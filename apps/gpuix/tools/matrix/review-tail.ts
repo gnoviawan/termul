@@ -159,11 +159,9 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'blocked',
     differences: [
       'No web reference: SSH needs a host-local client and a browser never is one, so the web client shows no SSH section.',
-      'R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render. In gpuix-ssh-connected.png the SFTP Modified column wraps times such as 12:26 AM onto two lines.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'C14 SFTP table column widths',
-    impact: 1
+      'R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render.',
+      'The SFTP Modified column wrapped times such as 12:26 AM onto two lines in gpuix-ssh-connected.png, and Chromium wraps them too: the tabular-figure time is 57 px in a w-14 (56 px) column. G3 widened the shared column to w-16 in SftpEntryRow, a web fix (C14).'
+    ]
   },
   'settings.accounts-claude': {
     status: 'blocked',

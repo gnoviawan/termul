@@ -291,7 +291,6 @@ Rank is the reviewed impact (1 to 3) times the area weight.
 | 47 | `update.toast` | blocked | native override needed | U1 GPUIX updater and what's new | 1 | Not compared: the update toast and the what's new modal render only under isTauriContext(). GPUIX needs its own updater path to show them at all. |
 | 48 | `remote.access-popover` | blocked | server route needed | R4 desktop host role over the server | 0.5 | Not compared: the popover renders only under isTauriContext(), so the web client has no reference. |
 | 49 | `palette.save-snapshot` | partial | missing GPUIX capability | C6 overlay backdrop | 0.5 | The Create Snapshot modal matches. The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable. |
-| 50 | `ssh.workspace` | blocked | compat translator gap | C14 SFTP table column widths | 0.5 | No web reference: SSH needs a host-local client and a browser never is one, so the web client shows no SSH section. R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render. In gpuix-ssh-connected.png the SFTP Modified column wraps times such as 12:26 AM onto two lines. |
 
 ### Proposed units
 
@@ -318,9 +317,8 @@ Each unit with the surfaces its gaps name. Gain is the usage-weighted score (all
 | 17 | V2 native webview | missing GPUIX capability | 1 | 2 | +1.0 |
 | 18 | U1 GPUIX updater and what's new | native override needed | 1 | 1 | +0.5 |
 | 19 | R4 desktop host role over the server | server route needed | 1 | 0.5 | +0.5 |
-| 20 | C14 SFTP table column widths | compat translator gap | 1 | 0.5 | +0.5 |
 
-If every listed unit landed and fixed its surfaces, the usage-weighted score would be 98.5%.
+If every listed unit landed and fixed its surfaces, the usage-weighted score would be 98.0%.
 
 ### Surfaces
 
@@ -420,7 +418,7 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
 | `canvas.open` Canvas | canvas | blocked | partial | 4/4 | 4/4 | 4.9% / 2.45% |  | This server build ships no figcraft bundle, so the web tab shows the BUNDLE_MISSING error JSON; GPUIX stays on Loading editor... and paints neither that error nor an editor. The canvas is a figcraft iframe (CanvasMountLayer), which GPUIX 0.11 cannot host. |
 | `browser.pane` Browser pane | browser | blocked | blocked | n/a | n/a |  |  | Not compared: browser tabs are Tauri webviews with no web-client reference, and GPUIX 0.11 has no webview element. Replacing Tauri loses the browser pane until a native webview exists. |
 | `notifications.toast` Toast after creating a branch | notifications | partial | ported | 7/7 | 7/7 | 7.7% / 1.52% |  | Typing the branch name and pressing Enter creates toast-branch and shows the success toast in both. The toast is the sonner shim: a flat green box at the window edge with the close button on the right, where the web shows a card with a check icon and the close button at its top-left. |
-| `ssh.workspace` SSH profiles and sessions | ssh | blocked | pending-unit | n/a | n/a |  |  | No web reference: SSH needs a host-local client and a browser never is one, so the web client shows no SSH section. R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render. In gpuix-ssh-connected.png the SFTP Modified column wraps times such as 12:26 AM onto two lines. |
+| `ssh.workspace` SSH profiles and sessions | ssh | blocked | pending-unit | n/a | n/a |  |  | No web reference: SSH needs a host-local client and a browser never is one, so the web client shows no SSH section. R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render. The SFTP Modified column wrapped times such as 12:26 AM onto two lines in gpuix-ssh-connected.png, and Chromium wraps them too: the tabular-figure time is 57 px in a w-14 (56 px) column. G3 widened the shared column to w-16 in SftpEntryRow, a web fix (C14). |
 | `settings.accounts-claude` Claude account sign-in | settings | blocked | pending-unit | n/a | n/a |  |  | No web reference: Claude account management needs a host-local client. The R1-R3 e2e kit (reports/r1-e2e, accounts mode) covers the server path; no GPUIX pixel check of the sign-in flow exists yet. |
 | `update.toast` Update available toast and what's new modal | notifications | blocked | blocked | n/a | n/a |  |  | Not compared: the update toast and the what's new modal render only under isTauriContext(). GPUIX needs its own updater path to show them at all. |
 | `snapshots.page` Snapshots page (#/snapshots) | snapshots | blocked | blocked | n/a | n/a |  |  |  |
