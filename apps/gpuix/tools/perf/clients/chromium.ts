@@ -105,7 +105,9 @@ function browserPid(): number {
   for (const pid of descendants(process.pid)) {
     if (pid === process.pid) continue
     const cmd = readCmdline(pid)
-    if (/chrom/i.test(cmd) && !cmd.includes('--type=')) return pid
+    // Match the executable only: other children (the server) carry run paths in their args.
+    const exe = path.basename(cmd.split(' ')[0] ?? '')
+    if (/chrom/i.test(exe) && !cmd.includes('--type=')) return pid
   }
   throw new Error('could not find the launched Chromium root process')
 }

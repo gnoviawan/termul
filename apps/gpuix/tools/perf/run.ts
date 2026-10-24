@@ -2,6 +2,7 @@
  * Linux perf runner for the Termul desktop client candidates. See README.md.
  *
  *   bun run perf --scenarios stream-storm,pty-flood --runs 3   (from apps/gpuix)
+ *   bun run perf --client chromium,gpuix ...                   (interleaved per run)
  */
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -12,7 +13,8 @@ import { REPO_DIR } from '../../build.ts'
 import { DIST_WEB } from '../parity/shoot-web.ts'
 import { startByteProxy } from './byte-proxy.ts'
 import { chromiumDriver, launchChromium } from './clients/chromium.ts'
-import type { ClientDriver } from './clients/client.ts'
+import type { ClientDriver, ClientKind } from './clients/client.ts'
+import { gpuixDriver, launchGpuix } from './clients/gpuix.ts'
 import {
   chromiumRole,
   type MachineSample,
@@ -23,15 +25,17 @@ import {
   withPageRenderer
 } from './proc-sampler.ts'
 import { DEFAULTS, type Flags, type PhaseClock, SCENARIOS, type ScenarioName } from './scenarios.ts'
+import { type ScreenLog, startScreenLog, summarizeScreen } from './screen-frames.ts'
 import { startPerfServer } from './server.ts'
 import { aggregate, median, type Numbers, summarizePage, summarizeProc } from './stats.ts'
+import { snapshotThreads, type ThreadSnapshot, threadCpu } from './thread-sampler.ts'
 
 const HERE = import.meta.dir
 
 interface Options {
   scenarios: ScenarioName[]
   runs: number
-  client: 'chromium'
+  clients: ClientKind[]
   gl: 'lavapipe' | 'swiftshader' | 'cpu'
   serverBin: string
   port: number
@@ -43,6 +47,10 @@ interface Options {
   quietBelowPct: number
   quietWaitS: number
   noPageMetrics: boolean
+  /** Log X DAMAGE events on the run's display for screen frame timing. */
+  screenFrames: boolean
+  /** Per-run server state, client state and probe files go under here. */
+  stateRoot: string
   distWeb: string
   outDir: string
   overrides: Flags
@@ -64,7 +72,7 @@ function parseArgs(argv: string[]): Options {
   const opts: Options = {
     scenarios: take('scenarios', 'stream-storm,pty-flood').split(',') as ScenarioName[],
     runs: Number(take('runs', '3')),
-    client: take('client', 'chromium') as 'chromium',
+    clients: take('client', 'chromium').split(',') as ClientKind[],
     gl: take('gl', 'lavapipe') as 'lavapipe' | 'swiftshader' | 'cpu',
     serverBin: take('server-bin', '/root/gpuix-bin/termul-server'),
     port: Number(take('port', '8196')),
@@ -75,14 +83,22 @@ function parseArgs(argv: string[]): Options {
     quietBelowPct: Number(take('quiet-below', '150')),
     quietWaitS: Number(take('quiet-wait', '600')),
     noPageMetrics: take('page-metrics', 'on') === 'off',
+    screenFrames: take('screen-frames', 'on') !== 'off',
+    stateRoot: path.resolve(take('state-root', process.env.GPUIX_STATE_ROOT ?? '/tmp/gpuix-b0')),
     distWeb: path.resolve(take('dist-web', DIST_WEB)),
     outDir: path.resolve(take('out', path.join(HERE, 'results', `linux-${stamp}`))),
     overrides: {}
   }
   for (const s of opts.scenarios) if (!(s in SCENARIOS)) throw new Error(`unknown scenario ${s}`)
+  for (const c of opts.clients) if (!CLIENTS.includes(c)) throw new Error(`unknown client ${c}`)
   for (const [k, v] of Object.entries(raw)) opts.overrides[k] = Number(v)
   return opts
 }
+
+const CLIENTS: ClientKind[] = ['chromium', 'gpuix']
+
+/** The GPUIX client is one Bun process; anything it starts would be `other`. */
+const gpuixRole: RoleOf = (_pid, cmd) => (cmd.includes('dist/main.js') ? 'app' : 'other')
 
 const serverRole: RoleOf = (_pid, cmd) => {
   if (cmd.includes('termul-server')) return 'server'
@@ -133,11 +149,18 @@ interface PhaseWindow {
   to: number
   bytes: { down: number; up: number }
   page: Numbers
+  threads?: { before: ThreadSnapshot; after: ThreadSnapshot }
 }
 
-async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) {
+async function runOnce(
+  opts: Options,
+  client: ClientKind,
+  scenario: ScenarioName,
+  runIndex: number
+) {
   const flags: Flags = { ...DEFAULTS[scenario], ...opts.overrides }
-  const scratch = path.join('/tmp/gpuix-b0', `${scenario}-${runIndex}`)
+  // No dashes: the GPUIX lane types probe paths as keystrokes.
+  const scratch = path.join(opts.stateRoot, `${client}${scenario.replace(/-/g, '')}${runIndex}`)
   mkdirSync(scratch, { recursive: true })
   const errors: string[] = []
   const notes: Record<string, unknown> = {}
@@ -146,6 +169,7 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
   const load1Before = os.loadavg()[0]
 
   const xvfb = await startXvfb(opts.display, opts.width, opts.height)
+  const screen: ScreenLog | null = opts.screenFrames ? await startScreenLog(opts.display) : null
   const server = await startPerfServer({
     binary: opts.serverBin,
     port: opts.port,
@@ -173,7 +197,7 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
   try {
     const t0 = performance.now()
     const wall0 = Date.now()
-    const handle = await launchChromium({
+    const launchOpts = {
       url: proxy.url,
       display: opts.display,
       width: opts.width,
@@ -181,9 +205,20 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
       distWeb: opts.distWeb,
       gl: opts.gl,
       noPageMetrics: opts.noPageMetrics
-    })
-    sampler = startProcSampler(handle.rootPid, chromiumRole)
-    driver = chromiumDriver(handle)
+    }
+    if (client === 'gpuix') {
+      const handle = await launchGpuix({
+        ...launchOpts,
+        clientStateDir: path.join(scratch, 'client')
+      })
+      sampler = startProcSampler(handle.rootPid, gpuixRole)
+      driver = gpuixDriver(handle)
+    } else {
+      const handle = await launchChromium(launchOpts)
+      sampler = startProcSampler(handle.rootPid, chromiumRole)
+      driver = chromiumDriver(handle)
+    }
+    const handle = driver.handle
     notes.client = handle.version
     notes.backend = handle.backend
     startup['startup.processUpMs'] = Math.round(handle.launchedMs)
@@ -205,9 +240,11 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
       phase: async (name, body) => {
         await d.beginPhase(name)
         proxy.reset()
+        const before = snapshotThreads(d.handle.rootPid)
         const from = Date.now()
         await body()
         const to = Date.now()
+        const after = snapshotThreads(d.handle.rootPid)
         const bytes = proxy.counters()
         const page = await d.endPhase(name)
         windows.push({
@@ -215,7 +252,8 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
           from,
           to,
           bytes,
-          page: page && !opts.noPageMetrics ? summarizePage(page, to - from) : {}
+          page: page && !opts.noPageMetrics ? summarizePage(page, to - from) : {},
+          threads: { before, after }
         })
       },
       note: (key, value) => {
@@ -232,12 +270,19 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
     if (sampler) {
       clientSamples = sampler.stop()
       processes = sampler.processes()
-      notes.pageRendererPid = withPageRenderer(
-        clientSamples,
-        new Map(processes.map((p) => [p.pid, p.role]))
+      const roleOfPid = new Map(processes.map((p) => [p.pid, p.role]))
+      if (client === 'chromium') notes.pageRendererPid = withPageRenderer(clientSamples, roleOfPid)
+      const pageRenderer = notes.pageRendererPid
+      const role = (pid: number) =>
+        pid === pageRenderer ? 'page-renderer' : (roleOfPid.get(pid) ?? 'other')
+      notes.threads = Object.fromEntries(
+        windows.flatMap((w) =>
+          w.threads ? [[w.name, threadCpu(w.threads.before, w.threads.after, role)]] : []
+        )
       )
     }
     await driver?.handle.close()
+    await screen?.stop()
     await proxy.close()
     serverSamples = serverSampler.stop()
     machineSamples = machineSampler.stop()
@@ -257,6 +302,11 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
       prefixed(w.name, summarizeProc(within(clientSamples, w.from, w.to), 'proc.'))
     )
     Object.assign(metrics, prefixed(w.name, w.page))
+    if (screen)
+      Object.assign(
+        metrics,
+        prefixed(w.name, summarizeScreen(screen.frames(w.from, w.to), w.to - w.from))
+      )
     const serverCpu =
       summarizeProc(within(serverSamples, w.from, w.to), 'server.')['server.total.cpuMeanPct'] ?? 0
     const machine = within(machineSamples, w.from, w.to).map((m) => m.busy)
@@ -287,11 +337,12 @@ async function runOnce(opts: Options, scenario: ScenarioName, runIndex: number) 
     meta: {
       scenario,
       run: runIndex,
-      client: opts.client,
+      client,
       clientVersion: notes.client,
       backend: notes.backend,
       gl: opts.gl,
-      pageMetrics: !opts.noPageMetrics,
+      pageMetrics: client === 'chromium' && !opts.noPageMetrics,
+      screenFrames: opts.screenFrames,
       seed: opts.seed,
       flags,
       viewport: `${opts.width}x${opts.height}`,
@@ -367,38 +418,55 @@ async function main() {
     kernel: os.release(),
     bun: Bun.version
   }
-  const byScenario: Record<string, Numbers[]> = {}
+  // One client keeps B0's flat layout; several get a directory each, so
+  // perf:report can take them as separate columns.
+  const dirOf = (client: ClientKind) =>
+    opts.clients.length > 1 ? path.join(opts.outDir, client) : opts.outDir
+  const byClient = new Map<ClientKind, Record<string, Numbers[]>>()
+  for (const client of opts.clients) {
+    mkdirSync(dirOf(client), { recursive: true })
+    byClient.set(client, {})
+  }
+  const writeAggregate = (client: ClientKind) => {
+    const byScenario = byClient.get(client) ?? {}
+    const summary = {
+      machine,
+      client,
+      gl: opts.gl,
+      runs: opts.runs,
+      scenarios: Object.fromEntries(
+        Object.entries(byScenario).map(([s, runs]) => [
+          s,
+          { okRuns: runs.length, metrics: aggregate(runs) }
+        ])
+      )
+    }
+    writeFileSync(path.join(dirOf(client), 'aggregate.json'), JSON.stringify(summary, null, 1))
+  }
+  // Interleaved: run 1 of every scenario on every client, then run 2, so
+  // drift and other units' load hit every cell alike.
   for (let run = 1; run <= opts.runs; run++) {
     for (const scenario of opts.scenarios) {
-      console.log(`[perf] ${scenario} run ${run}/${opts.runs}`)
-      const record = await runOnce(opts, scenario, run)
-      writeFileSync(
-        path.join(opts.outDir, `${scenario}-run${run}.json`),
-        JSON.stringify({ machine, ...record })
-      )
-      console.log(
-        `[perf]   status=${record.meta.status} errors=${record.errors.length} preRunBusy=${record.meta.preRunBusyPct}% waited=${record.meta.quietWaitS}s`
-      )
-      for (const e of record.errors) console.log(`[perf]   ! ${e.split('\n')[0]}`)
-      if (record.meta.status === 'ok') {
-        byScenario[scenario] ??= []
-        byScenario[scenario].push(record.metrics)
+      for (const client of opts.clients) {
+        console.log(`[perf] ${client} ${scenario} run ${run}/${opts.runs}`)
+        const record = await runOnce(opts, client, scenario, run)
+        writeFileSync(
+          path.join(dirOf(client), `${scenario}-run${run}.json`),
+          JSON.stringify({ machine, ...record })
+        )
+        console.log(
+          `[perf]   status=${record.meta.status} errors=${record.errors.length} preRunBusy=${record.meta.preRunBusyPct}% waited=${record.meta.quietWaitS}s load1=${record.meta.load1Before.toFixed(1)}`
+        )
+        for (const e of record.errors) console.log(`[perf]   ! ${e.split('\n')[0]}`)
+        if (record.meta.status === 'ok') {
+          const byScenario = byClient.get(client) ?? {}
+          byScenario[scenario] ??= []
+          byScenario[scenario].push(record.metrics)
+        }
+        writeAggregate(client)
       }
     }
   }
-  const summary = {
-    machine,
-    client: opts.client,
-    gl: opts.gl,
-    runs: opts.runs,
-    scenarios: Object.fromEntries(
-      Object.entries(byScenario).map(([s, runs]) => [
-        s,
-        { okRuns: runs.length, metrics: aggregate(runs) }
-      ])
-    )
-  }
-  writeFileSync(path.join(opts.outDir, 'aggregate.json'), JSON.stringify(summary, null, 1))
   console.log(`[perf] wrote ${opts.outDir}`)
 }
 
