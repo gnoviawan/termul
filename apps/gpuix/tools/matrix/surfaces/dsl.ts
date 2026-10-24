@@ -14,7 +14,8 @@ export const click = (target: Target): Action => ({ do: 'click', target })
 export const rclick = (target: Target): Action => ({ do: 'click', target, button: 'right' })
 export const dblclick = (target: Target): Action => ({ do: 'dblclick', target })
 export const hover = (target: Target): Action => ({ do: 'hover', target })
-export const press = (keys: string): Action => ({ do: 'press', keys })
+export const press = (keys: string, gpuixKeys?: string): Action =>
+  gpuixKeys ? { do: 'press', keys, gpuixKeys } : { do: 'press', keys }
 export const type = (text: string): Action => ({ do: 'type', text })
 export const wait = (ms: number): Action => ({ do: 'wait', ms })
 export const drag = (from: Target, to: Target): Action => ({ do: 'drag', from, to })

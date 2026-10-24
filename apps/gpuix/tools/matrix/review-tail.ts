@@ -1,7 +1,7 @@
 /** Reviews for settings, palette, shortcuts, themes and the long tail (see `review.ts`). */
 
 import type { Review } from './review'
-import { BACKDROP, SELECT, SETTINGS_BASE, TINT, TOAST } from './review-phrases'
+import { BACKDROP, SELECT, SETTINGS_BASE, TOAST } from './review-phrases'
 
 const THEME_FAMILIES = [
   'termul',
@@ -23,7 +23,7 @@ const THEME_REVIEWS: Record<string, Review> = Object.fromEntries(
         status: 'ported',
         differences: [
           'Background, panel, card, border, text and accent colours match the web dashboard.',
-          'The differences left are not the theme: the overlapping chat cards (chat.send) and the outline connection lamp (statusbar.items).'
+          'The differences left are not the theme.'
         ]
       }
     ])
@@ -35,11 +35,12 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'palette.type-ahead': {
     status: 'partial',
     differences: [
-      'Typing "theme" straight after Ctrl+K filters the palette in both.',
-      'The web ranks Open Canvas first for "theme" and GPUIX ranks Agent Launcher first, and the GPUIX search field has no focus underline.'
+      'Typing "theme" straight after Ctrl+K filters the palette in both, and the rows rank the same (C16 fixed in G3: the cmdk shim scores with cmdk\'s command-score and sorts as cmdk does), Open Canvas first under Workspace.',
+      'The step races in both clients: in some runs the web drops the first key ("heme") and in some GPUIX does (an empty filter); GPUIX failed this check in 5 of 9 G3 runs, 3 of 6 with the C16 change and 2 of 3 without it.',
+      'The GPUIX search field has no focus underline.'
     ],
     cause: 'compat translator gap',
-    unit: 'C16 cmdk ranking',
+    unit: 'focus ring on focused fields (unassigned)',
     impact: 1
   },
   'palette.new-terminal': {
@@ -52,7 +53,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
   'palette.save-snapshot': {
     status: 'partial',
-    differences: ['The Create Snapshot modal matches.', BACKDROP, TINT],
+    differences: ['The Create Snapshot modal matches.', BACKDROP],
     cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
@@ -128,10 +129,14 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: ['Ctrl+Alt+T opens the Color Themes popover in both.']
   },
   'shortcuts.zoom-in': {
-    status: 'ported',
+    status: 'partial',
     differences: [
-      'Zoom scales the whole GPUIX window (G4, shims/window-zoom.ts) on the desktop key, Ctrl+=: tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both clients, a real click and a context menu land where the zoomed UI paints, and Ctrl+0 restores the frame exactly. This surface still presses the web key (Alt+=), which the GPUIX desktop keymap leaves unbound, so its GPUIX frame shows no zoom; the steps need a per-client key.'
-    ]
+      'Each client presses its own key (G3: the web Alt+=, GPUIX the desktop Ctrl+= from G4\'s keymap), and both zoom: the rail and sidebar widen alike (G4, shims/window-zoom.ts; tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both).',
+      'The zoomed web page runs past the window bottom, so its status bar is cut off and the dashboard heading sits 25 px lower; GPUIX keeps the status bar in the window.'
+    ],
+    cause: 'needs diagnosis',
+    unit: 'web zoom overflow (unassigned)',
+    impact: 1
   },
 
   'shortcuts.desktop-keymap': {
@@ -153,11 +158,9 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'blocked',
     differences: [
       'No web reference: SSH needs a host-local client and a browser never is one, so the web client shows no SSH section.',
-      'R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render. In gpuix-ssh-connected.png the SFTP Modified column wraps times such as 12:26 AM onto two lines.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'C14 SFTP table column widths',
-    impact: 1
+      'R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render.',
+      'The SFTP Modified column wrapped times such as 12:26 AM onto two lines in gpuix-ssh-connected.png, and Chromium wraps them too: the tabular-figure time is 57 px in a w-14 (56 px) column. G3 widened the shared column to w-16 in SftpEntryRow, a web fix (C14).'
+    ]
   },
   'settings.accounts-claude': {
     status: 'blocked',
@@ -179,7 +182,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       'Row dividers inside a group are missing and rows sit tighter.'
     ],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'settings row layout (unassigned)',
     impact: 1
   },
   'settings.editor': {
@@ -210,8 +213,8 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'settings.terminal-profiles': {
     status: 'partial',
     differences: SETTINGS_BASE,
-    cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
   'settings.ai-agents': {
@@ -227,29 +230,29 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'settings.skills': {
     status: 'partial',
     differences: SETTINGS_BASE,
-    cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
   'settings.provider': {
     status: 'partial',
     differences: [...SETTINGS_BASE, 'The usage line moves under the account instead of beside it.'],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'settings row layout (unassigned)',
     impact: 1
   },
   'settings.mcp-servers': {
     status: 'partial',
     differences: [...SETTINGS_BASE, 'The inline code in the footnote breaks onto its own line.'],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'settings row layout (unassigned)',
     impact: 1
   },
   'settings.shortcuts': {
     status: 'partial',
     differences: SETTINGS_BASE,
-    cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
   'settings.diagnostics': {
@@ -283,19 +286,18 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'shortcuts.settings-shortcut': {
     status: 'ported',
     differences: [
-      'Alt+, opens Preferences on the web and Escape closes it. GPUIX takes the desktop key, Ctrl+, (G4 desktop keymap; workspace-checks asserts it opens and Escape closes); this surface still presses Alt+,, so its GPUIX steps need a per-client key.'
+      'Each client presses its own key (G3): Alt+, on the web and the desktop Ctrl+, in GPUIX (G4 keymap) open Preferences, and Escape closes it in both.'
     ]
   },
 
   'theme.picker': {
     status: 'partial',
     differences: [
-      'The Color Themes popover, groups, swatches and the current-theme check match.',
-      TINT,
+      'The Color Themes popover, groups, swatches and the current-theme check match, and labels antialias in grayscale as on the web (C8 fixed in G3).',
       'No focus ring on the search field.'
     ],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'focus ring on focused fields (unassigned)',
     impact: 1
   },
   'dialogs.bug-report': {

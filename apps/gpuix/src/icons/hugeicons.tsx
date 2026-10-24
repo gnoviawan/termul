@@ -35,16 +35,23 @@ export interface HugeiconsIconProps {
 const kebab = (name: string) => name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)
 const escapeAttr = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
 
+const FILL_CURRENT = /(^|\s)fill-current(\s|$)/
+
 const sourceCache = new Map<IconSvgElement, Map<string, string>>()
 
-/** SVG markup for `icon` with every paint black, as GPUIX's tinted renderer expects. */
-export function iconSource(icon: IconSvgElement, strokeWidth: number | undefined): string {
+/**
+ * SVG markup for `icon` with every paint black, as GPUIX's tinted renderer
+ * expects. `filled` is `fill-current`: CSS sets the root's fill, which every
+ * shape without its own `fill` inherits (the status-bar connection lamp is a
+ * filled Circle).
+ */
+export function iconSource(icon: IconSvgElement, strokeWidth: number | undefined, filled = false): string {
   let bySize = sourceCache.get(icon)
   if (!bySize) {
     bySize = new Map()
     sourceCache.set(icon, bySize)
   }
-  const key = String(strokeWidth)
+  const key = `${strokeWidth}:${filled}`
   const cached = bySize.get(key)
   if (cached) return cached
   const body = icon
@@ -61,7 +68,7 @@ export function iconSource(icon: IconSvgElement, strokeWidth: number | undefined
       return `<${tag} ${out.join(' ')}/>`
     })
     .join('')
-  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">${body}</svg>`
+  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="${filled ? '#000' : 'none'}">${body}</svg>`
   bySize.set(key, source)
   return source
 }
@@ -115,10 +122,12 @@ export const HugeiconsIcon = forwardRef<PublicInstance, HugeiconsIconProps>(func
   const stroke =
     strokeWidth !== undefined && absoluteStrokeWidth ? (strokeWidth * 24) / px(size) : strokeWidth
   const resolved = useIconStyle(size, className, primaryColor ?? color, style)
+  const descendant = useContext(SvgClassContext)
+  const filled = FILL_CURRENT.test(className ?? '') || FILL_CURRENT.test(descendant ?? '')
   const svg = (
     <svg
       ref={ref as Ref<PublicInstance>}
-      source={iconSource(current, stroke)}
+      source={iconSource(current, stroke, filled)}
       style={resolved}
       testId={testId}
       role={ariaLabel ? 'img' : undefined}

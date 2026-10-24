@@ -7,13 +7,12 @@
 
 import {
   BACKDROP,
-  CHECKBOX,
   LAMP,
   PROSE,
   RUN_ORDER,
-  TAB_TITLE,
   TAB_TRUNC,
-  TINT,
+  TEXTAREA_GAP,
+  TAB_TITLE,
   TITLE_TIP,
   TOAST,
   TREE_TEXT
@@ -45,10 +44,15 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Same layout and order; switching to beta works by click.', LAMP]
   },
   'rail.project-menu': {
-    status: 'ported',
+    status: 'partial',
     differences: [
-      'Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete. The menu sits 2 px left of the web one, so every glyph shows in the region diff (4.97% perceptual).'
-    ]
+      'Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete. The menu box now sits where the web puts it (G3: Radix opens a context menu 2 px right of the pointer).',
+      'Every row label sits 3 px right of the web one: a row\'s children reach layout as a nested array ({indicator}{children}{after}), so the " Label" text after the icon keeps its leading space. Laying nested arrays out like the parent\'s own slots fixed the menu (region perceptual 1.75%) but broke the editor check\'s README preview click, so it was reverted.',
+      'Under the open menu GPUIX keeps the hovered beta row\'s gear and shortcut; the web hides them, since a modal Radix menu turns pointer events off on the page.'
+    ],
+    cause: 'compat translator gap',
+    unit: 'nested children text runs (unassigned)',
+    impact: 1
   },
   'rail.project-rename': {
     status: 'ported',
@@ -63,13 +67,11 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Change Color opens the Select Color popover with the same nine swatches and the current one ringed.']
   },
   'rail.project-reorder': {
-    status: 'broken',
+    status: 'ported',
     differences: [
-      'Dragging gamma onto alpha reorders the web list to alpha, gamma, beta; GPUIX keeps alpha, beta, gamma. D1 emulates HTML5 drag and drop, but the rail reorders through framer-motion Reorder pointer gestures, which the framer-motion shim does not drive.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'C3 framer-motion Reorder drag',
-    impact: 1
+      'Dragging gamma onto alpha reorders the list to alpha, gamma, beta in both (C3 fixed in G3: the framer-motion shim drives Reorder from pointer moves with framer\'s one-neighbour-per-move rule). The dragged row does not follow the pointer in GPUIX, which has no transforms; the list reorders live under it.',
+      'After the drop the web paints alpha and gamma in their hover state (gear and Ctrl+1/Ctrl+2); GPUIX shows alpha\'s diff stat with no hover.'
+    ]
   },
   'rail.add-menu': {
     status: 'partial',
@@ -86,11 +88,15 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Collapsed rail matches: icons, project letters, Changes badge.', LAMP]
   },
   'rail.project-settings': {
-    status: 'partial',
-    differences: ['The gear opens Project settings on General with the same fields in both.', BACKDROP, TINT],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
-    impact: 1
+    status: 'broken',
+    differences: [
+      'When the gear opens Project settings, it shows General with the same fields in both.',
+      BACKDROP,
+      'In GPUIX the click on the gear often does nothing: it failed in 10 of 11 G3 runs, with or without a hover on the row first. The gear shows only while its row is hovered (hidden group-hover:flex), and once the pointer has moved, no mouse-down reaches a compat listener at all. A plain click on a rail row has the same problem with real X input (--x11-input): 4 of 5 runs did not switch projects without the C3 Reorder change, and 2 of 9 with it. Cause not found.'
+    ],
+    cause: 'needs diagnosis',
+    unit: 'press after hover lost (unassigned)',
+    impact: 3
   },
   'side.chats': {
     status: 'ported',
@@ -170,25 +176,38 @@ export const REVIEWS: Record<string, Review> = {
   },
   'git.changes': {
     status: 'partial',
-    differences: ['Sections, rows, counts and history footer match.', CHECKBOX],
+    differences: [
+      'Sections, rows, counts and history footer match, and the Amend last commit checkbox draws as the Chromium box (C5, G3).',
+      TEXTAREA_GAP
+    ],
     cause: 'compat translator gap',
     unit: 'C5 form controls',
     impact: 1
   },
   'git.diff': {
     status: 'partial',
-    differences: ['Inline diff, hunk header and STAGE HUNK match closely.', CHECKBOX],
+    differences: ['Inline diff, hunk header and STAGE HUNK match closely.', TEXTAREA_GAP],
+    cause: 'compat translator gap',
+    unit: 'C5 form controls',
+    impact: 1
+  },
+  'git.amend': {
+    status: 'partial',
+    differences: [
+      'Clicking the Amend last commit label checks the box and the button reads Amend commit with the last message filled in; clicking the box clears it, in both. The box, its check and its colours are sampled from Chromium. The web frames show the box in its hover colour because the pointer rests on it; GPUIX automation clicks without moving the pointer.',
+      TEXTAREA_GAP
+    ],
     cause: 'compat translator gap',
     unit: 'C5 form controls',
     impact: 1
   },
   'git.stage': {
     status: 'partial',
-    differences: ['Staging README.md moves it to Staged 2 in both.', CHECKBOX]
+    differences: ['Staging README.md moves it to Staged 2 in both.', TEXTAREA_GAP]
   },
   'git.unstage': {
     status: 'partial',
-    differences: ['Unstaging app.ts moves it to Changes in both.', CHECKBOX]
+    differences: ['Unstaging app.ts moves it to Changes in both.', TEXTAREA_GAP]
   },
   'git.discard': {
     status: 'partial',
@@ -287,7 +306,12 @@ export const REVIEWS: Record<string, Review> = {
   },
   'terminal.open': {
     status: 'partial',
-    differences: ['Terminal tab and prompt match.', TAB_TRUNC],
+    differences: [
+      'Terminal tab and prompt match.',
+      TAB_TRUNC,
+      LAMP,
+      'The status-bar Terminal button\'s title tooltip paints under the pointer after the click; the web frame shows none.'
+    ],
     cause: 'compat translator gap',
     unit: 'C15 tab title width',
     impact: 2
@@ -322,22 +346,20 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'statusbar.items': {
-    status: 'partial',
-    differences: ['Branch, path, Terminal and settings items line up.', LAMP],
-    cause: 'compat translator gap',
-    unit: 'C7 svg fill utilities',
-    impact: 1
+    status: 'ported',
+    differences: [
+      'Branch, path, Terminal and settings items line up.',
+      LAMP,
+      'The rest of the region diff is glyph antialiasing: Chromium draws the status bar text with subpixel (LCD) colour fringes, and GPUIX draws it in grayscale (C8).'
+    ]
   },
   'statusbar.context-bar': {
     status: 'ported',
     differences: ['The Show in Context Bar popover opens with the same five toggles and states.']
   },
   'statusbar.connection': {
-    status: 'partial',
-    differences: ['Hovering the connection lamp shows the Connected tooltip in both.', LAMP],
-    cause: 'compat translator gap',
-    unit: 'C7 svg fill utilities',
-    impact: 1
+    status: 'ported',
+    differences: ['Hovering the connection lamp shows the Connected tooltip in both.', LAMP]
   },
   'remote.access-popover': {
     status: 'blocked',

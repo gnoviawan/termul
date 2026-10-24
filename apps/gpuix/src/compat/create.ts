@@ -12,6 +12,7 @@ import { cloneElement, type ReactElement, type ReactNode, type Ref } from 'react
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { applyRules } from '../style/tw'
 import type { TwState } from '../style/variants'
+import { checkboxElement } from './checkbox'
 import { childInfo, contentBasis, layoutChildren, wrapAutoMargin } from './children'
 import { ColorContext, SvgClassContext } from './color'
 import { ScopeContext, withScopedClasses } from './scope'
@@ -190,18 +191,20 @@ export function buildElement(
 
   const listeners: GpuixListeners = {}
   const source = overrides?.handlers ? { ...props, ...overrides.handlers } : props
-  const text = tag === 'input' || tag === 'textarea'
+  const checkbox = tag === 'input' && props.type === 'checkbox'
+  const text = !checkbox && (tag === 'input' || tag === 'textarea')
   const focusable =
     !disabled &&
     (FOCUSABLE_TAGS.has(tag) || (tag === 'a' && props.href !== undefined) || props.tabIndex !== undefined)
   const draggable = source.draggable === true || source.draggable === 'true'
   const handlers = disabled ? null : adaptHandlers(source, text, focusable, listeners, draggable)
   if (!disabled) addFormListeners(tag, props.type, listeners)
-  const interactive = handlers !== null || focusable || tr.hoverable || style.overflow === 'scroll'
+  const interactive = handlers !== null || focusable || tr.hoverable || style.overflow === 'scroll' || listeners.onClick !== undefined
   if (!interactive) style = passThrough(style)
 
   const userRef = props.ref
-  const tracked = userRef != null || handlers !== null || focusable || attrs !== NO_ATTRS || pointerEvents !== undefined
+  const tracked =
+    userRef != null || handlers !== null || focusable || attrs !== NO_ATTRS || pointerEvents !== undefined || listeners.onClick !== undefined
   const dom: DomInfo = {
     tag,
     className: props.className ?? '',
@@ -230,9 +233,11 @@ export function buildElement(
   } else if (tr.type === 'img') {
     native.src = props.src
     element = jsx('img', native, key)
+  } else if (checkbox) {
+    element = checkboxElement(props.className ?? '', style, Boolean(props.checked ?? props.defaultChecked), disabled, native, key)
   } else if (text) {
     const type = props.type
-    if (type === 'checkbox' || type === 'radio' || type === 'file' || type === 'hidden' || type === 'range') {
+    if (type === 'radio' || type === 'file' || type === 'hidden' || type === 'range') {
       compatWarn('element-unsupported', `input[type=${String(type)}]`)
       return jsx('div', { style: HIDDEN }, key)
     }

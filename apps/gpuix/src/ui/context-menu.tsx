@@ -38,6 +38,7 @@ import {
 const MENU_TOUCH_ROW_CLASS = 'pointer-coarse:min-h-11'
 const MENU_REDUCED_MOTION_CLASS = 'motion-reduce:animate-none!'
 const ROW_CLASS = cn(MENU_ITEM_CLASS, MENU_TOUCH_ROW_CLASS)
+const RADIX_SIDE_OFFSET = 2
 
 type Point = { x: number; y: number }
 const PointContext = createContext<{ point: Point; setPoint(point: Point): void }>({
@@ -108,10 +109,11 @@ ContextMenuSubContent.displayName = 'ContextMenuSubContent'
 const ContextMenuContent = forwardRef<PublicInstance, MenuContentProps>(
   ({ className, ...props }, ref) => {
     const { point } = useContext(PointContext)
+    // Radix opens a context menu on the pointer's right side with a 2 px sideOffset.
     return (
       <MenuContentBase
         ref={ref}
-        position={point}
+        position={{ x: point.x + RADIX_SIDE_OFFSET, y: point.y }}
         side="bottom"
         align="start"
         {...props}

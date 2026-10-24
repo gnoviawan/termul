@@ -148,6 +148,15 @@ function setPreview(next: DragPreview | null): void {
   for (const listener of previewListeners) listener()
 }
 
+/**
+ * A pointer drag compat drives outside this module (framer-motion Reorder)
+ * ended at `point`; the click GPUIX delivers with that release is dropped,
+ * as for an HTML5 drag.
+ */
+export function notePointerDragRelease(point: Point): void {
+  lastRelease = { ...point, at: performance.now() }
+}
+
 /** Whether a click GPUIX is delivering belongs to the release of a drag. */
 export function dragSuppressesClick(payload: EventPayload): boolean {
   if (session?.phase === 'dragging') return true
@@ -350,13 +359,23 @@ export function moveSource(payload: EventPayload): void {
 }
 
 /**
- * Mouse up on a draggable element, or anywhere once its drag lost the capture.
- *
- * A press that never became a drag is a click. GPUIX's pointer capture on the
- * source keeps that click from reaching the source's descendants (a chat
- * card's button inside its draggable row), so when the release lands on a
- * descendant this returns that element for the caller to click, and the click
- * GPUIX may still deliver to the source itself is dropped as a duplicate.
+ * A press on a capturing `source` (a draggable, a framer-motion Reorder
+ * item) that never became a drag is a click. GPUIX's pointer capture keeps
+ * that click from reaching the source's descendants (a chat card's button
+ * inside its draggable row), so this returns the descendant under the
+ * release for the caller to click, and drops the click GPUIX may still
+ * deliver to the source itself as a duplicate.
+ */
+export function withheldClickTarget(source: number, point: Point): number | null {
+  const target = hitTest(point)
+  if (target === null || target === source || !ancestorIds(target).includes(source)) return null
+  lastRelease = { ...point, at: performance.now() }
+  return target
+}
+
+/**
+ * Mouse up on a draggable element, or anywhere once its drag lost the
+ * capture. Returns the element a plain press clicks (`withheldClickTarget`).
  */
 export function releaseSource(payload: EventPayload): number | null {
   const s = session
@@ -366,11 +385,7 @@ export function releaseSource(payload: EventPayload): number | null {
     return null
   }
   session = null
-  const point = pointOf(payload)
-  const target = hitTest(point)
-  if (target === null || target === s.source || !ancestorIds(target).includes(s.source)) return null
-  lastRelease = { ...point, at: performance.now() }
-  return target
+  return withheldClickTarget(s.source, pointOf(payload))
 }
 
 let lastFileDrop = ''

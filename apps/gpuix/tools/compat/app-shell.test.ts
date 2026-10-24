@@ -3,7 +3,9 @@ import { jsx } from 'react/jsx-runtime'
 import { jsxs } from '../../src/compat/jsx-runtime'
 import { hasContainerClasses, resolveContainerClasses } from '../../src/compat/container'
 import { type Placement, placeStyle } from '../../src/compat/placement'
-import { defaultFilter, splitPartClasses } from '../../src/compat/shims/cmdk-model'
+// cmdk exports only its entry, so the oracle is imported by path.
+import { commandScore as cmdkScore } from '../../../../node_modules/cmdk/dist/command-score.mjs'
+import { commandScore, orderedSlots, slotOrder, splitPartClasses } from '../../src/compat/shims/cmdk-model'
 import { resolveViewportUnits, translation } from '../../src/compat/translate'
 
 describe('viewport lengths', () => {
@@ -33,12 +35,43 @@ describe('cmdk stand-in', () => {
     })
   })
 
-  test('the filter keeps substrings and in-order letters, and drops the rest', () => {
-    expect(defaultFilter('App Preferences open global application preferences', 'prefs')).toBe(0.5)
-    expect(defaultFilter('New Terminal', 'term')).toBe(1)
-    expect(defaultFilter('New Terminal', '')).toBe(1)
-    expect(defaultFilter('New Terminal', 'xyz')).toBe(0)
-    expect(defaultFilter('alpha', 'repo', ['repository'])).toBe(1)
+  test("the filter scores exactly as cmdk's command-score", () => {
+    const cases: [string, string, string[]?][] = [
+      ['App Preferences open global application preferences', 'prefs'],
+      ['New Terminal', 'term'],
+      ['New Terminal', 'TERM'],
+      ['New Terminal', 'xyz'],
+      ['alpha', 'repo', ['repository']],
+      ['Open Canvas Open the project\'s .figcraft design document as a canvas tab', 'theme'],
+      ['Agent Launcher Show the agent launcher prompt in the active pane', 'theme'],
+      ['workspace/src_main.ts', 'wsm'],
+      ['abc', 'acb']
+    ]
+    for (const [value, search, keywords] of cases) {
+      expect(commandScore(value, search, keywords)).toBe(cmdkScore(value, search, keywords ?? []))
+    }
+    expect(commandScore('New Terminal', 'term')).toBeCloseTo(0.9 * 0.99 * 0.9999, 10)
+    expect(commandScore('New Terminal', 'xyz')).toBe(0)
+  })
+
+  test('items sort by score in their group and ungrouped items move last; groups keep their order', () => {
+    const at = (listSlot: number, group: string | null, groupSlot: number, score: number) => ({
+      placement: { listSlot, group, groupSlot },
+      score
+    })
+    const order = slotOrder([
+      at(1, 'projects', 0, 0.2),
+      at(1, 'projects', 1, 0.5),
+      at(2, 'workspace', 0, 0.1),
+      at(2, 'workspace', 2, 0.9),
+      at(2, 'workspace', 1, 0.1),
+      at(3, null, 0, 0.3)
+    ])
+    expect(order.list).toEqual([3])
+    expect(order.groups.get('workspace')).toEqual([2, 0, 1])
+    expect(order.groups.get('projects')).toEqual([1, 0])
+    expect(orderedSlots(5, order.list)).toEqual([0, 1, 2, 4, 3])
+    expect(orderedSlots(3, undefined)).toEqual([0, 1, 2])
   })
 })
 

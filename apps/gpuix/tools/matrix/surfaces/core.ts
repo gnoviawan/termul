@@ -320,6 +320,18 @@ const GIT: Surface[] = [
     steps: [DASHBOARD, step('b-changes', [changes], see('app.ts', 'README.md', 'notes.txt'))]
   },
   {
+    id: 'git.amend',
+    area: 'git',
+    title: 'Amend last commit: the label and the box toggle it',
+    prepare: resetAlpha,
+    steps: [
+      DASHBOARD,
+      step('b-changes', [changes], see('Amend last commit')),
+      step('c-label', [click(txt('Amend last commit')), wait(400)], see('Amend commit')),
+      step('d-box', [click(css('input[type="checkbox"]')), wait(400)], [gone('Amend commit')])
+    ]
+  },
+  {
     id: 'git.diff',
     area: 'git',
     title: 'Diff view of an unstaged file',
