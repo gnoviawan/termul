@@ -550,18 +550,72 @@ pub(super) fn shape_parsed(
     snapshot: PageSnapshot,
     mint: impl FnOnce(Vec<RefNode>) -> Vec<String>,
 ) -> (PageData, usize) {
-    let (text, count) = format_snapshot(&snapshot, mint);
+    let (text, count, shortened) = format_snapshot(&snapshot, mint);
     let mut page = PageData::meta(&snapshot.url, &snapshot.title);
     let (text, cut) = truncate_snapshot(&text);
     page.snapshot = Some(text);
-    page.truncated |= cut || snapshot.cut;
+    page.truncated |= cut || shortened || snapshot.cut;
     (page, count)
+}
+
+const TEXT_ELLIPSIS: &str = "…";
+
+/// Text lines give way to every other line: when the outline would pass
+/// the cap, each text line longer than one shared length is cut to it, so
+/// the controls after a long article keep their refs. Each entry of
+/// `texts` is a text line's index and where its quoted text starts. True
+/// when a line was cut.
+fn fit_text(lines: &mut [String], texts: &[(usize, usize)]) -> bool {
+    let total = lines.iter().map(String::len).sum::<usize>() + lines.len().saturating_sub(1);
+    if total <= SNAPSHOT_MAX_CHARS {
+        return false;
+    }
+    // Each text body runs from its start to the line's closing quote.
+    let bodies: Vec<usize> = texts.iter().map(|&(i, start)| lines[i].len() - 1 - start).collect();
+    let fixed = total - bodies.iter().sum::<usize>() + TEXT_ELLIPSIS.len() * bodies.len();
+    let share = shared_length(&bodies, SNAPSHOT_MAX_CHARS.saturating_sub(fixed));
+    let mut cut = false;
+    for (&(i, start), &body) in texts.iter().zip(&bodies) {
+        if body <= share {
+            continue;
+        }
+        let line = &mut lines[i];
+        let mut end = start + share;
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        // Never keep half of a `\n` line-break escape.
+        if line[start..end].ends_with('\\') {
+            end -= 1;
+        }
+        line.truncate(end);
+        line.push_str(TEXT_ELLIPSIS);
+        line.push('"');
+        cut = true;
+    }
+    cut
+}
+
+/// The largest length that, with every body longer than it cut to it,
+/// keeps their total within `budget`.
+fn shared_length(bodies: &[usize], budget: usize) -> usize {
+    let mut sorted = bodies.to_vec();
+    sorted.sort_unstable();
+    let mut left = budget;
+    for (i, &len) in sorted.iter().enumerate() {
+        let rest = sorted.len() - i;
+        if len * rest > left {
+            return left / rest;
+        }
+        left -= len;
+    }
+    usize::MAX
 }
 
 fn format_snapshot(
     snapshot: &PageSnapshot,
     mint: impl FnOnce(Vec<RefNode>) -> Vec<String>,
-) -> (String, usize) {
+) -> (String, usize, bool) {
     let nodes: Vec<RefNode> = snapshot
         .items
         .iter()
@@ -580,6 +634,7 @@ fn format_snapshot(
     let mut tokens = mint(nodes).into_iter();
     let count = tokens.len();
     let mut lines = Vec::with_capacity(snapshot.items.len() + 1);
+    let mut texts = Vec::new();
     for item in &snapshot.items {
         let line = match item {
             SnapshotItem::Node {
@@ -612,11 +667,11 @@ fn format_snapshot(
                 "" => format!("{}- {}", indent(*depth), outline_text(role)),
                 name => format!("{}- {} \"{}\"", indent(*depth), outline_text(role), name),
             },
-            SnapshotItem::Text { depth, text, pre: false } => {
-                format!("{}- text \"{}\"", indent(*depth), outline_text(text))
-            }
-            SnapshotItem::Text { depth, text, pre: true } => {
-                format!("{}- text \"{}\"", indent(*depth), outline_lines(text))
+            SnapshotItem::Text { depth, text, pre } => {
+                let head = format!("{}- text \"", indent(*depth));
+                texts.push((lines.len(), head.len()));
+                let body = if *pre { outline_lines(text) } else { outline_text(text) };
+                format!("{head}{body}\"")
             }
             SnapshotItem::Frame { depth, name, unauthorized: None, .. } => {
                 format!("{}- iframe \"{}\" {UNREACHABLE_FRAME}", indent(*depth), outline_text(name))
@@ -633,7 +688,8 @@ fn format_snapshot(
     if snapshot.capped {
         lines.push(SNAPSHOT_CAP_LINE.to_string());
     }
-    (lines.join("\n"), count)
+    let shortened = fit_text(&mut lines, &texts);
+    (lines.join("\n"), count, shortened)
 }
 
 fn indent(depth: usize) -> String {

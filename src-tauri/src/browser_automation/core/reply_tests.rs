@@ -411,3 +411,46 @@ fn a_text_block_the_helper_cut_marks_the_page_truncated() {
     .expect("helper result shapes");
     assert!(page.truncated);
 }
+
+#[test]
+fn long_text_gives_way_so_every_control_after_it_keeps_its_ref() {
+    let mut items: Vec<Value> = (1..=40)
+        .map(|n| json!({ "kind": "text", "depth": 1, "text": format!("Paragraph {n:02}. {}", "word ".repeat(400)) }))
+        .collect();
+    items.push(json!({ "kind": "text", "depth": 1, "text": "Short caption" }));
+    for name in ["Next page", "Post comment"] {
+        items.push(json!({ "kind": "node", "depth": 1, "role": "button", "name": name, "path": "html>body>button" }));
+    }
+    let (page, count) = shape_snapshot(
+        json!({ "url": "https://example.com/a", "title": "Article", "items": items, "capped": false }),
+        |nodes| (1..=nodes.len()).map(|n| format!("@e{n}")).collect(),
+    )
+    .expect("helper result shapes");
+    let outline = page.snapshot.unwrap();
+    assert_eq!(count, 2);
+    assert!(outline.len() <= SNAPSHOT_MAX_CHARS, "{}", outline.len());
+    assert!(!outline.contains(SNAPSHOT_TRUNCATION_MARKER.trim()), "nothing is cut at the cap");
+    assert!(outline.ends_with("  - button \"Next page\" @e1\n  - button \"Post comment\" @e2"), "{outline}");
+    assert!(outline.contains("\n  - text \"Short caption\"\n"), "short text stays whole");
+    let paragraphs: Vec<&str> = outline.lines().filter(|l| l.contains("Paragraph")).collect();
+    assert_eq!(paragraphs.len(), 40);
+    assert!(paragraphs.iter().all(|l| l.ends_with("…\"")), "{paragraphs:?}");
+    assert!(page.truncated);
+}
+
+#[test]
+fn text_that_fits_the_snapshot_is_left_whole() {
+    let paragraph = format!("Paragraph. {}", "word ".repeat(400));
+    let (page, _) = shape_snapshot(
+        json!({
+            "url": "https://example.com/a",
+            "title": "Article",
+            "items": [{ "kind": "text", "depth": 0, "text": paragraph }],
+            "capped": false
+        }),
+        |_| Vec::new(),
+    )
+    .expect("helper result shapes");
+    assert_eq!(page.snapshot.unwrap(), format!("- text \"{}\"", paragraph.trim_end()));
+    assert!(!page.truncated);
+}
