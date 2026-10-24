@@ -35,6 +35,23 @@ export function rowAccessibleName({
  * `Edit <name>, thinking <level>`. Without one it says what it edits:
  * `Edit <sections> for <name>`.
  */
+/**
+ * The row's visual tooltip: the full model name first (a long name truncates in
+ * the row), then the agent, then the description. Never part of the accessible
+ * name; the row keeps `rowAccessibleName`.
+ */
+export function rowTooltip({
+  name,
+  agentName,
+  details
+}: {
+  name: string
+  agentName?: string
+  details?: string
+}): string {
+  return [name.trim(), agentName, details].filter(Boolean).join('\n\n')
+}
+
 export function editButtonAccessibleName({
   name,
   thinking,

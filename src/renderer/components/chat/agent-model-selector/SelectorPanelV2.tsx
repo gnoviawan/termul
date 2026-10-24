@@ -54,6 +54,7 @@ import {
   entryDisableReason,
   type ModelCatalog,
   rowAccessibleName,
+  rowTooltip,
   splitContextOption
 } from './selector-model'
 import { PICKER_ICON, PICKER_LABEL } from './selector-tokens'
@@ -162,18 +163,18 @@ function DenseModelRow({
         />
       </button>
     )
-    const tip = [agentName, tooltip].filter(Boolean).join('\n\n')
-    const withTip =
-      !tip || touch ? (
-        button
-      ) : (
-        <Tooltip>
-          <TooltipTrigger asChild>{button}</TooltipTrigger>
-          <TooltipContent side="right" className="max-w-64 whitespace-pre-line">
-            {tip}
-          </TooltipContent>
-        </Tooltip>
-      )
+    // Leads with the full name, which a long one truncates in the row.
+    const tip = rowTooltip({ name, agentName, details: tooltip })
+    const withTip = touch ? (
+      button
+    ) : (
+      <Tooltip>
+        <TooltipTrigger asChild>{button}</TooltipTrigger>
+        <TooltipContent side="right" className="max-w-64 whitespace-pre-line">
+          {tip}
+        </TooltipContent>
+      </Tooltip>
+    )
     if (!favorite) return withTip
     // The star is the row button's sibling, laid over its reserved slot
     // (right of the name, left of the check), never nested in it.
