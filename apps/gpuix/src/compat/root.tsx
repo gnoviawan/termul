@@ -6,7 +6,6 @@
 
 import { type PublicInstance, type RenderOptions, useGpuixRequired } from '@gpuix/react'
 import { Fragment, type ReactNode, useCallback, useLayoutEffect, useState, useSyncExternalStore } from 'react'
-import { busyTolerantReads } from './busy-ui'
 import { dragPreview, hitTransparent, subscribeDragPreview } from './dnd'
 import { type CompatRenderer, bindCompatRenderer } from './dom-node'
 import { noteWindowKey, windowKeyEvent } from './events'
@@ -39,7 +38,7 @@ export function CompatRoot({ children, onRenderer }: CompatRootProps): ReactNode
     return hitTransparent(instance as { id: number } | null)
   }, [])
   useLayoutEffect(() => {
-    bindCompatRenderer(busyTolerantReads(renderer as unknown as CompatRenderer))
+    bindCompatRenderer(renderer as unknown as CompatRenderer)
     const parking = parkHiddenPanes(renderer)
     onRenderer?.(renderer)
     syncViewport(renderer)
