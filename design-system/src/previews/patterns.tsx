@@ -90,6 +90,7 @@ import {
 } from '@/components/ui/select'
 import {
   Sheet,
+  SheetClose,
   SheetContent,
   SheetDescription,
   SheetFooter,
@@ -185,7 +186,9 @@ export function SheetPreview() {
                 <dd className="tabular-nums">09:12</dd>
               </dl>
               <SheetFooter>
-                <Button variant="outline">Close</Button>
+                <SheetClose asChild>
+                  <Button variant="outline">Close</Button>
+                </SheetClose>
               </SheetFooter>
             </SheetContent>
           </Sheet>
@@ -601,7 +604,14 @@ export function FormPreview() {
         <Switch id="ds-form-connect" defaultChecked />
       </div>
       <div className="flex justify-end gap-2 pt-1">
-        <Button type="reset" variant="ghost" onClick={() => setSubmitted(false)}>
+        <Button
+          type="reset"
+          variant="ghost"
+          onClick={() => {
+            setName('')
+            setSubmitted(false)
+          }}
+        >
           Cancel
         </Button>
         <Button type="submit">

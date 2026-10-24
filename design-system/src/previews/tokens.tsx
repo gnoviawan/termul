@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -180,7 +180,8 @@ function SwitchSpecimen({
   disabled?: boolean
   className?: string
 }) {
-  const id = `ds-switch-${label.replace(/\W+/g, '-').toLowerCase()}`
+  // Rest and disabled rows reuse the same labels, so ids must be unique per specimen.
+  const id = useId()
   return (
     <div className="flex w-24 flex-col items-start gap-1.5">
       <Switch id={id} checked={checked} disabled={disabled} className={className} />

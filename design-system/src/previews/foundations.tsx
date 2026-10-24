@@ -446,8 +446,11 @@ function RadiusTile({ className }: { className: string }) {
   )
 }
 
+// Module-level so useCssVars sees a stable array and does not re-run every render.
+const RADIUS_VARS = ['--radius'] as const
+
 export function RadiusScale() {
-  const vars = useCssVars(['--radius'])
+  const vars = useCssVars(RADIUS_VARS)
   return (
     <Pad>
       <div className="flex flex-wrap gap-5">
@@ -589,10 +592,9 @@ export function MotionDurations() {
           <div className="relative h-2 rounded-full bg-muted">
             {/* The rail is the track minus the dot, so translateX(100%) lands the dot at the end. */}
             <span
-              className="absolute inset-y-0 left-0 w-[calc(100%-0.5rem)] motion-reduce:transition-none"
+              className="absolute inset-y-0 left-0 w-[calc(100%-0.5rem)] transition-transform motion-reduce:transition-none"
               style={{
                 transform: played ? 'translateX(100%)' : 'translateX(0)',
-                transitionProperty: 'transform',
                 transitionDuration: `var(${name})`,
                 transitionTimingFunction: 'var(--ease-out)'
               }}
