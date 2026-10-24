@@ -77,9 +77,26 @@ Read the base column with care. Its two finished runs had lost the workspace pan
 
 With parking, every run finished, 6 to 8 chats opened, and the hidden part of the tree fell from tens of thousands of elements to about 20. Starting a chat while others stream took 12 to 18 s against Chromium's 16 to 24 s, and the typing part of it 8 to 12 s against 9 to 17 s. GPUIX still draws fewer frames than Chromium: 2.3 to 2.6 fps in the measure phase against a Chromium median of 5.7. The F2 measurement of the same load on `exp/gpuix-client` was 0.8 fps, about 1.5 s per typed key, and 1 of 5 runs finished.
 
-### stream-storm, 4 chats
+### stream-storm, 4 chats, with G2's transcript changes
 
-STORM4
+The same command with `--agents 2` and `--out tools/perf/results-f3/storm4`, at the same commit, on the same busy machine (load average 4.9 to 9.0 at each start). Records are in [`results-f3/storm4/`](results-f3/storm4/).
+
+| Metric | base | park | Chromium |
+|---|---|---|---|
+| Runs that finished | 3 of 3 | 3 of 3 | 3 of 3 |
+| Chats open at the end (of 4) | 3, 3, 3 | 3, 3, 4 | 4, 4, 4 |
+| Elements reachable from the root, measure | 34,996, 27,583, 31,265 | 16,588, 11,231, 4,752 | |
+| Of those, hidden and never painted | 31,582, 11,614, 16,267 | 64, 43, 35 | |
+| Largest row, the live turn's activity | | 16,305, 10,948, 4,419 | |
+| Chat start while others stream, p50 (s) | 84.3, 15.0, 20.8 | 81.5, 7.6, 11.0 | 10.1, 15.0, 13.8 |
+| Typing part of that start, p50 (s) | 62.1, 10.6, 14.9 | 57.3, 5.7, 7.6 | 6.1, 10.6, 9.6 |
+| Frames on screen while switching chats | 0.4, 0.5, 0.4 | 2.3, 0.7, 3.0 | 7.5, 5.1, 5.6 |
+| Frames on screen, measure phase | 0.3, 0.3, 0.3 | 0.5, 0.8, 1.6 | 2.5, 4.6, 3.8 |
+| Client PSS, measure, median (MB) | 1,556, 1,334, 1,567 | 1,214, 987, 488 | 1,014, 1,119, 1,102 |
+| Client PSS, measure, peak (MB) | 1,598, 1,433, 1,618 | 1,262, 1,050, 578 | 1,026, 1,140, 1,109 |
+| `gpuix-ui` CPU, measure (% of a core) | 91, 95, 90 | 87, 87, 69 | |
+
+Every GPUIX run but one lost a chat start ("launcher composer never accepted"), with or without parking. The p50 start time of a run that lost one is taken over its three remaining chats, and the 80 s values include the start right after the failed one. With four chats the hidden tree is smaller than with eight, but parking still cuts it from 11,600 to 31,600 elements to under 70. What is left is the live turn's activity row, which held 4,419 to 16,305 elements and kept the frame rate at 0.5 to 1.6 fps against Chromium's 2.5 to 4.6.
 
 ## What still limits it
 
