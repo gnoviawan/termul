@@ -415,9 +415,9 @@ function inputChange(payload: EventPayload): void {
  * still. In the DOM that focus lands before the next keystroke, so the field
  * gets them. Printable keys no handler prevented are held here and given to a
  * controlled text field that focus() targets soon before or after
- * (palette.type-ahead).
+ * (palette.type-ahead). The window is wide because rendering what the
+ * shortcut opens can take over a second on a loaded host.
  */
-/** Rendering what the shortcut opens can take over a second on a loaded host before its focus() runs. */
 const TYPE_AHEAD_MS = 3000
 let typeAhead: { text: string; at: number } | null = null
 let focusTarget: { id: number; at: number } | null = null
