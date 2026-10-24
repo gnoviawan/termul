@@ -14,6 +14,7 @@ import {
   MENU_SHORTCUT_CLASS,
   MENU_SUB_TRIGGER_OPEN_CLASS
 } from './menu-styles'
+import { usePortalContainer } from './portal-container'
 
 /**
  * Touch floor: rows keep the shared 32px menu height on fine pointers and grow
@@ -82,7 +83,7 @@ const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
 >(({ className, children, ...props }, ref) => (
-  <ContextMenuPrimitive.Portal>
+  <ContextMenuPrimitive.Portal container={usePortalContainer()}>
     <ContextMenuPrimitive.Content
       ref={ref}
       className={cn(
