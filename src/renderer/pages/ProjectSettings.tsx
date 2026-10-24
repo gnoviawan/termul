@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Info } from '@/components/icons'
-import { NewProjectModal } from '@/components/NewProjectModal'
 import { toastAccountChoiceError } from '@/components/settings/provider/account-choice-error'
 import { ProjectProviderSettings } from '@/components/settings/provider/ProjectProviderSettings'
 import { SettingsLayout, SettingsSection } from '@/components/settings/SettingsLayout'
@@ -37,12 +36,11 @@ export function ProjectSettingsModal() {
   const openAppSettings = useSettingsModalStore((state) => state.openApp)
   const projectPage = useSettingsModalStore((state) => state.projectPage)
   const setProjectPage = useSettingsModalStore((state) => state.setProjectPage)
-  const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false)
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false)
   const activeProject = useActiveProject()
   const claudeAccountDraft = useProjectClaudeAccountDraft(activeProject?.id, { enabled: isOpen })
   const activeProjectId = useActiveProjectId()
-  const { addProject, updateProject } = useProjectActions()
+  const { updateProject } = useProjectActions()
 
   const [projectName, setProjectName] = useState(activeProject?.name || '')
   const [selectedColor, setSelectedColor] = useState<ProjectColor>(activeProject?.color || 'blue')
@@ -435,12 +433,6 @@ export function ProjectSettingsModal() {
           </SettingsSection>
         </SettingsLayout>
       </SettingsModal>
-
-      <NewProjectModal
-        isOpen={isNewProjectModalOpen}
-        onClose={() => setIsNewProjectModalOpen(false)}
-        onCreateProject={addProject}
-      />
 
       <ConfirmDialog
         isOpen={isCloseConfirmOpen}
