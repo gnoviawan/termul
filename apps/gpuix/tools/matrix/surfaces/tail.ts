@@ -183,14 +183,16 @@ const LONG_TAIL: Surface[] = [
     id: 'ssh.workspace',
     area: 'ssh',
     title: 'SSH profiles and sessions',
-    pending: { unit: 'R1', reason: 'SSH server routes are on gpuix/r1, in review' },
+    blocked:
+      'No web reference: SSH needs a host-local client (useHostGate(canUseHostSsh)), which a browser never is; R2 drove the GPUIX flow against a throwaway sshd (reports/r2-shots)',
     steps: []
   },
   {
     id: 'settings.accounts-claude',
     area: 'settings',
     title: 'Claude account sign-in',
-    pending: { unit: 'R1', reason: 'Claude-account server routes are on gpuix/r1, in review' },
+    blocked:
+      'No web reference: Claude account management needs a host-local client, which a browser never is; the R1-R3 e2e kit (reports/r1-e2e, accounts mode) covers the server path',
     steps: []
   },
   {

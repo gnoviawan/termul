@@ -41,6 +41,11 @@ const TINT =
   'Some words in labels and descriptions paint in an accent or warm colour (word runs pick up a colour the web text does not have).'
 const SELECT =
   'Each native select renders as a chevron button plus every option laid out as plain text in the row, which squeezes the label column; the web shows one closed dropdown.'
+const SHORT_TRANSCRIPT =
+  'A short transcript sits at the bottom of the GPUIX pane, leaving the space above it empty, where the web starts it at the top.'
+const TAB_TITLE = 'The GPUIX tab title truncates to a few letters ("matr...") where the web shows the whole title.'
+const ENTER =
+  'Enter in a text field or list does not run the field\'s action in GPUIX (form submit, command palette selection), while Enter in the chat composer does.'
 const SETTINGS_BASE = ['The section content and navigation match.', 'The modal backdrop is far lighter than the web bg-overlay.', TINT]
 const TOAST =
   'The toast is the sonner shim: a flat green box at the window edge with the close button on the right, where the web shows a card with a check icon and the close button at its top-left.'
@@ -229,13 +234,7 @@ export const REVIEWS: Record<string, Review> = {
   },
   'terminal.open': { status: 'ported', differences: ['Terminal tab and prompt match; the GPUIX tab title truncates to "Ter..." where the web shows "Terminal 1".'] },
   'terminal.type': { status: 'ported', differences: ['echo output matches cell for cell.'] },
-  'terminal.vim-replies': {
-    status: 'ported',
-    differences: [
-      'After vim -u NONE and :q! both clients show a clean prompt. The echoed query replies (^[[>0;276;0c ... rgb:) from the O1 fixture did not appear in either client here.',
-      'GPUIX draws a block cursor; the unfocused web terminal draws none.'
-    ]
-  },
+
   'terminal.file-link': {
     status: 'ported',
     differences: ['Ctrl+click on src/app.ts in terminal output opens app.ts in a new tab in both.', TREE_TEXT]
@@ -376,5 +375,165 @@ export const REVIEWS: Record<string, Review> = {
     unit: 'U1 GPUIX updater and what\'s new',
     impact: 1
   },
-  ...THEME_REVIEWS
+  ...THEME_REVIEWS,
+  'theme.tokyonight-light': {
+    status: 'ported',
+    differences: [
+      'Colours match the web dashboard.',
+      'In the first full run this GPUIX launch crashed to "Uncaught runtime errors: Timed out after 2 seconds waiting for the automation bounds query" (compat live-reads from a tanstack-virtual resize); the rerun booted cleanly, so the crash is intermittent.'
+    ],
+    cause: 'needs diagnosis',
+    unit: 'C13 live-read timeout under load',
+    impact: 1
+  },
+  'chat.plan': {
+    status: 'partial',
+    differences: [
+      'The pinned Plan panel and the inline plan card match: three entries, Medium chips, the struck-through finished entry and the 1/3 count.',
+      SHORT_TRANSCRIPT,
+      TAB_TITLE
+    ],
+    cause: 'native override needed',
+    unit: 'O6 transcript scroll and anchoring',
+    impact: 1
+  },
+  'chat.permission': {
+    status: 'partial',
+    differences: [
+      'The Approval needed card, its Allow and Reject buttons, the Needs you badge and the status-bar pill match; clicking Allow answers allow-once in both.',
+      SHORT_TRANSCRIPT
+    ],
+    cause: 'native override needed',
+    unit: 'O6 transcript scroll and anchoring',
+    impact: 1
+  },
+  'chat.queue': {
+    status: 'partial',
+    differences: ['A prompt sent while the turn runs shows under 1 Queued in both, and the stop button replaces send.', SHORT_TRANSCRIPT, PROSE],
+    cause: 'native override needed',
+    unit: 'O5 native prose styling',
+    impact: 1
+  },
+  'terminal.vim-replies': {
+    status: 'ported',
+    differences: [
+      'With the O1 fixture\'s command (vim -u NONE -N notes.txt, then :q!) typed into the full app, both clients return to a clean prompt; neither echoes ^[[>0;276;0c or rgb: replies.',
+      'So the echo in O1\'s GPUIX shot does not reproduce in the full app with typed input: it belongs to the fixture, which writes its inputs to the PTY back to back, not to GPUIX (inferred; the fixture itself was not rerun here).'
+    ]
+  },
+  'palette.type-ahead': {
+    status: 'broken',
+    differences: [
+      'Typing "theme" straight after Ctrl+K filters the web palette; GPUIX opens the palette with an empty search field, so the keystrokes typed before focus moved are lost.',
+      'The web ranks Open Canvas first for "theme" and GPUIX ranks Agent Launcher first (seen when the filter is typed after the palette opens).'
+    ],
+    cause: 'needs diagnosis',
+    unit: 'C11 focus on open',
+    impact: 2
+  },
+  'palette.new-terminal': { status: 'ported', differences: ['New Terminal opens Terminal 1 in both.'] },
+  'palette.agent-launcher': { status: 'ported', differences: ['Agent Launcher shows the launcher with its close button in both.'] },
+  'palette.save-snapshot': {
+    status: 'partial',
+    differences: ['The Create Snapshot modal matches.', `The ${OVERLAY}`, TINT],
+    cause: 'compat translator gap',
+    unit: 'C6 overlay backdrop',
+    impact: 1
+  },
+  'palette.open-canvas': {
+    status: 'blocked',
+    differences: ['Opens the canvas tab in both; see canvas.open for why the canvas itself is not compared.'],
+    cause: 'missing GPUIX capability',
+    unit: 'X1 canvas host',
+    impact: 1
+  },
+  'palette.project-settings': {
+    status: 'partial',
+    differences: ['Project settings opens on General with the same fields.', `The ${OVERLAY}`],
+    cause: 'compat translator gap',
+    unit: 'C6 overlay backdrop',
+    impact: 1
+  },
+  'palette.app-preferences': {
+    status: 'partial',
+    differences: ['Preferences opens on Interface.', `The ${OVERLAY}`],
+    cause: 'compat translator gap',
+    unit: 'C6 overlay backdrop',
+    impact: 1
+  },
+  'palette.switch-project': {
+    status: 'broken',
+    differences: ['Typing beta filters to the beta row in both, but Enter switches the web to beta and leaves the GPUIX palette open on alpha.', ENTER],
+    cause: 'needs diagnosis',
+    unit: 'C12 Enter in fields and lists',
+    impact: 2
+  },
+  'palette.command-history': {
+    status: 'partial',
+    differences: ['The Command History modal, its scope picker and empty state match.', `The ${OVERLAY}`, 'No focus ring on the search field.'],
+    cause: 'compat translator gap',
+    unit: 'C6 overlay backdrop',
+    impact: 1
+  },
+  'palette.color-theme': { status: 'ported', differences: ['Change Color Theme opens the Color Themes popover in both; see theme.picker for its tint.'] },
+  'palette.shortcut-menu': {
+    status: 'partial',
+    differences: ['Opens the Shortcut Menu in both.', `The ${OVERLAY}`],
+    cause: 'compat translator gap',
+    unit: 'C6 overlay backdrop',
+    impact: 1
+  },
+  'palette.report-bug': {
+    status: 'broken',
+    differences: ['Opens the Report a bug dialog, collapsed the same way as dialogs.bug-report.'],
+    cause: 'compat translator gap',
+    unit: 'C9 dialog body layout',
+    impact: 1
+  },
+  'shortcuts.toggle-projects': { status: 'ported', differences: ['Ctrl+Shift+B collapses the rail in both.'] },
+  'shortcuts.toggle-side-panel': { status: 'ported', differences: ['Ctrl+B hides the side panel in both.'] },
+  'shortcuts.theme-picker': { status: 'ported', differences: ['Ctrl+Alt+T opens the Color Themes popover in both.'] },
+  'shortcuts.zoom-in': {
+    status: 'broken',
+    differences: [
+      'Alt+= zooms the web UI to 110 %; GPUIX does not change scale. The UI zoom hook (hooks/use-ui-zoom.ts) is on the compat needs-override list.'
+    ],
+    cause: 'native override needed',
+    unit: 'O10 UI zoom',
+    impact: 2
+  },
+  'shortcuts.desktop-keymap': {
+    status: 'blocked',
+    differences: [
+      'GPUIX boots without __TAURI_INTERNALS__, so getDefaultKeyboardShortcuts() hands it the web keymap: Alt+T, Alt+W, Alt+, and Alt+= instead of the desktop Ctrl+T, Ctrl+W, Ctrl+, and Ctrl+=, and no Ctrl+R command history. A desktop user who moves to GPUIX loses those keys.'
+    ],
+    cause: 'native override needed',
+    unit: 'K2 desktop keymap for GPUIX',
+    impact: 2
+  },
+  'notifications.toast': {
+    status: 'broken',
+    differences: [
+      'Create branch from main opens the name field in both. Typing the name and pressing Enter creates the branch and shows the success toast on the web; in GPUIX the name sits in the field and nothing happens.',
+      ENTER,
+      'Toast styling itself is compared on git.commit.'
+    ],
+    cause: 'needs diagnosis',
+    unit: 'C12 Enter in fields and lists',
+    impact: 2
+  },
+  'ssh.workspace': {
+    status: 'blocked',
+    differences: [
+      'No web reference: SSH needs a host-local client and a browser never is one, so the web client shows no SSH section.',
+      'R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render. In gpuix-ssh-connected.png the SFTP Modified column wraps times such as 12:26 AM onto two lines.'
+    ],
+    cause: 'compat translator gap',
+    unit: 'C14 SFTP table column widths',
+    impact: 1
+  },
+  'settings.accounts-claude': {
+    status: 'blocked',
+    differences: ['No web reference: Claude account management needs a host-local client. The R1-R3 e2e kit (reports/r1-e2e, accounts mode) covers the server path; no GPUIX pixel check of the sign-in flow exists yet.']
+  }
 }

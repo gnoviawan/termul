@@ -450,6 +450,16 @@ const TERMINAL: Surface[] = [
     steps: [DASHBOARD, step('b-menu', [click(label('New tab'))], see('Terminal'))]
   },
   {
+    id: 'terminal.tab-reorder',
+    area: 'terminal',
+    title: 'Reorder terminal tabs by dragging',
+    steps: [
+      DASHBOARD,
+      step('b-two', [openTerminal, wait(2000), click(label('New tab')), click(label('Bash', 'menuitem')), wait(2000)], see('Terminal 1', 'Terminal 2')),
+      step('c-reordered', [drag(txt('Terminal 2'), txt('Terminal 1')), wait(1200)])
+    ]
+  },
+  {
     id: 'terminal.split',
     area: 'terminal',
     title: 'Split panes: drag a second terminal tab to the pane edge',
