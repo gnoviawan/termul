@@ -47,6 +47,15 @@ export const BAND_FOCUS_CLASS = 'focus-within:border-focus-ring'
 export const COMPOSER_FOCUS_CLASS =
   'focus-within:border-focus-ring focus-within:ring-1 focus-within:ring-focus-ring'
 
+/**
+ * {@link COMPOSER_FOCUS_CLASS} for a prompt card whose options are buttons:
+ * the edge lights only while a child matches `:focus-visible`, so a mouse
+ * click on an option does not ring the whole card. A text field inside still
+ * lights it, since browsers treat a focused text field as `:focus-visible`.
+ */
+export const PROMPT_CARD_FOCUS_CLASS =
+  'has-[:focus-visible]:border-focus-ring has-[:focus-visible]:ring-1 has-[:focus-visible]:ring-focus-ring'
+
 /** Quiet icon button: muted glyph, foreground wash on hover. No size. */
 export const QUIET_ICON_BUTTON_CLASS = `inline-flex items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground ${FOCUS_RING_CLASS}`
 
