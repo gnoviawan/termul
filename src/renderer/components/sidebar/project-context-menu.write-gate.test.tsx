@@ -26,7 +26,6 @@ function renderMenu(project: Project) {
         availableShells={null}
         selectProject={vi.fn()}
         onStartRename={vi.fn()}
-        onOpenSettings={vi.fn()}
         onOpenColorPicker={vi.fn()}
         onUpdateProject={vi.fn()}
         moveProjectToGroup={vi.fn()}
