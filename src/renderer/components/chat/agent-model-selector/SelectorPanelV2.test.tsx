@@ -543,7 +543,7 @@ describe('SelectorPanelV2 rejected values and optimistic switches', () => {
     const onSetConfig = vi.fn(async () => {
       throw new Error('not supported')
     })
-    const { rerender } = render(<Panel {...props({ onSetConfig })} />)
+    const { rerender } = render(<Panel {...props({ onSetConfig, thoughtLevel: null })} />)
     const flyout = await openEdit()
     fireEvent.click(within(flyout).getByRole('menuitemradio', { name: '1M' }))
     await waitFor(() => expect(stored.size).toBe(1))
@@ -551,6 +551,7 @@ describe('SelectorPanelV2 rejected values and optimistic switches', () => {
       <Panel
         {...props({
           onSetConfig,
+          thoughtLevel: null,
           genericOptions: [
             contextOption('1m', [
               ['300k', '300K'],
@@ -565,6 +566,14 @@ describe('SelectorPanelV2 rejected values and optimistic switches', () => {
     })
     expect(current).toBeDisabled()
     expect(current).toHaveAttribute('aria-checked', 'true')
+
+    // Reopened, focus skips the disabled current value to the first enabled one.
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowLeft' })
+    await waitFor(() => expect(screen.queryByTestId('selector-edit-flyout')).toBeNull())
+    const reopened = await openEdit()
+    await waitFor(() =>
+      expect(within(reopened).getByRole('menuitemradio', { name: '300K' })).toHaveFocus()
+    )
   })
 
   it('a boolean option flips at once, and reverts when the agent rejects it', async () => {

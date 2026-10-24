@@ -253,7 +253,8 @@ function optionChoices(option: SessionConfigOption, isRejected?: IsRejected): Op
   })
 }
 
-const ignore = (): void => {}
+/** A rejected set is already toasted, and its value marked unavailable. */
+const alreadyReported = (): void => {}
 
 /**
  * The active model's session options: Thinking (the effort option), Context,
@@ -287,7 +288,7 @@ function editSections(
       label: 'Context',
       value: selectValue(context),
       choices: windows,
-      onPick: (value) => void trySet(context.id, value).catch(ignore)
+      onPick: (value) => void trySet(context.id, value).catch(alreadyReported)
     })
   }
   const { onToggleFast } = props
@@ -375,7 +376,7 @@ function SessionOptions({
         choices={choices}
         disabled={disabled}
         touch={touch}
-        onSelect={(value) => void trySet(option.id, value).catch(ignore)}
+        onSelect={(value) => void trySet(option.id, value).catch(alreadyReported)}
       />
     )
   }

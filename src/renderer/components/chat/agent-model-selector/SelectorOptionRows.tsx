@@ -97,7 +97,7 @@ export type ChoiceSection =
       onToggle: (value: boolean) => void | Promise<void>
     }
 
-/** `Thinking, Context and Fast` */
+/** `Thinking, Context and Fast mode` */
 export function sectionsLabel(sections: readonly ChoiceSection[]): string {
   const labels = sections.map((section) => section.label)
   const last = labels.pop()
@@ -252,7 +252,10 @@ function ToggleChoice({
 
 /** Focus the first checked radio choice (or the first item) when a flyout opens. */
 function focusChoice(container: HTMLElement | null): void {
-  const choices = Array.from(container?.querySelectorAll<HTMLElement>(CHOICE) ?? [])
+  // A checked value the agent has since rejected is disabled and cannot take focus.
+  const choices = Array.from(container?.querySelectorAll<HTMLElement>(CHOICE) ?? []).filter(
+    (c) => !c.hasAttribute('disabled')
+  )
   const target =
     choices.find(
       (c) => c.getAttribute('role') === 'menuitemradio' && c.getAttribute('aria-checked') === 'true'
