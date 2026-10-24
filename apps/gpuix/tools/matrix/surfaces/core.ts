@@ -428,7 +428,7 @@ const TERMINAL: Surface[] = [
     steps: [
       DASHBOARD,
       step('b-open', [openTerminal, wait(2500)]),
-      step('c-vim', [type('vim -u NONE\n'), wait(2500)]),
+      step('c-vim', [type('vim -u NONE -N notes.txt\n'), wait(2500)]),
       step('d-quit', [press('escape'), type(':q!\n'), wait(1500)])
     ]
   },

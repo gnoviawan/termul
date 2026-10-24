@@ -34,7 +34,11 @@ deleted at the end of the run.
    (`README.md`) and an untracked file (`notes.txt`). beta, gamma and delta
    are plain folders. A chat in alpha holds the scripted agent's three turns
    (`tools/chat/scenario-agent.ts`): prose, code, a table, mermaid, tool
-   calls, thoughts and an edit with a diff.
+   calls, thoughts and an edit with a diff. The agent runs behind
+   `tools/matrix/agent.ts`, which answers three more prompts itself:
+   `matrix plan` (a plan update), `matrix permission` (a tool call that asks
+   for permission) and `matrix hold` (a turn that stays open, so the next
+   prompt queues).
 2. Each surface in `surfaces/` runs in the web client (Playwright chromium,
    1280x800, dark, reduced motion) and then in GPUIX (Xvfb, lavapipe,
    automation). Both start on the dashboard as a fresh device, so per-device
@@ -45,7 +49,9 @@ deleted at the end of the run.
    point where the web client acted. `web-point` means it clicked where the
    web client painted that element, which happens for targets only the DOM can
    name (accessible labels, CSS selectors) and for native lookups that found
-   nothing.
+   nothing. A drag onto a pane spot (`frac` of `[data-pane-content]`) runs as
+   mouse steps on the web, so the HTML5 drag reveals the pane's drop zones
+   before the pointer reaches them; other drags use Playwright `dragTo`.
 4. A check passes when its text is painted. On the web that means
    `innerText` of the page or of the `within` test id. On GPUIX it means a
    node's text or the joined tree text (`getAllText`, because
