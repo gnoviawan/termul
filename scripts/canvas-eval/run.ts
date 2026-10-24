@@ -37,6 +37,8 @@ interface RunResult {
   durationMs?: number
   calls: number
   failedCalls: number
+  /** Calls after which the router could not save the document, so design.figcraft may be stale. */
+  failedSnapshots: number
   issues: Issue[]
   png?: string
 }
@@ -124,7 +126,7 @@ function runOne(prompt: Prompt, mode: string, out: string): RunResult {
     })
     .findLast((event) => event.type === 'result')
   const calls = lines(join(dir, 'calls.jsonl')).map(
-    (line) => JSON.parse(line) as { isError: boolean }
+    (line) => JSON.parse(line) as { isError: boolean; snapshotError?: string }
   )
 
   let png: string | undefined
@@ -149,12 +151,13 @@ function runOne(prompt: Prompt, mode: string, out: string): RunResult {
     durationMs: final?.duration_ms as number | undefined,
     calls: calls.length,
     failedCalls: calls.filter((call) => call.isError).length,
+    failedSnapshots: calls.filter((call) => call.snapshotError).length,
     issues,
     png
   }
   writeFileSync(join(dir, 'result.json'), JSON.stringify(result, null, 2))
   process.stdout.write(
-    `${prompt.id} / ${mode}: ${calls.length} calls, ${issues.length} integrity issues, ${png ? 'rendered' : 'no image'}\n`
+    `${prompt.id} / ${mode}: ${calls.length} calls, ${issues.length} integrity issues, ${png ? 'rendered' : 'no image'}${result.failedSnapshots ? `, ${result.failedSnapshots} failed snapshots` : ''}\n`
   )
   return result
 }

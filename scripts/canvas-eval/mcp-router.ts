@@ -80,9 +80,9 @@ const figcraft = new Upstream(
 )
 
 const ready = (async () => {
-  const [hello] = await Promise.all([termul.open(), figcraft.open()])
+  const [hello, engine] = await Promise.all([termul.open(), figcraft.open()])
   const listed = await termul.request('tools/list', {})
-  const failed = hello.error ?? listed.error
+  const failed = hello.error ?? engine.error ?? listed.error
   if (failed) throw new Error(String(failed.message))
   const full = String(hello.result?.instructions ?? '')
   const instructions = mode === 'baseline' ? withoutHarness(full) : full
@@ -98,12 +98,18 @@ const ready = (async () => {
 // Every handler awaits `ready` and reports its failure, so a rejection before the first message must not kill the router.
 ready.catch(() => {})
 
-async function snapshot() {
-  await figcraft.request('tools/call', { name: 'save_file', arguments: { path: designPath } })
+/** Saves the document for the runner and returns why that failed, if it did. */
+async function snapshot(): Promise<string | undefined> {
+  const saved = await figcraft.request('tools/call', {
+    name: 'save_file',
+    arguments: { path: designPath }
+  })
   const tree = await figcraft.request('tools/call', {
     name: 'inspect_document',
     arguments: { depth: 64 }
   })
+  const failed = [saved, tree].find((reply) => reply.error || reply.result?.isError === true)
+  if (failed) return JSON.stringify(failed.error ?? failed.result?.content)
   const content = tree.result?.content as { text?: string }[] | undefined
   if (content?.[0]?.text) writeFileSync(join(out, 'document.json'), content[0].text)
 }
@@ -122,11 +128,15 @@ async function callTool(params: Json): Promise<Json> {
     content: [{ type: 'text', text: JSON.stringify(reply.error) }],
     isError: true
   }
+  const ms = Date.now() - at
+  // A failed snapshot is the eval's problem, not the agent's. Its change did apply, so the agent
+  // still gets its result and the failure is recorded for the run report instead.
+  const snapshotError =
+    !READ_ONLY.has(name) && result.isError !== true ? await snapshot() : undefined
   appendFileSync(
     join(out, 'calls.jsonl'),
-    `${JSON.stringify({ at: at - started, ms: Date.now() - at, tool: name, isError: result.isError === true })}\n`
+    `${JSON.stringify({ at: at - started, ms, tool: name, isError: result.isError === true, snapshotError })}\n`
   )
-  if (!READ_ONLY.has(name) && result.isError !== true) await snapshot()
   return result
 }
 
