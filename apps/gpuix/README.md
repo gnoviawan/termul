@@ -38,6 +38,7 @@ Scripts:
 - `bun run typecheck` runs both tsc projects (see below).
 - `bun run check:react` proves the bundle shares one React 19 with `@gpuix/react`.
 - `bun run parity <scenario>` runs the pixel-parity harness.
+- `TERMUL_SERVER_BIN=<fresh termul-server> bun tools/launcher/host-local-e2e.ts` runs the real launcher against that server and checks the `/ws` grant: `hostLocal` with the credential, not without it, not through a proxy header, and for an attached client only with `TERMUL_GPUIX_DATA_DIR`.
 - `bun tools/live-rename.ts` shoots the project list, renames a project through
   the server API while the app runs, and shoots again.
 
