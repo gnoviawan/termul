@@ -62,13 +62,7 @@ async function boot(): Promise<void> {
   )
   await new Promise<void>((ready, failed) => {
     withGpuix(
-      {
-        server: world.server,
-        entry: build.entry,
-        clientStateDir,
-        width: WINDOW_WIDTH,
-        height: WINDOW_HEIGHT
-      },
+      { server: world.server, entry: build.entry, clientStateDir, width: WINDOW_WIDTH, height: WINDOW_HEIGHT },
       async (session) => {
         await session.app.getByText('What should we do in alpha?').waitFor({ timeoutMs: 60_000 })
         await new Promise<void>((done) => {

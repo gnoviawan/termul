@@ -14,21 +14,16 @@ const out = process.env.BENCH_OUT ?? '/tmp/gpuix-c1/bench.json'
 runBench(
   process.env.BENCH_MODE === 'hand' ? 'hand' : 'compat',
   {
-    profile:
-      process.env.BENCH_PROFILE === 'mount' || process.env.BENCH_PROFILE === 'rerender'
-        ? process.env.BENCH_PROFILE
-        : null,
+    profile: process.env.BENCH_PROFILE === 'mount' || process.env.BENCH_PROFILE === 'rerender' ? process.env.BENCH_PROFILE : null,
     iterations: process.env.BENCH_ITERATIONS ? Number(process.env.BENCH_ITERATIONS) : null,
     sleep: (ms) => Bun.sleep(ms),
     gc: () => Bun.gc(true),
     rssBytes: () => process.memoryUsage().rss,
-    cpuMicros: () =>
-      Number(readFileSync(`/proc/self/task/${process.pid}/schedstat`, 'utf8').split(' ')[0]) / 1000,
+    cpuMicros: () => Number(readFileSync(`/proc/self/task/${process.pid}/schedstat`, 'utf8').split(' ')[0]) / 1000,
     write: (json) => writeFileSync(out, json),
     exit: () => process.exit(0)
   },
   (renderer) => {
-    for (const file of FONT_FILES)
-      renderer.registerFont?.(readFileSync(path.join(FONT_DIR, path.basename(file))))
+    for (const file of FONT_FILES) renderer.registerFont?.(readFileSync(path.join(FONT_DIR, path.basename(file))))
   }
 )

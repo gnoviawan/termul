@@ -52,22 +52,15 @@ export const REVIEWS: Record<string, Review> = {
   },
   'rail.project-rename': {
     status: 'ported',
-    differences: [
-      'Rename from the context menu edits the row in place and Enter saves gamma-renamed in both.'
-    ]
+    differences: ['Rename from the context menu edits the row in place and Enter saves gamma-renamed in both.']
   },
   'rail.project-remove': {
     status: 'ported',
-    differences: [
-      'Delete from the context menu asks for confirmation and removes delta in both.',
-      BACKDROP
-    ]
+    differences: ['Delete from the context menu asks for confirmation and removes delta in both.', BACKDROP]
   },
   'rail.project-colour': {
     status: 'ported',
-    differences: [
-      'Change Color opens the Select Color popover with the same nine swatches and the current one ringed.'
-    ]
+    differences: ['Change Color opens the Select Color popover with the same nine swatches and the current one ringed.']
   },
   'rail.project-reorder': {
     status: 'broken',
@@ -94,11 +87,7 @@ export const REVIEWS: Record<string, Review> = {
   },
   'rail.project-settings': {
     status: 'partial',
-    differences: [
-      'The gear opens Project settings on General with the same fields in both.',
-      BACKDROP,
-      TINT
-    ],
+    differences: ['The gear opens Project settings on General with the same fields in both.', BACKDROP, TINT],
     cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
@@ -115,9 +104,7 @@ export const REVIEWS: Record<string, Review> = {
   },
   'side.chat-card-menu': {
     status: 'ported',
-    differences: [
-      'Right-click on a chat card opens the same five-row menu with Delete Chat in red.'
-    ]
+    differences: ['Right-click on a chat card opens the same five-row menu with Delete Chat in red.']
   },
   'side.workspace-switcher': {
     status: 'ported',
@@ -273,7 +260,10 @@ export const REVIEWS: Record<string, Review> = {
   },
   'chat.model-selector': {
     status: 'partial',
-    differences: ['The running chat shows the agent chip and composer like the web.', PROSE],
+    differences: [
+      'The running chat shows the agent chip and composer like the web.',
+      PROSE
+    ],
     cause: 'missing GPUIX capability',
     unit: 'O5 native prose styling',
     impact: 1

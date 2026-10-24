@@ -18,7 +18,6 @@ import { addProject, type TestServer } from './server'
 import { READY_TIMEOUT_MS, withGpuix } from './shoot-gpuix'
 
 type GpuixApp = Parameters<Parameters<typeof withGpuix>[1]>[0]['app']
-
 import { withWeb } from './shoot-web'
 
 export type Action =
@@ -81,16 +80,12 @@ export const WORKSPACE_REGIONS: Region[] = [
 ]
 
 function git(cwd: string, ...args: string[]): void {
-  const proc = Bun.spawnSync(
-    ['git', '-c', 'user.name=parity', '-c', 'user.email=parity@example.invalid', ...args],
-    {
-      cwd,
-      stdout: 'ignore',
-      stderr: 'pipe'
-    }
-  )
-  if (proc.exitCode !== 0)
-    throw new Error(`git ${args.join(' ')} failed: ${proc.stderr.toString()}`)
+  const proc = Bun.spawnSync(['git', '-c', 'user.name=parity', '-c', 'user.email=parity@example.invalid', ...args], {
+    cwd,
+    stdout: 'ignore',
+    stderr: 'pipe'
+  })
+  if (proc.exitCode !== 0) throw new Error(`git ${args.join(' ')} failed: ${proc.stderr.toString()}`)
 }
 
 /** alpha is a git repo with one commit, a modified file and an untracked one; beta is a plain folder. */
@@ -124,10 +119,7 @@ async function webAction(page: Page, action: Action): Promise<Rect | null> {
       await page.keyboard.press(action.key)
       return null
     case 'gone':
-      await page
-        .getByText(action.text, { exact: true })
-        .first()
-        .waitFor({ state: 'hidden', timeout: READY_TIMEOUT_MS })
+      await page.getByText(action.text, { exact: true }).first().waitFor({ state: 'hidden', timeout: READY_TIMEOUT_MS })
       return null
   }
 }
@@ -136,8 +128,7 @@ async function webAction(page: Page, action: Action): Promise<Rect | null> {
 async function gpuixText(app: GpuixApp, text: string, present: boolean): Promise<void> {
   const deadline = Date.now() + READY_TIMEOUT_MS
   while ((await app.getByText(text).count()) > 0 !== present) {
-    if (Date.now() > deadline)
-      throw new Error(`gpuix: "${text}" ${present ? 'never painted' : 'still painted'}`)
+    if (Date.now() > deadline) throw new Error(`gpuix: "${text}" ${present ? 'never painted' : 'still painted'}`)
     await Bun.sleep(100)
   }
 }
@@ -172,10 +163,8 @@ export async function runWorkspace(opts: WorkspaceRun): Promise<StepResult[]> {
   const size = { width: opts.width, height: opts.height }
   const clickPoints = new Map<string, Rect>()
   const rects = new Map<string, Record<string, Rect | null>>()
-  const shot = (step: string, client: 'web' | 'gpuix') =>
-    path.join(opts.outDir, step, `${client}.png`)
-  for (const step of WORKSPACE_STEPS)
-    await mkdir(path.join(opts.outDir, step.name), { recursive: true })
+  const shot = (step: string, client: 'web' | 'gpuix') => path.join(opts.outDir, step, `${client}.png`)
+  for (const step of WORKSPACE_STEPS) await mkdir(path.join(opts.outDir, step.name), { recursive: true })
 
   await withWeb({ server: opts.server, ...size }, async ({ page, grab }) => {
     for (const step of WORKSPACE_STEPS) {
@@ -184,36 +173,29 @@ export async function runWorkspace(opts: WorkspaceRun): Promise<StepResult[]> {
         if (box) clickPoints.set(`${step.name}/${i}`, box)
       }
       for (const text of step.ready) {
-        await page
-          .getByText(text, { exact: true })
-          .first()
-          .waitFor({ state: 'visible', timeout: READY_TIMEOUT_MS })
+        await page.getByText(text, { exact: true }).first().waitFor({ state: 'visible', timeout: READY_TIMEOUT_MS })
       }
       rects.set(step.name, await regionRects(page))
       await grab(shot(step.name, 'web'))
     }
   })
 
-  await withGpuix(
-    { server: opts.server, entry: opts.entry, clientStateDir: opts.clientStateDir, ...size },
-    async ({ app, grab }) => {
-      for (const step of WORKSPACE_STEPS) {
-        for (const [i, action] of step.actions.entries()) {
-          if (action.kind === 'click-testid') await app.getByTestId(action.testId).click()
-          else if (action.kind === 'press')
-            await app.call('keystrokes', { keys: GPUI_KEYS[action.key] })
-          else if (action.kind === 'gone') await gpuixText(app, action.text, false)
-          else {
-            const box = clickPoints.get(`${step.name}/${i}`)
-            if (!box) throw new Error(`no web position for "${action.label}"`)
-            await app.mouse.click({ x: box.x + box.width / 2, y: box.y + box.height / 2 })
-          }
+  await withGpuix({ server: opts.server, entry: opts.entry, clientStateDir: opts.clientStateDir, ...size }, async ({ app, grab }) => {
+    for (const step of WORKSPACE_STEPS) {
+      for (const [i, action] of step.actions.entries()) {
+        if (action.kind === 'click-testid') await app.getByTestId(action.testId).click()
+        else if (action.kind === 'press') await app.call('keystrokes', { keys: GPUI_KEYS[action.key] })
+        else if (action.kind === 'gone') await gpuixText(app, action.text, false)
+        else {
+          const box = clickPoints.get(`${step.name}/${i}`)
+          if (!box) throw new Error(`no web position for "${action.label}"`)
+          await app.mouse.click({ x: box.x + box.width / 2, y: box.y + box.height / 2 })
         }
-        for (const text of step.ready) await gpuixText(app, text, true)
-        await grab(shot(step.name, 'gpuix'))
       }
+      for (const text of step.ready) await gpuixText(app, text, true)
+      await grab(shot(step.name, 'gpuix'))
     }
-  )
+  })
 
   return WORKSPACE_STEPS.map((step) => {
     const dir = path.join(opts.outDir, step.name)
@@ -224,22 +206,11 @@ export async function runWorkspace(opts: WorkspaceRun): Promise<StepResult[]> {
       const rect = rects.get(step.name)?.[region.name]
       if (!rect) return []
       const files = Object.fromEntries(
-        (['web', 'gpuix', 'diff'] as const).map((kind) => [
-          kind,
-          path.join(dir, `${region.name}-${kind}.png`)
-        ])
+        (['web', 'gpuix', 'diff'] as const).map((kind) => [kind, path.join(dir, `${region.name}-${kind}.png`)])
       ) as Record<'web' | 'gpuix' | 'diff', string>
       cropPng(web, rect, files.web)
       cropPng(gpuix, rect, files.gpuix)
-      return [
-        {
-          name: region.name,
-          rect,
-          diff: diffPngs(files.web, files.gpuix, files.diff),
-          web: files.web,
-          gpuix: files.gpuix
-        }
-      ]
+      return [{ name: region.name, rect, diff: diffPngs(files.web, files.gpuix, files.diff), web: files.web, gpuix: files.gpuix }]
     })
     return { step: step.name, web, gpuix, full, regions }
   })

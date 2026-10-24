@@ -215,24 +215,14 @@ export function parseAllowlist(raw: unknown, source: string): Allowlist {
 export function overriddenFiles(overridesDir: string): Set<string> {
   if (!existsSync(overridesDir)) return new Set()
   const glob = new Bun.Glob('**/*.{ts,tsx}')
-  return new Set(
-    [...glob.scanSync({ cwd: overridesDir })].map((rel) => rel.split(path.sep).join('/'))
-  )
+  return new Set([...glob.scanSync({ cwd: overridesDir })].map((rel) => rel.split(path.sep).join('/')))
 }
 
-export function judge(
-  scans: FileScan[],
-  allowlist: Allowlist,
-  overridden: ReadonlySet<string> = new Set()
-): Verdict {
+export function judge(scans: FileScan[], allowlist: Allowlist, overridden: ReadonlySet<string> = new Set()): Verdict {
   const byPath = new Map(scans.map((s) => [s.path, s]))
   const verdict: Verdict = { unlisted: [], vanished: [], stale: [], drifted: [] }
   for (const scan of scans) {
-    if (
-      scan.status === 'needs-override' &&
-      !(scan.path in allowlist) &&
-      !overridden.has(scan.path)
-    ) {
+    if (scan.status === 'needs-override' && !(scan.path in allowlist) && !overridden.has(scan.path)) {
       verdict.unlisted.push(scan)
     }
   }
@@ -358,11 +348,7 @@ export function run(argv: string[], log: (line: string) => void = console.log): 
   })
   const scans = scanTree(values.root)
   if (values.write) writeFileSync(values.overrides, formatAllowlist(allowlistFrom(scans)))
-  const verdict = judge(
-    scans,
-    readAllowlist(values.overrides),
-    overriddenFiles(values['overrides-dir'])
-  )
+  const verdict = judge(scans, readAllowlist(values.overrides), overriddenFiles(values['overrides-dir']))
   const summary = summarize(scans)
   const failed = verdict.unlisted.length > 0 || verdict.vanished.length > 0
   if (values.json) {

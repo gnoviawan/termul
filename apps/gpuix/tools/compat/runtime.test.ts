@@ -13,13 +13,11 @@ interface Shape {
 /** The GPUIX element tree as type, style and children, the way the renderer receives it. */
 function shape(node: ReactNode): Shape | string {
   if (!isValidElement(node)) return String(node)
-  const { style, children } = (node as ReactElement<{ style?: unknown; children?: ReactNode }>)
-    .props
+  const { style, children } = (node as ReactElement<{ style?: unknown; children?: ReactNode }>).props
   const out: Shape = { type: String(node.type) }
   if (style !== undefined) out.style = style
   if (typeof children === 'string') out.children = children
-  else if (children !== undefined)
-    out.children = [children].flat(Number.POSITIVE_INFINITY).map(shape) as Shape[]
+  else if (children !== undefined) out.children = [children].flat(Number.POSITIVE_INFINITY).map(shape) as Shape[]
   return out
 }
 
@@ -34,11 +32,7 @@ describe('inline text', () => {
 
   test('mixed inline content wraps as a row of word runs that keep their own style', () => {
     const p = jsxs('p', {
-      children: [
-        'Done. I renamed ',
-        jsx('strong', { className: 'font-semibold', children: 'StatusItem' }),
-        ' and kept it.'
-      ]
+      children: ['Done. I renamed ', jsx('strong', { className: 'font-semibold', children: 'StatusItem' }), ' and kept it.']
     })
     expect(shape(p)).toEqual({
       type: 'div',
@@ -60,10 +54,7 @@ describe('lists', () => {
   test('an inside marker sits below the item top padding, on its first line', () => {
     const ul = jsxs('ul', {
       className: 'list-inside list-disc',
-      children: [
-        jsx('li', { className: 'py-1', children: 'one' }, 'a'),
-        jsx('li', { children: 'two' }, 'b')
-      ]
+      children: [jsx('li', { className: 'py-1', children: 'one' }, 'a'), jsx('li', { children: 'two' }, 'b')]
     })
     const row = (marker: Shape['style'], item: Shape) => ({
       type: 'div',
@@ -72,13 +63,7 @@ describe('lists', () => {
         { type: 'text', style: marker, children: '•' },
         {
           type: 'div',
-          style: {
-            flexGrow: 1,
-            flexShrink: 1,
-            minWidth: 0,
-            display: 'flex',
-            flexDirection: 'column'
-          },
+          style: { flexGrow: 1, flexShrink: 1, minWidth: 0, display: 'flex', flexDirection: 'column' },
           children: [item]
         }
       ]
@@ -87,14 +72,8 @@ describe('lists', () => {
       type: 'div',
       style: {},
       children: [
-        row(
-          { width: 16, flexShrink: 0, paddingTop: 4 },
-          { type: 'div', style: { paddingTop: 4, paddingBottom: 4 }, children: 'one' }
-        ),
-        row(
-          { width: 16, flexShrink: 0, paddingTop: 0 },
-          { type: 'div', style: {}, children: 'two' }
-        )
+        row({ width: 16, flexShrink: 0, paddingTop: 4 }, { type: 'div', style: { paddingTop: 4, paddingBottom: 4 }, children: 'one' }),
+        row({ width: 16, flexShrink: 0, paddingTop: 0 }, { type: 'div', style: {}, children: 'two' })
       ]
     })
   })
@@ -110,12 +89,8 @@ describe('translation cache', () => {
 
 describe('native ui text runs', () => {
   test('DiffStatCounts paints each count as one text node', () => {
-    const counts = DiffStatCounts({ added: 3, removed: 1 }) as ReactElement<{
-      children: ReactNode[]
-    }>
-    const texts = counts.props.children
-      .filter(isValidElement)
-      .map((child) => (child.props as { children: unknown }).children)
+    const counts = DiffStatCounts({ added: 3, removed: 1 }) as ReactElement<{ children: ReactNode[] }>
+    const texts = counts.props.children.filter(isValidElement).map((child) => (child.props as { children: unknown }).children)
     expect(texts).toEqual(['+3', ' ', '−1'])
   })
 })

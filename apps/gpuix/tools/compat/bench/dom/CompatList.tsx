@@ -30,11 +30,7 @@ export function CompatList() {
   const projects = useBenchStore((s) => s.projects)
   return (
     <TooltipProvider delayDuration={80}>
-      <div
-        data-testid="bench-ready"
-        data-rail-surface
-        className="flex w-[260px] flex-col gap-0.5 bg-sidebar p-2"
-      >
+      <div data-testid="bench-ready" data-rail-surface className="flex w-[260px] flex-col gap-0.5 bg-sidebar p-2">
         {projects.map((project, index) => (
           <Row key={project.id} project={project} index={index} />
         ))}

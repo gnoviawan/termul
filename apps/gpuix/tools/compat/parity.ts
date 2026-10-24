@@ -17,13 +17,7 @@ import { APP_DIR, REPO_DIR } from '../../build'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { diffPngs } from '../parity/diff'
 import { addProject, startTestServer, type TestServer } from '../parity/server'
-import {
-  grabFrame,
-  LAVAPIPE_ICD,
-  SCREEN_MARGIN,
-  startXvfb,
-  windowOrigin
-} from '../parity/shoot-gpuix'
+import { grabFrame, LAVAPIPE_ICD, SCREEN_MARGIN, startXvfb, windowOrigin } from '../parity/shoot-gpuix'
 import { stateRoot } from '../shared/seed'
 import { buildFixtures } from './build-fixtures'
 import { FIXTURE_NAMES } from './fixtures/names'
@@ -62,8 +56,7 @@ function cropPng(src: string, box: Box, out: string): void {
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
   const p = Bun.spawn(['git', ...args], { cwd, stdout: 'ignore', stderr: 'pipe' })
-  if ((await p.exited) !== 0)
-    throw new Error(`git ${args.join(' ')}: ${await new Response(p.stderr).text()}`)
+  if ((await p.exited) !== 0) throw new Error(`git ${args.join(' ')}: ${await new Response(p.stderr).text()}`)
 }
 
 async function seed(server: TestServer): Promise<void> {
@@ -85,12 +78,7 @@ async function seed(server: TestServer): Promise<void> {
     ['x1-beta', 'beta', 'green'],
     ['x1-gamma', 'gamma service', 'purple']
   ]) {
-    await addProject(server, {
-      id: pid,
-      name,
-      path: path.join(root, name.replace(' ', '-')),
-      color
-    })
+    await addProject(server, { id: pid, name, path: path.join(root, name.replace(' ', '-')), color })
   }
 }
 
@@ -146,13 +134,7 @@ async function shootWeb(server: TestServer, fixture: string, outPath: string) {
 }
 
 /** The bundle as a plain child, so React errors and compat warnings land in a log. */
-async function shootGpuix(
-  server: TestServer,
-  entry: string,
-  fixture: string,
-  outPath: string,
-  dir: string
-) {
+async function shootGpuix(server: TestServer, entry: string, fixture: string, outPath: string, dir: string) {
   const xvfb = await startXvfb(WINDOW_WIDTH + SCREEN_MARGIN, WINDOW_HEIGHT + SCREEN_MARGIN)
   try {
     const app = Bun.spawn(['bun', entry], {
@@ -176,13 +158,7 @@ async function shootGpuix(
     })
     await Bun.sleep(Number(values.settle))
     if (app.exitCode !== null) return `gpuix exited with ${app.exitCode}`
-    await grabFrame(
-      xvfb.display,
-      WINDOW_WIDTH,
-      WINDOW_HEIGHT,
-      outPath,
-      await windowOrigin(xvfb.display, WINDOW_WIDTH, WINDOW_HEIGHT)
-    )
+    await grabFrame(xvfb.display, WINDOW_WIDTH, WINDOW_HEIGHT, outPath, await windowOrigin(xvfb.display, WINDOW_WIDTH, WINDOW_HEIGHT))
     app.kill('SIGTERM')
     await Promise.race([app.exited, Bun.sleep(3000)])
     if (app.exitCode === null) app.kill('SIGKILL')
@@ -194,33 +170,20 @@ async function shootGpuix(
 
 await mkdir(OUT, { recursive: true })
 if (!values['skip-web-build']) {
-  const vite = Bun.spawn(
-    ['bunx', '--bun', 'vite', 'build', '--config', 'apps/gpuix/tools/compat/web/vite.config.ts'],
-    {
-      cwd: REPO_DIR,
-      stdout: 'ignore',
-      stderr: 'pipe'
-    }
-  )
-  if ((await vite.exited) !== 0)
-    throw new Error(`web fixture build failed: ${await new Response(vite.stderr).text()}`)
+  const vite = Bun.spawn(['bunx', '--bun', 'vite', 'build', '--config', 'apps/gpuix/tools/compat/web/vite.config.ts'], {
+    cwd: REPO_DIR,
+    stdout: 'ignore',
+    stderr: 'pipe'
+  })
+  if ((await vite.exited) !== 0) throw new Error(`web fixture build failed: ${await new Response(vite.stderr).text()}`)
 }
 const entry = await buildFixtures()
 
 const port = Number(values.port)
-if (
-  await fetch(`http://127.0.0.1:${port}/health`).then(
-    () => true,
-    () => false
-  )
-) {
+if (await fetch(`http://127.0.0.1:${port}/health`).then(() => true, () => false)) {
   throw new Error(`port ${port} already serves something; pick another with --port`)
 }
-const server = await startTestServer({
-  port,
-  token: 'c1-token',
-  stateDir: path.join(STATE, 'server')
-})
+const server = await startTestServer({ port, token: 'c1-token', stateDir: path.join(STATE, 'server') })
 const summary: Record<string, unknown>[] = []
 try {
   await seed(server)
@@ -231,18 +194,12 @@ try {
     const gpuixPng = path.join(dir, 'gpuix.png')
     const web = await shootWeb(server, fixture, webPng)
     const gpuixError = await shootGpuix(server, entry, fixture, gpuixPng, dir)
-    const full = existsSync(gpuixPng)
-      ? diffPngs(webPng, gpuixPng, path.join(dir, 'diff.png'))
-      : null
+    const full = existsSync(gpuixPng) ? diffPngs(webPng, gpuixPng, path.join(dir, 'diff.png')) : null
     let roi: ReturnType<typeof diffPngs> | null = null
     if (full && web.roi) {
       cropPng(webPng, web.roi, path.join(dir, 'web-roi.png'))
       cropPng(gpuixPng, web.roi, path.join(dir, 'gpuix-roi.png'))
-      roi = diffPngs(
-        path.join(dir, 'web-roi.png'),
-        path.join(dir, 'gpuix-roi.png'),
-        path.join(dir, 'diff-roi.png')
-      )
+      roi = diffPngs(path.join(dir, 'web-roi.png'), path.join(dir, 'gpuix-roi.png'), path.join(dir, 'diff-roi.png'))
     }
     const row = {
       fixture,

@@ -14,7 +14,7 @@ import { parseArgs } from 'node:util'
 import { APP_DIR, buildClient } from '../../build'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { diffPngs, PERCEPTUAL_THRESHOLD } from './diff'
-import { SCENARIOS, type Scenario } from './scenarios'
+import { type Scenario, SCENARIOS } from './scenarios'
 import { startTestServer } from './server'
 import { shootGpuix } from './shoot-gpuix'
 import { shootWeb } from './shoot-web'
@@ -113,9 +113,7 @@ function printSteps(results: StepResult[]): void {
     console.log(`step ${result.step}`)
     console.log(`  web:   ${result.web}`)
     console.log(`  gpuix: ${result.gpuix}`)
-    console.log(
-      `  full       exact ${pct(result.full.exact)}  perceptual ${pct(result.full.perceptual)}`
-    )
+    console.log(`  full       exact ${pct(result.full.exact)}  perceptual ${pct(result.full.perceptual)}`)
     for (const region of result.regions) {
       const { x, y, width, height } = region.rect
       console.log(

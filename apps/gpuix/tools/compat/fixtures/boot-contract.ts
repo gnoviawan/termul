@@ -7,10 +7,6 @@
 import type { NativeRenderer } from '@gpuix/react'
 import type { ClientConfig } from '../../../src/client-config'
 
-export type BootFixture = (
-  config: ClientConfig,
-  fixture: string,
-  onRenderer: (renderer: NativeRenderer) => void
-) => void
+export type BootFixture = (config: ClientConfig, fixture: string, onRenderer: (renderer: NativeRenderer) => void) => void
 
 export declare const boot: BootFixture

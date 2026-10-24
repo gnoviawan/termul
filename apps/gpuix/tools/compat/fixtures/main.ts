@@ -28,15 +28,6 @@ const { boot } = await import('#compat/fixture-boot')
 const FONT_DIR = path.join(import.meta.dir, '../assets/fonts')
 const dump = process.env.COMPAT_DUMP
 boot(config, process.env.COMPAT_FIXTURE ?? 'statusbar', (renderer) => {
-  for (const file of FONT_FILES)
-    renderer.registerFont?.(readFileSync(path.join(FONT_DIR, path.basename(file))))
-  if (dump)
-    setTimeout(
-      () =>
-        writeFileSync(
-          dump,
-          (renderer as unknown as { getAutomationTree(): string }).getAutomationTree()
-        ),
-      6000
-    )
+  for (const file of FONT_FILES) renderer.registerFont?.(readFileSync(path.join(FONT_DIR, path.basename(file))))
+  if (dump) setTimeout(() => writeFileSync(dump, (renderer as unknown as { getAutomationTree(): string }).getAutomationTree()), 6000)
 })

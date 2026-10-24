@@ -1,2015 +1,2015 @@
 {
-  "machine": {
-    "cpu": "AMD EPYC Processor (with IBPB)",
-    "cores": 8,
-    "memGB": 23,
-    "kernel": "6.8.0-147-generic",
-    "bun": "1.4.0"
-  },
-  "client": "gpuix",
-  "gl": "lavapipe",
-  "runs": 5,
-  "scenarios": {
-    "idle": {
-      "okRuns": 5,
-      "metrics": {
-        "measure.bytesDownKBps": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "measure.bytesUpKBps": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "measure.durationS": {
-          "median": 20,
-          "min": 20,
-          "max": 20,
-          "n": 5
-        },
-        "measure.machine.cpuBusyPct": {
-          "median": 64,
-          "min": 55,
-          "max": 381,
-          "n": 5
-        },
-        "measure.machine.foreignCpuPct": {
-          "median": 55,
-          "min": 49,
-          "max": 370,
-          "n": 5
-        },
-        "measure.proc.app.cpuMeanPct": {
-          "median": 8.8,
-          "min": 6.2,
-          "max": 10.7,
-          "n": 5
-        },
-        "measure.proc.app.pssMaxMB": {
-          "median": 234.6,
-          "min": 232.7,
-          "max": 236.7,
-          "n": 5
-        },
-        "measure.proc.app.pssMedianMB": {
-          "median": 231.8,
-          "min": 223.5,
-          "max": 236,
-          "n": 5
-        },
-        "measure.proc.app.rssMaxMB": {
-          "median": 281.7,
-          "min": 279.8,
-          "max": 283.6,
-          "n": 5
-        },
-        "measure.proc.app.rssMedianMB": {
-          "median": 280.5,
-          "min": 276.9,
-          "max": 283.1,
-          "n": 5
-        },
-        "measure.proc.total.cpuMeanPct": {
-          "median": 8.8,
-          "min": 6.2,
-          "max": 10.7,
-          "n": 5
-        },
-        "measure.proc.total.pssMaxMB": {
-          "median": 234.6,
-          "min": 232.7,
-          "max": 236.7,
-          "n": 5
-        },
-        "measure.proc.total.pssMedianMB": {
-          "median": 231.8,
-          "min": 223.5,
-          "max": 236,
-          "n": 5
-        },
-        "measure.proc.total.rssMaxMB": {
-          "median": 281.7,
-          "min": 279.8,
-          "max": 283.6,
-          "n": 5
-        },
-        "measure.proc.total.rssMedianMB": {
-          "median": 280.5,
-          "min": 276.9,
-          "max": 283.1,
-          "n": 5
-        },
-        "measure.screen.fps": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "measure.screen.frames": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "measure.screen.gapMaxMs": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "measure.screen.gapP50Ms": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "measure.screen.gapP95Ms": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "measure.screen.gapP99Ms": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "measure.screen.gapsOver50Ms": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "measure.server.cpuMeanPct": {
-          "median": 0.3,
-          "min": 0.2,
-          "max": 0.5,
-          "n": 5
-        },
-        "settle.bytesDownKBps": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "settle.bytesUpKBps": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "settle.durationS": {
-          "median": 20,
-          "min": 20,
-          "max": 20,
-          "n": 5
-        },
-        "settle.machine.cpuBusyPct": {
-          "median": 139,
-          "min": 62,
-          "max": 244,
-          "n": 5
-        },
-        "settle.machine.foreignCpuPct": {
-          "median": 108,
-          "min": 46,
-          "max": 232,
-          "n": 5
-        },
-        "settle.proc.app.cpuMeanPct": {
-          "median": 17.3,
-          "min": 11.5,
-          "max": 29.8,
-          "n": 5
-        },
-        "settle.proc.app.pssMaxMB": {
-          "median": 236.6,
-          "min": 235.1,
-          "max": 239.7,
-          "n": 5
-        },
-        "settle.proc.app.pssMedianMB": {
-          "median": 234.4,
-          "min": 194,
-          "max": 238.2,
-          "n": 5
-        },
-        "settle.proc.app.rssMaxMB": {
-          "median": 286,
-          "min": 283.4,
-          "max": 286.4,
-          "n": 5
-        },
-        "settle.proc.app.rssMedianMB": {
-          "median": 285,
-          "min": 281.4,
-          "max": 285.5,
-          "n": 5
-        },
-        "settle.proc.total.cpuMeanPct": {
-          "median": 17.3,
-          "min": 11.5,
-          "max": 29.8,
-          "n": 5
-        },
-        "settle.proc.total.pssMaxMB": {
-          "median": 236.6,
-          "min": 235.1,
-          "max": 239.7,
-          "n": 5
-        },
-        "settle.proc.total.pssMedianMB": {
-          "median": 234.4,
-          "min": 194,
-          "max": 238.2,
-          "n": 5
-        },
-        "settle.proc.total.rssMaxMB": {
-          "median": 286,
-          "min": 283.4,
-          "max": 286.4,
-          "n": 5
-        },
-        "settle.proc.total.rssMedianMB": {
-          "median": 285,
-          "min": 281.4,
-          "max": 285.5,
-          "n": 5
-        },
-        "settle.screen.fps": {
-          "median": 0.1,
-          "min": 0,
-          "max": 0.2,
-          "n": 5
-        },
-        "settle.screen.frames": {
-          "median": 2,
-          "min": 1,
-          "max": 3,
-          "n": 5
-        },
-        "settle.screen.gapMaxMs": {
-          "median": 101.4,
-          "min": 0,
-          "max": 402.4,
-          "n": 5
-        },
-        "settle.screen.gapP50Ms": {
-          "median": 101.4,
-          "min": 0,
-          "max": 402.4,
-          "n": 5
-        },
-        "settle.screen.gapP95Ms": {
-          "median": 101.4,
-          "min": 0,
-          "max": 402.4,
-          "n": 5
-        },
-        "settle.screen.gapP99Ms": {
-          "median": 101.4,
-          "min": 0,
-          "max": 402.4,
-          "n": 5
-        },
-        "settle.screen.gapsOver50Ms": {
-          "median": 1,
-          "min": 0,
-          "max": 2,
-          "n": 5
-        },
-        "settle.server.cpuMeanPct": {
-          "median": 0.9,
-          "min": 0.8,
-          "max": 1.2,
-          "n": 5
-        },
-        "startup.bytesDownKBps": {
-          "median": 12,
-          "min": 10,
-          "max": 18,
-          "n": 5
-        },
-        "startup.bytesUpKBps": {
-          "median": 3,
-          "min": 3,
-          "max": 5,
-          "n": 5
-        },
-        "startup.durationS": {
-          "median": 4.5,
-          "min": 2.9,
-          "max": 5.1,
-          "n": 5
-        },
-        "startup.launcherReadyMs": {
-          "median": 4510,
-          "min": 2935,
-          "max": 5123,
-          "n": 5
-        },
-        "startup.machine.cpuBusyPct": {
-          "median": 289,
-          "min": 230,
-          "max": 350,
-          "n": 5
-        },
-        "startup.machine.foreignCpuPct": {
-          "median": 10,
-          "min": 0,
-          "max": 126,
-          "n": 5
-        },
-        "startup.proc.app.cpuMeanPct": {
-          "median": 211.3,
-          "min": 162.6,
-          "max": 268.8,
-          "n": 5
-        },
-        "startup.proc.app.pssMaxMB": {
-          "median": 236.9,
-          "min": 195.1,
-          "max": 240.3,
-          "n": 5
-        },
-        "startup.proc.app.pssMedianMB": {
-          "median": 234.8,
-          "min": 193.9,
-          "max": 237.5,
-          "n": 5
-        },
-        "startup.proc.app.rssMaxMB": {
-          "median": 283.5,
-          "min": 280.4,
-          "max": 285.6,
-          "n": 5
-        },
-        "startup.proc.app.rssMedianMB": {
-          "median": 280.5,
-          "min": 277.8,
-          "max": 283.1,
-          "n": 5
-        },
-        "startup.proc.total.cpuMeanPct": {
-          "median": 211.3,
-          "min": 162.6,
-          "max": 268.8,
-          "n": 5
-        },
-        "startup.proc.total.pssMaxMB": {
-          "median": 236.9,
-          "min": 195.1,
-          "max": 240.3,
-          "n": 5
-        },
-        "startup.proc.total.pssMedianMB": {
-          "median": 234.8,
-          "min": 193.9,
-          "max": 237.5,
-          "n": 5
-        },
-        "startup.proc.total.rssMaxMB": {
-          "median": 283.5,
-          "min": 280.4,
-          "max": 285.6,
-          "n": 5
-        },
-        "startup.proc.total.rssMedianMB": {
-          "median": 280.5,
-          "min": 277.8,
-          "max": 283.1,
-          "n": 5
-        },
-        "startup.processUpMs": {
-          "median": 1265,
-          "min": 858,
-          "max": 1643,
-          "n": 5
-        },
-        "startup.projectListMs": {
-          "median": 2103,
-          "min": 1532,
-          "max": 2808,
-          "n": 5
-        },
-        "startup.screen.fps": {
-          "median": 4.7,
-          "min": 3.5,
-          "max": 5.8,
-          "n": 5
-        },
-        "startup.screen.frames": {
-          "median": 19,
-          "min": 17,
-          "max": 22,
-          "n": 5
-        },
-        "startup.screen.gapMaxMs": {
-          "median": 706.9,
-          "min": 471.6,
-          "max": 831.9,
-          "n": 5
-        },
-        "startup.screen.gapP50Ms": {
-          "median": 118.1,
-          "min": 92.8,
-          "max": 230.5,
-          "n": 5
-        },
-        "startup.screen.gapP95Ms": {
-          "median": 376.8,
-          "min": 305.7,
-          "max": 577.3,
-          "n": 5
-        },
-        "startup.screen.gapP99Ms": {
-          "median": 706.9,
-          "min": 471.6,
-          "max": 831.9,
-          "n": 5
-        },
-        "startup.screen.gapsOver50Ms": {
-          "median": 16,
-          "min": 14,
-          "max": 20,
-          "n": 5
-        },
-        "startup.server.cpuMeanPct": {
-          "median": 61.1,
-          "min": 47.3,
-          "max": 67.5,
-          "n": 5
-        }
-      }
+ "machine": {
+  "cpu": "AMD EPYC Processor (with IBPB)",
+  "cores": 8,
+  "memGB": 23,
+  "kernel": "6.8.0-147-generic",
+  "bun": "1.4.0"
+ },
+ "client": "gpuix",
+ "gl": "lavapipe",
+ "runs": 5,
+ "scenarios": {
+  "idle": {
+   "okRuns": 5,
+   "metrics": {
+    "measure.bytesDownKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
     },
-    "pty-flood": {
-      "okRuns": 5,
-      "metrics": {
-        "burst.bytesDownKBps": {
-          "median": 3806,
-          "min": 1805,
-          "max": 8532,
-          "n": 5
-        },
-        "burst.bytesUpKBps": {
-          "median": 3,
-          "min": 2,
-          "max": 7,
-          "n": 5
-        },
-        "burst.durationS": {
-          "median": 2.4,
-          "min": 1.1,
-          "max": 5,
-          "n": 5
-        },
-        "burst.machine.cpuBusyPct": {
-          "median": 357,
-          "min": 235,
-          "max": 434,
-          "n": 5
-        },
-        "burst.machine.foreignCpuPct": {
-          "median": 110,
-          "min": 0,
-          "max": 123,
-          "n": 5
-        },
-        "burst.proc.app.cpuMeanPct": {
-          "median": 199.1,
-          "min": 179.9,
-          "max": 339.6,
-          "n": 5
-        },
-        "burst.proc.app.pssMaxMB": {
-          "median": 447.1,
-          "min": 402.8,
-          "max": 460.9,
-          "n": 5
-        },
-        "burst.proc.app.pssMedianMB": {
-          "median": 415.8,
-          "min": 385.8,
-          "max": 447.4,
-          "n": 5
-        },
-        "burst.proc.app.rssMaxMB": {
-          "median": 497.4,
-          "min": 456.7,
-          "max": 508.5,
-          "n": 5
-        },
-        "burst.proc.app.rssMedianMB": {
-          "median": 463.8,
-          "min": 437.4,
-          "max": 497.4,
-          "n": 5
-        },
-        "burst.proc.other.cpuMeanPct": {
-          "median": 7.8,
-          "min": 7.8,
-          "max": 7.8,
-          "n": 1
-        },
-        "burst.proc.other.pssMaxMB": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 1
-        },
-        "burst.proc.other.pssMedianMB": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 1
-        },
-        "burst.proc.other.rssMaxMB": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 1
-        },
-        "burst.proc.other.rssMedianMB": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 1
-        },
-        "burst.proc.total.cpuMeanPct": {
-          "median": 199.1,
-          "min": 179.9,
-          "max": 339.6,
-          "n": 5
-        },
-        "burst.proc.total.pssMaxMB": {
-          "median": 447.1,
-          "min": 402.8,
-          "max": 460.9,
-          "n": 5
-        },
-        "burst.proc.total.pssMedianMB": {
-          "median": 415.8,
-          "min": 385.8,
-          "max": 447.4,
-          "n": 5
-        },
-        "burst.proc.total.rssMaxMB": {
-          "median": 497.4,
-          "min": 456.7,
-          "max": 508.5,
-          "n": 5
-        },
-        "burst.proc.total.rssMedianMB": {
-          "median": 463.8,
-          "min": 437.4,
-          "max": 497.4,
-          "n": 5
-        },
-        "burst.screen.fps": {
-          "median": 5,
-          "min": 2.6,
-          "max": 8.5,
-          "n": 5
-        },
-        "burst.screen.frames": {
-          "median": 12,
-          "min": 9,
-          "max": 13,
-          "n": 5
-        },
-        "burst.screen.gapMaxMs": {
-          "median": 425.9,
-          "min": 213.8,
-          "max": 1000.8,
-          "n": 5
-        },
-        "burst.screen.gapP50Ms": {
-          "median": 145.1,
-          "min": 102.7,
-          "max": 334,
-          "n": 5
-        },
-        "burst.screen.gapP95Ms": {
-          "median": 425.9,
-          "min": 213.8,
-          "max": 781.7,
-          "n": 5
-        },
-        "burst.screen.gapP99Ms": {
-          "median": 425.9,
-          "min": 213.8,
-          "max": 1000.8,
-          "n": 5
-        },
-        "burst.screen.gapsOver50Ms": {
-          "median": 11,
-          "min": 8,
-          "max": 12,
-          "n": 5
-        },
-        "burst.server.cpuMeanPct": {
-          "median": 52.4,
-          "min": 28.4,
-          "max": 59.9,
-          "n": 5
-        },
-        "flood.bytesDownKBps": {
-          "median": 279,
-          "min": 238,
-          "max": 280,
-          "n": 5
-        },
-        "flood.bytesUpKBps": {
-          "median": 1,
-          "min": 1,
-          "max": 1,
-          "n": 5
-        },
-        "flood.durationS": {
-          "median": 33.5,
-          "min": 33.4,
-          "max": 41.8,
-          "n": 5
-        },
-        "flood.machine.cpuBusyPct": {
-          "median": 334,
-          "min": 248,
-          "max": 405,
-          "n": 5
-        },
-        "flood.machine.foreignCpuPct": {
-          "median": 3,
-          "min": 0,
-          "max": 92,
-          "n": 5
-        },
-        "flood.proc.app.cpuMeanPct": {
-          "median": 266.1,
-          "min": 212.3,
-          "max": 326.2,
-          "n": 5
-        },
-        "flood.proc.app.pssMaxMB": {
-          "median": 379.4,
-          "min": 339.9,
-          "max": 391.7,
-          "n": 5
-        },
-        "flood.proc.app.pssMedianMB": {
-          "median": 327.4,
-          "min": 310.1,
-          "max": 344.9,
-          "n": 5
-        },
-        "flood.proc.app.rssMaxMB": {
-          "median": 433.7,
-          "min": 419.2,
-          "max": 444.6,
-          "n": 5
-        },
-        "flood.proc.app.rssMedianMB": {
-          "median": 390,
-          "min": 372.5,
-          "max": 401.2,
-          "n": 5
-        },
-        "flood.proc.total.cpuMeanPct": {
-          "median": 266.1,
-          "min": 212.3,
-          "max": 326.2,
-          "n": 5
-        },
-        "flood.proc.total.pssMaxMB": {
-          "median": 379.4,
-          "min": 339.9,
-          "max": 391.7,
-          "n": 5
-        },
-        "flood.proc.total.pssMedianMB": {
-          "median": 327.4,
-          "min": 310.1,
-          "max": 344.9,
-          "n": 5
-        },
-        "flood.proc.total.rssMaxMB": {
-          "median": 433.7,
-          "min": 419.2,
-          "max": 444.6,
-          "n": 5
-        },
-        "flood.proc.total.rssMedianMB": {
-          "median": 390,
-          "min": 372.5,
-          "max": 401.2,
-          "n": 5
-        },
-        "flood.screen.fps": {
-          "median": 7.2,
-          "min": 3.2,
-          "max": 8.3,
-          "n": 5
-        },
-        "flood.screen.frames": {
-          "median": 239,
-          "min": 134,
-          "max": 279,
-          "n": 5
-        },
-        "flood.screen.gapMaxMs": {
-          "median": 987.2,
-          "min": 486.5,
-          "max": 1971.6,
-          "n": 5
-        },
-        "flood.screen.gapP50Ms": {
-          "median": 106.8,
-          "min": 93,
-          "max": 245.7,
-          "n": 5
-        },
-        "flood.screen.gapP95Ms": {
-          "median": 364.8,
-          "min": 270.2,
-          "max": 757,
-          "n": 5
-        },
-        "flood.screen.gapP99Ms": {
-          "median": 536.6,
-          "min": 381,
-          "max": 1011.7,
-          "n": 5
-        },
-        "flood.screen.gapsOver50Ms": {
-          "median": 237,
-          "min": 133,
-          "max": 274,
-          "n": 5
-        },
-        "flood.server.cpuMeanPct": {
-          "median": 53.5,
-          "min": 46.3,
-          "max": 73.2,
-          "n": 5
-        },
-        "measure.bytesDownKBps": {
-          "median": 291,
-          "min": 281,
-          "max": 296,
-          "n": 5
-        },
-        "measure.bytesUpKBps": {
-          "median": 1,
-          "min": 0,
-          "max": 1,
-          "n": 5
-        },
-        "measure.durationS": {
-          "median": 15,
-          "min": 15,
-          "max": 15.1,
-          "n": 5
-        },
-        "measure.machine.cpuBusyPct": {
-          "median": 322,
-          "min": 276,
-          "max": 327,
-          "n": 5
-        },
-        "measure.machine.foreignCpuPct": {
-          "median": 0,
-          "min": 0,
-          "max": 24,
-          "n": 5
-        },
-        "measure.proc.app.cpuMeanPct": {
-          "median": 253.4,
-          "min": 207.1,
-          "max": 302.5,
-          "n": 5
-        },
-        "measure.proc.app.pssMaxMB": {
-          "median": 397,
-          "min": 383.3,
-          "max": 422.9,
-          "n": 5
-        },
-        "measure.proc.app.pssMedianMB": {
-          "median": 388.2,
-          "min": 338.8,
-          "max": 401.3,
-          "n": 5
-        },
-        "measure.proc.app.rssMaxMB": {
-          "median": 448.6,
-          "min": 436,
-          "max": 475.9,
-          "n": 5
-        },
-        "measure.proc.app.rssMedianMB": {
-          "median": 440.6,
-          "min": 424.1,
-          "max": 454.2,
-          "n": 5
-        },
-        "measure.proc.total.cpuMeanPct": {
-          "median": 253.4,
-          "min": 207.1,
-          "max": 302.5,
-          "n": 5
-        },
-        "measure.proc.total.pssMaxMB": {
-          "median": 397,
-          "min": 383.3,
-          "max": 422.9,
-          "n": 5
-        },
-        "measure.proc.total.pssMedianMB": {
-          "median": 388.2,
-          "min": 338.8,
-          "max": 401.3,
-          "n": 5
-        },
-        "measure.proc.total.rssMaxMB": {
-          "median": 448.6,
-          "min": 436,
-          "max": 475.9,
-          "n": 5
-        },
-        "measure.proc.total.rssMedianMB": {
-          "median": 440.6,
-          "min": 424.1,
-          "max": 454.2,
-          "n": 5
-        },
-        "measure.screen.fps": {
-          "median": 5.7,
-          "min": 3.7,
-          "max": 7.3,
-          "n": 5
-        },
-        "measure.screen.frames": {
-          "median": 85,
-          "min": 55,
-          "max": 110,
-          "n": 5
-        },
-        "measure.screen.gapMaxMs": {
-          "median": 906.1,
-          "min": 624.9,
-          "max": 1201.2,
-          "n": 5
-        },
-        "measure.screen.gapP50Ms": {
-          "median": 143.2,
-          "min": 95.4,
-          "max": 187.1,
-          "n": 5
-        },
-        "measure.screen.gapP95Ms": {
-          "median": 356.8,
-          "min": 334.3,
-          "max": 639.2,
-          "n": 5
-        },
-        "measure.screen.gapP99Ms": {
-          "median": 572,
-          "min": 425.8,
-          "max": 1000.3,
-          "n": 5
-        },
-        "measure.screen.gapsOver50Ms": {
-          "median": 84,
-          "min": 53,
-          "max": 109,
-          "n": 5
-        },
-        "measure.server.cpuMeanPct": {
-          "median": 57.3,
-          "min": 47.9,
-          "max": 75.1,
-          "n": 5
-        },
-        "probe.burstLines": {
-          "median": 20000,
-          "min": 20000,
-          "max": 20000,
-          "n": 5
-        },
-        "probe.burstMB": {
-          "median": 2.66,
-          "min": 2.66,
-          "max": 2.66,
-          "n": 5
-        },
-        "probe.burstMBps": {
-          "median": 1.83,
-          "min": 0.99,
-          "max": 6.79,
-          "n": 5
-        },
-        "probe.burstTotalMs": {
-          "median": 1455,
-          "min": 392,
-          "max": 2676,
-          "n": 5
-        },
-        "probe.burstWriteMs": {
-          "median": 1179,
-          "min": 298,
-          "max": 1300,
-          "n": 5
-        },
-        "probe.pacedLinesPerSecPerTerminal": {
-          "median": 200,
-          "min": 199,
-          "max": 200,
-          "n": 5
-        },
-        "probe.pacedProbes": {
-          "median": 172,
-          "min": 162,
-          "max": 174,
-          "n": 5
-        },
-        "probe.pacedRttMaxMs": {
-          "median": 1719.2,
-          "min": 746.1,
-          "max": 2616.4,
-          "n": 5
-        },
-        "probe.pacedRttP50Ms": {
-          "median": 90.3,
-          "min": 61.5,
-          "max": 346.1,
-          "n": 5
-        },
-        "probe.pacedRttP95Ms": {
-          "median": 642,
-          "min": 419.5,
-          "max": 1351,
-          "n": 5
-        },
-        "probe.pacedTimeouts": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 5
-        },
-        "startup.bytesDownKBps": {
-          "median": 12,
-          "min": 4,
-          "max": 16,
-          "n": 5
-        },
-        "startup.bytesUpKBps": {
-          "median": 3,
-          "min": 1,
-          "max": 4,
-          "n": 5
-        },
-        "startup.durationS": {
-          "median": 4.4,
-          "min": 3.3,
-          "max": 14,
-          "n": 5
-        },
-        "startup.launcherReadyMs": {
-          "median": 4379,
-          "min": 3315,
-          "max": 14020,
-          "n": 5
-        },
-        "startup.machine.cpuBusyPct": {
-          "median": 295,
-          "min": 218,
-          "max": 310,
-          "n": 5
-        },
-        "startup.machine.foreignCpuPct": {
-          "median": 31,
-          "min": 21,
-          "max": 38,
-          "n": 5
-        },
-        "startup.proc.app.cpuMeanPct": {
-          "median": 186.5,
-          "min": 178.9,
-          "max": 229.5,
-          "n": 5
-        },
-        "startup.proc.app.pssMaxMB": {
-          "median": 238.3,
-          "min": 237.8,
-          "max": 241.6,
-          "n": 5
-        },
-        "startup.proc.app.pssMedianMB": {
-          "median": 236.6,
-          "min": 235.9,
-          "max": 238.2,
-          "n": 5
-        },
-        "startup.proc.app.rssMaxMB": {
-          "median": 282.6,
-          "min": 281.2,
-          "max": 284.6,
-          "n": 5
-        },
-        "startup.proc.app.rssMedianMB": {
-          "median": 280.8,
-          "min": 278.9,
-          "max": 281.8,
-          "n": 5
-        },
-        "startup.proc.total.cpuMeanPct": {
-          "median": 186.5,
-          "min": 178.9,
-          "max": 229.5,
-          "n": 5
-        },
-        "startup.proc.total.pssMaxMB": {
-          "median": 238.3,
-          "min": 237.8,
-          "max": 241.6,
-          "n": 5
-        },
-        "startup.proc.total.pssMedianMB": {
-          "median": 236.6,
-          "min": 235.9,
-          "max": 238.2,
-          "n": 5
-        },
-        "startup.proc.total.rssMaxMB": {
-          "median": 282.6,
-          "min": 281.2,
-          "max": 284.6,
-          "n": 5
-        },
-        "startup.proc.total.rssMedianMB": {
-          "median": 280.8,
-          "min": 278.9,
-          "max": 281.8,
-          "n": 5
-        },
-        "startup.processUpMs": {
-          "median": 1043,
-          "min": 1008,
-          "max": 9261,
-          "n": 5
-        },
-        "startup.projectListMs": {
-          "median": 2592,
-          "min": 1621,
-          "max": 11192,
-          "n": 5
-        },
-        "startup.screen.fps": {
-          "median": 4.3,
-          "min": 1.5,
-          "max": 5.7,
-          "n": 5
-        },
-        "startup.screen.frames": {
-          "median": 19,
-          "min": 19,
-          "max": 21,
-          "n": 5
-        },
-        "startup.screen.gapMaxMs": {
-          "median": 608.5,
-          "min": 453.3,
-          "max": 984.2,
-          "n": 5
-        },
-        "startup.screen.gapP50Ms": {
-          "median": 137.6,
-          "min": 90.4,
-          "max": 184.8,
-          "n": 5
-        },
-        "startup.screen.gapP95Ms": {
-          "median": 390.2,
-          "min": 313.6,
-          "max": 722.4,
-          "n": 5
-        },
-        "startup.screen.gapP99Ms": {
-          "median": 608.5,
-          "min": 453.3,
-          "max": 984.2,
-          "n": 5
-        },
-        "startup.screen.gapsOver50Ms": {
-          "median": 17,
-          "min": 16,
-          "max": 19,
-          "n": 5
-        },
-        "startup.server.cpuMeanPct": {
-          "median": 70.1,
-          "min": 4.8,
-          "max": 85,
-          "n": 5
-        },
-        "warmup.bytesDownKBps": {
-          "median": 60,
-          "min": 37,
-          "max": 72,
-          "n": 5
-        },
-        "warmup.bytesUpKBps": {
-          "median": 1,
-          "min": 1,
-          "max": 2,
-          "n": 5
-        },
-        "warmup.durationS": {
-          "median": 7.3,
-          "min": 6.2,
-          "max": 9,
-          "n": 5
-        },
-        "warmup.machine.cpuBusyPct": {
-          "median": 303,
-          "min": 278,
-          "max": 346,
-          "n": 5
-        },
-        "warmup.machine.foreignCpuPct": {
-          "median": 0,
-          "min": 0,
-          "max": 45,
-          "n": 5
-        },
-        "warmup.proc.app.cpuMeanPct": {
-          "median": 339.9,
-          "min": 243.3,
-          "max": 363.5,
-          "n": 5
-        },
-        "warmup.proc.app.pssMaxMB": {
-          "median": 278.6,
-          "min": 266.4,
-          "max": 317.2,
-          "n": 5
-        },
-        "warmup.proc.app.pssMedianMB": {
-          "median": 271,
-          "min": 255.4,
-          "max": 278.7,
-          "n": 5
-        },
-        "warmup.proc.app.rssMaxMB": {
-          "median": 328.2,
-          "min": 315.9,
-          "max": 366.7,
-          "n": 5
-        },
-        "warmup.proc.app.rssMedianMB": {
-          "median": 320.4,
-          "min": 303.1,
-          "max": 328.1,
-          "n": 5
-        },
-        "warmup.proc.total.cpuMeanPct": {
-          "median": 339.9,
-          "min": 243.3,
-          "max": 363.5,
-          "n": 5
-        },
-        "warmup.proc.total.pssMaxMB": {
-          "median": 278.6,
-          "min": 266.4,
-          "max": 317.2,
-          "n": 5
-        },
-        "warmup.proc.total.pssMedianMB": {
-          "median": 271,
-          "min": 255.4,
-          "max": 278.7,
-          "n": 5
-        },
-        "warmup.proc.total.rssMaxMB": {
-          "median": 328.2,
-          "min": 315.9,
-          "max": 366.7,
-          "n": 5
-        },
-        "warmup.proc.total.rssMedianMB": {
-          "median": 320.4,
-          "min": 303.1,
-          "max": 328.1,
-          "n": 5
-        },
-        "warmup.screen.fps": {
-          "median": 6,
-          "min": 3.8,
-          "max": 8.5,
-          "n": 5
-        },
-        "warmup.screen.frames": {
-          "median": 39,
-          "min": 34,
-          "max": 56,
-          "n": 5
-        },
-        "warmup.screen.gapMaxMs": {
-          "median": 555.4,
-          "min": 430,
-          "max": 1001.9,
-          "n": 5
-        },
-        "warmup.screen.gapP50Ms": {
-          "median": 120.5,
-          "min": 86.3,
-          "max": 218.9,
-          "n": 5
-        },
-        "warmup.screen.gapP95Ms": {
-          "median": 391.5,
-          "min": 278.4,
-          "max": 475.3,
-          "n": 5
-        },
-        "warmup.screen.gapP99Ms": {
-          "median": 527.5,
-          "min": 424.3,
-          "max": 1001.9,
-          "n": 5
-        },
-        "warmup.screen.gapsOver50Ms": {
-          "median": 38,
-          "min": 33,
-          "max": 55,
-          "n": 5
-        },
-        "warmup.server.cpuMeanPct": {
-          "median": 20.5,
-          "min": 15.8,
-          "max": 24.7,
-          "n": 5
-        }
-      }
+    "measure.bytesUpKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
     },
-    "stream-storm": {
-      "okRuns": 1,
-      "metrics": {
-        "chat.firstStartMs": {
-          "median": 5454,
-          "min": 5454,
-          "max": 5454,
-          "n": 1
-        },
-        "chat.openUnderLoadP50Ms": {
-          "median": 4492,
-          "min": 4492,
-          "max": 4492,
-          "n": 1
-        },
-        "chat.startUnderLoadMaxMs": {
-          "median": 89484,
-          "min": 89484,
-          "max": 89484,
-          "n": 1
-        },
-        "chat.startUnderLoadP50Ms": {
-          "median": 33693,
-          "min": 33693,
-          "max": 33693,
-          "n": 1
-        },
-        "chat.switches": {
-          "median": 3,
-          "min": 3,
-          "max": 3,
-          "n": 1
-        },
-        "chat.typeUnderLoadP50Ms": {
-          "median": 23376,
-          "min": 23376,
-          "max": 23376,
-          "n": 1
-        },
-        "chatsOpen": {
-          "median": 8,
-          "min": 8,
-          "max": 8,
-          "n": 1
-        },
-        "measure.bytesDownKBps": {
-          "median": 48,
-          "min": 48,
-          "max": 48,
-          "n": 1
-        },
-        "measure.bytesUpKBps": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 1
-        },
-        "measure.durationS": {
-          "median": 20,
-          "min": 20,
-          "max": 20,
-          "n": 1
-        },
-        "measure.machine.cpuBusyPct": {
-          "median": 280,
-          "min": 280,
-          "max": 280,
-          "n": 1
-        },
-        "measure.machine.foreignCpuPct": {
-          "median": 118,
-          "min": 118,
-          "max": 118,
-          "n": 1
-        },
-        "measure.proc.app.cpuMeanPct": {
-          "median": 117.8,
-          "min": 117.8,
-          "max": 117.8,
-          "n": 1
-        },
-        "measure.proc.app.pssMaxMB": {
-          "median": 924.7,
-          "min": 924.7,
-          "max": 924.7,
-          "n": 1
-        },
-        "measure.proc.app.pssMedianMB": {
-          "median": 913.2,
-          "min": 913.2,
-          "max": 913.2,
-          "n": 1
-        },
-        "measure.proc.app.rssMaxMB": {
-          "median": 979.6,
-          "min": 979.6,
-          "max": 979.6,
-          "n": 1
-        },
-        "measure.proc.app.rssMedianMB": {
-          "median": 968.3,
-          "min": 968.3,
-          "max": 968.3,
-          "n": 1
-        },
-        "measure.proc.total.cpuMeanPct": {
-          "median": 117.8,
-          "min": 117.8,
-          "max": 117.8,
-          "n": 1
-        },
-        "measure.proc.total.pssMaxMB": {
-          "median": 924.7,
-          "min": 924.7,
-          "max": 924.7,
-          "n": 1
-        },
-        "measure.proc.total.pssMedianMB": {
-          "median": 913.2,
-          "min": 913.2,
-          "max": 913.2,
-          "n": 1
-        },
-        "measure.proc.total.rssMaxMB": {
-          "median": 979.6,
-          "min": 979.6,
-          "max": 979.6,
-          "n": 1
-        },
-        "measure.proc.total.rssMedianMB": {
-          "median": 968.3,
-          "min": 968.3,
-          "max": 968.3,
-          "n": 1
-        },
-        "measure.screen.fps": {
-          "median": 0.8,
-          "min": 0.8,
-          "max": 0.8,
-          "n": 1
-        },
-        "measure.screen.frames": {
-          "median": 15,
-          "min": 15,
-          "max": 15,
-          "n": 1
-        },
-        "measure.screen.gapMaxMs": {
-          "median": 1607.3,
-          "min": 1607.3,
-          "max": 1607.3,
-          "n": 1
-        },
-        "measure.screen.gapP50Ms": {
-          "median": 1249.6,
-          "min": 1249.6,
-          "max": 1249.6,
-          "n": 1
-        },
-        "measure.screen.gapP95Ms": {
-          "median": 1586.2,
-          "min": 1586.2,
-          "max": 1586.2,
-          "n": 1
-        },
-        "measure.screen.gapP99Ms": {
-          "median": 1607.3,
-          "min": 1607.3,
-          "max": 1607.3,
-          "n": 1
-        },
-        "measure.screen.gapsOver50Ms": {
-          "median": 14,
-          "min": 14,
-          "max": 14,
-          "n": 1
-        },
-        "measure.server.cpuMeanPct": {
-          "median": 43.7,
-          "min": 43.7,
-          "max": 43.7,
-          "n": 1
-        },
-        "open-chats.bytesDownKBps": {
-          "median": 37,
-          "min": 37,
-          "max": 37,
-          "n": 1
-        },
-        "open-chats.bytesUpKBps": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 1
-        },
-        "open-chats.durationS": {
-          "median": 284.7,
-          "min": 284.7,
-          "max": 284.7,
-          "n": 1
-        },
-        "open-chats.machine.cpuBusyPct": {
-          "median": 250,
-          "min": 250,
-          "max": 250,
-          "n": 1
-        },
-        "open-chats.machine.foreignCpuPct": {
-          "median": 68,
-          "min": 68,
-          "max": 68,
-          "n": 1
-        },
-        "open-chats.proc.app.cpuMeanPct": {
-          "median": 146.9,
-          "min": 146.9,
-          "max": 146.9,
-          "n": 1
-        },
-        "open-chats.proc.app.pssMaxMB": {
-          "median": 899.9,
-          "min": 899.9,
-          "max": 899.9,
-          "n": 1
-        },
-        "open-chats.proc.app.pssMedianMB": {
-          "median": 590.3,
-          "min": 590.3,
-          "max": 590.3,
-          "n": 1
-        },
-        "open-chats.proc.app.rssMaxMB": {
-          "median": 954.6,
-          "min": 954.6,
-          "max": 954.6,
-          "n": 1
-        },
-        "open-chats.proc.app.rssMedianMB": {
-          "median": 685.2,
-          "min": 685.2,
-          "max": 685.2,
-          "n": 1
-        },
-        "open-chats.proc.total.cpuMeanPct": {
-          "median": 146.9,
-          "min": 146.9,
-          "max": 146.9,
-          "n": 1
-        },
-        "open-chats.proc.total.pssMaxMB": {
-          "median": 899.9,
-          "min": 899.9,
-          "max": 899.9,
-          "n": 1
-        },
-        "open-chats.proc.total.pssMedianMB": {
-          "median": 590.3,
-          "min": 590.3,
-          "max": 590.3,
-          "n": 1
-        },
-        "open-chats.proc.total.rssMaxMB": {
-          "median": 954.6,
-          "min": 954.6,
-          "max": 954.6,
-          "n": 1
-        },
-        "open-chats.proc.total.rssMedianMB": {
-          "median": 685.2,
-          "min": 685.2,
-          "max": 685.2,
-          "n": 1
-        },
-        "open-chats.screen.fps": {
-          "median": 1.5,
-          "min": 1.5,
-          "max": 1.5,
-          "n": 1
-        },
-        "open-chats.screen.frames": {
-          "median": 420,
-          "min": 420,
-          "max": 420,
-          "n": 1
-        },
-        "open-chats.screen.gapMaxMs": {
-          "median": 3055.5,
-          "min": 3055.5,
-          "max": 3055.5,
-          "n": 1
-        },
-        "open-chats.screen.gapP50Ms": {
-          "median": 590.4,
-          "min": 590.4,
-          "max": 590.4,
-          "n": 1
-        },
-        "open-chats.screen.gapP95Ms": {
-          "median": 1588.1,
-          "min": 1588.1,
-          "max": 1588.1,
-          "n": 1
-        },
-        "open-chats.screen.gapP99Ms": {
-          "median": 2249.3,
-          "min": 2249.3,
-          "max": 2249.3,
-          "n": 1
-        },
-        "open-chats.screen.gapsOver50Ms": {
-          "median": 419,
-          "min": 419,
-          "max": 419,
-          "n": 1
-        },
-        "open-chats.server.cpuMeanPct": {
-          "median": 34.7,
-          "min": 34.7,
-          "max": 34.7,
-          "n": 1
-        },
-        "startup.bytesDownKBps": {
-          "median": 13,
-          "min": 13,
-          "max": 13,
-          "n": 1
-        },
-        "startup.bytesUpKBps": {
-          "median": 4,
-          "min": 4,
-          "max": 4,
-          "n": 1
-        },
-        "startup.durationS": {
-          "median": 4,
-          "min": 4,
-          "max": 4,
-          "n": 1
-        },
-        "startup.launcherReadyMs": {
-          "median": 4005,
-          "min": 4005,
-          "max": 4005,
-          "n": 1
-        },
-        "startup.machine.cpuBusyPct": {
-          "median": 366,
-          "min": 366,
-          "max": 366,
-          "n": 1
-        },
-        "startup.machine.foreignCpuPct": {
-          "median": 108,
-          "min": 108,
-          "max": 108,
-          "n": 1
-        },
-        "startup.proc.app.cpuMeanPct": {
-          "median": 198,
-          "min": 198,
-          "max": 198,
-          "n": 1
-        },
-        "startup.proc.app.pssMaxMB": {
-          "median": 198.6,
-          "min": 198.6,
-          "max": 198.6,
-          "n": 1
-        },
-        "startup.proc.app.pssMedianMB": {
-          "median": 191.4,
-          "min": 191.4,
-          "max": 191.4,
-          "n": 1
-        },
-        "startup.proc.app.rssMaxMB": {
-          "median": 282.5,
-          "min": 282.5,
-          "max": 282.5,
-          "n": 1
-        },
-        "startup.proc.app.rssMedianMB": {
-          "median": 279.3,
-          "min": 279.3,
-          "max": 279.3,
-          "n": 1
-        },
-        "startup.proc.total.cpuMeanPct": {
-          "median": 198,
-          "min": 198,
-          "max": 198,
-          "n": 1
-        },
-        "startup.proc.total.pssMaxMB": {
-          "median": 198.6,
-          "min": 198.6,
-          "max": 198.6,
-          "n": 1
-        },
-        "startup.proc.total.pssMedianMB": {
-          "median": 191.4,
-          "min": 191.4,
-          "max": 191.4,
-          "n": 1
-        },
-        "startup.proc.total.rssMaxMB": {
-          "median": 282.5,
-          "min": 282.5,
-          "max": 282.5,
-          "n": 1
-        },
-        "startup.proc.total.rssMedianMB": {
-          "median": 279.3,
-          "min": 279.3,
-          "max": 279.3,
-          "n": 1
-        },
-        "startup.processUpMs": {
-          "median": 1105,
-          "min": 1105,
-          "max": 1105,
-          "n": 1
-        },
-        "startup.projectListMs": {
-          "median": 2279,
-          "min": 2279,
-          "max": 2279,
-          "n": 1
-        },
-        "startup.screen.fps": {
-          "median": 5,
-          "min": 5,
-          "max": 5,
-          "n": 1
-        },
-        "startup.screen.frames": {
-          "median": 20,
-          "min": 20,
-          "max": 20,
-          "n": 1
-        },
-        "startup.screen.gapMaxMs": {
-          "median": 568.4,
-          "min": 568.4,
-          "max": 568.4,
-          "n": 1
-        },
-        "startup.screen.gapP50Ms": {
-          "median": 93.8,
-          "min": 93.8,
-          "max": 93.8,
-          "n": 1
-        },
-        "startup.screen.gapP95Ms": {
-          "median": 416.7,
-          "min": 416.7,
-          "max": 416.7,
-          "n": 1
-        },
-        "startup.screen.gapP99Ms": {
-          "median": 568.4,
-          "min": 568.4,
-          "max": 568.4,
-          "n": 1
-        },
-        "startup.screen.gapsOver50Ms": {
-          "median": 17,
-          "min": 17,
-          "max": 17,
-          "n": 1
-        },
-        "startup.server.cpuMeanPct": {
-          "median": 59.7,
-          "min": 59.7,
-          "max": 59.7,
-          "n": 1
-        },
-        "sustained-stream.bytesDownKBps": {
-          "median": 57,
-          "min": 57,
-          "max": 57,
-          "n": 1
-        },
-        "sustained-stream.bytesUpKBps": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 1
-        },
-        "sustained-stream.durationS": {
-          "median": 31.1,
-          "min": 31.1,
-          "max": 31.1,
-          "n": 1
-        },
-        "sustained-stream.machine.cpuBusyPct": {
-          "median": 209,
-          "min": 209,
-          "max": 209,
-          "n": 1
-        },
-        "sustained-stream.machine.foreignCpuPct": {
-          "median": 34,
-          "min": 34,
-          "max": 34,
-          "n": 1
-        },
-        "sustained-stream.proc.app.cpuMeanPct": {
-          "median": 123,
-          "min": 123,
-          "max": 123,
-          "n": 1
-        },
-        "sustained-stream.proc.app.pssMaxMB": {
-          "median": 919.9,
-          "min": 919.9,
-          "max": 919.9,
-          "n": 1
-        },
-        "sustained-stream.proc.app.pssMedianMB": {
-          "median": 892.4,
-          "min": 892.4,
-          "max": 892.4,
-          "n": 1
-        },
-        "sustained-stream.proc.app.rssMaxMB": {
-          "median": 974.6,
-          "min": 974.6,
-          "max": 974.6,
-          "n": 1
-        },
-        "sustained-stream.proc.app.rssMedianMB": {
-          "median": 947.1,
-          "min": 947.1,
-          "max": 947.1,
-          "n": 1
-        },
-        "sustained-stream.proc.total.cpuMeanPct": {
-          "median": 123,
-          "min": 123,
-          "max": 123,
-          "n": 1
-        },
-        "sustained-stream.proc.total.pssMaxMB": {
-          "median": 919.9,
-          "min": 919.9,
-          "max": 919.9,
-          "n": 1
-        },
-        "sustained-stream.proc.total.pssMedianMB": {
-          "median": 892.4,
-          "min": 892.4,
-          "max": 892.4,
-          "n": 1
-        },
-        "sustained-stream.proc.total.rssMaxMB": {
-          "median": 974.6,
-          "min": 974.6,
-          "max": 974.6,
-          "n": 1
-        },
-        "sustained-stream.proc.total.rssMedianMB": {
-          "median": 947.1,
-          "min": 947.1,
-          "max": 947.1,
-          "n": 1
-        },
-        "sustained-stream.screen.fps": {
-          "median": 0.8,
-          "min": 0.8,
-          "max": 0.8,
-          "n": 1
-        },
-        "sustained-stream.screen.frames": {
-          "median": 24,
-          "min": 24,
-          "max": 24,
-          "n": 1
-        },
-        "sustained-stream.screen.gapMaxMs": {
-          "median": 1999.8,
-          "min": 1999.8,
-          "max": 1999.8,
-          "n": 1
-        },
-        "sustained-stream.screen.gapP50Ms": {
-          "median": 1269.6,
-          "min": 1269.6,
-          "max": 1269.6,
-          "n": 1
-        },
-        "sustained-stream.screen.gapP95Ms": {
-          "median": 1592.2,
-          "min": 1592.2,
-          "max": 1592.2,
-          "n": 1
-        },
-        "sustained-stream.screen.gapP99Ms": {
-          "median": 1999.8,
-          "min": 1999.8,
-          "max": 1999.8,
-          "n": 1
-        },
-        "sustained-stream.screen.gapsOver50Ms": {
-          "median": 23,
-          "min": 23,
-          "max": 23,
-          "n": 1
-        },
-        "sustained-stream.server.cpuMeanPct": {
-          "median": 52.2,
-          "min": 52.2,
-          "max": 52.2,
-          "n": 1
-        },
-        "warmup.bytesDownKBps": {
-          "median": 4,
-          "min": 4,
-          "max": 4,
-          "n": 1
-        },
-        "warmup.bytesUpKBps": {
-          "median": 0,
-          "min": 0,
-          "max": 0,
-          "n": 1
-        },
-        "warmup.durationS": {
-          "median": 15.5,
-          "min": 15.5,
-          "max": 15.5,
-          "n": 1
-        },
-        "warmup.machine.cpuBusyPct": {
-          "median": 403,
-          "min": 403,
-          "max": 403,
-          "n": 1
-        },
-        "warmup.machine.foreignCpuPct": {
-          "median": 117,
-          "min": 117,
-          "max": 117,
-          "n": 1
-        },
-        "warmup.proc.app.cpuMeanPct": {
-          "median": 282.2,
-          "min": 282.2,
-          "max": 282.2,
-          "n": 1
-        },
-        "warmup.proc.app.pssMaxMB": {
-          "median": 268.8,
-          "min": 268.8,
-          "max": 268.8,
-          "n": 1
-        },
-        "warmup.proc.app.pssMedianMB": {
-          "median": 238.5,
-          "min": 238.5,
-          "max": 238.5,
-          "n": 1
-        },
-        "warmup.proc.app.rssMaxMB": {
-          "median": 362.2,
-          "min": 362.2,
-          "max": 362.2,
-          "n": 1
-        },
-        "warmup.proc.app.rssMedianMB": {
-          "median": 331.2,
-          "min": 331.2,
-          "max": 331.2,
-          "n": 1
-        },
-        "warmup.proc.total.cpuMeanPct": {
-          "median": 282.2,
-          "min": 282.2,
-          "max": 282.2,
-          "n": 1
-        },
-        "warmup.proc.total.pssMaxMB": {
-          "median": 268.8,
-          "min": 268.8,
-          "max": 268.8,
-          "n": 1
-        },
-        "warmup.proc.total.pssMedianMB": {
-          "median": 238.5,
-          "min": 238.5,
-          "max": 238.5,
-          "n": 1
-        },
-        "warmup.proc.total.rssMaxMB": {
-          "median": 362.2,
-          "min": 362.2,
-          "max": 362.2,
-          "n": 1
-        },
-        "warmup.proc.total.rssMedianMB": {
-          "median": 331.2,
-          "min": 331.2,
-          "max": 331.2,
-          "n": 1
-        },
-        "warmup.screen.fps": {
-          "median": 7.3,
-          "min": 7.3,
-          "max": 7.3,
-          "n": 1
-        },
-        "warmup.screen.frames": {
-          "median": 113,
-          "min": 113,
-          "max": 113,
-          "n": 1
-        },
-        "warmup.screen.gapMaxMs": {
-          "median": 367.8,
-          "min": 367.8,
-          "max": 367.8,
-          "n": 1
-        },
-        "warmup.screen.gapP50Ms": {
-          "median": 113.7,
-          "min": 113.7,
-          "max": 113.7,
-          "n": 1
-        },
-        "warmup.screen.gapP95Ms": {
-          "median": 270.3,
-          "min": 270.3,
-          "max": 270.3,
-          "n": 1
-        },
-        "warmup.screen.gapP99Ms": {
-          "median": 302.3,
-          "min": 302.3,
-          "max": 302.3,
-          "n": 1
-        },
-        "warmup.screen.gapsOver50Ms": {
-          "median": 112,
-          "min": 112,
-          "max": 112,
-          "n": 1
-        },
-        "warmup.server.cpuMeanPct": {
-          "median": 4.5,
-          "min": 4.5,
-          "max": 4.5,
-          "n": 1
-        }
-      }
+    "measure.durationS": {
+     "median": 20,
+     "min": 20,
+     "max": 20,
+     "n": 5
+    },
+    "measure.machine.cpuBusyPct": {
+     "median": 64,
+     "min": 55,
+     "max": 381,
+     "n": 5
+    },
+    "measure.machine.foreignCpuPct": {
+     "median": 55,
+     "min": 49,
+     "max": 370,
+     "n": 5
+    },
+    "measure.proc.app.cpuMeanPct": {
+     "median": 8.8,
+     "min": 6.2,
+     "max": 10.7,
+     "n": 5
+    },
+    "measure.proc.app.pssMaxMB": {
+     "median": 234.6,
+     "min": 232.7,
+     "max": 236.7,
+     "n": 5
+    },
+    "measure.proc.app.pssMedianMB": {
+     "median": 231.8,
+     "min": 223.5,
+     "max": 236,
+     "n": 5
+    },
+    "measure.proc.app.rssMaxMB": {
+     "median": 281.7,
+     "min": 279.8,
+     "max": 283.6,
+     "n": 5
+    },
+    "measure.proc.app.rssMedianMB": {
+     "median": 280.5,
+     "min": 276.9,
+     "max": 283.1,
+     "n": 5
+    },
+    "measure.proc.total.cpuMeanPct": {
+     "median": 8.8,
+     "min": 6.2,
+     "max": 10.7,
+     "n": 5
+    },
+    "measure.proc.total.pssMaxMB": {
+     "median": 234.6,
+     "min": 232.7,
+     "max": 236.7,
+     "n": 5
+    },
+    "measure.proc.total.pssMedianMB": {
+     "median": 231.8,
+     "min": 223.5,
+     "max": 236,
+     "n": 5
+    },
+    "measure.proc.total.rssMaxMB": {
+     "median": 281.7,
+     "min": 279.8,
+     "max": 283.6,
+     "n": 5
+    },
+    "measure.proc.total.rssMedianMB": {
+     "median": 280.5,
+     "min": 276.9,
+     "max": 283.1,
+     "n": 5
+    },
+    "measure.screen.fps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.screen.frames": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.screen.gapMaxMs": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.screen.gapP50Ms": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.screen.gapP95Ms": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.screen.gapP99Ms": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.screen.gapsOver50Ms": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.server.cpuMeanPct": {
+     "median": 0.3,
+     "min": 0.2,
+     "max": 0.5,
+     "n": 5
+    },
+    "settle.bytesDownKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "settle.bytesUpKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "settle.durationS": {
+     "median": 20,
+     "min": 20,
+     "max": 20,
+     "n": 5
+    },
+    "settle.machine.cpuBusyPct": {
+     "median": 139,
+     "min": 62,
+     "max": 244,
+     "n": 5
+    },
+    "settle.machine.foreignCpuPct": {
+     "median": 108,
+     "min": 46,
+     "max": 232,
+     "n": 5
+    },
+    "settle.proc.app.cpuMeanPct": {
+     "median": 17.3,
+     "min": 11.5,
+     "max": 29.8,
+     "n": 5
+    },
+    "settle.proc.app.pssMaxMB": {
+     "median": 236.6,
+     "min": 235.1,
+     "max": 239.7,
+     "n": 5
+    },
+    "settle.proc.app.pssMedianMB": {
+     "median": 234.4,
+     "min": 194,
+     "max": 238.2,
+     "n": 5
+    },
+    "settle.proc.app.rssMaxMB": {
+     "median": 286,
+     "min": 283.4,
+     "max": 286.4,
+     "n": 5
+    },
+    "settle.proc.app.rssMedianMB": {
+     "median": 285,
+     "min": 281.4,
+     "max": 285.5,
+     "n": 5
+    },
+    "settle.proc.total.cpuMeanPct": {
+     "median": 17.3,
+     "min": 11.5,
+     "max": 29.8,
+     "n": 5
+    },
+    "settle.proc.total.pssMaxMB": {
+     "median": 236.6,
+     "min": 235.1,
+     "max": 239.7,
+     "n": 5
+    },
+    "settle.proc.total.pssMedianMB": {
+     "median": 234.4,
+     "min": 194,
+     "max": 238.2,
+     "n": 5
+    },
+    "settle.proc.total.rssMaxMB": {
+     "median": 286,
+     "min": 283.4,
+     "max": 286.4,
+     "n": 5
+    },
+    "settle.proc.total.rssMedianMB": {
+     "median": 285,
+     "min": 281.4,
+     "max": 285.5,
+     "n": 5
+    },
+    "settle.screen.fps": {
+     "median": 0.1,
+     "min": 0,
+     "max": 0.2,
+     "n": 5
+    },
+    "settle.screen.frames": {
+     "median": 2,
+     "min": 1,
+     "max": 3,
+     "n": 5
+    },
+    "settle.screen.gapMaxMs": {
+     "median": 101.4,
+     "min": 0,
+     "max": 402.4,
+     "n": 5
+    },
+    "settle.screen.gapP50Ms": {
+     "median": 101.4,
+     "min": 0,
+     "max": 402.4,
+     "n": 5
+    },
+    "settle.screen.gapP95Ms": {
+     "median": 101.4,
+     "min": 0,
+     "max": 402.4,
+     "n": 5
+    },
+    "settle.screen.gapP99Ms": {
+     "median": 101.4,
+     "min": 0,
+     "max": 402.4,
+     "n": 5
+    },
+    "settle.screen.gapsOver50Ms": {
+     "median": 1,
+     "min": 0,
+     "max": 2,
+     "n": 5
+    },
+    "settle.server.cpuMeanPct": {
+     "median": 0.9,
+     "min": 0.8,
+     "max": 1.2,
+     "n": 5
+    },
+    "startup.bytesDownKBps": {
+     "median": 12,
+     "min": 10,
+     "max": 18,
+     "n": 5
+    },
+    "startup.bytesUpKBps": {
+     "median": 3,
+     "min": 3,
+     "max": 5,
+     "n": 5
+    },
+    "startup.durationS": {
+     "median": 4.5,
+     "min": 2.9,
+     "max": 5.1,
+     "n": 5
+    },
+    "startup.launcherReadyMs": {
+     "median": 4510,
+     "min": 2935,
+     "max": 5123,
+     "n": 5
+    },
+    "startup.machine.cpuBusyPct": {
+     "median": 289,
+     "min": 230,
+     "max": 350,
+     "n": 5
+    },
+    "startup.machine.foreignCpuPct": {
+     "median": 10,
+     "min": 0,
+     "max": 126,
+     "n": 5
+    },
+    "startup.proc.app.cpuMeanPct": {
+     "median": 211.3,
+     "min": 162.6,
+     "max": 268.8,
+     "n": 5
+    },
+    "startup.proc.app.pssMaxMB": {
+     "median": 236.9,
+     "min": 195.1,
+     "max": 240.3,
+     "n": 5
+    },
+    "startup.proc.app.pssMedianMB": {
+     "median": 234.8,
+     "min": 193.9,
+     "max": 237.5,
+     "n": 5
+    },
+    "startup.proc.app.rssMaxMB": {
+     "median": 283.5,
+     "min": 280.4,
+     "max": 285.6,
+     "n": 5
+    },
+    "startup.proc.app.rssMedianMB": {
+     "median": 280.5,
+     "min": 277.8,
+     "max": 283.1,
+     "n": 5
+    },
+    "startup.proc.total.cpuMeanPct": {
+     "median": 211.3,
+     "min": 162.6,
+     "max": 268.8,
+     "n": 5
+    },
+    "startup.proc.total.pssMaxMB": {
+     "median": 236.9,
+     "min": 195.1,
+     "max": 240.3,
+     "n": 5
+    },
+    "startup.proc.total.pssMedianMB": {
+     "median": 234.8,
+     "min": 193.9,
+     "max": 237.5,
+     "n": 5
+    },
+    "startup.proc.total.rssMaxMB": {
+     "median": 283.5,
+     "min": 280.4,
+     "max": 285.6,
+     "n": 5
+    },
+    "startup.proc.total.rssMedianMB": {
+     "median": 280.5,
+     "min": 277.8,
+     "max": 283.1,
+     "n": 5
+    },
+    "startup.processUpMs": {
+     "median": 1265,
+     "min": 858,
+     "max": 1643,
+     "n": 5
+    },
+    "startup.projectListMs": {
+     "median": 2103,
+     "min": 1532,
+     "max": 2808,
+     "n": 5
+    },
+    "startup.screen.fps": {
+     "median": 4.7,
+     "min": 3.5,
+     "max": 5.8,
+     "n": 5
+    },
+    "startup.screen.frames": {
+     "median": 19,
+     "min": 17,
+     "max": 22,
+     "n": 5
+    },
+    "startup.screen.gapMaxMs": {
+     "median": 706.9,
+     "min": 471.6,
+     "max": 831.9,
+     "n": 5
+    },
+    "startup.screen.gapP50Ms": {
+     "median": 118.1,
+     "min": 92.8,
+     "max": 230.5,
+     "n": 5
+    },
+    "startup.screen.gapP95Ms": {
+     "median": 376.8,
+     "min": 305.7,
+     "max": 577.3,
+     "n": 5
+    },
+    "startup.screen.gapP99Ms": {
+     "median": 706.9,
+     "min": 471.6,
+     "max": 831.9,
+     "n": 5
+    },
+    "startup.screen.gapsOver50Ms": {
+     "median": 16,
+     "min": 14,
+     "max": 20,
+     "n": 5
+    },
+    "startup.server.cpuMeanPct": {
+     "median": 61.1,
+     "min": 47.3,
+     "max": 67.5,
+     "n": 5
     }
+   }
+  },
+  "pty-flood": {
+   "okRuns": 5,
+   "metrics": {
+    "burst.bytesDownKBps": {
+     "median": 3806,
+     "min": 1805,
+     "max": 8532,
+     "n": 5
+    },
+    "burst.bytesUpKBps": {
+     "median": 3,
+     "min": 2,
+     "max": 7,
+     "n": 5
+    },
+    "burst.durationS": {
+     "median": 2.4,
+     "min": 1.1,
+     "max": 5,
+     "n": 5
+    },
+    "burst.machine.cpuBusyPct": {
+     "median": 357,
+     "min": 235,
+     "max": 434,
+     "n": 5
+    },
+    "burst.machine.foreignCpuPct": {
+     "median": 110,
+     "min": 0,
+     "max": 123,
+     "n": 5
+    },
+    "burst.proc.app.cpuMeanPct": {
+     "median": 199.1,
+     "min": 179.9,
+     "max": 339.6,
+     "n": 5
+    },
+    "burst.proc.app.pssMaxMB": {
+     "median": 447.1,
+     "min": 402.8,
+     "max": 460.9,
+     "n": 5
+    },
+    "burst.proc.app.pssMedianMB": {
+     "median": 415.8,
+     "min": 385.8,
+     "max": 447.4,
+     "n": 5
+    },
+    "burst.proc.app.rssMaxMB": {
+     "median": 497.4,
+     "min": 456.7,
+     "max": 508.5,
+     "n": 5
+    },
+    "burst.proc.app.rssMedianMB": {
+     "median": 463.8,
+     "min": 437.4,
+     "max": 497.4,
+     "n": 5
+    },
+    "burst.proc.other.cpuMeanPct": {
+     "median": 7.8,
+     "min": 7.8,
+     "max": 7.8,
+     "n": 1
+    },
+    "burst.proc.other.pssMaxMB": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 1
+    },
+    "burst.proc.other.pssMedianMB": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 1
+    },
+    "burst.proc.other.rssMaxMB": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 1
+    },
+    "burst.proc.other.rssMedianMB": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 1
+    },
+    "burst.proc.total.cpuMeanPct": {
+     "median": 199.1,
+     "min": 179.9,
+     "max": 339.6,
+     "n": 5
+    },
+    "burst.proc.total.pssMaxMB": {
+     "median": 447.1,
+     "min": 402.8,
+     "max": 460.9,
+     "n": 5
+    },
+    "burst.proc.total.pssMedianMB": {
+     "median": 415.8,
+     "min": 385.8,
+     "max": 447.4,
+     "n": 5
+    },
+    "burst.proc.total.rssMaxMB": {
+     "median": 497.4,
+     "min": 456.7,
+     "max": 508.5,
+     "n": 5
+    },
+    "burst.proc.total.rssMedianMB": {
+     "median": 463.8,
+     "min": 437.4,
+     "max": 497.4,
+     "n": 5
+    },
+    "burst.screen.fps": {
+     "median": 5,
+     "min": 2.6,
+     "max": 8.5,
+     "n": 5
+    },
+    "burst.screen.frames": {
+     "median": 12,
+     "min": 9,
+     "max": 13,
+     "n": 5
+    },
+    "burst.screen.gapMaxMs": {
+     "median": 425.9,
+     "min": 213.8,
+     "max": 1000.8,
+     "n": 5
+    },
+    "burst.screen.gapP50Ms": {
+     "median": 145.1,
+     "min": 102.7,
+     "max": 334,
+     "n": 5
+    },
+    "burst.screen.gapP95Ms": {
+     "median": 425.9,
+     "min": 213.8,
+     "max": 781.7,
+     "n": 5
+    },
+    "burst.screen.gapP99Ms": {
+     "median": 425.9,
+     "min": 213.8,
+     "max": 1000.8,
+     "n": 5
+    },
+    "burst.screen.gapsOver50Ms": {
+     "median": 11,
+     "min": 8,
+     "max": 12,
+     "n": 5
+    },
+    "burst.server.cpuMeanPct": {
+     "median": 52.4,
+     "min": 28.4,
+     "max": 59.9,
+     "n": 5
+    },
+    "flood.bytesDownKBps": {
+     "median": 279,
+     "min": 238,
+     "max": 280,
+     "n": 5
+    },
+    "flood.bytesUpKBps": {
+     "median": 1,
+     "min": 1,
+     "max": 1,
+     "n": 5
+    },
+    "flood.durationS": {
+     "median": 33.5,
+     "min": 33.4,
+     "max": 41.8,
+     "n": 5
+    },
+    "flood.machine.cpuBusyPct": {
+     "median": 334,
+     "min": 248,
+     "max": 405,
+     "n": 5
+    },
+    "flood.machine.foreignCpuPct": {
+     "median": 3,
+     "min": 0,
+     "max": 92,
+     "n": 5
+    },
+    "flood.proc.app.cpuMeanPct": {
+     "median": 266.1,
+     "min": 212.3,
+     "max": 326.2,
+     "n": 5
+    },
+    "flood.proc.app.pssMaxMB": {
+     "median": 379.4,
+     "min": 339.9,
+     "max": 391.7,
+     "n": 5
+    },
+    "flood.proc.app.pssMedianMB": {
+     "median": 327.4,
+     "min": 310.1,
+     "max": 344.9,
+     "n": 5
+    },
+    "flood.proc.app.rssMaxMB": {
+     "median": 433.7,
+     "min": 419.2,
+     "max": 444.6,
+     "n": 5
+    },
+    "flood.proc.app.rssMedianMB": {
+     "median": 390,
+     "min": 372.5,
+     "max": 401.2,
+     "n": 5
+    },
+    "flood.proc.total.cpuMeanPct": {
+     "median": 266.1,
+     "min": 212.3,
+     "max": 326.2,
+     "n": 5
+    },
+    "flood.proc.total.pssMaxMB": {
+     "median": 379.4,
+     "min": 339.9,
+     "max": 391.7,
+     "n": 5
+    },
+    "flood.proc.total.pssMedianMB": {
+     "median": 327.4,
+     "min": 310.1,
+     "max": 344.9,
+     "n": 5
+    },
+    "flood.proc.total.rssMaxMB": {
+     "median": 433.7,
+     "min": 419.2,
+     "max": 444.6,
+     "n": 5
+    },
+    "flood.proc.total.rssMedianMB": {
+     "median": 390,
+     "min": 372.5,
+     "max": 401.2,
+     "n": 5
+    },
+    "flood.screen.fps": {
+     "median": 7.2,
+     "min": 3.2,
+     "max": 8.3,
+     "n": 5
+    },
+    "flood.screen.frames": {
+     "median": 239,
+     "min": 134,
+     "max": 279,
+     "n": 5
+    },
+    "flood.screen.gapMaxMs": {
+     "median": 987.2,
+     "min": 486.5,
+     "max": 1971.6,
+     "n": 5
+    },
+    "flood.screen.gapP50Ms": {
+     "median": 106.8,
+     "min": 93,
+     "max": 245.7,
+     "n": 5
+    },
+    "flood.screen.gapP95Ms": {
+     "median": 364.8,
+     "min": 270.2,
+     "max": 757,
+     "n": 5
+    },
+    "flood.screen.gapP99Ms": {
+     "median": 536.6,
+     "min": 381,
+     "max": 1011.7,
+     "n": 5
+    },
+    "flood.screen.gapsOver50Ms": {
+     "median": 237,
+     "min": 133,
+     "max": 274,
+     "n": 5
+    },
+    "flood.server.cpuMeanPct": {
+     "median": 53.5,
+     "min": 46.3,
+     "max": 73.2,
+     "n": 5
+    },
+    "measure.bytesDownKBps": {
+     "median": 291,
+     "min": 281,
+     "max": 296,
+     "n": 5
+    },
+    "measure.bytesUpKBps": {
+     "median": 1,
+     "min": 0,
+     "max": 1,
+     "n": 5
+    },
+    "measure.durationS": {
+     "median": 15,
+     "min": 15,
+     "max": 15.1,
+     "n": 5
+    },
+    "measure.machine.cpuBusyPct": {
+     "median": 322,
+     "min": 276,
+     "max": 327,
+     "n": 5
+    },
+    "measure.machine.foreignCpuPct": {
+     "median": 0,
+     "min": 0,
+     "max": 24,
+     "n": 5
+    },
+    "measure.proc.app.cpuMeanPct": {
+     "median": 253.4,
+     "min": 207.1,
+     "max": 302.5,
+     "n": 5
+    },
+    "measure.proc.app.pssMaxMB": {
+     "median": 397,
+     "min": 383.3,
+     "max": 422.9,
+     "n": 5
+    },
+    "measure.proc.app.pssMedianMB": {
+     "median": 388.2,
+     "min": 338.8,
+     "max": 401.3,
+     "n": 5
+    },
+    "measure.proc.app.rssMaxMB": {
+     "median": 448.6,
+     "min": 436,
+     "max": 475.9,
+     "n": 5
+    },
+    "measure.proc.app.rssMedianMB": {
+     "median": 440.6,
+     "min": 424.1,
+     "max": 454.2,
+     "n": 5
+    },
+    "measure.proc.total.cpuMeanPct": {
+     "median": 253.4,
+     "min": 207.1,
+     "max": 302.5,
+     "n": 5
+    },
+    "measure.proc.total.pssMaxMB": {
+     "median": 397,
+     "min": 383.3,
+     "max": 422.9,
+     "n": 5
+    },
+    "measure.proc.total.pssMedianMB": {
+     "median": 388.2,
+     "min": 338.8,
+     "max": 401.3,
+     "n": 5
+    },
+    "measure.proc.total.rssMaxMB": {
+     "median": 448.6,
+     "min": 436,
+     "max": 475.9,
+     "n": 5
+    },
+    "measure.proc.total.rssMedianMB": {
+     "median": 440.6,
+     "min": 424.1,
+     "max": 454.2,
+     "n": 5
+    },
+    "measure.screen.fps": {
+     "median": 5.7,
+     "min": 3.7,
+     "max": 7.3,
+     "n": 5
+    },
+    "measure.screen.frames": {
+     "median": 85,
+     "min": 55,
+     "max": 110,
+     "n": 5
+    },
+    "measure.screen.gapMaxMs": {
+     "median": 906.1,
+     "min": 624.9,
+     "max": 1201.2,
+     "n": 5
+    },
+    "measure.screen.gapP50Ms": {
+     "median": 143.2,
+     "min": 95.4,
+     "max": 187.1,
+     "n": 5
+    },
+    "measure.screen.gapP95Ms": {
+     "median": 356.8,
+     "min": 334.3,
+     "max": 639.2,
+     "n": 5
+    },
+    "measure.screen.gapP99Ms": {
+     "median": 572,
+     "min": 425.8,
+     "max": 1000.3,
+     "n": 5
+    },
+    "measure.screen.gapsOver50Ms": {
+     "median": 84,
+     "min": 53,
+     "max": 109,
+     "n": 5
+    },
+    "measure.server.cpuMeanPct": {
+     "median": 57.3,
+     "min": 47.9,
+     "max": 75.1,
+     "n": 5
+    },
+    "probe.burstLines": {
+     "median": 20000,
+     "min": 20000,
+     "max": 20000,
+     "n": 5
+    },
+    "probe.burstMB": {
+     "median": 2.66,
+     "min": 2.66,
+     "max": 2.66,
+     "n": 5
+    },
+    "probe.burstMBps": {
+     "median": 1.83,
+     "min": 0.99,
+     "max": 6.79,
+     "n": 5
+    },
+    "probe.burstTotalMs": {
+     "median": 1455,
+     "min": 392,
+     "max": 2676,
+     "n": 5
+    },
+    "probe.burstWriteMs": {
+     "median": 1179,
+     "min": 298,
+     "max": 1300,
+     "n": 5
+    },
+    "probe.pacedLinesPerSecPerTerminal": {
+     "median": 200,
+     "min": 199,
+     "max": 200,
+     "n": 5
+    },
+    "probe.pacedProbes": {
+     "median": 172,
+     "min": 162,
+     "max": 174,
+     "n": 5
+    },
+    "probe.pacedRttMaxMs": {
+     "median": 1719.2,
+     "min": 746.1,
+     "max": 2616.4,
+     "n": 5
+    },
+    "probe.pacedRttP50Ms": {
+     "median": 90.3,
+     "min": 61.5,
+     "max": 346.1,
+     "n": 5
+    },
+    "probe.pacedRttP95Ms": {
+     "median": 642,
+     "min": 419.5,
+     "max": 1351,
+     "n": 5
+    },
+    "probe.pacedTimeouts": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "startup.bytesDownKBps": {
+     "median": 12,
+     "min": 4,
+     "max": 16,
+     "n": 5
+    },
+    "startup.bytesUpKBps": {
+     "median": 3,
+     "min": 1,
+     "max": 4,
+     "n": 5
+    },
+    "startup.durationS": {
+     "median": 4.4,
+     "min": 3.3,
+     "max": 14,
+     "n": 5
+    },
+    "startup.launcherReadyMs": {
+     "median": 4379,
+     "min": 3315,
+     "max": 14020,
+     "n": 5
+    },
+    "startup.machine.cpuBusyPct": {
+     "median": 295,
+     "min": 218,
+     "max": 310,
+     "n": 5
+    },
+    "startup.machine.foreignCpuPct": {
+     "median": 31,
+     "min": 21,
+     "max": 38,
+     "n": 5
+    },
+    "startup.proc.app.cpuMeanPct": {
+     "median": 186.5,
+     "min": 178.9,
+     "max": 229.5,
+     "n": 5
+    },
+    "startup.proc.app.pssMaxMB": {
+     "median": 238.3,
+     "min": 237.8,
+     "max": 241.6,
+     "n": 5
+    },
+    "startup.proc.app.pssMedianMB": {
+     "median": 236.6,
+     "min": 235.9,
+     "max": 238.2,
+     "n": 5
+    },
+    "startup.proc.app.rssMaxMB": {
+     "median": 282.6,
+     "min": 281.2,
+     "max": 284.6,
+     "n": 5
+    },
+    "startup.proc.app.rssMedianMB": {
+     "median": 280.8,
+     "min": 278.9,
+     "max": 281.8,
+     "n": 5
+    },
+    "startup.proc.total.cpuMeanPct": {
+     "median": 186.5,
+     "min": 178.9,
+     "max": 229.5,
+     "n": 5
+    },
+    "startup.proc.total.pssMaxMB": {
+     "median": 238.3,
+     "min": 237.8,
+     "max": 241.6,
+     "n": 5
+    },
+    "startup.proc.total.pssMedianMB": {
+     "median": 236.6,
+     "min": 235.9,
+     "max": 238.2,
+     "n": 5
+    },
+    "startup.proc.total.rssMaxMB": {
+     "median": 282.6,
+     "min": 281.2,
+     "max": 284.6,
+     "n": 5
+    },
+    "startup.proc.total.rssMedianMB": {
+     "median": 280.8,
+     "min": 278.9,
+     "max": 281.8,
+     "n": 5
+    },
+    "startup.processUpMs": {
+     "median": 1043,
+     "min": 1008,
+     "max": 9261,
+     "n": 5
+    },
+    "startup.projectListMs": {
+     "median": 2592,
+     "min": 1621,
+     "max": 11192,
+     "n": 5
+    },
+    "startup.screen.fps": {
+     "median": 4.3,
+     "min": 1.5,
+     "max": 5.7,
+     "n": 5
+    },
+    "startup.screen.frames": {
+     "median": 19,
+     "min": 19,
+     "max": 21,
+     "n": 5
+    },
+    "startup.screen.gapMaxMs": {
+     "median": 608.5,
+     "min": 453.3,
+     "max": 984.2,
+     "n": 5
+    },
+    "startup.screen.gapP50Ms": {
+     "median": 137.6,
+     "min": 90.4,
+     "max": 184.8,
+     "n": 5
+    },
+    "startup.screen.gapP95Ms": {
+     "median": 390.2,
+     "min": 313.6,
+     "max": 722.4,
+     "n": 5
+    },
+    "startup.screen.gapP99Ms": {
+     "median": 608.5,
+     "min": 453.3,
+     "max": 984.2,
+     "n": 5
+    },
+    "startup.screen.gapsOver50Ms": {
+     "median": 17,
+     "min": 16,
+     "max": 19,
+     "n": 5
+    },
+    "startup.server.cpuMeanPct": {
+     "median": 70.1,
+     "min": 4.8,
+     "max": 85,
+     "n": 5
+    },
+    "warmup.bytesDownKBps": {
+     "median": 60,
+     "min": 37,
+     "max": 72,
+     "n": 5
+    },
+    "warmup.bytesUpKBps": {
+     "median": 1,
+     "min": 1,
+     "max": 2,
+     "n": 5
+    },
+    "warmup.durationS": {
+     "median": 7.3,
+     "min": 6.2,
+     "max": 9,
+     "n": 5
+    },
+    "warmup.machine.cpuBusyPct": {
+     "median": 303,
+     "min": 278,
+     "max": 346,
+     "n": 5
+    },
+    "warmup.machine.foreignCpuPct": {
+     "median": 0,
+     "min": 0,
+     "max": 45,
+     "n": 5
+    },
+    "warmup.proc.app.cpuMeanPct": {
+     "median": 339.9,
+     "min": 243.3,
+     "max": 363.5,
+     "n": 5
+    },
+    "warmup.proc.app.pssMaxMB": {
+     "median": 278.6,
+     "min": 266.4,
+     "max": 317.2,
+     "n": 5
+    },
+    "warmup.proc.app.pssMedianMB": {
+     "median": 271,
+     "min": 255.4,
+     "max": 278.7,
+     "n": 5
+    },
+    "warmup.proc.app.rssMaxMB": {
+     "median": 328.2,
+     "min": 315.9,
+     "max": 366.7,
+     "n": 5
+    },
+    "warmup.proc.app.rssMedianMB": {
+     "median": 320.4,
+     "min": 303.1,
+     "max": 328.1,
+     "n": 5
+    },
+    "warmup.proc.total.cpuMeanPct": {
+     "median": 339.9,
+     "min": 243.3,
+     "max": 363.5,
+     "n": 5
+    },
+    "warmup.proc.total.pssMaxMB": {
+     "median": 278.6,
+     "min": 266.4,
+     "max": 317.2,
+     "n": 5
+    },
+    "warmup.proc.total.pssMedianMB": {
+     "median": 271,
+     "min": 255.4,
+     "max": 278.7,
+     "n": 5
+    },
+    "warmup.proc.total.rssMaxMB": {
+     "median": 328.2,
+     "min": 315.9,
+     "max": 366.7,
+     "n": 5
+    },
+    "warmup.proc.total.rssMedianMB": {
+     "median": 320.4,
+     "min": 303.1,
+     "max": 328.1,
+     "n": 5
+    },
+    "warmup.screen.fps": {
+     "median": 6,
+     "min": 3.8,
+     "max": 8.5,
+     "n": 5
+    },
+    "warmup.screen.frames": {
+     "median": 39,
+     "min": 34,
+     "max": 56,
+     "n": 5
+    },
+    "warmup.screen.gapMaxMs": {
+     "median": 555.4,
+     "min": 430,
+     "max": 1001.9,
+     "n": 5
+    },
+    "warmup.screen.gapP50Ms": {
+     "median": 120.5,
+     "min": 86.3,
+     "max": 218.9,
+     "n": 5
+    },
+    "warmup.screen.gapP95Ms": {
+     "median": 391.5,
+     "min": 278.4,
+     "max": 475.3,
+     "n": 5
+    },
+    "warmup.screen.gapP99Ms": {
+     "median": 527.5,
+     "min": 424.3,
+     "max": 1001.9,
+     "n": 5
+    },
+    "warmup.screen.gapsOver50Ms": {
+     "median": 38,
+     "min": 33,
+     "max": 55,
+     "n": 5
+    },
+    "warmup.server.cpuMeanPct": {
+     "median": 20.5,
+     "min": 15.8,
+     "max": 24.7,
+     "n": 5
+    }
+   }
+  },
+  "stream-storm": {
+   "okRuns": 1,
+   "metrics": {
+    "chat.firstStartMs": {
+     "median": 5454,
+     "min": 5454,
+     "max": 5454,
+     "n": 1
+    },
+    "chat.openUnderLoadP50Ms": {
+     "median": 4492,
+     "min": 4492,
+     "max": 4492,
+     "n": 1
+    },
+    "chat.startUnderLoadMaxMs": {
+     "median": 89484,
+     "min": 89484,
+     "max": 89484,
+     "n": 1
+    },
+    "chat.startUnderLoadP50Ms": {
+     "median": 33693,
+     "min": 33693,
+     "max": 33693,
+     "n": 1
+    },
+    "chat.switches": {
+     "median": 3,
+     "min": 3,
+     "max": 3,
+     "n": 1
+    },
+    "chat.typeUnderLoadP50Ms": {
+     "median": 23376,
+     "min": 23376,
+     "max": 23376,
+     "n": 1
+    },
+    "chatsOpen": {
+     "median": 8,
+     "min": 8,
+     "max": 8,
+     "n": 1
+    },
+    "measure.bytesDownKBps": {
+     "median": 48,
+     "min": 48,
+     "max": 48,
+     "n": 1
+    },
+    "measure.bytesUpKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 1
+    },
+    "measure.durationS": {
+     "median": 20,
+     "min": 20,
+     "max": 20,
+     "n": 1
+    },
+    "measure.machine.cpuBusyPct": {
+     "median": 280,
+     "min": 280,
+     "max": 280,
+     "n": 1
+    },
+    "measure.machine.foreignCpuPct": {
+     "median": 118,
+     "min": 118,
+     "max": 118,
+     "n": 1
+    },
+    "measure.proc.app.cpuMeanPct": {
+     "median": 117.8,
+     "min": 117.8,
+     "max": 117.8,
+     "n": 1
+    },
+    "measure.proc.app.pssMaxMB": {
+     "median": 924.7,
+     "min": 924.7,
+     "max": 924.7,
+     "n": 1
+    },
+    "measure.proc.app.pssMedianMB": {
+     "median": 913.2,
+     "min": 913.2,
+     "max": 913.2,
+     "n": 1
+    },
+    "measure.proc.app.rssMaxMB": {
+     "median": 979.6,
+     "min": 979.6,
+     "max": 979.6,
+     "n": 1
+    },
+    "measure.proc.app.rssMedianMB": {
+     "median": 968.3,
+     "min": 968.3,
+     "max": 968.3,
+     "n": 1
+    },
+    "measure.proc.total.cpuMeanPct": {
+     "median": 117.8,
+     "min": 117.8,
+     "max": 117.8,
+     "n": 1
+    },
+    "measure.proc.total.pssMaxMB": {
+     "median": 924.7,
+     "min": 924.7,
+     "max": 924.7,
+     "n": 1
+    },
+    "measure.proc.total.pssMedianMB": {
+     "median": 913.2,
+     "min": 913.2,
+     "max": 913.2,
+     "n": 1
+    },
+    "measure.proc.total.rssMaxMB": {
+     "median": 979.6,
+     "min": 979.6,
+     "max": 979.6,
+     "n": 1
+    },
+    "measure.proc.total.rssMedianMB": {
+     "median": 968.3,
+     "min": 968.3,
+     "max": 968.3,
+     "n": 1
+    },
+    "measure.screen.fps": {
+     "median": 0.8,
+     "min": 0.8,
+     "max": 0.8,
+     "n": 1
+    },
+    "measure.screen.frames": {
+     "median": 15,
+     "min": 15,
+     "max": 15,
+     "n": 1
+    },
+    "measure.screen.gapMaxMs": {
+     "median": 1607.3,
+     "min": 1607.3,
+     "max": 1607.3,
+     "n": 1
+    },
+    "measure.screen.gapP50Ms": {
+     "median": 1249.6,
+     "min": 1249.6,
+     "max": 1249.6,
+     "n": 1
+    },
+    "measure.screen.gapP95Ms": {
+     "median": 1586.2,
+     "min": 1586.2,
+     "max": 1586.2,
+     "n": 1
+    },
+    "measure.screen.gapP99Ms": {
+     "median": 1607.3,
+     "min": 1607.3,
+     "max": 1607.3,
+     "n": 1
+    },
+    "measure.screen.gapsOver50Ms": {
+     "median": 14,
+     "min": 14,
+     "max": 14,
+     "n": 1
+    },
+    "measure.server.cpuMeanPct": {
+     "median": 43.7,
+     "min": 43.7,
+     "max": 43.7,
+     "n": 1
+    },
+    "open-chats.bytesDownKBps": {
+     "median": 37,
+     "min": 37,
+     "max": 37,
+     "n": 1
+    },
+    "open-chats.bytesUpKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 1
+    },
+    "open-chats.durationS": {
+     "median": 284.7,
+     "min": 284.7,
+     "max": 284.7,
+     "n": 1
+    },
+    "open-chats.machine.cpuBusyPct": {
+     "median": 250,
+     "min": 250,
+     "max": 250,
+     "n": 1
+    },
+    "open-chats.machine.foreignCpuPct": {
+     "median": 68,
+     "min": 68,
+     "max": 68,
+     "n": 1
+    },
+    "open-chats.proc.app.cpuMeanPct": {
+     "median": 146.9,
+     "min": 146.9,
+     "max": 146.9,
+     "n": 1
+    },
+    "open-chats.proc.app.pssMaxMB": {
+     "median": 899.9,
+     "min": 899.9,
+     "max": 899.9,
+     "n": 1
+    },
+    "open-chats.proc.app.pssMedianMB": {
+     "median": 590.3,
+     "min": 590.3,
+     "max": 590.3,
+     "n": 1
+    },
+    "open-chats.proc.app.rssMaxMB": {
+     "median": 954.6,
+     "min": 954.6,
+     "max": 954.6,
+     "n": 1
+    },
+    "open-chats.proc.app.rssMedianMB": {
+     "median": 685.2,
+     "min": 685.2,
+     "max": 685.2,
+     "n": 1
+    },
+    "open-chats.proc.total.cpuMeanPct": {
+     "median": 146.9,
+     "min": 146.9,
+     "max": 146.9,
+     "n": 1
+    },
+    "open-chats.proc.total.pssMaxMB": {
+     "median": 899.9,
+     "min": 899.9,
+     "max": 899.9,
+     "n": 1
+    },
+    "open-chats.proc.total.pssMedianMB": {
+     "median": 590.3,
+     "min": 590.3,
+     "max": 590.3,
+     "n": 1
+    },
+    "open-chats.proc.total.rssMaxMB": {
+     "median": 954.6,
+     "min": 954.6,
+     "max": 954.6,
+     "n": 1
+    },
+    "open-chats.proc.total.rssMedianMB": {
+     "median": 685.2,
+     "min": 685.2,
+     "max": 685.2,
+     "n": 1
+    },
+    "open-chats.screen.fps": {
+     "median": 1.5,
+     "min": 1.5,
+     "max": 1.5,
+     "n": 1
+    },
+    "open-chats.screen.frames": {
+     "median": 420,
+     "min": 420,
+     "max": 420,
+     "n": 1
+    },
+    "open-chats.screen.gapMaxMs": {
+     "median": 3055.5,
+     "min": 3055.5,
+     "max": 3055.5,
+     "n": 1
+    },
+    "open-chats.screen.gapP50Ms": {
+     "median": 590.4,
+     "min": 590.4,
+     "max": 590.4,
+     "n": 1
+    },
+    "open-chats.screen.gapP95Ms": {
+     "median": 1588.1,
+     "min": 1588.1,
+     "max": 1588.1,
+     "n": 1
+    },
+    "open-chats.screen.gapP99Ms": {
+     "median": 2249.3,
+     "min": 2249.3,
+     "max": 2249.3,
+     "n": 1
+    },
+    "open-chats.screen.gapsOver50Ms": {
+     "median": 419,
+     "min": 419,
+     "max": 419,
+     "n": 1
+    },
+    "open-chats.server.cpuMeanPct": {
+     "median": 34.7,
+     "min": 34.7,
+     "max": 34.7,
+     "n": 1
+    },
+    "startup.bytesDownKBps": {
+     "median": 13,
+     "min": 13,
+     "max": 13,
+     "n": 1
+    },
+    "startup.bytesUpKBps": {
+     "median": 4,
+     "min": 4,
+     "max": 4,
+     "n": 1
+    },
+    "startup.durationS": {
+     "median": 4,
+     "min": 4,
+     "max": 4,
+     "n": 1
+    },
+    "startup.launcherReadyMs": {
+     "median": 4005,
+     "min": 4005,
+     "max": 4005,
+     "n": 1
+    },
+    "startup.machine.cpuBusyPct": {
+     "median": 366,
+     "min": 366,
+     "max": 366,
+     "n": 1
+    },
+    "startup.machine.foreignCpuPct": {
+     "median": 108,
+     "min": 108,
+     "max": 108,
+     "n": 1
+    },
+    "startup.proc.app.cpuMeanPct": {
+     "median": 198,
+     "min": 198,
+     "max": 198,
+     "n": 1
+    },
+    "startup.proc.app.pssMaxMB": {
+     "median": 198.6,
+     "min": 198.6,
+     "max": 198.6,
+     "n": 1
+    },
+    "startup.proc.app.pssMedianMB": {
+     "median": 191.4,
+     "min": 191.4,
+     "max": 191.4,
+     "n": 1
+    },
+    "startup.proc.app.rssMaxMB": {
+     "median": 282.5,
+     "min": 282.5,
+     "max": 282.5,
+     "n": 1
+    },
+    "startup.proc.app.rssMedianMB": {
+     "median": 279.3,
+     "min": 279.3,
+     "max": 279.3,
+     "n": 1
+    },
+    "startup.proc.total.cpuMeanPct": {
+     "median": 198,
+     "min": 198,
+     "max": 198,
+     "n": 1
+    },
+    "startup.proc.total.pssMaxMB": {
+     "median": 198.6,
+     "min": 198.6,
+     "max": 198.6,
+     "n": 1
+    },
+    "startup.proc.total.pssMedianMB": {
+     "median": 191.4,
+     "min": 191.4,
+     "max": 191.4,
+     "n": 1
+    },
+    "startup.proc.total.rssMaxMB": {
+     "median": 282.5,
+     "min": 282.5,
+     "max": 282.5,
+     "n": 1
+    },
+    "startup.proc.total.rssMedianMB": {
+     "median": 279.3,
+     "min": 279.3,
+     "max": 279.3,
+     "n": 1
+    },
+    "startup.processUpMs": {
+     "median": 1105,
+     "min": 1105,
+     "max": 1105,
+     "n": 1
+    },
+    "startup.projectListMs": {
+     "median": 2279,
+     "min": 2279,
+     "max": 2279,
+     "n": 1
+    },
+    "startup.screen.fps": {
+     "median": 5,
+     "min": 5,
+     "max": 5,
+     "n": 1
+    },
+    "startup.screen.frames": {
+     "median": 20,
+     "min": 20,
+     "max": 20,
+     "n": 1
+    },
+    "startup.screen.gapMaxMs": {
+     "median": 568.4,
+     "min": 568.4,
+     "max": 568.4,
+     "n": 1
+    },
+    "startup.screen.gapP50Ms": {
+     "median": 93.8,
+     "min": 93.8,
+     "max": 93.8,
+     "n": 1
+    },
+    "startup.screen.gapP95Ms": {
+     "median": 416.7,
+     "min": 416.7,
+     "max": 416.7,
+     "n": 1
+    },
+    "startup.screen.gapP99Ms": {
+     "median": 568.4,
+     "min": 568.4,
+     "max": 568.4,
+     "n": 1
+    },
+    "startup.screen.gapsOver50Ms": {
+     "median": 17,
+     "min": 17,
+     "max": 17,
+     "n": 1
+    },
+    "startup.server.cpuMeanPct": {
+     "median": 59.7,
+     "min": 59.7,
+     "max": 59.7,
+     "n": 1
+    },
+    "sustained-stream.bytesDownKBps": {
+     "median": 57,
+     "min": 57,
+     "max": 57,
+     "n": 1
+    },
+    "sustained-stream.bytesUpKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 1
+    },
+    "sustained-stream.durationS": {
+     "median": 31.1,
+     "min": 31.1,
+     "max": 31.1,
+     "n": 1
+    },
+    "sustained-stream.machine.cpuBusyPct": {
+     "median": 209,
+     "min": 209,
+     "max": 209,
+     "n": 1
+    },
+    "sustained-stream.machine.foreignCpuPct": {
+     "median": 34,
+     "min": 34,
+     "max": 34,
+     "n": 1
+    },
+    "sustained-stream.proc.app.cpuMeanPct": {
+     "median": 123,
+     "min": 123,
+     "max": 123,
+     "n": 1
+    },
+    "sustained-stream.proc.app.pssMaxMB": {
+     "median": 919.9,
+     "min": 919.9,
+     "max": 919.9,
+     "n": 1
+    },
+    "sustained-stream.proc.app.pssMedianMB": {
+     "median": 892.4,
+     "min": 892.4,
+     "max": 892.4,
+     "n": 1
+    },
+    "sustained-stream.proc.app.rssMaxMB": {
+     "median": 974.6,
+     "min": 974.6,
+     "max": 974.6,
+     "n": 1
+    },
+    "sustained-stream.proc.app.rssMedianMB": {
+     "median": 947.1,
+     "min": 947.1,
+     "max": 947.1,
+     "n": 1
+    },
+    "sustained-stream.proc.total.cpuMeanPct": {
+     "median": 123,
+     "min": 123,
+     "max": 123,
+     "n": 1
+    },
+    "sustained-stream.proc.total.pssMaxMB": {
+     "median": 919.9,
+     "min": 919.9,
+     "max": 919.9,
+     "n": 1
+    },
+    "sustained-stream.proc.total.pssMedianMB": {
+     "median": 892.4,
+     "min": 892.4,
+     "max": 892.4,
+     "n": 1
+    },
+    "sustained-stream.proc.total.rssMaxMB": {
+     "median": 974.6,
+     "min": 974.6,
+     "max": 974.6,
+     "n": 1
+    },
+    "sustained-stream.proc.total.rssMedianMB": {
+     "median": 947.1,
+     "min": 947.1,
+     "max": 947.1,
+     "n": 1
+    },
+    "sustained-stream.screen.fps": {
+     "median": 0.8,
+     "min": 0.8,
+     "max": 0.8,
+     "n": 1
+    },
+    "sustained-stream.screen.frames": {
+     "median": 24,
+     "min": 24,
+     "max": 24,
+     "n": 1
+    },
+    "sustained-stream.screen.gapMaxMs": {
+     "median": 1999.8,
+     "min": 1999.8,
+     "max": 1999.8,
+     "n": 1
+    },
+    "sustained-stream.screen.gapP50Ms": {
+     "median": 1269.6,
+     "min": 1269.6,
+     "max": 1269.6,
+     "n": 1
+    },
+    "sustained-stream.screen.gapP95Ms": {
+     "median": 1592.2,
+     "min": 1592.2,
+     "max": 1592.2,
+     "n": 1
+    },
+    "sustained-stream.screen.gapP99Ms": {
+     "median": 1999.8,
+     "min": 1999.8,
+     "max": 1999.8,
+     "n": 1
+    },
+    "sustained-stream.screen.gapsOver50Ms": {
+     "median": 23,
+     "min": 23,
+     "max": 23,
+     "n": 1
+    },
+    "sustained-stream.server.cpuMeanPct": {
+     "median": 52.2,
+     "min": 52.2,
+     "max": 52.2,
+     "n": 1
+    },
+    "warmup.bytesDownKBps": {
+     "median": 4,
+     "min": 4,
+     "max": 4,
+     "n": 1
+    },
+    "warmup.bytesUpKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 1
+    },
+    "warmup.durationS": {
+     "median": 15.5,
+     "min": 15.5,
+     "max": 15.5,
+     "n": 1
+    },
+    "warmup.machine.cpuBusyPct": {
+     "median": 403,
+     "min": 403,
+     "max": 403,
+     "n": 1
+    },
+    "warmup.machine.foreignCpuPct": {
+     "median": 117,
+     "min": 117,
+     "max": 117,
+     "n": 1
+    },
+    "warmup.proc.app.cpuMeanPct": {
+     "median": 282.2,
+     "min": 282.2,
+     "max": 282.2,
+     "n": 1
+    },
+    "warmup.proc.app.pssMaxMB": {
+     "median": 268.8,
+     "min": 268.8,
+     "max": 268.8,
+     "n": 1
+    },
+    "warmup.proc.app.pssMedianMB": {
+     "median": 238.5,
+     "min": 238.5,
+     "max": 238.5,
+     "n": 1
+    },
+    "warmup.proc.app.rssMaxMB": {
+     "median": 362.2,
+     "min": 362.2,
+     "max": 362.2,
+     "n": 1
+    },
+    "warmup.proc.app.rssMedianMB": {
+     "median": 331.2,
+     "min": 331.2,
+     "max": 331.2,
+     "n": 1
+    },
+    "warmup.proc.total.cpuMeanPct": {
+     "median": 282.2,
+     "min": 282.2,
+     "max": 282.2,
+     "n": 1
+    },
+    "warmup.proc.total.pssMaxMB": {
+     "median": 268.8,
+     "min": 268.8,
+     "max": 268.8,
+     "n": 1
+    },
+    "warmup.proc.total.pssMedianMB": {
+     "median": 238.5,
+     "min": 238.5,
+     "max": 238.5,
+     "n": 1
+    },
+    "warmup.proc.total.rssMaxMB": {
+     "median": 362.2,
+     "min": 362.2,
+     "max": 362.2,
+     "n": 1
+    },
+    "warmup.proc.total.rssMedianMB": {
+     "median": 331.2,
+     "min": 331.2,
+     "max": 331.2,
+     "n": 1
+    },
+    "warmup.screen.fps": {
+     "median": 7.3,
+     "min": 7.3,
+     "max": 7.3,
+     "n": 1
+    },
+    "warmup.screen.frames": {
+     "median": 113,
+     "min": 113,
+     "max": 113,
+     "n": 1
+    },
+    "warmup.screen.gapMaxMs": {
+     "median": 367.8,
+     "min": 367.8,
+     "max": 367.8,
+     "n": 1
+    },
+    "warmup.screen.gapP50Ms": {
+     "median": 113.7,
+     "min": 113.7,
+     "max": 113.7,
+     "n": 1
+    },
+    "warmup.screen.gapP95Ms": {
+     "median": 270.3,
+     "min": 270.3,
+     "max": 270.3,
+     "n": 1
+    },
+    "warmup.screen.gapP99Ms": {
+     "median": 302.3,
+     "min": 302.3,
+     "max": 302.3,
+     "n": 1
+    },
+    "warmup.screen.gapsOver50Ms": {
+     "median": 112,
+     "min": 112,
+     "max": 112,
+     "n": 1
+    },
+    "warmup.server.cpuMeanPct": {
+     "median": 4.5,
+     "min": 4.5,
+     "max": 4.5,
+     "n": 1
+    }
+   }
   }
+ }
 }

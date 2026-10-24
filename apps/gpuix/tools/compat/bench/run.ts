@@ -38,11 +38,7 @@ if (values.loop !== undefined && values.loop !== 'mount' && values.loop !== 'rer
   process.exit(2)
 }
 
-const build = await buildClient(
-  path.join(APP_DIR, 'tools/compat/bench/main.ts'),
-  path.join(APP_DIR, 'dist-bench'),
-  { production: true }
-)
+const build = await buildClient(path.join(APP_DIR, 'tools/compat/bench/main.ts'), path.join(APP_DIR, 'dist-bench'), { production: true })
 for (const line of build.logs) console.error(line)
 if (!build.ok) process.exit(1)
 
@@ -67,9 +63,7 @@ async function once<T>(mode: Mode, i: number): Promise<T> {
   rmSync(out, { force: true })
   const xvfb = await startXvfb(WINDOW_WIDTH, WINDOW_HEIGHT)
   try {
-    const profile = values.profile
-      ? ['--cpu-prof-md', `--cpu-prof-dir=${path.resolve(values.profile, `${mode}-${i}`)}`]
-      : []
+    const profile = values.profile ? ['--cpu-prof-md', `--cpu-prof-dir=${path.resolve(values.profile, `${mode}-${i}`)}`] : []
     const child = Bun.spawn(['bun', ...profile, build.entry], {
       cwd: path.dirname(build.entry),
       env: {
@@ -102,24 +96,17 @@ const stat = (xs: number[]) => {
   return { median: s[Math.floor(s.length / 2)], min: s[0], max: s[s.length - 1] }
 }
 
-async function compare<T>(
-  describe: (mode: Mode, i: number, r: T) => string,
-  metrics: [string, (r: T) => number][]
-) {
+async function compare<T>(describe: (mode: Mode, i: number, r: T) => string, metrics: [string, (r: T) => number][]) {
   const results: Record<Mode, T[]> = { compat: [], hand: [] }
   const runs = Number(values.runs)
   for (let i = 0; i < runs; i++) {
-    for (const mode of i % 2 === 0
-      ? (['compat', 'hand'] as const)
-      : (['hand', 'compat'] as const)) {
+    for (const mode of i % 2 === 0 ? (['compat', 'hand'] as const) : (['hand', 'compat'] as const)) {
       const r = await once<T>(mode, i)
       results[mode].push(r)
       console.log(describe(mode, i, r))
     }
   }
-  console.log(
-    `\n${runs} runs per mode, ${values.rows} rows${values.loop ? `, ${values.loop} loop` : ''}`
-  )
+  console.log(`\n${runs} runs per mode, ${values.rows} rows${values.loop ? `, ${values.loop} loop` : ''}`)
   for (const [name, pick] of metrics) {
     const c = stat(results.compat.map(pick))
     const h = stat(results.hand.map(pick))
@@ -131,8 +118,7 @@ async function compare<T>(
 
 if (values.loop) {
   await compare<LoopResult>(
-    (mode, i, r) =>
-      `${mode} #${i}: ${r.iterations} iterations, cpu ${r.cpuMsPerIteration.toFixed(3)} ms, wall ${r.msPerIteration.toFixed(3)} ms per iteration`,
+    (mode, i, r) => `${mode} #${i}: ${r.iterations} iterations, cpu ${r.cpuMsPerIteration.toFixed(3)} ms, wall ${r.msPerIteration.toFixed(3)} ms per iteration`,
     [
       ['js cpu ms / iter', (r) => r.cpuMsPerIteration],
       ['wall ms / iter', (r) => r.msPerIteration]

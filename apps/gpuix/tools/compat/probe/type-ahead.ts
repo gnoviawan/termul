@@ -36,13 +36,7 @@ try {
     JSON.stringify({ 'termul.deviceId': deviceId })
   )
   await withGpuix(
-    {
-      server: world.server,
-      entry: build.entry,
-      clientStateDir,
-      width: WINDOW_WIDTH,
-      height: WINDOW_HEIGHT
-    },
+    { server: world.server, entry: build.entry, clientStateDir, width: WINDOW_WIDTH, height: WINDOW_HEIGHT },
     async ({ app, grab }) => {
       await app.getByText('What should we do in alpha?').waitFor({ timeoutMs: READY_TIMEOUT_MS })
       await Bun.sleep(500)

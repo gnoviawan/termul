@@ -22,7 +22,5 @@ export async function buildScene(): Promise<string> {
 if (import.meta.main) {
   const started = performance.now()
   const entry = await buildScene()
-  console.log(
-    `built ${path.relative(APP_DIR, entry)} in ${Math.round(performance.now() - started)} ms`
-  )
+  console.log(`built ${path.relative(APP_DIR, entry)} in ${Math.round(performance.now() - started)} ms`)
 }
