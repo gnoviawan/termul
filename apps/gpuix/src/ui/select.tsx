@@ -11,6 +11,8 @@ import { type PublicInstance, useGpuix } from '@gpuix/react'
 import {
   createContext,
   forwardRef,
+  isValidElement,
+  type ReactElement,
   type ReactNode,
   type Ref,
   useCallback,
@@ -290,9 +292,43 @@ export interface SelectItemProps extends Omit<MenuItemProps, 'onSelect'> {
   value: string
 }
 
+/** Whether the item being rendered is the selected one, for `SelectItemIndicator`. */
+const ItemSelectedContext = createContext(false)
+
+/**
+ * Radix `Select.ItemText`: the part of an item the trigger shows. An item
+ * without one shows all of its children, as `SelectItem` always has.
+ */
+function SelectItemText({ children }: { children?: ReactNode }) {
+  return <>{wrapText(children)}</>
+}
+
+/** Radix `Select.ItemIndicator`: its children paint on the selected item only. */
+function SelectItemIndicator({ children }: { children?: ReactNode }) {
+  return useContext(ItemSelectedContext) ? <>{children}</> : null
+}
+
+/** The first element of type `part` in an item's children, searched depth first. */
+function findPart(children: ReactNode, part: unknown): ReactElement<{ children?: ReactNode }> | null {
+  const list = Array.isArray(children) ? children : [children]
+  for (const child of list) {
+    if (Array.isArray(child)) {
+      const hit = findPart(child, part)
+      if (hit) return hit
+      continue
+    }
+    if (!isValidElement<{ children?: ReactNode }>(child)) continue
+    if (child.type === part) return child
+    const hit = findPart(child.props.children, part)
+    if (hit) return hit
+  }
+  return null
+}
+
 function CollectItem({ value, children }: { value: string; children?: ReactNode }) {
   const select = useSelect('SelectItem')
-  useLayoutEffect(() => select.setLabel(value, children), [select.setLabel, value, children])
+  const label = findPart(children, SelectItemText)?.props.children ?? children
+  useLayoutEffect(() => select.setLabel(value, label), [select.setLabel, value, label])
   return null
 }
 
@@ -306,8 +342,11 @@ function OpenItem({
   const select = useSelect('SelectItem')
   const overlay = useOverlay('SelectItem')
   const selected = select.value === value
-  useLayoutEffect(() => select.setLabel(value, children), [select.setLabel, value, children])
+  const label = findPart(children, SelectItemText)?.props.children ?? children
+  const ownIndicator = findPart(children, SelectItemIndicator) !== null
+  useLayoutEffect(() => select.setLabel(value, label), [select.setLabel, value, label])
   return (
+    <ItemSelectedContext.Provider value={selected}>
     <MenuItemBase
       ref={itemRef}
       role="option"
@@ -317,7 +356,7 @@ function OpenItem({
       className={className}
       value={value}
       keepOpen
-      indicator={<Indicator show={selected} className={MENU_INDICATOR_CLASS} />}
+      indicator={ownIndicator ? undefined : <Indicator show={selected} className={MENU_INDICATOR_CLASS} />}
       onSelect={() => {
         select.setValue(value)
         overlay.setOpen(false)
@@ -326,6 +365,7 @@ function OpenItem({
     >
       {children}
     </MenuItemBase>
+    </ItemSelectedContext.Provider>
   )
 }
 
@@ -348,6 +388,8 @@ export {
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectItemIndicator,
+  SelectItemText,
   SelectLabel,
   SelectScrollDownButton,
   SelectScrollUpButton,
