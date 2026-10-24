@@ -48,7 +48,7 @@ function walk(el, depth) {
   var role = roleOf(el);
   var name = nameOf(el);
   if (isInteractive(el) && visible(el)) {
-    var node = { kind: 'node', depth: depth, role: nodeRole(el), name: name, path: guard + pathOf(el) + '~' + idOf(el) };
+    var node = { kind: 'node', depth: depth, role: nodeRole(el), name: name, path: guard + pathOf(el) + '~' + fingerprint(el) };
     if (tag === 'A' && hrefOf(el)) node.href = String(hrefOf(el));
     if (tag === 'INPUT') {
       node.inputType = inputType(el);

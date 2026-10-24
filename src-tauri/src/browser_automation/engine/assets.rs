@@ -5,10 +5,9 @@
 //! a helper only inside `p`, which every engine passes as a native call
 //! argument, so no agent text is ever part of script source. An element is
 //! named by the structural path the snapshot reported for it, which also
-//! pins the identity the snapshot gave the element. That identity, a
-//! property of the isolated world's wrapper of the element, is the only
-//! state helpers keep between calls: a path that now leads to another
-//! element finds nothing.
+//! pins a fingerprint of the element (its telling attributes and the text
+//! of its row), so a path that now leads to another element finds
+//! nothing. Helpers keep no state between calls.
 
 use serde_json::{json, Value};
 

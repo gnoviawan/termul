@@ -186,15 +186,16 @@ function labelledText(el) {
   }
   return out.trim();
 }
-var LABEL_SKIP = ['INPUT', 'SELECT', 'TEXTAREA', 'SCRIPT', 'STYLE'];
-// The text of a <label>, without the controls it wraps. Read in place: a
-// copy would construct the label's custom elements, running page code.
-function labelText(node) {
+var NOT_STATIC = ['INPUT', 'SELECT', 'TEXTAREA', 'SCRIPT', 'STYLE'];
+// The text under node without the controls and editable elements in it,
+// whose text the agent's own input changes. Read in place: a copy would
+// construct the page's custom elements, running page code.
+function staticText(node) {
   var out = '';
   for (var c = firstNodeOf(node); c; c = nextNodeOf(c)) {
     var type = nodeTypeOf(c);
     if (type === 3) out += nodeValueOf(c);
-    else if (type === 1 && LABEL_SKIP.indexOf(tagOf(c)) < 0) out += labelText(c);
+    else if (type === 1 && NOT_STATIC.indexOf(tagOf(c)) < 0 && !editableOf(c)) out += staticText(c);
   }
   return out;
 }
@@ -202,7 +203,7 @@ function labelsText(el) {
   var read = LABELS[tagOf(el)];
   var labels = read ? read(el) : null;
   var out = '';
-  for (var i = 0; labels && i < labels.length; i++) out += labelText(labels[i]) + ' ';
+  for (var i = 0; labels && i < labels.length; i++) out += staticText(labels[i]) + ' ';
   return out;
 }
 // A field never takes its name from what it holds: the value changes as
@@ -292,24 +293,23 @@ function stepInto(root, local) {
   }
   return node && nodeTypeOf(node) === 1 ? node : null;
 }
-// Each element a snapshot reports gets a random identity, kept as a
-// property of this script world's wrapper of the element, which the page
-// cannot see. A snapshot path ends in '~<id>', so a path that leads to
-// another element once the page has moved its siblings finds nothing
-// instead of that element. A wrapper with a property of its own lives as
-// long as its element; one only held as a WeakMap key does not on WebKit.
-var ID_KEY = Symbol.for('termul.element-id');
-function idOf(el) {
-  var id = el[ID_KEY];
-  if (!id) {
-    id = Math.floor(Math.random() * 9007199254740991) + 1;
-    el[ID_KEY] = id;
-  }
-  return id;
+// A snapshot path ends in '~<fingerprint>' of its element: its tag, the
+// attributes that tell like elements apart, and the text of the row or
+// list item holding it. A path that leads to another element once the
+// page has moved its siblings (the next row's "Delete") then finds
+// nothing instead of that element.
+var ROW = 'tr, li, [role=row], [role=listitem], [role=option]';
+function fingerprint(el) {
+  var row = closestOf(el, ROW);
+  var text = [tagOf(el), attr(el, 'id'), attr(el, 'name'), attr(el, 'type'), attr(el, 'href'),
+    row && row !== el ? staticText(row) : ''].join('\u0001');
+  var h = 0x811c9dc5;
+  for (var i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(36);
 }
 function locate(path) {
   var text = String(path);
-  var pinned = /~(\d+)$/.exec(text);
+  var pinned = /~([0-9a-z]+)$/.exec(text);
   if (pinned) text = text.slice(0, pinned.index);
   var parts = text.split('|');
   var i = 0;
@@ -328,7 +328,7 @@ function locate(path) {
     }
     el = root ? stepInto(root, parts[i + 1]) : null;
   }
-  return el && (!pinned || el[ID_KEY] === Number(pinned[1])) ? el : null;
+  return el && (!pinned || fingerprint(el) === pinned[1]) ? el : null;
 }
 function isInteractive(el) {
   try { return matchesOf(el, INTERACTIVE); } catch (e) { return false; }
