@@ -252,14 +252,10 @@ function AgentTabStrip({
                 // list's row grid; 6px radius like the rows.
                 cn('rounded-md', touch ? 'size-11' : 'size-7')
               : cn('flex-1 rounded-t-md', touch ? 'h-11' : 'h-8'),
-            item.selected
-              ? 'text-foreground'
-              : cn(
-                  'text-muted-foreground',
-                  vertical
-                    ? 'hover:bg-foreground/5 hover:text-foreground/80'
-                    : 'hover:bg-row-hover hover:text-foreground'
-                ),
+            // Icons keep their colour (brand or foreground); state reads from
+            // the icon's opacity, as the active fill alone is too faint.
+            'group/tab text-foreground',
+            !item.selected && (vertical ? 'hover:bg-foreground/5' : 'hover:bg-row-hover'),
             ROW_FOCUS
           )}
         >
@@ -278,7 +274,15 @@ function AgentTabStrip({
               )}
             />
           ) : null}
-          <span className="relative inline-flex">{item.glyph}</span>
+          <span
+            data-tab-glyph=""
+            className={cn(
+              'relative inline-flex transition-opacity duration-150 ease-out motion-reduce:transition-none',
+              item.selected ? 'opacity-100' : 'opacity-55 group-hover/tab:opacity-80'
+            )}
+          >
+            {item.glyph}
+          </span>
         </button>
       ))}
     </div>
@@ -705,7 +709,6 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   const tabItems: TabItem[] = tabs.visible.map((tab) => ({
     key: tab.configId,
     label: tab.name,
-    // The tab sets the colour: muted, brighter on hover, full when active.
     glyph: <TabGlyph tab={tab} colorClassName="text-current" />,
     selected: !showingMore && tab.configId === viewId,
     title: state.hasUpdate(tab) ? `${tab.name} · update available` : tab.name,

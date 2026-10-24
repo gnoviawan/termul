@@ -675,13 +675,25 @@ describe('SelectorPanelV2 agent rail', () => {
     expect(selectAgent).toHaveBeenCalledWith(expect.objectContaining({ configId: CLAUDE.id }))
   })
 
-  it('tab glyphs take the tab colour, so inactive tabs are muted; list rows keep theirs', () => {
+  it('tab icons keep their colour; inactive tabs dim by opacity only', () => {
     render(<Panel {...props({ agentRail: 'left' })} />)
+    const wrap = (name: string): HTMLElement | null =>
+      screen.getByRole('tab', { name }).querySelector<HTMLElement>('[data-tab-glyph]')
+    const active = wrap('Cursor')
+    const inactive = wrap('Claude Agent')
+    expect(active).toHaveClass('opacity-100')
+    expect(inactive).toHaveClass('opacity-55', 'group-hover/tab:opacity-80')
+    for (const el of [active, inactive]) {
+      expect(el).toHaveClass('transition-opacity', 'duration-150', 'ease-out')
+      expect(el).toHaveClass('motion-reduce:transition-none')
+    }
     const tab = screen.getByRole('tab', { name: 'Claude Agent' })
-    expect(tab).toHaveClass('text-muted-foreground')
-    const glyph = tab.querySelector('[aria-hidden="true"]:not(.pointer-events-none)')
-    expect(glyph).toHaveClass('text-current')
-    expect(glyph).not.toHaveClass('text-foreground/80')
+    expect(tab).not.toHaveClass('text-muted-foreground')
+    // Claude's brand colour survives the inactive state.
+    const glyph = inactive?.querySelector<HTMLElement>('[data-agent-brand]')
+    expect(glyph?.style.getPropertyValue('--agent-brand-dark')).toBe('#D97757')
+    // Cursor's mark is monochrome: it takes the tab's foreground.
+    expect(active?.querySelector('[data-agent-brand]')).toBeNull()
   })
 
   it('the default top strip stays horizontal', () => {
