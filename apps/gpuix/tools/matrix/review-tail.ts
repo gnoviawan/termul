@@ -1,7 +1,7 @@
 /** Reviews for settings, palette, shortcuts, themes and the long tail (see `review.ts`). */
 
 import type { Review } from './review'
-import { BACKDROP, SELECT, SETTINGS_BASE, TINT, TOAST } from './review-phrases'
+import { BACKDROP, SELECT, SETTINGS_BASE, TOAST } from './review-phrases'
 
 const THEME_FAMILIES = [
   'termul',
@@ -52,7 +52,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
   'palette.save-snapshot': {
     status: 'partial',
-    differences: ['The Create Snapshot modal matches.', BACKDROP, TINT],
+    differences: ['The Create Snapshot modal matches.', BACKDROP],
     cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
@@ -185,7 +185,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       'Row dividers inside a group are missing and rows sit tighter.'
     ],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'settings row layout (unassigned)',
     impact: 1
   },
   'settings.editor': {
@@ -216,8 +216,8 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'settings.terminal-profiles': {
     status: 'partial',
     differences: SETTINGS_BASE,
-    cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
   'settings.ai-agents': {
@@ -233,29 +233,29 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'settings.skills': {
     status: 'partial',
     differences: SETTINGS_BASE,
-    cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
   'settings.provider': {
     status: 'partial',
     differences: [...SETTINGS_BASE, 'The usage line moves under the account instead of beside it.'],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'settings row layout (unassigned)',
     impact: 1
   },
   'settings.mcp-servers': {
     status: 'partial',
     differences: [...SETTINGS_BASE, 'The inline code in the footnote breaks onto its own line.'],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'settings row layout (unassigned)',
     impact: 1
   },
   'settings.shortcuts': {
     status: 'partial',
     differences: SETTINGS_BASE,
-    cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
   'settings.diagnostics': {
@@ -294,12 +294,11 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'theme.picker': {
     status: 'partial',
     differences: [
-      'The Color Themes popover, groups, swatches and the current-theme check match.',
-      TINT,
+      'The Color Themes popover, groups, swatches and the current-theme check match, and labels antialias in grayscale as on the web (C8 fixed in G3).',
       'No focus ring on the search field.'
     ],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'focus ring on focused fields (unassigned)',
     impact: 1
   },
   'dialogs.bug-report': {

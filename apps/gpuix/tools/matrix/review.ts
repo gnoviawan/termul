@@ -13,7 +13,6 @@ import {
   PROSE,
   SHORT_TRANSCRIPT,
   TAB_TITLE,
-  TINT,
   TITLE_TIP,
   TOAST,
   TREE_TEXT
@@ -87,7 +86,7 @@ export const REVIEWS: Record<string, Review> = {
   },
   'rail.project-settings': {
     status: 'partial',
-    differences: ['The gear opens Project settings on General with the same fields in both.', BACKDROP, TINT],
+    differences: ['The gear opens Project settings on General with the same fields in both.', BACKDROP],
     cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
