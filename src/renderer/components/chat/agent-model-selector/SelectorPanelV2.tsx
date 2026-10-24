@@ -1,20 +1,11 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import {
-  type KeyboardEvent,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState
-} from 'react'
-import { Check, MoreHorizontal, Search } from '@/components/icons'
+import { type KeyboardEvent, type ReactNode, useCallback, useRef } from 'react'
+import { Check, MoreHorizontal, Search, Zap } from '@/components/icons'
 import { BAND_FOCUS_CLASS, INNER_FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { flattenConfigOptionValues } from '../chat-input-bar-config'
-import { shouldShowSessionUsage } from '../context-usage-utils'
 import {
   type ChoiceSection,
   DENSE_ROW,
@@ -40,25 +31,15 @@ import {
 } from './SelectorRows'
 import {
   type AgentTab,
-  armableConfigId,
-  buildAgentTabs,
   type CatalogModel,
-  capabilitySummary,
-  catalogModels,
   entryDisableReason,
   type FavoriteModel,
-  MORE_AGENTS_VIEW,
   type ModelCatalog,
-  modelMatches,
-  resolveFavorites,
   splitContextOption
 } from './selector-model'
-import type { SwitchModelPick } from './use-agent-switch'
-import { loadPersistedCatalog, useKnownCatalogs, useOtherAgentCatalog } from './use-model-catalog'
-import { statusBadge } from './use-selector-panel-state'
+import { useRejectedOptionValues } from './use-option-values'
+import { useSelectorPanelState } from './use-selector-panel-state'
 
-const NO_IDS: readonly string[] = []
-const NO_FAVORITES: readonly FavoriteModel[] = []
 const LIST_ROW = '[data-selector-row]'
 /** `--ease-smooth-out`; framer needs the curve itself, not the variable. */
 const EASE_OUT = [0.22, 1, 0.36, 1] as const
@@ -252,21 +233,39 @@ function AgentTabStrip({
   )
 }
 
-const optionChoices = (option: SessionConfigOption): OptionChoice[] =>
-  flattenConfigOptionValues(option).map(({ value, name, description }) => ({
-    value,
-    name,
-    description: description ?? undefined
-  }))
+/** A select option's value, or undefined when the agent sent none (or a non-string). */
+const selectValue = (option: SessionConfigOption): string | undefined =>
+  typeof option.currentValue === 'string' ? option.currentValue : undefined
+
+type IsRejected = (optionId: string, value: string) => boolean
+type TrySet = (optionId: string, value: string | boolean) => Promise<void>
 
 /**
- * The active model's Edit flyout sections: Thinking (the effort option),
- * Context, Fast. Each shows only when the agent sends that option, with value
- * labels from the option data.
+ * A select option's choices, labelled from the option data. A value the agent
+ * rejected is dropped, or kept disabled while it is still the current one.
+ */
+function optionChoices(option: SessionConfigOption, isRejected?: IsRejected): OptionChoice[] {
+  const current = selectValue(option)
+  return flattenConfigOptionValues(option).flatMap(({ value, name, description }) => {
+    const unavailable = isRejected?.(option.id, value) ?? false
+    if (unavailable && value !== current) return []
+    return [{ value, name, description: description ?? undefined, unavailable }]
+  })
+}
+
+const ignore = (): void => {}
+
+/**
+ * The active model's session options: Thinking (the effort option), Context,
+ * Fast mode. Each shows only when the agent sends that option, with value
+ * labels from the option data. They sit in the active row's Edit flyout, or
+ * in the footer when no active row is on screen.
  */
 function editSections(
   props: SelectorPanelV2Props,
-  context: SessionConfigOption | null
+  context: SessionConfigOption | null,
+  isRejected: IsRejected,
+  trySet: TrySet
 ): ChoiceSection[] {
   const sections: ChoiceSection[] = []
   const thinking = props.thoughtLevel ? optionChoices(props.thoughtLevel) : []
@@ -280,68 +279,103 @@ function editSections(
       onPick: props.onEffort
     })
   }
-  const windows = context ? optionChoices(context) : []
+  const windows = context ? optionChoices(context, isRejected) : []
   if (context && windows.length > 0) {
     sections.push({
       kind: 'radio',
       id: 'context',
       label: 'Context',
-      value: String(context.currentValue),
+      value: selectValue(context),
       choices: windows,
-      onPick: (value) => void props.onSetConfig(context.id, value)
+      onPick: (value) => void trySet(context.id, value).catch(ignore)
     })
   }
-  if (props.fastMode && props.onToggleFast) {
+  const { onToggleFast } = props
+  if (props.fastMode && onToggleFast) {
     sections.push({
       kind: 'toggle',
       id: 'fast',
-      label: 'Fast',
+      label: 'Fast mode',
+      icon: <Zap size={14} aria-hidden="true" className="shrink-0 text-muted-foreground" />,
       checked: props.fastOn,
-      onToggle: props.onToggleFast
+      onToggle: () => onToggleFast()
     })
   }
   return sections
 }
 
 /**
- * The agent's other session options, one footer row each, shown only when
- * the agent sends them.
+ * The footer's session option rows: the agent's other options, after the
+ * active model's own ones when no active row holds them.
  */
 function SessionOptions({
+  sections,
   rest,
-  ...props
-}: SelectorPanelV2Props & { rest: SessionConfigOption[] }): React.JSX.Element | null {
-  const { touch, disabled } = props
+  isRejected,
+  trySet,
+  disabled,
+  touch
+}: {
+  sections: ChoiceSection[]
+  rest: SessionConfigOption[]
+  isRejected: IsRejected
+  trySet: TrySet
+  disabled: boolean
+  touch: boolean
+}): React.JSX.Element | null {
   const ref = useRef<HTMLFieldSetElement>(null)
-  const rows: ReactNode[] = []
+  const rows: ReactNode[] = sections.map((section) =>
+    section.kind === 'toggle' ? (
+      <OptionSwitchRow
+        key={section.id}
+        id={section.id}
+        label={section.label}
+        icon={section.icon}
+        checked={section.checked}
+        disabled={disabled}
+        touch={touch}
+        onToggle={section.onToggle}
+      />
+    ) : (
+      <OptionRow
+        key={section.id}
+        id={section.id}
+        label={section.label}
+        value={section.value}
+        choices={section.choices}
+        disabled={disabled}
+        touch={touch}
+        onSelect={section.onPick}
+      />
+    )
+  )
   for (const option of rest) {
     if (option.type === 'boolean') {
-      const checked = option.currentValue === true
       rows.push(
         <OptionSwitchRow
           key={option.id}
           id={option.id}
           label={option.name}
-          checked={checked}
+          checked={option.currentValue === true}
           disabled={disabled}
           touch={touch}
-          onToggle={() => void props.onSetConfig(option.id, !checked)}
+          onToggle={(value) => trySet(option.id, value)}
         />
       )
       continue
     }
-    const choices = optionChoices(option)
+    const choices = optionChoices(option, isRejected)
     if (choices.length === 0) continue
     rows.push(
       <OptionRow
         key={option.id}
         id={option.id}
         label={option.name}
-        value={String(option.currentValue)}
+        value={selectValue(option)}
         choices={choices}
         disabled={disabled}
         touch={touch}
-        onSelect={(value) => void props.onSetConfig(option.id, value)}
+        onSelect={(value) => void trySet(option.id, value).catch(ignore)}
       />
     )
   }
@@ -362,134 +396,36 @@ function SessionOptions({
 }
 
 /**
- * Model picker v2 (view only): the same source, picks and states as
- * `SelectorPanel` in a denser layout. Glyph tabs with an underline, a
- * Favorites section, 28px rows, and an Edit flyout on the active model for
- * Thinking, Context and Fast. Visual direction after volt (MIT,
- * github.com/LeulAria/volt), on Termul tokens.
+ * Model picker v2: the same state as `SelectorPanel` (one hook) in a denser
+ * layout. Glyph tabs with an underline, a Favorites section, 28px rows, and
+ * an Edit flyout on the active model for Thinking, Context and Fast mode.
+ * Visual direction after volt (MIT, github.com/LeulAria/volt), on Termul
+ * tokens.
  */
 export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element {
-  const { source: sw, touch, disabled, modelOption, modelValue, onClose, escapeRef } = props
-  const favorites = props.favorites ?? NO_FAVORITES
+  const { source: sw, touch, disabled, modelValue } = props
   const reduced = useReducedMotion() ?? false
-  const [query, setQuery] = useState('')
-  const [view, setView] = useState<string | null>(null)
-  const [confirm, setConfirm] = useState<{ configId: string; pick: SwitchModelPick } | null>(null)
+  const state = useSelectorPanelState(props, { reserveMoreTab: false, favorites: props.favorites })
+  const { query, searching, showingMore, effectiveId, viewId, viewTab, tabs, view } = state
+  const { effectiveCatalog, capabilities, nameOf, tabOf } = state
   const searchRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
 
-  const effectiveId = sw.armedConfigId ?? sw.currentConfigId
-  const showingMore = view === MORE_AGENTS_VIEW
-  const viewId = showingMore ? null : (view ?? effectiveId)
-  const searching = query.trim().length > 0
-
-  const tabs = useMemo(
-    () =>
-      buildAgentTabs({
-        currentConfigId: sw.currentConfigId,
-        armedConfigId: sw.armedConfigId,
-        viewConfigId: viewId,
-        entries: sw.entries,
-        agentConfigs: sw.agentConfigs
-      }),
-    [sw.currentConfigId, sw.armedConfigId, viewId, sw.entries, sw.agentConfigs]
+  const { isRejected, trySet } = useRejectedOptionValues(
+    effectiveId,
+    props.genericOptions,
+    props.onSetConfig
   )
-  const allTabs = useMemo(() => [...tabs.visible, ...tabs.overflow], [tabs])
-  const tabById = useMemo(() => new Map(allTabs.map((t) => [t.configId, t])), [allTabs])
-  const notSetUp = (tab: AgentTab): boolean =>
-    sw.selectAgent == null &&
-    tab.entry?.status === 'ready' &&
-    armableConfigId(tab.entry, sw.agentConfigs) === null
-  const hasUpdate = (tab: AgentTab): boolean =>
-    Boolean(tab.entry && sw.updateAgentIds?.has(tab.entry.agent.id))
-  const badgeOf = (tab: AgentTab): string | null =>
-    statusBadge(tab.entry, sw.installingConfigId === tab.configId, !notSetUp(tab)) ??
-    (hasUpdate(tab) ? 'Update' : null)
-  const viewTab = viewId ? (tabById.get(viewId) ?? null) : null
-  const nameOf = (configId: string | null): string =>
-    (configId && tabById.get(configId)?.name) || 'this agent'
-
-  const tabIdsKey = allTabs.map((t) => t.configId).join('\n')
-  useEffect(() => {
-    for (const configId of tabIdsKey.split('\n')) if (configId) loadPersistedCatalog(configId)
-  }, [tabIdsKey])
-
-  const liveCatalog = sw.liveCatalog
-  const viewKind: 'effective' | 'current' | 'other' =
-    viewId === effectiveId ? 'effective' : viewId === sw.currentConfigId ? 'current' : 'other'
-  const viewEntry = viewTab?.entry ?? null
-  const viewReady = viewEntry ? viewEntry.status === 'ready' : Boolean(viewTab?.config)
-  const other = useOtherAgentCatalog(
-    sw.workspace,
-    !searching && viewKind === 'other' && viewReady ? viewId : null,
-    true
-  )
-
-  const showFavorites = !searching && viewKind === 'effective' && favorites.length > 0
-  const favoriteIdsKey = favorites.map((f) => f.configId).join('\n')
-  const lookupIds = useMemo(() => {
-    const ids = new Set<string>()
-    if (searching) {
-      for (const t of allTabs) if (t.configId !== effectiveId) ids.add(t.configId)
-    }
-    if (showFavorites) {
-      for (const id of favoriteIdsKey.split('\n')) if (id && id !== effectiveId) ids.add(id)
-    }
-    return ids.size > 0 ? [...ids] : NO_IDS
-  }, [searching, showFavorites, allTabs, effectiveId, favoriteIdsKey])
-  const known = useKnownCatalogs(sw.workspace.cwd, lookupIds)
-  const knownById = new Map(lookupIds.map((id, i) => [id, known[i] ?? null]))
-
-  escapeRef.current = () => {
-    if (confirm) {
-      setConfirm(null)
-      return true
-    }
-    if (query) {
-      setQuery('')
-      return true
-    }
-    return false
-  }
-
-  // Same picks as SelectorPanel: a model pick never closes the panel.
-  const pick = (configId: string | null, catalog: ModelCatalog | null, value: string): void => {
-    if (configId === effectiveId) {
-      props.onPickModel(value)
-      return
-    }
-    if (configId && configId === sw.currentConfigId) {
-      sw.pickCurrentModel(catalog, value)
-      return
-    }
-    if (!configId) return
-    const choice = {
-      modelId: value,
-      modelConfigId: catalog?.source === 'config' ? catalog.id : null
-    }
-    if (sw.blocked) {
-      setQuery('')
-      setView(configId)
-      setConfirm({ configId, pick: choice })
-      return
-    }
-    sw.pickOtherModel(configId, choice)
-    if (sw.selectAgent) setView(null)
-  }
-
-  const openAgent = (tab: AgentTab): void => {
-    setConfirm(null)
-    if (sw.selectAgent) {
-      sw.selectAgent(tab)
-      setView(null)
-      return
-    }
-    setView(tab.configId)
-  }
-
-  const capabilities = capabilitySummary(props.capabilities)
   const { context, rest } = splitContextOption(props.genericOptions)
-  const edit = editSections(props, context)
+  const edit = editSections(props, context, isRejected, trySet)
+  // The Edit flyout hangs off the active model's row. With no such row on
+  // screen (no model list, or a value outside it) the footer takes its rows.
+  const activeShown =
+    modelValue !== undefined &&
+    (view.kind === 'effective'
+      ? Boolean(view.catalog?.options.some((m) => m.value === modelValue))
+      : view.kind === 'search' && view.own.some((m) => m.value === modelValue))
+
   const rows = (
     configId: string | null,
     catalog: ModelCatalog | null,
@@ -517,216 +453,149 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
         }
         disabled={disabled}
         touch={touch}
-        onPick={() => pick(configId, catalog, model.value)}
+        onPick={() => state.pick(configId, catalog, model.value)}
       />
     ))
 
-  const effectiveCatalog: ModelCatalog | null = modelOption
-    ? {
-        id: modelOption.id,
-        source: 'config',
-        options: catalogModels(modelOption),
-        currentValue: null
-      }
-    : null
-  const modelChoices = modelOption ? catalogModels(modelOption) : []
-
-  const favoriteRows = showFavorites
-    ? resolveFavorites(favorites, (id) =>
-        id === effectiveId ? effectiveCatalog : (knownById.get(id) ?? null)
-      ).map((favorite) =>
-        rows(
-          favorite.configId,
-          favorite.configId === effectiveId
-            ? effectiveCatalog
-            : (knownById.get(favorite.configId) ?? null),
-          [favorite.model],
-          favorite.configId === effectiveId ? modelValue : undefined,
-          tabById.get(favorite.configId) ?? null,
-          true,
-          'favorite\0'
-        )
-      )
-    : []
+  const agentRow = (tab: AgentTab, key: string, onPick: () => void): React.JSX.Element => (
+    <AgentRow
+      key={key}
+      tab={tab}
+      badge={state.badgeOf(tab)}
+      disabled={disabled || state.notSetUp(tab)}
+      touch={touch}
+      onPick={onPick}
+    />
+  )
 
   let body: ReactNode
-  let resultCount = 0
-  if (searching) {
-    const effectiveTab = effectiveId ? (tabById.get(effectiveId) ?? null) : null
-    const own = modelChoices.filter((m) => modelMatches(m, query))
-    const others = lookupIds.flatMap((id) => {
-      const catalog = knownById.get(id)
-      return catalog
-        ? catalog.options.filter((m) => modelMatches(m, query)).map((m) => ({ id, catalog, m }))
-        : []
-    })
-    const agents = allTabs.filter(
-      (t) => t.configId !== effectiveId && t.name.toLowerCase().includes(query.trim().toLowerCase())
-    )
-    resultCount = own.length + others.length + agents.length
-    body =
-      resultCount === 0 ? (
-        <ListMessage title="No models or agents match." detail="Try another name." />
-      ) : (
-        <>
-          {rows(effectiveId, effectiveCatalog, own, modelValue, effectiveTab, true)}
-          {others.map(({ id, catalog, m }) =>
-            rows(id, catalog, [m], undefined, tabById.get(id) ?? null, true)
-          )}
-          {agents.map((tab) => (
-            <AgentRow
-              key={`agent\0${tab.configId}`}
-              tab={tab}
-              badge={badgeOf(tab)}
-              disabled={disabled || notSetUp(tab)}
-              touch={touch}
-              onPick={() => {
-                setQuery('')
-                openAgent(tab)
-              }}
-            />
-          ))}
-        </>
-      )
-  } else if (showingMore) {
-    body = tabs.overflow.map((tab) => (
-      <AgentRow
-        key={tab.configId}
-        tab={tab}
-        badge={badgeOf(tab)}
-        disabled={disabled || notSetUp(tab)}
-        touch={touch}
-        onPick={() => openAgent(tab)}
-      />
-    ))
-  } else if (viewKind === 'effective' && viewEntry && viewEntry.status !== 'ready' && viewTab) {
-    body = (
-      <InstallState
-        tab={viewTab}
-        reason={entryDisableReason(viewEntry)}
-        installing={sw.installingConfigId === viewEntry.configId}
-        installBlocked={Boolean(
-          sw.installingConfigId && sw.installingConfigId !== viewEntry.configId
-        )}
-        touch={touch}
-        onInstall={viewEntry.install ? () => sw.install(viewEntry) : null}
-      />
-    )
-  } else if (viewKind === 'effective') {
-    const status = sw.modelStatus
-    if (modelOption) {
+  switch (view.kind) {
+    case 'search':
+      body =
+        view.count === 0 ? (
+          <ListMessage title="No models or agents match." detail="Try another name." />
+        ) : (
+          <>
+            {rows(effectiveId, effectiveCatalog, view.own, modelValue, tabOf(effectiveId), true)}
+            {view.others.map(({ configId, catalog, model }) =>
+              rows(configId, catalog, [model], undefined, tabOf(configId), true)
+            )}
+            {view.agents.map((tab) =>
+              agentRow(tab, `agent\0${tab.configId}`, () => {
+                state.setQuery('')
+                state.openAgent(tab)
+              })
+            )}
+          </>
+        )
+      break
+    case 'more':
+      body = view.tabs.map((tab) => agentRow(tab, tab.configId, () => state.openAgent(tab)))
+      break
+    case 'install':
       body = (
+        <InstallState
+          tab={view.tab}
+          reason={entryDisableReason(view.entry)}
+          installing={view.installing}
+          installBlocked={view.installBlocked}
+          touch={touch}
+          onInstall={view.install}
+        />
+      )
+      break
+    case 'effective':
+      body = view.catalog ? (
         <>
-          {favoriteRows.length > 0 ? (
+          {view.favorites.length > 0 ? (
             <>
               <SectionLabel>Favorites</SectionLabel>
-              {favoriteRows}
+              {view.favorites.map((favorite) =>
+                rows(
+                  favorite.configId,
+                  favorite.catalog,
+                  [favorite.model],
+                  favorite.configId === effectiveId ? modelValue : undefined,
+                  tabOf(favorite.configId),
+                  true,
+                  'favorite\0'
+                )
+              )}
               <SectionLabel>{viewTab?.name ?? 'Models'}</SectionLabel>
             </>
           ) : null}
-          {rows(effectiveId, effectiveCatalog, modelChoices, modelValue, viewTab, false)}
-          {status?.stale && status.error ? (
+          {rows(effectiveId, view.catalog, view.catalog.options, modelValue, viewTab, false)}
+          {view.stale?.error ? (
             <StatusActions
-              title={`${status.error.label}. These models are from the last session.`}
-              detail={status.error.detail}
-              status={status}
+              title={`${view.stale.error.label}. These models are from the last session.`}
+              detail={view.stale.error.detail}
+              status={view.stale}
               touch={touch}
               compact
             />
           ) : null}
         </>
-      )
-    } else if (status?.loading) {
-      body = <ListMessage loading title={`Loading ${nameOf(effectiveId)} models…`} />
-    } else if (status?.error) {
-      body = (
-        <StatusActions
-          title={status.error.label}
-          detail={status.error.detail}
-          status={status}
-          touch={touch}
-        />
-      )
-    } else {
-      body = (
+      ) : (
         <ListMessage
           title="This agent gives no model choice."
           detail={effectiveId === sw.currentConfigId ? (capabilities ?? undefined) : undefined}
         />
       )
-    }
-  } else if (viewKind === 'current') {
-    body = (
-      <>
-        {liveCatalog ? (
-          rows(viewId, liveCatalog, liveCatalog.options, undefined, viewTab, false)
-        ) : (
-          <ListMessage
-            title={`${nameOf(viewId)} gives no model choice.`}
-            detail={capabilities ?? undefined}
-          />
-        )}
-        <Hint>{`Keeps ${nameOf(viewId)} and cancels the switch to ${nameOf(sw.armedConfigId)}.`}</Hint>
-      </>
-    )
-  } else if (viewEntry && viewEntry.status !== 'ready' && viewTab) {
-    const spec = viewEntry.install
-    body = (
-      <InstallState
-        tab={viewTab}
-        reason={entryDisableReason(viewEntry)}
-        installing={sw.installingConfigId === viewEntry.configId}
-        installBlocked={
-          sw.blocked ||
-          Boolean(sw.installingConfigId && sw.installingConfigId !== viewEntry.configId)
-        }
-        touch={touch}
-        onInstall={spec ? () => sw.install(viewEntry) : null}
-      />
-    )
-  } else if (other.catalog) {
-    body = (
-      <>
-        {rows(viewId, other.catalog, other.catalog.options, undefined, viewTab, false)}
-        {confirm && confirm.configId === viewId ? (
-          <BusyBlock
-            agentName={nameOf(sw.currentConfigId)}
-            canCancel={sw.turnBusy}
-            touch={touch}
-            onWait={() => {
-              setConfirm(null)
-              onClose()
-            }}
-            onCancelAndSwitch={() => {
-              const chosen = confirm
-              setConfirm(null)
-              onClose()
-              void sw.cancelThenSwitch(chosen.configId, chosen.pick)
-            }}
-          />
-        ) : (
-          <Hint>{`Switches to ${nameOf(viewId)} on the next send`}</Hint>
-        )}
-      </>
-    )
-  } else if (other.error) {
-    body = (
-      <div className="flex flex-col gap-1">
-        <ListMessage
-          title={`Could not load ${nameOf(viewId)} models.`}
-          detail={other.error.label}
-        />
-        <button
-          type="button"
-          onClick={other.retry}
-          className={cn(DENSE_ROW, denseRowSize(touch), 'justify-center')}
-        >
-          Try again
-        </button>
-      </div>
-    )
-  } else {
-    body = <ListMessage loading title={`Loading ${nameOf(viewId)} models…`} />
+      break
+    case 'current':
+      body = (
+        <>
+          {view.catalog ? (
+            rows(viewId, view.catalog, view.catalog.options, undefined, viewTab, false)
+          ) : (
+            <ListMessage
+              title={`${nameOf(viewId)} gives no model choice.`}
+              detail={capabilities ?? undefined}
+            />
+          )}
+          <Hint>{`Keeps ${nameOf(viewId)} and cancels the switch to ${nameOf(sw.armedConfigId)}.`}</Hint>
+        </>
+      )
+      break
+    case 'other':
+      body = (
+        <>
+          {rows(viewId, view.catalog, view.catalog.options, undefined, viewTab, false)}
+          {view.confirming ? (
+            <BusyBlock
+              agentName={nameOf(sw.currentConfigId)}
+              canCancel={sw.turnBusy}
+              touch={touch}
+              onWait={state.waitForTurn}
+              onCancelAndSwitch={state.cancelAndSwitch}
+            />
+          ) : (
+            <Hint>{`Switches to ${nameOf(viewId)} on the next send`}</Hint>
+          )}
+        </>
+      )
+      break
+    case 'error':
+      body = view.status ? (
+        <StatusActions title={view.title} detail={view.detail} status={view.status} touch={touch} />
+      ) : (
+        <div className="flex flex-col gap-1">
+          <ListMessage title={view.title} detail={view.detail} />
+          {view.retry ? (
+            <button
+              type="button"
+              onClick={view.retry}
+              className={cn(DENSE_ROW, denseRowSize(touch), 'justify-center')}
+            >
+              Try again
+            </button>
+          ) : null}
+        </div>
+      )
+      break
+    case 'loading':
+      body = <ListMessage loading title={view.title} />
+      break
   }
 
   const tabItems: TabItem[] = tabs.visible.map((tab) => ({
@@ -734,8 +603,8 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
     label: tab.name,
     glyph: <TabGlyph tab={tab} />,
     selected: !showingMore && tab.configId === viewId,
-    title: hasUpdate(tab) ? `${tab.name} · update available` : tab.name,
-    onSelect: () => openAgent(tab)
+    title: state.hasUpdate(tab) ? `${tab.name} · update available` : tab.name,
+    onSelect: () => state.openAgent(tab)
   }))
   if (tabs.overflow.length > 0) {
     tabItems.push({
@@ -744,15 +613,11 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       glyph: <MoreHorizontal size={14} aria-hidden="true" />,
       selected: showingMore,
       title: 'More agents',
-      onSelect: () => {
-        setConfirm(null)
-        setView(MORE_AGENTS_VIEW)
-      }
+      onSelect: state.showMore
     })
   }
   const showTabs = !searching && tabItems.length > 1
 
-  const listKey = searching ? 'search' : showingMore ? MORE_AGENTS_VIEW : (viewId ?? 'effective')
   // The list remounts per view (`key`), so this runs once per view: open on
   // the chosen model even when it sits below the fold.
   const attachList = useCallback((node: HTMLDivElement | null) => {
@@ -781,12 +646,9 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   }
 
   const pad = touch ? 'px-3' : 'px-1'
-  const ownFooter = searching || (!showingMore && viewId === effectiveId)
-  const contextUsage = shouldShowSessionUsage(props.usage ?? null, props.messages ?? [])
-  const otherHint =
-    !ownFooter && !showingMore && viewTab && (viewKind === 'current' || other.catalog)
-      ? `Choose a model to set Thinking and Fast for ${viewTab.name}.`
-      : null
+  const otherHint = state.otherHintTab
+    ? `Choose a model to set Thinking and Fast mode for ${state.otherHintTab.name}.`
+    : null
 
   return (
     <div
@@ -811,10 +673,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           // biome-ignore lint/a11y/noAutofocus: the selector opens to search, like a command list
           autoFocus={!touch}
           value={query}
-          onChange={(event) => {
-            setQuery(event.target.value)
-            setConfirm(null)
-          }}
+          onChange={(event) => state.setQuery(event.target.value)}
           onKeyDown={onSearchKeyDown}
           placeholder="Search models…"
           aria-label="Search models and agents"
@@ -823,8 +682,8 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
             touch ? 'text-base' : 'text-sm'
           )}
         />
-        {searching ? (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{resultCount}</span>
+        {view.kind === 'search' ? (
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{view.count}</span>
         ) : null}
       </div>
       {showTabs ? (
@@ -838,7 +697,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       ) : null}
       <motion.div
         ref={attachList}
-        key={listKey}
+        key={state.listKey}
         role={showTabs ? 'tabpanel' : undefined}
         aria-label={showTabs ? (showingMore ? 'More agents' : viewTab?.name) : undefined}
         data-testid="selector-list"
@@ -850,13 +709,22 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       >
         {body}
       </motion.div>
-      {!searching && contextUsage ? (
+      {!searching && state.contextUsage ? (
         <>
           <div className="h-px bg-border" />
-          <ContextSummary usage={contextUsage} touch={touch} />
+          <ContextSummary usage={state.contextUsage} touch={touch} />
         </>
       ) : null}
-      {ownFooter ? <SessionOptions {...props} rest={rest} /> : null}
+      {state.ownFooter ? (
+        <SessionOptions
+          sections={activeShown ? [] : edit}
+          rest={rest}
+          isRejected={isRejected}
+          trySet={trySet}
+          disabled={disabled}
+          touch={touch}
+        />
+      ) : null}
       {otherHint ? (
         <p
           className={cn(

@@ -19,9 +19,26 @@ if (typeof document.elementFromPoint !== 'function') {
   })
 }
 
-const { knownCatalogs } = vi.hoisted(() => ({
-  knownCatalogs: { current: new Map<string, ModelCatalog>() }
+const { knownCatalogs, stored } = vi.hoisted(() => ({
+  knownCatalogs: { current: new Map<string, ModelCatalog>() },
+  /** The persistence store: rejected option values per agent. */
+  stored: new Map<string, unknown>()
 }))
+
+vi.mock('@/lib/api', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    persistenceApi: {
+      read: async (key: string) =>
+        stored.has(key) ? { success: true, data: stored.get(key) } : { success: true, data: null },
+      write: async (key: string, data: unknown) => {
+        stored.set(key, data)
+        return { success: true }
+      }
+    }
+  }
+})
 
 vi.mock('./use-model-catalog', () => ({
   loadPersistedCatalog: () => {},
@@ -194,6 +211,7 @@ function InPicker({
 afterEach(() => {
   cleanup()
   knownCatalogs.current = new Map()
+  stored.clear()
 })
 
 const FAST = {
@@ -274,10 +292,12 @@ describe('SelectorPanelV2 Edit flyout', () => {
     render(
       <Panel {...props({ thoughtLevel: null, genericOptions: [], fastMode: FAST, onToggleFast })} />
     )
-    expect(screen.getByTestId('selector-edit')).toHaveAccessibleName('Edit Fast for Claude Opus')
+    expect(screen.getByTestId('selector-edit')).toHaveAccessibleName(
+      'Edit Fast mode for Claude Opus'
+    )
     const flyout = await openEdit()
     expect(within(flyout).queryAllByRole('menuitemradio')).toHaveLength(0)
-    const fast = within(flyout).getByRole('menuitemcheckbox', { name: 'Fast' })
+    const fast = within(flyout).getByRole('menuitemcheckbox', { name: 'Fast mode' })
     expect(within(flyout).getAllByRole('menuitemcheckbox')).toHaveLength(1)
     expect(fast).toHaveAttribute('aria-checked', 'false')
     fireEvent.click(fast)
@@ -429,5 +449,153 @@ describe('SelectorPanelV2 favorites', () => {
       target: { value: 'opus' }
     })
     expect(screen.queryByText('Favorites')).toBeNull()
+  })
+})
+
+/** Resolves or rejects a pending set from the test. */
+function deferred(): {
+  promise: Promise<void>
+  resolve: () => void
+  reject: (error: Error) => void
+} {
+  let resolve = (): void => {}
+  let reject = (_error: Error): void => {}
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+describe('SelectorPanelV2 with no active row', () => {
+  it('with no models, Thinking and Fast mode move into the footer', () => {
+    const onEffort = vi.fn()
+    const onToggleFast = vi.fn()
+    render(
+      <Panel
+        {...props({
+          modelOption: null,
+          modelValue: undefined,
+          genericOptions: [],
+          fastMode: FAST,
+          onToggleFast,
+          onEffort
+        })}
+      />
+    )
+    expect(screen.getByText('This agent gives no model choice.')).toBeInTheDocument()
+    expect(screen.queryByTestId('selector-edit')).toBeNull()
+    const footer = screen.getByTestId('selector-options')
+    expect(within(footer).getByTestId('selector-option-thinking')).toHaveAccessibleName(
+      'Thinking: High'
+    )
+    const fast = within(footer).getByRole('switch', { name: 'Fast mode' })
+    fireEvent.click(fast)
+    expect(onToggleFast).toHaveBeenCalledTimes(1)
+  })
+
+  it('with a model value outside the list, Context is in the footer', () => {
+    render(<Panel {...props({ modelValue: 'retired', thoughtLevel: null })} />)
+    expect(screen.queryByTestId('selector-edit')).toBeNull()
+    expect(screen.getByTestId('selector-option-context')).toHaveAccessibleName('Context: 300K')
+  })
+
+  it('shows Default, not "undefined", for a context with no current value', async () => {
+    const unset = { ...WIDE, currentValue: undefined } as unknown as SessionConfigOption
+    const { rerender } = render(<Panel {...props({ genericOptions: [unset] })} />)
+    const flyout = await openEdit()
+    const context = within(flyout).getByRole('group', { name: 'Context' })
+    for (const item of within(context).getAllByRole('menuitemradio')) {
+      expect(item).toHaveAttribute('aria-checked', 'false')
+    }
+    rerender(<Panel {...props({ modelValue: 'retired', genericOptions: [unset] })} />)
+    expect(screen.getByTestId('selector-option-context')).toHaveAccessibleName('Context: Default')
+  })
+})
+
+describe('SelectorPanelV2 rejected values and optimistic switches', () => {
+  it('hides a context value the agent rejects, and remembers it per agent', async () => {
+    const onSetConfig = vi.fn(async () => {
+      throw new Error('not supported')
+    })
+    render(<Panel {...props({ onSetConfig })} />)
+    let flyout = await openEdit()
+    fireEvent.click(within(flyout).getByRole('menuitemradio', { name: '1M' }))
+    expect(onSetConfig).toHaveBeenCalledWith('context', '1m')
+    flyout = screen.getByTestId('selector-edit-flyout')
+    await waitFor(() =>
+      expect(within(flyout).queryByRole('menuitemradio', { name: '1M' })).toBeNull()
+    )
+    await waitFor(() => expect(stored.size).toBe(1))
+    expect([...stored.values()]).toEqual([{ context: ['1m'] }])
+
+    // A fresh panel for the same agent opens with the value already hidden.
+    cleanup()
+    render(<Panel {...props()} />)
+    const reopened = await openEdit()
+    await waitFor(() =>
+      expect(within(reopened).queryByRole('menuitemradio', { name: '1M' })).toBeNull()
+    )
+    expect(within(reopened).getByRole('menuitemradio', { name: '300K' })).toBeInTheDocument()
+  })
+
+  it('keeps a rejected value that is still current, disabled', async () => {
+    const onSetConfig = vi.fn(async () => {
+      throw new Error('not supported')
+    })
+    const { rerender } = render(<Panel {...props({ onSetConfig })} />)
+    const flyout = await openEdit()
+    fireEvent.click(within(flyout).getByRole('menuitemradio', { name: '1M' }))
+    await waitFor(() => expect(stored.size).toBe(1))
+    rerender(
+      <Panel
+        {...props({
+          onSetConfig,
+          genericOptions: [
+            contextOption('1m', [
+              ['300k', '300K'],
+              ['1m', '1M']
+            ])
+          ]
+        })}
+      />
+    )
+    const current = within(screen.getByTestId('selector-edit-flyout')).getByRole('menuitemradio', {
+      name: '1M — Not available for this agent'
+    })
+    expect(current).toBeDisabled()
+    expect(current).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('a boolean option flips at once, and reverts when the agent rejects it', async () => {
+    const pending = deferred()
+    const onSetConfig = vi.fn(() => pending.promise)
+    const sandbox = { ...FAST, id: 'sandbox', name: 'Sandbox' } as SessionConfigOption
+    render(<Panel {...props({ onSetConfig, genericOptions: [sandbox] })} />)
+    const toggle = screen.getByRole('switch', { name: 'Sandbox' })
+    fireEvent.click(toggle)
+    expect(onSetConfig).toHaveBeenCalledWith('sandbox', true)
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+    await act(async () => {
+      pending.reject(new Error('not supported'))
+      await pending.promise.catch(() => undefined)
+    })
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+  })
+
+  it('the Fast mode item in the flyout flips at once, and reverts on a rejection', async () => {
+    const pending = deferred()
+    // The composer's toggle is typed void; a pending one still gets the revert.
+    const onToggleFast = vi.fn(() => pending.promise) as unknown as () => void
+    render(<Panel {...props({ fastMode: FAST, onToggleFast })} />)
+    const flyout = await openEdit()
+    const fast = within(flyout).getByRole('menuitemcheckbox', { name: 'Fast mode' })
+    fireEvent.click(fast)
+    expect(fast).toHaveAttribute('aria-checked', 'true')
+    await act(async () => {
+      pending.reject(new Error('rejected'))
+      await pending.promise.catch(() => undefined)
+    })
+    await waitFor(() => expect(fast).toHaveAttribute('aria-checked', 'false'))
   })
 })

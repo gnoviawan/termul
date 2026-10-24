@@ -94,7 +94,7 @@ export interface SelectorPanelState {
   hasUpdate: (tab: AgentTab) => boolean
 }
 
-export function statusBadge(
+function statusBadge(
   entry: SupportedAcpAgentEntry | null,
   installing: boolean,
   armable: boolean
