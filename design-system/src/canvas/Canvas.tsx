@@ -27,11 +27,10 @@ import {
   type Point,
   zoomAt
 } from './camera'
+import { viewportKeyCommand } from './keyboard'
 import { routeWheel, type WheelGesture } from './wheel-routing'
 
 const TOOLBAR_HEIGHT = 56
-const PAN_STEP = 80
-const PAN_STEP_LARGE = 320
 const ZOOM_STEP = 1.2
 const PAN_THRESHOLD = 3
 const LINE_HEIGHT_PX = 16
@@ -436,26 +435,16 @@ export function Canvas({
   // Keyboard camera when the canvas itself has focus.
   const onViewportKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return
-    const step = event.shiftKey ? PAN_STEP_LARGE : PAN_STEP
-    const camera = cameraRef.current
-    const moves: Record<string, Point> = {
-      ArrowLeft: { x: step, y: 0 },
-      ArrowRight: { x: -step, y: 0 },
-      ArrowUp: { x: 0, y: step },
-      ArrowDown: { x: 0, y: -step }
-    }
-    const move = moves[event.key]
-    if (move) {
-      event.preventDefault()
-      setCamera({ ...camera, x: camera.x + move.x, y: camera.y + move.y })
-      return
-    }
-    if (event.key === '+' || event.key === '=') zoomBy(ZOOM_STEP)
-    else if (event.key === '-' || event.key === '_') zoomBy(1 / ZOOM_STEP)
-    else if (event.key === '0') resetCamera()
-    else if (event.key === 'f' || event.key === 'F') fitAll()
-    else return
+    const command = viewportKeyCommand(event)
+    if (!command) return
     event.preventDefault()
+    if (command.type === 'pan') {
+      const camera = cameraRef.current
+      setCamera({ ...camera, x: camera.x + command.by.x, y: camera.y + command.by.y })
+    } else if (command.type === 'zoom-in') zoomBy(ZOOM_STEP)
+    else if (command.type === 'zoom-out') zoomBy(1 / ZOOM_STEP)
+    else if (command.type === 'reset') resetCamera()
+    else fitAll()
   }
 
   // Keep keyboard focus visible: bring a focused preview control into view.
