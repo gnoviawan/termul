@@ -40,16 +40,21 @@ if [ -n "$fixed" ]; then
 fi
 
 # A test outside the record gets one rerun on its own, since a few fail only
-# under the load of a full run.
+# under the load of a full run. Names are read a line at a time because a
+# doc-test name holds spaces. A rerun clears the test only when it ran that
+# test and it passed: a filter that matches nothing also exits 0.
 unknown="$(comm -23 "$failing" "$known")"
 still_failing="$(mktemp)"
-for name in $unknown; do
-  if cargo test -- --exact "$name" >/dev/null 2>&1; then
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  rerun="$(cargo test --features conformance -- --exact "$name" 2>&1)"
+  rerun_status=$?
+  if [ "$rerun_status" -eq 0 ] && grep -q "^test result: ok[.] 1 passed" <<<"$rerun"; then
     echo "flaky: $name failed in the full run and passed on its own"
   else
     echo "$name" >>"$still_failing"
   fi
-done
+done <<<"$unknown"
 if [ -s "$still_failing" ]; then
   echo "UNEXPECTED failing tests:"
   sed 's/^/  /' "$still_failing"
