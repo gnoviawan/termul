@@ -29,6 +29,7 @@ import {
 } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import type { EnvVariable, ProjectColor } from '@/types/project'
+import { ProjectBrowserSection } from './project-settings/browser-section'
 import {
   PROJECT_SETTINGS_CATEGORIES,
   PROJECT_SETTINGS_SEARCH_INDEX
@@ -642,6 +643,8 @@ export function ProjectSettingsModal() {
               />
             </div>
           </SettingsSection>
+
+          <ProjectBrowserSection projectId={activeProject?.id} />
 
           {/* Emergency Mode & Expert Workflows Section */}
           <SettingsSection id="emergency">

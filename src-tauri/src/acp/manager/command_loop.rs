@@ -677,6 +677,8 @@ pub(super) async fn run_command_loop(
                 // routed to this accepted prompt's session, even when the agent
                 // reuses an MCP child created for an older session.
                 host_plan_server.begin_turn(&agent_id.0, &session_id.0);
+                // The user's prompt turn ends a browser Stop for the session.
+                crate::browser_automation::user_turn(&session_id.0);
                 // Story 1.8 T3.2: capture the client turn-id to echo on prompt_complete.
                 let turn_turn_id = turn_id.clone();
                 let spawn_result = cx.spawn(async move {

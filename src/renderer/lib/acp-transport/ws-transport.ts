@@ -1331,6 +1331,10 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('respond_permission', { agentId, requestId, optionId }, undefined, options)
   }
 
+  async stopBrowserAgent(sessionId: string): Promise<void> {
+    await this.request('browser_stop', { sessionId })
+  }
+
   async answerQuestion(
     agentId: AgentId,
     questionId: string,

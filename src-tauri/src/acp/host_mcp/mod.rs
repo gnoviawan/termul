@@ -142,9 +142,12 @@ pub enum FrameKind {
     #[default]
     Plan,
     SetTitle,
-    /// `browser` tool call — action + args forwarded to
-    /// `browser_automation::dispatch`; the reply carries `result`/`code`.
+    /// `browser` tool call: the raw tool arguments, folded and checked by
+    /// the parent, then forwarded to `browser_automation::dispatch`.
     Browser,
+    /// Fetch the `browser` tool schema the child serves. Authenticated by
+    /// token alone: children describe before `session/new` returns.
+    Describe,
     /// `ask_user` tool call (issue #784): the parent shows the question panel
     /// and holds the reply until the user answers or the call is cancelled.
     AskUser,
@@ -187,50 +190,24 @@ fn default_allow_free_text() -> bool {
     true
 }
 
-/// Input the agent sends to the `browser` tool. `action` selects the verb;
+/// Input the agent sends to the `browser` tool, parsed by the parent from
+/// the frame's raw `browser_input`. `action` selects the verb;
 /// `args` holds verb-specific fields; `element` is the agent-stated intent
 /// (e.g. "the login button") surfaced in consent/audit UI.
 ///
 /// Agents send parameters in BOTH wire forms (the tool description documents
 /// both): nested under `args` (the schema shape) or flat at the tool-call top
-/// level. The custom `Deserialize` folds unknown top-level keys into `args` —
+/// level. [`TermulBrowserInput::parse`] folds unknown top-level keys into `args` —
 /// a nested `args` object wins on key conflicts — and rejects a non-object
 /// `args` (e.g. a JSON string) with a typed `invalid_params` error naming the
 /// action's expected field. `element` is a known top-level field (consent
 /// context); one nested under `args` is hoisted to it when the top-level
 /// field is absent.
-#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone)]
 pub struct TermulBrowserInput {
-    /// Action verb: navigate | snapshot | screenshot | click | fill | type |
-    /// press | scroll | hover | wait | new_tab | list_tabs | close_tab |
-    /// back | forward | reload.
     pub action: String,
-    /// Action-specific args (url, ref, value, key, tabId, ms, text, dy…).
-    #[serde(default)]
     pub args: serde_json::Value,
-    /// Optional human-readable intent for mutating actions.
-    #[serde(default)]
     pub element: Option<String>,
-}
-
-/// Fields an action reads from `args` — names the expected keys in
-/// `invalid_params` messages so a mis-shaped call is diagnosable. Covers
-/// every documented action; unknown verbs keep a generic answer.
-fn expected_arg_fields(action: &str) -> &'static str {
-    match action {
-        "navigate" | "new_tab" => "'url'",
-        "wait" => "'ms' or 'text'",
-        "fill" => "'ref' and 'value'",
-        "click" => "'ref' (optional 'tabId')",
-        "hover" => "'ref'",
-        "type" => "'text' (optional 'ref')",
-        "press" => "'key'",
-        "scroll" => "'dy' or 'ref'",
-        "back" | "forward" | "reload" | "close_tab" => "'tabId' (optional)",
-        "snapshot" | "screenshot" => "'tabId' (optional)",
-        "list_tabs" => "no arguments",
-        _ => "action-specific fields",
-    }
 }
 
 fn json_type_name(value: &serde_json::Value) -> &'static str {
@@ -244,78 +221,62 @@ fn json_type_name(value: &serde_json::Value) -> &'static str {
     }
 }
 
-/// Typed rejection for a non-object `args` (e.g. a JSON string) — names the
-/// action's expected field so the mis-shaped call is diagnosable.
-fn non_object_args_error(action: &str, expected: &str, kind: &str) -> String {
-    format!("invalid_params: 'args' must be a JSON object, not {kind} — {action} needs {expected}")
+/// Log one rejection and return its agent-facing text. The log carries the
+/// wire code and the rejection text only; texts name expected keys and
+/// JSON types, never argument values (CWE-532).
+fn reject(text: String) -> Result<TermulBrowserInput, String> {
+    log::warn!("[host-mcp] browser input rejected [invalid_params]: {text}");
+    Err(text)
 }
 
-impl<'de> Deserialize<'de> for TermulBrowserInput {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        // Rejection logs carry the wire error code, the action, and the
-        // expected field names ONLY — never argument values (CWE-532).
-        let mut map = match serde_json::Value::deserialize(deserializer)? {
+fn string_field(
+    value: Option<serde_json::Value>,
+    key: &str,
+) -> Result<Option<String>, String> {
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s)),
+        Some(other) => Err(format!("'{key}' must be a string, not {}", json_type_name(&other))),
+    }
+}
+
+impl TermulBrowserInput {
+    /// Fold and check the raw tool arguments. Errors are `invalid_params`
+    /// texts naming the action's expected fields.
+    pub fn parse(raw: serde_json::Value) -> Result<Self, String> {
+        let mut map = match raw {
             serde_json::Value::Object(map) => map,
             serde_json::Value::Null => serde_json::Map::new(),
             other => {
-                log::warn!(
-                    "[host-mcp] browser input rejected [invalid_params]: body must be a JSON object, not {}",
+                return reject(format!(
+                    "browser input must be a JSON object, not {}",
                     json_type_name(&other)
-                );
-                return Err(serde::de::Error::custom(format!(
-                    "invalid_params: browser input must be a JSON object, not {}",
-                    json_type_name(&other)
-                )));
+                ));
             }
         };
         // Extract `action` first so later errors can name its expected args.
-        let action = match map.remove("action") {
-            Some(serde_json::Value::String(action)) => action,
-            Some(other) => {
-                log::warn!(
-                    "[host-mcp] browser input rejected [invalid_params]: 'action' must be a string, not {}",
-                    json_type_name(&other)
-                );
-                return Err(serde::de::Error::custom(format!(
-                    "invalid_params: 'action' must be a string, not {}",
-                    json_type_name(&other)
-                )));
-            }
-            None => {
-                log::warn!("[host-mcp] browser input rejected [invalid_params]: missing 'action'");
-                return Err(serde::de::Error::custom("invalid_params: missing 'action'"));
-            }
+        let action = match string_field(map.remove("action"), "action") {
+            Ok(Some(action)) => action,
+            Ok(None) => return reject("missing 'action'".to_string()),
+            Err(text) => return reject(text),
         };
-        let element = match map.remove("element") {
-            None | Some(serde_json::Value::Null) => None,
-            Some(serde_json::Value::String(element)) => Some(element),
-            Some(other) => {
-                log::warn!(
-                    "[host-mcp] browser input rejected [invalid_params]: 'element' must be a string, not {}",
-                    json_type_name(&other)
-                );
-                return Err(serde::de::Error::custom(format!(
-                    "invalid_params: 'element' must be a string, not {}",
-                    json_type_name(&other)
-                )));
-            }
+        let element = match string_field(map.remove("element"), "element") {
+            Ok(element) => element,
+            Err(text) => return reject(text),
         };
-        let expected = expected_arg_fields(&action);
+        let expected = crate::browser_automation::expected_args_text(&action);
         let mut args = match map.remove("args") {
             None | Some(serde_json::Value::Null) => serde_json::Map::new(),
             Some(serde_json::Value::Object(args)) => args,
             Some(other) => {
+                // The action is agent-supplied: log the expected keys only.
                 log::warn!(
-                    "[host-mcp] browser input rejected [invalid_params]: 'args' must be a JSON object, action={action} expected={expected}"
+                    "[host-mcp] browser input rejected [invalid_params]: 'args' must be a JSON object, expected={expected}"
                 );
-                return Err(serde::de::Error::custom(non_object_args_error(
-                    &action,
-                    expected,
-                    json_type_name(&other),
-                )));
+                return Err(format!(
+                    "'args' must be a JSON object, not {} — {action} needs {expected}",
+                    json_type_name(&other)
+                ));
             }
         };
         // Fold the remaining (unknown) top-level keys into `args`; a value
@@ -324,22 +285,12 @@ impl<'de> Deserialize<'de> for TermulBrowserInput {
             args.entry(key).or_insert(value);
         }
         // Consent context may also arrive nested under `args` — hoist it to
-        // the top-level `element` when that is absent (string values only).
+        // the top-level `element` when that is absent.
         let element = match element {
             Some(element) => Some(element),
-            None => match args.remove("element") {
-                None | Some(serde_json::Value::Null) => None,
-                Some(serde_json::Value::String(element)) => Some(element),
-                Some(other) => {
-                    log::warn!(
-                        "[host-mcp] browser input rejected [invalid_params]: 'element' must be a string, not {}",
-                        json_type_name(&other)
-                    );
-                    return Err(serde::de::Error::custom(format!(
-                        "invalid_params: 'element' must be a string, not {}",
-                        json_type_name(&other)
-                    )));
-                }
+            None => match string_field(args.remove("element"), "element") {
+                Ok(element) => element,
+                Err(text) => return reject(text),
             },
         };
         let args = if args.is_empty() {
@@ -347,7 +298,7 @@ impl<'de> Deserialize<'de> for TermulBrowserInput {
         } else {
             serde_json::Value::Object(args)
         };
-        Ok(TermulBrowserInput {
+        Ok(Self {
             action,
             args,
             element,
@@ -355,11 +306,21 @@ impl<'de> Deserialize<'de> for TermulBrowserInput {
     }
 }
 
+impl<'de> Deserialize<'de> for TermulBrowserInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = serde_json::Value::deserialize(deserializer)?;
+        Self::parse(raw).map_err(|text| serde::de::Error::custom(format!("invalid_params: {text}")))
+    }
+}
+
 /// The parent reads at most this much of a child's request line, newline
 /// included, so a misbehaving peer cannot grow it unbounded.
 pub const MAX_REQUEST_FRAME_BYTES: u64 = 1024 * 1024;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct FrameRequest {
     pub token: String,
     pub session_id: String,
@@ -373,12 +334,9 @@ pub struct FrameRequest {
     /// `SetTitle` frame; validated and applied host-side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    /// The `browser` tool call's arguments exactly as the agent sent them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub browser_action: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub browser_args: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub browser_element: Option<String>,
+    pub browser_input: Option<serde_json::Value>,
     /// The question of an `AskUser` frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ask: Option<TermulAskUserInput>,

@@ -129,9 +129,7 @@ fn title_frame_round_trips_with_kind_and_title() {
         todos: Vec::new(),
         title: Some("Fix login bug".into()),
         branch: None,
-        browser_action: None,
-        browser_args: None,
-        browser_element: None,
+        browser_input: None,
         ask: None,
         canvas_method: None,
         canvas_params: None,
@@ -402,37 +400,45 @@ fn browser_input_non_string_element_is_rejected_top_level_and_nested() {
 }
 
 #[test]
-fn frame_from_flat_call_carries_folded_keys_in_browser_args() {
-    // The frame the child builds for a FLAT call — `browser_args` must carry
-    // the folded keys so the parent Browser arm can reconstruct them.
-    let input = browser_input(serde_json::json!({
-        "action": "navigate",
-        "url": "https://example.com"
-    }))
-    .unwrap();
+fn browser_frame_carries_the_raw_tool_arguments_verbatim() {
+    // The child forwards the agent's arguments untouched; folding and
+    // validation happen in the parent.
+    let raw = serde_json::json!({ "action": "navigate", "url": "https://example.com" });
     let frame = FrameRequest {
         token: "t".into(),
         session_id: "p".into(),
         kind: FrameKind::Browser,
-        todos: Vec::new(),
-        title: None,
-        branch: None,
-        browser_action: Some(input.action),
-        browser_args: Some(input.args),
-        browser_element: input.element,
-        ask: None,
-        canvas_method: None,
-        canvas_params: None,
-        canvas_tool: None,
+        browser_input: Some(raw.clone()),
+        ..FrameRequest::default()
     };
     let value = serde_json::to_value(&frame).unwrap();
-    assert_eq!(value["browser_action"], "navigate");
-    assert_eq!(value["browser_args"]["url"], "https://example.com");
+    assert_eq!(value["kind"], "browser");
+    assert_eq!(value["browser_input"], raw);
     let decoded: FrameRequest = serde_json::from_value(value).unwrap();
-    assert_eq!(decoded.browser_action.as_deref(), Some("navigate"));
+    assert_eq!(decoded.browser_input, Some(raw));
+}
+
+#[test]
+fn describe_frame_kind_round_trips() {
+    let value = serde_json::to_value(FrameKind::Describe).unwrap();
+    assert_eq!(value, "describe");
+    assert_eq!(serde_json::from_value::<FrameKind>(value).unwrap(), FrameKind::Describe);
+}
+
+#[test]
+fn browser_input_parse_strips_the_wire_prefix_and_names_expected_fields() {
+    let err = TermulBrowserInput::parse(serde_json::json!({
+        "action": "fill",
+        "args": "{}"
+    }))
+    .expect_err("string args must be rejected");
     assert_eq!(
-        decoded.browser_args.as_ref().and_then(|a| a.get("url")),
-        Some(&serde_json::json!("https://example.com"))
+        err,
+        "'args' must be a JSON object, not a string — fill needs 'ref' and 'value' (optional 'tabId')"
+    );
+    assert_eq!(
+        TermulBrowserInput::parse(serde_json::json!({})).unwrap_err(),
+        "missing 'action'"
     );
 }
 
@@ -445,9 +451,7 @@ fn title_frame_carries_the_optional_branch_slug() {
         todos: Vec::new(),
         title: Some("Fix login bug".into()),
         branch: Some("fix-login".into()),
-        browser_action: None,
-        browser_args: None,
-        browser_element: None,
+        browser_input: None,
         ask: None,
         canvas_method: None,
         canvas_params: None,

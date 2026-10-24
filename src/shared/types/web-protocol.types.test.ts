@@ -88,8 +88,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 55 request types including warm-pool promotion and host-owned session delete', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(55)
+  it('exports exactly 56 request types including warm-pool promotion, host-owned session delete and browser stop', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(56)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -98,6 +98,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'set_model',
       'respond_permission',
       'answer_question',
+      // Stop agent browsing for a session (desktop parity with browser_stop).
+      'browser_stop',
       'create_session',
       'load_session',
       'resume_session',

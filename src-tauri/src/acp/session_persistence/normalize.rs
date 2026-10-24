@@ -21,6 +21,8 @@ pub fn is_durable_event(type_: &str) -> bool {
     !matches!(
         type_,
         "permission_request"
+            | "browser_ticket_closed"
+            | "browser_stop_changed"
             | "auth_required"
             | "agent_spawned"
             | "agent_disconnected"

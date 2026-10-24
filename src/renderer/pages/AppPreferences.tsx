@@ -45,6 +45,7 @@ import type { ProjectColor } from '@/types/project'
 import { TERMINAL_URL_OPEN_MODE_OPTIONS, type TerminalUrlOpenMode } from '@/types/settings'
 import { AiAgentsSection } from './app-preferences/ai-agents-section'
 import { AppearanceSection } from './app-preferences/appearance-section'
+import { BrowserSection } from './app-preferences/browser-section'
 import { appPrefCategories, appPrefSearchIndex } from './app-preferences/categories'
 import { DiagnosticsSection } from './app-preferences/diagnostics-section'
 import { EditorSection } from './app-preferences/editor-section'
@@ -331,6 +332,7 @@ export function AppPreferencesModal(): React.JSX.Element {
           <SkillsSection />
           <ProviderSection />
           <McpServersSection />
+          <BrowserSection />
           <ShortcutsSection
             shortcuts={shortcuts}
             updateShortcut={updateShortcut}

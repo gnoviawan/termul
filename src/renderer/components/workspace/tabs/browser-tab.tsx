@@ -1,4 +1,6 @@
+import { BrowserAgentTabStop } from '@/components/browser/BrowserAgentStop'
 import { Globe } from '@/components/icons'
+import { useAgentTabSession } from '@/stores/browser-control-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { TabContextMenu } from '../tab-context-menu'
 import { TabChrome } from './tab-chrome'
@@ -23,6 +25,7 @@ export function BrowserTabInline({
   bulkMenu
 }: BrowserTabInlineProps): React.JSX.Element {
   const browserTab = useBrowserSessionStore((state) => state.getTab(tab.browserTabId))
+  const agentSession = useAgentTabSession(tab.browserTabId)
   const label = (() => {
     if (!browserTab) return 'Browser'
     if (browserTab.title.trim()) return browserTab.title.trim()
@@ -54,11 +57,14 @@ export function BrowserTabInline({
         label={label}
         after={
           browserTab?.agentControlled ? (
-            <span
-              title="This tab is being driven by the agent — closing it revokes control"
-              className="flex h-4 shrink-0 items-center rounded bg-primary/15 px-1 text-4xs font-semibold uppercase leading-none tracking-wide text-primary"
-            >
-              Agent
+            <span className="flex shrink-0 items-center gap-0.5">
+              <span
+                title="This tab is being driven by the agent — closing it revokes control"
+                className="flex h-4 shrink-0 items-center rounded bg-primary/15 px-1 text-4xs font-semibold uppercase leading-none tracking-wide text-primary"
+              >
+                Agent
+              </span>
+              {agentSession ? <BrowserAgentTabStop sessionId={agentSession} /> : null}
             </span>
           ) : undefined
         }

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dynamic page</title>
+</head>
+<body>
+<main>
+<h1>Dynamic page</h1>
+<p id="loading">Loading the dashboard</p>
+</main>
+<script>
+setTimeout(function () {
+  var p = document.getElementById('loading');
+  p.parentNode.removeChild(p);
+}, 1200);
+setTimeout(function () {
+  history.pushState({}, '', '/dynamic.html?step=2');
+  var p = document.createElement('p');
+  p.textContent = 'Step two ready';
+  document.querySelector('main').appendChild(p);
+}, 2000);
+</script>
+</body>
+</html>

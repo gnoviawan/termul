@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cross-origin frame fixture</title>
+</head>
+<body>
+<h1>Cross-origin frame fixture</h1>
+<div id="slot"></div>
+<button id="reload" type="button">Reload frame</button>
+<p>Frames ready</p>
+<script>
+// The frame comes from the second loopback port under another host name,
+// so it is cross-site as well as cross-origin.
+var query = new URLSearchParams(location.search);
+var src = 'http://localhost:' + query.get('xo') + '/' + (query.get('page') || 'frame-inner.html');
+var frame = document.createElement('iframe');
+frame.title = 'Cross frame';
+frame.width = '400';
+frame.height = '160';
+frame.style.border = '7px solid #888';
+frame.style.padding = '5px';
+frame.src = src;
+document.getElementById('slot').appendChild(frame);
+var loads = 0;
+document.getElementById('reload').addEventListener('click', function () {
+  loads += 1;
+  frame.src = src + '?load=' + loads;
+});
+</script>
+</body>
+</html>

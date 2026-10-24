@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Form controls</title>
+</head>
+<body>
+<main>
+<h1>Form controls</h1>
+<form id="f" onsubmit="return false">
+<select id="color" aria-label="Color">
+<option value="red">Red</option>
+<option value="green">Green</option>
+<option value="blue">Deep blue</option>
+</select>
+<input id="news" type="checkbox" aria-label="Newsletter">
+<input id="terms" type="checkbox" aria-label="Terms" checked>
+<input id="small" type="radio" name="size" value="small" aria-label="Small" checked>
+<input id="large" type="radio" name="size" value="large" aria-label="Large">
+</form>
+<p id="result">State: none</p>
+</main>
+<script>
+function report() {
+  var size = document.querySelector('input[name=size]:checked');
+  document.getElementById('result').textContent =
+    'State: color=' + document.getElementById('color').value +
+    ' news=' + document.getElementById('news').checked +
+    ' terms=' + document.getElementById('terms').checked +
+    ' size=' + (size ? size.value : 'none');
+}
+document.getElementById('f').addEventListener('change', report);
+report();
+</script>
+</body>
+</html>

@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for Termul Manager Tauri POC - Fase 3 Persistence & UI",
-  "windows": ["main"],
+  "description": "Main app webview only. Browser tab webviews match no capability.",
+  "webviews": ["main"],
   "permissions": [
     "core:default",
     "os:default",
