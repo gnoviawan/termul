@@ -531,6 +531,121 @@ describe('SelectorPanelV2 row tooltip', () => {
   })
 })
 
+describe('SelectorPanelV2 row tooltip after the Edit flyout', () => {
+  /** The visible tooltip box (the Radix content; it holds the hidden copy too). */
+  const tipText = (): string | undefined =>
+    screen.queryByRole('tooltip')?.parentElement?.textContent?.trim()
+
+  async function editThenEscape(): Promise<HTMLElement> {
+    render(<Panel {...props()} />)
+    const row = activeRow()
+    act(() => row.focus())
+    fireEvent.keyDown(row, { key: 'ArrowRight' })
+    const flyout = await screen.findByTestId('selector-edit-flyout')
+    await waitFor(() =>
+      expect(within(flyout).getByRole('menuitemradio', { name: 'High' })).toHaveFocus()
+    )
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('selector-edit-flyout')).toBeNull())
+    await waitFor(() => expect(row).toHaveFocus())
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    return row
+  }
+
+  it('hovering the row afterwards still opens its tooltip', async () => {
+    const row = await editThenEscape()
+    fireEvent.pointerMove(row, { pointerType: 'mouse' })
+    await waitFor(() => expect(tipText()?.startsWith('Claude Opus')).toBe(true), {
+      timeout: 2000
+    })
+  })
+
+  it("arrowing onto another row afterwards opens that row's tooltip", async () => {
+    const row = await editThenEscape()
+    fireEvent.keyDown(row, { key: 'ArrowDown' })
+    const sonnet = screen.getByRole('button', { name: 'Claude Sonnet' })
+    await waitFor(() => expect(sonnet).toHaveFocus())
+    await waitFor(() => expect(tipText()?.startsWith('Claude Sonnet')).toBe(true))
+  })
+
+  it('Tab away and back to the row opens its tooltip again', async () => {
+    const row = await editThenEscape()
+    act(() => row.blur())
+    act(() => row.focus())
+    await waitFor(() => expect(tipText()?.startsWith('Claude Opus')).toBe(true))
+  })
+})
+
+describe('SelectorPanelV2 row description', () => {
+  it('a name-only row has no aria-describedby, even with its tooltip open', async () => {
+    render(<Panel {...props()} />)
+    const row = screen.getByRole('button', { name: 'Claude Sonnet' })
+    expect(row).not.toHaveAttribute('aria-describedby')
+    fireEvent.focus(row)
+    await screen.findByRole('tooltip')
+    expect(row).not.toHaveAttribute('aria-describedby')
+    expect(row).toHaveAccessibleDescription('')
+  })
+
+  it('a row with a description is described by it while the tooltip is open', async () => {
+    const model = {
+      ...MODEL,
+      options: [
+        { value: 'opus', name: 'Claude Opus' },
+        { value: 'sonnet', name: 'Claude Sonnet', description: 'Fast and smart' }
+      ]
+    } as SessionConfigOption
+    render(<Panel {...props({ modelOption: model })} />)
+    const row = screen.getByRole('button', { name: 'Claude Sonnet' })
+    fireEvent.focus(row)
+    await screen.findByRole('tooltip')
+    expect(row).toHaveAttribute('aria-describedby')
+    expect(row).toHaveAccessibleDescription('Fast and smart')
+  })
+})
+
+describe('SelectorPanelV2 selected-row check', () => {
+  const checkOf = (row: HTMLElement): Element | null => row.querySelector('[data-row-check]')
+
+  it('the selected row showing the level on Edit has no check; others keep the slot', () => {
+    render(<Panel {...props()} />)
+    const row = activeRow()
+    expect(screen.getByTestId('selector-edit')).toHaveTextContent('High')
+    expect(checkOf(row)).toBeNull()
+    const sonnet = screen.getByRole('button', { name: 'Claude Sonnet' })
+    expect(checkOf(sonnet)?.getAttribute('class')).toContain('opacity-0')
+  })
+
+  it('the Favorites copy of the selected row (no Edit) keeps its visible check', () => {
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
+    const rows = screen.getAllByRole('button', { name: 'Claude Opus', pressed: true })
+    const copy = rows.find((row) => row.closest('[data-favorite-entry]')) as HTMLElement
+    const listed = rows.find((row) => row !== copy) as HTMLElement
+    expect(copy).toBeDefined()
+    expect(listed).toBeDefined()
+    // The list row shows the level on Edit instead of the check.
+    expect(screen.getAllByTestId('selector-edit')).toHaveLength(1)
+    expect(checkOf(listed)).toBeNull()
+    expect(checkOf(copy)?.getAttribute('class')).toContain('opacity-100')
+  })
+
+  it('a selected row without a level on Edit keeps its visible check', () => {
+    render(<Panel {...props({ thoughtLevel: null, effortValue: null })} />)
+    const row = activeRow()
+    expect(
+      screen.queryByTestId('selector-edit')?.querySelector('[data-edit-thinking]') ?? null
+    ).toBeNull()
+    expect(checkOf(row)?.getAttribute('class')).toContain('opacity-100')
+  })
+
+  it('the name sits 2px closer to the agent glyph than the row gap', () => {
+    render(<Panel {...props()} />)
+    for (const name of document.querySelectorAll('[data-row-name]')) {
+      expect(classes(name)).toContain('-ml-0.5')
+    }
+  })
+})
+
 describe('SelectorPanelV2 Thinking level on the Edit button', () => {
   const edit = (): HTMLElement => screen.getByTestId('selector-edit')
   /** Edit's visible text, chevron aside (it is an aria-hidden svg). */
@@ -756,14 +871,12 @@ describe('SelectorPanelV2 Edit flyout keyboard', () => {
     expect(onOpenChange).not.toHaveBeenCalled()
     await waitFor(() => expect(row).toHaveFocus())
 
-    // Focus back on the row shows its name tooltip; Escape dismisses that
-    // first (WCAG 1.4.13), keeping focus, then closes the picker.
-    if (screen.queryByRole('tooltip')) {
-      fireEvent.keyDown(row, { key: 'Escape' })
-      await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
-      expect(onOpenChange).not.toHaveBeenCalled()
-      expect(row).toHaveFocus()
-    }
+    // Focus handed back by the flyout does not pop the row's tooltip, so the
+    // next Escape closes the picker.
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    expect(row).not.toHaveAttribute('data-state', 'delayed-open')
+    expect(row).not.toHaveAttribute('data-state', 'instant-open')
+
     fireEvent.keyDown(row, { key: 'Escape' })
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })

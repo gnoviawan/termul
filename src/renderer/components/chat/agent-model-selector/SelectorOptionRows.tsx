@@ -1,5 +1,6 @@
 import {
   type KeyboardEvent,
+  type MutableRefObject,
   type ReactNode,
   type RefObject,
   useEffect,
@@ -454,6 +455,12 @@ export interface EditRowHandle {
   ref: RefObject<HTMLButtonElement>
   open: boolean
   onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void
+  /**
+   * Set just before the closing flyout hands focus back to the row, so the row's
+   * tooltip does not pop up on that focus (Escape then closes the picker, not a
+   * tooltip). The row clears it on the next pointer move or enter, or on blur.
+   */
+  suppressNextTooltip: MutableRefObject<boolean>
 }
 
 /**
@@ -479,12 +486,20 @@ export function EditableRow({
   const [open, setOpen] = useState(false)
   const rowRef = useRef<HTMLButtonElement>(null)
   const clickedAway = useRef(false)
+  const suppressNextTooltip = useRef(false)
   const what = sectionsLabel(sections)
   // The button shows the current level when there is one, else "Edit".
   const level = thinkingLabel(sections)
+  // Focus back on the row from the flyout: quietly, without the row's tooltip.
+  const focusRow = (): void => {
+    const row = rowRef.current
+    if (!row || document.activeElement === row) return
+    suppressNextTooltip.current = true
+    row.focus()
+  }
   const backToRow = (): void => {
     setOpen(false)
-    rowRef.current?.focus()
+    focusRow()
   }
 
   const edit = (
@@ -531,6 +546,7 @@ export function EditableRow({
       {renderRow({
         ref: rowRef,
         open,
+        suppressNextTooltip,
         onKeyDown: (event) => {
           if (event.key !== 'ArrowRight' || touch || disabled) return
           event.preventDefault()
@@ -575,14 +591,14 @@ export function EditableRow({
         collisionPadding={8}
         // The list focuses its checked choice itself.
         onOpenAutoFocus={(event) => event.preventDefault()}
-        onEscapeKeyDown={() => rowRef.current?.focus()}
+        onEscapeKeyDown={focusRow}
         onInteractOutside={() => {
           clickedAway.current = true
         }}
         // Back to the row, not the Edit trigger; a click elsewhere keeps its own focus.
         onCloseAutoFocus={(event) => {
           event.preventDefault()
-          if (!clickedAway.current) rowRef.current?.focus()
+          if (!clickedAway.current) focusRow()
           clickedAway.current = false
         }}
         data-testid="selector-edit-flyout"
