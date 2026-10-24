@@ -223,3 +223,31 @@ export function proseBlocks(source: string, linkFiles: boolean): ProseBlock[] {
   cache.set(cacheKey, blocks)
   return blocks
 }
+
+/** A quote block's content: its lines with the leading `>` marker removed. */
+export function unquote(source: string): string {
+  return source
+    .split('\n')
+    .map((line) => line.replace(/^ {0,3}> ?/, ''))
+    .join('\n')
+}
+
+/**
+ * A list block's top-level items, each as list source of its own. Native
+ * markdown spaces list items a fixed 4px apart; Streamdown's `li` is `py-1`
+ * (8px between items), so each item paints as its own element. An ordered
+ * item keeps its number by starting its own list there.
+ */
+export function listItems(source: string): string[] {
+  const list = fromMarkdown(source, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] })
+    .children[0]
+  if (list?.type !== 'list' || list.children.length < 2) return [source]
+  const lineStart = (offset: number) => source.lastIndexOf('\n', offset - 1) + 1
+  const starts = list.children.map((item) => lineStart(item.position?.start.offset ?? 0))
+  return starts.map((start, i) => {
+    const item = source.slice(start, starts[i + 1] ?? source.length).replace(/\n+$/, '')
+    return list.ordered && i > 0
+      ? item.replace(/^( {0,3})\d{1,9}/, `$1${(list.start ?? 1) + i}`)
+      : item
+  })
+}
