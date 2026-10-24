@@ -63,7 +63,7 @@ function SectionLabel({ children }: { children: ReactNode }): React.JSX.Element 
 }
 
 function DenseModelRow({
-  name,
+  name: rawName,
   tooltip,
   selected,
   glyph,
@@ -91,6 +91,9 @@ function DenseModelRow({
   touch: boolean
   onPick: () => void
 }): React.JSX.Element {
+  // Agent-sent names can carry edge whitespace; inside the name span it would
+  // land before the sr-only suffixes and read as "Opus , thinking High".
+  const name = rawName.trim()
   const editable = Boolean(edit && edit.length > 0)
   const renderRow = (handle?: EditRowHandle): React.JSX.Element => {
     const button = (

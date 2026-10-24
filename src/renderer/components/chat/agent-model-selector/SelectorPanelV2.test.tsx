@@ -407,7 +407,9 @@ describe('SelectorPanelV2 no horizontal overflow', () => {
   })
 
   it('a very long model name keeps its Edit button and check in the row', () => {
-    const long = 'Claude Opus 4.7 with 1M context and extended thinking, preview build '.repeat(3)
+    const long = Array(3)
+      .fill('Claude Opus 4.7 with 1M context and extended thinking, preview build')
+      .join(' ')
     const model = select('model', 'Model', 'opus', [
       ['opus', long],
       ['sonnet', 'Claude Sonnet']
@@ -415,7 +417,7 @@ describe('SelectorPanelV2 no horizontal overflow', () => {
     render(<Panel {...props({ modelOption: model })} />)
     const row = screen.getByRole('button', { pressed: true })
     // The real name, then the level; read once.
-    expect(row).toHaveAccessibleName(`${long.trim()} , thinking High`)
+    expect(row).toHaveAccessibleName(`${long}, thinking High`)
     const name = row.querySelector('[data-row-name]')
     expect(classes(name)).toEqual(expect.arrayContaining(['min-w-0', 'truncate']))
     // The Thinking level stays whole beside the truncating name.
@@ -440,6 +442,27 @@ describe('SelectorPanelV2 Thinking level on the selected row', () => {
     Array.from(
       screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('[data-row-thinking]')
     )
+
+  it('reads exactly "<name>, thinking <level>" for a short name', () => {
+    render(<Panel {...props()} />)
+    expect(screen.getByRole('button', { pressed: true })).toHaveAccessibleName(
+      'Claude Opus, thinking High'
+    )
+  })
+
+  it('drops edge whitespace an agent sends in a model name', () => {
+    const model = select('model', 'Model', 'opus', [
+      ['opus', '  Claude Opus  '],
+      ['sonnet', 'Claude Sonnet']
+    ])
+    render(<Panel {...props({ modelOption: model })} />)
+    const row = screen.getByRole('button', { pressed: true })
+    expect(row).toHaveAccessibleName('Claude Opus, thinking High')
+    expect(row.querySelector('[data-row-name]')?.textContent).toBe('Claude Opus, thinking High')
+    expect(screen.getByTestId('selector-edit')).toHaveAccessibleName(
+      'Edit Thinking and Context for Claude Opus'
+    )
+  })
 
   it('shows only on the selected row, after the name, muted and aria-hidden', () => {
     render(<Panel {...props()} />)
