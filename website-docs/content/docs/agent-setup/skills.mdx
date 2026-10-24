@@ -13,7 +13,7 @@ Each skill is a folder with a `SKILL.md` file in it. Termul looks in these place
 - **Claude Code** skills are in `~/.claude/skills/`, and in the skills of the Claude Code plugins you have enabled. Termul lists them with your global skills, so a skill you already installed for Claude Code shows up without copying it.
 - **Project** skills are in `.agents/skills/` inside the project folder. Only that project can use them.
 
-If two skills have the same name, the more specific one wins. A project skill beats `~/.agents/skills/`, which beats `~/.claude/skills/`, which beats a Claude Code plugin skill. Termul does not list a Claude Code plugin that you turned off.
+If two skills have the same name, the more specific one wins. A project skill beats `~/.agents/skills/`, which beats `~/.claude/skills/`, which beats a Claude Code plugin skill. Termul does not list skills from a Claude Code plugin that you turned off.
 
 These are the same folders the Zed editor uses, so skills you wrote for Zed show up in Termul too.
 
