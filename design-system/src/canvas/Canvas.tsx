@@ -278,12 +278,19 @@ export function Canvas({
         dy,
         zoom: event.ctrlKey || event.metaKey,
         findContainer: (x, y) => findScrollContainer(event.target, x, y),
-        canScroll: canScrollBy
+        canScroll: canScrollBy,
+        containsTarget: (container) =>
+          event.target instanceof Node && container.contains(event.target)
       })
       wheelGestureRef.current = gesture
       if (action === 'native') return
       event.preventDefault()
       if (action === 'block') return
+      if (action === 'scroll') {
+        // The pointer left the latched preview; keep scrolling it, not the one under the pointer.
+        if (gesture && gesture.owner !== 'canvas') gesture.owner.container.scrollBy(dx, dy)
+        return
+      }
       if (action === 'zoom') {
         const rect = viewport.getBoundingClientRect()
         const factor = Math.exp(-clamp(dy, -60, 60) * 0.01)

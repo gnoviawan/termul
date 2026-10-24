@@ -21,6 +21,7 @@ function input(overrides: Partial<WheelInput<Frame>> & { over?: Frame | null }):
     zoom: false,
     findContainer: (_dx, dy) => (over && dy > 0 && over.room > 0 ? over : null),
     canScroll: (frame, _dx, dy) => dy > 0 && frame.room > 0,
+    containsTarget: (frame) => frame === over,
     ...overrides
   }
 }
@@ -89,5 +90,35 @@ describe('routeWheel', () => {
     const stale: WheelGesture<Frame> = { owner: 'canvas', lastTime: 0 }
     const route = routeWheel(stale, input({ time: 1000, dx: 0, dy: 0 }))
     expect(route).toEqual({ action: 'block', gesture: stale })
+  })
+
+  it('scrolls the latched frame explicitly when the pointer moves over another frame', () => {
+    const owner: Frame = { id: 'owner', room: 400 }
+    const other: Frame = { id: 'other', room: 400 }
+    const first = routeWheel(null, input({ time: 0, over: owner }))
+    expect(first.action).toBe('native')
+
+    const moved = routeWheel(first.gesture, input({ time: 16, over: other }))
+    expect(moved.action).toBe('scroll')
+    expect(moved.gesture?.owner).toEqual({ container: owner })
+
+    const offFrames = routeWheel(moved.gesture, input({ time: 32, over: null }))
+    expect(offFrames.action).toBe('scroll')
+    expect(offFrames.gesture?.owner).toEqual({ container: owner })
+  })
+
+  it('leaves native scrolling alone while the pointer stays inside the latched frame', () => {
+    const owner: Frame = { id: 'owner', room: 400 }
+    const first = routeWheel(null, input({ time: 0, over: owner }))
+    const still = routeWheel(first.gesture, input({ time: 16, over: owner }))
+    expect(still.action).toBe('native')
+  })
+
+  it('blocks instead of scrolling when the latched frame is at its limit off-pointer', () => {
+    const owner: Frame = { id: 'owner', room: 400 }
+    const other: Frame = { id: 'other', room: 400 }
+    const first = routeWheel(null, input({ time: 0, over: owner }))
+    owner.room = 0
+    expect(routeWheel(first.gesture, input({ time: 16, over: other })).action).toBe('block')
   })
 })

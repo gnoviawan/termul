@@ -17,15 +17,19 @@ export interface WheelInput<T> {
   findContainer: (dx: number, dy: number) => T | null
   /** True when the container can still move by this delta. */
   canScroll: (container: T, dx: number, dy: number) => boolean
+  /** True when the wheel event target is inside this container. */
+  containsTarget: (container: T) => boolean
 }
 
 /**
  * - `zoom`: zoom the camera at the pointer.
  * - `pan`: pan the camera.
- * - `native`: let the browser scroll the latched container.
+ * - `native`: let the browser scroll the latched container (the pointer is inside it).
+ * - `scroll`: prevent default and scroll the latched container by the delta, because
+ *   the pointer has moved over another element that the browser would scroll instead.
  * - `block`: prevent default and do nothing.
  */
-export type WheelAction = 'zoom' | 'pan' | 'native' | 'block'
+export type WheelAction = 'zoom' | 'pan' | 'native' | 'scroll' | 'block'
 
 export interface WheelRoute<T> {
   action: WheelAction
@@ -44,10 +48,9 @@ export function routeWheel<T>(
   if (continues) {
     const next = { owner: gesture.owner, lastTime: time }
     if (next.owner === 'canvas') return { action: 'pan', gesture: next }
-    return {
-      action: input.canScroll(next.owner.container, dx, dy) ? 'native' : 'block',
-      gesture: next
-    }
+    const { container } = next.owner
+    if (!input.canScroll(container, dx, dy)) return { action: 'block', gesture: next }
+    return { action: input.containsTarget(container) ? 'native' : 'scroll', gesture: next }
   }
 
   if (dx === 0 && dy === 0) return { action: 'block', gesture }
