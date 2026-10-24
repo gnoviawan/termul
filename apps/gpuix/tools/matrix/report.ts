@@ -24,12 +24,46 @@ interface Row {
   surface: Surface
   result?: SurfaceResult
   review?: Review
+  previous?: PreviousRow
   status: Status
 }
 
-function finalStatus(result?: SurfaceResult, review?: Review): Status {
+/**
+ * A surface's columns and interaction lines as the page last recorded them.
+ * `results.json` is not committed, so a partial run in a fresh checkout keeps
+ * these for every surface it did not run instead of blanking them.
+ */
+interface PreviousRow {
+  status: Status
+  /** Auto, Web, GPUIX, full and region mismatch cells, as written. */
+  cells: string[]
+  interactions: string
+}
+
+function finalStatus(result?: SurfaceResult, review?: Review, previous?: PreviousRow): Status {
   if (review) return review.status
-  return result ? result.auto : 'unverified'
+  return result ? result.auto : (previous?.status ?? 'unverified')
+}
+
+/** The surface rows and interaction entries of the page's generated block, by surface id. */
+export function previousRows(doc: string): Map<string, PreviousRow> {
+  const rows = new Map<string, PreviousRow>()
+  const lines = doc.split('\n')
+  for (const line of lines) {
+    const row = /^\| `([^`]+)` .*?\| [^|]+ \| ([a-z-]+) \| ((?:[^|]*\|){5})/.exec(line)
+    if (!row) continue
+    const cells = row[3].split('|').slice(0, 5).map((c) => c.trim())
+    rows.set(row[1], { status: row[2] as Status, cells, interactions: '' })
+  }
+  for (let i = 0; i < lines.length; i++) {
+    const entry = /^- `([^`]+)`(.*)$/.exec(lines[i])
+    const row = entry && rows.get(entry[1])
+    if (!entry || !row) continue
+    const body = [entry[2]]
+    while (lines[i + 1]?.startsWith('  - ')) body.push(lines[++i])
+    row.interactions = body.join('\n')
+  }
+  return rows
 }
 
 const pct = (n: number) => `${n.toFixed(1)}%`
@@ -97,11 +131,15 @@ function interactions(row: Row): string {
   return `\n${lines.join('\n')}`
 }
 
-export function renderMatrix(results: Record<string, SurfaceResult>): string {
+export function renderMatrix(
+  results: Record<string, SurfaceResult>,
+  previous: ReadonlyMap<string, PreviousRow> = new Map()
+): string {
   const rows: Row[] = SURFACES.map((surface) => {
     const result = results[surface.id]
     const review = REVIEWS[surface.id]
-    return { surface, result, review, status: finalStatus(result, review) }
+    const prior = result ? undefined : previous.get(surface.id)
+    return { surface, result, review, previous: prior, status: finalStatus(result, review, prior) }
   })
   const byArea = new Map<AreaId, Row[]>()
   for (const row of rows)
@@ -203,13 +241,18 @@ export function renderMatrix(results: Record<string, SurfaceResult>): string {
   out.push('| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |')
   for (const row of rows) {
     const [full, roi] = mismatch(row.result)
+    const measuredCells = row.previous?.cells ?? [row.result?.auto ?? '', passed(row.result?.web), passed(row.result?.gpuix), full, roi]
     out.push(
-      `| \`${row.surface.id}\` ${cell(row.surface.title)} | ${row.surface.area} | ${row.status} | ${row.result?.auto ?? ''} | ${passed(row.result?.web)} | ${passed(row.result?.gpuix)} | ${full} | ${roi} | ${cell(row.review?.differences.join(' ') ?? '')} |`
+      `| \`${row.surface.id}\` ${cell(row.surface.title)} | ${row.surface.area} | ${row.status} | ${measuredCells.join(' | ')} | ${cell(row.review?.differences.join(' ') ?? '')} |`
     )
   }
 
   out.push('', '### Driven interactions and literal results', '')
   for (const row of rows) {
+    if (row.previous?.interactions) {
+      out.push(`- \`${row.surface.id}\`${row.previous.interactions}`)
+      continue
+    }
     const first = row.result?.web?.frames[0]
     const frames = first ? ` (frames \`${path.dirname(path.dirname(first))}/\`)` : ''
     out.push(`- \`${row.surface.id}\`${frames}:${interactions(row)}`)
@@ -226,7 +269,7 @@ export function writeReport(results: Record<string, SurfaceResult>): void {
   if (start < 0 || end < start) throw new Error(`${DOC} lost its matrix markers`)
   writeFileSync(
     DOC,
-    `${doc.slice(0, start + BEGIN.length)}\n\n${renderMatrix(results)}\n\n${doc.slice(end)}`
+    `${doc.slice(0, start + BEGIN.length)}\n\n${renderMatrix(results, previousRows(doc.slice(start, end)))}\n\n${doc.slice(end)}`
   )
   console.error(`[matrix] wrote ${DOC}`)
 }
