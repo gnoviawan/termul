@@ -4,8 +4,9 @@
  *
  *   bun tools/perf/runs-report.ts <set-dir> [phase ...]   (from apps/gpuix)
  *
- * <set-dir> holds one directory per client (`run.ts --client a,b`). With
- * exactly two clients it also prints an exact rank-sum test per key.
+ * <set-dir> holds one directory per client (`run.ts --client a,b`, or the
+ * labels of `ab.ts`). It also prints an exact rank-sum test per key for every
+ * pair of clients.
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -162,7 +163,10 @@ const COMPARE: Record<string, string[]> = {
     'sustained-stream.screen.fps',
     'measure.screen.fps',
     'measure.proc.total.pssMedianMB',
-    'measure.proc.total.cpuMeanPct'
+    'measure.proc.total.cpuMeanPct',
+    'measure.tree.reachable',
+    'measure.ui.getListScrollTopBlockedMsPerS',
+    'chatsOpen'
   ],
   'pty-flood': [
     'measure.screen.fps',
@@ -176,9 +180,9 @@ const COMPARE: Record<string, string[]> = {
   ]
 }
 
-const clients = [...new Set(runs.map((r) => r.meta.client))]
-if (clients.length === 2) {
-  const [a, b] = clients
+const clients = [...new Set(runs.map((r) => r.meta.client))].sort()
+const pairs = clients.flatMap((a, i) => clients.slice(i + 1).map((b) => [a, b] as const))
+for (const [a, b] of pairs) {
   console.log(
     `\n### ${a} against ${b}, ok runs (all runs for keys measured before any crash), two-sided rank-sum p\n`
   )
