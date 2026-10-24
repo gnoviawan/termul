@@ -24,6 +24,7 @@
  */
 
 import type { StyleDesc } from '@gpuix/react'
+import { setOffFrameQuery } from './visibility'
 
 export interface BatchRenderer {
   applyBatch(json: string): number[]
@@ -49,6 +50,8 @@ function parksHidden(style: StyleDesc | null | undefined): boolean {
 export interface Parking {
   /** Elements currently parked. */
   parked(): number
+  /** Whether `id` is a parked element or inside one. */
+  isParked(id: number): boolean
   uninstall(): void
 }
 
@@ -172,11 +175,20 @@ export function parkHiddenPanes(renderer: BatchRenderer): Parking {
     return destroyed
   }
 
+  const isParked = (id: number): boolean => {
+    for (let at = parentOf.get(id); at !== undefined; at = parentOf.get(at))
+      if (at === PARK_BASE) return true
+    return false
+  }
+
   renderer.applyBatch = applyBatch
+  setOffFrameQuery(isParked)
   return {
     parked: () => placeholderOf.size,
+    isParked,
     uninstall: () => {
       if (renderer.applyBatch === applyBatch) renderer.applyBatch = native
+      setOffFrameQuery(null)
     }
   }
 }

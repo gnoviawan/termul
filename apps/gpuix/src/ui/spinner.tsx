@@ -5,8 +5,10 @@
  * rising opacity, rotated by re-rendering the source in 10-degree steps. One
  * lap is 700ms; reduced motion holds it at rest, like the paused animation.
  */
-import { useContext, useEffect, useState } from 'react'
+import type { PublicInstance } from '@gpuix/react'
+import { type RefObject, useContext, useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
+import { isOffFrame } from '../compat/visibility'
 import { useIconStyle } from '../icons/hugeicons'
 import { UiEnvironmentContext } from './internal/host'
 
@@ -45,20 +47,23 @@ export function cometSource(size: number, angle: number): string {
   return source
 }
 
-function useLapAngle(running: boolean): number {
+function useLapAngle(running: boolean, ref: RefObject<PublicInstance | null>): number {
   const [angle, setAngle] = useState(0)
   useEffect(() => {
     if (!running) return
     const started = Date.now()
     const timer = setInterval(
       () => {
+        // Each step resends the whole ring (about 11 KB at 16 px); a parked pane never shows it.
+        const id = ref.current?.id
+        if (id !== undefined && isOffFrame(id)) return
         const turn = ((Date.now() - started) % LAP_MS) / LAP_MS
         setAngle(Math.floor((turn * 360) / STEP_DEG) * STEP_DEG)
       },
       LAP_MS / (360 / STEP_DEG)
     )
     return () => clearInterval(timer)
-  }, [running])
+  }, [running, ref])
   return angle
 }
 
@@ -77,10 +82,12 @@ function Spinner({
   label?: string
 }) {
   const { reducedMotion } = useContext(UiEnvironmentContext)
-  const angle = useLapAngle(!reducedMotion)
+  const ref = useRef<PublicInstance | null>(null)
+  const angle = useLapAngle(!reducedMotion, ref)
   const style = useIconStyle(size, cn('shrink-0', className), undefined, undefined)
   return (
     <svg
+      ref={ref}
       source={cometSource(size, angle)}
       style={style}
       role={decorative ? undefined : 'status'}
