@@ -5,7 +5,8 @@
  * UI thread, and the tree and bounds reads also make it paint a frame, so
  * their count shows how much of the UI thread's load JS asks for.
  *
- * With `ops`, each line also counts the mutation ops by kind, their JSON bytes,
+ * With `ops`, each line also counts the mutation ops by kind (`setCustomProp`
+ * by key), their JSON bytes,
  * and how many distinct elements got a `setText`. It parses every batch, so
  * it is for diagnostic runs, not for the timing ones.
  */
@@ -36,8 +37,9 @@ export function recordRendererStats(renderer: object, file: string | undefined, 
   const textIds = new Set<unknown>()
   const countOps = (json: string) => {
     for (const op of JSON.parse(json) as [string, unknown, ...unknown[]][]) {
-      opCount[op[0]] = (opCount[op[0]] ?? 0) + 1
-      opBytes[op[0]] = (opBytes[op[0]] ?? 0) + JSON.stringify(op).length
+      const kind = op[0] === 'setCustomProp' ? `setCustomProp:${op[2]}` : op[0]
+      opCount[kind] = (opCount[kind] ?? 0) + 1
+      opBytes[kind] = (opBytes[kind] ?? 0) + JSON.stringify(op).length
       if (op[0] === 'setText') textIds.add(op[1])
     }
   }
