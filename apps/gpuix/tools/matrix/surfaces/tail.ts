@@ -36,7 +36,18 @@ const SETTINGS: Surface[] = SETTINGS_SECTIONS.map(([sectionId, nav, expect]) => 
   ]
 }))
 
-const THEME_FAMILIES = ['termul', 'cursor', 'catppuccin', 'dracula', 'nord', 'gruvbox', 'tokyonight', 'ayu', 'one-dark', 'github']
+const THEME_FAMILIES = [
+  'termul',
+  'cursor',
+  'catppuccin',
+  'dracula',
+  'nord',
+  'gruvbox',
+  'tokyonight',
+  'ayu',
+  'one-dark',
+  'github'
+]
 
 const THEMES: Surface[] = THEME_FAMILIES.flatMap((family) =>
   (['dark', 'light'] as const).map(
@@ -96,17 +107,37 @@ const PALETTE: Surface[] = [
     area: 'palette',
     title: 'Typing straight after Ctrl+K reaches the palette filter',
     roi: '[role="dialog"]',
-    steps: [DASHBOARD, step('b-typed', [press('ctrl-k'), type('theme')], [...see('Change Color Theme'), gone('New Terminal')])]
+    steps: [
+      DASHBOARD,
+      step(
+        'b-typed',
+        [press('ctrl-k'), type('theme')],
+        [...see('Change Color Theme'), gone('New Terminal')]
+      )
+    ]
   },
   ...PALETTE_COMMANDS.map(
     ([commandId, command, expect]): Surface => ({
       id: `palette.${commandId}`,
-      area: commandId === 'switch-project' ? 'rail' : commandId.includes('snapshot') ? 'snapshots' : 'palette',
+      area:
+        commandId === 'switch-project'
+          ? 'rail'
+          : commandId.includes('snapshot')
+            ? 'snapshots'
+            : 'palette',
       title: `Palette command: ${command}`,
       steps: [
         DASHBOARD,
-        step('b-filtered', [press('ctrl-k'), wait(800), type(command)], [...see(command), ...(command === 'New Terminal' ? [] : [gone('New Terminal')])]),
-        step('c-run', [commandId === 'switch-project' ? press('enter') : click(txt(command)), wait(1200)], see(expect))
+        step(
+          'b-filtered',
+          [press('ctrl-k'), wait(800), type(command)],
+          [...see(command), ...(command === 'New Terminal' ? [] : [gone('New Terminal')])]
+        ),
+        step(
+          'c-run',
+          [commandId === 'switch-project' ? press('enter') : click(txt(command)), wait(1200)],
+          see(expect)
+        )
       ]
     })
   )
@@ -117,27 +148,38 @@ const LONG_TAIL: Surface[] = [
     id: 'shortcuts.menu',
     area: 'shortcuts',
     title: 'Keyboard shortcuts popover',
-    steps: [DASHBOARD, step('b-open', [click(label('Open keyboard shortcuts menu'))], see('Shortcut Menu'))]
+    steps: [
+      DASHBOARD,
+      step('b-open', [click(label('Open keyboard shortcuts menu'))], see('Shortcut Menu'))
+    ]
   },
   {
     id: 'shortcuts.settings-shortcut',
     area: 'shortcuts',
     title: 'Settings shortcut (Alt+,); Escape leaves the web dialog open',
-    steps: [DASHBOARD, step('b-open', [press('alt-,')], see('Interface zoom')), step('c-escape', [press('escape'), wait(600)], see('Interface zoom'))]
+    steps: [
+      DASHBOARD,
+      step('b-open', [press('alt-,')], see('Interface zoom')),
+      step('c-escape', [press('escape'), wait(600)], see('Interface zoom'))
+    ]
   },
   ...SHORTCUTS.map(
     ([shortcutId, keys, title, expect]): Surface => ({
       id: `shortcuts.${shortcutId}`,
       area: 'shortcuts',
       title: `Default shortcut ${keys}: ${title}`,
-      steps: [DASHBOARD, step('b-pressed', [click(txt('Projects')), press(keys), wait(1000)], expect)]
+      steps: [
+        DASHBOARD,
+        step('b-pressed', [click(txt('Projects')), press(keys), wait(1000)], expect)
+      ]
     })
   ),
   {
     id: 'shortcuts.desktop-keymap',
     area: 'shortcuts',
     title: 'Desktop key bindings (Ctrl+T, Ctrl+W, Ctrl+R, Ctrl+, and Ctrl+=)',
-    blocked: 'No web reference: the web client swaps browser-reserved keys for Alt combos, and GPUIX inherits that keymap because it is not a Tauri context',
+    blocked:
+      'No web reference: the web client swaps browser-reserved keys for Alt combos, and GPUIX inherits that keymap because it is not a Tauri context',
     steps: []
   },
   {
@@ -162,7 +204,8 @@ const LONG_TAIL: Surface[] = [
     id: 'browser.pane',
     area: 'browser',
     title: 'Browser pane',
-    blocked: 'Browser tabs are Tauri native webviews; the web client offers no New Browser Tab, so there is no reference, and GPUIX 0.11 has no webview element',
+    blocked:
+      'Browser tabs are Tauri native webviews; the web client offers no New Browser Tab, so there is no reference, and GPUIX 0.11 has no webview element',
     steps: []
   },
   {
@@ -175,8 +218,16 @@ const LONG_TAIL: Surface[] = [
     },
     steps: [
       DASHBOARD,
-      step('b-picker', [click(label('Switch git branch')), click(txt('Create branch from', false))], []),
-      step('c-toast', [type(TOAST_BRANCH), press('enter'), wait(800)], see(`Created and checked out ${TOAST_BRANCH}`))
+      step(
+        'b-picker',
+        [click(label('Switch git branch')), click(txt('Create branch from', false))],
+        []
+      ),
+      step(
+        'c-toast',
+        [type(TOAST_BRANCH), press('enter'), wait(800)],
+        see(`Created and checked out ${TOAST_BRANCH}`)
+      )
     ]
   },
   {
@@ -198,15 +249,17 @@ const LONG_TAIL: Surface[] = [
   {
     id: 'update.toast',
     area: 'notifications',
-    title: 'Update available toast and what\'s new modal',
-    blocked: 'Both render only when isTauriContext() is true (App.tsx WhatsNewModal, UpdateAvailableToast); the web client never shows them, so there is no reference to compare against',
+    title: "Update available toast and what's new modal",
+    blocked:
+      'Both render only when isTauriContext() is true (App.tsx WhatsNewModal, UpdateAvailableToast); the web client never shows them, so there is no reference to compare against',
     steps: []
   },
   {
     id: 'snapshots.page',
     area: 'snapshots',
     title: 'Snapshots page (#/snapshots)',
-    blocked: 'The desktop shell has no link to the route; only the mobile drawer navigates to it, and GPUIX cannot start on a hash route yet',
+    blocked:
+      'The desktop shell has no link to the route; only the mobile drawer navigates to it, and GPUIX cannot start on a hash route yet',
     steps: []
   }
 ]

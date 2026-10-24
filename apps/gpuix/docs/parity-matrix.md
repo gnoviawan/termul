@@ -12,7 +12,7 @@ generated. The prose around them is written by hand from the PNG pairs.
 ```sh
 bun run build:web                        # at the repo root: the web client under test
 cd apps/gpuix
-bun run parity:matrix                    # every surface, about 40 minutes
+bun run parity:matrix                    # every surface, about 45 minutes
 bun run parity:matrix --only git.diff,chat.send
 bun run parity:matrix --area terminal
 bun run parity:matrix --report-only      # regenerate this page from results.json and review.ts
@@ -22,7 +22,8 @@ bun tools/matrix/pair.ts [surface-id]    # web | GPUIX side by side, for review
 
 Output goes to `parity-out/matrix/<surface>/<step>/` (`web.png`, `gpuix.png`,
 `diff.png`, the region crops and `pair.png`) and `parity-out/matrix/results.json`.
-A partial run updates only the surfaces it ran. Server and client state live
+A partial run updates only the surfaces it ran. `results.json` and the PNGs
+are not committed (`parity-out/` is ignored); this page is the record. Server and client state live
 under `/tmp/gpuix-m1` (`--state` or `GPUIX_STATE_ROOT` moves them) and are
 deleted at the end of the run.
 
@@ -91,6 +92,94 @@ always. Shortcuts, dialogs, toasts and the browser pane get 1 each, and the
 canvas, SSH, remote access and snapshots get 0.5 each because few sessions
 open them. Settings has 13 sections, so a per-surface weight would let it
 dominate; weighting by area avoids that.
+
+## Findings
+
+These findings are from the rows below, which came from three batches. Most
+surfaces ran at eceaec17 (E1, the native editor). The chat, palette,
+shortcut, toast and vim rows ran again after the matrix gained its agent
+proxy and web-keymap shortcuts. The drag, split, tab and editor rows ran
+again at fce9a3e2 (D1 drag and drop, R1 to R3 host-local SSH and accounts).
+A full rerun at one head is the first follow-up.
+
+**Where it stands.** The usage-weighted score is 59.7 % over all 115
+surfaces and 61.7 % over the 106 that have a web reference. Unweighted, it is
+56.5 % and 61.3 %. A score this low does not mean the client is unusable.
+Most of the 38 partial surfaces work end to end and lose half their score to
+one cosmetic difference that repeats across many screens, such as the light
+modal backdrop, warm-tinted word runs or truncated tab titles.
+
+**What is at parity.** The composer (mention, slash and attach menus), all 20
+themes on the dashboard, terminal typing and Ctrl+click file links, the git
+branch picker and worktree switcher, explorer tree and file drops, the code
+editor, and the rail and side-panel shortcuts match. The chat flows that the
+scenario agent could not reach before (plan panel, permission prompt, prompt
+queue) now work in GPUIX the same way as on the web. They are partial only
+because a short transcript sits at the bottom of the pane.
+
+**What hurts most.** C2 is the largest gap. Radix menus, popovers and
+context menus do not open through compat, which takes out the rail's project
+menu, rename, remove, colour and settings, the add-project menu, the agent
+and model popover (it crashes the pane), and the context-bar popover. Landing
+C2 alone would add about 11 points. Next come the chat surfaces, which carry
+the most weight: chat cards overlap in the side panel once a project has
+more than one chat (O7), the transcript does not scroll by wheel and anchors
+short transcripts low (O6), and prose loses inline-code chips, link colour
+and italics (O5). Pane tabs truncate to three letters (C15), so two
+terminals cannot be told apart. Enter does not submit text fields or run the
+palette's selected command (C12), and keys typed straight after Ctrl+K are
+lost (C11).
+
+**What 99 % parity requires.** On the usage-weighted score, 99 % allows
+losing about one point of the 100 weight. The ranked units below, if each one
+fixed every surface it names, would reach about 98.3 %. The remaining points
+are surfaces that have no web reference (SSH, Claude accounts, the remote
+access popover, the update toast, the desktop keymap, snapshots page) or that
+need a capability GPUIX 0.11 lacks (the browser pane and the canvas need a
+webview, V1 and V2). Three kinds of work close that gap.
+
+1. Land the compat and override units in rank order. C2, O7, O6, O5 and C15
+   carry most of the weight, and C6, C8 and C4 are small but repeat across
+   many surfaces.
+2. Give the Tauri-only surfaces a reference. That means a desktop screenshot
+   harness for the Tauri app, or accepting R2's functional evidence for SSH
+   and a GPUIX-only check for the rest.
+3. Decide the webview question for the browser pane and the canvas. That is
+   a GPUIX capability, not a Termul change.
+
+Ninety-nine percent also means every partial surface reaches ported, so the
+cosmetic units count even when no single one looks important.
+
+**Terminal query replies after vim.** The O1 note said GPUIX echoed terminal
+query replies (`^[[>0;276;0c ... rgb:`) into the prompt after its T1 fixture
+ran vim. Here both clients ran the fixture's own command, `vim -u NONE -N
+notes.txt` and then `:q!`, typed into the full app. Both returned to a clean
+prompt with no echoed replies. The echo does not reproduce in the full app.
+It is most likely a fixture artifact, because the fixture writes its inputs
+to the PTY back to back. That cause is inferred, since this unit did not
+rerun the fixture. It is not counted as a gap.
+
+**How far to trust a row.** GPUIX text checks read the automation tree.
+Natively painted text (chat prose, the editor, terminal cells) is not in that
+tree, so those checks fail even when the text is on screen. Those rows were
+decided from the PNG pairs. The theme.tokyonight-light row crashed once with
+`Timed out after 2 seconds waiting for the automation bounds query` and
+booted cleanly on rerun (C13). The web reference also flakes. The ayu-light
+dashboard once showed "Composer unavailable". Every pair was looked at
+before it was classified.
+
+**Not covered.** The matrix does not drive these, so they are not scored.
+
+- Settings toggles and inputs inside each section. Only navigation and
+  content are compared.
+- The new project modal and folder groups, which are unreachable in GPUIX
+  while the add menu is broken (C2).
+- Git stash, history view, and conflict resolution.
+- Editor save, Source mode editing in markdown, and big files.
+- Composer pills with real files, because a bare @ lists no files on this
+  server in either client.
+- Panel divider resize. D1 reports that it works and persists the size.
+- The mobile layout, the snapshots page and what's new.
 
 <!-- matrix:begin (generated by `bun run parity:matrix`; edit tools/matrix/review.ts, not this block) -->
 

@@ -19,7 +19,10 @@ export const CLIENTS: readonly Client[] = ['web', 'gpuix']
 export type Target =
   | { testId: string }
   | { text: string; exact?: boolean }
-  | { label: string; role?: 'button' | 'tab' | 'menuitem' | 'option' | 'switch' | 'combobox' | 'checkbox' | 'link' }
+  | {
+      label: string
+      role?: 'button' | 'tab' | 'menuitem' | 'option' | 'switch' | 'combobox' | 'checkbox' | 'link'
+    }
   | { css: string; at?: { x: number; y: number }; frac?: { x: number; y: number } }
 
 /** Keys are written in GPUI keystroke syntax (`ctrl-k`, `alt-,`, `escape`). */

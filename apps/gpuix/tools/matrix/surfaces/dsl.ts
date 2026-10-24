@@ -4,7 +4,10 @@ import type { Action, Check, Step, Target } from '../types'
 
 export const id = (testId: string): Target => ({ testId })
 export const txt = (text: string, exact = true): Target => ({ text, exact })
-export const label = (name: string, role?: Extract<Target, { label: string }>['role']): Target => ({ label: name, role })
+export const label = (name: string, role?: Extract<Target, { label: string }>['role']): Target => ({
+  label: name,
+  role
+})
 export const css = (selector: string): Target => ({ css: selector })
 
 export const click = (target: Target): Action => ({ do: 'click', target })
@@ -20,7 +23,11 @@ export const wheel = (target: Target, deltaY: number): Action => ({ do: 'wheel',
 export const see = (...texts: string[]): Check[] => texts.map((text) => ({ text }))
 export const gone = (text: string): Check => ({ text, gone: true })
 
-export const step = (name: string, actions: Action[], expect: Check[] = []): Step => ({ name, actions, expect })
+export const step = (name: string, actions: Action[], expect: Check[] = []): Step => ({
+  name,
+  actions,
+  expect
+})
 
 /** The dashboard as it boots, with checks that the seeded state is there. */
 export const DASHBOARD = step('a-dashboard', [], see('What should we do in alpha?'))

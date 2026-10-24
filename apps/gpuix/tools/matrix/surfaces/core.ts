@@ -3,10 +3,33 @@
  * composer, terminal and status bar.
  */
 
-import { HOLD_REPLY, MATRIX_PROMPTS, PERMISSION_GRANTED, PERMISSION_TITLE, PLAN_ENTRIES } from '../agent'
+import {
+  HOLD_REPLY,
+  MATRIX_PROMPTS,
+  PERMISSION_GRANTED,
+  PERMISSION_TITLE,
+  PLAN_ENTRIES
+} from '../agent'
 import type { Surface } from '../types'
 import { ensureProject, resetAlpha } from '../world'
-import { click, css, DASHBOARD, drag, gone, hover, id, label, press, rclick, see, step, txt, type, wait, wheel } from './dsl'
+import {
+  click,
+  css,
+  DASHBOARD,
+  drag,
+  gone,
+  hover,
+  id,
+  label,
+  press,
+  rclick,
+  see,
+  step,
+  txt,
+  type,
+  wait,
+  wheel
+} from './dsl'
 
 export const CHAT_TITLE = 'How does the web client decide which routes rend'
 const openChat = click(txt(CHAT_TITLE, false))
@@ -24,7 +47,11 @@ const RAIL: Surface[] = [
     title: 'Project list and switching',
     roi: '[data-testid="shell-rail"]',
     steps: [
-      step('a-dashboard', [], see('alpha', 'beta', 'gamma', 'delta', 'What should we do in alpha?')),
+      step(
+        'a-dashboard',
+        [],
+        see('alpha', 'beta', 'gamma', 'delta', 'What should we do in alpha?')
+      ),
       step('b-switch-beta', [click(id('project-item-m1-beta'))], see('What should we do in beta?'))
     ]
   },
@@ -64,7 +91,11 @@ const RAIL: Surface[] = [
     prepare: (world) => ensureProject(world, 'delta'),
     steps: [
       DASHBOARD,
-      step('b-confirm', [rclick(id('project-item-m1-delta')), click(txt('Delete'))], see('Delete Project')),
+      step(
+        'b-confirm',
+        [rclick(id('project-item-m1-delta')), click(txt('Delete'))],
+        see('Delete Project')
+      ),
       step('c-removed', [click(label('Delete'))], [gone('delta')])
     ]
   },
@@ -73,7 +104,14 @@ const RAIL: Surface[] = [
     area: 'rail',
     title: 'Project colour picker',
     prepare: (world) => ensureProject(world, 'beta'),
-    steps: [DASHBOARD, step('b-picker', [rclick(id('project-item-m1-beta')), click(txt('Change Color'))], see('Select Color'))]
+    steps: [
+      DASHBOARD,
+      step(
+        'b-picker',
+        [rclick(id('project-item-m1-beta')), click(txt('Change Color'))],
+        see('Select Color')
+      )
+    ]
   },
   {
     id: 'rail.project-reorder',
@@ -82,9 +120,11 @@ const RAIL: Surface[] = [
     roi: '[data-testid="shell-rail"]',
     steps: [
       DASHBOARD,
-      step('b-dragged', [drag(id('project-item-m1-gamma'), id('project-item-m1-alpha')), wait(500)], [
-        { order: ['alpha', 'gamma', 'beta'], within: 'shell-rail' }
-      ])
+      step(
+        'b-dragged',
+        [drag(id('project-item-m1-gamma'), id('project-item-m1-alpha')), wait(500)],
+        [{ order: ['alpha', 'gamma', 'beta'], within: 'shell-rail' }]
+      )
     ]
   },
   {
@@ -101,7 +141,10 @@ const RAIL: Surface[] = [
     id: 'rail.collapse',
     area: 'rail',
     title: 'Collapse and expand the rail',
-    steps: [DASHBOARD, step('b-collapsed', [click(label('Expand or collapse projects'))], [gone('Projects')])]
+    steps: [
+      DASHBOARD,
+      step('b-collapsed', [click(label('Expand or collapse projects'))], [gone('Projects')])
+    ]
   },
   {
     id: 'rail.project-settings',
@@ -110,7 +153,11 @@ const RAIL: Surface[] = [
     steps: [
       DASHBOARD,
       step('b-beta', [click(id('project-item-m1-beta'))], see('What should we do in beta?')),
-      step('c-settings', [click(label('Settings for beta'))], see('Basic project identification and location.'))
+      step(
+        'c-settings',
+        [click(label('Settings for beta'))],
+        see('Basic project identification and location.')
+      )
     ]
   }
 ]
@@ -129,7 +176,11 @@ const SIDE: Surface[] = [
     title: 'Search chats',
     steps: [
       DASHBOARD,
-      step('b-miss', [click(css('input[placeholder^="Search chats"]')), type('zzz-no-match')], [gone(CHAT_TITLE)]),
+      step(
+        'b-miss',
+        [click(css('input[placeholder^="Search chats"]')), type('zzz-no-match')],
+        [gone(CHAT_TITLE)]
+      ),
       step('c-hit', [press('ctrl-a'), type('routes')], see(CHAT_TITLE))
     ]
   },
@@ -137,7 +188,14 @@ const SIDE: Surface[] = [
     id: 'side.chat-card-menu',
     area: 'side-panel',
     title: 'Chat card context menu',
-    steps: [DASHBOARD, step('b-menu', [rclick(txt(CHAT_TITLE, false))], see('Open in split', 'Copy Path', 'Delete Chat'))]
+    steps: [
+      DASHBOARD,
+      step(
+        'b-menu',
+        [rclick(txt(CHAT_TITLE, false))],
+        see('Open in split', 'Copy Path', 'Delete Chat')
+      )
+    ]
   },
   {
     id: 'side.workspace-switcher',
@@ -164,13 +222,21 @@ const EXPLORER: Surface[] = [
     id: 'explorer.expand',
     area: 'explorer',
     title: 'Expand a folder',
-    steps: [DASHBOARD, step('b-tree', [explorer], see('src')), step('c-expanded', [click(txt('src'))], see('app.ts', 'utils.ts'))]
+    steps: [
+      DASHBOARD,
+      step('b-tree', [explorer], see('src')),
+      step('c-expanded', [click(txt('src'))], see('app.ts', 'utils.ts'))
+    ]
   },
   {
     id: 'explorer.context-menu',
     area: 'explorer',
     title: 'File context menu',
-    steps: [DASHBOARD, step('b-tree', [explorer], see('README.md')), step('c-menu', [rclick(txt('README.md'))], see('Rename', 'Delete'))]
+    steps: [
+      DASHBOARD,
+      step('b-tree', [explorer], see('README.md')),
+      step('c-menu', [rclick(txt('README.md'))], see('Rename', 'Delete'))
+    ]
   },
   {
     id: 'explorer.drag',
@@ -180,7 +246,11 @@ const EXPLORER: Surface[] = [
     steps: [
       DASHBOARD,
       step('b-tree', [explorer], see('notes.txt', 'docs')),
-      step('c-dropped', [drag(txt('notes.txt'), paneAt(0.5, 0.5)), wait(1200)], see('untracked notes'))
+      step(
+        'c-dropped',
+        [drag(txt('notes.txt'), paneAt(0.5, 0.5)), wait(1200)],
+        see('untracked notes')
+      )
     ]
   }
 ]
@@ -203,8 +273,16 @@ const EDITOR: Surface[] = [
     prepare: resetAlpha,
     steps: [
       DASHBOARD,
-      step('b-open', [explorer, click(txt('src')), click(txt('app.ts'))], see('export function greet')),
-      step('c-typed', [click(txt('VERSION', false)), press('end'), type(' // edited')], see('// edited'))
+      step(
+        'b-open',
+        [explorer, click(txt('src')), click(txt('app.ts'))],
+        see('export function greet')
+      ),
+      step(
+        'c-typed',
+        [click(txt('VERSION', false)), press('end'), type(' // edited')],
+        see('// edited')
+      )
     ]
   },
   {
@@ -223,7 +301,11 @@ const EDITOR: Surface[] = [
     title: 'Two editor tabs and switching',
     steps: [
       DASHBOARD,
-      step('b-two', [explorer, click(txt('README.md')), click(txt('src')), click(txt('app.ts'))], see('export function greet')),
+      step(
+        'b-two',
+        [explorer, click(txt('README.md')), click(txt('src')), click(txt('app.ts'))],
+        see('export function greet')
+      ),
       step('c-back', [click(css('[role="tab"]:has-text("README.md")'))], see('The matrix project.'))
     ]
   }
@@ -242,7 +324,11 @@ const GIT: Surface[] = [
     area: 'git',
     title: 'Diff view of an unstaged file',
     prepare: resetAlpha,
-    steps: [DASHBOARD, step('b-changes', [changes], see('README.md')), step('c-diff', [click(txt('README.md'))], see('An unstaged line.'))]
+    steps: [
+      DASHBOARD,
+      step('b-changes', [changes], see('README.md')),
+      step('c-diff', [click(txt('README.md'))], see('An unstaged line.'))
+    ]
   },
   {
     id: 'git.stage',
@@ -285,7 +371,10 @@ const GIT: Surface[] = [
     steps: [
       DASHBOARD,
       step('b-changes', [changes], see('app.ts')),
-      step('c-message', [click(css('input[placeholder="Summary (required)"]')), type('bump version')]),
+      step('c-message', [
+        click(css('input[placeholder="Summary (required)"]')),
+        type('bump version')
+      ]),
       step('d-committed', [click(label('Commit to main'))], [gone('app.ts')])
     ]
   },
@@ -314,7 +403,10 @@ const CHAT: Surface[] = [
     area: 'chat',
     title: 'Open a chat: transcript, tool cards, changed files',
     roi: '[data-slot="message-scroller-viewport"]',
-    steps: [DASHBOARD, step('b-open', [openChat, wait(1500)], see('One more place parses it', 'Changed files'))]
+    steps: [
+      DASHBOARD,
+      step('b-open', [openChat, wait(1500)], see('One more place parses it', 'Changed files'))
+    ]
   },
   {
     id: 'chat.scroll-top',
@@ -324,7 +416,11 @@ const CHAT: Surface[] = [
     steps: [
       DASHBOARD,
       step('b-open', [openChat, wait(1500)], see('One more place parses it')),
-      step('c-top', [wheel(txt('One more place parses it', false), -20000), wait(1200)], see('Three call sites depend on it'))
+      step(
+        'c-top',
+        [wheel(txt('One more place parses it', false), -20000), wait(1200)],
+        see('Three call sites depend on it')
+      )
     ]
   },
   {
@@ -337,7 +433,14 @@ const CHAT: Surface[] = [
     id: 'chat.agent-launcher',
     area: 'chat',
     title: 'Agent launcher menu',
-    steps: [DASHBOARD, step('b-menu', [click(css('button[aria-label^="Agent and model"]'))], see('This agent gives no model'))]
+    steps: [
+      DASHBOARD,
+      step(
+        'b-menu',
+        [click(css('button[aria-label^="Agent and model"]'))],
+        see('This agent gives no model')
+      )
+    ]
   },
   {
     id: 'chat.send',
@@ -346,7 +449,11 @@ const CHAT: Surface[] = [
     steps: [
       DASHBOARD,
       step('b-typed', [composer, type('Explain the router')], see('Explain the router')),
-      step('c-reply', [press('enter'), wait(4000)], see('The router docs cover the hash variant in more depth'))
+      step(
+        'c-reply',
+        [press('enter'), wait(4000)],
+        see('The router docs cover the hash variant in more depth')
+      )
     ]
   },
   {
@@ -361,7 +468,11 @@ const CHAT: Surface[] = [
     title: 'Plan panel from a plan update',
     steps: [
       DASHBOARD,
-      step('b-reply', [composer, type(MATRIX_PROMPTS.plan), press('enter'), wait(3000)], see('Here is the plan for the router work.')),
+      step(
+        'b-reply',
+        [composer, type(MATRIX_PROMPTS.plan), press('enter'), wait(3000)],
+        see('Here is the plan for the router work.')
+      ),
       step('c-panel', [], see('Plan', ...PLAN_ENTRIES))
     ]
   },
@@ -371,8 +482,16 @@ const CHAT: Surface[] = [
     title: 'Permission prompt: allow a tool call',
     steps: [
       DASHBOARD,
-      step('b-prompt', [composer, type(MATRIX_PROMPTS.permission), press('enter'), wait(3000)], see(PERMISSION_TITLE, 'Allow', 'Reject')),
-      step('c-allowed', [click(txt('Allow')), wait(1500)], [...see(PERMISSION_GRANTED), gone('Reject')])
+      step(
+        'b-prompt',
+        [composer, type(MATRIX_PROMPTS.permission), press('enter'), wait(3000)],
+        see(PERMISSION_TITLE, 'Allow', 'Reject')
+      ),
+      step(
+        'c-allowed',
+        [click(txt('Allow')), wait(1500)],
+        [...see(PERMISSION_GRANTED), gone('Reject')]
+      )
     ]
   },
   {
@@ -381,8 +500,16 @@ const CHAT: Surface[] = [
     title: 'Prompt queue while a turn runs',
     steps: [
       DASHBOARD,
-      step('b-holding', [composer, type(MATRIX_PROMPTS.hold), press('enter'), wait(2500)], see(HOLD_REPLY)),
-      step('c-queued', [composer, type('queued follow-up'), press('enter'), wait(1200)], see('Queued', 'queued follow-up'))
+      step(
+        'b-holding',
+        [composer, type(MATRIX_PROMPTS.hold), press('enter'), wait(2500)],
+        see(HOLD_REPLY)
+      ),
+      step(
+        'c-queued',
+        [composer, type('queued follow-up'), press('enter'), wait(1200)],
+        see('Queued', 'queued follow-up')
+      )
     ]
   }
 ]
@@ -419,7 +546,11 @@ const TERMINAL: Surface[] = [
     id: 'terminal.type',
     area: 'terminal',
     title: 'Type a command and see its output',
-    steps: [DASHBOARD, step('b-open', [openTerminal, wait(2500)]), step('c-echo', [type('echo matrix-$((6*7))\n'), wait(1500)])]
+    steps: [
+      DASHBOARD,
+      step('b-open', [openTerminal, wait(2500)]),
+      step('c-echo', [type('echo matrix-$((6*7))\n'), wait(1500)])
+    ]
   },
   {
     id: 'terminal.vim-replies',
@@ -440,7 +571,14 @@ const TERMINAL: Surface[] = [
       DASHBOARD,
       step('b-open', [openTerminal, wait(2500)]),
       step('c-echo', [type('clear && echo src/app.ts\n'), wait(1500)]),
-      step('d-link', [{ do: 'click', target: { css: '.xterm-screen', at: { x: 24, y: 9 } }, modifiers: 'ctrl' }, wait(2500)], see('export function greet'))
+      step(
+        'd-link',
+        [
+          { do: 'click', target: { css: '.xterm-screen', at: { x: 24, y: 9 } }, modifiers: 'ctrl' },
+          wait(2500)
+        ],
+        see('export function greet')
+      )
     ]
   },
   {
@@ -455,8 +593,24 @@ const TERMINAL: Surface[] = [
     title: 'Reorder terminal tabs by dragging',
     steps: [
       DASHBOARD,
-      step('b-two', [openTerminal, wait(2000), click(label('New tab')), click(label('Bash', 'menuitem')), wait(2000)], see('Terminal 1', 'Terminal 2')),
-      step('c-reordered', [drag(txt('Terminal 2'), { css: '[role="tab"]:has-text("Terminal 1")', frac: { x: 0.1, y: 0.5 } }), wait(1200)])
+      step(
+        'b-two',
+        [
+          openTerminal,
+          wait(2000),
+          click(label('New tab')),
+          click(label('Bash', 'menuitem')),
+          wait(2000)
+        ],
+        see('Terminal 1', 'Terminal 2')
+      ),
+      step('c-reordered', [
+        drag(txt('Terminal 2'), {
+          css: '[role="tab"]:has-text("Terminal 1")',
+          frac: { x: 0.1, y: 0.5 }
+        }),
+        wait(1200)
+      ])
     ]
   },
   {
@@ -465,8 +619,22 @@ const TERMINAL: Surface[] = [
     title: 'Split panes: drag a second terminal tab to the pane edge',
     steps: [
       DASHBOARD,
-      step('b-two', [openTerminal, wait(2000), click(label('New tab')), click(label('Bash', 'menuitem')), wait(2000)], see('Terminal 1', 'Terminal 2')),
-      step('c-split', [drag(txt('Terminal 2'), paneAt(0.92, 0.5)), wait(2000)], see('Terminal 1', 'Terminal 2'))
+      step(
+        'b-two',
+        [
+          openTerminal,
+          wait(2000),
+          click(label('New tab')),
+          click(label('Bash', 'menuitem')),
+          wait(2000)
+        ],
+        see('Terminal 1', 'Terminal 2')
+      ),
+      step(
+        'c-split',
+        [drag(txt('Terminal 2'), paneAt(0.92, 0.5)), wait(2000)],
+        see('Terminal 1', 'Terminal 2')
+      )
     ]
   }
 ]
@@ -495,7 +663,8 @@ const STATUSBAR: Surface[] = [
     id: 'remote.access-popover',
     area: 'remote',
     title: 'Remote access popover (desktop shared-live host)',
-    blocked: 'StatusBar renders RemoteAccessPopover only under isTauriContext(); the web client has none to compare, and GPUIX would need the desktop host role from the server',
+    blocked:
+      'StatusBar renders RemoteAccessPopover only under isTauriContext(); the web client has none to compare, and GPUIX would need the desktop host role from the server',
     steps: []
   }
 ]

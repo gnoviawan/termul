@@ -120,7 +120,8 @@ try {
       })
       console.log(`--- after ${step.name}`)
       if (failed || process.env.PROBE_ALL) {
-        for (const [key, list] of Object.entries(inventory)) console.log(`${key}: ${[...new Set(list)].join(' | ')}`)
+        for (const [key, list] of Object.entries(inventory))
+          console.log(`${key}: ${[...new Set(list)].join(' | ')}`)
       }
       await page.screenshot({ path: path.join(root, `${surface.id}-${step.name}.png`) })
       console.log(`shot: ${path.join(root, `${surface.id}-${step.name}.png`)}`)

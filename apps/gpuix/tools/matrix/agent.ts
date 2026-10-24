@@ -25,8 +25,16 @@ interface Frame {
   result?: { outcome?: { outcome?: string; optionId?: string } }
 }
 
-export const MATRIX_PROMPTS = { plan: 'matrix plan', permission: 'matrix permission', hold: 'matrix hold' } as const
-export const PLAN_ENTRIES = ['Read the router module', 'Write the hash router tests', 'Update the router docs']
+export const MATRIX_PROMPTS = {
+  plan: 'matrix plan',
+  permission: 'matrix permission',
+  hold: 'matrix hold'
+} as const
+export const PLAN_ENTRIES = [
+  'Read the router module',
+  'Write the hash router tests',
+  'Update the router docs'
+]
 export const PERMISSION_TITLE = 'Run the router test suite'
 export const PERMISSION_GRANTED = 'Permission answer: allow-once'
 export const HOLD_REPLY = 'Holding this turn open for the queue.'
@@ -58,7 +66,11 @@ async function plan(sessionId: string): Promise<void> {
   const statuses = ['completed', 'in_progress', 'pending']
   update(sessionId, {
     sessionUpdate: 'plan',
-    entries: PLAN_ENTRIES.map((content, i) => ({ content, priority: 'medium', status: statuses[i] }))
+    entries: PLAN_ENTRIES.map((content, i) => ({
+      content,
+      priority: 'medium',
+      status: statuses[i]
+    }))
   })
   await sleep(200)
   say(sessionId, 'Here is the plan for the router work.')
@@ -66,7 +78,13 @@ async function plan(sessionId: string): Promise<void> {
 
 async function permission(sessionId: string): Promise<void> {
   const toolCallId = `m1-permission-${requestCounter}`
-  const toolCall = { toolCallId, title: PERMISSION_TITLE, kind: 'execute', status: 'pending', rawInput: { command: 'bun test router' } }
+  const toolCall = {
+    toolCallId,
+    title: PERMISSION_TITLE,
+    kind: 'execute',
+    status: 'pending',
+    rawInput: { command: 'bun test router' }
+  }
   update(sessionId, { sessionUpdate: 'tool_call', ...toolCall })
   const reply = await request('session/request_permission', {
     sessionId,
@@ -77,8 +95,13 @@ async function permission(sessionId: string): Promise<void> {
     ]
   })
   const outcome = reply.result?.outcome
-  const answer = outcome?.outcome === 'selected' ? (outcome.optionId ?? '') : (outcome?.outcome ?? 'none')
-  update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: answer === 'allow-once' ? 'completed' : 'failed' })
+  const answer =
+    outcome?.outcome === 'selected' ? (outcome.optionId ?? '') : (outcome?.outcome ?? 'none')
+  update(sessionId, {
+    sessionUpdate: 'tool_call_update',
+    toolCallId,
+    status: answer === 'allow-once' ? 'completed' : 'failed'
+  })
   say(sessionId, `Permission answer: ${answer}`)
 }
 
@@ -94,7 +117,11 @@ const HANDLERS: Record<string, (sessionId: string) => Promise<void>> = {
   [MATRIX_PROMPTS.hold]: hold
 }
 
-async function answer(id: Id, sessionId: string, handler: (sessionId: string) => Promise<void>): Promise<void> {
+async function answer(
+  id: Id,
+  sessionId: string,
+  handler: (sessionId: string) => Promise<void>
+): Promise<void> {
   cancelled = false
   try {
     await handler(sessionId)
@@ -114,7 +141,10 @@ function intercept(frame: Frame): boolean {
   }
   if (frame.method === 'session/cancel') cancelled = true
   if (frame.method !== 'session/prompt' || frame.id === undefined) return false
-  const text = (frame.params?.prompt ?? []).map((block) => block.text ?? '').join('').trim()
+  const text = (frame.params?.prompt ?? [])
+    .map((block) => block.text ?? '')
+    .join('')
+    .trim()
   const handler = HANDLERS[text]
   if (!handler) return false
   void answer(frame.id, frame.params?.sessionId ?? '', handler)
@@ -122,7 +152,9 @@ function intercept(frame: Frame): boolean {
 }
 
 if (import.meta.main) {
-  const child = spawn('bun', [path.join(import.meta.dir, '../chat/scenario-agent.ts')], { stdio: ['pipe', 'pipe', 'inherit'] })
+  const child = spawn('bun', [path.join(import.meta.dir, '../chat/scenario-agent.ts')], {
+    stdio: ['pipe', 'pipe', 'inherit']
+  })
   void (async () => {
     for await (const line of createInterface({ input: child.stdout })) {
       if (line.trim()) process.stdout.write(`${line}\n`)

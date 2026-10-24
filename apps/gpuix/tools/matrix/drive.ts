@@ -29,7 +29,13 @@ const normalize = (text: string) => text.replace(/\s+/g, ' ').trim()
 
 export function describe(action: Action): string {
   const target = (t: Target) =>
-    'testId' in t ? `#${t.testId}` : 'text' in t ? `"${t.text}"` : 'label' in t ? `[${t.label}]` : t.css
+    'testId' in t
+      ? `#${t.testId}`
+      : 'text' in t
+        ? `"${t.text}"`
+        : 'label' in t
+          ? `[${t.label}]`
+          : t.css
   switch (action.do) {
     case 'click':
       return `${action.button === 'right' ? 'right-click' : action.modifiers ? `${action.modifiers}-click` : 'click'} ${target(action.target)}`
@@ -95,9 +101,16 @@ export interface Driver {
 
 function webLocator(page: Page, target: Target): Locator {
   if ('testId' in target) return page.getByTestId(target.testId).filter({ visible: true }).first()
-  if ('text' in target) return page.getByText(target.text, { exact: target.exact ?? true }).filter({ visible: true }).first()
+  if ('text' in target)
+    return page
+      .getByText(target.text, { exact: target.exact ?? true })
+      .filter({ visible: true })
+      .first()
   if ('label' in target) {
-    return page.getByRole(target.role ?? 'button', { name: target.label, exact: true }).filter({ visible: true }).first()
+    return page
+      .getByRole(target.role ?? 'button', { name: target.label, exact: true })
+      .filter({ visible: true })
+      .first()
   }
   return page.locator(target.css).filter({ visible: true }).first()
 }
@@ -200,19 +213,30 @@ export function webDriver(page: Page, points: Map<string, Point>): Driver {
         const inOrder = async () =>
           ordered(
             await page.evaluate(
-              (within) => (document.querySelector(`[data-testid="${within}"]`) as HTMLElement | null)?.innerText ?? '',
+              (within) =>
+                (document.querySelector(`[data-testid="${within}"]`) as HTMLElement | null)
+                  ?.innerText ?? '',
               check.within
             ),
             order
           )
-        return { step, text: order.join(' < '), expect: 'present', pass: await poll(inOrder, PRESENT_TIMEOUT_MS) }
+        return {
+          step,
+          text: order.join(' < '),
+          expect: 'present',
+          pass: await poll(inOrder, PRESENT_TIMEOUT_MS)
+        }
       }
       const want = normalize(check.text)
       const painted = () =>
         page.evaluate(
           ({ needle, within }) => {
-            const root = within ? document.querySelector(`[data-testid="${within}"]`) : document.body
-            return (root as HTMLElement | null)?.innerText.replace(/\s+/g, ' ').includes(needle) ?? false
+            const root = within
+              ? document.querySelector(`[data-testid="${within}"]`)
+              : document.body
+            return (
+              (root as HTMLElement | null)?.innerText.replace(/\s+/g, ' ').includes(needle) ?? false
+            )
           },
           { needle: want, within: check.within }
         )
@@ -247,14 +271,18 @@ function subtreeText(node: Node): string {
 }
 
 function nearest(nodes: Node[], to: Point | undefined): Point | null {
-  const painted = nodes.filter((node) => node.bounds && node.bounds.width > 0 && node.bounds.height > 0)
+  const painted = nodes.filter(
+    (node) => node.bounds && node.bounds.width > 0 && node.bounds.height > 0
+  )
   if (painted.length === 0) return null
   const centres = painted.map((node) => {
     const b = node.bounds as NonNullable<Node['bounds']>
     return { x: b.x + b.width / 2, y: b.y + b.height / 2 }
   })
   if (!to) return centres[0]
-  return centres.reduce((best, c) => (Math.hypot(c.x - to.x, c.y - to.y) < Math.hypot(best.x - to.x, best.y - to.y) ? c : best))
+  return centres.reduce((best, c) =>
+    Math.hypot(c.x - to.x, c.y - to.y) < Math.hypot(best.x - to.x, best.y - to.y) ? c : best
+  )
 }
 
 /** Real X input for clicks: the Xvfb display and the window's origin on it. */
@@ -267,21 +295,38 @@ const X11_CLICK = path.join(import.meta.dir, 'x11-click.py')
 
 async function x11Click(x11: X11Input, point: Point, button: 1 | 3): Promise<void> {
   const proc = Bun.spawn(
-    ['uv', 'run', '--quiet', '--with', 'python-xlib==0.33', 'python', '-I', X11_CLICK, String(x11.origin.x + point.x), String(x11.origin.y + point.y), String(button)],
+    [
+      'uv',
+      'run',
+      '--quiet',
+      '--with',
+      'python-xlib==0.33',
+      'python',
+      '-I',
+      X11_CLICK,
+      String(x11.origin.x + point.x),
+      String(x11.origin.y + point.y),
+      String(button)
+    ],
     { env: { ...process.env, DISPLAY: x11.display }, stdout: 'ignore', stderr: 'pipe' }
   )
-  if ((await proc.exited) !== 0) throw new Error(`x11-click failed: ${await new Response(proc.stderr).text()}`)
+  if ((await proc.exited) !== 0)
+    throw new Error(`x11-click failed: ${await new Response(proc.stderr).text()}`)
 }
 
 export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11Input): Driver {
-  const resolve = async (target: Target, key: string): Promise<{ point: Point; via: ActionLog['via'] }> => {
+  const resolve = async (
+    target: Target,
+    key: string
+  ): Promise<{ point: Point; via: ActionLog['via'] }> => {
     const web = points.get(key)
     let native: Point | null = null
     let via: ActionLog['via'] = 'web-point'
     if ('testId' in target) {
-      native = await poll(async () => (await app.getByTestId(target.testId).count()) > 0, 2500).then(async () =>
-        nearest(await app.getByTestId(target.testId).all(), web)
-      )
+      native = await poll(
+        async () => (await app.getByTestId(target.testId).count()) > 0,
+        2500
+      ).then(async () => nearest(await app.getByTestId(target.testId).all(), web))
       via = 'testid'
     } else if ('text' in target) {
       const exact = target.exact ?? true
@@ -305,7 +350,8 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11
           case 'click': {
             const { point, via } = await resolve(action.target, key)
             log.via = via
-            if (x11 && !action.modifiers) await x11Click(x11, point, action.button === 'right' ? 3 : 1)
+            if (x11 && !action.modifiers)
+              await x11Click(x11, point, action.button === 'right' ? 3 : 1)
             else {
               await app.call('click', {
                 ...point,
@@ -367,7 +413,12 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11
           const scope = app.getByTestId(check.within)
           return (await scope.count()) > 0 && ordered(subtreeText(await scope.element()), order)
         }
-        return { step, text: order.join(' < '), expect: 'present', pass: await poll(inOrder, GPUIX_PRESENT_TIMEOUT_MS) }
+        return {
+          step,
+          text: order.join(' < '),
+          expect: 'present',
+          pass: await poll(inOrder, GPUIX_PRESENT_TIMEOUT_MS)
+        }
       }
       const want = normalize(check.text)
       const painted = async () => {

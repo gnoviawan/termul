@@ -24,20 +24,25 @@ export interface Review {
   impact?: 1 | 2 | 3
 }
 
-const LAMP = 'The status-bar connection lamp is an outline ring instead of a filled dot (fill-current on the icon is ignored).'
+const LAMP =
+  'The status-bar connection lamp is an outline ring instead of a filled dot (fill-current on the icon is ignored).'
 const RIGHT_CLICK =
   'Right-click opens no menu: the Radix ContextMenu trigger in compat never opens, with GPUIX automation input and with real X input (XTEST, --x11-input) alike.'
 
 const TITLE_TIP =
   'A title tooltip paints at once under the pointer after a click, anchored over the element, where the web shows none in the frame.'
-const CHECKBOX = 'The Amend last commit checkbox box is not drawn (native checkbox input), only its label.'
-const BACKDROP = 'The modal backdrop is far lighter than the web bg-overlay, so the page behind stays readable.'
-const OVERLAY = 'the modal backdrop is far lighter than the web bg-overlay, so the page behind stays readable.'
+const CHECKBOX =
+  'The Amend last commit checkbox box is not drawn (native checkbox input), only its label.'
+const BACKDROP =
+  'The modal backdrop is far lighter than the web bg-overlay, so the page behind stays readable.'
+const OVERLAY =
+  'the modal backdrop is far lighter than the web bg-overlay, so the page behind stays readable.'
 const OVERLAP =
   'In the Chats list two chat cards paint on top of each other once a second chat exists, and GPUIX lists only the seeded chat where the web lists all three.'
 const PROSE =
   'Native markdown prose loses inline-code chips, link colour and italics, and some runs pick up a warm tint; a blockquote gets a filled background instead of a rule.'
-const TREE_TEXT = 'The text check fails only because natively painted text is not in the automation tree.'
+const TREE_TEXT =
+  'The text check fails only because natively painted text is not in the automation tree.'
 const TINT =
   'Some words in labels and descriptions paint in an accent or warm colour (word runs pick up a colour the web text does not have).'
 const SELECT =
@@ -46,14 +51,30 @@ const TAB_TRUNC =
   'Pane tab titles truncate to three letters and an ellipsis ("Ter...", "note...") where the web shows the whole title, so two terminals cannot be told apart.'
 const SHORT_TRANSCRIPT =
   'A short transcript sits at the bottom of the GPUIX pane, leaving the space above it empty, where the web starts it at the top.'
-const TAB_TITLE = 'The GPUIX tab title truncates to a few letters ("matr...") where the web shows the whole title.'
+const TAB_TITLE =
+  'The GPUIX tab title truncates to a few letters ("matr...") where the web shows the whole title.'
 const ENTER =
-  'Enter in a text field or list does not run the field\'s action in GPUIX (form submit, command palette selection), while Enter in the chat composer does.'
-const SETTINGS_BASE = ['The section content and navigation match.', 'The modal backdrop is far lighter than the web bg-overlay.', TINT]
+  "Enter in a text field or list does not run the field's action in GPUIX (form submit, command palette selection), while Enter in the chat composer does."
+const SETTINGS_BASE = [
+  'The section content and navigation match.',
+  'The modal backdrop is far lighter than the web bg-overlay.',
+  TINT
+]
 const TOAST =
   'The toast is the sonner shim: a flat green box at the window edge with the close button on the right, where the web shows a card with a check icon and the close button at its top-left.'
 
-const THEME_FAMILIES = ['termul', 'cursor', 'catppuccin', 'dracula', 'nord', 'gruvbox', 'tokyonight', 'ayu', 'one-dark', 'github']
+const THEME_FAMILIES = [
+  'termul',
+  'cursor',
+  'catppuccin',
+  'dracula',
+  'nord',
+  'gruvbox',
+  'tokyonight',
+  'ayu',
+  'one-dark',
+  'github'
+]
 const THEME_REVIEWS: Record<string, Review> = Object.fromEntries(
   THEME_FAMILIES.flatMap((family) =>
     (['dark', 'light'] as const).map((mode): [string, Review] => [
@@ -70,17 +91,41 @@ const THEME_REVIEWS: Record<string, Review> = Object.fromEntries(
 )
 
 export const REVIEWS: Record<string, Review> = {
-  'rail.project-list': { status: 'ported', differences: ['Same layout and order; switching to beta works by click.', LAMP] },
-  'rail.project-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 3 },
+  'rail.project-list': {
+    status: 'ported',
+    differences: ['Same layout and order; switching to beta works by click.', LAMP]
+  },
+  'rail.project-menu': {
+    status: 'broken',
+    differences: [RIGHT_CLICK],
+    cause: 'compat translator gap',
+    unit: 'C2 menus and popovers',
+    impact: 3
+  },
   'rail.project-rename': {
     status: 'broken',
-    differences: [RIGHT_CLICK, 'With no menu, the replayed clicks land on the row and the typed name goes into the composer instead.'],
+    differences: [
+      RIGHT_CLICK,
+      'With no menu, the replayed clicks land on the row and the typed name goes into the composer instead.'
+    ],
     cause: 'compat translator gap',
     unit: 'C2 menus and popovers',
     impact: 2
   },
-  'rail.project-remove': { status: 'broken', differences: [RIGHT_CLICK, 'No delete confirmation, so the project stays.'], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 2 },
-  'rail.project-colour': { status: 'broken', differences: [RIGHT_CLICK, 'The Select Color popover never appears.'], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 1 },
+  'rail.project-remove': {
+    status: 'broken',
+    differences: [RIGHT_CLICK, 'No delete confirmation, so the project stays.'],
+    cause: 'compat translator gap',
+    unit: 'C2 menus and popovers',
+    impact: 2
+  },
+  'rail.project-colour': {
+    status: 'broken',
+    differences: [RIGHT_CLICK, 'The Select Color popover never appears.'],
+    cause: 'compat translator gap',
+    unit: 'C2 menus and popovers',
+    impact: 1
+  },
   'rail.project-reorder': {
     status: 'broken',
     differences: [
@@ -92,15 +137,22 @@ export const REVIEWS: Record<string, Review> = {
   },
   'rail.add-menu': {
     status: 'broken',
-    differences: ['Clicking + shows only its tooltip; the New project / New folder group dropdown does not open, so the new project modal is unreachable from the rail.'],
+    differences: [
+      'Clicking + shows only its tooltip; the New project / New folder group dropdown does not open, so the new project modal is unreachable from the rail.'
+    ],
     cause: 'compat translator gap',
     unit: 'C2 menus and popovers',
     impact: 3
   },
-  'rail.collapse': { status: 'ported', differences: ['Collapsed rail matches: icons, project letters, Changes badge.', LAMP] },
+  'rail.collapse': {
+    status: 'ported',
+    differences: ['Collapsed rail matches: icons, project letters, Changes badge.', LAMP]
+  },
   'rail.project-settings': {
     status: 'broken',
-    differences: ['The gear on the hovered row shows, but clicking it does not open Project settings (also fails with real X input).'],
+    differences: [
+      'The gear on the hovered row shows, but clicking it does not open Project settings (also fails with real X input).'
+    ],
     cause: 'compat translator gap',
     unit: 'C2 menus and popovers',
     impact: 2
@@ -115,22 +167,52 @@ export const REVIEWS: Record<string, Review> = {
     unit: 'O7 chat list sync and layout',
     impact: 3
   },
-  'side.chats-search': { status: 'ported', differences: ['Filtering to no match and back matches, including the No matches. text.'] },
-  'side.chat-card-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 2 },
-  'side.workspace-switcher': { status: 'ported', differences: ['The Working copies popover matches; GPUIX omits the small terminal glyph on the web row hover.'] },
-  'side.hide': { status: 'ported', differences: ['Side panel hides; the expand chevron sits in the same place.'] },
-  'explorer.tree': { status: 'ported', differences: ['Tree, git colours and status letters match.'] },
+  'side.chats-search': {
+    status: 'ported',
+    differences: ['Filtering to no match and back matches, including the No matches. text.']
+  },
+  'side.chat-card-menu': {
+    status: 'broken',
+    differences: [RIGHT_CLICK],
+    cause: 'compat translator gap',
+    unit: 'C2 menus and popovers',
+    impact: 2
+  },
+  'side.workspace-switcher': {
+    status: 'ported',
+    differences: [
+      'The Working copies popover matches; GPUIX omits the small terminal glyph on the web row hover.'
+    ]
+  },
+  'side.hide': {
+    status: 'ported',
+    differences: ['Side panel hides; the expand chevron sits in the same place.']
+  },
+  'explorer.tree': {
+    status: 'ported',
+    differences: ['Tree, git colours and status letters match.']
+  },
   'explorer.expand': {
     status: 'partial',
-    differences: [TITLE_TIP + ' It covers the chevron and the open-folder icon of the expanded row.'],
+    differences: [
+      TITLE_TIP + ' It covers the chevron and the open-folder icon of the expanded row.'
+    ],
     cause: 'compat translator gap',
     unit: 'C4 tooltips',
     impact: 1
   },
-  'explorer.context-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 2 },
+  'explorer.context-menu': {
+    status: 'broken',
+    differences: [RIGHT_CLICK],
+    cause: 'compat translator gap',
+    unit: 'C2 menus and popovers',
+    impact: 2
+  },
   'explorer.drag': {
     status: 'ported',
-    differences: ['Dragging notes.txt from the tree into the pane opens it in an editor tab in both (D1 compat drag and drop).']
+    differences: [
+      'Dragging notes.txt from the tree into the pane opens it in an editor tab in both (D1 compat drag and drop).'
+    ]
   },
   'editor.code': {
     status: 'ported',
@@ -140,7 +222,9 @@ export const REVIEWS: Record<string, Review> = {
   },
   'editor.code-edit': {
     status: 'ported',
-    differences: ['Click, End and typing put "// edited" on line 5 in both; the dirty dot shows on the tab. Same tree-text caveat as editor.code.']
+    differences: [
+      'Click, End and typing put "// edited" on line 5 in both; the dirty dot shows on the tab. Same tree-text caveat as editor.code.'
+    ]
   },
   'editor.markdown': {
     status: 'partial',
@@ -155,15 +239,35 @@ export const REVIEWS: Record<string, Review> = {
   },
   'editor.tabs': {
     status: 'partial',
-    differences: ['Switching tabs works; README preview shows the same outline and typography gaps as editor.markdown, and the tab title truncates to "READ...".'],
+    differences: [
+      'Switching tabs works; README preview shows the same outline and typography gaps as editor.markdown, and the tab title truncates to "READ...".'
+    ],
     cause: 'native override needed',
     unit: 'E2 markdown preview parity',
     impact: 1
   },
-  'git.changes': { status: 'partial', differences: ['Sections, rows, counts and history footer match.', CHECKBOX], cause: 'compat translator gap', unit: 'C5 form controls', impact: 1 },
-  'git.diff': { status: 'partial', differences: ['Inline diff, hunk header and STAGE HUNK match closely.', CHECKBOX], cause: 'compat translator gap', unit: 'C5 form controls', impact: 1 },
-  'git.stage': { status: 'partial', differences: ['Staging README.md moves it to Staged 2 in both.', CHECKBOX] },
-  'git.unstage': { status: 'partial', differences: ['Unstaging app.ts moves it to Changes in both.', CHECKBOX] },
+  'git.changes': {
+    status: 'partial',
+    differences: ['Sections, rows, counts and history footer match.', CHECKBOX],
+    cause: 'compat translator gap',
+    unit: 'C5 form controls',
+    impact: 1
+  },
+  'git.diff': {
+    status: 'partial',
+    differences: ['Inline diff, hunk header and STAGE HUNK match closely.', CHECKBOX],
+    cause: 'compat translator gap',
+    unit: 'C5 form controls',
+    impact: 1
+  },
+  'git.stage': {
+    status: 'partial',
+    differences: ['Staging README.md moves it to Staged 2 in both.', CHECKBOX]
+  },
+  'git.unstage': {
+    status: 'partial',
+    differences: ['Unstaging app.ts moves it to Changes in both.', CHECKBOX]
+  },
   'git.discard': {
     status: 'partial',
     differences: ['The confirm dialog matches, but ' + OVERLAY],
@@ -178,11 +282,23 @@ export const REVIEWS: Record<string, Review> = {
     unit: 'O4 toasts',
     impact: 1
   },
-  'git.branch-picker': { status: 'ported', differences: ['Branch popover, Local group, feature/login and Create branch row match.'] },
-  'git.worktree-create': { status: 'ported', differences: ['Typing a new name shows No matching working copies and Create worktree feat-matrix in both.'] },
+  'git.branch-picker': {
+    status: 'ported',
+    differences: ['Branch popover, Local group, feature/login and Create branch row match.']
+  },
+  'git.worktree-create': {
+    status: 'ported',
+    differences: [
+      'Typing a new name shows No matching working copies and Create worktree feat-matrix in both.'
+    ]
+  },
   'chat.transcript': {
     status: 'partial',
-    differences: ['The transcript, code card, task list, Worked for row and Changed files bar all render.', PROSE, TREE_TEXT],
+    differences: [
+      'The transcript, code card, task list, Worked for row and Changed files bar all render.',
+      PROSE,
+      TREE_TEXT
+    ],
     cause: 'native override needed',
     unit: 'O5 native prose styling',
     impact: 3
@@ -196,7 +312,10 @@ export const REVIEWS: Record<string, Review> = {
     unit: 'O6 transcript scroll and anchoring',
     impact: 3
   },
-  'chat.new-chat': { status: 'ported', differences: ['New chat opens the launcher composer in place.'] },
+  'chat.new-chat': {
+    status: 'ported',
+    differences: ['New chat opens the launcher composer in place.']
+  },
   'chat.agent-launcher': {
     status: 'broken',
     differences: [
@@ -220,7 +339,11 @@ export const REVIEWS: Record<string, Review> = {
   },
   'chat.model-selector': {
     status: 'partial',
-    differences: ['The running chat shows the agent chip and composer like the web.', OVERLAP, PROSE],
+    differences: [
+      'The running chat shows the agent chip and composer like the web.',
+      OVERLAP,
+      PROSE
+    ],
     cause: 'needs diagnosis',
     unit: 'O7 chat list sync and layout',
     impact: 2
@@ -232,10 +355,15 @@ export const REVIEWS: Record<string, Review> = {
       'The web draws a focus ring on the composer; GPUIX does not.'
     ]
   },
-  'composer.slash': { status: 'ported', differences: ['The Skills menu matches row for row.', 'No focus ring on the GPUIX composer.'] },
+  'composer.slash': {
+    status: 'ported',
+    differences: ['The Skills menu matches row for row.', 'No focus ring on the GPUIX composer.']
+  },
   'composer.attach': {
     status: 'ported',
-    differences: ['Clicking Attach files opens nothing visible in either client in this headless run (the web file chooser is a native dialog Playwright does not paint).']
+    differences: [
+      'Clicking Attach files opens nothing visible in either client in this headless run (the web file chooser is a native dialog Playwright does not paint).'
+    ]
   },
   'terminal.open': {
     status: 'partial',
@@ -248,7 +376,10 @@ export const REVIEWS: Record<string, Review> = {
 
   'terminal.file-link': {
     status: 'ported',
-    differences: ['Ctrl+click on src/app.ts in terminal output opens app.ts in a new tab in both.', TREE_TEXT]
+    differences: [
+      'Ctrl+click on src/app.ts in terminal output opens app.ts in a new tab in both.',
+      TREE_TEXT
+    ]
   },
   'terminal.new-tab-menu': { status: 'ported', differences: ['The new tab menu matches.'] },
   'terminal.tab-reorder': {
@@ -263,7 +394,10 @@ export const REVIEWS: Record<string, Review> = {
   },
   'terminal.split': {
     status: 'partial',
-    differences: ['Dragging the Terminal 2 tab to the pane\'s right edge splits the pane in both (D1).', TAB_TRUNC],
+    differences: [
+      "Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1).",
+      TAB_TRUNC
+    ],
     cause: 'compat translator gap',
     unit: 'C15 tab title width',
     impact: 1
@@ -284,44 +418,89 @@ export const REVIEWS: Record<string, Review> = {
   },
   'statusbar.connection': {
     status: 'partial',
-    differences: ['Hovering the connection lamp shows a Connected tooltip on the web; GPUIX shows none.', LAMP],
+    differences: [
+      'Hovering the connection lamp shows a Connected tooltip on the web; GPUIX shows none.',
+      LAMP
+    ],
     cause: 'compat translator gap',
     unit: 'C4 tooltips',
     impact: 1
   },
   'remote.access-popover': {
     status: 'blocked',
-    differences: ['Not compared: the popover renders only under isTauriContext(), so the web client has no reference.'],
+    differences: [
+      'Not compared: the popover renders only under isTauriContext(), so the web client has no reference.'
+    ],
     cause: 'server route needed',
     unit: 'R4 desktop host role over the server',
     impact: 1
   },
-  'settings.interface': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C6 overlay backdrop', impact: 1 },
+  'settings.interface': {
+    status: 'partial',
+    differences: SETTINGS_BASE,
+    cause: 'compat translator gap',
+    unit: 'C6 overlay backdrop',
+    impact: 1
+  },
   'settings.notifications': {
     status: 'partial',
-    differences: [...SETTINGS_BASE, 'Row dividers inside a group are missing and rows sit tighter.'],
+    differences: [
+      ...SETTINGS_BASE,
+      'Row dividers inside a group are missing and rows sit tighter.'
+    ],
     cause: 'compat translator gap',
     unit: 'C8 text colour runs',
     impact: 1
   },
-  'settings.editor': { status: 'broken', differences: [SELECT, ...SETTINGS_BASE.slice(1)], cause: 'native override needed', unit: 'O8 native select', impact: 2 },
+  'settings.editor': {
+    status: 'broken',
+    differences: [SELECT, ...SETTINGS_BASE.slice(1)],
+    cause: 'native override needed',
+    unit: 'O8 native select',
+    impact: 2
+  },
   'settings.appearance': {
     status: 'broken',
-    differences: [SELECT, 'Renderer and Scrollback rows wrap their descriptions one word per line.', ...SETTINGS_BASE.slice(1)],
+    differences: [
+      SELECT,
+      'Renderer and Scrollback rows wrap their descriptions one word per line.',
+      ...SETTINGS_BASE.slice(1)
+    ],
     cause: 'native override needed',
     unit: 'O8 native select',
     impact: 2
   },
-  'settings.shell': { status: 'broken', differences: [SELECT, ...SETTINGS_BASE.slice(1)], cause: 'native override needed', unit: 'O8 native select', impact: 2 },
-  'settings.terminal-profiles': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C8 text colour runs', impact: 1 },
+  'settings.shell': {
+    status: 'broken',
+    differences: [SELECT, ...SETTINGS_BASE.slice(1)],
+    cause: 'native override needed',
+    unit: 'O8 native select',
+    impact: 2
+  },
+  'settings.terminal-profiles': {
+    status: 'partial',
+    differences: SETTINGS_BASE,
+    cause: 'compat translator gap',
+    unit: 'C8 text colour runs',
+    impact: 1
+  },
   'settings.ai-agents': {
     status: 'broken',
-    differences: [SELECT, 'The Close idle chats after label wraps one or two letters per line, filling the pane; the agents list below is pushed out of view.'],
+    differences: [
+      SELECT,
+      'The Close idle chats after label wraps one or two letters per line, filling the pane; the agents list below is pushed out of view.'
+    ],
     cause: 'native override needed',
     unit: 'O8 native select',
     impact: 2
   },
-  'settings.skills': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C8 text colour runs', impact: 1 },
+  'settings.skills': {
+    status: 'partial',
+    differences: SETTINGS_BASE,
+    cause: 'compat translator gap',
+    unit: 'C8 text colour runs',
+    impact: 1
+  },
   'settings.provider': {
     status: 'partial',
     differences: [...SETTINGS_BASE, 'The usage line moves under the account instead of beside it.'],
@@ -336,32 +515,56 @@ export const REVIEWS: Record<string, Review> = {
     unit: 'C8 text colour runs',
     impact: 1
   },
-  'settings.shortcuts': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C8 text colour runs', impact: 1 },
+  'settings.shortcuts': {
+    status: 'partial',
+    differences: SETTINGS_BASE,
+    cause: 'compat translator gap',
+    unit: 'C8 text colour runs',
+    impact: 1
+  },
   'settings.diagnostics': {
     status: 'partial',
-    differences: [...SETTINGS_BASE, 'Server version reads termul-server v0.1.0 in GPUIX and v0.4.52 on the web against the same server.'],
+    differences: [
+      ...SETTINGS_BASE,
+      'Server version reads termul-server v0.1.0 in GPUIX and v0.4.52 on the web against the same server.'
+    ],
     cause: 'needs diagnosis',
     unit: 'O9 server version source',
     impact: 1
   },
-  'settings.reset': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C6 overlay backdrop', impact: 1 },
+  'settings.reset': {
+    status: 'partial',
+    differences: SETTINGS_BASE,
+    cause: 'compat translator gap',
+    unit: 'C6 overlay backdrop',
+    impact: 1
+  },
   'shortcuts.menu': {
     status: 'partial',
-    differences: ['Shortcut Menu rows, descriptions and key chips match, including the blank Command History chip in both.', BACKDROP],
+    differences: [
+      'Shortcut Menu rows, descriptions and key chips match, including the blank Command History chip in both.',
+      BACKDROP
+    ],
     cause: 'compat translator gap',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
   'shortcuts.settings-shortcut': {
     status: 'partial',
-    differences: ['Alt+, opens Preferences in both. Escape then closes the dialog in GPUIX, where the web keeps it open.'],
+    differences: [
+      'Alt+, opens Preferences in both. Escape then closes the dialog in GPUIX, where the web keeps it open.'
+    ],
     cause: 'needs diagnosis',
     unit: 'C10 dialog Escape routing',
     impact: 1
   },
   'theme.picker': {
     status: 'partial',
-    differences: ['The Color Themes popover, groups, swatches and the current-theme check match.', TINT, 'No focus ring on the search field.'],
+    differences: [
+      'The Color Themes popover, groups, swatches and the current-theme check match.',
+      TINT,
+      'No focus ring on the search field.'
+    ],
     cause: 'compat translator gap',
     unit: 'C8 text colour runs',
     impact: 1
@@ -387,16 +590,20 @@ export const REVIEWS: Record<string, Review> = {
   },
   'browser.pane': {
     status: 'blocked',
-    differences: ['Not compared: browser tabs are Tauri webviews with no web-client reference, and GPUIX 0.11 has no webview element. Replacing Tauri loses the browser pane until a native webview exists.'],
+    differences: [
+      'Not compared: browser tabs are Tauri webviews with no web-client reference, and GPUIX 0.11 has no webview element. Replacing Tauri loses the browser pane until a native webview exists.'
+    ],
     cause: 'missing GPUIX capability',
     unit: 'V2 native webview',
     impact: 2
   },
   'update.toast': {
     status: 'blocked',
-    differences: ['Not compared: the update toast and the what\'s new modal render only under isTauriContext(). GPUIX needs its own updater path to show them at all.'],
+    differences: [
+      "Not compared: the update toast and the what's new modal render only under isTauriContext(). GPUIX needs its own updater path to show them at all."
+    ],
     cause: 'native override needed',
-    unit: 'U1 GPUIX updater and what\'s new',
+    unit: "U1 GPUIX updater and what's new",
     impact: 1
   },
   ...THEME_REVIEWS,
@@ -433,7 +640,11 @@ export const REVIEWS: Record<string, Review> = {
   },
   'chat.queue': {
     status: 'partial',
-    differences: ['A prompt sent while the turn runs shows under 1 Queued in both, and the stop button replaces send.', SHORT_TRANSCRIPT, PROSE],
+    differences: [
+      'A prompt sent while the turn runs shows under 1 Queued in both, and the stop button replaces send.',
+      SHORT_TRANSCRIPT,
+      PROSE
+    ],
     cause: 'native override needed',
     unit: 'O5 native prose styling',
     impact: 1
@@ -441,8 +652,8 @@ export const REVIEWS: Record<string, Review> = {
   'terminal.vim-replies': {
     status: 'ported',
     differences: [
-      'With the O1 fixture\'s command (vim -u NONE -N notes.txt, then :q!) typed into the full app, both clients return to a clean prompt; neither echoes ^[[>0;276;0c or rgb: replies.',
-      'So the echo in O1\'s GPUIX shot does not reproduce in the full app with typed input: it belongs to the fixture, which writes its inputs to the PTY back to back, not to GPUIX (inferred; the fixture itself was not rerun here).'
+      "With the O1 fixture's command (vim -u NONE -N notes.txt, then :q!) typed into the full app, both clients return to a clean prompt; neither echoes ^[[>0;276;0c or rgb: replies.",
+      "So the echo in O1's GPUIX shot does not reproduce in the full app with typed input: it belongs to the fixture, which writes its inputs to the PTY back to back, not to GPUIX (inferred; the fixture itself was not rerun here)."
     ]
   },
   'palette.type-ahead': {
@@ -455,8 +666,14 @@ export const REVIEWS: Record<string, Review> = {
     unit: 'C11 focus on open',
     impact: 2
   },
-  'palette.new-terminal': { status: 'ported', differences: ['New Terminal opens Terminal 1 in both.'] },
-  'palette.agent-launcher': { status: 'ported', differences: ['Agent Launcher shows the launcher with its close button in both.'] },
+  'palette.new-terminal': {
+    status: 'ported',
+    differences: ['New Terminal opens Terminal 1 in both.']
+  },
+  'palette.agent-launcher': {
+    status: 'ported',
+    differences: ['Agent Launcher shows the launcher with its close button in both.']
+  },
   'palette.save-snapshot': {
     status: 'partial',
     differences: ['The Create Snapshot modal matches.', BACKDROP, TINT],
@@ -466,7 +683,9 @@ export const REVIEWS: Record<string, Review> = {
   },
   'palette.open-canvas': {
     status: 'blocked',
-    differences: ['Opens the canvas tab in both; see canvas.open for why the canvas itself is not compared.'],
+    differences: [
+      'Opens the canvas tab in both; see canvas.open for why the canvas itself is not compared.'
+    ],
     cause: 'missing GPUIX capability',
     unit: 'V1 canvas host',
     impact: 1
@@ -487,19 +706,31 @@ export const REVIEWS: Record<string, Review> = {
   },
   'palette.switch-project': {
     status: 'broken',
-    differences: ['Typing beta filters to the beta row in both, but Enter switches the web to beta and leaves the GPUIX palette open on alpha.', ENTER],
+    differences: [
+      'Typing beta filters to the beta row in both, but Enter switches the web to beta and leaves the GPUIX palette open on alpha.',
+      ENTER
+    ],
     cause: 'needs diagnosis',
     unit: 'C12 Enter in fields and lists',
     impact: 2
   },
   'palette.command-history': {
     status: 'partial',
-    differences: ['The Command History modal, its scope picker and empty state match.', BACKDROP, 'No focus ring on the search field.'],
+    differences: [
+      'The Command History modal, its scope picker and empty state match.',
+      BACKDROP,
+      'No focus ring on the search field.'
+    ],
     cause: 'compat translator gap',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
-  'palette.color-theme': { status: 'ported', differences: ['Change Color Theme opens the Color Themes popover in both; see theme.picker for its tint.'] },
+  'palette.color-theme': {
+    status: 'ported',
+    differences: [
+      'Change Color Theme opens the Color Themes popover in both; see theme.picker for its tint.'
+    ]
+  },
   'palette.shortcut-menu': {
     status: 'partial',
     differences: ['Opens the Shortcut Menu in both.', BACKDROP],
@@ -514,9 +745,18 @@ export const REVIEWS: Record<string, Review> = {
     unit: 'C9 dialog body layout',
     impact: 1
   },
-  'shortcuts.toggle-projects': { status: 'ported', differences: ['Ctrl+Shift+B collapses the rail in both.'] },
-  'shortcuts.toggle-side-panel': { status: 'ported', differences: ['Ctrl+B hides the side panel in both.'] },
-  'shortcuts.theme-picker': { status: 'ported', differences: ['Ctrl+Alt+T opens the Color Themes popover in both.'] },
+  'shortcuts.toggle-projects': {
+    status: 'ported',
+    differences: ['Ctrl+Shift+B collapses the rail in both.']
+  },
+  'shortcuts.toggle-side-panel': {
+    status: 'ported',
+    differences: ['Ctrl+B hides the side panel in both.']
+  },
+  'shortcuts.theme-picker': {
+    status: 'ported',
+    differences: ['Ctrl+Alt+T opens the Color Themes popover in both.']
+  },
   'shortcuts.zoom-in': {
     status: 'broken',
     differences: [
@@ -558,6 +798,8 @@ export const REVIEWS: Record<string, Review> = {
   },
   'settings.accounts-claude': {
     status: 'blocked',
-    differences: ['No web reference: Claude account management needs a host-local client. The R1-R3 e2e kit (reports/r1-e2e, accounts mode) covers the server path; no GPUIX pixel check of the sign-in flow exists yet.']
+    differences: [
+      'No web reference: Claude account management needs a host-local client. The R1-R3 e2e kit (reports/r1-e2e, accounts mode) covers the server path; no GPUIX pixel check of the sign-in flow exists yet.'
+    ]
   }
 }

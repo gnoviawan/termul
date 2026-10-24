@@ -36,8 +36,16 @@ function scaled(file: string, scale: number, crop?: number[]): PNG {
     for (let x = 0; x < width; x++) {
       const sum = [0, 0, 0, 0]
       let n = 0
-      for (let yy = Math.floor(cy + y * step); yy < Math.min(cy + ch, Math.floor(cy + (y + 1) * step)); yy++) {
-        for (let xx = Math.floor(cx + x * step); xx < Math.min(cx + cw, Math.floor(cx + (x + 1) * step)); xx++) {
+      for (
+        let yy = Math.floor(cy + y * step);
+        yy < Math.min(cy + ch, Math.floor(cy + (y + 1) * step));
+        yy++
+      ) {
+        for (
+          let xx = Math.floor(cx + x * step);
+          xx < Math.min(cx + cw, Math.floor(cx + (x + 1) * step));
+          xx++
+        ) {
           const i = (yy * src.width + xx) * 4
           for (let c = 0; c < 4; c++) sum[c] += src.data[i + c]
           n++
@@ -67,7 +75,10 @@ export function writePair(dir: string, scale: number, crop?: number[]): string |
 
 if (import.meta.main) {
   const out = path.resolve(values.out as string)
-  const results = JSON.parse(readFileSync(path.join(out, 'results.json'), 'utf8')) as Record<string, SurfaceResult>
+  const results = JSON.parse(readFileSync(path.join(out, 'results.json'), 'utf8')) as Record<
+    string,
+    SurfaceResult
+  >
   const crop = values.crop?.split(',').map(Number)
   for (const [id, result] of Object.entries(results)) {
     if (positionals.length && !positionals.includes(id)) continue

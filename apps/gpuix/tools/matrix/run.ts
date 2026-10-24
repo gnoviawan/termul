@@ -50,7 +50,9 @@ export const PORTED_PERCEPTUAL_PCT = 2
 const BOOT_TEXT = 'What should we do in alpha?'
 
 function loadResults(): Record<string, SurfaceResult> {
-  return existsSync(RESULTS) ? (JSON.parse(readFileSync(RESULTS, 'utf8')) as Record<string, SurfaceResult>) : {}
+  return existsSync(RESULTS)
+    ? (JSON.parse(readFileSync(RESULTS, 'utf8')) as Record<string, SurfaceResult>)
+    : {}
 }
 
 function selected(): Surface[] {
@@ -58,7 +60,9 @@ function selected(): Surface[] {
   const areas = values.area?.split(',').filter(Boolean)
   const ids = new Set(SURFACES.map((s) => s.id))
   for (const id of only ?? []) if (!ids.has(id)) throw new Error(`unknown surface ${id}`)
-  return SURFACES.filter((s) => (!only || only.includes(s.id)) && (!areas || areas.includes(s.area)))
+  return SURFACES.filter(
+    (s) => (!only || only.includes(s.id)) && (!areas || areas.includes(s.area))
+  )
 }
 
 const slug = (id: string) => id.replace(/[^a-z0-9-]/gi, '-')
@@ -106,7 +110,12 @@ function failedRun(error: unknown, started: number): ClientRun {
   }
 }
 
-async function runWeb(browser: Browser, world: World, surface: Surface, points: Map<string, Point>) {
+async function runWeb(
+  browser: Browser,
+  world: World,
+  surface: Surface,
+  points: Map<string, Point>
+) {
   const deviceId = `m1-${slug(surface.id)}-web`
   await prepareDevice(world, deviceId)
   await setTheme(world, 'termul', 'dark')
@@ -123,7 +132,12 @@ async function runWeb(browser: Browser, world: World, surface: Surface, points: 
       const request = route.request()
       const url = new URL(request.url())
       const file = path.join(DIST_WEB, url.pathname === '/' ? 'index.html' : url.pathname)
-      if (request.method() === 'GET' && file.startsWith(DIST_WEB) && existsSync(file) && !file.endsWith(path.sep)) {
+      if (
+        request.method() === 'GET' &&
+        file.startsWith(DIST_WEB) &&
+        existsSync(file) &&
+        !file.endsWith(path.sep)
+      ) {
         await route.fulfill({ path: file })
         return
       }
@@ -152,7 +166,10 @@ async function runWeb(browser: Browser, world: World, surface: Surface, points: 
       },
       surface.roi
         ? async () => {
-            const locator = page.locator(surface.roi as string).filter({ visible: true }).first()
+            const locator = page
+              .locator(surface.roi as string)
+              .filter({ visible: true })
+              .first()
             return (await locator.count()) > 0 ? locator.boundingBox() : null
           }
         : undefined
@@ -177,14 +194,24 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
     path.join(clientStateDir, 'web-storage', `${host}.json`),
     JSON.stringify({ 'termul.deviceId': deviceId })
   )
-  return withGpuix({ server: world.server, entry, clientStateDir, ...SIZE }, async ({ app, display, grab }) => {
-    await app.getByText(BOOT_TEXT).waitFor({ timeoutMs: READY_TIMEOUT_MS })
-    const x11 = values['x11-input'] ? { display, origin: await windowOrigin(display, SIZE.width, SIZE.height) } : undefined
-    return runSteps(surface, 'gpuix', gpuixDriver(app, points, x11), grab)
-  })
+  return withGpuix(
+    { server: world.server, entry, clientStateDir, ...SIZE },
+    async ({ app, display, grab }) => {
+      await app.getByText(BOOT_TEXT).waitFor({ timeoutMs: READY_TIMEOUT_MS })
+      const x11 = values['x11-input']
+        ? { display, origin: await windowOrigin(display, SIZE.width, SIZE.height) }
+        : undefined
+      return runSteps(surface, 'gpuix', gpuixDriver(app, points, x11), grab)
+    }
+  )
 }
 
-function autoStatus(surface: Surface, web?: ClientRun, gpuix?: ClientRun, diffs: StepDiff[] = []): AutoStatus {
+function autoStatus(
+  surface: Surface,
+  web?: ClientRun,
+  gpuix?: ClientRun,
+  diffs: StepDiff[] = []
+): AutoStatus {
   if (surface.pending) return 'pending-unit'
   if (surface.blocked) return 'blocked'
   if (!web?.ok) return 'unverified'
@@ -194,7 +221,12 @@ function autoStatus(surface: Surface, web?: ClientRun, gpuix?: ClientRun, diffs:
   return pct <= PORTED_PERCEPTUAL_PCT ? 'ported' : 'partial'
 }
 
-function diffSurface(surface: Surface, web: ClientRun, gpuix: ClientRun, rects: (Rect | null)[]): StepDiff[] {
+function diffSurface(
+  surface: Surface,
+  web: ClientRun,
+  gpuix: ClientRun,
+  rects: (Rect | null)[]
+): StepDiff[] {
   const out: StepDiff[] = []
   for (const [i, step] of surface.steps.entries()) {
     const webPng = web.frames[i]
@@ -208,7 +240,11 @@ function diffSurface(surface: Surface, web: ClientRun, gpuix: ClientRun, rects: 
       const files = { web: path.join(dir, 'roi-web.png'), gpuix: path.join(dir, 'roi-gpuix.png') }
       cropPng(webPng, rect, files.web)
       cropPng(gpuixPng, rect, files.gpuix)
-      entry.roi = { rect, diff: diffPngs(files.web, files.gpuix, path.join(dir, 'roi-diff.png')), ...files }
+      entry.roi = {
+        rect,
+        diff: diffPngs(files.web, files.gpuix, path.join(dir, 'roi-diff.png')),
+        ...files
+      }
     }
     out.push(entry)
   }
@@ -227,7 +263,9 @@ function summarize(result: SurfaceResult): string {
   const last = result.diffs.at(-1)
   const diff = last
     ? `full ${last.full.exact.percent.toFixed(1)}/${last.full.perceptual.percent.toFixed(2)}%` +
-      (last.roi ? ` roi ${last.roi.diff.exact.percent.toFixed(1)}/${last.roi.diff.perceptual.percent.toFixed(2)}%` : '')
+      (last.roi
+        ? ` roi ${last.roi.diff.exact.percent.toFixed(1)}/${last.roi.diff.perceptual.percent.toFixed(2)}%`
+        : '')
     : ''
   return `${result.auto.padEnd(12)} ${result.id.padEnd(34)} ${diff}  web[${failed(result.web)}] gpuix[${failed(result.gpuix)}]`
 }
@@ -255,7 +293,12 @@ async function main(): Promise<void> {
   })
   try {
     for (const surface of surfaces) {
-      const result: SurfaceResult = { id: surface.id, ranAt: new Date().toISOString(), auto: 'pending-unit', diffs: [] }
+      const result: SurfaceResult = {
+        id: surface.id,
+        ranAt: new Date().toISOString(),
+        auto: 'pending-unit',
+        diffs: []
+      }
       if (surface.pending || surface.blocked) {
         result.pending = surface.pending
         result.blocked = surface.blocked
@@ -277,7 +320,8 @@ async function main(): Promise<void> {
           } catch (error) {
             result.gpuix = failedRun(error, started)
           }
-          if (result.web && result.gpuix) result.diffs = diffSurface(surface, result.web, result.gpuix, rects)
+          if (result.web && result.gpuix)
+            result.diffs = diffSurface(surface, result.web, result.gpuix, rects)
         }
       }
       result.auto = autoStatus(surface, result.web, result.gpuix, result.diffs)

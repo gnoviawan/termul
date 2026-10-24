@@ -16,9 +16,9 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { addProject, startTestServer, type TestServer } from '../parity/server'
-import { agentConfig, sendPrompt } from '../chat/seed'
 import { SCRIPT_PROMPTS } from '../chat/script'
+import { agentConfig, sendPrompt } from '../chat/seed'
+import { addProject, startTestServer, type TestServer } from '../parity/server'
 import { type AgentConfig, registerAgent } from '../shared/seed'
 import { commandId, connectWs, type WsClient } from '../shared/ws'
 
@@ -49,7 +49,8 @@ const GIT_ID = ['-c', 'user.name=Matrix', '-c', 'user.email=matrix@example.inval
 
 function git(cwd: string, ...args: string[]): string {
   const proc = Bun.spawnSync(['git', ...GIT_ID, ...args], { cwd, stdout: 'pipe', stderr: 'pipe' })
-  if (proc.exitCode !== 0) throw new Error(`git ${args.join(' ')} failed: ${proc.stderr.toString()}`)
+  if (proc.exitCode !== 0)
+    throw new Error(`git ${args.join(' ')} failed: ${proc.stderr.toString()}`)
   return proc.stdout.toString().trim()
 }
 
@@ -100,21 +101,37 @@ export function resetAlphaChanges(dir: string, head: string): void {
   git(dir, 'clean', '-fdq')
   write(dir, 'src/app.ts', APP_TS.replace("'1.0.0'", "'1.1.0'"))
   git(dir, 'add', 'src/app.ts')
-  write(dir, 'README.md', '# alpha\n\nThe matrix project.\n\nSee docs/guide.md.\n\nAn unstaged line.\n')
+  write(
+    dir,
+    'README.md',
+    '# alpha\n\nThe matrix project.\n\nSee docs/guide.md.\n\nAn unstaged line.\n'
+  )
   write(dir, 'notes.txt', 'untracked notes\n')
 }
 
 export async function createWorld(opts: { port: number; root: string }): Promise<World> {
-  const server = await startTestServer({ port: opts.port, token: TOKEN, stateDir: path.join(opts.root, 'server') })
+  const server = await startTestServer({
+    port: opts.port,
+    token: TOKEN,
+    stateDir: path.join(opts.root, 'server')
+  })
   const dirs = Object.fromEntries(
-    (Object.keys(PROJECTS) as ProjectKey[]).map((key) => [key, path.join(opts.root, 'projects', PROJECTS[key].name)])
+    (Object.keys(PROJECTS) as ProjectKey[]).map((key) => [
+      key,
+      path.join(opts.root, 'projects', PROJECTS[key].name)
+    ])
   ) as Record<ProjectKey, string>
   const fetchServer = async (route: string, init: RequestInit = {}) => {
     const res = await fetch(`${server.baseUrl}${route}`, {
       ...init,
-      headers: { Authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json', ...(init.headers ?? {}) }
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        'content-type': 'application/json',
+        ...(init.headers ?? {})
+      }
     })
-    if (!res.ok) throw new Error(`${init.method ?? 'GET'} ${route}: HTTP ${res.status} ${await res.text()}`)
+    if (!res.ok)
+      throw new Error(`${init.method ?? 'GET'} ${route}: HTTP ${res.status} ${await res.text()}`)
     return res
   }
   try {
@@ -126,7 +143,12 @@ export async function createWorld(opts: { port: number; root: string }): Promise
     write(dirs.gamma, 'todo.md', '# gamma\n')
     write(dirs.delta, 'todo.md', '# delta\n')
 
-    const ws = await connectWs({ baseUrl: server.baseUrl, token: TOKEN, deviceId: 'm1-seed', clientInstanceId: 'm1-seed' })
+    const ws = await connectWs({
+      baseUrl: server.baseUrl,
+      token: TOKEN,
+      deviceId: 'm1-seed',
+      clientInstanceId: 'm1-seed'
+    })
     await ws.request('set_default_project', { projectId: PROJECTS.alpha.id })
     const agent = { ...agentConfig(), args: [path.join(import.meta.dir, 'agent.ts')] }
     await registerAgent(ws, 'm1-seed', agent)
@@ -141,7 +163,16 @@ export async function createWorld(opts: { port: number; root: string }): Promise
       { commandId: commandId('session') }
     )
     for (const prompt of SCRIPT_PROMPTS) await sendPrompt(ws, { agentId, sessionId }, prompt)
-    return { server, ws, root: opts.root, dirs, agent, chat: { agentId, sessionId }, alphaHead, fetch: fetchServer }
+    return {
+      server,
+      ws,
+      root: opts.root,
+      dirs,
+      agent,
+      chat: { agentId, sessionId },
+      alphaHead,
+      fetch: fetchServer
+    }
   } catch (error) {
     await server.stop()
     throw error
@@ -151,7 +182,12 @@ export async function createWorld(opts: { port: number; root: string }): Promise
 /** Give a fresh device the scripted agent as its launcher pick. */
 export async function prepareDevice(world: World, deviceId: string): Promise<void> {
   // A device key is writable only from a connection that authenticated as that device.
-  const ws = await connectWs({ baseUrl: world.server.baseUrl, token: TOKEN, deviceId, clientInstanceId: `${deviceId}-seed` })
+  const ws = await connectWs({
+    baseUrl: world.server.baseUrl,
+    token: TOKEN,
+    deviceId,
+    clientInstanceId: `${deviceId}-seed`
+  })
   try {
     await registerAgent(ws, deviceId, world.agent)
   } finally {
@@ -163,7 +199,9 @@ export async function prepareDevice(world: World, deviceId: string): Promise<voi
 export async function ensureProject(world: World, key: ProjectKey): Promise<void> {
   const project = PROJECTS[key]
   const list = (await (await world.fetch('/projects')).json()) as unknown
-  const rows = (Array.isArray(list) ? list : ((list as { projects?: unknown[] }).projects ?? [])) as { id: string }[]
+  const rows = (
+    Array.isArray(list) ? list : ((list as { projects?: unknown[] }).projects ?? [])
+  ) as { id: string }[]
   if (!rows.some((row) => row.id === project.id)) {
     await addProject(world.server, { ...project, path: world.dirs[key] })
     return
@@ -184,12 +222,27 @@ export async function resetAlpha(world: World): Promise<void> {
  * settings store writes it, and put the UI zoom back to 100 %, so a surface
  * that zooms does not leak its zoom into the next client run.
  */
-export async function setTheme(world: World, family: string, mode: 'dark' | 'light'): Promise<void> {
+export async function setTheme(
+  world: World,
+  family: string,
+  mode: 'dark' | 'light'
+): Promise<void> {
   const key = 'shared/lww/settings/app'
-  const current = await world.ws.request<{ revision?: number; value?: { data?: Record<string, unknown> } }>('store_read', { key })
+  const current = await world.ws.request<{
+    revision?: number
+    value?: { data?: Record<string, unknown> }
+  }>('store_read', { key })
   await world.ws.request('store_write', {
     key,
-    value: { _version: 1, data: { ...(current.value?.data ?? {}), colorTheme: family, appearanceMode: mode, uiZoomLevel: 1 } },
+    value: {
+      _version: 1,
+      data: {
+        ...(current.value?.data ?? {}),
+        colorTheme: family,
+        appearanceMode: mode,
+        uiZoomLevel: 1
+      }
+    },
     baseRevision: current.revision ?? 0
   })
 }
