@@ -284,7 +284,14 @@ output and keyboard ownership. Page console lines go to the client log as
   menus, popovers and selects register an occluder while open (boot hands
   them the renderer's `useNativeWebviewOcclusion`, see
   `src/ui/internal/occlusion.ts`), so the webviews unmap until the last
-  overlay closes, as on the desktop. Tooltips do not occlude, as on the web.
+  overlay closes, as on the desktop. Shared code on the compat Radix path
+  occludes through the shared `components/ui` wrappers, as it does on the
+  desktop. Tooltips do not occlude, as on the web.
+- **Bounds.** `useBrowserWebview` resizes the webview from its
+  ResizeObserver callback. The compat ResizeObserver hands the box `onLayout`
+  reported to the read memo (`src/compat/live-reads.ts`), so the callback's
+  `getBoundingClientRect` answers without waiting for another frame. Like the
+  DOM, a move without a size change reports nothing.
 - **Keyboard.** A button press anywhere on the display is watched through
   XInput2 raw events. A press inside a webview gives it the X input focus; a
   press elsewhere in the window, or any GPUIX focus change, gives it back.
@@ -299,11 +306,13 @@ Checks, each under Xvfb with real X input through XTest (GPUIX automation input
 never reaches X) and a test server on a free port in 8190-8199:
 
 - `bun tools/browser/pane-check.ts` drives the real shell: URL bar, link,
-  back and forward, a split and a divider drag (with per-frame tracking from
-  a 30 fps strip capture), Preferences and a dropdown over the webview, keys
-  into the page and back to the composer, two tabs and their WebKit
-  processes, and quitting. PNGs and `results.json` go to
-  `/tmp/gpuix-b2/pane-check`.
+  back and forward, a split, a stepped divider drag (30 fps strip capture)
+  and continuous drags both ways (60 fps strip capture, counting the GPUIX
+  divider positions the webview trails), Preferences with a dropdown and the
+  New tab menu over the webview, keys into the page and back to the
+  composer, two tabs and their WebKit processes, and quitting. It waits for a
+  quiet machine before the divider drags (`waitForQuiet`) and records how
+  busy it was. PNGs and `results.json` go to `/tmp/gpuix-b2/pane-check`.
 - `bun tools/browser/unsupported-check.ts [--case missing-helper|wayland]`
   checks the unsupported state.
 
