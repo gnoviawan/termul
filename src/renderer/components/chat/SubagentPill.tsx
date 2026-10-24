@@ -16,9 +16,12 @@ import {
   countSubagents,
   formatElapsed,
   formatTokens,
+  isBackgroundSubagent,
   type SubagentCounts,
   type SubagentStatus,
   selectCurrentTurnSubagents,
+  subagentChildCalls,
+  subagentDurationMs,
   subagentMetrics,
   subagentStatus,
   subagentTitle,
@@ -183,6 +186,10 @@ export function SubagentPill({
     if (live) lastSelected.current = live
   }, [live])
   const selected = selectedId ? (live ?? lastSelected.current) : null
+  const selectedChildCalls = useMemo(
+    () => (selectedId ? subagentChildCalls(toolCalls, selectedId) : []),
+    [toolCalls, selectedId]
+  )
   const liveSummary = COUNT_KEYS.filter((key) => counts[key] > 0)
     .map((key) => `${counts[key]} ${STATUS_LABEL[key]}`)
     .join(', ')
@@ -193,15 +200,7 @@ export function SubagentPill({
         const status = subagentStatus(tc, turnActive)
         const type = subagentType(tc)
         const metrics = subagentMetrics(tc)
-        const started = typeof tc.timestamp === 'number' ? tc.timestamp : null
-        const settledAt = endedAt[tc.toolCallId]
-        const durationMs =
-          status === 'running'
-            ? started === null
-              ? undefined
-              : now - started
-            : (metrics.totalDurationMs ??
-              (started !== null && settledAt !== undefined ? settledAt - started : undefined))
+        const durationMs = subagentDurationMs(tc, status, now, endedAt[tc.toolCallId])
         return (
           <li key={tc.toolCallId}>
             <button
@@ -223,6 +222,11 @@ export function SubagentPill({
                 {subagentTitle(tc)}
                 {type && <span className="ml-1.5 text-muted-foreground">{type}</span>}
               </span>
+              {isBackgroundSubagent(tc) && (
+                <span className="shrink-0 rounded-sm border border-border px-1 text-2xs text-muted-foreground">
+                  background
+                </span>
+              )}
               <span className="shrink-0 tabular-nums text-muted-foreground">
                 {durationMs !== undefined && formatElapsed(durationMs)}
                 {status !== 'running' && metrics.totalTokens !== undefined && (
@@ -325,6 +329,7 @@ export function SubagentPill({
       {selected && (
         <SubagentDetailsDialog
           toolCall={selected}
+          childToolCalls={selectedChildCalls}
           parentTurnActive={turnActive}
           filePathContext={filePathContext}
           open

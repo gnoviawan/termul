@@ -1,5 +1,6 @@
 //! Tauri IPC for Agent Skills discovery.
 
+use super::files::{list_skill_files, SkillFileEntry};
 use super::{list_agent_skills, read_agent_skill, AgentSkillContent, AgentSkillSummary};
 
 #[tauri::command]
@@ -15,4 +16,11 @@ pub async fn read_agent_skill_cmd(
     project_root: Option<String>,
 ) -> Result<AgentSkillContent, String> {
     read_agent_skill(&name, project_root.as_deref())
+}
+
+#[tauri::command]
+pub async fn list_skill_files_cmd(
+    project_root: Option<String>,
+) -> Result<Vec<SkillFileEntry>, String> {
+    list_skill_files(project_root.as_deref())
 }

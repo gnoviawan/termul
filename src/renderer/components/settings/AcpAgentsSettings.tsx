@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { CustomAcpAgentDialog, exportAgentConfig } from '@/components/agents/CustomAcpAgentDialog'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Clipboard, Plus, RefreshCw, Search } from '@/components/icons'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { type StatusTone, StatusWord } from '@/components/settings/StatusWord'
@@ -159,15 +160,18 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
         >
           Save path
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          disabled={saving}
-          onClick={() => void clearPath()}
-        >
-          Clear saved path
-        </Button>
+        {/* Custom agents are removed from the row's Remove action (with confirm). */}
+        {!isCustomAgentEntry(entry) && (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={saving}
+            onClick={() => void clearPath()}
+          >
+            Clear saved path
+          </Button>
+        )}
       </div>
     </div>
   )
@@ -184,6 +188,9 @@ interface AgentRowProps {
 
 function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX.Element {
   const warmState = useConfigWarmState(entry.configId)
+  const deleteAgentConfig = useAcpStore((s) => s.deleteAgentConfig)
+  const [removeOpen, setRemoveOpen] = useState(false)
+  const [removing, setRemoving] = useState(false)
   const iconEntry = useMemo(() => findBundledIconByKey(`acp:${entry.agent.id}`), [entry.agent.id])
   // Prefer a persisted custom icon (bundled or uploaded) over the catalog.
   const customIcon = entry.config?.icon
@@ -227,6 +234,21 @@ function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX
         message: `Failed to copy custom agent config "${entry.agent.name}": ${message}`
       })
       toast.error('Failed to copy JSON to clipboard.')
+    }
+  }
+
+  const handleRemove = async (): Promise<void> => {
+    if (!entry.config) return
+    setRemoving(true)
+    try {
+      // Delete by the persisted record's `id`, same as the path editor's clear.
+      await deleteAgentConfig(entry.config.id)
+      toast.success(`${entry.agent.name} removed`)
+      setRemoveOpen(false)
+    } catch (err) {
+      toast.error(String(err))
+    } finally {
+      setRemoving(false)
     }
   }
 
@@ -317,11 +339,31 @@ function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX
           </p>
         )}
         {isCustomAgentEntry(entry) && entry.config && (
-          <div className="mt-1.5 flex items-center">
+          <div className="mt-1.5 flex items-center gap-1">
             <Button type="button" size="sm" variant="ghost" onClick={() => void handleCopyJson()}>
               <Clipboard size={13} className="mr-1.5" />
               Copy JSON
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={removing}
+              onClick={() => setRemoveOpen(true)}
+            >
+              Remove
+            </Button>
+            <ConfirmDialog
+              isOpen={removeOpen}
+              title="Remove custom agent"
+              message={`Remove "${entry.agent.name}" from Agent chats? Its saved configuration will be deleted. This action cannot be undone.`}
+              confirmLabel="Remove"
+              cancelLabel="Cancel"
+              variant="danger"
+              isLoading={removing}
+              onConfirm={() => void handleRemove()}
+              onCancel={() => setRemoveOpen(false)}
+            />
           </div>
         )}
       </div>

@@ -39,8 +39,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::acp::session_persistence::{
-    is_file_change_kind, last_unmatched_user_prompt, PersistedEventRecord, PersistedSessionStatus,
-    SessionMetadata, MAX_SUMMARY_PATH_CHARS,
+    is_file_change_kind, is_subagent_chunk, last_unmatched_user_prompt, PersistedEventRecord,
+    PersistedSessionStatus, SessionMetadata, MAX_SUMMARY_PATH_CHARS,
 };
 
 /// The renderer session-metadata shape (`SessionIndexEntry` in
@@ -649,6 +649,7 @@ pub(crate) fn fold_session_records(
                     handoff_boundary: false,
                 });
             }
+            "message_chunk" if is_subagent_chunk(&record.payload) => {}
             "message_chunk" => {
                 let role = if record.payload.get("role").and_then(Value::as_str) == Some("thought")
                 {

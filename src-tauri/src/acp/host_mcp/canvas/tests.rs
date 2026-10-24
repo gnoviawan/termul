@@ -336,7 +336,7 @@ fn errors_an_agent_can_recover_from_tell_it_the_next_step() {
             CanvasErrorCode::CanvasOpenElsewhere,
             "another Termul window",
         ),
-        (CanvasErrorCode::CanvasTimeout, "retry once"),
+        (CanvasErrorCode::CanvasTimeout, "do not retry it blindly"),
         (CanvasErrorCode::UnsupportedInKiosk, "save_file"),
     ];
     for (code, step) in actionable {
@@ -354,6 +354,28 @@ fn errors_an_agent_can_recover_from_tell_it_the_next_step() {
     for code in [CanvasErrorCode::UnknownMethod, CanvasErrorCode::EngineError] {
         let encoded = CanvasError::new(code, "bad").to_backend_string();
         assert!(encoded.ends_with(r#""message":"bad"}"#), "{encoded}");
+    }
+}
+
+#[test]
+fn a_timeout_advises_by_tool_and_only_reads_are_retried_as_is() {
+    let late = CanvasError::new(CanvasErrorCode::CanvasTimeout, "late");
+    let advice = [
+        ("export", "smaller `scale` or `size`"),
+        ("screenshot", "smaller `maxSize` or `scale`"),
+        ("batch", "read the current state"),
+        ("create_node", "read the current state"),
+        ("set_properties", "read the current state"),
+        ("run_command", "read the current state"),
+        ("get_node", "retry once"),
+        ("inspect_document", "retry once"),
+    ];
+    for (tool, hint) in advice {
+        let encoded = late.to_backend_string_for(Some(tool));
+        assert!(encoded.contains(hint), "{tool}: {encoded}");
+        if hint != "retry once" {
+            assert!(!encoded.contains("retry once"), "{tool}: {encoded}");
+        }
     }
 }
 

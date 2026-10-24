@@ -8,6 +8,7 @@ use figcraft_mcp::Backend;
 use serde_json::{json, Value};
 
 use super::*;
+use crate::acp::host_mcp::canvas::CanvasCallFrame;
 use crate::acp::host_mcp::gateway_harness::{mount_renderer, Harness};
 
 fn error_of(result: Result<Value, String>) -> Value {
@@ -149,7 +150,9 @@ fn render_png_asks_host_render_png_and_decodes_its_base64() {
     });
     let mut bridge = Bridge::new(configs[0].clone());
     assert_eq!(bridge.render_png(&[7], 2.0).unwrap(), png.to_vec());
-    let frame = seen.recv_timeout(Duration::from_secs(5)).unwrap();
+    let frame = std::iter::from_fn(|| seen.recv_timeout(Duration::from_secs(5)).ok())
+        .find(|frame| frame.method != "node.get")
+        .expect("the render reached the editor");
     assert_eq!(frame.method, "host.renderPng");
     let params: Value = serde_json::from_str(&frame.params).unwrap();
     assert_eq!(params, json!({"scale": 2.0, "ids": [7]}));
@@ -208,8 +211,9 @@ fn export_with_a_project_path_writes_the_inline_bytes_there() {
         std::fs::read(harness.cwd.join("out/hero.png")).unwrap(),
         png
     );
-    let frame = seen.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(frame.method, "engine.execute");
+    let frame = std::iter::from_fn(|| seen.recv_timeout(Duration::from_secs(5)).ok())
+        .find(|frame| frame.method == "engine.execute")
+        .expect("the export reached the editor");
     let sent: Value = serde_json::from_str(&frame.params).unwrap();
     assert_eq!(
         sent,
@@ -224,7 +228,10 @@ fn a_link_planted_while_the_editor_exports_does_not_redirect_the_write() {
     let outside = outside_dir.path().to_path_buf();
     let planted = harness.cwd.join("out");
     let (link_target, link) = (outside.clone(), planted.clone());
-    let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, move |_| {
+    let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, move |frame| {
+        if frame.method != "engine.execute" {
+            return Some(Ok("{}".to_string()));
+        }
         link_dir(&link_target, &link).ok()?;
         Some(Ok(json!({"format": "svg", "data": "PHN2Zy8+"}).to_string()))
     });
@@ -403,4 +410,128 @@ fn an_oversize_request_is_an_engine_error_naming_the_limit_not_a_closed_canvas()
             json!({ "params": { "text": "a".repeat(limit / 2) } }),
         )
         .expect("a request under the limit reaches the editor");
+}
+
+/// An editor whose layer 1 is 100x100: an export at `scale: 3` is answered
+/// only by the test (it outlasts its wait), any other export at once with
+/// `quick`.
+fn slow_large_exports(
+    harness: &Harness,
+    quick: &'static [u8],
+) -> std::sync::mpsc::Receiver<CanvasCallFrame> {
+    let router = harness.router();
+    router.set_call_timeout(Duration::from_millis(150));
+    mount_renderer(&router, "conn-a", "proj-1", 1, move |frame| {
+        let params: Value = serde_json::from_str(&frame.params).unwrap();
+        match frame.method.as_str() {
+            "node.get" => Some(Ok(json!({
+                "id": 1,
+                "absoluteBounds": {"x": 0, "y": 0, "width": 100, "height": 100}
+            })
+            .to_string())),
+            "engine.execute" if params["params"]["scale"] == 3.0 => None,
+            "engine.execute" => Some(Ok(export_reply(quick))),
+            _ => None,
+        }
+    })
+}
+
+fn export_reply(bytes: &[u8]) -> String {
+    let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+    json!({"format": "png", "data": data}).to_string()
+}
+
+fn slow_export(seen: &std::sync::mpsc::Receiver<CanvasCallFrame>) -> CanvasCallFrame {
+    std::iter::from_fn(|| seen.recv_timeout(Duration::from_secs(5)).ok())
+        .find(|frame| frame.method == "engine.execute")
+        .expect("the export reached the editor")
+}
+
+/// The file once it exists, waiting up to five seconds for it.
+fn written(path: &std::path::Path) -> Option<Vec<u8>> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if let Ok(bytes) = std::fs::read(path) {
+            return Some(bytes);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    None
+}
+
+#[test]
+fn an_export_that_outlasts_its_wait_is_still_written_when_it_finishes() {
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let seen = slow_large_exports(&harness, b"quick");
+    let mut bridge = Bridge::new(configs[0].clone()).with_tool("export");
+
+    let result = figcraft_mcp::call_tool(
+        &mut bridge,
+        "export",
+        &json!({"ids": [1], "scale": 3, "path": "out/big.png"}),
+    );
+
+    let error = tool_error(&result);
+    assert_eq!(error["code"], "CANVAS_TIMEOUT");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("writes it to `out/big.png`"), "{message}");
+    assert!(message.contains("smaller `scale`"), "{message}");
+    assert!(!message.contains("retry once"), "{message}");
+    let target = harness.cwd.join("out/big.png");
+    assert!(
+        !target.exists(),
+        "nothing is written before the editor finishes"
+    );
+
+    let frame = slow_export(&seen);
+    assert!(harness.router().reply(
+        "conn-a",
+        frame.call_id,
+        frame.mount_seq,
+        Ok(export_reply(b"finished late"))
+    ));
+
+    assert_eq!(written(&target).as_deref(), Some(&b"finished late"[..]));
+}
+
+#[test]
+fn a_late_export_never_replaces_a_newer_export_to_the_same_path() {
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let seen = slow_large_exports(&harness, b"newer and smaller");
+    let mut bridge = Bridge::new(configs[0].clone()).with_tool("export");
+    let large = json!({"ids": [1], "scale": 3, "path": "out/hero.png"});
+    let result = figcraft_mcp::call_tool(&mut bridge, "export", &large);
+    assert_eq!(tool_error(&result)["code"], "CANVAS_TIMEOUT");
+    let late = slow_export(&seen);
+
+    let smaller = json!({"ids": [1], "scale": 1, "path": "out/hero.png"});
+    let result = figcraft_mcp::call_tool(&mut bridge, "export", &smaller);
+    assert_eq!(tool_json(&result)["path"], "out/hero.png");
+    harness.router().reply(
+        "conn-a",
+        late.call_id,
+        late.mount_seq,
+        Ok(export_reply(b"older and larger")),
+    );
+    std::thread::sleep(Duration::from_millis(500));
+
+    assert_eq!(
+        std::fs::read(harness.cwd.join("out/hero.png")).unwrap(),
+        b"newer and smaller"
+    );
+}
+
+#[test]
+fn a_timed_out_export_without_a_path_advises_a_smaller_size_not_a_retry() {
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let _seen = slow_large_exports(&harness, b"quick");
+    let mut bridge = Bridge::new(configs[0].clone()).with_tool("export");
+
+    let result = figcraft_mcp::call_tool(&mut bridge, "export", &json!({"ids": [1], "scale": 3}));
+
+    let error = tool_error(&result);
+    assert_eq!(error["code"], "CANVAS_TIMEOUT");
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("smaller `scale` or `size`"), "{message}");
+    assert!(!message.contains("retry once"), "{message}");
 }

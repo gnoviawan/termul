@@ -379,6 +379,9 @@ vi.mock('./ChatChangedFilesPanel', () => ({
     return <div data-testid="changed-files-stub" />
   }
 }))
+vi.mock('./claude-account/ClaudeLimitNotice', () => ({
+  ClaudeLimitNotice: () => <div data-testid="claude-limit-notice-stub" />
+}))
 const { chatInputBarPropsRef } = vi.hoisted(() => ({
   chatInputBarPropsRef: {
     current: [] as Array<{
@@ -1564,6 +1567,16 @@ describe('AgentChatPanel ChatChangedFilesPanel mounting', () => {
     sessionRef.current = mockAcpSession({ id: 's2', cwd: '/w', status: 'closed' })
     render(<AgentChatPanel sessionId="s2" isVisible />)
     expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
+  })
+
+  // The panel's negative bottom margin tucks it under the composer, so a notice
+  // between the two is painted over and its "Switch to" button cannot be clicked.
+  it('renders the Claude limit notice above the changed-files panel', () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    const notice = screen.getByTestId('claude-limit-notice-stub')
+    const panel = screen.getByTestId('changed-files-stub')
+    expect(notice.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
 

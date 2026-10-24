@@ -53,17 +53,24 @@ impl Connection {
 struct Pending {
     holder_id: String,
     mount_seq: u64,
+    sent_at: Instant,
+    deadline: Instant,
+    /// Whether the call feeds the crash detector ([`Route::watched`]).
+    watched: bool,
     /// The leading slices of a long reply, which arrive ahead of its last one.
     slices: String,
     responder: oneshot::Sender<CanvasOutcome>,
 }
+
+type Waiting = Arc<Mutex<HashMap<u64, Pending>>>;
 
 /// The most watched calls remembered after they timed out, for a late
 /// answer to prove the editor alive.
 const TIMED_OUT_REMEMBERED: usize = 256;
 
 pub(super) struct Calls {
-    waiting: Mutex<HashMap<u64, Pending>>,
+    /// Shared with each [`LateAnswer`], which removes its call when dropped.
+    waiting: Waiting,
     /// Watched calls that timed out, by call id: the connection and mount
     /// they went to.
     timed_out: Mutex<HashMap<u64, (String, u64)>>,
@@ -75,7 +82,7 @@ pub(super) struct Calls {
 impl Default for Calls {
     fn default() -> Self {
         Self {
-            waiting: Mutex::default(),
+            waiting: Waiting::default(),
             timed_out: Mutex::default(),
             next_id: AtomicU64::default(),
             reply_limit: AtomicU64::new(MAX_REPLY_BYTES),
@@ -86,7 +93,8 @@ impl Default for Calls {
 /// Who is asking. Agent calls are refused while the mount quiesces and are
 /// counted so the quiesce can wait them out; the host's own calls belong to
 /// the close sequence and name the mount they expect. Presence lookups
-/// follow an agent call already answered: they reach only a connected
+/// follow an agent call already answered, and render-budget lookups size an
+/// agent call about to be sent: they reach only a connected
 /// editor, and never count as activity, as a call the quiesce waits for, or
 /// toward the crash timeouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +154,47 @@ fn not_running() -> CanvasError {
         CanvasErrorCode::CanvasClosed,
         "the canvas is not running in any window",
     )
+}
+
+/// The answer to a call that timed out at the gateway while the editor may
+/// still be working on it (an export with a `path` still gets written).
+/// Dropping it stops waiting.
+pub struct LateAnswer {
+    call_id: u64,
+    waiting: Waiting,
+    answer: oneshot::Receiver<CanvasOutcome>,
+    gone: watch::Receiver<()>,
+}
+
+impl LateAnswer {
+    /// The editor's answer, or `None` when its connection ended or `limit`
+    /// passed first.
+    pub async fn wait(mut self, limit: Duration) -> Option<CanvasOutcome> {
+        tokio::select! {
+            answered = &mut self.answer => answered.ok(),
+            _ = self.gone.changed() => None,
+            () = tokio::time::sleep(limit) => None,
+        }
+    }
+}
+
+impl Drop for LateAnswer {
+    fn drop(&mut self) {
+        self.waiting.lock().remove(&self.call_id);
+    }
+}
+
+/// A call that failed; `late` is set when it timed out and the caller asked
+/// to keep waiting for the editor's answer.
+pub struct CallFailed {
+    pub error: CanvasError,
+    pub late: Option<LateAnswer>,
+}
+
+impl From<CanvasError> for CallFailed {
+    fn from(error: CanvasError) -> Self {
+        Self { error, late: None }
+    }
 }
 
 fn timed_out(timeout: Duration) -> CanvasError {
@@ -361,12 +410,45 @@ impl CanvasPersistence {
         params: String,
         timeout: Duration,
     ) -> CanvasOutcome {
+        self.agent_call(project_id, method, params, timeout, false)
+            .await
+            .map_err(|failed| failed.error)
+    }
+
+    /// [`Self::call`], except that a call the editor received but did not
+    /// answer in time hands back a [`LateAnswer`] for its answer.
+    pub async fn call_keeping_late(
+        &self,
+        project_id: &str,
+        method: &str,
+        params: String,
+        timeout: Duration,
+    ) -> Result<String, CallFailed> {
+        self.agent_call(project_id, method, params, timeout, true)
+            .await
+    }
+
+    async fn agent_call(
+        &self,
+        project_id: &str,
+        method: &str,
+        params: String,
+        timeout: Duration,
+        keep_late: bool,
+    ) -> Result<String, CallFailed> {
         let deadline = Instant::now() + timeout;
         loop {
             match self.route(project_id, Caller::Agent)? {
                 Routed::Ready(route) => {
                     return self
-                        .forward(project_id, route, method, params, (deadline, timeout))
+                        .forward(
+                            project_id,
+                            route,
+                            method,
+                            params,
+                            (deadline, timeout),
+                            keep_late,
+                        )
                         .await;
                 }
                 Routed::Reconnecting {
@@ -378,7 +460,7 @@ impl CanvasPersistence {
                         () = tokio::time::sleep_until(grace_ends.min(deadline)) => {}
                     }
                     if Instant::now() >= deadline {
-                        return Err(timed_out(timeout));
+                        return Err(timed_out(timeout).into());
                     }
                 }
             }
@@ -406,12 +488,15 @@ impl CanvasPersistence {
                 Instant::now() + self.host_call_timeout,
                 self.host_call_timeout,
             ),
+            false,
         )
         .await
+        .map_err(|failed| failed.error)
     }
 
     /// A presence lookup (`node.get`, `document.inspect`) for an agent call
-    /// already answered. It goes only to a connected editor, never waits out
+    /// already answered, or the bounds lookup that sizes a render's wait
+    /// (`host_mcp::canvas_budget`). It goes only to a connected editor, never waits out
     /// a reconnect, and leaves activity, the quiesce and the crash count
     /// alone (see [`Caller::Presence`]).
     pub async fn presence_call(
@@ -430,8 +515,10 @@ impl CanvasPersistence {
             method,
             params,
             (Instant::now() + timeout, timeout),
+            false,
         )
         .await
+        .map_err(|failed| failed.error)
     }
 
     /// A presence notice (`host.guest*`) to the connected editor of
@@ -461,7 +548,8 @@ impl CanvasPersistence {
         method: &str,
         params: String,
         (deadline, timeout): (Instant, Duration),
-    ) -> CanvasOutcome {
+        keep_late: bool,
+    ) -> Result<String, CallFailed> {
         let Route {
             mount_seq,
             holder,
@@ -470,25 +558,29 @@ impl CanvasPersistence {
             watched,
         } = route;
         let call_id = self.calls.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let (responder, waiting) = oneshot::channel();
+        let (responder, mut waiting) = oneshot::channel();
+        let sent_at = Instant::now();
         self.calls.waiting.lock().insert(
             call_id,
             Pending {
                 holder_id: holder.id().to_string(),
                 mount_seq,
+                sent_at,
+                deadline,
+                watched,
                 slices: String::new(),
                 responder,
             },
         );
         let frame = CanvasCallFrame::new(call_id, project_id, mount_seq, method, params)
-            .expiring_in(deadline.saturating_duration_since(Instant::now()));
-        let sent_at = Instant::now();
+            .expiring_in(deadline.saturating_duration_since(sent_at));
         if !holder.deliver(frame) {
             self.calls.waiting.lock().remove(&call_id);
             return Err(refused(
                 CanvasErrorCode::CanvasClosed,
                 "the canvas renderer is not reachable",
-            ));
+            )
+            .into());
         }
         let gone_before_answer = || {
             Err(refused(
@@ -497,7 +589,7 @@ impl CanvasPersistence {
             ))
         };
         let outcome = tokio::select! {
-            answered = waiting => match answered {
+            answered = &mut waiting => match answered {
                 Ok(outcome) => {
                     if watched && answered_by_editor(&outcome) {
                         self.call_answered(project_id, mount_seq);
@@ -508,16 +600,29 @@ impl CanvasPersistence {
             },
             _ = gone.changed() => gone_before_answer(),
             () = tokio::time::sleep_until(deadline) => {
-                self.calls.waiting.lock().remove(&call_id);
+                if !keep_late {
+                    self.calls.waiting.lock().remove(&call_id);
+                }
                 if watched {
                     self.remember_timed_out(call_id, holder.id(), mount_seq);
-                    self.call_timed_out(project_id, mount_seq, sent_at);
+                    if !self.calls.busy_before(holder.id(), mount_seq, sent_at) {
+                        self.call_timed_out(project_id, mount_seq, sent_at);
+                    }
                 }
-                Err(timed_out(timeout))
+                let late = keep_late.then(|| LateAnswer {
+                    call_id,
+                    waiting: Arc::clone(&self.calls.waiting),
+                    answer: waiting,
+                    gone,
+                });
+                return Err(CallFailed {
+                    error: timed_out(timeout),
+                    late,
+                });
             }
         };
         self.calls.waiting.lock().remove(&call_id);
-        outcome
+        outcome.map_err(CallFailed::from)
     }
 
     /// A host notice to the renderer on `holder`, on the call channel so it
@@ -585,13 +690,13 @@ impl CanvasPersistence {
                 _ => None,
             }
         };
-        let Some(call) = pending else {
-            let late = self.calls.timed_out.lock().remove(&call_id);
-            if let Some((sent_to, sent_seq)) = late {
-                if sent_to == holder_id && sent_seq == mount_seq && answered_by_editor(&outcome) {
-                    self.late_answer(holder_id, mount_seq);
-                }
+        let late = self.calls.timed_out.lock().remove(&call_id);
+        if let Some((sent_to, sent_seq)) = late {
+            if sent_to == holder_id && sent_seq == mount_seq && answered_by_editor(&outcome) {
+                self.late_answer(holder_id, mount_seq);
             }
+        }
+        let Some(call) = pending else {
             return ReplyMatch::NotWaiting;
         };
         if call.mount_seq == mount_seq {
@@ -610,6 +715,24 @@ impl CanvasPersistence {
                 sent_to: call.mount_seq,
             }
         }
+    }
+}
+
+impl Calls {
+    /// Whether a watched call sent to the same editor before `sent_at` is
+    /// still inside its own wait. The editor runs one call at a time, so a
+    /// call queued behind a long render times out while the editor works,
+    /// which is not a stall. Calls that all wait the same time never overlap
+    /// this way, so for them the crash count is unchanged.
+    fn busy_before(&self, holder_id: &str, mount_seq: u64, sent_at: Instant) -> bool {
+        let now = Instant::now();
+        self.waiting.lock().values().any(|call| {
+            call.watched
+                && call.holder_id == holder_id
+                && call.mount_seq == mount_seq
+                && call.sent_at < sent_at
+                && call.deadline > now
+        })
     }
 }
 

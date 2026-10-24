@@ -116,6 +116,7 @@ import {
   sessionReopenGenerations,
   terminalAssistCollectors
 } from '../shared-state'
+import { cancelRunningSubagents } from '../subagent-lifecycle'
 import {
   type AcpState,
   ChatLaunchCancelledError,
@@ -2507,6 +2508,14 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     // new one. That close is about the old process, so the chat ignores it.
     const owner = get().sessions[e.sessionId]?.agentId
     if (e.agentId && owner && owner !== e.agentId) return
+    const endedAt = Date.now()
+    // A buffered tool update can still say `running`. Apply it first, then
+    // cancel, so the flush below cannot restore the running state.
+    flushCoalescedSync()
+    set((s) => {
+      const toolCalls = cancelRunningSubagents(s.toolCalls, [e.sessionId], endedAt)
+      return toolCalls === s.toolCalls ? {} : { toolCalls }
+    })
     if (reloadInFlight.has(e.sessionId)) {
       // A reload asked the old process to release this session. Keep the
       // transcript and do not cancel the reopen that follows. Once the chat

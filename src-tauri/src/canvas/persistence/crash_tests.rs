@@ -329,3 +329,65 @@ async fn a_late_answer_to_a_timed_out_call_resets_the_count() {
         "the late answer proved the editor alive"
     );
 }
+
+#[tokio::test]
+async fn calls_queued_behind_a_render_still_inside_its_wait_are_not_a_crash() {
+    let mut editor = Editor::mounted(true);
+    let mounts = Arc::clone(&editor.mounts);
+    let render = tokio::spawn(async move {
+        mounts
+            .call(
+                PROJECT,
+                "host.renderPng",
+                "{}".into(),
+                Duration::from_secs(30),
+            )
+            .await
+    });
+    editor
+        .frames
+        .recv()
+        .await
+        .expect("the render reached the renderer");
+
+    for _ in 0..4 {
+        editor.time_out().await;
+    }
+
+    assert!(editor.still_mounted(), "the editor is busy rendering");
+    render.abort();
+}
+
+#[tokio::test]
+async fn once_a_render_outlasts_its_own_wait_timeouts_count_again() {
+    let mut editor = Editor::mounted(true);
+    let mounts = Arc::clone(&editor.mounts);
+    let render = tokio::spawn(async move {
+        mounts
+            .call(
+                PROJECT,
+                "host.renderPng",
+                "{}".into(),
+                Duration::from_millis(300),
+            )
+            .await
+    });
+    editor
+        .frames
+        .recv()
+        .await
+        .expect("the render reached the renderer");
+    editor.time_out().await;
+    assert_eq!(
+        render.await.unwrap().unwrap_err().code,
+        CanvasErrorCode::CanvasTimeout
+    );
+
+    editor.time_out().await;
+    editor.time_out().await;
+
+    let notice = tokio::time::timeout(Duration::from_secs(2), editor.remounted_notice())
+        .await
+        .expect("the render and two calls after it are three in a row");
+    assert!(notice.reason.contains("3 consecutive calls timed out"));
+}

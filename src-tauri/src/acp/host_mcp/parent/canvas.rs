@@ -2,14 +2,27 @@
 //! kiosk file-tool policy, and hand the call to the canvas router (spine
 //! AD-18, AD-21).
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
 use base64::Engine as _;
+use parking_lot::Mutex;
 use serde_json::Value;
 
 use super::HostPlanServer;
 use crate::acp::host_mcp::canvas::{CanvasError, CanvasErrorCode, CanvasOutcome};
+use crate::acp::host_mcp::canvas_budget;
 use crate::acp::host_mcp::canvas_policy::{self, CanvasRoute, ProjectFile};
 use crate::acp::host_mcp::presence::CallOrigin;
 use crate::acp::host_mcp::FrameReply;
+use crate::canvas::persistence::{CallFailed, LateAnswer};
+
+/// How long an export with a `path` that timed out may still finish and be
+/// written.
+pub(super) const LATE_EXPORT_LIMIT: Duration = Duration::from_secs(600);
 
 /// The project a session works in: the router key and the folder exports
 /// are written under (the session's working directory).
@@ -55,7 +68,10 @@ impl HostPlanServer {
         let outcome = match route {
             CanvasRoute::Forward => {
                 log::debug!("[canvas-gateway] {tool} {method} for project {project_id}");
-                self.canvas.call(project_id, &method, params).await
+                let timeout = self.call_budget(project_id, &method, parsed.as_ref()).await;
+                self.canvas
+                    .call_within(project_id, &method, params, timeout)
+                    .await
             }
             CanvasRoute::HostSave => {
                 log::info!("[canvas-gateway] {tool} host save for project {project_id}");
@@ -90,10 +106,28 @@ impl HostPlanServer {
         }
     }
 
+    /// How long `method` may take ([`canvas_budget`]).
+    async fn call_budget(
+        &self,
+        project_id: &str,
+        method: &str,
+        params: Option<&Value>,
+    ) -> Duration {
+        canvas_budget::call_budget(
+            self.canvas.mounts(),
+            project_id,
+            method,
+            params,
+            self.canvas.call_timeout(),
+        )
+        .await
+    }
+
     /// Export inline, then write the bytes to `path` inside the project. The
     /// path is checked before the editor runs, so a bad one costs no export,
     /// and again at the write. The reply is upstream's export-to-path result
-    /// with the relative path.
+    /// with the relative path. An export that outlasts its wait is still
+    /// written when the editor finishes it ([`Self::write_late`]).
     async fn export_to(
         &self,
         tool: &str,
@@ -105,10 +139,32 @@ impl HostPlanServer {
         let file = canvas_policy::resolve_project_file(&scope.root, path).inspect_err(|_| {
             log::info!("[canvas-gateway] {tool} export path refused for project {project_id}");
         })?;
-        let result = self
+        let timeout = self
+            .call_budget(project_id, "engine.execute", Some(execute))
+            .await;
+        let claim = self.exports.claim(&file.absolute);
+        let result = match self
             .canvas
-            .call(project_id, "engine.execute", execute.to_string())
-            .await?;
+            .call_keeping_late(project_id, "engine.execute", execute.to_string(), timeout)
+            .await
+        {
+            Ok(result) => result,
+            Err(CallFailed {
+                error,
+                late: Some(late),
+            }) => {
+                let message = format!(
+                    "{}. The export is still running: Termul writes it to `{}` if it finishes \
+                     within {} minutes and no newer export to that path starts first",
+                    error.message,
+                    file.relative,
+                    LATE_EXPORT_LIMIT.as_secs() / 60
+                );
+                self.write_late(tool, scope, path, file, late, claim);
+                return Err(CanvasError::new(error.code, message));
+            }
+            Err(failed) => return Err(failed.error),
+        };
         let (reply, bytes) = written_export(&result, &file)?;
         let size = bytes.len();
         let root = scope.root.clone();
@@ -126,6 +182,66 @@ impl HostPlanServer {
             file.relative
         );
         Ok(reply.to_string())
+    }
+
+    /// Wait for the late answer of an export that timed out and write it to
+    /// `path`, unless a newer export to the same file started meanwhile.
+    fn write_late(
+        &self,
+        tool: &str,
+        scope: &SessionScope,
+        path: &str,
+        file: ProjectFile,
+        late: LateAnswer,
+        claim: ExportClaim,
+    ) {
+        let tool = tool.to_string();
+        let project_id = scope.project_id.clone();
+        let root = scope.root.clone();
+        let requested = path.to_string();
+        tokio::spawn(async move {
+            let relative = file.relative.clone();
+            let outcome = late.wait(LATE_EXPORT_LIMIT).await;
+            let bytes = match outcome.map(|result| written_export(&result?, &file)) {
+                Some(Ok((_, bytes))) => bytes,
+                Some(Err(error)) => {
+                    log::info!(
+                        "[canvas-gateway] {tool} late export {relative} for project {project_id} failed: {} ({})",
+                        error.code.as_str(),
+                        error.message
+                    );
+                    return;
+                }
+                None => {
+                    log::info!(
+                        "[canvas-gateway] {tool} late export {relative} for project {project_id} never finished"
+                    );
+                    return;
+                }
+            };
+            let size = bytes.len();
+            let written = tokio::task::spawn_blocking(move || {
+                claim.write_if_newest(|| {
+                    canvas_policy::write_project_file(&root, &requested, &bytes)
+                })
+            })
+            .await;
+            match written {
+                Ok(Some(Ok(_))) => log::info!(
+                    "[canvas-gateway] {tool} wrote late export {relative} ({size} bytes) for project {project_id}"
+                ),
+                Ok(None) => log::info!(
+                    "[canvas-gateway] {tool} late export {relative} for project {project_id} dropped: a newer export to it started"
+                ),
+                Ok(Some(Err(error))) => log::info!(
+                    "[canvas-gateway] {tool} late export write {relative} refused for project {project_id}: {}",
+                    error.message
+                ),
+                Err(error) => log::warn!(
+                    "[canvas-gateway] {tool} late export write {relative} stopped for project {project_id}: {error}"
+                ),
+            }
+        });
     }
 
     /// The session's project and working directory, read from the session
@@ -159,6 +275,52 @@ fn written_export(result: &str, file: &ProjectFile) -> Result<(Value, Vec<u8>), 
     fields.insert("path".to_string(), Value::String(file.relative.clone()));
     fields.insert("bytes".to_string(), Value::from(bytes.len()));
     Ok((reply, bytes))
+}
+
+/// The newest export to each project file, so a late export never replaces
+/// a file that a newer export to the same path wrote or is about to write.
+#[derive(Default)]
+pub(super) struct ExportClaims {
+    newest: Mutex<HashMap<PathBuf, u64>>,
+    next: AtomicU64,
+}
+
+impl ExportClaims {
+    /// Make an export to `path` the newest one.
+    fn claim(self: &Arc<Self>, path: &Path) -> ExportClaim {
+        let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        self.newest.lock().insert(path.to_path_buf(), id);
+        ExportClaim {
+            claims: Arc::clone(self),
+            path: path.to_path_buf(),
+            id,
+        }
+    }
+}
+
+/// One export's claim on its file, released when dropped.
+pub(super) struct ExportClaim {
+    claims: Arc<ExportClaims>,
+    path: PathBuf,
+    id: u64,
+}
+
+impl ExportClaim {
+    /// Run `write` unless a newer export to the same file started. The lock
+    /// is held through the write, so none can start in between.
+    fn write_if_newest<T>(&self, write: impl FnOnce() -> T) -> Option<T> {
+        let newest = self.claims.newest.lock();
+        (newest.get(&self.path) == Some(&self.id)).then(write)
+    }
+}
+
+impl Drop for ExportClaim {
+    fn drop(&mut self) {
+        let mut newest = self.claims.newest.lock();
+        if newest.get(&self.path) == Some(&self.id) {
+            newest.remove(&self.path);
+        }
+    }
 }
 
 fn engine_error(message: impl Into<String>) -> CanvasError {

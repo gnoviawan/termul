@@ -128,6 +128,14 @@ export interface ChatMessage {
  * Options for one history open. A reload passes the current MCP list and
  * asks for a new agent process. A normal history open omits both.
  */
+export interface AgentReloadMark {
+  afterMessageId: string | null
+  /** Highest message or tool-call seq at the reload; null for an empty chat. */
+  afterSeq?: number | null
+  /** Client clock (epoch ms) of the reload, for items without a seq. */
+  reloadedAt?: number
+}
+
 export interface OpenHistoryOptions {
   mcpServers?: McpServer[]
   /** Skip adopting the process that already owns this session. */
@@ -402,9 +410,11 @@ export interface AcpState {
   reloadingChatIds: Record<SessionId, true>
   /**
    * In-memory "Agent reloaded" mark. `afterMessageId` is the last message at
-   * the moment of reload, so later messages stay below the line. Not persisted.
+   * the moment of reload, so later messages stay below the line. The live
+   * window can trim that message, so `afterSeq` (the highest transcript seq)
+   * and `reloadedAt` place the line without it. Not persisted.
    */
-  agentReloadMarks: Record<SessionId, { afterMessageId: string | null }>
+  agentReloadMarks: Record<SessionId, AgentReloadMark>
 
   // User-configured agents (persisted, distinct from the live `agents` map)
   agentConfigs: StoredAgentConfig[]

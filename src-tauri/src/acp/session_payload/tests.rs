@@ -1058,3 +1058,40 @@ fn a_newer_prompt_or_switch_retires_the_earlier_failure() {
     ];
     assert_eq!(wire_last_turn_error(&later_success), None);
 }
+
+#[test]
+fn subagent_chunks_stay_out_of_the_main_reply_bubbles() {
+    let mut subagent_text = chunk(3, "agent", "subagent report");
+    subagent_text.payload["parentToolCallId"] = json!("toolu_agent");
+    let mut subagent_thought = chunk(4, "thought", "subagent thinking");
+    subagent_thought.payload["parentToolCallId"] = json!("toolu_agent");
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "hello"),
+        chunk(2, "agent", "Main "),
+        subagent_text,
+        subagent_thought,
+        chunk(5, "agent", "reply"),
+        prompt_complete(6, "turn-1"),
+    ];
+    let mut meta = metadata();
+    meta.last_seq = 6;
+    let payload = materialize_session_payload(&meta, &records);
+
+    let ids: Vec<&str> = payload.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["turn:turn-1", "snapshot:agent:2"]);
+    assert_eq!(
+        payload.messages[1].blocks,
+        vec![json!({"type": "text", "text": "Main reply"})]
+    );
+
+    // The incremental fold agrees, so `message_count` matches the payload.
+    let mut state = crate::acp::session_persistence::FoldState::default();
+    let mut opened = 0;
+    for record in &records {
+        let (next, opens) =
+            crate::acp::session_persistence::fold_step(state, &record.type_, &record.payload);
+        state = next;
+        opened += usize::from(opens);
+    }
+    assert_eq!(opened, payload.messages.len());
+}

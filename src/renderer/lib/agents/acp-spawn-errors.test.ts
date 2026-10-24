@@ -59,6 +59,47 @@ describe('formatAcpSpawnError', () => {
     )
   })
 
+  it('explains an npx package executable missing after npx itself launched (exit 127)', () => {
+    // JSON data escapes its newline; the appended stderr tail uses real newlines.
+    const raw =
+      'agent failed to start: Internal error: {\n' +
+      '  "data": "Process exited with exit status: 127: sh: codex-acp: command not found\\n"\n' +
+      '}\nagent stderr:\nsh: codex-acp: command not found'
+    const result = classifySetupError(raw, { command: 'npx' })
+    expect(result).toMatchObject({
+      category: 'spawn',
+      label: 'Agent unavailable'
+    })
+    expect(result.detail).toContain('"codex-acp"')
+    expect(result.detail).toContain('npx cache')
+    expect(result.detail).not.toContain('Install Node.js')
+  })
+
+  it.each([
+    '@scope/tool',
+    'tool+extra',
+    'tool.v2'
+  ])('recognizes npx child executable %s without blaming Node.js', (binary) => {
+    const raw = `Process exited with exit status: 127: sh: ${binary}: command not found`
+    const result = formatAcpSpawnError(raw, { command: 'npx' })
+    expect(result).toContain(`"${binary}"`)
+    expect(result).toContain('npm config get cache')
+    expect(result).not.toContain('Install Node.js')
+  })
+
+  it('does not blame the npx cache for other exit-127 or missing-command failures', () => {
+    const other = 'Process exited with exit status: 127: sh: unrelated tool failed'
+    expect(formatAcpSpawnError(other, { command: 'npx' })).toBe(other)
+    expect(
+      formatAcpSpawnError(
+        'Process exited with exit status: 127: sh: codex-acp: command not found',
+        {
+          command: 'uvx'
+        }
+      )
+    ).toContain('Install uv')
+  })
+
   it('keeps a resolver error that names a different binary verbatim', () => {
     // Managed claude-acp spawns `node`, but a failed *pre-spawn* probe of the
     // system claude.cmd names the shim — rewriting it against `node` would

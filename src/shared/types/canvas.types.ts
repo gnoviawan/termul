@@ -36,6 +36,10 @@ export interface CanvasOpenInfo {
   mountSeq: number
   /** Canvases this open unloaded to make room; the renderer marks them. */
   evicted: CanvasEviction[]
+  /** System font URLs, relative to the bundle page, the renderer hands
+   * `host.fallbackFonts` for characters the editor's own font lacks. Only
+   * the desktop lists any; `[]` on the web client. */
+  fallbackFonts: string[]
 }
 
 /** The host's persistence projection of one mount. */

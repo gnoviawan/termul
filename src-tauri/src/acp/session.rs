@@ -29,7 +29,9 @@ use crate::acp::session_persistence::SessionRegistration;
 
 mod activity;
 mod commands;
+mod subagents;
 pub(crate) use activity::ActivityClock;
+pub(crate) use subagents::ChildRoute;
 pub use activity::AgentActivity;
 
 /// A permission request awaiting the user's decision.
@@ -143,6 +145,8 @@ pub(crate) struct DriverState {
     /// repeat is dropped before it takes a seq. Forgotten when a replay
     /// window opens (load/resume) and in `remove_session_root`.
     last_commands: commands::LastCommands,
+    /// Native subagent child sessions and the chat each one belongs to.
+    subagents: subagents::SubagentRoutes,
 }
 
 /// State of one session's replay window: how many reopens are in flight and
@@ -411,9 +415,11 @@ impl DriverState {
         self.ephemeral_sessions.insert(session_id);
     }
 
+    /// A native subagent session takes the mark of the chat it belongs to.
     #[must_use]
     pub(crate) fn is_ephemeral(&self, session_id: &str) -> bool {
-        self.ephemeral_sessions.contains(session_id)
+        self.ephemeral_sessions
+            .contains(self.subagents.root_of(session_id))
     }
 
     /// Stash the durable registration metadata for a backend-ephemeral session
@@ -439,9 +445,12 @@ impl DriverState {
         self.promotable_sessions.remove(session_id);
     }
 
-    /// Look up the canonicalized workspace root for a session, if known.
+    /// Look up the canonicalized workspace root for a session, if known. A
+    /// native subagent session uses the root of the chat it belongs to.
     pub(crate) fn session_root(&self, session_id: &str) -> Option<PathBuf> {
-        self.session_roots.get(session_id).cloned()
+        self.session_roots
+            .get(self.subagents.root_of(session_id))
+            .cloned()
     }
 
     /// Begin closing a session: report whether it was ephemeral — captured
@@ -467,6 +476,7 @@ impl DriverState {
         self.legacy_model_sessions.remove(session_id);
         self.promotable_sessions.remove(session_id);
         self.last_commands.forget(session_id);
+        self.subagents.forget_root(session_id);
     }
 
     /// Whether an `available_commands_update` repeats the set last fanned
@@ -811,3 +821,6 @@ impl DriverState {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod subagents_tests;

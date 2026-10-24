@@ -46,7 +46,8 @@ const WEB_INFO: CanvasOpenInfo = {
   pinTag: 'termul-v1',
   docKey: DOC,
   mountSeq: 1,
-  evicted: []
+  evicted: [],
+  fallbackFonts: []
 }
 
 describe('canvasApi (web vs desktop branch)', () => {

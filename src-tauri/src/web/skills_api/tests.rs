@@ -9,6 +9,14 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 fn test_state() -> AppState {
+    test_state_with_project(
+        &std::env::temp_dir()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::temp_dir()),
+    )
+}
+
+fn test_state_with_project(project: &std::path::Path) -> AppState {
     let pty = test_pty_manager();
     AppState {
         acp: Arc::new(AcpManager::new(vec![])),
@@ -18,11 +26,7 @@ fn test_state() -> AppState {
         exit_code_tracker: pty.exit_code_tracker(),
         pty,
         relay: Arc::new(WsRelaySink::new()),
-        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(
-            &std::env::temp_dir()
-                .canonicalize()
-                .unwrap_or_else(|_| std::env::temp_dir()),
-        ),
+        registry: crate::web::project_registry::ProjectRegistry::seeded_for_test(project),
         history_mode: crate::web::ws::HistoryMode::LiveOnly,
         acp_catalog: None,
         acp_install: None,
@@ -42,6 +46,7 @@ fn test_router(state: AppState) -> axum::Router {
     axum::Router::new()
         .route("/skills", get(list))
         .route("/skills/{name}", get(read))
+        .route("/skills-index", get(files))
         .with_state(state)
 }
 
@@ -115,6 +120,93 @@ async fn list_skills_rejects_project_root_outside_every_registered_project() {
         "outside-project-root projectRoot must be rejected"
     );
     assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
+}
+
+#[tokio::test]
+async fn skill_index_lists_project_harness_skills() {
+    let root = std::env::temp_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join(format!("termul-skills-index-route-{}", std::process::id()));
+    let skill_dir = root.join(".opencode").join("skills").join("route-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    let skill_md = skill_dir.join("SKILL.md");
+    std::fs::write(&skill_md, "---\nname: route-skill\n---\n\nbody\n").unwrap();
+
+    let uri = format!("/skills-index?projectRoot={}", root.display());
+    let resp = get_request(test_state(), &uri).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: IpcBody<Vec<SkillFileEntry>> = body_as_json(resp.into_body()).await;
+    assert!(body.success, "skill index should succeed: {:?}", body.error);
+    let entries = body.data.expect("data array");
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.name == "route-skill" && e.path == skill_md.to_string_lossy()),
+        "{entries:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn skill_index_rejects_project_root_outside_every_registered_project() {
+    let root = std::env::temp_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| std::env::temp_dir());
+    let outside = root
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let uri = format!("/skills-index?projectRoot={}", outside.display());
+    let resp = get_request(test_state(), &uri).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: IpcBody<Vec<SkillFileEntry>> = body_as_json(resp.into_body()).await;
+    assert!(
+        !body.success,
+        "outside-project-root projectRoot must be rejected"
+    );
+    assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
+}
+
+#[tokio::test]
+async fn skill_index_does_not_walk_an_unresolvable_root_into_another_repo() {
+    let base = std::env::temp_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join(format!("termul-skills-index-walk-{}", std::process::id()));
+    let registered = base.join("registered");
+    let other_repo = base.join("other-repo");
+    std::fs::create_dir_all(&registered).unwrap();
+    std::fs::create_dir_all(other_repo.join(".git")).unwrap();
+    let leak_dir = other_repo
+        .join(".opencode")
+        .join("skills")
+        .join("leak-skill");
+    std::fs::create_dir_all(&leak_dir).unwrap();
+    std::fs::write(
+        leak_dir.join("SKILL.md"),
+        "---\nname: leak-skill\n---\n\nbody\n",
+    )
+    .unwrap();
+
+    for root in [
+        other_repo.join("does-not-exist"),
+        registered.join("..").join("other-repo").join("missing"),
+    ] {
+        let uri = format!("/skills-index?projectRoot={}", root.display());
+        let resp = get_request(test_state_with_project(&registered), &uri).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<Vec<SkillFileEntry>> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "degrades to global roots: {:?}", body.error);
+        let entries = body.data.expect("data array");
+        assert!(
+            entries.iter().all(|e| e.name != "leak-skill"),
+            "{root:?} leaked {entries:?}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(base);
 }
 
 #[tokio::test]

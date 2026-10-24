@@ -100,6 +100,8 @@ pub struct HostPlanServer {
     canvas: Arc<CanvasRouter>,
     /// Shows each answered agent canvas call as the session's guest cursor.
     presence: Arc<Presence>,
+    /// The newest export to each project file.
+    exports: Arc<canvas::ExportClaims>,
 }
 
 impl HostPlanServer {
@@ -130,6 +132,7 @@ impl HostPlanServer {
             persistence,
             presence: Presence::new(Arc::clone(canvas.mounts())),
             canvas,
+            exports: Arc::default(),
         });
         let server_for_thread = Arc::clone(&server);
         let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();

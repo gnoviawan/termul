@@ -1,7 +1,8 @@
 /**
  * Agent Skills IPC facade — lists and reads Zed-compatible SKILL.md packages.
  *
- * Skill discovery reads the user's local filesystem (`~/.agents/skills/` +
+ * Skill discovery reads the user's local filesystem (`~/.claude/skills/`,
+ * enabled Claude Code plugins, `~/.agents/skills/`, and
  * `{project}/.agents/skills/`). On desktop the Tauri commands
  * `list_agent_skills_cmd` / `read_agent_skill_cmd` back this facade; on the
  * web/remote client the same calls hit the shipped parity routes `GET /skills`
@@ -33,6 +34,14 @@ export interface AgentSkillContent {
   path: string
 }
 
+/** A skill `SKILL.md` an agent can load — from Termul's `.agents` roots or a
+ * harness root (`.opencode/skills`, `.claude/skills`, ...). */
+export interface SkillFileEntry {
+  name: string
+  /** Absolute path to the skill's `SKILL.md`. */
+  path: string
+}
+
 export const skillsApi = {
   listSkills(projectRoot?: string): Promise<AgentSkillSummary[]> {
     if (!isTauriContext()) return webServerSkills.list(projectRoot)
@@ -45,6 +54,15 @@ export const skillsApi = {
     if (!isTauriContext()) return webServerSkills.read(name, projectRoot)
     return invoke<AgentSkillContent>('read_agent_skill_cmd', {
       name,
+      projectRoot: projectRoot || null
+    })
+  },
+
+  /** Index every skill `SKILL.md` visible from `projectRoot` (project roots,
+   * walked up to the git root, override global roots). */
+  listSkillFiles(projectRoot?: string): Promise<SkillFileEntry[]> {
+    if (!isTauriContext()) return webServerSkills.files(projectRoot)
+    return invoke<SkillFileEntry[]>('list_skill_files_cmd', {
       projectRoot: projectRoot || null
     })
   }

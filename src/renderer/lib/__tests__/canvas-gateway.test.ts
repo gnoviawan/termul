@@ -18,7 +18,7 @@ import { CanvasGatewayClient } from '@/lib/acp-transport/canvas-gateway-client'
 import { asJsonText, type CanvasBridge, createCanvasBridge } from '@/lib/canvas-bridge'
 import { type CanvasPhase, useCanvasStore } from '@/stores/canvas-store'
 import { useProjectStore } from '@/stores/project-store'
-import { projectRelativePath, startCanvasGateway } from '../canvas-gateway'
+import { startCanvasGateway } from '../canvas-gateway'
 
 const INFO: CanvasOpenInfo = {
   canvasId: 'cv1',
@@ -321,32 +321,5 @@ describe('startCanvasGateway', () => {
       })
     ])
     expect(writeSnapshot).not.toHaveBeenCalled()
-  })
-})
-
-describe('projectRelativePath', () => {
-  it('strips the project root, folding case and separators for drive paths', () => {
-    expect(projectRelativePath('C:/p/design/app.figcraft', 'c:\\P\\')).toBe('design/app.figcraft')
-    expect(projectRelativePath('/home/u/p/a.figcraft', '/home/u/p')).toBe('a.figcraft')
-  })
-
-  it('treats a verbatim Windows root like its plain spelling, in any slash style', () => {
-    const root = String.raw`\\?\D:\Work\Proj`
-    expect(projectRelativePath('//?/d:/work/proj/design.figcraft', root)).toBe('design.figcraft')
-    expect(projectRelativePath(String.raw`\\?\D:\Work\Proj/a.figcraft`, 'd:/work/proj')).toBe(
-      'a.figcraft'
-    )
-    expect(projectRelativePath('D:/Work/Proj/sub/a.figcraft', root)).toBe('sub/a.figcraft')
-    expect(
-      projectRelativePath(String.raw`\\?\UNC\srv\share\p\a.figcraft`, String.raw`\\srv\share\p`)
-    ).toBe('a.figcraft')
-  })
-
-  it('keeps the full path for a document outside the root or with no root', () => {
-    expect(projectRelativePath('/home/u/other/a.figcraft', '/home/u/p')).toBe(
-      '/home/u/other/a.figcraft'
-    )
-    expect(projectRelativePath('/home/u/pp/a.figcraft', '/home/u/p')).toBe('/home/u/pp/a.figcraft')
-    expect(projectRelativePath('C:\\p\\a.figcraft', undefined)).toBe('C:/p/a.figcraft')
   })
 })

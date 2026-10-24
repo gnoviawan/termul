@@ -117,6 +117,13 @@ export const PersistenceKeys = {
   // composer selector shows another agent's models from it before that agent
   // runs in this app session.
   agentModelCatalog: (configId: string): string => `agents/model-catalog/${configId}`,
+  // Config-option values the agent itself REJECTED on set (e.g. a tool
+  // advertised as a segment, #1480), per agent-config-id. Value shape is
+  // `PersistedRejectedOptionValues` keyed by option id. The composer hides
+  // these on panel open so users see only values the agent accepts; entries
+  // for options the agent no longer advertises are dropped on load.
+  agentRejectedOptionValues: (configId: string): string =>
+    `agents/rejected-option-values/${configId}`,
   // Mobile file explorer: last folder the user navigated into, per project.
   // Restored on drawer reopen across close/reopen and page reloads (web only).
   mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`,
@@ -195,6 +202,11 @@ export interface LastSelectedAgent {
 // launcher (pre-launch pending options + worktree isolation) and the store
 // setters (running-chatbox model/mode/config changes). Restored on launcher
 // mount. All fields optional — an absent field means "use agent default".
+/** Option values the agent rejected, per option id (#1480/#1489). */
+export interface PersistedRejectedOptionValues {
+  [optionId: string]: string[]
+}
+
 export interface PersistedComposerOptions {
   modelId?: string
   modeId?: string

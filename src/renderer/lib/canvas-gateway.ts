@@ -25,7 +25,7 @@ import {
   bridgeFailure,
   type CanvasBridgeReply
 } from '@/lib/canvas-bridge'
-import { comparablePath, plainPath } from '@/lib/canvas-doc'
+import { projectRelativePath } from '@/lib/canvas-doc'
 import { type CanvasSession, useCanvasStore } from '@/stores/canvas-store'
 import { useProjectStore } from '@/stores/project-store'
 
@@ -35,16 +35,6 @@ const HOST_REMOUNTED = 'host.remounted'
 function mountedSeqOf(session: CanvasSession | undefined): number | null {
   const phase = session?.phase
   return phase?.kind === 'loading' || phase?.kind === 'ready' ? phase.mount.mountSeq : null
-}
-
-/** `docPath` relative to `root` with forward slashes; the absolute path when
- * the document is not under the root. Drive-letter roots compare
- * case-insensitively, as Windows paths do. */
-export function projectRelativePath(docPath: string, root: string | undefined): string {
-  const doc = plainPath(docPath)
-  if (!root) return doc
-  const prefix = `${plainPath(root).replace(/\/+$/, '')}/`
-  return comparablePath(doc).startsWith(comparablePath(prefix)) ? doc.slice(prefix.length) : doc
 }
 
 function hostRemounted(projectId: string, params: string): CanvasBridgeReply {

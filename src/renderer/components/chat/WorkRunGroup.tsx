@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useState } from 'react'
 import { ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -10,12 +10,13 @@ import { CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
 import type { TimelineItem } from './chat-timeline'
 import { RowReveal } from './RowReveal'
-import { ThinkingStatus } from './ThinkingStatus'
+import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
 import type { ToolActivitySummary } from './tool-call-summary'
 import type { EnterTracker } from './use-enter-tracker'
 
-export type ToolTimelineItem = Extract<TimelineItem, { kind: 'tool' }>
+/** One step of agent work between two narration messages. */
+export type WorkRunItem = Extract<TimelineItem, { kind: 'tool' } | { kind: 'thought-group' }>
 
 interface DiffStatProps {
   added: number
@@ -37,65 +38,49 @@ export function DiffStat({ added, removed }: DiffStatProps): React.JSX.Element |
   )
 }
 
-interface ToolCallGroupProps {
-  /** The turn's tool calls, in timeline order. */
-  items: ToolTimelineItem[]
-  /** Categorized rollup on the trigger line — "Ran 2 commands, created 1 file". */
+interface WorkRunGroupProps {
+  /** The run's thoughts and tool calls, in timeline order. */
+  items: WorkRunItem[]
+  /** Categorized rollup on the trigger line — "Thought 2 times, ran 3 commands". */
   summary: ToolActivitySummary
   /** The parent turn is still running. */
   active: boolean
-  /** True while this run owns the turn's last timeline item — its live edge. */
+  /** True while this run owns the turn's last timeline item: the label shimmers and its trailing thought streams. */
   isLiveTail: boolean
-  attentionRequired: boolean
+  /** A call failed: the trigger reads red. */
+  failed: boolean
   enter: EnterTracker
   filePathContext?: FilePathResolutionContext
   onOpenSubagent: (toolCall: ToolCall) => void
 }
 
 /**
- * One nested disclosure rolling up the turn's tool calls; expanding lists
- * every call's card. Mirrors the thought group: open while the run is the
- * turn's live edge, and once activity moves past it — or the turn settles —
- * it stays open only when a call needs a look: an unfinished or failed call
- * sits one click deep, not two. A manual toggle sticks (userOverride) until
- * a call newly needs attention, which re-arms the auto-drive.
+ * One nested disclosure rolling up a run of thoughts and tool calls between
+ * two narration messages; expanding lists them in order. Always starts
+ * collapsed, live or failed, so narration stays adjacent; a failed run
+ * flags itself in red instead of opening.
  */
-function ToolCallGroupComponent({
+function WorkRunGroupComponent({
   items,
   summary,
   active,
   isLiveTail,
-  attentionRequired,
+  failed,
   enter,
   filePathContext,
   onOpenSubagent
-}: ToolCallGroupProps): React.JSX.Element {
+}: WorkRunGroupProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
-  const [open, setOpen] = useState(isLiveTail || attentionRequired)
-  const userOverride = useRef(false)
-  const wasAttentionRequired = useRef(attentionRequired)
-
-  useEffect(() => {
-    // A call that newly needs attention is a fresh event: it re-arms the
-    // auto-drive even after a manual toggle.
-    if (attentionRequired && !wasAttentionRequired.current) userOverride.current = false
-    wasAttentionRequired.current = attentionRequired
-    if (userOverride.current) return
-    setOpen(isLiveTail || attentionRequired)
-  }, [isLiveTail, attentionRequired])
-
-  const handleOpenChange = (next: boolean): void => {
-    userOverride.current = true
-    setOpen(next)
-  }
+  const [open, setOpen] = useState(false)
 
   return (
-    <Collapsible open={open} onOpenChange={handleOpenChange} className="min-w-0">
+    <Collapsible open={open} onOpenChange={setOpen} className="min-w-0">
       <CollapsibleTrigger
         data-press-feedback="off"
         className={cn(
           'flex w-full cursor-pointer items-center gap-1.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-          CHAT_ROW_MIN_H
+          CHAT_ROW_MIN_H,
+          failed && 'text-destructive'
         )}
       >
         <motion.span
@@ -106,13 +91,32 @@ function ToolCallGroupComponent({
         >
           <ChevronRight size={13} />
         </motion.span>
-        <ThinkingStatus text={summary.label} shimmer={false} />
+        {/* The shimmer is CSS on data-text, so a count change re-renders in place. */}
+        <span className={cn('t-think is-start min-w-0', !isLiveTail && 'is-settled')}>
+          <span className="t-think-text tabular-nums" data-text={summary.label}>
+            {summary.label}
+          </span>
+        </span>
         <DiffStat added={summary.added} removed={summary.removed} />
       </CollapsibleTrigger>
       <CollapsibleContent forceMount>
         <CollapseExpandMotion open={open} motion="chat">
           <div className="min-w-0 pl-4">
-            {items.map((item) => {
+            {items.map((item, index) => {
+              if (item.kind === 'thought-group') {
+                return (
+                  <RowReveal
+                    key={item.key}
+                    animate={enter.animate(item.key)}
+                    staggerIndex={enter.staggerIndex(item.key)}
+                  >
+                    <ThoughtGroup
+                      messages={item.messages}
+                      isLiveTail={isLiveTail && index === items.length - 1}
+                    />
+                  </RowReveal>
+                )
+              }
               const id = item.tool.toolCallId
               return (
                 <RowReveal
@@ -137,7 +141,7 @@ function ToolCallGroupComponent({
 }
 
 /**
- * Memoized like the turn row above it: the group wraps every tool card in
- * the turn, so a `statusLine`-only re-render of TurnActivity skips the walk.
+ * Memoized like the turn row above it: the group wraps every card in its run,
+ * so a `statusLine`-only re-render of TurnActivity skips the walk.
  */
-export const ToolCallGroup = memo(ToolCallGroupComponent)
+export const WorkRunGroup = memo(WorkRunGroupComponent)

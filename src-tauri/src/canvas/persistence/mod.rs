@@ -79,7 +79,7 @@ pub use close::{CloseMode, CloseOutcome};
 pub use crash::{crash_timeouts, LostChanges, Remount, DEFAULT_CRASH_TIMEOUTS, REMOUNTED_METHOD};
 pub use disk::{ConflictChoice, ConflictView, DiskOutcome, ResolveOutcome, CODE_DOCUMENT_DELETED};
 pub use evict::{mount_cap, Admitted, Eviction, CODE_EVICTION_BLOCKED, DEFAULT_MAX_MOUNTED};
-pub use gateway::{LostLease, ReplyMatch, SliceMatch};
+pub use gateway::{CallFailed, LateAnswer, LostLease, ReplyMatch, SliceMatch};
 pub use lease::{
     lease_grace, ExpiredLease, LeaseChange, MountRequest, Opened, RendererId,
     DEFAULT_LEASE_GRACE_MS,
