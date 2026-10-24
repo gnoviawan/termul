@@ -56,6 +56,8 @@ export const COMPONENT_TOKEN_DEFAULTS = {
    * where `none` is invalid and drops the focus ring.
    */
   '--composer-shadow': '0 0 #0000',
+  /** Raised "you are here" fill (active tab, row, segment), read by .keycap. */
+  '--keycap-fill': 'oklch(var(--muted))',
   /** Raised "you are here" depth, read by .keycap and the Rail keycap default. */
   '--keycap-shadow': 'inset 0 1px 0 oklch(var(--ring) / 0.08), 0 1px 2px #00000040',
   /** Rail keycap fill (active row on the sidebar). Defaults to the computed --rail-keycap. */

@@ -4,8 +4,14 @@ import { BUNDLED_COLOR_THEMES } from './bundled-themes'
 import { COMPONENT_TOKEN_DEFAULTS } from './component-tokens'
 import { CONTAINER, S_DEFAULT } from './termul-light-chrome'
 
-/** Tokens added for the Termul Light v2 composer and Rail keycap. */
-const LIFT_TOKENS = ['--composer-shadow', '--rail-keycap-fill', '--rail-keycap-shadow'] as const
+/** Tokens added for the Termul Light v2 composer, keycaps and Rail keycap. */
+const LIFT_TOKENS = [
+  '--composer-shadow',
+  '--keycap-fill',
+  '--keycap-shadow',
+  '--rail-keycap-fill',
+  '--rail-keycap-shadow'
+] as const
 
 function emittedVars(themeId: string): Record<string, string> {
   const root = document.documentElement
@@ -36,15 +42,17 @@ describe('component tokens', () => {
     }
   })
 
-  it('lifts the composer and Rail keycap in Termul Light', () => {
+  it('lifts the composer, tabs, keycaps and Rail keycap in Termul Light', () => {
     const vars = emittedVars('termul-light')
     expect(vars['--composer-shadow']).toBe(S_DEFAULT)
+    expect(vars['--keycap-fill']).toBe(CONTAINER)
+    expect(vars['--keycap-shadow']).toBe(S_DEFAULT)
     expect(vars['--rail-keycap-shadow']).toBe(S_DEFAULT)
     expect(vars['--rail-keycap-fill']).toBe(CONTAINER)
   })
 
   for (const id of Object.keys(BUNDLED_COLOR_THEMES).filter((id) => id !== 'termul-light')) {
-    it(`${id} keeps the composer and Rail keycap defaults`, () => {
+    it(`${id} keeps the composer and keycap defaults`, () => {
       const vars = emittedVars(id)
       for (const token of LIFT_TOKENS) {
         expect(vars[token], `${id} ${token}`).toBe(COMPONENT_TOKEN_DEFAULTS[token])
