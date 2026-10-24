@@ -2,7 +2,10 @@
 
 This page compares the GPUIX desktop client with the web client in Chromium, and with the shipped Linux app (Tauri on WebKitGTK), under the `tools/perf` scenarios on the GPUIX development machine. [`baseline-linux.md`](baseline-linux.md) has the earlier Chromium-only baseline, and [`README.md`](README.md) describes the runner and every metric key.
 
-<!-- VERDICT -->
+## Verdict
+
+On this machine, compared with today's desktop app, the GPUIX client starts faster and uses far less memory, but it is not yet faster to use under heavy load, and it crashes when many chats stream. It lists your project in about 2.3 s instead of 7.7 s for the shipped Linux app (3.6 s for the web client in Chromium). It sits idle at 232 MB and 9% of one CPU core, where the shipped app uses 543 MB and 94%. With one chat streaming it draws about twice as many frames as Chromium with 40% of the memory. With three busy terminals it uses half of Chromium's memory and the same CPU, but it shows a third as many frames per second. With 8 streaming chats it slows to under one frame per second, takes about 1.5 s per typed key, and crashed in 4 of 5 runs because of a 2 s timeout in the chat transcript's scroll polling. Most of the drawing cost on this machine is software rendering with no GPU. A real GPU would likely remove much of GPUIX's terminal and one-chat CPU cost, but not the many-chat slowdown, which is UI-thread layout work. So today a user would notice faster startup and lower memory, and under a heavy chat load they would notice a slower and less stable app. The crash fix and the UI-thread layout cost come first.
+
 
 ## Results
 
@@ -22,7 +25,16 @@ Startup happens at the start of every run, so its rows pool all 15 runs per clie
 | Idle CPU of the client (`measure.proc.total.cpuMeanPct`) | 8.8% of one core (6.2 to 10.7) | 6.6% (3.1 to 9.5) | 0.22 |
 | Frames on screen while idle (`measure.screen.fps`) | 0 | 0 | |
 
-<!-- WEBKIT -->
+The shipped Linux app ran after the Chromium and GPUIX sets, 5 runs, through `webkit-startup.ts`. It is not interleaved with the other two, and it measures only startup and idle (see [`baseline-linux.md`](baseline-linux.md#measure-the-shipped-linux-app)).
+
+| Metric | GPUIX | Shipped app (WebKitGTK) |
+|---|---|---|
+| Time to first project list | 2279 ms (1532 to 11192), 15 runs | 7695 ms (7002 to 12253), 5 runs |
+| Idle PSS of the client | 232 MB (224 to 236) | 543 MB (489 to 560) |
+| Idle RSS sum of the client | 281 MB (277 to 283) | 744 MB (738 to 749) |
+| Idle CPU of the client | 8.8% of one core (6.2 to 10.7) | 94.4% (83.6 to 102.8) |
+
+The two startup numbers are measured differently. WebKitGTK's counts the first screen grab with the project avatar's color in the sidebar, at a 1200x800 window. GPUIX's counts the project row's element in the automation tree, at 1440x900. WebKitGTK's idle CPU includes 28.8% in the `other` role, the agent `--version` checks and `npm` that the desktop app starts, which the GPUIX client leaves to the server.
 
 GPUIX lists the project about 1.4 s sooner, but the launcher accepts input at the same time as in Chromium. The GPUIX gap between the two is the agent picker and composer mounting after the shell. At idle GPUIX uses 43% of Chromium's memory. Idle CPU is the same within noise: GPUIX's comes from the Bun thread (4.9%) and the GPUI UI thread (1.4%), and neither client draws a frame while idle.
 
@@ -68,7 +80,25 @@ Chromium finished all 5 runs with 8 chats open and no errors. GPUIX crashed in 4
 
 With one chat streaming, GPUIX draws more frames than Chromium with 40% of the memory, at more CPU. Each chat that GPUIX adds makes it slower. GPUIX chat starts grow from 4 s to 6 s for the first chat, to 12 s to 20 s for chats 2 and 3, and to 30 s to 91 s for chats 5 to 8. Chromium's chats 5 to 8 took 5 s to 25 s. With 8 chats open, GPUIX draws under one frame per second and takes about 1.5 s for each typed key.
 
-<!-- STORM4 -->
+### stream-storm with 4 chats (`--agents 2`)
+
+This extra set ran right after the main set with the same flags except `--agents 2`, 5 interleaved runs per client. It checks whether GPUIX holds up at a lighter load. GPUIX finished 2 of 5 runs. The other 3 crashed the same way. In 3 of the 5 GPUIX runs the fourth chat never took its prompt ("launcher composer never accepted"), so one finished GPUIX run had 3 chats open, not 4.
+
+| Metric | GPUIX | Chromium | p |
+|---|---|---|---|
+| Runs that finished | 2 of 5 | 5 of 5 | |
+| One streaming chat: frames on screen | 8.1 fps (5.3 to 9.0), 5 runs | 3.8 fps (3.7 to 5.3) | 0.016 |
+| One streaming chat: client PSS | 267 MB (221 to 281), 5 runs | 695 MB (680 to 728) | 0.008 |
+| One streaming chat: client CPU | 322% of one core (224 to 337), 5 runs | 168% (144 to 209) | 0.008 |
+| Chat start while others stream, median | 17116 ms and 19140 ms | 12066 ms (8884 to 13299) | 0.095 |
+| Typing part of that start | 11613 ms and 13697 ms | 7681 ms (5230 to 9471) | 0.095 |
+| Start click to open chat | 2174 ms and 2568 ms | 2526 ms (1741 to 3210) | 0.86 |
+| Frames on screen while switching chats | 2.1 and 2.8 fps | 3.8 fps (3.6 to 5.8) | 0.095 |
+| Frames on screen, measure phase | 2.0 and 3.0 fps | 3.1 fps (1.9 to 3.6) | 0.48 |
+| Client PSS, measure phase | 454 MB and 861 MB | 1066 MB (1047 to 1076) | 0.095 |
+| Client CPU, measure phase | 154% and 202% of one core | 212% (162 to 266) | 0.38 |
+
+At 4 chats, the runs that finished show GPUIX drawing about as many frames as Chromium with less memory. Typing a prompt is slower on GPUIX. With 2 finished runs, none of these differences reaches p < 0.05.
 
 ## Limiters
 
@@ -81,9 +111,9 @@ Per-thread CPU in the measure phase, median over the runs that finished (`runs-r
 | stream-storm, 8 chats | `gpuix-ui` 90, `llvmpipe-N` 22, `bun` 4 (1 run) | GPU process `llvmpipe-N` 104, page renderer main 74, GPU main 20, page renderer `ThreadPoolForeg` 19 |
 | stream-storm, warmup (1 chat, all 5 runs) | `llvmpipe-N` 250, `gpuix-ui` 34, `bun` 20, `JITWorker` 15 | GPU process `llvmpipe-N` 105, page renderer main 38, GPU main 30, page renderer `ThreadPoolForeg` 22 |
 
-- **GPUIX under pty-flood is bound by software rasterization.** Its lavapipe threads use about 1.9 cores. Its UI thread (29%) and JS thread (24%) have room. Per frame on screen, GPUIX spends about 330 ms of lavapipe CPU (187% / 5.7 fps) where Chromium spends about 73 ms (130% / 17.7 fps). <!-- DAMAGE -->
+- **GPUIX under pty-flood is bound by software rasterization.** Its lavapipe threads use about 1.9 cores. Its UI thread (29%) and JS thread (24%) have room. Per frame on screen, GPUIX spends about 330 ms of lavapipe CPU (187% / 5.7 fps) where Chromium spends about 73 ms (130% / 17.7 fps). Why GPUIX's frames cost so much more lavapipe time is not measured. A separate, unreported run logged X damage rectangles while a terminal printed output. Every present of both clients covered the whole window (98 of 98 GPUIX frames, 349 of 349 Chromium frames), so X damage cannot show how much each client re-rasterizes. My guess is that GPUI redraws the whole scene each frame and Chromium re-rasterizes only changed tiles.
 - **With one streaming chat, GPUIX is also bound by software rasterization.** Its lavapipe threads use 2.5 cores for 8 frames per second, against Chromium's 1 core for 4.7. GPUIX draws more frames there because its UI thread still has room.
-- **GPUIX under stream-storm is bound by its UI thread.** `gpuix-ui` sits at 84% to 90% of one core with 6 to 8 chats open, and the JS thread under 10%. A separate, unreported `perf record` of `gpuix-ui` with 4 chats streaming put 70% of samples in `gpuix-native.linux-x64-gnu.node`. The top symbols were Taffy flexbox and block layout (about 25% together), `malloc` and `free` (about 15%), element id hashing, `gpuix_native::renderer::build_element`, and text shaping. The automation tree held 2146 elements, of which 330 had on-screen bounds, so the hidden chat panes stay mounted. Whether GPUI rebuilds and lays out the hidden panes on every frame is not proven. It is the first thing to check. Frame rate falls as transcripts grow (7 to 9 fps with one chat, 1.5 fps while chats open, 0.8 fps with 8 chats), so the per-frame work grows with the content.
+- **GPUIX under stream-storm is bound by its UI thread.** `gpuix-ui` sits at 83% to 90% of one core with 6 to 8 chats open, and the JS thread under 10%. A separate, unreported `perf record` of `gpuix-ui` with 4 chats streaming put 70% of samples in `gpuix-native.linux-x64-gnu.node`. The top symbols were Taffy flexbox and block layout (about 25% together), `malloc` and `free` (about 15%), element id hashing, `gpuix_native::renderer::build_element`, and text shaping. The automation tree held 2146 elements, of which 330 had on-screen bounds, so the hidden chat panes stay mounted. Whether GPUI rebuilds and lays out the hidden panes on every frame is not proven. It is the first thing to check. Frame rate falls as transcripts grow (7 to 9 fps with one chat, 1.5 fps while chats open, 0.8 fps with 8 chats), so the per-frame work grows with the content.
 - **Chromium under both loads** is bound by the GPU process's lavapipe threads plus the page renderer's main thread, as in [`baseline-linux.md`](baseline-linux.md#limiters).
 
 ## Product bugs
@@ -120,7 +150,7 @@ Every key and click goes through the same GPUI UI thread queue. With 3 chats str
 
 ### Measured data the driver could not explain
 
-In the one GPUIX 8-chat run that finished, the client received 48 KB/s from the server, against 83 to 108 KB/s for Chromium with the same 8 chats. <!-- BYTES -->
+In the one GPUIX 8-chat run that finished, the client received 48 KB/s from the server, against 83 to 108 KB/s for Chromium with the same 8 chats. Bytes per chat are not steady even for Chromium: 5.5 to 6.0 KB/s per chat with 4 chats, and 10.4 to 13.5 with 8 chats. So the stream carries more than the chat deltas, and that part grows faster than the chat count. In the 4-chat set, GPUIX received 5.7 and 9.5 KB/s per chat. Whether the GPUIX shell subscribes to fewer updates, or falls behind on reading them, is not established.
 
 
 ## Method
@@ -144,7 +174,15 @@ bun run perf:report gpuix=<dir>/gpuix chromium=<dir>/chromium
 bun tools/perf/runs-report.ts <dir> measure sustained-stream flood burst
 ```
 
-<!-- EXTRA-COMMANDS -->
+The 4-chat set and the shipped app, from `apps/gpuix`:
+
+```bash
+bun run perf --client gpuix,chromium --scenarios stream-storm --runs 5 --agents 2 \
+  --page-metrics off --state-root /tmp/gpuix-f2/state4 --out <dir4> --quiet-wait 300
+bun tools/perf/webkit-startup.ts --runs 5 --state-root /tmp/gpuix-f2/webkit --out <dir-webkit> --quiet-wait 300
+```
+
+The result files of these runs are in [`results-f2/`](results-f2/): `main/` (the 3-scenario set), `storm4/` (the 4-chat set), and `webkitgtk/`. Each run file keeps its `procSeries`, so `report.ts` and `runs-report.ts` rerun on them as they are.
 
 ### How the runs are ordered
 
@@ -170,4 +208,30 @@ Typing differs in one way. Playwright sends one key at a time and waits for the 
 - **Bytes.** Bytes through the relay per second. These show that both clients received the same stream.
 - **Startup.** From the `launch()` call until the seeded project row exists (`projectListMs`) and until the launcher accepts input (`launcherReadyMs`). GPUIX checks for the element in the automation tree. Chromium checks the DOM. Neither waits for the pixels.
 
-<!-- LIMITS -->
+### Load per run
+
+Other agents ran their own GPUIX apps, builds, and screenshots on the same 8 cores the whole time. `runs-report.ts` prints the full per-run table. In summary:
+
+| Set | Client | Runs | Quiet-gate sample before the run | 1-minute load average | Gate wait | Foreign CPU in the measure phase, median and max |
+|---|---|---|---|---|---|---|
+| main | GPUIX | 15 | 33% to 143% of one core | 2.4 to 13.1 | 5 s to 105 s | 49% and 370% |
+| main | Chromium | 15 | 36% to 149% | 2.5 to 10.3 | 5 s to 70 s | 58% and 243% |
+| 4 chats | GPUIX | 5 | 35% to 146% | 5.5 to 10.7 | 5 s to 231 s | 123% and 123% (2 finished runs) |
+| 4 chats | Chromium | 5 | 71% to 145% | 4.4 to 9.8 | 10 s to 135 s | 131% and 187% |
+| shipped app | WebKitGTK | 5 | 33% to 143% | 6.5 to 8.7 | | not sampled |
+
+The load average often stayed high while the 5 s CPU sample passed the gate, because other agents ran in bursts. Latency and frame numbers carry that noise on both sides. The GPUIX pty-flood run with the worst numbers (346 ms reply p50, 3.7 fps) started at a load average of 13.1.
+
+## What the numbers mean, and their limits
+
+- **Everything here is rendered in software.** The machine has no GPU. GPUIX rasterizes with lavapipe through Vulkan. Chromium rasterizes with ANGLE on the same lavapipe. The shipped app uses WebKitGTK's software GL. Every frame-rate number, and every CPU number in pty-flood and in the one-chat warmup, is bound by software rasterization on both sides. GPUI is built to draw on a GPU, so on a real GPU the lavapipe threads' 1.9 to 2.5 cores of work would move off the CPU. GPUIX's terminal frame rate and its one-chat CPU cost would then most likely improve much more than Chromium's, whose page renderer already does more of its work outside raster. That is an inference from the thread profiles, not a measurement.
+- **The stream-storm limiter is not rasterization.** With 6 to 8 chats, GPUIX's UI thread is the limit at 83% to 90% of one core. It spends that time on layout and element building, not drawing, so a GPU would not fix it. Neither would a faster JS engine: the JS thread is under 10%.
+- **The crash removes most GPUIX stream-storm data.** Rows marked "1 run" or "2 runs" come from the runs that survived, which may be the luckier ones. The warmup rows avoid that bias, because every run reached them.
+- **The GPUIX driver costs the app something.** `getTree` serializes the whole element tree and asks the UI thread for every element's bounds. Under load each call took 260 ms to 850 ms in a separate run. The driver polls it every 250 ms while it waits for a step, so the observer competes with the app's own UI thread during chat starts and switches. Playwright's locator queries cost Chromium's renderer main thread too, but less. The measure phases send no driver calls on either side, so the measure rows are observer-free.
+- **Typing is not a typing-speed test.** Both drivers send one key at a time and wait for the client to take it. A chat start's typing part therefore measures input latency under load, times the prompt length (13 to 16 characters plus Ctrl+A and Backspace).
+- **Frames on screen are presents, not content changes.** Both clients present full-window images, so the frame counter cannot tell a frame that changed one character from one that changed everything. Neither client presents while idle.
+- **Startup readiness is an element, not a pixel**, for both GPUIX and Chromium. A GPUIX element can exist in the tree a frame before it is painted.
+- **The shipped app was measured after the other two, not interleaved,** at a different window size, with pixel-based readiness, and with Tauri IPC instead of `termul-server`.
+- **Chromium is a stand-in for the shipped app's web view.** See [`baseline-linux.md`](baseline-linux.md#what-each-number-measures-and-its-limits).
+- **Five runs a side is enough only for large differences.** A gap with p above 0.1 here is no measurable difference, not proof of equality.
+
