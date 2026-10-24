@@ -39,12 +39,8 @@ import {
   onBrowserTabNavigated,
   onBrowserTabTitleChanged
 } from '../browser-api'
-import {
-  _resetBrowserHostForTesting,
-  type BrowserHost,
-  nativeBrowserPanesAvailable,
-  registerBrowserHost
-} from '../browser-host'
+import { _resetBrowserHostForTesting, type BrowserHost, registerBrowserHost } from '../browser-host'
+import { nativeBrowserPanesAvailable } from '../browser-panes'
 
 const BOUNDS = { x: 10, y: 20, width: 300, height: 200 }
 

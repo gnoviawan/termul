@@ -25,6 +25,11 @@ export const boot: BootFn = (config, options) => {
     for (const font of options.fonts)
       renderer.registerFont?.(font as Parameters<NonNullable<NativeRenderer['registerFont']>>[0])
     log.info('boot', `registered ${options.fonts.length} font faces`)
+    const focus = renderer as unknown as { getFocusedElementId?(): number | null; blur?(): void }
+    options.onFocusControl?.({
+      focusedElement: () => focus.getFocusedElementId?.() ?? null,
+      blur: () => focus.blur?.()
+    })
   }
   render(
     <ServerGate

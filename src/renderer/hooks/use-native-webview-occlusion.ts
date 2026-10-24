@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react'
-import { nativeBrowserPanesAvailable } from '@/lib/browser-host'
+import { nativeBrowserPanesAvailable } from '@/lib/browser-panes'
 
 /**
  * Native browser webviews paint above the DOM, so an overlay would be drawn

@@ -30,6 +30,7 @@
     "src/main.tsx",
     "src/env",
     "src/log.ts",
+    "src/browser",
     "build.ts",
     "tools",
     "src/style/fonts.ts",

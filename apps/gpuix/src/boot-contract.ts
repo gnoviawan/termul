@@ -31,6 +31,15 @@ export interface BootOptions {
    * this app did not start the server (`launcher/host-local.ts`).
    */
   hostLocalToken: (() => string | null) | null
+  /** Receives the window's focus controls once the renderer exists (browser-pane keyboard pairing). */
+  onFocusControl?(control: FocusControl): void
+}
+
+export interface FocusControl {
+  /** The focused GPUIX element, `null` when none is. */
+  focusedElement(): number | null
+  /** Clear GPUIX focus. */
+  blur(): void
 }
 
 export type BootFn = (config: ClientConfig, options: BootOptions) => void

@@ -18,8 +18,7 @@ import type {
   BrowserTabNavigatedPayload,
   BrowserTabTitleChangedPayload,
   IpcResult
-} from './browser-api'
-import { isTauriContext } from './tauri-runtime'
+} from './browser-types'
 
 export interface BrowserHost {
   create(tabId: string, url: string, bounds: BrowserBounds): Promise<IpcResult<BrowserTabInfo>>
@@ -48,15 +47,6 @@ export function registerBrowserHost(next: BrowserHost): void {
 
 export function getBrowserHost(): BrowserHost | null {
   return host
-}
-
-/**
- * Whether this surface can show browser panes: the Tauri desktop app, or a
- * desktop shell that registered a browser host. The browser and phone client
- * cannot, so their entry points stay hidden.
- */
-export function nativeBrowserPanesAvailable(): boolean {
-  return isTauriContext() || host !== null
 }
 
 /** @internal Testing only. */

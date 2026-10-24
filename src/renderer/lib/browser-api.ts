@@ -2,43 +2,25 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getBrowserHost } from './browser-host'
+import type {
+  BrowserBounds,
+  BrowserEventSubscription,
+  BrowserTabInfo,
+  BrowserTabLoadedPayload,
+  BrowserTabNavigatedPayload,
+  BrowserTabTitleChangedPayload,
+  IpcResult
+} from './browser-types'
 
-export interface BrowserBounds {
-  x: number
-  y: number
-  width: number
-  height: number
-}
-
-export interface BrowserTabInfo {
-  id: string
-  url: string
-  title: string
-  /** True when the host claimed this webview for a pending agent open. */
-  agentControlled: boolean
-}
-
-export interface BrowserTabNavigatedPayload {
-  browserTabId: string
-  url: string
-}
-
-export interface BrowserTabLoadedPayload {
-  browserTabId: string
-}
-
-export interface BrowserTabTitleChangedPayload {
-  browserTabId: string
-  title: string
-}
-
-export interface BrowserEventSubscription {
-  unlisten: () => void
-}
-
-export type IpcResult<T> =
-  | { success: true; data: T }
-  | { success: false; error: string; code: string }
+export type {
+  BrowserBounds,
+  BrowserEventSubscription,
+  BrowserTabInfo,
+  BrowserTabLoadedPayload,
+  BrowserTabNavigatedPayload,
+  BrowserTabTitleChangedPayload,
+  IpcResult
+} from './browser-types'
 
 export async function browserTabCreate(
   tabId: string,

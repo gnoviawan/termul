@@ -2262,8 +2262,9 @@ describe('Desktop host seam parity (GPUIX)', () => {
 // GPUIX browser host seam (apps/gpuix, unit B2): a non-Tauri desktop shell
 // registers native webviews through `browser-host.ts`; every browser-api
 // facade asks it first, and the browser-pane entry points are gated on
-// `nativeBrowserPanesAvailable()` instead of `isTauriContext()`. Behavior is
-// covered by `browser-host.web.test.ts`; this block pins the wiring.
+// `nativeBrowserPanesAvailable()` (`browser-panes.ts`) instead of
+// `isTauriContext()`. Behavior is covered by `browser-host.web.test.ts`; this
+// block pins the wiring.
 describe('Browser host seam parity (GPUIX)', () => {
   const RENDERER_DIR = join(LIB_DIR, '..')
   const api = readFileSync(join(LIB_DIR, 'browser-api.ts'), 'utf-8')

@@ -10,6 +10,8 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { registerDesktopHost } from '@/lib/desktop-host'
+import type { FocusControl } from './boot-contract'
+import { detectBrowserSupport } from './browser/support'
 import { installBrowserEnv } from './env'
 import { readInitialWindowSize } from './env/window-size'
 import { launch } from './launcher'
@@ -38,6 +40,25 @@ const fonts = FONT_FILES.map((file) => readFileSync(path.join(FONT_DIR, path.bas
 // Before the app tree loads: the keyboard-shortcuts store reads its desktop
 // defaults from the registered host when its module is evaluated.
 registerDesktopHost(createDesktopHost())
+let focusControl: FocusControl | null = null
+const browserSupport = detectBrowserSupport(process.env, process.platform, import.meta.dir)
+if (browserSupport.kind === 'x11') {
+  const [{ registerBrowserHost }, { createGpuixBrowserHost }] = await Promise.all([
+    import('@/lib/browser-host'),
+    import('./browser/browser-host')
+  ])
+  const browserHost = createGpuixBrowserHost({
+    binary: browserSupport.binary,
+    parentPid: process.pid,
+    focusedElement: () => focusControl?.focusedElement() ?? null,
+    blurApp: () => focusControl?.blur()
+  })
+  registerBrowserHost(browserHost)
+  process.on('exit', () => browserHost.kill())
+  log.info('browser', `browser panes on, helper ${browserSupport.binary}`)
+} else {
+  log.info('browser', `browser panes off: ${browserSupport.reason}`)
+}
 // The window zoom needs the React root. The reconciler instance is not in
 // @gpuix/react's exports, so it is imported by file: the same module record
 // @gpuix/react loaded, because the loader keys modules by resolved path.
@@ -54,5 +75,8 @@ boot(config, {
   onFocusRequest: launched.onFocusRequest,
   window: windowSize,
   fonts,
-  hostLocalToken: hostLocalTokenFile ? () => readHostLocalToken(hostLocalTokenFile) : null
+  hostLocalToken: hostLocalTokenFile ? () => readHostLocalToken(hostLocalTokenFile) : null,
+  onFocusControl: (control) => {
+    focusControl = control
+  }
 })

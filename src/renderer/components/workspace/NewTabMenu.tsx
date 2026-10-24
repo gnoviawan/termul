@@ -8,7 +8,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
-import { nativeBrowserPanesAvailable } from '@/lib/browser-host'
+import { nativeBrowserPanesAvailable } from '@/lib/browser-panes'
 import { openProjectCanvas } from '@/lib/open-project-canvas'
 import { cn } from '@/lib/utils'
 import { useActiveProject } from '@/stores/project-store'
