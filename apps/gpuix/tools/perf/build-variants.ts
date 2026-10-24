@@ -10,6 +10,8 @@
  * - `park` (dist): the branch as committed.
  * - `base` (dist-sbase): `parkHiddenPanes` does nothing, so hidden panes stay
  *   in the GPUI frame as on exp/gpuix-client before F3.
+ * - `prespin` (dist-sprespin): parking, but a spinner in a parked pane keeps
+ *   animating, as before `isOffFrame`.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -23,9 +25,14 @@ interface Edit {
 }
 
 const PARK = path.join(APP_DIR, 'src/compat/park.ts')
+const SPINNER = path.join(APP_DIR, 'src/ui/spinner.tsx')
 
 const VARIANTS: Record<string, { outdir: string; edits: Edit[] }> = {
   park: { outdir: 'dist', edits: [] },
+  prespin: {
+    outdir: 'dist-sprespin',
+    edits: [{ file: SPINNER, from: 'if (id !== undefined && isOffFrame(id)) return', to: '' }]
+  },
   base: {
     outdir: 'dist-sbase',
     edits: [
