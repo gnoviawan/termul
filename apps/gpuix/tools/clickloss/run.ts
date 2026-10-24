@@ -1,10 +1,12 @@
 /**
- * `bun tools/clickloss/run.ts [--trials N] [--modes a,b] [--targets row,gear] [--port N] [--xvfb-args "..."]`
+ * `bun tools/clickloss/run.ts [--trials N] [--modes a,b] [--targets row,gear,fade] [--port N] [--entry dist/main.js]`
  *
  * Lost-press repro on the real rail. Seeds the matrix world, launches the
  * client with `COMPAT_TRACE_POINTER=1`, and clicks rail rows (success: the
- * dashboard of that project shows) and the hover-revealed gear (success: the
- * Project settings modal shows), each through one input path:
+ * dashboard of that project shows), the hover-revealed gear (success: the
+ * Project settings modal shows) and the fade at the start of the hover-revealed
+ * action strip (success: the row's project opens, as a click there does on
+ * the web), each through one input path:
  *
  * - `auto`: GPUIX automation `click` at the point, no move first.
  * - `auto-move`: automation `mouseMove` to the point, then `click`.
@@ -29,7 +31,7 @@ import { createWorld, PROJECTS, prepareDevice, setTheme } from '../matrix/world'
 import { startX, waitForQuietHost, type XServer } from './x'
 
 type Mode = 'auto' | 'auto-move' | 'xtest' | 'xtest-nofocus'
-type Target = 'row' | 'gear'
+type Target = 'row' | 'gear' | 'fade'
 type App = Awaited<ReturnType<typeof launch>>
 interface Point {
   x: number
@@ -41,10 +43,11 @@ const { values } = parseArgs({
   options: {
     trials: { type: 'string', default: '10' },
     modes: { type: 'string', default: 'auto,auto-move,xtest' },
-    targets: { type: 'string', default: 'row,gear' },
+    targets: { type: 'string', default: 'row,gear,fade' },
     port: { type: 'string' },
     'xvfb-args': { type: 'string', default: '' },
-    'no-build': { type: 'boolean', default: false }
+    /** A prebuilt client bundle (e.g. another checkout's dist/main.js) instead of building this one. */
+    entry: { type: 'string' }
   }
 })
 
@@ -118,6 +121,26 @@ function input(mode: Mode, app: App, x: XServer, origin: Point): Input {
 /** A point away from the rail, to start each trial from a moved pointer. */
 const PARK: Point = { x: 700, y: 400 }
 
+interface Box {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** The row's action strip once its hover has revealed it. */
+async function stripOf(app: App, row: Point): Promise<Box | null> {
+  const deadline = Date.now() + 3000
+  while (Date.now() < deadline) {
+    for (const node of await app.getByTestId('project-row-actions').all()) {
+      const b = node.bounds as Box | undefined
+      if (b && b.y <= row.y && row.y <= b.y + b.height) return b
+    }
+    await Bun.sleep(100)
+  }
+  return null
+}
+
 async function trial(app: App, inp: Input, target: Target, name: string): Promise<boolean> {
   const id = PROJECTS[name as keyof typeof PROJECTS].id
   await inp.move(PARK)
@@ -128,17 +151,13 @@ async function trial(app: App, inp: Input, target: Target, name: string): Promis
     return seen(app, dashboard(name), 3000)
   }
   await inp.move(row)
-  const actions = app.getByTestId('project-row-actions')
-  const deadline = Date.now() + 3000
-  let gear: Point | null = null
-  while (Date.now() < deadline && !gear) {
-    for (const node of await actions.all()) {
-      const b = node.bounds
-      if (b && b.y <= row.y && row.y <= b.y + b.height) gear = { x: b.x + 24 + 10, y: b.y + b.height / 2 }
-    }
-    if (!gear) await Bun.sleep(100)
+  const strip = await stripOf(app, row)
+  if (!strip) throw new Error(`row ${name} hover did not reveal its actions`)
+  if (target === 'fade') {
+    await inp.click({ x: strip.x + 8, y: strip.y + strip.height / 2 })
+    return seen(app, dashboard(name), 3000)
   }
-  if (!gear) throw new Error(`row ${name} hover did not reveal its actions`)
+  const gear = { x: strip.x + 24 + 10, y: strip.y + strip.height / 2 }
   await inp.click(gear)
   const ok = await seen(app, SETTINGS_TEXT, 3000)
   if (ok) {
@@ -151,7 +170,7 @@ async function trial(app: App, inp: Input, target: Target, name: string): Promis
 async function main(): Promise<void> {
   mkdirSync(STATE, { recursive: true })
   await waitForQuietHost()
-  const build = values['no-build'] ? { ok: true, entry: path.join(import.meta.dir, '../../dist/main.js'), logs: [] } : await buildClient()
+  const build = values.entry ? { ok: true, entry: path.resolve(values.entry), logs: [] } : await buildClient()
   if (!build.ok) {
     for (const line of build.logs) console.error(line)
     process.exit(1)
@@ -201,7 +220,7 @@ async function main(): Promise<void> {
             const key = `${mode}/${target}`
             const r = (results[key] = { ok: 0, total: 0, failures: [] as string[] })
             for (let i = 0; i < TRIALS; i++) {
-              const name = target === 'row' ? ROWS[i % ROWS.length] : 'beta'
+              const name = target === 'gear' ? 'beta' : ROWS[i % ROWS.length]
               const before = readFileSync(stderrFile, 'utf8').length
               let ok = false
               let error = ''

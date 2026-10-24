@@ -631,20 +631,20 @@ export function adaptHandlers(
 /**
  * A box GPUIX makes block the pointer (absolutely placed, or filled and
  * interactive) also blocks its own ancestors, which the DOM never does. It
- * gets the listeners that hand the press and the hover on to them: a click
- * on the fade of a row's action strip still clicks the row, and the row stays
- * hovered while the pointer is over the strip (`hover.ts`). No `mouseDown`
- * next to an own `mouseMove`: the pair arms GPUIX's pointer capture.
+ * gets the listeners that hand clicks and hover on to them: a click on the
+ * fade of a row's action strip still clicks the row, and the row stays
+ * hovered while the pointer is over the strip (`hover.ts`). Presses
+ * (`mousedown`/`mouseup`) are not handed on: an ancestor that starts a gesture
+ * on press (a Reorder item, a drag source) relies on GPUIX's pointer capture
+ * to see the release, and a forwarded press arms no capture.
  */
 export function addOccluderListeners(out: GpuixListeners, disabled: boolean): void {
   out.onMouseEnter = traced.occluderEnter
   out.onMouseLeave = traced.occluderLeave
-  // A disabled control takes no press, and the DOM does not bubble one from it.
+  // A disabled control takes no click, and the DOM does not bubble one from it.
   if (disabled) return
   out.onClick ??= traced.click
   out.onAuxClick ??= traced.auxClick
-  if (!out.onMouseMove) out.onMouseDown ??= traced.down
-  out.onMouseUp ??= traced.up
 }
 
 /** A real `Event` carrying `extra` as own properties, for `window`/`document` listeners. */
