@@ -6,8 +6,8 @@
  * subtree out once and then skips it. GPUI rebuilds and lays out every
  * element reachable from the window root on every frame, and `visibility:
  * hidden` only skips the paint, so each hidden pane cost the UI thread its
- * full size on every frame (tools/perf/hidden: 8 panes of 150 rows, 81% of a
- * core hidden against 14% parked).
+ * full size on every frame (tools/perf/hidden: 8 panes of 150 rows, 86% of a
+ * core hidden against 19% parked, 11% with no panes).
  *
  * This wraps the renderer's `applyBatch`. When an element's style becomes a
  * hidden full-bleed overlay, the element moves under a native node that is
@@ -35,7 +35,7 @@ type Op = [string, ...unknown[]]
 const PARK_BASE = 2 ** 52
 const PLACEHOLDER: StyleDesc = { position: 'absolute', width: 0, height: 0, visibility: 'hidden' }
 
-export function parksHidden(style: StyleDesc | null | undefined): boolean {
+function parksHidden(style: StyleDesc | null | undefined): boolean {
   return (
     style?.visibility === 'hidden' &&
     style.position === 'absolute' &&
