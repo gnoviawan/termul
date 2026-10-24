@@ -44,6 +44,8 @@ const TIERS: &[(CapabilityId, Support)] = &[
 /// press's deferred focus request finds it locked.
 const FOCUS_LOCK_HOLD: Duration = Duration::from_millis(600);
 const DRAG_STEPS: u32 = 6;
+/// The longest a key call waits for the page to take its queued keys.
+const KEY_DRAIN: Duration = Duration::from_secs(2);
 /// CSS px per unit of a smooth scroll delta in WebKitGTK.
 const PX_PER_SCROLL_UNIT: f64 = 40.0;
 
@@ -380,12 +382,21 @@ impl NativeInput for GdkInput {
             // this process now and a click sent next would overtake them.
             // The page acknowledges an event before it answers an eval sent
             // after it, so each round trip lets at least one more through.
-            for _ in 0..events {
-                string_eval::call(&self.tabs, tab, |platform, done| {
-                    eval::call(platform, "return 'null';", "{}", done)
-                })
-                .await?;
-            }
+            // The keys are delivered already: the drain only orders what
+            // comes next, so it gives up at the first failed round trip (an
+            // Enter that navigates) or at its time bound, and never fails
+            // the call.
+            let drain = async {
+                for _ in 0..events {
+                    let probe = string_eval::call(&self.tabs, tab, |platform, done| {
+                        eval::call(platform, "return 'null';", "{}", done)
+                    });
+                    if probe.await.is_err() {
+                        return;
+                    }
+                }
+            };
+            let _ = tokio::time::timeout(KEY_DRAIN, drain).await;
             Ok(())
         })
     }
