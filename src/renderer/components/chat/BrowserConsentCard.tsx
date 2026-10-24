@@ -21,7 +21,7 @@
  * answers too.
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import {
   browserConsentFileLine,
   browserConsentOptionLabel,
@@ -40,6 +40,10 @@ import { logFrontendError } from '@/lib/log-api'
 import { useAcpStore } from '@/stores/acp-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
 
+// Module-wide, not per card: the chat panel's card and the root host's card
+// can both mount for one ticket while the panel registers as its host.
+const loggedRequestIds = new Set<string>()
+
 interface BrowserConsentCardProps {
   /** The pending ticket belonging to this panel's session. */
   consent: BrowserConsentTicket
@@ -51,7 +55,6 @@ export function BrowserConsentCard({ consent }: BrowserConsentCardProps): React.
   const agentName = useAgentDisplayName(agentId)
   const stripHosting = useIsConsentStripHosting()
   const armed = useConsentArmed(consent.requestId)
-  const loggedRequestRef = useRef<string | null>(null)
 
   // The card is the fallback surface: it renders only while no live strip
   // hosts the focused pane's active browser tab (mutual exclusion).
@@ -60,8 +63,8 @@ export function BrowserConsentCard({ consent }: BrowserConsentCardProps): React.
   // Boundary log (durable): once per request, record that the in-chat card
   // owns this consent decision rather than the in-pane strip.
   useEffect(() => {
-    if (!hosting || loggedRequestRef.current === consent.requestId) return
-    loggedRequestRef.current = consent.requestId
+    if (!hosting || loggedRequestIds.has(consent.requestId)) return
+    loggedRequestIds.add(consent.requestId)
     void logFrontendError({
       level: 'info',
       message: `browser consent card hosting prompt: requestId=${consent.requestId}`,

@@ -233,25 +233,38 @@ describe('BrowserConsentCard', () => {
   })
 })
 
+// The logged-request record is module-wide, so each test uses its own ids.
 describe('BrowserConsentCard boundary log', () => {
   it('logs hosting once per requestId and not again on re-render', () => {
-    const consent = ticket()
+    const consent = ticket({ requestId: 'host:log-1' })
     const { rerender } = render(<BrowserConsentCard consent={consent} />)
     expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
     expect(mockLogFrontendError.mock.calls[0][0]).toMatchObject({
       level: 'info',
+      message: 'browser consent card hosting prompt: requestId=host:log-1',
       source: 'BrowserConsentCard'
     })
     rerender(<BrowserConsentCard consent={consent} />)
     expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
-    rerender(<BrowserConsentCard consent={ticket({ requestId: 'host:req-2' })} />)
+    rerender(<BrowserConsentCard consent={ticket({ requestId: 'host:log-2' })} />)
     expect(mockLogFrontendError).toHaveBeenCalledTimes(2)
+  })
+
+  it('logs once when the chat panel and the root host both show one ticket', () => {
+    const consent = ticket({ requestId: 'host:log-3' })
+    render(
+      <>
+        <BrowserConsentCard consent={consent} />
+        <BrowserConsentCard consent={consent} />
+      </>
+    )
+    expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
   })
 
   it('does not log while suppressed by a hosting strip', () => {
     useConsentStripHost.setState({ mountedBrowserTabIds: new Set([TAB_ID]) })
     workspaceState.activeTab = browserTab()
-    render(<BrowserConsentCard consent={ticket()} />)
+    render(<BrowserConsentCard consent={ticket({ requestId: 'host:log-4' })} />)
     expect(mockLogFrontendError).not.toHaveBeenCalled()
   })
 })
