@@ -4,6 +4,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState
@@ -92,8 +93,12 @@ export interface SelectorPanelV2Props extends SelectorPanelProps {
   agentRail?: 'top' | 'left'
 }
 
-function SectionLabel({ children }: { children: ReactNode }): React.JSX.Element {
-  return <div className={PICKER_LABEL}>{children}</div>
+function SectionLabel({ id, children }: { id?: string; children: ReactNode }): React.JSX.Element {
+  return (
+    <div id={id} className={PICKER_LABEL}>
+      {children}
+    </div>
+  )
 }
 
 function DenseModelRow({
@@ -134,8 +139,9 @@ function DenseModelRow({
     details: tooltip
   })
   const editable = Boolean(edit && edit.length > 0)
-  // Edit showing the level marks the selected row; it replaces the check there.
-  // Every other selected row (the Favorites copy, a row without a level) keeps it.
+  // Edit showing the level marks the selected row (its list row and its
+  // Favorites copy alike); it replaces the check there. A selected row with no
+  // level on Edit keeps it.
   const levelOnEdit = editable && edit !== undefined && thinkingLabel(edit) !== undefined
   // Controlled, so a focus handed back by the closing flyout can skip it.
   const [tipOpen, setTipOpen] = useState(false)
@@ -679,6 +685,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   const { effectiveCatalog, capabilities, nameOf, tabOf } = state
   const searchRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
+  const favoritesLabelId = useId()
 
   const { isRejected, trySet } = useRejectedOptionValues(
     effectiveId,
@@ -758,12 +765,9 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           glyph={tab ? <TabGlyph tab={tab} /> : null}
           agentId={configId}
           agentName={mixed && configId !== effectiveId ? tab?.name : undefined}
-          // Only the active model has session options; a favorite repeats it without Edit.
-          edit={
-            configId === effectiveId && model.value === selectedValue && !keyPrefix
-              ? edit
-              : undefined
-          }
+          // Only the active model has session options. Each of its rows (the list
+          // row, its Favorites copy) gets the same Edit over that one session state.
+          edit={configId === effectiveId && model.value === selectedValue ? edit : undefined}
           favorite={
             key
               ? {
@@ -833,17 +837,21 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
         <>
           {view.favorites.length > 0 ? (
             <>
-              <SectionLabel>Favorites</SectionLabel>
-              {view.favorites.map((favorite) =>
-                rows(
-                  favorite.configId,
-                  favorite.catalog,
-                  [favorite.model],
-                  favorite.configId === effectiveId ? modelValue : undefined,
-                  true,
-                  FAVORITES_PREFIX
-                )
-              )}
+              {/* A named group: a screen reader tells the copy's Edit from the list row's. */}
+              {/* biome-ignore lint/a11y/useSemanticElements: a fieldset would give model rows form semantics and min-content sizing */}
+              <div role="group" aria-labelledby={favoritesLabelId}>
+                <SectionLabel id={favoritesLabelId}>Favorites</SectionLabel>
+                {view.favorites.map((favorite) =>
+                  rows(
+                    favorite.configId,
+                    favorite.catalog,
+                    [favorite.model],
+                    favorite.configId === effectiveId ? modelValue : undefined,
+                    true,
+                    FAVORITES_PREFIX
+                  )
+                )}
+              </div>
               <SectionLabel>{viewTab?.name ?? 'Models'}</SectionLabel>
             </>
           ) : null}

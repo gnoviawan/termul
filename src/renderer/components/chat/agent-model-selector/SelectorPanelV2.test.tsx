@@ -616,17 +616,20 @@ describe('SelectorPanelV2 selected-row check', () => {
     expect(checkOf(sonnet)?.getAttribute('class')).toContain('opacity-0')
   })
 
-  it('the Favorites copy of the selected row (no Edit) keeps its visible check', () => {
+  it('the Favorites copy of the selected row shows the level on its own Edit, no check', () => {
     render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
     const rows = screen.getAllByRole('button', { name: 'Claude Opus', pressed: true })
     const copy = rows.find((row) => row.closest('[data-favorite-entry]')) as HTMLElement
     const listed = rows.find((row) => row !== copy) as HTMLElement
     expect(copy).toBeDefined()
     expect(listed).toBeDefined()
-    // The list row shows the level on Edit instead of the check.
-    expect(screen.getAllByTestId('selector-edit')).toHaveLength(1)
-    expect(checkOf(listed)).toBeNull()
-    expect(checkOf(copy)?.getAttribute('class')).toContain('opacity-100')
+    // Both copies of the active model carry Edit with the level, in place of the check.
+    const edits = screen.getAllByTestId('selector-edit')
+    expect(edits).toHaveLength(2)
+    for (const row of [copy, listed]) {
+      expect(checkOf(row)).toBeNull()
+      expect(edits.some((edit) => edit.parentElement?.contains(row))).toBe(true)
+    }
   })
 
   it('a selected row without a level on Edit keeps its visible check', () => {
@@ -797,10 +800,17 @@ describe('SelectorPanelV2 Thinking level on the Edit button', () => {
     for (const button of screen.getAllByTestId('selector-edit')) {
       expect(selected.some((row) => row.contains(button))).toBe(false)
     }
-    // One Edit, on the list row; it carries the level.
-    expect(screen.getAllByTestId('selector-edit')).toHaveLength(1)
-    expect(levels()).toHaveLength(1)
-    expect(edit()).toHaveAttribute('aria-label', 'Edit Claude Opus, thinking High')
+    // Two Edits, one per copy of the active model; each carries the level.
+    const edits = screen.getAllByTestId('selector-edit')
+    expect(edits).toHaveLength(2)
+    expect(levels().map((level) => level.textContent)).toEqual(['High', 'High'])
+    for (const button of edits) {
+      expect(button).toHaveAttribute('aria-label', 'Edit Claude Opus, thinking High')
+    }
+    // The Favorites group tells them apart: only the copy's Edit is inside it.
+    const group = screen.getByRole('group', { name: 'Favorites' })
+    expect(edits.filter((button) => group.contains(button))).toHaveLength(1)
+    expect(group).toContainElement(favoriteRow as HTMLElement)
   })
 })
 
@@ -1042,6 +1052,153 @@ describe('SelectorPanelV2 favorite star', () => {
     expect(screen.queryByText('Favorites')).toBeNull()
   })
 })
+
+describe('SelectorPanelV2 Edit on the Favorites copy', () => {
+  const favoritesOf = (): HTMLElement => screen.getByRole('group', { name: 'Favorites' })
+  /** The active model's row: its Favorites copy or its list row. */
+  const copyRow = (): HTMLElement =>
+    within(favoritesOf()).getByRole('button', { name: 'Claude Opus', pressed: true })
+  const listedRow = (): HTMLElement =>
+    screen
+      .getAllByRole('button', { name: 'Claude Opus', pressed: true })
+      .find((row) => !favoritesOf().contains(row)) as HTMLElement
+  /** The Edit button beside a row. */
+  const editOf = (row: HTMLElement): HTMLElement => editBeside(row) as HTMLElement
+  const levelTexts = (): string[] =>
+    Array.from(document.querySelectorAll<HTMLElement>('[data-edit-thinking]')).map(
+      (level) => level.textContent ?? ''
+    )
+
+  /** The panel with live effort state, as the composer holds it. */
+  function LivePanel(p: SelectorPanelV2Props): React.JSX.Element {
+    const [effort, setEffort] = useState(p.effortValue)
+    return (
+      <Panel
+        {...p}
+        effortValue={effort}
+        thoughtLevel={p.thoughtLevel ? { ...p.thoughtLevel, currentValue: effort ?? '' } : null}
+        onEffort={(value) => {
+          p.onEffort(value)
+          setEffort(value)
+        }}
+      />
+    )
+  }
+
+  it('Edit on the copy opens the flyout; a Thinking pick updates both levels', async () => {
+    const onEffort = vi.fn()
+    render(<LivePanel {...props({ onEffort, favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
+    expect(levelTexts()).toEqual(['High', 'High'])
+    const edit = editOf(copyRow())
+    expect(favoritesOf()).toContainElement(edit)
+    fireEvent.click(edit)
+    const flyout = await screen.findByTestId('selector-edit-flyout')
+    expect(edit).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.click(within(flyout).getByRole('menuitemradio', { name: 'Medium' }))
+    expect(onEffort).toHaveBeenCalledWith('medium')
+    await waitFor(() => expect(levelTexts()).toEqual(['Medium', 'Medium']))
+  })
+
+  it("only one flyout is open: Edit on the list row closes the copy's", async () => {
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
+    const copyEdit = editOf(copyRow())
+    const listedEdit = editOf(listedRow())
+    expect(copyEdit).not.toBe(listedEdit)
+    fireEvent.click(copyEdit)
+    await screen.findByTestId('selector-edit-flyout')
+    expect(copyEdit).toHaveAttribute('aria-expanded', 'true')
+    // A press outside the open flyout dismisses it, then the click opens the other.
+    fireEvent.pointerDown(listedEdit)
+    fireEvent.click(listedEdit)
+    await waitFor(() => expect(copyEdit).toHaveAttribute('aria-expanded', 'false'))
+    expect(listedEdit).toHaveAttribute('aria-expanded', 'true')
+    await waitFor(() => expect(screen.getAllByTestId('selector-edit-flyout')).toHaveLength(1))
+  })
+
+  it('ArrowRight on the copy opens it; ArrowLeft returns focus to the copy', async () => {
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
+    const copy = copyRow()
+    act(() => copy.focus())
+    fireEvent.keyDown(copy, { key: 'ArrowRight' })
+    const flyout = await screen.findByTestId('selector-edit-flyout')
+    await waitFor(() =>
+      expect(within(flyout).getByRole('menuitemradio', { name: 'High' })).toHaveFocus()
+    )
+    expect(editOf(copy)).toHaveAttribute('aria-expanded', 'true')
+    expect(editOf(listedRow())).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowLeft' })
+    await waitFor(() => expect(screen.queryByTestId('selector-edit-flyout')).toBeNull())
+    await waitFor(() => expect(copy).toHaveFocus())
+  })
+
+  it("Escape from the copy's flyout returns to the copy, quietly; the next closes the picker", async () => {
+    const onOpenChange = vi.fn()
+    render(
+      <InPicker
+        {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })}
+        onOpenChange={onOpenChange}
+      />
+    )
+    const copy = await waitFor(copyRow)
+    act(() => copy.focus())
+    fireEvent.keyDown(copy, { key: 'ArrowRight' })
+    const flyout = await screen.findByTestId('selector-edit-flyout')
+    await waitFor(() =>
+      expect(within(flyout).getByRole('menuitemradio', { name: 'High' })).toHaveFocus()
+    )
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('selector-edit-flyout')).toBeNull())
+    expect(onOpenChange).not.toHaveBeenCalled()
+    await waitFor(() => expect(copy).toHaveFocus())
+    expect(listedRow()).not.toHaveFocus()
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    expect(copy).not.toHaveAttribute('data-state', 'delayed-open')
+    expect(copy).not.toHaveAttribute('data-state', 'instant-open')
+    fireEvent.keyDown(copy, { key: 'Escape' })
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it("unselected favorites and other agents' favorites get no Edit", () => {
+    knownCatalogs.current = new Map([
+      [CLAUDE.id, { ...CLAUDE_CATALOG, currentValue: 'claude-opus' } as ModelCatalog]
+    ])
+    render(
+      <Panel
+        {...props({
+          favoritesStore: storeOf([
+            [CLAUDE.id, 'claude-opus'],
+            [CURSOR.id, 'sonnet'],
+            [CURSOR.id, 'opus']
+          ])
+        })}
+      />
+    )
+    const entries = Array.from(favoritesOf().querySelectorAll<HTMLElement>('[data-favorite-entry]'))
+    expect(entries).toHaveLength(3)
+    const named = entries
+      .filter((entry) => editBeside(entry) !== undefined)
+      .map((entry) => entry.querySelector('[data-selector-row]')?.getAttribute('aria-label'))
+    expect(named).toEqual(['Claude Opus'])
+    expect(
+      within(favoritesOf()).queryByRole('button', { name: /^Edit Opus via Claude/ })
+    ).toBeNull()
+    arrowRightOpensNothing(within(favoritesOf()).getByRole('button', { name: 'Claude Sonnet' }))
+    arrowRightOpensNothing(
+      within(favoritesOf()).getByRole('button', { name: 'Opus via Claude · Claude Agent' })
+    )
+  })
+})
+
+/** The Edit button sharing a row's hover box, if it has one. */
+function editBeside(row: HTMLElement): HTMLElement | undefined {
+  return screen.queryAllByTestId('selector-edit').find((edit) => edit.parentElement?.contains(row))
+}
+
+function arrowRightOpensNothing(row: HTMLElement): void {
+  act(() => row.focus())
+  fireEvent.keyDown(row, { key: 'ArrowRight' })
+  expect(screen.queryByTestId('selector-edit-flyout')).toBeNull()
+}
 
 /** Resolves or rejects a pending set from the test. */
 function deferred(): {
