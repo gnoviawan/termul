@@ -434,7 +434,7 @@ export const SECTIONS: CanvasSection[] = [
             name: 'Model selector v2 (flag)',
             source: `${PICKER}/SelectorPanelV2.tsx`,
             width: 1120,
-            height: 560,
+            height: 680,
             Preview: M.ModelSelectorV2
           }
         ]

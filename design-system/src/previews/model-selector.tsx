@@ -94,7 +94,7 @@ function V2Column({ id, label, model }: { id: string; label: string; model: stri
   const state = useMockSelector(id, model)
   const escapeRef = useRef<(() => boolean) | null>(null)
   return (
-    // Room on the right for the session option flyout.
+    // Room on the right for the Edit flyout.
     <div className="flex w-130 flex-col gap-3">
       <Caption>{label}</Caption>
       <div className={`${SURFACE} self-start`}>
