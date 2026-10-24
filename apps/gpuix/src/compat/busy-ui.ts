@@ -15,11 +15,12 @@ export function isUiTimeout(err: unknown): boolean {
 }
 
 export interface FocusReader {
-  getFocusedElementId(): number | null
+  getFocusedElementId?: () => number | null
 }
 
 export function tolerateBusyFocusReads(renderer: FocusReader): () => void {
   const read = renderer.getFocusedElementId
+  if (!read) return () => {}
   const tolerant = () => {
     try {
       return read.call(renderer)

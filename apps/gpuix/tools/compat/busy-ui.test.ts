@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { tolerateBusyFocusReads } from '../../src/compat/busy-ui'
 
-function reader(answer: () => number | null) {
+function reader(answer: () => number | null): { getFocusedElementId: () => number | null } {
   return { getFocusedElementId: answer }
 }
 
