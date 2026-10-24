@@ -22,6 +22,7 @@ import {
   type RoleOf,
   startMachineSampler,
   startProcSampler,
+  waitForQuiet,
   withPageRenderer
 } from './proc-sampler.ts'
 import { DEFAULTS, type Flags, type PhaseClock, SCENARIOS, type ScenarioName } from './scenarios.ts'
@@ -118,26 +119,6 @@ async function startXvfb(display: string, width: number, height: number): Promis
   await sleep(700)
   if (xvfb.exitCode !== null) throw new Error(`Xvfb ${display} exited (display in use?)`)
   return xvfb
-}
-
-/**
- * Other units share this machine. Before a run, poll 5 s windows of
- * whole-machine CPU until one falls under the threshold or time runs out.
- * The run goes ahead either way; the record says how quiet it was.
- */
-async function waitForQuiet(
-  belowPct: number,
-  waitS: number
-): Promise<{ waitedS: number; busyPct: number }> {
-  const started = Date.now()
-  for (;;) {
-    const sampler = startMachineSampler()
-    await sleep(5000)
-    const busy = sampler.stop().map((m) => m.busy)
-    const busyPct = Math.round(busy.reduce((a, b) => a + b, 0) / busy.length)
-    const waitedS = Math.round((Date.now() - started) / 1000)
-    if (busyPct < belowPct || waitedS >= waitS) return { waitedS, busyPct }
-  }
 }
 
 const within = <T extends { t: number }>(samples: T[], from: number, to: number) =>
