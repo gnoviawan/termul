@@ -85,9 +85,24 @@ function DragPreviewBox(): ReactNode {
   )
 }
 
-/** Render options a compat tree needs: window key events reach `window` listeners. */
-export const compatRenderOptions: Pick<RenderOptions, 'onKeyDown' | 'onKeyUp' | 'keyboardFocusDim'> = {
+function hostPlatform(): string | undefined {
+  return (globalThis as { process?: { platform?: string } }).process?.platform
+}
+
+/**
+ * Render options a compat tree needs: window key events reach `window`
+ * listeners, and on Linux text antialiases in grayscale like Chromium's.
+ * GPUI draws subpixel (LCD) text into an opaque window, whose colour fringes
+ * make small labels read warm or blue next to the web (C8); it draws grayscale
+ * into a transparent one. CompatRoot paints `bg-background` over the whole
+ * window, so the window still looks opaque.
+ */
+export const compatRenderOptions: Pick<
+  RenderOptions,
+  'onKeyDown' | 'onKeyUp' | 'keyboardFocusDim' | 'windowBackground'
+> = {
   keyboardFocusDim: false,
+  ...(hostPlatform() === 'linux' ? { windowBackground: 'transparent' } : {}),
   onKeyDown: (event) => {
     const dom = windowKeyEvent('keydown', event)
     ;(globalThis as { window?: EventTarget }).window?.dispatchEvent(dom)

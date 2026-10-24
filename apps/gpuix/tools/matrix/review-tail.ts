@@ -1,7 +1,7 @@
 /** Reviews for settings, palette, shortcuts, themes and the long tail (see `review.ts`). */
 
 import type { Review } from './review'
-import { BACKDROP, SELECT, SETTINGS_BASE, TINT, TOAST } from './review-phrases'
+import { BACKDROP, SELECT, SETTINGS_BASE, TOAST } from './review-phrases'
 
 const THEME_FAMILIES = [
   'termul',
@@ -23,7 +23,7 @@ const THEME_REVIEWS: Record<string, Review> = Object.fromEntries(
         status: 'ported',
         differences: [
           'Background, panel, card, border, text and accent colours match the web dashboard.',
-          'The differences left are not the theme: the overlapping chat cards (chat.send) and the outline connection lamp (statusbar.items).'
+          'The differences left are not the theme.'
         ]
       }
     ])
@@ -35,11 +35,12 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'palette.type-ahead': {
     status: 'partial',
     differences: [
-      'Typing "theme" straight after Ctrl+K filters the palette in both.',
-      'The web ranks Open Canvas first for "theme" and GPUIX ranks Agent Launcher first, and the GPUIX search field has no focus underline.'
+      'Typing "theme" straight after Ctrl+K filters the palette in both, and the rows rank the same (C16 fixed in G3: the cmdk shim scores with cmdk\'s command-score and sorts as cmdk does), Open Canvas first under Workspace.',
+      'The step races in both clients: in some runs the web drops the first key ("heme") and in some GPUIX does (an empty filter); GPUIX failed this check in 5 of 9 G3 runs, 3 of 6 with the C16 change and 2 of 3 without it.',
+      'The GPUIX search field has no focus underline.'
     ],
     cause: 'compat translator gap',
-    unit: 'C16 cmdk ranking',
+    unit: 'focus ring on focused fields (unassigned)',
     impact: 1
   },
   'palette.new-terminal': {
@@ -52,7 +53,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
   'palette.save-snapshot': {
     status: 'partial',
-    differences: ['The Create Snapshot modal matches.', BACKDROP, TINT],
+    differences: ['The Create Snapshot modal matches.', BACKDROP],
     cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
@@ -128,42 +129,38 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: ['Ctrl+Alt+T opens the Color Themes popover in both.']
   },
   'shortcuts.zoom-in': {
-    status: 'broken',
+    status: 'partial',
     differences: [
-      'Alt+= zooms the web UI to 110 %; GPUIX does not change scale. The UI zoom hook (hooks/use-ui-zoom.ts) is on the compat needs-override list.'
+      'Each client presses its own key (G3: the web Alt+=, GPUIX the desktop Ctrl+= from G4\'s keymap), and both zoom: the rail and sidebar widen alike (G4, shims/window-zoom.ts; tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both).',
+      'The zoomed web page runs past the window bottom, so its status bar is cut off and the dashboard heading sits 25 px lower; GPUIX keeps the status bar in the window.'
     ],
-    cause: 'native override needed',
-    unit: 'O10 UI zoom',
-    impact: 2
+    cause: 'needs diagnosis',
+    unit: 'web zoom overflow (unassigned)',
+    impact: 1
   },
+
   'shortcuts.desktop-keymap': {
     status: 'blocked',
     differences: [
-      'GPUIX boots without __TAURI_INTERNALS__, so getDefaultKeyboardShortcuts() hands it the web keymap: Alt+T, Alt+W, Alt+, and Alt+= instead of the desktop Ctrl+T, Ctrl+W, Ctrl+, and Ctrl+=, and no Ctrl+R command history. A desktop user who moves to GPUIX loses those keys.'
-    ],
-    cause: 'native override needed',
-    unit: 'K2 desktop keymap for GPUIX',
-    impact: 2
+      'No web reference. GPUIX registers a desktop host, which now gets the same Ctrl-based keymap as Tauri (G4): workspace-checks asserts Ctrl+, opens Preferences, Ctrl+R opens command history and Alt+, does nothing.'
+    ]
   },
+
   'notifications.toast': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Typing the branch name and pressing Enter creates toast-branch and shows the success toast in both.',
       TOAST
-    ],
-    cause: 'native override needed',
-    unit: 'O4 toasts',
-    impact: 1
+    ]
   },
+
   'ssh.workspace': {
     status: 'blocked',
     differences: [
       'No web reference: SSH needs a host-local client and a browser never is one, so the web client shows no SSH section.',
-      'R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render. In gpuix-ssh-connected.png the SFTP Modified column wraps times such as 12:26 AM onto two lines.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'C14 SFTP table column widths',
-    impact: 1
+      'R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render.',
+      'The SFTP Modified column wrapped times such as 12:26 AM onto two lines in gpuix-ssh-connected.png, and Chromium wraps them too: the tabular-figure time is 57 px in a w-14 (56 px) column. G3 widened the shared column to w-16 in SftpEntryRow, a web fix (C14).'
+    ]
   },
   'settings.accounts-claude': {
     status: 'blocked',
@@ -185,7 +182,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       'Row dividers inside a group are missing and rows sit tighter.'
     ],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'settings row layout (unassigned)',
     impact: 1
   },
   'settings.editor': {
@@ -216,8 +213,8 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'settings.terminal-profiles': {
     status: 'partial',
     differences: SETTINGS_BASE,
-    cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
   'settings.ai-agents': {
@@ -233,41 +230,42 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'settings.skills': {
     status: 'partial',
     differences: SETTINGS_BASE,
-    cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
   'settings.provider': {
     status: 'partial',
     differences: [...SETTINGS_BASE, 'The usage line moves under the account instead of beside it.'],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'settings row layout (unassigned)',
     impact: 1
   },
   'settings.mcp-servers': {
     status: 'partial',
     differences: [...SETTINGS_BASE, 'The inline code in the footnote breaks onto its own line.'],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'settings row layout (unassigned)',
     impact: 1
   },
   'settings.shortcuts': {
     status: 'partial',
     differences: SETTINGS_BASE,
-    cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
   'settings.diagnostics': {
     status: 'partial',
     differences: [
       ...SETTINGS_BASE,
-      'Server version reads termul-server v0.1.0 in GPUIX and v0.4.52 on the web against the same server.'
+      'Server version reads termul-server v0.4.52 in both: GPUIX asks the server (G4).'
     ],
-    cause: 'needs diagnosis',
-    unit: 'O9 server version source',
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
     impact: 1
   },
+
   'settings.reset': {
     status: 'partial',
     differences: SETTINGS_BASE,
@@ -288,18 +286,18 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'shortcuts.settings-shortcut': {
     status: 'ported',
     differences: [
-      'Alt+, opens Preferences and Escape closes it in both. The web used to keep it open: the Shortcuts section keeps idle recorders mounted, which SettingsModal mistook for a recording in progress (fixed in src/renderer).'
+      'Each client presses its own key (G3): Alt+, on the web and the desktop Ctrl+, in GPUIX (G4 keymap) open Preferences, and Escape closes it in both.'
     ]
   },
+
   'theme.picker': {
     status: 'partial',
     differences: [
-      'The Color Themes popover, groups, swatches and the current-theme check match.',
-      TINT,
+      'The Color Themes popover, groups, swatches and the current-theme check match, and labels antialias in grayscale as on the web (C8 fixed in G3).',
       'No focus ring on the search field.'
     ],
     cause: 'compat translator gap',
-    unit: 'C8 text colour runs',
+    unit: 'focus ring on focused fields (unassigned)',
     impact: 1
   },
   'dialogs.bug-report': {
@@ -335,12 +333,13 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'update.toast': {
     status: 'blocked',
     differences: [
-      "Not compared: the update toast and the what's new modal render only under isTauriContext(). GPUIX needs its own updater path to show them at all."
+      "Not compared: the update toast and the what's new modal render only under isTauriContext(), so neither client shows them (the web hides them by design). GPUIX shows its version like the web (Preferences, Logs: termul-server v0.4.52). A GPUIX update check against the release feed is not built yet."
     ],
     cause: 'native override needed',
     unit: "U1 GPUIX updater and what's new",
     impact: 1
   },
+
   'theme.tokyonight-light': {
     status: 'ported',
     differences: [

@@ -9,6 +9,7 @@
  * the parts through context and each part adds them to its own className.
  */
 import {
+  Children,
   createContext,
   forwardRef,
   type ReactNode,
@@ -21,7 +22,16 @@ import {
   useState,
   useSyncExternalStore
 } from 'react'
-import { defaultFilter, type Part, type PartClasses, splitPartClasses } from './cmdk-model'
+import {
+  commandScore,
+  orderedSlots,
+  type Part,
+  type PartClasses,
+  type Placement,
+  type SlotOrder,
+  slotOrder,
+  splitPartClasses
+} from './cmdk-model'
 
 // biome-ignore lint/suspicious/noExplicitAny: a cmdk stand-in passes arbitrary DOM props through
 type AnyProps = { children?: ReactNode; [prop: string]: any }
@@ -31,7 +41,7 @@ const join = (...classes: (string | undefined)[]) => classes.filter(Boolean).joi
 interface ItemEntry {
   value: string
   keywords: readonly string[]
-  group: string | null
+  placement: Placement
   disabled: boolean
   order: number
   onSelect(): void
@@ -40,15 +50,17 @@ interface ItemEntry {
 interface Snapshot {
   search: string
   selected: string | null
-  /** Ids of the items that pass the filter, in mount order. */
+  /** Ids of the items that pass the filter, in display order. */
   visible: readonly string[]
   /** Ids of the groups with a visible item. */
   groups: ReadonlySet<string>
+  /** cmdk's sort while a search filters; null keeps source order. */
+  order: SlotOrder | null
 }
 
 interface StoreOptions {
   shouldFilter: boolean
-  filter: typeof defaultFilter
+  filter: typeof commandScore
   loop: boolean
   onValueChange?: (value: string) => void
 }
@@ -59,7 +71,7 @@ class CommandStore {
   private nextOrder = 0
   private search = ''
   private wanted: string | null = null
-  private snapshot: Snapshot = { search: '', selected: null, visible: [], groups: new Set() }
+  private snapshot: Snapshot = { search: '', selected: null, visible: [], groups: new Set(), order: null }
 
   constructor(private readonly options: () => StoreOptions) {}
 
@@ -120,16 +132,36 @@ class CommandStore {
 
   private update(): void {
     const { shouldFilter, filter } = this.options()
-    const visible = [...this.items.entries()]
-      .filter(([, item]) => !shouldFilter || !this.search || filter(item.value, this.search, item.keywords) > 0)
-      .sort(([, a], [, b]) => a.order - b.order)
-    const values = visible.filter(([, item]) => !item.disabled).map(([, item]) => item.value)
+    const filtering = shouldFilter && this.search !== ''
+    const scored = [...this.items.entries()]
+      .map(([id, item]) => ({ id, item, score: filtering ? filter(item.value, this.search, item.keywords) : 1 }))
+      .filter(({ score }) => score > 0)
+    const order = filtering ? slotOrder(scored.map(({ item, score }) => ({ placement: item.placement, score }))) : null
+    const position = (item: ItemEntry): number[] => {
+      if (!order) return []
+      const { listSlot, group, groupSlot } = item.placement
+      const ranked = order.list.indexOf(listSlot)
+      const inGroup = group === null ? 0 : (order.groups.get(group)?.indexOf(groupSlot) ?? 0)
+      return [ranked, ranked < 0 ? listSlot : 0, inGroup]
+    }
+    const byPosition = (a: number[], b: number[]) => a.reduce((d, v, i) => d || v - (b[i] ?? 0), 0)
+    const visible = scored
+      .map((entry) => ({ ...entry, at: position(entry.item) }))
+      .sort((a, b) => byPosition(a.at, b.at) || a.item.order - b.item.order)
+    const values = visible.filter(({ item }) => !item.disabled).map(({ item }) => item.value)
     const selected = this.wanted !== null && values.includes(this.wanted) ? this.wanted : (values[0] ?? null)
-    const ids = visible.map(([id]) => id)
+    const ids = visible.map(({ id }) => id)
     const prev = this.snapshot
-    if (prev.search === this.search && prev.selected === selected && prev.visible.join('\n') === ids.join('\n')) return
-    const groups = new Set(visible.flatMap(([, item]) => (item.group ? [item.group] : [])))
-    this.snapshot = { search: this.search, selected, visible: ids, groups }
+    const orderKey = (o: SlotOrder | null) => (o ? JSON.stringify([o.list, [...o.groups]]) : '')
+    if (
+      prev.search === this.search &&
+      prev.selected === selected &&
+      prev.visible.join('\n') === ids.join('\n') &&
+      orderKey(prev.order) === orderKey(order)
+    )
+      return
+    const groups = new Set(visible.flatMap(({ item }) => (item.placement.group ? [item.placement.group] : [])))
+    this.snapshot = { search: this.search, selected, visible: ids, groups, order }
     for (const listener of this.listeners) listener()
   }
 }
@@ -143,6 +175,27 @@ interface RootContext {
 
 const RootCtx = createContext<RootContext | null>(null)
 const GroupCtx = createContext<{ id: string; parts: PartClasses } | null>(null)
+/** The child slot an item or group renders in, in the list and in its group. */
+const ListSlotCtx = createContext(0)
+const GroupSlotCtx = createContext(0)
+
+/**
+ * `children` in cmdk's sorted order, each in a slot context so the items
+ * inside know where they render. React keeps each child by key, so a
+ * reorder moves it instead of remounting it.
+ */
+function slotted(children: ReactNode, ranked: readonly number[] | undefined, Slot: typeof ListSlotCtx): ReactNode {
+  const kids = Children.toArray(children)
+  return orderedSlots(kids.length, ranked).map((slot) => {
+    const kid = kids[slot]
+    const key = (kid as { key?: string | null }).key ?? slot
+    return (
+      <Slot.Provider key={key} value={slot}>
+        {kid}
+      </Slot.Provider>
+    )
+  })
+}
 
 function useRoot(part: string): RootContext {
   const ctx = useContext(RootCtx)
@@ -181,8 +234,8 @@ const CommandRoot = forwardRef<HTMLDivElement, AnyProps>(function Command(
   },
   ref
 ) {
-  const optionsRef = useRef<StoreOptions>({ shouldFilter, filter: filter ?? defaultFilter, loop, onValueChange })
-  optionsRef.current = { shouldFilter, filter: filter ?? defaultFilter, loop, onValueChange }
+  const optionsRef = useRef<StoreOptions>({ shouldFilter, filter: filter ?? commandScore, loop, onValueChange })
+  optionsRef.current = { shouldFilter, filter: filter ?? commandScore, loop, onValueChange }
   const [store] = useState(() => new CommandStore(() => optionsRef.current))
   const [search, setSearchState] = useState('')
   const setSearch = useCallback(
@@ -246,9 +299,10 @@ const Input = forwardRef<HTMLInputElement, AnyProps>(function CommandInput(
 
 const List = forwardRef<HTMLDivElement, AnyProps>(function CommandList({ className, children, label: _label, ...props }, ref) {
   const root = useRoot('Command.List')
+  const snapshot = useSnapshot(root.store)
   return (
     <div ref={ref} cmdk-list="" role="listbox" className={join(className, root.parts.list)} {...props}>
-      {children}
+      {slotted(children, snapshot.order?.list, ListSlotCtx)}
     </div>
   )
 })
@@ -293,7 +347,7 @@ const Group = forwardRef<HTMLDivElement, AnyProps>(function CommandGroup(
           </div>
         ) : null}
         <div cmdk-group-items="" role="group" className={join(parts['group-items'], root.parts['group-items'])}>
-          {children}
+          {slotted(children, snapshot.order?.groups.get(id), GroupSlotCtx)}
         </div>
       </div>
     </GroupCtx.Provider>
@@ -321,16 +375,18 @@ const Item = forwardRef<HTMLDivElement, AnyProps>(function CommandItem(
   onSelectRef.current = onSelect
   const keywordKey = Array.isArray(keywords) ? keywords.join('\n') : ''
   const groupId = group?.id ?? null
+  const listSlot = useContext(ListSlotCtx)
+  const groupSlot = useContext(GroupSlotCtx)
   useLayoutEffect(
     () =>
       root.store.register(id, {
         value: itemValue,
         keywords: keywordKey ? keywordKey.split('\n') : [],
-        group: groupId,
+        placement: { listSlot, group: groupId, groupSlot: groupId === null ? 0 : groupSlot },
         disabled,
         onSelect: () => onSelectRef.current?.(itemValue)
       }),
-    [root.store, id, itemValue, keywordKey, groupId, disabled]
+    [root.store, id, itemValue, keywordKey, groupId, listSlot, groupSlot, disabled]
   )
   const snapshot = useSnapshot(root.store)
   const itemClass = usePartClass(root, 'item')

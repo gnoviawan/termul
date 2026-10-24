@@ -3,6 +3,9 @@
  * the OS capabilities a browser lacks, and the facades use them on their
  * non-Tauri branch. With no host registered (the browser and phone client)
  * every facade keeps its web behavior; Tauri never reaches this module.
+ * A registered host also owns its window's keys, so the default keymap is the
+ * desktop one (`getDefaultKeyboardShortcuts`). The host must be registered
+ * before the keyboard-shortcuts store module loads.
  *
  * A host provides the whole set or nothing, so a facade never has to handle
  * a half-capable host.

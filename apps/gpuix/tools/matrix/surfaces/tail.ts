@@ -79,14 +79,15 @@ const TOAST_BRANCH = 'toast-branch'
 
 /**
  * Pressed after a click on the rail's Projects label, so no text field holds
- * focus. Keys are the web defaults (settings.ts WEB_DEFAULT_KEY_OVERRIDES),
- * which GPUIX inherits because it is not a Tauri context.
+ * focus. The web presses its defaults (settings.ts WEB_DEFAULT_KEY_OVERRIDES);
+ * GPUIX, a registered desktop host, has the desktop table (K2), so where the
+ * two differ the fifth field is the key GPUIX presses.
  */
-const SHORTCUTS: Array<[id: string, keys: string, title: string, expect: Check[]]> = [
+const SHORTCUTS: Array<[id: string, keys: string, title: string, expect: Check[], gpuixKeys?: string]> = [
   ['toggle-projects', 'ctrl-shift-b', 'collapse the project rail', [gone('gamma')]],
   ['toggle-side-panel', 'ctrl-b', 'hide the side panel', [gone('Explorer')]],
   ['theme-picker', 'ctrl-alt-t', 'theme picker', see('Color Themes')],
-  ['zoom-in', 'alt-=', 'zoom in', see('What should we do in alpha?')]
+  ['zoom-in', 'alt-=', 'zoom in', see('What should we do in alpha?'), 'ctrl-=']
 ]
 
 const PALETTE: Surface[] = [
@@ -156,21 +157,21 @@ const LONG_TAIL: Surface[] = [
   {
     id: 'shortcuts.settings-shortcut',
     area: 'shortcuts',
-    title: 'Settings shortcut (Alt+,); Escape closes the dialog',
+    title: 'Settings shortcut (web Alt+,, desktop Ctrl+,); Escape closes the dialog',
     steps: [
       DASHBOARD,
-      step('b-open', [press('alt-,')], see('Interface zoom')),
+      step('b-open', [press('alt-,', 'ctrl-,')], see('Interface zoom')),
       step('c-escape', [press('escape'), wait(600)], [gone('Interface zoom')])
     ]
   },
   ...SHORTCUTS.map(
-    ([shortcutId, keys, title, expect]): Surface => ({
+    ([shortcutId, keys, title, expect, gpuixKeys]): Surface => ({
       id: `shortcuts.${shortcutId}`,
       area: 'shortcuts',
       title: `Default shortcut ${keys}: ${title}`,
       steps: [
         DASHBOARD,
-        step('b-pressed', [click(txt('Projects')), press(keys), wait(1000)], expect)
+        step('b-pressed', [click(txt('Projects')), press(keys, gpuixKeys), wait(1000)], expect)
       ]
     })
   ),

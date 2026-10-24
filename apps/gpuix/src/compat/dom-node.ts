@@ -57,6 +57,8 @@ const instances = new Map<number, TrackedInstance>()
 const nodes = new Map<number, CompatElement>()
 /** Live input values reported by onChange, for uncontrolled inputs. */
 export const inputValues = new Map<number, string>()
+/** A checkbox's flipped state while its change handlers run, before React re-renders it. */
+export const checkedValues = new Map<number, boolean>()
 
 /**
  * The ref every tracked element gets. One function for all of them, so React
@@ -274,6 +276,10 @@ export class CompatElement {
     inputValues.set(this.elementId, next)
   }
 
+  get checked(): boolean {
+    return checkedValues.get(this.elementId) ?? Boolean(this.dom?.attrs.checked)
+  }
+
   get type(): string {
     return String(this.dom?.attrs.type ?? '')
   }
@@ -418,7 +424,9 @@ export class CompatElement {
     const options = typeof xOrOptions === 'number' ? { left: xOrOptions, top: y } : (xOrOptions ?? {})
     const left = options.left ?? this.scrollLeft
     const top = options.top ?? this.scrollTop
-    renderer.scrollTo(this.elementId, left, top)
+    // GPUI's scroll offset is the content's shift, negative once scrolled; the
+    // getters above negate it, so the DOM's positive scrollTop goes in negated.
+    renderer.scrollTo(this.elementId, -left, -top)
     reads?.invalidate()
   }
 

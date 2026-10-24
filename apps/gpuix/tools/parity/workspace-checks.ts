@@ -3,8 +3,8 @@
  *
  * Drives the GPUIX client on the seeded workspace and asserts what a user
  * sees: project switching, the command palette's Ctrl+K and Escape, the
- * settings shortcut, and a window resize reflowing the shell. Exits non-zero
- * on the first failed assertion.
+ * desktop keymap (Ctrl+, and Ctrl+R, not the web's Alt+,), and a window
+ * resize reflowing the shell. Exits non-zero on the first failed assertion.
  */
 
 import { mkdir, rm } from 'node:fs/promises'
@@ -81,10 +81,18 @@ try {
       assertEqual(await paintedCount(app, 'App Preferences', false), 0, 'Escape: palette closed')
 
       await app.call('keystrokes', { keys: 'alt-,' })
-      assertEqual(await paintedCount(app, 'Interface zoom', true), 1, 'Alt+,: settings open on its first section')
+      await Bun.sleep(500)
+      assertEqual(await app.getByText('Interface zoom').count(), 0, 'Alt+, (web keymap) does nothing on the desktop keymap')
+      await app.call('keystrokes', { keys: 'ctrl-,' })
+      assertEqual(await paintedCount(app, 'Interface zoom', true), 1, 'Ctrl+,: settings open on its first section')
       assertEqual(await app.getByText('Preferences').textContent(), 'Preferences', 'settings title')
       await app.call('keystrokes', { keys: 'escape' })
       assertEqual(await paintedCount(app, 'Interface zoom', false), 0, 'Escape: settings closed')
+
+      await app.call('keystrokes', { keys: 'ctrl-r' })
+      assertEqual(await paintedCount(app, 'No command history yet', true), 1, 'Ctrl+R: command history opens (desktop-only binding)')
+      await app.call('keystrokes', { keys: 'escape' })
+      assertEqual(await paintedCount(app, 'No command history yet', false), 0, 'Escape: command history closed')
 
       const rowBefore = await width(app, 'shell-row')
       const railBefore = await width(app, 'shell-rail')

@@ -82,3 +82,27 @@ describe('scroll size', () => {
     }
   })
 })
+
+describe('scroll writes', () => {
+  test('scrollTop = 120 scrolls the native offset to -120 and reads back 120', () => {
+    let offset = [0, 0]
+    const renderer: CompatRenderer = {
+      ...fakeRenderer().renderer,
+      scrollTo(_id, x, y) {
+        offset = [x, y]
+      },
+      getScrollOffset: () => offset
+    }
+    bindCompatRenderer(renderer)
+    try {
+      const list = nodeFor(1)
+      list.scrollTop = 120
+      expect(offset[1]).toBe(-120)
+      expect(list.scrollTop).toBe(120)
+      list.scrollBy({ top: 30 })
+      expect(offset[1]).toBe(-150)
+    } finally {
+      bindCompatRenderer(null)
+    }
+  })
+})

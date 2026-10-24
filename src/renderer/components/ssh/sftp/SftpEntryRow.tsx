@@ -22,7 +22,7 @@ const TEXT_FILE = /\.(log|txt|md|conf|cfg|ini|ya?ml|json|toml|env|csv)$/i
 export const SFTP_NAME_INSET_CLASS = 'pl-12'
 /** Shared widths so the column header lines up with every row. */
 export const SFTP_SIZE_COL_CLASS = 'w-12 shrink-0 text-right'
-export const SFTP_MODIFIED_COL_CLASS = 'w-14 shrink-0 text-right'
+export const SFTP_MODIFIED_COL_CLASS = 'w-16 shrink-0 text-right'
 
 interface SftpEntryRowProps {
   entry: SFTPEntry

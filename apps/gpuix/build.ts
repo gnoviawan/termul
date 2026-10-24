@@ -282,6 +282,17 @@ export interface BuildResult {
  * which ESM does before any line of the bundle runs. This file sets it first,
  * so `bun dist/main.js` gets React's production build with or without the env.
  */
+/**
+ * The app version, as `vite.config.web.ts` defines it for the web build:
+ * Preferences reads it for "Termul vX" and the release notes. Without it
+ * Bun's `import.meta.env` is `process.env` and the UI says v0.1.0.
+ */
+const APP_VERSION = (JSON.parse(readFileSync(path.join(REPO_DIR, 'package.json'), 'utf8')) as { version: string }).version
+const VERSION_DEFINES = {
+  'import.meta.env.PACKAGE_VERSION': JSON.stringify(APP_VERSION),
+  'import.meta.env.VITE_APP_VERSION': JSON.stringify(APP_VERSION)
+}
+
 function productionEntry(bundle: string): string {
   return `process.env.NODE_ENV = 'production'\nawait import(${JSON.stringify(`./${bundle}`)})\n`
 }
@@ -307,10 +318,12 @@ export async function buildClient(
       : '[name].[ext]',
     // Dynamic imports (shiki grammars, mermaid, BlockNote) become chunks read on first use.
     splitting: Boolean(options.production),
+    define: {
+      ...VERSION_DEFINES,
+      ...(options.production ? { 'process.env.NODE_ENV': '"production"' } : {})
+    },
     // React's production build has no jsxDEV, so a production bundle needs jsx().
-    ...(options.production
-      ? { minify: true, jsx: { development: false }, define: { 'process.env.NODE_ENV': '"production"' } }
-      : {})
+    ...(options.production ? { minify: true, jsx: { development: false } } : {})
   })
   if (result.success && options.production) {
     await Bun.write(path.join(outdir, `${name}.js`), productionEntry(`${name}.bundle.js`))

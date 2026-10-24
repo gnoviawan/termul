@@ -30,7 +30,8 @@ export type Action =
   | { do: 'click'; target: Target; button?: 'right'; modifiers?: 'ctrl' }
   | { do: 'dblclick'; target: Target }
   | { do: 'hover'; target: Target }
-  | { do: 'press'; keys: string }
+  /** `gpuixKeys`: what GPUIX presses instead, when its desktop keymap binds the action elsewhere. */
+  | { do: 'press'; keys: string; gpuixKeys?: string }
   | { do: 'type'; text: string }
   | { do: 'wheel'; target: Target; deltaY: number }
   | { do: 'drag'; from: Target; to: Target }

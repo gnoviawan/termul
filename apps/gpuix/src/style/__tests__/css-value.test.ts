@@ -22,6 +22,16 @@ describe('css-value', () => {
   test('calc() over the spacing scale and rem', () => {
     expect(parseLength('calc(var(--spacing) * 3.5)', { '--spacing': '0.25rem' })).toBe(14)
     expect(parseLength('calc(0.5rem - 2px)')).toBe(6)
+    expect(parseLength('calc(800px-2rem)')).toBe(768)
+    expect(parseLength('calc(-1rem + 20px)')).toBe(4)
+    expect(parseLength('calc(2 * -3px)')).toBe(-6)
+  })
+
+  test('min(), max() and env() lengths', () => {
+    expect(parseLength('min(680px,48rem)')).toBe(680)
+    expect(parseLength('min(22.5rem,calc(800px-2rem))')).toBe(360)
+    expect(parseLength('max(0.5rem,env(safe-area-inset-bottom))')).toBe(8)
+    expect(parseLength('env(safe-area-inset-bottom, 12px)')).toBe(12)
   })
 
   test('shadow lists with inset and oklch colours', () => {
