@@ -140,6 +140,13 @@ export function registerPortal(layer: number, host: number): () => void {
   }
 }
 
+let focusedByCall: ((id: number) => void) | null = null
+
+/** Called after `element.focus()` moves focus; GPUIX reports no focus event for it on a text field. */
+export function onFocusCall(listener: ((id: number) => void) | null): void {
+  focusedByCall = listener
+}
+
 /** Ancestor ids of `id`, nearest first, skipping the trigger a portalled layer sits in. */
 export function ancestorIds(id: number): number[] {
   const { parent } = treeIndex()
@@ -309,7 +316,9 @@ export class CompatElement {
       renderer.focusElement(this.elementId)
     } catch (error) {
       compatWarn('focus-detached', error instanceof Error ? error.message : String(error))
+      return
     }
+    focusedByCall?.(this.elementId)
   }
 
   blur(): void {

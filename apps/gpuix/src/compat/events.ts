@@ -10,7 +10,17 @@
  */
 
 import type { EventPayload, KeyEvent } from '@gpuix/react'
-import { ancestorIds, compatRenderer, descendantIds, type DomInfo, inputValues, nodeFor, nodeOrNull, trackedInstance } from './dom-node'
+import {
+  ancestorIds,
+  compatRenderer,
+  descendantIds,
+  type DomInfo,
+  inputValues,
+  nodeFor,
+  nodeOrNull,
+  onFocusCall,
+  trackedInstance
+} from './dom-node'
 import { dragSuppressesClick, fileDrop, moveSource, pressSource, releaseSource } from './dnd'
 import { compatWarn } from './log'
 
@@ -398,6 +408,50 @@ function inputChange(payload: EventPayload): void {
   call(handlers.onChange, event, id)
 }
 
+/**
+ * Keys typed in the same burst as a shortcut that opens a field (Ctrl+K then
+ * "theme") reach `window` with nothing focused: the field's focus() runs in a
+ * later JS turn than GPUI dispatches them, and GPUIX applies it a frame later
+ * still. In the DOM that focus lands before the next keystroke, so the field
+ * gets them. Printable keys no handler prevented are held here and given to a
+ * controlled text field that focus() targets soon before or after
+ * (palette.type-ahead).
+ */
+/** Rendering what the shortcut opens can take over a second on a loaded host before its focus() runs. */
+const TYPE_AHEAD_MS = 3000
+let typeAhead: { text: string; at: number } | null = null
+let focusTarget: { id: number; at: number } | null = null
+
+const fresh = (entry: { at: number } | null): boolean =>
+  entry !== null && performance.now() - entry.at < TYPE_AHEAD_MS
+
+export function noteWindowKey(payload: KeyEvent, prevented: boolean): void {
+  const ch = payload.keyChar
+  const mods = payload.modifiers
+  if (prevented || !ch || ch.length !== 1 || mods?.ctrl || mods?.alt || mods?.cmd) return
+  if (compatRenderer()?.getFocusedElementId() != null) {
+    focusTarget = null
+    return
+  }
+  typeAhead = { text: (fresh(typeAhead) ? typeAhead?.text : '') + ch, at: performance.now() }
+  if (focusTarget && fresh(focusTarget)) replayTypeAhead(focusTarget.id)
+}
+
+function replayTypeAhead(id: number): void {
+  const pending = typeAhead
+  typeAhead = null
+  if (!pending || !fresh(pending)) return
+  const dom = domOf(id)
+  if ((dom?.tag !== 'input' && dom?.tag !== 'textarea') || dom.attrs.value === undefined) return
+  const current = inputValues.get(id) ?? String(dom.attrs.value)
+  inputChange({ elementId: id, value: current + pending.text } as EventPayload)
+}
+
+onFocusCall((id) => {
+  focusTarget = { id, at: performance.now() }
+  replayTypeAhead(id)
+})
+
 /** Focus moved: the element's own handler, ancestors' React onFocus (it bubbles), then document focusin. */
 export type FocusSink = (type: 'focusin' | 'focusout', target: unknown, related: unknown) => void
 
@@ -416,6 +470,8 @@ function focusListener(type: 'focus' | 'blur') {
     const related = type === 'focus' ? nodeOrNull(lastFocused) : null
     if (type === 'focus') lastFocused = id
     else if (lastFocused === id) lastFocused = null
+    // Not on focus: JS sees the field's focus before the keys GPUI dispatched ahead of it.
+    if (type === 'blur' && focusTarget?.id === id) focusTarget = null
     const event = new CompatEvent(type, target, payload, related)
     for (const at of [id, ...ancestorIds(id)]) {
       const handlers = handlersOf(at)
