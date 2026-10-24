@@ -11,26 +11,42 @@ export const MORE_AGENTS_VIEW = '\0more'
 
 /**
  * A model row's accessible name, set as the row button's `aria-label`:
- * `<name>[ · <agent>][, thinking <level>]`. One string, not sr-only fragments:
- * Chrome reads an absolutely positioned sr-only span as its own block and puts
- * a space before it ("Opus , thinking High"). The name is trimmed, as agents
- * can send edge whitespace.
+ * `<name>[ · <agent>]`. One string, not sr-only fragments: Chrome reads an
+ * absolutely positioned sr-only span as its own block and puts a space before
+ * it ("Opus , thinking High"). The name is trimmed, as agents can send edge
+ * whitespace. The Thinking level is on the row's Edit button, not here.
  */
 export function rowAccessibleName({
   name,
-  agentName,
-  thinking
+  agentName
 }: {
   name: string
   /** Another agent's model: whose it is. */
   agentName?: string
-  /** The selected model's shown Thinking level. */
-  thinking?: string
 }): string {
-  let label = name.trim()
-  if (agentName) label += ` · ${agentName}`
-  if (thinking) label += `, thinking ${thinking}`
-  return label
+  const label = name.trim()
+  return agentName ? `${label} · ${agentName}` : label
+}
+
+/**
+ * The active row's Edit button name. With a Thinking level the button shows
+ * that level, so the name carries it (WCAG 2.5.3, label in name):
+ * `Edit <name>, thinking <level>`. Without one it says what it edits:
+ * `Edit <sections> for <name>`.
+ */
+export function editButtonAccessibleName({
+  name,
+  thinking,
+  sections
+}: {
+  name: string
+  /** The current Thinking level, as the button shows it. */
+  thinking?: string
+  /** What the flyout sets, e.g. `Thinking and Context`. */
+  sections: string
+}): string {
+  const model = name.trim()
+  return thinking ? `Edit ${model}, thinking ${thinking}` : `Edit ${sections} for ${model}`
 }
 
 export interface CatalogModel {

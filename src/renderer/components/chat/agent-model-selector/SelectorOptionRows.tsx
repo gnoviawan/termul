@@ -19,10 +19,12 @@ import {
 } from '@/components/ui/sheet'
 import { Switch, switchClasses } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
+import { editButtonAccessibleName } from './selector-model'
 import {
   PICKER_ICON,
   PICKER_LABEL,
   PICKER_ROW,
+  PICKER_ROW_VALUE,
   PICKER_SURFACE,
   pickerRowHeight
 } from './selector-tokens'
@@ -117,6 +119,18 @@ export function sectionsLabel(sections: readonly ChoiceSection[]): string {
   const labels = sections.map((section) => section.label)
   const last = labels.pop()
   return labels.length > 0 ? `${labels.join(', ')} and ${last}` : (last ?? '')
+}
+
+/**
+ * The current Thinking level's label, read from the flyout's own Thinking
+ * section so the Edit button and the flyout can never disagree. Undefined
+ * when the model has no thinking option or no current value is known: never
+ * a guessed default.
+ */
+export function thinkingLabel(sections: readonly ChoiceSection[]): string | undefined {
+  const section = sections.find((s) => s.id === 'thinking')
+  if (section?.kind !== 'radio' || section.value === undefined) return undefined
+  return section.choices.find((choice) => choice.value === section.value)?.name
 }
 
 /** The look of `Switch`, for an item that is itself the control. */
@@ -466,6 +480,8 @@ export function EditableRow({
   const rowRef = useRef<HTMLButtonElement>(null)
   const clickedAway = useRef(false)
   const what = sectionsLabel(sections)
+  // The button shows the current level when there is one, else "Edit".
+  const level = thinkingLabel(sections)
   const backToRow = (): void => {
     setOpen(false)
     rowRef.current?.focus()
@@ -475,19 +491,32 @@ export function EditableRow({
     <button
       type="button"
       data-testid="selector-edit"
-      aria-label={`Edit ${what} for ${modelName}`}
-      aria-haspopup="menu"
+      aria-label={editButtonAccessibleName({ name: modelName, thinking: level, sections: what })}
+      // The flyout is a Popover (a sheet on touch): a dialog holding the menu.
+      aria-haspopup="dialog"
       aria-expanded={open}
       disabled={disabled}
       className={cn(
         // 2px less on the chevron side so the label and chevron look centred.
-        'flex shrink-0 items-center gap-0.5 rounded-md pl-1.5 pr-1 text-xs transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60',
+        'group/edit flex shrink-0 items-center gap-0.5 rounded-md pl-1.5 pr-1 text-xs transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60',
         open ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
         touch ? 'min-h-11' : 'h-7',
         ROW_FOCUS
       )}
     >
-      Edit
+      {level ? (
+        <span
+          data-edit-thinking=""
+          className={cn(
+            PICKER_ROW_VALUE,
+            open ? 'text-foreground' : 'group-hover/edit:text-foreground'
+          )}
+        >
+          {level}
+        </span>
+      ) : (
+        'Edit'
+      )}
       <ChevronRight size={12} aria-hidden="true" />
     </button>
   )

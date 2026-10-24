@@ -9,6 +9,7 @@ import {
   capabilitySummary,
   catalogFromPersisted,
   catalogFromSessionState,
+  editButtonAccessibleName,
   entryDisableReason,
   favoriteFor,
   isContextOption,
@@ -502,37 +503,61 @@ describe('spacingPx', () => {
 })
 
 describe('rowAccessibleName', () => {
-  it('a short name with a level', () => {
-    expect(rowAccessibleName({ name: 'Claude Opus', thinking: 'High' })).toBe(
-      'Claude Opus, thinking High'
-    )
+  it('a short name', () => {
+    expect(rowAccessibleName({ name: 'Claude Opus' })).toBe('Claude Opus')
   })
 
-  it('a long name with a level', () => {
+  it('a long name, whole', () => {
     const long = 'Claude 4.7 Opus Thinking Max with Extended 1M Context Window Preview Build'
-    expect(rowAccessibleName({ name: long, thinking: 'Extra High' })).toBe(
-      `${long}, thinking Extra High`
-    )
+    expect(rowAccessibleName({ name: long })).toBe(long)
   })
 
   it('trims a padded name', () => {
-    expect(rowAccessibleName({ name: '  Claude Opus  ', thinking: 'High' })).toBe(
-      'Claude Opus, thinking High'
-    )
+    expect(rowAccessibleName({ name: '  Claude Opus  ' })).toBe('Claude Opus')
     expect(rowAccessibleName({ name: '\tClaude Opus\n' })).toBe('Claude Opus')
   })
 
-  it('no level: just the name, no suffix', () => {
-    expect(rowAccessibleName({ name: 'Claude Opus' })).toBe('Claude Opus')
-    expect(rowAccessibleName({ name: 'Claude Opus', thinking: '' })).toBe('Claude Opus')
-  })
-
-  it('with an agent name, before the level', () => {
-    expect(rowAccessibleName({ name: 'Opus via Claude', agentName: 'Claude Agent' })).toBe(
+  it('with an agent name', () => {
+    expect(rowAccessibleName({ name: ' Opus via Claude ', agentName: 'Claude Agent' })).toBe(
       'Opus via Claude · Claude Agent'
     )
+  })
+})
+
+describe('editButtonAccessibleName', () => {
+  const sections = 'Thinking and Context'
+
+  it('with a level: "Edit <name>, thinking <level>"', () => {
+    expect(editButtonAccessibleName({ name: 'Claude Opus', thinking: 'High', sections })).toBe(
+      'Edit Claude Opus, thinking High'
+    )
     expect(
-      rowAccessibleName({ name: ' Opus via Claude ', agentName: 'Claude Agent', thinking: 'High' })
-    ).toBe('Opus via Claude · Claude Agent, thinking High')
+      editButtonAccessibleName({
+        name: 'Claude 4.7 Opus Thinking',
+        thinking: 'Extra High',
+        sections
+      })
+    ).toBe('Edit Claude 4.7 Opus Thinking, thinking Extra High')
+  })
+
+  it('trims a padded name', () => {
+    expect(editButtonAccessibleName({ name: '  Claude Opus  ', thinking: 'High', sections })).toBe(
+      'Edit Claude Opus, thinking High'
+    )
+    expect(editButtonAccessibleName({ name: '  Claude Opus  ', sections })).toBe(
+      'Edit Thinking and Context for Claude Opus'
+    )
+  })
+
+  it('no level: what it edits, as before', () => {
+    expect(editButtonAccessibleName({ name: 'Claude Opus', sections })).toBe(
+      'Edit Thinking and Context for Claude Opus'
+    )
+    expect(editButtonAccessibleName({ name: 'Claude Opus', thinking: '', sections })).toBe(
+      'Edit Thinking and Context for Claude Opus'
+    )
+    expect(editButtonAccessibleName({ name: 'Claude Opus', sections: 'Fast mode' })).toBe(
+      'Edit Fast mode for Claude Opus'
+    )
   })
 })
