@@ -139,6 +139,12 @@ pub fn resolve(path: &str) -> Script {
     Script::new(RESOLVE, json!({ "path": path }))
 }
 
+/// Report the centre, role and name of the element at `path` without
+/// scrolling it, for verbs that only read it.
+pub fn resolve_in_place(path: &str) -> Script {
+    Script::new(RESOLVE, json!({ "path": path, "scroll": false }))
+}
+
 /// Synthetic pointer and click events on the element at `path`.
 pub fn click(path: &str) -> Script {
     Script::new(CLICK, json!({ "path": path }))

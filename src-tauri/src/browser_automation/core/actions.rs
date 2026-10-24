@@ -479,17 +479,39 @@ impl DesktopBrowserHost {
         token: &str,
         resolved: &ResolvedRef,
     ) -> Result<ResolvedElement, BrowserError> {
-        let out = self
-            .eval_ref(label, &resolved.node, assets::resolve(&resolved.node.path))
-            .await?;
-        let mut element = resolve_result(out, Some(token))?;
-        if element.role != resolved.node.role || element.name != resolved.node.name {
-            return Err(stale_ref_error(token, RefStale::Gone));
-        }
+        let script = assets::resolve(&resolved.node.path);
+        let mut element = self.minted_element(label, token, resolved, script).await?;
         if !resolved.node.frame.is_empty() {
             let origin = self.frame_origin(label, &resolved.node.frame).await?;
             element.rect.cx += origin.x;
             element.rect.cy += origin.y;
+        }
+        Ok(element)
+    }
+
+    /// The same check for a verb that only reads the element: the page
+    /// does not scroll.
+    pub(super) async fn revalidate_in_place(
+        &self,
+        label: &str,
+        token: &str,
+        resolved: &ResolvedRef,
+    ) -> Result<(), BrowserError> {
+        let script = assets::resolve_in_place(&resolved.node.path);
+        self.minted_element(label, token, resolved, script).await.map(drop)
+    }
+
+    async fn minted_element(
+        &self,
+        label: &str,
+        token: &str,
+        resolved: &ResolvedRef,
+        script: Script,
+    ) -> Result<ResolvedElement, BrowserError> {
+        let out = self.eval_ref(label, &resolved.node, script).await?;
+        let element = resolve_result(out, Some(token))?;
+        if element.role != resolved.node.role || element.name != resolved.node.name {
+            return Err(stale_ref_error(token, RefStale::Gone));
         }
         Ok(element)
     }

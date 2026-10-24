@@ -180,7 +180,7 @@ impl DesktopBrowserHost {
         let out = match token {
             Some(token) => {
                 let resolved = self.resolve_ref(label, token)?;
-                self.revalidate(label, token, &resolved).await?;
+                self.revalidate_in_place(label, token, &resolved).await?;
                 let script = assets::read_text(Some(&resolved.node.path), cursor, limit);
                 self.eval_ref(label, &resolved.node, script).await?
             }

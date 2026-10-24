@@ -13,7 +13,7 @@
 //! proxy alive and each download its own proxy, through associated
 //! objects, and each proxy keeps wry's delegate.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::path::PathBuf;
 use std::ptr::{self, NonNull};
@@ -85,6 +85,9 @@ pub struct DownloadIvars {
     events: TabEvents,
     /// The host's path for the download, once wry's delegate chose it.
     path: Rc<RefCell<Option<PathBuf>>>,
+    /// Set once the download finished or failed, so the progress timer
+    /// stops whether or not WebKit marks the progress done.
+    ended: Rc<Cell<bool>>,
 }
 
 define_class!(
@@ -117,6 +120,7 @@ define_class!(
             let handler = handler.copy();
             let chosen = self.ivars().path.clone();
             let events = self.ivars().events.clone();
+            let ended = self.ivars().ended.clone();
             // SAFETY: a live WKDownload WebKit handed to its delegate.
             let watched = unsafe { Retained::retain(ptr::from_ref(download).cast_mut()) };
             let answer: RcBlock<dyn Fn(*const NSURL)> = RcBlock::new(move |url: *const NSURL| {
@@ -127,7 +131,7 @@ define_class!(
                     .map(|p| PathBuf::from(p.to_string()));
                 if let (Some(path), Some(watched)) = (path, watched.as_deref()) {
                     *chosen.borrow_mut() = Some(path.clone());
-                    watch(watched, path, events.clone());
+                    watch(watched, path, events.clone(), ended.clone());
                 }
                 handler.call((url,));
             });
@@ -167,6 +171,7 @@ define_class!(
 
 impl AgentDownloadDelegate {
     fn ended(&self, success: bool) {
+        self.ivars().ended.set(true);
         if let Some(path) = self.ivars().path.borrow().as_deref() {
             self.ivars().events.download_finished(path, success);
         }
@@ -190,6 +195,7 @@ impl AgentNavigationDelegate {
             inner,
             events: self.ivars().events.clone(),
             path: Rc::default(),
+            ended: Rc::default(),
         });
         // SAFETY: NSObject's designated initializer.
         let proxy: Retained<AgentDownloadDelegate> = unsafe { msg_send![super(proxy), init] };
@@ -209,7 +215,7 @@ impl AgentNavigationDelegate {
 
 /// Report `download`'s size to the host every tick until it ends, and
 /// cancel it when the host says so.
-fn watch(download: &AnyObject, path: PathBuf, events: TabEvents) {
+fn watch(download: &AnyObject, path: PathBuf, events: TabEvents, ended: Rc<Cell<bool>>) {
     let Some(timer_class) = AnyClass::get(c"NSTimer") else {
         return;
     };
@@ -239,7 +245,7 @@ fn watch(download: &AnyObject, path: PathBuf, events: TabEvents) {
         };
         // A download the host never held reports no end: the deadline
         // bounds the watch.
-        if finished || cancelled || started.elapsed() > budgets::DOWNLOAD_TOTAL {
+        if ended.get() || finished || cancelled || started.elapsed() > budgets::DOWNLOAD_TOTAL {
             return stop();
         }
         let size = DownloadSize {
