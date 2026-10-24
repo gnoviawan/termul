@@ -10,6 +10,7 @@
 //! hidden. Comparison is case-insensitive (see `slash-menu-model`).
 
 pub mod commands;
+pub mod files;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

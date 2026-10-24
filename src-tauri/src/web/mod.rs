@@ -91,7 +91,7 @@ use crate::web::store::WebStore;
 pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
     let events = TerminalEventHub::standalone();
     let cwd = Arc::new(CwdTracker::new(events.clone()));
-    let git = Arc::new(GitTracker::new(None, events.clone()));
+    let git = Arc::new(GitTracker::new(events.clone()));
     let exit = Arc::new(ExitCodeTracker::new(events.clone()));
     Arc::new(PtyManager::new(events, cwd, git, exit))
 }

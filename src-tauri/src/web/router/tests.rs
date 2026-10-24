@@ -711,6 +711,7 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
         "/search/content",
         "/skills",
         "/skills/x",
+        "/skills-index",
         "/log/frontend-error",
         "/log/diagnostics",
         "/log/report-bug",

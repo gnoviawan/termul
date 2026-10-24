@@ -190,6 +190,66 @@ describe('SubagentDetailsDialog agent prose', () => {
   })
 })
 
+describe('SubagentDetailsDialog subagent activity', () => {
+  const child = (id: string, status: ToolCall['status'], path: string): ToolCall => ({
+    toolCallId: id,
+    kind: 'read',
+    status,
+    title: `Read ${path}`,
+    locations: [{ path }],
+    parentToolCallId: 'task-1'
+  })
+
+  it('lists the tool calls the subagent made and its streamed text', () => {
+    render(
+      <SubagentDetailsDialog
+        toolCall={{ ...delegatedCall, subagentText: 'Found 3 issues so far.' }}
+        childToolCalls={[child('c1', 'completed', 'src/a.ts'), child('c2', 'failed', 'src/b.ts')]}
+        parentTurnActive
+        open
+        onOpenChange={() => {}}
+        filePathContext={undefined}
+      />
+    )
+
+    const activity = screen.getByTestId('subagent-activity')
+    expect(activity).toHaveTextContent('Activity · 2 tool calls')
+    expect(within(activity).getAllByRole('listitem')).toHaveLength(2)
+    expect(within(activity).getByLabelText('Done')).toBeInTheDocument()
+    expect(within(activity).getByLabelText('Failed')).toBeInTheDocument()
+    expect(screen.getByTestId('subagent-output')).toHaveTextContent('Found 3 issues so far.')
+  })
+
+  it('shows only the newest 50 calls of a long subagent run', () => {
+    const calls = Array.from({ length: 53 }, (_, i) => child(`c${i}`, 'completed', `f${i}.ts`))
+    render(
+      <SubagentDetailsDialog
+        toolCall={delegatedCall}
+        childToolCalls={calls}
+        open
+        onOpenChange={() => {}}
+        filePathContext={undefined}
+      />
+    )
+    const activity = screen.getByTestId('subagent-activity')
+    expect(within(activity).getAllByRole('listitem')).toHaveLength(50)
+    expect(activity).toHaveTextContent('3 earlier tool calls are not shown.')
+  })
+
+  it('omits both sections when the subagent reported nothing', () => {
+    render(
+      <SubagentDetailsDialog
+        toolCall={delegatedCall}
+        open
+        onOpenChange={() => {}}
+        filePathContext={undefined}
+      />
+    )
+    expect(screen.queryByTestId('subagent-activity')).toBeNull()
+    expect(screen.queryByTestId('subagent-output')).toBeNull()
+  })
+})
+
 describe('SubagentDetailsDialog file-path open', () => {
   const completedCall: ToolCall = {
     ...delegatedCall,

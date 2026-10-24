@@ -5,6 +5,7 @@
  */
 
 import type { BugReportSubmitRequest } from '@shared/types/bug-report.types'
+import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/persistence.types'
 import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
 import { flattenConfigOptionValues } from '@/components/chat/chat-input-bar-config'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
@@ -42,6 +43,7 @@ import {
   isAgentAuthRequiredError,
   isClaudeAccountSignedOutError
 } from '@/lib/agents/acp-spawn-errors'
+import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import {
   isFolderTokenPath,
@@ -1436,6 +1438,113 @@ export function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: Ses
     modes: session.modes ?? null,
     configOptions: session.configOptions ?? []
   })
+  // #1486/#1479: advertised options landing on a live session (fresh
+  // session/new after a branch-checkout re-prepare, or the first
+  // config_option_update after an idle reopen) is exactly the moment a
+  // silently-reset pick can be healed from the persisted composer options.
+  // Idempotent: values equal to the session's current ones are no-ops, and
+  // picks no longer advertised are dropped.
+  void reapplyPersistedComposerOptions(get, sessionId, configId)
+}
+
+/** Sessions with a reapply currently in flight (dedupes event storms). */
+const reapplyInFlight = new Set<SessionId>()
+
+/** Minimal structural shape reapply needs from the store (keeps helpers
+ *  decoupled from the full AcpState action surface). */
+export async function reapplyPersistedComposerOptions(
+  get: AcpGet,
+  sessionId: SessionId,
+  configId: string
+): Promise<void> {
+  if (reapplyInFlight.has(sessionId)) return
+  const session = get().sessions[sessionId]
+  // Only heal live chats: a session still initializing or sitting in an
+  // error/launch-fail state has no stable advertised surface to validate
+  // picks against, and firing set-config calls there can race the launch
+  // failure path.
+  if (
+    !session ||
+    session.status !== 'active' ||
+    (session.configOptions.length === 0 && (session.models?.availableModels.length ?? 0) === 0)
+  )
+    return
+  reapplyInFlight.add(sessionId)
+  // Snapshot the live values when the read starts. The read is async; if the
+  // user (or any event) changes a value while it is in flight, the change is
+  // newer than the persisted record and must win — the saved value for that
+  // option is then skipped instead of undoing it (review: race on #1488).
+  const valuesAtReadStart = new Map<string, string | boolean>()
+  for (const option of session.configOptions) valuesAtReadStart.set(option.id, option.currentValue)
+  const modelAtReadStart =
+    session.configOptions.find((o) => o.category === 'model')?.currentValue ??
+    session.models?.currentModelId ??
+    null
+  try {
+    const result = await persistenceApi.read<PersistedComposerOptions>(
+      PersistenceKeys.lastComposerOptions(configId)
+    )
+    if (!result.success || !result.data) return
+    const saved = result.data
+
+    for (const [optionId, valueId] of Object.entries(saved.configValues ?? {})) {
+      const option = get().sessions[sessionId]?.configOptions.find((o) => o.id === optionId)
+      if (!option || option.currentValue === valueId) continue
+      if (valuesAtReadStart.get(optionId) !== option.currentValue) continue // changed during read
+      // Grouped selects nest their values; flatten like mergeAgentConfigOptions.
+      const advertised =
+        option.type === 'boolean' ||
+        flattenConfigOptionValues(option).some((v) => v.value === valueId)
+      if (!advertised) continue
+      try {
+        await get().setConfigOption(sessionId, optionId, valueId)
+        void logFrontendError({
+          level: 'info',
+          source: 'acp.reapplyComposerOptions',
+          message: `re-applied persisted config '${optionId}' on session ${sessionId} (#1486/#1479)`
+        })
+      } catch {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.reapplyComposerOptions',
+          message: `failed to re-apply persisted config '${optionId}' (details withheld)`
+        })
+      }
+    }
+
+    if (saved.modelId) {
+      const live = get().sessions[sessionId]
+      const modelOption = live?.configOptions.find((o) => o.category === 'model')
+      const current = modelOption?.currentValue ?? live?.models?.currentModelId ?? null
+      if (current !== modelAtReadStart) return // model changed during read
+      // Advertised via a model-category config option (flattened for groups)
+      // or through the native session.models state when no option exists.
+      const advertised =
+        (modelOption != null &&
+          (modelOption.type === 'boolean' ||
+            flattenConfigOptionValues(modelOption).some((v) => v.value === saved.modelId))) ||
+        (modelOption == null &&
+          (live?.models?.availableModels.some((m) => m.modelId === saved.modelId) ?? false))
+      if (advertised && current !== saved.modelId) {
+        try {
+          await get().setModel(sessionId, saved.modelId)
+          void logFrontendError({
+            level: 'info',
+            source: 'acp.reapplyComposerOptions',
+            message: `re-applied persisted model on session ${sessionId} (#1486/#1479)`
+          })
+        } catch {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp.reapplyComposerOptions',
+            message: 'failed to re-apply persisted model (details withheld)'
+          })
+        }
+      }
+    }
+  } finally {
+    reapplyInFlight.delete(sessionId)
+  }
 }
 
 /** Best-effort tear-down for a session created by a cancelled/stale prepare. */

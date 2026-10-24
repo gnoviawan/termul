@@ -221,6 +221,7 @@ impl FakeDriver {
                     "chunk",
                 )),
                 message_id: None,
+                parent_tool_call_id: None,
             };
             events::fan_out(
                 &self.sinks,

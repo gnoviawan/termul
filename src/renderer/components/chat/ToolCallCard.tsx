@@ -267,20 +267,23 @@ function ToolCallCardComponent({
   // cards never show a bogus duration.
   const [open, setOpen] = useState(false)
   const [endedAt, setEndedAt] = useState<number | null>(null)
-  const prevStatus = useRef(status)
+  const running = isSubagent
+    ? isSubagentRunning(toolCall, parentTurnActive)
+    : isToolCallRunning(toolCall)
+  // A background subagent completes its launch call early, so a subagent card
+  // settles when the agent stops running, not when its tool call completes.
+  const settled = isSubagent ? !running : status === 'completed' || status === 'failed'
+  const prevSettled = useRef(settled)
   useEffect(() => {
-    if (prevStatus.current === status) return
-    if (status === 'completed' || status === 'failed') setEndedAt(Date.now())
-    prevStatus.current = status
-  }, [status])
+    if (prevSettled.current === settled) return
+    if (settled) setEndedAt(Date.now())
+    prevSettled.current = settled
+  }, [settled])
 
   const startedAt = typeof toolCall.timestamp === 'number' ? toolCall.timestamp : null
   const durationMs = endedAt != null && startedAt != null ? endedAt - startedAt : null
 
   const { verb, primary, detail, diffStat } = describeToolCall(toolCall)
-  const running = isSubagent
-    ? isSubagentRunning(toolCall, parentTurnActive)
-    : isToolCallRunning(toolCall)
   const language = readLanguage(toolCall)
   const label = `${verb} ${primary}`.trim()
 

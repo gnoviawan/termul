@@ -277,9 +277,11 @@ pub fn router(
         .route("/search/content", post(search_api::content))
         .route("/search/file-names", get(search_api::file_names))
         .route("/search/cancel", post(search_api::cancel))
-        // Skills web routes (CAP-2): `GET /skills` + `GET /skills/:name`.
+        // Skills web routes (CAP-2): `GET /skills`, `GET /skills/:name`, and
+        // `GET /skills-index` (SKILL.md paths for clickable chat chips).
         .route("/skills", get(skills_api::list))
         .route("/skills/{name}", get(skills_api::read))
+        .route("/skills-index", get(skills_api::files))
         // Frontend error forwarding (CAP-2): `POST /log/frontend-error`.
         .route("/log/frontend-error", log_api::route())
         // Bug-report diagnostics + host-side `gh` submit
@@ -500,6 +502,7 @@ pub fn router_with_static(
         .route("/search/cancel", post(search_api::cancel))
         .route("/skills", get(skills_api::list))
         .route("/skills/{name}", get(skills_api::read))
+        .route("/skills-index", get(skills_api::files))
         .route("/log/frontend-error", log_api::route())
         .route("/log/diagnostics", diagnostics_api::diagnostics_route())
         .route("/log/report-bug", diagnostics_api::report_bug_route())

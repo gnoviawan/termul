@@ -2,7 +2,7 @@ import { mergeAttributes, Node } from '@tiptap/core'
 import { NodeViewWrapper, type ReactNodeViewProps, ReactNodeViewRenderer } from '@tiptap/react'
 import { CMD_TOKEN_END, CMD_TOKEN_START } from '@/lib/skill-tokens'
 import { cn } from '@/lib/utils'
-import { CommandChip } from '../CommandChip'
+import { CommandChipLink } from '../skill-file-links'
 
 /**
  * Inline atomic Tiptap node for a slash COMMAND "pill" (e.g. `/compact`).
@@ -69,7 +69,8 @@ export const CommandPill = Node.create({
 
 /**
  * React NodeView for the command pill. Renders `<CommandChip>` (terminal icon,
- * muted `/name`). `NodeViewWrapper as="span"` keeps it inline (the node is
+ * muted `/name`) through `CommandChipLink`, which makes a skill-backed command
+ * open its `SKILL.md`. `NodeViewWrapper as="span"` keeps it inline (the node is
  * `inline: true`); the `selected` ring + `data-command-*` attrs live on the
  * wrapper so ProseMirror selection state and clipboard serialization work
  * without touching the chip visual.
@@ -87,7 +88,7 @@ function CommandPillNodeView({ node, selected }: ReactNodeViewProps): React.JSX.
       data-command-pill="true"
       data-command-name={name}
     >
-      <CommandChip name={name} />
+      <CommandChipLink name={name} surface="composer" />
     </NodeViewWrapper>
   )
 }

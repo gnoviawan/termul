@@ -32,7 +32,10 @@ pub(super) async fn run_command_loop(
     let init_request = InitializeRequest::new(ProtocolVersion::V1)
         .client_capabilities(client::client_capabilities(allow_terminal))
         .client_info(Implementation::new("termul", env!("CARGO_PKG_VERSION")).title("Termul"));
-    let init_message = match initialize_message(&init_request) {
+    if profile.native_subagents {
+        log::info!("[acp] agent {agent_id}: advertising native subagent sessions");
+    }
+    let init_message = match initialize_message(&init_request, profile.native_subagents) {
         Ok(message) => message,
         Err(error) => {
             let _ = init_tx.send(Err(error.clone()));
@@ -1480,10 +1483,16 @@ pub(super) fn send_reply<T>(slot: &ReplySlot<T>, value: Result<T, String>) {
     }
 }
 
-/// Typed initialize plus the Codex gateway auth capability, which SDK 1.3
-/// cannot set on `AuthCapabilities`.
-fn initialize_message(request: &InitializeRequest) -> Result<UntypedMessage, String> {
+/// Typed initialize plus the capabilities SDK 1.3 cannot set: Codex gateway
+/// auth, and (Claude only) native subagent sessions.
+pub(super) fn initialize_message(
+    request: &InitializeRequest,
+    native_subagents: bool,
+) -> Result<UntypedMessage, String> {
     let mut value = serde_json::to_value(request).map_err(|error| error.to_string())?;
+    if native_subagents {
+        super::native_subagents::advertise_subagents(&mut value);
+    }
     if let Some(auth) = value
         .get_mut("clientCapabilities")
         .and_then(|caps| caps.get_mut("auth"))

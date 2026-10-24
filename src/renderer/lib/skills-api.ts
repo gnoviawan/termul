@@ -34,6 +34,14 @@ export interface AgentSkillContent {
   path: string
 }
 
+/** A skill `SKILL.md` an agent can load — from Termul's `.agents` roots or a
+ * harness root (`.opencode/skills`, `.claude/skills`, ...). */
+export interface SkillFileEntry {
+  name: string
+  /** Absolute path to the skill's `SKILL.md`. */
+  path: string
+}
+
 export const skillsApi = {
   listSkills(projectRoot?: string): Promise<AgentSkillSummary[]> {
     if (!isTauriContext()) return webServerSkills.list(projectRoot)
@@ -46,6 +54,15 @@ export const skillsApi = {
     if (!isTauriContext()) return webServerSkills.read(name, projectRoot)
     return invoke<AgentSkillContent>('read_agent_skill_cmd', {
       name,
+      projectRoot: projectRoot || null
+    })
+  },
+
+  /** Index every skill `SKILL.md` visible from `projectRoot` (project roots,
+   * walked up to the git root, override global roots). */
+  listSkillFiles(projectRoot?: string): Promise<SkillFileEntry[]> {
+    if (!isTauriContext()) return webServerSkills.files(projectRoot)
+    return invoke<SkillFileEntry[]>('list_skill_files_cmd', {
       projectRoot: projectRoot || null
     })
   }

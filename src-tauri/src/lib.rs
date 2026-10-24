@@ -1360,8 +1360,8 @@ pub fn run() {
             let cwd_tracker = Arc::new(CwdTracker::new(terminal_events.clone()));
             app.manage(cwd_tracker.clone());
 
-            let git_tracker = Arc::new(GitTracker::new(
-                Some(handle.clone()),
+            let git_tracker = Arc::new(GitTracker::with_cwd_tracker(
+                cwd_tracker.clone(),
                 terminal_events.clone(),
             ));
             app.manage(git_tracker.clone());
@@ -2092,6 +2092,7 @@ pub fn run() {
             // Agent Skills (Zed-compatible SKILL.md packages)
             skills::commands::list_agent_skills_cmd,
             skills::commands::read_agent_skill_cmd,
+            skills::commands::list_skill_files_cmd,
             // Remote server commands
             commands::remote_server_start,
             commands::remote_server_stop,

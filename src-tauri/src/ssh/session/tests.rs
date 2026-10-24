@@ -16,7 +16,7 @@ fn recording_manager() -> (Arc<SshSessionManager>, Events) {
 fn pty_manager() -> PtyManager {
     let events = crate::trackers::TerminalEventHub::standalone();
     let cwd = Arc::new(crate::trackers::CwdTracker::new(events.clone()));
-    let git = Arc::new(crate::trackers::GitTracker::new(None, events.clone()));
+    let git = Arc::new(crate::trackers::GitTracker::new(events.clone()));
     let exit = Arc::new(crate::trackers::ExitCodeTracker::new(events.clone()));
     PtyManager::new(events, cwd, git, exit)
 }

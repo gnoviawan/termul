@@ -61,6 +61,7 @@ import {
   MENTION_SEARCHING_LABEL
 } from '@/components/chat/FileMentionMenu'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
+import { SkillFilesProvider } from '@/components/chat/skill-file-links'
 import { useChatComposer } from '@/components/chat/use-chat-composer'
 import { useComposerAttachments } from '@/components/chat/use-composer-attachments'
 import {
@@ -2008,28 +2009,30 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                    overlay, no canvas padding. The `prompt` string (sentinel-token
                    format) is the shared model the wire builder + first-turn
                    sync + timeline consume (byte-identical wire payload). */}
-                <ChatComposerEditor
-                  value={prompt}
-                  onValueChange={setPrompt}
-                  onCaretChange={mentions.update}
-                  onBeforeEditorKeyDown={handleKeyDown}
-                  onPasteAttachments={handlePaste}
-                  getSkillPaths={() => skillPathsRef.current}
-                  editorRef={editorRef}
-                  inputRef={composerInputRef}
-                  disabled={composerDisabled}
-                  minHeight={76}
-                  maxHeight={160}
-                  placeholder={
-                    composerDisabled
-                      ? 'Composer unavailable'
-                      : hasCommandToken
-                        ? 'Add a message (optional)…'
-                        : 'Ask anything… (/ for commands, @ for files)'
-                  }
-                  ariaLabel="Agent prompt"
-                  autoFocus
-                />
+                <SkillFilesProvider projectRoot={skillsRoot}>
+                  <ChatComposerEditor
+                    value={prompt}
+                    onValueChange={setPrompt}
+                    onCaretChange={mentions.update}
+                    onBeforeEditorKeyDown={handleKeyDown}
+                    onPasteAttachments={handlePaste}
+                    getSkillPaths={() => skillPathsRef.current}
+                    editorRef={editorRef}
+                    inputRef={composerInputRef}
+                    disabled={composerDisabled}
+                    minHeight={76}
+                    maxHeight={160}
+                    placeholder={
+                      composerDisabled
+                        ? 'Composer unavailable'
+                        : hasCommandToken
+                          ? 'Add a message (optional)…'
+                          : 'Ask anything… (/ for commands, @ for files)'
+                    }
+                    ariaLabel="Agent prompt"
+                    autoFocus
+                  />
+                </SkillFilesProvider>
               </div>
               <LauncherToolbar
                 pickFiles={pickFiles}

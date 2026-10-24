@@ -228,13 +228,22 @@ export function isToolCallRunning(toolCall: ToolCall): boolean {
 }
 
 /**
- * A subagent dispatch runs only while its parent turn is active: it is
- * pending/in_progress, or has no status yet (the adapter sends the dispatch
- * before any status update). A cancelled or crashed turn can leave a dispatch
- * pending forever, so an ended turn never counts it as running.
+ * A subagent dispatch runs while its parent turn is active: it is
+ * pending/in_progress, has no status yet (the adapter sends the dispatch
+ * before any status update), or is a background agent whose launch call has
+ * completed but whose agent has not ended. A cancelled or crashed turn can
+ * leave a dispatch pending forever, so an ended turn never counts that as
+ * running. A host lifecycle of `running` is different: the host reports the
+ * real end later, and the subagent can outlive the turn. A known terminal
+ * agent state always wins over the tool-call status.
  */
 export function isSubagentRunning(toolCall: ToolCall, parentTurnActive: boolean): boolean {
-  return parentTurnActive && (isToolCallRunning(toolCall) || toolCall.status == null)
+  const lifecycle = toolCall.subagentLifecycle
+  if (lifecycle?.state !== undefined && lifecycle.state !== 'running') return false
+  if (toolCall.status === 'failed') return false
+  if (lifecycle?.state === 'running') return true
+  if (!parentTurnActive) return false
+  return isToolCallRunning(toolCall) || toolCall.status == null || lifecycle?.background === true
 }
 
 function runningVerbForKind(kind: ToolKind | undefined): string {
@@ -384,15 +393,62 @@ type ActivityCategory =
   | 'fetch'
   | 'agent'
   | 'background-agent'
+  | 'agent-control'
   | 'mode'
   | 'other'
 
-const BACKGROUND_INPUT_KEYS = ['run_in_background', 'is_background', 'background']
+/** `rawInput` flags of a subagent dispatch that asks for a background launch. */
+export const BACKGROUND_INPUT_KEYS = ['run_in_background', 'is_background', 'background']
 
 function isBackgroundAgent(call: ToolCall): boolean {
+  if (call.subagentLifecycle?.background === true) return true
   const input = asRecord(call.rawInput)
   if (!input) return false
   return BACKGROUND_INPUT_KEYS.some((key) => input[key] === true)
+}
+
+/** A Codex collaboration tool call (`spawnAgent`, `wait`, `sendInput`, ...). */
+export function isCodexCollabCall(call: ToolCall): boolean {
+  const input = asRecord(call.rawInput)
+  return !!input && ('senderThreadId' in input || 'agentsStates' in input)
+}
+
+export function isCodexSpawnCall(call: ToolCall): boolean {
+  return (
+    isCodexCollabCall(call) &&
+    (call.title ?? '').replace(/[_\s-]/g, '').toLowerCase() === 'spawnagent'
+  )
+}
+
+/** A Codex subagent activity card (`Start subagent <name>`, ...). */
+export function codexActivity(call: ToolCall): { threadId: string; kind: string } | null {
+  const input = asRecord(call.rawInput)
+  const threadId = firstString(input, ['agentThreadId'])
+  const kind = firstString(input, ['activityKind'])
+  return threadId && kind ? { threadId, kind } : null
+}
+
+/** Thread ids a Codex collab call names: receivers plus `agentsStates` keys. */
+export function codexThreadIds(call: ToolCall): string[] {
+  const input = asRecord(call.rawInput)
+  if (!input) return []
+  const ids = new Set<string>()
+  if (Array.isArray(input.receiverThreadIds)) {
+    for (const id of input.receiverThreadIds) if (typeof id === 'string' && id) ids.add(id)
+  }
+  for (const id of Object.keys(asRecord(input.agentsStates) ?? {})) ids.add(id)
+  return [...ids]
+}
+
+/**
+ * A call that controls an existing subagent instead of starting one: a Codex
+ * collab call other than `spawnAgent` (`wait`, `sendInput`, `closeAgent`, ...),
+ * or a Codex activity card (`Start subagent <name>`, ...), which reports an
+ * agent that its spawn call already represents.
+ */
+export function isSubagentControlCall(call: ToolCall): boolean {
+  if (codexActivity(call)) return true
+  return isCodexCollabCall(call) && !isCodexSpawnCall(call)
 }
 
 /**
@@ -415,6 +471,7 @@ const ACTIVITY_CATEGORY_RULES: ReadonlyArray<{
   category: ActivityCategory
   match: (call: ToolCall) => boolean
 }> = [
+  { category: 'agent-control', match: (call) => isSubagentControlCall(call) },
   {
     category: 'background-agent',
     match: (call) => isSubagentCall(call) && isBackgroundAgent(call)
@@ -444,6 +501,10 @@ const ACTIVITY_PHRASES: Record<ActivityCategory, { one: string; many: (n: number
   'background-agent': {
     one: 'ran 1 background agent',
     many: (n) => `ran ${n} background agents`
+  },
+  'agent-control': {
+    one: 'sent 1 agent command',
+    many: (n) => `sent ${n} agent commands`
   },
   mode: { one: 'switched mode', many: (n) => `switched mode ${n} times` },
   other: { one: 'used 1 tool', many: (n) => `used ${n} tools` }

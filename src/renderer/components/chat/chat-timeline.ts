@@ -1,6 +1,6 @@
 import type { ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
-import type { ChatMessage } from '@/stores/acp-store'
+import type { AgentReloadMark, ChatMessage } from '@/stores/acp-store'
 
 export type TimelineItem =
   | {
@@ -80,11 +80,14 @@ export function buildTimeline(
     })
   })
 
+  const callIds = new Set(toolCalls.map((tool) => tool.toolCallId))
   toolCalls.forEach((tool, i) => {
     // Restored durable file-change summaries feed the Changed files panel
     // only — they never render as timeline cards, so a restored chat looks
     // exactly as it did before summaries were materialized.
     if (tool.restoredSummary === true) return
+    // A subagent's own tool calls show inside its dispatch card's details.
+    if (tool.parentToolCallId && callIds.has(tool.parentToolCallId)) return
     stamped.push({
       item: { kind: 'tool', key: tool.toolCallId, tool },
       seq: typeof tool.seq === 'number' ? tool.seq : undefined,
@@ -208,6 +211,59 @@ function itemTimestamp(item: TimelineItem | undefined): number | null {
     return item.message.timestamp > 0 ? item.message.timestamp : null
   }
   return null
+}
+
+function itemSeq(item: TimelineItem): number | undefined {
+  switch (item.kind) {
+    case 'message':
+      return item.message.seq
+    case 'tool':
+      return typeof item.tool.seq === 'number' ? item.tool.seq : undefined
+    case 'thought-group':
+      return item.messages[0]?.seq
+    case 'switch':
+      return item.switch.seq
+    default:
+      return undefined
+  }
+}
+
+/** True when `item` arrived after the reload. Unordered rows (worktree) never count. */
+function isAfterReload(item: TimelineItem, mark: AgentReloadMark): boolean {
+  const seq = itemSeq(item)
+  if (typeof seq === 'number' && typeof mark.afterSeq === 'number') return seq > mark.afterSeq
+  const ts = itemTimestamp(item)
+  return ts !== null && typeof mark.reloadedAt === 'number' && ts > mark.reloadedAt
+}
+
+/**
+ * Splice the "Agent reloaded" divider into `items`: after the anchor message
+ * when it is still in the window, else before the first item that arrived
+ * after the reload, else at the end (nothing arrived yet). When the live
+ * window trimmed every item before the reload, the divider is older than the
+ * whole window, so it is not shown (it would pin to the top of the window).
+ */
+export function spliceReloadMarker(
+  items: TimelineItem[],
+  mark: AgentReloadMark,
+  key: string
+): void {
+  const marker: TimelineItem = { kind: 'reload', key }
+  const anchor = mark.afterMessageId
+    ? items.findIndex((item) => item.kind === 'message' && item.message.id === mark.afterMessageId)
+    : -1
+  if (anchor >= 0) {
+    items.splice(anchor + 1, 0, marker)
+    return
+  }
+  const emptyAtReload = mark.afterMessageId === null && mark.afterSeq == null
+  const first = items.findIndex((item) => isAfterReload(item, mark))
+  if (first === -1) {
+    items.push(marker)
+    return
+  }
+  const hasOlderItem = items.slice(0, first).some((item) => item.kind !== 'worktree')
+  if (hasOlderItem || emptyAtReload) items.splice(first, 0, marker)
 }
 
 export function activityNeedsAttention(items: TimelineItem[]): boolean {

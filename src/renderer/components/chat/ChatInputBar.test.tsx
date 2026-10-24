@@ -182,6 +182,16 @@ vi.mock('sonner', () => ({
   toast: { error: mockToastError, success: vi.fn() }
 }))
 
+// Behavior is covered in `claude-account/ClaudeAccount.test.tsx`; here only its
+// place in the composer card matters.
+const { limitWarningRef } = vi.hoisted(() => ({ limitWarningRef: { current: false } }))
+vi.mock('@/components/chat/claude-account/ClaudeLimitWarning', () => ({
+  ClaudeLimitWarning: ({ atTop }: { atTop: boolean }) =>
+    limitWarningRef.current ? (
+      <div data-testid="claude-limit-warning-stub" data-at-top={String(atTop)} />
+    ) : null
+}))
+
 vi.mock('@/hooks/use-agent-skills', async () => {
   // Use the real (sync) buildPromptWithLoadedSkills so the wire framing is
   // exercised end-to-end — no mock needed now that paths are captured at pick
@@ -985,6 +995,44 @@ describe('ChatInputBar placeholder', () => {
         'Ask anything… (/ for commands, @ for files)'
       )
     })
+  })
+})
+
+describe('ChatInputBar Claude limit warning', () => {
+  beforeEach(() => {
+    limitWarningRef.current = true
+  })
+  afterEach(() => {
+    limitWarningRef.current = false
+  })
+
+  it('shows the warning inside the composer card, at its top', () => {
+    const { container } = renderInputBar()
+    const composer = container.querySelector('[data-chat-composer="true"]')
+    const warning = screen.getByTestId('claude-limit-warning-stub')
+    expect(composer).toContainElement(warning)
+    expect(warning).toHaveAttribute('data-at-top', 'true')
+  })
+
+  it('puts the warning below a pending permission prompt', () => {
+    renderInputBar({
+      permission: {
+        requestId: 'permission-1',
+        agentId: 'agent-1',
+        sessionId: 'session-1',
+        toolCall: { title: 'Approve Spec' },
+        options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }]
+      }
+    })
+    const prompt = screen.getByTestId('permission-prompt')
+    const warning = screen.getByTestId('claude-limit-warning-stub')
+    expect(prompt.compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(warning).toHaveAttribute('data-at-top', 'false')
+  })
+
+  it('hides the warning while the chat is closed', () => {
+    renderInputBar({ controlsDisabled: true })
+    expect(screen.queryByTestId('claude-limit-warning-stub')).not.toBeInTheDocument()
   })
 })
 

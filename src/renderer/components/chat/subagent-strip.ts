@@ -6,8 +6,12 @@
 import type { ToolCall } from '@/lib/acp-api'
 import {
   asRecord,
+  codexActivity,
+  codexThreadIds,
   firstString,
+  isCodexSpawnCall,
   isSubagentCall,
+  isSubagentControlCall,
   isSubagentRunning,
   isToolCallRunning
 } from './tool-call-summary'
@@ -42,6 +46,19 @@ function isAfterBoundary(toolCall: ToolCall, boundary: TurnBoundary): boolean {
 }
 
 /**
+ * One pill row per agent. Codex control calls (`wait`, `sendInput`, ...) and
+ * activity cards report on an agent that another row represents, so they are
+ * not rows. A `started` activity card is the row only when no spawn call in
+ * the session names its thread (for example, a history replay without spawns).
+ */
+function isAgentRow(toolCall: ToolCall, spawnedThreads: ReadonlySet<string>): boolean {
+  if (!isSubagentCall(toolCall)) return false
+  const activity = codexActivity(toolCall)
+  if (activity) return activity.kind === 'started' && !spawnedThreads.has(activity.threadId)
+  return !isSubagentControlCall(toolCall)
+}
+
+/**
  * Subagent calls of the current turn: those that arrived after the latest user
  * message (all of them when there is none). Restored summaries never count.
  */
@@ -49,18 +66,62 @@ export function selectCurrentTurnSubagents(
   toolCalls: readonly ToolCall[],
   lastUserMessage: TurnBoundary | null
 ): ToolCall[] {
+  const spawnedThreads = new Set(toolCalls.filter(isCodexSpawnCall).flatMap(codexThreadIds))
   return toolCalls.filter(
     (tc) =>
       !tc.restoredSummary &&
-      isSubagentCall(tc) &&
+      isAgentRow(tc, spawnedThreads) &&
       (lastUserMessage === null || isAfterBoundary(tc, lastUserMessage))
   )
 }
 
 export function subagentStatus(toolCall: ToolCall, turnActive: boolean): SubagentStatus {
   if (isSubagentRunning(toolCall, turnActive)) return 'running'
+  switch (toolCall.subagentLifecycle?.state) {
+    case 'completed':
+      return 'done'
+    case 'failed':
+      return 'failed'
+    case 'cancelled':
+      return 'stopped'
+  }
   if (isToolCallRunning(toolCall)) return 'stopped'
   return toolCall.status === 'failed' ? 'failed' : 'done'
+}
+
+/** True for a dispatch that keeps running after its launch call returns. */
+export function isBackgroundSubagent(toolCall: ToolCall): boolean {
+  return toolCall.subagentLifecycle?.background === true
+}
+
+const NO_CHILD_CALLS: readonly ToolCall[] = []
+
+/** The tool calls a subagent made, in arrival order (same array when none). */
+export function subagentChildCalls(
+  toolCalls: readonly ToolCall[] | undefined,
+  dispatchId: string
+): readonly ToolCall[] {
+  const children = (toolCalls ?? []).filter((tc) => tc.parentToolCallId === dispatchId)
+  return children.length > 0 ? children : NO_CHILD_CALLS
+}
+
+/**
+ * Row duration in ms: live elapsed while running; otherwise the agent's own
+ * total, the host end stamp, or the pill's observed settle time, in that order.
+ */
+export function subagentDurationMs(
+  toolCall: ToolCall,
+  status: SubagentStatus,
+  now: number,
+  observedSettledAt: number | undefined
+): number | undefined {
+  const started = typeof toolCall.timestamp === 'number' ? toolCall.timestamp : null
+  if (status === 'running') return started === null ? undefined : now - started
+  const total = toolCall.subagentUsage?.totalDurationMs
+  if (total !== undefined && !isBackgroundSubagent(toolCall)) return total
+  if (started === null) return total
+  const endedAt = toolCall.subagentLifecycle?.endedAt ?? observedSettledAt
+  return endedAt !== undefined ? Math.max(0, endedAt - started) : total
 }
 
 export function countSubagents(

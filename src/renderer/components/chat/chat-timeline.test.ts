@@ -6,6 +6,7 @@ import {
   buildTimeline,
   consolidateThoughtGroups,
   groupTurnActivity,
+  spliceReloadMarker,
   type TimelineItem
 } from './chat-timeline'
 
@@ -133,6 +134,16 @@ describe('buildTimeline', () => {
 
   it('returns an empty timeline when there is nothing', () => {
     expect(buildTimeline([], [])).toEqual([])
+  })
+
+  it('hides subagent tool calls whose dispatch card is listed', () => {
+    const tools = [
+      tool('dispatch', 10, 1),
+      { ...tool('child', 11, 2), parentToolCallId: 'dispatch' },
+      { ...tool('orphan', 12, 3), parentToolCallId: 'trimmed-dispatch' },
+      tool('main', 13, 4)
+    ]
+    expect(buildTimeline([], tools).map(timelineItemId)).toEqual(['dispatch', 'orphan', 'main'])
   })
 })
 
@@ -587,5 +598,50 @@ describe('groupTurnActivity with switches (CAP-2)', () => {
     // splits them — old content before, new content after (fresh grouping).
     expect(grouped.map((item) => item.kind)).toEqual(['message', 'message', 'switch', 'message'])
     expect(grouped.some((item) => item.kind === 'switch')).toBe(true)
+  })
+})
+
+describe('spliceReloadMarker', () => {
+  const kinds = (items: TimelineItem[]) =>
+    items.map((i) => (i.kind === 'reload' ? 'RELOAD' : timelineItemId(i)))
+
+  it('goes after the anchor message while it is in the window', () => {
+    const items = buildTimeline([msg('u1', 'user', 1, 1), msg('a1', 'agent', 2, 2)], [])
+    spliceReloadMarker(items, { afterMessageId: 'u1', afterSeq: 1, reloadedAt: 1 }, 'r')
+    expect(kinds(items)).toEqual(['u1', 'RELOAD', 'a1'])
+  })
+
+  it('stays above later messages after the window trims its anchor', () => {
+    // m1 (the anchor) was trimmed; m2 is pre-reload, m3/t3 arrived later.
+    const items = buildTimeline(
+      [msg('m2', 'agent', 20, 2), msg('m3', 'user', 40, 4)],
+      [tool('t3', 50, 5)]
+    )
+    spliceReloadMarker(items, { afterMessageId: 'm1', afterSeq: 3, reloadedAt: 30 }, 'r')
+    expect(kinds(items)).toEqual(['m2', 'RELOAD', 'm3', 't3'])
+  })
+
+  it('hides the divider when every item in the window is newer than the reload', () => {
+    const items = buildTimeline([msg('m5', 'user', 50, 5), msg('m6', 'agent', 60, 6)], [])
+    spliceReloadMarker(items, { afterMessageId: 'm1', afterSeq: 3, reloadedAt: 30 }, 'r')
+    expect(kinds(items)).toEqual(['m5', 'm6'])
+  })
+
+  it('goes at the end when nothing arrived after the reload', () => {
+    const items = buildTimeline([msg('m2', 'agent', 20, 2)], [])
+    spliceReloadMarker(items, { afterMessageId: 'gone', afterSeq: 2, reloadedAt: 30 }, 'r')
+    expect(kinds(items)).toEqual(['m2', 'RELOAD'])
+  })
+
+  it('sits at the start of a chat that was empty at the reload', () => {
+    const items = buildTimeline([msg('u1', 'user', 40, 1), msg('a1', 'agent', 50, 2)], [])
+    spliceReloadMarker(items, { afterMessageId: null, afterSeq: null, reloadedAt: 30 }, 'r')
+    expect(kinds(items)).toEqual(['RELOAD', 'u1', 'a1'])
+  })
+
+  it('falls back to timestamps for items without a seq', () => {
+    const items = buildTimeline([msg('h1', 'agent', 20), msg('h2', 'user', 40)], [])
+    spliceReloadMarker(items, { afterMessageId: 'gone', afterSeq: null, reloadedAt: 30 }, 'r')
+    expect(kinds(items)).toEqual(['h1', 'RELOAD', 'h2'])
   })
 })

@@ -176,6 +176,22 @@ describe('SubagentPill', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })
 
+  it('counts a launched background agent as running and tags its row', () => {
+    const launched = sub({
+      status: 'completed',
+      subagentLifecycle: { background: true, outputFile: '/tmp/a1.output' }
+    })
+    renderPill([launched])
+    expect(pill()).toHaveAccessibleName('Subagents: 1 running')
+    fireEvent.click(pill())
+    const row = screen.getByRole('button', { name: /^running\s*Audit code/ })
+    expect(within(row).getByText('background')).toBeInTheDocument()
+    fireEvent.click(row)
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Running in background')).toBeInTheDocument()
+    expect(within(dialog).getByText('Output file: /tmp/a1.output')).toBeInTheDocument()
+  })
+
   it('opens a bottom sheet on the phone shell and registers it for Back', () => {
     mobileRef.current = true
     renderPill([sub({ status: 'completed' }), sub({ toolCallId: 'b', status: 'in_progress' })])

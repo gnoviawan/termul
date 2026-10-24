@@ -7,6 +7,7 @@ import {
 } from '@/components/agents/pending-launcher-options'
 import { BrowserAgentIndicator } from '@/components/browser/BrowserAgentStop'
 import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
+import { SkillFilesProvider } from '@/components/chat/skill-file-links'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
@@ -54,7 +55,7 @@ import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
 import { CHAT_GUTTER_X } from './chat-layout'
 import { ChatStarters } from './chat-start'
-import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
+import { buildTimeline, consolidateThoughtGroups, spliceReloadMarker } from './chat-timeline'
 import { ClaudeLimitNotice } from './claude-account/ClaudeLimitNotice'
 import { ClaudeSignInAction } from './claude-account/ClaudeSignInAction'
 import { ElicitationPrompt } from './ElicitationPrompt'
@@ -62,6 +63,7 @@ import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
 import { PromptReconcileNotice } from './PromptReconcileNotice'
+import { ReloadChatConfirmDialog } from './ReloadChatConfirmDialog'
 import { SubagentPill } from './SubagentPill'
 import { useApprovalDock } from './use-approval-dock'
 import { AUTO_RESUME_FAILED_REASON, useIdleStopAutoResume } from './use-idle-stop-auto-resume'
@@ -676,15 +678,11 @@ export function AgentChatPanel({
       })
     }
     if (reloadMark) {
-      const anchor = reloadMark.afterMessageId
-        ? items.findIndex(
-            (item) => item.kind === 'message' && item.message.id === reloadMark.afterMessageId
-          )
-        : -1
-      items.splice(anchor >= 0 ? anchor + 1 : items.length, 0, {
-        kind: 'reload',
-        key: `reload:${sessionId}:${reloadMark.afterMessageId ?? 'start'}`
-      })
+      spliceReloadMarker(
+        items,
+        reloadMark,
+        `reload:${sessionId}:${reloadMark.afterMessageId ?? 'start'}`
+      )
     }
     return items
   }, [messages, toolCalls, agentSwitches, session?.worktreeProgressId, reloadMark, sessionId])
@@ -918,14 +916,16 @@ export function AgentChatPanel({
         forceCollapsed={compactDock}
       />
       <div className="relative flex min-h-0 flex-1 flex-col">
-        <ChatMessageList
-          items={timeline}
-          sessionId={session.id}
-          showRunningIndicator={showRunningIndicator}
-          filePathContext={filePathContext}
-          onEditMessage={seedComposer}
-          onRetry={canOfferRetry ? handleRetry : undefined}
-        />
+        <SkillFilesProvider projectRoot={skillsProjectRoot}>
+          <ChatMessageList
+            items={timeline}
+            sessionId={session.id}
+            showRunningIndicator={showRunningIndicator}
+            filePathContext={filePathContext}
+            onEditMessage={seedComposer}
+            onRetry={canOfferRetry ? handleRetry : undefined}
+          />
+        </SkillFilesProvider>
         {/* Top-right status slot: floats over the transcript (clear of the
             scrollbar gutter) so status items take no layout height. */}
         <div className="pointer-events-none absolute right-4 top-3.5 z-20 flex items-center gap-1.5">
@@ -939,6 +939,7 @@ export function AgentChatPanel({
           />
         </div>
       </div>
+      <ReloadChatConfirmDialog sessionId={sessionId} />
       {showPromptReconcile && promptCommand && session.activeTurn && (
         // AD-6: the host has not yet confirmed the last prompt (the connection
         // dropped before the reply). Not an error — the same turn id is resent, and
@@ -1005,6 +1006,16 @@ export function AgentChatPanel({
         </div>
       ) : (
         <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
+          {/* Above the changed-files panel: that panel's negative bottom margin
+              tucks it under the composer, so anything between the two is
+              painted over and loses its clicks. */}
+          {!isClosed && (
+            <div className={CHAT_GUTTER_X}>
+              <div className="mx-auto w-full max-w-3xl">
+                <ClaudeLimitNotice sessionId={sessionId} />
+              </div>
+            </div>
+          )}
           <ChatChangedFilesPanel
             cwd={session.cwd}
             toolCalls={toolCalls}
@@ -1013,13 +1024,6 @@ export function AgentChatPanel({
               isMobileShell ? (opener) => openGitSheet(session.cwd, opener) : undefined
             }
           />
-          {!isClosed && (
-            <div className={CHAT_GUTTER_X}>
-              <div className="mx-auto w-full max-w-3xl">
-                <ClaudeLimitNotice sessionId={sessionId} />
-              </div>
-            </div>
-          )}
           <ChatInputBar
             session={composerSession ?? session}
             projectRoot={skillsProjectRoot}
