@@ -17,8 +17,15 @@ import {
   SheetTitle,
   SheetTrigger
 } from '@/components/ui/sheet'
-import { Switch } from '@/components/ui/switch'
+import { Switch, switchClasses } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
+import {
+  PICKER_ICON,
+  PICKER_LABEL,
+  PICKER_ROW,
+  PICKER_SURFACE,
+  pickerRowHeight
+} from './selector-tokens'
 import { REJECTED_TITLE, useOptimisticSwitch } from './use-option-values'
 
 /**
@@ -30,14 +37,22 @@ export const ROW_FOCUS =
 
 /** A dense 28px row (44px on touch), shared by the list, footer and flyout. */
 export const DENSE_ROW = cn(
-  'flex w-full items-center gap-2 rounded-md px-2 text-left text-sm text-foreground',
+  'flex w-full items-center text-left text-foreground',
+  PICKER_ROW.text,
+  PICKER_ROW.gap,
+  PICKER_ROW.padX,
+  PICKER_ROW.radius,
   'transition-colors duration-150 ease-out hover:bg-row-hover disabled:cursor-not-allowed disabled:opacity-60',
   ROW_FOCUS
 )
 
-export function denseRowSize(touch: boolean): string {
-  return touch ? 'min-h-11' : 'h-7'
-}
+export const denseRowSize = pickerRowHeight
+
+/**
+ * A flyout's surface: the panel's radius, border and shadow, as wide as its
+ * longest choice but never under 180px.
+ */
+const FLYOUT_SURFACE = cn('min-w-45 max-w-64 border-border', PICKER_SURFACE.radius)
 
 export interface OptionChoice {
   value: string
@@ -107,16 +122,10 @@ export function sectionsLabel(sections: readonly ChoiceSection[]): string {
 /** The look of `Switch`, for an item that is itself the control. */
 function SwitchMark({ on }: { on: boolean }): React.JSX.Element {
   const state = on ? 'checked' : 'unchecked'
+  const { track, thumb } = switchClasses('sm')
   return (
-    <span
-      aria-hidden="true"
-      data-state={state}
-      className="switch-track inline-flex h-5 w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors duration-150 ease-out"
-    >
-      <span
-        data-state={state}
-        className="switch-thumb block size-4 rounded-full transition-transform duration-150 ease-out motion-reduce:transition-none data-[state=checked]:translate-x-4"
-      />
+    <span aria-hidden="true" data-state={state} data-switch-size="sm" className={track}>
+      <span data-state={state} className={thumb} />
     </span>
   )
 }
@@ -150,7 +159,11 @@ export function ChoiceList({
       ref={ref}
       role="menu"
       aria-label={label}
-      className={cn('flex flex-col', touch ? 'px-3 pb-3' : 'p-1')}
+      className={cn(
+        'flex flex-col',
+        PICKER_ROW.text,
+        touch ? PICKER_SURFACE.paddingTouch : PICKER_SURFACE.padding
+      )}
       onKeyDown={(event) => {
         // The flyout is portaled but its keys still bubble through the React
         // tree into the list and footer; keep the ones handled here.
@@ -168,7 +181,12 @@ export function ChoiceList({
       {sections.map((section, index) => {
         if (section.kind === 'toggle') {
           return (
-            <ToggleChoice key={section.id} section={section} touch={touch} divided={index > 0} />
+            <div key={section.id} className="flex flex-col">
+              {index > 0 ? (
+                <hr className={cn('my-1', PICKER_SURFACE.separator, touch ? '-mx-3' : '-mx-1')} />
+              ) : null}
+              <ToggleChoice section={section} touch={touch} />
+            </div>
           )
         }
         const items = section.choices.map((choice) => {
@@ -191,7 +209,7 @@ export function ChoiceList({
                 <span className="shrink-0 text-[10px] text-muted-foreground">Not available</span>
               ) : null}
               <Check
-                size={14}
+                size={PICKER_ICON.check}
                 aria-hidden="true"
                 className={cn('shrink-0', selected ? 'opacity-100' : 'opacity-0')}
               />
@@ -202,13 +220,7 @@ export function ChoiceList({
         const headingId = `${baseId}-${section.id}`
         return (
           <fieldset key={section.id} aria-labelledby={headingId} className="flex min-w-0 flex-col">
-            <div
-              id={headingId}
-              className={cn(
-                'truncate px-2 pb-1 text-xs text-muted-foreground',
-                index > 0 ? 'pt-2' : 'pt-1'
-              )}
-            >
+            <div id={headingId} className={PICKER_LABEL}>
               {section.label}
             </div>
             {items}
@@ -222,12 +234,10 @@ export function ChoiceList({
 /** A flyout's on/off item; flips at once and reverts if the agent rejects it. */
 function ToggleChoice({
   section,
-  touch,
-  divided
+  touch
 }: {
   section: Extract<ChoiceSection, { kind: 'toggle' }>
   touch: boolean
-  divided: boolean
 }): React.JSX.Element {
   const [on, toggle] = useOptimisticSwitch(section.checked, section.onToggle)
   return (
@@ -237,11 +247,7 @@ function ToggleChoice({
       aria-checked={on}
       data-option-choice=""
       onClick={() => toggle(!on)}
-      className={cn(
-        DENSE_ROW,
-        denseRowSize(touch),
-        divided && 'mt-1 rounded-t-none border-t border-border'
-      )}
+      className={cn(DENSE_ROW, denseRowSize(touch))}
     >
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
       {section.icon}
@@ -370,7 +376,7 @@ export function OptionRow({
         onOpenAutoFocus={(event) => event.preventDefault()}
         data-testid={`selector-flyout-${id}`}
         contentClassName="z-[110]"
-        className="w-44 rounded-lg border-border"
+        className={FLYOUT_SURFACE}
       >
         {list}
       </AnimatedMenuContent>
@@ -402,7 +408,15 @@ export function OptionSwitchRow({
 }): React.JSX.Element {
   const [on, toggle] = useOptimisticSwitch(checked, onToggle)
   return (
-    <div className={cn('flex items-center gap-2 px-2 text-sm', denseRowSize(touch))}>
+    <div
+      className={cn(
+        'flex items-center',
+        PICKER_ROW.gap,
+        PICKER_ROW.padX,
+        PICKER_ROW.text,
+        denseRowSize(touch)
+      )}
+    >
       <label
         htmlFor={`selector-switch-${id}`}
         className="min-w-0 flex-1 cursor-pointer truncate text-muted-foreground"
@@ -480,7 +494,7 @@ export function EditableRow({
   const row = (trigger: ReactNode): React.JSX.Element => (
     <div
       className={cn(
-        'flex items-center rounded-md transition-colors duration-150 ease-out hover:bg-row-hover',
+        'flex min-w-0 items-center rounded-md transition-colors duration-150 ease-out hover:bg-row-hover',
         open && 'bg-row-hover'
       )}
     >
@@ -543,7 +557,7 @@ export function EditableRow({
         }}
         data-testid="selector-edit-flyout"
         contentClassName="z-[110]"
-        className="w-44 rounded-lg border-border"
+        className={FLYOUT_SURFACE}
       >
         {list}
       </AnimatedMenuContent>

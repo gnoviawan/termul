@@ -39,6 +39,7 @@ import {
   type ModelCatalog,
   splitContextOption
 } from './selector-model'
+import { PICKER_ICON, PICKER_LABEL } from './selector-tokens'
 import { useRejectedOptionValues } from './use-option-values'
 import { useSelectorPanelState } from './use-selector-panel-state'
 
@@ -58,7 +59,7 @@ export interface SelectorPanelV2Props extends SelectorPanelProps {
 }
 
 function SectionLabel({ children }: { children: ReactNode }): React.JSX.Element {
-  return <div className="truncate px-2 pb-1 pt-2 text-xs text-muted-foreground">{children}</div>
+  return <div className={PICKER_LABEL}>{children}</div>
 }
 
 function DenseModelRow({
@@ -111,12 +112,15 @@ function DenseModelRow({
         >
           {glyph}
         </span>
-        <span className="min-w-0 flex-1 truncate">
+        {/* `relative` keeps the sr-only agent name inside the clipped name:
+            unpositioned, it lands after the full name, past the row, and
+            widens the scrolling list. */}
+        <span data-row-name="" className="relative min-w-0 flex-1 truncate">
           {name}
           {agentName ? <span className="sr-only">{` · ${agentName}`}</span> : null}
         </span>
         <Check
-          size={14}
+          size={PICKER_ICON.check}
           aria-hidden="true"
           className={cn('shrink-0', selected ? 'opacity-100' : 'opacity-0')}
         />
@@ -397,7 +401,13 @@ function editSections(
       kind: 'toggle',
       id: 'fast',
       label: 'Fast mode',
-      icon: <Zap size={14} aria-hidden="true" className="shrink-0 text-muted-foreground" />,
+      icon: (
+        <Zap
+          size={PICKER_ICON.glyph}
+          aria-hidden="true"
+          className="shrink-0 text-muted-foreground"
+        />
+      ),
       checked: props.fastOn,
       onToggle: () => onToggleFast()
     })
@@ -832,7 +842,8 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           onKeyDown={onListKeyDown}
           className={cn(
             AGENT_TRACK_CLASS.listMaxHeight,
-            'min-w-0 flex-1 overflow-y-auto overscroll-contain',
+            // Rows truncate inside it; overflow-x-hidden only backs that up.
+            'min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain',
             pad,
             'py-1'
           )}
