@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasLayout } from '../registry/layout'
@@ -69,5 +69,30 @@ describe('Canvas under StrictMode', () => {
     expect(queue.size).toBe(1)
     flushFrames()
     expect(queue.size).toBe(0)
+  })
+
+  it('zoom in changes the world transform after the dev double mount', () => {
+    const { container } = render(
+      <StrictMode>
+        <Canvas
+          layout={EMPTY_LAYOUT}
+          sections={[]}
+          positions={{}}
+          initialCamera={{ x: 0, y: 0, z: 1 }}
+          themeControl={null}
+          onMove={() => {}}
+          onCameraChange={() => {}}
+          onCameraSettled={() => {}}
+          onResetLayout={() => {}}
+        />
+      </StrictMode>
+    )
+    flushFrames()
+    const world = container.querySelector<HTMLElement>('[role="application"] .origin-top-left')
+    expect(world).not.toBeNull()
+    const before = world?.style.transform
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+    flushFrames()
+    expect(world?.style.transform).not.toBe(before)
   })
 })
