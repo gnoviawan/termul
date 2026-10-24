@@ -27,7 +27,7 @@ import {
   OptionSwitchRow,
   ROW_FOCUS
 } from './SelectorOptionRows'
-import { type SelectorPanelProps, statusBadge } from './SelectorPanel'
+import type { SelectorPanelProps } from './SelectorPanel'
 import {
   AgentRow,
   BusyBlock,
@@ -55,6 +55,7 @@ import {
 } from './selector-model'
 import type { SwitchModelPick } from './use-agent-switch'
 import { loadPersistedCatalog, useKnownCatalogs, useOtherAgentCatalog } from './use-model-catalog'
+import { statusBadge } from './use-selector-panel-state'
 
 const NO_IDS: readonly string[] = []
 const NO_FAVORITES: readonly FavoriteModel[] = []
