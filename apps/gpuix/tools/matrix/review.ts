@@ -42,6 +42,8 @@ const TINT =
   'Some words in labels and descriptions paint in an accent or warm colour (word runs pick up a colour the web text does not have).'
 const SELECT =
   'Each native select renders as a chevron button plus every option laid out as plain text in the row, which squeezes the label column; the web shows one closed dropdown.'
+const TAB_TRUNC =
+  'Pane tab titles truncate to three letters and an ellipsis ("Ter...", "note...") where the web shows the whole title, so two terminals cannot be told apart.'
 const SHORT_TRANSCRIPT =
   'A short transcript sits at the bottom of the GPUIX pane, leaving the space above it empty, where the web starts it at the top.'
 const TAB_TITLE = 'The GPUIX tab title truncates to a few letters ("matr...") where the web shows the whole title.'
@@ -81,9 +83,11 @@ export const REVIEWS: Record<string, Review> = {
   'rail.project-colour': { status: 'broken', differences: [RIGHT_CLICK, 'The Select Color popover never appears.'], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 1 },
   'rail.project-reorder': {
     status: 'broken',
-    differences: ['Dragging gamma onto alpha reorders the web list to alpha, gamma, beta; GPUIX keeps alpha, beta, gamma (no drag-and-drop through compat).'],
+    differences: [
+      'Dragging gamma onto alpha reorders the web list to alpha, gamma, beta; GPUIX keeps alpha, beta, gamma. D1 emulates HTML5 drag and drop, but the rail reorders through framer-motion Reorder pointer gestures, which the framer-motion shim does not drive.'
+    ],
     cause: 'compat translator gap',
-    unit: 'C3 drag and drop',
+    unit: 'C3 framer-motion Reorder drag',
     impact: 1
   },
   'rail.add-menu': {
@@ -125,8 +129,8 @@ export const REVIEWS: Record<string, Review> = {
   },
   'explorer.context-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 menus and popovers', impact: 2 },
   'explorer.drag': {
-    status: 'unverified',
-    differences: ['Playwright dragTo did not move notes.txt in the web client either (HTML5 drag events), so there is no reference; GPUIX treated the drag as a click and expanded docs.']
+    status: 'ported',
+    differences: ['Dragging notes.txt from the tree into the pane opens it in an editor tab in both (D1 compat drag and drop).']
   },
   'editor.code': {
     status: 'ported',
@@ -141,7 +145,7 @@ export const REVIEWS: Record<string, Review> = {
   'editor.markdown': {
     status: 'partial',
     differences: [
-      'Preview renders, but the "On this page" outline column is missing, headings are smaller and paragraph spacing is tighter.',
+      'Preview renders, but the "On this page" outline column is missing (still missing at fce9a3e2, after D1 brought EditorTocLayout back), headings are smaller and paragraph spacing is tighter.',
       'The tab title truncates to "guid..." where the web shows "guide.md".',
       TITLE_TIP
     ],
@@ -233,7 +237,13 @@ export const REVIEWS: Record<string, Review> = {
     status: 'ported',
     differences: ['Clicking Attach files opens nothing visible in either client in this headless run (the web file chooser is a native dialog Playwright does not paint).']
   },
-  'terminal.open': { status: 'ported', differences: ['Terminal tab and prompt match; the GPUIX tab title truncates to "Ter..." where the web shows "Terminal 1".'] },
+  'terminal.open': {
+    status: 'partial',
+    differences: ['Terminal tab and prompt match.', TAB_TRUNC],
+    cause: 'compat translator gap',
+    unit: 'C15 tab title width',
+    impact: 2
+  },
   'terminal.type': { status: 'ported', differences: ['echo output matches cell for cell.'] },
 
   'terminal.file-link': {
@@ -241,9 +251,22 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Ctrl+click on src/app.ts in terminal output opens app.ts in a new tab in both.', TREE_TEXT]
   },
   'terminal.new-tab-menu': { status: 'ported', differences: ['The new tab menu matches.'] },
+  'terminal.tab-reorder': {
+    status: 'partial',
+    differences: [
+      'Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both; in GPUIX the active tab moves to the front, but both titles read "Ter...", so the order is inferred from the active tab, not read.',
+      TAB_TRUNC
+    ],
+    cause: 'compat translator gap',
+    unit: 'C15 tab title width',
+    impact: 1
+  },
   'terminal.split': {
-    status: 'unverified',
-    differences: ['Ctrl+Shift+D split nothing in the web client either, so the split binding in this build is not that key; split panes are not compared.']
+    status: 'partial',
+    differences: ['Dragging the Terminal 2 tab to the pane\'s right edge splits the pane in both (D1).', TAB_TRUNC],
+    cause: 'compat translator gap',
+    unit: 'C15 tab title width',
+    impact: 1
   },
   'statusbar.items': {
     status: 'partial',

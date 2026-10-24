@@ -456,7 +456,7 @@ const TERMINAL: Surface[] = [
     steps: [
       DASHBOARD,
       step('b-two', [openTerminal, wait(2000), click(label('New tab')), click(label('Bash', 'menuitem')), wait(2000)], see('Terminal 1', 'Terminal 2')),
-      step('c-reordered', [drag(txt('Terminal 2'), txt('Terminal 1')), wait(1200)])
+      step('c-reordered', [drag(txt('Terminal 2'), { css: '[role="tab"]:has-text("Terminal 1")', frac: { x: 0.1, y: 0.5 } }), wait(1200)])
     ]
   },
   {
