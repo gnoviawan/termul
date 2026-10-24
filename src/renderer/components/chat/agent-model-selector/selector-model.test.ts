@@ -18,6 +18,7 @@ import {
   resolveFavorites,
   rowAccessibleName,
   rowTooltip,
+  rowTooltipDescription,
   spacingPx,
   splitAgentTabs,
   splitContextOption,
@@ -595,5 +596,18 @@ describe('rowTooltip', () => {
     expect(rowTooltip({ name: 'Claude Opus', details: 'Most capable' })).toBe(
       'Claude Opus\n\nMost capable'
     )
+  })
+})
+
+describe('rowTooltipDescription', () => {
+  it('leaves the name out: the row is already named by it', () => {
+    expect(rowTooltipDescription({ agentName: 'Claude Agent', details: 'Most capable' })).toBe(
+      'Claude Agent\n\nMost capable'
+    )
+    expect(rowTooltipDescription({ details: 'Most capable' })).toBe('Most capable')
+  })
+
+  it('is blank, not empty, with nothing more to say', () => {
+    expect(rowTooltipDescription({})).toBe(' ')
   })
 })

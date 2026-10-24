@@ -52,6 +52,21 @@ export function rowTooltip({
   return [name.trim(), agentName, details].filter(Boolean).join('\n\n')
 }
 
+/**
+ * What the row tooltip adds for screen readers: everything but the name, which
+ * the row's `aria-label` already says. A blank string, not '', when there is
+ * nothing more, since Radix falls back to the visible text for a falsy label.
+ */
+export function rowTooltipDescription({
+  agentName,
+  details
+}: {
+  agentName?: string
+  details?: string
+}): string {
+  return [agentName, details].filter(Boolean).join('\n\n') || ' '
+}
+
 export function editButtonAccessibleName({
   name,
   thinking,
