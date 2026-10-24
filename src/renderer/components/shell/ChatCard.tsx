@@ -1,5 +1,6 @@
 import { ChatEntryIcon } from '@/components/chat/ChatHistoryEntryRow'
 import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
+import { ReloadChatMenuItem } from '@/components/chat/ReloadChatMenuItem'
 import { Columns2, Copy, FolderOpen, GitBranch, Terminal, Trash2 } from '@/components/icons'
 import {
   ChatRowTrail,
@@ -165,6 +166,7 @@ export function ChatCard({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-48">
+        <ReloadChatMenuItem sessionId={entry.id} />
         <ContextMenuItem
           disabled={soleTabOfActivePane}
           onSelect={() => actions.onOpenInSplit(entry)}
