@@ -34,7 +34,7 @@ where
 pub(super) const PUBLIC_PATHS: &[&str] = &["/health", "/ws", "/terminal/ws", "/oauth/callback"];
 
 /// API route prefixes that require the token when the gate is active
-/// (CAP-1 intent: "every endpoint"). Everything else — the static bundle and
+/// (every endpoint). Everything else — the static bundle and
 /// SPA client routes — stays public so the login page can load.
 const GATED_PREFIXES: &[&str] = &[
     "/host/",
