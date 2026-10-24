@@ -106,7 +106,10 @@ function cargoRelease(manifest: string, bin: string, features: string[] = []): s
       bin,
       ...(features.length ? ['--features', features.join(',')] : [])
     ],
-    { env: { CARGO_TARGET_DIR: TARGET_DIR } }
+    // From the crate's own dir, like `cd src-tauri && cargo` and the Tauri CLI: cargo reads
+    // `.cargo/config.toml` from the cwd up, and `src-tauri/` plus the repo root give different
+    // rustflags than the root alone, so another cwd recompiles every crate in a shared target.
+    { cwd: path.dirname(manifest), env: { CARGO_TARGET_DIR: TARGET_DIR } }
   )
   return path.join(TARGET_DIR, 'release', bin)
 }
