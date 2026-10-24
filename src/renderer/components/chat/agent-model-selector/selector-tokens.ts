@@ -13,13 +13,11 @@ export const PICKER_ROW = {
 } as const
 
 /**
- * A value after the selected row's name (its Thinking level): smaller and
- * muted, and it never shrinks, so the name truncates first. The row's
- * `PICKER_ROW.gap` already sets it apart; `-ml-1` halves that to 4px so the
- * value reads with the name, not with the check.
+ * A value on the selected row (its Thinking level, on the Edit button):
+ * smaller and muted, and it never shrinks, so the name truncates first.
  */
 export const PICKER_ROW_VALUE =
-  '-ml-1 shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground'
+  'shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground'
 
 /** Icon sizes in a row: the agent glyph and the Fast bolt (16), the check (14). */
 export const PICKER_ICON = { glyph: 16, check: 14 } as const
