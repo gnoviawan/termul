@@ -9,8 +9,6 @@ export const CHECKBOX =
   'The Amend last commit checkbox box is not drawn (native checkbox input), only its label.'
 export const BACKDROP =
   'The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable.'
-export const OVERLAY =
-  'the scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp and readable.'
 export const OVERLAP =
   'In the Chats list two chat cards paint on top of each other once a second chat exists, and GPUIX lists only the seeded chat where the web lists all three.'
 export const PROSE =

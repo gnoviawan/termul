@@ -10,7 +10,6 @@ import {
   CHECKBOX,
   LAMP,
   OVERLAP,
-  OVERLAY,
   PROSE,
   SHORT_TRANSCRIPT,
   TAB_TITLE,
@@ -198,7 +197,7 @@ export const REVIEWS: Record<string, Review> = {
   },
   'git.discard': {
     status: 'partial',
-    differences: ['The confirm dialog matches, but ' + OVERLAY],
+    differences: ['The confirm dialog matches.', BACKDROP],
     cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
