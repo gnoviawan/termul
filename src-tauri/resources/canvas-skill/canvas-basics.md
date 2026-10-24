@@ -64,7 +64,7 @@ A new text layer is 12 units, black, Inter Regular, and grows in both directions
 
 The canvas renders one family today: **Inter**, in the faces `Regular`, `Italic`, `Semi Bold` and `Bold`.
 
-- Any other `fontFamily` falls back without an error, so the design will not look the way you planned.
+- Any other `fontFamily` falls back to the default face without an error, so the design will not look the way you planned. The `warnings` in the result name the family that is not installed.
 - A `fontStyle` such as `Medium` or `Light` draws in the nearest face. The `warnings` in the result tell you when the face has another weight than the name asks for.
 - Build contrast from size, weight (`Regular` against `Semi Bold` or `Bold`), case and letter spacing, not from a second family.
 - Inter covers Latin letters with accents, digits and common punctuation. Emoji and most symbols have no glyph and do not draw, so write labels in words and draw simple icons from shapes.

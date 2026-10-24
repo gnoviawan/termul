@@ -39,9 +39,9 @@ When the user gives no brand, call `get_canvas_style()` to list the curated styl
 1. Put every design in its own top-level frame, named for what it is ("Landing / Toko Roti Sari"). Never draw loose layers on the page.
 2. Build with auto layout from the root frame down. Set position with `layout`, `gap`, `padding`, `mainAlign` and `crossAlign`, not with `x` and `y`.
 3. Give every text layer that can be longer than a few words a width it can wrap in: `sizingH: "fill"` with `textAutoResize: "height"` inside auto layout, or a fixed `width` outside it.
-4. Use only the Inter family, in the faces `Regular`, `Italic`, `Semi Bold` and `Bold`. Other families and faces do not render on this canvas today, and nothing warns you when they fall back.
+4. Use only the Inter family, in the faces `Regular`, `Italic`, `Semi Bold` and `Bold`. Other families and faces do not render on this canvas today. They fall back to one of these, and the result's `warnings` say so.
 5. Take colours from the style's tokens or the document's variables. Do not invent a new colour for each layer.
-6. Build one section per `batch` call, then look at it with `screenshot` before you build the next one.
+6. Build one section per `batch` call, then look at it with `screenshot` before you build the next one. Read the `warnings` in every result that changes the canvas and fix what they name. If a `batch` fails, nothing changes and the error names the failing step.
 7. Fix a problem by changing the layers you have (`set_properties`, `node.reparent`), not by deleting them and drawing them again.
 8. Name the layers you make. "Hero", "Pricing / Pro plan" and "CTA button" help the user; "Frame 12" does not.
 9. Write real copy in the user's language. Never use lorem ipsum or "Your headline here".

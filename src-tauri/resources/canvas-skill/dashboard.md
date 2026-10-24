@@ -39,7 +39,11 @@ Duplicates land in the same auto layout row; change their text with `set_propert
 The canvas has no chart command. Draw charts from simple shapes, which is enough for a design:
 
 - **Bar chart**: a horizontal frame with `crossAlign: "max"` and a `gap` of 8 to 16, holding rectangles of fixed width whose heights are the values scaled to the chart height. Put the axis labels in a second row of text below.
-- **Line chart**: one `vector` with a `path` such as `"M0 120 L80 96 L160 104 L240 60 L320 72 L400 28"`, `fills: []`, `stroke` in `primary` and `strokeWeight` 2 to 3, over a few thin horizontal grid lines in `border`.
+- **Line chart**: one `vector` over a few thin horizontal grid lines in `border`, with `fills: []`, `stroke` in `primary` and `strokeWeight` 2 to 3. Pass the line as `path` next to `type`, in the `create_node` arguments or the `node.create` params. `path` is not a prop, and inside `props` it is an error:
+
+  ```json
+  { "command": "node.create", "params": { "type": "vector", "name": "Line", "parent": { "$step": 0 }, "path": "M0 120 L80 96 L160 104 L240 60 L320 72 L400 28", "props": { "fills": [], "stroke": "#38BDD8", "strokeWeight": 2 } } }
+  ```
 - **Progress or share**: a track rectangle in `surface` with a shorter one in `primary` on top.
 - Give every chart a title, the period ("30 hari terakhir") and units. Use one colour for the main series and `muted` for comparison.
 
