@@ -369,6 +369,39 @@ describe('resolveSupportedAcpAgents', () => {
     })
   })
 
+  it('gives a PATH-ready bundled binary (Oh My Pi, #1501) a launchable config without a persisted one', async () => {
+    listCatalogMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        host: {
+          os: 'linux',
+          arch: 'x86_64',
+          runtimes: { npx: false, uvx: false, node: false, bun: false, python3: false }
+        },
+        agents: [
+          {
+            id: 'oh-my-pi',
+            name: 'Oh My Pi',
+            version: '18.12.6',
+            description: 'Oh My Pi (omp)',
+            source: 'bundled',
+            distribution: {
+              binary: { 'linux-x86_64': { cmd: 'omp', args: ['acp'] } }
+            },
+            runtimeRequirements: [],
+            status: 'ready',
+            platformTargets: [{ os: 'linux', arch: 'x86_64' }]
+          }
+        ]
+      }
+    })
+
+    const entries = await resolveSupportedAcpAgents([])
+
+    expect(entries[0]).toMatchObject({ id: 'oh-my-pi', status: 'ready' })
+    expect(entries[0].config).toMatchObject({ command: 'omp', args: ['acp'] })
+  })
+
   it('prefers a persisted config and marks it ready', async () => {
     listCatalogMock.mockResolvedValueOnce({
       success: true,
