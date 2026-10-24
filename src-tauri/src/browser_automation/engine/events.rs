@@ -120,6 +120,21 @@ pub enum TabEvent {
     Closed,
 }
 
+/// How far a download got: the bytes written so far, and the length its
+/// response announced when it did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadSize {
+    pub received: u64,
+    pub announced: Option<u64>,
+}
+
+impl DownloadSize {
+    /// The size the download has or will have, whichever is larger.
+    pub fn largest(self) -> u64 {
+        self.received.max(self.announced.unwrap_or(0))
+    }
+}
+
 /// The core's per-hop navigation and download decisions, consulted
 /// synchronously on the UI thread. Implementations must not block.
 pub trait NavPolicy: Send + Sync {
@@ -134,10 +149,11 @@ pub trait NavPolicy: Send + Sync {
     fn download_starting(&self, _tab: &str, _url: &Url, _suggested: &Path) -> Option<PathBuf> {
         None
     }
-    /// A download the tab holds has, or announced it will have, `bytes`.
-    /// False cancels it: engines that report progress call this while the
-    /// bytes stream, and once with the announced length before any land.
-    fn download_progress(&self, _tab: &str, _url: &Url, _bytes: u64) -> bool {
+    /// How far a download the tab holds got. False cancels it: every
+    /// engine calls this while the bytes stream and about once a second
+    /// while none arrive, and WebView2 and WebKitGTK once with the
+    /// announced length before any land.
+    fn download_progress(&self, _tab: &str, _url: &Url, _size: DownloadSize) -> bool {
         true
     }
     fn download_finished(&self, _tab: &str, _url: &Url, _success: bool) {}
@@ -243,9 +259,8 @@ impl TabEvents {
         self.policy.download_starting(&self.label, url, suggested)
     }
 
-    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "tauri's WKWebView hook reports no download progress"))]
-    pub fn download_progress(&self, url: &Url, bytes: u64) -> bool {
-        self.policy.download_progress(&self.label, url, bytes)
+    pub fn download_progress(&self, url: &Url, size: DownloadSize) -> bool {
+        self.policy.download_progress(&self.label, url, size)
     }
 
     pub fn download_finished(&self, url: &Url, success: bool) {

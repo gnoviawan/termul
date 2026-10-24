@@ -8,14 +8,15 @@
 //!
 //! Engine hooks are synchronous, so the confirmation comes after the bytes
 //! landed in the session directory and before anything else can use them.
-//! The size cap holds while the bytes stream where the engine reports
-//! progress (WebView2, WebKitGTK): a download announcing more is cancelled
-//! before any byte lands, and one that grows past it is cancelled there.
-//! Tauri's WKWebView hook reports no progress, so on macOS the cap is
-//! checked when the download finishes.
+//! Every engine reports a download's size while the bytes stream and once
+//! a second while none arrive. A download announcing more than the size cap
+//! is cancelled before any byte lands, and one that grows past it, stalls
+//! past the idle timeout or outlives the deadline is cancelled there and
+//! its partial file deleted.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use tauri::Url;
@@ -29,6 +30,7 @@ use super::sensitivity::Sensitive;
 use super::teardown::session_dir;
 use super::DesktopBrowserHost;
 use crate::browser_automation::budgets::{self, Deadline};
+use crate::browser_automation::engine::events::DownloadSize;
 use crate::browser_automation::engine::files;
 
 pub const MAX_DOWNLOADS_PER_SESSION: usize = 20;
@@ -42,12 +44,20 @@ pub struct Pending {
     pub path: PathBuf,
     pub origin: CanonicalOrigin,
     pub profile: TabProfile,
+    pub started: Instant,
+}
+
+/// A pending download and how far it got.
+struct Held {
+    pending: Pending,
+    received: u64,
+    grew: Instant,
 }
 
 #[derive(Default)]
 struct SessionDownloads {
     started: usize,
-    pending: Vec<Pending>,
+    pending: Vec<Held>,
 }
 
 /// Per-session download bookkeeping.
@@ -66,8 +76,41 @@ impl Downloads {
             return false;
         }
         session.started += 1;
-        session.pending.push(pending);
+        let grew = pending.started;
+        session.pending.push(Held {
+            pending,
+            received: 0,
+            grew,
+        });
         true
+    }
+
+    /// Record how far `tab`'s download of `url` got at `now`. `Err` carries
+    /// why it must stop: past the size cap, no new byte for the idle
+    /// timeout, or past its deadline.
+    pub fn progress(&self, tab: &str, url: &str, size: DownloadSize, now: Instant) -> Result<(), &'static str> {
+        if size.largest() > MAX_DOWNLOAD_BYTES {
+            return Err("too_large");
+        }
+        let mut sessions = self.sessions.lock();
+        let Some(held) = sessions
+            .values_mut()
+            .flat_map(|s| s.pending.iter_mut())
+            .find(|h| h.pending.tab == tab && h.pending.url == url)
+        else {
+            return Ok(());
+        };
+        if size.received > held.received {
+            held.received = size.received;
+            held.grew = now;
+        }
+        if now.saturating_duration_since(held.pending.started) > budgets::DOWNLOAD_TOTAL {
+            return Err("deadline");
+        }
+        if now.saturating_duration_since(held.grew) > budgets::DOWNLOAD_IDLE {
+            return Err("idle");
+        }
+        Ok(())
     }
 
     /// The oldest pending download of `tab` for `url`.
@@ -77,26 +120,14 @@ impl Downloads {
             let at = s
                 .pending
                 .iter()
-                .position(|p| p.tab == tab && p.url == url)?;
-            Some((session_id.clone(), s.pending.remove(at)))
+                .position(|h| h.pending.tab == tab && h.pending.url == url)?;
+            Some((session_id.clone(), s.pending.remove(at).pending))
         })
     }
 
     pub fn forget(&self, session_id: &str) {
         self.sessions.lock().remove(session_id);
     }
-}
-
-/// Whether a download of `tab` that has (or announced) `bytes` may go on.
-pub fn within_cap(tab: &str, bytes: u64) -> bool {
-    if bytes <= MAX_DOWNLOAD_BYTES {
-        return true;
-    }
-    log::info!(
-        "[browser-agent] download cancelled tab={} reason=too_large",
-        label_prefix(tab)
-    );
-    false
 }
 
 /// The extension a download keeps: ASCII alphanumerics only, short, lower
@@ -185,12 +216,24 @@ impl DesktopBrowserHost {
             path: path.clone(),
             origin,
             profile,
+            started: Instant::now(),
         };
         if !self.downloads.admit(&session_id, pending) {
             return refuse("download_cap");
         }
         log::info!("[browser-agent] download started tab={}", label_prefix(tab));
         Some(path)
+    }
+
+    /// Whether `tab`'s download of `url`, at `size`, may go on.
+    pub(super) fn download_progress(&self, tab: &str, url: &Url, size: DownloadSize) -> bool {
+        match self.downloads.progress(tab, url.as_str(), size, Instant::now()) {
+            Ok(()) => true,
+            Err(reason) => {
+                log::info!("[browser-agent] download cancelled tab={} reason={reason}", label_prefix(tab));
+                false
+            }
+        }
     }
 
     /// The engine finished (or failed) a download it started for `tab`.

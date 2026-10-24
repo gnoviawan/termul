@@ -23,6 +23,10 @@ pub const FRAME_BUDGET: Duration = ROUND_TRIP.saturating_sub(MARGIN);
 /// How long the child waits for the describe reply at startup.
 pub const DESCRIBE: Duration = secs(5);
 
+/// How long an agent download may go without a new byte.
+pub const DOWNLOAD_IDLE: Duration = secs(60);
+/// The longest an agent download may run.
+pub const DOWNLOAD_TOTAL: Duration = secs(30 * 60);
 /// How long a consent prompt may wait for the user.
 pub const CONSENT_WAIT: Duration = secs(120);
 /// Renderer round trip to mount an agent tab's pane and webview.

@@ -2,7 +2,6 @@
   "knownFailing": [
     { "capability": "network", "code": "capability_unavailable" },
     { "capability": "iframe_cross_origin", "code": "capability_unavailable" },
-    { "capability": "download_size_cap", "code": "capability_unavailable" },
     { "capability": "frame_password_submit", "code": "capability_unavailable" },
     { "capability": "frame_focused_password_submit", "code": "capability_unavailable" },
     { "capability": "frame_focused_key", "code": "capability_unavailable" },

@@ -47,7 +47,7 @@ pub use tabs::TabView;
 pub use teardown::session_dir;
 
 use super::budgets::Deadline;
-use super::engine::events::{NavPolicy, NavVerdict, TabEvent, TabEvents, TabRole};
+use super::engine::events::{DownloadSize, NavPolicy, NavVerdict, TabEvent, TabEvents, TabRole};
 use super::engine::{self, BrowserEngine, EngineFacts};
 use super::{BrowserCall, BrowserHost, HostFuture, TabCreateError};
 use crate::acp::events as acp_events;
@@ -274,8 +274,8 @@ impl NavPolicy for HopPolicy {
         self.host.upgrade()?.download_starting(tab, url, suggested)
     }
 
-    fn download_progress(&self, tab: &str, _url: &Url, bytes: u64) -> bool {
-        downloads::within_cap(tab, bytes)
+    fn download_progress(&self, tab: &str, url: &Url, size: DownloadSize) -> bool {
+        self.host.upgrade().is_some_and(|host| host.download_progress(tab, url, size))
     }
 
     fn download_finished(&self, tab: &str, url: &Url, success: bool) {
