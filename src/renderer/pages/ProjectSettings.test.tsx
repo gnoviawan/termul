@@ -5,6 +5,10 @@ import { useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import type { Project } from '@/types/project'
 import { ProjectSettingsModal } from './ProjectSettings'
+import {
+  PROJECT_SETTINGS_CATEGORIES,
+  PROJECT_SETTINGS_SEARCH_INDEX
+} from './project-settings/categories'
 
 const apiMocks = vi.hoisted(() => ({
   selectFile: vi.fn(),
@@ -296,5 +300,81 @@ describe('ProjectSettings .env import', () => {
     })
     expect(screen.getByDisplayValue('new')).toBeInTheDocument()
     expect(screen.getByDisplayValue('ORDER')).toBeInTheDocument()
+  })
+})
+
+describe('ProjectSettings layout', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiMocks.getAvailableShells.mockResolvedValue({
+      success: true,
+      data: {
+        available: [
+          { name: 'bash', path: '/bin/bash', displayName: 'Bash' },
+          { name: 'zsh', path: '/bin/zsh', displayName: 'Zsh' }
+        ],
+        default: { name: 'bash', path: '/bin/bash', displayName: 'Bash' }
+      }
+    })
+    apiMocks.parseGitignore.mockResolvedValue({ success: true, data: [] })
+  })
+
+  it('groups pages like Preferences and leaves Emergency mode out', () => {
+    expect(PROJECT_SETTINGS_CATEGORIES.map((c) => [c.group, c.id])).toEqual([
+      ['Project', 'general'],
+      ['Project', 'shell'],
+      ['Project', 'env-vars'],
+      ['Project', 'symlinks'],
+      ['Agents', 'provider']
+    ])
+    expect(PROJECT_SETTINGS_SEARCH_INDEX.some((e) => e.categoryId === 'emergency')).toBe(false)
+  })
+
+  it('points every search anchor at a rendered settings row', () => {
+    renderSettings()
+
+    const anchors = PROJECT_SETTINGS_SEARCH_INDEX.flatMap((e) => (e.anchorId ? [e.anchorId] : []))
+    expect(anchors.length).toBeGreaterThan(0)
+    for (const anchor of anchors) {
+      const row = document.getElementById(anchor)
+      expect(row, anchor).not.toBeNull()
+      expect(row).toHaveAttribute('data-settings-row')
+    }
+    expect(screen.queryByText(/skip confirmation/i)).not.toBeInTheDocument()
+  })
+
+  it('shows a stored shell name as its detected shell', async () => {
+    renderSettings()
+
+    const select = screen.getByRole('combobox', { name: 'Shell' })
+    await waitFor(() => expect(select).toHaveTextContent('Bash'))
+  })
+
+  it('offers the app default when the project has no shell of its own', async () => {
+    renderSettings([{ ...firstProject, defaultShell: undefined }])
+
+    await waitFor(() => expect(apiMocks.getAvailableShells).toHaveBeenCalled())
+    expect(screen.getByRole('combobox', { name: 'Shell' })).toHaveTextContent('App default')
+  })
+
+  it('labels each list row control and its remove button', () => {
+    renderSettings([{ ...firstProject, symlinkDirs: ['node_modules'] }])
+
+    expect(screen.getByRole('textbox', { name: 'Name of KEEP' })).toHaveValue('KEEP')
+    expect(screen.getByRole('textbox', { name: 'Value of KEEP' })).toHaveValue('unchanged')
+    expect(screen.getByRole('button', { name: 'Remove KEEP' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Path of node_modules' })).toHaveValue(
+      'node_modules'
+    )
+    expect(screen.getByRole('button', { name: 'Remove node_modules' })).toBeInTheDocument()
+  })
+
+  it('shows an empty state with both actions when a list is empty', () => {
+    renderSettings([{ ...firstProject, envVars: [] }])
+
+    expect(screen.getByText('No environment variables')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /import from \.env/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add variable/i })).toBeInTheDocument()
+    expect(screen.getByText('No linked directories')).toBeInTheDocument()
   })
 })
