@@ -81,7 +81,7 @@ export function parkHiddenPanes(renderer: BatchRenderer): Parking {
           const child = swap(op[2] as number)
           op[2] = child
           parentOf.set(child, op[1] as number)
-          touched.add(op[2] as number)
+          touched.add(child)
           break
         }
         case 'insertBefore': {
