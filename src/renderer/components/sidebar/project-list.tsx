@@ -115,6 +115,8 @@ export function ProjectList({
   const showSections = railSections
   // The lifted row's shadow is a CSS transition keyed off data-dragging:
   // Motion can't interpolate a var() shadow, so whileDrag would snap it.
+  // The lift (opaque bg) holds until the row lands, and `relative` lets
+  // Reorder's own zIndex apply, so neighbours never show through it.
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const renderProjectRow = (project: Project): React.JSX.Element => {
     const shortcutIndex = activeIndexById.get(project.id) ?? -1
@@ -125,7 +127,7 @@ export function ProjectList({
         drag="y"
         layout="position"
         data-dragging={draggingId === project.id || undefined}
-        className="list-none rounded-lg transition-[box-shadow,background-color] duration-150 ease-out motion-reduce:transition-none data-[dragging]:bg-sidebar data-[dragging]:shadow-md"
+        className="relative list-none rounded-lg transition-shadow duration-[110ms] ease-out motion-reduce:transition-none data-[dragging]:bg-sidebar data-[dragging]:shadow-md data-[dragging]:duration-150"
         whileDrag={{
           scale: 1.02,
           pointerEvents: 'none'
@@ -156,8 +158,10 @@ export function ProjectList({
           }
           setActiveDragOverGroupId(null)
           activeDragOverGroupIdRef.current = null
-          setDraggingId(null)
         }}
+        onDragTransitionEnd={() =>
+          setDraggingId((current) => (current === project.id ? null : current))
+        }
       >
         <RailProjectItem
           project={project}
