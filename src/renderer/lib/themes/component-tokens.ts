@@ -50,12 +50,18 @@ export const COMPONENT_TOKEN_DEFAULTS = {
   '--elevation-panel': '0 12px 32px oklch(0 0 0 / 0.45)',
   /** Subagent pill menu. */
   '--elevation-menu': '0 12px 32px oklch(0 0 0 / 0.6)',
-  /** Chat composer card at rest. Flat by default; its border separates it. */
-  '--composer-shadow': 'none',
+  /**
+   * Chat composer card at rest. Flat by default; its border separates it.
+   * Never `none`: Tailwind joins shadow-* and ring-* into one box-shadow list,
+   * where `none` is invalid and drops the focus ring.
+   */
+  '--composer-shadow': '0 0 #0000',
+  /** Raised "you are here" depth, read by .keycap and the Rail keycap default. */
+  '--keycap-shadow': 'inset 0 1px 0 oklch(var(--ring) / 0.08), 0 1px 2px #00000040',
   /** Rail keycap fill (active row on the sidebar). Defaults to the computed --rail-keycap. */
   '--rail-keycap-fill': 'var(--rail-keycap)',
-  /** Rail keycap depth. Defaults to the shared .keycap shadow. */
-  '--rail-keycap-shadow': 'inset 0 1px 0 oklch(var(--ring) / 0.08), 0 1px 2px #00000040'
+  /** Rail keycap depth. Defaults to the shared keycap shadow. */
+  '--rail-keycap-shadow': 'var(--keycap-shadow)'
 } as const
 
 export type ComponentToken = keyof typeof COMPONENT_TOKEN_DEFAULTS

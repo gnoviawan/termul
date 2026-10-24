@@ -9,7 +9,7 @@ import type { ThemeChrome } from './types'
 /** Interfere gray-1. Page and terminal; a step off white to cut glare. */
 const PAGE = '#fcfcfc'
 /** Raised panels, menus and dialogs. Their shadow ring separates them. */
-const CONTAINER = '#ffffff'
+export const CONTAINER = '#ffffff'
 /** Interfere shell, oklch(0.973 0 0). Sidebar and title bar. */
 const SHELL = '#f6f6f6'
 /** gray-a3 on the page. Hover wash. */
@@ -26,7 +26,7 @@ const INK = '#202020'
 const SECONDARY_INK = '#646464'
 
 /** Interfere s-default: 0.5px ring plus a short drop. Cards and raised controls. */
-const S_DEFAULT = '0 0 0 0.5px #0000000f, 0 1px 1px -1px #0000001a, 0 1px 2px 0 #0000000d'
+export const S_DEFAULT = '0 0 0 0.5px #0000000f, 0 1px 1px -1px #0000001a, 0 1px 2px 0 #0000000d'
 /** Interfere s-large. Popovers, menus, tooltips. */
 const S_LARGE =
   '0 0 0 0.5px color-mix(in oklab, #0000000f, #f0f0f0 25%), 0 2px 3px -2px #0000000f, 0 3px 12px -4px #0000001a, 0 4px 16px -8px #0000000d'

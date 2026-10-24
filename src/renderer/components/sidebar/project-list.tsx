@@ -1,5 +1,5 @@
 import { LayoutGroup, Reorder } from 'framer-motion'
-import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
+import { type Dispatch, type MutableRefObject, type SetStateAction, useState } from 'react'
 import { ChevronDown, ChevronRight, FolderPlus } from '@/components/icons'
 import { RailTooltip } from '@/components/shell/rail-button'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
@@ -113,6 +113,9 @@ export function ProjectList({
   // Dropping on a folder header or group container moves the project there.
   // The row also watches git for its diff stat.
   const showSections = railSections
+  // The lifted row's shadow is a CSS transition keyed off data-dragging:
+  // Motion can't interpolate a var() shadow, so whileDrag would snap it.
+  const [draggingId, setDraggingId] = useState<string | null>(null)
   const renderProjectRow = (project: Project): React.JSX.Element => {
     const shortcutIndex = activeIndexById.get(project.id) ?? -1
     return (
@@ -121,12 +124,13 @@ export function ProjectList({
         value={project}
         drag="y"
         layout="position"
-        className="list-none rounded-lg"
+        data-dragging={draggingId === project.id || undefined}
+        className="list-none rounded-lg transition-[box-shadow,background-color] duration-150 ease-out motion-reduce:transition-none data-[dragging]:bg-sidebar data-[dragging]:shadow-md"
         whileDrag={{
           scale: 1.02,
-          boxShadow: 'var(--elevation-md)',
           pointerEvents: 'none'
         }}
+        onDragStart={() => setDraggingId(project.id)}
         onDrag={(_event, info) => {
           const element = document.elementFromPoint(info.point.x, info.point.y)
           const container = element?.closest('[data-group-container-id]')
@@ -152,6 +156,7 @@ export function ProjectList({
           }
           setActiveDragOverGroupId(null)
           activeDragOverGroupIdRef.current = null
+          setDraggingId(null)
         }}
       >
         <RailProjectItem
