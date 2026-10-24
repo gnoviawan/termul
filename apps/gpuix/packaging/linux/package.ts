@@ -19,7 +19,6 @@ import {
   chmodSync,
   copyFileSync,
   cpSync,
-  existsSync,
   mkdirSync,
   readdirSync,
   rmSync,
@@ -129,9 +128,15 @@ function dirBytes(dir: string): number {
 const mib = (bytes: number) => `${(bytes / 1024 ** 2).toFixed(1)} MiB`
 
 if (process.platform !== 'linux' || process.arch !== 'x64') {
-  throw new Error(`the Linux package builds on linux x64 only (this is ${process.platform} ${process.arch})`)
+  throw new Error(
+    `the Linux package builds on linux x64 only (this is ${process.platform} ${process.arch})`
+  )
 }
-for (const tool of ['dpkg-deb', 'strip', ...(values['server-bin'] && values['webview-host'] ? [] : ['cargo'])]) {
+for (const tool of [
+  'dpkg-deb',
+  'strip',
+  ...(values['server-bin'] && values['webview-host'] ? [] : ['cargo'])
+]) {
   requireTool(tool)
 }
 
@@ -157,9 +162,12 @@ cpSync(path.join(APP_DIR, 'assets/fonts'), path.join(ROOT, 'assets/fonts'), { re
 step('runtime packages')
 copyFileSync(path.join(APP_DIR, 'package.json'), path.join(ROOT, 'package.json'))
 copyFileSync(path.join(APP_DIR, 'bun.lock'), path.join(ROOT, 'bun.lock'))
-run(['bun', 'install', '--production', '--frozen-lockfile', '--ignore-scripts', '--backend=copyfile'], {
-  cwd: ROOT
-})
+run(
+  ['bun', 'install', '--production', '--frozen-lockfile', '--ignore-scripts', '--backend=copyfile'],
+  {
+    cwd: ROOT
+  }
+)
 rmSync(path.join(ROOT, 'bun.lock'))
 // The browser (wasm) build of @gpuix/native: the desktop app loads the .node addon.
 rmSync(path.join(ROOT, 'node_modules/@gpuix/native/wasm'), { recursive: true })
@@ -167,10 +175,16 @@ writeFileSync(
   path.join(ROOT, 'package.json'),
   `${JSON.stringify({ name: PACKAGE_NAME, version: VERSION, private: true, type: 'module' }, null, 2)}\n`
 )
-writeFileSync(path.join(ROOT, 'bunfig.toml'), '# Empty: keeps a bunfig.toml in the working directory out of the app.\n')
+writeFileSync(
+  path.join(ROOT, 'bunfig.toml'),
+  '# Empty: keeps a bunfig.toml in the working directory out of the app.\n'
+)
 copyFileSync(process.execPath, path.join(ROOT, 'bun'))
 chmodSync(path.join(ROOT, 'bun'), 0o755)
-const addon = path.join(ROOT, 'node_modules/@gpuix/native-linux-x64-gnu/gpuix-native.linux-x64-gnu.node')
+const addon = path.join(
+  ROOT,
+  'node_modules/@gpuix/native-linux-x64-gnu/gpuix-native.linux-x64-gnu.node'
+)
 run(['strip', '--strip-unneeded', addon])
 
 step('termul-server')
@@ -191,7 +205,9 @@ const hostBin =
 installElf(hostBin, path.join(DIST, WEBVIEW_HOST_BIN))
 
 step('wrapper, desktop entry, icons')
-writeFileSync(path.join(ROOT, PACKAGE_NAME), WRAPPER.replaceAll('@VERSION@', VERSION), { mode: 0o755 })
+writeFileSync(path.join(ROOT, PACKAGE_NAME), WRAPPER.replaceAll('@VERSION@', VERSION), {
+  mode: 0o755
+})
 mkdirSync(path.join(STAGE, 'usr/bin'), { recursive: true })
 symlinkSync(
   path.relative(path.join(STAGE, 'usr/bin'), path.join(ROOT, PACKAGE_NAME)),
@@ -206,7 +222,10 @@ for (const icon of ICONS) {
 }
 const docDir = path.join(STAGE, 'usr/share/doc', PACKAGE_NAME)
 mkdirSync(docDir, { recursive: true })
-copyFileSync(path.join(APP_DIR, 'THIRD_PARTY_NOTICES.md'), path.join(docDir, 'THIRD_PARTY_NOTICES.md'))
+copyFileSync(
+  path.join(APP_DIR, 'THIRD_PARTY_NOTICES.md'),
+  path.join(docDir, 'THIRD_PARTY_NOTICES.md')
+)
 
 step('dpkg-deb')
 const installedBytes = dirBytes(STAGE)

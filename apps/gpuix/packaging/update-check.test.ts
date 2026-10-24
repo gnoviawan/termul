@@ -1,4 +1,4 @@
-import { describe as suite, expect, test } from 'bun:test'
+import { expect, describe as suite, test } from 'bun:test'
 import { compareVersions, describe, evaluateFeed, FEED_URL } from './update-check'
 
 const FEED = {

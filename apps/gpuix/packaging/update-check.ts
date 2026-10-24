@@ -103,7 +103,9 @@ if (import.meta.main) {
   main().then(
     (code) => process.exit(code),
     (error) => {
-      console.error(`[termul-gpuix] error update-check: ${error instanceof Error ? error.message : error}`)
+      console.error(
+        `[termul-gpuix] error update-check: ${error instanceof Error ? error.message : error}`
+      )
       process.exit(1)
     }
   )
