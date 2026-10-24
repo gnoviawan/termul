@@ -21,11 +21,13 @@ import {
 } from '@/components/ui/sheet'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { SessionConfigOption, SessionUsage } from '@/lib/acp-api'
+import { isModelPickerV2Enabled } from '@/lib/model-picker-flag'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { shouldShowSessionUsage } from '../context-usage-utils'
 import { SelectorPanel } from './SelectorPanel'
+import { SelectorPanelV2 } from './SelectorPanelV2'
 import { type SelectorSource, useSessionSelectorSource } from './selector-source'
 import { useCurrentAgentConfigId } from './use-agent-switch'
 
@@ -229,8 +231,10 @@ export function AgentModelSelector({
     ? `→ ${modelName ?? agent.armedName}`
     : (modelName ?? statusText ?? (agent.present ? agent.name : (effortName ?? 'Fast')))
 
+  // View-only v2 behind an opt-in flag (default off); same props and source.
+  const Panel = isModelPickerV2Enabled() ? SelectorPanelV2 : SelectorPanel
   const panel = (
-    <SelectorPanel
+    <Panel
       key={generation}
       source={source}
       touch={isMobile}
