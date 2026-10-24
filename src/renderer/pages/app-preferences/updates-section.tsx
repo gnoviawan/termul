@@ -1,4 +1,5 @@
 import { ExternalLink, RefreshCw, RotateCcw } from '@/components/icons'
+import { rowId } from '@/components/settings/row-id'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsNotice } from '@/components/settings/SettingsNotice'
@@ -9,7 +10,6 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import type { UpdateChannel } from '@/lib/tauri-updater-api'
-import { rowId } from './categories'
 
 interface UpdatesSectionProps {
   isAurUpdater: boolean
