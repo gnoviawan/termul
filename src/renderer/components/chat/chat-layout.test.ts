@@ -45,3 +45,12 @@ describe('composer elevation family', () => {
     expect(source).not.toMatch(/shadow-\[|shadow-(?:sm|md|lg|xl|2xl|panel)\b|boxShadow:/)
   })
 })
+
+describe('composer edge', () => {
+  it('casts no shadow or fade above the composer', () => {
+    const list = readFileSync(join(__dirname, 'ChatMessageList.tsx'), 'utf8')
+    expect(list).not.toMatch(/bg-gradient-to-t/)
+    expect(list).not.toMatch(/bottom-0[^"]*bg-gradient/)
+    expect(COMPOSER_CARD_CLASS).toContain('shadow-composer')
+  })
+})
