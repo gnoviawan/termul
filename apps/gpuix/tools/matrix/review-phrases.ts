@@ -29,4 +29,4 @@ export const SETTINGS_BASE = [
   TINT
 ]
 export const TOAST =
-  'The toast is the sonner shim: a flat green box at the window edge with the close button on the right, where the web shows a card with a check icon and the close button at its top-left.'
+  'The toast matches the web card (G4 native toaster): check icon, close button over the top-left corner, Arial text (sonner sets its own font stack); the toast crop differs 0.85 % perceptual.'
