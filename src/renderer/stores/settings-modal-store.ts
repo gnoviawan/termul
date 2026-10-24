@@ -40,7 +40,7 @@ export const useSettingsModalStore = create<SettingsModalState>((set) => ({
   },
 
   openApp: (page?: string): void => {
-    set({ view: 'app', appPage: page ?? null })
+    set({ view: 'app', appPage: page ?? null, projectId: null })
   },
 
   setAppPage: (page: string): void => {
@@ -52,7 +52,7 @@ export const useSettingsModalStore = create<SettingsModalState>((set) => ({
   },
 
   close: (): void => {
-    set({ view: null })
+    set({ view: null, projectId: null })
   }
 }))
 
