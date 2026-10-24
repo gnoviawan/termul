@@ -95,13 +95,15 @@ export interface CommandCallOptions {
 
 /**
  * Options for `session/load` and `session/resume`.
- * `mcpServers` is set only by Reload this chat. It stays on this bag so a
+ * `mcpServers` carries the reopen's MCP list. It stays on this bag so a
  * normal reopen still passes command options as the fifth argument.
  */
 export type ReopenCallOptions = CommandCallOptions & {
   /**
-   * Present only for a reload. An empty array still asks the host to attach
-   * the plan server. Omitted keeps a normal history reopen.
+   * The MCP servers to attach on this reopen. The store defaults it to the
+   * user's configured servers for every reopen (#1420); Reload this chat sends
+   * an explicit list. An empty array still asks the host to attach the plan
+   * server. Omitted means no client MCP list and no host plan server.
    */
   mcpServers?: McpServer[]
 }
