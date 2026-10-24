@@ -517,11 +517,16 @@ describe('SelectorPanelV2 row tooltip', () => {
       expect(copy).toBeDefined()
       fireEvent.focus(copy)
       await waitFor(() =>
-        expect(screen.getByRole('tooltip').textContent?.split('\n\n')[0]).toBe(name)
+        expect(
+          (document.querySelector('[data-side]') as HTMLElement | null)?.textContent
+            ?.split('\n\n')[0]
+            .trim()
+        ).toBe(name)
       )
+      expect(copy).toHaveAccessibleDescription('')
       expect(copy).toHaveAttribute('aria-label', name)
       fireEvent.blur(copy)
-      await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull())
+      await waitFor(() => expect(document.querySelector('[data-side]')).toBeNull())
     }
   })
 })
