@@ -163,7 +163,7 @@ export function BrowserProjectPolicy({ projectId }: { projectId: string }): Reac
 
 function clearMessage(sessions: number, projects: number): string {
   if (sessions === 0) {
-    return 'The agent signs out of every site. No agent browser tabs are open right now.'
+    return 'The agent signs out of every site. No tabs on the shared agent profile are open right now.'
   }
   const chats = `${sessions} ${sessions === 1 ? 'chat' : 'chats'}`
   const scope = `${projects} ${projects === 1 ? 'project' : 'projects'}`

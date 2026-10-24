@@ -189,6 +189,16 @@ describe('BrowserPolicySettings', () => {
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
   })
 
+  it('says only the shared profile is affected when no tab uses it', async () => {
+    host.app.clearImpact = { sessions: 0, projects: 0 }
+    render(<BrowserPolicySettings />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear agent profile' }))
+
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('No tabs on the shared agent profile are open right now.')
+    expect(dialog).not.toHaveTextContent('No agent browser tabs')
+  })
+
   it('reports that this build cannot clear the profile yet', async () => {
     render(<BrowserPolicySettings />)
     fireEvent.click(await screen.findByRole('button', { name: 'Clear agent profile' }))
