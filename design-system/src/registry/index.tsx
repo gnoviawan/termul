@@ -1,5 +1,6 @@
 import * as C from '../previews/components'
 import * as F from '../previews/foundations'
+import * as M from '../previews/model-selector'
 import * as P from '../previews/patterns'
 import * as S from '../previews/surfaces'
 import * as T from '../previews/tokens'
@@ -8,6 +9,7 @@ import type { CanvasEntry, CanvasSection } from './types'
 const THEMES = 'src/renderer/lib/themes'
 const INDEX_CSS = 'src/renderer/index.css'
 const UI = 'src/renderer/components/ui'
+const PICKER = 'src/renderer/components/chat/agent-model-selector'
 
 function tokens(id: string, name: string, list: readonly F.TokenSpec[], width = 480): CanvasEntry {
   return {
@@ -418,6 +420,14 @@ export const SECTIONS: CanvasSection[] = [
             width: 560,
             height: 432,
             Preview: C.MessagePreview
+          },
+          {
+            id: 'chat.model-selector.v1',
+            name: 'Model selector v1 (current)',
+            source: `${PICKER}/SelectorPanel.tsx`,
+            width: 720,
+            height: 520,
+            Preview: M.ModelSelectorV1
           }
         ]
       }
