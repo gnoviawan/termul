@@ -103,6 +103,7 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
       }
       case 'keyboard':
         keyboard = event.owner
+        log.info(SOURCE, `keyboard -> ${keyboard === null ? 'app' : `tab ${keyboard}`}`)
         stopFocusPoll()
         if (keyboard === null) return
         options.blurApp()

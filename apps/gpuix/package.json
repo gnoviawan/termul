@@ -14,6 +14,7 @@
   },
   "scripts": {
     "build": "bun build.ts",
+    "build:webview-host": "bun tools/webview-host.ts",
     "dev": "bun tools/dev.ts",
     "start": "bun build.ts && bun dist/main.js",
     "check:react": "bun tools/check-react.ts",

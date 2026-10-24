@@ -176,7 +176,7 @@ impl Host {
         let view = WebViewBuilder::new()
             .with_url(&url)
             .with_bounds(rect(&bounds))
-            .with_visible(false)
+            .with_visible(true)
             .with_devtools(true)
             .with_initialization_script_for_main_only(INIT_JS, true)
             .with_ipc_handler(move |request| match protocol::parse_page_message(request.body()) {
@@ -273,6 +273,9 @@ fn quit() -> ! {
 }
 
 fn dispatch(line: String) {
+    if std::env::var_os("TERMUL_WEBVIEW_HOST_TRACE").is_some() {
+        log(&format!("command {line}"));
+    }
     let cmd = match protocol::parse_command(&line) {
         Ok(cmd) => cmd,
         Err(error) => return emit(Event::Invalid { line, error }),

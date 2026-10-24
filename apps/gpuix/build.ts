@@ -23,6 +23,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { BunPlugin } from 'bun'
 import { gpuixUiAliases } from './tools/ui/alias'
+import { buildWebviewHost } from './tools/webview-host'
 
 export const APP_DIR = import.meta.dir
 export const REPO_DIR = path.resolve(APP_DIR, '../..')
@@ -138,9 +139,12 @@ const RENDERER_ONLY_ALIASES = new Set(['@tiptap/react', 'dompurify'])
  * everything under apps/gpuix except the compat stand-ins (radix, shims),
  * which are DOM components like the code they replace.
  */
-const DOM_DIRS = ['src/compat/radix', 'src/compat/shims', 'tools/compat/fixtures/dom', 'tools/compat/bench/dom'].map(
-  (dir) => path.join(APP_DIR, dir) + path.sep
-)
+const DOM_DIRS = [
+  'src/compat/radix',
+  'src/compat/shims',
+  'tools/compat/fixtures/dom',
+  'tools/compat/bench/dom'
+].map((dir) => path.join(APP_DIR, dir) + path.sep)
 
 export function isNativeImporter(importer: string): boolean {
   if (!importer.startsWith(APP_DIR + path.sep)) return false
@@ -182,16 +186,27 @@ export function compatPlugin(aliases?: CompatResolve[]): BunPlugin {
         if (isNativeImporter(args.importer)) return { path: 'react', external: true }
         return { path: path.join(COMPAT_DIR, 'react.ts') }
       })
-      build.onResolve({ filter: /^(react-dom(\/client)?|@radix-ui\/.*|framer-motion|cmdk|@streamdown\/mermaid|@tiptap\/react|dompurify|react-resizable-panels)$/ }, (args) => {
-        if (args.path.startsWith('react-dom') && isNativeImporter(args.importer)) {
-          return { path: args.path, external: true }
+      build.onResolve(
+        {
+          filter:
+            /^(react-dom(\/client)?|@radix-ui\/.*|framer-motion|cmdk|@streamdown\/mermaid|@tiptap\/react|dompurify|react-resizable-panels)$/
+        },
+        (args) => {
+          if (args.path.startsWith('react-dom') && isNativeImporter(args.importer)) {
+            return { path: args.path, external: true }
+          }
+          if (
+            RENDERER_ONLY_ALIASES.has(args.path) &&
+            !args.importer.startsWith(RENDERER_DIR + path.sep)
+          )
+            return undefined
+          const target = PACKAGE_ALIASES[args.path]
+          if (!target)
+            throw new Error(`compat: no stand-in for ${args.path} (imported by ${args.importer})`)
+          aliases?.push({ specifier: args.path, target })
+          return { path: path.join(COMPAT_DIR, target) }
         }
-        if (RENDERER_ONLY_ALIASES.has(args.path) && !args.importer.startsWith(RENDERER_DIR + path.sep)) return undefined
-        const target = PACKAGE_ALIASES[args.path]
-        if (!target) throw new Error(`compat: no stand-in for ${args.path} (imported by ${args.importer})`)
-        aliases?.push({ specifier: args.path, target })
-        return { path: path.join(COMPAT_DIR, target) }
-      })
+      )
     }
   }
 }
@@ -202,7 +217,10 @@ export function overridesPlugin(): BunPlugin {
     name: 'termul-gpuix-overrides',
     setup(build) {
       build.onResolve({ filter: /^(@\/|@renderer\/)/ }, (args) => {
-        const resolved = Bun.resolveSync(`./${args.path.replace(/^@(renderer)?\//, '')}`, RENDERER_DIR)
+        const resolved = Bun.resolveSync(
+          `./${args.path.replace(/^@(renderer)?\//, '')}`,
+          RENDERER_DIR
+        )
         return { path: overrideFor(resolved, args.importer) ?? resolved }
       })
       build.onResolve({ filter: /^\.\.?\// }, (args) => {
@@ -252,16 +270,21 @@ export function globPlugin(): BunPlugin {
         '@material-icons/': `${path.join(path.dirname(Bun.resolveSync('material-icon-theme/package.json', REPO_DIR)), 'icons')}/`
       }
       build.onLoad({ filter: /(agent-icon-catalog|material-icon-catalog)\.ts$/ }, (args) => {
-        const source = readFileSync(args.path, 'utf8').replace(GLOB_CALL, (_call, pattern: string) => {
-          const prefix = Object.keys(roots).find((key) => pattern.startsWith(key))
-          const absolute = prefix ? roots[prefix] + pattern.slice(prefix.length) : pattern
-          const dir = path.dirname(absolute)
-          const entries = [...new Bun.Glob(path.basename(absolute)).scanSync({ cwd: dir })].map((name) => {
-            const file = path.join(dir, name)
-            return `${JSON.stringify(`/${path.relative(REPO_DIR, file)}`)}: ${JSON.stringify(readFileSync(file, 'utf8'))}`
-          })
-          return `({${entries.join(',')}})`
-        })
+        const source = readFileSync(args.path, 'utf8').replace(
+          GLOB_CALL,
+          (_call, pattern: string) => {
+            const prefix = Object.keys(roots).find((key) => pattern.startsWith(key))
+            const absolute = prefix ? roots[prefix] + pattern.slice(prefix.length) : pattern
+            const dir = path.dirname(absolute)
+            const entries = [...new Bun.Glob(path.basename(absolute)).scanSync({ cwd: dir })].map(
+              (name) => {
+                const file = path.join(dir, name)
+                return `${JSON.stringify(`/${path.relative(REPO_DIR, file)}`)}: ${JSON.stringify(readFileSync(file, 'utf8'))}`
+              }
+            )
+            return `({${entries.join(',')}})`
+          }
+        )
         return { loader: 'ts', contents: source }
       })
     }
@@ -287,7 +310,9 @@ export interface BuildResult {
  * Preferences reads it for "Termul vX" and the release notes. Without it
  * Bun's `import.meta.env` is `process.env` and the UI says v0.1.0.
  */
-const APP_VERSION = (JSON.parse(readFileSync(path.join(REPO_DIR, 'package.json'), 'utf8')) as { version: string }).version
+const APP_VERSION = (
+  JSON.parse(readFileSync(path.join(REPO_DIR, 'package.json'), 'utf8')) as { version: string }
+).version
 const VERSION_DEFINES = {
   'import.meta.env.PACKAGE_VERSION': JSON.stringify(APP_VERSION),
   'import.meta.env.VITE_APP_VERSION': JSON.stringify(APP_VERSION)
@@ -312,7 +337,14 @@ export async function buildClient(
     sourcemap: 'linked',
     // react and react-dom are not listed: the plugins decide per importer.
     external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
-    plugins: [rawPlugin(), globPlugin(), compatPlugin(), gpuixUiAliases(), overridesPlugin(), termulResolver(reactResolves)],
+    plugins: [
+      rawPlugin(),
+      globPlugin(),
+      compatPlugin(),
+      gpuixUiAliases(),
+      overridesPlugin(),
+      termulResolver(reactResolves)
+    ],
     naming: options.production
       ? { entry: '[name].bundle.[ext]', chunk: 'chunk-[hash].[ext]', asset: '[name].[ext]' }
       : '[name].[ext]',
@@ -343,5 +375,11 @@ if (import.meta.main) {
   if (!result.ok) process.exit(1)
   console.log(
     `built ${path.relative(APP_DIR, result.entry)} in ${Math.round(performance.now() - started)} ms`
+  )
+  const host = buildWebviewHost(OUT_DIR, { release: Bun.argv.includes('--release-host') })
+  console.log(
+    host.kind === 'built'
+      ? `linked ${path.relative(APP_DIR, host.binary)} in ${host.ms} ms`
+      : `webview host skipped: ${host.reason}`
   )
 }
