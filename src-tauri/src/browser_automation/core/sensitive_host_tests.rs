@@ -267,17 +267,15 @@ async fn ephemeral_tabs_honour_project_pre_approvals_and_always_allow_writes_one
 #[tokio::test]
 async fn reading_a_page_then_sending_its_data_to_another_origin_prompts() {
     let r = rig(vec![]);
-    let reply = r.h.call("navigate", json!({ "url": LOGIN })).await;
-    assert_eq!(reply["ok"], true);
     let away = json!({ "url": "http://localhost:4100/collect?d=secret" });
     assert_eq!(
         r.h.call("navigate", away.clone()).await["ok"],
         true,
-        "untainted"
+        "nothing read yet"
     );
 
+    // The reply names the page's URL, which the page can pick.
     r.h.call("navigate", json!({ "url": LOGIN })).await;
-    r.h.call("snapshot", json!({})).await;
     let reply = r.h.call("navigate", away).await;
     assert_eq!(reply["code"], ERR_CONFIRMATION, "{reply}");
     assert_eq!(r.ticket_actions()[0].0, ActionClass::TaintedExfil);
