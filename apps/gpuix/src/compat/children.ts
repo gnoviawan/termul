@@ -196,6 +196,25 @@ function withMarkers(slots: Slot[], marker: 'disc' | 'decimal', inside: boolean)
  * array, positions are identity) or `jsx` (one child, or a dynamic array the
  * caller keyed).
  */
+/**
+ * A column whose height is its content's (no height, at most a max height) is
+ * indefinite, and CSS resolves a child's `flex-1` basis of 0% against it as
+ * the child's content size. GPUIX takes basis 0 literally, so a scrolling body
+ * (`flex-1 overflow-y-auto`) collapses to nothing. Drop the basis on such
+ * children: they size to their content and still shrink under the max height.
+ */
+export function contentBasis(children: ReactNode): ReactNode {
+  if (Array.isArray(children)) return children.map(contentBasis)
+  if (!isValidElement<{ style?: StyleDesc }>(children)) return children
+  const style = children.props.style
+  if (style?.flexBasis !== 0 || !style.flexGrow) return children
+  const { flexBasis: _, ...rest } = style
+  const clone = cloneElement(children, { style: rest })
+  const info = childInfo.get(children)
+  if (info) childInfo.set(clone, info)
+  return clone
+}
+
 export function layoutChildren(
   tr: Translation,
   style: StyleDesc,
