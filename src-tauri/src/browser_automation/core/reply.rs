@@ -88,11 +88,17 @@ impl PageData {
         }
     }
 
-    /// The reply hands the agent text the page wrote: its outline, a
-    /// dialog's message, console messages or requests. Untrusted text can
-    /// carry instructions, so it taints the session.
+    /// The reply hands the agent text the page wrote: its title or URL
+    /// (a redirect or `pushState` picks it), its outline, a dialog's
+    /// message, console messages or requests. Untrusted text can carry
+    /// instructions, so it taints the session.
     pub(super) fn carries_page_text(&self) -> bool {
-        self.snapshot.is_some() || self.dialog.is_some() || self.console.is_some() || self.network.is_some()
+        !self.title.is_empty()
+            || !matches!(self.url.as_str(), "" | "about:blank")
+            || self.snapshot.is_some()
+            || self.dialog.is_some()
+            || self.console.is_some()
+            || self.network.is_some()
     }
 }
 
