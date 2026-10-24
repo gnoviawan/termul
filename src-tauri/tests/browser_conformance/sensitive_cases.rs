@@ -285,6 +285,27 @@ async fn formless_password_submit_asked(c: &Ctx<'_>) -> CaseResult {
     c.expect_url("/login-formless.html", "the refused submit").await
 }
 
+/// A pay button outside the card form, wired up by page script, submits
+/// the card all the same. Changing a control that sits outside every form
+/// asks nothing.
+pub async fn payment_outside_form(c: &Ctx<'_>) -> CaseResult {
+    c.open("/checkout-outside-form.html", "Checkout outside form fixture").await?;
+    let quantity = c.ref_of("combobox", "Quantity").await?;
+    c.call("select_option", json!({ "ref": quantity, "value": "2" })).await?;
+    let gift = c.ref_of("checkbox", "Gift wrap").await?;
+    c.call("check", json!({ "ref": gift })).await?;
+    expect_tickets(c, &[], "changing controls outside the card form")?;
+    let pay = c.ref_of("button", "Pay now").await?;
+    expect_refusal(
+        c.call("click", json!({ "ref": pay })).await,
+        "confirmation_required",
+        "unattended",
+        "a pay button outside the card form",
+    )?;
+    expect_tickets(c, &[ActionClass::PaymentSubmit], "payment outside the card form")?;
+    c.expect_url("/checkout-outside-form.html", "the refused payment").await
+}
+
 /// Once the agent read the page, Enter on a link that carries data to
 /// another origin is confirmed like a click on it.
 pub async fn tainted_link_enter(c: &Ctx<'_>) -> CaseResult {
