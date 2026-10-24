@@ -72,6 +72,9 @@ export interface SelectorPanelV2Props extends SelectorPanelProps {
   agentRail?: 'top' | 'left'
 }
 
+/** Keys the Favorites copies apart from the same models in the list. */
+const FAVORITES_KEY_PREFIX = 'favorite\0'
+
 function SectionLabel({ id, children }: { id?: string; children: ReactNode }): React.JSX.Element {
   return (
     <div id={id} className={PICKER_LABEL}>
@@ -88,6 +91,7 @@ function DenseModelRow({
   agentId,
   agentName,
   edit,
+  inFavorites = false,
   disabled,
   touch,
   onPick
@@ -102,6 +106,8 @@ function DenseModelRow({
   agentName?: string
   /** Session options of the active model; adds the Edit button. */
   edit?: ChoiceSection[]
+  /** A row in Favorites: its Edit is named apart from the list row's. */
+  inFavorites?: boolean
   disabled: boolean
   touch: boolean
   onPick: () => void
@@ -202,6 +208,7 @@ function DenseModelRow({
   return (
     <EditableRow
       modelName={name}
+      inFavorites={inFavorites}
       sections={edit}
       disabled={disabled}
       touch={touch}
@@ -632,6 +639,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
         // Only the active model has session options. Each of its rows (the list
         // row, its Favorites copy) gets the same Edit over that one session state.
         edit={configId === effectiveId && model.value === selectedValue ? edit : undefined}
+        inFavorites={keyPrefix === FAVORITES_KEY_PREFIX}
         disabled={disabled}
         touch={touch}
         onPick={() => state.pick(configId, catalog, model.value)}
@@ -702,7 +710,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
                     [favorite.model],
                     favorite.configId === effectiveId ? modelValue : undefined,
                     true,
-                    'favorite\0'
+                    FAVORITES_KEY_PREFIX
                   )
                 )}
               </div>

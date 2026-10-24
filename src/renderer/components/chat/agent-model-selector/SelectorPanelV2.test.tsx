@@ -733,12 +733,14 @@ describe('SelectorPanelV2 Thinking level on the Edit button', () => {
       expect(row.textContent?.trim()).toBe('Claude Opus')
     }
     // Two Edits, one per copy of the active model; each carries the level.
+    // The copy's (first, in Favorites) says where it is; the list row's does not.
     const edits = screen.getAllByTestId('selector-edit')
     expect(edits).toHaveLength(2)
     expect(levels().map((level) => level.textContent)).toEqual(['High', 'High'])
-    for (const button of edits) {
-      expect(button).toHaveAttribute('aria-label', 'Edit Claude Opus, thinking High')
-    }
+    expect(edits.map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Edit Claude Opus in Favorites, thinking High',
+      'Edit Claude Opus, thinking High'
+    ])
     // The Favorites group tells them apart: only the copy's Edit is inside it.
     const group = screen.getByRole('group', { name: 'Favorites' })
     expect(edits.filter((button) => group.contains(button))).toHaveLength(1)
@@ -927,6 +929,30 @@ describe('SelectorPanelV2 Edit on the Favorites copy', () => {
     fireEvent.click(within(flyout).getByRole('menuitemradio', { name: 'Medium' }))
     expect(onEffort).toHaveBeenCalledWith('medium')
     await waitFor(() => expect(levelTexts()).toEqual(['Medium', 'Medium']))
+  })
+
+  it('the copy\'s Edit has its own name, "in Favorites", with the visible level last', () => {
+    render(<Panel {...props(OPUS_FAVORITE)} />)
+    const copyEdit = editOf(copyRow())
+    const listedEdit = editOf(listedRow())
+    const copyName = copyEdit.getAttribute('aria-label') ?? ''
+    const listedName = listedEdit.getAttribute('aria-label') ?? ''
+    expect(copyName).not.toBe(listedName)
+    expect(copyName).toContain('in Favorites')
+    expect(copyEdit).toHaveAccessibleName('Edit Claude Opus in Favorites, thinking High')
+    expect(listedEdit).toHaveAccessibleName('Edit Claude Opus, thinking High')
+    // Label in name: each name ends with the text its button shows.
+    for (const button of [copyEdit, listedEdit]) {
+      const shown = button.textContent?.trim() ?? ''
+      expect(shown).toBe('High')
+      expect(button.getAttribute('aria-label')?.endsWith(shown)).toBe(true)
+    }
+  })
+
+  it("with no level, the copy's Edit still names Favorites, as the fallback does", () => {
+    render(<Panel {...props({ thoughtLevel: null, ...OPUS_FAVORITE })} />)
+    expect(editOf(copyRow())).toHaveAccessibleName('Edit Context for Claude Opus in Favorites')
+    expect(editOf(listedRow())).toHaveAccessibleName('Edit Context for Claude Opus')
   })
 
   it("only one flyout is open: Edit on the list row closes the copy's", async () => {

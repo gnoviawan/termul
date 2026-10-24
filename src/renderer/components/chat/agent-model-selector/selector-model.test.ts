@@ -566,6 +566,38 @@ describe('editButtonAccessibleName', () => {
   })
 })
 
+describe('editButtonAccessibleName in Favorites', () => {
+  const sections = 'Thinking and Context'
+
+  it('with a level: "Edit <name> in Favorites, thinking <level>", the level last', () => {
+    expect(
+      editButtonAccessibleName({
+        name: ' Claude Opus ',
+        thinking: 'High',
+        sections,
+        inFavorites: true
+      })
+    ).toBe('Edit Claude Opus in Favorites, thinking High')
+  })
+
+  it('no level: the fallback, in Favorites', () => {
+    expect(editButtonAccessibleName({ name: 'Claude Opus', sections, inFavorites: true })).toBe(
+      'Edit Thinking and Context for Claude Opus in Favorites'
+    )
+  })
+
+  it('outside Favorites the name is unchanged', () => {
+    expect(
+      editButtonAccessibleName({
+        name: 'Claude Opus',
+        thinking: 'High',
+        sections,
+        inFavorites: false
+      })
+    ).toBe('Edit Claude Opus, thinking High')
+  })
+})
+
 describe('rowTooltip', () => {
   it('leads with the full, trimmed model name', () => {
     expect(rowTooltip({ name: '  Claude 4.7 Opus Thinking ' })).toBe('Claude 4.7 Opus Thinking')
