@@ -15,6 +15,7 @@ import {
   modelMatches,
   orderAgentTabs,
   resolveFavorites,
+  rowAccessibleName,
   spacingPx,
   splitAgentTabs,
   splitContextOption,
@@ -517,5 +518,41 @@ describe('spacingPx', () => {
 
   it('throws on a class with no spacing step', () => {
     expect(() => spacingPx('max-h-full')).toThrow('Not a spacing class')
+  })
+})
+
+describe('rowAccessibleName', () => {
+  it('a short name with a level', () => {
+    expect(rowAccessibleName({ name: 'Claude Opus', thinking: 'High' })).toBe(
+      'Claude Opus, thinking High'
+    )
+  })
+
+  it('a long name with a level', () => {
+    const long = 'Claude 4.7 Opus Thinking Max with Extended 1M Context Window Preview Build'
+    expect(rowAccessibleName({ name: long, thinking: 'Extra High' })).toBe(
+      `${long}, thinking Extra High`
+    )
+  })
+
+  it('trims a padded name', () => {
+    expect(rowAccessibleName({ name: '  Claude Opus  ', thinking: 'High' })).toBe(
+      'Claude Opus, thinking High'
+    )
+    expect(rowAccessibleName({ name: '\tClaude Opus\n' })).toBe('Claude Opus')
+  })
+
+  it('no level: just the name, no suffix', () => {
+    expect(rowAccessibleName({ name: 'Claude Opus' })).toBe('Claude Opus')
+    expect(rowAccessibleName({ name: 'Claude Opus', thinking: '' })).toBe('Claude Opus')
+  })
+
+  it('with an agent name, before the level', () => {
+    expect(rowAccessibleName({ name: 'Opus via Claude', agentName: 'Claude Agent' })).toBe(
+      'Opus via Claude · Claude Agent'
+    )
+    expect(
+      rowAccessibleName({ name: ' Opus via Claude ', agentName: 'Claude Agent', thinking: 'High' })
+    ).toBe('Opus via Claude · Claude Agent, thinking High')
   })
 })

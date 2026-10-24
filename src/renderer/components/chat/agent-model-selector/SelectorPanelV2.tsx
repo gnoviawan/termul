@@ -53,6 +53,7 @@ import {
   type CatalogModel,
   entryDisableReason,
   type ModelCatalog,
+  rowAccessibleName,
   splitContextOption
 } from './selector-model'
 import { PICKER_ICON, PICKER_LABEL, PICKER_ROW_VALUE } from './selector-tokens'
@@ -122,9 +123,8 @@ function DenseModelRow({
   touch: boolean
   onPick: () => void
 }): React.JSX.Element {
-  // Agent-sent names can carry edge whitespace; inside the name span it would
-  // land before the sr-only suffixes and read as "Opus , thinking High".
   const name = rawName.trim()
+  const label = rowAccessibleName({ name, agentName, thinking })
   const editable = Boolean(edit && edit.length > 0)
   const renderRow = (handle?: EditRowHandle): React.JSX.Element => {
     const button = (
@@ -132,6 +132,7 @@ function DenseModelRow({
         ref={handle?.ref}
         type="button"
         data-selector-row=""
+        aria-label={label}
         aria-pressed={selected}
         disabled={disabled}
         onClick={onPick}
@@ -149,15 +150,10 @@ function DenseModelRow({
         >
           {glyph}
         </span>
-        {/* `relative` keeps the sr-only agent name inside the clipped name:
-            unpositioned, it lands after the full name, past the row, and
-            widens the scrolling list. */}
-        <span data-row-name="" className="relative min-w-0 flex-1 truncate">
+        {/* The row is named by `aria-label`; the visible text stays out of it. */}
+        <span data-row-name="" aria-hidden="true" className="min-w-0 flex-1 truncate">
           {name}
-          {agentName ? <span className="sr-only">{` · ${agentName}`}</span> : null}
-          {thinking ? <span className="sr-only">{`, thinking ${thinking}`}</span> : null}
         </span>
-        {/* Read once, from the sr-only text in the name. */}
         {thinking ? (
           <span data-row-thinking="" aria-hidden="true" className={PICKER_ROW_VALUE}>
             {thinking}
