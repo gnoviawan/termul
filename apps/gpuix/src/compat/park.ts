@@ -60,6 +60,8 @@ export function parkHiddenPanes(renderer: BatchRenderer): Parking {
   const wantsPark = new Set<number>()
   /** Parked element -> the placeholder holding its slot. */
   const placeholderOf = new Map<number, number>()
+  /** Placeholder -> the parked element it stands for. */
+  const parkedAt = new Map<number, number>()
   let nextId = PARK_BASE + 1
   let rootCreated = false
 
@@ -103,7 +105,6 @@ export function parkHiddenPanes(renderer: BatchRenderer): Parking {
           const id = op[1] as number
           const placeholder = placeholderOf.get(id)
           if (placeholder !== undefined) {
-            placeholderOf.delete(id)
             out.push(op, ['destroyElement', placeholder])
             rewritten = true
             continue
@@ -129,6 +130,7 @@ export function parkHiddenPanes(renderer: BatchRenderer): Parking {
           ['appendChild', PARK_BASE, id]
         )
         placeholderOf.set(id, slot)
+        parkedAt.set(slot, id)
         parentOf.set(slot, parent)
         parentOf.set(id, PARK_BASE)
         rewritten = true
@@ -137,15 +139,35 @@ export function parkHiddenPanes(renderer: BatchRenderer): Parking {
         if (parent === undefined) continue
         out.push(['insertBefore', parent, id, placeholder], ['destroyElement', placeholder])
         placeholderOf.delete(id)
+        parkedAt.delete(placeholder)
         parentOf.set(id, parent)
         rewritten = true
       }
     }
 
     const destroyed = native(rewritten ? JSON.stringify(out) : json)
-    for (const id of destroyed) {
-      parentOf.delete(id)
-      wantsPark.delete(id)
+    // A parked pane is not under its React ancestors in the native tree, so
+    // destroying an ancestor reaches only its placeholder. Free the pane too.
+    let freed = destroyed
+    while (freed.length > 0) {
+      const gone = new Set(freed)
+      const orphans: number[] = []
+      for (const id of freed) {
+        parentOf.delete(id)
+        wantsPark.delete(id)
+        const placeholder = placeholderOf.get(id)
+        if (placeholder !== undefined) {
+          placeholderOf.delete(id)
+          parkedAt.delete(placeholder)
+        }
+        const parked = parkedAt.get(id)
+        if (parked !== undefined && !gone.has(parked)) orphans.push(parked)
+      }
+      freed =
+        orphans.length > 0
+          ? native(JSON.stringify(orphans.map((id) => ['destroyElement', id])))
+          : []
+      destroyed.push(...freed)
     }
     return destroyed
   }

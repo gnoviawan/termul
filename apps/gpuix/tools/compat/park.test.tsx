@@ -9,7 +9,10 @@ import { parkHiddenPanes } from '../../src/compat/park'
  * an unknown `before` appends, and destroy is recursive.
  */
 class FakeTree {
-  readonly nodes = new Map<number, { type: string; text?: string; style?: StyleDesc; parent?: number; children: number[] }>()
+  readonly nodes = new Map<
+    number,
+    { type: string; text?: string; style?: StyleDesc; parent?: number; children: number[] }
+  >()
   root: number | null = null
 
   applyBatch(json: string): number[] {
@@ -71,7 +74,14 @@ class FakeTree {
   }
 }
 
-const HIDDEN: StyleDesc = { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, visibility: 'hidden' }
+const HIDDEN: StyleDesc = {
+  position: 'absolute',
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  visibility: 'hidden'
+}
 const SHOWN: StyleDesc = { width: '100%', height: '100%' }
 
 let bump = () => {}
@@ -97,7 +107,13 @@ function mount() {
   const tree = new FakeTree()
   const parking = parkHiddenPanes(tree)
   const root = createRoot(tree as unknown as NativeRenderer)
-  return { tree, parking, render: (panes: Parameters<typeof Panes>[0]['panes']) => flushSync(() => root.render(<Panes panes={panes} />)), root }
+  return {
+    tree,
+    parking,
+    render: (panes: Parameters<typeof Panes>[0]['panes']) =>
+      flushSync(() => root.render(<Panes panes={panes} />)),
+    root
+  }
 }
 
 describe('parkHiddenPanes', () => {
@@ -148,6 +164,23 @@ describe('parkHiddenPanes', () => {
     // The park root stays for the next hidden pane.
     expect(tree.nodes.size).toBe(before + 1)
     root.unmount()
+  })
+
+  test('unmounting an ancestor of a parked pane frees the pane too', () => {
+    const { tree, parking, render, root } = mount()
+    render([{ key: 'a' }, { key: 'chat', hidden: true }])
+    const destroyed: number[] = []
+    const native = tree.applyBatch.bind(tree)
+    const parked = [...tree.nodes].filter(([, node]) => node.text === 'chat 0').map(([id]) => id)
+    tree.applyBatch = (json) => {
+      const ids = native(json)
+      destroyed.push(...ids)
+      return ids
+    }
+    flushSync(() => root.render(<text>gone</text>))
+    expect([...tree.nodes.values()].map((node) => node.text).filter(Boolean)).toEqual(['gone'])
+    expect(destroyed).toEqual(expect.arrayContaining(parked))
+    expect(parking.parked()).toBe(0)
   })
 
   test('a hidden element that takes room in its parent stays in the tree', () => {
