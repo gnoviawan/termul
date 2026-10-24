@@ -992,17 +992,18 @@ async fn a_stopped_session_s_agent_tab_takes_no_hop_the_page_starts() {
 }
 
 #[tokio::test]
-async fn elements_sharing_a_role_and_name_never_resolve() {
+async fn elements_sharing_a_role_and_name_are_each_clicked_where_they_are() {
     let mut engine = FakeEngine::new(webview2_like());
-    engine.snapshot_buttons = vec!["Sign in", "Sign in"];
+    engine.snapshot_buttons = vec!["Remove", "Remove"];
     let h = harness_with(engine);
     h.call("navigate", json!({ "url": "https://example.com/" })).await;
     h.call("snapshot", json!({})).await;
-    for token in ["@e1", "@e2"] {
+    for token in ["@e2", "@e1"] {
         let reply = h.call("click", json!({ "ref": token })).await;
-        assert_eq!(code_and_reason(&reply), (Some("stale_ref"), Some("ref_ambiguous")), "{token}");
+        assert_eq!(reply["ok"], true, "{token}: {reply}");
     }
-    assert!(h.engine.clicks.lock().is_empty(), "nothing was clicked");
+    let xs: Vec<f64> = h.engine.clicks.lock().iter().map(|(at, _)| at.x).collect();
+    assert_eq!(xs, [112.0, 12.0], "each ref clicked its own button");
 }
 
 #[tokio::test]

@@ -336,22 +336,18 @@ fn refs_from_an_older_document_or_snapshot_are_stale() {
 }
 
 #[test]
-fn duplicate_role_and_name_never_resolve() {
+fn nodes_sharing_a_role_and_name_each_resolve_to_their_own_path() {
     let mut refs = TabRefs::default();
     let minted = refs.mint_snapshot(
         1,
         vec![
-            node("button", "Delete", "@e1"),
-            node("button", "Delete", "@e2"),
-            node("button", "Keep", "@e3"),
+            node("button", "Delete", "p1"),
+            node("button", "Delete", "p2"),
+            node("textbox", "", "p3"),
+            node("textbox", "", "p4"),
         ],
     );
-    for token in &minted[..2] {
-        assert_eq!(refs.resolve(token, 1).err(), Some(RefStale::Ambiguous));
-    }
-    assert_eq!(refs.resolve(&minted[2], 1).unwrap().name, "Keep");
-    assert_eq!(
-        stale_ref_error(&minted[0], RefStale::Ambiguous).reason,
-        Some("ref_ambiguous")
-    );
+    assert_eq!(minted, ["@e1", "@e2", "@e3", "@e4"]);
+    let paths: Vec<&str> = minted.iter().map(|t| refs.resolve(t, 1).unwrap().path.as_str()).collect();
+    assert_eq!(paths, ["p1", "p2", "p3", "p4"]);
 }

@@ -638,7 +638,9 @@ impl TabRegistry {
 // older document can never name an element of the current one. Within an
 // epoch an identical node keeps its ref across snapshots. A ref resolves
 // only while its node was in the tab's latest snapshot of the current
-// epoch, and only when its role and name are unique in that snapshot.
+// epoch. Its path names one element, so nodes that share a role and name
+// each resolve to their own; actionability then checks that the element
+// there still has the role and name the ref was minted for.
 
 /// One actionable node as an adapter reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -659,8 +661,6 @@ pub enum RefStale {
     OlderDocument,
     /// Not in the latest snapshot.
     Superseded,
-    /// Its role and name match more than one node.
-    Ambiguous,
     /// The element behind it no longer has its role and name.
     Gone,
 }
@@ -671,7 +671,6 @@ impl RefStale {
             RefStale::Unknown | RefStale::Gone => "ref_not_resolved",
             RefStale::OlderDocument => "ref_older_document",
             RefStale::Superseded => "ref_superseded",
-            RefStale::Ambiguous => "ref_ambiguous",
         }
     }
 }
@@ -679,7 +678,6 @@ impl RefStale {
 struct MintedRef {
     epoch: u64,
     generation: u64,
-    ambiguous: bool,
     node: RefNode,
 }
 
@@ -708,14 +706,9 @@ impl TabRefs {
             self.epoch_floor = self.next + 1;
             self.minted.clear();
         }
-        let mut seen: HashMap<(String, String), usize> = HashMap::new();
-        for node in &nodes {
-            *seen.entry((node.role.clone(), node.name.clone())).or_default() += 1;
-        }
         nodes
             .into_iter()
             .map(|node| {
-                let ambiguous = seen[&(node.role.clone(), node.name.clone())] > 1;
                 let reuse = self
                     .minted
                     .iter()
@@ -730,7 +723,6 @@ impl TabRefs {
                     MintedRef {
                         epoch,
                         generation,
-                        ambiguous,
                         node,
                     },
                 );
@@ -754,9 +746,6 @@ impl TabRefs {
         }
         if minted.generation != self.generation {
             return Err(RefStale::Superseded);
-        }
-        if minted.ambiguous {
-            return Err(RefStale::Ambiguous);
         }
         Ok(&minted.node)
     }
