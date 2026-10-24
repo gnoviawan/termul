@@ -550,8 +550,10 @@ describe('SelectorPanelV2 Thinking level on the selected row', () => {
     })
     expect(selected).toHaveLength(2)
     expect(levels()).toHaveLength(2)
-    for (const row of selected)
+    for (const row of selected) {
+      expect(row).toHaveAccessibleName('Claude Opus, thinking High')
       expect(row.querySelector('[data-row-thinking]')).toHaveTextContent('High')
+    }
   })
 })
 
