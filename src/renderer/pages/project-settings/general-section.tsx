@@ -4,9 +4,12 @@ import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsRow, settingsDescriptionId } from '@/components/settings/SettingsRow'
 import { Button } from '@/components/ui/button'
+import { PANEL_FIELD_CLASS } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import type { ProjectColor } from '@/types/project'
-import { SETTINGS_FIELD_CLASS } from './field-class'
+
+/** Sized like `SettingsSelect`: full width when narrow, 15rem in a row. */
+const FIELD_SIZE_CLASS = 'h-8 w-full px-2.5 @[35rem]:w-60'
 
 interface GeneralSectionProps {
   name: string
@@ -39,7 +42,7 @@ export function GeneralSection({
               spellCheck={false}
               value={name}
               onChange={(event) => onNameChange(event.target.value)}
-              className={SETTINGS_FIELD_CLASS}
+              className={cn(PANEL_FIELD_CLASS, FIELD_SIZE_CLASS)}
             />
           </SettingsRow>
           <SettingsRow
@@ -56,7 +59,7 @@ export function GeneralSection({
               aria-describedby={settingsDescriptionId('project-root-directory')}
               value={rootPath}
               onChange={(event) => onRootPathChange(event.target.value)}
-              className={cn(SETTINGS_FIELD_CLASS, 'min-w-0 font-mono')}
+              className={cn(PANEL_FIELD_CLASS, FIELD_SIZE_CLASS, 'min-w-0 font-mono')}
             />
             <Button
               type="button"
