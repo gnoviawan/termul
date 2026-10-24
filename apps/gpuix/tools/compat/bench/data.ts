@@ -3,7 +3,9 @@
 import { create } from 'zustand'
 import type { Project } from '@/types/project'
 
-export const ROWS = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.BENCH_ROWS ?? 60)
+export const ROWS = Number(
+  (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.BENCH_ROWS ?? 60
+)
 const COLORS = ['blue', 'green', 'purple', 'red', 'orange', 'yellow', 'pink', 'cyan'] as const
 
 function project(i: number): Project {

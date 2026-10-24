@@ -1,23 +1,25 @@
 import { describe, expect, test } from 'bun:test'
 import { jsx } from 'react/jsx-runtime'
-import { jsxs } from '../../src/compat/jsx-runtime'
 import { hasContainerClasses, resolveContainerClasses } from '../../src/compat/container'
+import { jsxs } from '../../src/compat/jsx-runtime'
 import { type Placement, placeStyle } from '../../src/compat/placement'
 import { defaultFilter, splitPartClasses } from '../../src/compat/shims/cmdk-model'
 import { resolveViewportUnits, translation } from '../../src/compat/translate'
 
 describe('viewport lengths', () => {
   test('arbitrary vh and vw values become px of the window', () => {
-    expect(resolveViewportUnits('flex h-[90vh] md:h-[85vh] md:w-[90vw] max-h-[52vh] pt-[7vh]', 1280, 800)).toBe(
-      'flex h-[720px] md:h-[680px] md:w-[1152px] max-h-[416px] pt-[56px]'
-    )
+    expect(
+      resolveViewportUnits('flex h-[90vh] md:h-[85vh] md:w-[90vw] max-h-[52vh] pt-[7vh]', 1280, 800)
+    ).toBe('flex h-[720px] md:h-[680px] md:w-[1152px] max-h-[416px] pt-[56px]')
   })
 
   test('dynamic viewport units and calc() operands are resolved too; other classes are untouched', () => {
-    expect(resolveViewportUnits('h-[100dvh] max-h-[calc(100vh-2rem)] overflow-hidden', 1000, 700)).toBe(
-      'h-[700px] max-h-[calc(700px-2rem)] overflow-hidden'
+    expect(
+      resolveViewportUnits('h-[100dvh] max-h-[calc(100vh-2rem)] overflow-hidden', 1000, 700)
+    ).toBe('h-[700px] max-h-[calc(700px-2rem)] overflow-hidden')
+    expect(resolveViewportUnits('h-screen w-full overflow-visible', 1000, 700)).toBe(
+      'h-screen w-full overflow-visible'
     )
-    expect(resolveViewportUnits('h-screen w-full overflow-visible', 1000, 700)).toBe('h-screen w-full overflow-visible')
   })
 })
 
@@ -79,7 +81,10 @@ describe('placement idioms', () => {
   })
 
   test('a bottom-full menu becomes an anchored popup on the top side with its margin as the gap', () => {
-    const tr = translation('div', 'absolute bottom-full left-2 right-2 mb-1 rounded-xl bg-popover p-1')
+    const tr = translation(
+      'div',
+      'absolute bottom-full left-2 right-2 mb-1 rounded-xl bg-popover p-1'
+    )
     expect(tr.placement).toEqual({ centerX: false, centerY: false, popup: 'top' })
     const placed = placeStyle(tr.base, tr.placement as Placement)
     expect(placed?.inner).not.toHaveProperty('marginBottom')
@@ -95,7 +100,11 @@ describe('placement idioms', () => {
 
 describe('button layout', () => {
   test('a plain button centres its content; a flex button lays it out from the start', () => {
-    expect(translation('button', 'px-2').base).toMatchObject({ display: 'flex', justifyContent: 'center', alignItems: 'center' })
+    expect(translation('button', 'px-2').base).toMatchObject({
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center'
+    })
     const flex = translation('button', 'flex gap-2 px-2').base
     expect(flex.display).toBe('flex')
     expect(flex.justifyContent).toBeUndefined()
@@ -107,9 +116,22 @@ describe('calc(100% - x) widths', () => {
   test('a centred box keeps the subtracted width as even padding on a full-width row', () => {
     const tr = translation('div', 'relative mx-auto -mt-4 flex w-[calc(100%-2.75rem)] items-center')
     expect(tr.fillMinus).toBe(44)
-    const element = jsxs('div', { className: 'relative mx-auto -mt-4 flex w-[calc(100%-2.75rem)] items-center', children: ['a', 'b'] })
-    const props = element.props as { style: Record<string, unknown>; children: { props: { style: Record<string, unknown> } } }
-    expect(props.style).toEqual({ display: 'flex', flexDirection: 'row', width: '100%', flexShrink: 0, paddingLeft: 22, paddingRight: 22 })
+    const element = jsxs('div', {
+      className: 'relative mx-auto -mt-4 flex w-[calc(100%-2.75rem)] items-center',
+      children: ['a', 'b']
+    })
+    const props = element.props as {
+      style: Record<string, unknown>
+      children: { props: { style: Record<string, unknown> } }
+    }
+    expect(props.style).toEqual({
+      display: 'flex',
+      flexDirection: 'row',
+      width: '100%',
+      flexShrink: 0,
+      paddingLeft: 22,
+      paddingRight: 22
+    })
     expect(props.children.props.style).toMatchObject({ flexGrow: 1, minWidth: 0, marginTop: -16 })
     expect(props.children.props.style).not.toHaveProperty('width')
   })
@@ -124,16 +146,24 @@ describe('positioned children', () => {
     const field = jsxs('div', {
       className: 'relative',
       children: [
-        jsx(Icon, { className: 'pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground' }),
+        jsx(Icon, {
+          className:
+            'pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground'
+        }),
         jsxs('input', { className: 'h-8 w-full' }),
         ''
       ]
     })
     const kids = (field.props as { children: unknown[] }).children
-    const types = kids.map((kid) => (kid && typeof kid === 'object' ? (kid as { type: unknown }).type : kid))
+    const types = kids.map((kid) =>
+      kid && typeof kid === 'object' ? (kid as { type: unknown }).type : kid
+    )
     expect(types[0]).toBeNull()
     expect(types[1]).toBe('input')
-    const wrapper = kids[kids.length - 1] as { key: string; props: { style: unknown; children: { props: { className: string } } } }
+    const wrapper = kids[kids.length - 1] as {
+      key: string
+      props: { style: unknown; children: { props: { className: string } } }
+    }
     expect(wrapper.key).toBe('$positioned0')
     expect(wrapper.props.style).toEqual({
       position: 'absolute',

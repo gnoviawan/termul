@@ -4,13 +4,13 @@
  */
 
 import { render } from '@gpuix/react'
+import { FixtureRoot } from '#compat/fixture-dom'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { checkWebAuthGate } from '@/lib/web-auth-gate'
 import { setWebAuthToken } from '@/lib/web-auth-token'
 import { ensureClientIdentity } from '@/lib/web-client-identity'
 import { CompatRoot, compatRenderOptions } from '../../../src/compat/root'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
-import { FixtureRoot } from '#compat/fixture-dom'
 import type { BootFixture } from './boot-contract'
 
 export const boot: BootFixture = (config, fixture, onRenderer) => {

@@ -32,7 +32,10 @@ export interface WebSession {
 }
 
 /** Open the web client against the test server, run `body` on the page, then close the browser. */
-export async function withWeb<T>(opts: WebSessionOptions, body: (session: WebSession) => Promise<T>): Promise<T> {
+export async function withWeb<T>(
+  opts: WebSessionOptions,
+  body: (session: WebSession) => Promise<T>
+): Promise<T> {
   if (!existsSync(path.join(DIST_WEB, 'index.html'))) {
     throw new Error(
       `${DIST_WEB} has no index.html: run \`bun run build:web\` at the repo root first`
@@ -90,7 +93,9 @@ export async function withWeb<T>(opts: WebSessionOptions, body: (session: WebSes
   }
 }
 
-export async function shootWeb(opts: WebSessionOptions & { readyTestIds: string[]; outPath: string }): Promise<void> {
+export async function shootWeb(
+  opts: WebSessionOptions & { readyTestIds: string[]; outPath: string }
+): Promise<void> {
   await withWeb(opts, async ({ page, grab }) => {
     for (const testId of opts.readyTestIds) {
       await page

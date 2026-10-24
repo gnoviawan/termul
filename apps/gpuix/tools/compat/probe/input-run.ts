@@ -11,7 +11,13 @@ const app = await launch({
   command: 'bun',
   args: [path.join(import.meta.dir, 'input.tsx')],
   cwd: import.meta.dir,
-  env: { ...process.env, DISPLAY: xvfb.display, VK_ICD_FILENAMES: LAVAPIPE_ICD, GPUIX_BACKGROUND: '1', PROBE_LOG: LOG }
+  env: {
+    ...process.env,
+    DISPLAY: xvfb.display,
+    VK_ICD_FILENAMES: LAVAPIPE_ICD,
+    GPUIX_BACKGROUND: '1',
+    PROBE_LOG: LOG
+  }
 })
 try {
   const input = app.getByTestId('in')

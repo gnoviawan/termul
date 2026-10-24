@@ -85,8 +85,8 @@ try {
   await app.getByText('What should we do in alpha?').waitFor({ timeoutMs: READY_TIMEOUT_MS })
   const origin = await s.origin()
   const rootPoint = (x: number, y: number): [string, string] => [
-    String(origin.x + x),
-    String(origin.y + y)
+    String(Math.round(origin.x + x)),
+    String(Math.round(origin.y + y))
   ]
   const click = (x: number, y: number) => X('click', ...rootPoint(x, y))
   /** Software rendering can paint a control after it is on screen; press again until it reacts. */
@@ -388,6 +388,110 @@ try {
       composerWithPointerOverWebview: afterXyz,
       pageKeysBefore: keysBefore,
       pageKeysAfter: keysAfter
+    }
+  )
+
+  // 7. A second tab, its memory, and closing it ends its WebKit processes.
+  const sumPss = (pids: number[]) =>
+    Math.round(processTable(pids).reduce((sum, p) => sum + p.pssMb, 0))
+  const oneTab = descendants(helperPid)
+  measures.memoryOneTab = processTable([helperPid, ...oneTab])
+  measures.memoryOneTabPssMb = sumPss([helperPid, ...oneTab])
+  await clickUntilPainted(1248, 28, 'Open canvas')
+  const browserItem = await until(
+    'the right pane menu item',
+    async () =>
+      (await app.getByText('New browser tab').all()).find((node) => (node.bounds?.x ?? 0) > r.x)
+        ?.bounds
+  )
+  click(browserItem.x + 10, browserItem.y + browserItem.height / 2)
+  const secondId = await until('a second tab', async () => {
+    const ids = [...log().matchAll(/created tab (\S+)/g)]
+      .map((m) => m[1])
+      .filter((id) => id !== tabId)
+    return ids[0] ?? null
+  })
+  r = (await placed((rect) => rect.x === r.x)).rect
+  click(r.x + 300, r.y - 19)
+  await Bun.sleep(800)
+  X('key', 'Control_L+a')
+  X('type', `${pages.origin}/two`)
+  await Bun.sleep(1200)
+  X('type', '\n')
+  await logged(new RegExp(`\\[${secondId}\\] log: b2-page-two-loaded`))
+  // Let the page settle before reading memory: right after load the web process is still growing.
+  await Bun.sleep(3000)
+  const twoTabs = descendants(helperPid)
+  const secondPids = twoTabs.filter((pid) => !oneTab.includes(pid))
+  measures.memoryTwoTabs = processTable([helperPid, ...twoTabs])
+  const secondTable = processTable(secondPids).map((p) => `${p.pid} ${p.comm}`)
+  measures.memoryTwoTabsPssMb = sumPss([helperPid, ...twoTabs])
+  measures.secondTabPssDeltaMb =
+    (measures.memoryTwoTabsPssMb as number) - (measures.memoryOneTabPssMb as number)
+  await shot('07-two-tabs')
+  const closeX = await until("the second tab's close button", async () => {
+    const { tree } = await app.call('getTree', {})
+    let title: Rect | null = null
+    const nodes: { id: number; bounds: Rect }[] = []
+    const walk = (
+      node: { id: number; text?: string; bounds?: Rect; children?: unknown[] } | null
+    ) => {
+      if (!node) return
+      if (node.text === 'B2 page two' && node.bounds && node.bounds.y < 45) title = node.bounds
+      if (node.bounds) nodes.push({ id: node.id, bounds: node.bounds })
+      for (const child of (node.children ?? []) as never[]) walk(child)
+    }
+    walk(tree as never)
+    if (!title) return null
+    const t: Rect = title
+    return nodes
+      .map((n) => n.bounds)
+      .filter(
+        (b) => b.width <= 24 && b.height <= 24 && b.x > t.x + t.width && b.x < t.x + t.width + 40
+      )
+      .filter((b) => Math.abs(b.y + b.height / 2 - (t.y + t.height / 2)) < 6)
+      .sort((a, b) => a.width - b.width)[0]
+  })
+  click(closeX.x + closeX.width / 2, closeX.y + closeX.height / 2)
+  await logged(new RegExp(`destroyed tab ${secondId}`))
+  const secondGone = await until("the closed tab's WebKit processes exit", async () =>
+    secondPids.every((pid) => !alive(pid)) ? true : null
+  ).catch(() => false)
+  const firstAlive = oneTab.filter(alive)
+  await shot('08-second-tab-closed')
+  check(
+    'two tabs run their own WebKit processes; closing one ends exactly its processes',
+    secondPids.length > 0 && secondGone && firstAlive.length === oneTab.length,
+    {
+      secondTabPids: secondTable,
+      secondGone,
+      firstTabPids: oneTab.map((pid) => `${pid} ${alive(pid) ? 'alive' : 'gone'}`),
+      pssOneTabMb: measures.memoryOneTabPssMb,
+      pssTwoTabsMb: measures.memoryTwoTabsPssMb,
+      perExtraTabMb: measures.secondTabPssDeltaMb
+    }
+  )
+
+  // 8. Closing the window ends the app, the helper and every WebKit process.
+  const everything = [helperPid, ...descendants(helperPid)]
+  const protocols = closeWindow(s.display, parentXid)
+  const exitCode = await Promise.race([s.exited, Bun.sleep(15_000).then(() => 'timeout' as const)])
+  const leftovers = await until(
+    'helper and WebKit processes exit',
+    async () => {
+      const live = everything.filter(alive)
+      return live.length === 0 ? [] : null
+    },
+    10_000
+  ).catch(() => everything.filter(alive))
+  check(
+    'closing the window quits the app and leaves no helper or WebKit process',
+    exitCode !== 'timeout' && leftovers.length === 0,
+    {
+      wmProtocols: protocols,
+      appExit: exitCode,
+      watched: processTable(everything).length,
+      leftovers: processTable(leftovers)
     }
   )
 } catch (error) {

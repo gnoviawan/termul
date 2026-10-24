@@ -6,9 +6,9 @@
 
 import { flushSync, render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useState } from 'react'
+import { CompatList } from '#compat/bench-dom'
 import { CompatRoot, compatRenderOptions } from '../../../src/compat/root'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../../src/window'
-import { CompatList } from '#compat/bench-dom'
 import type { BenchHost, RunBench } from './app-contract'
 import { ROWS, useBenchStore } from './data'
 import { HandList } from './HandList'
@@ -24,7 +24,14 @@ interface LiveRenderer {
   simulateMouseMove(x: number, y: number): void
   setDebugFrameOverlay(mode: string): string
   resetDebugFrameOverlayStats(): void
-  getDebugFrameOverlayStats(): { p90Ms?: number; p99Ms?: number; maxMs?: number; currentMs?: number; frames: number; samples: number }
+  getDebugFrameOverlayStats(): {
+    p90Ms?: number
+    p99Ms?: number
+    maxMs?: number
+    currentMs?: number
+    frames: number
+    samples: number
+  }
   getAutomationTree(): string
 }
 
@@ -48,7 +55,14 @@ async function profileLoop(host: BenchHost, setShow: (show: boolean) => void): P
       flushSync(() => useBenchStore.getState().rename(5 + (i % 10), `renamed ${i}`))
     }
   }
-  host.write(JSON.stringify({ profile: host.profile, iterations: ITERATIONS, msPerIteration: (performance.now() - t0) / ITERATIONS, cpuMsPerIteration: (host.cpuMicros() - c0) / 1000 / ITERATIONS }))
+  host.write(
+    JSON.stringify({
+      profile: host.profile,
+      iterations: ITERATIONS,
+      msPerIteration: (performance.now() - t0) / ITERATIONS,
+      cpuMsPerIteration: (host.cpuMicros() - c0) / 1000 / ITERATIONS
+    })
+  )
   host.exit()
 }
 
@@ -106,7 +120,20 @@ function Bench({ mode, host }: { mode: Mode; host: BenchHost }) {
       await host.sleep(300)
       const rss = host.rssBytes()
       host.write(
-        JSON.stringify({ mode, rows: ROWS, mountMs, warmMountMs: median(warmMounts), warmMounts, rerenderMs: median(rerender), rerender, frames, rssMb: rss / 2 ** 20, nodes, renamedPainted, hoverShowsActions })
+        JSON.stringify({
+          mode,
+          rows: ROWS,
+          mountMs,
+          warmMountMs: median(warmMounts),
+          warmMounts,
+          rerenderMs: median(rerender),
+          rerender,
+          frames,
+          rssMb: rss / 2 ** 20,
+          nodes,
+          renamedPainted,
+          hoverShowsActions
+        })
       )
       host.exit()
     })()
@@ -120,6 +147,12 @@ export const runBench: RunBench = (mode, host, onRenderer) => {
     <CompatRoot onRenderer={onRenderer}>
       <Bench mode={mode} host={host} />
     </CompatRoot>,
-    { title: `bench ${mode}`, width: WINDOW_WIDTH, height: WINDOW_HEIGHT, focus: false, ...compatRenderOptions }
+    {
+      title: `bench ${mode}`,
+      width: WINDOW_WIDTH,
+      height: WINDOW_HEIGHT,
+      focus: false,
+      ...compatRenderOptions
+    }
   )
 }

@@ -5,11 +5,12 @@
  *   bun tools/webview-host.ts            # debug profile
  *   bun tools/webview-host.ts --release
  *
- * Cargo writes to `$CARGO_TARGET_DIR`, defaulting to the repo's `src-tauri/target`, which already
- * holds wry and webkit2gtk from the desktop build. `TERMUL_GPUIX_SKIP_WEBVIEW_HOST=1` skips it.
+ * Cargo writes to `$CARGO_TARGET_DIR`, defaulting to the repo's `src-tauri/target` when it exists
+ * (it already holds wry and webkit2gtk from the desktop build); with neither, the build is skipped
+ * rather than compiling GTK and WebKit from scratch. `TERMUL_GPUIX_SKIP_WEBVIEW_HOST=1` skips it.
  */
 
-import { linkSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { WEBVIEW_HOST_BIN } from '../src/browser/support'
 
@@ -31,6 +32,13 @@ export function buildWebviewHost(
   }
   if (!Bun.which('cargo')) return { kind: 'skipped', reason: 'cargo is not on PATH' }
   const targetDir = process.env.CARGO_TARGET_DIR || path.resolve(APP_DIR, '../../src-tauri/target')
+  // A fresh worktree has no src-tauri/target; building there compiles GTK and WebKit (~1 GB).
+  if (!process.env.CARGO_TARGET_DIR && !existsSync(targetDir)) {
+    return {
+      kind: 'skipped',
+      reason: `${targetDir} does not exist; set CARGO_TARGET_DIR to a target dir that has the desktop build`
+    }
+  }
   const started = performance.now()
   const args = ['build', '--manifest-path', CRATE, ...(options.release ? ['--release'] : [])]
   const result = Bun.spawnSync(['cargo', ...args], {

@@ -6,7 +6,10 @@ const LOG = process.env.PROBE_LOG ?? '/tmp/gpuix-g1/input-probe.log'
 const log = (line: string) => appendFileSync(LOG, `${line}\n`)
 
 render(
-  <div style={{ width: 600, height: 300, padding: 20, backgroundColor: '#111' }} onKeyDown={(e) => log(`parent down ${e.key}`)}>
+  <div
+    style={{ width: 600, height: 300, padding: 20, backgroundColor: '#111' }}
+    onKeyDown={(e) => log(`parent down ${e.key}`)}
+  >
     <input
       testId="in"
       style={{ width: 300, height: 28, color: '#eee', backgroundColor: '#222' }}

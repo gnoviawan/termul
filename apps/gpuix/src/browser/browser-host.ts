@@ -25,6 +25,8 @@ export interface GpuixBrowserHostOptions {
   binary: string
   /** This process; the helper finds the GPUIX window by its `_NET_WM_PID`. */
   parentPid: number
+  /** Cookies, storage and cache of every tab (one profile, as in the desktop app). */
+  dataDir?: string
   /** GPUIX's focused element id, polled while a webview holds the keyboard. */
   focusedElement(): number | null
   /** Clear GPUIX focus when a webview takes the keyboard, as a page blurs for an iframe. */
@@ -124,7 +126,11 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
     if (helper?.alive) return helper
     const started = new HostProcess({
       binary: options.binary,
-      args: ['--parent-pid', String(options.parentPid)],
+      args: [
+        '--parent-pid',
+        String(options.parentPid),
+        ...(options.dataDir ? ['--data-dir', options.dataDir] : [])
+      ],
       onEvent,
       onStderr: (line) => log.info('webview-host', line),
       onExit: (detail) => {

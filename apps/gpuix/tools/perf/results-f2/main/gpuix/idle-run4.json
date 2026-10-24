@@ -1,1 +1,437 @@
-{"machine":{"cpu":"AMD EPYC Processor (with IBPB)","cores":8,"memGB":23,"kernel":"6.8.0-147-generic","bun":"1.4.0"},"meta":{"scenario":"idle","run":4,"client":"gpuix","clientVersion":"GPUIX 0.11.0 on Bun 1.4.0","backend":"GPUI Vulkan, libvulkan_lvp.so","gl":"lavapipe","pageMetrics":false,"screenFrames":true,"seed":42,"flags":{"settle":20,"measure":20},"viewport":"1440x900","startedAt":"2026-10-24T07:54:49.069Z","gitCommit":"a88625c060c377c84bb2536be15ebe63f97a9f74","quietWaitS":10,"preRunBusyPct":109,"load1Before":5.56,"load1After":2.69,"status":"ok"},"metrics":{"startup.processUpMs":1223,"startup.projectListMs":2103,"startup.launcherReadyMs":4036,"startup.proc.total.rssMedianMB":280.5,"startup.proc.total.rssMaxMB":283.5,"startup.proc.total.pssMedianMB":237.5,"startup.proc.total.pssMaxMB":240.3,"startup.proc.total.cpuMeanPct":237.7,"startup.proc.app.rssMedianMB":280.5,"startup.proc.app.rssMaxMB":283.5,"startup.proc.app.pssMedianMB":237.5,"startup.proc.app.pssMaxMB":240.3,"startup.proc.app.cpuMeanPct":237.7,"startup.screen.frames":19,"startup.screen.fps":4.7,"startup.screen.gapP50Ms":114.8,"startup.screen.gapP95Ms":327,"startup.screen.gapP99Ms":831.9,"startup.screen.gapMaxMs":831.9,"startup.screen.gapsOver50Ms":16,"startup.server.cpuMeanPct":47.3,"startup.machine.cpuBusyPct":273,"startup.machine.foreignCpuPct":0,"startup.durationS":4,"startup.bytesDownKBps":13,"startup.bytesUpKBps":3,"settle.proc.total.rssMedianMB":285,"settle.proc.total.rssMaxMB":286.4,"settle.proc.total.pssMedianMB":238.2,"settle.proc.total.pssMaxMB":239.7,"settle.proc.total.cpuMeanPct":17.3,"settle.proc.app.rssMedianMB":285,"settle.proc.app.rssMaxMB":286.4,"settle.proc.app.pssMedianMB":238.2,"settle.proc.app.pssMaxMB":239.7,"settle.proc.app.cpuMeanPct":17.3,"settle.screen.frames":3,"settle.screen.fps":0.1,"settle.screen.gapP50Ms":180,"settle.screen.gapP95Ms":180,"settle.screen.gapP99Ms":180,"settle.screen.gapMaxMs":180,"settle.screen.gapsOver50Ms":2,"settle.server.cpuMeanPct":0.8,"settle.machine.cpuBusyPct":69,"settle.machine.foreignCpuPct":51,"settle.durationS":20,"settle.bytesDownKBps":0,"settle.bytesUpKBps":0,"measure.proc.total.rssMedianMB":282.9,"measure.proc.total.rssMaxMB":283.6,"measure.proc.total.pssMedianMB":236,"measure.proc.total.pssMaxMB":236.7,"measure.proc.total.cpuMeanPct":6.2,"measure.proc.app.rssMedianMB":282.9,"measure.proc.app.rssMaxMB":283.6,"measure.proc.app.pssMedianMB":236,"measure.proc.app.pssMaxMB":236.7,"measure.proc.app.cpuMeanPct":6.2,"measure.screen.frames":0,"measure.screen.fps":0,"measure.screen.gapP50Ms":0,"measure.screen.gapP95Ms":0,"measure.screen.gapP99Ms":0,"measure.screen.gapMaxMs":0,"measure.screen.gapsOver50Ms":0,"measure.server.cpuMeanPct":0.2,"measure.machine.cpuBusyPct":55,"measure.machine.foreignCpuPct":49,"measure.durationS":20,"measure.bytesDownKBps":0,"measure.bytesUpKBps":0},"errors":[],"notes":{"client":"GPUIX 0.11.0 on Bun 1.4.0","backend":"GPUI Vulkan, libvulkan_lvp.so","chatStartParts":[],"threads":{"settle":[{"thread":"app:llvmpipe-N","cpuPct":6.9},{"thread":"app:bun","cpuPct":4.3},{"thread":"app:gpuix-ui","cpuPct":1.8},{"thread":"app:mi-scavenger","cpuPct":1.3},{"thread":"app:HeapHelper","cpuPct":0.1},{"thread":"app:WSI swapchain q","cpuPct":0.1}],"measure":[{"thread":"app:bun","cpuPct":3.9},{"thread":"app:gpuix-ui","cpuPct":1.1},{"thread":"app:mi-scavenger","cpuPct":0.8},{"thread":"app:HeapHelper","cpuPct":0.1}]},"serverSamples":88,"serverProc":{"startup":{"server.total.rssMedianMB":56,"server.total.rssMaxMB":235.9,"server.total.pssMedianMB":41.9,"server.total.pssMaxMB":220.5,"server.total.cpuMeanPct":47.3,"server.server.rssMedianMB":55.8,"server.server.rssMaxMB":56,"server.server.pssMedianMB":41.8,"server.server.pssMaxMB":41.9,"server.server.cpuMeanPct":6.5,"server.other.rssMedianMB":0,"server.other.rssMaxMB":180,"server.other.pssMedianMB":0,"server.other.pssMaxMB":178.6,"server.other.cpuMeanPct":40.8},"settle":{"server.total.rssMedianMB":83.2,"server.total.rssMaxMB":83.2,"server.total.pssMedianMB":55.2,"server.total.pssMaxMB":55.3,"server.total.cpuMeanPct":0.8,"server.server.rssMedianMB":58.2,"server.server.rssMaxMB":58.2,"server.server.pssMedianMB":44.2,"server.server.pssMaxMB":44.2,"server.server.cpuMeanPct":0.1,"server.agent.rssMedianMB":24.9,"server.agent.rssMaxMB":24.9,"server.agent.pssMedianMB":11,"server.agent.pssMaxMB":11.1,"server.agent.cpuMeanPct":0.6},"measure":{"server.total.rssMedianMB":83.2,"server.total.rssMaxMB":83.2,"server.total.pssMedianMB":55.2,"server.total.pssMaxMB":55.2,"server.total.cpuMeanPct":0.2,"server.server.rssMedianMB":58.3,"server.server.rssMaxMB":58.3,"server.server.pssMedianMB":44.1,"server.server.pssMaxMB":44.2,"server.server.cpuMeanPct":0.1,"server.agent.rssMedianMB":24.9,"server.agent.rssMaxMB":25,"server.agent.pssMedianMB":11,"server.agent.pssMaxMB":11.1,"server.agent.cpuMeanPct":0.1}}},"processes":[{"pid":2866036,"role":"app","cmd":"/root/.bun/bin/bun /root/termul-wt/gpuix-f2/apps/gpuix/dist/main.js"}],"procSeries":[{"t":1792828446142,"roles":{"app":{"rss":270553088,"pss":226178048,"cpu":255.1984877126654,"count":1}},"total":{"rss":270553088,"pss":226178048,"cpu":255.1984877126654,"count":1}},{"t":1792828447143,"roles":{"app":{"rss":297046016,"pss":252019712,"cpu":336,"count":1}},"total":{"rss":297046016,"pss":252019712,"cpu":336,"count":1}},{"t":1792828448165,"roles":{"app":{"rss":297226240,"pss":251386880,"cpu":88.29174664107485,"count":1}},"total":{"rss":297226240,"pss":251386880,"cpu":88.29174664107485,"count":1}},{"t":1792828449166,"roles":{"app":{"rss":298958848,"pss":249979904,"cpu":118,"count":1}},"total":{"rss":298958848,"pss":249979904,"cpu":118,"count":1}},{"t":1792828450166,"roles":{"app":{"rss":298807296,"pss":249763840,"cpu":4,"count":1}},"total":{"rss":298807296,"pss":249763840,"cpu":4,"count":1}},{"t":1792828451170,"roles":{"app":{"rss":298831872,"pss":249766912,"cpu":7.984031936127744,"count":1}},"total":{"rss":298831872,"pss":249766912,"cpu":7.984031936127744,"count":1}},{"t":1792828452170,"roles":{"app":{"rss":298831872,"pss":249766912,"cpu":10,"count":1}},"total":{"rss":298831872,"pss":249766912,"cpu":10,"count":1}},{"t":1792828453170,"roles":{"app":{"rss":298831872,"pss":249766912,"cpu":6,"count":1}},"total":{"rss":298831872,"pss":249766912,"cpu":6,"count":1}},{"t":1792828454171,"roles":{"app":{"rss":298831872,"pss":249766912,"cpu":4,"count":1}},"total":{"rss":298831872,"pss":249766912,"cpu":4,"count":1}},{"t":1792828455171,"roles":{"app":{"rss":298848256,"pss":249766912,"cpu":4,"count":1}},"total":{"rss":298848256,"pss":249766912,"cpu":4,"count":1}},{"t":1792828456171,"roles":{"app":{"rss":298840064,"pss":249775104,"cpu":8,"count":1}},"total":{"rss":298840064,"pss":249775104,"cpu":8,"count":1}},{"t":1792828457247,"roles":{"app":{"rss":298823680,"pss":249758720,"cpu":5.208333333333334,"count":1}},"total":{"rss":298823680,"pss":249758720,"cpu":5.208333333333334,"count":1}},{"t":1792828458247,"roles":{"app":{"rss":298823680,"pss":249758720,"cpu":4,"count":1}},"total":{"rss":298823680,"pss":249758720,"cpu":4,"count":1}},{"t":1792828459248,"roles":{"app":{"rss":297127936,"pss":248022016,"cpu":8,"count":1}},"total":{"rss":297127936,"pss":248022016,"cpu":8,"count":1}},{"t":1792828460248,"roles":{"app":{"rss":295899136,"pss":246793216,"cpu":6,"count":1}},"total":{"rss":295899136,"pss":246793216,"cpu":6,"count":1}},{"t":1792828461249,"roles":{"app":{"rss":295899136,"pss":246792192,"cpu":4,"count":1}},"total":{"rss":295899136,"pss":246792192,"cpu":4,"count":1}},{"t":1792828462250,"roles":{"app":{"rss":295899136,"pss":246789120,"cpu":6,"count":1}},"total":{"rss":295899136,"pss":246789120,"cpu":6,"count":1}},{"t":1792828463253,"roles":{"app":{"rss":295899136,"pss":246792192,"cpu":3.9761431411530817,"count":1}},"total":{"rss":295899136,"pss":246792192,"cpu":3.9761431411530817,"count":1}},{"t":1792828464253,"roles":{"app":{"rss":295899136,"pss":246791168,"cpu":8,"count":1}},"total":{"rss":295899136,"pss":246791168,"cpu":8,"count":1}},{"t":1792828465253,"roles":{"app":{"rss":295899136,"pss":246792192,"cpu":6,"count":1}},"total":{"rss":295899136,"pss":246792192,"cpu":6,"count":1}},{"t":1792828466263,"roles":{"app":{"rss":295899136,"pss":246792192,"cpu":11.76470588235294,"count":1}},"total":{"rss":295899136,"pss":246792192,"cpu":11.76470588235294,"count":1}},{"t":1792828467265,"roles":{"app":{"rss":295899136,"pss":246792192,"cpu":5.97609561752988,"count":1}},"total":{"rss":295899136,"pss":246792192,"cpu":5.97609561752988,"count":1}},{"t":1792828468265,"roles":{"app":{"rss":295899136,"pss":246792192,"cpu":6,"count":1}},"total":{"rss":295899136,"pss":246792192,"cpu":6,"count":1}},{"t":1792828469266,"roles":{"app":{"rss":295899136,"pss":246792192,"cpu":6,"count":1}},"total":{"rss":295899136,"pss":246792192,"cpu":6,"count":1}},{"t":1792828470296,"roles":{"app":{"rss":295899136,"pss":246791168,"cpu":5.660377358490566,"count":1}},"total":{"rss":295899136,"pss":246791168,"cpu":5.660377358490566,"count":1}},{"t":1792828471296,"roles":{"app":{"rss":296181760,"pss":247041024,"cpu":8,"count":1}},"total":{"rss":296181760,"pss":247041024,"cpu":8,"count":1}},{"t":1792828472298,"roles":{"app":{"rss":296181760,"pss":247041024,"cpu":5.9880239520958085,"count":1}},"total":{"rss":296181760,"pss":247041024,"cpu":5.9880239520958085,"count":1}},{"t":1792828473298,"roles":{"app":{"rss":296177664,"pss":247036928,"cpu":6,"count":1}},"total":{"rss":296177664,"pss":247036928,"cpu":6,"count":1}},{"t":1792828474314,"roles":{"app":{"rss":296181760,"pss":247041024,"cpu":3.90625,"count":1}},"total":{"rss":296181760,"pss":247041024,"cpu":3.90625,"count":1}},{"t":1792828475318,"roles":{"app":{"rss":296181760,"pss":247041024,"cpu":5.9880239520958085,"count":1}},"total":{"rss":296181760,"pss":247041024,"cpu":5.9880239520958085,"count":1}},{"t":1792828476352,"roles":{"app":{"rss":296677376,"pss":247503872,"cpu":11.385199240986717,"count":1}},"total":{"rss":296677376,"pss":247503872,"cpu":11.385199240986717,"count":1}},{"t":1792828477353,"roles":{"app":{"rss":296677376,"pss":247503872,"cpu":4,"count":1}},"total":{"rss":296677376,"pss":247503872,"cpu":4,"count":1}},{"t":1792828478353,"roles":{"app":{"rss":296677376,"pss":247503872,"cpu":6,"count":1}},"total":{"rss":296677376,"pss":247503872,"cpu":6,"count":1}},{"t":1792828479391,"roles":{"app":{"rss":296677376,"pss":247503872,"cpu":7.476635514018691,"count":1}},"total":{"rss":296677376,"pss":247503872,"cpu":7.476635514018691,"count":1}},{"t":1792828480391,"roles":{"app":{"rss":297398272,"pss":248192000,"cpu":2,"count":1}},"total":{"rss":297398272,"pss":248192000,"cpu":2,"count":1}},{"t":1792828481697,"roles":{"app":{"rss":297398272,"pss":248192000,"cpu":4.968944099378882,"count":1}},"total":{"rss":297398272,"pss":248192000,"cpu":4.968944099378882,"count":1}},{"t":1792828482701,"roles":{"app":{"rss":297398272,"pss":248192000,"cpu":5.952380952380952,"count":1}},"total":{"rss":297398272,"pss":248192000,"cpu":5.952380952380952,"count":1}},{"t":1792828483702,"roles":{"app":{"rss":297406464,"pss":248200192,"cpu":5.9880239520958085,"count":1}},"total":{"rss":297406464,"pss":248200192,"cpu":5.9880239520958085,"count":1}},{"t":1792828484704,"roles":{"app":{"rss":297406464,"pss":248200192,"cpu":1.9920318725099602,"count":1}},"total":{"rss":297406464,"pss":248200192,"cpu":1.9920318725099602,"count":1}},{"t":1792828485705,"roles":{"app":{"rss":297406464,"pss":248199168,"cpu":2,"count":1}},"total":{"rss":297406464,"pss":248199168,"cpu":2,"count":1}},{"t":1792828486706,"roles":{"app":{"rss":297332736,"pss":248126464,"cpu":6,"count":1}},"total":{"rss":297332736,"pss":248126464,"cpu":6,"count":1}},{"t":1792828487707,"roles":{"app":{"rss":297336832,"pss":248130560,"cpu":10,"count":1}},"total":{"rss":297336832,"pss":248130560,"cpu":10,"count":1}},{"t":1792828488535,"roles":{"app":{"rss":297754624,"pss":248556544,"cpu":9.146341463414634,"count":1}},"total":{"rss":297754624,"pss":248556544,"cpu":9.146341463414634,"count":1}}]}
+{
+  "machine": {
+    "cpu": "AMD EPYC Processor (with IBPB)",
+    "cores": 8,
+    "memGB": 23,
+    "kernel": "6.8.0-147-generic",
+    "bun": "1.4.0"
+  },
+  "meta": {
+    "scenario": "idle",
+    "run": 4,
+    "client": "gpuix",
+    "clientVersion": "GPUIX 0.11.0 on Bun 1.4.0",
+    "backend": "GPUI Vulkan, libvulkan_lvp.so",
+    "gl": "lavapipe",
+    "pageMetrics": false,
+    "screenFrames": true,
+    "seed": 42,
+    "flags": { "settle": 20, "measure": 20 },
+    "viewport": "1440x900",
+    "startedAt": "2026-10-24T07:54:49.069Z",
+    "gitCommit": "a88625c060c377c84bb2536be15ebe63f97a9f74",
+    "quietWaitS": 10,
+    "preRunBusyPct": 109,
+    "load1Before": 5.56,
+    "load1After": 2.69,
+    "status": "ok"
+  },
+  "metrics": {
+    "startup.processUpMs": 1223,
+    "startup.projectListMs": 2103,
+    "startup.launcherReadyMs": 4036,
+    "startup.proc.total.rssMedianMB": 280.5,
+    "startup.proc.total.rssMaxMB": 283.5,
+    "startup.proc.total.pssMedianMB": 237.5,
+    "startup.proc.total.pssMaxMB": 240.3,
+    "startup.proc.total.cpuMeanPct": 237.7,
+    "startup.proc.app.rssMedianMB": 280.5,
+    "startup.proc.app.rssMaxMB": 283.5,
+    "startup.proc.app.pssMedianMB": 237.5,
+    "startup.proc.app.pssMaxMB": 240.3,
+    "startup.proc.app.cpuMeanPct": 237.7,
+    "startup.screen.frames": 19,
+    "startup.screen.fps": 4.7,
+    "startup.screen.gapP50Ms": 114.8,
+    "startup.screen.gapP95Ms": 327,
+    "startup.screen.gapP99Ms": 831.9,
+    "startup.screen.gapMaxMs": 831.9,
+    "startup.screen.gapsOver50Ms": 16,
+    "startup.server.cpuMeanPct": 47.3,
+    "startup.machine.cpuBusyPct": 273,
+    "startup.machine.foreignCpuPct": 0,
+    "startup.durationS": 4,
+    "startup.bytesDownKBps": 13,
+    "startup.bytesUpKBps": 3,
+    "settle.proc.total.rssMedianMB": 285,
+    "settle.proc.total.rssMaxMB": 286.4,
+    "settle.proc.total.pssMedianMB": 238.2,
+    "settle.proc.total.pssMaxMB": 239.7,
+    "settle.proc.total.cpuMeanPct": 17.3,
+    "settle.proc.app.rssMedianMB": 285,
+    "settle.proc.app.rssMaxMB": 286.4,
+    "settle.proc.app.pssMedianMB": 238.2,
+    "settle.proc.app.pssMaxMB": 239.7,
+    "settle.proc.app.cpuMeanPct": 17.3,
+    "settle.screen.frames": 3,
+    "settle.screen.fps": 0.1,
+    "settle.screen.gapP50Ms": 180,
+    "settle.screen.gapP95Ms": 180,
+    "settle.screen.gapP99Ms": 180,
+    "settle.screen.gapMaxMs": 180,
+    "settle.screen.gapsOver50Ms": 2,
+    "settle.server.cpuMeanPct": 0.8,
+    "settle.machine.cpuBusyPct": 69,
+    "settle.machine.foreignCpuPct": 51,
+    "settle.durationS": 20,
+    "settle.bytesDownKBps": 0,
+    "settle.bytesUpKBps": 0,
+    "measure.proc.total.rssMedianMB": 282.9,
+    "measure.proc.total.rssMaxMB": 283.6,
+    "measure.proc.total.pssMedianMB": 236,
+    "measure.proc.total.pssMaxMB": 236.7,
+    "measure.proc.total.cpuMeanPct": 6.2,
+    "measure.proc.app.rssMedianMB": 282.9,
+    "measure.proc.app.rssMaxMB": 283.6,
+    "measure.proc.app.pssMedianMB": 236,
+    "measure.proc.app.pssMaxMB": 236.7,
+    "measure.proc.app.cpuMeanPct": 6.2,
+    "measure.screen.frames": 0,
+    "measure.screen.fps": 0,
+    "measure.screen.gapP50Ms": 0,
+    "measure.screen.gapP95Ms": 0,
+    "measure.screen.gapP99Ms": 0,
+    "measure.screen.gapMaxMs": 0,
+    "measure.screen.gapsOver50Ms": 0,
+    "measure.server.cpuMeanPct": 0.2,
+    "measure.machine.cpuBusyPct": 55,
+    "measure.machine.foreignCpuPct": 49,
+    "measure.durationS": 20,
+    "measure.bytesDownKBps": 0,
+    "measure.bytesUpKBps": 0
+  },
+  "errors": [],
+  "notes": {
+    "client": "GPUIX 0.11.0 on Bun 1.4.0",
+    "backend": "GPUI Vulkan, libvulkan_lvp.so",
+    "chatStartParts": [],
+    "threads": {
+      "settle": [
+        { "thread": "app:llvmpipe-N", "cpuPct": 6.9 },
+        { "thread": "app:bun", "cpuPct": 4.3 },
+        { "thread": "app:gpuix-ui", "cpuPct": 1.8 },
+        { "thread": "app:mi-scavenger", "cpuPct": 1.3 },
+        { "thread": "app:HeapHelper", "cpuPct": 0.1 },
+        { "thread": "app:WSI swapchain q", "cpuPct": 0.1 }
+      ],
+      "measure": [
+        { "thread": "app:bun", "cpuPct": 3.9 },
+        { "thread": "app:gpuix-ui", "cpuPct": 1.1 },
+        { "thread": "app:mi-scavenger", "cpuPct": 0.8 },
+        { "thread": "app:HeapHelper", "cpuPct": 0.1 }
+      ]
+    },
+    "serverSamples": 88,
+    "serverProc": {
+      "startup": {
+        "server.total.rssMedianMB": 56,
+        "server.total.rssMaxMB": 235.9,
+        "server.total.pssMedianMB": 41.9,
+        "server.total.pssMaxMB": 220.5,
+        "server.total.cpuMeanPct": 47.3,
+        "server.server.rssMedianMB": 55.8,
+        "server.server.rssMaxMB": 56,
+        "server.server.pssMedianMB": 41.8,
+        "server.server.pssMaxMB": 41.9,
+        "server.server.cpuMeanPct": 6.5,
+        "server.other.rssMedianMB": 0,
+        "server.other.rssMaxMB": 180,
+        "server.other.pssMedianMB": 0,
+        "server.other.pssMaxMB": 178.6,
+        "server.other.cpuMeanPct": 40.8
+      },
+      "settle": {
+        "server.total.rssMedianMB": 83.2,
+        "server.total.rssMaxMB": 83.2,
+        "server.total.pssMedianMB": 55.2,
+        "server.total.pssMaxMB": 55.3,
+        "server.total.cpuMeanPct": 0.8,
+        "server.server.rssMedianMB": 58.2,
+        "server.server.rssMaxMB": 58.2,
+        "server.server.pssMedianMB": 44.2,
+        "server.server.pssMaxMB": 44.2,
+        "server.server.cpuMeanPct": 0.1,
+        "server.agent.rssMedianMB": 24.9,
+        "server.agent.rssMaxMB": 24.9,
+        "server.agent.pssMedianMB": 11,
+        "server.agent.pssMaxMB": 11.1,
+        "server.agent.cpuMeanPct": 0.6
+      },
+      "measure": {
+        "server.total.rssMedianMB": 83.2,
+        "server.total.rssMaxMB": 83.2,
+        "server.total.pssMedianMB": 55.2,
+        "server.total.pssMaxMB": 55.2,
+        "server.total.cpuMeanPct": 0.2,
+        "server.server.rssMedianMB": 58.3,
+        "server.server.rssMaxMB": 58.3,
+        "server.server.pssMedianMB": 44.1,
+        "server.server.pssMaxMB": 44.2,
+        "server.server.cpuMeanPct": 0.1,
+        "server.agent.rssMedianMB": 24.9,
+        "server.agent.rssMaxMB": 25,
+        "server.agent.pssMedianMB": 11,
+        "server.agent.pssMaxMB": 11.1,
+        "server.agent.cpuMeanPct": 0.1
+      }
+    }
+  },
+  "processes": [
+    {
+      "pid": 2866036,
+      "role": "app",
+      "cmd": "/root/.bun/bin/bun /root/termul-wt/gpuix-f2/apps/gpuix/dist/main.js"
+    }
+  ],
+  "procSeries": [
+    {
+      "t": 1792828446142,
+      "roles": {
+        "app": { "rss": 270553088, "pss": 226178048, "cpu": 255.1984877126654, "count": 1 }
+      },
+      "total": { "rss": 270553088, "pss": 226178048, "cpu": 255.1984877126654, "count": 1 }
+    },
+    {
+      "t": 1792828447143,
+      "roles": { "app": { "rss": 297046016, "pss": 252019712, "cpu": 336, "count": 1 } },
+      "total": { "rss": 297046016, "pss": 252019712, "cpu": 336, "count": 1 }
+    },
+    {
+      "t": 1792828448165,
+      "roles": {
+        "app": { "rss": 297226240, "pss": 251386880, "cpu": 88.29174664107485, "count": 1 }
+      },
+      "total": { "rss": 297226240, "pss": 251386880, "cpu": 88.29174664107485, "count": 1 }
+    },
+    {
+      "t": 1792828449166,
+      "roles": { "app": { "rss": 298958848, "pss": 249979904, "cpu": 118, "count": 1 } },
+      "total": { "rss": 298958848, "pss": 249979904, "cpu": 118, "count": 1 }
+    },
+    {
+      "t": 1792828450166,
+      "roles": { "app": { "rss": 298807296, "pss": 249763840, "cpu": 4, "count": 1 } },
+      "total": { "rss": 298807296, "pss": 249763840, "cpu": 4, "count": 1 }
+    },
+    {
+      "t": 1792828451170,
+      "roles": {
+        "app": { "rss": 298831872, "pss": 249766912, "cpu": 7.984031936127744, "count": 1 }
+      },
+      "total": { "rss": 298831872, "pss": 249766912, "cpu": 7.984031936127744, "count": 1 }
+    },
+    {
+      "t": 1792828452170,
+      "roles": { "app": { "rss": 298831872, "pss": 249766912, "cpu": 10, "count": 1 } },
+      "total": { "rss": 298831872, "pss": 249766912, "cpu": 10, "count": 1 }
+    },
+    {
+      "t": 1792828453170,
+      "roles": { "app": { "rss": 298831872, "pss": 249766912, "cpu": 6, "count": 1 } },
+      "total": { "rss": 298831872, "pss": 249766912, "cpu": 6, "count": 1 }
+    },
+    {
+      "t": 1792828454171,
+      "roles": { "app": { "rss": 298831872, "pss": 249766912, "cpu": 4, "count": 1 } },
+      "total": { "rss": 298831872, "pss": 249766912, "cpu": 4, "count": 1 }
+    },
+    {
+      "t": 1792828455171,
+      "roles": { "app": { "rss": 298848256, "pss": 249766912, "cpu": 4, "count": 1 } },
+      "total": { "rss": 298848256, "pss": 249766912, "cpu": 4, "count": 1 }
+    },
+    {
+      "t": 1792828456171,
+      "roles": { "app": { "rss": 298840064, "pss": 249775104, "cpu": 8, "count": 1 } },
+      "total": { "rss": 298840064, "pss": 249775104, "cpu": 8, "count": 1 }
+    },
+    {
+      "t": 1792828457247,
+      "roles": {
+        "app": { "rss": 298823680, "pss": 249758720, "cpu": 5.208333333333334, "count": 1 }
+      },
+      "total": { "rss": 298823680, "pss": 249758720, "cpu": 5.208333333333334, "count": 1 }
+    },
+    {
+      "t": 1792828458247,
+      "roles": { "app": { "rss": 298823680, "pss": 249758720, "cpu": 4, "count": 1 } },
+      "total": { "rss": 298823680, "pss": 249758720, "cpu": 4, "count": 1 }
+    },
+    {
+      "t": 1792828459248,
+      "roles": { "app": { "rss": 297127936, "pss": 248022016, "cpu": 8, "count": 1 } },
+      "total": { "rss": 297127936, "pss": 248022016, "cpu": 8, "count": 1 }
+    },
+    {
+      "t": 1792828460248,
+      "roles": { "app": { "rss": 295899136, "pss": 246793216, "cpu": 6, "count": 1 } },
+      "total": { "rss": 295899136, "pss": 246793216, "cpu": 6, "count": 1 }
+    },
+    {
+      "t": 1792828461249,
+      "roles": { "app": { "rss": 295899136, "pss": 246792192, "cpu": 4, "count": 1 } },
+      "total": { "rss": 295899136, "pss": 246792192, "cpu": 4, "count": 1 }
+    },
+    {
+      "t": 1792828462250,
+      "roles": { "app": { "rss": 295899136, "pss": 246789120, "cpu": 6, "count": 1 } },
+      "total": { "rss": 295899136, "pss": 246789120, "cpu": 6, "count": 1 }
+    },
+    {
+      "t": 1792828463253,
+      "roles": {
+        "app": { "rss": 295899136, "pss": 246792192, "cpu": 3.9761431411530817, "count": 1 }
+      },
+      "total": { "rss": 295899136, "pss": 246792192, "cpu": 3.9761431411530817, "count": 1 }
+    },
+    {
+      "t": 1792828464253,
+      "roles": { "app": { "rss": 295899136, "pss": 246791168, "cpu": 8, "count": 1 } },
+      "total": { "rss": 295899136, "pss": 246791168, "cpu": 8, "count": 1 }
+    },
+    {
+      "t": 1792828465253,
+      "roles": { "app": { "rss": 295899136, "pss": 246792192, "cpu": 6, "count": 1 } },
+      "total": { "rss": 295899136, "pss": 246792192, "cpu": 6, "count": 1 }
+    },
+    {
+      "t": 1792828466263,
+      "roles": {
+        "app": { "rss": 295899136, "pss": 246792192, "cpu": 11.76470588235294, "count": 1 }
+      },
+      "total": { "rss": 295899136, "pss": 246792192, "cpu": 11.76470588235294, "count": 1 }
+    },
+    {
+      "t": 1792828467265,
+      "roles": {
+        "app": { "rss": 295899136, "pss": 246792192, "cpu": 5.97609561752988, "count": 1 }
+      },
+      "total": { "rss": 295899136, "pss": 246792192, "cpu": 5.97609561752988, "count": 1 }
+    },
+    {
+      "t": 1792828468265,
+      "roles": { "app": { "rss": 295899136, "pss": 246792192, "cpu": 6, "count": 1 } },
+      "total": { "rss": 295899136, "pss": 246792192, "cpu": 6, "count": 1 }
+    },
+    {
+      "t": 1792828469266,
+      "roles": { "app": { "rss": 295899136, "pss": 246792192, "cpu": 6, "count": 1 } },
+      "total": { "rss": 295899136, "pss": 246792192, "cpu": 6, "count": 1 }
+    },
+    {
+      "t": 1792828470296,
+      "roles": {
+        "app": { "rss": 295899136, "pss": 246791168, "cpu": 5.660377358490566, "count": 1 }
+      },
+      "total": { "rss": 295899136, "pss": 246791168, "cpu": 5.660377358490566, "count": 1 }
+    },
+    {
+      "t": 1792828471296,
+      "roles": { "app": { "rss": 296181760, "pss": 247041024, "cpu": 8, "count": 1 } },
+      "total": { "rss": 296181760, "pss": 247041024, "cpu": 8, "count": 1 }
+    },
+    {
+      "t": 1792828472298,
+      "roles": {
+        "app": { "rss": 296181760, "pss": 247041024, "cpu": 5.9880239520958085, "count": 1 }
+      },
+      "total": { "rss": 296181760, "pss": 247041024, "cpu": 5.9880239520958085, "count": 1 }
+    },
+    {
+      "t": 1792828473298,
+      "roles": { "app": { "rss": 296177664, "pss": 247036928, "cpu": 6, "count": 1 } },
+      "total": { "rss": 296177664, "pss": 247036928, "cpu": 6, "count": 1 }
+    },
+    {
+      "t": 1792828474314,
+      "roles": { "app": { "rss": 296181760, "pss": 247041024, "cpu": 3.90625, "count": 1 } },
+      "total": { "rss": 296181760, "pss": 247041024, "cpu": 3.90625, "count": 1 }
+    },
+    {
+      "t": 1792828475318,
+      "roles": {
+        "app": { "rss": 296181760, "pss": 247041024, "cpu": 5.9880239520958085, "count": 1 }
+      },
+      "total": { "rss": 296181760, "pss": 247041024, "cpu": 5.9880239520958085, "count": 1 }
+    },
+    {
+      "t": 1792828476352,
+      "roles": {
+        "app": { "rss": 296677376, "pss": 247503872, "cpu": 11.385199240986717, "count": 1 }
+      },
+      "total": { "rss": 296677376, "pss": 247503872, "cpu": 11.385199240986717, "count": 1 }
+    },
+    {
+      "t": 1792828477353,
+      "roles": { "app": { "rss": 296677376, "pss": 247503872, "cpu": 4, "count": 1 } },
+      "total": { "rss": 296677376, "pss": 247503872, "cpu": 4, "count": 1 }
+    },
+    {
+      "t": 1792828478353,
+      "roles": { "app": { "rss": 296677376, "pss": 247503872, "cpu": 6, "count": 1 } },
+      "total": { "rss": 296677376, "pss": 247503872, "cpu": 6, "count": 1 }
+    },
+    {
+      "t": 1792828479391,
+      "roles": {
+        "app": { "rss": 296677376, "pss": 247503872, "cpu": 7.476635514018691, "count": 1 }
+      },
+      "total": { "rss": 296677376, "pss": 247503872, "cpu": 7.476635514018691, "count": 1 }
+    },
+    {
+      "t": 1792828480391,
+      "roles": { "app": { "rss": 297398272, "pss": 248192000, "cpu": 2, "count": 1 } },
+      "total": { "rss": 297398272, "pss": 248192000, "cpu": 2, "count": 1 }
+    },
+    {
+      "t": 1792828481697,
+      "roles": {
+        "app": { "rss": 297398272, "pss": 248192000, "cpu": 4.968944099378882, "count": 1 }
+      },
+      "total": { "rss": 297398272, "pss": 248192000, "cpu": 4.968944099378882, "count": 1 }
+    },
+    {
+      "t": 1792828482701,
+      "roles": {
+        "app": { "rss": 297398272, "pss": 248192000, "cpu": 5.952380952380952, "count": 1 }
+      },
+      "total": { "rss": 297398272, "pss": 248192000, "cpu": 5.952380952380952, "count": 1 }
+    },
+    {
+      "t": 1792828483702,
+      "roles": {
+        "app": { "rss": 297406464, "pss": 248200192, "cpu": 5.9880239520958085, "count": 1 }
+      },
+      "total": { "rss": 297406464, "pss": 248200192, "cpu": 5.9880239520958085, "count": 1 }
+    },
+    {
+      "t": 1792828484704,
+      "roles": {
+        "app": { "rss": 297406464, "pss": 248200192, "cpu": 1.9920318725099602, "count": 1 }
+      },
+      "total": { "rss": 297406464, "pss": 248200192, "cpu": 1.9920318725099602, "count": 1 }
+    },
+    {
+      "t": 1792828485705,
+      "roles": { "app": { "rss": 297406464, "pss": 248199168, "cpu": 2, "count": 1 } },
+      "total": { "rss": 297406464, "pss": 248199168, "cpu": 2, "count": 1 }
+    },
+    {
+      "t": 1792828486706,
+      "roles": { "app": { "rss": 297332736, "pss": 248126464, "cpu": 6, "count": 1 } },
+      "total": { "rss": 297332736, "pss": 248126464, "cpu": 6, "count": 1 }
+    },
+    {
+      "t": 1792828487707,
+      "roles": { "app": { "rss": 297336832, "pss": 248130560, "cpu": 10, "count": 1 } },
+      "total": { "rss": 297336832, "pss": 248130560, "cpu": 10, "count": 1 }
+    },
+    {
+      "t": 1792828488535,
+      "roles": {
+        "app": { "rss": 297754624, "pss": 248556544, "cpu": 9.146341463414634, "count": 1 }
+      },
+      "total": { "rss": 297754624, "pss": 248556544, "cpu": 9.146341463414634, "count": 1 }
+    }
+  ]
+}

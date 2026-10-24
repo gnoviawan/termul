@@ -16,5 +16,7 @@ export async function buildFixtures(): Promise<string> {
 if (import.meta.main) {
   const started = performance.now()
   const entry = await buildFixtures()
-  console.log(`built ${path.relative(APP_DIR, entry)} in ${Math.round(performance.now() - started)} ms`)
+  console.log(
+    `built ${path.relative(APP_DIR, entry)} in ${Math.round(performance.now() - started)} ms`
+  )
 }

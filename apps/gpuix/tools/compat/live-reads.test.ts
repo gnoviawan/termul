@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { bindCompatRenderer, nodeFor } from '../../src/compat/dom-node'
-import { type Bounds, type CompatRenderer, liveReads, type TreeJson } from '../../src/compat/live-reads'
+import {
+  type Bounds,
+  type CompatRenderer,
+  liveReads,
+  type TreeJson
+} from '../../src/compat/live-reads'
 
 /** A renderer whose painted tree is a row (id 1) of three 100 px tabs scrolled 20 px. */
 function fakeRenderer() {
@@ -11,7 +16,12 @@ function fakeRenderer() {
     3: { x: 90, y: 0, width: 100, height: 30 },
     4: { x: 190, y: 0, width: 100, height: 30 }
   }
-  const node = (id: number, children?: TreeJson[]): TreeJson => ({ id, type: 'div', bounds: boxes[id], children })
+  const node = (id: number, children?: TreeJson[]): TreeJson => ({
+    id,
+    type: 'div',
+    bounds: boxes[id],
+    children
+  })
   const renderer: CompatRenderer = {
     focusElement() {},
     getFocusedElementId: () => null,

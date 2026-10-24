@@ -23,7 +23,7 @@ use raw_window_handle::{
     XlibWindowHandle,
 };
 use wry::dpi::{LogicalPosition, LogicalSize};
-use wry::{PageLoadEvent, Rect, WebView, WebViewBuilder, WebViewExtUnix};
+use wry::{PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder, WebViewExtUnix};
 use x11::{Xid, X};
 
 fn emit(event: Event) {
@@ -61,6 +61,9 @@ struct Tab {
 struct Host {
     parent: Xid,
     x: X,
+    /// One context for every tab, like one browser profile: shared cookies and storage, one
+    /// network process, and a web process per tab that ends when its tab does.
+    context: WebContext,
     tabs: HashMap<String, Tab>,
     /// The tab holding the keyboard; `None` means the app window does.
     keyboard: Option<String>,
@@ -173,7 +176,8 @@ impl Host {
             self.destroy(&id)?;
         }
         let (nav_id, load_id, title_id, ipc_id) = (id.clone(), id.clone(), id.clone(), id.clone());
-        let view = WebViewBuilder::new()
+        let parent = Parent(self.parent);
+        let view = WebViewBuilder::new_with_web_context(&mut self.context)
             .with_url(&url)
             // wry scales creation bounds by the screen's DPI but not later ones, and GTK then
             // ignores a move to the unscaled spot; start tiny and place it with set_bounds.
@@ -194,7 +198,7 @@ impl Host {
                     emit(Event::Loaded { id: load_id.clone(), url });
                 }
             })
-            .build_as_child(&Parent(self.parent))
+            .build_as_child(&parent)
             .map_err(|e| format!("create webview: {e}"))?;
         let container = container_of(&view)?;
         view.set_bounds(rect(&bounds)).map_err(|e| e.to_string())?;
@@ -346,11 +350,16 @@ fn main() {
                 })
                 .unwrap_or_else(|| fatal(format!("no mapped X11 window of pid {pid}")))
         }
-        (None, None) => fatal("usage: termul-webview-host --parent-pid <pid> | --parent <xid>".into()),
+        (None, None) => fatal(
+            "usage: termul-webview-host (--parent-pid <pid> | --parent <xid>) [--data-dir <dir>]".into(),
+        ),
     };
     x.watch_button_presses();
     let fd = x.fd();
-    HOST.with(|cell| *cell.borrow_mut() = Some(Host { parent, x, tabs: HashMap::new(), keyboard: None }));
+    let context = WebContext::new(arg(&args, "--data-dir").map(std::path::PathBuf::from));
+    HOST.with(|cell| {
+        *cell.borrow_mut() = Some(Host { parent, x, context, tabs: HashMap::new(), keyboard: None })
+    });
     emit(Event::Ready { parent, pid: std::process::id() });
     log(&format!("ready, parent window {parent:#x}"));
 

@@ -73,7 +73,11 @@ interface Sample {
   frame?: string
 }
 
-async function firstSeen(app: App, started: number, probe: () => Promise<boolean>): Promise<number> {
+async function firstSeen(
+  app: App,
+  started: number,
+  probe: () => Promise<boolean>
+): Promise<number> {
   for (;;) {
     if (await probe()) return Math.round(performance.now() - started)
     if (performance.now() - started > TIMEOUT_MS) throw new Error('not painted within 60 s')
@@ -153,7 +157,9 @@ async function gpuixRun(entry: string, run: number, display: string): Promise<Sa
   const started = performance.now()
   const app = await launch({
     command: 'bun',
-    args: values.profile ? ['--cpu-prof-md', `--cpu-prof-dir=${path.join(values.out, 'profile', tag)}`, entry] : [entry],
+    args: values.profile
+      ? ['--cpu-prof-md', `--cpu-prof-dir=${path.join(values.out, 'profile', tag)}`, entry]
+      : [entry],
     cwd: APP_DIR,
     env: {
       ...launcherEnv,
@@ -171,8 +177,16 @@ async function gpuixRun(entry: string, run: number, display: string): Promise<Sa
   })
   try {
     const windowMs = Math.round(performance.now() - started)
-    const projectListMs = await firstSeen(app, started, async () => (await app.getByTestId('project-item-parity-alpha').count()) > 0)
-    const dashboardMs = await firstSeen(app, started, async () => (await app.getByText(HEADING).count()) > 0)
+    const projectListMs = await firstSeen(
+      app,
+      started,
+      async () => (await app.getByTestId('project-item-parity-alpha').count()) > 0
+    )
+    const dashboardMs = await firstSeen(
+      app,
+      started,
+      async () => (await app.getByText(HEADING).count()) > 0
+    )
     const dashboardCpuMs = appCpuMs(entry)
     const frame = path.join(values.out, `${tag}.png`)
     await grabFrame(display, WIDTH, HEIGHT, frame, await windowOrigin(display, WIDTH, HEIGHT))
@@ -188,18 +202,39 @@ async function chromiumRun(run: number): Promise<Sample> {
   const out = path.join(values.out, `chromium-${run}`)
   const proc = Bun.spawn(
     [
-      'bun', path.join(APP_DIR, 'tools/perf/run.ts'),
-      '--scenarios', 'idle', '--runs', '1', '--page-metrics', 'off',
-      '--port', values['chromium-port'], '--display', values['chromium-display'],
-      '--width', String(WIDTH), '--height', String(HEIGHT),
-      '--quiet-wait', '20', '--out', out
+      'bun',
+      path.join(APP_DIR, 'tools/perf/run.ts'),
+      '--scenarios',
+      'idle',
+      '--runs',
+      '1',
+      '--page-metrics',
+      'off',
+      '--port',
+      values['chromium-port'],
+      '--display',
+      values['chromium-display'],
+      '--width',
+      String(WIDTH),
+      '--height',
+      String(HEIGHT),
+      '--quiet-wait',
+      '20',
+      '--out',
+      out
     ],
     { cwd: APP_DIR, stdout: 'ignore', stderr: 'inherit' }
   )
   if ((await proc.exited) !== 0) throw new Error(`chromium run ${run} failed`)
   const record = JSON.parse(await readFile(path.join(out, 'idle-run1.json'), 'utf8'))
-  if (record.meta.status !== 'ok') throw new Error(`chromium run ${run}: ${JSON.stringify(record.errors)}`)
-  return { subject: 'chromium', run, load1: record.meta.load1Before, projectListMs: record.metrics['startup.projectListMs'] }
+  if (record.meta.status !== 'ok')
+    throw new Error(`chromium run ${run}: ${JSON.stringify(record.errors)}`)
+  return {
+    subject: 'chromium',
+    run,
+    load1: record.meta.load1Before,
+    projectListMs: record.metrics['startup.projectListMs']
+  }
 }
 
 const samples: Sample[] = []
@@ -218,14 +253,17 @@ try {
     if (values.chromium) {
       const sample = await chromiumRun(run)
       samples.push(sample)
-      console.log(`run ${run} chromium: project list ${sample.projectListMs} ms, load1 ${sample.load1}`)
+      console.log(
+        `run ${run} chromium: project list ${sample.projectListMs} ms, load1 ${sample.load1}`
+      )
     }
   }
 } finally {
   xvfb.stop()
 }
 
-const median = (xs: number[]) => (xs.length % 2 ? xs[(xs.length - 1) / 2] : (xs[xs.length / 2 - 1] + xs[xs.length / 2]) / 2)
+const median = (xs: number[]) =>
+  xs.length % 2 ? xs[(xs.length - 1) / 2] : (xs[xs.length / 2 - 1] + xs[xs.length / 2]) / 2
 const METRICS = ['windowMs', 'projectListMs', 'dashboardMs', 'dashboardCpuMs'] as const
 const summary: Record<string, Record<string, { median: number; min: number; max: number }>> = {}
 for (const subject of [...entries.map(subjectName), ...(values.chromium ? ['chromium'] : [])]) {
@@ -235,7 +273,8 @@ for (const subject of [...entries.map(subjectName), ...(values.chromium ? ['chro
       .filter((s) => s.subject === subject && s[metric] !== undefined)
       .map((s) => s[metric] as number)
       .sort((a, b) => a - b)
-    if (xs.length) summary[subject][metric] = { median: median(xs), min: xs[0], max: xs[xs.length - 1] }
+    if (xs.length)
+      summary[subject][metric] = { median: median(xs), min: xs[0], max: xs[xs.length - 1] }
   }
 }
 const bundleBytes = Object.fromEntries(
@@ -243,14 +282,21 @@ const bundleBytes = Object.fromEntries(
     entries.map(async (entry) => {
       const dir = path.dirname(entry)
       const files = (await Array.fromAsync(new Bun.Glob('*.js').scan({ cwd: dir }))) as string[]
-      const sizes = await Promise.all(files.map(async (file) => (await stat(path.join(dir, file))).size))
+      const sizes = await Promise.all(
+        files.map(async (file) => (await stat(path.join(dir, file))).size)
+      )
       return [subjectName(entry), sizes.reduce((a, b) => a + b, 0)]
     })
   )
 )
-await writeFile(path.join(values.out, 'results.json'), JSON.stringify({ samples, summary, bundleBytes, load: os.loadavg() }, null, 2))
+await writeFile(
+  path.join(values.out, 'results.json'),
+  JSON.stringify({ samples, summary, bundleBytes, load: os.loadavg() }, null, 2)
+)
 for (const [subject, metrics] of Object.entries(summary)) {
-  for (const [metric, s] of Object.entries(metrics)) console.log(`${subject} ${metric}: median ${s.median} ms (${s.min} to ${s.max})`)
+  for (const [metric, s] of Object.entries(metrics))
+    console.log(`${subject} ${metric}: median ${s.median} ms (${s.min} to ${s.max})`)
 }
-for (const [subject, bytes] of Object.entries(bundleBytes)) console.log(`${subject}: ${bytes} bytes of JS`)
+for (const [subject, bytes] of Object.entries(bundleBytes))
+  console.log(`${subject}: ${bytes} bytes of JS`)
 await rm(values.root, { recursive: true, force: true })

@@ -1,1 +1,1620 @@
-{"machine":{"cpu":"AMD EPYC Processor (with IBPB)","cores":8,"memGB":23,"kernel":"6.8.0-147-generic","bun":"1.4.0"},"meta":{"scenario":"stream-storm","run":3,"client":"gpuix","clientVersion":"GPUIX 0.11.0 on Bun 1.4.0","backend":"GPUI Vulkan, libvulkan_lvp.so","gl":"lavapipe","pageMetrics":false,"screenFrames":true,"seed":42,"flags":{"agents":2,"sessions-per-agent":2,"rate":20,"warmup":10,"sustain":30,"measure":20,"switch-every-ms":5000},"viewport":"1440x900","startedAt":"2026-10-24T09:22:41.562Z","gitCommit":"cdf718928985bc0b819ffb7075a79772c85aeb0f","quietWaitS":5,"preRunBusyPct":77,"load1Before":6.88,"load1After":7.82,"status":"failed"},"metrics":{"startup.processUpMs":2353,"startup.projectListMs":3843,"startup.launcherReadyMs":6339,"startup.proc.total.rssMedianMB":274.9,"startup.proc.total.rssMaxMB":279.1,"startup.proc.total.pssMedianMB":226.5,"startup.proc.total.pssMaxMB":230.5,"startup.proc.total.cpuMeanPct":153.8,"startup.proc.app.rssMedianMB":274.9,"startup.proc.app.rssMaxMB":279.1,"startup.proc.app.pssMedianMB":226.5,"startup.proc.app.pssMaxMB":230.5,"startup.proc.app.cpuMeanPct":153.8,"startup.screen.frames":17,"startup.screen.fps":2.7,"startup.screen.gapP50Ms":263.3,"startup.screen.gapP95Ms":650.5,"startup.screen.gapP99Ms":670.7,"startup.screen.gapMaxMs":670.7,"startup.screen.gapsOver50Ms":15,"startup.server.cpuMeanPct":17.4,"startup.machine.cpuBusyPct":278,"startup.machine.foreignCpuPct":107,"startup.durationS":6.3,"startup.bytesDownKBps":8,"startup.bytesUpKBps":2,"warmup.proc.total.rssMedianMB":322.8,"warmup.proc.total.rssMaxMB":352.4,"warmup.proc.total.pssMedianMB":261.4,"warmup.proc.total.pssMaxMB":290.5,"warmup.proc.total.cpuMeanPct":265.2,"warmup.proc.app.rssMedianMB":322.8,"warmup.proc.app.rssMaxMB":352.4,"warmup.proc.app.pssMedianMB":261.4,"warmup.proc.app.pssMaxMB":290.5,"warmup.proc.app.cpuMeanPct":265.2,"warmup.screen.frames":97,"warmup.screen.fps":5.7,"warmup.screen.gapP50Ms":122.1,"warmup.screen.gapP95Ms":435.6,"warmup.screen.gapP99Ms":776.8,"warmup.screen.gapMaxMs":960.6,"warmup.screen.gapsOver50Ms":93,"warmup.server.cpuMeanPct":6.6,"warmup.machine.cpuBusyPct":288,"warmup.machine.foreignCpuPct":16,"warmup.durationS":17,"warmup.bytesDownKBps":4,"warmup.bytesUpKBps":0,"open-chats.proc.total.rssMedianMB":523.6,"open-chats.proc.total.rssMaxMB":690.3,"open-chats.proc.total.pssMedianMB":428.2,"open-chats.proc.total.pssMaxMB":637.7,"open-chats.proc.total.cpuMeanPct":156.1,"open-chats.proc.app.rssMedianMB":523.6,"open-chats.proc.app.rssMaxMB":690.3,"open-chats.proc.app.pssMedianMB":428.2,"open-chats.proc.app.pssMaxMB":637.7,"open-chats.proc.app.cpuMeanPct":156.1,"open-chats.screen.frames":331,"open-chats.screen.fps":1.9,"open-chats.screen.gapP50Ms":489.8,"open-chats.screen.gapP95Ms":945.4,"open-chats.screen.gapP99Ms":1819.6,"open-chats.screen.gapMaxMs":3145.7,"open-chats.screen.gapsOver50Ms":322,"open-chats.server.cpuMeanPct":22.5,"open-chats.machine.cpuBusyPct":272,"open-chats.machine.foreignCpuPct":93,"open-chats.durationS":170.4,"open-chats.bytesDownKBps":19,"open-chats.bytesUpKBps":0,"sustained-stream.proc.total.rssMedianMB":600,"sustained-stream.proc.total.rssMaxMB":669.7,"sustained-stream.proc.total.pssMedianMB":547.4,"sustained-stream.proc.total.pssMaxMB":617.1,"sustained-stream.proc.total.cpuMeanPct":31.7,"sustained-stream.proc.app.rssMedianMB":600,"sustained-stream.proc.app.rssMaxMB":669.7,"sustained-stream.proc.app.pssMedianMB":547.4,"sustained-stream.proc.app.pssMaxMB":617.1,"sustained-stream.proc.app.cpuMeanPct":31.7,"sustained-stream.screen.frames":32,"sustained-stream.screen.fps":1.1,"sustained-stream.screen.gapP50Ms":92,"sustained-stream.screen.gapP95Ms":5115.9,"sustained-stream.screen.gapP99Ms":5257.9,"sustained-stream.screen.gapMaxMs":5257.9,"sustained-stream.screen.gapsOver50Ms":24,"sustained-stream.server.cpuMeanPct":22.7,"sustained-stream.machine.cpuBusyPct":117,"sustained-stream.machine.foreignCpuPct":63,"sustained-stream.durationS":30,"sustained-stream.bytesDownKBps":18,"sustained-stream.bytesUpKBps":0,"chat.firstStartMs":6974,"chat.startUnderLoadP50Ms":26359,"chat.startUnderLoadMaxMs":26359,"chat.switches":5},"errors":["chat 2: Error: launcher composer never accepted \"perf stream 2\"","switch: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException","switch: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException","switch: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException","switch: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException","switch: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException","fatal: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException\n    at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/tools/perf/clients/gpuix.ts:185:30)\n    at async <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/tools/perf/clients/gpuix.ts:330:44)\n    at async streamStorm (/root/termul-wt/gpuix-f2/apps/gpuix/tools/perf/scenarios.ts:77:40)\n    at async runOnce (unknown)\n    at async main (unknown)\n    at processTicksAndRejections (native:7:39)","fatal: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException"],"notes":{"client":"GPUIX 0.11.0 on Bun 1.4.0","backend":"GPUI Vulkan, libvulkan_lvp.so","chatStartMs":[6974,25491,26359],"switches":5,"threads":{"warmup":[{"thread":"app:llvmpipe-N","cpuPct":188.5},{"thread":"app:gpuix-ui","cpuPct":23.3},{"thread":"app:bun","cpuPct":20.5},{"thread":"app:JITWorker","cpuPct":15.2},{"thread":"app:mi-scavenger","cpuPct":6.9},{"thread":"app:WSI swapchain q","cpuPct":5.1},{"thread":"app:HeapHelper","cpuPct":1.5},{"thread":"app:HTTP Client","cpuPct":0.1}],"open-chats":[{"thread":"app:llvmpipe-N","cpuPct":71.7},{"thread":"app:gpuix-ui","cpuPct":64.1},{"thread":"app:bun","cpuPct":10.7},{"thread":"app:JITWorker","cpuPct":2.2},{"thread":"app:WSI swapchain q","cpuPct":2.1},{"thread":"app:HeapHelper","cpuPct":1.8},{"thread":"app:mi-scavenger","cpuPct":1.5},{"thread":"app:HTTP Client","cpuPct":0.1}],"sustained-stream":[{"thread":"app:llvmpipe-N","cpuPct":12.4},{"thread":"app:bun","cpuPct":8.9},{"thread":"app:mi-scavenger","cpuPct":3.6},{"thread":"app:gpuix-ui","cpuPct":2.8},{"thread":"app:WSI swapchain q","cpuPct":1.1},{"thread":"app:HeapHelper","cpuPct":0.8}]},"serverSamples":427,"serverProc":{"startup":{"server.total.rssMedianMB":54.3,"server.total.rssMaxMB":114.9,"server.total.pssMedianMB":40.2,"server.total.pssMaxMB":98.5,"server.total.cpuMeanPct":17.4,"server.server.rssMedianMB":54.3,"server.server.rssMaxMB":56.9,"server.server.pssMedianMB":40.2,"server.server.pssMaxMB":42.8,"server.server.cpuMeanPct":8.5,"server.other.rssMedianMB":0,"server.other.rssMaxMB":58,"server.other.pssMedianMB":0,"server.other.pssMaxMB":55.7,"server.other.cpuMeanPct":8.9},"warmup":{"server.total.rssMedianMB":115.5,"server.total.rssMaxMB":116.7,"server.total.pssMedianMB":49,"server.total.pssMaxMB":50.3,"server.total.cpuMeanPct":6.6,"server.server.rssMedianMB":60.3,"server.server.rssMaxMB":60.5,"server.server.pssMedianMB":32,"server.server.pssMaxMB":34.3,"server.server.cpuMeanPct":4.4,"server.agent.rssMedianMB":55.2,"server.agent.rssMaxMB":56.1,"server.agent.pssMedianMB":17.5,"server.agent.pssMaxMB":18,"server.agent.cpuMeanPct":2.2},"open-chats":{"server.total.rssMedianMB":198,"server.total.rssMaxMB":366.5,"server.total.pssMedianMB":78.7,"server.total.pssMaxMB":256.8,"server.total.cpuMeanPct":22.5,"server.server.rssMedianMB":67,"server.server.rssMaxMB":82,"server.server.pssMedianMB":42.7,"server.server.pssMaxMB":67.8,"server.server.cpuMeanPct":12.6,"server.agent.rssMedianMB":130.4,"server.agent.rssMaxMB":131.1,"server.agent.pssMedianMB":35.8,"server.agent.pssMaxMB":42.7,"server.agent.cpuMeanPct":8.5,"server.other.rssMedianMB":0,"server.other.rssMaxMB":181.9,"server.other.pssMedianMB":0,"server.other.pssMaxMB":180,"server.other.cpuMeanPct":1.4},"sustained-stream":{"server.total.rssMedianMB":211.6,"server.total.rssMaxMB":212.9,"server.total.pssMedianMB":108.4,"server.total.pssMaxMB":109.7,"server.total.cpuMeanPct":22.7,"server.server.rssMedianMB":80.8,"server.server.rssMaxMB":82.1,"server.server.pssMedianMB":66.2,"server.server.pssMaxMB":67.6,"server.server.cpuMeanPct":14.5,"server.agent.rssMedianMB":130.8,"server.agent.rssMaxMB":130.9,"server.agent.pssMedianMB":42.4,"server.agent.pssMaxMB":42.5,"server.agent.cpuMeanPct":8.2}}},"processes":[{"pid":3005805,"role":"app","cmd":"/root/.bun/bin/bun /root/termul-wt/gpuix-f2/apps/gpuix/dist/main.js"}],"procSeries":[{"t":1792833538296,"roles":{"app":{"rss":262807552,"pss":212430848,"cpu":171.79902755267423,"count":1}},"total":{"rss":262807552,"pss":212430848,"cpu":171.79902755267423,"count":1}},{"t":1792833539342,"roles":{"app":{"rss":288210944,"pss":237464576,"cpu":153.69261477045907,"count":1}},"total":{"rss":288210944,"pss":237464576,"cpu":153.69261477045907,"count":1}},{"t":1792833540370,"roles":{"app":{"rss":292655104,"pss":241667072,"cpu":159.39278937381403,"count":1}},"total":{"rss":292655104,"pss":241667072,"cpu":159.39278937381403,"count":1}},{"t":1792833541376,"roles":{"app":{"rss":291815424,"pss":241031168,"cpu":212.3015873015873,"count":1}},"total":{"rss":291815424,"pss":241031168,"cpu":212.3015873015873,"count":1}},{"t":1792833542377,"roles":{"app":{"rss":299061248,"pss":244570112,"cpu":421.1576846307385,"count":1}},"total":{"rss":299061248,"pss":244570112,"cpu":421.1576846307385,"count":1}},{"t":1792833543767,"roles":{"app":{"rss":300163072,"pss":244117504,"cpu":296.2962962962963,"count":1}},"total":{"rss":300163072,"pss":244117504,"cpu":296.2962962962963,"count":1}},{"t":1792833545053,"roles":{"app":{"rss":300412928,"pss":243959808,"cpu":146.44351464435147,"count":1}},"total":{"rss":300412928,"pss":243959808,"cpu":146.44351464435147,"count":1}},{"t":1792833546060,"roles":{"app":{"rss":300068864,"pss":243342336,"cpu":365.0793650793651,"count":1}},"total":{"rss":300068864,"pss":243342336,"cpu":365.0793650793651,"count":1}},{"t":1792833547071,"roles":{"app":{"rss":306069504,"pss":249319424,"cpu":379.9212598425197,"count":1}},"total":{"rss":306069504,"pss":249319424,"cpu":379.9212598425197,"count":1}},{"t":1792833548098,"roles":{"app":{"rss":305004544,"pss":249408512,"cpu":372,"count":1}},"total":{"rss":305004544,"pss":249408512,"cpu":372,"count":1}},{"t":1792833549116,"roles":{"app":{"rss":316305408,"pss":259514368,"cpu":354,"count":1}},"total":{"rss":316305408,"pss":259514368,"cpu":354,"count":1}},{"t":1792833550127,"roles":{"app":{"rss":337768448,"pss":273060864,"cpu":279.8434442270059,"count":1}},"total":{"rss":337768448,"pss":273060864,"cpu":279.8434442270059,"count":1}},{"t":1792833551131,"roles":{"app":{"rss":355340288,"pss":290600960,"cpu":330.67729083665336,"count":1}},"total":{"rss":355340288,"pss":290600960,"cpu":330.67729083665336,"count":1}},{"t":1792833552214,"roles":{"app":{"rss":343728128,"pss":278966272,"cpu":157.80445969125216,"count":1}},"total":{"rss":343728128,"pss":278966272,"cpu":157.80445969125216,"count":1}},{"t":1792833553214,"roles":{"app":{"rss":347955200,"pss":282981376,"cpu":158,"count":1}},"total":{"rss":347955200,"pss":282981376,"cpu":158,"count":1}},{"t":1792833554215,"roles":{"app":{"rss":353804288,"pss":288975872,"cpu":306,"count":1}},"total":{"rss":353804288,"pss":288975872,"cpu":306,"count":1}},{"t":1792833555234,"roles":{"app":{"rss":356220928,"pss":291391488,"cpu":323.0174081237911,"count":1}},"total":{"rss":356220928,"pss":291391488,"cpu":323.0174081237911,"count":1}},{"t":1792833556245,"roles":{"app":{"rss":359473152,"pss":294410240,"cpu":192.07920792079207,"count":1}},"total":{"rss":359473152,"pss":294410240,"cpu":192.07920792079207,"count":1}},{"t":1792833557244,"roles":{"app":{"rss":362360832,"pss":297655296,"cpu":227.99999999999997,"count":1}},"total":{"rss":362360832,"pss":297655296,"cpu":227.99999999999997,"count":1}},{"t":1792833558286,"roles":{"app":{"rss":369467392,"pss":304604160,"cpu":153.41959334565618,"count":1}},"total":{"rss":369467392,"pss":304604160,"cpu":153.41959334565618,"count":1}},{"t":1792833559426,"roles":{"app":{"rss":376524800,"pss":307731456,"cpu":216.30094043887146,"count":1}},"total":{"rss":376524800,"pss":307731456,"cpu":216.30094043887146,"count":1}},{"t":1792833560567,"roles":{"app":{"rss":379105280,"pss":296271872,"cpu":191.61676646706587,"count":1}},"total":{"rss":379105280,"pss":296271872,"cpu":191.61676646706587,"count":1}},{"t":1792833561570,"roles":{"app":{"rss":381751296,"pss":282001408,"cpu":205.1792828685259,"count":1}},"total":{"rss":381751296,"pss":282001408,"cpu":205.1792828685259,"count":1}},{"t":1792833562576,"roles":{"app":{"rss":386777088,"pss":286821376,"cpu":196.81908548707753,"count":1}},"total":{"rss":386777088,"pss":286821376,"cpu":196.81908548707753,"count":1}},{"t":1792833563595,"roles":{"app":{"rss":388280320,"pss":288176128,"cpu":158,"count":1}},"total":{"rss":388280320,"pss":288176128,"cpu":158,"count":1}},{"t":1792833564870,"roles":{"app":{"rss":388251648,"pss":288142336,"cpu":61.66219839142092,"count":1}},"total":{"rss":388251648,"pss":288142336,"cpu":61.66219839142092,"count":1}},{"t":1792833566018,"roles":{"app":{"rss":390496256,"pss":290266112,"cpu":177.4960380348653,"count":1}},"total":{"rss":390496256,"pss":290266112,"cpu":177.4960380348653,"count":1}},{"t":1792833567095,"roles":{"app":{"rss":395935744,"pss":295396352,"cpu":211.53846153846155,"count":1}},"total":{"rss":395935744,"pss":295396352,"cpu":211.53846153846155,"count":1}},{"t":1792833568097,"roles":{"app":{"rss":398237696,"pss":298179584,"cpu":274.9003984063745,"count":1}},"total":{"rss":398237696,"pss":298179584,"cpu":274.9003984063745,"count":1}},{"t":1792833569106,"roles":{"app":{"rss":399421440,"pss":298957824,"cpu":92.70216962524654,"count":1}},"total":{"rss":399421440,"pss":298957824,"cpu":92.70216962524654,"count":1}},{"t":1792833570137,"roles":{"app":{"rss":399257600,"pss":298720256,"cpu":106,"count":1}},"total":{"rss":399257600,"pss":298720256,"cpu":106,"count":1}},{"t":1792833571165,"roles":{"app":{"rss":400818176,"pss":300280832,"cpu":150,"count":1}},"total":{"rss":400818176,"pss":300280832,"cpu":150,"count":1}},{"t":1792833572228,"roles":{"app":{"rss":409231360,"pss":308758528,"cpu":193.359375,"count":1}},"total":{"rss":409231360,"pss":308758528,"cpu":193.359375,"count":1}},{"t":1792833573318,"roles":{"app":{"rss":410247168,"pss":309709824,"cpu":81.48148148148148,"count":1}},"total":{"rss":410247168,"pss":309709824,"cpu":81.48148148148148,"count":1}},{"t":1792833575178,"roles":{"app":{"rss":412643328,"pss":312105984,"cpu":182,"count":1}},"total":{"rss":412643328,"pss":312105984,"cpu":182,"count":1}},{"t":1792833576186,"roles":{"app":{"rss":416985088,"pss":316281856,"cpu":150,"count":1}},"total":{"rss":416985088,"pss":316281856,"cpu":150,"count":1}},{"t":1792833577257,"roles":{"app":{"rss":421822464,"pss":321118208,"cpu":285.96491228070175,"count":1}},"total":{"rss":421822464,"pss":321118208,"cpu":285.96491228070175,"count":1}},{"t":1792833578317,"roles":{"app":{"rss":422711296,"pss":322002944,"cpu":201.19521912350598,"count":1}},"total":{"rss":422711296,"pss":322002944,"cpu":201.19521912350598,"count":1}},{"t":1792833579318,"roles":{"app":{"rss":426786816,"pss":326078464,"cpu":176,"count":1}},"total":{"rss":426786816,"pss":326078464,"cpu":176,"count":1}},{"t":1792833580512,"roles":{"app":{"rss":429264896,"pss":328547328,"cpu":233.33333333333331,"count":1}},"total":{"rss":429264896,"pss":328547328,"cpu":233.33333333333331,"count":1}},{"t":1792833581637,"roles":{"app":{"rss":432898048,"pss":331953152,"cpu":99.67845659163987,"count":1}},"total":{"rss":432898048,"pss":331953152,"cpu":99.67845659163987,"count":1}},{"t":1792833583057,"roles":{"app":{"rss":432562176,"pss":331615232,"cpu":148,"count":1}},"total":{"rss":432562176,"pss":331615232,"cpu":148,"count":1}},{"t":1792833584117,"roles":{"app":{"rss":432648192,"pss":331695104,"cpu":6,"count":1}},"total":{"rss":432648192,"pss":331695104,"cpu":6,"count":1}},{"t":1792833585121,"roles":{"app":{"rss":433442816,"pss":332502016,"cpu":216,"count":1}},"total":{"rss":433442816,"pss":332502016,"cpu":216,"count":1}},{"t":1792833586251,"roles":{"app":{"rss":435888128,"pss":334689280,"cpu":173.30677290836653,"count":1}},"total":{"rss":435888128,"pss":334689280,"cpu":173.30677290836653,"count":1}},{"t":1792833587320,"roles":{"app":{"rss":437518336,"pss":336447488,"cpu":188.53974121996302,"count":1}},"total":{"rss":437518336,"pss":336447488,"cpu":188.53974121996302,"count":1}},{"t":1792833588321,"roles":{"app":{"rss":439136256,"pss":337947648,"cpu":218.00000000000003,"count":1}},"total":{"rss":439136256,"pss":337947648,"cpu":218.00000000000003,"count":1}},{"t":1792833589349,"roles":{"app":{"rss":441524224,"pss":340432896,"cpu":168.29745596868884,"count":1}},"total":{"rss":441524224,"pss":340432896,"cpu":168.29745596868884,"count":1}},{"t":1792833590362,"roles":{"app":{"rss":442781696,"pss":377105408,"cpu":91.61793372319687,"count":1}},"total":{"rss":442781696,"pss":377105408,"cpu":91.61793372319687,"count":1}},{"t":1792833591363,"roles":{"app":{"rss":444477440,"pss":387014656,"cpu":213.57285429141717,"count":1}},"total":{"rss":444477440,"pss":387014656,"cpu":213.57285429141717,"count":1}},{"t":1792833592385,"roles":{"app":{"rss":446197760,"pss":388877312,"cpu":282,"count":1}},"total":{"rss":446197760,"pss":388877312,"cpu":282,"count":1}},{"t":1792833593386,"roles":{"app":{"rss":446570496,"pss":390241280,"cpu":131.7365269461078,"count":1}},"total":{"rss":446570496,"pss":390241280,"cpu":131.7365269461078,"count":1}},{"t":1792833594423,"roles":{"app":{"rss":450777088,"pss":397044736,"cpu":120.07504690431519,"count":1}},"total":{"rss":450777088,"pss":397044736,"cpu":120.07504690431519,"count":1}},{"t":1792833595424,"roles":{"app":{"rss":452452352,"pss":398720000,"cpu":158,"count":1}},"total":{"rss":452452352,"pss":398720000,"cpu":158,"count":1}},{"t":1792833596425,"roles":{"app":{"rss":454660096,"pss":400927744,"cpu":197.60479041916167,"count":1}},"total":{"rss":454660096,"pss":400927744,"cpu":197.60479041916167,"count":1}},{"t":1792833597425,"roles":{"app":{"rss":457719808,"pss":403987456,"cpu":186,"count":1}},"total":{"rss":457719808,"pss":403987456,"cpu":186,"count":1}},{"t":1792833598425,"roles":{"app":{"rss":459362304,"pss":405510144,"cpu":256,"count":1}},"total":{"rss":459362304,"pss":405510144,"cpu":256,"count":1}},{"t":1792833599426,"roles":{"app":{"rss":460939264,"pss":407198720,"cpu":155.68862275449104,"count":1}},"total":{"rss":460939264,"pss":407198720,"cpu":155.68862275449104,"count":1}},{"t":1792833600440,"roles":{"app":{"rss":462569472,"pss":408832000,"cpu":186.87872763419483,"count":1}},"total":{"rss":462569472,"pss":408832000,"cpu":186.87872763419483,"count":1}},{"t":1792833602164,"roles":{"app":{"rss":463589376,"pss":409851904,"cpu":102.17755443886097,"count":1}},"total":{"rss":463589376,"pss":409851904,"cpu":102.17755443886097,"count":1}},{"t":1792833603554,"roles":{"app":{"rss":463589376,"pss":409851904,"cpu":8.361204013377927,"count":1}},"total":{"rss":463589376,"pss":409851904,"cpu":8.361204013377927,"count":1}},{"t":1792833605039,"roles":{"app":{"rss":464326656,"pss":410593280,"cpu":119.12943871706759,"count":1}},"total":{"rss":464326656,"pss":410593280,"cpu":119.12943871706759,"count":1}},{"t":1792833606330,"roles":{"app":{"rss":466653184,"pss":412894208,"cpu":107.54716981132073,"count":1}},"total":{"rss":466653184,"pss":412894208,"cpu":107.54716981132073,"count":1}},{"t":1792833607335,"roles":{"app":{"rss":475799552,"pss":420790272,"cpu":261.9047619047619,"count":1}},"total":{"rss":475799552,"pss":420790272,"cpu":261.9047619047619,"count":1}},{"t":1792833608336,"roles":{"app":{"rss":481169408,"pss":426486784,"cpu":218.00000000000003,"count":1}},"total":{"rss":481169408,"pss":426486784,"cpu":218.00000000000003,"count":1}},{"t":1792833609442,"roles":{"app":{"rss":483516416,"pss":426244096,"cpu":117.53731343283582,"count":1}},"total":{"rss":483516416,"pss":426244096,"cpu":117.53731343283582,"count":1}},{"t":1792833610443,"roles":{"app":{"rss":484720640,"pss":427336704,"cpu":171.6566866267465,"count":1}},"total":{"rss":484720640,"pss":427336704,"cpu":171.6566866267465,"count":1}},{"t":1792833611482,"roles":{"app":{"rss":492478464,"pss":434688000,"cpu":178.10760667903523,"count":1}},"total":{"rss":492478464,"pss":434688000,"cpu":178.10760667903523,"count":1}},{"t":1792833612572,"roles":{"app":{"rss":490360832,"pss":431122432,"cpu":140.07782101167314,"count":1}},"total":{"rss":490360832,"pss":431122432,"cpu":140.07782101167314,"count":1}},{"t":1792833613603,"roles":{"app":{"rss":494030848,"pss":434995200,"cpu":197.74011299435028,"count":1}},"total":{"rss":494030848,"pss":434995200,"cpu":197.74011299435028,"count":1}},{"t":1792833614675,"roles":{"app":{"rss":496160768,"pss":437218304,"cpu":155.06958250497019,"count":1}},"total":{"rss":496160768,"pss":437218304,"cpu":155.06958250497019,"count":1}},{"t":1792833615804,"roles":{"app":{"rss":496513024,"pss":437431296,"cpu":165.66866267465068,"count":1}},"total":{"rss":496513024,"pss":437431296,"cpu":165.66866267465068,"count":1}},{"t":1792833616862,"roles":{"app":{"rss":500174848,"pss":441039872,"cpu":129.15129151291512,"count":1}},"total":{"rss":500174848,"pss":441039872,"cpu":129.15129151291512,"count":1}},{"t":1792833617870,"roles":{"app":{"rss":498737152,"pss":432653312,"cpu":146.24505928853756,"count":1}},"total":{"rss":498737152,"pss":432653312,"cpu":146.24505928853756,"count":1}},{"t":1792833618933,"roles":{"app":{"rss":499200000,"pss":433107968,"cpu":114.9012567324955,"count":1}},"total":{"rss":499200000,"pss":433107968,"cpu":114.9012567324955,"count":1}},{"t":1792833619938,"roles":{"app":{"rss":499875840,"pss":433748992,"cpu":172,"count":1}},"total":{"rss":499875840,"pss":433748992,"cpu":172,"count":1}},{"t":1792833621121,"roles":{"app":{"rss":499490816,"pss":421448704,"cpu":66.07929515418502,"count":1}},"total":{"rss":499490816,"pss":421448704,"cpu":66.07929515418502,"count":1}},{"t":1792833622137,"roles":{"app":{"rss":488435712,"pss":422304768,"cpu":124.2603550295858,"count":1}},"total":{"rss":488435712,"pss":422304768,"cpu":124.2603550295858,"count":1}},{"t":1792833623138,"roles":{"app":{"rss":490573824,"pss":424431616,"cpu":142,"count":1}},"total":{"rss":490573824,"pss":424431616,"cpu":142,"count":1}},{"t":1792833624144,"roles":{"app":{"rss":492486656,"pss":426346496,"cpu":120.79207920792079,"count":1}},"total":{"rss":492486656,"pss":426346496,"cpu":120.79207920792079,"count":1}},{"t":1792833625271,"roles":{"app":{"rss":495194112,"pss":429046784,"cpu":107.78443113772455,"count":1}},"total":{"rss":495194112,"pss":429046784,"cpu":107.78443113772455,"count":1}},{"t":1792833626272,"roles":{"app":{"rss":495915008,"pss":429799424,"cpu":171.6566866267465,"count":1}},"total":{"rss":495915008,"pss":429799424,"cpu":171.6566866267465,"count":1}},{"t":1792833627467,"roles":{"app":{"rss":497098752,"pss":424160256,"cpu":153.27102803738316,"count":1}},"total":{"rss":497098752,"pss":424160256,"cpu":153.27102803738316,"count":1}},{"t":1792833628541,"roles":{"app":{"rss":498106368,"pss":403657728,"cpu":136,"count":1}},"total":{"rss":498106368,"pss":403657728,"cpu":136,"count":1}},{"t":1792833629629,"roles":{"app":{"rss":503676928,"pss":402783232,"cpu":146,"count":1}},"total":{"rss":503676928,"pss":402783232,"cpu":146,"count":1}},{"t":1792833630638,"roles":{"app":{"rss":506630144,"pss":405649408,"cpu":143.7125748502994,"count":1}},"total":{"rss":506630144,"pss":405649408,"cpu":143.7125748502994,"count":1}},{"t":1792833631646,"roles":{"app":{"rss":507977728,"pss":406887424,"cpu":139.4422310756972,"count":1}},"total":{"rss":507977728,"pss":406887424,"cpu":139.4422310756972,"count":1}},{"t":1792833632646,"roles":{"app":{"rss":508346368,"pss":406862848,"cpu":138,"count":1}},"total":{"rss":508346368,"pss":406862848,"cpu":138,"count":1}},{"t":1792833633651,"roles":{"app":{"rss":512585728,"pss":411102208,"cpu":150.4950495049505,"count":1}},"total":{"rss":512585728,"pss":411102208,"cpu":150.4950495049505,"count":1}},{"t":1792833634653,"roles":{"app":{"rss":515481600,"pss":417840128,"cpu":157.37051792828686,"count":1}},"total":{"rss":515481600,"pss":417840128,"cpu":157.37051792828686,"count":1}},{"t":1792833635715,"roles":{"app":{"rss":525594624,"pss":424111104,"cpu":42.62877442273535,"count":1}},"total":{"rss":525594624,"pss":424111104,"cpu":42.62877442273535,"count":1}},{"t":1792833636737,"roles":{"app":{"rss":520105984,"pss":418543616,"cpu":115.45988258317024,"count":1}},"total":{"rss":520105984,"pss":418543616,"cpu":115.45988258317024,"count":1}},{"t":1792833637740,"roles":{"app":{"rss":530264064,"pss":428701696,"cpu":130,"count":1}},"total":{"rss":530264064,"pss":428701696,"cpu":130,"count":1}},{"t":1792833638748,"roles":{"app":{"rss":531120128,"pss":429557760,"cpu":177.5147928994083,"count":1}},"total":{"rss":531120128,"pss":429557760,"cpu":177.5147928994083,"count":1}},{"t":1792833639748,"roles":{"app":{"rss":530534400,"pss":428972032,"cpu":136,"count":1}},"total":{"rss":530534400,"pss":428972032,"cpu":136,"count":1}},{"t":1792833640749,"roles":{"app":{"rss":536158208,"pss":435326976,"cpu":128,"count":1}},"total":{"rss":536158208,"pss":435326976,"cpu":128,"count":1}},{"t":1792833641756,"roles":{"app":{"rss":537223168,"pss":435554304,"cpu":238,"count":1}},"total":{"rss":537223168,"pss":435554304,"cpu":238,"count":1}},{"t":1792833642757,"roles":{"app":{"rss":538238976,"pss":436670464,"cpu":133.73253493013974,"count":1}},"total":{"rss":538238976,"pss":436670464,"cpu":133.73253493013974,"count":1}},{"t":1792833643761,"roles":{"app":{"rss":541839360,"pss":440269824,"cpu":184.8906560636183,"count":1}},"total":{"rss":541839360,"pss":440269824,"cpu":184.8906560636183,"count":1}},{"t":1792833644788,"roles":{"app":{"rss":550862848,"pss":449294336,"cpu":103.71819960861058,"count":1}},"total":{"rss":550862848,"pss":449294336,"cpu":103.71819960861058,"count":1}},{"t":1792833645793,"roles":{"app":{"rss":550543360,"pss":448964608,"cpu":128,"count":1}},"total":{"rss":550543360,"pss":448964608,"cpu":128,"count":1}},{"t":1792833646818,"roles":{"app":{"rss":554745856,"pss":453167104,"cpu":133.58778625954199,"count":1}},"total":{"rss":554745856,"pss":453167104,"cpu":133.58778625954199,"count":1}},{"t":1792833647866,"roles":{"app":{"rss":556556288,"pss":454975488,"cpu":145.48802946593003,"count":1}},"total":{"rss":556556288,"pss":454975488,"cpu":145.48802946593003,"count":1}},{"t":1792833648874,"roles":{"app":{"rss":555024384,"pss":451591168,"cpu":81.83632734530939,"count":1}},"total":{"rss":555024384,"pss":451591168,"cpu":81.83632734530939,"count":1}},{"t":1792833649876,"roles":{"app":{"rss":555053056,"pss":453471232,"cpu":139.4422310756972,"count":1}},"total":{"rss":555053056,"pss":453471232,"cpu":139.4422310756972,"count":1}},{"t":1792833650878,"roles":{"app":{"rss":559382528,"pss":453928960,"cpu":189.2430278884462,"count":1}},"total":{"rss":559382528,"pss":453928960,"cpu":189.2430278884462,"count":1}},{"t":1792833651887,"roles":{"app":{"rss":560656384,"pss":459074560,"cpu":157.17092337917487,"count":1}},"total":{"rss":560656384,"pss":459074560,"cpu":157.17092337917487,"count":1}},{"t":1792833653146,"roles":{"app":{"rss":552243200,"pss":450661376,"cpu":156.99208443271766,"count":1}},"total":{"rss":552243200,"pss":450661376,"cpu":156.99208443271766,"count":1}},{"t":1792833654149,"roles":{"app":{"rss":548724736,"pss":482388992,"cpu":148,"count":1}},"total":{"rss":548724736,"pss":482388992,"cpu":148,"count":1}},{"t":1792833655149,"roles":{"app":{"rss":550240256,"pss":491913216,"cpu":180,"count":1}},"total":{"rss":550240256,"pss":491913216,"cpu":180,"count":1}},{"t":1792833656150,"roles":{"app":{"rss":554147840,"pss":495937536,"cpu":166,"count":1}},"total":{"rss":554147840,"pss":495937536,"cpu":166,"count":1}},{"t":1792833657162,"roles":{"app":{"rss":554553344,"pss":496586752,"cpu":106,"count":1}},"total":{"rss":554553344,"pss":496586752,"cpu":106,"count":1}},{"t":1792833658163,"roles":{"app":{"rss":555163648,"pss":500080640,"cpu":161.67664670658684,"count":1}},"total":{"rss":555163648,"pss":500080640,"cpu":161.67664670658684,"count":1}},{"t":1792833659163,"roles":{"app":{"rss":558387200,"pss":503305216,"cpu":186,"count":1}},"total":{"rss":558387200,"pss":503305216,"cpu":186,"count":1}},{"t":1792833660164,"roles":{"app":{"rss":562434048,"pss":507352064,"cpu":259.48103792415174,"count":1}},"total":{"rss":562434048,"pss":507352064,"cpu":259.48103792415174,"count":1}},{"t":1792833661255,"roles":{"app":{"rss":564969472,"pss":509887488,"cpu":203.5928143712575,"count":1}},"total":{"rss":564969472,"pss":509887488,"cpu":203.5928143712575,"count":1}},{"t":1792833662268,"roles":{"app":{"rss":565051392,"pss":509969408,"cpu":72.97830374753451,"count":1}},"total":{"rss":565051392,"pss":509969408,"cpu":72.97830374753451,"count":1}},{"t":1792833663299,"roles":{"app":{"rss":567144448,"pss":512062464,"cpu":135.49618320610685,"count":1}},"total":{"rss":567144448,"pss":512062464,"cpu":135.49618320610685,"count":1}},{"t":1792833664303,"roles":{"app":{"rss":571256832,"pss":516219904,"cpu":126,"count":1}},"total":{"rss":571256832,"pss":516219904,"cpu":126,"count":1}},{"t":1792833665304,"roles":{"app":{"rss":574443520,"pss":519356416,"cpu":136,"count":1}},"total":{"rss":574443520,"pss":519356416,"cpu":136,"count":1}},{"t":1792833666307,"roles":{"app":{"rss":580673536,"pss":525588480,"cpu":307.38522954091815,"count":1}},"total":{"rss":580673536,"pss":525588480,"cpu":307.38522954091815,"count":1}},{"t":1792833667308,"roles":{"app":{"rss":583757824,"pss":528672768,"cpu":165.66866267465068,"count":1}},"total":{"rss":583757824,"pss":528672768,"cpu":165.66866267465068,"count":1}},{"t":1792833668308,"roles":{"app":{"rss":586305536,"pss":531214336,"cpu":156,"count":1}},"total":{"rss":586305536,"pss":531214336,"cpu":156,"count":1}},{"t":1792833669311,"roles":{"app":{"rss":592003072,"pss":536911872,"cpu":231.53692614770458,"count":1}},"total":{"rss":592003072,"pss":536911872,"cpu":231.53692614770458,"count":1}},{"t":1792833670313,"roles":{"app":{"rss":595701760,"pss":540616704,"cpu":144,"count":1}},"total":{"rss":595701760,"pss":540616704,"cpu":144,"count":1}},{"t":1792833671429,"roles":{"app":{"rss":597942272,"pss":542857216,"cpu":94.46254071661238,"count":1}},"total":{"rss":597942272,"pss":542857216,"cpu":94.46254071661238,"count":1}},{"t":1792833672471,"roles":{"app":{"rss":604913664,"pss":548563968,"cpu":178.36812144212522,"count":1}},"total":{"rss":604913664,"pss":548563968,"cpu":178.36812144212522,"count":1}},{"t":1792833673473,"roles":{"app":{"rss":615690240,"pss":557942784,"cpu":110.00000000000001,"count":1}},"total":{"rss":615690240,"pss":557942784,"cpu":110.00000000000001,"count":1}},{"t":1792833674497,"roles":{"app":{"rss":614879232,"pss":557078528,"cpu":100.7905138339921,"count":1}},"total":{"rss":614879232,"pss":557078528,"cpu":100.7905138339921,"count":1}},{"t":1792833675530,"roles":{"app":{"rss":634978304,"pss":576049152,"cpu":144.4652908067542,"count":1}},"total":{"rss":634978304,"pss":576049152,"cpu":144.4652908067542,"count":1}},{"t":1792833676537,"roles":{"app":{"rss":639561728,"pss":580505600,"cpu":262.32741617357004,"count":1}},"total":{"rss":639561728,"pss":580505600,"cpu":262.32741617357004,"count":1}},{"t":1792833677538,"roles":{"app":{"rss":627466240,"pss":568396800,"cpu":202,"count":1}},"total":{"rss":627466240,"pss":568396800,"cpu":202,"count":1}},{"t":1792833678538,"roles":{"app":{"rss":631558144,"pss":572477440,"cpu":126,"count":1}},"total":{"rss":631558144,"pss":572477440,"cpu":126,"count":1}},{"t":1792833679538,"roles":{"app":{"rss":651468800,"pss":585366528,"cpu":130,"count":1}},"total":{"rss":651468800,"pss":585366528,"cpu":130,"count":1}},{"t":1792833680544,"roles":{"app":{"rss":647933952,"pss":582964224,"cpu":127.49003984063745,"count":1}},"total":{"rss":647933952,"pss":582964224,"cpu":127.49003984063745,"count":1}},{"t":1792833681560,"roles":{"app":{"rss":650244096,"pss":584004608,"cpu":115.99999999999999,"count":1}},"total":{"rss":650244096,"pss":584004608,"cpu":115.99999999999999,"count":1}},{"t":1792833682564,"roles":{"app":{"rss":646918144,"pss":580670464,"cpu":140,"count":1}},"total":{"rss":646918144,"pss":580670464,"cpu":140,"count":1}},{"t":1792833683573,"roles":{"app":{"rss":651300864,"pss":578409472,"cpu":135.5599214145383,"count":1}},"total":{"rss":651300864,"pss":578409472,"cpu":135.5599214145383,"count":1}},{"t":1792833684575,"roles":{"app":{"rss":642424832,"pss":576161792,"cpu":91.81636726546907,"count":1}},"total":{"rss":642424832,"pss":576161792,"cpu":91.81636726546907,"count":1}},{"t":1792833685577,"roles":{"app":{"rss":637046784,"pss":567316480,"cpu":147.41035856573706,"count":1}},"total":{"rss":637046784,"pss":567316480,"cpu":147.41035856573706,"count":1}},{"t":1792833686577,"roles":{"app":{"rss":649265152,"pss":556068864,"cpu":156,"count":1}},"total":{"rss":649265152,"pss":556068864,"cpu":156,"count":1}},{"t":1792833687585,"roles":{"app":{"rss":662331392,"pss":561348608,"cpu":157.48031496062993,"count":1}},"total":{"rss":662331392,"pss":561348608,"cpu":157.48031496062993,"count":1}},{"t":1792833688591,"roles":{"app":{"rss":661008384,"pss":559866880,"cpu":101.59362549800797,"count":1}},"total":{"rss":661008384,"pss":559866880,"cpu":101.59362549800797,"count":1}},{"t":1792833689595,"roles":{"app":{"rss":662503424,"pss":560920576,"cpu":145.12922465208746,"count":1}},"total":{"rss":662503424,"pss":560920576,"cpu":145.12922465208746,"count":1}},{"t":1792833690656,"roles":{"app":{"rss":663203840,"pss":561649664,"cpu":136.4522417153996,"count":1}},"total":{"rss":663203840,"pss":561649664,"cpu":136.4522417153996,"count":1}},{"t":1792833691753,"roles":{"app":{"rss":665346048,"pss":563792896,"cpu":103.58565737051792,"count":1}},"total":{"rss":665346048,"pss":563792896,"cpu":103.58565737051792,"count":1}},{"t":1792833692759,"roles":{"app":{"rss":664588288,"pss":565385216,"cpu":127.49003984063745,"count":1}},"total":{"rss":664588288,"pss":565385216,"cpu":127.49003984063745,"count":1}},{"t":1792833693770,"roles":{"app":{"rss":667422720,"pss":565868544,"cpu":127.45098039215685,"count":1}},"total":{"rss":667422720,"pss":565868544,"cpu":127.45098039215685,"count":1}},{"t":1792833694771,"roles":{"app":{"rss":672796672,"pss":571242496,"cpu":138,"count":1}},"total":{"rss":672796672,"pss":571242496,"cpu":138,"count":1}},{"t":1792833695771,"roles":{"app":{"rss":677232640,"pss":575677440,"cpu":164,"count":1}},"total":{"rss":677232640,"pss":575677440,"cpu":164,"count":1}},{"t":1792833696772,"roles":{"app":{"rss":680595456,"pss":579041280,"cpu":149.7005988023952,"count":1}},"total":{"rss":680595456,"pss":579041280,"cpu":149.7005988023952,"count":1}},{"t":1792833697776,"roles":{"app":{"rss":682598400,"pss":581039104,"cpu":110.00000000000001,"count":1}},"total":{"rss":682598400,"pss":581039104,"cpu":110.00000000000001,"count":1}},{"t":1792833698777,"roles":{"app":{"rss":687222784,"pss":585663488,"cpu":145.7085828343313,"count":1}},"total":{"rss":687222784,"pss":585663488,"cpu":145.7085828343313,"count":1}},{"t":1792833699777,"roles":{"app":{"rss":690294784,"pss":588735488,"cpu":180,"count":1}},"total":{"rss":690294784,"pss":588735488,"cpu":180,"count":1}},{"t":1792833700778,"roles":{"app":{"rss":692387840,"pss":590828544,"cpu":131.7365269461078,"count":1}},"total":{"rss":692387840,"pss":590828544,"cpu":131.7365269461078,"count":1}},{"t":1792833701805,"roles":{"app":{"rss":696958976,"pss":595398656,"cpu":154.58015267175574,"count":1}},"total":{"rss":696958976,"pss":595398656,"cpu":154.58015267175574,"count":1}},{"t":1792833702808,"roles":{"app":{"rss":699629568,"pss":598063104,"cpu":118,"count":1}},"total":{"rss":699629568,"pss":598063104,"cpu":118,"count":1}},{"t":1792833703809,"roles":{"app":{"rss":702140416,"pss":600609792,"cpu":173.65269461077844,"count":1}},"total":{"rss":702140416,"pss":600609792,"cpu":173.65269461077844,"count":1}},{"t":1792833704810,"roles":{"app":{"rss":684371968,"pss":582823936,"cpu":104,"count":1}},"total":{"rss":684371968,"pss":582823936,"cpu":104,"count":1}},{"t":1792833705811,"roles":{"app":{"rss":678391808,"pss":576820224,"cpu":106,"count":1}},"total":{"rss":678391808,"pss":576820224,"cpu":106,"count":1}},{"t":1792833706951,"roles":{"app":{"rss":679542784,"pss":577970176,"cpu":106.25,"count":1}},"total":{"rss":679542784,"pss":577970176,"cpu":106.25,"count":1}},{"t":1792833707957,"roles":{"app":{"rss":682934272,"pss":581362688,"cpu":114.62450592885374,"count":1}},"total":{"rss":682934272,"pss":581362688,"cpu":114.62450592885374,"count":1}},{"t":1792833708962,"roles":{"app":{"rss":683167744,"pss":581587968,"cpu":119.28429423459244,"count":1}},"total":{"rss":683167744,"pss":581587968,"cpu":119.28429423459244,"count":1}},{"t":1792833710026,"roles":{"app":{"rss":686870528,"pss":585298944,"cpu":137.7245508982036,"count":1}},"total":{"rss":686870528,"pss":585298944,"cpu":137.7245508982036,"count":1}},{"t":1792833711045,"roles":{"app":{"rss":691867648,"pss":592311296,"cpu":112.00000000000001,"count":1}},"total":{"rss":691867648,"pss":592311296,"cpu":112.00000000000001,"count":1}},{"t":1792833712046,"roles":{"app":{"rss":695472128,"pss":637142016,"cpu":167.6646706586826,"count":1}},"total":{"rss":695472128,"pss":637142016,"cpu":167.6646706586826,"count":1}},{"t":1792833713047,"roles":{"app":{"rss":696799232,"pss":638584832,"cpu":98,"count":1}},"total":{"rss":696799232,"pss":638584832,"cpu":98,"count":1}},{"t":1792833714048,"roles":{"app":{"rss":701575168,"pss":643360768,"cpu":154,"count":1}},"total":{"rss":701575168,"pss":643360768,"cpu":154,"count":1}},{"t":1792833715075,"roles":{"app":{"rss":708034560,"pss":652948480,"cpu":169.20152091254752,"count":1}},"total":{"rss":708034560,"pss":652948480,"cpu":169.20152091254752,"count":1}},{"t":1792833716114,"roles":{"app":{"rss":708583424,"pss":653497344,"cpu":193.3085501858736,"count":1}},"total":{"rss":708583424,"pss":653497344,"cpu":193.3085501858736,"count":1}},{"t":1792833717279,"roles":{"app":{"rss":705773568,"pss":650854400,"cpu":235.10971786833858,"count":1}},"total":{"rss":705773568,"pss":650854400,"cpu":235.10971786833858,"count":1}},{"t":1792833718320,"roles":{"app":{"rss":719552512,"pss":664466432,"cpu":220.37037037037032,"count":1}},"total":{"rss":719552512,"pss":664466432,"cpu":220.37037037037032,"count":1}},{"t":1792833719401,"roles":{"app":{"rss":715042816,"pss":659956736,"cpu":174.82517482517483,"count":1}},"total":{"rss":715042816,"pss":659956736,"cpu":174.82517482517483,"count":1}},{"t":1792833720404,"roles":{"app":{"rss":719802368,"pss":664716288,"cpu":155.37848605577688,"count":1}},"total":{"rss":719802368,"pss":664716288,"cpu":155.37848605577688,"count":1}},{"t":1792833721405,"roles":{"app":{"rss":720900096,"pss":665919488,"cpu":143.7125748502994,"count":1}},"total":{"rss":720900096,"pss":665919488,"cpu":143.7125748502994,"count":1}},{"t":1792833723524,"roles":{"app":{"rss":705269760,"pss":650142720,"cpu":61.89555125725339,"count":1}},"total":{"rss":705269760,"pss":650142720,"cpu":61.89555125725339,"count":1}},{"t":1792833724527,"roles":{"app":{"rss":702226432,"pss":647132160,"cpu":262.9482071713148,"count":1}},"total":{"rss":702226432,"pss":647132160,"cpu":262.9482071713148,"count":1}},{"t":1792833725533,"roles":{"app":{"rss":702238720,"pss":647111680,"cpu":207.58483033932137,"count":1}},"total":{"rss":702238720,"pss":647111680,"cpu":207.58483033932137,"count":1}},{"t":1792833726537,"roles":{"app":{"rss":702259200,"pss":647132160,"cpu":290.2584493041749,"count":1}},"total":{"rss":702259200,"pss":647132160,"cpu":290.2584493041749,"count":1}},{"t":1792833727539,"roles":{"app":{"rss":702238720,"pss":647111680,"cpu":282,"count":1}},"total":{"rss":702238720,"pss":647111680,"cpu":282,"count":1}},{"t":1792833728671,"roles":{"app":{"rss":702238720,"pss":647111680,"cpu":67.86427145708583,"count":1}},"total":{"rss":702238720,"pss":647111680,"cpu":67.86427145708583,"count":1}},{"t":1792833729676,"roles":{"app":{"rss":702230528,"pss":647103488,"cpu":9.980039920159681,"count":1}},"total":{"rss":702230528,"pss":647103488,"cpu":9.980039920159681,"count":1}},{"t":1792833730676,"roles":{"app":{"rss":702230528,"pss":647103488,"cpu":8,"count":1}},"total":{"rss":702230528,"pss":647103488,"cpu":8,"count":1}},{"t":1792833731737,"roles":{"app":{"rss":702226432,"pss":647099392,"cpu":11.928429423459244,"count":1}},"total":{"rss":702226432,"pss":647099392,"cpu":11.928429423459244,"count":1}},{"t":1792833732737,"roles":{"app":{"rss":701968384,"pss":646611968,"cpu":12,"count":1}},"total":{"rss":701968384,"pss":646611968,"cpu":12,"count":1}},{"t":1792833733739,"roles":{"app":{"rss":673292288,"pss":618165248,"cpu":25.89641434262948,"count":1}},"total":{"rss":673292288,"pss":618165248,"cpu":25.89641434262948,"count":1}},{"t":1792833734852,"roles":{"app":{"rss":654360576,"pss":599233536,"cpu":124.10071942446041,"count":1}},"total":{"rss":654360576,"pss":599233536,"cpu":124.10071942446041,"count":1}},{"t":1792833735856,"roles":{"app":{"rss":629116928,"pss":573989888,"cpu":7.984031936127744,"count":1}},"total":{"rss":629116928,"pss":573989888,"cpu":7.984031936127744,"count":1}},{"t":1792833736856,"roles":{"app":{"rss":629116928,"pss":573989888,"cpu":12,"count":1}},"total":{"rss":629116928,"pss":573989888,"cpu":12,"count":1}},{"t":1792833737862,"roles":{"app":{"rss":629129216,"pss":574002176,"cpu":7.905138339920949,"count":1}},"total":{"rss":629129216,"pss":574002176,"cpu":7.905138339920949,"count":1}},{"t":1792833738864,"roles":{"app":{"rss":629133312,"pss":574006272,"cpu":15.968063872255488,"count":1}},"total":{"rss":629133312,"pss":574006272,"cpu":15.968063872255488,"count":1}},{"t":1792833739871,"roles":{"app":{"rss":629141504,"pss":574022656,"cpu":106.50887573964498,"count":1}},"total":{"rss":629141504,"pss":574022656,"cpu":106.50887573964498,"count":1}},{"t":1792833740873,"roles":{"app":{"rss":629133312,"pss":574006272,"cpu":7.984031936127744,"count":1}},"total":{"rss":629133312,"pss":574006272,"cpu":7.984031936127744,"count":1}},{"t":1792833741874,"roles":{"app":{"rss":629133312,"pss":574006272,"cpu":10,"count":1}},"total":{"rss":629133312,"pss":574006272,"cpu":10,"count":1}},{"t":1792833742889,"roles":{"app":{"rss":629133312,"pss":574006272,"cpu":15.968063872255488,"count":1}},"total":{"rss":629133312,"pss":574006272,"cpu":15.968063872255488,"count":1}},{"t":1792833743900,"roles":{"app":{"rss":629133312,"pss":574006272,"cpu":10,"count":1}},"total":{"rss":629133312,"pss":574006272,"cpu":10,"count":1}},{"t":1792833744902,"roles":{"app":{"rss":629133312,"pss":574006272,"cpu":7.984031936127744,"count":1}},"total":{"rss":629133312,"pss":574006272,"cpu":7.984031936127744,"count":1}},{"t":1792833745902,"roles":{"app":{"rss":629133312,"pss":574006272,"cpu":22,"count":1}},"total":{"rss":629133312,"pss":574006272,"cpu":22,"count":1}},{"t":1792833746904,"roles":{"app":{"rss":629133312,"pss":574008320,"cpu":5.9880239520958085,"count":1}},"total":{"rss":629133312,"pss":574008320,"cpu":5.9880239520958085,"count":1}},{"t":1792833747904,"roles":{"app":{"rss":629088256,"pss":573963264,"cpu":14.000000000000002,"count":1}},"total":{"rss":629088256,"pss":573963264,"cpu":14.000000000000002,"count":1}},{"t":1792833748908,"roles":{"app":{"rss":629088256,"pss":573963264,"cpu":12,"count":1}},"total":{"rss":629088256,"pss":573963264,"cpu":12,"count":1}},{"t":1792833750039,"roles":{"app":{"rss":629088256,"pss":573955072,"cpu":43.63001745200699,"count":1}},"total":{"rss":629088256,"pss":573955072,"cpu":43.63001745200699,"count":1}},{"t":1792833751048,"roles":{"app":{"rss":629100544,"pss":571739136,"cpu":169.66067864271457,"count":1}},"total":{"rss":629100544,"pss":571739136,"cpu":169.66067864271457,"count":1}},{"t":1792833752182,"roles":{"app":{"rss":629088256,"pss":571216896,"cpu":4.73186119873817,"count":1}},"total":{"rss":629088256,"pss":571216896,"cpu":4.73186119873817,"count":1}},{"t":1792833753247,"roles":{"app":{"rss":629211136,"pss":571339776,"cpu":3.816793893129771,"count":1}},"total":{"rss":629211136,"pss":571339776,"cpu":3.816793893129771,"count":1}},{"t":1792833754247,"roles":{"app":{"rss":629211136,"pss":571005952,"cpu":12,"count":1}},"total":{"rss":629211136,"pss":571005952,"cpu":12,"count":1}},{"t":1792833755252,"roles":{"app":{"rss":629248000,"pss":570163200,"cpu":12,"count":1}},"total":{"rss":629248000,"pss":570163200,"cpu":12,"count":1}},{"t":1792833756382,"roles":{"app":{"rss":629272576,"pss":570121216,"cpu":54,"count":1}},"total":{"rss":629272576,"pss":570121216,"cpu":54,"count":1}},{"t":1792833757501,"roles":{"app":{"rss":629325824,"pss":570174464,"cpu":36.0655737704918,"count":1}},"total":{"rss":629325824,"pss":570174464,"cpu":36.0655737704918,"count":1}},{"t":1792833758501,"roles":{"app":{"rss":629342208,"pss":570168320,"cpu":16,"count":1}},"total":{"rss":629342208,"pss":570168320,"cpu":16,"count":1}},{"t":1792833759518,"roles":{"app":{"rss":629358592,"pss":570115072,"cpu":147.28682170542635,"count":1}},"total":{"rss":629358592,"pss":570115072,"cpu":147.28682170542635,"count":1}}]}
+{
+  "machine": {
+    "cpu": "AMD EPYC Processor (with IBPB)",
+    "cores": 8,
+    "memGB": 23,
+    "kernel": "6.8.0-147-generic",
+    "bun": "1.4.0"
+  },
+  "meta": {
+    "scenario": "stream-storm",
+    "run": 3,
+    "client": "gpuix",
+    "clientVersion": "GPUIX 0.11.0 on Bun 1.4.0",
+    "backend": "GPUI Vulkan, libvulkan_lvp.so",
+    "gl": "lavapipe",
+    "pageMetrics": false,
+    "screenFrames": true,
+    "seed": 42,
+    "flags": {
+      "agents": 2,
+      "sessions-per-agent": 2,
+      "rate": 20,
+      "warmup": 10,
+      "sustain": 30,
+      "measure": 20,
+      "switch-every-ms": 5000
+    },
+    "viewport": "1440x900",
+    "startedAt": "2026-10-24T09:22:41.562Z",
+    "gitCommit": "cdf718928985bc0b819ffb7075a79772c85aeb0f",
+    "quietWaitS": 5,
+    "preRunBusyPct": 77,
+    "load1Before": 6.88,
+    "load1After": 7.82,
+    "status": "failed"
+  },
+  "metrics": {
+    "startup.processUpMs": 2353,
+    "startup.projectListMs": 3843,
+    "startup.launcherReadyMs": 6339,
+    "startup.proc.total.rssMedianMB": 274.9,
+    "startup.proc.total.rssMaxMB": 279.1,
+    "startup.proc.total.pssMedianMB": 226.5,
+    "startup.proc.total.pssMaxMB": 230.5,
+    "startup.proc.total.cpuMeanPct": 153.8,
+    "startup.proc.app.rssMedianMB": 274.9,
+    "startup.proc.app.rssMaxMB": 279.1,
+    "startup.proc.app.pssMedianMB": 226.5,
+    "startup.proc.app.pssMaxMB": 230.5,
+    "startup.proc.app.cpuMeanPct": 153.8,
+    "startup.screen.frames": 17,
+    "startup.screen.fps": 2.7,
+    "startup.screen.gapP50Ms": 263.3,
+    "startup.screen.gapP95Ms": 650.5,
+    "startup.screen.gapP99Ms": 670.7,
+    "startup.screen.gapMaxMs": 670.7,
+    "startup.screen.gapsOver50Ms": 15,
+    "startup.server.cpuMeanPct": 17.4,
+    "startup.machine.cpuBusyPct": 278,
+    "startup.machine.foreignCpuPct": 107,
+    "startup.durationS": 6.3,
+    "startup.bytesDownKBps": 8,
+    "startup.bytesUpKBps": 2,
+    "warmup.proc.total.rssMedianMB": 322.8,
+    "warmup.proc.total.rssMaxMB": 352.4,
+    "warmup.proc.total.pssMedianMB": 261.4,
+    "warmup.proc.total.pssMaxMB": 290.5,
+    "warmup.proc.total.cpuMeanPct": 265.2,
+    "warmup.proc.app.rssMedianMB": 322.8,
+    "warmup.proc.app.rssMaxMB": 352.4,
+    "warmup.proc.app.pssMedianMB": 261.4,
+    "warmup.proc.app.pssMaxMB": 290.5,
+    "warmup.proc.app.cpuMeanPct": 265.2,
+    "warmup.screen.frames": 97,
+    "warmup.screen.fps": 5.7,
+    "warmup.screen.gapP50Ms": 122.1,
+    "warmup.screen.gapP95Ms": 435.6,
+    "warmup.screen.gapP99Ms": 776.8,
+    "warmup.screen.gapMaxMs": 960.6,
+    "warmup.screen.gapsOver50Ms": 93,
+    "warmup.server.cpuMeanPct": 6.6,
+    "warmup.machine.cpuBusyPct": 288,
+    "warmup.machine.foreignCpuPct": 16,
+    "warmup.durationS": 17,
+    "warmup.bytesDownKBps": 4,
+    "warmup.bytesUpKBps": 0,
+    "open-chats.proc.total.rssMedianMB": 523.6,
+    "open-chats.proc.total.rssMaxMB": 690.3,
+    "open-chats.proc.total.pssMedianMB": 428.2,
+    "open-chats.proc.total.pssMaxMB": 637.7,
+    "open-chats.proc.total.cpuMeanPct": 156.1,
+    "open-chats.proc.app.rssMedianMB": 523.6,
+    "open-chats.proc.app.rssMaxMB": 690.3,
+    "open-chats.proc.app.pssMedianMB": 428.2,
+    "open-chats.proc.app.pssMaxMB": 637.7,
+    "open-chats.proc.app.cpuMeanPct": 156.1,
+    "open-chats.screen.frames": 331,
+    "open-chats.screen.fps": 1.9,
+    "open-chats.screen.gapP50Ms": 489.8,
+    "open-chats.screen.gapP95Ms": 945.4,
+    "open-chats.screen.gapP99Ms": 1819.6,
+    "open-chats.screen.gapMaxMs": 3145.7,
+    "open-chats.screen.gapsOver50Ms": 322,
+    "open-chats.server.cpuMeanPct": 22.5,
+    "open-chats.machine.cpuBusyPct": 272,
+    "open-chats.machine.foreignCpuPct": 93,
+    "open-chats.durationS": 170.4,
+    "open-chats.bytesDownKBps": 19,
+    "open-chats.bytesUpKBps": 0,
+    "sustained-stream.proc.total.rssMedianMB": 600,
+    "sustained-stream.proc.total.rssMaxMB": 669.7,
+    "sustained-stream.proc.total.pssMedianMB": 547.4,
+    "sustained-stream.proc.total.pssMaxMB": 617.1,
+    "sustained-stream.proc.total.cpuMeanPct": 31.7,
+    "sustained-stream.proc.app.rssMedianMB": 600,
+    "sustained-stream.proc.app.rssMaxMB": 669.7,
+    "sustained-stream.proc.app.pssMedianMB": 547.4,
+    "sustained-stream.proc.app.pssMaxMB": 617.1,
+    "sustained-stream.proc.app.cpuMeanPct": 31.7,
+    "sustained-stream.screen.frames": 32,
+    "sustained-stream.screen.fps": 1.1,
+    "sustained-stream.screen.gapP50Ms": 92,
+    "sustained-stream.screen.gapP95Ms": 5115.9,
+    "sustained-stream.screen.gapP99Ms": 5257.9,
+    "sustained-stream.screen.gapMaxMs": 5257.9,
+    "sustained-stream.screen.gapsOver50Ms": 24,
+    "sustained-stream.server.cpuMeanPct": 22.7,
+    "sustained-stream.machine.cpuBusyPct": 117,
+    "sustained-stream.machine.foreignCpuPct": 63,
+    "sustained-stream.durationS": 30,
+    "sustained-stream.bytesDownKBps": 18,
+    "sustained-stream.bytesUpKBps": 0,
+    "chat.firstStartMs": 6974,
+    "chat.startUnderLoadP50Ms": 26359,
+    "chat.startUnderLoadMaxMs": 26359,
+    "chat.switches": 5
+  },
+  "errors": [
+    "chat 2: Error: launcher composer never accepted \"perf stream 2\"",
+    "switch: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException",
+    "switch: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException",
+    "switch: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException",
+    "switch: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException",
+    "switch: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException",
+    "fatal: Error: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException\n    at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/tools/perf/clients/gpuix.ts:185:30)\n    at async <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/tools/perf/clients/gpuix.ts:330:44)\n    at async streamStorm (/root/termul-wt/gpuix-f2/apps/gpuix/tools/perf/scenarios.ts:77:40)\n    at async runOnce (unknown)\n    at async main (unknown)\n    at processTicksAndRejections (native:7:39)",
+    "fatal: app crashed: Timed out after 2 seconds waiting for the GPUI list scroll query |     at getListScrollTop (unknown) |     at <anonymous> (/root/termul-wt/gpuix-f2/apps/gpuix/src/overrides/components/chat/ChatMessageList.tsx:233:28) | uncaughtException"
+  ],
+  "notes": {
+    "client": "GPUIX 0.11.0 on Bun 1.4.0",
+    "backend": "GPUI Vulkan, libvulkan_lvp.so",
+    "chatStartMs": [6974, 25491, 26359],
+    "switches": 5,
+    "threads": {
+      "warmup": [
+        { "thread": "app:llvmpipe-N", "cpuPct": 188.5 },
+        { "thread": "app:gpuix-ui", "cpuPct": 23.3 },
+        { "thread": "app:bun", "cpuPct": 20.5 },
+        { "thread": "app:JITWorker", "cpuPct": 15.2 },
+        { "thread": "app:mi-scavenger", "cpuPct": 6.9 },
+        { "thread": "app:WSI swapchain q", "cpuPct": 5.1 },
+        { "thread": "app:HeapHelper", "cpuPct": 1.5 },
+        { "thread": "app:HTTP Client", "cpuPct": 0.1 }
+      ],
+      "open-chats": [
+        { "thread": "app:llvmpipe-N", "cpuPct": 71.7 },
+        { "thread": "app:gpuix-ui", "cpuPct": 64.1 },
+        { "thread": "app:bun", "cpuPct": 10.7 },
+        { "thread": "app:JITWorker", "cpuPct": 2.2 },
+        { "thread": "app:WSI swapchain q", "cpuPct": 2.1 },
+        { "thread": "app:HeapHelper", "cpuPct": 1.8 },
+        { "thread": "app:mi-scavenger", "cpuPct": 1.5 },
+        { "thread": "app:HTTP Client", "cpuPct": 0.1 }
+      ],
+      "sustained-stream": [
+        { "thread": "app:llvmpipe-N", "cpuPct": 12.4 },
+        { "thread": "app:bun", "cpuPct": 8.9 },
+        { "thread": "app:mi-scavenger", "cpuPct": 3.6 },
+        { "thread": "app:gpuix-ui", "cpuPct": 2.8 },
+        { "thread": "app:WSI swapchain q", "cpuPct": 1.1 },
+        { "thread": "app:HeapHelper", "cpuPct": 0.8 }
+      ]
+    },
+    "serverSamples": 427,
+    "serverProc": {
+      "startup": {
+        "server.total.rssMedianMB": 54.3,
+        "server.total.rssMaxMB": 114.9,
+        "server.total.pssMedianMB": 40.2,
+        "server.total.pssMaxMB": 98.5,
+        "server.total.cpuMeanPct": 17.4,
+        "server.server.rssMedianMB": 54.3,
+        "server.server.rssMaxMB": 56.9,
+        "server.server.pssMedianMB": 40.2,
+        "server.server.pssMaxMB": 42.8,
+        "server.server.cpuMeanPct": 8.5,
+        "server.other.rssMedianMB": 0,
+        "server.other.rssMaxMB": 58,
+        "server.other.pssMedianMB": 0,
+        "server.other.pssMaxMB": 55.7,
+        "server.other.cpuMeanPct": 8.9
+      },
+      "warmup": {
+        "server.total.rssMedianMB": 115.5,
+        "server.total.rssMaxMB": 116.7,
+        "server.total.pssMedianMB": 49,
+        "server.total.pssMaxMB": 50.3,
+        "server.total.cpuMeanPct": 6.6,
+        "server.server.rssMedianMB": 60.3,
+        "server.server.rssMaxMB": 60.5,
+        "server.server.pssMedianMB": 32,
+        "server.server.pssMaxMB": 34.3,
+        "server.server.cpuMeanPct": 4.4,
+        "server.agent.rssMedianMB": 55.2,
+        "server.agent.rssMaxMB": 56.1,
+        "server.agent.pssMedianMB": 17.5,
+        "server.agent.pssMaxMB": 18,
+        "server.agent.cpuMeanPct": 2.2
+      },
+      "open-chats": {
+        "server.total.rssMedianMB": 198,
+        "server.total.rssMaxMB": 366.5,
+        "server.total.pssMedianMB": 78.7,
+        "server.total.pssMaxMB": 256.8,
+        "server.total.cpuMeanPct": 22.5,
+        "server.server.rssMedianMB": 67,
+        "server.server.rssMaxMB": 82,
+        "server.server.pssMedianMB": 42.7,
+        "server.server.pssMaxMB": 67.8,
+        "server.server.cpuMeanPct": 12.6,
+        "server.agent.rssMedianMB": 130.4,
+        "server.agent.rssMaxMB": 131.1,
+        "server.agent.pssMedianMB": 35.8,
+        "server.agent.pssMaxMB": 42.7,
+        "server.agent.cpuMeanPct": 8.5,
+        "server.other.rssMedianMB": 0,
+        "server.other.rssMaxMB": 181.9,
+        "server.other.pssMedianMB": 0,
+        "server.other.pssMaxMB": 180,
+        "server.other.cpuMeanPct": 1.4
+      },
+      "sustained-stream": {
+        "server.total.rssMedianMB": 211.6,
+        "server.total.rssMaxMB": 212.9,
+        "server.total.pssMedianMB": 108.4,
+        "server.total.pssMaxMB": 109.7,
+        "server.total.cpuMeanPct": 22.7,
+        "server.server.rssMedianMB": 80.8,
+        "server.server.rssMaxMB": 82.1,
+        "server.server.pssMedianMB": 66.2,
+        "server.server.pssMaxMB": 67.6,
+        "server.server.cpuMeanPct": 14.5,
+        "server.agent.rssMedianMB": 130.8,
+        "server.agent.rssMaxMB": 130.9,
+        "server.agent.pssMedianMB": 42.4,
+        "server.agent.pssMaxMB": 42.5,
+        "server.agent.cpuMeanPct": 8.2
+      }
+    }
+  },
+  "processes": [
+    {
+      "pid": 3005805,
+      "role": "app",
+      "cmd": "/root/.bun/bin/bun /root/termul-wt/gpuix-f2/apps/gpuix/dist/main.js"
+    }
+  ],
+  "procSeries": [
+    {
+      "t": 1792833538296,
+      "roles": {
+        "app": { "rss": 262807552, "pss": 212430848, "cpu": 171.79902755267423, "count": 1 }
+      },
+      "total": { "rss": 262807552, "pss": 212430848, "cpu": 171.79902755267423, "count": 1 }
+    },
+    {
+      "t": 1792833539342,
+      "roles": {
+        "app": { "rss": 288210944, "pss": 237464576, "cpu": 153.69261477045907, "count": 1 }
+      },
+      "total": { "rss": 288210944, "pss": 237464576, "cpu": 153.69261477045907, "count": 1 }
+    },
+    {
+      "t": 1792833540370,
+      "roles": {
+        "app": { "rss": 292655104, "pss": 241667072, "cpu": 159.39278937381403, "count": 1 }
+      },
+      "total": { "rss": 292655104, "pss": 241667072, "cpu": 159.39278937381403, "count": 1 }
+    },
+    {
+      "t": 1792833541376,
+      "roles": {
+        "app": { "rss": 291815424, "pss": 241031168, "cpu": 212.3015873015873, "count": 1 }
+      },
+      "total": { "rss": 291815424, "pss": 241031168, "cpu": 212.3015873015873, "count": 1 }
+    },
+    {
+      "t": 1792833542377,
+      "roles": {
+        "app": { "rss": 299061248, "pss": 244570112, "cpu": 421.1576846307385, "count": 1 }
+      },
+      "total": { "rss": 299061248, "pss": 244570112, "cpu": 421.1576846307385, "count": 1 }
+    },
+    {
+      "t": 1792833543767,
+      "roles": {
+        "app": { "rss": 300163072, "pss": 244117504, "cpu": 296.2962962962963, "count": 1 }
+      },
+      "total": { "rss": 300163072, "pss": 244117504, "cpu": 296.2962962962963, "count": 1 }
+    },
+    {
+      "t": 1792833545053,
+      "roles": {
+        "app": { "rss": 300412928, "pss": 243959808, "cpu": 146.44351464435147, "count": 1 }
+      },
+      "total": { "rss": 300412928, "pss": 243959808, "cpu": 146.44351464435147, "count": 1 }
+    },
+    {
+      "t": 1792833546060,
+      "roles": {
+        "app": { "rss": 300068864, "pss": 243342336, "cpu": 365.0793650793651, "count": 1 }
+      },
+      "total": { "rss": 300068864, "pss": 243342336, "cpu": 365.0793650793651, "count": 1 }
+    },
+    {
+      "t": 1792833547071,
+      "roles": {
+        "app": { "rss": 306069504, "pss": 249319424, "cpu": 379.9212598425197, "count": 1 }
+      },
+      "total": { "rss": 306069504, "pss": 249319424, "cpu": 379.9212598425197, "count": 1 }
+    },
+    {
+      "t": 1792833548098,
+      "roles": { "app": { "rss": 305004544, "pss": 249408512, "cpu": 372, "count": 1 } },
+      "total": { "rss": 305004544, "pss": 249408512, "cpu": 372, "count": 1 }
+    },
+    {
+      "t": 1792833549116,
+      "roles": { "app": { "rss": 316305408, "pss": 259514368, "cpu": 354, "count": 1 } },
+      "total": { "rss": 316305408, "pss": 259514368, "cpu": 354, "count": 1 }
+    },
+    {
+      "t": 1792833550127,
+      "roles": {
+        "app": { "rss": 337768448, "pss": 273060864, "cpu": 279.8434442270059, "count": 1 }
+      },
+      "total": { "rss": 337768448, "pss": 273060864, "cpu": 279.8434442270059, "count": 1 }
+    },
+    {
+      "t": 1792833551131,
+      "roles": {
+        "app": { "rss": 355340288, "pss": 290600960, "cpu": 330.67729083665336, "count": 1 }
+      },
+      "total": { "rss": 355340288, "pss": 290600960, "cpu": 330.67729083665336, "count": 1 }
+    },
+    {
+      "t": 1792833552214,
+      "roles": {
+        "app": { "rss": 343728128, "pss": 278966272, "cpu": 157.80445969125216, "count": 1 }
+      },
+      "total": { "rss": 343728128, "pss": 278966272, "cpu": 157.80445969125216, "count": 1 }
+    },
+    {
+      "t": 1792833553214,
+      "roles": { "app": { "rss": 347955200, "pss": 282981376, "cpu": 158, "count": 1 } },
+      "total": { "rss": 347955200, "pss": 282981376, "cpu": 158, "count": 1 }
+    },
+    {
+      "t": 1792833554215,
+      "roles": { "app": { "rss": 353804288, "pss": 288975872, "cpu": 306, "count": 1 } },
+      "total": { "rss": 353804288, "pss": 288975872, "cpu": 306, "count": 1 }
+    },
+    {
+      "t": 1792833555234,
+      "roles": {
+        "app": { "rss": 356220928, "pss": 291391488, "cpu": 323.0174081237911, "count": 1 }
+      },
+      "total": { "rss": 356220928, "pss": 291391488, "cpu": 323.0174081237911, "count": 1 }
+    },
+    {
+      "t": 1792833556245,
+      "roles": {
+        "app": { "rss": 359473152, "pss": 294410240, "cpu": 192.07920792079207, "count": 1 }
+      },
+      "total": { "rss": 359473152, "pss": 294410240, "cpu": 192.07920792079207, "count": 1 }
+    },
+    {
+      "t": 1792833557244,
+      "roles": {
+        "app": { "rss": 362360832, "pss": 297655296, "cpu": 227.99999999999997, "count": 1 }
+      },
+      "total": { "rss": 362360832, "pss": 297655296, "cpu": 227.99999999999997, "count": 1 }
+    },
+    {
+      "t": 1792833558286,
+      "roles": {
+        "app": { "rss": 369467392, "pss": 304604160, "cpu": 153.41959334565618, "count": 1 }
+      },
+      "total": { "rss": 369467392, "pss": 304604160, "cpu": 153.41959334565618, "count": 1 }
+    },
+    {
+      "t": 1792833559426,
+      "roles": {
+        "app": { "rss": 376524800, "pss": 307731456, "cpu": 216.30094043887146, "count": 1 }
+      },
+      "total": { "rss": 376524800, "pss": 307731456, "cpu": 216.30094043887146, "count": 1 }
+    },
+    {
+      "t": 1792833560567,
+      "roles": {
+        "app": { "rss": 379105280, "pss": 296271872, "cpu": 191.61676646706587, "count": 1 }
+      },
+      "total": { "rss": 379105280, "pss": 296271872, "cpu": 191.61676646706587, "count": 1 }
+    },
+    {
+      "t": 1792833561570,
+      "roles": {
+        "app": { "rss": 381751296, "pss": 282001408, "cpu": 205.1792828685259, "count": 1 }
+      },
+      "total": { "rss": 381751296, "pss": 282001408, "cpu": 205.1792828685259, "count": 1 }
+    },
+    {
+      "t": 1792833562576,
+      "roles": {
+        "app": { "rss": 386777088, "pss": 286821376, "cpu": 196.81908548707753, "count": 1 }
+      },
+      "total": { "rss": 386777088, "pss": 286821376, "cpu": 196.81908548707753, "count": 1 }
+    },
+    {
+      "t": 1792833563595,
+      "roles": { "app": { "rss": 388280320, "pss": 288176128, "cpu": 158, "count": 1 } },
+      "total": { "rss": 388280320, "pss": 288176128, "cpu": 158, "count": 1 }
+    },
+    {
+      "t": 1792833564870,
+      "roles": {
+        "app": { "rss": 388251648, "pss": 288142336, "cpu": 61.66219839142092, "count": 1 }
+      },
+      "total": { "rss": 388251648, "pss": 288142336, "cpu": 61.66219839142092, "count": 1 }
+    },
+    {
+      "t": 1792833566018,
+      "roles": {
+        "app": { "rss": 390496256, "pss": 290266112, "cpu": 177.4960380348653, "count": 1 }
+      },
+      "total": { "rss": 390496256, "pss": 290266112, "cpu": 177.4960380348653, "count": 1 }
+    },
+    {
+      "t": 1792833567095,
+      "roles": {
+        "app": { "rss": 395935744, "pss": 295396352, "cpu": 211.53846153846155, "count": 1 }
+      },
+      "total": { "rss": 395935744, "pss": 295396352, "cpu": 211.53846153846155, "count": 1 }
+    },
+    {
+      "t": 1792833568097,
+      "roles": {
+        "app": { "rss": 398237696, "pss": 298179584, "cpu": 274.9003984063745, "count": 1 }
+      },
+      "total": { "rss": 398237696, "pss": 298179584, "cpu": 274.9003984063745, "count": 1 }
+    },
+    {
+      "t": 1792833569106,
+      "roles": {
+        "app": { "rss": 399421440, "pss": 298957824, "cpu": 92.70216962524654, "count": 1 }
+      },
+      "total": { "rss": 399421440, "pss": 298957824, "cpu": 92.70216962524654, "count": 1 }
+    },
+    {
+      "t": 1792833570137,
+      "roles": { "app": { "rss": 399257600, "pss": 298720256, "cpu": 106, "count": 1 } },
+      "total": { "rss": 399257600, "pss": 298720256, "cpu": 106, "count": 1 }
+    },
+    {
+      "t": 1792833571165,
+      "roles": { "app": { "rss": 400818176, "pss": 300280832, "cpu": 150, "count": 1 } },
+      "total": { "rss": 400818176, "pss": 300280832, "cpu": 150, "count": 1 }
+    },
+    {
+      "t": 1792833572228,
+      "roles": { "app": { "rss": 409231360, "pss": 308758528, "cpu": 193.359375, "count": 1 } },
+      "total": { "rss": 409231360, "pss": 308758528, "cpu": 193.359375, "count": 1 }
+    },
+    {
+      "t": 1792833573318,
+      "roles": {
+        "app": { "rss": 410247168, "pss": 309709824, "cpu": 81.48148148148148, "count": 1 }
+      },
+      "total": { "rss": 410247168, "pss": 309709824, "cpu": 81.48148148148148, "count": 1 }
+    },
+    {
+      "t": 1792833575178,
+      "roles": { "app": { "rss": 412643328, "pss": 312105984, "cpu": 182, "count": 1 } },
+      "total": { "rss": 412643328, "pss": 312105984, "cpu": 182, "count": 1 }
+    },
+    {
+      "t": 1792833576186,
+      "roles": { "app": { "rss": 416985088, "pss": 316281856, "cpu": 150, "count": 1 } },
+      "total": { "rss": 416985088, "pss": 316281856, "cpu": 150, "count": 1 }
+    },
+    {
+      "t": 1792833577257,
+      "roles": {
+        "app": { "rss": 421822464, "pss": 321118208, "cpu": 285.96491228070175, "count": 1 }
+      },
+      "total": { "rss": 421822464, "pss": 321118208, "cpu": 285.96491228070175, "count": 1 }
+    },
+    {
+      "t": 1792833578317,
+      "roles": {
+        "app": { "rss": 422711296, "pss": 322002944, "cpu": 201.19521912350598, "count": 1 }
+      },
+      "total": { "rss": 422711296, "pss": 322002944, "cpu": 201.19521912350598, "count": 1 }
+    },
+    {
+      "t": 1792833579318,
+      "roles": { "app": { "rss": 426786816, "pss": 326078464, "cpu": 176, "count": 1 } },
+      "total": { "rss": 426786816, "pss": 326078464, "cpu": 176, "count": 1 }
+    },
+    {
+      "t": 1792833580512,
+      "roles": {
+        "app": { "rss": 429264896, "pss": 328547328, "cpu": 233.33333333333331, "count": 1 }
+      },
+      "total": { "rss": 429264896, "pss": 328547328, "cpu": 233.33333333333331, "count": 1 }
+    },
+    {
+      "t": 1792833581637,
+      "roles": {
+        "app": { "rss": 432898048, "pss": 331953152, "cpu": 99.67845659163987, "count": 1 }
+      },
+      "total": { "rss": 432898048, "pss": 331953152, "cpu": 99.67845659163987, "count": 1 }
+    },
+    {
+      "t": 1792833583057,
+      "roles": { "app": { "rss": 432562176, "pss": 331615232, "cpu": 148, "count": 1 } },
+      "total": { "rss": 432562176, "pss": 331615232, "cpu": 148, "count": 1 }
+    },
+    {
+      "t": 1792833584117,
+      "roles": { "app": { "rss": 432648192, "pss": 331695104, "cpu": 6, "count": 1 } },
+      "total": { "rss": 432648192, "pss": 331695104, "cpu": 6, "count": 1 }
+    },
+    {
+      "t": 1792833585121,
+      "roles": { "app": { "rss": 433442816, "pss": 332502016, "cpu": 216, "count": 1 } },
+      "total": { "rss": 433442816, "pss": 332502016, "cpu": 216, "count": 1 }
+    },
+    {
+      "t": 1792833586251,
+      "roles": {
+        "app": { "rss": 435888128, "pss": 334689280, "cpu": 173.30677290836653, "count": 1 }
+      },
+      "total": { "rss": 435888128, "pss": 334689280, "cpu": 173.30677290836653, "count": 1 }
+    },
+    {
+      "t": 1792833587320,
+      "roles": {
+        "app": { "rss": 437518336, "pss": 336447488, "cpu": 188.53974121996302, "count": 1 }
+      },
+      "total": { "rss": 437518336, "pss": 336447488, "cpu": 188.53974121996302, "count": 1 }
+    },
+    {
+      "t": 1792833588321,
+      "roles": {
+        "app": { "rss": 439136256, "pss": 337947648, "cpu": 218.00000000000003, "count": 1 }
+      },
+      "total": { "rss": 439136256, "pss": 337947648, "cpu": 218.00000000000003, "count": 1 }
+    },
+    {
+      "t": 1792833589349,
+      "roles": {
+        "app": { "rss": 441524224, "pss": 340432896, "cpu": 168.29745596868884, "count": 1 }
+      },
+      "total": { "rss": 441524224, "pss": 340432896, "cpu": 168.29745596868884, "count": 1 }
+    },
+    {
+      "t": 1792833590362,
+      "roles": {
+        "app": { "rss": 442781696, "pss": 377105408, "cpu": 91.61793372319687, "count": 1 }
+      },
+      "total": { "rss": 442781696, "pss": 377105408, "cpu": 91.61793372319687, "count": 1 }
+    },
+    {
+      "t": 1792833591363,
+      "roles": {
+        "app": { "rss": 444477440, "pss": 387014656, "cpu": 213.57285429141717, "count": 1 }
+      },
+      "total": { "rss": 444477440, "pss": 387014656, "cpu": 213.57285429141717, "count": 1 }
+    },
+    {
+      "t": 1792833592385,
+      "roles": { "app": { "rss": 446197760, "pss": 388877312, "cpu": 282, "count": 1 } },
+      "total": { "rss": 446197760, "pss": 388877312, "cpu": 282, "count": 1 }
+    },
+    {
+      "t": 1792833593386,
+      "roles": {
+        "app": { "rss": 446570496, "pss": 390241280, "cpu": 131.7365269461078, "count": 1 }
+      },
+      "total": { "rss": 446570496, "pss": 390241280, "cpu": 131.7365269461078, "count": 1 }
+    },
+    {
+      "t": 1792833594423,
+      "roles": {
+        "app": { "rss": 450777088, "pss": 397044736, "cpu": 120.07504690431519, "count": 1 }
+      },
+      "total": { "rss": 450777088, "pss": 397044736, "cpu": 120.07504690431519, "count": 1 }
+    },
+    {
+      "t": 1792833595424,
+      "roles": { "app": { "rss": 452452352, "pss": 398720000, "cpu": 158, "count": 1 } },
+      "total": { "rss": 452452352, "pss": 398720000, "cpu": 158, "count": 1 }
+    },
+    {
+      "t": 1792833596425,
+      "roles": {
+        "app": { "rss": 454660096, "pss": 400927744, "cpu": 197.60479041916167, "count": 1 }
+      },
+      "total": { "rss": 454660096, "pss": 400927744, "cpu": 197.60479041916167, "count": 1 }
+    },
+    {
+      "t": 1792833597425,
+      "roles": { "app": { "rss": 457719808, "pss": 403987456, "cpu": 186, "count": 1 } },
+      "total": { "rss": 457719808, "pss": 403987456, "cpu": 186, "count": 1 }
+    },
+    {
+      "t": 1792833598425,
+      "roles": { "app": { "rss": 459362304, "pss": 405510144, "cpu": 256, "count": 1 } },
+      "total": { "rss": 459362304, "pss": 405510144, "cpu": 256, "count": 1 }
+    },
+    {
+      "t": 1792833599426,
+      "roles": {
+        "app": { "rss": 460939264, "pss": 407198720, "cpu": 155.68862275449104, "count": 1 }
+      },
+      "total": { "rss": 460939264, "pss": 407198720, "cpu": 155.68862275449104, "count": 1 }
+    },
+    {
+      "t": 1792833600440,
+      "roles": {
+        "app": { "rss": 462569472, "pss": 408832000, "cpu": 186.87872763419483, "count": 1 }
+      },
+      "total": { "rss": 462569472, "pss": 408832000, "cpu": 186.87872763419483, "count": 1 }
+    },
+    {
+      "t": 1792833602164,
+      "roles": {
+        "app": { "rss": 463589376, "pss": 409851904, "cpu": 102.17755443886097, "count": 1 }
+      },
+      "total": { "rss": 463589376, "pss": 409851904, "cpu": 102.17755443886097, "count": 1 }
+    },
+    {
+      "t": 1792833603554,
+      "roles": {
+        "app": { "rss": 463589376, "pss": 409851904, "cpu": 8.361204013377927, "count": 1 }
+      },
+      "total": { "rss": 463589376, "pss": 409851904, "cpu": 8.361204013377927, "count": 1 }
+    },
+    {
+      "t": 1792833605039,
+      "roles": {
+        "app": { "rss": 464326656, "pss": 410593280, "cpu": 119.12943871706759, "count": 1 }
+      },
+      "total": { "rss": 464326656, "pss": 410593280, "cpu": 119.12943871706759, "count": 1 }
+    },
+    {
+      "t": 1792833606330,
+      "roles": {
+        "app": { "rss": 466653184, "pss": 412894208, "cpu": 107.54716981132073, "count": 1 }
+      },
+      "total": { "rss": 466653184, "pss": 412894208, "cpu": 107.54716981132073, "count": 1 }
+    },
+    {
+      "t": 1792833607335,
+      "roles": {
+        "app": { "rss": 475799552, "pss": 420790272, "cpu": 261.9047619047619, "count": 1 }
+      },
+      "total": { "rss": 475799552, "pss": 420790272, "cpu": 261.9047619047619, "count": 1 }
+    },
+    {
+      "t": 1792833608336,
+      "roles": {
+        "app": { "rss": 481169408, "pss": 426486784, "cpu": 218.00000000000003, "count": 1 }
+      },
+      "total": { "rss": 481169408, "pss": 426486784, "cpu": 218.00000000000003, "count": 1 }
+    },
+    {
+      "t": 1792833609442,
+      "roles": {
+        "app": { "rss": 483516416, "pss": 426244096, "cpu": 117.53731343283582, "count": 1 }
+      },
+      "total": { "rss": 483516416, "pss": 426244096, "cpu": 117.53731343283582, "count": 1 }
+    },
+    {
+      "t": 1792833610443,
+      "roles": {
+        "app": { "rss": 484720640, "pss": 427336704, "cpu": 171.6566866267465, "count": 1 }
+      },
+      "total": { "rss": 484720640, "pss": 427336704, "cpu": 171.6566866267465, "count": 1 }
+    },
+    {
+      "t": 1792833611482,
+      "roles": {
+        "app": { "rss": 492478464, "pss": 434688000, "cpu": 178.10760667903523, "count": 1 }
+      },
+      "total": { "rss": 492478464, "pss": 434688000, "cpu": 178.10760667903523, "count": 1 }
+    },
+    {
+      "t": 1792833612572,
+      "roles": {
+        "app": { "rss": 490360832, "pss": 431122432, "cpu": 140.07782101167314, "count": 1 }
+      },
+      "total": { "rss": 490360832, "pss": 431122432, "cpu": 140.07782101167314, "count": 1 }
+    },
+    {
+      "t": 1792833613603,
+      "roles": {
+        "app": { "rss": 494030848, "pss": 434995200, "cpu": 197.74011299435028, "count": 1 }
+      },
+      "total": { "rss": 494030848, "pss": 434995200, "cpu": 197.74011299435028, "count": 1 }
+    },
+    {
+      "t": 1792833614675,
+      "roles": {
+        "app": { "rss": 496160768, "pss": 437218304, "cpu": 155.06958250497019, "count": 1 }
+      },
+      "total": { "rss": 496160768, "pss": 437218304, "cpu": 155.06958250497019, "count": 1 }
+    },
+    {
+      "t": 1792833615804,
+      "roles": {
+        "app": { "rss": 496513024, "pss": 437431296, "cpu": 165.66866267465068, "count": 1 }
+      },
+      "total": { "rss": 496513024, "pss": 437431296, "cpu": 165.66866267465068, "count": 1 }
+    },
+    {
+      "t": 1792833616862,
+      "roles": {
+        "app": { "rss": 500174848, "pss": 441039872, "cpu": 129.15129151291512, "count": 1 }
+      },
+      "total": { "rss": 500174848, "pss": 441039872, "cpu": 129.15129151291512, "count": 1 }
+    },
+    {
+      "t": 1792833617870,
+      "roles": {
+        "app": { "rss": 498737152, "pss": 432653312, "cpu": 146.24505928853756, "count": 1 }
+      },
+      "total": { "rss": 498737152, "pss": 432653312, "cpu": 146.24505928853756, "count": 1 }
+    },
+    {
+      "t": 1792833618933,
+      "roles": {
+        "app": { "rss": 499200000, "pss": 433107968, "cpu": 114.9012567324955, "count": 1 }
+      },
+      "total": { "rss": 499200000, "pss": 433107968, "cpu": 114.9012567324955, "count": 1 }
+    },
+    {
+      "t": 1792833619938,
+      "roles": { "app": { "rss": 499875840, "pss": 433748992, "cpu": 172, "count": 1 } },
+      "total": { "rss": 499875840, "pss": 433748992, "cpu": 172, "count": 1 }
+    },
+    {
+      "t": 1792833621121,
+      "roles": {
+        "app": { "rss": 499490816, "pss": 421448704, "cpu": 66.07929515418502, "count": 1 }
+      },
+      "total": { "rss": 499490816, "pss": 421448704, "cpu": 66.07929515418502, "count": 1 }
+    },
+    {
+      "t": 1792833622137,
+      "roles": {
+        "app": { "rss": 488435712, "pss": 422304768, "cpu": 124.2603550295858, "count": 1 }
+      },
+      "total": { "rss": 488435712, "pss": 422304768, "cpu": 124.2603550295858, "count": 1 }
+    },
+    {
+      "t": 1792833623138,
+      "roles": { "app": { "rss": 490573824, "pss": 424431616, "cpu": 142, "count": 1 } },
+      "total": { "rss": 490573824, "pss": 424431616, "cpu": 142, "count": 1 }
+    },
+    {
+      "t": 1792833624144,
+      "roles": {
+        "app": { "rss": 492486656, "pss": 426346496, "cpu": 120.79207920792079, "count": 1 }
+      },
+      "total": { "rss": 492486656, "pss": 426346496, "cpu": 120.79207920792079, "count": 1 }
+    },
+    {
+      "t": 1792833625271,
+      "roles": {
+        "app": { "rss": 495194112, "pss": 429046784, "cpu": 107.78443113772455, "count": 1 }
+      },
+      "total": { "rss": 495194112, "pss": 429046784, "cpu": 107.78443113772455, "count": 1 }
+    },
+    {
+      "t": 1792833626272,
+      "roles": {
+        "app": { "rss": 495915008, "pss": 429799424, "cpu": 171.6566866267465, "count": 1 }
+      },
+      "total": { "rss": 495915008, "pss": 429799424, "cpu": 171.6566866267465, "count": 1 }
+    },
+    {
+      "t": 1792833627467,
+      "roles": {
+        "app": { "rss": 497098752, "pss": 424160256, "cpu": 153.27102803738316, "count": 1 }
+      },
+      "total": { "rss": 497098752, "pss": 424160256, "cpu": 153.27102803738316, "count": 1 }
+    },
+    {
+      "t": 1792833628541,
+      "roles": { "app": { "rss": 498106368, "pss": 403657728, "cpu": 136, "count": 1 } },
+      "total": { "rss": 498106368, "pss": 403657728, "cpu": 136, "count": 1 }
+    },
+    {
+      "t": 1792833629629,
+      "roles": { "app": { "rss": 503676928, "pss": 402783232, "cpu": 146, "count": 1 } },
+      "total": { "rss": 503676928, "pss": 402783232, "cpu": 146, "count": 1 }
+    },
+    {
+      "t": 1792833630638,
+      "roles": {
+        "app": { "rss": 506630144, "pss": 405649408, "cpu": 143.7125748502994, "count": 1 }
+      },
+      "total": { "rss": 506630144, "pss": 405649408, "cpu": 143.7125748502994, "count": 1 }
+    },
+    {
+      "t": 1792833631646,
+      "roles": {
+        "app": { "rss": 507977728, "pss": 406887424, "cpu": 139.4422310756972, "count": 1 }
+      },
+      "total": { "rss": 507977728, "pss": 406887424, "cpu": 139.4422310756972, "count": 1 }
+    },
+    {
+      "t": 1792833632646,
+      "roles": { "app": { "rss": 508346368, "pss": 406862848, "cpu": 138, "count": 1 } },
+      "total": { "rss": 508346368, "pss": 406862848, "cpu": 138, "count": 1 }
+    },
+    {
+      "t": 1792833633651,
+      "roles": {
+        "app": { "rss": 512585728, "pss": 411102208, "cpu": 150.4950495049505, "count": 1 }
+      },
+      "total": { "rss": 512585728, "pss": 411102208, "cpu": 150.4950495049505, "count": 1 }
+    },
+    {
+      "t": 1792833634653,
+      "roles": {
+        "app": { "rss": 515481600, "pss": 417840128, "cpu": 157.37051792828686, "count": 1 }
+      },
+      "total": { "rss": 515481600, "pss": 417840128, "cpu": 157.37051792828686, "count": 1 }
+    },
+    {
+      "t": 1792833635715,
+      "roles": {
+        "app": { "rss": 525594624, "pss": 424111104, "cpu": 42.62877442273535, "count": 1 }
+      },
+      "total": { "rss": 525594624, "pss": 424111104, "cpu": 42.62877442273535, "count": 1 }
+    },
+    {
+      "t": 1792833636737,
+      "roles": {
+        "app": { "rss": 520105984, "pss": 418543616, "cpu": 115.45988258317024, "count": 1 }
+      },
+      "total": { "rss": 520105984, "pss": 418543616, "cpu": 115.45988258317024, "count": 1 }
+    },
+    {
+      "t": 1792833637740,
+      "roles": { "app": { "rss": 530264064, "pss": 428701696, "cpu": 130, "count": 1 } },
+      "total": { "rss": 530264064, "pss": 428701696, "cpu": 130, "count": 1 }
+    },
+    {
+      "t": 1792833638748,
+      "roles": {
+        "app": { "rss": 531120128, "pss": 429557760, "cpu": 177.5147928994083, "count": 1 }
+      },
+      "total": { "rss": 531120128, "pss": 429557760, "cpu": 177.5147928994083, "count": 1 }
+    },
+    {
+      "t": 1792833639748,
+      "roles": { "app": { "rss": 530534400, "pss": 428972032, "cpu": 136, "count": 1 } },
+      "total": { "rss": 530534400, "pss": 428972032, "cpu": 136, "count": 1 }
+    },
+    {
+      "t": 1792833640749,
+      "roles": { "app": { "rss": 536158208, "pss": 435326976, "cpu": 128, "count": 1 } },
+      "total": { "rss": 536158208, "pss": 435326976, "cpu": 128, "count": 1 }
+    },
+    {
+      "t": 1792833641756,
+      "roles": { "app": { "rss": 537223168, "pss": 435554304, "cpu": 238, "count": 1 } },
+      "total": { "rss": 537223168, "pss": 435554304, "cpu": 238, "count": 1 }
+    },
+    {
+      "t": 1792833642757,
+      "roles": {
+        "app": { "rss": 538238976, "pss": 436670464, "cpu": 133.73253493013974, "count": 1 }
+      },
+      "total": { "rss": 538238976, "pss": 436670464, "cpu": 133.73253493013974, "count": 1 }
+    },
+    {
+      "t": 1792833643761,
+      "roles": {
+        "app": { "rss": 541839360, "pss": 440269824, "cpu": 184.8906560636183, "count": 1 }
+      },
+      "total": { "rss": 541839360, "pss": 440269824, "cpu": 184.8906560636183, "count": 1 }
+    },
+    {
+      "t": 1792833644788,
+      "roles": {
+        "app": { "rss": 550862848, "pss": 449294336, "cpu": 103.71819960861058, "count": 1 }
+      },
+      "total": { "rss": 550862848, "pss": 449294336, "cpu": 103.71819960861058, "count": 1 }
+    },
+    {
+      "t": 1792833645793,
+      "roles": { "app": { "rss": 550543360, "pss": 448964608, "cpu": 128, "count": 1 } },
+      "total": { "rss": 550543360, "pss": 448964608, "cpu": 128, "count": 1 }
+    },
+    {
+      "t": 1792833646818,
+      "roles": {
+        "app": { "rss": 554745856, "pss": 453167104, "cpu": 133.58778625954199, "count": 1 }
+      },
+      "total": { "rss": 554745856, "pss": 453167104, "cpu": 133.58778625954199, "count": 1 }
+    },
+    {
+      "t": 1792833647866,
+      "roles": {
+        "app": { "rss": 556556288, "pss": 454975488, "cpu": 145.48802946593003, "count": 1 }
+      },
+      "total": { "rss": 556556288, "pss": 454975488, "cpu": 145.48802946593003, "count": 1 }
+    },
+    {
+      "t": 1792833648874,
+      "roles": {
+        "app": { "rss": 555024384, "pss": 451591168, "cpu": 81.83632734530939, "count": 1 }
+      },
+      "total": { "rss": 555024384, "pss": 451591168, "cpu": 81.83632734530939, "count": 1 }
+    },
+    {
+      "t": 1792833649876,
+      "roles": {
+        "app": { "rss": 555053056, "pss": 453471232, "cpu": 139.4422310756972, "count": 1 }
+      },
+      "total": { "rss": 555053056, "pss": 453471232, "cpu": 139.4422310756972, "count": 1 }
+    },
+    {
+      "t": 1792833650878,
+      "roles": {
+        "app": { "rss": 559382528, "pss": 453928960, "cpu": 189.2430278884462, "count": 1 }
+      },
+      "total": { "rss": 559382528, "pss": 453928960, "cpu": 189.2430278884462, "count": 1 }
+    },
+    {
+      "t": 1792833651887,
+      "roles": {
+        "app": { "rss": 560656384, "pss": 459074560, "cpu": 157.17092337917487, "count": 1 }
+      },
+      "total": { "rss": 560656384, "pss": 459074560, "cpu": 157.17092337917487, "count": 1 }
+    },
+    {
+      "t": 1792833653146,
+      "roles": {
+        "app": { "rss": 552243200, "pss": 450661376, "cpu": 156.99208443271766, "count": 1 }
+      },
+      "total": { "rss": 552243200, "pss": 450661376, "cpu": 156.99208443271766, "count": 1 }
+    },
+    {
+      "t": 1792833654149,
+      "roles": { "app": { "rss": 548724736, "pss": 482388992, "cpu": 148, "count": 1 } },
+      "total": { "rss": 548724736, "pss": 482388992, "cpu": 148, "count": 1 }
+    },
+    {
+      "t": 1792833655149,
+      "roles": { "app": { "rss": 550240256, "pss": 491913216, "cpu": 180, "count": 1 } },
+      "total": { "rss": 550240256, "pss": 491913216, "cpu": 180, "count": 1 }
+    },
+    {
+      "t": 1792833656150,
+      "roles": { "app": { "rss": 554147840, "pss": 495937536, "cpu": 166, "count": 1 } },
+      "total": { "rss": 554147840, "pss": 495937536, "cpu": 166, "count": 1 }
+    },
+    {
+      "t": 1792833657162,
+      "roles": { "app": { "rss": 554553344, "pss": 496586752, "cpu": 106, "count": 1 } },
+      "total": { "rss": 554553344, "pss": 496586752, "cpu": 106, "count": 1 }
+    },
+    {
+      "t": 1792833658163,
+      "roles": {
+        "app": { "rss": 555163648, "pss": 500080640, "cpu": 161.67664670658684, "count": 1 }
+      },
+      "total": { "rss": 555163648, "pss": 500080640, "cpu": 161.67664670658684, "count": 1 }
+    },
+    {
+      "t": 1792833659163,
+      "roles": { "app": { "rss": 558387200, "pss": 503305216, "cpu": 186, "count": 1 } },
+      "total": { "rss": 558387200, "pss": 503305216, "cpu": 186, "count": 1 }
+    },
+    {
+      "t": 1792833660164,
+      "roles": {
+        "app": { "rss": 562434048, "pss": 507352064, "cpu": 259.48103792415174, "count": 1 }
+      },
+      "total": { "rss": 562434048, "pss": 507352064, "cpu": 259.48103792415174, "count": 1 }
+    },
+    {
+      "t": 1792833661255,
+      "roles": {
+        "app": { "rss": 564969472, "pss": 509887488, "cpu": 203.5928143712575, "count": 1 }
+      },
+      "total": { "rss": 564969472, "pss": 509887488, "cpu": 203.5928143712575, "count": 1 }
+    },
+    {
+      "t": 1792833662268,
+      "roles": {
+        "app": { "rss": 565051392, "pss": 509969408, "cpu": 72.97830374753451, "count": 1 }
+      },
+      "total": { "rss": 565051392, "pss": 509969408, "cpu": 72.97830374753451, "count": 1 }
+    },
+    {
+      "t": 1792833663299,
+      "roles": {
+        "app": { "rss": 567144448, "pss": 512062464, "cpu": 135.49618320610685, "count": 1 }
+      },
+      "total": { "rss": 567144448, "pss": 512062464, "cpu": 135.49618320610685, "count": 1 }
+    },
+    {
+      "t": 1792833664303,
+      "roles": { "app": { "rss": 571256832, "pss": 516219904, "cpu": 126, "count": 1 } },
+      "total": { "rss": 571256832, "pss": 516219904, "cpu": 126, "count": 1 }
+    },
+    {
+      "t": 1792833665304,
+      "roles": { "app": { "rss": 574443520, "pss": 519356416, "cpu": 136, "count": 1 } },
+      "total": { "rss": 574443520, "pss": 519356416, "cpu": 136, "count": 1 }
+    },
+    {
+      "t": 1792833666307,
+      "roles": {
+        "app": { "rss": 580673536, "pss": 525588480, "cpu": 307.38522954091815, "count": 1 }
+      },
+      "total": { "rss": 580673536, "pss": 525588480, "cpu": 307.38522954091815, "count": 1 }
+    },
+    {
+      "t": 1792833667308,
+      "roles": {
+        "app": { "rss": 583757824, "pss": 528672768, "cpu": 165.66866267465068, "count": 1 }
+      },
+      "total": { "rss": 583757824, "pss": 528672768, "cpu": 165.66866267465068, "count": 1 }
+    },
+    {
+      "t": 1792833668308,
+      "roles": { "app": { "rss": 586305536, "pss": 531214336, "cpu": 156, "count": 1 } },
+      "total": { "rss": 586305536, "pss": 531214336, "cpu": 156, "count": 1 }
+    },
+    {
+      "t": 1792833669311,
+      "roles": {
+        "app": { "rss": 592003072, "pss": 536911872, "cpu": 231.53692614770458, "count": 1 }
+      },
+      "total": { "rss": 592003072, "pss": 536911872, "cpu": 231.53692614770458, "count": 1 }
+    },
+    {
+      "t": 1792833670313,
+      "roles": { "app": { "rss": 595701760, "pss": 540616704, "cpu": 144, "count": 1 } },
+      "total": { "rss": 595701760, "pss": 540616704, "cpu": 144, "count": 1 }
+    },
+    {
+      "t": 1792833671429,
+      "roles": {
+        "app": { "rss": 597942272, "pss": 542857216, "cpu": 94.46254071661238, "count": 1 }
+      },
+      "total": { "rss": 597942272, "pss": 542857216, "cpu": 94.46254071661238, "count": 1 }
+    },
+    {
+      "t": 1792833672471,
+      "roles": {
+        "app": { "rss": 604913664, "pss": 548563968, "cpu": 178.36812144212522, "count": 1 }
+      },
+      "total": { "rss": 604913664, "pss": 548563968, "cpu": 178.36812144212522, "count": 1 }
+    },
+    {
+      "t": 1792833673473,
+      "roles": {
+        "app": { "rss": 615690240, "pss": 557942784, "cpu": 110.00000000000001, "count": 1 }
+      },
+      "total": { "rss": 615690240, "pss": 557942784, "cpu": 110.00000000000001, "count": 1 }
+    },
+    {
+      "t": 1792833674497,
+      "roles": {
+        "app": { "rss": 614879232, "pss": 557078528, "cpu": 100.7905138339921, "count": 1 }
+      },
+      "total": { "rss": 614879232, "pss": 557078528, "cpu": 100.7905138339921, "count": 1 }
+    },
+    {
+      "t": 1792833675530,
+      "roles": {
+        "app": { "rss": 634978304, "pss": 576049152, "cpu": 144.4652908067542, "count": 1 }
+      },
+      "total": { "rss": 634978304, "pss": 576049152, "cpu": 144.4652908067542, "count": 1 }
+    },
+    {
+      "t": 1792833676537,
+      "roles": {
+        "app": { "rss": 639561728, "pss": 580505600, "cpu": 262.32741617357004, "count": 1 }
+      },
+      "total": { "rss": 639561728, "pss": 580505600, "cpu": 262.32741617357004, "count": 1 }
+    },
+    {
+      "t": 1792833677538,
+      "roles": { "app": { "rss": 627466240, "pss": 568396800, "cpu": 202, "count": 1 } },
+      "total": { "rss": 627466240, "pss": 568396800, "cpu": 202, "count": 1 }
+    },
+    {
+      "t": 1792833678538,
+      "roles": { "app": { "rss": 631558144, "pss": 572477440, "cpu": 126, "count": 1 } },
+      "total": { "rss": 631558144, "pss": 572477440, "cpu": 126, "count": 1 }
+    },
+    {
+      "t": 1792833679538,
+      "roles": { "app": { "rss": 651468800, "pss": 585366528, "cpu": 130, "count": 1 } },
+      "total": { "rss": 651468800, "pss": 585366528, "cpu": 130, "count": 1 }
+    },
+    {
+      "t": 1792833680544,
+      "roles": {
+        "app": { "rss": 647933952, "pss": 582964224, "cpu": 127.49003984063745, "count": 1 }
+      },
+      "total": { "rss": 647933952, "pss": 582964224, "cpu": 127.49003984063745, "count": 1 }
+    },
+    {
+      "t": 1792833681560,
+      "roles": {
+        "app": { "rss": 650244096, "pss": 584004608, "cpu": 115.99999999999999, "count": 1 }
+      },
+      "total": { "rss": 650244096, "pss": 584004608, "cpu": 115.99999999999999, "count": 1 }
+    },
+    {
+      "t": 1792833682564,
+      "roles": { "app": { "rss": 646918144, "pss": 580670464, "cpu": 140, "count": 1 } },
+      "total": { "rss": 646918144, "pss": 580670464, "cpu": 140, "count": 1 }
+    },
+    {
+      "t": 1792833683573,
+      "roles": {
+        "app": { "rss": 651300864, "pss": 578409472, "cpu": 135.5599214145383, "count": 1 }
+      },
+      "total": { "rss": 651300864, "pss": 578409472, "cpu": 135.5599214145383, "count": 1 }
+    },
+    {
+      "t": 1792833684575,
+      "roles": {
+        "app": { "rss": 642424832, "pss": 576161792, "cpu": 91.81636726546907, "count": 1 }
+      },
+      "total": { "rss": 642424832, "pss": 576161792, "cpu": 91.81636726546907, "count": 1 }
+    },
+    {
+      "t": 1792833685577,
+      "roles": {
+        "app": { "rss": 637046784, "pss": 567316480, "cpu": 147.41035856573706, "count": 1 }
+      },
+      "total": { "rss": 637046784, "pss": 567316480, "cpu": 147.41035856573706, "count": 1 }
+    },
+    {
+      "t": 1792833686577,
+      "roles": { "app": { "rss": 649265152, "pss": 556068864, "cpu": 156, "count": 1 } },
+      "total": { "rss": 649265152, "pss": 556068864, "cpu": 156, "count": 1 }
+    },
+    {
+      "t": 1792833687585,
+      "roles": {
+        "app": { "rss": 662331392, "pss": 561348608, "cpu": 157.48031496062993, "count": 1 }
+      },
+      "total": { "rss": 662331392, "pss": 561348608, "cpu": 157.48031496062993, "count": 1 }
+    },
+    {
+      "t": 1792833688591,
+      "roles": {
+        "app": { "rss": 661008384, "pss": 559866880, "cpu": 101.59362549800797, "count": 1 }
+      },
+      "total": { "rss": 661008384, "pss": 559866880, "cpu": 101.59362549800797, "count": 1 }
+    },
+    {
+      "t": 1792833689595,
+      "roles": {
+        "app": { "rss": 662503424, "pss": 560920576, "cpu": 145.12922465208746, "count": 1 }
+      },
+      "total": { "rss": 662503424, "pss": 560920576, "cpu": 145.12922465208746, "count": 1 }
+    },
+    {
+      "t": 1792833690656,
+      "roles": {
+        "app": { "rss": 663203840, "pss": 561649664, "cpu": 136.4522417153996, "count": 1 }
+      },
+      "total": { "rss": 663203840, "pss": 561649664, "cpu": 136.4522417153996, "count": 1 }
+    },
+    {
+      "t": 1792833691753,
+      "roles": {
+        "app": { "rss": 665346048, "pss": 563792896, "cpu": 103.58565737051792, "count": 1 }
+      },
+      "total": { "rss": 665346048, "pss": 563792896, "cpu": 103.58565737051792, "count": 1 }
+    },
+    {
+      "t": 1792833692759,
+      "roles": {
+        "app": { "rss": 664588288, "pss": 565385216, "cpu": 127.49003984063745, "count": 1 }
+      },
+      "total": { "rss": 664588288, "pss": 565385216, "cpu": 127.49003984063745, "count": 1 }
+    },
+    {
+      "t": 1792833693770,
+      "roles": {
+        "app": { "rss": 667422720, "pss": 565868544, "cpu": 127.45098039215685, "count": 1 }
+      },
+      "total": { "rss": 667422720, "pss": 565868544, "cpu": 127.45098039215685, "count": 1 }
+    },
+    {
+      "t": 1792833694771,
+      "roles": { "app": { "rss": 672796672, "pss": 571242496, "cpu": 138, "count": 1 } },
+      "total": { "rss": 672796672, "pss": 571242496, "cpu": 138, "count": 1 }
+    },
+    {
+      "t": 1792833695771,
+      "roles": { "app": { "rss": 677232640, "pss": 575677440, "cpu": 164, "count": 1 } },
+      "total": { "rss": 677232640, "pss": 575677440, "cpu": 164, "count": 1 }
+    },
+    {
+      "t": 1792833696772,
+      "roles": {
+        "app": { "rss": 680595456, "pss": 579041280, "cpu": 149.7005988023952, "count": 1 }
+      },
+      "total": { "rss": 680595456, "pss": 579041280, "cpu": 149.7005988023952, "count": 1 }
+    },
+    {
+      "t": 1792833697776,
+      "roles": {
+        "app": { "rss": 682598400, "pss": 581039104, "cpu": 110.00000000000001, "count": 1 }
+      },
+      "total": { "rss": 682598400, "pss": 581039104, "cpu": 110.00000000000001, "count": 1 }
+    },
+    {
+      "t": 1792833698777,
+      "roles": {
+        "app": { "rss": 687222784, "pss": 585663488, "cpu": 145.7085828343313, "count": 1 }
+      },
+      "total": { "rss": 687222784, "pss": 585663488, "cpu": 145.7085828343313, "count": 1 }
+    },
+    {
+      "t": 1792833699777,
+      "roles": { "app": { "rss": 690294784, "pss": 588735488, "cpu": 180, "count": 1 } },
+      "total": { "rss": 690294784, "pss": 588735488, "cpu": 180, "count": 1 }
+    },
+    {
+      "t": 1792833700778,
+      "roles": {
+        "app": { "rss": 692387840, "pss": 590828544, "cpu": 131.7365269461078, "count": 1 }
+      },
+      "total": { "rss": 692387840, "pss": 590828544, "cpu": 131.7365269461078, "count": 1 }
+    },
+    {
+      "t": 1792833701805,
+      "roles": {
+        "app": { "rss": 696958976, "pss": 595398656, "cpu": 154.58015267175574, "count": 1 }
+      },
+      "total": { "rss": 696958976, "pss": 595398656, "cpu": 154.58015267175574, "count": 1 }
+    },
+    {
+      "t": 1792833702808,
+      "roles": { "app": { "rss": 699629568, "pss": 598063104, "cpu": 118, "count": 1 } },
+      "total": { "rss": 699629568, "pss": 598063104, "cpu": 118, "count": 1 }
+    },
+    {
+      "t": 1792833703809,
+      "roles": {
+        "app": { "rss": 702140416, "pss": 600609792, "cpu": 173.65269461077844, "count": 1 }
+      },
+      "total": { "rss": 702140416, "pss": 600609792, "cpu": 173.65269461077844, "count": 1 }
+    },
+    {
+      "t": 1792833704810,
+      "roles": { "app": { "rss": 684371968, "pss": 582823936, "cpu": 104, "count": 1 } },
+      "total": { "rss": 684371968, "pss": 582823936, "cpu": 104, "count": 1 }
+    },
+    {
+      "t": 1792833705811,
+      "roles": { "app": { "rss": 678391808, "pss": 576820224, "cpu": 106, "count": 1 } },
+      "total": { "rss": 678391808, "pss": 576820224, "cpu": 106, "count": 1 }
+    },
+    {
+      "t": 1792833706951,
+      "roles": { "app": { "rss": 679542784, "pss": 577970176, "cpu": 106.25, "count": 1 } },
+      "total": { "rss": 679542784, "pss": 577970176, "cpu": 106.25, "count": 1 }
+    },
+    {
+      "t": 1792833707957,
+      "roles": {
+        "app": { "rss": 682934272, "pss": 581362688, "cpu": 114.62450592885374, "count": 1 }
+      },
+      "total": { "rss": 682934272, "pss": 581362688, "cpu": 114.62450592885374, "count": 1 }
+    },
+    {
+      "t": 1792833708962,
+      "roles": {
+        "app": { "rss": 683167744, "pss": 581587968, "cpu": 119.28429423459244, "count": 1 }
+      },
+      "total": { "rss": 683167744, "pss": 581587968, "cpu": 119.28429423459244, "count": 1 }
+    },
+    {
+      "t": 1792833710026,
+      "roles": {
+        "app": { "rss": 686870528, "pss": 585298944, "cpu": 137.7245508982036, "count": 1 }
+      },
+      "total": { "rss": 686870528, "pss": 585298944, "cpu": 137.7245508982036, "count": 1 }
+    },
+    {
+      "t": 1792833711045,
+      "roles": {
+        "app": { "rss": 691867648, "pss": 592311296, "cpu": 112.00000000000001, "count": 1 }
+      },
+      "total": { "rss": 691867648, "pss": 592311296, "cpu": 112.00000000000001, "count": 1 }
+    },
+    {
+      "t": 1792833712046,
+      "roles": {
+        "app": { "rss": 695472128, "pss": 637142016, "cpu": 167.6646706586826, "count": 1 }
+      },
+      "total": { "rss": 695472128, "pss": 637142016, "cpu": 167.6646706586826, "count": 1 }
+    },
+    {
+      "t": 1792833713047,
+      "roles": { "app": { "rss": 696799232, "pss": 638584832, "cpu": 98, "count": 1 } },
+      "total": { "rss": 696799232, "pss": 638584832, "cpu": 98, "count": 1 }
+    },
+    {
+      "t": 1792833714048,
+      "roles": { "app": { "rss": 701575168, "pss": 643360768, "cpu": 154, "count": 1 } },
+      "total": { "rss": 701575168, "pss": 643360768, "cpu": 154, "count": 1 }
+    },
+    {
+      "t": 1792833715075,
+      "roles": {
+        "app": { "rss": 708034560, "pss": 652948480, "cpu": 169.20152091254752, "count": 1 }
+      },
+      "total": { "rss": 708034560, "pss": 652948480, "cpu": 169.20152091254752, "count": 1 }
+    },
+    {
+      "t": 1792833716114,
+      "roles": {
+        "app": { "rss": 708583424, "pss": 653497344, "cpu": 193.3085501858736, "count": 1 }
+      },
+      "total": { "rss": 708583424, "pss": 653497344, "cpu": 193.3085501858736, "count": 1 }
+    },
+    {
+      "t": 1792833717279,
+      "roles": {
+        "app": { "rss": 705773568, "pss": 650854400, "cpu": 235.10971786833858, "count": 1 }
+      },
+      "total": { "rss": 705773568, "pss": 650854400, "cpu": 235.10971786833858, "count": 1 }
+    },
+    {
+      "t": 1792833718320,
+      "roles": {
+        "app": { "rss": 719552512, "pss": 664466432, "cpu": 220.37037037037032, "count": 1 }
+      },
+      "total": { "rss": 719552512, "pss": 664466432, "cpu": 220.37037037037032, "count": 1 }
+    },
+    {
+      "t": 1792833719401,
+      "roles": {
+        "app": { "rss": 715042816, "pss": 659956736, "cpu": 174.82517482517483, "count": 1 }
+      },
+      "total": { "rss": 715042816, "pss": 659956736, "cpu": 174.82517482517483, "count": 1 }
+    },
+    {
+      "t": 1792833720404,
+      "roles": {
+        "app": { "rss": 719802368, "pss": 664716288, "cpu": 155.37848605577688, "count": 1 }
+      },
+      "total": { "rss": 719802368, "pss": 664716288, "cpu": 155.37848605577688, "count": 1 }
+    },
+    {
+      "t": 1792833721405,
+      "roles": {
+        "app": { "rss": 720900096, "pss": 665919488, "cpu": 143.7125748502994, "count": 1 }
+      },
+      "total": { "rss": 720900096, "pss": 665919488, "cpu": 143.7125748502994, "count": 1 }
+    },
+    {
+      "t": 1792833723524,
+      "roles": {
+        "app": { "rss": 705269760, "pss": 650142720, "cpu": 61.89555125725339, "count": 1 }
+      },
+      "total": { "rss": 705269760, "pss": 650142720, "cpu": 61.89555125725339, "count": 1 }
+    },
+    {
+      "t": 1792833724527,
+      "roles": {
+        "app": { "rss": 702226432, "pss": 647132160, "cpu": 262.9482071713148, "count": 1 }
+      },
+      "total": { "rss": 702226432, "pss": 647132160, "cpu": 262.9482071713148, "count": 1 }
+    },
+    {
+      "t": 1792833725533,
+      "roles": {
+        "app": { "rss": 702238720, "pss": 647111680, "cpu": 207.58483033932137, "count": 1 }
+      },
+      "total": { "rss": 702238720, "pss": 647111680, "cpu": 207.58483033932137, "count": 1 }
+    },
+    {
+      "t": 1792833726537,
+      "roles": {
+        "app": { "rss": 702259200, "pss": 647132160, "cpu": 290.2584493041749, "count": 1 }
+      },
+      "total": { "rss": 702259200, "pss": 647132160, "cpu": 290.2584493041749, "count": 1 }
+    },
+    {
+      "t": 1792833727539,
+      "roles": { "app": { "rss": 702238720, "pss": 647111680, "cpu": 282, "count": 1 } },
+      "total": { "rss": 702238720, "pss": 647111680, "cpu": 282, "count": 1 }
+    },
+    {
+      "t": 1792833728671,
+      "roles": {
+        "app": { "rss": 702238720, "pss": 647111680, "cpu": 67.86427145708583, "count": 1 }
+      },
+      "total": { "rss": 702238720, "pss": 647111680, "cpu": 67.86427145708583, "count": 1 }
+    },
+    {
+      "t": 1792833729676,
+      "roles": {
+        "app": { "rss": 702230528, "pss": 647103488, "cpu": 9.980039920159681, "count": 1 }
+      },
+      "total": { "rss": 702230528, "pss": 647103488, "cpu": 9.980039920159681, "count": 1 }
+    },
+    {
+      "t": 1792833730676,
+      "roles": { "app": { "rss": 702230528, "pss": 647103488, "cpu": 8, "count": 1 } },
+      "total": { "rss": 702230528, "pss": 647103488, "cpu": 8, "count": 1 }
+    },
+    {
+      "t": 1792833731737,
+      "roles": {
+        "app": { "rss": 702226432, "pss": 647099392, "cpu": 11.928429423459244, "count": 1 }
+      },
+      "total": { "rss": 702226432, "pss": 647099392, "cpu": 11.928429423459244, "count": 1 }
+    },
+    {
+      "t": 1792833732737,
+      "roles": { "app": { "rss": 701968384, "pss": 646611968, "cpu": 12, "count": 1 } },
+      "total": { "rss": 701968384, "pss": 646611968, "cpu": 12, "count": 1 }
+    },
+    {
+      "t": 1792833733739,
+      "roles": {
+        "app": { "rss": 673292288, "pss": 618165248, "cpu": 25.89641434262948, "count": 1 }
+      },
+      "total": { "rss": 673292288, "pss": 618165248, "cpu": 25.89641434262948, "count": 1 }
+    },
+    {
+      "t": 1792833734852,
+      "roles": {
+        "app": { "rss": 654360576, "pss": 599233536, "cpu": 124.10071942446041, "count": 1 }
+      },
+      "total": { "rss": 654360576, "pss": 599233536, "cpu": 124.10071942446041, "count": 1 }
+    },
+    {
+      "t": 1792833735856,
+      "roles": {
+        "app": { "rss": 629116928, "pss": 573989888, "cpu": 7.984031936127744, "count": 1 }
+      },
+      "total": { "rss": 629116928, "pss": 573989888, "cpu": 7.984031936127744, "count": 1 }
+    },
+    {
+      "t": 1792833736856,
+      "roles": { "app": { "rss": 629116928, "pss": 573989888, "cpu": 12, "count": 1 } },
+      "total": { "rss": 629116928, "pss": 573989888, "cpu": 12, "count": 1 }
+    },
+    {
+      "t": 1792833737862,
+      "roles": {
+        "app": { "rss": 629129216, "pss": 574002176, "cpu": 7.905138339920949, "count": 1 }
+      },
+      "total": { "rss": 629129216, "pss": 574002176, "cpu": 7.905138339920949, "count": 1 }
+    },
+    {
+      "t": 1792833738864,
+      "roles": {
+        "app": { "rss": 629133312, "pss": 574006272, "cpu": 15.968063872255488, "count": 1 }
+      },
+      "total": { "rss": 629133312, "pss": 574006272, "cpu": 15.968063872255488, "count": 1 }
+    },
+    {
+      "t": 1792833739871,
+      "roles": {
+        "app": { "rss": 629141504, "pss": 574022656, "cpu": 106.50887573964498, "count": 1 }
+      },
+      "total": { "rss": 629141504, "pss": 574022656, "cpu": 106.50887573964498, "count": 1 }
+    },
+    {
+      "t": 1792833740873,
+      "roles": {
+        "app": { "rss": 629133312, "pss": 574006272, "cpu": 7.984031936127744, "count": 1 }
+      },
+      "total": { "rss": 629133312, "pss": 574006272, "cpu": 7.984031936127744, "count": 1 }
+    },
+    {
+      "t": 1792833741874,
+      "roles": { "app": { "rss": 629133312, "pss": 574006272, "cpu": 10, "count": 1 } },
+      "total": { "rss": 629133312, "pss": 574006272, "cpu": 10, "count": 1 }
+    },
+    {
+      "t": 1792833742889,
+      "roles": {
+        "app": { "rss": 629133312, "pss": 574006272, "cpu": 15.968063872255488, "count": 1 }
+      },
+      "total": { "rss": 629133312, "pss": 574006272, "cpu": 15.968063872255488, "count": 1 }
+    },
+    {
+      "t": 1792833743900,
+      "roles": { "app": { "rss": 629133312, "pss": 574006272, "cpu": 10, "count": 1 } },
+      "total": { "rss": 629133312, "pss": 574006272, "cpu": 10, "count": 1 }
+    },
+    {
+      "t": 1792833744902,
+      "roles": {
+        "app": { "rss": 629133312, "pss": 574006272, "cpu": 7.984031936127744, "count": 1 }
+      },
+      "total": { "rss": 629133312, "pss": 574006272, "cpu": 7.984031936127744, "count": 1 }
+    },
+    {
+      "t": 1792833745902,
+      "roles": { "app": { "rss": 629133312, "pss": 574006272, "cpu": 22, "count": 1 } },
+      "total": { "rss": 629133312, "pss": 574006272, "cpu": 22, "count": 1 }
+    },
+    {
+      "t": 1792833746904,
+      "roles": {
+        "app": { "rss": 629133312, "pss": 574008320, "cpu": 5.9880239520958085, "count": 1 }
+      },
+      "total": { "rss": 629133312, "pss": 574008320, "cpu": 5.9880239520958085, "count": 1 }
+    },
+    {
+      "t": 1792833747904,
+      "roles": {
+        "app": { "rss": 629088256, "pss": 573963264, "cpu": 14.000000000000002, "count": 1 }
+      },
+      "total": { "rss": 629088256, "pss": 573963264, "cpu": 14.000000000000002, "count": 1 }
+    },
+    {
+      "t": 1792833748908,
+      "roles": { "app": { "rss": 629088256, "pss": 573963264, "cpu": 12, "count": 1 } },
+      "total": { "rss": 629088256, "pss": 573963264, "cpu": 12, "count": 1 }
+    },
+    {
+      "t": 1792833750039,
+      "roles": {
+        "app": { "rss": 629088256, "pss": 573955072, "cpu": 43.63001745200699, "count": 1 }
+      },
+      "total": { "rss": 629088256, "pss": 573955072, "cpu": 43.63001745200699, "count": 1 }
+    },
+    {
+      "t": 1792833751048,
+      "roles": {
+        "app": { "rss": 629100544, "pss": 571739136, "cpu": 169.66067864271457, "count": 1 }
+      },
+      "total": { "rss": 629100544, "pss": 571739136, "cpu": 169.66067864271457, "count": 1 }
+    },
+    {
+      "t": 1792833752182,
+      "roles": {
+        "app": { "rss": 629088256, "pss": 571216896, "cpu": 4.73186119873817, "count": 1 }
+      },
+      "total": { "rss": 629088256, "pss": 571216896, "cpu": 4.73186119873817, "count": 1 }
+    },
+    {
+      "t": 1792833753247,
+      "roles": {
+        "app": { "rss": 629211136, "pss": 571339776, "cpu": 3.816793893129771, "count": 1 }
+      },
+      "total": { "rss": 629211136, "pss": 571339776, "cpu": 3.816793893129771, "count": 1 }
+    },
+    {
+      "t": 1792833754247,
+      "roles": { "app": { "rss": 629211136, "pss": 571005952, "cpu": 12, "count": 1 } },
+      "total": { "rss": 629211136, "pss": 571005952, "cpu": 12, "count": 1 }
+    },
+    {
+      "t": 1792833755252,
+      "roles": { "app": { "rss": 629248000, "pss": 570163200, "cpu": 12, "count": 1 } },
+      "total": { "rss": 629248000, "pss": 570163200, "cpu": 12, "count": 1 }
+    },
+    {
+      "t": 1792833756382,
+      "roles": { "app": { "rss": 629272576, "pss": 570121216, "cpu": 54, "count": 1 } },
+      "total": { "rss": 629272576, "pss": 570121216, "cpu": 54, "count": 1 }
+    },
+    {
+      "t": 1792833757501,
+      "roles": {
+        "app": { "rss": 629325824, "pss": 570174464, "cpu": 36.0655737704918, "count": 1 }
+      },
+      "total": { "rss": 629325824, "pss": 570174464, "cpu": 36.0655737704918, "count": 1 }
+    },
+    {
+      "t": 1792833758501,
+      "roles": { "app": { "rss": 629342208, "pss": 570168320, "cpu": 16, "count": 1 } },
+      "total": { "rss": 629342208, "pss": 570168320, "cpu": 16, "count": 1 }
+    },
+    {
+      "t": 1792833759518,
+      "roles": {
+        "app": { "rss": 629358592, "pss": 570115072, "cpu": 147.28682170542635, "count": 1 }
+      },
+      "total": { "rss": 629358592, "pss": 570115072, "cpu": 147.28682170542635, "count": 1 }
+    }
+  ]
+}
