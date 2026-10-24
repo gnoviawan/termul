@@ -13,8 +13,14 @@ import {
 } from './favorite-models'
 import { SelectorPanel } from './SelectorPanel'
 import { SelectorPanelV2, type SelectorPanelV2Props } from './SelectorPanelV2'
-import type { ModelCatalog } from './selector-model'
+import {
+  AGENT_TRACK,
+  AGENT_TRACK_CLASS,
+  agentTrackCapacity,
+  type ModelCatalog
+} from './selector-model'
 import type { SelectorSource } from './selector-source'
+import { PICKER_LABEL, PICKER_ROW, PICKER_SURFACE } from './selector-tokens'
 
 // jsdom omits `document.elementFromPoint`; floating-ui calls it.
 if (typeof document.elementFromPoint !== 'function') {
@@ -342,6 +348,111 @@ describe('SelectorPanelV2 Edit flyout', () => {
     fireEvent.click(within(flyout).getByRole('menuitemradio', { name: '1M' }))
     expect(onSetConfig).toHaveBeenCalledWith('context', '1m')
     expect(screen.getByTestId('selector-edit-flyout')).toBeInTheDocument()
+  })
+})
+
+const classes = (el: Element | null | undefined): string[] => (el?.className ?? '').split(/\s+/)
+
+describe('SelectorPanelV2 sizes: flyout matches the list', () => {
+  it('flyout choices, labels and switch use the same tokens as the panel rows', async () => {
+    const onToggleFast = vi.fn()
+    render(
+      <Panel
+        {...props({
+          fastMode: FAST,
+          onToggleFast,
+          favoritesStore: storeOf([[CURSOR.id, 'sonnet']])
+        })}
+      />
+    )
+    const row = classes(activeRow())
+    const flyout = await openEdit()
+    // The flyout is portaled out of the panel, so it carries the text size itself.
+    expect(classes(within(flyout).getByRole('menu'))).toContain(PICKER_ROW.text)
+    const choices = [
+      ...within(flyout).getAllByRole('menuitemradio'),
+      within(flyout).getByRole('menuitemcheckbox', { name: 'Fast mode' })
+    ]
+    for (const choice of choices) {
+      for (const token of [
+        PICKER_ROW.text,
+        PICKER_ROW.height,
+        PICKER_ROW.padX,
+        PICKER_ROW.radius
+      ]) {
+        expect(classes(choice)).toContain(token)
+        expect(row).toContain(token)
+      }
+    }
+    // Thinking and Context are styled like the list's own group labels.
+    const thinking = within(flyout).getByText('Thinking')
+    expect(thinking.className).toBe(PICKER_LABEL)
+    expect(screen.getByText('Favorites').className).toBe(PICKER_LABEL)
+    // The check is the list's 14px; the switch is the small 28x16 one.
+    expect(
+      within(flyout).getByRole('menuitemradio', { name: 'High' }).querySelector('svg')
+    ).toHaveAttribute('width', '14')
+    const mark = within(flyout)
+      .getByRole('menuitemcheckbox', { name: 'Fast mode' })
+      .querySelector('[data-switch-size]')
+    expect(mark).toHaveAttribute('data-switch-size', 'sm')
+    expect(classes(mark)).toEqual(expect.arrayContaining(['h-4', 'w-7']))
+    // The toggle sits under a full-width separator, not a bordered row.
+    expect(within(flyout).getByRole('separator')).toHaveClass('border-t', 'border-border')
+    // Same radius as the panel; hugs its content with a 180px floor.
+    // (The test id sits on the positioned shell; the surface is its animated child.)
+    const surface = classes(flyout.firstElementChild)
+    expect(surface).toEqual(expect.arrayContaining([PICKER_SURFACE.radius, 'min-w-45']))
+    expect(surface).not.toContain('w-44')
+  })
+})
+
+describe('SelectorPanelV2 no horizontal overflow', () => {
+  it('the list clips sideways and every model name truncates inside its row', () => {
+    render(<Panel {...props()} />)
+    const list = screen.getByTestId('selector-list')
+    expect(classes(list)).toEqual(
+      expect.arrayContaining(['min-w-0', 'overflow-y-auto', 'overflow-x-hidden'])
+    )
+    const names = list.querySelectorAll('[data-row-name]')
+    expect(names.length).toBeGreaterThan(0)
+    for (const name of names) {
+      // `relative` holds the sr-only agent name inside the clipped span.
+      expect(classes(name)).toEqual(
+        expect.arrayContaining(['relative', 'min-w-0', 'flex-1', 'truncate'])
+      )
+    }
+  })
+
+  it('a very long model name keeps its star and Edit buttons in the row', () => {
+    const long = 'Claude Opus 4.7 with 1M context and extended thinking, preview build '.repeat(3)
+    const model = select('model', 'Model', 'opus', [
+      ['opus', long],
+      ['sonnet', 'Claude Sonnet']
+    ])
+    render(<Panel {...props({ modelOption: model, favoritesStore: storeOf([]) })} />)
+    const row = screen.getByRole('button', { name: long.trim(), pressed: true })
+    const fav = row.closest<HTMLElement>('[class*="group/fav"]')
+    expect(classes(fav)).toContain('min-w-0')
+    const star = within(fav as HTMLElement).getByRole('button', { name: 'Add to favorites' })
+    expect(star).toBeInTheDocument()
+    expect(star).not.toHaveAttribute('hidden')
+    // Laid over a slot the row always reserves (shrink-0), so a long name
+    // truncates before it instead of pushing it out of the 300px panel.
+    expect(classes(star)).toEqual(expect.arrayContaining(['absolute', 'right-7.5', 'w-5']))
+    const slot = row.querySelector('[data-row-name] + span[aria-hidden="true"]')
+    expect(classes(slot)).toEqual(expect.arrayContaining(['shrink-0', 'w-5']))
+    const name = row.querySelector('[data-row-name]')
+    expect(classes(name)).toEqual(expect.arrayContaining(['min-w-0', 'truncate']))
+    const edit = screen.getByTestId('selector-edit')
+    // Present and drawn: not hidden, not screen-reader only, never squeezed out.
+    expect(edit).toBeInTheDocument()
+    expect(edit).not.toHaveAttribute('hidden')
+    expect(classes(edit)).not.toContain('sr-only')
+    expect(classes(edit)).toContain('shrink-0')
+    expect(edit.parentElement).toContainElement(row)
+    expect(classes(edit.parentElement)).toContain('min-w-0')
+    expect(classes(row)).toEqual(expect.arrayContaining(['min-w-0', 'flex-1']))
   })
 })
 
@@ -903,6 +1014,24 @@ describe('SelectorPanelV2 agent order and overflow', () => {
     const at = names.map((n) => text.indexOf(n))
     expect(at.every((i) => i >= 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
+  })
+
+  it('renders exactly agentTrackCapacity rail tabs (9 + More), sized by the classes the capacity reads', () => {
+    render(<Panel {...props({ agentRail: 'left', source: many() })} />)
+    const capacity = agentTrackCapacity({ rail: 'left', touch: false, width: null })
+    expect(capacity).toBe(10)
+    const rail = screen.getByRole('tablist', { name: 'Agents' })
+    const tabs = within(rail).getAllByRole('tab')
+    expect(tabs).toHaveLength(capacity)
+    expect(tabs.at(-1)).toHaveAccessibleName('More agents')
+    // The px behind the capacity are the classes on screen: 288 / 8 / 28.
+    expect(AGENT_TRACK).toMatchObject({ listMaxHeight: 288, railPadding: 8, railPitch: 28 })
+    expect(rail.className.split(' ')).toContain(AGENT_TRACK_CLASS.railPadding)
+    expect(AGENT_TRACK_CLASS.railPadding).toBe('py-1')
+    for (const tab of tabs) expect(tab.className.split(' ')).toContain('size-7')
+    expect(AGENT_TRACK_CLASS.railTab).toBe('size-7')
+    expect(screen.getByTestId('selector-list').className.split(' ')).toContain('max-h-72')
+    expect(AGENT_TRACK_CLASS.listMaxHeight).toBe('max-h-72')
   })
 
   it('shows no More when every agent fits', () => {

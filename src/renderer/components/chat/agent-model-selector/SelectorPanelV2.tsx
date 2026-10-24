@@ -47,6 +47,7 @@ import {
   TabGlyph
 } from './SelectorRows'
 import {
+  AGENT_TRACK_CLASS,
   type AgentTab,
   agentTrackCapacity,
   type CatalogModel,
@@ -54,6 +55,7 @@ import {
   type ModelCatalog,
   splitContextOption
 } from './selector-model'
+import { PICKER_ICON, PICKER_LABEL } from './selector-tokens'
 import { useRejectedOptionValues } from './use-option-values'
 import { useSelectorPanelState } from './use-selector-panel-state'
 
@@ -85,7 +87,7 @@ export interface SelectorPanelV2Props extends SelectorPanelProps {
 }
 
 function SectionLabel({ children }: { children: ReactNode }): React.JSX.Element {
-  return <div className="truncate px-2 pb-1 pt-2 text-xs text-muted-foreground">{children}</div>
+  return <div className={PICKER_LABEL}>{children}</div>
 }
 
 function DenseModelRow({
@@ -141,7 +143,10 @@ function DenseModelRow({
         >
           {glyph}
         </span>
-        <span className="min-w-0 flex-1 truncate">
+        {/* `relative` keeps the sr-only agent name inside the clipped name:
+            unpositioned, it lands after the full name, past the row, and
+            widens the scrolling list. */}
+        <span data-row-name="" className="relative min-w-0 flex-1 truncate">
           {name}
           {agentName ? <span className="sr-only">{` · ${agentName}`}</span> : null}
         </span>
@@ -150,7 +155,7 @@ function DenseModelRow({
           <span aria-hidden="true" className={cn('shrink-0', touch ? 'w-11' : 'w-5')} />
         ) : null}
         <Check
-          size={14}
+          size={PICKER_ICON.check}
           aria-hidden="true"
           className={cn('shrink-0', selected ? 'opacity-100' : 'opacity-0')}
         />
@@ -329,7 +334,8 @@ function AgentTabStrip({
           ? // `box-content`: the hairline sits outside the 40px (56px touch) column,
             // so a 28px (44px) tab has 6px on each side and its centre is the rail's.
             cn(
-              'box-content shrink-0 flex-col items-center border-r border-border py-1',
+              'box-content shrink-0 flex-col items-center border-r border-border',
+              AGENT_TRACK_CLASS.railPadding,
               touch ? 'w-14' : 'w-10'
             )
           : cn('border-b border-border', touch ? 'px-3' : 'px-1')
@@ -352,7 +358,7 @@ function AgentTabStrip({
             vertical
               ? // A square as tall as a list row (28px), so each icon sits on the
                 // list's row grid; 6px radius like the rows.
-                cn('rounded-md', touch ? 'size-11' : 'size-7')
+                cn('rounded-md', touch ? AGENT_TRACK_CLASS.railTabTouch : AGENT_TRACK_CLASS.railTab)
               : cn('flex-1 rounded-t-md', touch ? 'h-11' : 'h-8'),
             // Icons keep their colour (brand or foreground); state reads from
             // the icon's opacity, as the active fill alone is too faint.
@@ -497,7 +503,13 @@ function editSections(
       kind: 'toggle',
       id: 'fast',
       label: 'Fast mode',
-      icon: <Zap size={14} aria-hidden="true" className="shrink-0 text-muted-foreground" />,
+      icon: (
+        <Zap
+          size={PICKER_ICON.glyph}
+          aria-hidden="true"
+          className="shrink-0 text-muted-foreground"
+        />
+      ),
       checked: props.fastOn,
       onToggle: () => onToggleFast()
     })
@@ -984,7 +996,13 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           animate={{ opacity: 1 }}
           transition={quick(reduced)}
           onKeyDown={onListKeyDown}
-          className={cn('max-h-72 min-w-0 flex-1 overflow-y-auto overscroll-contain', pad, 'py-1')}
+          className={cn(
+            AGENT_TRACK_CLASS.listMaxHeight,
+            // Rows truncate inside it; overflow-x-hidden only backs that up.
+            'min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain',
+            pad,
+            'py-1'
+          )}
         >
           {body}
         </motion.div>
