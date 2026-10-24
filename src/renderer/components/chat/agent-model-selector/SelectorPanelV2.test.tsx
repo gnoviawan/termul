@@ -20,7 +20,7 @@ import {
   type ModelCatalog
 } from './selector-model'
 import type { SelectorSource } from './selector-source'
-import { PICKER_LABEL, PICKER_ROW, PICKER_SURFACE } from './selector-tokens'
+import { PICKER_LABEL, PICKER_ROW, PICKER_ROW_NAME_PULL, PICKER_SURFACE } from './selector-tokens'
 
 // jsdom omits `document.elementFromPoint`; floating-ui calls it.
 if (typeof document.elementFromPoint !== 'function') {
@@ -641,7 +641,7 @@ describe('SelectorPanelV2 selected-row check', () => {
   it('the name sits 2px closer to the agent glyph than the row gap', () => {
     render(<Panel {...props()} />)
     for (const name of document.querySelectorAll('[data-row-name]')) {
-      expect(classes(name)).toContain('-ml-0.5')
+      expect(classes(name)).toContain(PICKER_ROW_NAME_PULL)
     }
   })
 })
@@ -1470,6 +1470,64 @@ describe('SelectorPanelV2 agent icon on every row', () => {
       ['Claude Opus', CURSOR.id],
       ['Opus via Claude · Claude Agent', CLAUDE.id]
     ])
+  })
+})
+
+describe('SelectorPanelV2 agent row description', () => {
+  const NAME = 'Opus via Claude · Claude Agent'
+  const search = (): void => {
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search models and agents' }), {
+      target: { value: 'opus' }
+    })
+  }
+  /** The visible tooltip box (the Radix content; it holds the hidden copy too). */
+  const visibleTip = (): string | undefined =>
+    screen.queryByRole('tooltip')?.parentElement?.textContent ?? undefined
+
+  it('the agent, already in the name, is not read again: no aria-describedby', async () => {
+    knownCatalogs.current = new Map([[CLAUDE.id, CLAUDE_CATALOG]])
+    render(<Panel {...props({ agentRail: 'left' })} />)
+    search()
+    const row = screen.getByRole('button', { name: NAME })
+    fireEvent.focus(row)
+    const tip = await screen.findByRole('tooltip')
+    expect(row).toHaveAccessibleName(NAME)
+    expect(row).not.toHaveAttribute('aria-describedby')
+    expect(row).toHaveAccessibleDescription('')
+    expect(tip.textContent).not.toContain('Claude Agent')
+    // The visual tooltip still says name, then agent.
+    expect(
+      visibleTip()
+        ?.split('\n\n')
+        .map((line) => line.trim())
+    ).toEqual(['Opus via Claude', 'Claude Agent'])
+  })
+
+  it('with a description, it is described by the description alone', async () => {
+    knownCatalogs.current = new Map([
+      [
+        CLAUDE.id,
+        {
+          ...CLAUDE_CATALOG,
+          options: [{ value: 'claude-opus', name: 'Opus via Claude', description: 'Most capable' }]
+        } as ModelCatalog
+      ]
+    ])
+    render(<Panel {...props({ agentRail: 'left' })} />)
+    search()
+    const row = screen.getByRole('button', { name: NAME })
+    fireEvent.focus(row)
+    await screen.findByRole('tooltip')
+    expect(row).toHaveAccessibleName(NAME)
+    expect(row).toHaveAttribute('aria-describedby')
+    expect(row).toHaveAccessibleDescription('Most capable')
+    // The visual tooltip is unchanged: name, agent, description (the box also
+    // holds the hidden copy, so the description shows up twice in its text).
+    expect(
+      visibleTip()
+        ?.split('\n\n')
+        .map((line) => line.trim())
+    ).toEqual(['Opus via Claude', 'Claude Agent', 'Most capableMost capable'])
   })
 })
 
