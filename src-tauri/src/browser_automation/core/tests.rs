@@ -221,6 +221,8 @@ pub(super) struct FakeEngine {
     sensitivity: Mutex<Value>,
     /// What it reports inside a reachable child frame.
     frame_sensitivity: Mutex<Value>,
+    /// The path the focused-frame helper reports in the main frame.
+    pub(super) focused_frame: Mutex<Value>,
     /// Every `set_input_files` call.
     files_set: Mutex<Vec<FilesSet>>,
 }
@@ -265,6 +267,7 @@ impl FakeEngine {
             frames: Mutex::new(Vec::new()),
             sensitivity: Mutex::new(json!({})),
             frame_sensitivity: Mutex::new(json!({})),
+            focused_frame: Mutex::new(Value::Null),
             files_set: Mutex::new(Vec::new()),
         }
     }
@@ -337,6 +340,7 @@ impl BrowserEngine for FakeEngine {
                 json!({ "ok": true })
             }
             "sensitivity" => self.sensitivity.lock().clone(),
+            "focused_frame" => self.focused_frame.lock().clone(),
             "viewport" => json!({ "w": 800.0, "h": 600.0 }),
             "focused_editable" => json!({ "editable": true }),
             _ => json!({ "ok": true }),

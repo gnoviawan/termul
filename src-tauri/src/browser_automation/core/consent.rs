@@ -515,7 +515,14 @@ impl DesktopBrowserHost {
             )
             .await?;
         self.authorize_frames(token, session_id, call, &project_id, profile, deadline)
-            .await
+            .await?;
+        let keys_to_focus = matches!(verb, Verb::Press | Verb::Type)
+            && call.args.get("ref").and_then(Value::as_str).is_none();
+        if keys_to_focus {
+            self.authorize_focused_frame(token, session_id, call, &project_id, profile, deadline)
+                .await?;
+        }
+        Ok(())
     }
 }
 

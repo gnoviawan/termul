@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Checkout outside form fixture</title>
+</head>
+<body>
+<main>
+<h1>Checkout outside form fixture</h1>
+<form id="card" autocomplete="off" onsubmit="return false">
+<input name="getBoundingClientRect" type="hidden" value="shadows the form's own method">
+<input id="number" autocomplete="cc-number" aria-label="Card number">
+<input id="cvc" name="cvc" aria-label="Security code">
+</form>
+<select id="quantity" aria-label="Quantity">
+<option value="1">1</option>
+<option value="2">2</option>
+</select>
+<input id="gift" type="checkbox" aria-label="Gift wrap">
+<button id="pay" type="button">Pay now</button>
+<img name="nodeType" alt="">
+<img name="elementFromPoint" alt="">
+<img name="host" alt="">
+</main>
+<script>
+document.getElementById('pay').addEventListener('click', function () {
+  location.href = '/form-done.html?paid=1';
+});
+</script>
+</body>
+</html>

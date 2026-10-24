@@ -247,8 +247,9 @@ async fn focused_password_submit_asked(c: &Ctx<'_>) -> CaseResult {
 }
 
 /// `check` on a submit styled as a switch clicks it, so it submits the
-/// password form like any click. The form also holds a field named
-/// `elements`, which shadows `form.elements` for every script.
+/// password form like any click. The form also holds fields named
+/// `elements` and `nodeType`, which shadow those properties of the form for
+/// every script.
 pub async fn check_password_submit(c: &Ctx<'_>) -> CaseResult {
     asking_before_passwords(c, check_password_submit_asked(c)).await
 }
@@ -283,6 +284,29 @@ async fn formless_password_submit_asked(c: &Ctx<'_>) -> CaseResult {
     )?;
     expect_tickets(c, &[ActionClass::PasswordSubmit], "formless password submit")?;
     c.expect_url("/login-formless.html", "the refused submit").await
+}
+
+/// A pay button outside the card form, wired up by page script, submits
+/// the card all the same. Changing a control that sits outside every form
+/// asks nothing. Fields and images on the page shadow properties of the
+/// card form (`getBoundingClientRect`) and of the document (`nodeType`,
+/// `elementFromPoint`, `host`) that the host's helpers read.
+pub async fn payment_outside_form(c: &Ctx<'_>) -> CaseResult {
+    c.open("/checkout-outside-form.html", "Checkout outside form fixture").await?;
+    let quantity = c.ref_of("combobox", "Quantity").await?;
+    c.call("select_option", json!({ "ref": quantity, "value": "2" })).await?;
+    let gift = c.ref_of("checkbox", "Gift wrap").await?;
+    c.call("check", json!({ "ref": gift })).await?;
+    expect_tickets(c, &[], "changing controls outside the card form")?;
+    let pay = c.ref_of("button", "Pay now").await?;
+    expect_refusal(
+        c.call("click", json!({ "ref": pay })).await,
+        "confirmation_required",
+        "unattended",
+        "a pay button outside the card form",
+    )?;
+    expect_tickets(c, &[ActionClass::PaymentSubmit], "payment outside the card form")?;
+    c.expect_url("/checkout-outside-form.html", "the refused payment").await
 }
 
 /// Once the agent read the page, Enter on a link that carries data to
@@ -414,13 +438,6 @@ pub async fn download_preapproved(c: &Ctx<'_>) -> CaseResult {
 /// length once it grows past the cap. Pre-approved, so only the cap stops
 /// them, and nothing is left under app data.
 pub async fn download_size_cap(c: &Ctx<'_>) -> CaseResult {
-    if cfg!(target_os = "macos") {
-        return Err(Failure {
-            code: "capability_unavailable".into(),
-            reason: Some("download_progress".into()),
-            message: "tauri's WKWebView hook reports no download progress; the cap applies when it finishes".into(),
-        });
-    }
     preapprove(c, Scope::App, ActionClass::Download).await?;
     c.open("/download-big.html", "Big download fixture").await?;
     let dir = c.engine.downloads_dir(&c.session);

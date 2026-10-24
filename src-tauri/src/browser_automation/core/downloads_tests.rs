@@ -52,6 +52,7 @@ fn pending(tab: &str, url: &str) -> Pending {
         path: PathBuf::from("/x"),
         origin: CanonicalOrigin::parse("https://files.example").unwrap(),
         profile: TabProfile::Global,
+        started: Instant::now(),
     }
 }
 
@@ -77,4 +78,34 @@ fn a_session_starts_at_most_its_quota_and_finishes_match_tab_and_url() {
 
     downloads.forget("s1");
     assert!(downloads.admit("s1", pending("agent-a", "https://files.example/1")));
+}
+
+#[test]
+fn a_download_stops_past_the_cap_when_it_stalls_or_at_its_deadline() {
+    let held = pending("t1", "https://files.example/big.bin");
+    let start = held.started;
+    let at = |secs: u64| start + std::time::Duration::from_secs(secs);
+    let downloads = Downloads::default();
+    assert!(downloads.admit("s1", held));
+    let progress = |received: u64, announced: Option<u64>, now: Instant| {
+        let size = DownloadSize { received, announced };
+        downloads.progress("t1", "https://files.example/big.bin", size, now)
+    };
+    assert_eq!(progress(0, Some(MAX_DOWNLOAD_BYTES + 1), at(0)), Err("too_large"));
+    assert_eq!(progress(MAX_DOWNLOAD_BYTES + 1, None, at(1)), Err("too_large"));
+    assert_eq!(progress(0, Some(MAX_DOWNLOAD_BYTES), at(1)), Ok(()), "announced at the cap");
+    assert_eq!(progress(10, Some(MAX_DOWNLOAD_BYTES), at(50)), Ok(()));
+    assert_eq!(progress(10, Some(MAX_DOWNLOAD_BYTES), at(110)), Ok(()), "60 s since the last new byte");
+    assert_eq!(progress(10, Some(MAX_DOWNLOAD_BYTES), at(111)), Err("idle"));
+    let total = budgets::DOWNLOAD_TOTAL.as_secs();
+    for (n, second) in (112..total).step_by(30).enumerate() {
+        assert_eq!(progress(20 + n as u64, None, at(second)), Ok(()), "growing at {second} s");
+    }
+    assert_eq!(progress(MAX_DOWNLOAD_BYTES, None, at(total + 1)), Err("deadline"));
+    let elsewhere = DownloadSize { received: 5, announced: None };
+    assert_eq!(
+        downloads.progress("t1", "https://files.example/other.bin", elsewhere, at(total + 1)),
+        Ok(()),
+        "a download the host does not hold meets only the cap"
+    );
 }

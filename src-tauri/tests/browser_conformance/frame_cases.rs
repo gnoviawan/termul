@@ -147,6 +147,23 @@ async fn frame_focused_password_submit_asked(c: &Ctx<'_>) -> CaseResult {
     expect_tickets(c, &[ActionClass::PasswordSubmit], "focused password submit in a cross-origin frame")
 }
 
+/// A key without a ref goes to the field focused inside a cross-origin
+/// frame, once the host authorized the frame's origin.
+pub async fn frame_focused_key(c: &Ctx<'_>) -> CaseResult {
+    let outline = cross_frame(c, "frame-inner.html", "Inner button").await?;
+    let field = ref_in(&outline, "textbox", "Inner field")?;
+    c.call("fill", json!({ "ref": field, "value": "Ada" })).await?;
+    c.call("press", json!({ "key": "x" })).await?;
+    c.click("button", "Inner button").await?;
+    let done = "Inner result: clicked [Adax]";
+    let after = c.outline_with(done).await?;
+    if after.contains(done) {
+        Ok(())
+    } else {
+        Err(mismatch(format!("the key did not reach the focused frame: {after}")))
+    }
+}
+
 /// An upload pre-approved for the frame's origin runs without a prompt and
 /// lands on the frame's own file input.
 pub async fn frame_upload(c: &Ctx<'_>) -> CaseResult {

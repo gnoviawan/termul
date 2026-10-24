@@ -18,7 +18,7 @@ use super::authz::HopVerdict;
 use super::consent::OriginRequest;
 use super::events::label_prefix;
 use super::ports::TabProfile;
-use super::reply::{engine_error, parse_snapshot, PageSnapshot, SnapshotItem};
+use super::reply::{engine_error, parse_snapshot, PageSnapshot, SnapshotItem, ERR_CAPABILITY};
 use super::tabs::RefNode;
 use super::stop::StopToken;
 use super::{BrowserError, DesktopBrowserHost};
@@ -196,6 +196,57 @@ impl DesktopBrowserHost {
             self.gate.authorize(token, request).await?;
         }
         Ok(())
+    }
+
+    /// Authorize the origin of the cross-origin frame that holds focus,
+    /// for a key or text sent to whatever has focus: the input lands in
+    /// that frame, as an action through a ref minted there would. A focused
+    /// frame the engine cannot reach has no origin to check, so the call is
+    /// refused.
+    pub(super) async fn authorize_focused_frame(
+        &self,
+        token: &StopToken,
+        session_id: &str,
+        call: &BrowserCall,
+        project_id: &str,
+        profile: TabProfile,
+        deadline: Deadline,
+    ) -> Result<(), BrowserError> {
+        let Ok(label) = self.resolve_tab(session_id, &call.args) else {
+            return Ok(());
+        };
+        let Some(mut path) = self.eval(&label, assets::focused_frame()).await?.as_str().map(str::to_string) else {
+            return Ok(());
+        };
+        let unreachable = || {
+            BrowserError::new(ERR_CAPABILITY, "focus is in a cross-origin frame this engine cannot reach; pass a ref")
+                .with_reason("focused_frame_unreachable")
+        };
+        let frames = self.engine.child_frames(&label).await.unwrap_or_default();
+        let mut parent: Option<String> = None;
+        for _ in 0..=MAX_FRAME_DEPTH {
+            let child = frames
+                .iter()
+                .find(|f| f.parent == parent && f.owner_path == path)
+                .ok_or_else(unreachable)?;
+            let inner = self.eval_frame(&label, Some(&child.id), assets::focused_frame()).await?;
+            if let Some(next) = inner.as_str() {
+                path = next.to_string();
+                parent = Some(child.id.clone());
+                continue;
+            }
+            let out = self.eval_frame(&label, Some(&child.id), assets::location()).await?;
+            let request = OriginRequest {
+                session_id,
+                project_id,
+                url: out.as_str().unwrap_or_default(),
+                element: call.element.as_deref(),
+                profile,
+                deadline,
+            };
+            return self.gate.authorize(token, request).await;
+        }
+        Err(unreachable())
     }
 
     async fn frame_outline(&self, label: &str, frame: &ChildFrame) -> Option<PageSnapshot> {
