@@ -142,6 +142,14 @@ and `src/compat/shims`.
   wrapping row of word runs.
 - `events.ts` turns DOM handlers into GPUIX listeners and bubbles mouse
   events through ancestors, which GPUIX does not do past a filled box.
+- `hover.ts` gives `mouseenter`/`mouseleave` DOM semantics. GPUIX ends a hit
+  test at the first absolutely placed or filled interactive box, and that box
+  blocks its own ancestors too, so a rail row lost its hover as soon as its
+  hover-revealed action strip painted under the pointer, hid the strip, and
+  looped. Every such box now reports its GPUI hover and hands clicks on to
+  its ancestors (`addOccluderListeners`), and an element counts as hovered
+  while GPUI hovers it or a blocking box inside it. Presses (`mousedown`,
+  `mouseup`) are not handed on.
 - `dom-node.ts` is what `ref`, `event.target` and `document.activeElement`
   return. Tree queries read a mirror of the retained tree.
 - `host.tsx` is the only per-element component. It is used only for
@@ -182,6 +190,16 @@ Tools:
   dropped on a pane. Output goes to `/tmp/gpuix-d1/dnd/`.
 - `bun tools/dnd/parity.ts` shoots the same pane drag in the web client and
   GPUIX (two tabs, right zone held, split) and diffs them.
+- `bun tools/clickloss/run.ts [--trials N] [--modes auto,auto-move,xtest,xtest-nofocus]`
+  clicks rail rows, the hover-revealed gear and the fade of the action strip
+  on a seeded server through GPUIX automation and through real X input
+  (XTEST), and exits non-zero on any lost click. `COMPAT_TRACE_POINTER=1`
+  (set by the tool) logs every compat pointer listener to stderr; the logs
+  land in `$GPUIX_STATE_ROOT` (default `/tmp/gpuix-h1`). Real X input under
+  Xvfb is a valid harness: Xvfb has XInput 2.0 with a master pointer, and
+  GPUI's "Found no xinput mouse pointers" only means no pointer has a scroll
+  class (`tools/clickloss/xi-devices.py` prints them), so presses and motion
+  arrive as from a mouse.
 
 - `bun tools/compat/parity.ts [fixture…] --port N` diffs StatusBar, ShellRail,
   ChatMessage and ConfirmDialog against the web build. Output goes to
