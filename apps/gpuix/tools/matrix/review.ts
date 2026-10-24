@@ -87,7 +87,7 @@ export const REVIEWS: Record<string, Review> = {
     differences: [
       'When the gear opens Project settings, it shows General with the same fields in both.',
       BACKDROP,
-      'In GPUIX the click on the gear often does nothing: it failed in 8 of 9 G3 runs, with or without a hover on the row first. The gear shows only while its row is hovered (hidden group-hover:flex), and once the pointer has moved, no mouse-down reaches a compat listener at all. A plain click on a rail row has the same problem with real X input (--x11-input): 4 of 5 runs did not switch projects without the C3 Reorder change, and 2 of 9 with it. Cause not found.'
+      'In GPUIX the click on the gear often does nothing: it failed in 10 of 11 G3 runs, with or without a hover on the row first. The gear shows only while its row is hovered (hidden group-hover:flex), and once the pointer has moved, no mouse-down reaches a compat listener at all. A plain click on a rail row has the same problem with real X input (--x11-input): 4 of 5 runs did not switch projects without the C3 Reorder change, and 2 of 9 with it. Cause not found.'
     ],
     cause: 'needs diagnosis',
     unit: 'press after hover lost (unassigned)',
