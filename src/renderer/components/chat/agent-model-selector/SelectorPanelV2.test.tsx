@@ -248,7 +248,7 @@ const FAST = {
 
 /** The active (checked) model row. */
 const activeRow = (): HTMLElement =>
-  screen.getByRole('button', { name: 'Claude Opus', pressed: true })
+  screen.getByRole('button', { name: 'Claude Opus, thinking High', pressed: true })
 
 async function openEdit(): Promise<HTMLElement> {
   const edit = screen.getByTestId('selector-edit')
@@ -431,7 +431,9 @@ describe('SelectorPanelV2 no horizontal overflow', () => {
       ['sonnet', 'Claude Sonnet']
     ])
     render(<Panel {...props({ modelOption: model, favoritesStore: storeOf([]) })} />)
-    const row = screen.getByRole('button', { name: long.trim(), pressed: true })
+    const row = screen.getByRole('button', { pressed: true })
+    // The real name, then the level; read once.
+    expect(row).toHaveAccessibleName(`${long.trim()} , thinking High`)
     const fav = row.closest<HTMLElement>('[class*="group/fav"]')
     expect(classes(fav)).toContain('min-w-0')
     const star = within(fav as HTMLElement).getByRole('button', { name: 'Add to favorites' })
@@ -440,10 +442,15 @@ describe('SelectorPanelV2 no horizontal overflow', () => {
     // Laid over a slot the row always reserves (shrink-0), so a long name
     // truncates before it instead of pushing it out of the 300px panel.
     expect(classes(star)).toEqual(expect.arrayContaining(['absolute', 'right-7.5', 'w-5']))
-    const slot = row.querySelector('[data-row-name] + span[aria-hidden="true"]')
+    const slot = row.querySelector('[data-row-thinking] + span[aria-hidden="true"]')
     expect(classes(slot)).toEqual(expect.arrayContaining(['shrink-0', 'w-5']))
     const name = row.querySelector('[data-row-name]')
     expect(classes(name)).toEqual(expect.arrayContaining(['min-w-0', 'truncate']))
+    // The Thinking level stays whole beside the truncating name.
+    const level = row.querySelector('[data-row-thinking]')
+    expect(level).toHaveTextContent('High')
+    expect(classes(level)).toEqual(expect.arrayContaining(['shrink-0', 'whitespace-nowrap']))
+    expect(classes(level)).not.toContain('sr-only')
     const edit = screen.getByTestId('selector-edit')
     // Present and drawn: not hidden, not screen-reader only, never squeezed out.
     expect(edit).toBeInTheDocument()
@@ -453,6 +460,103 @@ describe('SelectorPanelV2 no horizontal overflow', () => {
     expect(edit.parentElement).toContainElement(row)
     expect(classes(edit.parentElement)).toContain('min-w-0')
     expect(classes(row)).toEqual(expect.arrayContaining(['min-w-0', 'flex-1']))
+  })
+})
+
+describe('SelectorPanelV2 Thinking level on the selected row', () => {
+  const levels = (): HTMLElement[] =>
+    Array.from(
+      screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('[data-row-thinking]')
+    )
+
+  it('shows only on the selected row, after the name, muted and aria-hidden', () => {
+    render(<Panel {...props()} />)
+    expect(levels()).toHaveLength(1)
+    const [level] = levels()
+    expect(activeRow()).toContainElement(level ?? null)
+    expect(level).toHaveTextContent('High')
+    expect(level).toHaveAttribute('aria-hidden', 'true')
+    expect(classes(level)).toEqual(
+      expect.arrayContaining([
+        'shrink-0',
+        'whitespace-nowrap',
+        'tabular-nums',
+        'text-xs',
+        'text-muted-foreground'
+      ])
+    )
+    // Name, then the level, then the check.
+    const name = activeRow().querySelector('[data-row-name]')
+    expect(name?.nextElementSibling).toBe(level)
+    expect(screen.getByRole('button', { name: 'Claude Sonnet' })).not.toContainElement(
+      level ?? null
+    )
+  })
+
+  it("keeps the model's real name in the accessible name, read once", () => {
+    const model = select('model', 'Model', 'opus', [['opus', 'Claude 4.7 Opus Thinking']])
+    const effort = select(
+      'thought_level',
+      'Effort',
+      'xhigh',
+      [
+        ['high', 'High'],
+        ['xhigh', 'Extra High']
+      ],
+      'thought_level'
+    )
+    render(<Panel {...props({ modelOption: model, thoughtLevel: effort, effortValue: 'xhigh' })} />)
+    const row = screen.getByRole('button', { pressed: true })
+    expect(row).toHaveAccessibleName('Claude 4.7 Opus Thinking, thinking Extra High')
+    expect(row.querySelector('[data-row-thinking]')).toHaveTextContent('Extra High')
+  })
+
+  it('updates after Thinking changes in the Edit flyout', async () => {
+    function Live(): React.JSX.Element {
+      const [effort, setEffort] = useState('high')
+      return <Panel {...props({ effortValue: effort, onEffort: setEffort })} />
+    }
+    render(<Live />)
+    const flyout = await openEdit()
+    fireEvent.click(within(flyout).getByRole('menuitemradio', { name: 'Low' }))
+    await waitFor(() => expect(levels()[0]).toHaveTextContent('Low'))
+    expect(levels()).toHaveLength(1)
+    expect(
+      screen.getByRole('button', { name: 'Claude Opus, thinking Low', pressed: true })
+    ).toBeInTheDocument()
+  })
+
+  it('shows nothing without a thinking option, or without a current value', () => {
+    const { rerender } = render(
+      <Panel {...props({ thoughtLevel: null, effortValue: undefined })} />
+    )
+    expect(levels()).toHaveLength(0)
+    expect(screen.getByRole('button', { name: 'Claude Opus', pressed: true })).toBeInTheDocument()
+    // An option with no known value: no guessed default.
+    rerender(<Panel {...props({ effortValue: undefined })} />)
+    expect(levels()).toHaveLength(0)
+    expect(screen.getByRole('button', { name: 'Claude Opus', pressed: true })).toBeInTheDocument()
+  })
+
+  it('shows on the selected model in Favorites too, never on other favorites', () => {
+    render(
+      <Panel
+        {...props({
+          favoritesStore: storeOf([
+            [CURSOR.id, 'opus'],
+            [CURSOR.id, 'sonnet']
+          ])
+        })}
+      />
+    )
+    const selected = screen.getAllByRole('button', {
+      name: 'Claude Opus, thinking High',
+      pressed: true
+    })
+    expect(selected).toHaveLength(2)
+    expect(levels()).toHaveLength(2)
+    for (const row of selected)
+      expect(row.querySelector('[data-row-thinking]')).toHaveTextContent('High')
   })
 })
 
@@ -507,7 +611,10 @@ describe('SelectorPanelV2 Edit flyout keyboard', () => {
   it('Escape closes the flyout first, then the picker', async () => {
     const onOpenChange = vi.fn()
     render(<InPicker {...props()} onOpenChange={onOpenChange} />)
-    const row = await screen.findByRole('button', { name: 'Claude Opus', pressed: true })
+    const row = await screen.findByRole('button', {
+      name: 'Claude Opus, thinking High',
+      pressed: true
+    })
     act(() => row.focus())
     fireEvent.keyDown(row, { key: 'ArrowRight' })
     const flyout = await screen.findByTestId('selector-edit-flyout')
@@ -590,12 +697,17 @@ describe('SelectorPanelV2 favorite star', () => {
       screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('[data-favorite-entry]')
     )
   const favoriteNames = (): string[] =>
-    favoriteRows().map((row) => row.querySelector('[data-selector-row]')?.textContent?.trim() ?? '')
+    // Names as read aloud: the visible Thinking level is aria-hidden.
+    favoriteRows().map((row) => row.querySelector('[data-row-name]')?.textContent?.trim() ?? '')
   const starOf = (row: HTMLElement): HTMLElement => within(row).getByTestId('selector-favorite')
   const listRow = (name: string): HTMLElement => {
     const rows = Array.from(
       screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('[data-selector-row]')
-    ).filter((row) => row.textContent?.trim() === name && !row.closest('[data-favorite-entry]'))
+    ).filter(
+      (row) =>
+        row.querySelector('[data-row-name]')?.textContent?.trim() === name &&
+        !row.closest('[data-favorite-entry]')
+    )
     return rows[0] as HTMLElement
   }
 
@@ -623,7 +735,7 @@ describe('SelectorPanelV2 favorite star', () => {
     expect(store.list()).toEqual([])
     expect(onPickModel).not.toHaveBeenCalled()
     // The chosen model is still the chosen one.
-    expect(listRow('Claude Opus')).toHaveAttribute('aria-pressed', 'true')
+    expect(listRow('Claude Opus, thinking High')).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('the star is a sibling of the row button, never inside it', () => {
@@ -649,11 +761,11 @@ describe('SelectorPanelV2 favorite star', () => {
     expect(favoriteNames()).toEqual([
       'Opus via Claude · Claude Agent',
       'Claude Sonnet',
-      'Claude Opus'
+      'Claude Opus, thinking High'
     ])
     // First: the next favorite takes focus.
     await act(async () => fireEvent.click(starOf(favoriteRows()[0] as HTMLElement)))
-    expect(favoriteNames()).toEqual(['Claude Sonnet', 'Claude Opus'])
+    expect(favoriteNames()).toEqual(['Claude Sonnet', 'Claude Opus, thinking High'])
     expect(favoriteRows()[0]?.querySelector('[data-selector-row]')).toHaveFocus()
     // Last: the previous one does.
     await act(async () => fireEvent.click(starOf(favoriteRows()[1] as HTMLElement)))
@@ -854,7 +966,9 @@ const rowAgents = (): Array<[string, string | null]> =>
   ).map((row) => {
     const slot = row.querySelector<HTMLElement>('[data-row-agent]')
     expect(slot?.firstElementChild).not.toBeNull()
-    return [row.textContent?.trim() ?? '', slot?.dataset.rowAgent ?? null]
+    // The name as read aloud: the visible Thinking level is aria-hidden.
+    const name = row.querySelector('[data-row-name]')
+    return [name?.textContent?.trim() ?? '', slot?.dataset.rowAgent ?? null]
   })
 
 describe('SelectorPanelV2 agent rail', () => {
@@ -1092,7 +1206,7 @@ describe('SelectorPanelV2 agent icon on every row', () => {
     expect(rowAgents()).toEqual([
       ['Opus via Claude · Claude Agent', CLAUDE.id],
       ['Claude Sonnet', CURSOR.id],
-      ['Claude Opus', CURSOR.id],
+      ['Claude Opus, thinking High', CURSOR.id],
       ['Claude Sonnet', CURSOR.id]
     ])
   })
@@ -1104,7 +1218,7 @@ describe('SelectorPanelV2 agent icon on every row', () => {
       target: { value: 'opus' }
     })
     expect(rowAgents()).toEqual([
-      ['Claude Opus', CURSOR.id],
+      ['Claude Opus, thinking High', CURSOR.id],
       ['Opus via Claude · Claude Agent', CLAUDE.id]
     ])
   })
@@ -1167,7 +1281,7 @@ describe('SelectorPanelV2 opening scroll', () => {
         />
       )
       const list = screen.getByTestId('selector-list')
-      const chosen = screen.getByRole('button', { name: 'Model 13', pressed: true })
+      const chosen = screen.getByRole('button', { name: 'Model 13, thinking High', pressed: true })
       const rows = Array.from(list.querySelectorAll('[data-selector-row]'))
       const chosenTop = 4 + ROW * rows.indexOf(chosen)
       // `nearest` alone would leave the list at 4 + 14 * 28 - 288 = 108: 24px into a row.
