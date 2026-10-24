@@ -36,7 +36,7 @@ The shipped Linux app ran after the Chromium and GPUIX sets, 5 runs, through `we
 
 The two startup numbers are measured differently. WebKitGTK's counts the first screen grab with the project avatar's color in the sidebar, at a 1200x800 window. GPUIX's counts the project row's element in the automation tree, at 1440x900. WebKitGTK's idle CPU includes 28.8% in the `other` role, the agent `--version` checks and `npm` that the desktop app starts, which the GPUIX client leaves to the server.
 
-GPUIX lists the project about 1.4 s sooner, but the launcher accepts input at the same time as in Chromium. The GPUIX gap between the two is the agent picker and composer mounting after the shell. At idle GPUIX uses 43% of Chromium's memory. Idle CPU is the same within noise: GPUIX's comes from the Bun thread (4.9%) and the GPUI UI thread (1.4%), and neither client draws a frame while idle.
+GPUIX lists the project about 1.4 s sooner, but the launcher accepts input at the same time as in Chromium. What fills GPUIX's 1.8 s between the two is not measured. My guess is the agent picker and the composer mounting after the shell. At idle GPUIX uses 43% of Chromium's memory. Idle CPU is the same within noise. GPUIX's comes from the Bun thread (4.9%) and the GPUI UI thread (1.4%), and neither client draws a frame while idle.
 
 ### pty-flood: 3 terminals at 200 lines per second each, then a 20000-line burst
 
