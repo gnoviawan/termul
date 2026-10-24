@@ -6,15 +6,16 @@
  */
 
 import {
+  BACKDROP,
   CHECKBOX,
   LAMP,
   OVERLAP,
   OVERLAY,
   PROSE,
-  RIGHT_CLICK,
   SHORT_TRANSCRIPT,
   TAB_TITLE,
   TAB_TRUNC,
+  TINT,
   TITLE_TIP,
   TOAST,
   TREE_TEXT
@@ -46,35 +47,22 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Same layout and order; switching to beta works by click.', LAMP]
   },
   'rail.project-menu': {
-    status: 'broken',
-    differences: [RIGHT_CLICK],
-    cause: 'compat translator gap',
-    unit: 'C2 menus and popovers',
-    impact: 3
+    status: 'ported',
+    differences: [
+      'Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete. The menu sits 2 px left of the web one, so every glyph shows in the region diff (4.97% perceptual).'
+    ]
   },
   'rail.project-rename': {
-    status: 'broken',
-    differences: [
-      RIGHT_CLICK,
-      'With no menu, the replayed clicks land on the row and the typed name goes into the composer instead.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'C2 menus and popovers',
-    impact: 2
+    status: 'ported',
+    differences: ['Rename from the context menu edits the row in place and Enter saves gamma-renamed in both.']
   },
   'rail.project-remove': {
-    status: 'broken',
-    differences: [RIGHT_CLICK, 'No delete confirmation, so the project stays.'],
-    cause: 'compat translator gap',
-    unit: 'C2 menus and popovers',
-    impact: 2
+    status: 'ported',
+    differences: ['Delete from the context menu asks for confirmation and removes delta in both.', BACKDROP]
   },
   'rail.project-colour': {
-    status: 'broken',
-    differences: [RIGHT_CLICK, 'The Select Color popover never appears.'],
-    cause: 'compat translator gap',
-    unit: 'C2 menus and popovers',
-    impact: 1
+    status: 'ported',
+    differences: ['Change Color opens the Select Color popover with the same nine swatches and the current one ringed.']
   },
   'rail.project-reorder': {
     status: 'broken',
@@ -86,26 +74,25 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'rail.add-menu': {
-    status: 'broken',
+    status: 'partial',
     differences: [
-      'Clicking + shows only its tooltip; the New project / New folder group dropdown does not open, so the new project modal is unreachable from the rail.'
+      'Clicking + opens the New project / New folder group menu and New project opens the Create New Project modal with the same fields in both.',
+      BACKDROP
     ],
-    cause: 'compat translator gap',
-    unit: 'C2 menus and popovers',
-    impact: 3
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
+    impact: 1
   },
   'rail.collapse': {
     status: 'ported',
     differences: ['Collapsed rail matches: icons, project letters, Changes badge.', LAMP]
   },
   'rail.project-settings': {
-    status: 'broken',
-    differences: [
-      'The gear on the hovered row shows, but clicking it does not open Project settings (also fails with real X input).'
-    ],
-    cause: 'compat translator gap',
-    unit: 'C2 menus and popovers',
-    impact: 2
+    status: 'partial',
+    differences: ['The gear opens Project settings on General with the same fields in both.', BACKDROP, TINT],
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
+    impact: 1
   },
   'side.chats': {
     status: 'partial',
@@ -122,11 +109,8 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Filtering to no match and back matches, including the No matches. text.']
   },
   'side.chat-card-menu': {
-    status: 'broken',
-    differences: [RIGHT_CLICK],
-    cause: 'compat translator gap',
-    unit: 'C2 menus and popovers',
-    impact: 2
+    status: 'ported',
+    differences: ['Right-click on a chat card opens the same five-row menu with Delete Chat in red.']
   },
   'side.workspace-switcher': {
     status: 'ported',
@@ -143,20 +127,14 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Tree, git colours and status letters match.']
   },
   'explorer.expand': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      TITLE_TIP + ' It covers the chevron and the open-folder icon of the expanded row.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'C4 tooltips',
-    impact: 1
+      'Clicking src expands it to app.ts and utils.ts in both, with no tooltip over the row. The web frame also catches the row name hint that FileTreeNode shows after 900 ms of hover; the GPUIX frame is grabbed before it fires.'
+    ]
   },
   'explorer.context-menu': {
-    status: 'broken',
-    differences: [RIGHT_CLICK],
-    cause: 'compat translator gap',
-    unit: 'C2 menus and popovers',
-    impact: 2
+    status: 'ported',
+    differences: ['Right-click on README.md opens the same file menu with Delete in red.']
   },
   'explorer.drag': {
     status: 'ported',
@@ -221,7 +199,7 @@ export const REVIEWS: Record<string, Review> = {
   'git.discard': {
     status: 'partial',
     differences: ['The confirm dialog matches, but ' + OVERLAY],
-    cause: 'compat translator gap',
+    cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
     impact: 1
   },
@@ -267,13 +245,13 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['New chat opens the launcher composer in place.']
   },
   'chat.agent-launcher': {
-    status: 'broken',
+    status: 'partial',
     differences: [
-      'Opening the agent and model popover crashes the pane: its error boundary shows "Something went wrong in Terminal Pane: GPUIX host node does not belong to a root". The web shows the model search popover.'
+      'The agent and model popover opens above the pill in both, with the search field, the agent chip and This agent gives no model choice. In GPUIX the chip stretches across the panel and the more button wraps to a second line.'
     ],
     cause: 'compat translator gap',
     unit: 'C2 menus and popovers',
-    impact: 3
+    impact: 1
   },
   'chat.send': {
     status: 'partial',
@@ -359,20 +337,14 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'statusbar.context-bar': {
-    status: 'broken',
-    differences: ['The Show in Context Bar popover (five toggles) does not open on click.'],
-    cause: 'compat translator gap',
-    unit: 'C2 menus and popovers',
-    impact: 1
+    status: 'ported',
+    differences: ['The Show in Context Bar popover opens with the same five toggles and states.']
   },
   'statusbar.connection': {
     status: 'partial',
-    differences: [
-      'Hovering the connection lamp shows a Connected tooltip on the web; GPUIX shows none.',
-      LAMP
-    ],
+    differences: ['Hovering the connection lamp shows the Connected tooltip in both.', LAMP],
     cause: 'compat translator gap',
-    unit: 'C4 tooltips',
+    unit: 'C7 svg fill utilities',
     impact: 1
   },
   'remote.access-popover': {

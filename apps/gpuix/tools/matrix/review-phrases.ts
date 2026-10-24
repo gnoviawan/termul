@@ -2,17 +2,15 @@
 
 export const LAMP =
   'The status-bar connection lamp is an outline ring instead of a filled dot (fill-current on the icon is ignored).'
-export const RIGHT_CLICK =
-  'Right-click opens no menu: the Radix ContextMenu trigger in compat never opens, with GPUIX automation input and with real X input (XTEST, --x11-input) alike.'
 
 export const TITLE_TIP =
   'A title tooltip paints at once under the pointer after a click, anchored over the element, where the web shows none in the frame.'
 export const CHECKBOX =
   'The Amend last commit checkbox box is not drawn (native checkbox input), only its label.'
 export const BACKDROP =
-  'The modal backdrop is far lighter than the web bg-overlay, so the page behind stays readable.'
+  'The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable.'
 export const OVERLAY =
-  'the modal backdrop is far lighter than the web bg-overlay, so the page behind stays readable.'
+  'the scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp and readable.'
 export const OVERLAP =
   'In the Chats list two chat cards paint on top of each other once a second chat exists, and GPUIX lists only the seeded chat where the web lists all three.'
 export const PROSE =
@@ -29,11 +27,9 @@ export const SHORT_TRANSCRIPT =
   'A short transcript sits at the bottom of the GPUIX pane, leaving the space above it empty, where the web starts it at the top.'
 export const TAB_TITLE =
   'The GPUIX tab title truncates to a few letters ("matr...") where the web shows the whole title.'
-export const ENTER =
-  "Enter in a text field or list does not run the field's action in GPUIX (form submit, command palette selection), while Enter in the chat composer does."
 export const SETTINGS_BASE = [
   'The section content and navigation match.',
-  'The modal backdrop is far lighter than the web bg-overlay.',
+  'The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp.',
   TINT
 ]
 export const TOAST =
