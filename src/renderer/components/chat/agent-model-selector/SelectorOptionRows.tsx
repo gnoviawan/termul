@@ -48,7 +48,8 @@ export function moveFocus(
     (el) => !el.hasAttribute('disabled')
   )
   const index = all.indexOf(document.activeElement as HTMLElement)
-  if (all.length === 0) return false
+  // Keys from elsewhere (a portaled flyout bubbles through React) are not ours.
+  if (index < 0) return false
   event.preventDefault()
   const last = all.length - 1
   const next =
@@ -94,9 +95,15 @@ function ChoiceList({
       aria-label={label}
       className={cn('flex flex-col', touch ? 'px-3 pb-3' : 'p-1')}
       onKeyDown={(event) => {
-        if (moveFocus(event, ref.current, CHOICE)) return
+        // The flyout is portaled but its keys still bubble through the React
+        // tree into the footer and list; keep the ones handled here.
+        if (moveFocus(event, ref.current, CHOICE)) {
+          event.stopPropagation()
+          return
+        }
         if (event.key === 'ArrowLeft') {
           event.preventDefault()
+          event.stopPropagation()
           onBack()
         }
       }}
