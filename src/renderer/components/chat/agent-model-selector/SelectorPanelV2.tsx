@@ -33,6 +33,7 @@ import {
 import {
   AGENT_TRACK_CLASS,
   type AgentTab,
+  agentInRowName,
   agentTrackCapacity,
   type CatalogModel,
   entryDisableReason,
@@ -96,7 +97,11 @@ function DenseModelRow({
   const name = rawName.trim()
   const label = rowAccessibleName({ name, agentName })
   // The tooltip's screen-reader copy: only what `label` does not already say.
-  const description = rowTooltipDescription({ accessibleName: label, agentName, details: tooltip })
+  const description = rowTooltipDescription({
+    agentName,
+    agentInName: agentInRowName(agentName),
+    details: tooltip
+  })
   const editable = Boolean(edit && edit.length > 0)
   // Edit showing the level marks the selected row; it replaces the check there.
   // Every other selected row (the Favorites copy, a row without a level) keeps it.

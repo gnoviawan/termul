@@ -4,6 +4,7 @@ import type { SessionConfigOption } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import {
   type AgentTab,
+  agentInRowName,
   agentTrackCapacity,
   buildAgentTabs,
   capabilitySummary,
@@ -582,31 +583,43 @@ describe('rowTooltip', () => {
 
 describe('rowTooltipDescription', () => {
   it('leaves the name out: the row is already named by it', () => {
-    expect(rowTooltipDescription({ accessibleName: 'Opus', details: 'Most capable' })).toBe(
+    expect(rowTooltipDescription({ agentInName: false, details: 'Most capable' })).toBe(
       'Most capable'
     )
   })
 
-  it('leaves the agent out when the row name already ends with it', () => {
-    const accessibleName = rowAccessibleName({ name: 'Opus', agentName: 'Claude Agent' })
+  it('leaves the agent out when the row name already says it', () => {
     expect(
-      rowTooltipDescription({ accessibleName, agentName: 'Claude Agent', details: 'Most capable' })
+      rowTooltipDescription({
+        agentName: 'Claude Agent',
+        agentInName: true,
+        details: 'Most capable'
+      })
     ).toBe('Most capable')
-    expect(rowTooltipDescription({ accessibleName, agentName: 'Claude Agent' })).toBe(' ')
+    expect(rowTooltipDescription({ agentName: 'Claude Agent', agentInName: true })).toBe(' ')
   })
 
   it('keeps the agent when the row name does not say it', () => {
     expect(
       rowTooltipDescription({
-        accessibleName: 'Opus',
         agentName: 'Claude Agent',
+        agentInName: false,
         details: 'Most capable'
       })
     ).toBe('Claude Agent\n\nMost capable')
   })
 
   it('is blank, not empty, with nothing more to say', () => {
-    expect(rowTooltipDescription({ accessibleName: 'Opus' })).toBe(' ')
+    expect(rowTooltipDescription({ agentInName: false })).toBe(' ')
+  })
+})
+
+describe('agentInRowName', () => {
+  it('matches what rowAccessibleName says', () => {
+    for (const agentName of [undefined, '', 'Claude Agent']) {
+      const named = rowAccessibleName({ name: 'Opus', agentName }) !== 'Opus'
+      expect(agentInRowName(agentName)).toBe(named)
+    }
   })
 })
 

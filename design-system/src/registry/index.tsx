@@ -452,6 +452,14 @@ export const SECTIONS: CanvasSection[] = [
             width: 1200,
             height: 680,
             Preview: M.ModelSelectorV2ManyAgents
+          },
+          {
+            id: 'chat.model-selector.v2-composer',
+            name: 'Model selector v2 in the chat composer (flag)',
+            source: `${PICKER}/AgentModelSelector.tsx`,
+            width: 820,
+            height: 600,
+            Preview: M.ModelSelectorV2Composer
           }
         ]
       }
