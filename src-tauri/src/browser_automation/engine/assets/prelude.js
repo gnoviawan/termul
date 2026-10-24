@@ -243,8 +243,26 @@ function stepInto(root, local) {
   }
   return node && nodeTypeOf(node) === 1 ? node : null;
 }
+// Each element a snapshot reports gets a random identity, kept as a
+// property of this script world's wrapper of the element, which the page
+// cannot see. A snapshot path ends in '~<id>', so a path that leads to
+// another element once the page has moved its siblings finds nothing
+// instead of that element. A wrapper with a property of its own lives as
+// long as its element; one only held as a WeakMap key does not on WebKit.
+var ID_KEY = Symbol.for('termul.element-id');
+function idOf(el) {
+  var id = el[ID_KEY];
+  if (!id) {
+    id = Math.floor(Math.random() * 9007199254740991) + 1;
+    el[ID_KEY] = id;
+  }
+  return id;
+}
 function locate(path) {
-  var parts = String(path).split('|');
+  var text = String(path);
+  var pinned = /~(\d+)$/.exec(text);
+  if (pinned) text = text.slice(0, pinned.index);
+  var parts = text.split('|');
   var i = 0;
   if (parts[0].indexOf('frame:') === 0) {
     if (parts[0].slice(6) !== docId(document)) return null;
@@ -261,7 +279,7 @@ function locate(path) {
     }
     el = root ? stepInto(root, parts[i + 1]) : null;
   }
-  return el;
+  return el && (!pinned || el[ID_KEY] === Number(pinned[1])) ? el : null;
 }
 function isInteractive(el) {
   try { return matchesOf(el, INTERACTIVE); } catch (e) { return false; }

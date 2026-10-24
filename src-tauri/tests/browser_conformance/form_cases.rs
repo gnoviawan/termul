@@ -1,13 +1,15 @@
 //! A form whose fields are named only by the page's labels: `label[for]`, a
 //! wrapping label, `aria-labelledby` and a placeholder, beside two fields
 //! with no name at all. Every field is filled through its ref, one twice,
-//! and the server must receive every value in the real form post.
+//! and the server must receive every value in the real form post. And rows
+//! of same-named buttons, where a ref whose row moved goes stale instead of
+//! acting on the row that took its place.
 
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::{find_ref, find_refs, mismatch, CaseResult, Ctx, Failure};
+use super::{expect_code, find_ref, find_refs, mismatch, CaseResult, Ctx, Failure};
 use crate::fixture_server::FORM_POST_PATH;
 
 const LABELLED_READY: &str = "Labelled form";
@@ -54,6 +56,25 @@ pub async fn labelled_form(c: &Ctx<'_>) -> CaseResult {
             "{FORM_POST_PATH} received `{posted}`, expected `{want}`"
         )))
     }
+}
+
+/// Rows each with a "Delete" button. Deleting the first moves the others
+/// up; the second row's ref must not then delete the third row.
+pub async fn shifted_rows(c: &Ctx<'_>) -> CaseResult {
+    c.open("/rows.html", "Left: Ada Bob Carol").await?;
+    let snap = c.snapshot().await?;
+    let deletes = find_refs(&snap.text, "button", "Delete");
+    let [ada, bob, _carol] = deletes.as_slice() else {
+        return Err(mismatch(format!("expected three Delete buttons: {}", snap.text)));
+    };
+    c.call("click", json!({ "ref": ada })).await?;
+    c.call("wait", json!({ "text": "Left: Bob Carol" })).await?;
+    expect_code(
+        c.call("click", json!({ "ref": bob })).await,
+        "stale_ref",
+        "a ref whose row moved up",
+    )?;
+    c.expect_text("Left: Bob Carol").await
 }
 
 async fn await_post(c: &Ctx<'_>, mark: usize) -> Result<String, Failure> {

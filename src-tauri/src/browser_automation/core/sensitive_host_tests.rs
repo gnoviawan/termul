@@ -366,7 +366,7 @@ async fn an_upload_stages_the_project_file_and_prompts_unless_app_approved() {
     let (on, frame, input, files) = &set[0];
     assert_eq!(
         (on.as_str(), frame.as_deref(), input.as_str()),
-        (tab.as_str(), None, "html>body>button:nth-of-type(1)")
+        (tab.as_str(), None, "html>body>button:nth-of-type(1)~1")
     );
     let staging = super::super::session_dir(&r.h.pane.sessions, "s1").join("staging");
     assert!(files[0].starts_with(&staging), "{files:?}");

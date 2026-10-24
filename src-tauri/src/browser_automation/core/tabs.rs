@@ -638,9 +638,11 @@ impl TabRegistry {
 // older document can never name an element of the current one. Within an
 // epoch an identical node keeps its ref across snapshots. A ref resolves
 // only while its node was in the tab's latest snapshot of the current
-// epoch. Its path names one element, so nodes that share a role and name
-// each resolve to their own; actionability then checks that the element
-// there still has the role and name the ref was minted for.
+// epoch. Its path names one element and pins the identity the snapshot
+// gave it, so nodes that share a role and name each resolve to their own,
+// and once the page moves elements a path that would land on another one
+// resolves to none (`stale_ref`); actionability then checks that the
+// element still has the role and name the ref was minted for.
 
 /// One actionable node as an adapter reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

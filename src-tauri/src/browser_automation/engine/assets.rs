@@ -3,10 +3,12 @@
 //! Each helper is a static function body over one parameter object `p`,
 //! built from the files in `assets/` at compile time. Agent strings reach
 //! a helper only inside `p`, which every engine passes as a native call
-//! argument, so no agent text is ever part of script source. Helpers keep
-//! no state between calls: an element is named by the structural path the
-//! snapshot reported for it, and the core decides whether that path still
-//! names the element its ref was minted for.
+//! argument, so no agent text is ever part of script source. An element is
+//! named by the structural path the snapshot reported for it, which also
+//! pins the identity the snapshot gave the element. That identity, a
+//! property of the isolated world's wrapper of the element, is the only
+//! state helpers keep between calls: a path that now leads to another
+//! element finds nothing.
 
 use serde_json::{json, Value};
 

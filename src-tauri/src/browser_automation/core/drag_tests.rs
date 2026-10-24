@@ -36,7 +36,7 @@ async fn a_synthetic_drag_runs_the_page_helper_and_says_synthetic() {
     assert_eq!(reply["fidelity"], "synthetic", "{reply}");
     assert_eq!(
         h.engine.drags.lock().as_slice(),
-        ["script \"html>body>button:nth-of-type(2)\" -> \"html>body>button:nth-of-type(1)\""]
+        ["script \"html>body>button:nth-of-type(2)~2\" -> \"html>body>button:nth-of-type(1)~1\""]
     );
 }
 

@@ -200,6 +200,8 @@ pub(super) struct FakeEngine {
     fail_trusted_click: bool,
     /// The buttons the snapshot helper reports, by name.
     snapshot_buttons: Vec<&'static str>,
+    /// How many of the first buttons the page has removed since.
+    pub(super) removed_buttons: Mutex<usize>,
     /// Fields that override the default ready facts of every element.
     facts_patch: Value,
     /// The key-press tier when it differs from text entry's.
@@ -231,15 +233,33 @@ impl FakeEngine {
     /// Zero-based index of the button a helper's `path` names (the nth
     /// button sits 100px right of the one before it).
     fn button_index(script: &Script) -> usize {
-        script.params["path"]
-            .as_str()
-            .and_then(|p| p.rsplit_once("nth-of-type("))
+        Self::path_of(script)
+            .0
+            .rsplit_once("nth-of-type(")
             .and_then(|(_, rest)| rest.trim_end_matches(')').parse::<usize>().ok())
             .map_or(0, |n| n.saturating_sub(1))
     }
 
+    /// A helper's `path` split from the element identity it pins, as the
+    /// snapshot writes it (`<path>~<id>`).
+    fn path_of(script: &Script) -> (&str, Option<usize>) {
+        let path = script.params["path"].as_str().unwrap_or_default();
+        match path.rsplit_once('~') {
+            Some((at, id)) => (at, id.parse().ok()),
+            None => (path, None),
+        }
+    }
+
+    /// Whether the button the path names now is the one it pins: each
+    /// button's identity is its place in `snapshot_buttons`, one-based.
+    fn pinned_button_there(&self, script: &Script) -> bool {
+        let now = Self::button_index(script) + *self.removed_buttons.lock() + 1;
+        Self::path_of(script).1.is_none_or(|id| id == now)
+    }
+
     fn button_named_at(&self, script: &Script) -> &'static str {
-        self.snapshot_buttons.get(Self::button_index(script)).copied().unwrap_or("Sign in")
+        let at = Self::button_index(script) + *self.removed_buttons.lock();
+        self.snapshot_buttons.get(at).copied().unwrap_or("Sign in")
     }
 
     pub(super) fn new(capabilities: CapabilityTable) -> Self {
@@ -257,6 +277,7 @@ impl FakeEngine {
             drags: Mutex::new(Vec::new()),
             fail_trusted_click: false,
             snapshot_buttons: vec!["Sign in"],
+            removed_buttons: Mutex::new(0),
             facts_patch: json!({}),
             press_tier: None,
             focus_moves: false,
@@ -284,9 +305,11 @@ impl BrowserEngine for FakeEngine {
         let out = match script.helper.name {
             "ready_state" => json!("complete"),
             "snapshot" => {
+                let removed = *self.removed_buttons.lock();
                 let items: Vec<Value> = self
                     .snapshot_buttons
                     .iter()
+                    .skip(removed)
                     .enumerate()
                     .map(|(i, name)| {
                         json!({
@@ -294,7 +317,7 @@ impl BrowserEngine for FakeEngine {
                             "depth": 0,
                             "role": "button",
                             "name": name,
-                            "path": format!("html>body>button:nth-of-type({})", i + 1)
+                            "path": format!("html>body>button:nth-of-type({})~{}", i + 1, i + removed + 1)
                         })
                     })
                     .collect();
@@ -306,6 +329,8 @@ impl BrowserEngine for FakeEngine {
                     "capped": false
                 })
             }
+            "facts" if !self.pinned_button_there(&script) => json!({ "state": "detached" }),
+            "resolve" if !self.pinned_button_there(&script) => json!({ "error": "stale_ref" }),
             "resolve" => json!({
                 "rect": { "cx": 12.0, "cy": 34.0 },
                 "role": "button",
@@ -1008,6 +1033,33 @@ async fn elements_sharing_a_role_and_name_are_each_clicked_where_they_are() {
     }
     let xs: Vec<f64> = h.engine.clicks.lock().iter().map(|(at, _)| at.x).collect();
     assert_eq!(xs, [112.0, 12.0], "each ref clicked its own button");
+}
+
+#[tokio::test]
+async fn a_ref_to_one_of_several_same_named_buttons_goes_stale_when_the_rows_shift() {
+    let mut engine = FakeEngine::new(webview2_like());
+    engine.snapshot_buttons = vec!["Delete", "Delete", "Delete"];
+    let h = harness_with(engine);
+    h.call("navigate", json!({ "url": "https://example.com/" })).await;
+    h.call("snapshot", json!({})).await;
+    assert_eq!(h.call("click", json!({ "ref": "@e1" })).await["ok"], true);
+    *h.engine.removed_buttons.lock() = 1;
+    let reply = h.call("click", json!({ "ref": "@e2" })).await;
+    assert_eq!(code_and_reason(&reply), (Some(ERR_STALE_REF), Some("ref_not_resolved")), "{reply}");
+    assert_eq!(h.engine.clicks.lock().len(), 1, "the third row's button was never clicked");
+}
+
+#[tokio::test]
+async fn read_text_pages_through_the_text_under_page() {
+    let h = snapshotted(FakeEngine::new(webview2_like())).await;
+    let first = h.call("read_text", json!({ "limit": 8 })).await;
+    assert_eq!(first["page"]["text"], "Sign in ", "{first}");
+    assert_eq!(first["data"], json!({ "cursor": 8, "more": true, "length": 19 }));
+    let rest = h.call("read_text", json!({ "cursor": 8 })).await;
+    assert_eq!(rest["page"]["text"], "to continue", "{rest}");
+    assert_eq!(rest["data"], json!({ "cursor": 19, "more": false, "length": 19 }));
+    let reply = h.call("read_text", json!({ "limit": 0 })).await;
+    assert_eq!(code_and_reason(&reply).0, Some(ERR_INVALID_PARAMS), "{reply}");
 }
 
 #[tokio::test]
