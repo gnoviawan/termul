@@ -7,6 +7,7 @@ import { CONTAINER, S_DEFAULT } from './termul-light-chrome'
 /** Tokens added for the Termul Light v2 composer, keycaps and Rail keycap. */
 const LIFT_TOKENS = [
   '--composer-shadow',
+  '--prompt-panel-shadow',
   '--keycap-fill',
   '--keycap-shadow',
   '--rail-keycap-fill',
@@ -45,6 +46,7 @@ describe('component tokens', () => {
   it('lifts the composer, tabs, keycaps and Rail keycap in Termul Light', () => {
     const vars = emittedVars('termul-light')
     expect(vars['--composer-shadow']).toBe(S_DEFAULT)
+    expect(vars['--prompt-panel-shadow']).toBe(S_DEFAULT)
     expect(vars['--keycap-fill']).toBe(CONTAINER)
     expect(vars['--keycap-shadow']).toBe(S_DEFAULT)
     expect(vars['--rail-keycap-shadow']).toBe(S_DEFAULT)

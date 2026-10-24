@@ -56,6 +56,11 @@ export const COMPONENT_TOKEN_DEFAULTS = {
    * where `none` is invalid and drops the focus ring.
    */
   '--composer-shadow': '0 0 #0000',
+  /**
+   * Prompt panels that replace the composer (AskUserQuestion, ElicitationPrompt).
+   * Defaults to the panel elevation; a theme can tie it to the composer's lift.
+   */
+  '--prompt-panel-shadow': 'var(--elevation-panel)',
   /** Raised "you are here" fill (active tab, row, segment), read by .keycap. */
   '--keycap-fill': 'oklch(var(--muted))',
   /** Raised "you are here" depth, read by .keycap and the Rail keycap default. */

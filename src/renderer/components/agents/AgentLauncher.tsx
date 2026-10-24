@@ -52,7 +52,7 @@ import {
   resolveModelOption,
   wireConfigValue
 } from '@/components/chat/chat-input-bar-config'
-import { useComposerToolbarMode } from '@/components/chat/chat-layout'
+import { COMPOSER_CARD_CLASS, useComposerToolbarMode } from '@/components/chat/chat-layout'
 import { ChatStarters, ChatStartHero } from '@/components/chat/chat-start'
 import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEditor'
 import {
@@ -1957,7 +1957,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               ref={composerCardRef}
               data-agent-launcher-composer="true"
               className={cn(
-                'relative z-10 rounded-2xl border border-border/60 bg-card shadow-composer transition-[border-color,box-shadow]',
+                'relative z-10',
+                COMPOSER_CARD_CLASS,
                 // Same focus affordance as the chat composer card
                 // (ChatInputBar) — the two cards are one visual family.
                 COMPOSER_FOCUS_CLASS,

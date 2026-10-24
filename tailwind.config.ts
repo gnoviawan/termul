@@ -160,6 +160,7 @@ export default {
         panel: 'var(--elevation-panel)',
         menu: 'var(--elevation-menu)',
         composer: 'var(--composer-shadow)',
+        'prompt-panel': 'var(--prompt-panel-shadow)',
         emboss: 'var(--shadow-emboss)',
         'emboss-hover': 'var(--shadow-emboss-hover)',
         // Alpha kept inline here (single place); the hue components come from

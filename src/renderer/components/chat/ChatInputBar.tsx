@@ -44,7 +44,12 @@ import {
   partitionConfigOptions,
   resolveModelOption
 } from './chat-input-bar-config'
-import { CHAT_COMPACT_LABEL, CHAT_GUTTER_X, useComposerToolbarMode } from './chat-layout'
+import {
+  CHAT_COMPACT_LABEL,
+  CHAT_GUTTER_X,
+  COMPOSER_CARD_CLASS,
+  useComposerToolbarMode
+} from './chat-layout'
 import { ChatComposerEditor } from './composer/ChatComposerEditor'
 import { ComposerAddSheet } from './composer/ComposerAddSheet'
 import { ComposerSendButton } from './composer/ComposerSendButton'
@@ -650,7 +655,8 @@ export function ChatInputBar({
             // the editor (and the OSK), after an approval prompt resolves.
             tabIndex={isMobileShell ? -1 : undefined}
             className={cn(
-              'relative rounded-2xl border border-border/60 bg-card shadow-composer transition-[border-color,box-shadow]',
+              'relative',
+              COMPOSER_CARD_CLASS,
               COMPOSER_FOCUS_CLASS,
               dragActive && 'border-primary/70',
               isMobileShell && 'outline-none'

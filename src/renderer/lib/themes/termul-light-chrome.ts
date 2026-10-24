@@ -63,6 +63,8 @@ function termulLightChrome(): ThemeChrome {
       '--elevation-menu': S_EXTRA_LARGE,
       /** The composer is white on the white chat card: lift it with s-default. */
       '--composer-shadow': S_DEFAULT,
+      /** Prompt panels replace the composer, so they take the same lift. */
+      '--prompt-panel-shadow': S_DEFAULT,
       /** Tabs and other raised items: a white container with s-default, as in Interfere. */
       '--keycap-fill': CONTAINER,
       '--keycap-shadow': S_DEFAULT,
