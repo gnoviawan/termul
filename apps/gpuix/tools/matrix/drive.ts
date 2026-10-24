@@ -81,7 +81,7 @@ export function playwrightKeys(keys: string): string[] {
   })
 }
 
-function gpuiKeystrokes(text: string): string {
+export function gpuiKeystrokes(text: string): string {
   return [...text].map((ch) => (ch === ' ' ? 'space' : ch === '\n' ? 'enter' : ch)).join(' ')
 }
 
