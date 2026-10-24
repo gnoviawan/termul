@@ -1187,6 +1187,44 @@ describe('SelectorPanelV2 Edit on the Favorites copy', () => {
       within(favoritesOf()).getByRole('button', { name: 'Opus via Claude · Claude Agent' })
     )
   })
+
+  it('unstarring the selected copy moves focus to the next favorite, else the previous', async () => {
+    render(
+      <Panel
+        {...props({
+          favoritesStore: storeOf([
+            [CURSOR.id, 'opus'],
+            [CURSOR.id, 'sonnet']
+          ])
+        })}
+      />
+    )
+    const starOfCopy = (): HTMLElement =>
+      within(copyRow().closest('[data-favorite-entry]') as HTMLElement).getByTestId(
+        'selector-favorite'
+      )
+    await act(async () => fireEvent.click(starOfCopy()))
+    expect(
+      within(favoritesOf()).queryByRole('button', { name: 'Claude Opus', pressed: true })
+    ).toBeNull()
+    expect(within(favoritesOf()).getByRole('button', { name: 'Claude Sonnet' })).toHaveFocus()
+    // Only the list row's Edit is left.
+    expect(screen.getAllByTestId('selector-edit')).toHaveLength(1)
+    cleanup()
+
+    render(
+      <Panel
+        {...props({
+          favoritesStore: storeOf([
+            [CURSOR.id, 'sonnet'],
+            [CURSOR.id, 'opus']
+          ])
+        })}
+      />
+    )
+    await act(async () => fireEvent.click(starOfCopy()))
+    expect(within(favoritesOf()).getByRole('button', { name: 'Claude Sonnet' })).toHaveFocus()
+  })
 })
 
 /** The Edit button sharing a row's hover box, if it has one. */
