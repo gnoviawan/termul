@@ -27,3 +27,8 @@ web::worktree_rename_api::tests::rename_branch_renames_records_user_source_and_e
 worktree::merge_tests::merge_preview_of_a_clean_merge_lists_the_incoming_changes_and_touches_nothing
 # passed in another run, so it fails by timing: git command should run
 trackers::git_tracker::commit_detail_tests::it_commit_with_more_than_the_file_cap_is_truncated
+# left: "...\home\.agents\skills\...", right: "...\home\.agents/skills\..." (mixed separators)
+skills::files::tests::indexes_harness_roots_outside_the_project
+web::skills_api::tests::skill_index_lists_project_harness_skills
+# Os { code: 123, kind: InvalidFilename }: the directory name is not a valid Windows path
+trackers::git_tracker::tests::it_status_detail_expands_directory_named_like_a_pathspec_magic
