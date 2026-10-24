@@ -1,11 +1,13 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { AgentModelSelector } from '@/components/chat/agent-model-selector/AgentModelSelector'
+import {
+  createFavoritesStore,
+  type FavoriteModel,
+  memoryFavoritesAdapter
+} from '@/components/chat/agent-model-selector/favorite-models'
 import { SelectorPanel } from '@/components/chat/agent-model-selector/SelectorPanel'
 import { SelectorPanelV2 } from '@/components/chat/agent-model-selector/SelectorPanelV2'
-import {
-  type FavoriteModel,
-  favoriteFor
-} from '@/components/chat/agent-model-selector/selector-model'
+import { favoriteFor } from '@/components/chat/agent-model-selector/selector-model'
 import { Caption } from './kit'
 import {
   MOCK_AGENT_CONFIGS,
@@ -75,19 +77,19 @@ export function ModelSelectorV1() {
 }
 
 /**
- * Mock favorites until the favorites store lands. Keyed the way the store
- * will be: the agent's config id from `armableConfigId`, never the agent id.
+ * Seed favorites, keyed the way the app store keys them: the agent's config id
+ * from `armableConfigId`, never the agent id. Oldest first.
  */
-const MOCK_FAVORITES: FavoriteModel[] = (
+const SEED_FAVORITES: FavoriteModel[] = (
   [
     ['cursor', 'claude-4.6-sonnet-thinking-max'],
     ['claude-acp', 'opus-1m'],
     ['codex-acp', 'gpt-5.4-codex']
   ] as const
-).flatMap(([agentId, value]) => {
+).flatMap(([agentId, modelId], index) => {
   const entry = MOCK_ENTRIES.find((e) => e.agent.id === agentId)
-  const favorite = entry ? favoriteFor(entry, MOCK_AGENT_CONFIGS, value) : null
-  return favorite ? [favorite] : []
+  const key = entry ? favoriteFor(entry, MOCK_AGENT_CONFIGS, modelId) : null
+  return key ? [{ ...key, addedAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString() }] : []
 })
 
 function V2Column({
@@ -104,6 +106,11 @@ function V2Column({
   manyAgents?: boolean
 }) {
   const state = useMockSelector(id, model, { manyAgents })
+  // Each preview stars on its own, in memory: the canvas never touches the
+  // app's localStorage favorites.
+  const [favoritesStore] = useState(() =>
+    createFavoritesStore(memoryFavoritesAdapter(SEED_FAVORITES))
+  )
   const escapeRef = useRef<(() => boolean) | null>(null)
   return (
     // Room on the right for the Edit flyout.
@@ -112,7 +119,7 @@ function V2Column({
       <div className={`${SURFACE} self-start`}>
         <SelectorPanelV2
           {...panelProps(state)}
-          favorites={MOCK_FAVORITES}
+          favoritesStore={favoritesStore}
           agentRail={agentRail}
           escapeRef={escapeRef}
         />

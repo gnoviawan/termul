@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { shouldShowSessionUsage } from '../context-usage-utils'
+import type { FavoriteModel } from './favorite-models'
 import type { SelectorPanelProps } from './SelectorPanel'
 import {
   type AgentTab,
@@ -9,7 +10,7 @@ import {
   type CatalogModel,
   capabilitySummary,
   catalogModels,
-  type FavoriteModel,
+  isInstalledTab,
   MORE_AGENTS_VIEW,
   type ModelCatalog,
   modelMatches,
@@ -211,10 +212,13 @@ export function useSelectorPanelState(
       for (const t of allTabs) if (t.configId !== effectiveId) ids.add(t.configId)
     }
     if (showFavorites) {
-      for (const id of favoriteIdsKey.split('\n')) if (id && id !== effectiveId) ids.add(id)
+      for (const id of favoriteIdsKey.split('\n')) {
+        const tab = tabById.get(id)
+        if (id && id !== effectiveId && tab && isInstalledTab(tab)) ids.add(id)
+      }
     }
     return ids.size > 0 ? [...ids] : NO_IDS
-  }, [searching, showFavorites, allTabs, effectiveId, favoriteIdsKey])
+  }, [searching, showFavorites, allTabs, tabById, effectiveId, favoriteIdsKey])
   const known = useKnownCatalogs(sw.workspace.cwd, lookupIds)
   const knownById = new Map(lookupIds.map((id, i) => [id, known[i] ?? null]))
 
@@ -348,7 +352,11 @@ export function useSelectorPanelState(
         catalog: effectiveCatalog,
         favorites:
           modelOption && showFavorites
-            ? resolveFavorites(favorites, catalogOf).map(({ configId, model }) => ({
+            ? resolveFavorites(favorites, catalogOf, (id) => {
+                // Uninstalled agents hide their favorites; reinstalling shows them again.
+                const tab = tabById.get(id)
+                return tab ? isInstalledTab(tab) : false
+              }).map(({ configId, model }) => ({
                 configId,
                 catalog: catalogOf(configId),
                 model

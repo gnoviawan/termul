@@ -6,6 +6,11 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
+import {
+  createFavoritesStore,
+  type FavoritesStore,
+  memoryFavoritesAdapter
+} from './favorite-models'
 import { SelectorPanel } from './SelectorPanel'
 import { SelectorPanelV2, type SelectorPanelV2Props } from './SelectorPanelV2'
 import type { ModelCatalog } from './selector-model'
@@ -174,6 +179,19 @@ function props(over: Partial<SelectorPanelV2Props> = {}): SelectorPanelV2Props {
     escapeRef: { current: null },
     ...over
   }
+}
+
+/** An in-memory favorites store, starred in the given order. */
+function storeOf(pairs: Array<[string, string]>): FavoritesStore {
+  return createFavoritesStore(
+    memoryFavoritesAdapter(
+      pairs.map(([configId, modelId], i) => ({
+        configId,
+        modelId,
+        addedAt: new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString()
+      }))
+    )
+  )
 }
 
 function Panel(p: SelectorPanelV2Props): React.JSX.Element {
@@ -429,28 +447,125 @@ describe('SelectorPanelV2 favorites', () => {
     render(
       <Panel
         {...props({
-          favorites: [
-            { configId: CLAUDE.id, value: 'claude-opus' },
-            { configId: CURSOR.id, value: 'sonnet' },
-            { configId: CURSOR.id, value: 'gone' }
-          ]
+          favoritesStore: storeOf([
+            [CLAUDE.id, 'claude-opus'],
+            [CURSOR.id, 'sonnet'],
+            [CURSOR.id, 'gone']
+          ])
         })}
       />
     )
     const list = screen.getByTestId('selector-list')
     expect(within(list).getByText('Favorites')).toBeInTheDocument()
-    const names = within(list)
-      .getAllByRole('button')
-      .map((b) => b.textContent?.trim())
+    const names = Array.from(list.querySelectorAll('[data-selector-row]')).map((b) =>
+      b.textContent?.trim()
+    )
     expect(names.slice(0, 2)).toEqual(['Opus via Claude · Claude Agent', 'Claude Sonnet'])
     expect(names).not.toContain('gone')
   })
 
   it('hides the Favorites section while searching', () => {
-    render(<Panel {...props({ favorites: [{ configId: CURSOR.id, value: 'sonnet' }] })} />)
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'sonnet']]) })} />)
     fireEvent.change(screen.getByRole('textbox', { name: 'Search models and agents' }), {
       target: { value: 'opus' }
     })
+    expect(screen.queryByText('Favorites')).toBeNull()
+  })
+})
+
+describe('SelectorPanelV2 favorite star', () => {
+  const favoriteRows = (): HTMLElement[] =>
+    Array.from(
+      screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('[data-favorite-entry]')
+    )
+  const favoriteNames = (): string[] =>
+    favoriteRows().map((row) => row.querySelector('[data-selector-row]')?.textContent?.trim() ?? '')
+  const starOf = (row: HTMLElement): HTMLElement => within(row).getByTestId('selector-favorite')
+  const listRow = (name: string): HTMLElement => {
+    const rows = Array.from(
+      screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('[data-selector-row]')
+    ).filter((row) => row.textContent?.trim() === name && !row.closest('[data-favorite-entry]'))
+    return rows[0] as HTMLElement
+  }
+
+  it('stars a model into Favorites and back out, without picking it', async () => {
+    const store = storeOf([])
+    const onPickModel = vi.fn()
+    render(<Panel {...props({ favoritesStore: store, onPickModel })} />)
+    expect(screen.queryByText('Favorites')).toBeNull()
+    const star = listRow('Claude Sonnet').parentElement?.querySelector<HTMLElement>(
+      '[data-testid="selector-favorite"]'
+    ) as HTMLElement
+    expect(star).toHaveAttribute('aria-pressed', 'false')
+    expect(star).toHaveAccessibleName('Add to favorites')
+    await act(async () => fireEvent.click(star))
+    expect(favoriteNames()).toEqual(['Claude Sonnet'])
+    expect(star).toHaveAttribute('aria-pressed', 'true')
+    expect(star).toHaveAccessibleName('Remove from favorites')
+    expect(store.list()).toEqual([
+      expect.objectContaining({ configId: CURSOR.id, modelId: 'sonnet' })
+    ])
+    // The Favorites row's own star is filled and pressed.
+    expect(starOf(favoriteRows()[0] as HTMLElement)).toHaveAttribute('aria-pressed', 'true')
+    await act(async () => fireEvent.click(star))
+    expect(screen.queryByText('Favorites')).toBeNull()
+    expect(store.list()).toEqual([])
+    expect(onPickModel).not.toHaveBeenCalled()
+    // The chosen model is still the chosen one.
+    expect(listRow('Claude Opus')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('the star is a sibling of the row button, never inside it', () => {
+    render(<Panel {...props({ favoritesStore: storeOf([]) })} />)
+    for (const star of screen.getAllByTestId('selector-favorite')) {
+      expect(star.closest('[data-selector-row]')).toBeNull()
+    }
+  })
+
+  it('after unstarring in Favorites, focus moves to the next favorite, else the previous, else the list', async () => {
+    knownCatalogs.current = new Map([[CLAUDE.id, CLAUDE_CATALOG]])
+    render(
+      <Panel
+        {...props({
+          favoritesStore: storeOf([
+            [CLAUDE.id, 'claude-opus'],
+            [CURSOR.id, 'sonnet'],
+            [CURSOR.id, 'opus']
+          ])
+        })}
+      />
+    )
+    expect(favoriteNames()).toEqual([
+      'Opus via Claude · Claude Agent',
+      'Claude Sonnet',
+      'Claude Opus'
+    ])
+    // First: the next favorite takes focus.
+    await act(async () => fireEvent.click(starOf(favoriteRows()[0] as HTMLElement)))
+    expect(favoriteNames()).toEqual(['Claude Sonnet', 'Claude Opus'])
+    expect(favoriteRows()[0]?.querySelector('[data-selector-row]')).toHaveFocus()
+    // Last: the previous one does.
+    await act(async () => fireEvent.click(starOf(favoriteRows()[1] as HTMLElement)))
+    expect(favoriteNames()).toEqual(['Claude Sonnet'])
+    expect(favoriteRows()[0]?.querySelector('[data-selector-row]')).toHaveFocus()
+    // None left: the first list row.
+    await act(async () => fireEvent.click(starOf(favoriteRows()[0] as HTMLElement)))
+    expect(favoriteRows()).toEqual([])
+    expect(screen.getByTestId('selector-list').querySelector('[data-selector-row]')).toHaveFocus()
+  })
+
+  it('a failed write puts the star back', async () => {
+    const store = createFavoritesStore({
+      load: () => [],
+      put: () => Promise.reject(new Error('offline')),
+      remove: () => Promise.resolve()
+    })
+    render(<Panel {...props({ favoritesStore: store })} />)
+    const star = listRow('Claude Sonnet').parentElement?.querySelector<HTMLElement>(
+      '[data-testid="selector-favorite"]'
+    ) as HTMLElement
+    await act(async () => fireEvent.click(star))
+    await waitFor(() => expect(star).toHaveAttribute('aria-pressed', 'false'))
     expect(screen.queryByText('Favorites')).toBeNull()
   })
 })
@@ -837,10 +952,10 @@ describe('SelectorPanelV2 agent icon on every row', () => {
       <Panel
         {...props({
           agentRail,
-          favorites: [
-            { configId: CLAUDE.id, value: 'claude-opus' },
-            { configId: CURSOR.id, value: 'sonnet' }
-          ]
+          favoritesStore: storeOf([
+            [CLAUDE.id, 'claude-opus'],
+            [CURSOR.id, 'sonnet']
+          ])
         })}
       />
     )

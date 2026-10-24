@@ -3,6 +3,7 @@ import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { AgentCapabilities, SessionConfigOption, SessionModelState } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { flattenConfigOptionValues } from '../chat-input-bar-config'
+import type { FavoriteKey } from './favorite-models'
 
 /** Tabs shown in the agent track before the rest go behind "More". */
 export const MAX_VISIBLE_AGENT_TABS = 4
@@ -377,35 +378,29 @@ export function splitContextOption(options: readonly SessionConfigOption[]): {
   return { context: options[index], rest: options.filter((_, i) => i !== index) }
 }
 
-/**
- * A starred model. `configId` is the STORE id that `armableConfigId` returns,
- * never the registry agent id: picking a favorite arms that config.
- */
-export interface FavoriteModel {
-  configId: string
-  value: string
-}
-
-/** The favorite for a model on an agent, or null when the agent cannot be armed. */
+/** The favorite key for a model on an agent, or null when the agent cannot be armed. */
 export function favoriteFor(
   entry: SupportedAcpAgentEntry,
   agentConfigs: readonly { id: string }[],
-  value: string
-): FavoriteModel | null {
+  modelId: string
+): FavoriteKey | null {
   const configId = armableConfigId(entry, agentConfigs)
-  return configId ? { configId, value } : null
+  return configId ? { configId, modelId } : null
 }
 
 /**
- * Favorites that still exist, in starred order, with the model each points
- * at. A favorite whose agent has no known list, or whose model is gone, drops.
+ * Favorites to show, in the given (starred) order, with the model each points
+ * at. A favorite whose agent is not installed, has no known list, or no longer
+ * offers the model is HIDDEN: the store keeps it, so a reinstall brings it back.
  */
-export function resolveFavorites(
-  favorites: readonly FavoriteModel[],
-  catalogOf: (configId: string) => ModelCatalog | null
-): Array<FavoriteModel & { model: CatalogModel }> {
+export function resolveFavorites<F extends FavoriteKey>(
+  favorites: readonly F[],
+  catalogOf: (configId: string) => ModelCatalog | null,
+  installed: (configId: string) => boolean = () => true
+): Array<F & { model: CatalogModel }> {
   return favorites.flatMap((favorite) => {
-    const model = catalogOf(favorite.configId)?.options.find((m) => m.value === favorite.value)
+    if (!installed(favorite.configId)) return []
+    const model = catalogOf(favorite.configId)?.options.find((m) => m.value === favorite.modelId)
     return model ? [{ ...favorite, model }] : []
   })
 }

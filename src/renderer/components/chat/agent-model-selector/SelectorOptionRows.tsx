@@ -479,8 +479,9 @@ export function EditableRow({
   )
   const row = (trigger: ReactNode): React.JSX.Element => (
     <div
+      // `group/fav`: hovering Edit still shows the row's star.
       className={cn(
-        'flex items-center rounded-md transition-colors duration-150 ease-out hover:bg-row-hover',
+        'group/fav flex items-center rounded-md transition-colors duration-150 ease-out hover:bg-row-hover',
         open && 'bg-row-hover'
       )}
     >

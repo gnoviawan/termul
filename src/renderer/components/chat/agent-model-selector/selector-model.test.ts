@@ -455,7 +455,7 @@ describe('favorites', () => {
   it('keys a favorite by the armable STORE id, never the agent id', () => {
     expect(favoriteFor(IMPORTED, [STORED], 'opus')).toEqual({
       configId: 'custom-1',
-      value: 'opus'
+      modelId: 'opus'
     })
   })
 
@@ -475,13 +475,33 @@ describe('favorites', () => {
     }
     const result = resolveFavorites(
       [
-        { configId: 'a', value: 'haiku' },
-        { configId: 'a', value: 'gone' },
-        { configId: 'unknown', value: 'opus' },
-        { configId: 'a', value: 'opus' }
+        { configId: 'a', modelId: 'haiku' },
+        { configId: 'a', modelId: 'gone' },
+        { configId: 'unknown', modelId: 'opus' },
+        { configId: 'a', modelId: 'opus' }
       ],
       (id) => (id === 'a' ? catalog : null)
     )
     expect(result.map((f) => f.model.name)).toEqual(['Haiku', 'Opus'])
+  })
+
+  it('hides (keeps) favorites of an agent that is not installed', () => {
+    const catalog = {
+      id: 'model',
+      source: 'config' as const,
+      currentValue: null,
+      options: [{ value: 'opus', name: 'Opus' }]
+    }
+    const favorites = [
+      { configId: 'a', modelId: 'opus' },
+      { configId: 'b', modelId: 'opus' }
+    ]
+    const result = resolveFavorites(
+      favorites,
+      () => catalog,
+      (id) => id === 'a'
+    )
+    expect(result.map((f) => f.configId)).toEqual(['a'])
+    expect(favorites).toHaveLength(2)
   })
 })
