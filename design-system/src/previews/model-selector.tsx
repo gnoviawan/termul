@@ -1,4 +1,6 @@
+import { useReducedMotion } from 'framer-motion'
 import { useRef, useState } from 'react'
+import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import { AgentModelSelector } from '@/components/chat/agent-model-selector/AgentModelSelector'
 import {
   createFavoritesStore,
@@ -8,6 +10,14 @@ import {
 import { SelectorPanel } from '@/components/chat/agent-model-selector/SelectorPanel'
 import { SelectorPanelV2 } from '@/components/chat/agent-model-selector/SelectorPanelV2'
 import { favoriteFor } from '@/components/chat/agent-model-selector/selector-model'
+import { ComposerBeamShell } from '@/components/chat/ComposerBeamShell'
+import { CHAT_GUTTER_X, COMPOSER_CARD_CLASS } from '@/components/chat/chat-layout'
+import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEditor'
+import { ComposerSendButton } from '@/components/chat/composer/ComposerSendButton'
+import { Bubble, BubbleContent } from '@/components/ui/bubble'
+import { Message, MessageContent } from '@/components/ui/message'
+import { COMPOSER_FOCUS_CLASS } from '@/components/ui/panel-styles'
+import { cn } from '@/lib/utils'
 import { Caption } from './kit'
 import {
   MOCK_AGENT_CONFIGS,
@@ -186,6 +196,107 @@ export function ModelSelectorV2ManyAgents() {
         model={MOCK_DEFAULT_MODEL}
         manyAgents
       />
+    </div>
+  )
+}
+
+/**
+ * The v2 picker where it lives: the chat composer's model pill, opening the
+ * real `AgentModelSelector` popover above it (left rail). The composer is
+ * `ChatInputBar`'s desktop markup on its own tokens and parts, minus what
+ * needs a live session (mode chip, MCP, context strip). Mock data, launcher
+ * (draft) path: a pick lands at once and the pill follows it.
+ */
+export function ModelSelectorV2Composer() {
+  const state = useMockSelector('model-selector-v2-composer', MOCK_DEFAULT_MODEL)
+  const reduced = useReducedMotion() ?? false
+  const [value, setValue] = useState('')
+  const [favoritesStore] = useState(() =>
+    createFavoritesStore(memoryFavoritesAdapter(SEED_FAVORITES))
+  )
+  return (
+    <div className="@container flex h-full flex-col bg-background">
+      <div className={cn(CHAT_GUTTER_X, 'flex flex-1 flex-col justify-end')}>
+        <div className="mx-auto w-full max-w-3xl">
+          <Message align="end" className="py-2">
+            <MessageContent className="w-fit max-w-[85%]">
+              <Bubble variant="tinted" align="end" className="max-w-full">
+                <BubbleContent className="whitespace-pre-wrap">
+                  Add a health check to the API server.
+                </BubbleContent>
+              </Bubble>
+            </MessageContent>
+          </Message>
+          <Message align="start" className="py-2">
+            <MessageContent className="min-w-0 flex-1">
+              <Bubble variant="ghost" className="w-full">
+                <BubbleContent>
+                  Added GET /healthz returning 200 with uptime. Tests pass.
+                </BubbleContent>
+              </Bubble>
+            </MessageContent>
+          </Message>
+        </div>
+      </div>
+      <div className={cn(CHAT_GUTTER_X, 'pb-6 pt-3')}>
+        <div className="relative mx-auto w-full max-w-3xl">
+          <ComposerBeamShell busy={false} reduced={reduced}>
+            <div
+              data-chat-composer="true"
+              className={cn('relative', COMPOSER_CARD_CLASS, COMPOSER_FOCUS_CLASS)}
+            >
+              <div className="flex items-start gap-1 px-4 pb-1.5 pt-3.5">
+                <ChatComposerEditor
+                  className="min-w-0 flex-1"
+                  value={value}
+                  onValueChange={setValue}
+                  minHeight={26}
+                  maxHeight={78}
+                  placeholder="Ask anything… (/ for commands, @ for files)"
+                />
+              </div>
+              <div
+                className="flex items-center justify-between gap-3 px-2 pb-2"
+                data-composer-toolbar="wide"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <AttachFilesButton onClick={NOOP} />
+                </div>
+                <div className="flex min-w-0 items-center justify-end gap-2.5">
+                  <div
+                    className="flex min-w-0 flex-wrap items-center justify-end gap-2.5"
+                    data-composer-toolbar-row="single"
+                  >
+                    <AgentModelSelector
+                      draft={state.draft}
+                      disabled={false}
+                      busy={false}
+                      modelOption={state.modelOption}
+                      modelSource="config"
+                      thoughtLevel={state.thoughtLevel}
+                      fastMode={state.fastMode}
+                      agentTemplateId={state.agentTemplateId}
+                      agentIcon={null}
+                      genericOptions={state.genericOptions}
+                      onSetConfig={state.onSetConfig}
+                      onSetModel={state.onPickModel}
+                      v2PanelProps={{ agentRail: 'left', favoritesStore }}
+                    />
+                  </div>
+                  <ComposerSendButton
+                    showStop={false}
+                    canSend={value.trim() !== ''}
+                    busy={false}
+                    reduced={reduced}
+                    onCancel={NOOP}
+                    onSubmit={() => setValue('')}
+                  />
+                </div>
+              </div>
+            </div>
+          </ComposerBeamShell>
+        </div>
+      </div>
     </div>
   )
 }

@@ -26,7 +26,15 @@ export function rowAccessibleName({
   agentName?: string
 }): string {
   const label = name.trim()
-  return agentName ? `${label} · ${agentName}` : label
+  return agentName && agentInRowName(agentName) ? `${label} · ${agentName}` : label
+}
+
+/**
+ * Whether `rowAccessibleName` names the agent: any other agent's model does.
+ * Callers pass this to `rowTooltipDescription` instead of parsing the name.
+ */
+export function agentInRowName(agentName?: string): boolean {
+  return Boolean(agentName)
 }
 
 /**
@@ -48,22 +56,22 @@ export function rowTooltip({
 
 /**
  * What the row tooltip adds for screen readers: everything the row's
- * `aria-label` (`accessibleName`) does not already say. The name is always
- * there; the agent is too on another agent's row (`rowAccessibleName`), so it
- * is left out rather than read twice. A blank string, not '', when there is
- * nothing more, since Radix falls back to the visible text for a falsy label.
+ * `aria-label` does not already say. The name is always there; the agent is
+ * too when `agentInName` (`agentInRowName`), so it is left out rather than
+ * read twice. A blank string, not '', when there is nothing more, since Radix
+ * falls back to the visible text for a falsy label.
  */
 export function rowTooltipDescription({
-  accessibleName,
   agentName,
+  agentInName,
   details
 }: {
-  accessibleName: string
   agentName?: string
+  /** The row's accessible name already names the agent. */
+  agentInName: boolean
   details?: string
 }): string {
-  const agentSaid = agentName ? accessibleName.endsWith(` · ${agentName}`) : true
-  return [agentSaid ? undefined : agentName, details].filter(Boolean).join('\n\n') || ' '
+  return [agentInName ? undefined : agentName, details].filter(Boolean).join('\n\n') || ' '
 }
 
 /** Whether the row tooltip says anything the row's name does not (else no `aria-describedby`). */
