@@ -59,7 +59,7 @@ export const DOM_LIBS: readonly { id: string; specifier: RegExp; support: 'shim'
   { id: 'mermaid', specifier: /^mermaid$|^@streamdown\/mermaid$/, support: 'none' },
   { id: 'react-virtuoso', specifier: /^react-virtuoso$/, support: 'none' },
   { id: 'tanstack-virtual', specifier: /^@tanstack\/react-virtual$/, support: 'none' },
-  { id: 'react-resizable-panels', specifier: /^react-resizable-panels$/, support: 'none' },
+  { id: 'react-resizable-panels', specifier: /^react-resizable-panels$/, support: 'shim' },
   { id: 'radix', specifier: /^@radix-ui\//, support: 'shim' },
   { id: 'framer-motion', specifier: /^(framer-motion|motion)(\/|$)/, support: 'shim' },
   { id: 'cmdk', specifier: /^cmdk$/, support: 'shim' },

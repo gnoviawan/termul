@@ -126,7 +126,8 @@ export const PACKAGE_ALIASES: Record<string, string> = {
   cmdk: 'shims/cmdk.tsx',
   '@streamdown/mermaid': 'shims/streamdown-mermaid.ts',
   '@tiptap/react': 'shims/tiptap-react.tsx',
-  dompurify: 'shims/dompurify.ts'
+  dompurify: 'shims/dompurify.ts',
+  'react-resizable-panels': 'shims/resizable-panels.tsx'
 }
 
 /** Stand-ins only shared code gets; libraries built on the real package keep it (BlockNote on tiptap). */
@@ -181,7 +182,7 @@ export function compatPlugin(aliases?: CompatResolve[]): BunPlugin {
         if (isNativeImporter(args.importer)) return { path: 'react', external: true }
         return { path: path.join(COMPAT_DIR, 'react.ts') }
       })
-      build.onResolve({ filter: /^(react-dom(\/client)?|@radix-ui\/.*|framer-motion|cmdk|@streamdown\/mermaid|@tiptap\/react|dompurify)$/ }, (args) => {
+      build.onResolve({ filter: /^(react-dom(\/client)?|@radix-ui\/.*|framer-motion|cmdk|@streamdown\/mermaid|@tiptap\/react|dompurify|react-resizable-panels)$/ }, (args) => {
         if (args.path.startsWith('react-dom') && isNativeImporter(args.importer)) {
           return { path: args.path, external: true }
         }

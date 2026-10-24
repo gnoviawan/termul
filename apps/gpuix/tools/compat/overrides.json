@@ -154,9 +154,6 @@
   "components/ui/animated-menu-content.tsx": {
     "reasons": ["getComputedStyle"]
   },
-  "components/ui/resizable.tsx": {
-    "reasons": ["react-resizable-panels"]
-  },
   "components/workspace/DropZoneOverlay.tsx": {
     "reasons": ["html5-dnd"]
   },
