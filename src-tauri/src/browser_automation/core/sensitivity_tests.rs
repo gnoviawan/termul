@@ -127,6 +127,30 @@ fn a_formless_login_is_a_password_submit() {
 }
 
 #[test]
+fn outside_every_form_only_activating_reaches_the_pages_card_fields() {
+    let outside = SensitivityFacts {
+        frame_origin: Some("https://shop.example".into()),
+        region_has_payment: true,
+        ..SensitivityFacts::default()
+    };
+    let payment = vec![(ActionClass::PaymentSubmit, Some("https://shop.example"), false)];
+    for gesture in [Gesture::Click, Gesture::Key("Enter"), Gesture::Key("Space"), Gesture::Type("x
+")] {
+        assert_eq!(summary(&classify(gesture, &outside, &scene(false))), payment, "{gesture:?}");
+    }
+    for gesture in [Gesture::Toggle, Gesture::Select, Gesture::Fill] {
+        assert!(classify(gesture, &outside, &scene(false)).is_empty(), "{gesture:?}");
+    }
+    let in_card_form = SensitivityFacts {
+        target_in_form: true,
+        ..outside
+    };
+    for gesture in [Gesture::Toggle, Gesture::Select, Gesture::Fill] {
+        assert_eq!(summary(&classify(gesture, &in_card_form, &scene(false))), payment, "{gesture:?}");
+    }
+}
+
+#[test]
 fn enter_outside_a_credential_region_submits_nothing() {
     let field = SensitivityFacts {
         is_text_entry: true,
@@ -423,6 +447,7 @@ fn classification_is_monotonic_in_every_fact_taint_and_trust() {
     let facts = all_facts();
     let gestures = [
         Gesture::Click,
+        Gesture::Toggle,
         Gesture::Key("Enter"),
         Gesture::Key("Space"),
         Gesture::Key("Tab"),

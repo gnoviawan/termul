@@ -57,11 +57,10 @@ impl DesktopBrowserHost {
                     .map_err(|_| BrowserError::invalid("invalid url"))?;
                 (Gesture::Navigate(&target), Probe::Page)
             }
+            Verb::Click => (Gesture::Click, Probe::Element { needs_ref: true }),
             // `check` and `uncheck` click: a submit styled as a switch
             // submits its form all the same.
-            Verb::Click | Verb::Check | Verb::Uncheck => {
-                (Gesture::Click, Probe::Element { needs_ref: true })
-            }
+            Verb::Check | Verb::Uncheck => (Gesture::Toggle, Probe::Element { needs_ref: true }),
             Verb::SelectOption => (Gesture::Select, Probe::Element { needs_ref: true }),
             Verb::Fill => (Gesture::Fill, Probe::Element { needs_ref: true }),
             Verb::Upload => (Gesture::Upload, Probe::Element { needs_ref: true }),

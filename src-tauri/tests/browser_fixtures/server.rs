@@ -88,6 +88,7 @@ fn route(path: &str) -> Reply {
         "/password-shadow.html" => Reply::Page(include_str!("pages/password-shadow.html")),
         "/password-switch.html" => Reply::Page(include_str!("pages/password-switch.html")),
         "/login-formless.html" => Reply::Page(include_str!("pages/login-formless.html")),
+        "/checkout-outside-form.html" => Reply::Page(include_str!("pages/checkout-outside-form.html")),
         "/link-away.html" => Reply::Page(include_str!("pages/link-away.html")),
         "/upload.html" => Reply::Page(include_str!("pages/upload.html")),
         "/download.html" => Reply::Page(include_str!("pages/download.html")),

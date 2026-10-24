@@ -12,6 +12,8 @@ var ownerDocOf = getter(Node.prototype, 'ownerDocument');
 var baseOf = getter(Node.prototype, 'baseURI');
 var urlOf = getter(Document.prototype, 'URL');
 var bodyOf = getter(Document.prototype, 'body');
+var iframeDocOf = getter(HTMLIFrameElement.prototype, 'contentDocument');
+var frameDocOf = getter(HTMLFrameElement.prototype, 'contentDocument');
 var attr = Element.prototype.getAttribute;
 var closest = Element.prototype.closest;
 var QSA = { 1: Element.prototype.querySelectorAll, 9: Document.prototype.querySelectorAll, 11: DocumentFragment.prototype.querySelectorAll };
@@ -64,12 +66,15 @@ function isPayment(el) {
   return CARD_NAME.test((attr.call(el, 'name') || '') + ' ' + (attr.call(el, 'id') || ''));
 }
 var FIELDS = 'input,select,textarea,[autocomplete]';
-// Fields under root, open shadow roots included.
+// Fields under root, open shadow roots and same-origin frames included.
 function deepFields(root, out) {
   Array.prototype.push.apply(out, all(root, FIELDS));
   all(root, '*').forEach(function (el) {
     var shadow = shadowOf(el);
     if (shadow) deepFields(shadow, out);
+    var t = tagOf(el);
+    var inner = t === 'IFRAME' ? iframeDocOf(el) : t === 'FRAME' ? frameDocOf(el) : null;
+    if (inner) deepFields(inner, out);
   });
   return out;
 }
@@ -87,11 +92,9 @@ if (form) {
   var action = (facts.isSubmitter && attr.call(target, 'formaction')) || attr.call(form, 'action') || urlOf(doc);
   facts.formAction = absolute(action);
 } else {
-  // Outside a form, a script login or checkout reads its fields from the
-  // page: every shown field no form owns is in reach.
-  region = deepFields(doc, []).filter(function (el) {
-    return !('form' in el && el.form) && !closest.call(el, 'form') && visible(el);
-  });
+  // Outside a form, a script login or checkout reads its fields from
+  // anywhere on the page, a form included: every shown field is in reach.
+  region = deepFields(doc, []).filter(visible);
 }
 facts.regionHasPassword = region.some(isPassword);
 facts.regionHasPayment = region.some(isPayment);

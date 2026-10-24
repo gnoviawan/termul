@@ -19,8 +19,8 @@ use super::ports::{ActionClass, CanonicalOrigin};
 /// What the sensitivity helper observed about an action's target element.
 ///
 /// The region is the target's form, or, for a target outside every form,
-/// the shown fields of its document that no form owns: a script login or
-/// checkout submits whatever its page holds.
+/// every shown field of its document and its same-origin frames, forms
+/// included: a pay button outside the card form can submit it by script.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SensitivityFacts {
@@ -65,8 +65,10 @@ impl SensitivityFacts {
 /// The agent action being classified.
 #[derive(Debug, Clone, Copy)]
 pub enum Gesture<'a> {
-    /// A pointer click: `click`, `check` and `uncheck`.
+    /// A pointer click.
     Click,
+    /// `check` and `uncheck`: a click that changes a control's state.
+    Toggle,
     Key(&'a str),
     Type(&'a str),
     Fill,
@@ -172,12 +174,22 @@ impl Classes {
 /// counts it as their submit, however the page wired it up.
 fn activates(gesture: Gesture<'_>, facts: &SensitivityFacts) -> bool {
     match gesture {
-        Gesture::Click | Gesture::Fill => !facts.is_text_entry,
+        Gesture::Click | Gesture::Toggle | Gesture::Fill => !facts.is_text_entry,
         Gesture::Select => true,
         Gesture::Key(key) => is_enter(key) || (is_space(key) && !facts.is_text_entry),
         Gesture::Type(text) => has_newline(text) || !facts.is_text_entry,
         Gesture::Navigate(_) | Gesture::Upload => false,
     }
+}
+
+/// Whether the region's credential fields count for `gesture`. A form's
+/// fields count for anything that activates one of its controls. Outside
+/// every form the region is the whole page, so only what a page script
+/// takes as "submit" counts there: a click, Enter, Space or typed keys, not
+/// a state change of a control (`check`, `select_option`, `fill`). Every
+/// click on a checkout page still asks; changing its quantity does not.
+fn region_counts(gesture: Gesture<'_>, facts: &SensitivityFacts) -> bool {
+    facts.target_in_form || matches!(gesture, Gesture::Click | Gesture::Key(_) | Gesture::Type(_))
 }
 
 /// Whether `gesture` submits the target's form natively: Enter or a
@@ -207,10 +219,11 @@ pub fn classify(
     let mut out = Classes(Vec::new());
 
     if activates(gesture, facts) {
-        if facts.region_has_password {
+        let region = region_counts(gesture, facts);
+        if region && facts.region_has_password {
             out.add(ActionClass::PasswordSubmit, page_origin.clone(), page, false);
         }
-        if facts.region_has_payment {
+        if region && facts.region_has_payment {
             out.add(ActionClass::PaymentSubmit, page_origin.clone(), page, false);
         }
         if let Some(link) = facts.link_target.as_deref() {
@@ -244,7 +257,9 @@ pub fn classify(
     // submit that always prompts.
     if !scene.facts_trusted && !scene.trusted_origin {
         let submit_shaped = match gesture {
-            Gesture::Click | Gesture::Select => facts.is_submitter || facts.target_in_form,
+            Gesture::Click | Gesture::Toggle | Gesture::Select => {
+                facts.is_submitter || facts.target_in_form
+            }
             Gesture::Key(key) => is_enter(key) || is_space(key),
             Gesture::Type(text) => has_newline(text) || facts.target_in_form,
             Gesture::Fill => facts.target_in_form,
