@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
+import { REJECTED_TITLE, useOptimisticSwitch } from './use-option-values'
 
 /**
  * Keyboard focus for rows inside a clipped, scrolling list: the 2px
@@ -42,6 +43,8 @@ export interface OptionChoice {
   value: string
   name: string
   description?: string
+  /** The agent rejected this value: shown disabled, and only while it is current. */
+  unavailable?: boolean
 }
 
 /** Move focus among `selector` matches inside `root` with Up/Down/Home/End. */
@@ -84,7 +87,15 @@ export type ChoiceSection =
       choices: OptionChoice[]
       onPick: (value: string) => void
     }
-  | { kind: 'toggle'; id: string; label: string; checked: boolean; onToggle: () => void }
+  | {
+      kind: 'toggle'
+      id: string
+      label: string
+      /** Drawn beside the switch. */
+      icon?: ReactNode
+      checked: boolean
+      onToggle: (value: boolean) => void | Promise<void>
+    }
 
 /** `Thinking, Context and Fast` */
 export function sectionsLabel(sections: readonly ChoiceSection[]): string {
@@ -157,22 +168,7 @@ export function ChoiceList({
       {sections.map((section, index) => {
         if (section.kind === 'toggle') {
           return (
-            <button
-              key={section.id}
-              type="button"
-              role="menuitemcheckbox"
-              aria-checked={section.checked}
-              data-option-choice=""
-              onClick={section.onToggle}
-              className={cn(
-                DENSE_ROW,
-                denseRowSize(touch),
-                index > 0 && 'mt-1 rounded-t-none border-t border-border'
-              )}
-            >
-              <span className="min-w-0 flex-1 truncate">{section.label}</span>
-              <SwitchMark on={section.checked} />
-            </button>
+            <ToggleChoice key={section.id} section={section} touch={touch} divided={index > 0} />
           )
         }
         const items = section.choices.map((choice) => {
@@ -183,12 +179,17 @@ export function ChoiceList({
               type="button"
               role="menuitemradio"
               aria-checked={selected}
+              aria-label={choice.unavailable ? `${choice.name} — ${REJECTED_TITLE}` : undefined}
+              disabled={choice.unavailable}
               data-option-choice=""
-              title={choice.description}
+              title={choice.unavailable ? REJECTED_TITLE : choice.description}
               onClick={() => section.onPick(choice.value)}
               className={cn(DENSE_ROW, denseRowSize(touch))}
             >
               <span className="min-w-0 flex-1 truncate tabular-nums">{choice.name}</span>
+              {choice.unavailable ? (
+                <span className="shrink-0 text-[10px] text-muted-foreground">Not available</span>
+              ) : null}
               <Check
                 size={14}
                 aria-hidden="true"
@@ -215,6 +216,37 @@ export function ChoiceList({
         )
       })}
     </div>
+  )
+}
+
+/** A flyout's on/off item; flips at once and reverts if the agent rejects it. */
+function ToggleChoice({
+  section,
+  touch,
+  divided
+}: {
+  section: Extract<ChoiceSection, { kind: 'toggle' }>
+  touch: boolean
+  divided: boolean
+}): React.JSX.Element {
+  const [on, toggle] = useOptimisticSwitch(section.checked, section.onToggle)
+  return (
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={on}
+      data-option-choice=""
+      onClick={() => toggle(!on)}
+      className={cn(
+        DENSE_ROW,
+        denseRowSize(touch),
+        divided && 'mt-1 rounded-t-none border-t border-border'
+      )}
+    >
+      <span className="min-w-0 flex-1 truncate">{section.label}</span>
+      {section.icon}
+      <SwitchMark on={on} />
+    </button>
   )
 }
 
@@ -343,10 +375,14 @@ export function OptionRow({
   )
 }
 
-/** An on/off session option (Fast, or a boolean the agent sends) as one row. */
+/**
+ * An on/off session option (Fast, or a boolean the agent sends) as one row.
+ * It flips at once and reverts if the agent rejects the change.
+ */
 export function OptionSwitchRow({
   id,
   label,
+  icon,
   checked,
   disabled,
   touch,
@@ -354,11 +390,14 @@ export function OptionSwitchRow({
 }: {
   id: string
   label: string
+  /** Drawn beside the switch. */
+  icon?: ReactNode
   checked: boolean
   disabled: boolean
   touch: boolean
-  onToggle: () => void
+  onToggle: (value: boolean) => void | Promise<void>
 }): React.JSX.Element {
+  const [on, toggle] = useOptimisticSwitch(checked, onToggle)
   return (
     <div className={cn('flex items-center gap-2 px-2 text-sm', denseRowSize(touch))}>
       <label
@@ -367,13 +406,14 @@ export function OptionSwitchRow({
       >
         {label}
       </label>
+      {icon}
       <Switch
         id={`selector-switch-${id}`}
         data-option-row=""
         data-testid={`selector-option-${id}`}
-        checked={checked}
+        checked={on}
         disabled={disabled}
-        onCheckedChange={onToggle}
+        onCheckedChange={toggle}
       />
     </div>
   )
