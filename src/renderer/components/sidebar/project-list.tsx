@@ -52,7 +52,6 @@ export interface ProjectListProps {
   /** Select the project and go to the workspace. */
   openProject: (projectId: string) => void
   /** Select the project without navigating (for the settings shortcut). */
-  selectProject: (id: string) => void
   onReorderProjects: (projectIds: string[]) => void
 
   // Archived section
@@ -101,7 +100,6 @@ export function ProjectList({
   renderProjectContextMenu,
   openNeedsYou,
   openProject,
-  selectProject,
   onReorderProjects,
   archivedProjects,
   showArchived,
@@ -182,10 +180,9 @@ export function ProjectList({
           onEditNameChange={setEditName}
           onSaveRename={() => handleSaveRename(project.id)}
           onCancelRename={handleCancelRename}
-          onSettingsClick={() => {
-            selectProject(project.id)
-            useSettingsModalStore.getState().openProject()
-          }}
+          onSettingsClick={() =>
+            useSettingsModalStore.getState().openProject(undefined, project.id)
+          }
         />
       </Reorder.Item>
     )

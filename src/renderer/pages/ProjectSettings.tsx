@@ -13,12 +13,7 @@ import { dialogApi, filesystemApi, shellApi, worktreeApi } from '@/lib/api'
 import { mergeEnvVars, parseEnvFile, resolveProjectEnvPath } from '@/lib/env-parser'
 import { renewAgentCredentials } from '@/stores/acp-store'
 import { applyProjectClaudeAccount, CLAUDE_AGENT_CONFIG_ID } from '@/stores/claude-account-switch'
-import {
-  useActiveProject,
-  useActiveProjectId,
-  useProjectActions,
-  useProjectStore
-} from '@/stores/project-store'
+import { useActiveProjectId, useProjectActions, useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import type { EnvVariable, Project, ProjectColor } from '@/types/project'
 import {
@@ -30,6 +25,11 @@ import { GeneralSection } from './project-settings/general-section'
 import { ShellSection } from './project-settings/shell-section'
 import { SymlinksSection } from './project-settings/symlinks-section'
 
+/** Id of the project the open modal edits, read outside render (async guards). */
+function currentSettingsProjectId(): string {
+  return useSettingsModalStore.getState().projectId || useProjectStore.getState().activeProjectId
+}
+
 export function ProjectSettingsModal() {
   const isOpen = useSettingsModalStore((state) => state.view === 'project')
   const close = useSettingsModalStore((state) => state.close)
@@ -37,20 +37,26 @@ export function ProjectSettingsModal() {
   const projectPage = useSettingsModalStore((state) => state.projectPage)
   const setProjectPage = useSettingsModalStore((state) => state.setProjectPage)
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false)
-  const activeProject = useActiveProject()
-  const claudeAccountDraft = useProjectClaudeAccountDraft(activeProject?.id, { enabled: isOpen })
+  // The modal edits the project it was opened for (a sidebar menu can open a
+  // project that is not active), else the active project.
   const activeProjectId = useActiveProjectId()
+  const targetProjectId = useSettingsModalStore((state) => state.projectId)
+  const settingsProjectId = targetProjectId || activeProjectId
+  const settingsProject = useProjectStore((state) =>
+    state.projects.find((p) => p.id === settingsProjectId)
+  )
+  const claudeAccountDraft = useProjectClaudeAccountDraft(settingsProject?.id, { enabled: isOpen })
   const { updateProject } = useProjectActions()
 
-  const [projectName, setProjectName] = useState(activeProject?.name || '')
-  const [selectedColor, setSelectedColor] = useState<ProjectColor>(activeProject?.color || 'blue')
-  const [rootPath, setRootPath] = useState(activeProject?.path || '')
+  const [projectName, setProjectName] = useState(settingsProject?.name || '')
+  const [selectedColor, setSelectedColor] = useState<ProjectColor>(settingsProject?.color || 'blue')
+  const [rootPath, setRootPath] = useState(settingsProject?.path || '')
   const rootPathRef = useRef(rootPath)
   rootPathRef.current = rootPath
-  const [envVars, setEnvVars] = useState<EnvVariable[]>(activeProject?.envVars || [])
-  const [shell, setShell] = useState(activeProject?.defaultShell || '')
+  const [envVars, setEnvVars] = useState<EnvVariable[]>(settingsProject?.envVars || [])
+  const [shell, setShell] = useState(settingsProject?.defaultShell || '')
   const [hasChanges, setHasChanges] = useState(false)
-  const [symlinkDirs, setSymlinkDirs] = useState<string[]>(activeProject?.symlinkDirs ?? [])
+  const [symlinkDirs, setSymlinkDirs] = useState<string[]>(settingsProject?.symlinkDirs ?? [])
   const [symlinkLoading, setSymlinkLoading] = useState(false)
   const [availableShells, setAvailableShells] = useState<DetectedShells | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
@@ -72,7 +78,7 @@ export function ProjectSettingsModal() {
   }, [])
 
   // Tracks which project's form fields have been initialized, so a re-render
-  // with a new activeProject object (a store update for the same project)
+  // with a new settingsProject object (a store update for the same project)
   // cannot wipe fields the user, or the D5 auto-fill, has since changed.
   const symlinkInitProjectRef = useRef<string | null>(null)
   const autoFilledSymlinkRef = useRef<string | null>(null)
@@ -93,17 +99,17 @@ export function ProjectSettingsModal() {
     setHasChanges(false)
   }, [])
 
-  // Sync state when the active project changes
+  // Sync state when the edited project changes
   useEffect(() => {
-    if (activeProject && symlinkInitProjectRef.current !== activeProject.id) {
-      symlinkInitProjectRef.current = activeProject.id
-      resetForm(activeProject)
+    if (settingsProject && symlinkInitProjectRef.current !== settingsProject.id) {
+      symlinkInitProjectRef.current = settingsProject.id
+      resetForm(settingsProject)
     }
-  }, [activeProject, resetForm])
+  }, [settingsProject, resetForm])
 
   const handleDiscard = () => {
     claudeAccountDraft.reset()
-    if (activeProject) resetForm(activeProject)
+    if (settingsProject) resetForm(settingsProject)
     else setHasChanges(false)
   }
 
@@ -112,7 +118,7 @@ export function ProjectSettingsModal() {
   // deps (e.g. node_modules) and don't break with "module not found". Runs once per
   // project and never overwrites a list the user has already configured (non-empty).
   useEffect(() => {
-    const proj = activeProject
+    const proj = settingsProject
     if (!proj?.path || !proj.isGitRepo) return
     if ((proj.symlinkDirs ?? []).length > 0) return
     if (autoFilledSymlinkRef.current === proj.id) return
@@ -144,12 +150,12 @@ export function ProjectSettingsModal() {
       cancelled = true
     }
     // Keyed on project identity only: this must run once per project selection and
-    // not re-fire when other activeProject fields change (which would re-parse and
+    // not re-fire when other settingsProject fields change (which would re-parse and
     // fight user edits).
-  }, [activeProject?.id, activeProject?.path, activeProject?.isGitRepo, activeProject])
+  }, [settingsProject?.id, settingsProject?.path, settingsProject?.isGitRepo, settingsProject])
 
   const handleSave = () => {
-    if (activeProject) {
+    if (settingsProject) {
       const normalizedEnvVars = envVars
         .map((envVar) => ({
           ...envVar,
@@ -160,7 +166,7 @@ export function ProjectSettingsModal() {
       // Normalize symlinkDirs: trim whitespace and remove empty/whitespace-only entries
       const normalizedSymlinkDirs = symlinkDirs.map((d) => d.trim()).filter((d) => d.length > 0)
 
-      updateProject(activeProject.id, {
+      updateProject(settingsProject.id, {
         name: projectName,
         color: selectedColor,
         path: rootPath,
@@ -168,7 +174,7 @@ export function ProjectSettingsModal() {
         defaultShell: shell,
         symlinkDirs: normalizedSymlinkDirs
       })
-      const projectId = activeProject.id
+      const projectId = settingsProject.id
       // Before the host write, as the launcher chip does: a chat started while
       // the save runs must not land on an agent of the old Account.
       if (claudeAccountDraft.dirty) renewAgentCredentials(CLAUDE_AGENT_CONFIG_ID, projectId)
@@ -225,10 +231,10 @@ export function ProjectSettingsModal() {
   }
 
   const syncFromGitignore = async () => {
-    if (!activeProject?.path) return
+    if (!settingsProject?.path) return
     setSymlinkLoading(true)
     try {
-      const result = await worktreeApi.parseGitignore(activeProject.path)
+      const result = await worktreeApi.parseGitignore(settingsProject.path)
       if (result.success && result.data) {
         const existing = new Set(symlinkDirs.filter((d) => d !== ''))
         const newDirs = result.data
@@ -249,7 +255,7 @@ export function ProjectSettingsModal() {
 
   const handleImportEnvFile = async () => {
     // Capture enough form identity to reject stale and out-of-order reads.
-    const projectIdAtStart = activeProjectId
+    const projectIdAtStart = settingsProjectId
     const normalizedRoot = rootPath.trim()
     const requestId = envImportRequestRef.current + 1
     envImportRequestRef.current = requestId
@@ -272,7 +278,7 @@ export function ProjectSettingsModal() {
       // overlapping reads and edits made while the adapter call is pending.
       if (
         requestId !== envImportRequestRef.current ||
-        projectIdAtStart !== useProjectStore.getState().activeProjectId ||
+        projectIdAtStart !== currentSettingsProjectId() ||
         normalizedRoot !== rootPathRef.current.trim()
       ) {
         return
@@ -314,7 +320,7 @@ export function ProjectSettingsModal() {
     } catch (error) {
       if (
         requestId !== envImportRequestRef.current ||
-        projectIdAtStart !== useProjectStore.getState().activeProjectId ||
+        projectIdAtStart !== currentSettingsProjectId() ||
         normalizedRoot !== rootPathRef.current.trim()
       ) {
         return
@@ -367,7 +373,7 @@ export function ProjectSettingsModal() {
       >
         <SettingsLayout
           title="Project settings"
-          subtitle={activeProject?.name}
+          subtitle={settingsProject?.name}
           categories={PROJECT_SETTINGS_CATEGORIES}
           searchIndex={PROJECT_SETTINGS_SEARCH_INDEX}
           onClose={handleClose}
@@ -412,7 +418,7 @@ export function ProjectSettingsModal() {
           <SymlinksSection
             dirs={symlinkDirs}
             syncing={symlinkLoading}
-            canSync={Boolean(activeProject?.isGitRepo)}
+            canSync={Boolean(settingsProject?.isGitRepo)}
             onSync={() => void syncFromGitignore()}
             onAdd={addSymlinkDir}
             onChange={updateSymlinkDir}
@@ -437,7 +443,7 @@ export function ProjectSettingsModal() {
       <ConfirmDialog
         isOpen={isCloseConfirmOpen}
         title="Unsaved Changes"
-        message={`You have unsaved changes in ${activeProject?.name ?? 'this project'}. Leaving will discard them.`}
+        message={`You have unsaved changes in ${settingsProject?.name ?? 'this project'}. Leaving will discard them.`}
         confirmLabel="Leave"
         cancelLabel="Cancel"
         variant="danger"

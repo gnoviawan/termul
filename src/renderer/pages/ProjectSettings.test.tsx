@@ -73,7 +73,11 @@ const secondProject: Project = {
   envVars: [{ key: 'SECOND', value: 'saved' }]
 }
 
-function renderSettings(projects: Project[] = [firstProject], activeProjectId = firstProject.id) {
+function renderSettings(
+  projects: Project[] = [firstProject],
+  activeProjectId = firstProject.id,
+  settingsProjectId: string | null = null
+) {
   useProjectStore.setState({
     projects,
     groups: [],
@@ -81,7 +85,7 @@ function renderSettings(projects: Project[] = [firstProject], activeProjectId = 
     isLoaded: true,
     isWorktreeOperationLocked: false
   })
-  useSettingsModalStore.setState({ view: 'project' })
+  useSettingsModalStore.setState({ view: 'project', projectId: settingsProjectId })
 
   return render(
     <MemoryRouter>
@@ -478,5 +482,45 @@ describe('ProjectSettings discard', () => {
 
     expect(await screen.findByLabelText('Name')).toHaveValue('First Project')
     expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
+  })
+})
+
+describe('ProjectSettings for a project that is not active', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiMocks.getAvailableShells.mockResolvedValue({ success: true, data: null })
+    apiMocks.parseGitignore.mockResolvedValue({ success: true, data: [] })
+  })
+
+  it('edits the project it was opened for and leaves the active project alone', async () => {
+    renderSettings([firstProject, secondProject], firstProject.id, secondProject.id)
+
+    expect(await screen.findByLabelText('Name')).toHaveValue('Second Project')
+    expect(screen.getByDisplayValue('/workspace/second')).toBeInTheDocument()
+    expect(useProjectStore.getState().activeProjectId).toBe(firstProject.id)
+  })
+
+  it('saves to the project it was opened for, not the active one', async () => {
+    const updateProject = vi.fn()
+    renderSettings([firstProject, secondProject], firstProject.id, secondProject.id)
+    useProjectStore.setState({ updateProject })
+
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Renamed' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    expect(updateProject).toHaveBeenCalledTimes(1)
+    expect(updateProject).toHaveBeenCalledWith(
+      secondProject.id,
+      expect.objectContaining({ name: 'Renamed', path: '/workspace/second' })
+    )
+    expect(useProjectStore.getState().activeProjectId).toBe(firstProject.id)
+  })
+
+  it('falls back to the active project when opened without a project', async () => {
+    renderSettings([firstProject, secondProject], secondProject.id)
+    act(() => useSettingsModalStore.getState().openProject())
+
+    expect(await screen.findByLabelText('Name')).toHaveValue('Second Project')
+    expect(useSettingsModalStore.getState().projectId).toBeNull()
   })
 })

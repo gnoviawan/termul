@@ -31,7 +31,6 @@ export interface ProjectContextMenuContentProps {
   project: Project
   groups: ProjectGroup[]
   availableShells: DetectedShells | null
-  selectProject: (id: string) => void
   onStartRename: (project: Project) => void
   onOpenColorPicker: (targetId: string, targetType: 'project' | 'group') => void
   onUpdateProject: (id: string, updates: ProjectUpdates) => void
@@ -47,7 +46,6 @@ export function ProjectContextMenuContent({
   project,
   groups,
   availableShells,
-  selectProject,
   onStartRename,
   onOpenColorPicker,
   onUpdateProject,
@@ -72,10 +70,7 @@ export function ProjectContextMenuContent({
   return (
     <ContextMenuContent className="w-56">
       <ContextMenuItem
-        onSelect={() => {
-          selectProject(project.id)
-          useSettingsModalStore.getState().openProject()
-        }}
+        onSelect={() => useSettingsModalStore.getState().openProject(undefined, project.id)}
       >
         <Settings className="mr-2 h-4 w-4" /> Settings
       </ContextMenuItem>

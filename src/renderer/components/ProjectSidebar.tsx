@@ -45,7 +45,6 @@ export function ProjectSidebar({
   activeSSHProfileId
 }: ProjectSidebarProps): React.JSX.Element {
   const {
-    selectProject,
     addProject,
     addGroup,
     removeGroup,
@@ -259,7 +258,6 @@ export function ProjectSidebar({
         project={project}
         groups={groups}
         availableShells={availableShells}
-        selectProject={selectProject}
         onStartRename={handleStartRename}
         onOpenColorPicker={handleOpenColorPicker}
         onUpdateProject={onUpdateProject}
@@ -276,7 +274,6 @@ export function ProjectSidebar({
       handleOpenColorPicker,
       onUpdateProject,
       onArchiveProject,
-      selectProject,
       groups,
       moveProjectToGroup
     ]
@@ -368,7 +365,6 @@ export function ProjectSidebar({
         renderProjectContextMenu={renderProjectContextMenu}
         openNeedsYou={openNeedsYou}
         openProject={openProject}
-        selectProject={selectProject}
         onReorderProjects={onReorderProjects}
         archivedProjects={archivedProjects}
         showArchived={showArchived}
