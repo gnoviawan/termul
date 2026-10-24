@@ -4,8 +4,8 @@
  * what's new).
  */
 
-import type { Surface } from '../types'
-import { setTheme } from '../world'
+import type { Check, Surface } from '../types'
+import { resetAlpha, setTheme } from '../world'
 import { click, DASHBOARD, gone, label, press, see, step, txt, type, wait } from './dsl'
 
 const SETTINGS_SECTIONS: Array<[id: string, nav: string, expect: string]> = [
@@ -64,6 +64,15 @@ const PALETTE_COMMANDS: Array<[id: string, command: string, expect: string]> = [
   ['report-bug', 'Report a Bug', 'Report a bug']
 ]
 
+const SHORTCUTS: Array<[id: string, keys: string, title: string, expect: Check[]]> = [
+  ['toggle-projects', 'ctrl-shift-b', 'collapse the project rail', [gone('gamma')]],
+  ['toggle-explorer', 'ctrl-b', 'file explorer', see('notes.txt')],
+  ['new-terminal', 'ctrl-t', 'new terminal', see('Terminal 1')],
+  ['command-history', 'ctrl-r', 'command history', see('Command History')],
+  ['theme-picker', 'ctrl-alt-t', 'theme picker', see('Color Themes')],
+  ['zoom-in', 'ctrl-=', 'zoom in', see('What should we do in alpha?')]
+]
+
 const PALETTE: Surface[] = [
   {
     id: 'palette.open',
@@ -77,6 +86,13 @@ const PALETTE: Surface[] = [
       step('d-escape', [press('escape')], [{ text: 'Change Color Theme', gone: true }])
     ]
   },
+  {
+    id: 'palette.type-ahead',
+    area: 'palette',
+    title: 'Typing straight after Ctrl+K reaches the palette filter',
+    roi: '[role="dialog"]',
+    steps: [DASHBOARD, step('b-typed', [press('ctrl-k'), type('theme')], [...see('Change Color Theme'), gone('New Terminal')])]
+  },
   ...PALETTE_COMMANDS.map(
     ([commandId, command, expect]): Surface => ({
       id: `palette.${commandId}`,
@@ -84,7 +100,7 @@ const PALETTE: Surface[] = [
       title: `Palette command: ${command}`,
       steps: [
         DASHBOARD,
-        step('b-filtered', [press('ctrl-k'), type(command)], [...see(command), ...(command === 'New Terminal' ? [] : [gone('New Terminal')])]),
+        step('b-filtered', [press('ctrl-k'), wait(800), type(command)], [...see(command), ...(command === 'New Terminal' ? [] : [gone('New Terminal')])]),
         step('c-run', [commandId === 'switch-project' ? press('enter') : click(txt(command)), wait(1200)], see(expect))
       ]
     })
@@ -104,6 +120,14 @@ const LONG_TAIL: Surface[] = [
     title: 'Settings shortcut (Alt+,); Escape leaves the web dialog open',
     steps: [DASHBOARD, step('b-open', [press('alt-,')], see('Interface zoom')), step('c-escape', [press('escape'), wait(600)], see('Interface zoom'))]
   },
+  ...SHORTCUTS.map(
+    ([shortcutId, keys, title, expect]): Surface => ({
+      id: `shortcuts.${shortcutId}`,
+      area: 'shortcuts',
+      title: `Default shortcut ${keys}: ${title}`,
+      steps: [DASHBOARD, step('b-pressed', [press(keys), wait(1000)], expect)]
+    })
+  ),
   {
     id: 'theme.picker',
     area: 'theme',
@@ -132,11 +156,12 @@ const LONG_TAIL: Surface[] = [
   {
     id: 'notifications.toast',
     area: 'notifications',
-    title: 'Toast after saving a snapshot',
+    title: 'Toast after switching branch',
+    prepare: resetAlpha,
     steps: [
       DASHBOARD,
-      step('b-modal', [press('ctrl-k'), type('Save Workspace Snapshot'), press('enter'), wait(800)], see('Snapshot')),
-      step('c-toast', [type('matrix snapshot'), press('enter'), wait(800)], see('Snapshot'))
+      step('b-picker', [click(label('Switch git branch'))], see('feature/login')),
+      step('c-toast', [click(txt('feature/login')), wait(800)], see('Switched to feature/login'))
     ]
   },
   {

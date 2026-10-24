@@ -7,7 +7,8 @@
  * - beta: a plain folder. gamma: a plain folder the rename surface renames.
  *   delta: a plain folder only the remove-project surface touches (each run
  *   re-adds it), so no chat another surface started there blocks the delete.
- * - a chat session in alpha with the scripted agent's three turns.
+ * - a chat session in alpha with the scripted agent's three turns. The agent
+ *   is `agent.ts`, which adds plan, permission and hold prompts.
  *
  * Every client run uses a fresh device id, so device-scoped UI state (open
  * tabs, side-panel tab, layout) never leaks from one run into the next.
@@ -127,7 +128,7 @@ export async function createWorld(opts: { port: number; root: string }): Promise
 
     const ws = await connectWs({ baseUrl: server.baseUrl, token: TOKEN, deviceId: 'm1-seed', clientInstanceId: 'm1-seed' })
     await ws.request('set_default_project', { projectId: PROJECTS.alpha.id })
-    const agent = agentConfig()
+    const agent = { ...agentConfig(), args: [path.join(import.meta.dir, 'agent.ts')] }
     await registerAgent(ws, 'm1-seed', agent)
     const { agentId } = await ws.request<{ agentId: string }>(
       'spawn_agent',

@@ -3,6 +3,7 @@
  * composer, terminal and status bar.
  */
 
+import { HOLD_REPLY, MATRIX_PROMPTS, PERMISSION_GRANTED, PERMISSION_TITLE, PLAN_ENTRIES } from '../agent'
 import type { Surface } from '../types'
 import { ensureProject, resetAlpha } from '../world'
 import { click, css, DASHBOARD, drag, gone, hover, id, label, press, rclick, see, step, txt, type, wait, wheel } from './dsl'
@@ -13,6 +14,8 @@ const explorer = click(txt('Explorer'))
 const changes = click(txt('Changes', false))
 const composer = click(css('[contenteditable="true"], textarea'))
 const openTerminal = click(css('button[aria-label^="Open terminal at"]'))
+/** A spot in the first workspace pane, as a fraction of its size: its drop zones while a drag runs. */
+const paneAt = (x: number, y: number) => ({ css: '[data-pane-content]', frac: { x, y } })
 
 const RAIL: Surface[] = [
   {
@@ -172,9 +175,13 @@ const EXPLORER: Surface[] = [
   {
     id: 'explorer.drag',
     area: 'explorer',
-    title: 'Drag a file into a folder',
+    title: 'Drag a file from the tree into the pane to open it',
     prepare: resetAlpha,
-    steps: [DASHBOARD, step('b-tree', [explorer], see('notes.txt', 'docs')), step('c-dropped', [drag(txt('notes.txt'), txt('docs')), wait(800)])]
+    steps: [
+      DASHBOARD,
+      step('b-tree', [explorer], see('notes.txt', 'docs')),
+      step('c-dropped', [drag(txt('notes.txt'), paneAt(0.5, 0.5)), wait(1200)], see('untracked notes'))
+    ]
   }
 ]
 
@@ -349,25 +356,34 @@ const CHAT: Surface[] = [
     steps: [DASHBOARD, step('b-open', [openChat, wait(1000)], see('Chat Scenario Agent'))]
   },
   {
-    id: 'chat.permission',
-    area: 'chat',
-    title: 'Permission prompt',
-    pending: { unit: 'M2', reason: 'needs a scripted agent that requests permission; the scenario agent has none' },
-    steps: []
-  },
-  {
     id: 'chat.plan',
     area: 'chat',
-    title: 'Plan panel',
-    pending: { unit: 'M2', reason: 'needs a scripted agent that emits plan updates' },
-    steps: []
+    title: 'Plan panel from a plan update',
+    steps: [
+      DASHBOARD,
+      step('b-reply', [composer, type(MATRIX_PROMPTS.plan), press('enter'), wait(3000)], see('Here is the plan for the router work.')),
+      step('c-panel', [], see('Plan', ...PLAN_ENTRIES))
+    ]
+  },
+  {
+    id: 'chat.permission',
+    area: 'chat',
+    title: 'Permission prompt: allow a tool call',
+    steps: [
+      DASHBOARD,
+      step('b-prompt', [composer, type(MATRIX_PROMPTS.permission), press('enter'), wait(3000)], see(PERMISSION_TITLE, 'Allow', 'Reject')),
+      step('c-allowed', [click(txt('Allow')), wait(1500)], [...see(PERMISSION_GRANTED), gone('Reject')])
+    ]
   },
   {
     id: 'chat.queue',
     area: 'chat',
     title: 'Prompt queue while a turn runs',
-    pending: { unit: 'M2', reason: 'needs a scripted agent that holds a turn open' },
-    steps: []
+    steps: [
+      DASHBOARD,
+      step('b-holding', [composer, type(MATRIX_PROMPTS.hold), press('enter'), wait(2500)], see(HOLD_REPLY)),
+      step('c-queued', [type('queued follow-up'), press('enter'), wait(1200)], see('Queued', 'queued follow-up'))
+    ]
   }
 ]
 
@@ -436,8 +452,12 @@ const TERMINAL: Surface[] = [
   {
     id: 'terminal.split',
     area: 'terminal',
-    title: 'Split terminal panes',
-    steps: [DASHBOARD, step('b-open', [openTerminal, wait(2500)]), step('c-split', [press('ctrl-shift-d'), wait(2000)])]
+    title: 'Split panes: drag a second terminal tab to the pane edge',
+    steps: [
+      DASHBOARD,
+      step('b-two', [openTerminal, wait(2000), press('ctrl-t'), wait(2000)], see('Terminal 1', 'Terminal 2')),
+      step('c-split', [drag(txt('Terminal 2'), paneAt(0.92, 0.5)), wait(2000)], see('Terminal 1', 'Terminal 2'))
+    ]
   }
 ]
 

@@ -13,13 +13,14 @@ export const CLIENTS: readonly Client[] = ['web', 'gpuix']
  * both clients (GPUIX picks the match nearest the point the web client used);
  * `label` (an accessible name) and `css` exist only in the DOM, so GPUIX
  * replays the click at the web element's centre (or at `at`, an offset from
- * its top-left corner, for a spot inside a canvas such as a terminal row).
+ * its top-left corner, for a spot inside a canvas such as a terminal row, or
+ * at `frac`, a fraction of its size, for a drop zone such as a pane's edge).
  */
 export type Target =
   | { testId: string }
   | { text: string; exact?: boolean }
   | { label: string; role?: 'button' | 'tab' | 'menuitem' | 'option' | 'switch' | 'combobox' | 'checkbox' | 'link' }
-  | { css: string; at?: { x: number; y: number } }
+  | { css: string; at?: { x: number; y: number }; frac?: { x: number; y: number } }
 
 /** Keys are written in GPUI keystroke syntax (`ctrl-k`, `alt-,`, `escape`). */
 export type Action =

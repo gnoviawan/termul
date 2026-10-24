@@ -45,6 +45,22 @@ const SETTINGS_BASE = ['The section content and navigation match.', 'The modal b
 const TOAST =
   'The toast is the sonner shim: a flat green box at the window edge with the close button on the right, where the web shows a card with a check icon and the close button at its top-left.'
 
+const THEME_FAMILIES = ['termul', 'cursor', 'catppuccin', 'dracula', 'nord', 'gruvbox', 'tokyonight', 'ayu', 'one-dark', 'github']
+const THEME_REVIEWS: Record<string, Review> = Object.fromEntries(
+  THEME_FAMILIES.flatMap((family) =>
+    (['dark', 'light'] as const).map((mode): [string, Review] => [
+      `theme.${family}-${mode}`,
+      {
+        status: 'ported',
+        differences: [
+          'Background, panel, card, border, text and accent colours match the web dashboard.',
+          'The differences left are not the theme: the overlapping chat cards (chat.send) and the outline connection lamp (statusbar.items).'
+        ]
+      }
+    ])
+  )
+)
+
 export const REVIEWS: Record<string, Review> = {
   'rail.project-list': { status: 'ported', differences: ['Same layout and order; switching to beta works by click.', LAMP] },
   'rail.project-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 context menus', impact: 3 },
@@ -79,7 +95,16 @@ export const REVIEWS: Record<string, Review> = {
     unit: 'C2 menus and popovers',
     impact: 2
   },
-  'side.chats': { status: 'ported', differences: ['Chat card title, agent, branch and age match.'] },
+  'side.chats': {
+    status: 'partial',
+    differences: [
+      'With the one seeded chat, the card title, agent, branch and age match.',
+      'Every later frame, once chat.send has started more chats, shows the overlap: ' + OVERLAP
+    ],
+    cause: 'needs diagnosis',
+    unit: 'O7 chat list sync and layout',
+    impact: 3
+  },
   'side.chats-search': { status: 'ported', differences: ['Filtering to no match and back matches, including the No matches. text.'] },
   'side.chat-card-menu': { status: 'broken', differences: [RIGHT_CLICK], cause: 'compat translator gap', unit: 'C2 context menus', impact: 2 },
   'side.workspace-switcher': { status: 'ported', differences: ['The Working copies popover matches; GPUIX omits the small terminal glyph on the web row hover.'] },
@@ -234,6 +259,20 @@ export const REVIEWS: Record<string, Review> = {
     unit: 'C2 menus and popovers',
     impact: 1
   },
+  'statusbar.connection': {
+    status: 'partial',
+    differences: ['Hovering the connection lamp shows a Connected tooltip on the web; GPUIX shows none.', LAMP],
+    cause: 'compat translator gap',
+    unit: 'C4 tooltips',
+    impact: 1
+  },
+  'remote.access-popover': {
+    status: 'blocked',
+    differences: ['Not compared: the popover renders only under isTauriContext(), so the web client has no reference.'],
+    cause: 'server route needed',
+    unit: 'R2 desktop host role over the server',
+    impact: 1
+  },
   'settings.interface': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C6 overlay backdrop', impact: 1 },
   'settings.notifications': {
     status: 'partial',
@@ -282,5 +321,60 @@ export const REVIEWS: Record<string, Review> = {
     unit: 'O9 server version source',
     impact: 1
   },
-  'settings.reset': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C6 overlay backdrop', impact: 1 }
+  'settings.reset': { status: 'partial', differences: SETTINGS_BASE, cause: 'compat translator gap', unit: 'C6 overlay backdrop', impact: 1 },
+  'shortcuts.menu': {
+    status: 'partial',
+    differences: ['Shortcut Menu rows, descriptions and key chips match, including the blank Command History chip in both.', `The ${OVERLAY}`],
+    cause: 'compat translator gap',
+    unit: 'C6 overlay backdrop',
+    impact: 1
+  },
+  'shortcuts.settings-shortcut': {
+    status: 'partial',
+    differences: ['Alt+, opens Preferences in both. Escape then closes the dialog in GPUIX, where the web keeps it open.'],
+    cause: 'needs diagnosis',
+    unit: 'C10 dialog Escape routing',
+    impact: 1
+  },
+  'theme.picker': {
+    status: 'partial',
+    differences: ['The Color Themes popover, groups, swatches and the current-theme check match.', TINT, 'No focus ring on the search field.'],
+    cause: 'compat translator gap',
+    unit: 'C8 text colour runs',
+    impact: 1
+  },
+  'dialogs.bug-report': {
+    status: 'broken',
+    differences: [
+      'The Report a bug dialog collapses to its header and footer: the Title field is cut off and the What happened, Screenshots and Preview sections are not painted, so no report can be written.'
+    ],
+    cause: 'compat translator gap',
+    unit: 'C9 dialog body layout',
+    impact: 3
+  },
+  'canvas.open': {
+    status: 'blocked',
+    differences: [
+      'This server build ships no figcraft bundle, so the web tab shows the BUNDLE_MISSING error JSON; GPUIX stays on Loading editor... and paints neither that error nor an editor.',
+      'The canvas is a figcraft iframe (CanvasMountLayer), which GPUIX 0.11 cannot host.'
+    ],
+    cause: 'missing GPUIX capability',
+    unit: 'X1 canvas host',
+    impact: 2
+  },
+  'browser.pane': {
+    status: 'blocked',
+    differences: ['Not compared: browser tabs are Tauri webviews with no web-client reference, and GPUIX 0.11 has no webview element. Replacing Tauri loses the browser pane until a native webview exists.'],
+    cause: 'missing GPUIX capability',
+    unit: 'X2 native webview',
+    impact: 2
+  },
+  'update.toast': {
+    status: 'blocked',
+    differences: ['Not compared: the update toast and the what\'s new modal render only under isTauriContext(). GPUIX needs its own updater path to show them at all.'],
+    cause: 'native override needed',
+    unit: 'U1 GPUIX updater and what\'s new',
+    impact: 1
+  },
+  ...THEME_REVIEWS
 }

@@ -103,11 +103,18 @@ function webLocator(page: Page, target: Target): Locator {
 }
 
 export function webDriver(page: Page, points: Map<string, Point>): Driver {
-  const centre = async (key: string, locator: Locator): Promise<Point> => {
+  /** Where the web client acts on `target`: its centre, or the `at` / `frac` spot inside it. */
+  const pointOf = async (key: string, target: Target): Promise<Point> => {
+    const locator = webLocator(page, target)
     await locator.waitFor({ state: 'visible', timeout: PRESENT_TIMEOUT_MS })
     const box = await locator.boundingBox()
     if (!box) throw new Error('no box')
-    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+    const spot: { at?: Point; frac?: Point } = 'css' in target ? target : {}
+    const point = spot.at
+      ? { x: box.x + spot.at.x, y: box.y + spot.at.y }
+      : spot.frac
+        ? { x: box.x + box.width * spot.frac.x, y: box.y + box.height * spot.frac.y }
+        : { x: box.x + box.width / 2, y: box.y + box.height / 2 }
     points.set(key, point)
     return point
   }
@@ -118,20 +125,16 @@ export function webDriver(page: Page, points: Map<string, Point>): Driver {
       try {
         switch (action.do) {
           case 'click': {
-            const locator = webLocator(page, action.target)
-            const at = 'css' in action.target ? action.target.at : undefined
-            if (at) {
-              await locator.waitFor({ state: 'visible', timeout: PRESENT_TIMEOUT_MS })
-              const box = await locator.boundingBox()
-              if (!box) throw new Error('no box')
-              const point = { x: box.x + at.x, y: box.y + at.y }
-              points.set(key, point)
+            const target = action.target
+            if ('css' in target && (target.at || target.frac)) {
+              const point = await pointOf(key, target)
               if (action.modifiers) await page.keyboard.down('Control')
               await page.mouse.click(point.x, point.y, { button: action.button })
               if (action.modifiers) await page.keyboard.up('Control')
               break
             }
-            await centre(key, locator)
+            const locator = webLocator(page, target)
+            await pointOf(key, target)
             await locator.click({
               button: action.button,
               modifiers: action.modifiers ? ['ControlOrMeta'] : undefined
@@ -139,29 +142,32 @@ export function webDriver(page: Page, points: Map<string, Point>): Driver {
             break
           }
           case 'dblclick': {
-            const locator = webLocator(page, action.target)
-            await centre(key, locator)
-            await locator.dblclick()
+            await pointOf(key, action.target)
+            await webLocator(page, action.target).dblclick()
             break
           }
           case 'hover': {
-            const locator = webLocator(page, action.target)
-            await centre(key, locator)
-            await locator.hover()
+            await pointOf(key, action.target)
+            await webLocator(page, action.target).hover()
             break
           }
           case 'wheel': {
-            const point = await centre(key, webLocator(page, action.target))
+            const point = await pointOf(key, action.target)
             await page.mouse.move(point.x, point.y)
             await page.mouse.wheel(0, action.deltaY)
             break
           }
           case 'drag': {
-            const from = webLocator(page, action.from)
-            const to = webLocator(page, action.to)
-            await centre(key, from)
-            await centre(`${key}/to`, to)
-            await from.dragTo(to)
+            // Mouse steps rather than dragTo: HTML5 drags (tabs, explorer rows) need a
+            // drag start before the drop zones they reveal exist under the pointer.
+            const from = await pointOf(key, action.from)
+            const to = await pointOf(`${key}/to`, action.to)
+            await page.mouse.move(from.x, from.y)
+            await page.mouse.down()
+            await page.mouse.move(from.x + 12, from.y + 4, { steps: 4 })
+            await page.mouse.move(to.x, to.y, { steps: 16 })
+            await page.waitForTimeout(200)
+            await page.mouse.up()
             break
           }
           case 'press':
