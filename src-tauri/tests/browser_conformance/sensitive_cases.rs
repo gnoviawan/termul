@@ -247,8 +247,9 @@ async fn focused_password_submit_asked(c: &Ctx<'_>) -> CaseResult {
 }
 
 /// `check` on a submit styled as a switch clicks it, so it submits the
-/// password form like any click. The form also holds a field named
-/// `elements`, which shadows `form.elements` for every script.
+/// password form like any click. The form also holds fields named
+/// `elements` and `nodeType`, which shadow those properties of the form for
+/// every script.
 pub async fn check_password_submit(c: &Ctx<'_>) -> CaseResult {
     asking_before_passwords(c, check_password_submit_asked(c)).await
 }
@@ -287,7 +288,9 @@ async fn formless_password_submit_asked(c: &Ctx<'_>) -> CaseResult {
 
 /// A pay button outside the card form, wired up by page script, submits
 /// the card all the same. Changing a control that sits outside every form
-/// asks nothing.
+/// asks nothing. Fields and images on the page shadow properties of the
+/// card form (`getBoundingClientRect`) and of the document (`nodeType`,
+/// `elementFromPoint`, `host`) that the host's helpers read.
 pub async fn payment_outside_form(c: &Ctx<'_>) -> CaseResult {
     c.open("/checkout-outside-form.html", "Checkout outside form fixture").await?;
     let quantity = c.ref_of("combobox", "Quantity").await?;
