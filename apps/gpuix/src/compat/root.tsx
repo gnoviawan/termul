@@ -5,8 +5,8 @@
  */
 
 import { type PublicInstance, type RenderOptions, useGpuixRequired } from '@gpuix/react'
-import { Fragment, type ReactNode, useLayoutEffect, useState, useSyncExternalStore } from 'react'
-import { dragPreview, subscribeDragPreview } from './dnd'
+import { Fragment, type ReactNode, useCallback, useLayoutEffect, useState, useSyncExternalStore } from 'react'
+import { dragPreview, hitTransparent, subscribeDragPreview } from './dnd'
 import { type CompatRenderer, bindCompatRenderer } from './dom-node'
 import { windowKeyEvent } from './events'
 import { setOverlayLayer } from './react-dom'
@@ -32,6 +32,10 @@ export function CompatRoot({ children, onRenderer }: CompatRootProps): ReactNode
   const renderer = useGpuixRequired()
   const [layer, setLayer] = useState<PublicInstance | null>(null)
   const [ready, setReady] = useState(false)
+  const layerRef = useCallback((instance: PublicInstance | null) => {
+    setLayer(instance)
+    return hitTransparent(instance as { id: number } | null)
+  }, [])
   useLayoutEffect(() => {
     bindCompatRenderer(renderer as unknown as CompatRenderer)
     onRenderer?.(renderer)
@@ -49,7 +53,7 @@ export function CompatRoot({ children, onRenderer }: CompatRootProps): ReactNode
   return (
     <div style={{ ...root, fontSize: 16, lineHeight: 24 }} onLayout={() => syncViewport(renderer)}>
       {ready && layer ? <Fragment key={themeId}>{children}</Fragment> : null}
-      <div ref={setLayer} style={OVERLAY} />
+      <div ref={layerRef} style={OVERLAY} />
       <DragPreviewBox />
     </div>
   )
@@ -62,6 +66,7 @@ function DragPreviewBox(): ReactNode {
   const look = compatTw()('rounded-sm border border-primary/40 bg-primary/10')
   return (
     <div
+      ref={hitTransparent as never}
       style={{
         ...look,
         position: 'absolute',

@@ -26,7 +26,10 @@ export function openDroppedFile(filePath: string): File {
     const blob = Bun.file(filePath)
     return new File([blob], name, { type: browserFileType(blob.type), lastModified: stat.mtimeMs })
   } catch (error) {
-    log.warn('dnd', `dropped path unreadable: ${error instanceof Error ? error.message : String(error)}`)
+    log.warn(
+      'dnd',
+      `dropped path unreadable: ${error instanceof Error ? error.message : String(error)}`
+    )
     return new File([], name)
   }
 }
@@ -57,7 +60,12 @@ export class BlobFileReader extends EventTarget {
 
   readAsDataURL(blob: Blob): void {
     this.read(
-      blob.arrayBuffer().then((bytes) => `data:${blob.type || 'application/octet-stream'};base64,${Buffer.from(bytes).toString('base64')}`)
+      blob
+        .arrayBuffer()
+        .then(
+          (bytes) =>
+            `data:${blob.type || 'application/octet-stream'};base64,${Buffer.from(bytes).toString('base64')}`
+        )
     )
   }
 

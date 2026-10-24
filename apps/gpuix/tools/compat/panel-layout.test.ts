@@ -3,7 +3,12 @@ import { defaultLayout, resizeAtHandle, validateLayout } from '../../src/compat/
 
 describe('defaultLayout', () => {
   test('stored pane sizes are kept', () => {
-    expect(defaultLayout([{ defaultSize: 30, minSize: 10 }, { defaultSize: 70, minSize: 10 }])).toEqual([30, 70])
+    expect(
+      defaultLayout([
+        { defaultSize: 30, minSize: 10 },
+        { defaultSize: 70, minSize: 10 }
+      ])
+    ).toEqual([30, 70])
   })
 
   test('panels without a default share what is left', () => {
@@ -37,10 +42,14 @@ describe('resizeAtHandle', () => {
   })
 
   test('the outline panel stops at its maximum', () => {
-    expect(resizeAtHandle([80, 20], -30, 0, [{ minSize: 60 }, { minSize: 15, maxSize: 35 }])).toEqual([65, 35])
+    expect(
+      resizeAtHandle([80, 20], -30, 0, [{ minSize: 60 }, { minSize: 15, maxSize: 35 }])
+    ).toEqual([65, 35])
   })
 
   test('a shrink past the neighbour minimum carries on to the next panel', () => {
-    expect(resizeAtHandle([40, 20, 40], 30, 0, [{ minSize: 10 }, { minSize: 10 }, { minSize: 10 }])).toEqual([70, 10, 20])
+    expect(
+      resizeAtHandle([40, 20, 40], 30, 0, [{ minSize: 10 }, { minSize: 10 }, { minSize: 10 }])
+    ).toEqual([70, 10, 20])
   })
 })

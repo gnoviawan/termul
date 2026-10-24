@@ -145,6 +145,19 @@ interface Lifted {
   svg: string[]
   placement: Placement | null
   fillMinus: number | null
+  /** `left-1/4`-style offsets as percent strings, placed by `percentPlacement`. */
+  insets: Record<string, string> | null
+}
+
+const FRACTION_INSET = /^(top|right|bottom|left|inset|inset-x|inset-y)-(\d+)\/(\d+)$/
+const INSET_SIDES: Readonly<Record<string, readonly string[]>> = {
+  top: ['top'],
+  right: ['right'],
+  bottom: ['bottom'],
+  left: ['left'],
+  inset: ['top', 'right', 'bottom', 'left'],
+  'inset-x': ['left', 'right'],
+  'inset-y': ['top', 'bottom']
 }
 
 /** Pull out the tokens tw() has no StyleDesc for. Variant-prefixed ones stay with tw(). */
@@ -161,7 +174,8 @@ function lift(className: string): Lifted {
     scope: null,
     svg: [],
     placement: null,
-    fillMinus: null
+    fillMinus: null,
+    insets: null
   }
   const placed = liftPlacement(className.split(/\s+/))
   lifted.placement = placed.placement
@@ -169,6 +183,14 @@ function lift(className: string): Lifted {
   lifted.fillMinus = fill.minus
   for (const raw of fill.rest) {
     if (!raw) continue
+    const inset = raw.match(FRACTION_INSET)
+    if (inset) {
+      const value = `${(Number(inset[2]) / Number(inset[3])) * 100}%`
+      const insets = lifted.insets ?? {}
+      for (const side of INSET_SIDES[inset[1]]) insets[side] = value
+      lifted.insets = insets
+      continue
+    }
     // `group-hover/name:` binds to the nearest group, whatever its name.
     const token = raw.includes('/') ? raw.replace(NAMED_GROUP_VARIANT, '$1$2') : raw
     const svg = svgToken(token)
@@ -288,7 +310,7 @@ function translate(tw: Tw, tag: string, className: string): Translation {
   // lay the content out from the start, like any flex container.
   const ownLayout = tag === 'button' && compiled.base.display !== undefined && compiled.base.display !== 'none'
   const merged: StyleDesc = defaults && !ownLayout ? { ...defaults, ...compiled.base } : compiled.base
-  const base = layoutFixes(merged)
+  const base = lifted.insets ? { ...layoutFixes(merged), ...lifted.insets } : layoutFixes(merged)
   let ruleMode: RuleMode = 'static'
   for (const rule of compiled.rules) {
     if (rule.when.some(needsHost)) {

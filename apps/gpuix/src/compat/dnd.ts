@@ -16,8 +16,9 @@
  */
 
 import type { EventPayload } from '@gpuix/react'
-import { ancestorIds, compatReads, compatRenderer, nodeOrNull } from './dom-node'
+import { ancestorIds, compatReads, nodeOrNull, trackedInstance, treeIndex } from './dom-node'
 import { CompatEvent, type DomHandlers, domEvent, handlersOf } from './events'
+import type { Bounds, TreeJson } from './live-reads'
 import { compatWarn } from './log'
 
 type DragType = 'dragstart' | 'drag' | 'dragend' | 'dragenter' | 'dragover' | 'dragleave' | 'drop'
@@ -151,7 +152,12 @@ function setPreview(next: DragPreview | null): void {
 export function dragSuppressesClick(payload: EventPayload): boolean {
   if (session?.phase === 'dragging') return true
   const r = lastRelease
-  return r !== null && r.x === payload.x && r.y === payload.y && performance.now() - r.at < CLICK_AFTER_DRAG_MS
+  return (
+    r !== null &&
+    r.x === payload.x &&
+    r.y === payload.y &&
+    performance.now() - r.at < CLICK_AFTER_DRAG_MS
+  )
 }
 
 type FileOpener = (path: string) => File
@@ -162,10 +168,49 @@ export function setDroppedFileOpener(opener: FileOpener | null): void {
   openFile = opener
 }
 
+/**
+ * Boxes compat adds around an element (placement wrappers, overlay layers):
+ * never a drop target themselves, and their children decide for themselves.
+ */
+const transparent = new Set<number>()
+
+export function hitTransparent(instance: { id: number } | null): (() => void) | undefined {
+  if (!instance) return undefined
+  const id = instance.id
+  transparent.add(id)
+  return () => {
+    transparent.delete(id)
+  }
+}
+
+function inside(b: Bounds, p: Point): boolean {
+  return p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height
+}
+
+/**
+ * The DOM's hit test over the last painted tree: the last-painted, deepest
+ * element whose box holds the point, inside every ancestor's box, skipping
+ * `pointer-events: none` as CSS inherits it. GPUIX's own `getElementsAt`
+ * cannot answer this: compat's click-through boxes carry `pointer-events:
+ * none`, which hides their whole subtree from it.
+ */
+function deepest(node: TreeJson, p: Point, inheritedNone: boolean): number | null {
+  if (node.bounds && !inside(node.bounds, p)) return null
+  const own = trackedInstance(node.id)?.props.__dom?.pointerEvents
+  const none = own === undefined ? inheritedNone : own === 'none'
+  const kids = node.children ?? []
+  for (let i = kids.length - 1; i >= 0; i--) {
+    const kid = kids[i]
+    const hit = kid ? deepest(kid, p, none) : null
+    if (hit !== null) return hit
+  }
+  if (!node.bounds || none || transparent.has(node.id)) return null
+  return node.id
+}
+
 function hitTest(point: Point): number | null {
-  const renderer = compatRenderer()
-  if (!renderer) return null
-  return renderer.getElementsAt(point.x, point.y)[0] ?? null
+  const tree = treeIndex().tree
+  return tree ? deepest(tree, point, false) : null
 }
 
 function pointOf(payload: EventPayload): Point {
@@ -182,7 +227,12 @@ function dispatch(
   payload: EventPayload,
   related: number | null = null
 ): DragEventView {
-  const event = new CompatEvent(type, nodeOrNull(target), payload, nodeOrNull(related)) as DragEventView
+  const event = new CompatEvent(
+    type,
+    nodeOrNull(target),
+    payload,
+    nodeOrNull(related)
+  ) as DragEventView
   Object.defineProperty(event, 'dataTransfer', { value: data })
   const name = HANDLER[type]
   for (const at of [target, ...ancestorIds(target)]) {
@@ -214,7 +264,11 @@ function dispatch(
 }
 
 /** Move the drag to `point`: enter/leave on a change of element, then dragover. */
-function hover(s: Extract<Session, { phase: 'dragging' }>, point: Point, payload: EventPayload): void {
+function hover(
+  s: Extract<Session, { phase: 'dragging' }>,
+  point: Point,
+  payload: EventPayload
+): void {
   const target = hitTest(point)
   if (target !== s.over) {
     const previous = s.over
@@ -265,7 +319,12 @@ export function pressSource(payload: EventPayload): void {
   if (session?.phase === 'dragging') return
   const now = performance.now()
   const s = session
-  if (s?.phase === 'pressed' && now - s.at < 100 && ancestorIds(s.source).includes(payload.elementId)) return
+  if (
+    s?.phase === 'pressed' &&
+    now - s.at < 100 &&
+    ancestorIds(s.source).includes(payload.elementId)
+  )
+    return
   session = { phase: 'pressed', source: payload.elementId, origin: pointOf(payload), at: now }
 }
 

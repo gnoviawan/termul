@@ -36,13 +36,19 @@ export function defaultLayout(panels: readonly PanelConstraints[]): number[] {
  * Scale the layout to total 100, clamp every panel into its bounds, and hand
  * what clamping freed or took to the panels after it, in order.
  */
-export function validateLayout(layout: readonly number[], panels: readonly PanelConstraints[]): number[] {
+export function validateLayout(
+  layout: readonly number[],
+  panels: readonly PanelConstraints[]
+): number[] {
   if (layout.length !== panels.length) {
     throw new Error(`Invalid ${panels.length} panel layout: ${layout.join(', ')}`)
   }
   if (layout.length === 0) return []
   const total = layout.reduce((sum, size) => sum + size, 0)
-  const next = total > EPSILON ? layout.map((size) => (size / total) * 100) : layout.map(() => 100 / layout.length)
+  const next =
+    total > EPSILON
+      ? layout.map((size) => (size / total) * 100)
+      : layout.map(() => 100 / layout.length)
   let remainder = 0
   for (let i = 0; i < next.length; i++) {
     const clamped = clamp(next[i], panels[i])
@@ -76,7 +82,11 @@ export function resizeAtHandle(
   const room = bounds(panels[growing]).max - next[growing]
   const wanted = Math.min(Math.abs(delta), Math.max(0, room))
   let taken = 0
-  for (let i = delta > 0 ? pivot + 1 : pivot; i >= 0 && i < next.length && wanted - taken > EPSILON; i += step) {
+  for (
+    let i = delta > 0 ? pivot + 1 : pivot;
+    i >= 0 && i < next.length && wanted - taken > EPSILON;
+    i += step
+  ) {
     const give = Math.min(next[i] - bounds(panels[i]).min, wanted - taken)
     if (give <= 0) continue
     next[i] -= give

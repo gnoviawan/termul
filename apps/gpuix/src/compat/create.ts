@@ -19,7 +19,7 @@ import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackIns
 import { convertDomStyle } from './dom-style'
 import { adaptHandlers, type GpuixListeners } from './events'
 import { compatWarn } from './log'
-import { placeStyle, wrapFillMinus } from './placement'
+import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
 import { layoutListener } from './resize'
 import { SVG_CHILD_TAGS, svgElement } from './svg'
 import { translation, type Translation, unreverse } from './translate'
@@ -184,6 +184,9 @@ export function buildElement(
   if (overrides?.nativeStyle) style = { ...style, ...overrides.nativeStyle }
   const placed = tr.placement ? placeStyle(style, tr.placement) : null
   if (placed) style = placed.inner
+  const percent = placed ? null : percentPlacement(style)
+  if (percent) style = percent.inner
+  const pointerEvents = style.pointerEvents
 
   const listeners: GpuixListeners = {}
   const source = overrides?.handlers ? { ...props, ...overrides.handlers } : props
@@ -197,13 +200,14 @@ export function buildElement(
   if (!interactive) style = passThrough(style)
 
   const userRef = props.ref
-  const tracked = userRef != null || handlers !== null || focusable || attrs !== NO_ATTRS
+  const tracked = userRef != null || handlers !== null || focusable || attrs !== NO_ATTRS || pointerEvents !== undefined
   const dom: DomInfo = {
     tag,
     className: props.className ?? '',
     attrs,
     handlers,
-    value: typeof props.value === 'string' ? props.value : undefined
+    value: typeof props.value === 'string' ? props.value : undefined,
+    pointerEvents
   }
   const native: Record<string, unknown> = { style, __dom: dom, ...listeners }
   if (overrides?.native) {
@@ -266,6 +270,7 @@ export function buildElement(
   }
   if (!childInfo.has(element)) childInfo.set(element, { inline: tr.inline })
   if (placed) return placed.wrap(element, key)
+  if (percent) return percent.wrap(element, key)
   if (tr.fillMinus !== null) {
     const m = tr.autoMargin
     const side = m?.left && m.right ? 'both' : m?.left ? 'left' : 'right'

@@ -26,7 +26,6 @@ function fakeRenderer() {
       calls.bounds++
       return boxes[id] ?? null
     },
-    getElementsAt: () => [],
     getAutomationTree() {
       calls.tree++
       return JSON.stringify(node(0, [node(1, [node(2), node(3), node(4)]), { id: 9, type: 'div' }]))

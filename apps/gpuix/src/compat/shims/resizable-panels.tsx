@@ -15,8 +15,8 @@
 import {
   type CSSProperties,
   createContext,
-  forwardRef,
   Fragment,
+  forwardRef,
   type ReactNode,
   useCallback,
   useContext,
@@ -28,7 +28,13 @@ import {
   useRef,
   useState
 } from 'react'
-import { defaultLayout, type PanelConstraints, resizeAtHandle, sameLayout, validateLayout } from './panel-layout'
+import {
+  defaultLayout,
+  type PanelConstraints,
+  resizeAtHandle,
+  sameLayout,
+  validateLayout
+} from './panel-layout'
 
 type Direction = 'horizontal' | 'vertical'
 
@@ -51,8 +57,12 @@ export interface ImperativePanelHandle {
   expand(): void
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: DOM props pass through to the host element untyped
-type AnyProps = { children?: ReactNode; className?: string; style?: Record<string, unknown>; [prop: string]: any }
+type AnyProps = {
+  children?: ReactNode
+  className?: string
+  style?: Record<string, unknown>
+  [prop: string]: any
+}
 
 interface PanelEntry {
   id: string
@@ -84,12 +94,22 @@ const HANDLE_PX = 1
 const GRAB_PX = 9
 
 const GRAB_COLUMN: CSSProperties = {
-  position: 'absolute', top: 0, bottom: 0, left: -(GRAB_PX - HANDLE_PX) / 2, width: GRAB_PX,
-  cursor: 'col-resize', pointerEvents: 'auto'
+  position: 'absolute',
+  top: 0,
+  bottom: 0,
+  left: -(GRAB_PX - HANDLE_PX) / 2,
+  width: GRAB_PX,
+  cursor: 'col-resize',
+  pointerEvents: 'auto'
 }
 const GRAB_ROW: CSSProperties = {
-  position: 'absolute', left: 0, right: 0, top: -(GRAB_PX - HANDLE_PX) / 2, height: GRAB_PX,
-  cursor: 'row-resize', pointerEvents: 'auto'
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  top: -(GRAB_PX - HANDLE_PX) / 2,
+  height: GRAB_PX,
+  cursor: 'row-resize',
+  pointerEvents: 'auto'
 }
 const SLOT_COLUMN: CSSProperties = { position: 'relative', flexShrink: 0, width: HANDLE_PX }
 const SLOT_ROW: CSSProperties = { position: 'relative', flexShrink: 0, height: HANDLE_PX }
@@ -97,7 +117,8 @@ const SLOT_ROW: CSSProperties = { position: 'relative', flexShrink: 0, height: H
 let panelSeq = 0
 
 function byOrder(a: PanelEntry, b: PanelEntry): number {
-  if (a.order !== undefined && b.order !== undefined && a.order !== b.order) return a.order - b.order
+  if (a.order !== undefined && b.order !== undefined && a.order !== b.order)
+    return a.order - b.order
   return a.seq - b.seq
 }
 
@@ -133,7 +154,9 @@ export const PanelGroup = forwardRef<ImperativePanelGroupHandle, AnyProps>(funct
   const layoutRef = useRef<number[]>([])
   const reported = useRef<Map<string, number>>(new Map())
   const reportedLayout = useRef<number[] | null>(null)
-  const element = useRef<{ getBoundingClientRect(): { width: number; height: number } } | null>(null)
+  const element = useRef<{ getBoundingClientRect(): { width: number; height: number } } | null>(
+    null
+  )
   const drag = useRef<DragStart | null>(null)
   const onLayoutRef = useRef<PanelGroupOnLayout | undefined>(onLayout)
   onLayoutRef.current = onLayout
@@ -151,7 +174,9 @@ export const PanelGroup = forwardRef<ImperativePanelGroupHandle, AnyProps>(funct
   const syncPanels = useCallback(() => {
     const entries = ordered()
     const ids = entries.map((p) => p.id)
-    setOrder((prev) => (prev.length === ids.length && prev.every((p, i) => p === ids[i]) ? prev : ids))
+    setOrder((prev) =>
+      prev.length === ids.length && prev.every((p, i) => p === ids[i]) ? prev : ids
+    )
     commit(defaultLayout(entries.map((p) => p.constraints)))
   }, [ordered, commit])
 
@@ -225,14 +250,20 @@ export const PanelGroup = forwardRef<ImperativePanelGroupHandle, AnyProps>(funct
   }, [layout, order])
 
   const horizontal = direction === 'horizontal'
-  const handleFor = (pivot: number): HandleEntry | undefined => handles.current[pivot] ?? handles.current[0]
+  const handleFor = (pivot: number): HandleEntry | undefined =>
+    handles.current[pivot] ?? handles.current[0]
 
   const onGrab = (pivot: number, event: { button: number; clientX: number; clientY: number }) => {
     if (event.button !== 0 || handleFor(pivot)?.disabled) return
     const box = element.current?.getBoundingClientRect()
     const size = (horizontal ? box?.width : box?.height) ?? 0
     if (size <= 0) return
-    drag.current = { pivot, at: horizontal ? event.clientX : event.clientY, size, layout: [...layoutRef.current] }
+    drag.current = {
+      pivot,
+      at: horizontal ? event.clientX : event.clientY,
+      size,
+      layout: [...layoutRef.current]
+    }
     handleFor(pivot)?.onDragging?.(true)
   }
   const onMove = (event: { clientX: number; clientY: number }) => {
@@ -291,7 +322,9 @@ export const PanelGroup = forwardRef<ImperativePanelGroupHandle, AnyProps>(funct
                     <div
                       data-testid={`resize-handle-${groupId}-${i}`}
                       style={grabStyle}
-                      onPointerDown={(e: { button: number; clientX: number; clientY: number }) => onGrab(i, e)}
+                      onPointerDown={(e: { button: number; clientX: number; clientY: number }) =>
+                        onGrab(i, e)
+                      }
                       onPointerMove={onMove}
                       onPointerUp={onRelease}
                     />
@@ -308,7 +341,8 @@ export const PanelGroup = forwardRef<ImperativePanelGroupHandle, AnyProps>(funct
 
 function useGroup(component: string): GroupContextValue {
   const group = useContext(GroupContext)
-  if (!group) throw new Error(`${component} components must be rendered within a PanelGroup container`)
+  if (!group)
+    throw new Error(`${component} components must be rendered within a PanelGroup container`)
   return group
 }
 
@@ -338,7 +372,13 @@ export const Panel = forwardRef<ImperativePanelHandle, AnyProps>(function Panel(
   const seq = useRef(-1)
   if (seq.current === -1) seq.current = panelSeq++
   const entry = useMemo<PanelEntry>(
-    () => ({ id: panelId, order, seq: seq.current, constraints: { defaultSize, minSize, maxSize }, onResize }),
+    () => ({
+      id: panelId,
+      order,
+      seq: seq.current,
+      constraints: { defaultSize, minSize, maxSize },
+      onResize
+    }),
     [panelId, order, defaultSize, minSize, maxSize, onResize]
   )
   const latest = useRef(entry)
@@ -370,7 +410,13 @@ export const Panel = forwardRef<ImperativePanelHandle, AnyProps>(function Panel(
       data-panel-id={panelId}
       data-panel-group-id={group.groupId}
       data-panel-size={size === undefined ? undefined : size.toFixed(1)}
-      style={{ flexBasis: 0, flexGrow: size ?? defaultSize ?? 1, flexShrink: 1, overflow: 'hidden', ...style }}
+      style={{
+        flexBasis: 0,
+        flexGrow: size ?? defaultSize ?? 1,
+        flexShrink: 1,
+        overflow: 'hidden',
+        ...style
+      }}
       {...rest}
     >
       {children}
