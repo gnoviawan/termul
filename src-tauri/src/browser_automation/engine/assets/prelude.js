@@ -18,6 +18,7 @@ var nodeTypeOf = getter(Node.prototype, 'nodeType');
 var parentOf = getter(Node.prototype, 'parentNode');
 var firstNodeOf = getter(Node.prototype, 'firstChild');
 var nextNodeOf = getter(Node.prototype, 'nextSibling');
+var prevNodeOf = getter(Node.prototype, 'previousSibling');
 var nodeValueOf = getter(Node.prototype, 'nodeValue');
 var containsOf = method(Node.prototype, 'contains');
 var dispatchOf = method(EventTarget.prototype, 'dispatchEvent');
@@ -28,6 +29,7 @@ var rootOf = method(Node.prototype, 'getRootNode');
 var tagOf = getter(Element.prototype, 'tagName');
 var shadowOf = getter(Element.prototype, 'shadowRoot');
 var nextOf = getter(Element.prototype, 'nextElementSibling');
+var prevOf = getter(Element.prototype, 'previousElementSibling');
 var clientLeftOf = getter(Element.prototype, 'clientLeft');
 var clientTopOf = getter(Element.prototype, 'clientTop');
 var attr = method(Element.prototype, 'getAttribute');
@@ -294,15 +296,68 @@ function stepInto(root, local) {
   return node && nodeTypeOf(node) === 1 ? node : null;
 }
 // A snapshot path ends in '~<fingerprint>' of its element: its tag, the
-// attributes that tell like elements apart, and the text of the row or
-// list item holding it. A path that leads to another element once the
-// page has moved its siblings (the next row's "Delete") then finds
-// nothing instead of that element.
+// attributes that tell like elements apart, and the text of the item
+// holding it. A path that leads to another element once the page has
+// moved its siblings (the next card's "Delete") then finds nothing
+// instead of that element. Text under controls and editables is left
+// out, so the agent's own input never changes a fingerprint.
 var ROW = 'tr, li, [role=row], [role=listitem], [role=option]';
-function fingerprint(el) {
+var ITEM_LEVELS = 6;
+var NEAR_SIBLINGS = 3;
+function flatText(node) {
+  return staticText(node).replace(/\s+/g, ' ').trim();
+}
+function shapeOf(el) {
+  var shape = tagOf(el) + '.' + (attr(el, 'class') || '');
+  for (var c = firstChildOf(el); c; c = nextOf(c)) shape += ' ' + tagOf(c);
+  return shape;
+}
+// Whether a near sibling has el's tag, class and child tags, as the items
+// of a list or the cards of a grid do.
+function repeats(el) {
+  var shape = shapeOf(el);
+  var before = prevOf(el), after = nextOf(el);
+  for (var i = 0; i < NEAR_SIBLINGS; i++) {
+    if (before && shapeOf(before) === shape) return true;
+    if (after && shapeOf(after) === shape) return true;
+    before = before && prevOf(before);
+    after = after && nextOf(after);
+  }
+  return false;
+}
+// The text of the item holding el: the nearest row, or the nearest
+// repeated ancestor whose text says more than el's own, so a button
+// beside an "Edit" takes its card's text rather than its own.
+function itemText(el) {
+  var own = flatText(el);
+  var body = bodyOf(ownerDocOf(el));
+  var a = parentOf(el);
+  for (var i = 0; i < ITEM_LEVELS && a && nodeTypeOf(a) === 1 && a !== body; i++, a = parentOf(a)) {
+    if (matchesOf(a, ROW)) return flatText(a);
+    if (repeats(a)) {
+      var text = flatText(a);
+      if (text !== own) return text;
+    }
+  }
   var row = closestOf(el, ROW);
+  return row && row !== el ? flatText(row) : '';
+}
+// For an element with no name at all, the nearest text before it: the
+// label-like text that is all that tells unnamed fields apart.
+function besideText(el) {
+  if (attr(el, 'id') || attr(el, 'name') || nameOf(el)) return '';
+  for (var n = prevNodeOf(el), i = 0; n && i < 8; n = prevNodeOf(n), i++) {
+    var type = nodeTypeOf(n);
+    var text = type === 3 ? nodeValueOf(n)
+      : type === 1 && NOT_STATIC.indexOf(tagOf(n)) < 0 && !editableOf(n) ? staticText(n) : '';
+    text = text.replace(/\s+/g, ' ').trim();
+    if (text) return text;
+  }
+  return '';
+}
+function fingerprint(el) {
   var text = [tagOf(el), attr(el, 'id'), attr(el, 'name'), attr(el, 'type'), attr(el, 'href'),
-    row && row !== el ? staticText(row) : ''].join('\u0001');
+    itemText(el), besideText(el)].join('\u0001');
   var h = 0x811c9dc5;
   for (var i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
   return (h >>> 0).toString(36);

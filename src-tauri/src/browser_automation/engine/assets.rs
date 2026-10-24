@@ -5,8 +5,9 @@
 //! a helper only inside `p`, which every engine passes as a native call
 //! argument, so no agent text is ever part of script source. An element is
 //! named by the structural path the snapshot reported for it, which also
-//! pins a fingerprint of the element (its telling attributes and the text
-//! of its row), so a path that now leads to another element finds
+//! pins a fingerprint of the element (its telling attributes, the text of
+//! the list item or card holding it, and for an element with no name the
+//! text before it), so a path that now leads to another element finds
 //! nothing. Helpers keep no state between calls.
 
 use serde_json::{json, Value};
