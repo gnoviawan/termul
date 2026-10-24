@@ -446,13 +446,22 @@ describe('SelectorPanelV2 row tooltip', () => {
     const row = screen.getByRole('button', { name: long, pressed: true })
     fireEvent.focus(row)
     const tip = await screen.findByRole('tooltip')
-    expect(tip.textContent?.split('\n\n')[0]).toBe(long)
+    // `role=tooltip` is the hidden copy screen readers get: the name is not repeated.
+    expect(tip.textContent).not.toContain(long)
+    expect(row).toHaveAccessibleDescription('')
+    // The visible tooltip leads with the full name (it holds the blank hidden copy too).
+    const visible = document.querySelector('[data-side]') as HTMLElement
+    expect(visible.textContent?.split('\n\n')[0].trim()).toBe(long)
     // Every row gets it, not just a truncated one.
     fireEvent.blur(row)
     const sonnet = screen.getByRole('button', { name: 'Claude Sonnet' })
     fireEvent.focus(sonnet)
     await waitFor(() =>
-      expect(screen.getByRole('tooltip').textContent?.startsWith('Claude Sonnet')).toBe(true)
+      expect(
+        (document.querySelector('[data-side]') as HTMLElement | null)?.textContent?.startsWith(
+          'Claude Sonnet'
+        )
+      ).toBe(true)
     )
     // Visual only: the names stay as they were.
     expect(row).toHaveAttribute('aria-label', long)

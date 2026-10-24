@@ -39,6 +39,7 @@ import {
   type ModelCatalog,
   rowAccessibleName,
   rowTooltip,
+  rowTooltipDescription,
   splitContextOption
 } from './selector-model'
 import { PICKER_ICON, PICKER_LABEL } from './selector-tokens'
@@ -134,7 +135,13 @@ function DenseModelRow({
     return (
       <Tooltip>
         <TooltipTrigger asChild>{button}</TooltipTrigger>
-        <TooltipContent side="right" className="max-w-64 whitespace-pre-line">
+        <TooltipContent
+          side="right"
+          className="max-w-64 whitespace-pre-line"
+          // Visual only for the name: the description skips it, so a screen
+          // reader does not hear the row's name twice.
+          aria-label={rowTooltipDescription({ agentName, details: tooltip })}
+        >
           {tip}
         </TooltipContent>
       </Tooltip>
