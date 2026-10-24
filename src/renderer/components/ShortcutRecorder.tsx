@@ -166,6 +166,7 @@ export function ShortcutRecorder({
             tabIndex={0}
             role="button"
             data-shortcut-recorder="true"
+            data-recording={isRecording ? 'true' : undefined}
             aria-label={`Record ${shortcut.label} shortcut`}
             onClick={handleClick}
             onBlur={handleBlur}
@@ -245,6 +246,7 @@ export function ShortcutRecorder({
             tabIndex={0}
             role="button"
             data-shortcut-recorder="true"
+            data-recording={isRecording ? 'true' : undefined}
             aria-label={`Record ${shortcut.label} shortcut`}
             onClick={handleClick}
             onBlur={handleBlur}
@@ -309,6 +311,7 @@ export function ShortcutRecorder({
           tabIndex={0}
           role="button"
           data-shortcut-recorder="true"
+          data-recording={isRecording ? 'true' : undefined}
           aria-label={`Record ${shortcut.label} shortcut`}
           onClick={handleClick}
           onBlur={handleBlur}

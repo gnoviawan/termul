@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsModal } from './SettingsModal'
 
@@ -35,5 +36,28 @@ describe('SettingsModal Tab trap', () => {
 
     fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
     expect(last).toHaveFocus()
+  })
+})
+
+describe('SettingsModal Escape', () => {
+  function renderWith(recorder: ReactNode) {
+    const onClose = vi.fn()
+    render(
+      <SettingsModal isOpen onClose={onClose} title="Preferences">
+        {recorder}
+      </SettingsModal>
+    )
+    fireEvent.keyDown(window, { key: 'Escape' })
+    return onClose
+  }
+
+  it('closes while an idle shortcut recorder is mounted', () => {
+    const onClose = renderWith(<div data-shortcut-recorder="true" />)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('stays open while a shortcut recorder is recording', () => {
+    const onClose = renderWith(<div data-shortcut-recorder="true" data-recording="true" />)
+    expect(onClose).not.toHaveBeenCalled()
   })
 })

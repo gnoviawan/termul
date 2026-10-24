@@ -72,7 +72,9 @@ export function SettingsModal({
       // open — let its own Escape handler run and don't close the modal.
       if (document.querySelector('[data-sibling-dialog]')) return
       // ShortcutRecorder is capturing — don't close the modal mid-recording.
-      if (document.querySelector('[data-shortcut-recorder]')) return
+      // Idle recorders are always mounted (the Shortcuts section), so match
+      // only the one that is recording.
+      if (document.querySelector('[data-shortcut-recorder][data-recording]')) return
       e.preventDefault()
       onClose()
     }
