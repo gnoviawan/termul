@@ -218,7 +218,8 @@ async function main(): Promise<void> {
           const inp = input(mode, app, xs, origin)
           for (const target of TARGETS) {
             const key = `${mode}/${target}`
-            const r = (results[key] = { ok: 0, total: 0, failures: [] as string[] })
+            const r = { ok: 0, total: 0, failures: [] as string[] }
+            results[key] = r
             for (let i = 0; i < TRIALS; i++) {
               const name = target === 'gear' ? 'beta' : ROWS[i % ROWS.length]
               const before = readFileSync(stderrFile, 'utf8').length

@@ -19,10 +19,16 @@
 import type { EventPayload } from '@gpuix/react'
 import { ancestorIds, nodeFor, trackedInstance } from './dom-node'
 import { CompatEvent, type DomHandlers } from './events'
+import { pointerTraceOn, traceLabel } from './trace'
 
 /** Elements GPUI hovers right now: ones with hover handlers, and blocking boxes. */
 const gpuiHovered = new Set<number>()
-const occluders = new Set<number>()
+/**
+ * Each hovered blocking box's ancestors. React never moves a host instance to
+ * another parent, so the chain holds for the box's life, and a repeat hover
+ * skips `ancestorIds`, whose tree read waits for a painted frame.
+ */
+const occluders = new Map<number, number[] | null>()
 /** Elements whose mouseenter ran and whose mouseleave has not. */
 const entered = new Set<number>()
 let pending: ReturnType<typeof setTimeout> | null = null
@@ -39,26 +45,35 @@ function fire(id: number, kind: 'enter' | 'leave', handlers: DomHandlers): void 
       ? [['pointerenter', handlers.onPointerEnter], ['mouseenter', handlers.onMouseEnter]]
       : [['pointerleave', handlers.onPointerLeave], ['mouseleave', handlers.onMouseLeave]]
   const target = nodeFor(id)
+  const started = pointerTraceOn ? performance.now() : 0
   for (const [type, handler] of pairs) {
     if (!handler) continue
     const event = new CompatEvent(type, target, payload)
     event.currentTarget = target
     handler(event)
   }
+  if (pointerTraceOn) console.error(`[compat-trace] ${started.toFixed(0)} hover-${kind} on=${traceLabel(id)} ${(performance.now() - started).toFixed(2)}ms`)
 }
 
 function settle(): void {
   pending = null
+  const started = pointerTraceOn ? performance.now() : 0
+  for (const id of occluders.keys()) if (!trackedInstance(id)) occluders.delete(id)
   const hovered = new Set<number>()
   for (const id of gpuiHovered) {
     // A box that stopped painting (unmounted, display: none) never reports its leave.
     if (!trackedInstance(id)) {
       gpuiHovered.delete(id)
-      occluders.delete(id)
       continue
     }
     hovered.add(id)
-    if (occluders.has(id)) for (const at of ancestorIds(id)) hovered.add(at)
+    if (!occluders.has(id)) continue
+    let chain = occluders.get(id) ?? null
+    if (chain === null) {
+      chain = ancestorIds(id)
+      occluders.set(id, chain)
+    }
+    for (const at of chain) hovered.add(at)
   }
   for (const id of [...entered]) {
     if (hovered.has(id)) continue
@@ -73,15 +88,15 @@ function settle(): void {
     entered.add(id)
     fire(id, 'enter', handlers)
   }
+  if (pointerTraceOn) console.error(`[compat-trace] ${started.toFixed(0)} hover-settle ${(performance.now() - started).toFixed(2)}ms hovered=${hovered.size}`)
 }
 
 function note(id: number, isHovered: boolean, occluder: boolean): void {
   if (isHovered) {
     gpuiHovered.add(id)
-    if (occluder) occluders.add(id)
+    if (occluder && !occluders.has(id)) occluders.set(id, null)
   } else {
     gpuiHovered.delete(id)
-    occluders.delete(id)
   }
   pending ??= setTimeout(settle, 0)
 }
