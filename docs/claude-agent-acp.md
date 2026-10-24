@@ -145,10 +145,17 @@ directory left by an earlier version is migrated — its sessions are merged int
 the shared directory before it becomes a junction. A file that is already in the
 shared directory is never overwritten; if the private copy differs, it is kept
 next to it as `<name>.private-backup` (then `-2`, `-3`, ...), and an identical
-one is skipped. The private directory is deleted only after the whole merge
-succeeded, and it is left alone, to be retried next time, when any file in it
-changed in the last 30 seconds (a best-effort sign that Claude Code is using
-it; an idle process or a write right after the check is not detected).
+one is skipped. The private directory is only touched when it is a plain
+directory directly inside the Account folder, never a link. It is not deleted
+until the merge succeeded: it is renamed to `<name>.migrating`, the junction is
+created, and then the renamed copy is deleted; if the junction cannot be created
+the rename is undone. The migration is skipped, to be retried next time, when
+any file in the directory changed in the last 30 seconds. That recent-write
+check is the only protection against a running Claude Code and it does not fully
+close the window: an idle process, or a write right after the check, is not
+detected, and Windows does not reliably refuse to move or delete files that
+another process has open. The merge runs while the Account store is locked, so a
+very large private directory briefly blocks other Account calls.
 
 ## Remote browser clients
 

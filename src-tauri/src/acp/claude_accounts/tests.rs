@@ -326,99 +326,255 @@ fn a_private_file_clashing_with_a_shared_directory_is_kept_under_a_backup_name()
     );
 }
 
-#[test]
-fn migration_keeps_both_versions_of_a_clashing_file_and_removes_the_private_dir() {
+/// Link creation for the migration tests: a symlink on Unix, a junction on
+/// Windows (what the Windows migration uses).
+fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        crate::junction::create_junction(target, link).map_err(std::io::Error::other)
+    }
+}
+
+/// `<root>/account/projects` (private) and `<root>/shared/projects`.
+struct MigrationFixture {
+    _root: tempfile::TempDir,
+    account: PathBuf,
+    private: PathBuf,
+    shared: PathBuf,
+}
+
+fn migration_fixture() -> MigrationFixture {
     let root = tempfile::tempdir().unwrap();
-    let private = root.path().join("account").join("projects");
+    let account = root.path().join("account");
+    let private = account.join("projects");
     let shared = root.path().join("shared").join("projects");
     fs::create_dir_all(&private).unwrap();
     fs::create_dir_all(&shared).unwrap();
-    fs::write(private.join("s.jsonl"), b"private").unwrap();
-    fs::write(private.join("only.jsonl"), b"only private").unwrap();
-    fs::write(shared.join("s.jsonl"), b"shared").unwrap();
-    age(&private.join("s.jsonl"));
-    age(&private.join("only.jsonl"));
+    MigrationFixture {
+        account,
+        private,
+        shared,
+        _root: root,
+    }
+}
 
-    assert!(links::merge_private_dir_into_shared(
-        &private, &shared, "projects"
+fn migrating_leftovers(account: &Path) -> Vec<String> {
+    fs::read_dir(account)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".migrating"))
+        .collect()
+}
+
+fn never_link(_: &Path, _: &Path) -> std::io::Result<()> {
+    panic!("the link must not be created");
+}
+
+#[test]
+fn migration_keeps_both_versions_of_a_clashing_file_and_links_the_dir() {
+    let f = migration_fixture();
+    fs::write(f.private.join("s.jsonl"), b"private").unwrap();
+    fs::write(f.private.join("only.jsonl"), b"only private").unwrap();
+    fs::write(f.shared.join("s.jsonl"), b"shared").unwrap();
+    age(&f.private.join("s.jsonl"));
+    age(&f.private.join("only.jsonl"));
+
+    assert!(links::migrate_private_dir(
+        &f.account, "projects", &f.shared, make_link
     ));
 
-    assert!(!private.exists());
-    assert_eq!(fs::read(shared.join("s.jsonl")).unwrap(), b"shared");
+    // The private dir is now a link to the shared one, and no temporary copy
+    // is left behind.
+    assert!(fs::symlink_metadata(&f.private)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(migrating_leftovers(&f.account).is_empty());
+    assert_eq!(fs::read(f.shared.join("s.jsonl")).unwrap(), b"shared");
     assert_eq!(
-        fs::read(shared.join("s.jsonl.private-backup")).unwrap(),
+        fs::read(f.shared.join("s.jsonl.private-backup")).unwrap(),
         b"private"
     );
     assert_eq!(
-        fs::read(shared.join("only.jsonl")).unwrap(),
+        fs::read(f.shared.join("only.jsonl")).unwrap(),
+        b"only private"
+    );
+    assert_eq!(
+        fs::read(f.private.join("only.jsonl")).unwrap(),
         b"only private"
     );
 }
 
 #[test]
 fn a_failed_merge_keeps_the_private_dir_and_every_file_in_it() {
-    let root = tempfile::tempdir().unwrap();
-    let private = root.path().join("account").join("projects");
-    let shared = root.path().join("shared").join("projects");
-    fs::create_dir_all(private.join("sub")).unwrap();
-    fs::create_dir_all(&shared).unwrap();
-    fs::write(private.join("top.jsonl"), b"top").unwrap();
-    fs::write(private.join("sub").join("deep.jsonl"), b"deep").unwrap();
+    let f = migration_fixture();
+    fs::create_dir_all(f.private.join("sub")).unwrap();
+    fs::write(f.private.join("top.jsonl"), b"top").unwrap();
+    fs::write(f.private.join("sub").join("deep.jsonl"), b"deep").unwrap();
     // A shared FILE where the private side has a directory: the merge cannot
     // create `sub` and stops with an error.
-    fs::write(shared.join("sub"), b"a file").unwrap();
-    age(&private.join("top.jsonl"));
-    age(&private.join("sub").join("deep.jsonl"));
+    fs::write(f.shared.join("sub"), b"a file").unwrap();
+    age(&f.private.join("top.jsonl"));
+    age(&f.private.join("sub").join("deep.jsonl"));
 
-    assert!(!links::merge_private_dir_into_shared(
-        &private, &shared, "projects"
+    assert!(!links::migrate_private_dir(
+        &f.account, "projects", &f.shared, never_link
     ));
 
-    assert_eq!(fs::read(private.join("top.jsonl")).unwrap(), b"top");
+    assert!(fs::symlink_metadata(&f.private).unwrap().is_dir());
+    assert_eq!(fs::read(f.private.join("top.jsonl")).unwrap(), b"top");
     assert_eq!(
-        fs::read(private.join("sub").join("deep.jsonl")).unwrap(),
+        fs::read(f.private.join("sub").join("deep.jsonl")).unwrap(),
         b"deep"
     );
-    assert_eq!(fs::read(shared.join("sub")).unwrap(), b"a file");
+    assert_eq!(fs::read(f.shared.join("sub")).unwrap(), b"a file");
+    assert!(migrating_leftovers(&f.account).is_empty());
+}
+
+#[test]
+fn a_failed_link_restores_the_private_dir_in_full() {
+    let f = migration_fixture();
+    fs::create_dir_all(f.private.join("proj")).unwrap();
+    fs::write(f.private.join("a.jsonl"), b"a").unwrap();
+    fs::write(f.private.join("proj").join("b.jsonl"), b"b").unwrap();
+    age(&f.private.join("a.jsonl"));
+    age(&f.private.join("proj").join("b.jsonl"));
+
+    let migrated = links::migrate_private_dir(&f.account, "projects", &f.shared, |_, _| {
+        Err(std::io::Error::other("link refused"))
+    });
+
+    assert!(!migrated);
+    assert!(fs::symlink_metadata(&f.private).unwrap().is_dir());
+    assert_eq!(fs::read(f.private.join("a.jsonl")).unwrap(), b"a");
+    assert_eq!(
+        fs::read(f.private.join("proj").join("b.jsonl")).unwrap(),
+        b"b"
+    );
+    assert!(migrating_leftovers(&f.account).is_empty());
+}
+
+#[test]
+fn a_partial_link_left_by_a_failed_link_is_cleared_before_the_restore() {
+    let f = migration_fixture();
+    fs::write(f.private.join("a.jsonl"), b"a").unwrap();
+    age(&f.private.join("a.jsonl"));
+
+    // The link step leaves an empty directory behind, then fails.
+    let migrated = links::migrate_private_dir(&f.account, "projects", &f.shared, |_, at| {
+        fs::create_dir(at)?;
+        Err(std::io::Error::other("link refused"))
+    });
+
+    assert!(!migrated);
+    assert_eq!(fs::read(f.private.join("a.jsonl")).unwrap(), b"a");
+    assert!(migrating_leftovers(&f.account).is_empty());
+}
+
+#[test]
+fn a_leftover_temporary_name_is_not_reused() {
+    let f = migration_fixture();
+    fs::create_dir_all(f.account.join("projects.migrating")).unwrap();
+    fs::write(f.account.join("projects.migrating").join("old"), b"old").unwrap();
+    fs::write(f.private.join("a.jsonl"), b"a").unwrap();
+    age(&f.private.join("a.jsonl"));
+
+    assert!(links::migrate_private_dir(
+        &f.account, "projects", &f.shared, make_link
+    ));
+
+    // The earlier leftover is untouched; the new temporary copy is gone.
+    assert_eq!(
+        fs::read(f.account.join("projects.migrating").join("old")).unwrap(),
+        b"old"
+    );
+    assert!(!f.account.join("projects.migrating-2").exists());
 }
 
 #[test]
 fn a_private_dir_with_a_recent_write_is_left_untouched() {
-    let root = tempfile::tempdir().unwrap();
-    let private = root.path().join("account").join("projects");
-    let shared = root.path().join("shared").join("projects");
-    fs::create_dir_all(private.join("proj")).unwrap();
-    fs::create_dir_all(&shared).unwrap();
-    fs::write(private.join("old.jsonl"), b"old").unwrap();
-    age(&private.join("old.jsonl"));
+    let f = migration_fixture();
+    fs::create_dir_all(f.private.join("proj")).unwrap();
+    fs::write(f.private.join("old.jsonl"), b"old").unwrap();
+    age(&f.private.join("old.jsonl"));
     // A chat in progress is appending to its session file right now.
-    fs::write(private.join("proj").join("live.jsonl"), b"live").unwrap();
+    fs::write(f.private.join("proj").join("live.jsonl"), b"live").unwrap();
 
-    assert!(!links::merge_private_dir_into_shared(
-        &private, &shared, "projects"
+    assert!(!links::migrate_private_dir(
+        &f.account, "projects", &f.shared, never_link
     ));
 
-    assert_eq!(fs::read(private.join("old.jsonl")).unwrap(), b"old");
+    assert_eq!(fs::read(f.private.join("old.jsonl")).unwrap(), b"old");
     assert_eq!(
-        fs::read(private.join("proj").join("live.jsonl")).unwrap(),
+        fs::read(f.private.join("proj").join("live.jsonl")).unwrap(),
         b"live"
     );
     assert_eq!(
-        fs::read_dir(&shared).unwrap().count(),
+        fs::read_dir(&f.shared).unwrap().count(),
         0,
         "nothing is merged while the dir looks in use"
     );
 
     // Once the write is old enough, the next round migrates it.
-    age(&private.join("proj").join("live.jsonl"));
-    assert!(links::merge_private_dir_into_shared(
-        &private, &shared, "projects"
+    age(&f.private.join("proj").join("live.jsonl"));
+    assert!(links::migrate_private_dir(
+        &f.account, "projects", &f.shared, make_link
     ));
-    assert!(!private.exists());
     assert_eq!(
-        fs::read(shared.join("proj").join("live.jsonl")).unwrap(),
+        fs::read(f.shared.join("proj").join("live.jsonl")).unwrap(),
         b"live"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn migration_refuses_to_act_through_a_link() {
+    let f = migration_fixture();
+    // `account/linked` is a symlink to a real directory elsewhere.
+    let elsewhere = f.account.parent().unwrap().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::write(elsewhere.join("keep.jsonl"), b"keep").unwrap();
+    age(&elsewhere.join("keep.jsonl"));
+    std::os::unix::fs::symlink(&elsewhere, f.account.join("linked")).unwrap();
+
+    assert!(!links::migrate_private_dir(
+        &f.account, "linked", &f.shared, never_link
+    ));
+
+    assert_eq!(fs::read(elsewhere.join("keep.jsonl")).unwrap(), b"keep");
+    assert!(fs::symlink_metadata(f.account.join("linked"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(fs::read_dir(&f.shared).unwrap().count(), 0);
+}
+
+#[test]
+fn only_a_real_directory_directly_under_the_account_may_be_removed() {
+    let f = migration_fixture();
+    // A real directory directly under the account is accepted.
+    assert!(links::ensure_real_dir_under(&f.private, &f.account).is_ok());
+    // A directory one level deeper, a file, and a missing path are refused.
+    fs::create_dir_all(f.private.join("nested")).unwrap();
+    assert!(links::ensure_real_dir_under(&f.private.join("nested"), &f.account).is_err());
+    fs::write(f.account.join("file"), b"x").unwrap();
+    assert!(links::ensure_real_dir_under(&f.account.join("file"), &f.account).is_err());
+    assert!(links::ensure_real_dir_under(&f.account.join("missing"), &f.account).is_err());
+    // A directory that lives under a different parent is refused.
+    assert!(links::ensure_real_dir_under(&f.shared, &f.account).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_is_not_a_real_directory_for_removal() {
+    let f = migration_fixture();
+    let link = f.account.join("projects-link");
+    std::os::unix::fs::symlink(&f.shared, &link).unwrap();
+    assert!(links::ensure_real_dir_under(&link, &f.account).is_err());
 }
 
 #[cfg(windows)]

@@ -167,47 +167,59 @@ fn migrate_or_leave(
 }
 
 /// Merge a private shared directory into the shared one, then replace it with a
-/// junction. The private copy is removed only after every file is merged, so a
-/// failure leaves the unmerged data in place.
+/// junction. See [`migrate_private_dir`] for the safety rules.
 #[cfg(windows)]
 fn migrate_dir_to_link(target: &Path, link: &Path, name: &str) -> bool {
-    if !merge_private_dir_into_shared(link, target, name) {
+    let Some(account) = link.parent() else {
         return false;
-    }
-    match create_link(target, link, true) {
-        Ok(()) => {
-            log::info!("[claude-accounts] migrated private {name} to a shared junction");
-            true
-        }
-        Err(error) => {
-            log::warn!(
-                "[claude-accounts] could not link {name} after migrating its contents: {:?}",
-                error.kind()
-            );
-            false
-        }
-    }
+    };
+    migrate_private_dir(account, name, target, |shared, at| {
+        create_link(shared, at, true)
+    })
 }
 
 /// How recently a file under a private directory must have changed for the
 /// directory to count as in use by a running Claude Code.
 const IN_USE_WINDOW: Duration = Duration::from_secs(30);
 
-/// Merge the private directory `private` into `shared` and remove it. Returns
-/// `true` only when `private` is gone, so the caller may put a link there.
+/// Replace the private directory `account/name` with a link to `shared`,
+/// keeping its contents. Returns `true` only when the link is in place.
 ///
-/// `private` is left untouched, and `false` is returned, when
-/// - a file under it changed within [`IN_USE_WINDOW`] (see
-///   [`recently_modified`]), so the migration is skipped this round and retried
-///   on the next resolve, or
-/// - the merge failed part way (already-copied files stay in `shared`), or
-/// - the merged directory could not be removed.
+/// Steps, each of which leaves the private data intact when it fails:
+/// 1. `account/name` must be a real directory directly under `account`
+///    ([`ensure_real_dir_under`]); a link or reparse point is never touched.
+/// 2. If a file under it changed within [`IN_USE_WINDOW`] the migration is
+///    skipped this round (see [`recently_modified`]) and retried next resolve.
+/// 3. Its files are merged into `shared` ([`merge_dir`]); a failure stops here.
+/// 4. It is renamed to `<name>.migrating` (or `-2`, `-3`, ... when taken) in
+///    the same parent, `create_link(shared, account/name)` runs, and only then
+///    is the renamed directory deleted. When creating the link fails the
+///    rename is undone, so the original directory is back in place.
 ///
-/// This split from the Windows-only junction step keeps the data-safety rules
-/// testable on every platform.
+/// If the final delete of the renamed directory fails, the link is still in
+/// place and its contents are already in `shared`; the leftover
+/// `<name>.migrating` is only logged. A process crash between the rename and
+/// the link leaves `<name>.migrating` with a merged copy and no `<name>`, and
+/// the next resolve links it as a fresh entry.
+///
+/// The link creation is injected so the rules are tested on every platform;
+/// Windows passes a junction.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn merge_private_dir_into_shared(private: &Path, shared: &Path, name: &str) -> bool {
-    if recently_modified(private, IN_USE_WINDOW) {
+pub(crate) fn migrate_private_dir(
+    account: &Path,
+    name: &str,
+    shared: &Path,
+    create_link: impl FnOnce(&Path, &Path) -> io::Result<()>,
+) -> bool {
+    let private = account.join(name);
+    if let Err(error) = ensure_real_dir_under(&private, account) {
+        log::warn!(
+            "[claude-accounts] private {name} is not a plain directory of the account ({:?}); leaving it",
+            error.kind()
+        );
+        return false;
+    }
+    if recently_modified(&private, IN_USE_WINDOW) {
         log::warn!(
             "[claude-accounts] private {name} changed in the last {}s, so Claude Code may be using it; skipping the migration this time",
             IN_USE_WINDOW.as_secs()
@@ -215,33 +227,118 @@ pub(crate) fn merge_private_dir_into_shared(private: &Path, shared: &Path, name:
         return false;
     }
     log::info!("[claude-accounts] migrating private {name} into the shared directory");
-    if let Err(error) = merge_dir(private, shared) {
+    if let Err(error) = merge_dir(&private, shared) {
         log::warn!(
             "[claude-accounts] could not merge private {name} into the shared dir ({:?}); leaving it",
             error.kind()
         );
         return false;
     }
-    if let Err(error) = fs::remove_dir_all(private) {
+    let Some(backup) = free_migrating_name(account, name) else {
+        log::warn!("[claude-accounts] no free temporary name for private {name}; leaving it");
+        return false;
+    };
+    if let Err(error) = fs::rename(&private, &backup) {
         log::warn!(
-            "[claude-accounts] merged private {name} but could not remove it to link ({:?}); leaving it",
+            "[claude-accounts] merged private {name} but could not set it aside to link ({:?}); leaving it",
             error.kind()
         );
         return false;
     }
+    if let Err(error) = create_link(shared, &private) {
+        log::warn!(
+            "[claude-accounts] could not link {name} after merging its contents ({:?}); restoring the private directory",
+            error.kind()
+        );
+        restore_private_dir(&backup, &private, name);
+        return false;
+    }
+    match ensure_real_dir_under(&backup, account).and_then(|()| fs::remove_dir_all(&backup)) {
+        Ok(()) => log::info!("[claude-accounts] migrated private {name} to a shared link"),
+        Err(error) => log::warn!(
+            "[claude-accounts] linked {name}, but could not delete its merged copy ({:?}); it is safe to remove by hand",
+            error.kind()
+        ),
+    }
     true
+}
+
+/// Undo the set-aside of a private directory after the link failed. A partial
+/// link left at `private` is removed first, but only when it is empty or a
+/// link, so a directory with data is never removed.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn restore_private_dir(backup: &Path, private: &Path, name: &str) {
+    if fs::symlink_metadata(private).is_ok() {
+        // `remove_dir` takes an empty directory or a junction without
+        // following it; a symlink needs `remove_file`.
+        let _ = fs::remove_dir(private).or_else(|_| fs::remove_file(private));
+    }
+    if let Err(error) = fs::rename(backup, private) {
+        log::error!(
+            "[claude-accounts] could not restore private {name} ({:?}); its files are in the {name}.migrating directory next to it",
+            error.kind()
+        );
+    }
+}
+
+/// `<name>.migrating`, or the first free `<name>.migrating-N`, in `account`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn free_migrating_name(account: &Path, name: &str) -> Option<std::path::PathBuf> {
+    (1..=100u32)
+        .map(|attempt| {
+            if attempt == 1 {
+                account.join(format!("{name}.migrating"))
+            } else {
+                account.join(format!("{name}.migrating-{attempt}"))
+            }
+        })
+        .find(|candidate| fs::symlink_metadata(candidate).is_err())
+}
+
+/// Fail unless `path` is a real directory (not a symlink, junction or other
+/// reparse point) whose parent is `account`, compared as canonical paths. Run
+/// before anything is deleted so a delete can never follow a link out of the
+/// account directory.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn ensure_real_dir_under(path: &Path, account: &Path) -> io::Result<()> {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a plain directory",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "reparse point"));
+        }
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no parent"))?;
+    if fs::canonicalize(parent)? != fs::canonicalize(account)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not directly under the account directory",
+        ));
+    }
+    Ok(())
 }
 
 /// Best-effort "is a Claude Code process using this directory right now": true
 /// when any file under `dir` was modified within `window`. A chat in progress
 /// keeps appending to its session file, so this catches the common case.
 ///
-/// Limits: a process that holds the directory but is idle for longer than
-/// `window` is not detected, and a write can still land between this check and
-/// the removal (nothing is locked). On Windows an open file usually makes
-/// `remove_dir_all` fail, which leaves the directory in place, so that race
-/// loses nothing there. An unreadable entry counts as in use, to err on the
-/// side of not migrating.
+/// This is the only protection against a running process, and it does not
+/// close the window. A process that holds the directory but wrote nothing for
+/// `window` is not detected, and a write can land between this check and the
+/// rename (nothing is locked). Deleting a file that another process has open is
+/// not reliably refused on Windows either (Node opens files with
+/// `FILE_SHARE_DELETE`), so do not count on the delete failing. An unreadable
+/// entry counts as in use, to err on the side of not migrating.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn recently_modified(dir: &Path, window: Duration) -> bool {
     let Ok(entries) = fs::read_dir(dir) else {
