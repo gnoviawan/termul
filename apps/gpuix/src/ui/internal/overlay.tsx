@@ -32,6 +32,7 @@ import {
   useRef,
   useState
 } from 'react'
+import { registerPortal } from '../../compat/dom-node'
 import { tw } from '../../style/tw'
 import { SANS_FAMILY } from '../../style/utilities'
 
@@ -255,6 +256,12 @@ export function Floating({
   // The layer sits inside the trigger in GPUI's tree, so it would inherit the
   // trigger's text style; a Radix portal inherits the body's instead.
   const surface: StyleDesc = { backgroundColor: 'transparent', ...bodyText() }
+  const portalled = position === undefined
+  const portalRef = useCallback(
+    (layer: PublicInstance | null) =>
+      layer && triggerId !== null && portalled ? registerPortal(layer.id, triggerId) : undefined,
+    [triggerId, portalled]
+  )
   const element = (
     <DismissableLayer
       onEscapeKeyDown={onDismiss}
@@ -262,6 +269,7 @@ export function Floating({
       finalFocus={(previous) => (returnFocus ? (triggerId ?? previous) : null)}
     >
       <anchored
+        ref={portalRef}
         side={side}
         align={align}
         gap={sideOffset}
