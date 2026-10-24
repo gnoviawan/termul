@@ -26,6 +26,7 @@ TERMUL_SERVER_URL=http://127.0.0.1:8192 TERMUL_SERVER_TOKEN=dev-token bun run de
 | `TERMUL_SERVER_URL`      | Origin of the server (no path)                                    | `http://127.0.0.1:8190`            |
 | `TERMUL_SERVER_TOKEN`    | Bearer token for a gated server                                   | none                               |
 | `TERMUL_GPUIX_STATE_DIR` | Where the client keeps its persisted web storage                  | `$XDG_STATE_HOME/termul-gpuix`     |
+| `TERMUL_GPUIX_DATA_DIR`  | The server's `--state-dir`. A launched server uses it; an attached client on the same host reads the server's `host-local.token` from it, so it gets Claude Accounts and SSH | the desktop app data dir (launched), unset (attached) |
 | `GPUIX_BACKGROUND=1`     | Open the window without taking focus (headless and agent runs)    | unset                              |
 
 Scripts:

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { readClientConfig } from '../../src/env/config'
 import { hostCommands, runHostAction } from '../../src/launcher/desktop-host'
 import { hostLocalTokenFile, readHostLocalToken } from '../../src/launcher/host-local'
 import { claimInstance } from '../../src/launcher/instance'
@@ -433,5 +434,16 @@ describe('host-local credential', () => {
     expect(readHostLocalToken(file)).toBe('first')
     writeFileSync(file, 'after-restart\n')
     expect(readHostLocalToken(file)).toBe('after-restart')
+  })
+})
+
+describe('client config', () => {
+  test('an attached client presents the credential of the server data dir it names', () => {
+    const attached = { TERMUL_SERVER_URL: 'http://127.0.0.1:8191', HOME: '/home/ana' }
+    expect(readClientConfig(attached).hostLocalTokenFile).toBeNull()
+    expect(
+      readClientConfig({ ...attached, TERMUL_GPUIX_DATA_DIR: '/srv/termul-state' })
+        .hostLocalTokenFile
+    ).toBe(path.join('/srv/termul-state', 'host-local.token'))
   })
 })
