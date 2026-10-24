@@ -15,13 +15,15 @@ import type { BootFn } from './boot-contract'
 import { compatRenderOptions } from './compat/root'
 import { ServerGate } from './launcher/ServerGate'
 import { log } from './log'
+import { guardNativeQueries } from './native-guard'
 import { DESKTOP_WINDOW } from './window'
 
 export const boot: BootFn = (config, options) => {
   if (config.token) setWebAuthToken(config.token)
   setHostLocalTokenSource(options.hostLocalToken)
   registerDesktopHost(options.desktopHost)
-  const registerFonts = (renderer: NativeRenderer) => {
+  const onRenderer = (renderer: NativeRenderer) => {
+    guardNativeQueries(renderer)
     for (const font of options.fonts)
       renderer.registerFont?.(font as Parameters<NonNullable<NativeRenderer['registerFont']>>[0])
     log.info('boot', `registered ${options.fonts.length} font faces`)
@@ -32,7 +34,7 @@ export const boot: BootFn = (config, options) => {
       onFocusRequest={options.onFocusRequest}
       onFirstReady={installGlobalErrorForwarding}
     >
-      <App onRenderer={registerFonts} />
+      <App onRenderer={onRenderer} />
     </ServerGate>,
     {
       title: DESKTOP_WINDOW.title,

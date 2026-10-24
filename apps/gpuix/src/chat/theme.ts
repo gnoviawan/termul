@@ -51,7 +51,10 @@ function syntaxTheme(themeId: string): SyntaxTheme {
   }
 }
 
-const cache = new Map<string, { prose: GpuixTheme; thought: GpuixTheme; code: GpuixTheme }>()
+const cache = new Map<
+  string,
+  { prose: GpuixTheme; quote: GpuixTheme; thought: GpuixTheme; code: GpuixTheme }
+>()
 
 /**
  * - `prose`: an agent reply block (`.chat-streamdown`): 14/21 body, inline
@@ -59,6 +62,7 @@ const cache = new Map<string, { prose: GpuixTheme; thought: GpuixTheme; code: Gp
  *   (`text-3xl` .. `text-lg`): utilities beat index.css's components layer.
  *   Native markdown tints list markers and the quote rail with `accent`; the
  *   web's markers are the text colour, so accent is the foreground.
+ * - `quote`: a quote's content, muted like Streamdown's `text-muted-foreground`.
  * - `thought`: the reasoning body (`.thought-markdown`), 12px muted.
  * - `code`: a fenced block body. Shiki's `<pre>` paints 13px mono at 20px
  *   rows (measured in Chromium; the 1.55 line-height applies to the body div).
@@ -97,6 +101,16 @@ export function transcriptThemes(themeId: string) {
         mdCodePaddingX: 16,
         mdCodePaddingY: 16,
         mdCodeRadius: 6
+      }
+    },
+    quote: {
+      ...base,
+      text: tokenColor('muted-foreground'),
+      metrics: {
+        mdTextSize: PROSE_TEXT,
+        mdLineHeight: PROSE_LINE,
+        mdBlockGap: 4,
+        mdInlineCodeRadius: 4
       }
     },
     thought: {

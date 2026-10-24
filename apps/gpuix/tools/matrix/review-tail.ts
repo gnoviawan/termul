@@ -189,29 +189,29 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'settings.editor': {
-    status: 'broken',
+    status: 'partial',
     differences: [SELECT, ...SETTINGS_BASE.slice(1)],
-    cause: 'native override needed',
-    unit: 'O8 native select',
-    impact: 2
+    cause: 'compat translator gap',
+    unit: 'C6 overlay backdrop',
+    impact: 1
   },
   'settings.appearance': {
-    status: 'broken',
+    status: 'partial',
     differences: [
       SELECT,
-      'Renderer and Scrollback rows wrap their descriptions one word per line.',
+      'Renderer and Scrollback descriptions now wrap normally beside the closed select.',
       ...SETTINGS_BASE.slice(1)
     ],
-    cause: 'native override needed',
-    unit: 'O8 native select',
-    impact: 2
+    cause: 'compat translator gap',
+    unit: 'C9 dialog body layout',
+    impact: 1
   },
   'settings.shell': {
-    status: 'broken',
+    status: 'partial',
     differences: [SELECT, ...SETTINGS_BASE.slice(1)],
-    cause: 'native override needed',
-    unit: 'O8 native select',
-    impact: 2
+    cause: 'compat translator gap',
+    unit: 'C6 overlay backdrop',
+    impact: 1
   },
   'settings.terminal-profiles': {
     status: 'partial',
@@ -221,14 +221,14 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'settings.ai-agents': {
-    status: 'broken',
+    status: 'partial',
     differences: [
       SELECT,
-      'The Close idle chats after label wraps one or two letters per line, filling the pane; the agents list below is pushed out of view.'
+      'The Close idle chats after row stacks its full-width select under the label, where the web puts it beside; the agents list shows No agents match while the web lists the registry.'
     ],
-    cause: 'native override needed',
-    unit: 'O8 native select',
-    impact: 2
+    cause: 'compat translator gap',
+    unit: 'C9 dialog body layout',
+    impact: 1
   },
   'settings.skills': {
     status: 'partial',

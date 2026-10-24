@@ -9,20 +9,18 @@ export const CHECKBOX =
   'The Amend last commit checkbox box is not drawn (native checkbox input), only its label.'
 export const BACKDROP =
   'The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable.'
-export const OVERLAP =
-  'In the Chats list two chat cards paint on top of each other once a second chat exists, and GPUIX lists only the seeded chat where the web lists all three.'
 export const PROSE =
-  'Native markdown prose loses inline-code chips, link colour and italics, and some runs pick up a warm tint; a blockquote gets a filled background instead of a rule.'
+  'Block spacing, list rhythm and the quote rule match, but native markdown paints links in the text colour (the web uses primary), inline code at body size (the web chip is smaller), no italics, and wraps a line holding inline code past the column edge.'
+export const RUN_ORDER =
+  'The GPUIX Chats list holds more cards because its pass runs after the web pass on the same server.'
 export const TREE_TEXT =
   'The text check fails only because natively painted text is not in the automation tree.'
 export const TINT =
   'Some words in labels and descriptions paint in an accent or warm colour (word runs pick up a colour the web text does not have).'
 export const SELECT =
-  'Each native select renders as a chevron button plus every option laid out as plain text in the row, which squeezes the label column; the web shows one closed dropdown.'
+  'Each select is one closed dropdown like the web (G2), but its trigger sizes to its value where the web gives it 240px (`@[35rem]:w-60`: container queries are not translated).'
 export const TAB_TRUNC =
   'Pane tab titles truncate to three letters and an ellipsis ("Ter...", "note...") where the web shows the whole title, so two terminals cannot be told apart.'
-export const SHORT_TRANSCRIPT =
-  'A short transcript sits at the bottom of the GPUIX pane, leaving the space above it empty, where the web starts it at the top.'
 export const TAB_TITLE =
   'The GPUIX tab title truncates to a few letters ("matr...") where the web shows the whole title.'
 export const SETTINGS_BASE = [

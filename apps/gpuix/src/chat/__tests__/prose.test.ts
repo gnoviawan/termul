@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { flowGap, leadingMargin, trailingMargin } from '../prose-flow'
 import { proseChunks, proseParts } from '../prose-parts'
-import { fileLinkPath, proseBlocks } from '../prose-source'
+import { fileLinkPath, listItems, proseBlocks, unquote } from '../prose-source'
 
 describe('proseParts', () => {
   test('splits top-level fences out of prose with their language', () => {
@@ -132,8 +132,8 @@ describe('proseBlocks', () => {
 
 describe('flowGap', () => {
   test('adjoining margins collapse to the larger, as in the web block flow', () => {
-    expect(flowGap({ kind: 'paragraph' }, { kind: 'list' })).toBe(22.75)
-    expect(flowGap({ kind: 'list' }, { kind: 'paragraph' })).toBeCloseTo(7.7)
+    expect(flowGap({ kind: 'paragraph' }, { kind: 'list' })).toBe(16)
+    expect(flowGap({ kind: 'list' }, { kind: 'paragraph' })).toBe(16)
     expect(flowGap({ kind: 'list' }, { kind: 'fence' })).toBe(16)
     expect(flowGap({ kind: 'heading', depth: 2 }, { kind: 'paragraph' })).toBe(8)
     expect(flowGap({ kind: 'paragraph' }, { kind: 'heading', depth: 2 })).toBe(24)
@@ -152,5 +152,31 @@ describe('task lists', () => {
     expect(proseBlocks('- [x] done\n- [ ] todo', false)).toEqual([
       { kind: 'markdown', block: 'list', depth: 0, source: '- ☑ done\n- ☐ todo' }
     ])
+  })
+})
+
+describe('unquote', () => {
+  test('drops the quote marker of every line, keeping inline markdown', () => {
+    expect(unquote('> The chat route is a *restore* mechanism,\n> not a view.\n>\n>  Indented')).toBe(
+      'The chat route is a *restore* mechanism,\nnot a view.\n\n Indented'
+    )
+  })
+})
+
+describe('listItems', () => {
+  test('splits top-level items, keeping nested lines and ordered numbers', () => {
+    expect(listItems('3. first\n   - nested\n4. second\n\n5. third')).toEqual([
+      '3. first\n   - nested',
+      '4. second',
+      '5. third'
+    ])
+  })
+
+  test('renumbers items written with repeated numbers', () => {
+    expect(listItems('1. a\n1. b')).toEqual(['1. a', '2. b'])
+  })
+
+  test('a task list keeps its checkboxes', () => {
+    expect(listItems('- [x] done\n- [ ] todo')).toEqual(['- [x] done', '- [ ] todo'])
   })
 })
