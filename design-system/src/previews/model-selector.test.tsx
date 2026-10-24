@@ -33,4 +33,32 @@ describe('ModelSelectorV2Composer', () => {
     expect(trigger.textContent).not.toBe(before)
     expect(trigger.textContent).toContain(label)
   })
+
+  // QA: after a pick on Cursor, a Cursor favorite opened from the Claude Agent
+  // tab took two clicks (or two Enters, the same button activation). The first
+  // only moved the rail back.
+  it('a Cursor favorite picked from the Claude Agent tab after an earlier pick lands in one click', async () => {
+    render(
+      <TooltipProvider>
+        <ModelSelectorV2Composer />
+      </TooltipProvider>
+    )
+    const trigger = screen.getByTestId('agent-model-selector-trigger')
+    fireEvent.click(trigger)
+    await screen.findByTestId('selector-list')
+    fireEvent.click(screen.getByRole('button', { name: 'Composer 2' }))
+    expect(trigger.textContent).toContain('Composer 2')
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Claude Agent' }))
+    const search = screen.getByLabelText('Search models and agents')
+    const favorite = screen.getByRole('button', {
+      name: 'Claude 4.6 Sonnet Thinking (Max Mode) · Cursor'
+    })
+    fireEvent.click(favorite)
+    // Same panel throughout (no remount), and it stays open, as in the app.
+    expect(screen.getByLabelText('Search models and agents')).toBe(search)
+
+    expect(trigger.textContent).toContain('Claude 4.6 Sonnet Thinking (Max Mode)')
+    expect(screen.getByRole('tab', { name: 'Cursor', selected: true })).toBeInTheDocument()
+  })
 })

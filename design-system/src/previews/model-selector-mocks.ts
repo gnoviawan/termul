@@ -377,8 +377,13 @@ export function useMockSelector(
     onToggleFast: fastMode ? () => setValue('fast', fastOn ? 'off' : 'on') : null,
     genericOptions,
     agentConfigId: configIdOf(agentId),
+    // The app's model write comes back as the model option's currentValue. Commit
+    // it the same way here: AgentModelSelector shows its optimistic pick until the
+    // committed value matches, so a write that never lands pins the pill to it.
     onSetConfig: (configId, value) => {
-      if (typeof value === 'string') setValue(configId, value)
+      if (typeof value !== 'string') return
+      if (configId === MODEL_OPTION_ID) setModels((m) => ({ ...m, [agentId]: value }))
+      else setValue(configId, value)
     }
   }
 }
