@@ -257,6 +257,8 @@ async fn initialize_advertises_the_chat_and_canvas_instructions() {
             "do not look for other design tools",
             "CANVAS_CLOSED",
             "Canvas button in Termul's left rail",
+            "read_canvas_guide",
+            "get_canvas_style",
         ] {
             assert!(instructions.contains(needle), "missing {needle:?}");
         }
@@ -454,7 +456,14 @@ async fn a_client_cancelled_ask_user_ends_the_parked_call_in_the_parent() {
     serve.await.expect("serve task").expect("serve ok");
 }
 
-const HOST_TOOLS: [&str; 4] = ["ask_user", "browser", "plan", "set_session_title"];
+const HOST_TOOLS: [&str; 6] = [
+    "ask_user",
+    "browser",
+    "get_canvas_style",
+    "plan",
+    "read_canvas_guide",
+    "set_session_title",
+];
 
 type ClientWriter = tokio::io::WriteHalf<tokio::io::DuplexStream>;
 type ClientReader = BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>;
@@ -578,6 +587,73 @@ async fn tools_list_carries_figcraft_tools_by_name_with_the_canvas_tag() {
             description.contains("relative to the project"),
             "{description}"
         );
+        drop(writer);
+    })
+    .await;
+}
+
+/// The design harness tools answer from the binary alone, with no parent and
+/// no open canvas, and report bad names as tool errors.
+#[tokio::test]
+async fn canvas_guide_and_style_tools_answer_without_a_canvas() {
+    with_mcp_session(handshake_config(), |mut writer, mut reader| async move {
+        let mut ask = async |id: i64, line: &str| {
+            send_line(&mut writer, line).await;
+            read_json_id(&mut reader, id).await
+        };
+        let text = |reply: &serde_json::Value| {
+            reply["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        };
+        let tools = ask(2, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#).await;
+        for name in ["read_canvas_guide", "get_canvas_style"] {
+            let tool = tools["result"]["tools"]
+                .as_array()
+                .and_then(|tools| tools.iter().find(|tool| tool["name"] == name))
+                .unwrap_or_else(|| panic!("{name} is listed: {tools}"));
+            assert_eq!(tool["annotations"]["readOnlyHint"], true, "{name}");
+        }
+
+        let index = ask(
+            3,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_canvas_guide"}}"#,
+        )
+        .await;
+        assert_ne!(index["result"]["isError"], true, "{index}");
+        assert_eq!(text(&index), canvas_skill::INDEX);
+
+        let topic = ask(
+            4,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_canvas_guide","arguments":{"topic":"working-protocol"}}}"#,
+        )
+        .await;
+        assert_eq!(
+            Ok(text(&topic).as_str()),
+            canvas_skill::read_guide(Some("working-protocol"))
+        );
+
+        let unknown = ask(
+            5,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_canvas_style","arguments":{"name":"Neon Swamp"}}}"#,
+        )
+        .await;
+        assert_eq!(unknown["result"]["isError"], true, "{unknown}");
+        assert!(
+            text(&unknown).contains("unknown canvas style `Neon Swamp`"),
+            "{unknown}"
+        );
+
+        let style = ask(
+            6,
+            r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_canvas_style","arguments":{"name":"warm editorial"}}}"#,
+        )
+        .await;
+        let style: serde_json::Value =
+            serde_json::from_str(&text(&style)).expect("the style reply is JSON");
+        assert_eq!(style["style"]["name"], "Warm Editorial");
+        assert_eq!(style["style"]["fonts"]["family"], "Inter");
         drop(writer);
     })
     .await;
