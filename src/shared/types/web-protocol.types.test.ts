@@ -88,8 +88,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 55 request types including warm-pool promotion and host-owned session delete', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(55)
+  it('exports exactly 82 request types including warm-pool promotion and host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(82)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -157,6 +157,35 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'list_claude_usage',
       'set_default_claude_account',
       'set_project_claude_account',
+      // Claude Accounts: manage, host-local connections only.
+      'add_claude_account',
+      'login_claude_account',
+      'cancel_claude_account_login',
+      'rename_claude_account',
+      'remove_claude_account',
+      // SSH: the desktop's SSH commands, host-local connections only.
+      'ssh_list_profiles',
+      'ssh_save_profile',
+      'ssh_delete_profile',
+      'ssh_duplicate_profile',
+      'ssh_import_config',
+      'ssh_inspect_key',
+      'ssh_list_keys',
+      'ssh_session_open',
+      'ssh_session_respond_host_key',
+      'ssh_session_cancel',
+      'ssh_session_close',
+      'ssh_session_list',
+      'sftp_list_dir',
+      'sftp_realpath',
+      'sftp_download',
+      'sftp_upload',
+      'sftp_delete',
+      'sftp_mkdir',
+      'sftp_rename',
+      'sftp_read_file',
+      'sftp_write_file',
+      'sftp_create_file',
       // The canvas gateway's renderer leg.
       'canvas_mount',
       'canvas_unmount',

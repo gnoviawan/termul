@@ -25,6 +25,8 @@ export interface DomInfo {
   readonly attrs: Readonly<Record<string, unknown>>
   readonly handlers: DomHandlers | null
   readonly value?: string
+  /** `pointer-events` the component asked for, before compat's click-through boxes. */
+  readonly pointerEvents?: 'auto' | 'none'
 }
 
 export interface TrackedInstance {
@@ -39,6 +41,7 @@ let reads: LiveReads | null = null
 export function bindCompatRenderer(next: CompatRenderer | null): void {
   renderer = next
   reads = next ? liveReads(next) : null
+  indexBatch = -1
 }
 
 export function compatRenderer(): CompatRenderer | null {
@@ -91,9 +94,11 @@ interface TreeIndex {
   parent: Map<number, number>
   children: Map<number, number[]>
   root: number | null
+  /** The painted tree the index was built from, boxes included. */
+  tree: TreeJson | null
 }
 
-let index: TreeIndex = { parent: new Map(), children: new Map(), root: null }
+let index: TreeIndex = { parent: new Map(), children: new Map(), root: null, tree: null }
 let indexBatch = -1
 
 /** The retained tree's parent/child links as of the last applied batch. */
@@ -115,7 +120,7 @@ export function treeIndex(): TreeIndex {
     children.set(node.id, ids)
   }
   if (json) walk(json)
-  index = { parent, children, root: json?.id ?? null }
+  index = { parent, children, root: json?.id ?? null, tree: json }
   indexBatch = batch
   return index
 }

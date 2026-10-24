@@ -27,8 +27,9 @@ import {
   PANEL_ICON_BUTTON_CLASS,
   QUIET_ICON_BUTTON_CLASS
 } from '@/components/ui/panel-styles'
+import { useHostGate } from '@/hooks/use-host-gate'
+import { canUseHostSsh } from '@/lib/ssh-api'
 import { addressLabel } from '@/lib/ssh-messages'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import {
   SSH_HOSTS_TAB,
@@ -81,7 +82,7 @@ export function SSHPanel({
   const showAddresses = useSSHShowAddresses()
   const ownDialogs = useSSHPanelDialogs()
   const dialogs = externalDialogs ?? ownDialogs
-  const desktop = isTauriContext()
+  const canConnect = useHostGate(canUseHostSsh)
 
   useEffect(() => {
     void loadProfiles()
@@ -100,7 +101,7 @@ export function SSHPanel({
     if (e.target !== e.currentTarget) return
     if (e.key === 'Enter') {
       e.preventDefault()
-      if (desktop) onConnect?.(profileId)
+      if (canConnect) onConnect?.(profileId)
       else onSelectProfile?.(profileId)
       return
     }
@@ -157,7 +158,7 @@ export function SSHPanel({
           >
             <Server size={14} />
           </button>
-          {desktop && (
+          {canConnect && (
             <button
               type="button"
               onClick={() => void handleImport()}
@@ -199,7 +200,7 @@ export function SSHPanel({
                 <Plus aria-hidden="true" />
                 Add host
               </Button>
-              {desktop && (
+              {canConnect && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -236,9 +237,9 @@ export function SSHPanel({
                       onKeyDown={focusableRows ? handleRowKeyDown(profile.id) : undefined}
                       onClick={() => onSelectProfile?.(profile.id)}
                       onDoubleClick={() => {
-                        if (desktop) onConnect?.(profile.id)
+                        if (canConnect) onConnect?.(profile.id)
                       }}
-                      title={desktop ? 'Click to open, double-click to connect' : undefined}
+                      title={canConnect ? 'Click to open, double-click to connect' : undefined}
                     >
                       <SSHHostLamp state={hostState} />
                       <div className="flex min-w-0 flex-1 flex-col">
@@ -280,7 +281,7 @@ export function SSHPanel({
                         >
                           <Pencil size={12} />
                         </button>
-                        {desktop && (
+                        {canConnect && (
                           <button
                             type="button"
                             onClick={(e) => {
@@ -298,7 +299,7 @@ export function SSHPanel({
                     </div>
                   </ContextMenuTrigger>
                   <ContextMenuContent className="w-48">
-                    {desktop && (
+                    {canConnect && (
                       <ContextMenuItem onSelect={() => onConnect?.(profile.id)}>
                         <Terminal className="mr-2 h-4 w-4" />
                         {hostSessions.length > 0 ? 'Open another session' : 'Connect'}

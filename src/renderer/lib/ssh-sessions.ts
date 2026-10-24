@@ -14,7 +14,6 @@ import type {
 import { sshApi, terminalApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { sshTerminalProjectId } from '@/lib/ssh-terminal-id'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import {
   SSH_HOSTS_TAB,
@@ -384,11 +383,12 @@ async function restoreSessions(): Promise<void> {
 }
 
 /**
- * Subscribe to backend session events. Desktop only; call
- * once per renderer root. Returns the unsubscribe function.
+ * Subscribe to backend session events: on desktop, and on a web connection
+ * the host runs SSH for (elsewhere the subscriptions are no-ops and the
+ * restore finds nothing). Call once per renderer root. Returns the
+ * unsubscribe function.
  */
 export function startSSHSessionEvents(): () => void {
-  if (!isTauriContext()) return () => {}
   const unsubscribers = [
     sshApi.onSessionProgress(onProgress),
     sshApi.onSessionHostKey(onHostKey),

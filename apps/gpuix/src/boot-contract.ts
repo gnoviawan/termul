@@ -29,6 +29,11 @@ export interface BootOptions {
   window: WindowSize
   /** Termul's font faces (TTF bytes), registered before the first paint. */
   fonts: readonly Uint8Array[]
+  /**
+   * Reads the server's host-local credential at each handshake; `null` when
+   * this app did not start the server (`launcher/host-local.ts`).
+   */
+  hostLocalToken: (() => string | null) | null
 }
 
 export type BootFn = (config: ClientConfig, options: BootOptions) => void

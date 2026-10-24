@@ -12,12 +12,12 @@ use tower::ServiceExt;
 
 /// Temp directory removed on drop (including panic paths). Mirrors the
 /// `TempDir` helper in `router.rs` tests.
-struct TempDir {
+pub(super) struct TempDir {
     path: PathBuf,
 }
 
 impl TempDir {
-    fn new(label: &str) -> Self {
+    pub(super) fn new(label: &str) -> Self {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -27,7 +27,7 @@ impl TempDir {
         Self { path }
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.path
     }
 }
@@ -38,7 +38,7 @@ impl Drop for TempDir {
     }
 }
 
-fn test_state() -> AppState {
+pub(super) fn test_state() -> AppState {
     // Default: no project root bound (legacy behavior preserved for tests
     // that do not exercise the PR-S4 boundary). PR-S4 tests use
     // `test_state_with_root` to set an explicit project root.
@@ -111,7 +111,7 @@ fn test_state_with_root(root: &Path) -> AppState {
 
 /// Deserialize an `IpcBody<T>` from a response body. Panics on failure
 /// (test-only).
-async fn body_as_json<T: serde::de::DeserializeOwned>(body: Body) -> T {
+pub(super) async fn body_as_json<T: serde::de::DeserializeOwned>(body: Body) -> T {
     let bytes = axum::body::to_bytes(body, usize::MAX)
         .await
         .expect("read body");
@@ -120,7 +120,7 @@ async fn body_as_json<T: serde::de::DeserializeOwned>(body: Body) -> T {
 
 /// Minimal percent-encoding for the characters we care about in test
 /// query strings (spaces, backslashes, colons, and anything non-path-safe).
-fn urlencoding(s: &str) -> String {
+pub(super) fn urlencoding(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -166,7 +166,7 @@ fn test_router(state: AppState) -> axum::Router {
         .with_state(state)
 }
 
-async fn get_request(state: AppState, uri: &str) -> axum::http::Response<Body> {
+pub(super) async fn get_request(state: AppState, uri: &str) -> axum::http::Response<Body> {
     get_request_from(state, uri, SocketAddr::from(([127, 0, 0, 1], 54321))).await
 }
 
@@ -192,7 +192,7 @@ async fn get_request_from(
 
 /// POST JSON with a loopback peer (the default for the fs write routes
 /// which now require `ConnectInfo<SocketAddr>` — Patch D).
-async fn post_json(
+pub(super) async fn post_json(
     state: AppState,
     uri: &str,
     body: &serde_json::Value,

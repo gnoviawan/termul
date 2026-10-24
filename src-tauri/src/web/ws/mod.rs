@@ -65,6 +65,7 @@ mod canvas;
 pub mod channel;
 mod chat_reads;
 mod claude_accounts;
+mod ssh;
 mod commands;
 mod dispatch;
 mod lifecycle;
@@ -84,6 +85,8 @@ use agents::*;
 use canvas::*;
 use chat_reads::*;
 use claude_accounts::*;
+use ssh::handle_ssh_request;
+pub use ssh::SSH_WS_REQUESTS;
 use commands::*;
 use dispatch::*;
 use lifecycle::*;
@@ -799,6 +802,8 @@ pub(super) fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsR
 mod canvas_tests;
 #[cfg(test)]
 mod capability_tests;
+#[cfg(test)]
+mod host_local_tests;
 #[cfg(test)]
 mod project_binding_tests;
 #[cfg(test)]

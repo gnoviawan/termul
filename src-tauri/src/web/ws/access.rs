@@ -4,7 +4,9 @@
 //! registration lives in `ConnState`.
 
 use super::*;
-use crate::web::capabilities::{ws_request_permitted, Capabilities, CapabilityPolicy};
+use crate::web::capabilities::{
+    ws_request_permitted, ws_request_requirement, Capabilities, CapabilityPolicy, Requirement,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ConnectionAccess {
@@ -23,9 +25,10 @@ impl ConnectionAccess {
         }
     }
 
-    /// `authenticate` succeeded: resolve capabilities once.
-    pub(super) fn grant(&mut self) {
-        self.capabilities = self.policy.resolve();
+    /// `authenticate` succeeded: resolve capabilities once. `host_credential`:
+    /// the client presented the host-local credential.
+    pub(super) fn grant(&mut self, host_credential: bool) {
+        self.capabilities = self.policy.resolve(host_credential);
     }
 
     pub(super) fn carrier(&self) -> Carrier {
@@ -46,7 +49,7 @@ impl ConnectionAccess {
     #[cfg(test)]
     pub(super) fn granted(policy: CapabilityPolicy) -> Self {
         let mut access = Self::new(policy);
-        access.capabilities = policy.resolve();
+        access.capabilities = policy.resolve(true);
         access
     }
 }
@@ -64,6 +67,7 @@ pub(super) fn forbidden_reply(
     if ws_request_permitted(request_type, payload, access.capabilities(), identity) {
         return None;
     }
+    let host_local = ws_request_requirement(request_type, payload) == Requirement::HostLocal;
     // Boundary log: request type + carrier + device label only — never the
     // payload (it can carry prompt text or store values).
     warn!(
@@ -71,12 +75,16 @@ pub(super) fn forbidden_reply(
         request_id = %id,
         request_type = %request_type,
         carrier = access.capabilities().carrier.as_str(),
+        host_local,
         device_id = %identity.map_or_else(String::new, |i| ClientIdentity::log_label(&i.device_id)),
-        "/ws request refused: view-only connection lacks write capability"
+        "/ws request refused: the connection lacks the capability it needs"
     );
-    Some(WsReply::err(
-        id,
-        WsErrorCode::Forbidden,
-        format!("`{request_type}` requires write capability; this connection is view-only"),
-    ))
+    let message = if host_local {
+        format!(
+            "`{request_type}` uses this host's credentials; only a client on the host itself that presented the host-local credential may send it"
+        )
+    } else {
+        format!("`{request_type}` requires write capability; this connection is view-only")
+    };
+    Some(WsReply::err(id, WsErrorCode::Forbidden, message))
 }

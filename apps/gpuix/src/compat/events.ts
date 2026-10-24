@@ -11,6 +11,7 @@
 
 import type { EventPayload, KeyEvent } from '@gpuix/react'
 import { ancestorIds, inputValues, nodeFor, nodeOrNull, trackedInstance, compatRenderer } from './dom-node'
+import { dragSuppressesClick, fileDrop, moveSource, pressSource, releaseSource } from './dnd'
 import { compatWarn } from './log'
 
 type Handler = (event: CompatEvent) => void
@@ -39,13 +40,21 @@ export interface DomHandlers {
   onScroll?: Handler
   onWheel?: Handler
   onSubmit?: Handler
+  onDragStart?: Handler
+  onDrag?: Handler
+  onDragEnd?: Handler
+  onDragEnter?: Handler
+  onDragOver?: Handler
+  onDragLeave?: Handler
+  onDrop?: Handler
 }
 
 export const HANDLER_NAMES: readonly (keyof DomHandlers)[] = [
   'onClick', 'onDoubleClick', 'onContextMenu', 'onMouseDown', 'onMouseUp', 'onMouseMove',
   'onMouseEnter', 'onMouseLeave', 'onPointerDown', 'onPointerUp', 'onPointerMove',
   'onPointerEnter', 'onPointerLeave', 'onKeyDown', 'onKeyUp', 'onFocus', 'onBlur', 'onChange',
-  'onInput', 'onScroll', 'onWheel', 'onSubmit'
+  'onInput', 'onScroll', 'onWheel', 'onSubmit', 'onDragStart', 'onDrag', 'onDragEnd', 'onDragEnter',
+  'onDragOver', 'onDragLeave', 'onDrop'
 ]
 
 const KEY_NAMES: Readonly<Record<string, string>> = {
@@ -180,7 +189,7 @@ export class CompatEvent {
   persist(): void {}
 }
 
-function handlersOf(id: number): DomHandlers | null {
+export function handlersOf(id: number): DomHandlers | null {
   return trackedInstance(id)?.props.__dom?.handlers ?? null
 }
 
@@ -241,10 +250,13 @@ function bubbling(pick: Pick) {
   }
 }
 
-const onClick = bubbling((h, p) => [
+const clickBubbling = bubbling((h, p) => [
   ['click', h.onClick],
   ['dblclick', p.clickCount === 2 ? h.onDoubleClick : undefined]
 ])
+function onClick(payload: EventPayload): void {
+  if (!dragSuppressesClick(payload)) clickBubbling(payload)
+}
 const onAuxClick = bubbling((h, p) => [['contextmenu', p.isRightClick ? h.onContextMenu : undefined]])
 const onMouseDown = bubbling((h) => [
   ['pointerdown', h.onPointerDown],
@@ -270,6 +282,20 @@ const onMouseMove = direct((h) => [
   ['pointermove', h.onPointerMove],
   ['mousemove', h.onMouseMove]
 ])
+/** A draggable element also feeds the drag session (`dnd.ts`); having all three arms GPUIX's pointer capture. */
+function onDragSourceDown(payload: EventPayload): void {
+  onMouseDown(payload)
+  pressSource(payload)
+}
+function onDragSourceMove(payload: EventPayload): void {
+  onMouseMove(payload)
+  moveSource(payload)
+}
+function onDragSourceUp(payload: EventPayload): void {
+  onMouseUp(payload)
+  releaseSource(payload)
+}
+
 const onMouseEnter = direct((h) => [
   ['pointerenter', h.onPointerEnter],
   ['mouseenter', h.onMouseEnter]
@@ -339,6 +365,7 @@ const onFocus = focusListener('focus')
 const onBlur = focusListener('blur')
 
 export interface GpuixListeners {
+  onFileDrop?: typeof fileDrop
   onClick?: typeof onClick
   onAuxClick?: typeof onAuxClick
   onMouseDown?: typeof onMouseDown
@@ -364,7 +391,8 @@ export function adaptHandlers(
   props: Readonly<Record<string, unknown>>,
   text: boolean,
   focusable: boolean,
-  out: GpuixListeners
+  out: GpuixListeners,
+  draggable = false
 ): DomHandlers | null {
   let handlers: DomHandlers | null = null
   for (const name of HANDLER_NAMES) {
@@ -390,6 +418,12 @@ export function adaptHandlers(
   if (handlers.onWheel) out.onScroll = onScroll
   if (handlers.onScroll) out.onScrollChange = onScrollChange
   if (text && (handlers.onChange || handlers.onInput)) out.onChange = inputChange
+  if (draggable) {
+    out.onMouseDown = onDragSourceDown
+    out.onMouseMove = onDragSourceMove
+    out.onMouseUp = onDragSourceUp
+  }
+  if (handlers.onDrop || handlers.onDragOver || handlers.onDragEnter) out.onFileDrop = fileDrop
   if (handlers.onSubmit) compatWarn('event-partial', 'onSubmit (form submit is not emulated)')
   return handlers
 }

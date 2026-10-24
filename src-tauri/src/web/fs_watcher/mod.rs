@@ -574,9 +574,11 @@ async fn watch_root(
                         Err(_) => break, // deadline
                     }
                 }
+                let secrets = crate::web::host_secrets::snapshot();
                 let mut paths: Vec<String> = pending
                     .iter()
                     .filter(|path| is_reportable_below_root(path, &root))
+                    .filter(|path| !secrets.covers(path))
                     .filter_map(|path| normalize_path(path))
                     .collect();
                 paths.sort();

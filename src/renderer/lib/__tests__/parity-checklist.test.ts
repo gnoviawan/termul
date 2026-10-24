@@ -19,7 +19,7 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
+import { WS_ERROR_CODES, WS_REQUEST_TYPES, WS_WATCH_NAMES } from '@shared/types/web-protocol.types'
 import { describe, expect, it } from 'vitest'
 import { mapTauriVerdict } from '../acp-transport/tauri-verdicts'
 import { AcpTransportError } from '../acp-transport/types'
@@ -2021,20 +2021,29 @@ describe('Claude Accounts parity (ADR-0004)', () => {
     }
   })
 
-  it('add, sign-in, rename and remove are desktop-only and gated in the facade', () => {
+  it('add, sign-in, rename and remove reach the same service on both paths, host-local on web', () => {
+    // Desktop: the Tauri commands. Web: the /ws requests, admitted only for a
+    // `host_local` connection. Both call the same ClaudeAgentService method.
     const dispatch = read('web', 'ws', 'dispatch.rs')
-    for (const command of [
-      'claude_accounts_add',
-      'claude_accounts_login',
-      'claude_accounts_login_cancel',
-      'claude_accounts_rename',
-      'claude_accounts_remove'
+    const ws = read('web', 'ws', 'claude_accounts.rs')
+    const tauri = read('acp', 'commands', 'claude_accounts.rs')
+    const capabilities = read('web', 'capabilities.rs')
+    for (const [command, request, method] of [
+      ['claude_accounts_add', 'add_claude_account', 'add_account'],
+      ['claude_accounts_login', 'login_claude_account', 'login_account'],
+      ['claude_accounts_login_cancel', 'cancel_claude_account_login', 'cancel_login'],
+      ['claude_accounts_rename', 'rename_claude_account', 'rename_account'],
+      ['claude_accounts_remove', 'remove_claude_account', 'remove_account']
     ]) {
       expect(facade).toContain(`'${command}'`)
       expect(read('lib.rs')).toContain(`acp::commands::${command}`)
+      expect(wsTransport).toContain(`'${request}'`)
+      expect(dispatch).toContain(`"${request}" => handle_${request}`)
+      expect(capabilities).toMatch(new RegExp(`HOST_LOCAL_WS_REQUESTS[^;]*"${request}"`, 's'))
+      expect(tauri).toContain(`service.${method}(`)
+      expect(ws).toContain(`claude_agent().${method}(`)
     }
-    expect(dispatch).not.toMatch(/"(add|login|rename|remove)_claude_account"/)
-    expect(facade).toMatch(/if \(!isTauriContext\(\)\) return Promise\.reject/)
+    expect(facade).toMatch(/connectionCapabilities\?\.\(\)\?\.hostLocal === true/)
   })
 
   it('the spawn sends the projectId that selects the account on every carrier', () => {
@@ -2247,5 +2256,67 @@ describe('Desktop host seam parity (GPUIX)', () => {
       )
       expect(content).toMatch(/getDesktopHost\(\)/)
     }
+  })
+})
+
+describe('SSH parity (desktop Tauri commands and host-local /ws)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const read = (...parts: string[]): string => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
+  const wsSsh = read('web', 'ws', 'ssh.rs')
+  const tauriSsh = read('commands', 'ssh.rs')
+  const requests = [...wsSsh.matchAll(/^ {4}"((?:ssh|sftp)_[a-z_]+)",$/gm)].map((m) => m[1])
+
+  it('every SSH command the desktop registers is a host-local /ws request, except port forwards', () => {
+    const lib = read('lib.rs')
+    const registered = [...lib.matchAll(/commands::((?:ssh|sftp)_[a-z_]+),/g)].map((m) => m[1])
+    expect(requests).toHaveLength(22)
+    expect([...registered].sort()).toEqual(
+      [...requests, 'ssh_port_forward_start', 'ssh_port_forward_stop'].sort()
+    )
+    for (const request of requests) {
+      expect(WS_REQUEST_TYPES).toContain(request)
+    }
+    expect(read('web', 'capabilities.rs')).toMatch(
+      /HOST_LOCAL_WS_REQUESTS\.contains\(&request_type\)\s*\|\| crate::web::ws::SSH_WS_REQUESTS\.contains/
+    )
+  })
+
+  it('both transports call the same ssh::service operation for each command', () => {
+    for (const request of requests) {
+      const tauri = new RegExp(`pub async fn ${request}\\([^]*?service::([a-z_]+)\\(`).exec(
+        tauriSsh
+      )
+      const ws = new RegExp(`"${request}" => \\{?[^]*?service::([a-z_]+)\\(`).exec(wsSsh)
+      expect(tauri?.[1], request).toBeDefined()
+      expect(ws?.[1], request).toBe(tauri?.[1])
+    }
+  })
+
+  it('the SSH core has no Tauri dependency; the desktop and the server each give it an event sink', () => {
+    for (const file of ['mod.rs', 'service.rs', 'sftp.rs', 'profile_manager.rs', 'session.rs']) {
+      expect(read('ssh', file), file).not.toMatch(/\btauri(_plugin_store)?::/)
+    }
+    expect(read('lib.rs')).toMatch(/ssh::SSHManager::new\(\s*&ssh_data_dir,[^;]*emitter\.emit/s)
+    expect(read('server_main.rs')).toMatch(/SSHManager::new\([^;]*publish_ssh_event/s)
+    expect(WS_WATCH_NAMES).toContain('ssh')
+  })
+
+  it('the SSH UI shows wherever the host runs SSH for the client, re-read when the grant arrives', () => {
+    const renderer = join(LIB_DIR, '..')
+    const ui = (path: string): string => readFileSync(join(renderer, path), 'utf-8')
+    for (const path of [
+      'components/ssh/SSHPanel.tsx',
+      'components/ssh/SSHHostsView.tsx',
+      'components/ssh/SSHHostEditor.tsx',
+      'components/sidebar/ssh-section.tsx',
+      'components/CommandPalette.tsx'
+    ]) {
+      expect(ui(path), path).toContain('useHostGate(canUseHostSsh)')
+    }
+    expect(ui('layouts/workspace-layout/use-ssh-workspace.ts')).toContain('if (!canUseHostSsh())')
+    // Local file pickers are Tauri dialogs: the key browser and SFTP
+    // upload/download stay desktop-only.
+    expect(ui('components/ssh/SSHHostEditor.tsx')).toMatch(/disabled=\{!desktop\}/)
+    expect(ui('components/ssh/SSHFileExplorer.tsx')).toContain('const desktop = isTauriContext()')
   })
 })

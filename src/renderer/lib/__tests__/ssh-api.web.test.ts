@@ -2,24 +2,38 @@
  * Web-branch tests for ssh-api.ts.
  *
  * Pins `isTauriContext()` to FALSE and asserts:
- * - profile CRUD (list/save/delete) reads/writes the server-side store
- *   (issue #613) instead of invoking Tauri commands,
- * - connection/SFTP/askpass methods still return an explicit
- *   `WEB_UNSUPPORTED` result instead of invoking the stubbed
- *   `@tauri-apps/api/core` `invoke()` (which throws `tauriUnavailable` on web).
+ * - on a connection the host does not run SSH for, profile CRUD
+ *   (list/save/delete) reads/writes the server-side store (issue #613), and
+ *   session/SFTP/key methods return an explicit `WEB_UNSUPPORTED` result
+ *   instead of invoking the stubbed `@tauri-apps/api/core` `invoke()`,
+ * - on a `hostLocal` connection every command, profile CRUD included, runs
+ *   over `/ws` under its Tauri name and arguments, and events arrive from the
+ *   host's `ssh` watch.
  * The desktop path is covered by direct invoke assertions in sibling tests.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockIsTauriContext, mockInvoke, mockListen, mockPersistenceApi } = vi.hoisted(() => ({
-  mockIsTauriContext: vi.fn(),
-  mockInvoke: vi.fn(),
-  mockListen: vi.fn(),
-  mockPersistenceApi: {
-    read: vi.fn(),
-    write: vi.fn()
-  }
+const { mockIsTauriContext, mockInvoke, mockListen, mockPersistenceApi, transport } = vi.hoisted(
+  () => ({
+    mockIsTauriContext: vi.fn(),
+    mockInvoke: vi.fn(),
+    mockListen: vi.fn(),
+    mockPersistenceApi: {
+      read: vi.fn(),
+      write: vi.fn()
+    },
+    transport: {
+      connect: vi.fn(),
+      connectionCapabilities: vi.fn(),
+      sshRequest: vi.fn(),
+      watches: { subscribe: vi.fn() }
+    }
+  })
+)
+
+vi.mock('../acp-transport', () => ({
+  getAcpTransport: () => transport
 }))
 
 vi.mock('../tauri-runtime', () => ({
@@ -40,7 +54,7 @@ vi.mock('../persistence-api', () => ({
 }))
 
 import type { SSHProfile } from '@shared/types/ssh.types'
-import { createSSHApi } from '../ssh-api'
+import { canUseHostSsh, createSSHApi } from '../ssh-api'
 
 const profile = (overrides: Partial<SSHProfile> = {}): SSHProfile => ({
   id: 'p-1',
@@ -62,6 +76,8 @@ describe('sshApi (web branch)', () => {
     mockPersistenceApi.read.mockReset()
     mockPersistenceApi.write.mockReset()
     mockPersistenceApi.write.mockResolvedValue({ success: true, data: undefined })
+    transport.connect.mockResolvedValue(undefined)
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: false })
   })
 
   it('listProfiles returns stored profiles from the server-side store', async () => {
@@ -235,6 +251,7 @@ describe('sshApi (web branch)', () => {
       unlisten()
     }
     expect(mockListen).not.toHaveBeenCalled()
+    expect(transport.watches.subscribe).not.toHaveBeenCalled()
   })
 
   it('sftpListDir returns WEB_UNSUPPORTED when !isTauriContext()', async () => {
@@ -246,5 +263,326 @@ describe('sshApi (web branch)', () => {
       expect(result.code).toBe('WEB_UNSUPPORTED')
     }
     expect(mockInvoke).not.toHaveBeenCalled()
+    expect(transport.sshRequest).not.toHaveBeenCalled()
+  })
+})
+
+describe('sshApi (host-local web connection)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIsTauriContext.mockReturnValue(false)
+    transport.connect.mockResolvedValue(undefined)
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: true })
+    transport.sshRequest.mockResolvedValue(null)
+    mockPersistenceApi.read.mockResolvedValue({
+      success: false,
+      error: 'not found',
+      code: 'KEY_NOT_FOUND'
+    })
+  })
+
+  it('sends each command over /ws under its Tauri name and arguments', async () => {
+    const api = createSSHApi()
+    await api.openSession({ sessionId: 's', profileId: 'p-1', cols: 80, rows: 24 })
+    await api.respondHostKey('s', true)
+    await api.sftpListDir('s', '/remote')
+    await api.sftpUpload('s', '/tmp/a.txt', '/remote/a.txt')
+    await api.duplicateProfile('p-1')
+    await api.listKeys()
+    expect(transport.sshRequest.mock.calls).toEqual([
+      ['ssh_session_open', { request: { sessionId: 's', profileId: 'p-1', cols: 80, rows: 24 } }],
+      ['ssh_session_respond_host_key', { sessionId: 's', trust: true }],
+      ['sftp_list_dir', { request: { connectionId: 's', remotePath: '/remote' } }],
+      [
+        'sftp_upload',
+        { request: { connectionId: 's', remotePath: '/remote/a.txt', localPath: '/tmp/a.txt' } }
+      ],
+      ['ssh_duplicate_profile', { profileId: 'p-1' }],
+      ['ssh_list_keys', undefined]
+    ])
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('answers the host value and maps a refusal to its code', async () => {
+    const api = createSSHApi()
+    transport.sshRequest.mockResolvedValueOnce('/home/deploy')
+    expect(await api.sftpRealpath('s', '.')).toEqual({ success: true, data: '/home/deploy' })
+    transport.sshRequest.mockRejectedValueOnce(
+      Object.assign(new Error('Authentication failed'), { code: 'SSH_AUTH_FAILED' })
+    )
+    expect(await api.openSession({ sessionId: 's', profileId: 'p', cols: 1, rows: 1 })).toEqual({
+      success: false,
+      error: 'Authentication failed',
+      code: 'SSH_AUTH_FAILED'
+    })
+  })
+
+  it('keeps profiles with the host SSH, not the server-side store', async () => {
+    const api = createSSHApi()
+    transport.sshRequest.mockResolvedValueOnce([profile()])
+    expect(await api.listProfiles()).toEqual({ success: true, data: [profile()] })
+    await api.saveProfile(profile({ password: 'secret' }))
+    await api.deleteProfile('p-1')
+    expect(transport.sshRequest.mock.calls.map((c) => c[0])).toEqual([
+      'ssh_list_profiles',
+      'ssh_save_profile',
+      'ssh_delete_profile'
+    ])
+    expect(transport.sshRequest.mock.calls[1][1]).toEqual({
+      profile: profile({ password: 'secret' })
+    })
+    const writtenKeys = mockPersistenceApi.write.mock.calls.map((c) => c[0])
+    expect(writtenKeys).toEqual(['ssh/profiles-migrated'])
+  })
+
+  it('waits for the handshake when the grant is not known yet', async () => {
+    transport.connectionCapabilities
+      .mockReturnValueOnce(null)
+      .mockReturnValue({ write: true, hostLocal: true })
+    const api = createSSHApi()
+    await api.listSessions()
+    expect(transport.connect).toHaveBeenCalledTimes(1)
+    expect(transport.sshRequest).toHaveBeenCalledWith('ssh_session_list', undefined)
+  })
+
+  it('reports SSH usable only once the grant is hostLocal', () => {
+    expect(canUseHostSsh()).toBe(true)
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: false })
+    expect(canUseHostSsh()).toBe(false)
+    transport.connectionCapabilities.mockReturnValue(null)
+    expect(canUseHostSsh()).toBe(false)
+  })
+
+  it('keeps port forwarding desktop-only', async () => {
+    const api = createSSHApi()
+    const result = await api.stopPortForward('s', 'f')
+    expect(result).toMatchObject({ success: false, code: 'WEB_UNSUPPORTED' })
+    expect(transport.sshRequest).not.toHaveBeenCalled()
+  })
+
+  it('delivers each ssh watch event to its own listener', async () => {
+    const handlers: Array<{ onDelta: (delta: unknown) => void }> = []
+    const off = vi.fn()
+    transport.watches.subscribe.mockImplementation((_watch, h) => {
+      handlers.push(h)
+      return off
+    })
+    const api = createSSHApi()
+    const progress = vi.fn()
+    const ended = vi.fn()
+    const stopProgress = api.onSessionProgress(progress)
+    api.onSessionEnded(ended)
+    await vi.waitFor(() => expect(handlers).toHaveLength(2))
+    expect(transport.watches.subscribe.mock.calls.map((c) => c[0])).toEqual(['ssh', 'ssh'])
+    for (const h of handlers) {
+      h.onDelta({ event: 'ssh-session-progress', payload: { sessionId: 's', stage: 'auth' } })
+    }
+    expect(progress).toHaveBeenCalledWith({ sessionId: 's', stage: 'auth' })
+    expect(ended).not.toHaveBeenCalled()
+    stopProgress()
+    expect(off).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * The one-time copy of the web store's profiles to the host, against an
+ * in-memory compare-and-set store and an in-memory host profile file. A
+ * "browser" is the same api on a connection without the hostLocal grant.
+ */
+describe('sshApi profile copy to the host', () => {
+  const p1 = profile()
+  const p2 = profile({ id: 'p-2', name: 'staging' })
+  const p3 = profile({ id: 'p-3', name: 'added-in-browser' })
+
+  let store: Map<string, unknown>
+  let host: Map<string, SSHProfile>
+  let beforeStoreWrite: ((key: string) => void) | undefined
+  let hostSaveFailsAt: number
+  let hostSaves: number
+
+  const asBrowser = () =>
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: false })
+  const asGpuix = () =>
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: true })
+  const ids = (list: SSHProfile[] | undefined) => (list ?? []).map((p) => p.id)
+  const hostIds = () => [...host.keys()]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIsTauriContext.mockReturnValue(false)
+    transport.connect.mockResolvedValue(undefined)
+    asGpuix()
+    store = new Map()
+    host = new Map([[p1.id, p1]])
+    beforeStoreWrite = undefined
+    hostSaveFailsAt = Number.POSITIVE_INFINITY
+    hostSaves = 0
+    mockPersistenceApi.read.mockImplementation(async (key: string) =>
+      store.has(key)
+        ? { success: true, data: structuredClone(store.get(key)) }
+        : { success: false, error: `Key not found: ${key}`, code: 'KEY_NOT_FOUND' }
+    )
+    mockPersistenceApi.write.mockImplementation(
+      async (key: string, data: unknown, opts?: { expected?: unknown }) => {
+        beforeStoreWrite?.(key)
+        const current = store.has(key) ? store.get(key) : null
+        if (opts && 'expected' in opts) {
+          if (JSON.stringify(opts.expected ?? null) !== JSON.stringify(current)) {
+            return { success: false, error: 'changed', code: 'STORE_CAS_FAILED' }
+          }
+        }
+        store.set(key, structuredClone(data))
+        return { success: true, data: undefined }
+      }
+    )
+    transport.sshRequest.mockImplementation(
+      async (command: string, args?: { profile?: SSHProfile }) => {
+        if (command === 'ssh_list_profiles') return [...host.values()]
+        if (command === 'ssh_save_profile' && args?.profile) {
+          if (hostSaves >= hostSaveFailsAt) {
+            throw Object.assign(new Error('host went away'), { code: 'SSH_PROFILE_ERROR' })
+          }
+          hostSaves++
+          host.set(args.profile.id, args.profile)
+          return null
+        }
+        throw new Error(`unexpected ${command}`)
+      }
+    )
+  })
+
+  afterEach(() => {
+    mockPersistenceApi.read.mockReset()
+    mockPersistenceApi.write.mockReset()
+    transport.sshRequest.mockReset()
+  })
+
+  it('copies the stored profiles the host lacks once and leaves the store whole', async () => {
+    store.set('ssh/profiles', [p1, p2])
+    const api = createSSHApi()
+
+    const first = await api.listProfiles()
+
+    expect(ids(first.success ? first.data : undefined)).toEqual(['p-1', 'p-2'])
+    expect(hostIds()).toEqual(['p-1', 'p-2'])
+    expect(store.get('ssh/profiles')).toEqual([p1, p2])
+    expect(store.get('ssh/profiles-migrated')).toMatchObject({ count: 1 })
+
+    host.delete('p-2')
+    const second = await api.listProfiles()
+    expect(ids(second.success ? second.data : undefined)).toEqual(['p-1'])
+    expect(hostIds()).toEqual(['p-1'])
+  })
+
+  it('leaves the browser list unchanged, and later browser saves stay in the browser', async () => {
+    store.set('ssh/profiles', [p1, p2])
+    const api = createSSHApi()
+    await api.listProfiles()
+
+    asBrowser()
+    const browserList = await api.listProfiles()
+    expect(ids(browserList.success ? browserList.data : undefined)).toEqual(['p-1', 'p-2'])
+    expect((await api.saveProfile(p3)).success).toBe(true)
+
+    asGpuix()
+    await api.listProfiles()
+    expect(hostIds()).toEqual(['p-1', 'p-2'])
+
+    asBrowser()
+    const after = await api.listProfiles()
+    expect(ids(after.success ? after.data : undefined)).toEqual(['p-1', 'p-2', 'p-3'])
+  })
+
+  it('keeps a browser write that lands during the copy', async () => {
+    store.set('ssh/profiles', [p1, p2])
+    beforeStoreWrite = (key) => {
+      if (key !== 'ssh/profiles-migrated') return
+      beforeStoreWrite = undefined
+      store.set('ssh/profiles', [p1, { ...p2, name: 'renamed-in-browser' }, p3])
+    }
+    const api = createSSHApi()
+
+    await api.listProfiles()
+
+    expect(store.get('ssh/profiles')).toEqual([p1, { ...p2, name: 'renamed-in-browser' }, p3])
+    expect(hostIds()).toEqual(['p-1', 'p-2'])
+    expect(store.has('ssh/profiles-migrated')).toBe(true)
+  })
+
+  it('lets two host-local clients copy at once without duplicating a profile', async () => {
+    store.set('ssh/profiles', [p1, p2, p3])
+    const [a, b] = [createSSHApi(), createSSHApi()]
+
+    const [ra, rb] = await Promise.all([a.listProfiles(), b.listProfiles()])
+
+    expect(ids(ra.success ? ra.data : undefined)).toEqual(['p-1', 'p-2', 'p-3'])
+    expect(ids(rb.success ? rb.data : undefined)).toEqual(['p-1', 'p-2', 'p-3'])
+    expect(hostIds()).toEqual(['p-1', 'p-2', 'p-3'])
+    const markerWrites = mockPersistenceApi.write.mock.calls.filter(
+      (c) => c[0] === 'ssh/profiles-migrated'
+    )
+    expect(markerWrites).toHaveLength(2)
+    expect(store.get('ssh/profiles')).toEqual([p1, p2, p3])
+  })
+
+  it('resumes a copy that stopped midway at the next list', async () => {
+    store.set('ssh/profiles', [p1, p2, p3])
+    hostSaveFailsAt = 1
+    const api = createSSHApi()
+
+    const interrupted = await api.listProfiles()
+    expect(ids(interrupted.success ? interrupted.data : undefined)).toEqual(['p-1', 'p-2'])
+    expect(store.has('ssh/profiles-migrated')).toBe(false)
+
+    hostSaveFailsAt = Number.POSITIVE_INFINITY
+    const resumed = await api.listProfiles()
+    expect(ids(resumed.success ? resumed.data : undefined)).toEqual(['p-1', 'p-2', 'p-3'])
+    expect(store.get('ssh/profiles-migrated')).toMatchObject({ count: 1 })
+    expect(store.get('ssh/profiles')).toEqual([p1, p2, p3])
+  })
+})
+
+describe('sshApi desktop and host-local web parity', () => {
+  const calls = (api: ReturnType<typeof createSSHApi>) => [
+    () => api.listProfiles(),
+    () => api.saveProfile(profile()),
+    () => api.deleteProfile('p-1'),
+    () => api.duplicateProfile('p-1'),
+    () => api.importConfig(),
+    () => api.inspectKey('/k'),
+    () => api.listKeys(),
+    () => api.openSession({ sessionId: 's', profileId: 'p-1', cols: 80, rows: 24, secret: 'x' }),
+    () => api.respondHostKey('s', false),
+    () => api.cancelSession('s'),
+    () => api.closeSession('s'),
+    () => api.listSessions(),
+    () => api.sftpListDir('s', '/'),
+    () => api.sftpRealpath('s', '.'),
+    () => api.sftpDownload('s', '/r', '/l'),
+    () => api.sftpUpload('s', '/l', '/r'),
+    () => api.sftpDelete('s', '/r'),
+    () => api.sftpMkdir('s', '/r'),
+    () => api.sftpRename('s', '/a', '/b'),
+    () => api.sftpReadFile('s', '/r'),
+    () => api.sftpWriteFile('s', '/r', 'text'),
+    () => api.sftpCreateFile('s', '/r')
+  ]
+
+  it('every method sends the same command and arguments on both paths', async () => {
+    vi.clearAllMocks()
+    mockIsTauriContext.mockReturnValue(true)
+    mockInvoke.mockResolvedValue({ success: true, data: null })
+    for (const call of calls(createSSHApi())) await call()
+    const desktop = mockInvoke.mock.calls.map(([command, args]) => [command, args])
+
+    mockIsTauriContext.mockReturnValue(false)
+    transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: true })
+    transport.sshRequest.mockResolvedValue(null)
+    mockPersistenceApi.read.mockResolvedValue({ success: true, data: { copiedAt: 'x', count: 0 } })
+    for (const call of calls(createSSHApi())) await call()
+    const web = transport.sshRequest.mock.calls.map(([command, args]) => [command, args])
+
+    expect(desktop).toHaveLength(22)
+    expect(web).toEqual(desktop)
   })
 })

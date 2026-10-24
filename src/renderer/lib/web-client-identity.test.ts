@@ -1,5 +1,6 @@
 import { MAX_CLIENT_ID_LEN, WS_PROTOCOL_VERSION } from '@shared/types/web-protocol.types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { setHostLocalTokenSource } from './web-auth-token'
 import {
   __resetClientIdentityForTesting,
   buildAuthenticatePayload,
@@ -165,6 +166,20 @@ describe('web-client-identity', () => {
       clientInstanceId: instance,
       token: 't'
     })
+  })
+
+  it('presents the host-local credential only once a launcher handed one over', () => {
+    expect('hostLocalToken' in buildAuthenticatePayload('t')).toBe(false)
+    setHostLocalTokenSource(() => 'host-credential\n')
+    try {
+      expect(buildAuthenticatePayload('t').hostLocalToken).toBe('host-credential')
+      expect(JSON.stringify({ ...window.localStorage, ...window.sessionStorage })).not.toContain(
+        'host-credential'
+      )
+    } finally {
+      setHostLocalTokenSource(null)
+    }
+    expect('hostLocalToken' in buildAuthenticatePayload('t')).toBe(false)
   })
 
   it('omits the token key entirely when no token is supplied', () => {

@@ -17,8 +17,12 @@ import type {
   SSHSessionProgressEvent,
   TransferProgressCallback
 } from '@shared/types/ssh.types'
+import type { SshWsRequestType } from '@shared/types/web-protocol.types'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { getAcpTransport } from './acp-transport'
+import type { AcpTransport } from './acp-transport/types'
 import { invokeIpc as invokeTauriIpc } from './ipc/tauri'
+import { logFrontendError } from './log-api'
 import { persistenceApi } from './persistence-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
@@ -92,30 +96,166 @@ const SSH_COMMANDS = {
   DUPLICATE_PROFILE: 'ssh_duplicate_profile',
   INSPECT_KEY: 'ssh_inspect_key',
   LIST_KEYS: 'ssh_list_keys'
+} as const satisfies Record<string, SshCommand>
+
+/** The SSH commands; port forwarding stays desktop-only (no renderer caller). */
+type SshCommand = SshWsRequestType | 'ssh_port_forward_start' | 'ssh_port_forward_stop'
+
+const WEB_UNSUPPORTED = {
+  success: false,
+  error: 'SSH is not available in the web client',
+  code: 'WEB_UNSUPPORTED'
 } as const
 
-async function invokeIpc<T>(
-  command: string,
-  args?: Record<string, unknown>
-): Promise<IpcResult<T>> {
-  // Web/remote mode: SSH/SFTP/port-forwarding are desktop-only. Return an
-  // explicit `WEB_UNSUPPORTED` result instead of invoking a Tauri-only
-  // command whose stub throws `tauriUnavailable`. All SSH command methods
-  // (profile CRUD, sessions, port forwarding, SFTP) delegate through this
-  // function, so the guard is applied once for the whole API.
-  if (!isTauriContext()) {
-    return {
-      success: false,
-      error: 'SSH is not available in the web client',
-      code: 'WEB_UNSUPPORTED'
+/**
+ * The web transport when the host runs SSH for this connection: only a
+ * `hostLocal` one (a client on the host itself holding the host-local
+ * credential, such as the GPUIX desktop client). The grant is known after the
+ * handshake, so a call made before it waits for the connection.
+ */
+async function hostTransport(): Promise<AcpTransport | null> {
+  const transport = getAcpTransport()
+  if (!transport.sshRequest || !transport.connectionCapabilities) return null
+  if (transport.connectionCapabilities() === null) {
+    try {
+      await transport.connect()
+    } catch {
+      return null
     }
   }
-  return invokeTauriIpc<T>(command, args)
+  return transport.connectionCapabilities()?.hostLocal === true ? transport : null
 }
 
-/** Subscribe to a Tauri event; a no-op outside the desktop runtime. */
+function errorCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code
+  return typeof code === 'string' ? code : 'SSH_INTERNAL'
+}
+
+/**
+ * Desktop: the Tauri command. Web: the same command over `/ws` when the host
+ * runs SSH for this connection, else an explicit `WEB_UNSUPPORTED` result
+ * (never the stubbed Tauri `invoke`, which throws on web). Every SSH command
+ * method delegates through here.
+ */
+async function invokeIpc<T>(
+  command: SshCommand,
+  args?: Record<string, unknown>
+): Promise<IpcResult<T>> {
+  if (isTauriContext()) return invokeTauriIpc<T>(command, args)
+  if (command === 'ssh_port_forward_start' || command === 'ssh_port_forward_stop') {
+    return WEB_UNSUPPORTED
+  }
+  const transport = await hostTransport()
+  if (!transport?.sshRequest) return WEB_UNSUPPORTED
+  try {
+    return { success: true, data: await transport.sshRequest<T>(command, args) }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      code: errorCode(error)
+    }
+  }
+}
+
+/**
+ * Whether this surface can run SSH sessions now: the desktop, or a web
+ * connection whose handshake granted `hostLocal`. For UI gates that render
+ * synchronously; `false` until that handshake.
+ */
+export function canUseHostSsh(): boolean {
+  if (isTauriContext()) return true
+  const transport = getAcpTransport()
+  return !!transport.sshRequest && transport.connectionCapabilities?.()?.hostLocal === true
+}
+
+/** Whether profiles live with the host's SSH (desktop, host-local web). */
+async function hostOwnsProfiles(): Promise<boolean> {
+  return isTauriContext() || (await hostTransport()) !== null
+}
+
+/**
+ * A web client that is not host-local keeps profiles in the server-side store
+ * (issue #613); a host-local one lists the host's SSH profiles. The first
+ * host-local list on a host copies the stored profiles the host lacks to it,
+ * once. The store is never written: browsers keep reading it, so their list
+ * stays whole. The create-only marker (`ssh/profiles-migrated`) is written
+ * after the copy, so a crash mid-copy resumes at the next list, and saving
+ * only the ids the host lacks makes that resume, or a second client copying
+ * at the same moment, harmless. Resolves to how many profiles were copied,
+ * so the caller re-lists when the host gained any.
+ */
+async function copyStoreProfilesToHost(hostProfiles: SSHProfile[]): Promise<number> {
+  const marker = await persistenceApi.read<SshProfilesMigrated>(PersistenceKeys.sshProfilesMigrated)
+  if (marker.success || marker.code !== 'KEY_NOT_FOUND') return 0
+  const stored = await readProfilesSnapshot()
+  if (!stored.success) return 0
+  const known = new Set(hostProfiles.map((p) => p.id))
+  const missing = stored.data.profiles.filter((p) => !known.has(p.id))
+  for (const [copied, profile] of missing.entries()) {
+    const saved = await invokeIpc<void>(SSH_COMMANDS.SAVE_PROFILE, { profile })
+    if (!saved.success) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'ssh.profileMigration',
+        message: `copying web SSH profiles to the host stopped after ${copied}: ${saved.error}`
+      })
+      return copied
+    }
+  }
+  const marked = await persistenceApi.write<SshProfilesMigrated>(
+    PersistenceKeys.sshProfilesMigrated,
+    { copiedAt: new Date().toISOString(), count: missing.length },
+    { expected: null }
+  )
+  const markerNote =
+    marked.success || marked.code === 'STORE_CAS_FAILED'
+      ? ''
+      : `; marker not written: ${marked.error}`
+  void logFrontendError({
+    level: 'info',
+    source: 'ssh.profileMigration',
+    message: `copied ${missing.length} web SSH profile(s) to the host${markerNote}`
+  })
+  return missing.length
+}
+
+/** Value of the `ssh/profiles-migrated` marker. */
+interface SshProfilesMigrated {
+  copiedAt: string
+  count: number
+}
+
+interface SshWatchDelta {
+  event?: string
+  payload?: unknown
+}
+
+/**
+ * Subscribe to one SSH event: a Tauri event on desktop, a delta of the host's
+ * `ssh` watch on a host-local web connection, a no-op otherwise.
+ */
+function listenSsh<T>(event: string, callback: (payload: T) => void): () => void {
+  if (isTauriContext()) return listenDesktop(event, callback)
+  let stopped = false
+  let stop: (() => void) | undefined
+  void hostTransport().then((transport) => {
+    if (stopped || !transport?.watches) return
+    stop = transport.watches.subscribe<unknown, SshWatchDelta>('ssh', {
+      onState: () => {},
+      onDelta: (delta) => {
+        if (delta?.event === event) callback(delta.payload as T)
+      }
+    })
+  })
+  return () => {
+    stopped = true
+    stop?.()
+  }
+}
+
+/** Subscribe to a Tauri event. */
 function listenDesktop<T>(event: string, callback: (payload: T) => void): () => void {
-  if (!isTauriContext()) return () => {}
   let unlisten: Promise<UnlistenFn> | undefined
   try {
     unlisten = listen<T>(event, ({ payload }) => callback(payload))
@@ -129,15 +269,19 @@ function listenDesktop<T>(event: string, callback: (payload: T) => void): () => 
 
 export function createSSHApi(): SSHApi {
   return {
-    // Profile management — CRUD works in web mode via the server-side store;
-    // sessions/SFTP/port-forwarding remain desktop-only (`WEB_UNSUPPORTED`).
+    // Profiles live with the host's SSH on desktop and on a host-local web
+    // connection; any other web client keeps them in the server-side store
+    // (it cannot open sessions).
     async listProfiles(): Promise<IpcResult<SSHProfile[]>> {
-      if (!isTauriContext()) return readProfilesFromStore()
-      return invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES)
+      if (!(await hostOwnsProfiles())) return readProfilesFromStore()
+      const listed = await invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES)
+      if (!listed.success || isTauriContext()) return listed
+      const copied = await copyStoreProfilesToHost(listed.data)
+      return copied > 0 ? invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES) : listed
     },
 
     async saveProfile(profile: SSHProfile): Promise<IpcResult<void>> {
-      if (!isTauriContext()) {
+      if (!(await hostOwnsProfiles())) {
         for (let attempt = 0; attempt < PROFILE_WRITE_ATTEMPTS; attempt++) {
           const list = await readProfilesSnapshot()
           if (!list.success) return list
@@ -160,7 +304,7 @@ export function createSSHApi(): SSHApi {
     },
 
     async deleteProfile(profileId: string): Promise<IpcResult<void>> {
-      if (!isTauriContext()) {
+      if (!(await hostOwnsProfiles())) {
         for (let attempt = 0; attempt < PROFILE_WRITE_ATTEMPTS; attempt++) {
           const list = await readProfilesSnapshot()
           if (!list.success) return list
@@ -321,26 +465,26 @@ export function createSSHApi(): SSHApi {
 
     // Event listeners
     onPortForwardStatusChanged(callback: PortForwardStatusCallback): () => void {
-      return listenDesktop<[string, ActivePortForward]>(
+      return listenSsh<[string, ActivePortForward]>(
         SSH_EVENTS.PORT_FORWARD_STATUS_CHANGED,
         (payload) => callback(payload[0], payload[1])
       )
     },
 
     onTransferProgress(callback: TransferProgressCallback): () => void {
-      return listenDesktop<SFTPTransferProgress>(SSH_EVENTS.TRANSFER_PROGRESS, callback)
+      return listenSsh<SFTPTransferProgress>(SSH_EVENTS.TRANSFER_PROGRESS, callback)
     },
 
     onSessionProgress(callback: (event: SSHSessionProgressEvent) => void): () => void {
-      return listenDesktop<SSHSessionProgressEvent>(SSH_EVENTS.SESSION_PROGRESS, callback)
+      return listenSsh<SSHSessionProgressEvent>(SSH_EVENTS.SESSION_PROGRESS, callback)
     },
 
     onSessionHostKey(callback: (prompt: SSHHostKeyPrompt) => void): () => void {
-      return listenDesktop<SSHHostKeyPrompt>(SSH_EVENTS.SESSION_HOST_KEY, callback)
+      return listenSsh<SSHHostKeyPrompt>(SSH_EVENTS.SESSION_HOST_KEY, callback)
     },
 
     onSessionEnded(callback: (event: SSHSessionEndedEvent) => void): () => void {
-      return listenDesktop<SSHSessionEndedEvent>(SSH_EVENTS.SESSION_ENDED, callback)
+      return listenSsh<SSHSessionEndedEvent>(SSH_EVENTS.SESSION_ENDED, callback)
     }
   }
 }

@@ -12,31 +12,38 @@ pub mod keys;
 pub mod known_hosts;
 pub mod port_forward;
 pub mod profile_manager;
+pub mod service;
 pub mod session;
 pub mod sftp;
 pub mod shell;
 
 use profile_manager::ProfileManager;
+pub use session::Emit;
 use session::SshSessionManager;
+use std::path::Path;
 use std::sync::Arc;
-use tauri::Emitter;
 
 /// Top-level SSH manager that coordinates all SSH subsystems
 pub struct SSHManager {
     pub profiles: Arc<ProfileManager>,
     pub sessions: Arc<SshSessionManager>,
+    /// The event sink of this host's transport: Tauri events on the
+    /// desktop, the `ssh` watch on the standalone server. It carries session
+    /// progress, host-key questions, session ends, transfer progress and
+    /// port-forward status.
+    pub emit: Emit,
 }
 
 impl SSHManager {
-    pub fn new(app_handle: tauri::AppHandle) -> Self {
-        let profiles = Arc::new(ProfileManager::new(app_handle.clone()));
-        let emitter = app_handle;
-        let sessions = SshSessionManager::new(Arc::new(move |event, payload| {
-            if let Err(e) = emitter.emit(event, payload) {
-                log::error!("[SSH] Failed to emit {}: {}", event, e);
-            }
-        }));
-        Self { profiles, sessions }
+    /// Profiles live in `data_dir`; events go to `emit`.
+    pub fn new(data_dir: &Path, emit: Emit) -> Self {
+        let profiles = Arc::new(ProfileManager::new(data_dir));
+        let sessions = SshSessionManager::new(emit.clone());
+        Self {
+            profiles,
+            sessions,
+            emit,
+        }
     }
 
     /// App exit: abort pending connects and stop port forwards. Live shells

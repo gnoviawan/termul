@@ -97,6 +97,9 @@ export const PersistenceKeys = {
   acpMentionRecents: (partitionId: string): string => `acp/mention-recents/${partitionId}`,
   // SSH profile metadata of the web client (shared, whole-value compare-and-set).
   sshProfiles: 'ssh/profiles',
+  // Marker: a host-local client copied the stored SSH profiles to the host
+  // (shared, create-only). The store keeps them for browsers.
+  sshProfilesMigrated: 'ssh/profiles-migrated',
   // The last crash-recovery session snapshot (device scope).
   sessionsAutoSave: 'sessions/auto-save',
   // Marker: the pre-fold-in `termul-sessions.json` entry was moved to
@@ -160,7 +163,8 @@ export const KEY_SCOPES = {
     'acp/mcp-servers'
   ],
   sharedCas: [
-    'ssh/profiles'
+    'ssh/profiles',
+    'ssh/profiles-migrated'
   ]
 } as const
 

@@ -33,6 +33,7 @@ pub(crate) use precondition::{sha256_hex, write_checked, write_unchecked, Checke
 use crate::trackers::git_tracker::GitTracker;
 use crate::web::capabilities::{write_decision, WriteDecision, WriteFlags};
 use crate::web::command_ledger::{fingerprint_of, no_entity, run_http, COMMAND_ID_HEADER};
+use crate::web::host_secrets;
 use crate::web::ws::AppState;
 
 /// HTTP response body mirroring the renderer-side `IpcResult<T>` shape
@@ -235,7 +236,8 @@ fn should_ignore(name: &str) -> bool {
 /// via `allow_remote_writes` is confined on the write routes (`mkdir`, `write`,
 /// `delete`, `rename`, `copy`) to the registered project roots by
 /// `ensure_remote_within_project_root`. The read and browse routes stay
-/// unconfined for every peer.
+/// unconfined for every peer, except that no route serves a host credential
+/// (`web::host_secrets`).
 pub(super) fn check_local_only<T>(
     peer: SocketAddr,
     allow_remote_writes: bool,
@@ -438,6 +440,43 @@ pub(crate) fn resolve_request_path(path: &Path) -> Result<PathBuf, (String, &'st
     Ok(safe_path)
 }
 
+/// How a route uses a request path, for the host-credential check.
+#[derive(Clone, Copy)]
+enum PathUse {
+    /// Read, write, list or delete the path itself.
+    Access,
+    /// Copy or move it elsewhere: a directory holding a credential would
+    /// carry it out of the protected location.
+    MoveSource,
+}
+
+/// [`resolve_request_path`], then refuse a host credential
+/// (`web::host_secrets`) with `FORBIDDEN`.
+fn resolve_route_path(
+    raw: &str,
+    route: &'static str,
+    path_use: PathUse,
+) -> Result<PathBuf, (String, &'static str)> {
+    let path = resolve_request_path(Path::new(raw))?;
+    let secrets = host_secrets::snapshot();
+    let refused = match path_use {
+        PathUse::Access => secrets.covers(&path),
+        PathUse::MoveSource => secrets.exposes(&path),
+    };
+    if refused {
+        tracing::warn!(
+            target: "termul::web::fs_api",
+            route,
+            "refused a request for a host credential path",
+        );
+        return Err((
+            format!("'{raw}' holds a host credential; the server does not serve it"),
+            "FORBIDDEN",
+        ));
+    }
+    Ok(path)
+}
+
 /// Build a `DirectoryEntryDto` from a directory entry path + optional
 /// metadata. Falls back to conservative defaults (`size: 0`,
 /// `modified_at: 0`, type inferred from `file_type()` when available else
@@ -522,7 +561,7 @@ pub async fn mkdir(
     ) {
         return (StatusCode::OK, Json(forbidden));
     }
-    let path = match resolve_request_path(Path::new(&req.path)) {
+    let path = match resolve_route_path(&req.path, "/fs/mkdir", PathUse::Access) {
         Ok(safe) => safe,
         Err((msg, code)) => {
             return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
@@ -563,7 +602,7 @@ pub async fn write(
     ) {
         return (StatusCode::OK, Json(forbidden));
     }
-    let path = match resolve_request_path(Path::new(&req.path)) {
+    let path = match resolve_route_path(&req.path, "/fs/write", PathUse::Access) {
         Ok(safe) => safe,
         Err((msg, code)) => {
             return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
@@ -592,7 +631,7 @@ pub async fn write(
 /// `{ success: false, error, code: "READ_ERROR" }` (missing dir = failure;
 /// the renderer's empty-check already treats missing as empty).
 pub async fn ls(State(_state): State<AppState>, Query(q): Query<PathQuery>) -> impl IntoResponse {
-    let path = match resolve_request_path(Path::new(&q.path)) {
+    let path = match resolve_route_path(&q.path, "/fs/ls", PathUse::Access) {
         Ok(safe) => safe,
         Err((msg, code)) => {
             return (
@@ -622,7 +661,7 @@ pub async fn browse(
     State(_state): State<AppState>,
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
-    let path = match resolve_request_path(Path::new(&q.path)) {
+    let path = match resolve_route_path(&q.path, "/fs/browse", PathUse::Access) {
         Ok(safe) => safe,
         Err((msg, code)) => {
             return (
@@ -660,7 +699,7 @@ pub async fn browse(
 /// loopback-guarded, so desktop-hosted LAN clients can open files in the
 /// editor; mutations stay loopback-only (`delete`/`rename`/`copy`).
 pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) -> impl IntoResponse {
-    let path = match resolve_request_path(Path::new(&q.path)) {
+    let path = match resolve_route_path(&q.path, "/fs/read", PathUse::Access) {
         Ok(safe) => safe,
         Err((msg, code)) => {
             return (
@@ -751,7 +790,7 @@ pub async fn info(
         return (StatusCode::OK, Json(forbidden));
     }
     let requested_path = q.path.clone();
-    let path = match resolve_request_path(Path::new(&q.path)) {
+    let path = match resolve_route_path(&q.path, "/fs/info", PathUse::Access) {
         Ok(safe) => safe,
         Err((msg, code)) => {
             return (StatusCode::OK, Json(IpcBody::<FileInfoDto>::err(msg, code)));
@@ -828,7 +867,7 @@ pub async fn delete(
     ) {
         return (StatusCode::OK, Json(forbidden));
     }
-    let path = match resolve_request_path(Path::new(&req.path)) {
+    let path = match resolve_route_path(&req.path, "/fs/delete", PathUse::Access) {
         Ok(safe) => safe,
         Err((msg, code)) => {
             return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
@@ -876,7 +915,7 @@ pub async fn rename(
     ) {
         return (StatusCode::OK, Json(forbidden));
     }
-    let from = match resolve_request_path(Path::new(&req.from)) {
+    let from = match resolve_route_path(&req.from, "/fs/rename", PathUse::MoveSource) {
         Ok(safe) => safe,
         Err((msg, code)) => {
             return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
@@ -885,7 +924,7 @@ pub async fn rename(
     if let Some(outside) = ensure_remote_within_project_root::<()>(&from, peer, &state) {
         return (StatusCode::OK, Json(outside));
     }
-    let to = match resolve_request_path(Path::new(&req.to)) {
+    let to = match resolve_route_path(&req.to, "/fs/rename", PathUse::Access) {
         Ok(safe) => safe,
         Err((msg, code)) => {
             return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
@@ -935,7 +974,7 @@ pub async fn copy(
     ) {
         return (StatusCode::OK, Json(forbidden));
     }
-    let from = match resolve_request_path(Path::new(&req.from)) {
+    let from = match resolve_route_path(&req.from, "/fs/copy", PathUse::MoveSource) {
         Ok(safe) => safe,
         Err((msg, code)) => {
             return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
@@ -944,7 +983,7 @@ pub async fn copy(
     if let Some(outside) = ensure_remote_within_project_root::<()>(&from, peer, &state) {
         return (StatusCode::OK, Json(outside));
     }
-    let to = match resolve_request_path(Path::new(&req.to)) {
+    let to = match resolve_route_path(&req.to, "/fs/copy", PathUse::Access) {
         Ok(safe) => safe,
         Err((msg, code)) => {
             return (StatusCode::OK, Json(IpcBody::<()>::err(msg, code)));
@@ -1077,6 +1116,8 @@ fn list_dir(path: &Path) -> std::io::Result<Vec<DirectoryEntryDto>> {
             .ok();
         entries.push(entry_dto(&parent_buf, name, metadata.as_ref()));
     }
+    let secrets = host_secrets::snapshot();
+    entries.retain(|entry| !secrets.covers(Path::new(&entry.path)));
     sort_directory_entries(&mut entries);
     Ok(entries)
 }
@@ -1107,5 +1148,7 @@ fn sort_directory_entries(entries: &mut [DirectoryEntryDto]) {
     });
 }
 
+#[cfg(test)]
+mod host_secret_tests;
 #[cfg(test)]
 mod tests;

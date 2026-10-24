@@ -19,7 +19,7 @@ import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackIns
 import { convertDomStyle } from './dom-style'
 import { adaptHandlers, type GpuixListeners } from './events'
 import { compatWarn } from './log'
-import { placeStyle, wrapFillMinus } from './placement'
+import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
 import { layoutListener } from './resize'
 import { SVG_CHILD_TAGS, svgElement } from './svg'
 import { translation, type Translation, unreverse } from './translate'
@@ -35,7 +35,7 @@ const FOCUSABLE_TAGS = new Set(['button', 'input', 'textarea', 'select', 'summar
 const DISABLEABLE = new Set(['button', 'input', 'textarea', 'select', 'fieldset'])
 const SKIPPED = new Set(['script', 'style', 'template', 'noscript', 'head', 'meta', 'link'])
 const UNSUPPORTED_TAGS = new Set(['iframe', 'canvas', 'video', 'audio', 'object', 'embed', 'webview'])
-const ATTR_PROPS = new Set(['id', 'role', 'type', 'href', 'name', 'title', 'tabIndex', 'disabled', 'htmlFor', 'value', 'checked', 'placeholder'])
+const ATTR_PROPS = new Set(['id', 'role', 'type', 'href', 'name', 'title', 'tabIndex', 'disabled', 'htmlFor', 'value', 'checked', 'placeholder', 'draggable'])
 /** GPUIX ignores `display: none` (measured): a hidden element is an empty, zero-size, unpainted box. */
 const HIDDEN: StyleDesc = { position: 'absolute', width: 0, height: 0, overflow: 'hidden', visibility: 'hidden' }
 const BREAK: StyleDesc = { width: '100%', height: 0 }
@@ -184,6 +184,9 @@ export function buildElement(
   if (overrides?.nativeStyle) style = { ...style, ...overrides.nativeStyle }
   const placed = tr.placement ? placeStyle(style, tr.placement) : null
   if (placed) style = placed.inner
+  const percent = placed ? null : percentPlacement(style)
+  if (percent) style = percent.inner
+  const pointerEvents = style.pointerEvents
 
   const listeners: GpuixListeners = {}
   const source = overrides?.handlers ? { ...props, ...overrides.handlers } : props
@@ -191,18 +194,20 @@ export function buildElement(
   const focusable =
     !disabled &&
     (FOCUSABLE_TAGS.has(tag) || (tag === 'a' && props.href !== undefined) || props.tabIndex !== undefined)
-  const handlers = disabled ? null : adaptHandlers(source, text, focusable, listeners)
+  const draggable = source.draggable === true || source.draggable === 'true'
+  const handlers = disabled ? null : adaptHandlers(source, text, focusable, listeners, draggable)
   const interactive = handlers !== null || focusable || tr.hoverable || style.overflow === 'scroll'
   if (!interactive) style = passThrough(style)
 
   const userRef = props.ref
-  const tracked = userRef != null || handlers !== null || focusable || attrs !== NO_ATTRS
+  const tracked = userRef != null || handlers !== null || focusable || attrs !== NO_ATTRS || pointerEvents !== undefined
   const dom: DomInfo = {
     tag,
     className: props.className ?? '',
     attrs,
     handlers,
-    value: typeof props.value === 'string' ? props.value : undefined
+    value: typeof props.value === 'string' ? props.value : undefined,
+    pointerEvents
   }
   const native: Record<string, unknown> = { style, __dom: dom, ...listeners }
   if (overrides?.native) {
@@ -265,6 +270,7 @@ export function buildElement(
   }
   if (!childInfo.has(element)) childInfo.set(element, { inline: tr.inline })
   if (placed) return placed.wrap(element, key)
+  if (percent) return percent.wrap(element, key)
   if (tr.fillMinus !== null) {
     const m = tr.autoMargin
     const side = m?.left && m.right ? 'both' : m?.left ? 'left' : 'right'

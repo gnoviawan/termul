@@ -7,6 +7,7 @@
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type {
+  ClaudeAccount,
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
@@ -14,10 +15,12 @@ import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AddProjectPayload,
   type ChatReadMark,
+  type ConnectionCapabilities,
   type HistoryMode,
   type PersistedSessionSummary,
   type ProjectBusyDetails,
   type SessionSnapshotEvent,
+  type SshWsRequestType,
   WS_ERROR_CODES,
   type WsAgentSummary
 } from '@shared/types/web-protocol.types'
@@ -231,6 +234,34 @@ export interface AcpTransport {
   setDefaultClaudeAccount(accountId: string): Promise<void>
   /** `null` returns the Project to the Default Account. */
   setProjectClaudeAccount(projectId: string, accountId: string | null): Promise<void>
+  /**
+   * What the host granted this connection at `authenticate`; `null` before
+   * the first handshake. Web carriers only.
+   */
+  connectionCapabilities?(): ConnectionCapabilities | null
+  /** Called whenever {@link connectionCapabilities} changes. Web carriers only. */
+  subscribeCapabilities?(listener: () => void): () => void
+  /**
+   * Claude Account management over `/ws`, admitted only for a `hostLocal`
+   * connection. Web carriers only: the desktop manages Accounts through its
+   * Tauri commands.
+   */
+  addClaudeAccount?(name: string): Promise<ClaudeAccount>
+  /** Resolves when the host's browser login finishes. */
+  loginClaudeAccount?(accountId: string): Promise<void>
+  /** `false` when no sign-in of that Account was running. */
+  cancelClaudeAccountLogin?(accountId: string): Promise<boolean>
+  renameClaudeAccount?(accountId: string, name: string): Promise<void>
+  /** Resolves to the ids of the Projects that moved to the Default Account. */
+  removeClaudeAccount?(accountId: string): Promise<string[]>
+  /**
+   * Run one of the desktop's SSH commands on the host over `/ws` (request
+   * type = command name, payload = its arguments), admitted only for a
+   * `hostLocal` connection. Resolves to the command's value; a failure
+   * rejects with an `AcpTransportError` carrying the command's code. Web
+   * carriers only.
+   */
+  sshRequest?<T>(command: SshWsRequestType, args?: Record<string, unknown>): Promise<T>
   /** `projectId` selects the Claude Account of a managed Claude agent. */
   spawnAgent(
     config: AgentConfig,

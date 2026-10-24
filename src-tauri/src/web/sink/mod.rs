@@ -185,6 +185,10 @@ pub struct WsRelaySink {
     /// `/terminal/ws` (both reach the relay through `AppState.relay`).
     presence: Arc<crate::web::presence::PresenceRegistry>,
     chat_reads: crate::web::chat_reads::ChatReads,
+    /// The host's SSH manager behind the `host_local` `/ws` SSH requests.
+    /// `None` until `termul-server` attaches one; the desktop keeps its own
+    /// behind the Tauri commands.
+    ssh: Mutex<Option<Arc<crate::ssh::SSHManager>>>,
 }
 
 /// Where a session's log stands at a point under the seq lock: the identity
@@ -257,6 +261,7 @@ impl WsRelaySink {
             )),
             presence: Arc::new(crate::web::presence::PresenceRegistry::new()),
             chat_reads: crate::web::chat_reads::ChatReads::default(),
+            ssh: Mutex::new(None),
         }
     }
 
@@ -366,6 +371,17 @@ impl WsRelaySink {
     #[must_use]
     pub fn event_log_capacity(&self) -> usize {
         self.event_log_capacity
+    }
+
+    /// Attach the SSH manager the `/ws` SSH requests run on (server path).
+    pub fn set_ssh(&self, ssh: Arc<crate::ssh::SSHManager>) {
+        *self.ssh.lock() = Some(ssh);
+    }
+
+    /// The attached SSH manager, if any.
+    #[must_use]
+    pub fn ssh(&self) -> Option<Arc<crate::ssh::SSHManager>> {
+        self.ssh.lock().clone()
     }
 
     /// Attach the server-side permission rendezvous (Story 1.7). Once attached, `emit`

@@ -331,17 +331,25 @@ fn pre_auth_reply(request: &WsRequest, conn: &mut ConnState, env: &HandlerEnv) -
     );
     // Capabilities are resolved ONCE, here (carrier + deployment flags + peer),
     // and the device joins presence.
-    conn.access.grant();
+    let host_credential = env.web_auth.as_deref().is_some_and(|gate| {
+        gate.accepts_host_local(request.payload["hostLocalToken"].as_str().unwrap_or(""))
+    });
+    conn.access.grant(host_credential);
     conn.presence = Some(env.relay.presence().register(&validated, conn.access.carrier()));
     // First authenticate wins; the connection is authed from here on.
     let _ = conn.identity.set(validated);
     conn.authed = true;
+    let capabilities = conn.access.capabilities();
     WsReply::ok(
         id,
         Some(json!({
             "historyMode": env.history_mode,
             "runtimePolicy": RuntimePolicy::resolved(),
             "protocolVersion": WS_PROTOCOL_VERSION,
+            "capabilities": {
+                "write": capabilities.write,
+                "hostLocal": capabilities.host_local,
+            },
         })),
     )
 }

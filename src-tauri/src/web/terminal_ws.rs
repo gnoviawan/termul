@@ -443,7 +443,7 @@ async fn handle(
                 }
             }
             ctx.authed = true;
-            ctx.capabilities = ctx.capability_policy.resolve();
+            ctx.capabilities = ctx.capability_policy.resolve(false);
             ctx.presence = Some(
                 state
                     .relay

@@ -9,7 +9,8 @@ import {
   INNER_FIELD_FOCUS_CLASS,
   QUIET_ICON_BUTTON_CLASS
 } from '@/components/ui/panel-styles'
-import { isTauriContext } from '@/lib/tauri-runtime'
+import { useHostGate } from '@/hooks/use-host-gate'
+import { canUseHostSsh } from '@/lib/ssh-api'
 import { cn } from '@/lib/utils'
 import { type SSHSession, useSSHActions, useSSHShowAddresses } from '@/stores/ssh-store'
 import { type SSHHostActions, SSHHostRow } from './SSHHostRow'
@@ -84,7 +85,7 @@ export function SSHHostsView({
   const [query, setQuery] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const desktop = isTauriContext()
+  const canConnect = useHostGate(canUseHostSsh)
   const showAddresses = useSSHShowAddresses()
   const { toggleShowAddresses } = useSSHActions()
 
@@ -139,7 +140,7 @@ export function SSHHostsView({
               <Plus />
               New host
             </Button>
-            {desktop && (
+            {canConnect && (
               <Button type="button" size="sm" variant="outline" onClick={onImport}>
                 <Download />
                 Import ~/.ssh/config
@@ -213,7 +214,7 @@ export function SSHHostsView({
           >
             {showAddresses ? <Eye /> : <EyeOff />}
           </Button>
-          {desktop && (
+          {canConnect && (
             <Button type="button" size="sm" variant="outline" onClick={onImport}>
               <Download />
               Import
@@ -226,7 +227,7 @@ export function SSHHostsView({
         </div>
       </div>
 
-      {!desktop && (
+      {!canConnect && (
         <p className="border-b border-border bg-card px-6 py-2 text-center text-xs text-muted-foreground">
           You can manage hosts here. Connecting to them works in the Termul desktop app.
         </p>
@@ -262,7 +263,7 @@ export function SSHHostsView({
                         state={resolveSSHHostState(hostSessions)}
                         sessionCount={hostSessions.length}
                         selected={selectedProfileId === profile.id}
-                        canConnect={desktop}
+                        canConnect={canConnect}
                         showAddress={showAddresses}
                         actions={actions}
                         onArrow={moveFocus}

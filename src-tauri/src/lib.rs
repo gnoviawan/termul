@@ -41,7 +41,7 @@ mod shell_paths;
 // Desktop-side channel manifest fetch for the insider/nightly updater path.
 // Routes the manifest fetch through Rust (reqwest) so CSP/CORS do not block it.
 mod skills;
-mod ssh;
+pub mod ssh;
 mod trackers;
 mod updater_api;
 pub mod web;
@@ -1647,7 +1647,19 @@ pub fn run() {
             ));
 
             // Create SSH Manager
-            let ssh_manager = Arc::new(ssh::SSHManager::new(handle.clone()));
+            let ssh_data_dir = handle
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
+            let emitter = handle.clone();
+            let ssh_manager = Arc::new(ssh::SSHManager::new(
+                &ssh_data_dir,
+                Arc::new(move |event, payload| {
+                    if let Err(e) = emitter.emit(event, payload) {
+                        log::error!("[SSH] Failed to emit {}: {}", event, e);
+                    }
+                }),
+            ));
             app.manage(ssh_manager);
 
             // Verify the OS keychain backend actually persists secrets. If this

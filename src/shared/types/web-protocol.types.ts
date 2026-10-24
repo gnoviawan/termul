@@ -249,13 +249,52 @@ export const WS_REQUEST_TYPES = [
   'set_default_project',
   // Claude Accounts (ADR-0004): list `{}` → `ClaudeAccountsSnapshot`; choose
   // the Default `{ accountId }` or a Project Account `{ projectId, accountId |
-  // null }` → `{}`. Add, sign-in, rename and remove stay host-local.
+  // null }` → `{}`.
   'list_claude_accounts',
   // `{ force? }` → `{ usage: ClaudeAccountUsage[] }`; reads are cached 5 min
   // on the host (a forced read still reuses one younger than 60 s).
   'list_claude_usage',
   'set_default_claude_account',
   'set_project_claude_account',
+  // Account management, admitted only for a `hostLocal` connection (a client
+  // on the host itself that presented the host-local credential; anything
+  // else is `forbidden`). `add_claude_account { name }` → `ClaudeAccount`;
+  // `login_claude_account { accountId }` → `{}` when the host's browser login
+  // finishes; `cancel_claude_account_login { accountId }` → `{ cancelled }`;
+  // `rename_claude_account { accountId, name }` → `{}`;
+  // `remove_claude_account { accountId }` → `{ movedProjectIds }`.
+  'add_claude_account',
+  'login_claude_account',
+  'cancel_claude_account_login',
+  'rename_claude_account',
+  'remove_claude_account',
+  // SSH sessions, SFTP, profiles and keys: the desktop's SSH Tauri commands
+  // under their own names, payload = the command's arguments, reply = its
+  // value; a failure carries the command's code (`SSH_AUTH_FAILED`, ...).
+  // Admitted only for a `hostLocal` connection. Events arrive on the `ssh`
+  // watch as `{ event, payload }` deltas.
+  'ssh_list_profiles',
+  'ssh_save_profile',
+  'ssh_delete_profile',
+  'ssh_duplicate_profile',
+  'ssh_import_config',
+  'ssh_inspect_key',
+  'ssh_list_keys',
+  'ssh_session_open',
+  'ssh_session_respond_host_key',
+  'ssh_session_cancel',
+  'ssh_session_close',
+  'ssh_session_list',
+  'sftp_list_dir',
+  'sftp_realpath',
+  'sftp_download',
+  'sftp_upload',
+  'sftp_delete',
+  'sftp_mkdir',
+  'sftp_rename',
+  'sftp_read_file',
+  'sftp_write_file',
+  'sftp_create_file',
   // The canvas gateway's renderer leg (spine AD-21, AD-29). `canvas_mount`
   // / `canvas_unmount` `{ projectId, mountSeq }` tell the host this connection
   // holds (or no longer holds) a project's canvas; the host then forwards
@@ -271,6 +310,9 @@ export const WS_REQUEST_TYPES = [
 
 /** Union of all WS request `type` strings. */
 export type WsRequestType = (typeof WS_REQUEST_TYPES)[number]
+
+/** The SSH requests: the desktop's SSH command names. */
+export type SshWsRequestType = Extract<WsRequestType, `ssh_${string}` | `sftp_${string}`>
 
 /** How the host's receipt ledger treats a request type. Mirrors the Rust `ClassKind`. */
 export type WsCommandKind = 'create' | 'command' | 'idempotent' | 'read'
@@ -313,6 +355,33 @@ export const WS_COMMAND_CLASSES: Readonly<
   list_claude_usage: ['read', null],
   set_default_claude_account: ['idempotent', null],
   set_project_claude_account: ['idempotent', null],
+  add_claude_account: ['command', 'payload'],
+  login_claude_account: ['command', 'receipt-only'],
+  cancel_claude_account_login: ['idempotent', null],
+  rename_claude_account: ['idempotent', null],
+  remove_claude_account: ['idempotent', null],
+  ssh_list_profiles: ['read', null],
+  ssh_save_profile: ['idempotent', null],
+  ssh_delete_profile: ['idempotent', null],
+  ssh_duplicate_profile: ['command', 'payload'],
+  ssh_import_config: ['command', 'payload'],
+  ssh_inspect_key: ['read', null],
+  ssh_list_keys: ['read', null],
+  ssh_session_open: ['command', 'receipt-only'],
+  ssh_session_respond_host_key: ['idempotent', null],
+  ssh_session_cancel: ['idempotent', null],
+  ssh_session_close: ['idempotent', null],
+  ssh_session_list: ['read', null],
+  sftp_list_dir: ['read', null],
+  sftp_realpath: ['read', null],
+  sftp_download: ['idempotent', null],
+  sftp_upload: ['idempotent', null],
+  sftp_delete: ['command', 'payload'],
+  sftp_mkdir: ['command', 'payload'],
+  sftp_rename: ['command', 'payload'],
+  sftp_read_file: ['read', null],
+  sftp_write_file: ['idempotent', null],
+  sftp_create_file: ['command', 'payload'],
   kill_agent: ['idempotent', null],
   list_agents: ['read', null],
   authenticate: ['read', null],
@@ -348,6 +417,17 @@ export const WS_COMMAND_CLASSES: Readonly<
   canvas_mount: ['idempotent', null],
   canvas_unmount: ['idempotent', null],
   canvas_reply: ['idempotent', null]
+}
+
+/**
+ * Whether the host admits `type` only with a `commandId` and refuses it
+ * `invalid_command_id` without one. Mirrors the Rust `CommandClass::ledgered`:
+ * every `create`, and every `command` but the `entity` replays (`send_prompt`,
+ * whose `turnId` is its id).
+ */
+export function isLedgeredRequest(type: WsRequestType): boolean {
+  const [kind, replay] = WS_COMMAND_CLASSES[type]
+  return kind === 'create' || (kind === 'command' && replay !== 'entity')
 }
 
 /** Longest accepted `commandId`, in bytes. Mirrors the Rust `MAX_COMMAND_ID_LEN`. */
@@ -737,6 +817,12 @@ export const MAX_CLIENT_ID_LEN = 128
  */
 export interface AcpAuthenticatePayload {
   token?: string
+  /**
+   * The host-local credential the server wrote to
+   * `<state dir>/host-local.token`; only a client that can read that file has
+   * it. Grants `hostLocal`.
+   */
+  hostLocalToken?: string
   protocolVersion: number
   /** Per install / browser profile; persisted locally. */
   deviceId: string
@@ -744,11 +830,25 @@ export interface AcpAuthenticatePayload {
   clientInstanceId: string
 }
 
+/**
+ * What the host granted this connection at `authenticate`. `write`: may
+ * mutate host state (else view-only). `hostLocal`: a loopback client, not
+ * behind a proxy, that presented the server token and the host-local
+ * credential; may manage Claude accounts and use the host's SSH keys and
+ * sessions.
+ */
+export interface ConnectionCapabilities {
+  write: boolean
+  hostLocal: boolean
+}
+
 export interface AcpAuthenticateReply {
   historyMode?: HistoryMode
   runtimePolicy?: AcpRuntimePolicy
   /** The protocol version the host speaks. */
   protocolVersion?: number
+  /** Absent on hosts that predate the field: treat as nothing granted. */
+  capabilities?: ConnectionCapabilities
 }
 
 /**
@@ -996,7 +1096,9 @@ export const WS_WATCH_NAMES = [
   'fs',
   'store',
   'terminals',
-  'chat_reads'
+  'chat_reads',
+  // SSH session events for a `hostLocal` connection: `{ event, payload }`.
+  'ssh'
 ] as const
 
 /** One of {@link WS_WATCH_NAMES}. */

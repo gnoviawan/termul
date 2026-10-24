@@ -324,6 +324,7 @@ impl RemoteServerState {
         // under the desktop's `app_data_dir` (never the service-account dir)
         // and is never logged — only its source path.
         let requires_token = shared_live_requires_token(requested_bind_mode, tunnel_planned);
+        crate::web::host_secrets::protect_state_dir(&data.data_dir);
         let web_auth: Option<Arc<WebAuth>> =
             match auth::resolve_shared_live(requires_token, &data.data_dir)
                 .map_err(|e| format!("Failed to start remote server: {e}"))?

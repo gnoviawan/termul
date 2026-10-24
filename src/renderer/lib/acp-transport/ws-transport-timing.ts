@@ -53,6 +53,9 @@ export function jitteredBackoffMs(
 const INSTALL_TIMEOUT_MS = 330_000 // host: 120 s download + 180 s child (+ margin)
 const CATALOG_TIMEOUT_MS = 90_000 // host refresh/network fetch bound 60 s (+ margin)
 const SESSION_OPEN_TIMEOUT_MS = 90_000 // host session new/reopen cap 60 s (+ grace)
+const CLAUDE_LOGIN_TIMEOUT_MS = 660_000 // host browser login cap 10 min (+ margin)
+const SSH_OPEN_TIMEOUT_MS = 360_000 // host-key question waits 5 min (+ connect)
+const SFTP_TRANSFER_TIMEOUT_MS = 3_600_000 // a large upload or download
 
 const FIXED_REQUEST_TIMEOUTS_MS: Partial<Record<WsRequestType, number>> = {
   install_acp_agent: INSTALL_TIMEOUT_MS,
@@ -60,7 +63,11 @@ const FIXED_REQUEST_TIMEOUTS_MS: Partial<Record<WsRequestType, number>> = {
   create_session: SESSION_OPEN_TIMEOUT_MS,
   load_session: SESSION_OPEN_TIMEOUT_MS,
   resume_session: SESSION_OPEN_TIMEOUT_MS,
-  authenticate: HANDSHAKE_TIMEOUT_MS
+  authenticate: HANDSHAKE_TIMEOUT_MS,
+  login_claude_account: CLAUDE_LOGIN_TIMEOUT_MS,
+  ssh_session_open: SSH_OPEN_TIMEOUT_MS,
+  sftp_download: SFTP_TRANSFER_TIMEOUT_MS,
+  sftp_upload: SFTP_TRANSFER_TIMEOUT_MS
 }
 
 /**

@@ -503,3 +503,47 @@ async fn file_names_search_separator_query_returns_no_folder_hits() {
     assert!(dir_paths(&data).is_empty());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A registered project whose tree holds a protected state dir: the
+/// credential and an ordinary file both contain `needle`.
+fn credential_fixture(tag: &str, needle: &str) -> (std::path::PathBuf, AppState) {
+    let (root, state) = folder_fixture(tag);
+    let state_dir = root.join("state");
+    std::fs::create_dir_all(&state_dir).expect("create state dir");
+    std::fs::write(state_dir.join(crate::web::host_local::HOST_LOCAL_TOKEN_FILE), needle)
+        .expect("write credential");
+    std::fs::write(root.join("src/needle.txt"), needle).expect("write needle");
+    crate::web::host_secrets::protect_state_dir(&state_dir);
+    (root, state)
+}
+
+#[tokio::test]
+async fn content_search_never_returns_a_credential_file() {
+    let needle = "credential-needle-6c1f";
+    let (root, state) = credential_fixture("cred-content", needle);
+    let req = serde_json::json!({
+        "scopeRoot": root,
+        "rootPath": root,
+        "query": needle,
+    });
+    let resp = post_json(state, "/search/content", &req).await;
+    let body: IpcBody<FileSearchResponse> = body_as_json(resp.into_body()).await;
+    let files: Vec<String> = body
+        .data
+        .expect("search ran")
+        .results
+        .into_iter()
+        .map(|r| r.file_path)
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(files[0].ends_with("src/needle.txt"), "{files:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn file_name_search_never_lists_a_credential_file() {
+    let (root, state) = credential_fixture("cred-names", "x");
+    let data = file_names_for(state, &root, "host-local", false).await;
+    assert!(file_paths(&data).is_empty(), "{:?}", file_paths(&data));
+    let _ = std::fs::remove_dir_all(&root);
+}

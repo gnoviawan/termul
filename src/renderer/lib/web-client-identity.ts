@@ -33,6 +33,7 @@ import {
 } from '@shared/types/web-protocol.types'
 import { logFrontendError } from './log-api'
 import { randomUUID } from './uuid'
+import { getHostLocalToken } from './web-auth-token'
 
 export const DEVICE_ID_STORAGE_KEY = 'termul.deviceId'
 export const CLIENT_INSTANCE_ID_STORAGE_KEY = 'termul.clientInstanceId'
@@ -237,7 +238,8 @@ export function ensureClientIdentity(): void {
 
 /**
  * Full `authenticate` payload every WS client sends on every handshake.
- * `token` is omitted when no token is supplied (never an empty string).
+ * `token` is omitted when no token is supplied (never an empty string), and
+ * `hostLocalToken` when the page holds no host-local credential.
  * `deviceId` defaults to the page's own id; only tests pass another.
  */
 export function buildAuthenticatePayload(
@@ -250,6 +252,8 @@ export function buildAuthenticatePayload(
     clientInstanceId: getClientInstanceId()
   }
   if (token) payload.token = token
+  const hostLocal = getHostLocalToken()
+  if (hostLocal) payload.hostLocalToken = hostLocal
   return payload
 }
 

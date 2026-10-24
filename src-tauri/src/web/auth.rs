@@ -24,7 +24,7 @@
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use subtle::ConstantTimeEq;
 
@@ -86,15 +86,20 @@ impl Eq for WebAuthToken {}
 #[derive(Debug, Clone, Copy)]
 pub struct BearerVerified;
 
-/// The active gate: one bearer token, compared in constant time.
+/// The active gate: one bearer token, compared in constant time, and the
+/// host-local credential (`web::host_local`) when the server issued one.
 pub struct WebAuth {
     token: WebAuthToken,
+    host_local: OnceLock<WebAuthToken>,
 }
 
 impl WebAuth {
     #[must_use]
     pub fn new(token: WebAuthToken) -> Self {
-        Self { token }
+        Self {
+            token,
+            host_local: OnceLock::new(),
+        }
     }
 
     /// Constant-time acceptance check. A missing/empty presented token never
@@ -102,6 +107,20 @@ impl WebAuth {
     #[must_use]
     pub fn accepts(&self, presented: &str) -> bool {
         self.token.0.as_bytes().ct_eq(presented.as_bytes()).into()
+    }
+
+    /// Install the host-local credential; the first one wins.
+    pub fn set_host_local_credential(&self, credential: WebAuthToken) {
+        let _ = self.host_local.set(credential);
+    }
+
+    /// Constant-time check of a presented host-local credential. `false` when
+    /// the server issued none.
+    #[must_use]
+    pub fn accepts_host_local(&self, presented: &str) -> bool {
+        self.host_local
+            .get()
+            .is_some_and(|credential| credential.0.as_bytes().ct_eq(presented.as_bytes()).into())
     }
 
     /// `base` with this gate's token in the URL fragment (`#token=<token>`,
@@ -287,7 +306,7 @@ fn encode_fragment_value(raw: &str) -> String {
 }
 
 /// chars, URL-safe so the `#token=` bootstrap fragment needs no encoding).
-fn generate_token() -> Result<WebAuthToken, String> {
+pub(super) fn generate_token() -> Result<WebAuthToken, String> {
     let mut raw = [0u8; 32];
     getrandom::getrandom(&mut raw)
         .map_err(|e| format!("failed to generate a web auth token (CSPRNG error): {e}"))?;
@@ -312,7 +331,7 @@ fn generate_token() -> Result<WebAuthToken, String> {
 /// startup rather than running a public-bind server with an unpersisted or
 /// world-readable token. `AlreadyExists` is returned verbatim so the caller
 /// can adopt the winner of a first-boot race.
-fn persist_token(path: &Path, token: &WebAuthToken) -> std::io::Result<()> {
+pub(super) fn persist_token(path: &Path, token: &WebAuthToken) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         // A failure here is a state-dir problem (permissions / not a
         // directory) — never a first-boot race. Force a non-`AlreadyExists`

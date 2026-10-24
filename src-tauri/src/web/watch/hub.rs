@@ -62,6 +62,9 @@ pub enum WatchKind {
     Terminals,
     /// The shared last-read marker of every agent chat.
     ChatReads,
+    /// The host's SSH session events (progress, host-key questions, ends,
+    /// transfer progress); `host_local` connections only.
+    Ssh,
 }
 
 impl WatchKind {
@@ -76,6 +79,7 @@ impl WatchKind {
             Self::Store => "store",
             Self::Terminals => "terminals",
             Self::ChatReads => "chat_reads",
+            Self::Ssh => "ssh",
         }
     }
 
@@ -90,6 +94,7 @@ impl WatchKind {
             "store" => Some(Self::Store),
             "terminals" => Some(Self::Terminals),
             "chat_reads" => Some(Self::ChatReads),
+            "ssh" => Some(Self::Ssh),
             _ => None,
         }
     }
@@ -100,7 +105,9 @@ impl WatchKind {
     #[must_use]
     pub fn accepts_scope(self, scope: &str) -> bool {
         match self {
-            Self::Projects | Self::ChatHistory | Self::Agents | Self::ChatReads => scope.is_empty(),
+            Self::Projects | Self::ChatHistory | Self::Agents | Self::ChatReads | Self::Ssh => {
+                scope.is_empty()
+            }
             Self::Fs | Self::Store | Self::Terminals => {
                 !scope.trim().is_empty() && scope.len() <= MAX_SCOPE_BYTES
             }

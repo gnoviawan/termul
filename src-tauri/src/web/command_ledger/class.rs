@@ -127,6 +127,42 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("list_claude_usage", CommandClass::read()),
     ("set_default_claude_account", CommandClass::idempotent()),
     ("set_project_claude_account", CommandClass::idempotent()),
+    // A resend of an add must not mint a second Account.
+    ("add_claude_account", CommandClass::command(Replay::Payload)),
+    (
+        "login_claude_account",
+        CommandClass::command(Replay::ReceiptOnly),
+    ),
+    ("cancel_claude_account_login", CommandClass::idempotent()),
+    ("rename_claude_account", CommandClass::idempotent()),
+    ("remove_claude_account", CommandClass::idempotent()),
+    // SSH (`ws/ssh.rs`, host-local only). An open carries the prompt secret
+    // and answers an attach claim, so no reply is stored; a resend of a
+    // duplicate or an import must not add the profiles twice.
+    ("ssh_list_profiles", CommandClass::read()),
+    ("ssh_save_profile", CommandClass::idempotent()),
+    ("ssh_delete_profile", CommandClass::idempotent()),
+    ("ssh_duplicate_profile", CommandClass::command(Replay::Payload)),
+    ("ssh_import_config", CommandClass::command(Replay::Payload)),
+    ("ssh_inspect_key", CommandClass::read()),
+    ("ssh_list_keys", CommandClass::read()),
+    ("ssh_session_open", CommandClass::command(Replay::ReceiptOnly)),
+    ("ssh_session_respond_host_key", CommandClass::idempotent()),
+    ("ssh_session_cancel", CommandClass::idempotent()),
+    ("ssh_session_close", CommandClass::idempotent()),
+    ("ssh_session_list", CommandClass::read()),
+    ("sftp_list_dir", CommandClass::read()),
+    ("sftp_realpath", CommandClass::read()),
+    ("sftp_download", CommandClass::idempotent()),
+    ("sftp_upload", CommandClass::idempotent()),
+    // A repeat of a delete, mkdir, rename or create fails (the path is gone
+    // or already there), so a resend must replay the first outcome.
+    ("sftp_delete", CommandClass::command(Replay::Payload)),
+    ("sftp_mkdir", CommandClass::command(Replay::Payload)),
+    ("sftp_rename", CommandClass::command(Replay::Payload)),
+    ("sftp_read_file", CommandClass::read()),
+    ("sftp_write_file", CommandClass::idempotent()),
+    ("sftp_create_file", CommandClass::command(Replay::Payload)),
     ("kill_agent", CommandClass::idempotent()),
     ("list_agents", CommandClass::read()),
     ("authenticate", CommandClass::read()),
@@ -208,6 +244,12 @@ fn identifying_fields(request_type: &str) -> &'static [&'static str] {
         "respond_permission" => &["agentId", "requestId", "optionId"],
         "answer_question" => &["agentId", "questionId"],
         "authenticate_agent" => &["agentId", "methodId"],
+        "ssh_session_open" => &["request.sessionId", "request.profileId"],
+        "ssh_duplicate_profile" => &["profileId"],
+        "sftp_delete" | "sftp_mkdir" | "sftp_create_file" => {
+            &["request.connectionId", "request.remotePath"]
+        }
+        "sftp_rename" => &["request.connectionId", "request.oldPath", "request.newPath"],
         "respond_elicitation" => &["agentId", "requestId", "action"],
         "acp_deliver_auth_redirect" | "install_acp_agent" | "logout_agent" | "kill_agent" => {
             &["agentId"]

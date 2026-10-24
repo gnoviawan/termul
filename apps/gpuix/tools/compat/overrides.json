@@ -14,9 +14,6 @@
   "components/agents/AgentIcon.tsx": {
     "reasons": ["dangerouslySetInnerHTML"]
   },
-  "components/agents/AgentLauncher.tsx": {
-    "reasons": ["html5-dnd"]
-  },
   "components/agents/IconPicker.tsx": {
     "reasons": ["dangerouslySetInnerHTML"]
   },
@@ -34,9 +31,6 @@
   },
   "components/chat/AgentGlyph.tsx": {
     "reasons": ["dangerouslySetInnerHTML"]
-  },
-  "components/chat/ChatInputBar.tsx": {
-    "reasons": ["html5-dnd"]
   },
   "components/chat/ChatMessageList.tsx": {
     "reasons": ["tanstack-virtual"]
@@ -57,13 +51,13 @@
     "reasons": ["tiptap"]
   },
   "components/chat/composer/CommandPillNode.tsx": {
-    "reasons": ["html5-dnd", "tiptap"]
+    "reasons": ["tiptap"]
   },
   "components/chat/composer/FilePillNode.tsx": {
-    "reasons": ["html5-dnd", "tiptap"]
+    "reasons": ["tiptap"]
   },
   "components/chat/composer/SkillPillNode.tsx": {
-    "reasons": ["html5-dnd", "tiptap"]
+    "reasons": ["tiptap"]
   },
   "components/chat/composer/insert-composer-trigger.ts": {
     "reasons": ["tiptap"]
@@ -72,7 +66,7 @@
     "reasons": ["IntersectionObserver"]
   },
   "components/chat/use-composer-attachments.ts": {
-    "reasons": ["dom-create", "html5-dnd"]
+    "reasons": ["dom-create"]
   },
   "components/editor/MarkdownEditor.tsx": {
     "reasons": ["MutationObserver", "blocknote"]
@@ -91,23 +85,11 @@
   "components/editor/mermaid-block-spec.tsx": {
     "reasons": ["blocknote"]
   },
-  "components/file-explorer/FileTreeNode.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/file-explorer/MaterialFileIcon.tsx": {
-    "reasons": ["html5-dnd"]
-  },
   "components/file-explorer/explorer-inline-input.tsx": {
     "reasons": ["text-selection"]
   },
-  "components/git/GitChangeList.tsx": {
-    "reasons": ["html5-dnd"]
-  },
   "components/git/GitHistoryView.tsx": {
     "reasons": ["text-selection"]
-  },
-  "components/git/StashSection.tsx": {
-    "reasons": ["html5-dnd"]
   },
   "components/settings/AcpAgentsSettings.tsx": {
     "reasons": ["dangerouslySetInnerHTML"]
@@ -115,17 +97,11 @@
   "components/settings/provider/ProviderGroupHeader.tsx": {
     "reasons": ["dangerouslySetInnerHTML"]
   },
-  "components/shell/ChatCard.tsx": {
-    "reasons": ["html5-dnd"]
-  },
   "components/shell/ChatsList.tsx": {
     "reasons": ["tanstack-virtual"]
   },
   "components/sidebar/ssh-section.tsx": {
     "reasons": ["element-style-write"]
-  },
-  "components/ssh/SSHFileExplorer.tsx": {
-    "reasons": ["html5-dnd"]
   },
   "components/terminal/ConnectedTerminal.tsx": {
     "reasons": ["text-selection", "xterm"]
@@ -154,50 +130,8 @@
   "components/ui/animated-menu-content.tsx": {
     "reasons": ["getComputedStyle"]
   },
-  "components/ui/resizable.tsx": {
-    "reasons": ["react-resizable-panels"]
-  },
-  "components/workspace/DropZoneOverlay.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/EditorTab.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/WorkspaceTabBar.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/tabs/agent-chat-tab.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/tabs/browser-tab.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/tabs/canvas-tab.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/tabs/diff-tab.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/tabs/git-history-tab.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/tabs/git-tab.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/tabs/tab-chrome.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/tabs/terminal-tab.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "components/workspace/tabs/types.ts": {
-    "reasons": ["html5-dnd"]
-  },
   "hooks/use-active-heading.ts": {
     "reasons": ["IntersectionObserver"]
-  },
-  "hooks/use-attachment-drop-zone.ts": {
-    "reasons": ["html5-dnd"]
   },
   "hooks/use-blocknote.ts": {
     "reasons": ["blocknote", "getComputedStyle"]
@@ -210,12 +144,6 @@
   },
   "hooks/use-osk-viewport.ts": {
     "reasons": ["element-style-write"]
-  },
-  "hooks/use-pane-dnd.tsx": {
-    "reasons": ["html5-dnd"]
-  },
-  "hooks/use-prevent-file-drop-navigation.ts": {
-    "reasons": ["html5-dnd"]
   },
   "hooks/use-resize-handle.ts": {
     "reasons": ["element-style-write"]

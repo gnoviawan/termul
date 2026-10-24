@@ -27,10 +27,12 @@ import {
   CommandList
 } from '@/components/ui/command'
 import { Kbd } from '@/components/ui/kbd'
+import { useHostGate } from '@/hooks/use-host-gate'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { usePinnedCommandIds, useTogglePinnedCommand } from '@/hooks/use-pinned-commands'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
 import { getColorClasses } from '@/lib/colors'
+import { canUseHostSsh } from '@/lib/ssh-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { terminalProfileCommandLine } from '@/lib/terminal-profiles'
 import { cn } from '@/lib/utils'
@@ -139,6 +141,7 @@ export function CommandPalette({
   // offers no visible close. Mobile repositions to the lower third, hides the
   // kbd hints, and renders a touch-sized close button. Desktop unchanged.
   const isMobile = useMobileWebShell()
+  const hostSsh = useHostGate(canUseHostSsh)
   const commands: CommandDef[] = useMemo(
     () => [
       ...(onAddTerminal
@@ -344,7 +347,7 @@ export function CommandPalette({
             }
           ]
         : []),
-      ...(isTauriContext() && onSSHConnect && sshProfiles
+      ...(hostSsh && onSSHConnect && sshProfiles
         ? sshProfiles.map((profile) => ({
             id: `ssh-${profile.id}`,
             category: 'tools' as const,
@@ -377,6 +380,7 @@ export function CommandPalette({
       onReportBug,
       onSSHConnect,
       sshProfiles,
+      hostSsh,
       getShortcutLabel,
       getProjectShortcutLabel
     ]

@@ -32,6 +32,7 @@ const DECLARED_SCOPES: Record<keyof typeof PersistenceKeys, KeyScope> = {
   acpMentionRecentsLegacy: 'device',
   acpMentionRecents: 'device',
   sshProfiles: 'sharedCas',
+  sshProfilesMigrated: 'sharedCas',
   sessionsAutoSave: 'device',
   sessionsLegacyMigrated: 'device',
   customAgents: 'sharedLww',
@@ -93,9 +94,10 @@ describe('scopeOf', () => {
     expect([...KEY_SCOPES.sharedLww]).toHaveLength(9)
   })
 
-  it('classifies ssh/profiles as shared-cas', () => {
+  it('classifies the SSH profile list and its migration marker as shared-cas', () => {
     expect(scopeOf('ssh/profiles')).toBe('sharedCas')
-    expect([...KEY_SCOPES.sharedCas]).toEqual(['ssh/profiles'])
+    expect(scopeOf('ssh/profiles-migrated')).toBe('sharedCas')
+    expect([...KEY_SCOPES.sharedCas]).toEqual(['ssh/profiles', 'ssh/profiles-migrated'])
   })
 
   it('keeps keys outside the table device-scoped', () => {

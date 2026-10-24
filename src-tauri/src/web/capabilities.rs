@@ -9,8 +9,17 @@
 //! A connection without [`Capabilities::write`] is *view-only*: it may read,
 //! ping, subscribe and write `device/<its deviceId>/…` store keys, and every
 //! other mutation is refused with the stable `forbidden` code.
+//!
+//! [`Capabilities::host_local`] is the narrower grant for requests that act
+//! with the host's own credentials (Claude account management, SSH keys and
+//! sessions): a loopback peer on a token-gated deployment that does not deny
+//! writes, whose upgrade names no proxy, and that presented the host-local
+//! credential (`web::host_local`) at `authenticate`. `--allow-remote-writes`
+//! never grants it.
 
 use std::net::SocketAddr;
+
+use axum::http::HeaderMap;
 
 use crate::web::ws::{AppState, ClientIdentity};
 
@@ -119,6 +128,9 @@ pub struct Capabilities {
     pub carrier: Carrier,
     /// May mutate host state (otherwise view-only).
     pub write: bool,
+    /// A same-host peer that presented the bearer token: may act with the
+    /// host's own credentials. Implies `write`.
+    pub host_local: bool,
 }
 
 impl Capabilities {
@@ -128,14 +140,16 @@ impl Capabilities {
         Self {
             carrier,
             write: false,
+            host_local: false,
         }
     }
 
-    /// Resolve a connection's capabilities from its carrier, deployment flags
-    /// and peer address. Logs the decision at the connection boundary (peer +
-    /// carrier only — never a token).
+    /// Resolve a connection's capabilities from its carrier, deployment flags,
+    /// peer address and whether it proved it runs on the host
+    /// ([`CapabilityPolicy::resolve`]). Logs the decision at the connection
+    /// boundary (peer + carrier only — never a token).
     #[must_use]
-    pub fn resolve(carrier: Carrier, peer: SocketAddr, flags: WriteFlags) -> Self {
+    pub fn resolve(carrier: Carrier, peer: SocketAddr, flags: WriteFlags, host_proven: bool) -> Self {
         let decision = write_decision(peer, flags);
         match decision {
             WriteDecision::Allowed => {}
@@ -156,6 +170,7 @@ impl Capabilities {
         Self {
             carrier,
             write: decision.is_allowed(),
+            host_local: decision == WriteDecision::Allowed && host_proven,
         }
     }
 }
@@ -167,6 +182,36 @@ pub struct CapabilityPolicy {
     pub carrier: Carrier,
     pub peer: SocketAddr,
     pub flags: WriteFlags,
+    /// The host requires the bearer token on `authenticate`.
+    pub token_gated: bool,
+    /// The upgrade request carried a header a reverse proxy or tunnel adds
+    /// ([`PROXY_HEADERS`]).
+    pub proxied: bool,
+}
+
+/// Headers a reverse proxy, CDN or tunnel adds to a forwarded request (RFC
+/// 7239, the de facto `X-Forwarded-*` family, `Via`, Cloudflare, Akamai and
+/// Tailscale Serve). Their presence on a loopback upgrade means the client is
+/// somewhere else. nginx adds none by default, so this is defense in depth
+/// behind the credential. Lowercase: `HeaderMap` lookups ignore case.
+pub const PROXY_HEADERS: [&str; 11] = [
+    "forwarded",
+    "via",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-real-ip",
+    "x-client-ip",
+    "true-client-ip",
+    "cf-connecting-ip",
+    "cf-ray",
+    "tailscale-user-login",
+];
+
+/// Whether `headers` carry any of [`PROXY_HEADERS`].
+#[must_use]
+pub fn names_a_proxy(headers: &HeaderMap) -> bool {
+    PROXY_HEADERS.iter().any(|name| headers.contains_key(*name))
 }
 
 impl CapabilityPolicy {
@@ -177,13 +222,44 @@ impl CapabilityPolicy {
             carrier,
             peer,
             flags: WriteFlags::from_state(state),
+            token_gated: state.web_auth.is_some(),
+            proxied: false,
         }
     }
 
-    /// Resolve the connection's capabilities (called once, at authenticate).
+    /// The same policy for an upgrade that did (`true`) or did not carry a
+    /// proxy header.
     #[must_use]
-    pub fn resolve(&self) -> Capabilities {
-        Capabilities::resolve(self.carrier, self.peer, self.flags)
+    pub const fn through_proxy(mut self, proxied: bool) -> Self {
+        self.proxied = proxied;
+        self
+    }
+
+    /// Resolve the connection's capabilities (called once, at authenticate).
+    /// `host_credential`: the client presented the host-local credential.
+    #[must_use]
+    pub fn resolve(&self, host_credential: bool) -> Capabilities {
+        let host_proven = self.token_gated && host_credential && !self.proxied;
+        let capabilities = Capabilities::resolve(self.carrier, self.peer, self.flags, host_proven);
+        if capabilities.write && !capabilities.host_local && self.carrier == Carrier::Ws {
+            let reason = if !self.token_gated {
+                "the host is not token-gated"
+            } else if self.proxied {
+                "the upgrade carried a proxy header"
+            } else if !host_credential {
+                "no host-local credential presented"
+            } else {
+                "the peer is not loopback"
+            };
+            tracing::info!(
+                target: "termul::web::capabilities",
+                carrier = self.carrier.as_str(),
+                peer = %self.peer,
+                reason,
+                "connection is not host-local",
+            );
+        }
+        capabilities
     }
 }
 
@@ -211,6 +287,8 @@ pub enum Requirement {
     DeviceStore,
     /// Every other mutation: needs [`Capabilities::write`].
     Write,
+    /// Acts with the host's own credentials: needs [`Capabilities::host_local`].
+    HostLocal,
 }
 
 /// Classify a `/ws` request type. Allow-list of the view-level types; every
@@ -242,8 +320,36 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         | "store_read"
         | "mark_chat_read" => Requirement::View,
         "store_write" | "store_delete" => Requirement::DeviceStore,
+        t if is_host_local_request(t) => Requirement::HostLocal,
         _ => Requirement::Write,
     }
+}
+
+/// `/ws` request types that act with the host's own credentials, besides
+/// the SSH requests ([`crate::web::ws::SSH_WS_REQUESTS`]).
+pub const HOST_LOCAL_WS_REQUESTS: &[&str] = &[
+    "add_claude_account",
+    "login_claude_account",
+    "cancel_claude_account_login",
+    "rename_claude_account",
+    "remove_claude_account",
+];
+
+fn is_host_local_request(request_type: &str) -> bool {
+    HOST_LOCAL_WS_REQUESTS.contains(&request_type)
+        || crate::web::ws::SSH_WS_REQUESTS.contains(&request_type)
+}
+
+/// [`ws_requirement`] refined by the payload: a `watch` of the `ssh` watch
+/// needs [`Requirement::HostLocal`], because SSH session events (host-key
+/// questions, remote paths) go only to the connections that may run the
+/// sessions.
+#[must_use]
+pub fn ws_request_requirement(request_type: &str, payload: &serde_json::Value) -> Requirement {
+    if request_type == "watch" && payload["watch"].as_str() == Some("ssh") {
+        return Requirement::HostLocal;
+    }
+    ws_requirement(request_type)
 }
 
 /// Whether `caps` may run a `/ws` request of `request_type` whose payload is
@@ -255,9 +361,10 @@ pub fn ws_request_permitted(
     caps: Capabilities,
     identity: Option<&ClientIdentity>,
 ) -> bool {
-    match ws_requirement(request_type) {
+    match ws_request_requirement(request_type, payload) {
         Requirement::View => true,
         Requirement::Write => caps.write,
+        Requirement::HostLocal => caps.host_local,
         Requirement::DeviceStore => {
             caps.write
                 || payload["key"]

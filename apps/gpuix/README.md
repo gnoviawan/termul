@@ -26,6 +26,7 @@ TERMUL_SERVER_URL=http://127.0.0.1:8192 TERMUL_SERVER_TOKEN=dev-token bun run de
 | `TERMUL_SERVER_URL`      | Origin of the server (no path)                                    | `http://127.0.0.1:8190`            |
 | `TERMUL_SERVER_TOKEN`    | Bearer token for a gated server                                   | none                               |
 | `TERMUL_GPUIX_STATE_DIR` | Where the client keeps its persisted web storage                  | `$XDG_STATE_HOME/termul-gpuix`     |
+| `TERMUL_GPUIX_DATA_DIR`  | The server's `--state-dir`. A launched server uses it; an attached client on the same host reads the server's `host-local.token` from it, so it gets Claude Accounts and SSH | the desktop app data dir (launched), unset (attached) |
 | `GPUIX_BACKGROUND=1`     | Open the window without taking focus (headless and agent runs)    | unset                              |
 
 Scripts:
@@ -37,6 +38,7 @@ Scripts:
 - `bun run typecheck` runs both tsc projects (see below).
 - `bun run check:react` proves the bundle shares one React 19 with `@gpuix/react`.
 - `bun run parity <scenario>` runs the pixel-parity harness.
+- `TERMUL_SERVER_BIN=<fresh termul-server> bun tools/launcher/host-local-e2e.ts` runs the real launcher against that server and checks the `/ws` grant: `hostLocal` with the credential, not without it, not through a proxy header, and for an attached client only with `TERMUL_GPUIX_DATA_DIR`.
 - `bun tools/live-rename.ts` shoots the project list, renames a project through
   the server API while the app runs, and shoots again.
 
@@ -130,7 +132,8 @@ Shared `src/renderer` components render on GPUIX unchanged. `build.ts`
 points their `react/jsx-runtime`, `react` and `react-dom` at `src/compat`, so
 each `<div className=… onClick=…>` becomes a GPUIX element when it is
 created. Files under `apps/gpuix` keep the real runtime, except the Radix,
-framer-motion and cmdk stand-ins in `src/compat/radix` and `src/compat/shims`.
+framer-motion, cmdk and react-resizable-panels stand-ins in `src/compat/radix`
+and `src/compat/shims`.
 
 - `translate.ts` maps a tag and class string to a style once and caches it,
   so an unchanged element keeps the same style object across renders.
@@ -144,6 +147,21 @@ framer-motion and cmdk stand-ins in `src/compat/radix` and `src/compat/shims`.
 - `host.tsx` is the only per-element component. It is used only for
   `group-*`, `focus:`, `focus-within:` and breakpoint variants, and for the
   `group` element itself.
+- `dnd.ts` is HTML5 drag and drop. A press on a `draggable` element that
+  travels 4px runs `dragstart`, `drag`, `dragenter`/`dragleave`, `dragover`,
+  `drop` and `dragend` with a `DataTransfer` in the DOM's protected and
+  read-only modes. The source carries mouse down, move and up, so GPUIX
+  captures the pointer. The target is a DOM-style hit test over the last
+  painted tree: GPUIX's `getElementsAt` hides every subtree under compat's
+  click-through boxes. An OS file drop (`onFileDrop`, X11 XDND) runs
+  `dragenter`, `dragover` and `drop` with the paths as `File`s; `src/env/files.ts`
+  opens them and provides `FileReader`. There is no drag out to the OS and
+  no hover feedback before an OS drop lands.
+- `placement.tsx` also rebuilds percentage offsets (`left-1/4`,
+  `style={{ top: '25%' }}`), which GPUIX rejects, from spacer rows.
+- `shims/resizable-panels.tsx` stands in for `react-resizable-panels`: panels
+  register with their group, sizes are flex-grow percentages, and the grab
+  strips sit in an overlay that paints after the panels.
 
 The ui primitives in `src/ui` build their host element through the same
 `buildElement`.
@@ -156,6 +174,14 @@ shared file uses a DOM API the compat layer lacks
 `tools/compat/overrides.json` entry.
 
 Tools:
+
+- `bun tools/dnd/check.ts [--only os-drop,toc,tabs,split,resize,explorer]`
+  drives drag and drop in the real shell and asserts on the result: an OS
+  file dropped on the composer, the outline handle, tab reorder, split by
+  drag, divider drag and its persistence across a restart, an Explorer file
+  dropped on a pane. Output goes to `/tmp/gpuix-d1/dnd/`.
+- `bun tools/dnd/parity.ts` shoots the same pane drag in the web client and
+  GPUIX (two tabs, right zone held, split) and diffs them.
 
 - `bun tools/compat/parity.ts [fixture…] --port N` diffs StatusBar, ShellRail,
   ChatMessage and ConfirmDialog against the web build. Output goes to

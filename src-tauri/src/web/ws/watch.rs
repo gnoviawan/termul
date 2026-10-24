@@ -7,8 +7,8 @@
 
 use super::*;
 use crate::web::watch::{
-    agents_state, chat_history_state, chat_reads_state, fs_state, projects_state, store_state,
-    terminals_state,
+    agents_state, chat_history_state, chat_reads_state, fs_state, projects_state, ssh_state,
+    store_state, terminals_state,
     SubscribeError, WatchKind,
 };
 
@@ -52,6 +52,13 @@ pub(super) fn handle_watch(id: String, payload: &Value, env: &HandlerEnv) -> WsR
                 WatchKind::ChatReads => chat_reads_state(relay),
                 _ => agents_state(&env.acp),
             })
+        }
+        // The capability check admitted only a `host_local` connection.
+        WatchKind::Ssh => {
+            if relay.ssh().is_none() {
+                return WsReply::err(id, WsErrorCode::Unsupported, "this host does not serve SSH");
+            }
+            hub.subscribe(kind, &scope, &env.out_tx, ssh_state)
         }
         WatchKind::Terminals => hub.subscribe(kind, &scope, &env.out_tx, || {
             terminals_state(&env.pty, &scope)

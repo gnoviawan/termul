@@ -6,4 +6,10 @@ export interface ClientConfig {
   token: string | null
   /** Where this client keeps its own files (persisted web storage). */
   stateDir: string
+  /**
+   * The server's host-local credential file: the launched server's, or
+   * `<TERMUL_GPUIX_DATA_DIR>/host-local.token` when attached on the same
+   * host; `null` when attached without it.
+   */
+  hostLocalTokenFile: string | null
 }

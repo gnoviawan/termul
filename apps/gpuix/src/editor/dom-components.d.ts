@@ -10,5 +10,6 @@ type SharedComponent = ComponentType<Record<string, unknown>>
 
 export declare const TocPanel: SharedComponent
 export declare const FrontmatterProperties: SharedComponent
+export declare const EditorTocLayout: SharedComponent
 
 export type TocVariant = 'panel' | 'strip'

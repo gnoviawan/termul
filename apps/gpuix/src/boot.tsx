@@ -9,7 +9,7 @@
 import { type NativeRenderer, render } from '@gpuix/react'
 import { registerDesktopHost } from '@/lib/desktop-host'
 import { installGlobalErrorForwarding } from '@/lib/log-api'
-import { setWebAuthToken } from '@/lib/web-auth-token'
+import { setHostLocalTokenSource, setWebAuthToken } from '@/lib/web-auth-token'
 import { App } from './App'
 import type { BootFn } from './boot-contract'
 import { compatRenderOptions } from './compat/root'
@@ -19,9 +19,11 @@ import { DESKTOP_WINDOW } from './window'
 
 export const boot: BootFn = (config, options) => {
   if (config.token) setWebAuthToken(config.token)
+  setHostLocalTokenSource(options.hostLocalToken)
   registerDesktopHost(options.desktopHost)
   const registerFonts = (renderer: NativeRenderer) => {
-    for (const font of options.fonts) renderer.registerFont?.(font as Parameters<NonNullable<NativeRenderer['registerFont']>>[0])
+    for (const font of options.fonts)
+      renderer.registerFont?.(font as Parameters<NonNullable<NativeRenderer['registerFont']>>[0])
     log.info('boot', `registered ${options.fonts.length} font faces`)
   }
   render(

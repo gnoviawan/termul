@@ -149,6 +149,7 @@ fn write_capabilities() -> Capabilities {
     Capabilities {
         carrier: Carrier::TerminalWs,
         write: true,
+        host_local: false,
     }
 }
 
@@ -169,6 +170,8 @@ fn capability_policy(
             allow_remote_writes,
             shared_live_writes_denied,
         },
+        token_gated: false,
+        proxied: false,
     }
 }
 

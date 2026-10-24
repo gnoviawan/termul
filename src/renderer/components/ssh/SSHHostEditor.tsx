@@ -21,8 +21,10 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { useHostGate } from '@/hooks/use-host-gate'
 import { dialogApi, sshApi } from '@/lib/api'
 import { captureFocusReturnTarget } from '@/lib/focus-return'
+import { canUseHostSsh } from '@/lib/ssh-api'
 import {
   type HostFormErrors,
   type HostFormField,
@@ -155,7 +157,9 @@ export function SSHHostEditor({
   const [localKeys, setLocalKeys] = useState<SSHKeyFileInfo[]>([])
   const [keyInfo, setKeyInfo] = useState<SSHKeyFileInfo | null>(null)
   const fieldRefs = useRef<Partial<Record<HostFormField, HTMLElement | null>>>({})
+  // The key picker is a Tauri dialog; keys and connecting need the host's SSH.
   const desktop = isTauriContext()
+  const hostSsh = useHostGate(canUseHostSsh)
 
   // Focus goes back where it was (or to the menu that opened the editor).
   const returnFocusTo = useRef<HTMLElement | null>(null)
@@ -173,7 +177,7 @@ export function SSHHostEditor({
 
   // Offer keys found in ~/.ssh.
   useEffect(() => {
-    if (!open || !desktop) return
+    if (!open || !hostSsh) return
     let cancelled = false
     void sshApi.listKeys().then((result) => {
       if (!cancelled && result.success) setLocalKeys(result.data)
@@ -181,12 +185,12 @@ export function SSHHostEditor({
     return () => {
       cancelled = true
     }
-  }, [open, desktop])
+  }, [open, hostSsh])
 
   // Inspect the chosen key (debounced) to explain problems and passphrases.
   const keyPath = values.authMethod === 'key' ? values.privateKeyPath.trim() : ''
   useEffect(() => {
-    if (!open || !desktop || !keyPath) {
+    if (!open || !hostSsh || !keyPath) {
       setKeyInfo(null)
       return
     }
@@ -200,7 +204,7 @@ export function SSHHostEditor({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [open, desktop, keyPath])
+  }, [open, hostSsh, keyPath])
 
   const groups = useMemo(
     () =>
@@ -306,7 +310,7 @@ export function SSHHostEditor({
           className="flex-1 space-y-7 overflow-y-auto px-6 pb-6 pt-5"
           onSubmit={(e) => {
             e.preventDefault()
-            void save(!profile && desktop)
+            void save(!profile && hostSsh)
           }}
         >
           <FieldGroup title="Connection">
@@ -600,7 +604,7 @@ export function SSHHostEditor({
                 Save
               </Button>
               <Button type="submit" form={formId} size="sm" disabled={saving}>
-                {saving ? 'Saving…' : desktop ? 'Save and connect' : 'Save'}
+                {saving ? 'Saving…' : hostSsh ? 'Save and connect' : 'Save'}
               </Button>
             </>
           )}

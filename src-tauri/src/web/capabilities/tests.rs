@@ -23,6 +23,12 @@ const VIEW_ONLY: Capabilities = Capabilities::none(Carrier::Ws);
 const WRITER: Capabilities = Capabilities {
     carrier: Carrier::Ws,
     write: true,
+    host_local: false,
+};
+const HOST_LOCAL: Capabilities = Capabilities {
+    carrier: Carrier::Ws,
+    write: true,
+    host_local: true,
 };
 
 #[test]
@@ -57,10 +63,10 @@ fn write_decision_matrix() {
 #[test]
 fn capabilities_follow_the_write_decision() {
     let lan = peer([10, 0, 0, 9]);
-    assert!(Capabilities::resolve(Carrier::Ws, peer([127, 0, 0, 1]), flags(false, false)).write);
-    assert!(!Capabilities::resolve(Carrier::Ws, lan, flags(false, false)).write);
-    assert!(Capabilities::resolve(Carrier::TerminalWs, lan, flags(true, false)).write);
-    let shared_live = Capabilities::resolve(Carrier::TerminalWs, peer([127, 0, 0, 1]), flags(true, true));
+    assert!(Capabilities::resolve(Carrier::Ws, peer([127, 0, 0, 1]), flags(false, false), false).write);
+    assert!(!Capabilities::resolve(Carrier::Ws, lan, flags(false, false), false).write);
+    assert!(Capabilities::resolve(Carrier::TerminalWs, lan, flags(true, false), false).write);
+    let shared_live = Capabilities::resolve(Carrier::TerminalWs, peer([127, 0, 0, 1]), flags(true, true), false);
     assert!(!shared_live.write);
     assert_eq!(shared_live.carrier, Carrier::TerminalWs);
 }
@@ -213,4 +219,84 @@ fn terminal_view_allow_list_excludes_every_mutation() {
     ] {
         assert!(!terminal_request_is_view(mutation), "{mutation}");
     }
+}
+
+fn policy(ip: [u8; 4], flags: WriteFlags, token_gated: bool, proxied: bool) -> CapabilityPolicy {
+    CapabilityPolicy {
+        carrier: Carrier::Ws,
+        peer: peer(ip),
+        flags,
+        token_gated,
+        proxied,
+    }
+}
+
+#[test]
+fn host_local_needs_loopback_a_token_gate_no_proxy_and_the_host_credential() {
+    let local = [127, 0, 0, 1];
+    let host_local = |ip, flags, gated, proxied, credential| {
+        policy(ip, flags, gated, proxied).resolve(credential).host_local
+    };
+    assert!(host_local(local, flags(false, false), true, false, true));
+    assert!(
+        !host_local(local, flags(false, false), true, false, false),
+        "a loopback peer with only the bearer token may be a reverse proxy"
+    );
+    assert!(
+        !host_local(local, flags(false, false), true, true, true),
+        "a proxy header means the client is elsewhere"
+    );
+    assert!(
+        !host_local(local, flags(false, false), false, false, true),
+        "an ungated host cannot tell who connected"
+    );
+    assert!(
+        !host_local([192, 168, 1, 50], flags(true, false), true, false, true),
+        "--allow-remote-writes admits writes, never the host's credentials"
+    );
+    assert!(
+        !host_local(local, flags(false, true), true, false, true),
+        "shared-live forwards tunnel traffic from loopback"
+    );
+}
+
+#[test]
+fn every_forwarding_header_names_a_proxy() {
+    let sent_as = [
+        "Forwarded",
+        "VIA",
+        "X-Forwarded-For",
+        "x-forwarded-host",
+        "X-Forwarded-Proto",
+        "X-Real-IP",
+        "X-Client-IP",
+        "True-Client-IP",
+        "CF-Connecting-IP",
+        "Cf-Ray",
+        "Tailscale-User-Login",
+    ];
+    assert_eq!(sent_as.len(), PROXY_HEADERS.len());
+    for name in sent_as {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            "203.0.113.7".parse().unwrap(),
+        );
+        assert!(names_a_proxy(&headers), "{name}");
+    }
+    let mut direct = axum::http::HeaderMap::new();
+    direct.insert("origin", "http://127.0.0.1:8190".parse().unwrap());
+    assert!(!names_a_proxy(&direct));
+}
+
+#[test]
+fn account_management_needs_host_local_and_every_other_request_is_unchanged() {
+    for kind in HOST_LOCAL_WS_REQUESTS {
+        assert_eq!(ws_requirement(kind), Requirement::HostLocal, "{kind}");
+        assert!(!ws_request_permitted(kind, &json!({}), VIEW_ONLY, None), "{kind}");
+        assert!(!ws_request_permitted(kind, &json!({}), WRITER, None), "{kind}");
+        assert!(ws_request_permitted(kind, &json!({}), HOST_LOCAL, None), "{kind}");
+    }
+    assert_eq!(ws_requirement("set_default_claude_account"), Requirement::Write);
+    assert_eq!(ws_requirement("list_claude_accounts"), Requirement::View);
 }

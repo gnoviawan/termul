@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { PANEL_HEADER_CLASS } from '@/components/ui/panel-styles'
-import { isTauriContext } from '@/lib/tauri-runtime'
+import { useHostGate } from '@/hooks/use-host-gate'
+import { canUseHostSsh } from '@/lib/ssh-api'
 import { cn } from '@/lib/utils'
 import { useShellLayoutStore, useSshSectionHeight } from '@/stores/shell-layout-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
@@ -22,6 +23,7 @@ export function SSHResizableSection({
 }): React.JSX.Element | null {
   const isVisible = useSSHPanelVisible()
   const height = useSshSectionHeight()
+  const hostSsh = useHostGate(canUseHostSsh)
 
   const isDragging = useRef(false)
   const startY = useRef(0)
@@ -93,10 +95,10 @@ export function SSHResizableSection({
     }
   }, [isVisible, teardownActiveDrag])
 
-  // Desktop-only surface (issue #843): the SSH/SFTP panel is hidden on web —
-  // connect/SFTP/port-forwarding are `WEB_UNSUPPORTED` — rather than
-  // rendering profiles with disabled Connect actions.
-  if (!isTauriContext()) return null
+  // Issue #843: the SSH/SFTP panel shows only where the host runs SSH for
+  // this client (desktop, host-local web), rather than rendering profiles
+  // with disabled Connect actions.
+  if (!hostSsh) return null
 
   // The section collapses to a header-only row instead of disappearing, so it
   // can be expanded again from the same place.

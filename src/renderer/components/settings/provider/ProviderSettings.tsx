@@ -5,6 +5,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Info, KeyRound, Monitor, Plus, RotateCcw, WifiOff } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useClaudeAccounts } from '@/hooks/use-claude-accounts'
+import { useHostGate } from '@/hooks/use-host-gate'
 import { claudeAccountsApi, isClaudeLoginCancelled } from '@/lib/claude-accounts-api'
 import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
@@ -48,7 +49,7 @@ function SkeletonRow(): React.JSX.Element {
 export function ProviderSettings(): React.JSX.Element {
   const { snapshot, usage, loading, error, refreshingUsage, reload, refreshUsage } =
     useClaudeAccounts()
-  const canManage = claudeAccountsApi.canManageAccounts()
+  const canManage = useHostGate(claudeAccountsApi.canManageAccounts)
   const projects = useProjectStore((s) => s.projects)
   const [addOpen, setAddOpen] = useState(false)
   const [renaming, setRenaming] = useState<ClaudeAccountView | null>(null)

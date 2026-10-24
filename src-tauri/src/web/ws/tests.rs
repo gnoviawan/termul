@@ -1051,6 +1051,17 @@ fn ws_reply_ok_and_err_shape() {
 /// A loopback, write-capable connection — what a standalone server's local
 /// browser gets. Tests that need a view-only peer build their own policy.
 pub(super) fn test_policy(peer: [u8; 4], allow_remote_writes: bool, shared_live_writes_denied: bool) -> CapabilityPolicy {
+    gated_policy(peer, allow_remote_writes, shared_live_writes_denied, false)
+}
+
+/// [`test_policy`] on a host that does (`token_gated`) or does not require
+/// the bearer token.
+pub(super) fn gated_policy(
+    peer: [u8; 4],
+    allow_remote_writes: bool,
+    shared_live_writes_denied: bool,
+    token_gated: bool,
+) -> CapabilityPolicy {
     CapabilityPolicy {
         carrier: Carrier::Ws,
         peer: SocketAddr::from((peer, 40000)),
@@ -1058,6 +1069,8 @@ pub(super) fn test_policy(peer: [u8; 4], allow_remote_writes: bool, shared_live_
             allow_remote_writes,
             shared_live_writes_denied,
         },
+        token_gated,
+        proxied: false,
     }
 }
 

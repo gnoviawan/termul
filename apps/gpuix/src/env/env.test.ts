@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { createHashHistory } from '@remix-run/router'
-import { MediaList } from './dom'
+import { cssEscape, MediaList } from './dom'
 import { createSessionHistory } from './history'
 import { readInitialWindowSize } from './window-size'
 
@@ -105,5 +105,17 @@ describe('matchMedia lists', () => {
 
     list.removeEventListener('change', listener)
     expect(registry.size).toBe(0)
+  })
+})
+
+describe('CSS.escape', () => {
+  test('matches the browser for ids the renderer builds', () => {
+    expect(cssEscape('ssh-tab-hosts')).toBe('ssh-tab-hosts')
+    expect(cssEscape('1abc')).toBe('\\31 abc')
+    expect(cssEscape('-2')).toBe('-\\32 ')
+    expect(cssEscape('-')).toBe('\\-')
+    expect(cssEscape('a b.c#d')).toBe('a\\ b\\.c\\#d')
+    expect(cssEscape('/tmp/x"y')).toBe('\\/tmp\\/x\\"y')
+    expect(cssEscape('\u00e9\u0000')).toBe('\u00e9\uFFFD')
   })
 })

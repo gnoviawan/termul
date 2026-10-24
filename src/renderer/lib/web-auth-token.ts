@@ -184,6 +184,23 @@ export function clearWebAuthToken(): void {
   safeLocalStorage()?.removeItem(STORAGE_KEY)
 }
 
+let hostLocalTokenSource: (() => string | null) | null = null
+
+/**
+ * Where the host-local credential comes from: a launcher that can read the
+ * server's `<state dir>/host-local.token` (the GPUIX client) reads it at each
+ * handshake, so a restarted server's fresh credential is picked up. Never
+ * stored, so no browser tab inherits it. A host-local connection may use the
+ * host's own credentials.
+ */
+export function setHostLocalTokenSource(source: (() => string | null) | null): void {
+  hostLocalTokenSource = source
+}
+
+export function getHostLocalToken(): string | null {
+  return hostLocalTokenSource?.()?.trim() || null
+}
+
 /** The `Authorization` header to merge into gated REST calls (absent when no token). */
 export function authHeader(): Record<string, string> | undefined {
   const token = getWebAuthToken()

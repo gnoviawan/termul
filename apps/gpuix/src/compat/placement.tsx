@@ -17,6 +17,7 @@
 import type { PublicInstance, StyleDesc } from '@gpuix/react'
 import { type ReactElement, useCallback, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import { jsx } from 'react/jsx-runtime'
+import { hitTransparent } from './dnd'
 import { compatReads, treeIndex } from './dom-node'
 import { subscribeViewport, viewportWidth } from './viewport'
 
@@ -95,6 +96,72 @@ export function placeStyle(style: StyleDesc, placement: Placement): { inner: Sty
   return {
     inner: { ...inner, position: 'relative', flexShrink: 0 } as StyleDesc,
     wrap: (element, key) => jsx('div', { style: wrapper, children: element }, key)
+  }
+}
+
+type Inset = number | string | undefined
+
+const isPercent = (value: unknown): value is string => typeof value === 'string' && value.endsWith('%')
+
+interface AxisPlan {
+  before: Inset
+  after: Inset
+  /** Both edges inset and no size: the element stretches between them. */
+  stretch: boolean
+  justifyContent: 'flex-start' | 'flex-end'
+}
+
+function axisPlan(start: Inset, end: Inset, size: unknown): AxisPlan {
+  return {
+    before: start,
+    after: end,
+    stretch: start !== undefined && end !== undefined && size === undefined,
+    justifyContent: start === undefined && end !== undefined ? 'flex-end' : 'flex-start'
+  }
+}
+
+function spacer(axis: 'width' | 'height', value: Inset, key: string): ReactElement | null {
+  if (value === undefined) return null
+  return jsx('div', { ref: hitTransparent, style: { [axis]: value, flexShrink: 0, pointerEvents: 'none' } }, key)
+}
+
+/**
+ * Percentage offsets (`left-1/4`, `style={{ top: '25%' }}`), which GPUIX
+ * rejects: an absolute box spanning the parent lays the element out with
+ * percentage spacers in a column, then a row. Spacers and wrappers are
+ * pointer-transparent; percentage sizes resolve against the parent as before.
+ * `null` when the element has no percentage offset.
+ */
+export function percentPlacement(style: StyleDesc): { inner: StyleDesc; wrap(element: ReactElement, key?: string): ReactElement } | null {
+  if (style.position !== 'absolute') return null
+  const raw = style as Record<string, unknown>
+  if (!OFFSET_KEYS.some((side) => isPercent(raw[side]))) return null
+  const inset = (side: (typeof OFFSET_KEYS)[number]) => raw[side] as Inset
+  const x = axisPlan(inset('left'), inset('right'), raw.width)
+  const y = axisPlan(inset('top'), inset('bottom'), raw.height)
+  const inner: Record<string, unknown> = { ...raw, position: 'relative', flexShrink: 0 }
+  for (const side of OFFSET_KEYS) delete inner[side]
+  if (x.stretch) Object.assign(inner, { flexGrow: 1, minWidth: 0 })
+  const row: Record<string, unknown> = { display: 'flex', flexDirection: 'row', justifyContent: x.justifyContent, flexShrink: 0, pointerEvents: 'none' }
+  if (y.stretch) Object.assign(row, { flexGrow: 1, minHeight: 0 })
+  else if (raw.height !== undefined) row.height = raw.height
+  if (y.stretch || raw.height !== undefined) inner.height = '100%'
+  const column = {
+    position: 'absolute', top: 0, right: 0, bottom: 0, left: 0,
+    display: 'flex', flexDirection: 'column', justifyContent: y.justifyContent, pointerEvents: 'none'
+  }
+  return {
+    inner: inner as StyleDesc,
+    wrap: (element, key) =>
+      jsx('div', {
+        ref: hitTransparent,
+        style: column,
+        children: [
+          spacer('height', y.before, 'top'),
+          jsx('div', { ref: hitTransparent, style: row, children: [spacer('width', x.before, 'left'), element, spacer('width', x.after, 'right')] }, 'row'),
+          spacer('height', y.after, 'bottom')
+        ]
+      }, key)
   }
 }
 
