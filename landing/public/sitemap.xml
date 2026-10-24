@@ -6,7 +6,7 @@
     <priority>1.0</priority>
   </url>
   <url>
-    <loc>https://termul.dev/testimonial/submit</loc>
+    <loc>https://termul.dev/testimonial/submit/</loc>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
