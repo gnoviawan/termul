@@ -98,10 +98,20 @@ The same command with `--agents 2` and `--out tools/perf/results-f3/storm4`, at 
 
 Every GPUIX run but one lost a chat start ("launcher composer never accepted"), with or without parking. The p50 start time of a run that lost one is taken over its three remaining chats, and the 80 s values include the start right after the failed one. With four chats the hidden tree is smaller than with eight, but parking still cuts it from 11,600 to 31,600 elements to under 70. What is left is the live turn's activity row, which held 4,419 to 16,305 elements and kept the frame rate at 0.5 to 1.6 fps against Chromium's 2.5 to 4.6.
 
+### Where the mutation stream goes: spinners
+
+`TERMUL_GPUIX_STATS_OPS=1 bun tools/perf/run.ts --client gpuix --runs 1 --scenarios stream-storm --page-metrics off --gpuix-dist dist ...` makes `src/renderer-stats.ts` count every op by kind, and `setCustomProp` by key. It parses every batch, so these two runs are for the breakdown only, not for timing. Records are [`results-f3/ops/by-kind.json`](results-f3/ops/by-kind.json) and [`results-f3/ops/by-key.json`](results-f3/ops/by-key.json).
+
+In the measure phase of the second run, the client sent 4,703 KB/s. Of that, `setCustomProp` with the key `source` was 4,632 KB/s (98.5%), at 427 sets per second, about 10.8 KB each. Text was not the cost: `setText` was under 10 KB/s in both runs. The `source` is the spinner's. `src/ui/spinner.tsx` draws its comet as an SVG of 72 wedges, about 11 KB at 16 px, and GPUIX has no transform to rotate it (`gpuix-capabilities.md`, Transforms), so each 10° step sends a new SVG, 36 steps per 700 ms lap, about 51 a second. 427 sets per second is about 8 spinners, one for each streaming chat's "Working…" row. All but the visible one sat in parked chats that are never drawn. A browser pays nothing for a CSS animation in a hidden pane.
+
+The spinner now skips a step while its element is parked: `park.ts` answers through `src/compat/visibility.ts`, and `tools/compat/park.test.tsx` checks that a spinner in a hidden pane sends no frames, and sends them again once shown.
+
+SPIN
+
 ## What still limits it
 
 - **The visible transcript's live turn.** After parking, one transcript row holds nearly all of the reachable tree: the live turn's activity row (`chat-row-activity:<id>`) with one `Thought · 1 line` child per streamed thought. In the post-merge 8-chat runs it held 4,346, 21,668 and 3,922 of the 4,804, 22,045 and 4,380 reachable elements. Before the merge it held 2,216 to 2,387. A `virtual-list` culls whole rows only, so this row is built and laid out on every frame and grows for as long as the turn streams. It decides both the frame rate and the memory: the run where it reached 21,668 elements drew 0.4 fps and used 3.9 GB. This is G2's code. The fix belongs in the activity row: virtualize its children (a nested `virtual-list`), or build only the visible part of a long thought group.
-- **Mutation volume.** The client sent 1.7 to 5.2 MB of mutation JSON per second in the measure phase for about 19 KB/s of streamed text (8 chats, 20 updates of 120 characters per second), up from 0.8 to 1.0 MB before the merge. The volume is the same with and without parking. See the op breakdown below.
+- **Mutation volume.** The client sent 1.7 to 5.2 MB of mutation JSON per second in the measure phase for about 19 KB/s of streamed text (8 chats, 20 updates of 120 characters per second), up from 0.8 to 1.0 MB before the merge. The volume is the same with and without parking. The section on spinners below finds the cause and the fix.
 - **Whole-scene rendering.** GPUIX rebuilds and lays out the whole reachable tree on every frame and has no cached subtrees. F2 found that every present covers the whole window. With about 4,500 reachable elements, `gpuix-ui` used 69% to 86% of a core.
 
 ## Upstream asks for GPUIX
@@ -109,3 +119,4 @@ Every GPUIX run but one lost a chat start ("launcher composer never accepted"), 
 1. Skip `display: none` subtrees in `build_element` (today `apply_styles` ignores the value), so a hidden subtree costs nothing per frame without moving native nodes.
 2. Cached subtrees: reuse the built and laid-out elements of a subtree whose `subtree_revision` did not change. Kybern carries this as its "cached islands" patch (`reports/kybern.md` item 2).
 3. Push scroll and list state to JS as events instead of synchronous queries with a 2 s timeout, or make the timeout a non-throwing "no answer".
+4. A `transform: rotate()` style (GPUIX #102), so a spinner sends one SVG once and then a few bytes of style per step. Until then the one visible spinner still sends about 560 KB/s.
