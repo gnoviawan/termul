@@ -17,7 +17,7 @@ import { ColorContext, SvgClassContext } from './color'
 import { ScopeContext, withScopedClasses } from './scope'
 import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
 import { convertDomStyle } from './dom-style'
-import { adaptHandlers, type GpuixListeners } from './events'
+import { adaptHandlers, addFormListeners, type GpuixListeners } from './events'
 import { compatWarn } from './log'
 import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
 import { layoutListener } from './resize'
@@ -196,6 +196,7 @@ export function buildElement(
     (FOCUSABLE_TAGS.has(tag) || (tag === 'a' && props.href !== undefined) || props.tabIndex !== undefined)
   const draggable = source.draggable === true || source.draggable === 'true'
   const handlers = disabled ? null : adaptHandlers(source, text, focusable, listeners, draggable)
+  if (!disabled) addFormListeners(tag, props.type, listeners)
   const interactive = handlers !== null || focusable || tr.hoverable || style.overflow === 'scroll'
   if (!interactive) style = passThrough(style)
 
