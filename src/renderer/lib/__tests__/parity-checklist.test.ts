@@ -1235,7 +1235,17 @@ describe('Parity Checklist Automation', () => {
     const FsFacade = join(LIB_DIR, 'tauri-filesystem-api.ts')
     const WebFileNameSearch = join(LIB_DIR, 'web-filename-search.ts')
     const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-    const RouterRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'router', 'mod.rs')
+    const RouterRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'web',
+      'router',
+      'mod.rs'
+    )
     const SearchApiRust = join(
       LIB_DIR,
       '..',

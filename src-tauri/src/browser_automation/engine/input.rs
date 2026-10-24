@@ -110,6 +110,7 @@ impl Key {
         }
     }
 
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code, reason = "only CDP key events carry the DOM key name"))]
     pub fn dom_key(self) -> String {
         match self {
             Key::Named(k) => k.dom_key().to_string(),

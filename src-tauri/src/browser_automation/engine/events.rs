@@ -108,11 +108,13 @@ pub enum TabEvent {
         url: String,
     },
     /// The engine refused to hand a URL to another application.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code, reason = "only WebView2 reports a refused external launch"))]
     ExternalProtocolBlocked,
     TitleChanged {
         title: String,
     },
     /// The page logged a console message (page-derived).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code, reason = "WebKit engines read the console through a page shim"))]
     Console(ConsoleEntry),
     /// A request the page made completed or failed (page-derived).
     Network(NetworkEntry),
