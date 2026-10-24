@@ -8,6 +8,7 @@
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { registerDesktopHost } from '@/lib/desktop-host'
 import { installBrowserEnv } from './env'
 import { readInitialWindowSize } from './env/window-size'
@@ -15,6 +16,7 @@ import { launch } from './launcher'
 import { createDesktopHost } from './launcher/desktop-host'
 import { readHostLocalToken } from './launcher/host-local'
 import { log } from './log'
+import { captureZoomRoots } from './shims/window-zoom'
 import { FONT_FILES } from './style/fonts'
 
 const launched = await launch()
@@ -36,6 +38,14 @@ const fonts = FONT_FILES.map((file) => readFileSync(path.join(FONT_DIR, path.bas
 // Before the app tree loads: the keyboard-shortcuts store reads its desktop
 // defaults from the registered host when its module is evaluated.
 registerDesktopHost(createDesktopHost())
+// The window zoom needs the React root. The reconciler instance is not in
+// @gpuix/react's exports, so it is imported by file: the same module record
+// @gpuix/react loaded, because the loader keys modules by resolved path.
+const reconcilerFile = path.join(
+  path.dirname(Bun.resolveSync('@gpuix/react', import.meta.dir)),
+  'reconciler/reconciler.js'
+)
+captureZoomRoots((await import(pathToFileURL(reconcilerFile).href)).reconciler)
 const { boot } = await import('#app/boot')
 // Headless runs (parity shots, agent checks) must not steal the keyboard.
 boot(config, {
