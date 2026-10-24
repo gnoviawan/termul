@@ -42,6 +42,9 @@ interface CanvasProps {
   initialCamera: Camera | null
   themeControl: ReactNode
   onMove: (id: string, position: Point) => void
+  /** Called synchronously on every camera change. Keep it cheap: no renders. */
+  onCameraChange: (camera: Camera) => void
+  /** Called once the camera has been still for a moment. */
   onCameraSettled: (camera: Camera) => void
   onResetLayout: () => void
 }
@@ -105,6 +108,7 @@ export function Canvas({
   initialCamera,
   themeControl,
   onMove,
+  onCameraChange,
   onCameraSettled,
   onResetLayout
 }: CanvasProps) {
@@ -125,6 +129,8 @@ export function Canvas({
   const touchesRef = useRef(new Map<number, Point>())
   const pinchRef = useRef<{ distance: number; mid: Point; origin: Camera } | null>(null)
   const wheelGestureRef = useRef<WheelGesture<HTMLElement> | null>(null)
+  const onCameraChangeRef = useRef(onCameraChange)
+  onCameraChangeRef.current = onCameraChange
   const onCameraSettledRef = useRef(onCameraSettled)
   onCameraSettledRef.current = onCameraSettled
 
@@ -148,6 +154,7 @@ export function Canvas({
   const setCamera = useCallback(
     (camera: Camera) => {
       cameraRef.current = clampCamera(camera)
+      onCameraChangeRef.current(cameraRef.current)
       write()
       settle()
     },

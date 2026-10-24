@@ -69,15 +69,19 @@ export function App() {
 
   const onMove = useCallback(
     (id: string, position: Point) => {
-      setPositions((current) => {
-        const next = { ...current, [id]: position }
-        snapshot.current = { ...snapshot.current, positions: next }
-        return next
-      })
+      // The ref is the source of truth for saves; update it before React state.
+      const next = { ...snapshot.current.positions, [id]: position }
+      snapshot.current = { ...snapshot.current, positions: next }
+      setPositions(next)
       scheduleSave()
     },
     [scheduleSave]
   )
+
+  // Every camera change lands in the snapshot at once, so pagehide never saves a stale camera.
+  const onCameraChange = useCallback((camera: Camera) => {
+    snapshot.current = { ...snapshot.current, camera }
+  }, [])
 
   const onCameraSettled = useCallback(
     (camera: Camera) => {
@@ -134,6 +138,7 @@ export function App() {
       initialCamera={canvasKey === 0 ? initial.camera : null}
       themeControl={themeControl}
       onMove={onMove}
+      onCameraChange={onCameraChange}
       onCameraSettled={onCameraSettled}
       onResetLayout={onResetLayout}
     />
