@@ -1,8 +1,8 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { Info, Save } from '@/components/icons'
+import { Info } from '@/components/icons'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import { toastAccountChoiceError } from '@/components/settings/provider/account-choice-error'
 import { ProjectProviderSettings } from '@/components/settings/provider/ProjectProviderSettings'
@@ -21,7 +21,7 @@ import {
   useProjectStore
 } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
-import type { EnvVariable, ProjectColor } from '@/types/project'
+import type { EnvVariable, Project, ProjectColor } from '@/types/project'
 import {
   PROJECT_SETTINGS_CATEGORIES,
   PROJECT_SETTINGS_SEARCH_INDEX
@@ -80,23 +80,34 @@ export function ProjectSettingsModal() {
   const autoFilledSymlinkRef = useRef<string | null>(null)
   const envImportRequestRef = useRef(0)
 
+  // Puts every field back to the saved project and drops any pending .env read.
+  const resetForm = useCallback((project: Project) => {
+    setProjectName(project.name)
+    setSelectedColor(project.color)
+    setRootPath(project.path || '')
+    // '' follows the app default shell, as the terminal openers do.
+    setShell(project.defaultShell || '')
+    envImportRequestRef.current += 1
+    setEnvVars(project.envVars || [])
+    setSymlinkDirs(project.symlinkDirs ?? [])
+    setImportError(null)
+    setImportWarnings(null)
+    setHasChanges(false)
+  }, [])
+
   // Sync state when the active project changes
   useEffect(() => {
     if (activeProject && symlinkInitProjectRef.current !== activeProject.id) {
       symlinkInitProjectRef.current = activeProject.id
-      setProjectName(activeProject.name)
-      setSelectedColor(activeProject.color)
-      setRootPath(activeProject.path || '')
-      // '' follows the app default shell, as the terminal openers do.
-      setShell(activeProject.defaultShell || '')
-      envImportRequestRef.current += 1
-      setEnvVars(activeProject.envVars || [])
-      setSymlinkDirs(activeProject.symlinkDirs ?? [])
-      setImportError(null)
-      setImportWarnings(null)
-      setHasChanges(false)
+      resetForm(activeProject)
     }
-  }, [activeProject])
+  }, [activeProject, resetForm])
+
+  const handleDiscard = () => {
+    claudeAccountDraft.reset()
+    if (activeProject) resetForm(activeProject)
+    else setHasChanges(false)
+  }
 
   // D5: default worktree symlinks ON. For a git project that has never configured
   // symlink dirs, pre-fill them from .gitignore so fresh worktrees inherit shared
@@ -332,25 +343,25 @@ export function ProjectSettingsModal() {
         title="Project settings"
         footer={
           hasChanges ? (
-            <div className="p-4 flex justify-end items-center gap-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-              <span className="text-sm text-muted-foreground mr-auto flex items-center">
-                <Info size={14} className="mr-2 text-warning" />
-                <span className="opacity-80">You have unsaved changes</span>
-              </span>
+            <div className="flex items-center justify-end gap-2 px-4 py-3">
+              <p
+                role="status"
+                className="mr-auto flex items-center gap-2 text-xs text-muted-foreground"
+              >
+                <Info size={14} aria-hidden="true" className="text-warning" />
+                Unsaved changes
+              </p>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => {
-                  claudeAccountDraft.reset()
-                  setHasChanges(false)
-                }}
+                className="h-8"
+                onClick={handleDiscard}
               >
                 Discard
               </Button>
-              <Button type="button" size="sm" onClick={handleSave}>
-                <Save />
-                Save Changes
+              <Button type="button" size="sm" className="h-8" onClick={handleSave}>
+                Save changes
               </Button>
             </div>
           ) : undefined

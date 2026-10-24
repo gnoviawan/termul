@@ -112,7 +112,7 @@ describe('ProjectSettings .env import', () => {
     expect(await screen.findByDisplayValue('new')).toBeInTheDocument()
     expect(screen.getByDisplayValue('unchanged')).toBeInTheDocument()
     expect(screen.getByDisplayValue('value')).toBeInTheDocument()
-    expect(screen.getByText('You have unsaved changes')).toBeInTheDocument()
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
     expect(useProjectStore.getState().projects[0].envVars).toEqual(firstProject.envVars)
   })
 
@@ -171,7 +171,7 @@ describe('ProjectSettings .env import', () => {
 
     expect(await screen.findByText('Failed to read .env: File not found')).toBeInTheDocument()
     expect(screen.getByDisplayValue('old')).toBeInTheDocument()
-    expect(screen.queryByText('You have unsaved changes')).not.toBeInTheDocument()
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
     expect(apiMocks.selectFile).not.toHaveBeenCalled()
   })
 
@@ -186,7 +186,7 @@ describe('ProjectSettings .env import', () => {
 
     expect(await screen.findByText('The .env file is empty.')).toBeInTheDocument()
     expect(screen.getByDisplayValue('old')).toBeInTheDocument()
-    expect(screen.queryByText('You have unsaved changes')).not.toBeInTheDocument()
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
   })
 
   it('reports invalid-only files without marking the form changed', async () => {
@@ -200,7 +200,7 @@ describe('ProjectSettings .env import', () => {
 
     expect(await screen.findByText(/Imported 0 variables/)).toBeInTheDocument()
     expect(screen.getByText(/Line 1: INVALID LINE/)).toBeInTheDocument()
-    expect(screen.queryByText('You have unsaved changes')).not.toBeInTheDocument()
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
   })
 
   it('imports valid variables and warns about invalid lines', async () => {
@@ -244,7 +244,7 @@ describe('ProjectSettings .env import', () => {
 
     expect(screen.queryByDisplayValue('ignored')).not.toBeInTheDocument()
     expect(screen.getByDisplayValue('saved')).toBeInTheDocument()
-    expect(screen.queryByText('You have unsaved changes')).not.toBeInTheDocument()
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
     expect(apiMocks.selectFile).not.toHaveBeenCalled()
   })
 
@@ -376,5 +376,79 @@ describe('ProjectSettings layout', () => {
     expect(screen.getByRole('button', { name: /import from \.env/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /add variable/i })).toBeInTheDocument()
     expect(screen.getByText('No linked directories')).toBeInTheDocument()
+  })
+})
+
+describe('ProjectSettings discard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiMocks.getAvailableShells.mockResolvedValue({
+      success: true,
+      data: {
+        available: [{ name: 'bash', path: '/bin/bash', displayName: 'Bash' }],
+        default: { name: 'bash', path: '/bin/bash', displayName: 'Bash' }
+      }
+    })
+    apiMocks.parseGitignore.mockResolvedValue({ success: true, data: [] })
+  })
+
+  it('puts every edited field back to the saved project and clears the save bar', async () => {
+    renderSettings([{ ...firstProject, symlinkDirs: ['node_modules'] }])
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed' } })
+    fireEvent.change(screen.getByLabelText('Root directory'), {
+      target: { value: '/workspace/elsewhere' }
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Value of KEEP' }), {
+      target: { value: 'edited' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove OVERWRITE' }))
+    fireEvent.click(screen.getByRole('button', { name: /add variable/i }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Path of node_modules' }), {
+      target: { value: '.venv' }
+    })
+    fireEvent.click(screen.getByRole('radio', { name: /green/i }))
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+
+    expect(screen.getByLabelText('Name')).toHaveValue('First Project')
+    expect(screen.getByLabelText('Root directory')).toHaveValue('/workspace/app')
+    expect(screen.getByRole('textbox', { name: 'Value of KEEP' })).toHaveValue('unchanged')
+    expect(screen.getByRole('textbox', { name: 'Value of OVERWRITE' })).toHaveValue('old')
+    expect(screen.queryByRole('textbox', { name: 'Name of variable 3' })).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Path of node_modules' })).toHaveValue(
+      'node_modules'
+    )
+    expect(screen.getByRole('radio', { name: /blue/i })).toBeChecked()
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
+    expect(useProjectStore.getState().projects[0]).toMatchObject({
+      name: 'First Project',
+      path: '/workspace/app',
+      envVars: firstProject.envVars
+    })
+  })
+
+  it('clears .env import messages and ignores a read that lands after discard', async () => {
+    let resolveRead: ((result: unknown) => void) | undefined
+    apiMocks.readFile.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRead = resolve
+      })
+    )
+    renderSettings()
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed' } })
+    importEnv()
+    await waitFor(() => expect(apiMocks.readFile).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+
+    await act(async () => {
+      resolveRead?.({ success: true, data: { content: 'LATE=value', path: '/workspace/app/.env' } })
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByDisplayValue('LATE')).not.toBeInTheDocument()
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
   })
 })
