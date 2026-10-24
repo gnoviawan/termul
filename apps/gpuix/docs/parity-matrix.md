@@ -326,7 +326,7 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
 | Surface | Area | Status | Auto | Web | GPUIX | Full mismatch | Region mismatch | Differences seen |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
 | `rail.project-list` Project list and switching | rail | ported | ported | 7/7 | 7/7 | 5.7% / 0.97% | 3.2% / 0.66% | Same layout and order; switching to beta works by click. The status-bar connection lamp is a filled dot as on the web (C7 fixed in G3: fill-current fills the icon), 1 px higher. |
-| `rail.project-menu` Project context menu | rail | ported | partial | 3/3 | 3/3 | 7.3% / 1.36% | 10.7% / 4.47% | Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete. The menu sits 2 px left of the web one, so every glyph shows in the region diff (4.97% perceptual). |
+| `rail.project-menu` Project context menu | rail | ported | ported | 3/3 | 3/3 | 7.1% / 1.18% | 7.5% / 1.75% | Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete, at the same place (G3: the menu opens 2 px right of the pointer as Radix's sideOffset does, and a row's " Label" text after its icon no longer keeps its leading space, which had pushed every label 3 px right). Under the open menu GPUIX keeps the hovered beta row's gear and shortcut; the web hides them, since a modal Radix menu turns pointer events off on the page. |
 | `rail.project-rename` Rename a project | rail | ported | ported | 8/8 | 8/8 | 6.6% / 1.10% | 6.1% / 0.80% | Rename from the context menu edits the row in place and Enter saves gamma-renamed in both. |
 | `rail.project-remove` Remove a project | rail | ported | ported | 6/6 | 6/6 | 6.2% / 1.11% |  | Delete from the context menu asks for confirmation and removes delta in both. The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable. |
 | `rail.project-colour` Project colour picker | rail | ported | ported | 4/4 | 4/4 | 7.3% / 1.09% |  | Change Color opens the Select Color popover with the same nine swatches and the current one ringed. |
@@ -336,7 +336,7 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
 | `rail.project-settings` Project settings modal | rail | partial | ported | 5/5 | 5/5 | 30.7% / 0.70% |  | The gear opens Project settings on General with the same fields in both. The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable. |
 | `side.chats` Chats tab with a chat card | side-panel | ported | ported | 2/2 | 2/2 | 6.1% / 1.06% | 1.5% / 0.62% | The card title, agent, branch and age match; with more chats the cards stack one per row (G2 native ChatsList). |
 | `side.chats-search` Search chats | side-panel | ported | ported | 7/7 | 7/7 | 6.1% / 1.09% |  | Filtering to no match and back matches, including the No matches. text. |
-| `side.chat-card-menu` Chat card context menu | side-panel | ported | ported | 5/5 | 5/5 | 7.4% / 1.29% |  | Right-click on a chat card opens the same five-row menu with Delete Chat in red. |
+| `side.chat-card-menu` Chat card context menu | side-panel | ported | ported | 5/5 | 5/5 | 7.2% / 1.10% |  | Right-click on a chat card opens the same five-row menu with Delete Chat in red. |
 | `side.workspace-switcher` Workspace (worktree) switcher | side-panel | ported | ported | 3/3 | 3/3 | 7.5% / 1.10% |  | The Working copies popover matches; GPUIX omits the small terminal glyph on the web row hover. |
 | `side.hide` Hide and show the side panel | side-panel | ported | ported | 3/3 | 3/3 | 5.8% / 0.88% |  | Side panel hides; the expand chevron sits in the same place. |
 | `explorer.tree` File tree | explorer | ported | ported | 6/6 | 6/6 | 6.2% / 1.06% |  | Tree, git colours and status letters match. |
@@ -480,7 +480,7 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-miss`: click input[placeholder^="Search chats"] (web ok; gpuix ok via web-point); type "zzz-no-match" (web ok; gpuix ok via key); gone "How does the web client decide which routes rend": web pass, gpuix pass
   - `c-hit`: press ctrl-a (web ok; gpuix ok via key); type "routes" (web ok; gpuix ok via key); present "How does the web client decide which routes rend": web pass, gpuix pass
-- `side.chat-card-menu` (frames `/root/termul-wt/gpuix-g1/apps/gpuix/parity-out/matrix/side-chat-card-menu/`):
+- `side.chat-card-menu` (frames `/root/termul-wt/gpuix-g3/apps/gpuix/parity-out/matrix/side-chat-card-menu/`):
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-menu`: right-click "How does the web client decide which routes rend" (web ok; gpuix ok via text); present "Open in split": web pass, gpuix pass; present "Copy Path": web pass, gpuix pass; present "Delete Chat": web pass, gpuix pass
 - `side.workspace-switcher` (frames `/root/termul-wt/gpuix-m1/apps/gpuix/parity-out/matrix/side-workspace-switcher/`):
@@ -496,7 +496,7 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-tree`: click "Explorer" (web ok; gpuix ok via text); present "src": web pass, gpuix pass
   - `c-expanded`: click "src" (web ok; gpuix ok via text); present "app.ts": web pass, gpuix pass; present "utils.ts": web pass, gpuix pass
-- `explorer.context-menu` (frames `/root/termul-wt/gpuix-g1/apps/gpuix/parity-out/matrix/explorer-context-menu/`):
+- `explorer.context-menu` (frames `/root/termul-wt/gpuix-g3/apps/gpuix/parity-out/matrix/explorer-context-menu/`):
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-tree`: click "Explorer" (web ok; gpuix ok via text); present "README.md": web pass, gpuix pass
   - `c-menu`: right-click "README.md" (web ok; gpuix ok via text); present "Rename": web pass, gpuix pass; present "Delete": web pass, gpuix pass

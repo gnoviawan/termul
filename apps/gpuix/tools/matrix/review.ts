@@ -45,7 +45,8 @@ export const REVIEWS: Record<string, Review> = {
   'rail.project-menu': {
     status: 'ported',
     differences: [
-      'Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete. The menu sits 2 px left of the web one, so every glyph shows in the region diff (4.97% perceptual).'
+      'Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete, at the same place (G3: the menu opens 2 px right of the pointer as Radix\'s sideOffset does, and a row\'s " Label" text after its icon no longer keeps its leading space, which had pushed every label 3 px right).',
+      'Under the open menu GPUIX keeps the hovered beta row\'s gear and shortcut; the web hides them, since a modal Radix menu turns pointer events off on the page.'
     ]
   },
   'rail.project-rename': {
