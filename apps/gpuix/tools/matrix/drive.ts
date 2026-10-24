@@ -43,7 +43,7 @@ export function describe(action: Action): string {
     case 'hover':
       return `${action.do} ${target(action.target)}`
     case 'press':
-      return `press ${action.keys}`
+      return action.gpuixKeys ? `press ${action.keys} (GPUIX ${action.gpuixKeys})` : `press ${action.keys}`
     case 'type':
       return `type "${action.text}"`
     case 'wheel':
@@ -395,7 +395,7 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11
           }
           case 'press':
             log.via = 'key'
-            await app.call('keystrokes', { keys: action.keys })
+            await app.call('keystrokes', { keys: action.gpuixKeys ?? action.keys })
             break
           case 'type':
             log.via = 'key'

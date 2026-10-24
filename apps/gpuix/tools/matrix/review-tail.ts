@@ -129,10 +129,14 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: ['Ctrl+Alt+T opens the Color Themes popover in both.']
   },
   'shortcuts.zoom-in': {
-    status: 'ported',
+    status: 'partial',
     differences: [
-      'Zoom scales the whole GPUIX window (G4, shims/window-zoom.ts) on the desktop key, Ctrl+=: tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both clients, a real click and a context menu land where the zoomed UI paints, and Ctrl+0 restores the frame exactly. This surface still presses the web key (Alt+=), which the GPUIX desktop keymap leaves unbound, so its GPUIX frame shows no zoom; the steps need a per-client key.'
-    ]
+      'Each client presses its own key (G3: the web Alt+=, GPUIX the desktop Ctrl+= from G4\'s keymap), and both zoom: the rail and sidebar widen alike (G4, shims/window-zoom.ts; tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both).',
+      'The zoomed web page runs past the window bottom, so its status bar is cut off and the dashboard heading sits 25 px lower; GPUIX keeps the status bar in the window.'
+    ],
+    cause: 'needs diagnosis',
+    unit: 'web zoom overflow (unassigned)',
+    impact: 1
   },
 
   'shortcuts.desktop-keymap': {
@@ -282,7 +286,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'shortcuts.settings-shortcut': {
     status: 'ported',
     differences: [
-      'Alt+, opens Preferences on the web and Escape closes it. GPUIX takes the desktop key, Ctrl+, (G4 desktop keymap; workspace-checks asserts it opens and Escape closes); this surface still presses Alt+,, so its GPUIX steps need a per-client key.'
+      'Each client presses its own key (G3): Alt+, on the web and the desktop Ctrl+, in GPUIX (G4 keymap) open Preferences, and Escape closes it in both.'
     ]
   },
 
