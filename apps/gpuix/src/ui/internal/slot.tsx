@@ -20,7 +20,7 @@ import {
 } from 'react'
 import { cn } from '@/lib/utils'
 import { domSource } from '../../compat/create'
-import { type CompatElement, decorateInstance, trackedInstance } from '../../compat/dom-node'
+import { CompatElement, decorateInstance, trackedInstance } from '../../compat/dom-node'
 import { cloneElement as cloneDomElement } from '../../compat/react'
 import { mergeRefs } from './host'
 
@@ -62,8 +62,27 @@ function domChildRef(
 ): (node: CompatElement | null) => void {
   return (node) => {
     mergeRefs(childRef)(node)
-    const instance = node ? trackedInstance(node.elementId) : undefined
-    mergeRefs(slotRef)(instance ? (decorateInstance(instance) as unknown as PublicInstance) : null)
+    mergeRefs(slotRef)(instanceOf(node))
+  }
+}
+
+function instanceOf(node: CompatElement | null): PublicInstance | null {
+  const instance = node ? trackedInstance(node.elementId) : undefined
+  return instance ? (decorateInstance(instance) as unknown as PublicInstance) : null
+}
+
+/**
+ * A component child (`<ComposerPill>`) may forward its ref to a shared DOM
+ * element, which hands it a compat node; the primitive still needs the GPUIX
+ * instance to portal into and to return focus to.
+ */
+function componentChildRef(
+  childRef: Ref<PublicInstance> | undefined,
+  slotRef: Ref<PublicInstance>
+): (node: PublicInstance | CompatElement | null) => void {
+  return (node) => {
+    mergeRefs(childRef)(node as PublicInstance | null)
+    mergeRefs(slotRef)(node instanceof CompatElement ? instanceOf(node) : node)
   }
 }
 
@@ -75,11 +94,15 @@ export const Slot = forwardRef<PublicInstance, AnyProps & { children?: unknown }
   const source = domSource.get(children)
   const childRef = (source ? source.props.ref : elementRef(children)) as Ref<unknown> | undefined
   const domRef = useMemo(() => domChildRef(childRef, ref), [childRef, ref])
+  const componentRef = useMemo(
+    () => componentChildRef(childRef as Ref<PublicInstance> | undefined, ref),
+    [childRef, ref]
+  )
   const merged = mergeSlotProps(props, (source?.props ?? children.props) as AnyProps)
   if (source) {
     merged.ref = domRef
     return cloneDomElement(children, merged)
   }
-  merged.ref = mergeRefs(childRef as Ref<PublicInstance> | undefined, ref)
+  merged.ref = componentRef
   return cloneElement(children, merged)
 })
