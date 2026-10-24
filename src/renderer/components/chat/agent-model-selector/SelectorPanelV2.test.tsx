@@ -8,7 +8,12 @@ import type { SessionConfigOption } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { SelectorPanel } from './SelectorPanel'
 import { SelectorPanelV2, type SelectorPanelV2Props } from './SelectorPanelV2'
-import type { ModelCatalog } from './selector-model'
+import {
+  AGENT_TRACK,
+  AGENT_TRACK_CLASS,
+  agentTrackCapacity,
+  type ModelCatalog
+} from './selector-model'
 import type { SelectorSource } from './selector-source'
 
 // jsdom omits `document.elementFromPoint`; floating-ui calls it.
@@ -788,6 +793,24 @@ describe('SelectorPanelV2 agent order and overflow', () => {
     const at = names.map((n) => text.indexOf(n))
     expect(at.every((i) => i >= 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
+  })
+
+  it('renders exactly agentTrackCapacity rail tabs (9 + More), sized by the classes the capacity reads', () => {
+    render(<Panel {...props({ agentRail: 'left', source: many() })} />)
+    const capacity = agentTrackCapacity({ rail: 'left', touch: false, width: null })
+    expect(capacity).toBe(10)
+    const rail = screen.getByRole('tablist', { name: 'Agents' })
+    const tabs = within(rail).getAllByRole('tab')
+    expect(tabs).toHaveLength(capacity)
+    expect(tabs.at(-1)).toHaveAccessibleName('More agents')
+    // The px behind the capacity are the classes on screen: 288 / 8 / 28.
+    expect(AGENT_TRACK).toMatchObject({ listMaxHeight: 288, railPadding: 8, railPitch: 28 })
+    expect(rail.className.split(' ')).toContain(AGENT_TRACK_CLASS.railPadding)
+    expect(AGENT_TRACK_CLASS.railPadding).toBe('py-1')
+    for (const tab of tabs) expect(tab.className.split(' ')).toContain('size-7')
+    expect(AGENT_TRACK_CLASS.railTab).toBe('size-7')
+    expect(screen.getByTestId('selector-list').className.split(' ')).toContain('max-h-72')
+    expect(AGENT_TRACK_CLASS.listMaxHeight).toBe('max-h-72')
   })
 
   it('shows no More when every agent fits', () => {

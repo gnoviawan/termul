@@ -30,6 +30,7 @@ import {
   TabGlyph
 } from './SelectorRows'
 import {
+  AGENT_TRACK_CLASS,
   type AgentTab,
   agentTrackCapacity,
   type CatalogModel,
@@ -227,7 +228,8 @@ function AgentTabStrip({
           ? // `box-content`: the hairline sits outside the 40px (56px touch) column,
             // so a 28px (44px) tab has 6px on each side and its centre is the rail's.
             cn(
-              'box-content shrink-0 flex-col items-center border-r border-border py-1',
+              'box-content shrink-0 flex-col items-center border-r border-border',
+              AGENT_TRACK_CLASS.railPadding,
               touch ? 'w-14' : 'w-10'
             )
           : cn('border-b border-border', touch ? 'px-3' : 'px-1')
@@ -250,7 +252,7 @@ function AgentTabStrip({
             vertical
               ? // A square as tall as a list row (28px), so each icon sits on the
                 // list's row grid; 6px radius like the rows.
-                cn('rounded-md', touch ? 'size-11' : 'size-7')
+                cn('rounded-md', touch ? AGENT_TRACK_CLASS.railTabTouch : AGENT_TRACK_CLASS.railTab)
               : cn('flex-1 rounded-t-md', touch ? 'h-11' : 'h-8'),
             // Icons keep their colour (brand or foreground); state reads from
             // the icon's opacity, as the active fill alone is too faint.
@@ -828,7 +830,12 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           animate={{ opacity: 1 }}
           transition={quick(reduced)}
           onKeyDown={onListKeyDown}
-          className={cn('max-h-72 min-w-0 flex-1 overflow-y-auto overscroll-contain', pad, 'py-1')}
+          className={cn(
+            AGENT_TRACK_CLASS.listMaxHeight,
+            'min-w-0 flex-1 overflow-y-auto overscroll-contain',
+            pad,
+            'py-1'
+          )}
         >
           {body}
         </motion.div>

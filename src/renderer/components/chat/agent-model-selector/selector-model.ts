@@ -294,15 +294,34 @@ export function tabTrackCapacity(length: number, pitch: number, padding = 0): nu
   return Math.max(1, Math.floor((length - padding) / pitch))
 }
 
-/** V2 track geometry, in px. Keep in step with SelectorPanelV2's classes. */
+/**
+ * The rail's Tailwind classes, the one source for its geometry: SelectorPanelV2
+ * renders these and AGENT_TRACK derives its px from them.
+ */
+export const AGENT_TRACK_CLASS = {
+  /** The list's height cap; the rail runs beside it. */
+  listMaxHeight: 'max-h-72',
+  /** The rail's top and bottom inset. */
+  railPadding: 'py-1',
+  /** Rail tabs are squares, as tall as a list row. */
+  railTab: 'size-7',
+  railTabTouch: 'size-11'
+} as const
+
+/** px of a class on Tailwind's default 4px spacing scale: `size-7` is 28. */
+export function spacingPx(className: string): number {
+  const step = Number(className.slice(className.lastIndexOf('-') + 1))
+  if (!Number.isFinite(step)) throw new Error(`Not a spacing class: ${className}`)
+  return step * 4
+}
+
+/** V2 track geometry, in px. */
 export const AGENT_TRACK = {
-  /** The list's `max-h-72`; the rail runs beside it. */
-  listMaxHeight: 288,
-  /** The rail's `py-1`. */
-  railPadding: 8,
-  /** Rail tabs are squares: `size-7`, `size-11` on touch. */
-  railPitch: 28,
-  railPitchTouch: 44,
+  listMaxHeight: spacingPx(AGENT_TRACK_CLASS.listMaxHeight),
+  /** `py-*` insets both ends. */
+  railPadding: 2 * spacingPx(AGENT_TRACK_CLASS.railPadding),
+  railPitch: spacingPx(AGENT_TRACK_CLASS.railTab),
+  railPitchTouch: spacingPx(AGENT_TRACK_CLASS.railTabTouch),
   /** The desktop panel's `w-75`, less the strip's `px-1`. */
   stripWidth: 300,
   stripPadding: 8,

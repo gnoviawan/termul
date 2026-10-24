@@ -15,6 +15,7 @@ import {
   modelMatches,
   orderAgentTabs,
   resolveFavorites,
+  spacingPx,
   splitAgentTabs,
   splitContextOption,
   stableAgentTabs
@@ -483,5 +484,18 @@ describe('favorites', () => {
       (id) => (id === 'a' ? catalog : null)
     )
     expect(result.map((f) => f.model.name)).toEqual(['Haiku', 'Opus'])
+  })
+})
+
+describe('spacingPx', () => {
+  it('reads the 4px Tailwind spacing step', () => {
+    expect(spacingPx('max-h-72')).toBe(288)
+    expect(spacingPx('size-7')).toBe(28)
+    expect(spacingPx('size-11')).toBe(44)
+    expect(spacingPx('py-1')).toBe(4)
+  })
+
+  it('throws on a class with no spacing step', () => {
+    expect(() => spacingPx('max-h-full')).toThrow('Not a spacing class')
   })
 })
