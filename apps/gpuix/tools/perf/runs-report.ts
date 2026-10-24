@@ -61,7 +61,7 @@ for (const r of runs) {
         .slice(0, 80)
     )
   )
-  const errors = r.errors.length ? `${r.errors.length}: ${[...kinds].join('; ')}` : 'none'
+  const errors = r.errors.length ? `${r.errors.length} errors: ${[...kinds].join('; ')}` : 'none'
   console.log(
     `| ${m.run} | ${m.scenario} | ${m.client} | ${m.status} | ${m.preRunBusyPct}% | ${m.quietWaitS} s | ${m.load1Before.toFixed(1)} | ${r.metrics['measure.machine.foreignCpuPct'] ?? 'n/a'}% | ${errors} |`
   )
@@ -141,6 +141,9 @@ function erfc(x: number): number {
   return x >= 0 ? e : 2 - e
 }
 
+/** Measured before the first chat starts streaming in more than one chat: valid in a run that crashed later. */
+const beforeCrash = (key: string) => key.startsWith('warmup.') || key === 'chat.firstStartMs'
+
 const COMPARE: Record<string, string[]> = {
   idle: [
     'startup.projectListMs',
@@ -150,6 +153,9 @@ const COMPARE: Record<string, string[]> = {
   ],
   'stream-storm': [
     'chat.firstStartMs',
+    'warmup.screen.fps',
+    'warmup.proc.total.pssMedianMB',
+    'warmup.proc.total.cpuMeanPct',
     'chat.startUnderLoadP50Ms',
     'chat.typeUnderLoadP50Ms',
     'chat.openUnderLoadP50Ms',
@@ -173,7 +179,9 @@ const COMPARE: Record<string, string[]> = {
 const clients = [...new Set(runs.map((r) => r.meta.client))]
 if (clients.length === 2) {
   const [a, b] = clients
-  console.log(`\n### ${a} against ${b}, ok runs, exact two-sided rank-sum p\n`)
+  console.log(
+    `\n### ${a} against ${b}, ok runs (all runs for keys measured before any crash), two-sided rank-sum p\n`
+  )
   console.log(`| Scenario | Key | ${a} runs | ${b} runs | p |`)
   console.log('|---|---|---|---|---|')
   // Startup comes before any scenario step, so every run of every scenario counts.
@@ -189,15 +197,18 @@ if (clients.length === 2) {
     )
   }
   for (const [scenario, keys] of Object.entries(COMPARE)) {
-    const ok = (client: string) =>
-      runs.filter(
-        (r) => r.meta.scenario === scenario && r.meta.client === client && r.meta.status === 'ok'
-      )
-    const [ra, rb] = [ok(a), ok(b)]
-    if (!ra.length || !rb.length) continue
+    const of = (client: string, key: string) =>
+      runs
+        .filter(
+          (r) =>
+            r.meta.scenario === scenario &&
+            r.meta.client === client &&
+            (r.meta.status === 'ok' || beforeCrash(key))
+        )
+        .map((r) => r.metrics[key])
+        .filter((v) => v !== undefined)
     for (const key of keys) {
-      const va = ra.map((r) => r.metrics[key]).filter((v) => v !== undefined)
-      const vb = rb.map((r) => r.metrics[key]).filter((v) => v !== undefined)
+      const [va, vb] = [of(a, key), of(b, key)]
       if (!va.length || !vb.length) continue
       const p = rankSumP(va, vb)
       console.log(
