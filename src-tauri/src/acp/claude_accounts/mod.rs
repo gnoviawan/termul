@@ -23,8 +23,8 @@ use super::atomic_file;
 /// Id of the built-in Account that uses the shared Claude config directory.
 pub const BUILTIN_ACCOUNT_ID: &str = "default";
 const BUILTIN_ACCOUNT_NAME: &str = "Default";
-const STORE_FILE_NAME: &str = "claude-accounts.json";
-const ACCOUNTS_DIR_NAME: &str = "claude-accounts";
+pub(crate) const STORE_FILE_NAME: &str = "claude-accounts.json";
+pub(crate) const ACCOUNTS_DIR_NAME: &str = "claude-accounts";
 const SCHEMA_VERSION: u32 = 1;
 const MAX_NAME_CHARS: usize = 40;
 

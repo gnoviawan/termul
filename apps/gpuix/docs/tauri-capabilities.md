@@ -231,7 +231,9 @@ Both features act with the host user's own credentials, so the peer address is n
 3. The upgrade request has no `Forwarded`, `X-Forwarded-For`, `X-Real-IP` or `CF-Connecting-IP` header.
 4. The client presented the host-local credential. termul-server writes a fresh one to `<state dir>/host-local.token` (mode 0600) at each start.
 
-The GPUIX launcher spawns the server on the app's data dir, so `main.tsx` passes `BootOptions.hostLocalToken`, a reader of that file, and the renderer presents it at each handshake (`lib/web-auth-token.ts` `setHostLocalTokenSource`). A browser never has the file, so a browser tab, local or not, is never `hostLocal`. When the app attaches to a server through `TERMUL_SERVER_URL`, it does not present the credential. An IPv4-mapped loopback peer (`::ffff:127.0.0.1`) is not loopback to `is_loopback()`, so such a client is refused (fails closed).
+The GPUIX launcher spawns the server on the app's data dir, so `main.tsx` passes `BootOptions.hostLocalToken`, a reader of that file, and the renderer presents it at each handshake (`lib/web-auth-token.ts` `setHostLocalTokenSource`). An honest browser tab never reads the file, so a browser tab, local or not, is not `hostLocal`. No `/fs/*`, `/search/*` or `fs` watch route serves the file, the bearer-token file or the Claude Account store (`web/host_secrets.rs`). When the app attaches to a server through `TERMUL_SERVER_URL`, it does not present the credential. An IPv4-mapped loopback peer (`::ffff:127.0.0.1`) is not loopback to `is_loopback()`, so such a client is refused (fails closed).
+
+This guards honest browsers, not bearer-token holders. The token opens a terminal that runs as the server's user, and that shell can read `host-local.token`. A real boundary would need the peer's credentials on a Unix socket (`SO_PEERCRED`), which termul-server does not have.
 
 ### Streaming content search
 

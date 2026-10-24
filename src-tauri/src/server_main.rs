@@ -122,6 +122,10 @@ fn main() -> ExitCode {
         }
     };
 
+    // No file route serves the credentials these dirs hold (`web::host_secrets`).
+    termul_manager_lib::web::host_secrets::protect_state_dir(&data_paths.state_dir);
+    termul_manager_lib::web::host_secrets::protect_state_dir(&cfg.service_account_state_dir());
+
     // QA remediation Story 1 (CAP-1 interim): resolve the web auth gate
     // BEFORE any binding/serving setup. Fail-closed: a public bind whose
     // token can be neither resolved nor persisted aborts here with an

@@ -567,3 +567,37 @@ async fn the_ended_notice_is_delivered_once_a_full_queue_has_room() {
     assert_eq!(payload["ended"], json!(true));
     assert_eq!(watches.subscriber_count(WatchKind::Fs, "p-gone"), 0);
 }
+
+#[tokio::test]
+async fn fs_deltas_never_name_a_credential_file() {
+    let dir = temp_project_dir("cred");
+    crate::web::host_secrets::protect_state_dir(&dir);
+    let registry = registry_with(&[("p-cred", &dir)]);
+    let hub = FsWatchHub::default();
+    let watches = Arc::new(WatchHub::new());
+    let (watching, mut rx) = conn();
+    subscribe_fs(&hub, &watches, &registry, "p-cred", &watching).unwrap();
+    assert!(hub.wait_armed("p-cred", ARM_WAIT).await, "watcher armed");
+
+    std::fs::write(dir.join(crate::web::host_local::HOST_LOCAL_TOKEN_FILE), "c").unwrap();
+    std::fs::write(dir.join("after.txt"), "x").unwrap();
+
+    let mut seen: Vec<String> = Vec::new();
+    while !seen.iter().any(|p| p.ends_with("/after.txt")) {
+        let payload = next_fs_changed(&mut rx, Duration::from_secs(10))
+            .await
+            .expect("the ordinary write arrives");
+        seen.extend(
+            payload["paths"]
+                .as_array()
+                .expect("paths")
+                .iter()
+                .filter_map(|p| p.as_str().map(str::to_owned)),
+        );
+    }
+    assert!(
+        !seen.iter().any(|p| p.contains("host-local.token")),
+        "credential path leaked: {seen:?}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
