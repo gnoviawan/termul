@@ -4,17 +4,16 @@
  * The web list is a TanStack virtualizer inside the MessageScroller engine
  * (DOM scroll element, ResizeObserver, scrollTop arithmetic). Here the rows
  * go into GPUIX's `<virtual-list>`, which measures rows natively, builds only
- * the rows near the viewport, and follows the tail on its own
- * (`alignment="bottom" followTail`). The data path is the web's: the same
+ * the rows near the viewport, and follows the tail on its own (`followTail`).
+ * The list is top-aligned like the web's scroll element, so a transcript
+ * shorter than the pane starts at the top. The data path is the web's: the same
  * turn grouping, identity stabilisation and row components.
  *
  * Agent replies span one row per block (`AgentReplyRows`), so GPUI lays out
  * only the blocks near the viewport while a reply streams.
  *
- * Follow state comes from `getListScrollTop`, read after each list scroll: a
- * bottom-aligned list resting at its end reports the at-end sentinel (index
- * === host row count). Anywhere else the reader has scrolled away, so the
- * jump-to-latest button shows.
+ * Follow state comes from the list's scroll event: with the last row out of
+ * view the reader has scrolled away, so the jump-to-latest button shows.
  */
 
 import { type PublicInstance, useGpuixRequired } from '@gpuix/react'
@@ -47,8 +46,10 @@ import { RowCountContext, RowShell } from '../../../chat/row-shell'
 import { log } from '../../../log'
 import { tw } from '../../../style/tw'
 
-/** Delay from a list scroll to reading its anchor, so a queued `scrollToItem` has applied. */
-const FOLLOW_READ_DELAY_MS = 120
+/** Quiet time after the last scroll event before the follow state is measured. */
+const SETTLE_MS = 120
+/** How far below the list's box the end sentinel may paint and still count as the live edge. */
+const END_SLACK_PX = 4
 
 type ListAnchor = [index: number, offset: number]
 
@@ -218,13 +219,17 @@ function JumpToLatest({ newCount, onJump }: { newCount: number; onJump: () => vo
 /**
  * Follow state of a native list: pinned at the live edge, or the reader's anchor.
  *
- * The anchor is read once after the list reports a scroll (`onVisibleRange`
- * fires for the wheel and for `scrollToItem`), never on a timer: a mounted
- * transcript nobody scrolls costs nothing, and a hidden one never asks the
- * UI thread. A read that times out (`native-guard.ts`) keeps the last state.
+ * Read once a scroll settles (`onVisibleRange` fires for the wheel and for
+ * `scrollToItem`), never on a timer, so a transcript nobody scrolls asks the
+ * UI thread nothing. The event's own range is the frame before the scroll,
+ * so the live edge is measured instead: pinned while the end sentinel row
+ * paints inside the list's box. Reads that time out (`native-guard.ts`) keep
+ * the last state.
  */
 function useListFollow(
   listRef: React.RefObject<PublicInstance | null>,
+  boxRef: React.RefObject<PublicInstance | null>,
+  endRef: React.RefObject<PublicInstance | null>,
   hostRows: () => number,
   sessionId: SessionId
 ) {
@@ -233,27 +238,33 @@ function useListFollow(
   const anchorRef = useRef<ListAnchor | null>(null)
   const countRef = useRef(hostRows)
   countRef.current = hostRows
-  const readTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const read = useCallback(() => {
-    readTimer.current = null
+  const readAnchor = useCallback((): ListAnchor | null => {
     const id = listRef.current?.id
-    if (id === undefined) return
-    const top = renderer.getListScrollTop?.(id)
-    if (!top) return
-    const atEnd = top[0] >= countRef.current()
-    anchorRef.current = atEnd ? null : [top[0], top[1]]
-    setPinned(atEnd)
+    const top = id === undefined ? null : renderer.getListScrollTop?.(id)
+    return top ? [top[0], top[1]] : null
   }, [renderer, listRef])
 
-  /** Called on every list scroll; reads the anchor once the scroll has been applied. */
+  const settle = useCallback(() => {
+    settleTimer.current = null
+    const box = boxRef.current && renderer.getElementBounds?.(boxRef.current.id)
+    const end = endRef.current && renderer.getElementBounds?.(endRef.current.id)
+    if (!box) return
+    const atEnd = !!end && end.y <= box.y + box.height + END_SLACK_PX
+    anchorRef.current = atEnd ? null : (readAnchor() ?? anchorRef.current)
+    setPinned(atEnd)
+  }, [renderer, boxRef, endRef, readAnchor])
+
+  /** Called on every list scroll; measures once the gesture has settled. */
   const onScrolled = useCallback(() => {
-    if (readTimer.current === null) readTimer.current = setTimeout(read, FOLLOW_READ_DELAY_MS)
-  }, [read])
+    if (settleTimer.current !== null) clearTimeout(settleTimer.current)
+    settleTimer.current = setTimeout(settle, SETTLE_MS)
+  }, [settle])
 
   useEffect(
     () => () => {
-      if (readTimer.current !== null) clearTimeout(readTimer.current)
+      if (settleTimer.current !== null) clearTimeout(settleTimer.current)
     },
     []
   )
@@ -283,7 +294,55 @@ function useListFollow(
     setPinned(true)
   }, [renderer, listRef])
 
-  return { pinned, jumpToLatest, onScrolled }
+  return { pinned, jumpToLatest, onScrolled, readAnchor }
+}
+
+/**
+ * Older history, loaded only on reader intent: scrolled away and at the first
+ * row. A top-aligned list resting at its very top shows rows spliced in above
+ * it, as a browser does, so the reader's row is put back under them once
+ * they commit, as the web list does with `scrollTop`.
+ */
+function useOlderHistory(
+  listRef: React.RefObject<PublicInstance | null>,
+  hostRows: () => number,
+  sessionId: SessionId,
+  readAnchor: () => ListAnchor | null
+) {
+  const renderer = useGpuixRequired()
+  const loading = useRef(false)
+  const pending = useRef<{ rows: number; anchor: ListAnchor; sessionId: SessionId } | null>(null)
+
+  const loadOlder = useCallback(() => {
+    if (loading.current) return
+    const anchor = readAnchor()
+    if (!anchor) return
+    loading.current = true
+    pending.current = { rows: hostRows(), anchor, sessionId }
+    void useAcpStore
+      .getState()
+      .loadOlderMessages(sessionId, 50)
+      .finally(() => {
+        loading.current = false
+      })
+  }, [hostRows, sessionId, readAnchor])
+
+  const rows = hostRows()
+  useLayoutEffect(() => {
+    const prepend = pending.current
+    const id = listRef.current?.id
+    if (!prepend || id === undefined) return
+    if (prepend.sessionId !== sessionId) {
+      pending.current = null
+      return
+    }
+    const added = rows - prepend.rows
+    if (added <= 0) return
+    pending.current = null
+    renderer.scrollToItem?.(id, prepend.anchor[0] + added, prepend.anchor[1])
+  }, [rows, sessionId, renderer, listRef])
+
+  return loadOlder
 }
 
 /** Items appended while the reader is away from the live edge. */
@@ -335,6 +394,8 @@ export function ChatMessageList({
       : null
 
   const listRef = useRef<PublicInstance | null>(null)
+  const boxRef = useRef<PublicInstance | null>(null)
+  const endRef = useRef<PublicInstance | null>(null)
   const count = stableItems.length
   const rowCounts = useRef(new Map<string, number>()).current
   const itemsRef = useRef(stableItems)
@@ -343,7 +404,13 @@ export function ChatMessageList({
     () => itemsRef.current.reduce((sum, item) => sum + (rowCounts.get(item.key) ?? 1), 0),
     [rowCounts]
   )
-  const { pinned, jumpToLatest, onScrolled } = useListFollow(listRef, hostRows, sessionId)
+  const { pinned, jumpToLatest, onScrolled, readAnchor } = useListFollow(
+    listRef,
+    boxRef,
+    endRef,
+    hostRows,
+    sessionId
+  )
   const newCount = useUnread(count, pinned)
 
   useEffect(() => {
@@ -351,21 +418,14 @@ export function ChatMessageList({
     useAcpStore.getState?.()?.clearSessionBackfill?.(sessionId)
   }, [pinned, sessionId])
 
-  // Older history loads only on reader intent: scrolled away and at the first row.
-  const loadingOlderRef = useRef(false)
+  const loadOlder = useOlderHistory(listRef, hostRows, sessionId, readAnchor)
   const onVisibleRange = useCallback(
     (event: { startIndex?: number }) => {
       onScrolled()
-      if ((event.startIndex ?? 1) > 0 || pinned || loadingOlderRef.current || count === 0) return
-      loadingOlderRef.current = true
-      void useAcpStore
-        .getState()
-        .loadOlderMessages(sessionId, 50)
-        .finally(() => {
-          loadingOlderRef.current = false
-        })
+      if ((event.startIndex ?? 1) > 0 || pinned || count === 0) return
+      loadOlder()
     },
-    [pinned, count, sessionId, onScrolled]
+    [onScrolled, pinned, count, loadOlder]
   )
 
   if (items.length === 0 && !showRunningIndicator) {
@@ -387,11 +447,10 @@ export function ChatMessageList({
   })
 
   return (
-    <div style={tw('relative flex min-h-0 flex-1 flex-col')} testId="chat-transcript">
+    <div ref={boxRef} style={tw('relative flex min-h-0 flex-1 flex-col')} testId="chat-transcript">
       <virtual-list
         ref={listRef}
         testId="chat-transcript-list"
-        alignment="bottom"
         followTail
         estimatedItemHeight={120}
         onVisibleRange={onVisibleRange}
@@ -440,6 +499,7 @@ export function ChatMessageList({
             )
           })}
         </RowCountContext.Provider>
+        <div key="__end" ref={endRef} style={{ height: 1 }} />
       </virtual-list>
       <div style={fade('top')} />
       <div style={fade('bottom')} />

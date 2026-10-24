@@ -377,7 +377,9 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11
           case 'wheel': {
             const { point, via } = await resolve(action.target, key)
             log.via = via
-            await app.mouse.wheel(point, 0, action.deltaY)
+            // Surfaces give DOM `deltaY` (negative scrolls up); a GPUI wheel
+            // delta is the content's motion (positive scrolls up).
+            await app.mouse.wheel(point, 0, -action.deltaY)
             break
           }
           case 'drag': {
