@@ -59,6 +59,8 @@ export interface ClientDriver {
    * until the chat tab existed and the launcher closed.
    */
   chatStartParts(): ChatStartPart[]
+  /** The client's own crash report, when it replaced its UI with one; else null. */
+  crashed(): Promise<string | null>
   /** In-page metrics, when the client is a web page; null otherwise. */
   beginPhase(name: string): Promise<void>
   endPhase(name: string): Promise<PageMetrics | null>

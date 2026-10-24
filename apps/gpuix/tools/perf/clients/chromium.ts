@@ -171,6 +171,7 @@ export function chromiumDriver(handle: ChromiumHandle): ClientDriver {
       titles.push(prompt)
     },
     chatStartParts: () => parts,
+    crashed: async () => null,
     chatCount: () => page.locator(CHAT_TAB).count(),
     switchToChat: async (index) => {
       const title = titles[index % titles.length]

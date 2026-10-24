@@ -268,6 +268,8 @@ async function runOnce(
   } catch (err) {
     errors.push(`fatal: ${err instanceof Error ? err.stack : String(err)}`)
   } finally {
+    const crash = await driver?.crashed().catch(() => null)
+    if (crash) errors.push(`fatal: app crashed: ${crash}`)
     if (sampler) {
       clientSamples = sampler.stop()
       processes = sampler.processes()
@@ -450,10 +452,12 @@ async function main() {
     writeFileSync(path.join(dirOf(client), 'aggregate.json'), JSON.stringify(summary, null, 1))
   }
   // Interleaved: run 1 of every scenario on every client, then run 2, so
-  // drift and other units' load hit every cell alike.
+  // drift and other units' load hit every cell alike. Even runs reverse the
+  // client order, so neither client always goes first.
   for (let run = 1; run <= opts.runs; run++) {
+    const order = run % 2 === 0 ? [...opts.clients].reverse() : opts.clients
     for (const scenario of opts.scenarios) {
-      for (const client of opts.clients) {
+      for (const client of order) {
         console.log(`[perf] ${client} ${scenario} run ${run}/${opts.runs}`)
         const record = await runOnce(opts, client, scenario, run)
         writeFileSync(

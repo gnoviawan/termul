@@ -92,7 +92,7 @@ function vulkanDriver(pid: number): string {
 }
 
 const ACTION_MS = 30_000
-const POLL_MS = 100
+const POLL_MS = 250
 const PROJECT_ROW = 'project-item-perf-project-0001'
 const LAUNCHER_HEADING = `What should we do in ${PERF_PROJECT_NAME}?`
 const COMPOSER_PLACEHOLDER = 'Ask anything… (/ for commands, @ for files)'
@@ -149,6 +149,14 @@ const keysFor = (text: string) => [...text].map((ch) => (ch === ' ' ? 'space' : 
  * still sits in its ordered queue and lands later, before any command sent
  * after it.
  */
+/** The app's top-level error boundary replaces the whole UI with this. */
+function crashReport(root: TreeNode): string | null {
+  const overlay = find(root, byTestId('runtime-error-overlay'))
+  if (!overlay) return null
+  const stack = find(overlay, byTestId('runtime-error-stack'))
+  return (stack ? (stack.children ?? []).map(textOf) : [textOf(overlay)]).join(' | ')
+}
+
 const isUiTimeout = (err: unknown) => /Timed out after 2 seconds waiting for/.test(String(err))
 const queued = (err: unknown) => {
   if (!isUiTimeout(err)) throw err
@@ -172,7 +180,10 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
   const tree = async (): Promise<TreeNode> => {
     for (let attempt = 0; ; attempt++) {
       try {
-        return (await app.call('getTree', {})).tree as TreeNode
+        const root = (await app.call('getTree', {})).tree as TreeNode
+        const crash = crashReport(root)
+        if (crash) throw new Error(`app crashed: ${crash}`)
+        return root
       } catch (err) {
         if (!isUiTimeout(err) || attempt === 5) throw err
       }
@@ -253,8 +264,10 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
         return launcherOpen(root) && contains(root, byTestId('agent-model-selector-trigger'))
       }).then(() => undefined),
     startChat: async (prompt) => {
-      let root = await tree()
-      if (!launcherOpen(root)) {
+      // Under load a click can land on a frame that is about to relayout;
+      // New chat is idempotent, so click again if no launcher shows.
+      for (let attempt = 0; attempt < 3 && !launcherOpen(await tree()); attempt++) {
+        const root = await tree()
         const header = find(
           root,
           (n) =>
@@ -265,15 +278,18 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
         const newChat = header?.children?.[1].children?.[0]
         if (!newChat) throw new Error('no New chat button next to the workspace switcher')
         await click(newChat)
-        root = await until('launcher after New chat', async () => {
-          const r = await tree()
-          return launcherOpen(r) ? r : null
-        })
+        await until(
+          'launcher after New chat',
+          async () => launcherOpen(await tree()),
+          10_000
+        ).catch(() => undefined)
       }
       const picker = await until('launcher agent picker names the perf agent', async () => {
         const r = await tree()
         const trigger = find(r, byTestId('agent-model-selector-trigger'))
-        return trigger && contains(trigger, byText(PERF_AGENT_NAME)) ? r : null
+        return trigger && contains(trigger, byText(PERF_AGENT_NAME)) && launcherComposer(r)
+          ? r
+          : null
       })
       const before = chatCards(picker).length
       const composer = launcherComposer(picker)
@@ -310,6 +326,7 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
       titles.push(prompt)
     },
     chatStartParts: () => parts,
+    crashed: async () => crashReport((await app.call('getTree', {})).tree as TreeNode),
     chatCount: async () => chatCards(await tree()).length,
     switchToChat: async (index) => {
       const title = titles[index % titles.length]
