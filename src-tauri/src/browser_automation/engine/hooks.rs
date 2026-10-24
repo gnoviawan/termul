@@ -40,7 +40,10 @@ pub fn install(builder: WebviewBuilder<Wry>, events: &TabEvents) -> WebviewBuild
     })
 }
 
-/// WebView2 and WKWebView raise downloads per webview through tauri's hook.
+/// WebView2 and WKWebView ask where a download lands through tauri's
+/// hook. Its end is reported by the adapter (`webview2::downloads`,
+/// `wkwebview::downloads`) instead: tauri's report carries only the URL,
+/// which two downloads can share, and no path for a failed one.
 #[cfg(not(target_os = "linux"))]
 fn install_downloads(builder: WebviewBuilder<Wry>, events: &TabEvents) -> WebviewBuilder<Wry> {
     use tauri::webview::DownloadEvent;
@@ -58,10 +61,6 @@ fn install_downloads(builder: WebviewBuilder<Wry>, events: &TabEvents) -> Webvie
                 }
                 None => false,
             }
-        }
-        DownloadEvent::Finished { url, success, .. } => {
-            downloads.download_finished(&url, success);
-            true
         }
         _ => true,
     })

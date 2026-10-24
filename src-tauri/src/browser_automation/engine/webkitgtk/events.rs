@@ -115,7 +115,7 @@ fn take_download(
     };
     let destination = path.to_string_lossy().into_owned();
     let announced = events.clone();
-    let announced_url = url.clone();
+    let announced_path = path.clone();
     download.connect_decide_destination(move |download, _| {
         // The response is in by now: a length past the cap is refused
         // before any byte lands.
@@ -124,7 +124,7 @@ fn take_download(
             received: 0,
             announced: Some(length),
         };
-        if !announced.download_progress(&announced_url, size) {
+        if !announced.download_progress(&announced_path, size) {
             download.cancel();
             return true;
         }
@@ -135,14 +135,14 @@ fn take_download(
     let ended = Rc::new(Cell::new(false));
     let check = {
         let events = events.clone();
-        let url = url.clone();
+        let path = path.clone();
         let ended = ended.clone();
         move |download: &Download| {
             let size = DownloadSize {
                 received: download.received_data_length(),
                 announced: None,
             };
-            if !ended.get() && !events.download_progress(&url, size) {
+            if !ended.get() && !events.download_progress(&path, size) {
                 ended.set(true);
                 download.cancel();
             }
@@ -165,10 +165,9 @@ fn take_download(
     let failed_flag = failed.clone();
     download.connect_failed(move |_, _| failed_flag.set(true));
     let finished = events.clone();
-    let url = url.clone();
     download.connect_finished(move |download| {
         ended.set(true);
         reissued.borrow_mut().retain(|d| d != download);
-        finished.download_finished(&url, !failed.get());
+        finished.download_finished(&path, !failed.get());
     });
 }

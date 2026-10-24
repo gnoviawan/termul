@@ -275,13 +275,13 @@ impl NavPolicy for HopPolicy {
         self.host.upgrade()?.download_starting(tab, url, suggested)
     }
 
-    fn download_progress(&self, tab: &str, url: &Url, size: DownloadSize) -> bool {
-        self.host.upgrade().is_some_and(|host| host.download_progress(tab, url, size))
+    fn download_progress(&self, tab: &str, path: &Path, size: DownloadSize) -> bool {
+        self.host.upgrade().is_some_and(|host| host.download_progress(tab, path, size))
     }
 
-    fn download_finished(&self, tab: &str, url: &Url, success: bool) {
+    fn download_finished(&self, tab: &str, path: &Path, success: bool) {
         if let Some(host) = self.host.upgrade() {
-            host.download_finished(tab, url, success);
+            host.download_finished(tab, path, success);
         }
     }
 }

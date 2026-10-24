@@ -149,14 +149,17 @@ pub trait NavPolicy: Send + Sync {
     fn download_starting(&self, _tab: &str, _url: &Url, _suggested: &Path) -> Option<PathBuf> {
         None
     }
-    /// How far a download the tab holds got. False cancels it: every
+    /// How far the download the tab writes into `path` (the one
+    /// [`NavPolicy::download_starting`] chose) got. False cancels it: every
     /// engine calls this while the bytes stream and about once a second
     /// while none arrive, and WebView2 and WebKitGTK once with the
     /// announced length before any land.
-    fn download_progress(&self, _tab: &str, _url: &Url, _size: DownloadSize) -> bool {
+    fn download_progress(&self, _tab: &str, _path: &Path, _size: DownloadSize) -> bool {
         true
     }
-    fn download_finished(&self, _tab: &str, _url: &Url, _success: bool) {}
+    /// The download into `path` ended. An engine may report one end more
+    /// than once.
+    fn download_finished(&self, _tab: &str, _path: &Path, _success: bool) {}
 }
 
 /// What the core gives an adapter for one tab: its label, the event
@@ -259,12 +262,12 @@ impl TabEvents {
         self.policy.download_starting(&self.label, url, suggested)
     }
 
-    pub fn download_progress(&self, url: &Url, size: DownloadSize) -> bool {
-        self.policy.download_progress(&self.label, url, size)
+    pub fn download_progress(&self, path: &Path, size: DownloadSize) -> bool {
+        self.policy.download_progress(&self.label, path, size)
     }
 
-    pub fn download_finished(&self, url: &Url, success: bool) {
-        self.policy.download_finished(&self.label, url, success);
+    pub fn download_finished(&self, path: &Path, success: bool) {
+        self.policy.download_finished(&self.label, path, success);
     }
 
     pub fn publish(&self, event: TabEvent) {

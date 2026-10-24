@@ -488,14 +488,14 @@ async fn downloads_land_host_named_under_the_session_and_are_kept_only_when_conf
     let name = denied.file_name().unwrap().to_string_lossy().into_owned();
     assert!(name.ends_with(".pdf") && name.len() == 36 + 4, "{name}");
     std::fs::write(&denied, b"bytes").unwrap();
-    r.h.host.download_finished(&tab, &url, true);
+    r.h.host.download_finished(&tab, &denied, true);
     until(|| !denied.exists()).await;
     assert_eq!(r.ticket_actions()[0].0, ActionClass::Download);
 
     r.preapprove_app(ActionClass::Download).await;
     let kept = r.h.host.download_starting(&tab, &url, suggested).unwrap();
     std::fs::write(&kept, b"bytes").unwrap();
-    r.h.host.download_finished(&tab, &url, true);
+    r.h.host.download_finished(&tab, &kept, true);
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(kept.exists());
     assert_eq!(
@@ -547,12 +547,32 @@ async fn a_download_past_the_size_cap_is_cancelled_while_it_streams() {
         received: 0,
         announced: Some(bytes),
     };
-    assert!(events.download_progress(&url, announced(cap)), "at the cap");
-    assert!(!events.download_progress(&url, announced(cap + 1)), "past the cap");
+    assert!(events.download_progress(&path, announced(cap)), "at the cap");
+    assert!(!events.download_progress(&path, announced(cap + 1)), "past the cap");
     std::fs::write(&path, b"partial").unwrap();
-    events.download_finished(&url, false);
+    events.download_finished(&path, false);
     until(|| !path.exists()).await;
     assert!(r.ticket_actions().is_empty(), "a cancelled download asks nobody");
+}
+
+/// An engine may report a cancelled download twice. A second download of
+/// the same URL is still its own: it asks before it is kept.
+#[tokio::test]
+async fn a_cancel_reported_twice_leaves_a_same_url_download_tracked() {
+    let r = rig(vec![]);
+    let tab = r.open(LOGIN).await;
+    let url: tauri::Url = "http://127.0.0.1:4100/slow.bin".parse().unwrap();
+    let suggested = std::path::Path::new("slow.bin");
+    let stalled = r.h.host.download_starting(&tab, &url, suggested).expect("admitted");
+    let sibling = r.h.host.download_starting(&tab, &url, suggested).expect("admitted");
+    assert_ne!(stalled, sibling);
+    r.h.host.download_finished(&tab, &stalled, false);
+    r.h.host.download_finished(&tab, &stalled, false);
+    std::fs::write(&sibling, b"payload").unwrap();
+    r.h.host.download_finished(&tab, &sibling, true);
+    until(|| !sibling.exists()).await;
+    let classes: Vec<ActionClass> = r.ticket_actions().into_iter().map(|(c, _)| c).collect();
+    assert_eq!(classes, vec![ActionClass::Download]);
 }
 
 /// Reading console messages, or a dialog's message through any reply,

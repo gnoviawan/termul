@@ -1,17 +1,22 @@
-//! WebView2 download progress on tabs whose downloads the host holds.
-//! Tauri's hook decides where a download lands and reports how it ended;
-//! this handler reports its size while the bytes stream, and again on a
+//! WebView2 downloads on tabs whose downloads the host holds. Tauri's hook
+//! decides where a download lands. This handler, which runs after it,
+//! reports the download's size while the bytes stream, and again on a
 //! timer while none arrive, so the host's size cap, idle timeout and
-//! deadline cancel it there instead of after the whole body is written.
+//! deadline cancel it there instead of after the whole body is written,
+//! and reports how it ended. Every report names the download by the path
+//! the host chose for it.
 
 use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 
-use tauri::Url;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2DownloadOperation, ICoreWebView2_4,
-    COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS,
+    COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED, COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS,
 };
-use webview2_com::{take_pwstr, BytesReceivedChangedEventHandler, DownloadStartingEventHandler};
+use webview2_com::{
+    take_pwstr, BytesReceivedChangedEventHandler, DownloadStartingEventHandler,
+    StateChangedEventHandler,
+};
 use windows_core::{Interface, BOOL, PWSTR};
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
@@ -25,7 +30,7 @@ const TICK_MS: u32 = 1000;
 struct Held {
     operation: ICoreWebView2DownloadOperation,
     events: TabEvents,
-    url: Url,
+    path: PathBuf,
 }
 
 thread_local! {
@@ -33,14 +38,6 @@ thread_local! {
     static TIMER: Cell<usize> = const { Cell::new(0) };
 }
 
-/// The download's URL as tauri's hook reports it.
-fn url_of(operation: &ICoreWebView2DownloadOperation) -> Option<Url> {
-    let mut uri = PWSTR::null();
-    // SAFETY: COM call on the event's own operation, on the UI thread;
-    // `take_pwstr` frees the string.
-    unsafe { operation.Uri(&mut uri) }.ok()?;
-    take_pwstr(uri).parse().ok()
-}
 
 /// How far the operation got.
 fn size_of(operation: &ICoreWebView2DownloadOperation) -> DownloadSize {
@@ -76,14 +73,13 @@ unsafe extern "system" fn tick(_: HWND, _: u32, _: usize, _: u32) {
         if !running {
             continue;
         }
-        if held.events.download_progress(&held.url, size_of(&held.operation)) {
+        if held.events.download_progress(&held.path, size_of(&held.operation)) {
             live.push(held);
             continue;
         }
-        // SAFETY: as above. The interrupted state ends the download
-        // through tauri's hook, which deletes the partial file.
+        // SAFETY: as above. The interrupted state reports the end, and
+        // the host deletes the partial file.
         let _ = unsafe { held.operation.Cancel() };
-        held.events.download_finished(&held.url, false);
     }
     HELD.with_borrow_mut(|all| all.extend(live));
     if HELD.with_borrow(Vec::is_empty) {
@@ -107,38 +103,57 @@ pub fn attach(core: &ICoreWebView2, events: &TabEvents) -> bool {
         if cancelled.as_bool() {
             return Ok(());
         }
-        // SAFETY: as above.
-        let operation = unsafe { args.DownloadOperation()? };
-        let Some(url) = url_of(&operation) else {
-            return Ok(());
+        // SAFETY: as above. Tauri's handler, attached first, has set the
+        // host's path; `take_pwstr` frees the string.
+        let (operation, path) = unsafe {
+            let mut path = PWSTR::null();
+            args.ResultFilePath(&mut path)?;
+            (args.DownloadOperation()?, PathBuf::from(take_pwstr(path)))
         };
-        if !events.download_progress(&url, size_of(&operation)) {
-            // SAFETY: as above. Cancelled here, no byte is written.
+        if !events.download_progress(&path, size_of(&operation)) {
+            // SAFETY: as above. Cancelled here, no byte is written and no
+            // state change follows.
             unsafe { args.SetCancel(true)? };
-            events.download_finished(&url, false);
+            events.download_finished(&path, false);
             return Ok(());
         }
         let progress = events.clone();
-        let progress_url = url.clone();
+        let progress_path = path.clone();
         let on_bytes = BytesReceivedChangedEventHandler::create(Box::new(move |operation, _| {
             let Some(operation) = operation else {
                 return Ok(());
             };
-            if !progress.download_progress(&progress_url, size_of(&operation)) {
+            if !progress.download_progress(&progress_path, size_of(&operation)) {
                 // SAFETY: COM call on the event's own operation, on the UI
-                // thread. The interrupted state ends the download through
-                // tauri's hook, which deletes the partial file.
+                // thread. The interrupted state reports the end.
                 unsafe { operation.Cancel()? };
+            }
+            Ok(())
+        }));
+        let ended = events.clone();
+        let ended_path = path.clone();
+        let on_state = StateChangedEventHandler::create(Box::new(move |operation, _| {
+            let Some(operation) = operation else {
+                return Ok(());
+            };
+            let mut state = COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS;
+            // SAFETY: as above.
+            unsafe { operation.State(&mut state)? };
+            if state != COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS {
+                ended.download_finished(&ended_path, state == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED);
             }
             Ok(())
         }));
         let mut token = 0i64;
         // SAFETY: as above.
-        unsafe { operation.add_BytesReceivedChanged(&on_bytes, &mut token)? };
+        unsafe {
+            operation.add_BytesReceivedChanged(&on_bytes, &mut token)?;
+            operation.add_StateChanged(&on_state, &mut token)?;
+        }
         hold(Held {
             operation,
             events: events.clone(),
-            url,
+            path,
         });
         Ok(())
     }));

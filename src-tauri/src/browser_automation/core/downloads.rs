@@ -36,7 +36,9 @@ use crate::browser_automation::engine::files;
 pub const MAX_DOWNLOADS_PER_SESSION: usize = 20;
 pub const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
 
-/// One download the engine is writing for an agent tab.
+/// One download the engine is writing for an agent tab. Its host-named
+/// `path` is unique, so it is what identifies the download: two downloads
+/// of one URL are still two.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pending {
     pub tab: String,
@@ -45,6 +47,14 @@ pub struct Pending {
     pub origin: CanonicalOrigin,
     pub profile: TabProfile,
     pub started: Instant,
+}
+
+impl Pending {
+    /// Matched by file name, the host's unique `<uuid>.<ext>`: an engine
+    /// may hand the directory back in another spelling.
+    fn is(&self, tab: &str, path: &Path) -> bool {
+        self.tab == tab && path.file_name().is_some_and(|name| self.path.file_name() == Some(name))
+    }
 }
 
 /// A pending download and how far it got.
@@ -85,10 +95,10 @@ impl Downloads {
         true
     }
 
-    /// Record how far `tab`'s download of `url` got at `now`. `Err` carries
-    /// why it must stop: past the size cap, no new byte for the idle
-    /// timeout, or past its deadline.
-    pub fn progress(&self, tab: &str, url: &str, size: DownloadSize, now: Instant) -> Result<(), &'static str> {
+    /// Record how far `tab`'s download into `path` got at `now`. `Err`
+    /// carries why it must stop: past the size cap, no new byte for the
+    /// idle timeout, or past its deadline.
+    pub fn progress(&self, tab: &str, path: &Path, size: DownloadSize, now: Instant) -> Result<(), &'static str> {
         if size.largest() > MAX_DOWNLOAD_BYTES {
             return Err("too_large");
         }
@@ -96,7 +106,7 @@ impl Downloads {
         let Some(held) = sessions
             .values_mut()
             .flat_map(|s| s.pending.iter_mut())
-            .find(|h| h.pending.tab == tab && h.pending.url == url)
+            .find(|h| h.pending.is(tab, path))
         else {
             return Ok(());
         };
@@ -113,14 +123,12 @@ impl Downloads {
         Ok(())
     }
 
-    /// The oldest pending download of `tab` for `url`.
-    pub fn take(&self, tab: &str, url: &str) -> Option<(String, Pending)> {
+    /// `tab`'s pending download into `path`. Engines may report an end
+    /// more than once; only the first finds it.
+    pub fn take(&self, tab: &str, path: &Path) -> Option<(String, Pending)> {
         let mut sessions = self.sessions.lock();
         sessions.iter_mut().find_map(|(session_id, s)| {
-            let at = s
-                .pending
-                .iter()
-                .position(|h| h.pending.tab == tab && h.pending.url == url)?;
+            let at = s.pending.iter().position(|h| h.pending.is(tab, path))?;
             Some((session_id.clone(), s.pending.remove(at).pending))
         })
     }
@@ -225,9 +233,9 @@ impl DesktopBrowserHost {
         Some(path)
     }
 
-    /// Whether `tab`'s download of `url`, at `size`, may go on.
-    pub(super) fn download_progress(&self, tab: &str, url: &Url, size: DownloadSize) -> bool {
-        match self.downloads.progress(tab, url.as_str(), size, Instant::now()) {
+    /// Whether `tab`'s download into `path`, at `size`, may go on.
+    pub(super) fn download_progress(&self, tab: &str, path: &Path, size: DownloadSize) -> bool {
+        match self.downloads.progress(tab, path, size, Instant::now()) {
             Ok(()) => true,
             Err(reason) => {
                 log::info!("[browser-agent] download cancelled tab={} reason={reason}", label_prefix(tab));
@@ -236,9 +244,10 @@ impl DesktopBrowserHost {
         }
     }
 
-    /// The engine finished (or failed) a download it started for `tab`.
-    pub(super) fn download_finished(&self, tab: &str, url: &Url, success: bool) {
-        let Some((session_id, pending)) = self.downloads.take(tab, url.as_str()) else {
+    /// The engine finished (or failed) the download it writes into `path`
+    /// for `tab`.
+    pub(super) fn download_finished(&self, tab: &str, path: &Path, success: bool) {
+        let Some((session_id, pending)) = self.downloads.take(tab, path) else {
             return;
         };
         let Some(me) = self.me.upgrade() else {
