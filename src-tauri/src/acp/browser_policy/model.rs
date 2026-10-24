@@ -220,6 +220,17 @@ impl ProjectPolicy {
         }
     }
 
+    /// The policy minus entries the reserved-origin rule refuses right now.
+    /// Edits already refuse them, but a port termul starts listening on
+    /// later, or a hand-edited file, can leave one stored.
+    pub fn without_reserved(mut self, owned_ports: &[u16]) -> Self {
+        self.allow_list
+            .retain(|pattern| pattern.reserved_kind(owned_ports).is_none());
+        self.preapprovals
+            .retain(|p| p.origin.reserved_kind(owned_ports).is_none());
+        self
+    }
+
     /// Whether `origin` is allow-listed (auto-granted without a prompt).
     pub fn allows(&self, origin: &CanonicalOrigin) -> bool {
         self.allow_list
@@ -236,6 +247,13 @@ impl ProjectPolicy {
 }
 
 impl AppPolicy {
+    /// See [`ProjectPolicy::without_reserved`].
+    pub fn without_reserved(mut self, owned_ports: &[u16]) -> Self {
+        self.preapprovals
+            .retain(|p| p.origin.reserved_kind(owned_ports).is_none());
+        self
+    }
+
     pub fn apply(&mut self, op: AppPolicyOp) -> Result<bool, PolicyRefusal> {
         match op {
             AppPolicyOp::SetGlobalProfile(enabled) => {

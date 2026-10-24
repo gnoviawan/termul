@@ -82,6 +82,10 @@ fn denied_origins_cannot_be_allow_listed() {
         class_of("http://localhost:5180", &["http://localhost:5180"]),
         OriginClass::Denied(DenyReason::TermulOwned)
     );
+    assert_eq!(
+        class_of("http://metadata.google.internal", &["http://*.google.internal"]),
+        OriginClass::Denied(DenyReason::MetadataAddress)
+    );
 }
 
 #[test]

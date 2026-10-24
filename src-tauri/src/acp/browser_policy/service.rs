@@ -96,7 +96,7 @@ impl BrowserPolicyService {
         let result = async {
             validate_project_id(project_id)?;
             caller.require_project(project_id)?;
-            let policy = self.project_policy(project_id).await?;
+            let policy = self.files.read_project(project_id).await?;
             Ok(self.project_view_of(project_id, &policy).await)
         }
         .await;
@@ -106,7 +106,7 @@ impl BrowserPolicyService {
     pub async fn app_view(&self, caller: &CallerScope) -> Result<AppPolicyView, PolicyRefusal> {
         let result = async {
             caller.require_app()?;
-            let policy = self.app_policy().await?;
+            let policy = self.files.read_app().await?;
             Ok(self.app_view_of(&policy))
         }
         .await;
@@ -172,14 +172,18 @@ impl BrowserPolicyService {
         )
     }
 
-    /// Current project policy, for the engine's authorization checks.
+    /// Current project policy, for the engine's authorization checks. It
+    /// leaves out entries for origins that are reserved at this moment.
     pub async fn project_policy(&self, project_id: &str) -> Result<ProjectPolicy, PolicyRefusal> {
-        self.files.read_project(project_id).await
+        let policy = self.files.read_project(project_id).await?;
+        Ok(policy.without_reserved(&(self.owned_ports)()))
     }
 
-    /// Current app policy, for the engine's authorization checks.
+    /// Current app policy, for the engine's authorization checks. It
+    /// leaves out entries for origins that are reserved at this moment.
     pub async fn app_policy(&self) -> Result<AppPolicy, PolicyRefusal> {
-        self.files.read_app().await
+        let policy = self.files.read_app().await?;
+        Ok(policy.without_reserved(&(self.owned_ports)()))
     }
 
     pub async fn apply_project_op(

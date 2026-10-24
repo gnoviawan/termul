@@ -189,6 +189,16 @@ impl CanonicalOrigin {
     }
 }
 
+/// Hostnames that are reserved on their own, for probing suffix patterns.
+const NAMED_RESERVED_HOSTS: [&str; 6] = [
+    "tauri.localhost",
+    "ipc.localhost",
+    "asset.localhost",
+    "metadata.google.internal",
+    "metadata.goog",
+    "instance-data",
+];
+
 fn parse_ip(host: &str) -> Option<IpAddr> {
     host.trim_start_matches('[')
         .trim_end_matches(']')
@@ -256,21 +266,32 @@ impl OriginPattern {
     /// [`Self::parse`] plus the reserved-origin rule.
     pub fn parse_allowed(input: &str, owned_ports: &[u16]) -> Result<Self, OriginError> {
         let pattern = Self::parse(input)?;
-        let anchor = match &pattern {
-            Self::Exact(origin) => origin,
+        match pattern.reserved_kind(owned_ports) {
+            Some(kind) => Err(OriginError::Reserved(kind)),
+            None => Ok(pattern),
+        }
+    }
+
+    /// Why this pattern may never be honoured, if it may not: its origin
+    /// is reserved, or a suffix pattern would cover a reserved host.
+    pub fn reserved_kind(&self, owned_ports: &[u16]) -> Option<ReservedKind> {
+        let parent = match self {
+            Self::Exact(origin) => return origin.reserved_kind(owned_ports),
             Self::Subdomains { parent } => parent,
         };
-        if let Some(kind) = anchor.reserved_kind(owned_ports) {
-            return Err(OriginError::Reserved(kind));
+        if let Some(kind) = parent.reserved_kind(owned_ports) {
+            return Some(kind);
         }
-        if let Self::Subdomains { parent } = &pattern {
-            // A suffix on a reserved parent would still cover its children.
-            let host = parent.host().trim_end_matches('.').to_ascii_lowercase();
-            if host == "localhost" || host.ends_with(".localhost") {
-                return Err(OriginError::Reserved(ReservedKind::AppOrigin));
-            }
+        let host = parent.host().trim_end_matches('.').to_ascii_lowercase();
+        if host == "localhost" || host.ends_with(".localhost") {
+            return Some(ReservedKind::AppOrigin);
         }
-        Ok(pattern)
+        let (scheme, host_port) = parent.as_str().split_once("://").unwrap_or_default();
+        let port = host_port.find(':').map_or("", |at| &host_port[at..]);
+        NAMED_RESERVED_HOSTS.iter().find_map(|name| {
+            let probe = CanonicalOrigin::parse(&format!("{scheme}://{name}{port}")).ok()?;
+            self.matches(&probe).then(|| probe.reserved_kind(owned_ports))?
+        })
     }
 
     pub fn matches(&self, origin: &CanonicalOrigin) -> bool {

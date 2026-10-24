@@ -340,6 +340,55 @@ async fn a_port_termul_starts_listening_on_later_is_refused_at_the_next_edit() {
 }
 
 #[tokio::test]
+async fn the_engine_ignores_entries_for_a_port_termul_started_listening_on_later() {
+    let dir = tempfile::tempdir().unwrap();
+    let ports = std::sync::Arc::new(parking_lot::Mutex::new(Vec::<u16>::new()));
+    let live = ports.clone();
+    let service = BrowserPolicyService::new(
+        dir.path().to_path_buf(),
+        std::sync::Arc::new(move || live.lock().clone()),
+        vec![],
+        std::sync::Arc::new(UnwiredProfileControl),
+    );
+    project_op(
+        &service,
+        0,
+        json!({"op": "add_origin", "origin": "http://localhost:5555"}),
+    )
+    .await;
+    project_op(
+        &service,
+        1,
+        json!({"op": "add_preapproval", "action": "upload", "origin": "http://localhost:5555"}),
+    )
+    .await;
+    app_op(
+        &service,
+        0,
+        json!({"op": "add_preapproval", "action": "upload", "origin": "http://localhost:5555"}),
+    )
+    .await;
+    let origin = CanonicalOrigin::parse("http://localhost:5555").unwrap();
+    let project = service.project_policy("p1").await.unwrap();
+    assert!(project.allows(&origin));
+    assert!(project.preapproves(ActionClass::Upload, &origin));
+
+    ports.lock().push(5555);
+    let project = service.project_policy("p1").await.unwrap();
+    assert!(!project.allows(&origin));
+    assert!(!project.preapproves(ActionClass::Upload, &origin));
+    assert_eq!(project.revision, 2);
+    let app = service.app_policy().await.unwrap();
+    assert!(!app.preapproves(ActionClass::Upload, &origin));
+
+    let view = service
+        .project_view(&CallerScope::App, "p1")
+        .await
+        .unwrap();
+    assert_eq!(view.allow_list, vec!["http://localhost:5555".to_string()]);
+}
+
+#[tokio::test]
 async fn global_tabs_may_pre_approve_password_submits_but_never_payment_submits() {
     let dir = tempfile::tempdir().unwrap();
     let f = fixture(dir.path(), vec![]);

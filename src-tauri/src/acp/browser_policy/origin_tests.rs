@@ -139,6 +139,15 @@ fn app_origins_and_custom_protocol_hosts_are_reserved() {
 }
 
 #[test]
+fn a_suffix_pattern_over_a_parent_of_a_reserved_host_is_reserved() {
+    assert_eq!(
+        reserved("https://*.google.internal", &[]),
+        Some(ReservedKind::Metadata)
+    );
+    assert_eq!(reserved("https://*.example.com", &[]), None);
+}
+
+#[test]
 fn unspecified_link_local_and_metadata_addresses_are_reserved() {
     assert_eq!(
         reserved("http://0.0.0.0:3000", &[]),
