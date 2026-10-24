@@ -119,7 +119,7 @@ interface ItemDrag {
   group: ReorderGroup | null
   value: unknown
   props: () => Record<string, unknown>
-  node: Measurable | null
+  node: (Measurable & { elementId?: number }) | null
   origin: Point
   last: Point
   /** The item's box along the axis when the drag began; the pointer offset moves it. */
@@ -165,7 +165,10 @@ function endDrag(event: PointerView): void {
   active = null
   if (!s) return
   const point = { x: event.clientX, y: event.clientY }
-  if (!s.started) return clickWithheldByCapture(point)
+  if (!s.started) {
+    if (s.node?.elementId !== undefined) clickWithheldByCapture(s.node.elementId, point)
+    return
+  }
   notePointerDragRelease(point)
   ;(s.props().onDragEnd as DragHandler | undefined)?.(event, dragInfo(s, point))
 }
@@ -227,7 +230,7 @@ const ReorderGroupComponent = forwardRef<unknown, Record<string, unknown>>(funct
  */
 const ReorderItemComponent = forwardRef<unknown, Record<string, unknown>>(function ReorderItem(props, ref) {
   const group = useContext(ReorderContext)
-  const node = useRef<Measurable | null>(null)
+  const node = useRef<ItemDrag['node']>(null)
   const latest = useRef(props)
   latest.current = props
   const { value } = props
@@ -235,7 +238,7 @@ const ReorderItemComponent = forwardRef<unknown, Record<string, unknown>>(functi
   if (group) group.spans.set(value, () => spanOf(node.current, axis))
   useEffect(() => () => void group?.spans.delete(value), [group?.spans, value])
   const setRef = (instance: unknown) => {
-    node.current = instance as Measurable | null
+    node.current = instance as ItemDrag['node']
     if (typeof ref === 'function') ref(instance)
     else if (ref) ref.current = instance
   }
