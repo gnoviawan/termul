@@ -2,6 +2,7 @@ import * as SwitchPrimitives from '@radix-ui/react-switch'
 import * as React from 'react'
 
 import { cn } from '@/lib/utils'
+import { FOCUS_RING_CLASS } from './panel-styles'
 
 /**
  * On/off switch. Track and thumb colors come from per-theme `--switch-*`
@@ -15,7 +16,8 @@ const Switch = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SwitchPrimitives.Root
     className={cn(
-      'peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent switch-track transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed',
+      'peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent switch-track transition-colors duration-150 ease-out disabled:cursor-not-allowed',
+      FOCUS_RING_CLASS,
       className
     )}
     {...props}

@@ -20,6 +20,8 @@ export default {
         input: 'oklch(var(--input) / <alpha-value>)',
         'field-border': 'oklch(var(--field-border) / <alpha-value>)',
         ring: 'oklch(var(--ring) / <alpha-value>)',
+        // Complete CSS color (component token): no alpha modifier.
+        'focus-ring': 'var(--focus-ring)',
         background: 'oklch(var(--background) / <alpha-value>)',
         foreground: 'oklch(var(--foreground) / <alpha-value>)',
         primary: {

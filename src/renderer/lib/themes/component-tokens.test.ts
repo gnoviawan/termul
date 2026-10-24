@@ -51,4 +51,10 @@ describe('component tokens', () => {
       }
     })
   }
+
+  it('emits the --focus-ring token in every bundled theme', () => {
+    for (const id of Object.keys(BUNDLED_COLOR_THEMES)) {
+      expect(emittedVars(id)['--focus-ring'], id).toBe(COMPONENT_TOKEN_DEFAULTS['--focus-ring'])
+    }
+  })
 })

@@ -61,7 +61,13 @@ export const COMPONENT_TOKEN_DEFAULTS = {
   /** Rail keycap fill (active row on the sidebar). Defaults to the computed --rail-keycap. */
   '--rail-keycap-fill': 'var(--rail-keycap)',
   /** Rail keycap depth. Defaults to the shared keycap shadow. */
-  '--rail-keycap-shadow': 'var(--keycap-shadow)'
+  '--rail-keycap-shadow': 'var(--keycap-shadow)',
+  /**
+   * Keyboard focus color, read by `ring-focus-ring` and `border-focus-ring`
+   * (panel-styles.ts). Defaults to `--ring`, the theme ink, which clears 3:1
+   * on every surface it sits on.
+   */
+  '--focus-ring': 'oklch(var(--ring))'
 } as const
 
 export type ComponentToken = keyof typeof COMPONENT_TOKEN_DEFAULTS

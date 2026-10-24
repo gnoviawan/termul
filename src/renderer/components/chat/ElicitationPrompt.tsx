@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { FileQuestion } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
+import { COMPOSER_FOCUS_CLASS, FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { Switch } from '@/components/ui/switch'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ElicitationField } from '@/lib/acp-api'
@@ -188,7 +188,7 @@ export function ElicitationPrompt({
         aria-live="polite"
         className={cn(
           'mx-auto w-full max-w-3xl rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
-          'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
+          COMPOSER_FOCUS_CLASS,
           questionShaped ? QUESTION_PANEL_SHADOW : 'px-3.5 py-3 sm:px-4'
         )}
       >

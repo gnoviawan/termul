@@ -3,6 +3,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import { ChevronDown, ChevronRight, FolderPlus } from '@/components/icons'
 import { RailTooltip } from '@/components/shell/rail-button'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
+import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import type { Project, ProjectGroup } from '@/types/project'
@@ -326,7 +327,7 @@ export function ProjectList({
             <div className="mt-2 flex flex-col gap-0.5">
               <button
                 onClick={() => setShowArchived(!showArchived)}
-                className="label-panel flex h-8 w-full items-center gap-1.5 rounded-md pl-1 pr-1.5 transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-default disabled:hover:bg-transparent"
+                className={`label-panel flex h-8 w-full items-center gap-1.5 rounded-md pl-1 pr-1.5 transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground focus-visible:ring-inset disabled:cursor-default disabled:hover:bg-transparent ${FOCUS_RING_CLASS}`}
                 aria-expanded={showArchived}
                 aria-label={`Archived projects (${archivedProjects.length})`}
               >

@@ -14,7 +14,7 @@ describe('Switch', () => {
     // ring-/shadow- utilities would override the .switch-thumb box-shadow token.
     expect(thumb).not.toMatch(/(^|\s)(ring|shadow)-/)
     expect(sw.className).toContain('h-5 w-9')
-    expect(sw.className).toContain('focus-visible:ring-ring')
+    expect(sw.className).toContain('focus-visible:ring-focus-ring')
     expect(sw.className).not.toContain('primary')
     fireEvent.click(sw)
     expect(onCheckedChange).toHaveBeenCalledWith(true)

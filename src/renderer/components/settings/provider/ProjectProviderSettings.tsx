@@ -7,6 +7,7 @@ import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { AlertCircle, Check, ExternalLink, Info, Link2, Shuffle } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import type { ProjectClaudeAccountDraft } from '@/hooks/use-project-claude-account-draft'
 import { claudeAccountsApi, isClaudeLoginCancelled } from '@/lib/claude-accounts-api'
 import { formatUsageReset, usageTone, usageWindowLabel } from '@/lib/claude-usage-format'
@@ -104,7 +105,7 @@ function Option({
       data-option
       className={cn(
         'grid cursor-default grid-cols-[1.75rem_minmax(0,1fr)_1rem] items-center gap-x-3.5 gap-y-2 rounded-lg px-3 py-2.5 outline-hidden transition-colors @[34rem]:grid-cols-[1.75rem_minmax(0,1fr)_10.5rem_1rem]',
-        'focus-visible:ring-1 focus-visible:ring-ring',
+        FOCUS_RING_CLASS,
         selected
           ? 'bg-foreground/[0.03] ring-1 ring-inset ring-foreground/[0.12]'
           : !disabled && 'hover:bg-foreground/[0.02]',
