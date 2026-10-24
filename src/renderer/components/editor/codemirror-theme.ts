@@ -83,9 +83,8 @@ export function createTermulTheme(
           backgroundColor: 'oklch(var(--card))',
           color: 'oklch(var(--card-foreground))'
         },
-        '.cm-panels.cm-panels-top': {
-          borderBottom: '1px solid oklch(var(--border))'
-        },
+        /* No top-panel border: the top panels are the floating find and
+           go-to-line widgets (editor/find), which draw their own edge. */
         '.cm-panels.cm-panels-bottom': {
           borderTop: '1px solid oklch(var(--border))'
         },
