@@ -466,7 +466,8 @@ export function EditableRow({
       aria-expanded={open}
       disabled={disabled}
       className={cn(
-        'flex shrink-0 items-center gap-0.5 rounded-md px-1.5 text-xs transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60',
+        // 2px less on the chevron side so the label and chevron look centred.
+        'flex shrink-0 items-center gap-0.5 rounded-md pl-1.5 pr-1 text-xs transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60',
         open ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
         touch ? 'min-h-11' : 'h-7',
         ROW_FOCUS

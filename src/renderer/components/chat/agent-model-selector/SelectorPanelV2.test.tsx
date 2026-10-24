@@ -636,28 +636,35 @@ describe('SelectorPanelV2 agent rail', () => {
     expect(screen.getByRole('tab', { name: 'Claude Agent' })).toHaveAttribute('tabindex', '-1')
   })
 
-  it('in chat, ArrowDown and ArrowUp move along the rail and open that agent', () => {
-    render(<Panel {...props({ agentRail: 'left', source: source({ selectAgent: null }) })} />)
+  it.each([
+    ['left', 'ArrowDown', 'ArrowUp'],
+    ['top', 'ArrowRight', 'ArrowLeft']
+  ] as const)('in chat, with agentRail="%s", %s and %s open that agent', (agentRail, next, prev) => {
+    render(<Panel {...props({ agentRail, source: source({ selectAgent: null }) })} />)
     const cursor = screen.getByRole('tab', { name: 'Cursor' })
     const claude = screen.getByRole('tab', { name: 'Claude Agent' })
     cursor.focus()
-    fireEvent.keyDown(cursor, { key: 'ArrowDown' })
+    fireEvent.keyDown(cursor, { key: next })
     expect(claude).toHaveFocus()
     expect(claude).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tabpanel', { name: 'Claude Agent' })).toBeInTheDocument()
-    fireEvent.keyDown(claude, { key: 'ArrowUp' })
+    fireEvent.keyDown(claude, { key: prev })
     expect(cursor).toHaveFocus()
     expect(cursor).toHaveAttribute('aria-selected', 'true')
   })
 
-  it('in the launcher, the arrows only move focus; a click picks the agent', () => {
+  it.each([
+    ['left', 'ArrowDown'],
+    ['top', 'ArrowRight']
+  ] as const)('in the launcher, with agentRail="%s", %s only moves focus; a click picks the agent', (agentRail, next) => {
     const selectAgent = vi.fn()
-    render(<Panel {...props({ agentRail: 'left', source: source({ selectAgent }) })} />)
+    render(<Panel {...props({ agentRail, source: source({ selectAgent }) })} />)
     const cursor = screen.getByRole('tab', { name: 'Cursor' })
     const claude = screen.getByRole('tab', { name: 'Claude Agent' })
     cursor.focus()
-    fireEvent.keyDown(cursor, { key: 'ArrowDown' })
+    fireEvent.keyDown(cursor, { key: next })
     expect(claude).toHaveFocus()
+    expect(cursor).toHaveAttribute('aria-selected', 'true')
     expect(selectAgent).not.toHaveBeenCalled()
     fireEvent.click(claude)
     expect(selectAgent).toHaveBeenCalledWith(expect.objectContaining({ configId: CLAUDE.id }))
@@ -708,5 +715,86 @@ describe('SelectorPanelV2 agent icon on every row', () => {
       ['Claude Opus', CURSOR.id],
       ['Opus via Claude · Claude Agent', CLAUDE.id]
     ])
+  })
+})
+
+describe('SelectorPanelV2 opening scroll', () => {
+  const ROW = 28
+  const LIST_HEIGHT = 288 // max-h-72: ten rows plus the list's 4px padding top and bottom
+
+  /**
+   * A fake layout: rows stacked 28px apart under the list's 4px top padding,
+   * a 288px list, and a `scrollIntoView` that scrolls just enough to bring a
+   * row in at the bottom edge, as `block: 'nearest'` does.
+   */
+  function fakeLayout(): () => void {
+    const scrolls = new WeakMap<Element, number>()
+    const rowsOf = (el: Element): HTMLElement[] =>
+      Array.from(
+        el
+          .closest('[data-testid="selector-list"]')
+          ?.querySelectorAll<HTMLElement>('[data-selector-row]') ?? []
+      )
+    const top = (el: Element): number => 4 + ROW * rowsOf(el).indexOf(el as HTMLElement)
+    const restore = [
+      vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(() => ROW),
+      vi.spyOn(Element.prototype, 'scrollTop', 'get').mockImplementation(function (this: Element) {
+        return scrolls.get(this) ?? 0
+      }),
+      vi.spyOn(Element.prototype, 'scrollTop', 'set').mockImplementation(function (
+        this: Element,
+        value: number
+      ) {
+        scrolls.set(this, value)
+      })
+    ]
+    Element.prototype.scrollIntoView = function (this: Element) {
+      const list = this.closest('[data-testid="selector-list"]')
+      if (!list) return
+      const bottom = top(this) + ROW
+      const current = scrolls.get(list) ?? 0
+      if (bottom > current + LIST_HEIGHT) scrolls.set(list, bottom - LIST_HEIGHT)
+    }
+    return () => {
+      for (const spy of restore) spy.mockRestore()
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    }
+  }
+
+  it('opens on a chosen model below the fold, kept in view, with the top row whole', () => {
+    const undo = fakeLayout()
+    try {
+      const values = Array.from({ length: 16 }, (_, i): [string, string] => [`m${i}`, `Model ${i}`])
+      render(
+        <Panel
+          {...props({
+            agentRail: 'left',
+            modelOption: select('model', 'Model', 'm13', values),
+            modelValue: 'm13'
+          })}
+        />
+      )
+      const list = screen.getByTestId('selector-list')
+      const chosen = screen.getByRole('button', { name: 'Model 13', pressed: true })
+      const rows = Array.from(list.querySelectorAll('[data-selector-row]'))
+      const chosenTop = 4 + ROW * rows.indexOf(chosen)
+      // `nearest` alone would leave the list at 4 + 14 * 28 - 288 = 108: 24px into a row.
+      expect(list.scrollTop).toBeGreaterThan(0)
+      expect(list.scrollTop % ROW).toBe(0)
+      expect(chosenTop).toBeGreaterThanOrEqual(list.scrollTop)
+      expect(chosenTop + ROW).toBeLessThanOrEqual(list.scrollTop + LIST_HEIGHT)
+    } finally {
+      undo()
+    }
+  })
+
+  it('leaves the list at the top when the chosen model is already in view', () => {
+    const undo = fakeLayout()
+    try {
+      render(<Panel {...props({ agentRail: 'left' })} />)
+      expect(screen.getByTestId('selector-list').scrollTop).toBe(0)
+    } finally {
+      undo()
+    }
   })
 })

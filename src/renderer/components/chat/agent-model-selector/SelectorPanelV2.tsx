@@ -242,10 +242,13 @@ function AgentTabStrip({
           className={cn(
             'relative flex items-center justify-center transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60',
             vertical
-              ? cn('ml-1 rounded-l-md', touch ? 'h-11' : 'h-8')
+              ? // 28px like a list row, so each icon sits on the list's row grid.
+                cn('ml-1 rounded-l-md', touch ? 'h-11' : 'h-7')
               : cn('flex-1 rounded-t-md', touch ? 'h-11' : 'h-8'),
             item.selected
-              ? 'text-foreground'
+              ? // The rail's active tab takes the popover's active-segment fill
+                // (docs/design/colors.md) so its edge bar reads as part of it.
+                cn('text-foreground', vertical && 'bg-foreground/10')
               : 'text-muted-foreground hover:bg-row-hover hover:text-foreground',
             ROW_FOCUS
           )}
@@ -258,7 +261,7 @@ function AgentTabStrip({
               transition={quick(reduced)}
               className={cn(
                 'absolute rounded-full bg-foreground',
-                vertical ? 'inset-y-2 -right-px w-0.5' : 'inset-x-2 -bottom-px h-0.5'
+                vertical ? 'inset-y-1.5 -right-px w-0.5' : 'inset-x-2 -bottom-px h-0.5'
               )}
             />
           ) : null}
@@ -271,6 +274,24 @@ function AgentTabStrip({
 /** A select option's value, or undefined when the agent sent none (or a non-string). */
 const selectValue = (option: SessionConfigOption): string | undefined =>
   typeof option.currentValue === 'string' ? option.currentValue : undefined
+
+/**
+ * Scroll the chosen model into view, then round the scroll up to a whole row so
+ * the top row is never cut in half. Rows and section labels share one height,
+ * and the list is ten rows tall plus its padding, so a multiple of the row
+ * height shows ten whole rows. Rounding up only moves the chosen row (at the
+ * bottom edge) further in.
+ */
+function revealChosenRow(list: HTMLElement): void {
+  const chosen = list.querySelectorAll<HTMLElement>(`${LIST_ROW}[aria-pressed="true"]`)
+  const row = chosen[chosen.length - 1]
+  if (!row) return
+  row.scrollIntoView?.({ block: 'nearest' }) // jsdom has none
+  const height = row.offsetHeight
+  if (height > 0 && list.scrollTop > 0) {
+    list.scrollTop = Math.ceil(list.scrollTop / height) * height
+  }
+}
 
 type IsRejected = (optionId: string, value: string) => boolean
 type TrySet = (optionId: string, value: string | boolean) => Promise<void>
@@ -649,7 +670,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
     tabItems.push({
       key: 'more',
       label: 'More agents',
-      glyph: <MoreHorizontal size={14} aria-hidden="true" />,
+      glyph: <MoreHorizontal size={16} aria-hidden="true" />,
       selected: showingMore,
       title: 'More agents',
       onSelect: state.showMore
@@ -662,7 +683,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       items={tabItems}
       orientation={orientation}
       // A tab in the launcher picks the agent; in chat it only opens its models.
-      followFocus={orientation === 'vertical' && sw.selectAgent == null}
+      followFocus={sw.selectAgent == null}
       disabled={disabled}
       touch={touch}
       reduced={reduced}
@@ -673,8 +694,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   // the chosen model even when it sits below the fold.
   const attachList = useCallback((node: HTMLDivElement | null) => {
     listRef.current = node
-    const chosen = node?.querySelectorAll<HTMLElement>(`${LIST_ROW}[aria-pressed="true"]`)
-    chosen?.[chosen.length - 1]?.scrollIntoView?.({ block: 'nearest' }) // jsdom has none
+    if (node) revealChosenRow(node)
   }, [])
 
   const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
