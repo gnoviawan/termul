@@ -132,7 +132,8 @@ Shared `src/renderer` components render on GPUIX unchanged. `build.ts`
 points their `react/jsx-runtime`, `react` and `react-dom` at `src/compat`, so
 each `<div className=… onClick=…>` becomes a GPUIX element when it is
 created. Files under `apps/gpuix` keep the real runtime, except the Radix,
-framer-motion and cmdk stand-ins in `src/compat/radix` and `src/compat/shims`.
+framer-motion, cmdk and react-resizable-panels stand-ins in `src/compat/radix`
+and `src/compat/shims`.
 
 - `translate.ts` maps a tag and class string to a style once and caches it,
   so an unchanged element keeps the same style object across renders.
@@ -146,6 +147,21 @@ framer-motion and cmdk stand-ins in `src/compat/radix` and `src/compat/shims`.
 - `host.tsx` is the only per-element component. It is used only for
   `group-*`, `focus:`, `focus-within:` and breakpoint variants, and for the
   `group` element itself.
+- `dnd.ts` is HTML5 drag and drop. A press on a `draggable` element that
+  travels 4px runs `dragstart`, `drag`, `dragenter`/`dragleave`, `dragover`,
+  `drop` and `dragend` with a `DataTransfer` in the DOM's protected and
+  read-only modes. The source carries mouse down, move and up, so GPUIX
+  captures the pointer. The target is a DOM-style hit test over the last
+  painted tree: GPUIX's `getElementsAt` hides every subtree under compat's
+  click-through boxes. An OS file drop (`onFileDrop`, X11 XDND) runs
+  `dragenter`, `dragover` and `drop` with the paths as `File`s; `src/env/files.ts`
+  opens them and provides `FileReader`. There is no drag out to the OS and
+  no hover feedback before an OS drop lands.
+- `placement.tsx` also rebuilds percentage offsets (`left-1/4`,
+  `style={{ top: '25%' }}`), which GPUIX rejects, from spacer rows.
+- `shims/resizable-panels.tsx` stands in for `react-resizable-panels`: panels
+  register with their group, sizes are flex-grow percentages, and the grab
+  strips sit in an overlay that paints after the panels.
 
 The ui primitives in `src/ui` build their host element through the same
 `buildElement`.
@@ -158,6 +174,14 @@ shared file uses a DOM API the compat layer lacks
 `tools/compat/overrides.json` entry.
 
 Tools:
+
+- `bun tools/dnd/check.ts [--only os-drop,toc,tabs,split,resize,explorer]`
+  drives drag and drop in the real shell and asserts on the result: an OS
+  file dropped on the composer, the outline handle, tab reorder, split by
+  drag, divider drag and its persistence across a restart, an Explorer file
+  dropped on a pane. Output goes to `/tmp/gpuix-d1/dnd/`.
+- `bun tools/dnd/parity.ts` shoots the same pane drag in the web client and
+  GPUIX (two tabs, right zone held, split) and diffs them.
 
 - `bun tools/compat/parity.ts [fixture…] --port N` diffs StatusBar, ShellRail,
   ChatMessage and ConfirmDialog against the web build. Output goes to
