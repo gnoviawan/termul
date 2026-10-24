@@ -44,6 +44,7 @@ pub use reply::{
     ERR_TAB_NOT_FOUND, ERR_TIMEOUT,
 };
 pub use tabs::TabView;
+#[cfg(any(test, feature = "conformance"))]
 pub use teardown::session_dir;
 
 use super::budgets::Deadline;
