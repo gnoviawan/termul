@@ -6,6 +6,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
+import { SelectorPanel } from './SelectorPanel'
 import { SelectorPanelV2, type SelectorPanelV2Props } from './SelectorPanelV2'
 import type { ModelCatalog } from './selector-model'
 import type { SelectorSource } from './selector-source'
@@ -299,6 +300,8 @@ describe('SelectorPanelV2 Edit flyout', () => {
     expect(within(flyout).queryAllByRole('menuitemradio')).toHaveLength(0)
     const fast = within(flyout).getByRole('menuitemcheckbox', { name: 'Fast mode' })
     expect(within(flyout).getAllByRole('menuitemcheckbox')).toHaveLength(1)
+    // Under prefers-reduced-motion the flyout switch thumb jumps instead of sliding.
+    expect(fast.querySelector('.switch-thumb')).toHaveClass('motion-reduce:transition-none')
     expect(fast).toHaveAttribute('aria-checked', 'false')
     fireEvent.click(fast)
     expect(onToggleFast).toHaveBeenCalledTimes(1)
@@ -490,6 +493,8 @@ describe('SelectorPanelV2 with no active row', () => {
       'Thinking: High'
     )
     const fast = within(footer).getByRole('switch', { name: 'Fast mode' })
+    // Under prefers-reduced-motion the thumb jumps instead of sliding.
+    expect(fast.querySelector('.switch-thumb')).toHaveClass('motion-reduce:transition-none')
     fireEvent.click(fast)
     expect(onToggleFast).toHaveBeenCalledTimes(1)
   })
@@ -670,11 +675,142 @@ describe('SelectorPanelV2 agent rail', () => {
     expect(selectAgent).toHaveBeenCalledWith(expect.objectContaining({ configId: CLAUDE.id }))
   })
 
+  it('tab glyphs take the tab colour, so inactive tabs are muted; list rows keep theirs', () => {
+    render(<Panel {...props({ agentRail: 'left' })} />)
+    const tab = screen.getByRole('tab', { name: 'Claude Agent' })
+    expect(tab).toHaveClass('text-muted-foreground')
+    const glyph = tab.querySelector('[aria-hidden="true"]:not(.pointer-events-none)')
+    expect(glyph).toHaveClass('text-current')
+    expect(glyph).not.toHaveClass('text-foreground/80')
+  })
+
   it('the default top strip stays horizontal', () => {
     render(<Panel {...props()} />)
     expect(screen.getByRole('tablist', { name: 'Agents' })).toHaveAttribute(
       'aria-orientation',
       'horizontal'
+    )
+  })
+})
+
+describe('SelectorPanelV2 agent order and overflow', () => {
+  const tabNames = (): string[] =>
+    within(screen.getByRole('tablist', { name: 'Agents' }))
+      .getAllByRole('tab')
+      .map((t) => t.getAttribute('aria-label') ?? '')
+  const notInstalled = (c: StoredAgentConfig): SupportedAcpAgentEntry => ({
+    ...entry(c),
+    config: null,
+    status: 'install-required'
+  })
+  // 9 installed + 3 to install: more than the rail's 10 slots.
+  const INSTALLED = [
+    'Zed Agent',
+    'amp',
+    'Codex',
+    'Gemini',
+    'Qwen Code',
+    'Goose',
+    'Kimi',
+    'Auggie',
+    'Droid'
+  ].map((name) => config(name.toLowerCase().replace(/\s/g, '-'), name))
+  const TO_INSTALL = ['OpenCode', 'Aider', 'Crush'].map((name) => config(name.toLowerCase(), name))
+  const many = (over: Partial<SelectorSource> = {}): SelectorSource =>
+    source({
+      selectAgent: null,
+      agentConfigs: [CURSOR, CLAUDE, ...INSTALLED],
+      entries: [
+        ...TO_INSTALL.map(notInstalled),
+        entry(CURSOR),
+        ...INSTALLED.map(entry),
+        entry(CLAUDE)
+      ],
+      ...over
+    })
+
+  it('orders V2 tabs installed first, A to Z, regardless of the current agent', () => {
+    render(<Panel {...props()} />)
+    expect(tabNames()).toEqual(['Claude Agent', 'Cursor'])
+  })
+
+  it('V1 keeps its order: the current agent first', () => {
+    render(
+      <TooltipProvider>
+        <SelectorPanel {...props()} />
+      </TooltipProvider>
+    )
+    expect(tabNames()[0]).toBe('Cursor')
+  })
+
+  it('selecting a tab does not move it', () => {
+    render(<Panel {...props({ agentRail: 'left', source: source({ selectAgent: null }) })} />)
+    const before = tabNames()
+    fireEvent.click(screen.getByRole('tab', { name: 'Cursor' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Claude Agent' }))
+    expect(tabNames()).toEqual(before)
+    expect(screen.getByRole('tab', { name: 'Claude Agent' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
+  it('fills the rail to its 10 slots, the last one More, in the same order', () => {
+    render(<Panel {...props({ agentRail: 'left', source: many() })} />)
+    expect(tabNames()).toEqual([
+      'amp',
+      'Auggie',
+      'Claude Agent',
+      'Codex',
+      'Cursor',
+      'Droid',
+      'Gemini',
+      'Goose',
+      'Kimi',
+      'More agents'
+    ])
+    fireEvent.click(screen.getByRole('tab', { name: 'More agents' }))
+    const more = screen.getByRole('tabpanel', { name: 'More agents' })
+    const names = ['Qwen Code', 'Zed Agent', 'Aider', 'Crush', 'OpenCode']
+    const text = more.textContent ?? ''
+    const at = names.map((n) => text.indexOf(n))
+    expect(at.every((i) => i >= 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+  })
+
+  it('shows no More when every agent fits', () => {
+    render(<Panel {...props({ agentRail: 'left' })} />)
+    expect(screen.queryByRole('tab', { name: 'More agents' })).toBeNull()
+  })
+
+  it('marks More active while an agent behind it is open, without reordering', () => {
+    render(<Panel {...props({ agentRail: 'left', source: many() })} />)
+    const before = tabNames()
+    fireEvent.click(screen.getByRole('tab', { name: 'More agents' }))
+    const more = screen.getByRole('tabpanel', { name: 'More agents' })
+    fireEvent.click(within(more).getAllByRole('button', { name: /Zed Agent/ })[0])
+    expect(tabNames()).toEqual(before)
+    expect(screen.getByRole('tab', { name: 'More agents' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    expect(screen.getByRole('tabpanel', { name: 'Zed Agent' })).toBeInTheDocument()
+  })
+
+  it('marks More active when the current agent itself sits behind it', () => {
+    render(
+      <Panel
+        {...props({
+          agentRail: 'left',
+          source: many({ currentConfigId: INSTALLED[0].id }),
+          agentConfigId: INSTALLED[0].id
+        })}
+      />
+    )
+    expect(tabNames()).not.toContain('Zed Agent')
+    expect(screen.getByRole('tab', { name: 'More agents' })).toHaveAttribute(
+      'aria-selected',
+      'true'
     )
   })
 })

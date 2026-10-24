@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { type KeyboardEvent, type ReactNode, useCallback, useRef } from 'react'
+import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Check, MoreHorizontal, Search, Zap } from '@/components/icons'
 import { BAND_FOCUS_CLASS, INNER_FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -31,6 +31,7 @@ import {
 } from './SelectorRows'
 import {
   type AgentTab,
+  agentTrackCapacity,
   type CatalogModel,
   entryDisableReason,
   type FavoriteModel,
@@ -158,9 +159,9 @@ const TAB_KEYS = {
 } as const
 
 /**
- * Agent tabs as glyphs, the active one marked by a 2px bar on the edge that
- * faces the list, sliding between tabs. Horizontal: a strip over a hairline,
- * underlined. Vertical: a rail left of the list. Tabs pattern: one tab stop
+ * Agent tabs as glyphs. Horizontal: a strip over a hairline, the active tab
+ * underlined. Vertical: a rail left of the list, the active tab filled. The
+ * mark slides between tabs. Tabs pattern: one tab stop
  * (the selected tab); the arrow keys of the orientation, Home and End move
  * focus, Enter or Space selects. With `followFocus` the arrows select too.
  */
@@ -254,8 +255,10 @@ function AgentTabStrip({
             item.selected
               ? 'text-foreground'
               : cn(
-                  'text-muted-foreground hover:text-foreground',
-                  vertical ? 'hover:bg-foreground/5' : 'hover:bg-row-hover'
+                  'text-muted-foreground',
+                  vertical
+                    ? 'hover:bg-foreground/5 hover:text-foreground/80'
+                    : 'hover:bg-row-hover hover:text-foreground'
                 ),
             ROW_FOCUS
           )}
@@ -280,6 +283,30 @@ function AgentTabStrip({
       ))}
     </div>
   )
+}
+
+/**
+ * The panel's width while `active` (the touch top strip, whose sheet width
+ * varies); null before the first measure or without ResizeObserver.
+ */
+function useTouchStripWidth(
+  ref: React.RefObject<HTMLDivElement | null>,
+  active: boolean
+): number | null {
+  const [width, setWidth] = useState<number | null>(null)
+  useEffect(() => {
+    const node = ref.current
+    if (!active || !node || typeof ResizeObserver === 'undefined') return
+    const measure = (): void => {
+      const next = Math.round(node.getBoundingClientRect().width)
+      setWidth(next > 0 ? next : null)
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [ref, active])
+  return active ? width : null
 }
 
 /** A select option's value, or undefined when the agent sent none (or a non-string). */
@@ -473,7 +500,13 @@ function SessionOptions({
 export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element {
   const { source: sw, touch, disabled, modelValue, agentRail = 'top' } = props
   const reduced = useReducedMotion() ?? false
-  const state = useSelectorPanelState(props, { reserveMoreTab: false, favorites: props.favorites })
+  const rootRef = useRef<HTMLDivElement>(null)
+  const width = useTouchStripWidth(rootRef, touch && agentRail === 'top')
+  const state = useSelectorPanelState(props, {
+    reserveMoreTab: false,
+    stableTabCapacity: agentTrackCapacity({ rail: agentRail, touch, width }),
+    favorites: props.favorites
+  })
   const { query, searching, showingMore, effectiveId, viewId, viewTab, tabs, view } = state
   const { effectiveCatalog, capabilities, nameOf, tabOf } = state
   const searchRef = useRef<HTMLInputElement>(null)
@@ -672,7 +705,8 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   const tabItems: TabItem[] = tabs.visible.map((tab) => ({
     key: tab.configId,
     label: tab.name,
-    glyph: <TabGlyph tab={tab} />,
+    // The tab sets the colour: muted, brighter on hover, full when active.
+    glyph: <TabGlyph tab={tab} colorClassName="text-current" />,
     selected: !showingMore && tab.configId === viewId,
     title: state.hasUpdate(tab) ? `${tab.name} · update available` : tab.name,
     onSelect: () => state.openAgent(tab)
@@ -682,7 +716,9 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       key: 'more',
       label: 'More agents',
       glyph: <MoreHorizontal size={16} aria-hidden="true" />,
-      selected: showingMore,
+      // Order is stable, so an agent behind "More" stays there; "More" shows
+      // as active while that agent's models are open.
+      selected: showingMore || state.viewInOverflow,
       title: 'More agents',
       onSelect: state.showMore
     })
@@ -734,6 +770,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
 
   return (
     <div
+      ref={rootRef}
       data-testid="agent-model-selector-panel"
       data-variant="v2"
       data-agent-rail={agentRail}

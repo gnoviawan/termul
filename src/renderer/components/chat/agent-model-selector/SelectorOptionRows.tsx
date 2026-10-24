@@ -115,7 +115,7 @@ function SwitchMark({ on }: { on: boolean }): React.JSX.Element {
     >
       <span
         data-state={state}
-        className="switch-thumb block size-4 rounded-full transition-transform duration-150 ease-out data-[state=checked]:translate-x-4"
+        className="switch-thumb block size-4 rounded-full transition-transform duration-150 ease-out motion-reduce:transition-none data-[state=checked]:translate-x-4"
       />
     </span>
   )

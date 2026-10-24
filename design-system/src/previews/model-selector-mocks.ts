@@ -144,32 +144,59 @@ const AGENTS: MockAgent[] = [
   { id: 'opencode', name: 'OpenCode', configured: false, models: [] }
 ]
 
+/**
+ * More agents for the "many agents" entry: with AGENTS, 11 installed and 3
+ * to install, past the rail's 10 slots and the strip's 8.
+ */
+const EXTRA_AGENTS: MockAgent[] = [
+  ...['Amp', 'Auggie', 'Droid', 'Goose', 'Kimi CLI', 'Qwen Code'].map((name) => {
+    const id = name.toLowerCase().replace(/\s/g, '-')
+    return { id, name, configured: true, models: [{ value: 'default', name: `${name} default` }] }
+  }),
+  { id: 'aider', name: 'Aider', configured: false, models: [] },
+  { id: 'crush', name: 'Crush', configured: false, models: [] }
+]
+
 const configIdOf = (agentId: string): string => `acp-registry:${agentId}`
 
-export const MOCK_AGENT_CONFIGS: StoredAgentConfig[] = AGENTS.filter((a) => a.configured).map(
-  (a) => ({
-    id: configIdOf(a.id),
-    configId: configIdOf(a.id),
-    name: a.name,
-    command: a.id,
-    args: [],
-    env: {},
-    allowTerminal: false,
-    templateId: a.id
-  })
-)
+function configsOf(agents: readonly MockAgent[]): StoredAgentConfig[] {
+  return agents
+    .filter((a) => a.configured)
+    .map((a) => ({
+      id: configIdOf(a.id),
+      configId: configIdOf(a.id),
+      name: a.name,
+      command: a.id,
+      args: [],
+      env: {},
+      allowTerminal: false,
+      templateId: a.id
+    }))
+}
 
-export const MOCK_ENTRIES: SupportedAcpAgentEntry[] = AGENTS.map((a) => ({
-  id: a.id,
-  configId: configIdOf(a.id),
-  agent: { id: a.id, name: a.name, version: '1.0.0', description: '', distribution: {} },
-  config: MOCK_AGENT_CONFIGS.find((c) => c.id === configIdOf(a.id)) ?? null,
-  status: a.configured ? 'ready' : 'install-required',
-  install: null,
-  manualInstall: null,
-  runtimeLauncher: null,
-  unavailableReason: null
-}))
+function entriesOf(
+  agents: readonly MockAgent[],
+  configs: readonly StoredAgentConfig[]
+): SupportedAcpAgentEntry[] {
+  return agents.map((a) => ({
+    id: a.id,
+    configId: configIdOf(a.id),
+    agent: { id: a.id, name: a.name, version: '1.0.0', description: '', distribution: {} },
+    config: configs.find((c) => c.id === configIdOf(a.id)) ?? null,
+    status: a.configured ? 'ready' : 'install-required',
+    install: null,
+    manualInstall: null,
+    runtimeLauncher: null,
+    unavailableReason: null
+  }))
+}
+
+export const MOCK_AGENT_CONFIGS: StoredAgentConfig[] = configsOf(AGENTS)
+export const MOCK_ENTRIES: SupportedAcpAgentEntry[] = entriesOf(AGENTS, MOCK_AGENT_CONFIGS)
+
+const MANY_AGENTS: MockAgent[] = [...AGENTS, ...EXTRA_AGENTS]
+const MANY_CONFIGS = configsOf(MANY_AGENTS)
+const MANY_ENTRIES = entriesOf(MANY_AGENTS, MANY_CONFIGS)
 
 const MODEL_OPTION_ID = 'model'
 
@@ -192,7 +219,7 @@ export function seedMockCatalogs(): void {
   const cache = useAcpStore.getState().agentOptionsCache ?? {}
   if (cache[configIdOf('claude-acp')]) return
   const next = { ...cache }
-  for (const agent of AGENTS) {
+  for (const agent of MANY_AGENTS) {
     if (!agent.configured) continue
     next[configIdOf(agent.id)] = {
       models: null,
@@ -230,14 +257,21 @@ export const MOCK_NARROW_CONTEXT_MODEL = 'gpt-5.4-codex'
  * One selector's mock state: the launcher (`draft`) path, so picking another
  * agent's tab selects that agent and picks land immediately.
  */
-export function useMockSelector(key: string, initialModel = MOCK_DEFAULT_MODEL): MockSelectorState {
+export function useMockSelector(
+  key: string,
+  initialModel = MOCK_DEFAULT_MODEL,
+  { manyAgents = false }: { manyAgents?: boolean } = {}
+): MockSelectorState {
   seedMockCatalogs()
+  const agents = manyAgents ? MANY_AGENTS : AGENTS
+  const agentConfigs = manyAgents ? MANY_CONFIGS : MOCK_AGENT_CONFIGS
+  const entries = manyAgents ? MANY_ENTRIES : MOCK_ENTRIES
   const [agentId, setAgentId] = useState('cursor')
   const [models, setModels] = useState<Record<string, string>>({ cursor: initialModel })
   /** Option values keyed `${agentId}:${optionId}`. */
   const [values, setValues] = useState<Record<string, string>>({})
 
-  const agent = AGENTS.find((a) => a.id === agentId) ?? AGENTS[0]
+  const agent = agents.find((a) => a.id === agentId) ?? agents[0]
   const modelValue = models[agent.id] ?? agent.models[0]?.value
   const model = agent.models.find((m) => m.value === modelValue)
 
@@ -302,8 +336,8 @@ export function useMockSelector(key: string, initialModel = MOCK_DEFAULT_MODEL):
     () => ({
       kind: 'draft',
       key: key,
-      agentConfigs: MOCK_AGENT_CONFIGS,
-      entries: MOCK_ENTRIES,
+      agentConfigs,
+      entries,
       currentConfigId: configIdOf(agentId),
       armedConfigId: null,
       blocked: false,
@@ -325,7 +359,7 @@ export function useMockSelector(key: string, initialModel = MOCK_DEFAULT_MODEL):
       modelStatus: null,
       updateAgentIds: new Set(['codex-acp'])
     }),
-    [key, agentId]
+    [key, agentId, agentConfigs, entries]
   )
 
   const fastOn = fastMode?.currentValue === 'on'

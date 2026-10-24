@@ -828,9 +828,10 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
 
       await waitFor(() => expect(mockPrepareChat).toHaveBeenCalled())
       await new Promise((resolve) => setTimeout(resolve, AUTO_LOAD_SETTLE_MS))
-      expect(mockPrepareChat.mock.calls.map(([configId]) => configId)).toEqual([
-        others[2]?.config?.id
-      ])
+      // V2 tabs run A to Z, so the last tab is whichever name sorts last.
+      const last = others.find((e) => e.config?.name === tabs[3]?.getAttribute('aria-label'))
+      expect(last).toBeDefined()
+      expect(mockPrepareChat.mock.calls.map(([configId]) => configId)).toEqual([last?.config?.id])
     } finally {
       localStorage.removeItem(MODEL_PICKER_V2_KEY)
     }

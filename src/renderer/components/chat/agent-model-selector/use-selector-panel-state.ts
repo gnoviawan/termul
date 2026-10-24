@@ -13,7 +13,8 @@ import {
   MORE_AGENTS_VIEW,
   type ModelCatalog,
   modelMatches,
-  resolveFavorites
+  resolveFavorites,
+  stableAgentTabs
 } from './selector-model'
 import type { SelectorModelStatus } from './selector-source'
 import type { SwitchModelPick } from './use-agent-switch'
@@ -70,6 +71,8 @@ export interface SelectorPanelState {
   viewId: string | null
   viewTab: AgentTab | null
   tabs: { visible: AgentTab[]; overflow: AgentTab[] }
+  /** The viewed agent sits behind "More" (V2's stable order keeps it there). */
+  viewInOverflow: boolean
   view: PanelView
   /** Changes when the list's content identity changes; keys its crossfade. */
   listKey: string
@@ -122,6 +125,12 @@ export function useSelectorPanelState(
   options: {
     /** Keep a grid column for "More" by showing one tab fewer when agents overflow. */
     reserveMoreTab: boolean
+    /**
+     * V2: tabs keep one order (installed first, then A to Z; `orderAgentTabs`)
+     * and fill this many slots, the last one "More" when they overflow. Unset
+     * (V1): the current agent first, the armed one next, the viewed one pinned.
+     */
+    stableTabCapacity?: number
     favorites?: readonly FavoriteModel[]
   }
 ): SelectorPanelState {
@@ -136,7 +145,7 @@ export function useSelectorPanelState(
   const viewId = showingMore ? null : (view ?? effectiveId)
   const searching = query.trim().length > 0
 
-  const { reserveMoreTab } = options
+  const { reserveMoreTab, stableTabCapacity } = options
   const tabs = useMemo(() => {
     const args = {
       currentConfigId: sw.currentConfigId,
@@ -145,9 +154,19 @@ export function useSelectorPanelState(
       entries: sw.entries,
       agentConfigs: sw.agentConfigs
     }
+    if (stableTabCapacity != null) return stableAgentTabs({ ...args, capacity: stableTabCapacity })
     const first = buildAgentTabs(args)
     return reserveMoreTab && first.overflow.length > 0 ? buildAgentTabs({ ...args, max: 3 }) : first
-  }, [sw.currentConfigId, sw.armedConfigId, viewId, sw.entries, sw.agentConfigs, reserveMoreTab])
+  }, [
+    sw.currentConfigId,
+    sw.armedConfigId,
+    viewId,
+    sw.entries,
+    sw.agentConfigs,
+    reserveMoreTab,
+    stableTabCapacity
+  ])
+  const viewInOverflow = viewId != null && tabs.overflow.some((t) => t.configId === viewId)
   const allTabs = useMemo(() => [...tabs.visible, ...tabs.overflow], [tabs])
   const tabById = useMemo(() => new Map(allTabs.map((t) => [t.configId, t])), [allTabs])
   const tabOf = (configId: string | null): AgentTab | null =>
@@ -385,6 +404,7 @@ export function useSelectorPanelState(
     viewId,
     viewTab,
     tabs,
+    viewInOverflow,
     view: body,
     // The launcher selects an agent in place (its `view` stays null), so the
     // effective id is part of the key or a provider switch would not fade.

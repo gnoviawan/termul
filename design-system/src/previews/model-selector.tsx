@@ -94,14 +94,16 @@ function V2Column({
   id,
   label,
   model,
-  agentRail
+  agentRail,
+  manyAgents
 }: {
   id: string
   label: string
   model: string
   agentRail?: 'top' | 'left'
+  manyAgents?: boolean
 }) {
-  const state = useMockSelector(id, model)
+  const state = useMockSelector(id, model, { manyAgents })
   const escapeRef = useRef<(() => boolean) | null>(null)
   return (
     // Room on the right for the Edit flyout.
@@ -152,6 +154,30 @@ export function ModelSelectorV2Rail() {
         label="Context 256K · 500K"
         model={MOCK_NARROW_CONTEXT_MODEL}
         agentRail="left"
+      />
+    </div>
+  )
+}
+
+/**
+ * Fourteen agents (11 installed, 3 to install): the rail fills its 10 slots,
+ * the strip its 8, and "More" holds the rest, installed first, A to Z.
+ */
+export function ModelSelectorV2ManyAgents() {
+  return (
+    <div className="flex gap-6 p-5">
+      <V2Column
+        id="model-selector-v2-many-rail"
+        label="Rail · 14 agents"
+        model={MOCK_DEFAULT_MODEL}
+        agentRail="left"
+        manyAgents
+      />
+      <V2Column
+        id="model-selector-v2-many-top"
+        label="Top strip · 14 agents"
+        model={MOCK_DEFAULT_MODEL}
+        manyAgents
       />
     </div>
   )

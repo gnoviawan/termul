@@ -159,26 +159,19 @@ function tabFromEntry(
 }
 
 /**
- * Split agents into the visible tab track and the "More" list. The current
- * agent is always first, then the armed target, then other ready agents in
- * catalog order, up to `max` tabs. An agent opened from "More"
- * takes the last free slot so its tab shows as selected.
+ * Every agent as a tab, in catalog order, plus a stored-config tab for the
+ * current, armed, or viewed agent when the catalog has not listed it yet.
  */
-export function buildAgentTabs({
+function allAgentTabs({
   currentConfigId,
   armedConfigId,
   viewConfigId,
   entries,
-  agentConfigs,
-  max = MAX_VISIBLE_AGENT_TABS
-}: {
-  max?: number
-  currentConfigId: string | null
-  armedConfigId: string | null
-  viewConfigId: string | null
-  entries: readonly SupportedAcpAgentEntry[]
-  agentConfigs: readonly StoredAgentConfig[]
-}): { visible: AgentTab[]; overflow: AgentTab[] } {
+  agentConfigs
+}: AgentTabSource): {
+  all: AgentTab[]
+  pinnedTab: (configId: string | null) => AgentTab | null
+} {
   const all = entries.map((entry) => tabFromEntry(entry, agentConfigs))
   const byId = new Map(all.map((tab) => [tab.configId, tab]))
   const pinnedTab = (configId: string | null): AgentTab | null => {
@@ -188,6 +181,37 @@ export function buildAgentTabs({
     const config = agentConfigs.find((c) => c.id === configId)
     return config ? { configId, name: config.name, config, entry: null } : null
   }
+  const extra: AgentTab[] = []
+  for (const id of [currentConfigId, armedConfigId, viewConfigId]) {
+    const tab = pinnedTab(id)
+    if (tab && !byId.has(tab.configId) && !extra.some((t) => t.configId === tab.configId)) {
+      extra.push(tab)
+    }
+  }
+  return { all: [...all, ...extra], pinnedTab }
+}
+
+interface AgentTabSource {
+  currentConfigId: string | null
+  armedConfigId: string | null
+  viewConfigId: string | null
+  entries: readonly SupportedAcpAgentEntry[]
+  agentConfigs: readonly StoredAgentConfig[]
+}
+
+/**
+ * Split agents into the visible tab track and the "More" list. The current
+ * agent is always first, then the armed target, then other ready agents in
+ * catalog order, up to `max` tabs. An agent opened from "More"
+ * takes the last free slot so its tab shows as selected. (V1 panel.)
+ */
+export function buildAgentTabs({
+  max = MAX_VISIBLE_AGENT_TABS,
+  ...source
+}: AgentTabSource & { max?: number }): { visible: AgentTab[]; overflow: AgentTab[] } {
+  const { currentConfigId, armedConfigId, viewConfigId, entries, agentConfigs } = source
+  const { pinnedTab } = allAgentTabs(source)
+  const all = entries.map((entry) => tabFromEntry(entry, agentConfigs))
   const visible: AgentTab[] = []
   const push = (tab: AgentTab | null): void => {
     if (tab && !visible.some((t) => t.configId === tab.configId)) visible.push(tab)
@@ -212,6 +236,106 @@ export function buildAgentTabs({
   }
   const shown = new Set(visible.map((t) => t.configId))
   return { visible, overflow: all.filter((tab) => !shown.has(tab.configId)) }
+}
+
+/**
+ * Installed on this machine, from the registry's install status: `ready`
+ * (not `install-required`, `needs-runtime`, `manual-install`, `unavailable`).
+ * A tab with no registry entry is a stored custom agent, so it is installed.
+ */
+export function isInstalledTab(tab: AgentTab): boolean {
+  return tab.entry ? tab.entry.status === 'ready' : tab.config != null
+}
+
+/**
+ * The V2 agent order: installed agents, then the rest, each A to Z by name
+ * (case- and accent-insensitive). It ignores which agent is current, armed, or
+ * viewed, so choosing an agent never moves its tab.
+ */
+export function orderAgentTabs(tabs: readonly AgentTab[]): AgentTab[] {
+  return tabs
+    .map((tab, index) => ({ tab, index, installed: isInstalledTab(tab) }))
+    .sort(
+      (a, b) =>
+        Number(b.installed) - Number(a.installed) ||
+        a.tab.name.localeCompare(b.tab.name, undefined, { sensitivity: 'base' }) ||
+        a.index - b.index
+    )
+    .map(({ tab }) => tab)
+}
+
+/**
+ * Fill `capacity` slots with tabs. When they all fit there is no "More";
+ * otherwise the last slot is "More" and holds the rest, in the same order.
+ */
+export function splitAgentTabs(
+  ordered: readonly AgentTab[],
+  capacity: number
+): { visible: AgentTab[]; overflow: AgentTab[] } {
+  const slots = Math.max(1, Math.floor(capacity))
+  if (ordered.length <= slots) return { visible: [...ordered], overflow: [] }
+  const shown = Math.max(0, slots - 1)
+  return { visible: ordered.slice(0, shown), overflow: ordered.slice(shown) }
+}
+
+/** V2: every agent in `orderAgentTabs` order, split to fill `capacity` slots. */
+export function stableAgentTabs(source: AgentTabSource & { capacity: number }): {
+  visible: AgentTab[]
+  overflow: AgentTab[]
+} {
+  return splitAgentTabs(orderAgentTabs(allAgentTabs(source).all), source.capacity)
+}
+
+/**
+ * Slots in a track of `length` px whose tabs are `pitch` px apart, after
+ * `padding` px of insets.
+ */
+export function tabTrackCapacity(length: number, pitch: number, padding = 0): number {
+  return Math.max(1, Math.floor((length - padding) / pitch))
+}
+
+/** V2 track geometry, in px. Keep in step with SelectorPanelV2's classes. */
+export const AGENT_TRACK = {
+  /** The list's `max-h-72`; the rail runs beside it. */
+  listMaxHeight: 288,
+  /** The rail's `py-1`. */
+  railPadding: 8,
+  /** Rail tabs are squares: `size-7`, `size-11` on touch. */
+  railPitch: 28,
+  railPitchTouch: 44,
+  /** The desktop panel's `w-75`, less the strip's `px-1`. */
+  stripWidth: 300,
+  stripPadding: 8,
+  stripPaddingTouch: 24,
+  /** Narrowest top-strip tab: a 16px glyph with 10px either side; 44 on touch. */
+  stripMinTab: 36,
+  stripMinTabTouch: 44,
+  /** Top strip on touch before its width is measured: the old 4 tabs + More. */
+  stripFallbackSlots: 5
+} as const
+
+/**
+ * Slots in the V2 agent track, "More" included. The rail runs the fixed list
+ * height, so it is computed; the top strip on touch spans the sheet, so it
+ * takes the measured panel width (null until measured).
+ */
+export function agentTrackCapacity({
+  rail,
+  touch,
+  width
+}: {
+  rail: 'top' | 'left'
+  touch: boolean
+  width: number | null
+}): number {
+  const t = AGENT_TRACK
+  if (rail === 'left') {
+    return tabTrackCapacity(t.listMaxHeight, touch ? t.railPitchTouch : t.railPitch, t.railPadding)
+  }
+  if (!touch) return tabTrackCapacity(t.stripWidth, t.stripMinTab, t.stripPadding)
+  return width
+    ? tabTrackCapacity(width, t.stripMinTabTouch, t.stripPaddingTouch)
+    : t.stripFallbackSlots
 }
 
 /** Case-insensitive match on a model's name, id, and description. */

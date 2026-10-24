@@ -408,11 +408,14 @@ export function EntryStatusTag({
 export const EntryGlyph = memo(function EntryGlyph({
   config,
   templateId,
-  name
+  name,
+  colorClassName = 'text-foreground/80'
 }: {
   config: StoredAgentConfig | null
   templateId?: string
   name?: string
+  /** The glyph's colour; `text-current` takes the parent's (e.g. a tab's state). */
+  colorClassName?: string
 }): React.JSX.Element {
   const normalized = useMemo(() => {
     // Prefer a persisted custom icon (bundled or uploaded) over the catalog.
@@ -432,7 +435,8 @@ export const EntryGlyph = memo(function EntryGlyph({
       <span
         aria-hidden="true"
         className={cn(
-          'inline-flex shrink-0 text-foreground/80 [&_svg]:h-full [&_svg]:w-full',
+          'inline-flex shrink-0 [&_svg]:h-full [&_svg]:w-full',
+          colorClassName,
           className
         )}
         // biome-ignore lint/security/noDangerouslySetInnerHtml: icon SVG is sanitized via sanitizeInlineAgentSvg (DOMPurify)
@@ -444,7 +448,8 @@ export const EntryGlyph = memo(function EntryGlyph({
     <span
       aria-hidden="true"
       className={cn(
-        'flex shrink-0 items-center justify-center bg-foreground/10 font-semibold uppercase text-foreground/80',
+        'flex shrink-0 items-center justify-center bg-foreground/10 font-semibold uppercase',
+        colorClassName,
         className
       )}
     >
