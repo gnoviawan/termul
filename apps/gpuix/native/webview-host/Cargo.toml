@@ -9,7 +9,8 @@ description = "Browser-pane webviews for the Termul GPUIX client: wry child wind
 
 [dependencies]
 # Same wry as src-tauri/Cargo.lock.
-wry = "=0.55.1"
+# `devtools`: open_devtools exists in release builds only with it, as tauri's "devtools" feature does for the desktop app.
+wry = { version = "=0.55.1", features = ["devtools"] }
 gtk = "0.18"
 gdkx11 = "0.18"
 x11-dl = "2.21"
