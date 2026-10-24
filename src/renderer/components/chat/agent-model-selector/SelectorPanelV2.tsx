@@ -66,7 +66,13 @@ import {
   rowTooltipDescription,
   splitContextOption
 } from './selector-model'
-import { PICKER_ICON, PICKER_LABEL, PICKER_ROW_NAME_PULL } from './selector-tokens'
+import {
+  PICKER_ICON,
+  PICKER_LABEL,
+  PICKER_ROW_NAME_PULL,
+  PICKER_ROW_SELECTED,
+  PICKER_ROW_SELECTED_BOX
+} from './selector-tokens'
 import { useRejectedOptionValues } from './use-option-values'
 import { useSelectorPanelState } from './use-selector-panel-state'
 
@@ -168,6 +174,13 @@ function DenseModelRow({
     : exiting
       ? 'exiting'
       : 'none'
+  // The selected row is filled like the rail's active tab, on its outermost box
+  // so the fill takes in the star, the check and Edit: the box around Edit (or
+  // a leaving one), else the star's box, else the row itself.
+  const outer = editable ? 'edit' : exiting ? 'exiting' : favorite ? 'favorite' : 'row'
+  const fillOn = (box: typeof outer): boolean => selected && outer === box
+  const fill = (box: typeof outer): { 'data-row-selected'?: '' } =>
+    fillOn(box) ? { 'data-row-selected': '' } : {}
   // Controlled, so a focus handed back by the closing flyout can skip it.
   const [tipOpen, setTipOpen] = useState(false)
   const renderRow = (handle?: EditRowHandle): React.JSX.Element => {
@@ -192,12 +205,14 @@ function DenseModelRow({
         // its agent) drops the trigger's `aria-describedby` (the row's props win
         // over the Slot's).
         {...(rowHasDescription(description) ? {} : { 'aria-describedby': undefined })}
+        {...fill('row')}
         // Beside an Edit (or one leaving) the hover belongs to the box around both.
         className={cn(
           DENSE_ROW,
           denseRowSize(touch),
           (editable || favorite || exiting) && 'min-w-0 flex-1 hover:bg-transparent',
-          flush && 'pr-0'
+          flush && 'pr-0',
+          fillOn('row') && PICKER_ROW_SELECTED_BOX
         )}
       >
         <span
@@ -259,10 +274,12 @@ function DenseModelRow({
     return (
       <div
         data-favorite-entry={favorite.entry}
+        {...fill('favorite')}
         className={cn(
           'group/fav relative flex min-w-0 flex-1 rounded-md',
           // An editable row's hover already belongs to the row around Edit.
-          !editable && 'transition-colors duration-150 ease-out hover:bg-row-hover'
+          !editable && 'transition-colors duration-150 ease-out hover:bg-row-hover',
+          fillOn('favorite') && PICKER_ROW_SELECTED_BOX
         )}
       >
         {withTip}
@@ -282,13 +299,19 @@ function DenseModelRow({
       {!edit || !editable ? (
         // The old Edit fades out beside the plain row. The box stays mounted
         // (`contents` at rest), so the row keeps its node, and focus, when it ends.
-        <div className={exiting ? EDIT_ROW_BOX : 'contents'}>
+        <div
+          {...fill('exiting')}
+          className={
+            exiting ? cn(EDIT_ROW_BOX, fillOn('exiting') && PICKER_ROW_SELECTED_BOX) : 'contents'
+          }
+        >
           {renderRow()}
           {exiting ? <ExitingEdit face={exiting} touch={touch} /> : null}
         </div>
       ) : (
         <EditableRow
           modelName={name}
+          selected={fillOn('edit')}
           inFavorites={inFavorites}
           entering={entering}
           sections={edit}
@@ -486,7 +509,7 @@ function AgentTabStrip({
                 // Rail: the popover's active-segment fill (docs/design/colors.md)
                 // filling the tab. Top strip: a bar under the tab.
                 vertical
-                  ? 'inset-0 rounded-md bg-foreground/10'
+                  ? cn('inset-0 rounded-md', PICKER_ROW_SELECTED)
                   : 'inset-x-2 -bottom-px h-0.5 rounded-full bg-foreground'
               )}
             />

@@ -26,6 +26,7 @@ import {
   PICKER_ICON,
   PICKER_LABEL,
   PICKER_ROW,
+  PICKER_ROW_SELECTED_BOX,
   PICKER_ROW_VALUE,
   PICKER_SURFACE,
   pickerRowHeight
@@ -552,6 +553,7 @@ export interface EditRowHandle {
  */
 export function EditableRow({
   modelName,
+  selected = false,
   inFavorites = false,
   entering = false,
   sections,
@@ -560,6 +562,8 @@ export function EditableRow({
   renderRow
 }: {
   modelName: string
+  /** The selected model: the box takes the selected fill, over hover and the open flyout. */
+  selected?: boolean
   /** The row is the Favorites copy: Edit's name says so. */
   inFavorites?: boolean
   /** A pick just made this row the active one: Edit slides in as it mounts. */
@@ -607,7 +611,13 @@ export function EditableRow({
         editBox(touch),
         entering ? PICKER_EDIT_MOTION.enter : 'transition-colors duration-150 ease-out',
         'disabled:cursor-not-allowed disabled:opacity-60',
-        open ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+        // On the selected fill muted ink drops under 4.5:1 (dark); secondary keeps it.
+        open
+          ? 'text-foreground'
+          : cn(
+              selected ? 'text-secondary-foreground' : 'text-muted-foreground',
+              'hover:text-foreground'
+            ),
         ROW_FOCUS
       )}
     >
@@ -616,7 +626,9 @@ export function EditableRow({
           data-edit-thinking=""
           className={cn(
             PICKER_ROW_VALUE,
-            open ? 'text-foreground' : 'group-hover/edit:text-foreground'
+            open
+              ? 'text-foreground'
+              : cn(selected && 'text-secondary-foreground', 'group-hover/edit:text-foreground')
           )}
         >
           {level}
@@ -629,8 +641,14 @@ export function EditableRow({
   )
   const row = (trigger: ReactNode): React.JSX.Element => (
     <div
+      data-row-selected={selected ? '' : undefined}
       // `group/fav`: hovering Edit still shows the row's star.
-      className={cn('group/fav', EDIT_ROW_BOX, open && 'bg-row-hover')}
+      className={cn(
+        'group/fav',
+        EDIT_ROW_BOX,
+        open && 'bg-row-hover',
+        selected && PICKER_ROW_SELECTED_BOX
+      )}
     >
       {renderRow({
         ref: rowRef,

@@ -11,6 +11,7 @@ import {
   type FavoritesStore,
   memoryFavoritesAdapter
 } from './favorite-models'
+import { ROW_FOCUS } from './SelectorOptionRows'
 import { SelectorPanel } from './SelectorPanel'
 import { SelectorPanelV2, type SelectorPanelV2Props } from './SelectorPanelV2'
 import {
@@ -25,6 +26,8 @@ import {
   PICKER_LABEL,
   PICKER_ROW,
   PICKER_ROW_NAME_PULL,
+  PICKER_ROW_SELECTED,
+  PICKER_ROW_SELECTED_BOX,
   PICKER_STAR_MOTION,
   PICKER_SURFACE
 } from './selector-tokens'
@@ -668,6 +671,242 @@ describe('SelectorPanelV2 selected-row check', () => {
   })
 })
 
+describe('SelectorPanelV2 selected-row fill', () => {
+  const THREE = select('model', 'Model', 'opus', [
+    ['opus', 'Claude Opus'],
+    ['sonnet', 'Claude Sonnet'],
+    ['haiku', 'Claude Haiku']
+  ])
+  /** Boxes marked as the selected row. */
+  const marked = (): HTMLElement[] =>
+    Array.from(document.querySelectorAll<HTMLElement>('[data-row-selected]'))
+  /** Everything in the list carrying the selected fill (SVGs included, so read the attribute). */
+  const filled = (): HTMLElement[] =>
+    Array.from(screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('*')).filter(
+      (el) => (el.getAttribute('class') ?? '').split(/\s+/).includes(PICKER_ROW_SELECTED)
+    )
+  /** The marked box around a row button, if any. */
+  const boxOf = (row: HTMLElement): HTMLElement | null =>
+    row.closest<HTMLElement>('[data-row-selected]')
+  const rowsNamed = (name: string): HTMLElement[] =>
+    screen.getAllByRole('button', { name }).filter((el) => el.hasAttribute('data-selector-row'))
+
+  function PickPanel(p: SelectorPanelV2Props): React.JSX.Element {
+    const [model, setModel] = useState(p.modelValue)
+    return (
+      <Panel
+        {...p}
+        modelValue={model}
+        onPickModel={(value) => {
+          p.onPickModel(value)
+          setModel(value)
+        }}
+      />
+    )
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('is the rail active fill, held under hover', () => {
+    expect(PICKER_ROW_SELECTED).toBe('bg-foreground/10')
+    expect(PICKER_ROW_SELECTED_BOX.split(' ')).toEqual([
+      PICKER_ROW_SELECTED,
+      `hover:${PICKER_ROW_SELECTED}`
+    ])
+  })
+
+  it('fills the whole outer box of the list row and its Favorites copy, and no other row', () => {
+    render(
+      <Panel
+        {...props({
+          modelOption: THREE,
+          favoritesStore: storeOf([
+            [CURSOR.id, 'opus'],
+            [CURSOR.id, 'sonnet']
+          ])
+        })}
+      />
+    )
+    const opus = rowsNamed('Claude Opus')
+    expect(opus).toHaveLength(2)
+    const boxes = marked()
+    expect(boxes).toHaveLength(2)
+    expect(filled()).toEqual(boxes)
+    for (const row of opus) {
+      const box = boxOf(row) as HTMLElement
+      expect(boxes).toContain(box)
+      expect(box).toHaveAttribute('data-row-selected', '')
+      expect(classes(box)).toContain(PICKER_ROW_SELECTED)
+      expect(classes(box)).toContain(PICKER_ROW.radius)
+      // The outermost box: glyph, name, star and Edit all sit inside it.
+      expect(box.querySelector('[data-row-agent]')).not.toBeNull()
+      expect(box.querySelector('[data-row-name]')).not.toBeNull()
+      expect(box.querySelector('[data-testid="selector-favorite"]')).not.toBeNull()
+      expect(box.querySelector('[data-testid="selector-edit"]')).not.toBeNull()
+      expect(box.parentElement?.closest('[data-row-selected]')).toBeNull()
+      // Full-contrast name.
+      expect(classes(row)).toContain('text-foreground')
+    }
+    for (const name of ['Claude Sonnet', 'Claude Haiku']) {
+      for (const row of rowsNamed(name)) expect(boxOf(row)).toBeNull()
+    }
+  })
+
+  it('a selected row without Edit fills the box around its star and check', () => {
+    render(
+      <Panel
+        {...props({
+          thoughtLevel: null,
+          effortValue: null,
+          genericOptions: [],
+          favoritesStore: storeOf([[CURSOR.id, 'opus']])
+        })}
+      />
+    )
+    expect(screen.queryByTestId('selector-edit')).toBeNull()
+    const boxes = marked()
+    expect(boxes).toHaveLength(2)
+    expect(filled()).toEqual(boxes)
+    for (const row of rowsNamed('Claude Opus')) {
+      const box = boxOf(row) as HTMLElement
+      expect(boxes).toContain(box)
+      expect(box.querySelector('[data-row-check]')).not.toBeNull()
+      expect(box.querySelector('[data-testid="selector-favorite"]')).not.toBeNull()
+    }
+  })
+
+  it('hover and the open flyout never replace the fill; other rows hover at 3%', async () => {
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />)
+    const check = (): void => {
+      for (const box of marked()) {
+        const names = classes(box)
+        expect(names).toContain(PICKER_ROW_SELECTED)
+        expect(names).toContain(`hover:${PICKER_ROW_SELECTED}`)
+        expect(names).not.toContain('bg-row-hover')
+        expect(names).not.toContain('hover:bg-row-hover')
+      }
+    }
+    check()
+    const [edit] = screen.getAllByTestId('selector-edit') as [HTMLElement]
+    fireEvent.click(edit)
+    await screen.findByTestId('selector-edit-flyout')
+    expect(edit).toHaveAttribute('aria-expanded', 'true')
+    check()
+    // An unselected row keeps the plain 3% hover and no fill.
+    const sonnet = rowsNamed('Claude Sonnet')[0] as HTMLElement
+    const box = sonnet.closest('.group\\/fav') as HTMLElement
+    expect(classes(box)).toContain('hover:bg-row-hover')
+    expect(classes(box)).not.toContain(PICKER_ROW_SELECTED)
+  })
+
+  it('moves on a pick: the old row loses it at once, even while its Edit copy leaves', () => {
+    vi.useFakeTimers()
+    render(
+      <PickPanel
+        {...props({
+          modelOption: THREE,
+          favoritesStore: storeOf([
+            [CURSOR.id, 'opus'],
+            [CURSOR.id, 'sonnet']
+          ])
+        })}
+      />
+    )
+    const sonnet = rowsNamed('Claude Sonnet').at(-1) as HTMLElement
+    fireEvent.click(sonnet)
+    // The old Edits are still fading out beside the old rows.
+    const leaving = Array.from(document.querySelectorAll<HTMLElement>('[data-edit-exiting]'))
+    expect(leaving).toHaveLength(2)
+    for (const copy of leaving) {
+      const box = copy.parentElement as HTMLElement
+      expect(box.closest('[data-row-selected]')).toBeNull()
+      expect(classes(box)).not.toContain(PICKER_ROW_SELECTED)
+    }
+    for (const row of rowsNamed('Claude Opus')) expect(boxOf(row)).toBeNull()
+    const boxes = marked()
+    expect(boxes).toHaveLength(2)
+    expect(filled()).toEqual(boxes)
+    for (const row of rowsNamed('Claude Sonnet')) expect(boxes).toContain(boxOf(row))
+
+    act(() => {
+      vi.advanceTimersByTime(PICKER_EDIT_MOTION.exitMs)
+    })
+    expect(document.querySelector('[data-edit-exiting]')).toBeNull()
+    expect(marked()).toEqual(boxes)
+    expect(filled()).toEqual(boxes)
+  })
+
+  it('reads selected from aria-pressed: selected, hover and keyboard-focus rows carry distinct tokens', () => {
+    render(
+      <Panel {...props({ modelOption: THREE, favoritesStore: storeOf([[CURSOR.id, 'opus']]) })} />
+    )
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-selector-row]'))
+    const pressed = rows.filter((row) => row.getAttribute('aria-pressed') === 'true')
+    expect(pressed.map((row) => row.getAttribute('aria-label'))).toEqual([
+      'Claude Opus',
+      'Claude Opus'
+    ])
+    // Exactly the aria-pressed rows sit in a filled box.
+    for (const row of rows) expect(boxOf(row) !== null).toBe(pressed.includes(row))
+    // Hover (unselected): the 3% wash, never the fill.
+    const plain = rowsNamed('Claude Haiku')[0] as HTMLElement
+    const plainBox = plain.closest('.group\\/fav') ?? plain
+    expect(classes(plainBox as HTMLElement)).toContain('hover:bg-row-hover')
+    expect(classes(plainBox as HTMLElement)).not.toContain(PICKER_ROW_SELECTED)
+    // Keyboard focus: the focus ring only, no fill, on selected and plain rows alike.
+    for (const row of [plain, ...pressed]) {
+      for (const token of ROW_FOCUS.split(' ')) expect(classes(row)).toContain(token)
+      expect(classes(row)).not.toContain(PICKER_ROW_SELECTED)
+    }
+    plain.focus()
+    expect(plain).toHaveFocus()
+    expect(boxOf(plain)).toBeNull()
+  })
+
+  it('the exiting Edit copy never carries the selected token', () => {
+    vi.useFakeTimers()
+    render(<PickPanel {...props({ modelOption: THREE })} />)
+    fireEvent.click(rowsNamed('Claude Sonnet')[0] as HTMLElement)
+    const copy = document.querySelector<HTMLElement>('[data-edit-exiting]') as HTMLElement
+    expect(copy).not.toBeNull()
+    expect(copy.closest('[data-row-selected]')).toBeNull()
+    for (const el of [copy, ...Array.from(copy.querySelectorAll<HTMLElement>('*'))]) {
+      expect((el.getAttribute('class') ?? '').split(/\s+/)).not.toContain(PICKER_ROW_SELECTED)
+    }
+  })
+
+  it('Edit on the selected fill uses secondary ink, not muted (muted drops under 4.5:1)', () => {
+    render(<Panel {...props({ modelOption: THREE })} />)
+    const edits = screen.getAllByTestId('selector-edit')
+    expect(edits.length).toBeGreaterThan(0)
+    for (const edit of edits) {
+      expect(edit.closest('[data-row-selected]')).not.toBeNull()
+      // Edit and its Thinking level, which sets its own ink.
+      const inked = [
+        edit,
+        ...Array.from(edit.querySelectorAll<HTMLElement>('[data-edit-thinking]'))
+      ]
+      for (const el of inked) {
+        const ink = (el.getAttribute('class') ?? '').split(/\s+/)
+        expect(ink).toContain('text-secondary-foreground')
+        expect(ink).not.toContain('text-muted-foreground')
+      }
+    }
+  })
+
+  it('the rail active tab uses the same fill', () => {
+    render(<Panel {...props({ agentRail: 'left' })} />)
+    const indicator = screen
+      .getByRole('tab', { name: 'Cursor' })
+      .querySelector<HTMLElement>(':scope > span[aria-hidden="true"]')
+    expect(classes(indicator)).toContain(PICKER_ROW_SELECTED)
+    const inactive = screen.getByRole('tab', { name: 'Claude Agent' })
+    expect(inactive.querySelector(':scope > span[aria-hidden="true"]')).toBeNull()
+  })
+})
+
 describe('SelectorPanelV2 Thinking level on the Edit button', () => {
   const edit = (): HTMLElement => screen.getByTestId('selector-edit')
   /** Edit's visible text, chevron aside (it is an aria-hidden svg). */
@@ -731,7 +970,8 @@ describe('SelectorPanelV2 Thinking level on the Edit button', () => {
         'whitespace-nowrap',
         'tabular-nums',
         'text-xs',
-        'text-muted-foreground'
+        // The level sits on the selected fill, where muted ink falls under 4.5:1.
+        'text-secondary-foreground'
       ])
     )
     expect(classes(edit())).toEqual(

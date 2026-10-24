@@ -25,6 +25,20 @@ export const PICKER_ROW_NAME_PULL = '-ml-0.5'
 export const PICKER_ROW_VALUE =
   'shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground'
 
+/**
+ * The selected model row's fill, and the left rail's active agent tab: the
+ * popover's active-segment fill (docs/design/colors.md). Both read this, so
+ * the active model reads like the active agent and the two cannot drift.
+ */
+export const PICKER_ROW_SELECTED = 'bg-foreground/10'
+
+/**
+ * The selected row's outer box: the fill, kept under hover. It goes last in
+ * `cn`, so tailwind-merge drops the box's own `hover:bg-row-hover` (and the
+ * open flyout's `bg-row-hover`). The hover half stays literal for Tailwind.
+ */
+export const PICKER_ROW_SELECTED_BOX = `${PICKER_ROW_SELECTED} hover:bg-foreground/10`
+
 /** Icon sizes in a row: the agent glyph and the Fast bolt (16), the check (14). */
 export const PICKER_ICON = { glyph: 16, check: 14 } as const
 
