@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { _resetDesktopHostForTesting, registerDesktopHost } from '@/lib/desktop-host'
 import { getDefaultKeyboardShortcuts } from '@/types/settings'
 
 // Issue #858: Chrome/Edge reserve Ctrl+N/T/W, Ctrl+Shift+N, Ctrl+PageUp/Down
@@ -12,6 +13,7 @@ describe('getDefaultKeyboardShortcuts (#858 web-safe defaults)', () => {
   afterEach(() => {
     // @ts-expect-error test cleanup deletes the injected global
     delete window.__TAURI_INTERNALS__
+    _resetDesktopHostForTesting()
   })
 
   it('desktop: returns the unchanged Ctrl-based defaults', () => {
@@ -30,6 +32,21 @@ describe('getDefaultKeyboardShortcuts (#858 web-safe defaults)', () => {
     expect(defaults.zoomOut.defaultKey).toBe('ctrl+-')
     expect(defaults.zoomReset.defaultKey).toBe('ctrl+0')
     expect(defaults.settings.defaultKey).toBe('ctrl+,')
+  })
+
+  it('desktop host (GPUIX, no Tauri): returns the same Ctrl-based table as Tauri', () => {
+    const noop = async (): Promise<void> => {}
+    registerDesktopHost({ openUrl: noop, openPath: noop, revealItemInDir: noop, notify: noop })
+
+    const defaults = getDefaultKeyboardShortcuts()
+
+    expect(defaults.newTerminal.defaultKey).toBe('ctrl+t')
+    expect(defaults.closeTab.defaultKey).toBe('ctrl+w')
+    expect(defaults.commandHistory.defaultKey).toBe('ctrl+r')
+    expect(defaults.zoomIn.defaultKey).toBe('ctrl+=')
+    expect(defaults.settings.defaultKey).toBe('ctrl+,')
+    ;(window as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    expect(defaults).toEqual(getDefaultKeyboardShortcuts())
   })
 
   it('web: remaps browser-reserved combos to Alt-based alternates', () => {

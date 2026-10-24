@@ -8,6 +8,7 @@
 
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { registerDesktopHost } from '@/lib/desktop-host'
 import { installBrowserEnv } from './env'
 import { readInitialWindowSize } from './env/window-size'
 import { launch } from './launcher'
@@ -32,13 +33,15 @@ log.info(
 const FONT_DIR = path.join(import.meta.dir, '../assets/fonts')
 const fonts = FONT_FILES.map((file) => readFileSync(path.join(FONT_DIR, path.basename(file))))
 
+// Before the app tree loads: the keyboard-shortcuts store reads its desktop
+// defaults from the registered host when its module is evaluated.
+registerDesktopHost(createDesktopHost())
 const { boot } = await import('#app/boot')
 // Headless runs (parity shots, agent checks) must not steal the keyboard.
 boot(config, {
   focus: process.env.GPUIX_BACKGROUND !== '1',
   server: launched.status,
   onFocusRequest: launched.onFocusRequest,
-  desktopHost: createDesktopHost(),
   window: windowSize,
   fonts,
   hostLocalToken: hostLocalTokenFile ? () => readHostLocalToken(hostLocalTokenFile) : null

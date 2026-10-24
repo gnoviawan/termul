@@ -1,4 +1,5 @@
-﻿import { MONO_STACK } from '@/lib/font-stacks'
+﻿import { getDesktopHost } from '@/lib/desktop-host'
+import { MONO_STACK } from '@/lib/font-stacks'
 
 // Context bar visibility settings
 export interface ContextBarSettings {
@@ -500,12 +501,16 @@ const WEB_DEFAULT_KEY_OVERRIDES: Record<string, string> = {
   settings: 'alt+,'
 }
 
-/** Platform-aware default bindings. See `WEB_DEFAULT_KEY_OVERRIDES`. */
+/**
+ * Platform-aware default bindings. See `WEB_DEFAULT_KEY_OVERRIDES`. A desktop
+ * shell owns its window's keys, so Tauri and a registered desktop host (the
+ * GPUIX client) keep the Ctrl-based table; only a browser tab gets the swaps.
+ */
 export function getDefaultKeyboardShortcuts(): KeyboardShortcutsConfig {
   const isTauri =
     typeof window !== 'undefined' &&
     typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !== 'undefined'
-  if (isTauri) return DEFAULT_KEYBOARD_SHORTCUTS
+  if (isTauri || getDesktopHost() !== null) return DEFAULT_KEYBOARD_SHORTCUTS
 
   const webDefaults: KeyboardShortcutsConfig = {}
   for (const [key, shortcut] of Object.entries(DEFAULT_KEYBOARD_SHORTCUTS)) {
