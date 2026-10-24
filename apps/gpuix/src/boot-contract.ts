@@ -34,6 +34,8 @@ export interface BootOptions {
    * this app did not start the server (`launcher/host-local.ts`).
    */
   hostLocalToken: (() => string | null) | null
+  /** Called once with the native renderer; perf runs wrap it to count round trips. */
+  onRenderer?: (renderer: object) => void
 }
 
 export type BootFn = (config: ClientConfig, options: BootOptions) => void

@@ -48,5 +48,5 @@ export function recordRendererStats(renderer: object, file: string | undefined):
     for (const key of Object.keys(blockedMs)) delete blockedMs[key]
     batchBytes = 0
     appendFileSync(file, `${JSON.stringify(line)}\n`)
-  }, 1000).unref?.()
+  }, 1000).unref()
 }

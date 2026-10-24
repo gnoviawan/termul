@@ -14,6 +14,7 @@ import { launch } from './launcher'
 import { createDesktopHost } from './launcher/desktop-host'
 import { readHostLocalToken } from './launcher/host-local'
 import { log } from './log'
+import { recordRendererStats } from './renderer-stats'
 import { FONT_FILES } from './style/fonts'
 
 const launched = await launch()
@@ -41,5 +42,6 @@ boot(config, {
   desktopHost: createDesktopHost(),
   window: windowSize,
   fonts,
-  hostLocalToken: hostLocalTokenFile ? () => readHostLocalToken(hostLocalTokenFile) : null
+  hostLocalToken: hostLocalTokenFile ? () => readHostLocalToken(hostLocalTokenFile) : null,
+  onRenderer: (renderer) => recordRendererStats(renderer, process.env.TERMUL_GPUIX_STATS)
 })
