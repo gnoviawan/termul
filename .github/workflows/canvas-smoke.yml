@@ -17,6 +17,7 @@ on:
       - 'vite.config.web.ts'
       - 'package.json'
       - 'bun.lock'
+  workflow_dispatch:
 
 permissions:
   contents: read

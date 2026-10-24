@@ -30,3 +30,6 @@ bun run test:smoke:canvas
 - every button's accessible name, as Chrome computes it, has no space before a comma or period and no edge whitespace.
 
 Accessible names are read from Chrome's accessibility tree (`helpers/ax-name.ts`), not jsdom. jsdom ignores layout, so it cannot catch a name Chrome changes because of CSS, like the stray space an absolutely positioned `sr-only` span added in #1512.
+
+`getFullAXTree` only sees rendered nodes, so a check on content inside a closed popover or flyout must open it first.
+If `/\s[,.]/` ever flags a legitimate name such as "Loading ...", narrow the regex; don't delete the test.
