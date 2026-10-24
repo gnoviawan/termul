@@ -300,6 +300,11 @@ async function launchGpuixClient(
   }
 }
 
+function quarter(values: number[], index: number): number[] {
+  const size = Math.ceil(values.length / 4)
+  return values.slice(index * size, (index + 1) * size)
+}
+
 async function runOnce(client: Client, mode: Mode, run: number, entry: string) {
   const dir = path.join(OUT, `${client}-${mode}-run${run}`)
   await rm(dir, { recursive: true, force: true })
@@ -349,7 +354,11 @@ async function runOnce(client: Client, mode: Mode, run: number, entry: string) {
           ? {
               'draw.p50Ms': round(percentile(probe.drawMs, 0.5), 2),
               'draw.p95Ms': round(percentile(probe.drawMs, 0.95), 2),
-              'draw.maxMs': round(Math.max(...probe.drawMs), 2)
+              'draw.maxMs': round(Math.max(...probe.drawMs), 2),
+              // Growth with reply length: the storm's reply is short in the
+              // first quarter of frames and longest in the last.
+              'draw.firstQuarterP50Ms': round(percentile(quarter(probe.drawMs, 0), 0.5), 2),
+              'draw.lastQuarterP50Ms': round(percentile(quarter(probe.drawMs, 3), 0.5), 2)
             }
           : {}),
         'latency.chunks': latency.length,

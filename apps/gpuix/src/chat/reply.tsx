@@ -34,7 +34,7 @@ import { CodeCard } from './CodeCard'
 import { transcriptProbe } from './perf-probe'
 import { type FlowBlock, flowGap, leadingMargin } from './prose-flow'
 import { type ProsePart, proseParts } from './prose-parts'
-import { fileLinkPath, proseBlocks } from './prose-source'
+import { fileLinkPath, listItems, proseBlocks, unquote } from './prose-source'
 import { TableCard } from './TableCard'
 import { transcriptThemes } from './theme'
 
@@ -196,8 +196,26 @@ export function useReplyLinks(filePathContext: FilePathResolutionContext | undef
   return { onLink, dialog }
 }
 
-/** `.chat-streamdown` lists: `padding-left: 1.25rem`. */
-const LIST_INDENT = 20
+/** Streamdown's `li` `py-1`. */
+const LIST_ITEM_PAD = 4
+/** `.chat-streamdown` lists: `padding-left: 1.25rem`; items `py-1` (see `listItems`). */
+const LIST_BOX = {
+  display: 'flex' as const,
+  flexDirection: 'column' as const,
+  gap: LIST_ITEM_PAD * 2,
+  paddingLeft: 20,
+  paddingTop: LIST_ITEM_PAD,
+  paddingBottom: LIST_ITEM_PAD,
+  minWidth: 0
+}
+
+/**
+ * Streamdown's quote, `border-l-4 border-muted-foreground/30 pl-4
+ * text-muted-foreground`: its utilities beat `.chat-streamdown`'s 2px rule
+ * (components layer). Native markdown paints quotes as a tinted card, so the
+ * rule is drawn here around the quote's own content.
+ */
+const QUOTE = { ...tw('border-l-4 border-muted-foreground/30 pl-4'), minWidth: 0 }
 
 const MarkdownBlock = memo(function MarkdownBlock({
   source,
@@ -213,22 +231,32 @@ const MarkdownBlock = memo(function MarkdownBlock({
   onLink: (url: string) => void
 }) {
   const themes = transcriptThemes(useColorTheme())
-  const markdown = (
+  const quote = block === 'blockquote'
+  const native = (text: string, key?: number) => (
     <markdown
-      source={source}
-      theme={themes.prose}
-      style={{ minWidth: 0, ...(block === 'list' ? { paddingLeft: LIST_INDENT } : {}) }}
+      key={key}
+      source={text}
+      theme={quote ? themes.quote : themes.prose}
+      style={{ minWidth: 0 }}
       onLinkClick={(event) => {
         if (event.value) onLink(event.value)
       }}
     />
   )
+  const markdown =
+    block === 'list' ? (
+      <div style={LIST_BOX}>{listItems(source).map((item, i) => native(item, i))}</div>
+    ) : (
+      native(quote ? unquote(source) : source)
+    )
   return (
     <div style={{ marginTop, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       {block === 'table' ? (
         <TableCard source={source} streaming={streaming}>
           {markdown}
         </TableCard>
+      ) : quote ? (
+        <div style={QUOTE}>{markdown}</div>
       ) : (
         markdown
       )}

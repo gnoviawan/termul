@@ -17,6 +17,7 @@
  */
 
 import { appliedBatchCount } from '@gpuix/native/host'
+import { orOnTimeout } from '../native-guard'
 
 export interface Bounds {
   x: number
@@ -117,7 +118,9 @@ export function liveReads(renderer: CompatRenderer): LiveReads {
     },
     tree() {
       fresh()
-      tree ??= paintedTree(renderer.getAutomationTree())
+      tree ??= paintedTree(
+        orOnTimeout('getAutomationTree', () => renderer.getAutomationTree(), 'null')
+      )
       return tree
     }
   }

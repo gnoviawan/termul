@@ -120,7 +120,7 @@ export const PACKAGE_ALIASES: Record<string, string> = {
   '@radix-ui/react-accordion': 'radix/generic.tsx',
   '@radix-ui/react-hover-card': 'radix/generic.tsx',
   '@radix-ui/react-switch': 'radix/generic.tsx',
-  '@radix-ui/react-select': 'radix/generic.tsx',
+  '@radix-ui/react-select': '../ui/internal/select-primitive.tsx',
   '@radix-ui/react-radio-group': 'radix/radio-group.tsx',
   'framer-motion': 'shims/framer-motion.tsx',
   cmdk: 'shims/cmdk.tsx',

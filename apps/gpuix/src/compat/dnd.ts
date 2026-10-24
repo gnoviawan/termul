@@ -349,14 +349,28 @@ export function moveSource(payload: EventPayload): void {
   if (preview) setPreview({ ...preview, x: point.x - current.grab.x, y: point.y - current.grab.y })
 }
 
-/** Mouse up on a draggable element, or anywhere once its drag lost the capture. */
-export function releaseSource(payload: EventPayload): void {
-  if (!session) return
-  if (session.phase === 'pressed') {
-    session = null
-    return
+/**
+ * Mouse up on a draggable element, or anywhere once its drag lost the capture.
+ *
+ * A press that never became a drag is a click. GPUIX's pointer capture on the
+ * source keeps that click from reaching the source's descendants (a chat
+ * card's button inside its draggable row), so when the release lands on a
+ * descendant this returns that element for the caller to click, and the click
+ * GPUIX may still deliver to the source itself is dropped as a duplicate.
+ */
+export function releaseSource(payload: EventPayload): number | null {
+  const s = session
+  if (!s) return null
+  if (s.phase === 'dragging') {
+    finish(payload)
+    return null
   }
-  finish(payload)
+  session = null
+  const point = pointOf(payload)
+  const target = hitTest(point)
+  if (target === null || target === s.source || !ancestorIds(target).includes(s.source)) return null
+  lastRelease = { ...point, at: performance.now() }
+  return target
 }
 
 let lastFileDrop = ''
