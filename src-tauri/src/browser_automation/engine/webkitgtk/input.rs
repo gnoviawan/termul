@@ -328,10 +328,14 @@ unsafe fn hardware_keycode(display: *mut gdk_sys::GdkDisplay, keyval: u32) -> u1
     let mut keys: *mut gdk_sys::GdkKeymapKey = std::ptr::null_mut();
     let mut n: i32 = 0;
     let mut code = 0u16;
-    if gdk_sys::gdk_keymap_get_entries_for_keyval(keymap, keyval, &mut keys, &mut n) != 0 && n > 0 {
-        code = (*keys).keycode as u16;
-        glib::ffi::g_free(keys.cast());
+    let found = gdk_sys::gdk_keymap_get_entries_for_keyval(keymap, keyval, &mut keys, &mut n) != 0;
+    if keys.is_null() {
+        return 0;
     }
+    if found && n > 0 {
+        code = (*keys).keycode as u16;
+    }
+    glib::ffi::g_free(keys.cast());
     code
 }
 

@@ -13,7 +13,9 @@
 // The frame comes from the second loopback port under another host name,
 // so it is cross-site as well as cross-origin.
 var query = new URLSearchParams(location.search);
-var src = 'http://localhost:' + query.get('xo') + '/' + (query.get('page') || 'frame-inner.html');
+var port = /^[0-9]{1,5}$/.test(query.get('xo') || '') ? query.get('xo') : '0';
+var page = /^[A-Za-z0-9_-]+.html$/.test(query.get('page') || '') ? query.get('page') : 'frame-inner.html';
+var src = 'http://localhost:' + port + '/' + page;
 var frame = document.createElement('iframe');
 frame.title = 'Cross frame';
 frame.width = '400';

@@ -118,7 +118,7 @@ async fn an_authenticated_client_of_the_session_resolves_the_ticket() {
         &env(&rig, Carrier::Ws, true, true),
     )
     .await;
-    assert!(reply.ok, "{:?}", reply.err);
+    assert!(reply.ok, "the route refused the frame");
     assert_eq!(
         waiter.await.unwrap(),
         TicketOutcome::Answered(ConsentOption::AllowSession)
@@ -306,7 +306,7 @@ fn browser_stop_needs_an_authenticated_client_of_the_session() {
         "refused stops never reach the host"
     );
     let reply = runtime.block_on(route(&frame, &env(&rig, Carrier::Ws, true, true)));
-    assert!(reply.ok, "{:?}", reply.err);
+    assert!(reply.ok, "the route refused the frame");
     assert_eq!(host.0.lock().as_slice(), [SESSION.to_string()]);
     let reply = runtime.block_on(route(
         &json!({"id": "s2", "type": "browser_stop", "payload": {}}).to_string(),
