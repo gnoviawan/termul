@@ -33,6 +33,7 @@
     "src/browser",
     "build.ts",
     "tools",
+    "packaging",
     "src/style/fonts.ts",
     "src/style/__tests__",
     "src/composer/__tests__"

@@ -44,6 +44,7 @@ export const boot: BootFn = (config, options) => {
     </ServerGate>,
     {
       title: DESKTOP_WINDOW.title,
+      appId: DESKTOP_WINDOW.appId,
       width: options.window.width,
       height: options.window.height,
       minWidth: DESKTOP_WINDOW.minWidth,
