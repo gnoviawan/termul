@@ -223,7 +223,12 @@ function AgentTabStrip({
       className={cn(
         'flex',
         vertical
-          ? cn('shrink-0 flex-col border-r border-border py-1', touch ? 'w-14' : 'w-10')
+          ? // `box-content`: the hairline sits outside the 40px (56px touch) column,
+            // so a 28px (44px) tab has 6px on each side and its centre is the rail's.
+            cn(
+              'box-content shrink-0 flex-col items-center border-r border-border py-1',
+              touch ? 'w-14' : 'w-10'
+            )
           : cn('border-b border-border', touch ? 'px-3' : 'px-1')
       )}
     >
@@ -242,29 +247,35 @@ function AgentTabStrip({
           className={cn(
             'relative flex items-center justify-center transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60',
             vertical
-              ? // 28px like a list row, so each icon sits on the list's row grid.
-                cn('ml-1 rounded-l-md', touch ? 'h-11' : 'h-7')
+              ? // A square as tall as a list row (28px), so each icon sits on the
+                // list's row grid; 6px radius like the rows.
+                cn('rounded-md', touch ? 'size-11' : 'size-7')
               : cn('flex-1 rounded-t-md', touch ? 'h-11' : 'h-8'),
             item.selected
-              ? // The rail's active tab takes the popover's active-segment fill
-                // (docs/design/colors.md) so its edge bar reads as part of it.
-                cn('text-foreground', vertical && 'bg-foreground/10')
-              : 'text-muted-foreground hover:bg-row-hover hover:text-foreground',
+              ? 'text-foreground'
+              : cn(
+                  'text-muted-foreground hover:text-foreground',
+                  vertical ? 'hover:bg-foreground/5' : 'hover:bg-row-hover'
+                ),
             ROW_FOCUS
           )}
         >
-          {item.glyph}
           {item.selected ? (
             <motion.span
               layoutId={`${id}-indicator`}
               aria-hidden="true"
               transition={quick(reduced)}
               className={cn(
-                'absolute rounded-full bg-foreground',
-                vertical ? 'inset-y-1.5 -right-px w-0.5' : 'inset-x-2 -bottom-px h-0.5'
+                'pointer-events-none absolute',
+                // Rail: the popover's active-segment fill (docs/design/colors.md)
+                // filling the tab. Top strip: a bar under the tab.
+                vertical
+                  ? 'inset-0 rounded-md bg-foreground/10'
+                  : 'inset-x-2 -bottom-px h-0.5 rounded-full bg-foreground'
               )}
             />
           ) : null}
+          <span className="relative inline-flex">{item.glyph}</span>
         </button>
       ))}
     </div>
@@ -726,13 +737,19 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       data-testid="agent-model-selector-panel"
       data-variant="v2"
       data-agent-rail={agentRail}
-      className={cn('flex min-h-0 flex-col', !touch && (agentRail === 'left' ? 'w-85' : 'w-75'))}
+      // Left rail: the 300px list plus the 40px rail and its 1px hairline.
+      className={cn(
+        'flex min-h-0 flex-col',
+        !touch && (agentRail === 'left' ? 'w-[341px]' : 'w-75')
+      )}
     >
       <div
         className={cn(
           'flex items-center gap-2 border-b border-border transition-colors duration-150 ease-out',
           BAND_FOCUS_CLASS,
-          touch ? 'h-12 px-5' : 'h-9 px-3'
+          // With the rail, the 14px icon sits on the rail's centre line (20px in);
+          // on touch px-5 already centres the 16px icon on the 56px rail.
+          touch ? 'h-12 px-5' : cn('h-9 pr-3', agentRail === 'left' ? 'pl-3.25' : 'pl-3')
         )}
       >
         <Search
