@@ -13,7 +13,7 @@ import {
 } from '../../../../../tools/perf/runner/scenario-ui.ts'
 import { descendants, readCmdline } from '../proc-sampler.ts'
 import { PERF_AGENT_NAME, PERF_DEVICE_ID, PERF_PROJECT_NAME, PERF_TOKEN } from '../server.ts'
-import type { ClientDriver, ClientHandle, ClientLaunchOptions } from './client.ts'
+import type { ChatStartPart, ClientDriver, ClientHandle, ClientLaunchOptions } from './client.ts'
 
 export interface ChromiumHandle extends ClientHandle {
   page: Page
@@ -138,6 +138,7 @@ async function typeIntoComposer(page: Page, composer: Locator, text: string): Pr
 export function chromiumDriver(handle: ChromiumHandle): ClientDriver {
   const { page, collector } = handle
   const titles: string[] = []
+  const parts: ChatStartPart[] = []
   return {
     handle,
     waitForProjectList: () => page.locator(PROJECT_ROW).first().waitFor({ timeout: 60_000 }),
@@ -153,7 +154,9 @@ export function chromiumDriver(handle: ChromiumHandle): ClientDriver {
         .first()
         .waitFor({ timeout: ACTION_MS })
       const before = await page.locator(CHAT_TAB).count()
+      const typed = performance.now()
       await typeIntoComposer(page, composer, prompt)
+      const clicked = performance.now()
       await page.locator(START_CHAT_SELECTOR).first().click({ timeout: ACTION_MS })
       await page.waitForFunction(
         ([sel, n]) => document.querySelectorAll(sel as string).length > (n as number),
@@ -161,8 +164,13 @@ export function chromiumDriver(handle: ChromiumHandle): ClientDriver {
         { timeout: ACTION_MS }
       )
       await composer.waitFor({ state: 'hidden', timeout: ACTION_MS })
+      parts.push({
+        typeMs: Math.round(clicked - typed),
+        openMs: Math.round(performance.now() - clicked)
+      })
       titles.push(prompt)
     },
+    chatStartParts: () => parts,
     chatCount: () => page.locator(CHAT_TAB).count(),
     switchToChat: async (index) => {
       const title = titles[index % titles.length]

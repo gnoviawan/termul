@@ -13,7 +13,7 @@ import { REPO_DIR } from '../../build.ts'
 import { DIST_WEB } from '../parity/shoot-web.ts'
 import { startByteProxy } from './byte-proxy.ts'
 import { chromiumDriver, launchChromium } from './clients/chromium.ts'
-import type { ClientDriver, ClientKind } from './clients/client.ts'
+import type { ChatStartPart, ClientDriver, ClientKind } from './clients/client.ts'
 import { gpuixDriver, launchGpuix } from './clients/gpuix.ts'
 import {
   chromiumRole,
@@ -264,6 +264,7 @@ async function runOnce(
       }
     }
     await SCENARIOS[scenario]({ driver: d, clock, flags, seed: opts.seed, scratch })
+    notes.chatStartParts = d.chatStartParts()
   } catch (err) {
     errors.push(`fatal: ${err instanceof Error ? err.stack : String(err)}`)
   } finally {
@@ -331,6 +332,11 @@ async function runOnce(
       metrics['chat.startUnderLoadP50Ms'] = median(loaded)
       metrics['chat.startUnderLoadMaxMs'] = Math.max(...loaded)
     }
+  }
+  const parts = notes.chatStartParts as ChatStartPart[] | undefined
+  if (parts && parts.length > 1) {
+    metrics['chat.typeUnderLoadP50Ms'] = median(parts.slice(1).map((p) => p.typeMs))
+    metrics['chat.openUnderLoadP50Ms'] = median(parts.slice(1).map((p) => p.openMs))
   }
   if (typeof notes.switches === 'number') metrics['chat.switches'] = notes.switches
   return {

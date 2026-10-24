@@ -6,7 +6,7 @@ import { APP_DIR } from '../../../build.ts'
 import { LAVAPIPE_ICD } from '../../parity/shoot-gpuix.ts'
 import { descendants, readCmdline } from '../proc-sampler.ts'
 import { PERF_AGENT_NAME, PERF_DEVICE_ID, PERF_PROJECT_NAME, PERF_TOKEN } from '../server.ts'
-import type { ClientDriver, ClientHandle, ClientLaunchOptions } from './client.ts'
+import type { ChatStartPart, ClientDriver, ClientHandle, ClientLaunchOptions } from './client.ts'
 
 type App = Awaited<ReturnType<typeof launch>>
 
@@ -141,7 +141,18 @@ const center = (n: TreeNode) => {
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 }
 }
 
-const keysFor = (text: string) => [...text].map((ch) => (ch === ' ' ? 'space' : ch)).join(' ')
+const keysFor = (text: string) => [...text].map((ch) => (ch === ' ' ? 'space' : ch))
+
+/**
+ * The app waits at most 2 s for its GPUI UI thread to take each automation
+ * command. Under load the UI thread can be busier than that; the command
+ * still sits in its ordered queue and lands later, before any command sent
+ * after it.
+ */
+const isUiTimeout = (err: unknown) => /Timed out after 2 seconds waiting for/.test(String(err))
+const queued = (err: unknown) => {
+  if (!isUiTimeout(err)) throw err
+}
 
 /**
  * The automation tree carries test ids and text but no aria-labels, so the
@@ -157,7 +168,21 @@ const keysFor = (text: string) => [...text].map((ch) => (ch === ' ' ? 'space' : 
 export function gpuixDriver(handle: GpuixHandle): ClientDriver {
   const { app } = handle
   const titles: string[] = []
-  const tree = async () => (await app.call('getTree', {})).tree as TreeNode
+  const parts: ChatStartPart[] = []
+  const tree = async (): Promise<TreeNode> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return (await app.call('getTree', {})).tree as TreeNode
+      } catch (err) {
+        if (!isUiTimeout(err) || attempt === 5) throw err
+      }
+    }
+  }
+  const click = (n: TreeNode) => app.mouse.click(center(n)).catch(queued)
+  // One key per command, as a person types; a long batch is one UI-thread job.
+  const type = async (elementId: number, keys: string[]) => {
+    for (const key of keys) await app.call('keystrokes', { elementId, keys: key }).catch(queued)
+  }
   let terminalId: string | null = null
 
   const chatCards = (root: TreeNode): TreeNode[] => {
@@ -181,19 +206,29 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
   }
 
   // The launcher's composer remounts while agent config loads, as on the web
-  // (see the Chromium lane). Clear, type, and retry until the text stuck.
+  // (see the Chromium lane). The textarea exposes no value, so "the text
+  // landed" is the placeholder going away; a new composer id means a remount.
   const typeIntoLauncher = async (firstId: number, prompt: string) => {
     let id = firstId
     for (let attempt = 0; attempt < 5; attempt++) {
-      await app.call('keystrokes', { elementId: id, keys: `ctrl-a backspace ${keysFor(prompt)}` })
-      await Bun.sleep(300)
-      const r = await tree()
-      const box = launcherComposer(r)
-      const placeholder =
-        box && find(r, (n) => byText(COMPOSER_PLACEHOLDER)(n) && n.bounds?.y === box.bounds?.y)
-      if (box?.id === id && !placeholder) return
-      if (box) id = box.id
-      await Bun.sleep(700)
+      await type(id, ['ctrl-a', 'backspace', ...keysFor(prompt)])
+      const landed = await until(
+        'launcher composer shows typed text or remounts',
+        async () => {
+          const r = await tree()
+          const box = launcherComposer(r)
+          if (!box) return null
+          if (box.id !== id) return { remounted: box.id }
+          const empty = find(
+            r,
+            (n) => byText(COMPOSER_PLACEHOLDER)(n) && n.bounds?.y === box.bounds?.y
+          )
+          return empty ? null : { remounted: null }
+        },
+        20_000
+      ).catch(() => ({ remounted: id }))
+      if (landed.remounted === null) return
+      id = landed.remounted
     }
     throw new Error(`launcher composer never accepted "${prompt}"`)
   }
@@ -229,7 +264,7 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
         )
         const newChat = header?.children?.[1].children?.[0]
         if (!newChat) throw new Error('no New chat button next to the workspace switcher')
-        await app.mouse.click(center(newChat))
+        await click(newChat)
         root = await until('launcher after New chat', async () => {
           const r = await tree()
           return launcherOpen(r) ? r : null
@@ -243,7 +278,9 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
       const before = chatCards(picker).length
       const composer = launcherComposer(picker)
       if (!composer) throw new Error('launcher has no composer')
+      const typed = performance.now()
       await typeIntoLauncher(composer.id, prompt)
+      const clicked = performance.now()
       // Innermost [picker, button] pair: outer ancestors also have two children.
       const rows: TreeNode[] = []
       walk(await tree(), (n) => {
@@ -261,20 +298,25 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
         )
       }
       if (!start) throw new Error('no Start button after the agent picker')
-      await app.mouse.click(center(start))
+      await click(start)
       await until('a new chat card and a closed launcher', async () => {
         const r = await tree()
         return chatCards(r).length > before && !launcherOpen(r)
       })
+      parts.push({
+        typeMs: Math.round(clicked - typed),
+        openMs: Math.round(performance.now() - clicked)
+      })
       titles.push(prompt)
     },
+    chatStartParts: () => parts,
     chatCount: async () => chatCards(await tree()).length,
     switchToChat: async (index) => {
       const title = titles[index % titles.length]
       const list = find(await tree(), byTestId('chats-list-scroll'))
       const card = list && find(list, byText(title))
       if (!card) throw new Error(`no chat card titled ${title}`)
-      await app.mouse.click(center(card))
+      await click(card)
     },
     openTerminal: async () => {
       const root = await tree()
@@ -284,7 +326,7 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
         (n) => byText('Terminal')(n) && (n.bounds?.y ?? 0) > handle.windowHeight - 40
       )
       if (!button) throw new Error('no status-bar Terminal button')
-      await app.mouse.click(center(button))
+      await click(button)
       // Keys typed before bash prints its prompt are lost, so wait for the prompt.
       const opened = await until('a new terminal with a prompt', async () =>
         terminalNodes(await tree()).find(
@@ -303,7 +345,9 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
           `terminal ${terminalId} is not in the tree; present: ${nodes.map((t) => t.testId).join(', ') || 'none'}`
         )
       }
-      await app.call('keystrokes', { elementId: node.id, keys: `${keysFor(command)} enter` })
+      await app
+        .call('keystrokes', { elementId: node.id, keys: [...keysFor(command), 'enter'].join(' ') })
+        .catch(queued)
     },
     waitForTerminalText: async (marker, timeoutMs) => {
       await until(
