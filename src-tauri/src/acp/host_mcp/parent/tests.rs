@@ -1394,3 +1394,102 @@ fn ask_idle_heartbeat_is_a_third_of_the_idle_timeout_within_bounds() {
         Duration::from_secs(30)
     );
 }
+
+/// Calls `plan` over the loopback bridge with `token` and returns the reply.
+async fn plan_call(port: u16, token: &str, provisional: &str) -> serde_json::Value {
+    let frame = serde_json::json!({
+        "token": token,
+        "session_id": provisional,
+        "kind": "plan",
+        "todos": [{"content": "x"}],
+    });
+    connect_and_send(port, &frame).await
+}
+
+/// A reopen registers and binds a NEW token while the session's earlier token
+/// is still held by a live agent child (#1420). Returns both tokens' details.
+struct ReopenFixture {
+    server: Arc<HostPlanServer>,
+    port: u16,
+    old: (String, String),
+    new: (String, String),
+}
+
+fn reopen_fixture() -> ReopenFixture {
+    let server = HostPlanServer::start(vec![Arc::new(CapturingSink::default())], None);
+    let (port, old_token, old_prov) = server.register_session("agent-1");
+    server.bind_session(&old_token, "sess-real");
+    server.begin_turn("agent-1", "sess-real");
+    // What `prepare_reopen_mcp` does: register + bind, drop nothing.
+    let (_, new_token, new_prov) = server.register_session("agent-1");
+    server.bind_session(&new_token, "sess-real");
+    ReopenFixture {
+        server,
+        port,
+        old: (old_token, old_prov),
+        new: (new_token, new_prov),
+    }
+}
+
+#[test]
+fn failed_reopen_keeps_the_old_token_valid_and_evicts_the_new_one() {
+    let fx = reopen_fixture();
+    fx.server.settle_reopen_token("sess-real", &fx.new.0, false);
+    assert!(fx.server.sessions.lock().contains_key(&fx.old.0));
+    assert!(!fx.server.sessions.lock().contains_key(&fx.new.0));
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async {
+        let old = plan_call(fx.port, &fx.old.0, &fx.old.1).await;
+        assert_eq!(old["ok"], true, "the live child's token must still work");
+        let new = plan_call(fx.port, &fx.new.0, &fx.new.1).await;
+        assert_eq!(new["ok"], false, "the evicted token must be rejected");
+    });
+}
+
+#[test]
+fn failed_reopen_does_not_clear_the_sessions_state() {
+    let fx = reopen_fixture();
+    fx.server.plan_store.set("sess-real", Vec::new());
+    fx.server
+        .title_set_for_session
+        .lock()
+        .insert("sess-real".to_string());
+    fx.server.settle_reopen_token("sess-real", &fx.new.0, false);
+    assert!(fx.server.title_set_for_session.lock().contains("sess-real"));
+    assert!(fx.server.plan_store.get("sess-real").is_some());
+}
+
+#[test]
+fn successful_reopen_drops_the_old_token_and_keeps_the_new_one() {
+    let fx = reopen_fixture();
+    fx.server.settle_reopen_token("sess-real", &fx.new.0, true);
+    assert!(!fx.server.sessions.lock().contains_key(&fx.old.0));
+    assert!(fx.server.sessions.lock().contains_key(&fx.new.0));
+    let runtime = Runtime::new().unwrap();
+    // A reopen clears the session's in-flight turns; the next prompt starts one.
+    fx.server.begin_turn("agent-1", "sess-real");
+    runtime.block_on(async {
+        let new = plan_call(fx.port, &fx.new.0, &fx.new.1).await;
+        assert_eq!(new["ok"], true, "the new token is bound to the session");
+        let old = plan_call(fx.port, &fx.old.0, &fx.old.1).await;
+        assert_eq!(old["ok"], false, "the old token must be dropped");
+    });
+}
+
+#[test]
+fn successful_reopen_leaves_other_sessions_tokens_alone() {
+    let fx = reopen_fixture();
+    let (_, other, _) = fx.server.register_session("agent-1");
+    fx.server.bind_session(&other, "sess-other");
+    fx.server.settle_reopen_token("sess-real", &fx.new.0, true);
+    assert!(fx.server.sessions.lock().contains_key(&other));
+}
+
+#[test]
+fn successful_reopen_with_no_earlier_token_keeps_the_new_one() {
+    let server = HostPlanServer::start(vec![], None);
+    let (_, token, _) = server.register_session("agent-1");
+    server.bind_session(&token, "sess-real");
+    server.settle_reopen_token("sess-real", &token, true);
+    assert!(server.sessions.lock().contains_key(&token));
+}

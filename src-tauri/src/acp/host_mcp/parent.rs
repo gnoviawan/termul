@@ -289,8 +289,36 @@ impl HostPlanServer {
     /// closed sessions, so a stale in-flight call is harmless, but evicting
     /// avoids token reuse + bounds the map size.
     pub fn unregister_session(&self, real_session_id: &str) {
+        self.unregister_session_except(real_session_id, None);
+    }
+
+    /// Settle the plan token of a history reopen (#1420) once its outcome is
+    /// known. `new_token` is the token `prepare_reopen_mcp` registered and bound
+    /// to `real_session_id`; the session's earlier token(s) stay valid until now,
+    /// so an agent child that is still alive can keep calling `plan` while the
+    /// reopen is in flight.
+    ///
+    /// - `reopened == true`: the agent now holds the new token. Drop the
+    ///   session's other tokens and its per-session state, keeping `new_token`.
+    /// - `reopened == false`: evict `new_token` only. The earlier token and the
+    ///   session's state (plan cache, title flags) are untouched.
+    pub fn settle_reopen_token(&self, real_session_id: &str, new_token: &str, reopened: bool) {
+        if reopened {
+            self.unregister_session_except(real_session_id, Some(new_token));
+        } else {
+            // Not `unregister_by_token`: it also drops the plan cache of the
+            // token's bound session, and this session is still live.
+            self.sessions.lock().remove(new_token);
+        }
+    }
+
+    /// `unregister_session`, but a token equal to `keep_token` survives.
+    fn unregister_session_except(&self, real_session_id: &str, keep_token: Option<&str>) {
         let mut sessions = self.sessions.lock();
-        sessions.retain(|_, auth| auth.real_session_id.as_deref() != Some(real_session_id));
+        sessions.retain(|token, auth| {
+            keep_token == Some(token.as_str())
+                || auth.real_session_id.as_deref() != Some(real_session_id)
+        });
         drop(sessions);
         let mut active_turns = self.active_turns.lock();
         active_turns.retain(|_, sessions| {
