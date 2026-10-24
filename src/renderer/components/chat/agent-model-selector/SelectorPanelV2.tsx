@@ -16,8 +16,11 @@ import { cn } from '@/lib/utils'
 import { flattenConfigOptionValues } from '../chat-input-bar-config'
 import { shouldShowSessionUsage } from '../context-usage-utils'
 import {
+  type ChoiceSection,
   DENSE_ROW,
   denseRowSize,
+  EditableRow,
+  type EditRowHandle,
   moveFocus,
   type OptionChoice,
   OptionRow,
@@ -78,6 +81,7 @@ function DenseModelRow({
   selected,
   glyph,
   agentName,
+  edit,
   disabled,
   touch,
   onPick
@@ -88,40 +92,62 @@ function DenseModelRow({
   glyph?: ReactNode
   /** Another agent's model: named for screen readers; the glyph shows it. */
   agentName?: string
+  /** Session options of the active model; adds the Edit button. */
+  edit?: ChoiceSection[]
   disabled: boolean
   touch: boolean
   onPick: () => void
 }): React.JSX.Element {
-  const button = (
-    <button
-      type="button"
-      data-selector-row=""
-      aria-pressed={selected}
-      disabled={disabled}
-      onClick={onPick}
-      className={cn(DENSE_ROW, denseRowSize(touch))}
-    >
-      {glyph ? <span className="inline-flex shrink-0">{glyph}</span> : null}
-      <span className="min-w-0 flex-1 truncate">
-        {name}
-        {agentName ? <span className="sr-only">{` · ${agentName}`}</span> : null}
-      </span>
-      <Check
-        size={14}
-        aria-hidden="true"
-        className={cn('shrink-0', selected ? 'opacity-100' : 'opacity-0')}
-      />
-    </button>
-  )
-  const tip = [agentName, tooltip].filter(Boolean).join('\n\n')
-  if (!tip || touch) return button
+  const editable = Boolean(edit && edit.length > 0)
+  const renderRow = (handle?: EditRowHandle): React.JSX.Element => {
+    const button = (
+      <button
+        ref={handle?.ref}
+        type="button"
+        data-selector-row=""
+        aria-pressed={selected}
+        disabled={disabled}
+        onClick={onPick}
+        onKeyDown={handle?.onKeyDown}
+        // On an editable row the hover belongs to the row around both buttons.
+        className={cn(
+          DENSE_ROW,
+          denseRowSize(touch),
+          editable && 'min-w-0 flex-1 hover:bg-transparent'
+        )}
+      >
+        {glyph ? <span className="inline-flex shrink-0">{glyph}</span> : null}
+        <span className="min-w-0 flex-1 truncate">
+          {name}
+          {agentName ? <span className="sr-only">{` · ${agentName}`}</span> : null}
+        </span>
+        <Check
+          size={14}
+          aria-hidden="true"
+          className={cn('shrink-0', selected ? 'opacity-100' : 'opacity-0')}
+        />
+      </button>
+    )
+    const tip = [agentName, tooltip].filter(Boolean).join('\n\n')
+    if (!tip || touch) return button
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>{button}</TooltipTrigger>
+        <TooltipContent side="right" className="max-w-64 whitespace-pre-line">
+          {tip}
+        </TooltipContent>
+      </Tooltip>
+    )
+  }
+  if (!edit || !editable) return renderRow()
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>{button}</TooltipTrigger>
-      <TooltipContent side="right" className="max-w-64 whitespace-pre-line">
-        {tip}
-      </TooltipContent>
-    </Tooltip>
+    <EditableRow
+      modelName={name}
+      sections={edit}
+      disabled={disabled}
+      touch={touch}
+      renderRow={renderRow}
+    />
   )
 }
 
@@ -233,56 +259,60 @@ const optionChoices = (option: SessionConfigOption): OptionChoice[] =>
   }))
 
 /**
- * The composer agent's session options, one row each: Effort, Context, Fast,
- * then whatever else the agent sends. A row shows only when the agent sends
- * that option; its value labels come from the option data.
+ * The active model's Edit flyout sections: Thinking (the effort option),
+ * Context, Fast. Each shows only when the agent sends that option, with value
+ * labels from the option data.
  */
-function SessionOptions(props: SelectorPanelV2Props): React.JSX.Element | null {
-  const { touch, disabled } = props
-  const ref = useRef<HTMLFieldSetElement>(null)
-  const { context, rest } = splitContextOption(props.genericOptions)
-  const rows: ReactNode[] = []
-  if (props.thoughtLevel) {
-    rows.push(
-      <OptionRow
-        key="effort"
-        id="effort"
-        label="Effort"
-        value={props.effortValue}
-        choices={optionChoices(props.thoughtLevel)}
-        disabled={disabled}
-        touch={touch}
-        onSelect={props.onEffort}
-      />
-    )
+function editSections(
+  props: SelectorPanelV2Props,
+  context: SessionConfigOption | null
+): ChoiceSection[] {
+  const sections: ChoiceSection[] = []
+  const thinking = props.thoughtLevel ? optionChoices(props.thoughtLevel) : []
+  if (thinking.length > 0) {
+    sections.push({
+      kind: 'radio',
+      id: 'thinking',
+      label: 'Thinking',
+      value: props.effortValue,
+      choices: thinking,
+      onPick: props.onEffort
+    })
   }
-  if (context) {
-    rows.push(
-      <OptionRow
-        key="context"
-        id="context"
-        label="Context"
-        value={String(context.currentValue)}
-        choices={optionChoices(context)}
-        disabled={disabled}
-        touch={touch}
-        onSelect={(value) => void props.onSetConfig(context.id, value)}
-      />
-    )
+  const windows = context ? optionChoices(context) : []
+  if (context && windows.length > 0) {
+    sections.push({
+      kind: 'radio',
+      id: 'context',
+      label: 'Context',
+      value: String(context.currentValue),
+      choices: windows,
+      onPick: (value) => void props.onSetConfig(context.id, value)
+    })
   }
   if (props.fastMode && props.onToggleFast) {
-    rows.push(
-      <OptionSwitchRow
-        key="fast"
-        id="fast"
-        label="Fast"
-        checked={props.fastOn}
-        disabled={disabled}
-        touch={touch}
-        onToggle={props.onToggleFast}
-      />
-    )
+    sections.push({
+      kind: 'toggle',
+      id: 'fast',
+      label: 'Fast',
+      checked: props.fastOn,
+      onToggle: props.onToggleFast
+    })
   }
+  return sections
+}
+
+/**
+ * The agent's other session options, one footer row each, shown only when
+ * the agent sends them.
+ */
+function SessionOptions({
+  rest,
+  ...props
+}: SelectorPanelV2Props & { rest: SessionConfigOption[] }): React.JSX.Element | null {
+  const { touch, disabled } = props
+  const ref = useRef<HTMLFieldSetElement>(null)
+  const rows: ReactNode[] = []
   for (const option of rest) {
     if (option.type === 'boolean') {
       const checked = option.currentValue === true
@@ -333,8 +363,8 @@ function SessionOptions(props: SelectorPanelV2Props): React.JSX.Element | null {
 /**
  * Model picker v2 (view only): the same source, picks and states as
  * `SelectorPanel` in a denser layout. Glyph tabs with an underline, a
- * Favorites section, 28px rows, and session options as footer rows that open
- * their choices in a side flyout. Visual direction after volt (MIT,
+ * Favorites section, 28px rows, and an Edit flyout on the active model for
+ * Thinking, Context and Fast. Visual direction after volt (MIT,
  * github.com/LeulAria/volt), on Termul tokens.
  */
 export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element {
@@ -457,6 +487,8 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   }
 
   const capabilities = capabilitySummary(props.capabilities)
+  const { context, rest } = splitContextOption(props.genericOptions)
+  const edit = editSections(props, context)
   const rows = (
     configId: string | null,
     catalog: ModelCatalog | null,
@@ -478,6 +510,10 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
         selected={model.value === selectedValue}
         glyph={showAgent && tab ? <TabGlyph tab={tab} /> : undefined}
         agentName={showAgent && configId !== effectiveId ? tab?.name : undefined}
+        // Only the active model has session options; a favorite repeats it without Edit.
+        edit={
+          configId === effectiveId && model.value === selectedValue && !keyPrefix ? edit : undefined
+        }
         disabled={disabled}
         touch={touch}
         onPick={() => pick(configId, catalog, model.value)}
@@ -748,7 +784,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   const contextUsage = shouldShowSessionUsage(props.usage ?? null, props.messages ?? [])
   const otherHint =
     !ownFooter && !showingMore && viewTab && (viewKind === 'current' || other.catalog)
-      ? `Choose a model to set Effort and Fast for ${viewTab.name}.`
+      ? `Choose a model to set Thinking and Fast for ${viewTab.name}.`
       : null
 
   return (
@@ -819,7 +855,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           <ContextSummary usage={contextUsage} touch={touch} />
         </>
       ) : null}
-      {ownFooter ? <SessionOptions {...props} /> : null}
+      {ownFooter ? <SessionOptions {...props} rest={rest} /> : null}
       {otherHint ? (
         <p
           className={cn(

@@ -196,99 +196,175 @@ afterEach(() => {
   knownCatalogs.current = new Map()
 })
 
-describe('SelectorPanelV2 session option rows', () => {
-  it('labels Effort and Context from the option data', () => {
-    const { rerender } = render(<Panel {...props()} />)
-    expect(screen.getByTestId('selector-option-effort')).toHaveAccessibleName('Effort: High')
-    expect(screen.getByTestId('selector-option-context')).toHaveAccessibleName('Context: 300K')
+const FAST = {
+  id: 'fast',
+  name: 'Fast',
+  type: 'boolean',
+  currentValue: false
+} as unknown as SessionConfigOption
 
-    rerender(<Panel {...props({ genericOptions: [NARROW] })} />)
-    expect(screen.getByTestId('selector-option-context')).toHaveAccessibleName('Context: 256K')
-  })
+/** The active (checked) model row. */
+const activeRow = (): HTMLElement =>
+  screen.getByRole('button', { name: 'Claude Opus', pressed: true })
 
-  it('shows a row only for options the agent sends', () => {
-    render(<Panel {...props({ thoughtLevel: null, genericOptions: [] })} />)
+async function openEdit(): Promise<HTMLElement> {
+  const edit = screen.getByTestId('selector-edit')
+  // A native button turns Enter into a click; jsdom needs the click itself.
+  fireEvent.keyDown(edit, { key: 'Enter' })
+  fireEvent.click(edit)
+  return screen.findByTestId('selector-edit-flyout')
+}
+
+describe('SelectorPanelV2 Edit flyout', () => {
+  it('shows Edit only on the active model row', () => {
+    render(<Panel {...props()} />)
+    const edits = screen.getAllByTestId('selector-edit')
+    expect(edits).toHaveLength(1)
+    expect(edits[0]).toHaveAccessibleName('Edit Thinking and Context for Claude Opus')
+    expect(edits[0]?.parentElement).toContainElement(activeRow())
+    // Thinking and Context left the footer.
     expect(screen.queryByTestId('selector-option-effort')).toBeNull()
     expect(screen.queryByTestId('selector-option-context')).toBeNull()
-    expect(screen.queryByTestId('selector-options')).toBeNull()
   })
 
-  it('finds context by id and category, not by its label', () => {
-    const renamed = { ...WIDE, name: 'Window' } as SessionConfigOption
-    render(<Panel {...props({ genericOptions: [renamed] })} />)
-    expect(screen.getByTestId('selector-option-context')).toHaveAccessibleName('Context: 300K')
-  })
-
-  it('sends the picked context value through onSetConfig', async () => {
-    const onSetConfig = vi.fn()
-    render(<Panel {...props({ onSetConfig })} />)
-    fireEvent.click(screen.getByTestId('selector-option-context'))
-    const menu = await screen.findByRole('menu', { name: 'Context' })
-    fireEvent.click(within(menu).getByRole('menuitemradio', { name: '1M' }))
-    expect(onSetConfig).toHaveBeenCalledWith('context', '1m')
-    await waitFor(() => expect(screen.queryByRole('menu', { name: 'Context' })).toBeNull())
-  })
-})
-
-describe('SelectorPanelV2 flyout keyboard', () => {
-  it('ArrowRight opens the flyout on the checked choice', async () => {
-    render(<Panel {...props()} />)
-    const row = screen.getByTestId('selector-option-effort')
-    row.focus()
-    fireEvent.keyDown(row, { key: 'ArrowRight' })
-    const menu = await screen.findByRole('menu', { name: 'Effort' })
-    await waitFor(() =>
-      expect(within(menu).getByRole('menuitemradio', { name: 'High' })).toHaveFocus()
-    )
-    expect(within(menu).getByRole('menuitemradio', { name: 'High' })).toHaveAttribute(
+  it('labels Thinking and Context choices from the option data', async () => {
+    const { rerender } = render(<Panel {...props()} />)
+    const flyout = await openEdit()
+    const thinking = within(flyout).getByRole('group', { name: 'Thinking' })
+    expect(within(thinking).getByRole('menuitemradio', { name: 'High' })).toHaveAttribute(
       'aria-checked',
       'true'
     )
+    const context = within(flyout).getByRole('group', { name: 'Context' })
+    expect(
+      within(context)
+        .getAllByRole('menuitemradio')
+        .map((item) => item.textContent)
+    ).toEqual(['300K', '1M'])
+    expect(within(context).getByRole('menuitemradio', { name: '300K' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+
+    rerender(<Panel {...props({ genericOptions: [NARROW] })} />)
+    const narrow = within(screen.getByTestId('selector-edit-flyout')).getByRole('group', {
+      name: 'Context'
+    })
+    expect(
+      within(narrow)
+        .getAllByRole('menuitemradio')
+        .map((item) => item.textContent)
+    ).toEqual(['256K', '500K'])
   })
 
-  it('Enter opens the flyout, and Enter on a choice picks it', async () => {
+  it('hides a section the agent does not send, and Edit when none is sent', async () => {
+    const { rerender } = render(<Panel {...props({ thoughtLevel: null })} />)
+    expect(screen.getByTestId('selector-edit')).toHaveAccessibleName('Edit Context for Claude Opus')
+    const flyout = await openEdit()
+    expect(within(flyout).getByRole('menu', { name: 'Context' })).toBeInTheDocument()
+    expect(within(flyout).queryByRole('group')).toBeNull()
+
+    rerender(<Panel {...props({ thoughtLevel: null, genericOptions: [] })} />)
+    expect(screen.queryByTestId('selector-edit')).toBeNull()
+    expect(screen.queryByTestId('selector-options')).toBeNull()
+  })
+
+  it('with only Fast, Edit still shows and the flyout holds just Fast', async () => {
+    const onToggleFast = vi.fn()
+    render(
+      <Panel {...props({ thoughtLevel: null, genericOptions: [], fastMode: FAST, onToggleFast })} />
+    )
+    expect(screen.getByTestId('selector-edit')).toHaveAccessibleName('Edit Fast for Claude Opus')
+    const flyout = await openEdit()
+    expect(within(flyout).queryAllByRole('menuitemradio')).toHaveLength(0)
+    const fast = within(flyout).getByRole('menuitemcheckbox', { name: 'Fast' })
+    expect(within(flyout).getAllByRole('menuitemcheckbox')).toHaveLength(1)
+    expect(fast).toHaveAttribute('aria-checked', 'false')
+    fireEvent.click(fast)
+    expect(onToggleFast).toHaveBeenCalledTimes(1)
+    // Fast moved off the footer too.
+    expect(screen.queryByTestId('selector-option-fast')).toBeNull()
+  })
+
+  it('finds context by id and category, not by its label', async () => {
+    const renamed = { ...WIDE, name: 'Window' } as SessionConfigOption
+    render(<Panel {...props({ genericOptions: [renamed] })} />)
+    const flyout = await openEdit()
+    const context = within(flyout).getByRole('group', { name: 'Context' })
+    expect(within(context).getByRole('menuitemradio', { name: '300K' })).toBeInTheDocument()
+  })
+
+  it('sends the picked context value through onSetConfig and stays open', async () => {
+    const onSetConfig = vi.fn()
+    render(<Panel {...props({ onSetConfig })} />)
+    const flyout = await openEdit()
+    fireEvent.click(within(flyout).getByRole('menuitemradio', { name: '1M' }))
+    expect(onSetConfig).toHaveBeenCalledWith('context', '1m')
+    expect(screen.getByTestId('selector-edit-flyout')).toBeInTheDocument()
+  })
+})
+
+describe('SelectorPanelV2 Edit flyout keyboard', () => {
+  it('ArrowRight on the active row opens on the checked Thinking choice', async () => {
+    render(<Panel {...props()} />)
+    const row = activeRow()
+    row.focus()
+    fireEvent.keyDown(row, { key: 'ArrowRight' })
+    const flyout = await screen.findByTestId('selector-edit-flyout')
+    await waitFor(() =>
+      expect(within(flyout).getByRole('menuitemradio', { name: 'High' })).toHaveFocus()
+    )
+    // Down runs on from Thinking into Context.
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowDown' })
+    expect(within(flyout).getByRole('menuitemradio', { name: '300K' })).toHaveFocus()
+  })
+
+  it('ArrowRight on another row opens nothing', () => {
+    render(<Panel {...props()} />)
+    const other = screen.getByRole('button', { name: 'Claude Sonnet' })
+    other.focus()
+    fireEvent.keyDown(other, { key: 'ArrowRight' })
+    expect(screen.queryByTestId('selector-edit-flyout')).toBeNull()
+  })
+
+  it('Enter on Edit opens the flyout, and Enter on a choice picks it', async () => {
     const onEffort = vi.fn()
     render(<Panel {...props({ onEffort })} />)
-    const row = screen.getByTestId('selector-option-effort')
-    row.focus()
-    // A native button turns Enter into a click; jsdom needs the click itself.
-    fireEvent.keyDown(row, { key: 'Enter' })
-    fireEvent.click(row)
-    const menu = await screen.findByRole('menu', { name: 'Effort' })
+    const flyout = await openEdit()
     await waitFor(() =>
-      expect(within(menu).getByRole('menuitemradio', { name: 'High' })).toHaveFocus()
+      expect(within(flyout).getByRole('menuitemradio', { name: 'High' })).toHaveFocus()
     )
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowUp' })
-    expect(within(menu).getByRole('menuitemradio', { name: 'Medium' })).toHaveFocus()
+    expect(within(flyout).getByRole('menuitemradio', { name: 'Medium' })).toHaveFocus()
     fireEvent.click(document.activeElement as HTMLElement)
     expect(onEffort).toHaveBeenCalledWith('medium')
   })
 
   it('ArrowLeft closes the flyout and returns focus to the row', async () => {
     render(<Panel {...props()} />)
-    const row = screen.getByTestId('selector-option-context')
+    const row = activeRow()
     row.focus()
     fireEvent.keyDown(row, { key: 'ArrowRight' })
-    const menu = await screen.findByRole('menu', { name: 'Context' })
-    await waitFor(() => expect(within(menu).getAllByRole('menuitemradio')[0]).toHaveFocus())
+    const flyout = await screen.findByTestId('selector-edit-flyout')
+    await waitFor(() => expect(within(flyout).getAllByRole('menuitemradio')[2]).toHaveFocus())
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'ArrowLeft' })
-    await waitFor(() => expect(screen.queryByRole('menu', { name: 'Context' })).toBeNull())
+    await waitFor(() => expect(screen.queryByTestId('selector-edit-flyout')).toBeNull())
     await waitFor(() => expect(row).toHaveFocus())
   })
 
   it('Escape closes the flyout first, then the picker', async () => {
     const onOpenChange = vi.fn()
     render(<InPicker {...props()} onOpenChange={onOpenChange} />)
-    const row = await screen.findByTestId('selector-option-effort')
+    const row = await screen.findByRole('button', { name: 'Claude Opus', pressed: true })
     act(() => row.focus())
     fireEvent.keyDown(row, { key: 'ArrowRight' })
-    const menu = await screen.findByRole('menu', { name: 'Effort' })
+    const flyout = await screen.findByTestId('selector-edit-flyout')
     await waitFor(() =>
-      expect(within(menu).getByRole('menuitemradio', { name: 'High' })).toHaveFocus()
+      expect(within(flyout).getByRole('menuitemradio', { name: 'High' })).toHaveFocus()
     )
 
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('menu', { name: 'Effort' })).toBeNull())
+    await waitFor(() => expect(screen.queryByTestId('selector-edit-flyout')).toBeNull())
     expect(onOpenChange).not.toHaveBeenCalled()
     await waitFor(() => expect(row).toHaveFocus())
 
@@ -296,15 +372,21 @@ describe('SelectorPanelV2 flyout keyboard', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
-  it('Up and Down move between footer rows', () => {
-    render(<Panel {...props()} />)
-    const effort = screen.getByTestId('selector-option-effort')
-    const context = screen.getByTestId('selector-option-context')
-    effort.focus()
-    fireEvent.keyDown(effort, { key: 'ArrowDown' })
-    expect(context).toHaveFocus()
-    fireEvent.keyDown(context, { key: 'ArrowUp' })
-    expect(effort).toHaveFocus()
+  it('Up and Down move between the remaining footer rows', () => {
+    const mode = select('mode', 'Mode', 'agent', [
+      ['agent', 'Agent'],
+      ['plan', 'Plan']
+    ])
+    const sandbox = { ...FAST, id: 'sandbox', name: 'Sandbox' } as SessionConfigOption
+    render(<Panel {...props({ genericOptions: [WIDE, mode, sandbox] })} />)
+    const modeRow = screen.getByTestId('selector-option-mode')
+    const sandboxRow = screen.getByTestId('selector-option-sandbox')
+    expect(modeRow).toHaveAccessibleName('Mode: Agent')
+    modeRow.focus()
+    fireEvent.keyDown(modeRow, { key: 'ArrowDown' })
+    expect(sandboxRow).toHaveFocus()
+    fireEvent.keyDown(sandboxRow, { key: 'ArrowUp' })
+    expect(modeRow).toHaveFocus()
   })
 })
 

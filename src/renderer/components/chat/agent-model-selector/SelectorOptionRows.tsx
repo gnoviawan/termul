@@ -1,7 +1,15 @@
-import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useId,
+  useRef,
+  useState
+} from 'react'
 import { Check, ChevronRight } from '@/components/icons'
 import { AnimatedMenuContent } from '@/components/ui/animated-menu-content'
-import { Popover, PopoverTrigger } from '@/components/ui/popover'
+import { Popover, PopoverAnchor, PopoverTrigger } from '@/components/ui/popover'
 import {
   Sheet,
   SheetContent,
@@ -66,25 +74,63 @@ export function moveFocus(
 
 const CHOICE = '[data-option-choice]'
 
-function ChoiceList({
+/** One section of a flyout: radio choices, or a single on/off item. */
+export type ChoiceSection =
+  | {
+      kind: 'radio'
+      id: string
+      label: string
+      value: string | undefined
+      choices: OptionChoice[]
+      onPick: (value: string) => void
+    }
+  | { kind: 'toggle'; id: string; label: string; checked: boolean; onToggle: () => void }
+
+/** `Thinking, Context and Fast` */
+export function sectionsLabel(sections: readonly ChoiceSection[]): string {
+  const labels = sections.map((section) => section.label)
+  const last = labels.pop()
+  return labels.length > 0 ? `${labels.join(', ')} and ${last}` : (last ?? '')
+}
+
+/** The look of `Switch`, for an item that is itself the control. */
+function SwitchMark({ on }: { on: boolean }): React.JSX.Element {
+  const state = on ? 'checked' : 'unchecked'
+  return (
+    <span
+      aria-hidden="true"
+      data-state={state}
+      className="switch-track inline-flex h-5 w-9 shrink-0 items-center rounded-full border-2 border-transparent transition-colors duration-150 ease-out"
+    >
+      <span
+        data-state={state}
+        className="switch-thumb block size-4 rounded-full transition-transform duration-150 ease-out data-[state=checked]:translate-x-4"
+      />
+    </span>
+  )
+}
+
+/**
+ * A flyout's choices as one menu. A lone radio section takes the menu's
+ * label; with more sections each radio set is a labelled group and a toggle
+ * is one checkbox item. Up/Down runs across all of them.
+ */
+export function ChoiceList({
   open,
   label,
-  choices,
-  value,
+  sections,
   touch,
-  onPick,
   onBack
 }: {
-  /** Focus moves to the checked choice each time the list opens. */
+  /** Focus moves to the first checked choice each time the list opens. */
   open: boolean
   label: string
-  choices: OptionChoice[]
-  value: string | undefined
+  sections: ChoiceSection[]
   touch: boolean
-  onPick: (value: string) => void
   onBack: () => void
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
+  const baseId = useId()
   useEffect(() => {
     if (open) focusChoice(ref.current)
   }, [open])
@@ -96,7 +142,7 @@ function ChoiceList({
       className={cn('flex flex-col', touch ? 'px-3 pb-3' : 'p-1')}
       onKeyDown={(event) => {
         // The flyout is portaled but its keys still bubble through the React
-        // tree into the footer and list; keep the ones handled here.
+        // tree into the list and footer; keep the ones handled here.
         if (moveFocus(event, ref.current, CHOICE)) {
           event.stopPropagation()
           return
@@ -108,42 +154,83 @@ function ChoiceList({
         }
       }}
     >
-      {choices.map((choice) => {
-        const selected = choice.value === value
+      {sections.map((section, index) => {
+        if (section.kind === 'toggle') {
+          return (
+            <button
+              key={section.id}
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={section.checked}
+              data-option-choice=""
+              onClick={section.onToggle}
+              className={cn(
+                DENSE_ROW,
+                denseRowSize(touch),
+                index > 0 && 'mt-1 rounded-t-none border-t border-border'
+              )}
+            >
+              <span className="min-w-0 flex-1 truncate">{section.label}</span>
+              <SwitchMark on={section.checked} />
+            </button>
+          )
+        }
+        const items = section.choices.map((choice) => {
+          const selected = choice.value === section.value
+          return (
+            <button
+              key={choice.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={selected}
+              data-option-choice=""
+              title={choice.description}
+              onClick={() => section.onPick(choice.value)}
+              className={cn(DENSE_ROW, denseRowSize(touch))}
+            >
+              <span className="min-w-0 flex-1 truncate tabular-nums">{choice.name}</span>
+              <Check
+                size={14}
+                aria-hidden="true"
+                className={cn('shrink-0', selected ? 'opacity-100' : 'opacity-0')}
+              />
+            </button>
+          )
+        })
+        if (sections.length === 1) return items
+        const headingId = `${baseId}-${section.id}`
         return (
-          <button
-            key={choice.value}
-            type="button"
-            role="menuitemradio"
-            aria-checked={selected}
-            data-option-choice=""
-            title={choice.description}
-            onClick={() => onPick(choice.value)}
-            className={cn(DENSE_ROW, denseRowSize(touch))}
-          >
-            <span className="min-w-0 flex-1 truncate">{choice.name}</span>
-            <Check
-              size={14}
-              aria-hidden="true"
-              className={cn('shrink-0', selected ? 'opacity-100' : 'opacity-0')}
-            />
-          </button>
+          <fieldset key={section.id} aria-labelledby={headingId} className="flex min-w-0 flex-col">
+            <div
+              id={headingId}
+              className={cn(
+                'truncate px-2 pb-1 text-xs text-muted-foreground',
+                index > 0 ? 'pt-2' : 'pt-1'
+              )}
+            >
+              {section.label}
+            </div>
+            {items}
+          </fieldset>
         )
       })}
     </div>
   )
 }
 
-/** Focus the checked choice (or the first) when a flyout opens. */
+/** Focus the first checked radio choice (or the first item) when a flyout opens. */
 function focusChoice(container: HTMLElement | null): void {
   const choices = Array.from(container?.querySelectorAll<HTMLElement>(CHOICE) ?? [])
-  const target = choices.find((c) => c.getAttribute('aria-checked') === 'true') ?? choices[0]
+  const target =
+    choices.find(
+      (c) => c.getAttribute('role') === 'menuitemradio' && c.getAttribute('aria-checked') === 'true'
+    ) ?? choices[0]
   target?.focus()
 }
 
 /**
- * One session option in the footer, `Effort · High ›`. The value label comes
- * from the option data, so whatever the agent sends (300K, 1M, 256K…) shows.
+ * One session option in the footer, `Mode · Agent ›`. The value label comes
+ * from the option data, so whatever the agent sends shows.
  * Clicking, Enter or ArrowRight opens its choices beside the row (a bottom
  * sheet on touch). ArrowLeft or Escape closes them and returns focus to the
  * row; Escape closes the flyout before the picker around it.
@@ -167,9 +254,16 @@ export function OptionRow({
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const valueName = choices.find((c) => c.value === value)?.name ?? value ?? 'Default'
-  const pick = (next: string): void => {
-    setOpen(false)
-    if (next !== value) onSelect(next)
+  const section: ChoiceSection = {
+    kind: 'radio',
+    id,
+    label,
+    value,
+    choices,
+    onPick: (next) => {
+      setOpen(false)
+      if (next !== value) onSelect(next)
+    }
   }
 
   const row = (
@@ -202,10 +296,8 @@ export function OptionRow({
     <ChoiceList
       open={open}
       label={label}
-      choices={choices}
-      value={value}
+      sections={[section]}
       touch={touch}
-      onPick={pick}
       onBack={() => setOpen(false)}
     />
   )
@@ -284,5 +376,133 @@ export function OptionSwitchRow({
         onCheckedChange={onToggle}
       />
     </div>
+  )
+}
+
+export interface EditRowHandle {
+  ref: RefObject<HTMLButtonElement>
+  open: boolean
+  onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void
+}
+
+/**
+ * The active model's row with an Edit button on its right, after volt's
+ * picker. Edit, or ArrowRight on the row, opens the model's session options
+ * (Thinking, Context, Fast) beside the row; a bottom sheet on touch.
+ * ArrowLeft or Escape closes them and returns focus to the row; Escape
+ * closes the flyout before the picker around it.
+ */
+export function EditableRow({
+  modelName,
+  sections,
+  disabled,
+  touch,
+  renderRow
+}: {
+  modelName: string
+  sections: ChoiceSection[]
+  disabled: boolean
+  touch: boolean
+  renderRow: (row: EditRowHandle) => ReactNode
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const rowRef = useRef<HTMLButtonElement>(null)
+  const clickedAway = useRef(false)
+  const what = sectionsLabel(sections)
+  const backToRow = (): void => {
+    setOpen(false)
+    rowRef.current?.focus()
+  }
+
+  const edit = (
+    <button
+      type="button"
+      data-testid="selector-edit"
+      aria-label={`Edit ${what} for ${modelName}`}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      disabled={disabled}
+      className={cn(
+        'flex shrink-0 items-center gap-0.5 rounded-md px-1.5 text-xs transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-60',
+        open ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+        touch ? 'min-h-11' : 'h-7',
+        ROW_FOCUS
+      )}
+    >
+      Edit
+      <ChevronRight size={12} aria-hidden="true" />
+    </button>
+  )
+  const row = (trigger: ReactNode): React.JSX.Element => (
+    <div
+      className={cn(
+        'flex items-center rounded-md transition-colors duration-150 ease-out hover:bg-row-hover',
+        open && 'bg-row-hover'
+      )}
+    >
+      {renderRow({
+        ref: rowRef,
+        open,
+        onKeyDown: (event) => {
+          if (event.key !== 'ArrowRight' || touch || disabled) return
+          event.preventDefault()
+          setOpen(true)
+        }
+      })}
+      {trigger}
+    </div>
+  )
+  const list = (
+    <ChoiceList open={open} label={what} sections={sections} touch={touch} onBack={backToRow} />
+  )
+
+  if (touch) {
+    return (
+      <Sheet open={open} onOpenChange={setOpen}>
+        {row(<SheetTrigger asChild>{edit}</SheetTrigger>)}
+        <SheetContent
+          side="bottom"
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          className="flex max-h-[70dvh] flex-col gap-0 border-border bg-popover p-0 pb-[env(safe-area-inset-bottom)] pt-3 [&>button:last-child]:hidden"
+        >
+          <SheetTitle className="truncate px-5 pb-2 text-sm font-medium">{modelName}</SheetTitle>
+          <SheetDescription className="sr-only">{`Set ${what}.`}</SheetDescription>
+          {list}
+        </SheetContent>
+      </Sheet>
+    )
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>{row(<PopoverTrigger asChild>{edit}</PopoverTrigger>)}</PopoverAnchor>
+      <AnimatedMenuContent
+        open={open}
+        motionPreset="flyout"
+        side="right"
+        align="start"
+        // Line the first item up with the row (the list has 4px padding).
+        alignOffset={-4}
+        sideOffset={8}
+        collisionPadding={8}
+        // The list focuses its checked choice itself.
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onEscapeKeyDown={() => rowRef.current?.focus()}
+        onInteractOutside={() => {
+          clickedAway.current = true
+        }}
+        // Back to the row, not the Edit trigger; a click elsewhere keeps its own focus.
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          if (!clickedAway.current) rowRef.current?.focus()
+          clickedAway.current = false
+        }}
+        data-testid="selector-edit-flyout"
+        contentClassName="z-[110]"
+        className="w-44 rounded-lg border-border"
+      >
+        {list}
+      </AnimatedMenuContent>
+    </Popover>
   )
 }
