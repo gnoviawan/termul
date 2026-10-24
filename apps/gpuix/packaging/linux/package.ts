@@ -11,14 +11,16 @@
  * `dpkg-deb` packs it all as DIR/termul-gpuix_<version>_amd64.deb (default DIR: dist-package/).
  *
  * `--server-bin` and `--webview-host` take prebuilt binaries instead of running cargo. Cargo uses
- * `$CARGO_TARGET_DIR`, else `src-tauri/target`. The server build embeds `dist-web/`, so without
- * `--server-bin` this runs `bun run build:web` in the repo first.
+ * `$CARGO_TARGET_DIR`, else `src-tauri/target`. The server build embeds `dist-web/`; without
+ * `--server-bin` this runs `bun run build:web` first when the repo has no `dist-web/` yet, or
+ * always with `--rebuild-web`.
  */
 
 import {
   chmodSync,
   copyFileSync,
   cpSync,
+  existsSync,
   mkdirSync,
   readdirSync,
   rmSync,
@@ -48,7 +50,8 @@ const { values } = parseArgs({
     out: { type: 'string', default: path.join(APP_DIR, 'dist-package') },
     'server-bin': { type: 'string' },
     'webview-host': { type: 'string' },
-    'keep-stage': { type: 'boolean', default: false }
+    'keep-stage': { type: 'boolean', default: false },
+    'rebuild-web': { type: 'boolean', default: false }
   }
 })
 
@@ -190,7 +193,11 @@ run(['strip', '--strip-unneeded', addon])
 step('termul-server')
 let serverBin = values['server-bin']
 if (!serverBin) {
-  run(['bun', 'run', 'build:web'])
+  // The server embeds dist-web/ for browsers; the GPUIX client never loads it, so an existing
+  // bundle is reused (rebuilding it changes its mtimes and recompiles the server crate).
+  if (values['rebuild-web'] || !existsSync(path.join(REPO_DIR, 'dist-web/index.html'))) {
+    run(['bun', 'run', 'build:web'])
+  }
   serverBin = cargoRelease(path.join(REPO_DIR, 'src-tauri/Cargo.toml'), 'termul-server', [
     'standalone-server'
   ])
