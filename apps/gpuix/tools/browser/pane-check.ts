@@ -410,6 +410,27 @@ try {
     }
   )
 
+  // The pane's New tab menu (a shared dropdown on the compat Radix path) over the webview.
+  await app.mouse.click({ x: 1248, y: 28 })
+  await app.getByText('New browser tab').waitFor({ timeoutMs: 10_000 })
+  const hiddenUnderMenu = await until('webview hidden under the New tab menu', async () =>
+    mapState(s.display, viewId) === 'IsUnMapped' ? true : null
+  ).catch(() => false)
+  await Bun.sleep(600)
+  await shot('05-new-tab-menu')
+  X('key', 'Escape')
+  const revealedAfterMenu = await until('webview mapped again after the menu closes', async () =>
+    mapState(s.display, viewId) === 'IsViewable' ? true : null
+  ).catch(() => false)
+  check(
+    'a dropdown menu over the webview hides it while open',
+    hiddenUnderMenu && revealedAfterMenu,
+    {
+      hiddenUnderMenu,
+      revealedAfterMenu
+    }
+  )
+
   // 6. Keys into the page, then back to a GPUIX field.
   const pageKeys = () => (log().match(new RegExp(`\\[${tabId}\\] log: b2-key`, 'g')) ?? []).length
   const keyboardIsApp = () =>
