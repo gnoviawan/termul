@@ -7,6 +7,8 @@
  */
 import type { PublicInstance, StyleDesc } from '@gpuix/react'
 import { forwardRef, type Ref, useContext } from 'react'
+import { wrapAutoMargin } from '../compat/children'
+import { translation } from '../compat/translate'
 import { tw } from '../style/tw'
 import { CurrentColorContext, SvgClassContext } from '../ui/internal/host'
 
@@ -113,7 +115,7 @@ export const HugeiconsIcon = forwardRef<PublicInstance, HugeiconsIconProps>(func
   const stroke =
     strokeWidth !== undefined && absoluteStrokeWidth ? (strokeWidth * 24) / px(size) : strokeWidth
   const resolved = useIconStyle(size, className, primaryColor ?? color, style)
-  return (
+  const svg = (
     <svg
       ref={ref as Ref<PublicInstance>}
       source={iconSource(current, stroke)}
@@ -123,4 +125,7 @@ export const HugeiconsIcon = forwardRef<PublicInstance, HugeiconsIconProps>(func
       aria-label={ariaLabel}
     />
   )
+  // GPUIX margins are px only: `ml-auto` (a sub-menu chevron) pushes through a wrapper, as compat does for DOM elements.
+  const margin = className ? translation('svg', className).autoMargin : null
+  return margin ? wrapAutoMargin(svg, margin, undefined) : svg
 })
