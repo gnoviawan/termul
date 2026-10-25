@@ -114,10 +114,12 @@ function growsInFlow(slot: Slot): boolean {
 }
 
 /**
- * In a row the wrapper grows to stand in for the auto margin. CSS gives auto
- * margins only the space left after `flex-grow`, so when a sibling grows the
- * wrapper must not: sharing the free space squeezed a `flex-1` tab strip to
- * half the bar beside its `ml-auto` actions.
+ * The wrapper grows along the main axis to stand in for the auto margin. CSS
+ * gives auto margins only the space left after `flex-grow`, so when a sibling
+ * grows the wrapper must not: sharing the free space squeezed a `flex-1` tab
+ * strip to half the bar beside its `ml-auto` actions, and the collapsed rail's
+ * `flex-1` action column to half the rail above its `mt-auto` footer, which
+ * clipped Search's neighbour, Open canvas.
  */
 function placeAutoMargin(
   node: ReactElement,
@@ -134,8 +136,9 @@ function placeAutoMargin(
   }
   const h = horizontal(info.margin)
   const v = vertical(info.margin)
-  const style = h ? COLUMN_PUSH[h] : v ? COLUMN_PUSH[v] : undefined
-  if (!style) return node
+  const push = h ? COLUMN_PUSH[h] : v ? COLUMN_PUSH[v] : undefined
+  if (!push) return node
+  const style = siblingGrows && push.flexGrow ? { ...push, flexGrow: 0 } : push
   // In block flow a block box with `mx-auto` is as wide as the line allows (up
   // to its max-width) and the auto margins split what is left; in the flex
   // wrapper that is a growing item.
@@ -370,7 +373,7 @@ export function layoutChildren(
   if (flex || blocks > 0 || texts === 0) {
     // Flex items, or block flow: contiguous text is one anonymous box.
     const row = style.display === 'flex' && style.flexDirection !== 'column' && style.flexDirection !== 'column-reverse'
-    const grows = row && slots.some(growsInFlow)
+    const grows = slots.some(growsInFlow)
     trimTextRuns(out, tr)
     const strut = tr.blockFlow ? strutDescent(style) : 0
     for (let i = 0; i < out.length; i++) {
@@ -513,10 +516,10 @@ export function divideChildren(children: ReactNode, divide: Divide, style: Style
   if (total < 2) return children
   const y = divide.axis === 'y'
   const gap = (y ? style.rowGap : style.columnGap) ?? style.gap
-  const pull = typeof gap === 'number' && gap > 0 ? -gap : undefined
   const line: StyleDesc = y
-    ? { height: divide.width, alignSelf: 'stretch', flexShrink: 0, backgroundColor: divide.color, marginTop: pull }
-    : { width: divide.width, alignSelf: 'stretch', flexShrink: 0, backgroundColor: divide.color, marginLeft: pull }
+    ? { height: divide.width, alignSelf: 'stretch', flexShrink: 0, backgroundColor: divide.color }
+    : { width: divide.width, alignSelf: 'stretch', flexShrink: 0, backgroundColor: divide.color }
+  if (typeof gap === 'number' && gap > 0) line[y ? 'marginTop' : 'marginLeft'] = -gap
   let seen = 0
   const walk = (slots: Slot[]): Slot[] =>
     slots.map((slot, i) => {
