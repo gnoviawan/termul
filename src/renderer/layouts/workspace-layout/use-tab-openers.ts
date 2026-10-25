@@ -6,9 +6,9 @@ import { WORKTREE_EVENTS } from '@/hooks/use-worktree-shortcuts'
 import { getActiveWorkingCopy, reportUnresolvedWorkingCopy } from '@/lib/active-working-copy'
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { BUILT_IN_AGENTS } from '@/lib/agents/agent-registry'
+import { newUserBrowserTabId } from '@/lib/browser-api'
 import { openProjectCanvas } from '@/lib/open-project-canvas'
 import { openTerminalFromProfile, spawnTerminalInPane } from '@/lib/terminal-spawn'
-import { randomUUID } from '@/lib/uuid'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useDefaultShell } from '@/stores/app-settings-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
@@ -149,7 +149,7 @@ export function useTabOpeners({
   const handleNewBrowserTab = useCallback((paneId?: string) => {
     const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId
     if (resolvedPaneId) {
-      const browserTabId = randomUUID()
+      const browserTabId = newUserBrowserTabId()
       useBrowserSessionStore.getState().createTab(browserTabId)
       useWorkspaceStore.getState().addBrowserTab(browserTabId, resolvedPaneId)
     }

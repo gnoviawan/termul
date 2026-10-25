@@ -22,6 +22,7 @@ import {
 import { getCachedSessionPayload, setCachedSessionPayload } from '@/lib/acp-history-persistence'
 import { AcpTransportError, isOutcomeUncertainError } from '@/lib/acp-transport'
 import { bumpTurnEndNotice } from '@/lib/agent-chat-notify'
+import { parseBrowserConsentTicket } from '@/lib/browser-consent-api'
 import { settleCommand } from '@/lib/command-engine'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
@@ -1015,6 +1016,13 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     // CAP-3 replay contract: a replayed request the payload already covered
     // must not re-surface a stale modal after reconnect.
     if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    // Host-originated browser consent rides the same contract but has its
+    // own focus-aware surfaces; the agent never sees these tickets.
+    const browserTicket = parseBrowserConsentTicket(e)
+    if (browserTicket) {
+      get()._onBrowserConsentTicket(browserTicket)
+      return
+    }
     const hadCommit = commitMessageCollectors.has(e.sessionId)
     const hadAssist = terminalAssistCollectors.has(e.sessionId)
     const hadBugReport = bugReportCollectors.has(e.sessionId)

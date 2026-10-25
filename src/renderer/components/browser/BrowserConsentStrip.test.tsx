@@ -1,7 +1,7 @@
 /**
- * spec-acp-browser-pane-agent-ui + spec-acp-browser-automation-v2 (CAP-5) coverage:
+ * Focus-aware browser consent presentation:
  *  - BrowserConsentStrip renders only in the focused pane's active browser tab
- *  - Allow/Deny route through respondBrowserConsent
+ *  - the three fixed options route through respondBrowserConsent
  *  - BrowserConsentCard is fallback-only (mutually exclusive with the strip)
  *  - BrowserPanel applies the agent-controlled gradient frame
  *  - index.css carries the reduced-motion override for the ring
@@ -11,14 +11,15 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { BrowserConsentRequestEvent } from '@/lib/acp-api'
+import type { BrowserConsentTicket } from '@/lib/browser-consent-api'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 
 const { mockRespond, acpState, workspaceState, runtimeState } = vi.hoisted(() => ({
   mockRespond: vi.fn(),
   acpState: {
-    pendingBrowserConsents: {} as Record<string, BrowserConsentRequestEvent>,
+    pendingBrowserConsents: {} as Record<string, BrowserConsentTicket>,
+    sessions: {} as Record<string, { agentId: string }>,
     configToLiveAgent: {} as Record<string, string>,
     agentConfigs: [] as Array<{ id: string; name?: string }>
   },
@@ -51,13 +52,17 @@ vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn(async () => {})
 }))
 
-// BrowserPanel's webview + title plumbing are native-side; stub them out so
-// the panel renders as pure DOM under jsdom.
+// The arming delay is covered by the card and root-host suites; here the
+// buttons are live at once so the focus routing stays the subject.
+vi.mock('@/components/browser/consent-intent', async (importActual) => ({
+  ...(await importActual<typeof import('@/components/browser/consent-intent')>()),
+  useConsentArmed: () => true
+}))
+
+// BrowserPanel's webview plumbing is native-side; stub it out so the panel
+// renders as pure DOM under jsdom.
 vi.mock('@/hooks/use-browser-webview', () => ({
   useBrowserWebview: () => ({ containerRef: { current: null } })
-}))
-vi.mock('@/lib/browser-api', () => ({
-  onBrowserTabTitleChanged: () => ({ unlisten: () => {} })
 }))
 vi.mock('@/components/browser/BrowserControls', () => ({
   BrowserControls: () => null
@@ -74,14 +79,16 @@ import { BrowserPanel } from './BrowserPanel'
 
 const TAB_ID = 'browser-tab-1'
 
-function consentEvent(
-  overrides: Partial<BrowserConsentRequestEvent> = {}
-): BrowserConsentRequestEvent {
+function consentEvent(overrides: Partial<BrowserConsentTicket> = {}): BrowserConsentTicket {
   return {
     requestId: 'req-1',
     sessionId: 'sess-1',
-    agentId: 'agent-1',
+    origin: 'https://docs.example.com',
+    targetUrl: 'https://docs.example.com/',
+    targetUrlBytes: 25,
     action: 'navigate',
+    profile: 'global',
+    options: ['allow_session', 'allow_project', 'deny'],
     ...overrides
   }
 }
@@ -93,6 +100,7 @@ function browserTab(id = TAB_ID): WorkspaceTab {
 beforeEach(() => {
   mockRespond.mockReset()
   acpState.pendingBrowserConsents = {}
+  acpState.sessions = {}
   acpState.configToLiveAgent = {}
   acpState.agentConfigs = []
   workspaceState.activeTab = undefined
@@ -108,7 +116,7 @@ describe('BrowserConsentStrip', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
     workspaceState.activeTab = browserTab()
     render(<BrowserConsentStrip browserTabId={TAB_ID} />)
-    expect(screen.getByText('Allow browser automation?')).toBeInTheDocument()
+    expect(screen.getByText('Allow the agent to open this site?')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Deny' })).toBeInTheDocument()
   })
@@ -146,7 +154,7 @@ describe('BrowserConsentStrip', () => {
     workspaceState.activeTab = browserTab()
     render(<BrowserConsentStrip browserTabId={TAB_ID} />)
     fireEvent.click(screen.getByRole('button', { name: 'Allow for this session' }))
-    expect(mockRespond).toHaveBeenCalledWith('req-1', true)
+    expect(mockRespond).toHaveBeenCalledWith('req-1', 'allow_session')
   })
 
   it('Deny responds with the pending requestId', () => {
@@ -154,34 +162,33 @@ describe('BrowserConsentStrip', () => {
     workspaceState.activeTab = browserTab()
     render(<BrowserConsentStrip browserTabId={TAB_ID} />)
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
-    expect(mockRespond).toHaveBeenCalledWith('req-1', false)
+    expect(mockRespond).toHaveBeenCalledWith('req-1', 'deny')
   })
 
   it('names the requesting agent when its live id resolves to a config', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    acpState.sessions = { 'sess-1': { agentId: 'agent-1' } }
     acpState.configToLiveAgent = { 'cfg-1\0/work': 'agent-1' }
     acpState.agentConfigs = [{ id: 'cfg-1', name: 'Claude' }]
     workspaceState.activeTab = browserTab()
     render(<BrowserConsentStrip browserTabId={TAB_ID} />)
-    expect(screen.getByText(/Claude wants to drive/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Claude wants to open https:\/\/docs\.example\.com/)
+    ).toBeInTheDocument()
   })
 
   it('falls back to a generic actor when the agent id is unmapped', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
     workspaceState.activeTab = browserTab()
     render(<BrowserConsentStrip browserTabId={TAB_ID} />)
-    expect(screen.getByText(/The agent wants to drive/)).toBeInTheDocument()
+    expect(screen.getByText(/The agent wants to open/)).toBeInTheDocument()
   })
 
   it('includes the element intent when the request states one', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent({ element: 'Search button' }) }
     workspaceState.activeTab = browserTab()
     render(<BrowserConsentStrip browserTabId={TAB_ID} />)
-    expect(
-      screen.getByText(
-        /wants to drive this app's browser for this session — it wants to navigate "Search button"\./
-      )
-    ).toBeInTheDocument()
+    expect(screen.getByText(/Agent says: "Search button"/)).toBeInTheDocument()
   })
 })
 
@@ -204,7 +211,7 @@ describe('BrowserConsentStrip failed respond', () => {
     expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled()
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
-    expect(mockRespond).toHaveBeenLastCalledWith('req-1', false)
+    expect(mockRespond).toHaveBeenLastCalledWith('req-1', 'deny')
     expect(mockRespond).toHaveBeenCalledTimes(2)
   })
 })
@@ -214,13 +221,15 @@ describe('BrowserConsentStrip announcement', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
     workspaceState.activeTab = browserTab()
     const first = render(<BrowserConsentStrip browserTabId={TAB_ID} />)
-    expect(screen.getByRole('alert')).toHaveTextContent('Allow browser automation?')
+    expect(screen.getByRole('alert')).toHaveTextContent('Allow the agent to open this site?')
     first.unmount()
 
     render(<BrowserConsentStrip browserTabId={TAB_ID} />)
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'Allow browser automation?' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('region', { name: 'Allow the agent to open this site?' })
+    ).toBeInTheDocument()
   })
 
   it('stays quiet for a request restored after a later one was announced', () => {
@@ -235,7 +244,9 @@ describe('BrowserConsentStrip announcement', () => {
     rerender(<BrowserConsentStrip browserTabId={TAB_ID} />)
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'Allow browser automation?' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('region', { name: 'Allow the agent to open this site?' })
+    ).toBeInTheDocument()
   })
 
   it('announces a re-prompt, which carries a new requestId', () => {
@@ -247,7 +258,7 @@ describe('BrowserConsentStrip announcement', () => {
     acpState.pendingBrowserConsents = { 'req-2': consentEvent({ requestId: 'req-2' }) }
     rerender(<BrowserConsentStrip browserTabId={TAB_ID} />)
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Allow browser automation?')
+    expect(screen.getByRole('alert')).toHaveTextContent('Allow the agent to open this site?')
   })
 })
 
@@ -277,7 +288,7 @@ describe('BrowserConsentCard (fallback)', () => {
     workspaceState.activeTab = { type: 'terminal', id: 't-1', terminalId: 't-1' } as WorkspaceTab
     render(<BrowserConsentCard consent={consentEvent()} />)
     expect(screen.getByTestId('browser-consent-card')).toBeInTheDocument()
-    expect(screen.getByText('Allow browser automation?')).toBeInTheDocument()
+    expect(screen.getByText('Allow the agent to open this site?')).toBeInTheDocument()
   })
 
   it('shows the card while a request is pending and no tab is active', () => {
@@ -313,11 +324,11 @@ describe('BrowserConsentCard (fallback)', () => {
     expect(screen.queryByTestId('browser-consent-card')).not.toBeInTheDocument()
   })
 
-  it('renders nothing outside Tauri', () => {
+  it('shows the card on a remote client, which has no strip', () => {
     runtimeState.tauri = false
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
-    const { container } = render(<BrowserConsentCard consent={consentEvent()} />)
-    expect(container).toBeEmptyDOMElement()
+    render(<BrowserConsentCard consent={consentEvent()} />)
+    expect(screen.getByTestId('browser-consent-card')).toBeInTheDocument()
   })
 })
 

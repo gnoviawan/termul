@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Checkout hosted fields fixture</title>
+</head>
+<body>
+<main>
+<h1>Checkout hosted fields fixture</h1>
+<form id="pay" action="/form-done.html" method="get">
+<input name="email" type="text" aria-label="Email">
+<div id="slot"></div>
+<button type="submit">Pay</button>
+</form>
+<p>Checkout ready</p>
+</main>
+<script>
+// The card fields come from the second loopback port, as a payment
+// provider's hosted fields do. `kind=labelled` names the frame the way
+// providers do; `kind=plain` leaves it anonymous.
+var query = new URLSearchParams(location.search);
+var port = /^[0-9]{1,5}$/.test(query.get('xo') || '') ? query.get('xo') : '0';
+var frame = document.createElement('iframe');
+if (query.get('kind') === 'labelled') {
+  frame.title = 'Secure card payment input frame';
+  frame.allow = 'payment *';
+} else {
+  frame.title = 'Embedded field';
+}
+frame.width = '400';
+frame.height = '120';
+frame.src = 'http://localhost:' + port + '/hosted-card.html';
+document.getElementById('slot').appendChild(frame);
+</script>
+</body>
+</html>

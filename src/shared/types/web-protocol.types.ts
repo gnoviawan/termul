@@ -124,6 +124,10 @@ export const WS_REQUEST_TYPES = [
   'set_model',
   'respond_permission',
   'answer_question',
+  // Stop agent browsing for a session (desktop parity with the
+  // `browser_stop` Tauri command); only an authenticated client of the
+  // session may send it.
+  'browser_stop',
   'create_session',
   'load_session',
   'resume_session',
@@ -300,6 +304,7 @@ export const WS_COMMAND_CLASSES: Readonly<
   set_model: ['idempotent', null],
   respond_permission: ['command', 'payload'],
   answer_question: ['command', 'payload'],
+  browser_stop: ['idempotent', null],
   create_session: ['create', 'entity'],
   load_session: ['command', 'payload'],
   resume_session: ['command', 'payload'],
@@ -1071,6 +1076,9 @@ export interface AgentsWatchDelta {
     // The host's browser-open shim captured an agent's auth URL; the payload is
     // `{ agentId, url }`. Not part of the roster state: a missed delta is lost.
     | 'browser_open_request'
+    // One browser policy scope changed; the payload is `{ scope, projectId?,
+    // revision }` and clients re-read that scope. Not roster state either.
+    | 'browser_policy_changed'
   payload: unknown
 }
 

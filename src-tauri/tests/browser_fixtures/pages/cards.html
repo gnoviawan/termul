@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cards fixture</title>
+</head>
+<body>
+<main>
+<h1>Cards fixture</h1>
+<div id="cards" class="grid">
+<div class="card"><div class="card-body"><span class="who">Ada</span><span>Analyst</span></div><div class="card-actions"><button type="button" class="btn">Edit</button><button type="button" class="btn delete">Delete</button></div></div>
+<div class="card"><div class="card-body"><span class="who">Bob</span><span>Analyst</span></div><div class="card-actions"><button type="button" class="btn">Edit</button><button type="button" class="btn delete">Delete</button></div></div>
+<div class="card"><div class="card-body"><span class="who">Carol</span><span>Analyst</span></div><div class="card-actions"><button type="button" class="btn">Edit</button><button type="button" class="btn delete">Delete</button></div></div>
+</div>
+<p id="left">Left: Ada Bob Carol</p>
+</main>
+<script>
+var cards = document.getElementById('cards');
+cards.addEventListener('click', function (e) {
+  var button = e.target.closest('button.delete');
+  if (!button) return;
+  button.closest('.card').remove();
+  var names = Array.prototype.map.call(cards.querySelectorAll('.who'), function (who) {
+    return who.textContent;
+  });
+  document.getElementById('left').textContent = 'Left: ' + names.join(' ');
+});
+</script>
+</body>
+</html>

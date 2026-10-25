@@ -108,6 +108,7 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     // reply + resend of the same commandId must replay the original outcome.
     ("respond_permission", CommandClass::command(Replay::Payload)),
     ("answer_question", CommandClass::command(Replay::Payload)),
+    ("browser_stop", CommandClass::idempotent()),
     ("create_session", CommandClass::create()),
     ("load_session", CommandClass::command(Replay::Payload)),
     ("resume_session", CommandClass::command(Replay::Payload)),
@@ -207,6 +208,7 @@ fn identifying_fields(request_type: &str) -> &'static [&'static str] {
         "record_agent_switch" => &["sessionId", "fromConfigId", "toConfigId", "newSessionId"],
         "respond_permission" => &["agentId", "requestId", "optionId"],
         "answer_question" => &["agentId", "questionId"],
+        "browser_stop" => &["sessionId"],
         "authenticate_agent" => &["agentId", "methodId"],
         "respond_elicitation" => &["agentId", "requestId", "action"],
         "acp_deliver_auth_redirect" | "install_acp_agent" | "logout_agent" | "kill_agent" => {

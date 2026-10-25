@@ -1,4 +1,5 @@
 import {
+  Globe,
   KeyRound,
   KeySquare,
   Link2,
@@ -6,6 +7,7 @@ import {
   ShieldAlert,
   TerminalSquare
 } from '@/components/icons'
+import { BROWSER_ANCHORS } from '@/components/settings/browser-policy-copy'
 import type { SettingsCategory } from '@/components/settings/SettingsLayout'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
 
@@ -43,6 +45,12 @@ export const PROJECT_SETTINGS_CATEGORIES: SettingsCategory[] = [
     icon: <KeyRound size={16} />
   },
   {
+    id: 'browser',
+    label: 'Browser',
+    description: 'Which sites agents may browse in this project without asking.',
+    icon: <Globe size={16} />
+  },
+  {
     id: 'emergency',
     label: 'Emergency mode',
     description:
@@ -57,6 +65,27 @@ export const PROJECT_SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     label: 'Claude account',
     description: 'Choose the Claude account that chats in this project use.',
     keywords: ['provider', 'account', 'claude', 'work', 'personal', 'switch']
+  },
+  {
+    categoryId: 'browser',
+    label: 'Browse logged out in this project',
+    description: 'Agents start logged out and keep nothing after the chat ends.',
+    keywords: ['ephemeral', 'incognito', 'private', 'profile', 'cookies', 'login', 'browser'],
+    anchorId: BROWSER_ANCHORS.projectEphemeral
+  },
+  {
+    categoryId: 'browser',
+    label: 'Allowed sites',
+    description: 'Sites agents open in this project without asking.',
+    keywords: ['browser', 'allow list', 'allowlist', 'origin', 'domain', 'website', 'automation'],
+    anchorId: BROWSER_ANCHORS.projectAllowList
+  },
+  {
+    categoryId: 'browser',
+    label: 'Pre-approved actions',
+    description: 'Actions agents may take on a site in this project without asking.',
+    keywords: ['browser', 'password', 'payment', 'upload', 'download', 'approve'],
+    anchorId: BROWSER_ANCHORS.projectPreapprovals
   },
   {
     categoryId: 'general',

@@ -553,6 +553,7 @@ pub(super) fn production_router(root: &std::path::Path) -> axum::Router {
         "http://127.0.0.1".to_string(),
         None,
         crate::web::origin::OriginPolicy::default(),
+        crate::web::host_allow::HostAllowList::loopback(),
         crate::web::connection_runtime::ConnectionRuntime::default(),
     )
 }

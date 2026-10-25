@@ -1,3 +1,4 @@
+import { isUserBrowserTabId, newUserBrowserTabId } from '@/lib/browser-api'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
 import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
@@ -328,16 +329,14 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
               }
             ]
           case 'browser': {
-            const bTabId = browserTabId(tab.browserTabId)
-            // Restore browser session entry lazily
-            useBrowserSessionStore.getState().createTab(tab.browserTabId, tab.url)
-            return [
-              {
-                type: 'browser',
-                id: bTabId,
-                browserTabId: tab.browserTabId
-              }
-            ]
+            // The host registry only builds user tabs under a label it
+            // accepts. A saved agent tab (its session is gone) or a label
+            // from an older build reopens as a new user tab at its URL.
+            const id = isUserBrowserTabId(tab.browserTabId)
+              ? tab.browserTabId
+              : newUserBrowserTabId()
+            useBrowserSessionStore.getState().createTab(id, tab.url)
+            return [{ type: 'browser', id: browserTabId(id), browserTabId: id }]
           }
           case 'git':
             return [

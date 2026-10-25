@@ -15,8 +15,8 @@
  * `useConsentCardHost`, so the host renders only unhosted consents, and it
  * stays empty while the strip is hosting.
  *
- * Desktop-only like every consent surface — remote clients never see a
- * prompt; the host auto-denies on timeout.
+ * Remote clients use it too: they have no browser pane, so a ticket whose
+ * chat is not on screen surfaces here.
  */
 
 import { BrowserConsentCard } from '@/components/chat/BrowserConsentCard'
@@ -24,7 +24,6 @@ import {
   useInterfaceOverlayOpen,
   useNativeWebviewOcclusion
 } from '@/hooks/use-native-webview-occlusion'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
@@ -35,10 +34,9 @@ export function BrowserConsentCardHost(): React.JSX.Element | null {
   const stripHosting = useIsConsentStripHosting()
   const overlayOpen = useInterfaceOverlayOpen()
 
-  const unhosted =
-    isTauriContext() && !stripHosting
-      ? Object.values(pending ?? {}).filter((c) => overlayOpen || !hosted.has(c.sessionId))
-      : []
+  const unhosted = stripHosting
+    ? []
+    : Object.values(pending ?? {}).filter((c) => overlayOpen || !hosted.has(c.sessionId))
 
   useNativeWebviewOcclusion(unhosted.length > 0, 'docked')
 

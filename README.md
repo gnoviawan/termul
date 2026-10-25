@@ -219,6 +219,8 @@ sudo apt install libwebkit2gtk-4.1-dev \
     librsvg2-dev patchelf
 ```
 
+The agent browser needs WebKitGTK 2.40 or later at runtime, because it calls `webkit_web_view_call_async_javascript_function`. On an older WebKitGTK, such as an Ubuntu 22.04 install without updates, the app can fail to load. Debian 12, Ubuntu 24.04 and an updated Ubuntu 22.04 meet it.
+
 </details>
 
 <details>
@@ -230,6 +232,8 @@ sudo dnf install webkit2gtk4.1-devel \
     appindicator-devel librsvg2-devel \
     patchelf
 ```
+
+The agent browser also needs WebKitGTK 2.40 or later at runtime on Fedora.
 
 </details>
 

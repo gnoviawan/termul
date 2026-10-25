@@ -1,0 +1,34 @@
+# Failing on the windows-latest runner today, in modules the browser work does not touch.
+# Each comment is the failure the runner printed.
+# expected loopback: http://foo.localhost:3000/cb
+acp::browser_shim::tests::loopback_validation_accepts_loopback_forms
+# git worktree add
+acp::destructive_guard::tests::a_session_in_a_nested_linked_worktree_does_not_block_the_enclosing_tree
+# the daemon was disposed, not leaked
+canvas::tests::pool_release_still_evicts_after_doc_file_deleted
+# left: None, right: Some(<pid>)
+data_lock::tests::recorded_pid_is_readable_by_a_rival_and_never_leaves_stale_digits
+# message must name the path, the rival and its pid
+data_lock::tests::second_acquire_of_a_held_dir_is_busy_until_the_first_is_dropped
+# left: "D:/tmp/qa-collect-projects.json", right: "/tmp/qa-collect-projects.json"
+onboard::tests::collect_wires_typed_projects_file_through_args_and_config
+# must name the owner-protected token file
+onboard::tests::write_access_info_public_bind_points_at_token_file_not_logs
+# failed to read web auth token file
+remote::host::tests::stop_then_start_reuses_the_one_desktop_store_without_taking_a_second_lock
+web::auth::tests::resolve_public_bind_generates_then_loads_same_token
+web::auth::tests::shared_live_with_exposure_requires_a_persisted_token_that_survives_restart
+# left: "one\r\n", right: "one\n"
+web::command_ledger::http_tests::routes::git_discard_resend_does_not_discard_again
+web::command_ledger::http_tests::routes::git_stash_apply_resend_does_not_apply_again
+# left: Some("chat/ab12cd34"), right: Some("chat/fix-login")
+web::worktree_rename_api::tests::rename_branch_renames_records_user_source_and_emits_once
+# left: "a\r\n", right: "a\n"
+worktree::merge_tests::merge_preview_of_a_clean_merge_lists_the_incoming_changes_and_touches_nothing
+# passed in another run, so it fails by timing: git command should run
+trackers::git_tracker::commit_detail_tests::it_commit_with_more_than_the_file_cap_is_truncated
+# left: "...\home\.agents\skills\...", right: "...\home\.agents/skills\..." (mixed separators)
+skills::files::tests::indexes_harness_roots_outside_the_project
+web::skills_api::tests::skill_index_lists_project_harness_skills
+# Os { code: 123, kind: InvalidFilename }: the directory name is not a valid Windows path
+trackers::git_tracker::tests::it_status_detail_expands_directory_named_like_a_pathspec_magic

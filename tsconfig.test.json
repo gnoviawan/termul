@@ -11,6 +11,8 @@
     "vitest.setup.ts",
     "scripts/**/*.test.ts",
     "scripts/acp-reference.ts",
-    "scripts/validate-pr-body.ts"
+    "scripts/validate-pr-body.ts",
+    "scripts/canvas-eval/checks.ts",
+    "scripts/canvas-eval/upstream.ts"
   ]
 }

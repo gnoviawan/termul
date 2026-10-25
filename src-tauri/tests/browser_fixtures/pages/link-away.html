@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Link away fixture</title>
+</head>
+<body>
+<main>
+<h1>Link away fixture</h1>
+<p>Secret page data: page-data</p>
+<a id="away" href="/index.html">Send the data</a>
+</main>
+<script>
+// localhost on the same port is another origin than 127.0.0.1.
+document.getElementById('away').href = 'http://localhost:' + location.port + '/index.html?d=page-data';
+</script>
+</body>
+</html>

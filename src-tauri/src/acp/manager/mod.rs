@@ -486,6 +486,13 @@ pub struct AcpManager {
 }
 
 impl AcpManager {
+    /// Loopback port of the in-process host tool listener the agents' MCP
+    /// children connect to.
+    #[must_use]
+    pub fn host_plan_server_port(&self) -> u16 {
+        self.host_plan_server.port()
+    }
+
     /// Create a new manager that fans `acp:*` events out to the given sinks.
     ///
     /// Pass a `WsRelaySink`-backed list (the desktop app and the headless

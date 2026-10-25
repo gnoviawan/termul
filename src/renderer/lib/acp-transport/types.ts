@@ -395,6 +395,8 @@ export interface AcpTransport {
     values?: string[],
     options?: CommandCallOptions
   ): Promise<void>
+  /** Stop agent browsing for a session until the user's next message. */
+  stopBrowserAgent(sessionId: string): Promise<void>
   /** Agent ACP auth (methodId) — NOT the WS relay token gate. */
   authenticate(
     agentId: AgentId,
