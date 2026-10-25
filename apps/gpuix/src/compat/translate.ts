@@ -59,6 +59,8 @@ export interface Translation {
    * takes it as its priority instead (`stacking.ts`).
    */
   readonly zIndex: number | null
+  /** The `rotate-*` class's degrees, or null. Painted only on icons (`svg.tsx`). */
+  readonly rotate: number | null
   readonly nowrap: boolean
   /** Paints a box (fill, border, padding, size): cannot merge into a parent's text run. */
   readonly paints: boolean
@@ -164,8 +166,10 @@ interface Lifted {
   /** `left-1/4`-style offsets as percent strings, placed by `percentPlacement`. */
   insets: Record<string, string> | null
   zIndex: number | null
+  rotate: number | null
 }
 
+const ROTATE_TOKEN = /^(-?)rotate-(?:(\d+)|\[(-?\d+(?:\.\d+)?)deg\])$/
 const FRACTION_INSET = /^(top|right|bottom|left|inset|inset-x|inset-y)-(\d+)\/(\d+)$/
 const INSET_SIDES: Readonly<Record<string, readonly string[]>> = {
   top: ['top'],
@@ -194,7 +198,8 @@ function lift(className: string): Lifted {
     placement: null,
     fillMinus: null,
     insets: null,
-    zIndex: null
+    zIndex: null,
+    rotate: null
   }
   const placed = liftPlacement(className.split(/\s+/))
   lifted.placement = placed.placement
@@ -220,6 +225,11 @@ function lift(className: string): Lifted {
     const z = zIndexToken(token)
     if (z !== undefined) {
       lifted.zIndex = z
+      continue
+    }
+    const turn = token.match(ROTATE_TOKEN)
+    if (turn) {
+      lifted.rotate = (turn[1] === '-' ? -1 : 1) * Number(turn[2] ?? turn[3])
       continue
     }
     if (token === 'group' || token.startsWith('group/')) {
@@ -400,6 +410,7 @@ function translate(tw: Tw, tag: string, className: string): Translation {
     hidden: display === 'none',
     fixed: isFixed,
     zIndex: lifted.zIndex,
+    rotate: lifted.rotate,
     nowrap: base.whiteSpace === 'nowrap',
     paints: hasAny(compiled.base, PAINT_KEYS) || (defaults !== undefined && 'display' in defaults),
     hoverable: base.hover !== undefined || base.active !== undefined,

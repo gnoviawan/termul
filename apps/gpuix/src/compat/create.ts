@@ -14,7 +14,7 @@ import { applyRules } from '../style/tw'
 import type { TwState } from '../style/variants'
 import { checkboxElement } from './checkbox'
 import { childInfo, contentBasis, divideChildren, layoutChildren, wrapAutoMargin } from './children'
-import { ColorContext, SvgClassContext } from './color'
+import { ColorContext, RotateContext, SvgClassContext } from './color'
 import { ScopeContext, withScopedClasses } from './scope'
 import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
 import { convertDomStyle } from './dom-style'
@@ -240,7 +240,7 @@ export function buildElement(
 
   let element: ReactElement
   if (tr.type === 'svg') {
-    element = svgElement(props, style, native, key)
+    element = svgElement(props, style, native, key, tr.rotate)
   } else if (tr.type === 'img') {
     native.src = props.src
     element = jsx('img', native, key)
@@ -275,6 +275,10 @@ export function buildElement(
     }
     if (nested && tr.svgClasses) {
       kids = (laid.isStatic && !wrapped ? jsxs : jsx)(SvgClassContext.Provider, { value: tr.svgClasses, children: kids })
+      wrapped = true
+    }
+    if (nested && tr.rotate !== null) {
+      kids = (laid.isStatic && !wrapped ? jsxs : jsx)(RotateContext.Provider, { value: tr.rotate, children: kids })
       wrapped = true
     }
     if (nested && tr.scope) {

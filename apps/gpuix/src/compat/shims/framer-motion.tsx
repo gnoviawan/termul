@@ -1,7 +1,7 @@
 /**
  * framer-motion for the compat prototype: `motion.<tag>` renders the plain
- * tag at its `animate` end state (opacity only; transforms have no GPUIX
- * target) and drops every motion prop. Animation fidelity is not attempted.
+ * tag at its `animate` end state (opacity, and a `rotate` that the icons
+ * below bake in, `color.ts`; other transforms have no GPUIX target) and drops every motion prop. Animation fidelity is not attempted.
  */
 
 import {
@@ -14,6 +14,7 @@ import {
   useEffect,
   useRef
 } from 'react'
+import { RotateContext } from '../color'
 import { notePointerDragRelease } from '../dnd'
 import { clickWithheldByCapture } from '../events'
 import { compatWarn } from '../log'
@@ -62,6 +63,7 @@ function motionComponent(tag: string) {
   const hit = cache.get(tag)
   if (hit) return hit
   const Component = forwardRef<unknown, Record<string, unknown>>(function Motion(props, ref) {
+    const outerRotate = useContext(RotateContext)
     const rest: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(props)) if (!MOTION_PROPS.has(k)) rest[k] = v
     const animate = props.animate
@@ -71,6 +73,10 @@ function motionComponent(tag: string) {
         rest.style = { ...(rest.style as object), opacity }
     }
     if (props.layout || props.layoutId) compatWarn('motion-unsupported', 'layout animation')
+    const rotate = animate && typeof animate === 'object' ? (animate as { rotate?: unknown }).rotate : undefined
+    if (typeof rotate === 'number') {
+      rest.children = createElement(RotateContext.Provider, { value: outerRotate + rotate }, rest.children as ReactNode)
+    }
     return createElement(tag, { ...rest, ref })
   })
   cache.set(tag, Component)
