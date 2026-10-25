@@ -50,7 +50,7 @@ pub use commit_detail::{
     git_get_commit_detail, git_get_commit_file_diff, CommitDetailError, GitCommitDetail,
     GitCommitFileDiff,
 };
-pub use diff_stat::{git_get_diff_stat, DiffStatError, GitDiffStat};
+pub use diff_stat::{git_get_diff_stat, DiffStatError, GitDiffStat, GitFileDiffStat};
 pub use resolve::{resolve_executable, resolve_git_binary};
 pub use types::{GitCommit, GitCommitContext, GitStatus, GitStatusDetail};
 

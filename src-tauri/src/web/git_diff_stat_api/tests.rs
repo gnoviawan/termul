@@ -1,5 +1,6 @@
 use super::*;
 use crate::acp::AcpManager;
+use crate::trackers::git_tracker::GitFileDiffStat;
 use crate::trackers::GitTracker;
 use crate::web::sink::WsRelaySink;
 use crate::web::test_pty_manager;
@@ -13,6 +14,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
+
+fn file(path: &str, added: u64, removed: u64) -> GitFileDiffStat {
+    GitFileDiffStat {
+        path: path.to_string(),
+        added,
+        removed,
+    }
+}
 
 /// Temp dir removed on drop (panic-safe).
 struct TempDir {
@@ -140,20 +149,29 @@ async fn diff_stat_returns_tracked_and_untracked_totals() {
         body.data,
         Some(GitDiffStat {
             added: 5,
-            removed: 0
+            removed: 0,
+            files: vec![file("a.txt", 2, 0), file("new.txt", 3, 0)]
         })
     );
 }
 
 #[tokio::test]
-async fn diff_stat_serializes_added_and_removed_keys() {
+async fn diff_stat_serializes_added_removed_and_files_keys() {
     let body = IpcBody::ok(GitDiffStat {
         added: 2,
         removed: 1,
+        files: vec![file("a.txt", 2, 1)],
     });
     assert_eq!(
         serde_json::to_value(body).expect("serialize"),
-        serde_json::json!({ "success": true, "data": { "added": 2, "removed": 1 } })
+        serde_json::json!({
+            "success": true,
+            "data": {
+                "added": 2,
+                "removed": 1,
+                "files": [{ "path": "a.txt", "added": 2, "removed": 1 }]
+            }
+        })
     );
 }
 
@@ -199,7 +217,8 @@ async fn diff_stat_admits_non_loopback_peer_without_remote_writes() {
         body.data,
         Some(GitDiffStat {
             added: 2,
-            removed: 0
+            removed: 0,
+            files: vec![file("new.txt", 2, 0)]
         })
     );
 }
