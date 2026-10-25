@@ -18,8 +18,8 @@ import { tokenColor } from './theme'
 
 /**
  * Chromium's disabled checkbox in each colour scheme (the web shows the user
- * agent's control, not a Termul token). Dark is measured from the M2 frames;
- * light follows Chromium's light palette and is not measured.
+ * agent's control, not a Termul token). Dark is measured from the M2 frames,
+ * light from Playwright's Chromium with `color-scheme: light`.
  */
 const BOX = {
   dark: {
@@ -28,11 +28,11 @@ const BOX = {
   },
   light: {
     checked: {
-      fill: 'rgb(198, 198, 198)',
-      border: 'rgb(198, 198, 198)',
-      mark: 'rgb(255, 255, 255)'
+      fill: 'rgb(209, 209, 209)',
+      border: 'rgb(209, 209, 209)',
+      mark: 'rgb(237, 237, 237)'
     },
-    unchecked: { fill: 'rgb(255, 255, 255)', border: 'rgb(198, 198, 198)', mark: '' }
+    unchecked: { fill: 'rgb(248, 248, 248)', border: 'rgb(209, 209, 209)', mark: '' }
   }
 } as const
 
