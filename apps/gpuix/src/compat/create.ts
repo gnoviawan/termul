@@ -304,6 +304,23 @@ export function buildElement(
   return element
 }
 
+const NON_TEXT_INPUTS = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'range', 'color', 'image', 'hidden'])
+const FOCUS_VISIBLE_VARIANT = /(^|\s|:)focus-visible:/g
+
+function isTextField(tag: string, type: unknown): boolean {
+  return tag === 'textarea' || (tag === 'input' && !NON_TEXT_INPUTS.has(String(type ?? 'text')))
+}
+
+/**
+ * Chromium matches `:focus-visible` on a focused text field however it got
+ * focus (a click, `autoFocus`, `.focus()`), since typing follows. GPUI's
+ * `focusVisible` needs the last input to be a key, so a text field's
+ * `focus-visible:` classes key on plain focus instead.
+ */
+function focusVisibleOnFocus(className: string | undefined): string | undefined {
+  return className?.includes('focus-visible:') ? className.replace(FOCUS_VISIBLE_VARIANT, '$1focus:') : className
+}
+
 /** The runtime entry for string types. `CompatHost` handles 'host' translations. */
 export function createDomElement(
   tag: string,
@@ -316,7 +333,8 @@ export function createDomElement(
   if (tag === 'br' || tag === 'wbr') return jsx('div', { style: tag === 'br' ? BREAK : HIDDEN }, key)
   if (UNSUPPORTED_TAGS.has(tag)) compatWarn('element-unsupported', tag)
   if (SVG_CHILD_TAGS.has(tag)) return jsx(tag as never, props, key)
-  const className = withScopedClasses(tag, props['data-streamdown'], props.className)
+  const scoped = withScopedClasses(tag, props['data-streamdown'], props.className)
+  const className = isTextField(tag, props.type) ? focusVisibleOnFocus(scoped) : scoped
   const tr = translation(tag, className)
   const element =
     tr.ruleMode === 'host' || tr.group !== null

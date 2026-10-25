@@ -37,7 +37,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: [
       'Typing "theme" straight after Ctrl+K filters the palette in both, and the rows rank the same (C16 fixed in G3: the cmdk shim scores with cmdk\'s command-score and sorts as cmdk does), Open Canvas first under Workspace.',
       'The step races in both clients: in some runs the web drops the first key ("heme") and in some GPUIX does (an empty filter); GPUIX failed this check in 5 of 9 G3 runs, 3 of 6 with the C16 change and 2 of 3 without it.',
-      'The GPUIX search field has no focus underline.'
+      'The search field shows its focus underline as on the web (G5: the matrix makes the GPUIX window the active X window, as the Playwright page is focused; an inactive GPUI window gets no focus events).'
     ],
     cause: 'compat translator gap',
     unit: 'focus ring on focused fields (unassigned)',
@@ -90,7 +90,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: [
       'The Command History modal, its scope picker and empty state match.',
       BACKDROP,
-      'No focus ring on the search field.'
+      'The search field shows its focus ring as on the web (G5).'
     ],
     cause: 'missing GPUIX capability',
     unit: 'C6 overlay backdrop',
@@ -291,20 +291,17 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
 
   'theme.picker': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'The Color Themes popover, groups, swatches and the current-theme check match, and labels antialias in grayscale as on the web (C8 fixed in G3).',
-      'No focus ring on the search field.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'focus ring on focused fields (unassigned)',
-    impact: 1
+      'The search field shows its focus ring as on the web (G5: the matrix makes the GPUIX window the active X window, as the Playwright page is focused; an inactive GPUI window gets no focus events).'
+    ]
   },
   'dialogs.bug-report': {
     status: 'partial',
     differences: [
       'The Report a bug dialog paints its Title, What happened, Screenshots and Preview sections at the web width and wraps the same lines.',
-      'The Title field opens focused with a ring on the web and unringed in GPUIX.',
+      'The Title field opens focused with its ring in both (G5: the matrix makes the GPUIX window the active X window, as the Playwright page is focused; an inactive GPUI window gets no focus events). The web draws a resize grip in the What happened corner; GPUIX has none.',
       'The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp.'
     ],
     cause: 'missing GPUIX capability',

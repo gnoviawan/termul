@@ -314,6 +314,29 @@ async function x11Click(x11: X11Input, point: Point, button: 1 | 3): Promise<voi
     throw new Error(`x11-click failed: ${await new Response(proc.stderr).text()}`)
 }
 
+const X11_FOCUS = path.join(import.meta.dir, 'x11-focus.py')
+
+/** Make the GPUIX window the active X window, so GPUI delivers focus and blur events (see x11-focus.py). */
+export async function activateWindow(display: string, origin: Point): Promise<void> {
+  const proc = Bun.spawn(
+    [
+      'uv',
+      'run',
+      '--quiet',
+      '--with',
+      'python-xlib==0.33',
+      'python',
+      '-I',
+      X11_FOCUS,
+      String(origin.x + 1),
+      String(origin.y + 1)
+    ],
+    { env: { ...process.env, DISPLAY: display }, stdout: 'ignore', stderr: 'pipe' }
+  )
+  if ((await proc.exited) !== 0)
+    throw new Error(`x11-focus failed: ${await new Response(proc.stderr).text()}`)
+}
+
 export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11Input): Driver {
   const resolve = async (
     target: Target,

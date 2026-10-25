@@ -1,5 +1,5 @@
 /**
- * `bun run parity:matrix [--only id,id] [--area a,b] [--port N] [--out DIR] [--report-only]`
+ * `bun run parity:matrix [--only id,id] [--area a,b] [--port N] [--out DIR] [--inactive-window] [--report-only]`
  *
  * Seeds one termul-server (see `world.ts`), then for every surface in
  * `surfaces/` runs the web client (Playwright chromium) and the GPUIX client
@@ -21,7 +21,7 @@ import { cropPng, diffPngs, type Rect } from '../parity/diff'
 import { READY_TIMEOUT_MS, windowOrigin, withGpuix } from '../parity/shoot-gpuix'
 import { DIST_WEB } from '../parity/shoot-web'
 import { pickPort } from '../shared/seed'
-import { type Driver, gpuixDriver, type Point, webDriver } from './drive'
+import { activateWindow, type Driver, gpuixDriver, type Point, webDriver } from './drive'
 import { writeReport } from './report'
 import { SURFACES } from './surfaces'
 import type { AutoStatus, Client, ClientRun, StepDiff, Surface, SurfaceResult } from './types'
@@ -38,6 +38,8 @@ const { values } = parseArgs({
     'web-only': { type: 'boolean', default: false },
     /** Send GPUIX clicks as real X input (XTEST) instead of GPUIX automation's simulated events. */
     'x11-input': { type: 'boolean', default: false },
+    /** Leave the GPUIX window inactive (no X focus): GPUI then sends no focus or blur events. */
+    'inactive-window': { type: 'boolean', default: false },
     'report-only': { type: 'boolean', default: false }
   }
 })
@@ -198,9 +200,9 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
     { server: world.server, entry, clientStateDir, ...SIZE },
     async ({ app, display, grab }) => {
       await app.getByText(BOOT_TEXT).waitFor({ timeoutMs: READY_TIMEOUT_MS })
-      const x11 = values['x11-input']
-        ? { display, origin: await windowOrigin(display, SIZE.width, SIZE.height) }
-        : undefined
+      const origin = await windowOrigin(display, SIZE.width, SIZE.height)
+      if (!values['inactive-window']) await activateWindow(display, origin)
+      const x11 = values['x11-input'] ? { display, origin } : undefined
       return runSteps(surface, 'gpuix', gpuixDriver(app, points, x11), grab)
     }
   )
