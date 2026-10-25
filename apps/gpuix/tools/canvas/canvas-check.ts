@@ -463,8 +463,30 @@ try {
     }
   )
 
-  // 10. Closing the window quits the app, the helper and every WebKit process.
-  const everything = [helperPid, ...descendants(helperPid)]
+  // 10. The helper dies under beta's canvas: the store asks the host for a fresh mount and a new
+  // helper shows it again (the editor-crash path of the DOM client, AD-31).
+  process.kill(helperPid, 'SIGKILL')
+  const restartedAt = Date.now()
+  const remounted = await logged(/created canvas (canvas-parity-beta-(?!2\b)\d+)/, 60_000)
+    .then((m) => m[1])
+    .catch(() => null)
+  const newHelper = Number([...log().matchAll(/started webview host (\d+)/g)].pop()?.[1])
+  const readyAgain = await app
+    .getByText('Ready')
+    .waitFor({ timeoutMs: 60_000 })
+    .then(() => true)
+    .catch(() => false)
+  measures.helperKillToReadyMs = Date.now() - restartedAt
+  await Bun.sleep(1500)
+  await shot('07-after-helper-killed')
+  check(
+    'a killed helper: the canvas remounts in a new helper and is ready again',
+    remounted !== null && newHelper !== helperPid && readyAgain,
+    { remounted, oldHelper: helperPid, newHelper, killToReadyMs: measures.helperKillToReadyMs }
+  )
+
+  // 11. Closing the window quits the app, the helper and every WebKit process.
+  const everything = [newHelper, ...descendants(newHelper)]
   closeWindow(s.display, parentXid)
   const exitCode = await Promise.race([s.exited, Bun.sleep(15_000).then(() => 'timeout' as const)])
   const leftovers = await until(

@@ -62,7 +62,7 @@ export function CanvasShell({
     }
     const { mountSeq, info } = mount
     const canvasOrigin = canvasOriginOf(info.baseUrl)
-    const relay = createCanvasRelayFrame(host, tabId, canvasOrigin)
+    const relay = createCanvasRelayFrame(host, tabId, canvasOrigin, mountSeq)
     const bridge = createCanvasBridge({
       iframe: relay.frame,
       canvasOrigin,

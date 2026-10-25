@@ -22,6 +22,8 @@ export interface CanvasWebviewHost {
   postToCanvas(tabId: string, data: string): Promise<IpcResult<void>>
   /** Messages the tab's editor posts to its parent, as JSON text. */
   onCanvasMessage(tabId: string, callback: (data: string) => void): BrowserEventSubscription
+  /** The tab's webview is gone without being destroyed (the helper died). */
+  onCanvasGone(tabId: string, callback: (reason: string) => void): BrowserEventSubscription
   /** Hand the keyboard back to the app if this tab holds it. */
   releaseKeyboard(tabId: string): void
 }
@@ -44,14 +46,17 @@ export interface CanvasRelayFrame {
 }
 
 /**
- * The frame `createCanvasBridge` talks to for canvas tab `tabId`. Like a real `postMessage`, a
- * message for another target origin is dropped. A relayed message that is not JSON is dropped
- * and logged; the bridge itself drops anything else it does not expect.
+ * The frame `createCanvasBridge` talks to for canvas tab `tabId` of mount `mountSeq`. Like a real
+ * `postMessage`, a message for another target origin is dropped. A relayed message that is not
+ * JSON is dropped and logged; the bridge itself drops anything else it does not expect. A webview
+ * that dies under the editor reports `event.crashed`, as the editor reports its own crash, so the
+ * store asks the host for a fresh mount.
  */
 export function createCanvasRelayFrame(
   host: CanvasWebviewHost,
   tabId: string,
-  canvasOrigin: string
+  canvasOrigin: string,
+  mountSeq: number
 ): CanvasRelayFrame {
   const contentWindow = {
     postMessage(message: unknown, targetOrigin: string): void {
@@ -61,7 +66,14 @@ export function createCanvasRelayFrame(
       })
     }
   }
-  const subscription = host.onCanvasMessage(tabId, (data) => {
+  const deliver = (data: unknown) => {
+    const event = new MessageEvent('message', { data })
+    // MessageEvent's init only accepts real windows and ports as `source`.
+    Object.defineProperty(event, 'origin', { value: canvasOrigin })
+    Object.defineProperty(event, 'source', { value: contentWindow })
+    window.dispatchEvent(event)
+  }
+  const messages = host.onCanvasMessage(tabId, (data) => {
     let parsed: unknown
     try {
       parsed = JSON.parse(data)
@@ -69,13 +81,19 @@ export function createCanvasRelayFrame(
       log.warn('canvas', `dropped an unreadable message from ${tabId}`)
       return
     }
-    const event = new MessageEvent('message', { data: parsed })
-    // MessageEvent's init only accepts real windows and ports as `source`.
-    Object.defineProperty(event, 'origin', { value: canvasOrigin })
-    Object.defineProperty(event, 'source', { value: contentWindow })
-    window.dispatchEvent(event)
+    deliver(parsed)
   })
-  return { frame: { contentWindow }, dispose: () => subscription.unlisten() }
+  const gone = host.onCanvasGone(tabId, (reason) => {
+    log.warn('canvas', `the webview of ${tabId} is gone: ${reason}`)
+    deliver({ method: 'event.crashed', params: JSON.stringify({ reason }), mountSeq })
+  })
+  return {
+    frame: { contentWindow },
+    dispose: () => {
+      messages.unlisten()
+      gone.unlisten()
+    }
+  }
 }
 
 /** Left of the window by more than any slot is wide (X coordinates are 16-bit). */

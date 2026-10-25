@@ -9,6 +9,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   const cmd = JSON.parse(line)
   if (cmd.op === 'quit') process.exit(0)
   if (cmd.op === 'create' && cmd.id === 'crash') process.exit(3)
+  if (cmd.op === 'post' && cmd.data === '"die"') process.exit(3)
   if (cmd.op === 'navigate' && cmd.url.includes('fail')) {
     send({ ev: 'ack', req: cmd.req, ok: false, error: `cannot load ${cmd.url}` })
     return

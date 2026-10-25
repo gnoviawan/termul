@@ -18,6 +18,7 @@ beforeAll(() => {
 function fakeHost() {
   const posted: { tabId: string; data: string }[] = []
   const listeners = new Map<string, (data: string) => void>()
+  const goneListeners = new Map<string, (reason: string) => void>()
   const host: CanvasWebviewHost = {
     createCanvas: async () => ({ success: true, data: undefined }),
     async postToCanvas(tabId, data): Promise<IpcResult<void>> {
@@ -28,10 +29,14 @@ function fakeHost() {
       listeners.set(tabId, callback)
       return { unlisten: () => listeners.delete(tabId) }
     },
+    onCanvasGone(tabId, callback): BrowserEventSubscription {
+      goneListeners.set(tabId, callback)
+      return { unlisten: () => goneListeners.delete(tabId) }
+    },
     releaseKeyboard: () => {}
   }
   const relay = (tabId: string, message: unknown) => listeners.get(tabId)?.(JSON.stringify(message))
-  return { host, posted, relay, listeners }
+  return { host, posted, relay, listeners, goneListeners }
 }
 
 /** What `createCanvasBridge` sees: `message` events on window, filtered as it filters them. */
@@ -48,7 +53,7 @@ function bridgeView(frame: RelayFrame, origin: string) {
 describe('canvas relay frame', () => {
   test('a post reaches the helper as JSON text, with u64 ids still digits inside params', () => {
     const { host, posted } = fakeHost()
-    const frame = createCanvasRelayFrame(host, 'canvas-p1-3', ORIGIN)
+    const frame = createCanvasRelayFrame(host, 'canvas-p1-3', ORIGIN, 3)
     frame.frame.contentWindow?.postMessage(
       { id: 1, method: 'node.get', params: '{"id":18446744073709551615}', mountSeq: 3 },
       ORIGIN
@@ -64,7 +69,7 @@ describe('canvas relay frame', () => {
 
   test("the editor's messages arrive on window from the frame's contentWindow at the editor origin", () => {
     const { host, relay } = fakeHost()
-    const frame = createCanvasRelayFrame(host, 'canvas-p1-4', ORIGIN)
+    const frame = createCanvasRelayFrame(host, 'canvas-p1-4', ORIGIN, 4)
     const view = bridgeView(frame.frame, ORIGIN)
     relay('canvas-p1-4', { method: 'event.ready', params: '{}', mountSeq: 4 })
     relay('canvas-p1-4', { id: 1, ok: true, result: '{"name":"Frame 1"}', mountSeq: 4 })
@@ -78,7 +83,7 @@ describe('canvas relay frame', () => {
 
   test('other tabs, unreadable relays and a disposed frame deliver nothing', () => {
     const { host, relay, listeners } = fakeHost()
-    const frame = createCanvasRelayFrame(host, 'canvas-p1-5', ORIGIN)
+    const frame = createCanvasRelayFrame(host, 'canvas-p1-5', ORIGIN, 5)
     const view = bridgeView(frame.frame, ORIGIN)
     relay('canvas-other', { method: 'event.ready', params: '{}', mountSeq: 5 })
     listeners.get('canvas-p1-5')?.('not json')
@@ -89,9 +94,26 @@ describe('canvas relay frame', () => {
     view.stop()
   })
 
+  test('a webview gone under the editor reaches the bridge as event.crashed for its mount', () => {
+    const { host, goneListeners } = fakeHost()
+    const frame = createCanvasRelayFrame(host, 'canvas-p1-7', ORIGIN, 7)
+    const view = bridgeView(frame.frame, ORIGIN)
+    goneListeners.get('canvas-p1-7')?.('webview host killed by SIGKILL')
+    expect(view.seen).toEqual([
+      {
+        method: 'event.crashed',
+        params: '{"reason":"webview host killed by SIGKILL"}',
+        mountSeq: 7
+      }
+    ])
+    view.stop()
+    frame.dispose()
+    expect(goneListeners.has('canvas-p1-7')).toBe(false)
+  })
+
   test('a post for another target origin is dropped, as postMessage drops it', () => {
     const { host, posted } = fakeHost()
-    const frame = createCanvasRelayFrame(host, 'canvas-p1-6', ORIGIN)
+    const frame = createCanvasRelayFrame(host, 'canvas-p1-6', ORIGIN, 6)
     frame.frame.contentWindow?.postMessage({ id: 1 }, 'http://evil.example')
     frame.frame.contentWindow?.postMessage({ id: 2 }, ORIGIN)
     expect(posted).toEqual([{ tabId: 'canvas-p1-6', data: '{"id":2}' }])
