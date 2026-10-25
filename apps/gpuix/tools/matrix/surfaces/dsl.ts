@@ -23,6 +23,8 @@ export const wheel = (target: Target, deltaY: number): Action => ({ do: 'wheel',
 
 export const see = (...texts: string[]): Check[] => texts.map((text) => ({ text }))
 export const gone = (text: string): Check => ({ text, gone: true })
+/** The canvas status once FigCraft is up: GPUIX takes 5 to 14 s to get there (V1). */
+export const CANVAS_READY: Check = { text: 'Ready', timeoutMs: 30_000 }
 
 export const step = (name: string, actions: Action[], expect: Check[] = []): Step => ({
   name,

@@ -42,7 +42,16 @@ export type Action =
  * settles; `within` scopes the search to the subtree of a test id both
  * clients set, so a match elsewhere on screen cannot pass the check.
  */
-export type Check = { text: string; gone?: true; within?: string; order?: never } | OrderCheck
+export type Check =
+  | {
+      text: string
+      gone?: true
+      within?: string
+      order?: never
+      /** How long a present check waits, for a surface that is slow to load. */
+      timeoutMs?: number
+    }
+  | OrderCheck
 
 /** Texts that must appear in this order inside the `within` subtree (a list after a reorder). */
 export type OrderCheck = { order: string[]; within: string; text?: never; gone?: never }

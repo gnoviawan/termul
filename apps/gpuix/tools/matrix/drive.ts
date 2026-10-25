@@ -242,7 +242,7 @@ export function webDriver(page: Page, points: Map<string, Point>): Driver {
         )
       const pass = check.gone
         ? await poll(async () => !(await painted()), GONE_TIMEOUT_MS)
-        : await poll(painted, PRESENT_TIMEOUT_MS)
+        : await poll(painted, check.timeoutMs ?? PRESENT_TIMEOUT_MS)
       return { step, text: check.text, expect: check.gone ? 'gone' : 'present', pass }
     }
   }
@@ -463,7 +463,7 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11
       }
       const pass = check.gone
         ? await poll(async () => !(await painted()), GONE_TIMEOUT_MS)
-        : await poll(painted, GPUIX_PRESENT_TIMEOUT_MS)
+        : await poll(painted, check.timeoutMs ?? GPUIX_PRESENT_TIMEOUT_MS)
       return { step, text: check.text, expect: check.gone ? 'gone' : 'present', pass }
     }
   }

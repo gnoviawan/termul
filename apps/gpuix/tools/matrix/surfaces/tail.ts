@@ -6,7 +6,7 @@
 
 import type { Check, Surface } from '../types'
 import { resetAlpha, setTheme } from '../world'
-import { click, DASHBOARD, gone, label, press, see, step, txt, type, wait } from './dsl'
+import { CANVAS_READY, click, DASHBOARD, gone, label, press, see, step, txt, type, wait } from './dsl'
 
 const SETTINGS_SECTIONS: Array<[id: string, nav: string, expect: string]> = [
   ['interface', 'Interface', 'Interface zoom'],
@@ -137,7 +137,7 @@ const PALETTE: Surface[] = [
         step(
           'c-run',
           [commandId === 'switch-project' ? press('enter') : click(txt(command)), wait(1200)],
-          see(expect)
+          commandId === 'open-canvas' ? [...see(expect), CANVAS_READY] : see(expect)
         )
       ]
     })
@@ -199,7 +199,7 @@ const LONG_TAIL: Surface[] = [
     id: 'canvas.open',
     area: 'canvas',
     title: 'Canvas',
-    steps: [DASHBOARD, step('b-open', [click(label('Open canvas')), wait(2000)], see('Canvas'))]
+    steps: [DASHBOARD, step('b-open', [click(label('Open canvas'))], [...see('Canvas'), CANVAS_READY])]
   },
   {
     id: 'browser.pane',
