@@ -210,7 +210,7 @@ export const REVIEWS: Record<string, Review> = {
     differences: [
       'Staging README.md moves it to Staged 2 in both.',
       TEXTAREA_LINE,
-      'In 1 of 3 M3 runs (the full run) the GPUIX click on the row\'s Stage changes button also opened README.md\'s working-tree diff ("No diff available"), as a click on the row does; the two reruns staged without opening it, and the row is from the first rerun. The cause is not traced; RowAction stops propagation, so a click reaching the row is a GPUIX event-path bug if it repeats.'
+      "In 1 of 3 M3 runs the GPUIX click on the row's Stage changes button also opened README.md's working-tree diff. G12 traced it to compat's gesture grouping: GPUIX delivers the click to the button and then to the row, one handler run apart (11 ms on a quiet host), and deliveries more than 100 ms after the first started a new gesture, so a slow Stage handler let the row's delivery past RowAction's stopPropagation. A delivery now belongs to the gesture of the press at its point until the next press (a unit test with a 150 ms handler fails before). `tools/clickloss --targets stage` did not reproduce it live (40 of 40 quiet, 20 of 20 on two loaded cores before; 40 of 40 after)."
     ]
   },
   'git.unstage': {
@@ -266,12 +266,12 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'View fullscreen fills the window with the table under a copy, download and exit toolbar in both (G7).',
-      "In GPUIX the chat composer card and the status bar paint over the bottom right of the fullscreen view, in 3 of 3 M3 runs (1.28 % full-frame perceptual; 1.01 % in G8's run, before patch gpuix/0011). The view is an `<anchored>` layer with no `priority` (`src/chat/TableCard.tsx`), so it sorts at 0, under the composer's `relative z-10` and the status bar's `z-50`, which paint in the same deferred pass since G9. The dialog priority (`LAYER.dialog`, as `src/ui/internal/modal.tsx` uses) is the likely fix (inferred from the code; not tried, since M3 changes no product code).",
+      "The view paints over the chat composer card and the status bar, as on the web (G12: its `<anchored>` layer takes `LAYER.dialog`; with no priority it had sorted at 0 under the composer's `relative z-10` and the bar's `z-50` since gpuix/0011, 1.28 % full-frame perceptual in M3, 1.01 % after). A test fails when any `<anchored>` in apps/gpuix/src names no priority.",
       "The web's toolbar buttons are the larger Streamdown menu triggers, so its three icons sit about 48 px apart against 30 px here, and its table cells are padded wider (Route starts at 34 px against 26 px; G8 widened the native cell padding from 5 to the chat table's 8 px, and the fullscreen table pads its cells more than the chat card does)."
     ],
     cause: 'native override needed',
-    unit: 'table fullscreen layer priority (unassigned)',
-    impact: 2
+    unit: 'table fullscreen toolbar and cell padding (unassigned)',
+    impact: 1
   },
   'chat.new-chat': {
     status: 'ported',

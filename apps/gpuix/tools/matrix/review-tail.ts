@@ -6,6 +6,8 @@ import {
   COMPOSER_PICK,
   DIVIDERS,
   FIELD_FOCUS,
+  HALF_PX_LINES,
+  LABEL_LINE,
   LAYOUT_FOCUS,
   SELECT,
   SETTINGS_BASE,
@@ -127,21 +129,15 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     ]
   },
   'shortcuts.toggle-projects': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Ctrl+Shift+B collapses the rail in both, with the Open canvas pencil under Search (see rail.collapse).',
       LAYOUT_FOCUS
-    ],
-    cause: 'needs diagnosis',
-    unit: 'composer focus across layout shortcuts (unassigned)',
-    impact: 1
+    ]
   },
   'shortcuts.toggle-side-panel': {
-    status: 'partial',
-    differences: ['Ctrl+B hides the side panel in both.', LAYOUT_FOCUS],
-    cause: 'needs diagnosis',
-    unit: 'composer focus across layout shortcuts (unassigned)',
-    impact: 1
+    status: 'ported',
+    differences: ['Ctrl+B hides the side panel in both.', LAYOUT_FOCUS]
   },
   'shortcuts.theme-picker': {
     status: 'ported',
@@ -193,25 +189,16 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: SETTINGS_BASE
   },
   'settings.notifications': {
-    status: 'partial',
-    differences: [...SETTINGS_BASE, DIVIDERS],
-    cause: 'compat translator gap',
-    unit: 'inline label line height in settings rows (unassigned)',
-    impact: 1
+    status: 'ported',
+    differences: [...SETTINGS_BASE, DIVIDERS, LABEL_LINE]
   },
   'settings.editor': {
-    status: 'partial',
-    differences: [SELECT, SETTINGS_BASE[1], DIVIDERS],
-    cause: 'compat translator gap',
-    unit: 'inline label line height in settings rows (unassigned)',
-    impact: 1
+    status: 'ported',
+    differences: [SELECT, SETTINGS_BASE[1], DIVIDERS, LABEL_LINE]
   },
   'settings.appearance': {
-    status: 'partial',
-    differences: [SELECT, SETTINGS_BASE[1], DIVIDERS],
-    cause: 'compat translator gap',
-    unit: 'inline label line height in settings rows (unassigned)',
-    impact: 1
+    status: 'ported',
+    differences: [SELECT, SETTINGS_BASE[1], DIVIDERS, LABEL_LINE]
   },
   'settings.shell': {
     status: 'ported',
@@ -227,6 +214,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       SELECT,
       'The agents list shows No agents match "" while the web lists the registry (Agoragentic first).',
       DIVIDERS,
+      LABEL_LINE,
       SETTINGS_BASE[1]
     ],
     cause: 'needs diagnosis',
@@ -235,9 +223,9 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
   'settings.skills': {
     status: 'partial',
-    differences: [...SETTINGS_BASE, DIVIDERS],
-    cause: 'compat translator gap',
-    unit: 'inline label line height in settings rows (unassigned)',
+    differences: [...SETTINGS_BASE, DIVIDERS, HALF_PX_LINES],
+    cause: 'native override needed',
+    unit: 'fractional text line height (unassigned)',
     impact: 1
   },
   'settings.provider': {
@@ -263,10 +251,11 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: [
       ...SETTINGS_BASE,
       DIVIDERS,
+      HALF_PX_LINES,
       'GPUIX lists the desktop keymap (Ctrl+R, Ctrl+T, Ctrl+,) where the web lists its defaults (Press keys…, Alt+T, Alt+,), by design since G4.'
     ],
-    cause: 'compat translator gap',
-    unit: 'inline label line height in settings rows (unassigned)',
+    cause: 'native override needed',
+    unit: 'fractional text line height (unassigned)',
     impact: 1
   },
   'settings.diagnostics': {
@@ -274,10 +263,11 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: [
       ...SETTINGS_BASE,
       DIVIDERS,
+      HALF_PX_LINES,
       'Server version reads termul-server v0.4.52 in both: GPUIX asks the server (G4).'
     ],
-    cause: 'compat translator gap',
-    unit: 'inline label line height in settings rows (unassigned)',
+    cause: 'native override needed',
+    unit: 'fractional text line height (unassigned)',
     impact: 1
   },
 

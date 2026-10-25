@@ -20,7 +20,11 @@ export const TREE_TEXT =
 export const SELECT =
   'Each select is one closed dropdown like the web (G2), and its trigger is 240px wide beside the label as on the web (G5: the GPUIX ui primitives resolve `@[35rem]:w-60` against the settings card container). The web truncates a long value (`[&>span]:line-clamp-1`); GPUIX shows it in full inside the 240px.'
 export const DIVIDERS =
-  'Rows inside a settings group are separated by the divider line as on the web (G6: `divide-y divide-border` in the style layer). Each row is about 4 px shorter in GPUIX: the label is an inline `<label>` whose CSS line box takes the 24 px strut of its block parent, and GPUIX lays it out at its own 20 px line height (inferred from the row heights).'
+  'Rows inside a settings group are separated by the divider line as on the web (G6: `divide-y divide-border` in the style layer).'
+export const LABEL_LINE =
+  "A row's label sits on the web's 24 px line (G12: the inline `<label>` alone on a line of its block parent gets the parent's strut, so the text column is 45 px against the web's 45.5 and the row 69 against 70; it was 41 and 65, with the label 3 px high)."
+export const HALF_PX_LINES =
+  "Rows have the web's height to within 1 px, but GPUIX sets each `text-xs leading-relaxed` line 19 px apart where Chromium sets them 19.5 px apart (G12, measured on the frames: lines at 254, 273, 292, 311 against 254, 274, 293, 313), so a section's later rows drift up to 3 px. M3 read this as the inline label line height; the label rows here already matched."
 export const SETTINGS_BASE = [
   'The section content and navigation match.',
   'The scrim dims and blurs the page behind it as on the web (N2).'
@@ -34,7 +38,7 @@ export const TOAST =
 export const COMPOSER_FOCUS =
   "The composer shows its focus border and inset ring while it holds the caret, as on the web (I4: its native textarea and key-capture div listen for focus, so the wrapper's `focus-within:` sees it; top edge 35 and 57 against the web's 36 and 58). At rest on the dashboard both clients now show it focused: M3's full run shows the focus border on 88 of 88 web and 81 of 88 GPUIX dashboard frames, and the other 7 GPUIX frames show the resting border."
 export const LAYOUT_FOCUS =
-  'After the shortcut the web composer loses focus (its top edge drops to the resting 28) and the GPUIX composer keeps its focus border and caret (36 and 58), in every M3 run (3 of 3 for Ctrl+B and Ctrl+Shift+B, 2 of 2 for zoom). The cause is not traced.'
+  "After the shortcut both composers rest unfocused (G12). The step first clicks the rail's Projects label, and the web blurs the composer there: Chromium's default action for a press no listener prevented moves focus to body when the pressed content takes none. GPUIX now does the same (`compat/window-press.ts`), where GPUI had kept the composer focused."
 export const COMPOSER_Z =
   "The composer card paints over the top of the workspace strip that follows it, as on the web (G9: the card's `relative z-10` paints in GPUI's deferred pass at priority 10 through native patch gpuix/0011, laid out in place; the card's bottom border is 28 in both, and the send button is undimmed, 30 against the web's 30, 22 before)."
 export const COMPOSER_PICK =
