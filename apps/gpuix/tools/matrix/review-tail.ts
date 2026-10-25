@@ -1,7 +1,15 @@
 /** Reviews for settings, palette, shortcuts, themes and the long tail (see `review.ts`). */
 
 import type { Review } from './review'
-import { BLUR, COMPOSER_PICK, DIVIDERS, FIELD_FOCUS, SELECT, SETTINGS_BASE, TOAST } from './review-phrases'
+import {
+  BLUR,
+  COMPOSER_PICK,
+  DIVIDERS,
+  FIELD_FOCUS,
+  SELECT,
+  SETTINGS_BASE,
+  TOAST
+} from './review-phrases'
 
 const THEME_FAMILIES = [
   'termul',
