@@ -290,7 +290,7 @@ const INTER_DESCENT = 0.2421875
  */
 function strutDescent(style: StyleDesc): number {
   const size = typeof style.fontSize === 'number' ? style.fontSize : ROOT_FONT_SIZE
-  const lineHeight = typeof style.lineHeight === 'number' ? style.lineHeight : size * INHERITED_LEADING
+  const lineHeight = strutHeight(style)
   const ascent = Math.round(size * INTER_ASCENT)
   const descent = Math.round(size * INTER_DESCENT)
   return Math.max(0, descent + (lineHeight - ascent - descent) / 2)
