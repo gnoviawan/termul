@@ -20,6 +20,12 @@ export interface DesktopHost {
   revealItemInDir(path: string): Promise<void>
   /** Post an OS notification. */
   notify(title: string, body: string): Promise<void>
+  /** Native open-file dialog: absolute paths, or null when dismissed. */
+  openFiles(options: { multiple: boolean }): Promise<string[] | null>
+  /** Native save dialog: the absolute path to write, or null when dismissed. */
+  saveFile(options: { defaultPath?: string }): Promise<string | null>
+  /** The file at a picked path, as the `File` a browser file input gives. */
+  fileAt(path: string): File
 }
 
 let host: DesktopHost | null = null

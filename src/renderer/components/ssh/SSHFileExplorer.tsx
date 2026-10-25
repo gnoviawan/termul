@@ -19,6 +19,7 @@ import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { joinPath, parentPath, useSftpBrowser } from '@/hooks/use-sftp-browser'
 import { useSftpTransfers } from '@/hooks/use-sftp-transfers'
 import { sshApi } from '@/lib/api'
+import { canPickLocalFiles } from '@/lib/dialog-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHStore } from '@/stores/ssh-store'
@@ -78,6 +79,7 @@ export function SSHFileExplorer({
   const [focusedEntry, setFocusedEntry] = useState<SFTPEntry | null>(null)
   const nameId = useId()
   const desktop = isTauriContext()
+  const localFiles = canPickLocalFiles()
   // Only the latest open may land in the editor (a slow read can finish last).
   const openRequest = useRef(0)
 
@@ -181,8 +183,8 @@ export function SSHFileExplorer({
     }
   }
 
-  // Upload needs local file paths, which only the desktop app has.
-  const upload = desktop
+  // Upload needs local file paths: Tauri's dialog, or the desktop host's.
+  const upload = localFiles
     ? () => {
         if (browser.currentPath) void transfers.upload(browser.currentPath, browser.entries)
       }
@@ -259,7 +261,9 @@ export function SSHFileExplorer({
           }
           onFocus={() => setFocusedEntry(entry)}
           onDownload={
-            desktop && entry.entryType === 'file' ? () => void transfers.download(entry) : undefined
+            localFiles && entry.entryType === 'file'
+              ? () => void transfers.download(entry)
+              : undefined
           }
           onRename={() => showNameDialog({ kind: 'rename', entry })}
           onDelete={() => setDeleteEntry(entry)}

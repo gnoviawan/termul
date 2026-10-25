@@ -1,7 +1,7 @@
 /**
  * The OS capabilities the GPUIX process provides to the shared facades through
  * `src/renderer/lib/desktop-host.ts`: open a URL or file, reveal a file, post
- * a notification. Each action is a table of argv commands per platform, tried
+ * a notification, and the file dialogs (`file-dialogs.ts`). Each action is a table of argv commands per platform, tried
  * in order until one exits 0. User text always travels as its own argv entry
  * (or an environment variable on Windows), never inside a shell string.
  */
@@ -10,6 +10,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { DesktopHost } from '@/lib/desktop-host'
 import { log } from '../log'
+import type { FileDialogs } from './file-dialogs'
 
 export type HostAction =
   | { kind: 'openUrl'; url: string }
@@ -145,8 +146,12 @@ export async function runHostAction(
   throw new Error(failures.join('; '))
 }
 
-export function createDesktopHost(platform: NodeJS.Platform = process.platform): DesktopHost {
+export function createDesktopHost(
+  dialogs: FileDialogs,
+  platform: NodeJS.Platform = process.platform
+): DesktopHost {
   return {
+    ...dialogs,
     openUrl: (url) => runHostAction(platform, { kind: 'openUrl', url }),
     openPath: (target) => runHostAction(platform, { kind: 'openPath', path: target }),
     revealItemInDir: (target) => runHostAction(platform, { kind: 'reveal', path: target }),

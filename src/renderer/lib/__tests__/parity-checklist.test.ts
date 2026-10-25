@@ -980,7 +980,9 @@ describe('Parity Checklist Automation', () => {
       )
       expect(existsSync(ClipboardKey), 'terminal/clipboard-key.ts should exist').toBe(true)
       const decision = readFileSync(ClipboardKey, 'utf-8')
-      expect(decision).toMatch(/case ['"]v['"]:\s*return input\.clipboardAvailable\(\) \? 'paste' : 'native-paste'/)
+      expect(decision).toMatch(
+        /case ['"]v['"]:\s*return input\.clipboardAvailable\(\) \? 'paste' : 'native-paste'/
+      )
       // Pins the non-secure branch exists (specific to the degrade path): the
       // DOM handler reports the Async Clipboard API's presence and lets xterm
       // take the key natively when it is missing.
@@ -2243,7 +2245,15 @@ describe('Desktop host seam parity (GPUIX)', () => {
     for (const name of ['registerDesktopHost', 'getDesktopHost', '_resetDesktopHostForTesting']) {
       expect(content).toMatch(new RegExp(`export\\s+function\\s+${name}\\b`))
     }
-    for (const method of ['openUrl', 'openPath', 'revealItemInDir', 'notify']) {
+    for (const method of [
+      'openUrl',
+      'openPath',
+      'revealItemInDir',
+      'notify',
+      'openFiles',
+      'saveFile',
+      'fileAt'
+    ]) {
       expect(content, `DesktopHost should declare ${method}`).toMatch(new RegExp(`\\b${method}\\(`))
     }
   })

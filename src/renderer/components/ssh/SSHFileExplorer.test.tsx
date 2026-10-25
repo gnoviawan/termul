@@ -2,6 +2,7 @@ import type { SFTPEntry } from '@shared/types/ssh.types'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { _resetDesktopHostForTesting, registerDesktopHost } from '@/lib/desktop-host'
 import { useSSHStore } from '@/stores/ssh-store'
 import { SSHFileExplorer } from './SSHFileExplorer'
 
@@ -240,6 +241,35 @@ describe('SSHFileExplorer', () => {
     await renderExplorer()
     expect(screen.queryByRole('button', { name: 'Upload' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Download app.conf' })).toBeNull()
+  })
+
+  it('uploads and downloads outside Tauri through a desktop host', async () => {
+    const noop = async () => {}
+    registerDesktopHost({
+      openUrl: noop,
+      openPath: noop,
+      revealItemInDir: noop,
+      notify: noop,
+      openFiles: async () => ['/home/me/notes.txt'],
+      saveFile: async () => '/home/me/app.conf',
+      fileAt: (path) => new File([], path)
+    })
+    try {
+      dialogApi.selectFiles.mockResolvedValue(ok(['/home/me/notes.txt']))
+      sshApi.sftpUpload.mockResolvedValue(ok(undefined))
+      await renderExplorer()
+      fireEvent.click(screen.getByRole('button', { name: 'Upload' }))
+      await waitFor(() =>
+        expect(sshApi.sftpUpload).toHaveBeenCalledWith(
+          's1',
+          '/home/me/notes.txt',
+          '/home/u/notes.txt'
+        )
+      )
+      expect(screen.getByRole('button', { name: 'Download app.conf' })).toBeInTheDocument()
+    } finally {
+      _resetDesktopHostForTesting()
+    }
   })
 })
 

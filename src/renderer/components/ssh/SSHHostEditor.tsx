@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/select'
 import { useHostGate } from '@/hooks/use-host-gate'
 import { dialogApi, sshApi } from '@/lib/api'
+import { canPickLocalFiles } from '@/lib/dialog-api'
 import { captureFocusReturnTarget } from '@/lib/focus-return'
 import { canUseHostSsh } from '@/lib/ssh-api'
 import {
@@ -36,7 +37,6 @@ import {
   validateHostForm
 } from '@/lib/ssh-host-form'
 import { addressLabel } from '@/lib/ssh-messages'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHProfiles } from '@/stores/ssh-store'
 
@@ -157,8 +157,8 @@ export function SSHHostEditor({
   const [localKeys, setLocalKeys] = useState<SSHKeyFileInfo[]>([])
   const [keyInfo, setKeyInfo] = useState<SSHKeyFileInfo | null>(null)
   const fieldRefs = useRef<Partial<Record<HostFormField, HTMLElement | null>>>({})
-  // The key picker is a Tauri dialog; keys and connecting need the host's SSH.
-  const desktop = isTauriContext()
+  // The key picker is a local file dialog; keys and connecting need the host's SSH.
+  const desktop = canPickLocalFiles()
   const hostSsh = useHostGate(canUseHostSsh)
 
   // Focus goes back where it was (or to the menu that opened the editor).

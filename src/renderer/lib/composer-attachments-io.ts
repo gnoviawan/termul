@@ -9,6 +9,7 @@ import { join, tempDir } from '@tauri-apps/api/path'
 import { readImage, writeImage } from '@tauri-apps/plugin-clipboard-manager'
 import { open } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
+import { getDesktopHost } from '@/lib/desktop-host'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 
@@ -38,8 +39,16 @@ function pickAttachmentPathsBrowser(): Promise<string[] | null> {
   return Promise.resolve(null)
 }
 
-/** Pick files in the browser via a transient file input (no path strings). */
-export function pickAttachmentFilesBrowser(): Promise<File[] | null> {
+/**
+ * Pick files outside Tauri: the host's native dialog when one is registered
+ * (the GPUIX client), else a transient file input (no path strings).
+ */
+export async function pickAttachmentFilesBrowser(): Promise<File[] | null> {
+  const host = getDesktopHost()
+  if (host) {
+    const paths = await host.openFiles({ multiple: true })
+    return paths && paths.length > 0 ? paths.map((path) => host.fileAt(path)) : null
+  }
   return new Promise((resolve) => {
     let settled = false
     const input = document.createElement('input')

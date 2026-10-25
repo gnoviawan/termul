@@ -16,6 +16,7 @@ import { installBrowserEnv } from './env'
 import { readInitialWindowSize } from './env/window-size'
 import { launch } from './launcher'
 import { createDesktopHost } from './launcher/desktop-host'
+import { createFileDialogs, type PathPrompter } from './launcher/file-dialogs'
 import { readHostLocalToken } from './launcher/host-local'
 import { log } from './log'
 import { recordRendererStats } from './renderer-stats'
@@ -40,7 +41,8 @@ const fonts = FONT_FILES.map((file) => readFileSync(path.join(FONT_DIR, path.bas
 
 // Before the app tree loads: the keyboard-shortcuts store reads its desktop
 // defaults from the registered host when its module is evaluated.
-registerDesktopHost(createDesktopHost())
+let pathPrompter: PathPrompter | null = null
+registerDesktopHost(createDesktopHost(createFileDialogs(() => pathPrompter)))
 let focusControl: FocusControl | null = null
 const browserSupport = detectBrowserSupport(process.env, process.platform, import.meta.dir)
 if (browserSupport.kind === 'x11') {
@@ -79,12 +81,14 @@ boot(config, {
   window: windowSize,
   fonts,
   hostLocalToken: hostLocalTokenFile ? () => readHostLocalToken(hostLocalTokenFile) : null,
-  onRenderer: (renderer) =>
+  onRenderer: (renderer) => {
+    pathPrompter = renderer as unknown as PathPrompter
     recordRendererStats(
       renderer,
       process.env.TERMUL_GPUIX_STATS,
       process.env.TERMUL_GPUIX_STATS_OPS === '1'
-    ),
+    )
+  },
   onFocusControl: (control) => {
     focusControl = control
   }

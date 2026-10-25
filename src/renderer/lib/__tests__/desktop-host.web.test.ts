@@ -36,7 +36,10 @@ function recordingHost(fail = false): { host: DesktopHost; calls: string[] } {
       openUrl: record('openUrl'),
       openPath: record('openPath'),
       revealItemInDir: record('revealItemInDir'),
-      notify: record('notify')
+      notify: record('notify'),
+      openFiles: async () => null,
+      saveFile: async () => null,
+      fileAt: (path) => new File([], path)
     }
   }
 }

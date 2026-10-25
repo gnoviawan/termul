@@ -36,7 +36,15 @@ describe('getDefaultKeyboardShortcuts (#858 web-safe defaults)', () => {
 
   it('desktop host (GPUIX, no Tauri): returns the same Ctrl-based table as Tauri', () => {
     const noop = async (): Promise<void> => {}
-    registerDesktopHost({ openUrl: noop, openPath: noop, revealItemInDir: noop, notify: noop })
+    registerDesktopHost({
+      openUrl: noop,
+      openPath: noop,
+      revealItemInDir: noop,
+      notify: noop,
+      openFiles: async () => null,
+      saveFile: async () => null,
+      fileAt: (path) => new File([], path)
+    })
 
     const defaults = getDefaultKeyboardShortcuts()
 
