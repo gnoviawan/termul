@@ -236,26 +236,76 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
   const typeIntoLauncher = async (firstId: number, prompt: string) => {
     let id = firstId
     for (let attempt = 0; attempt < 5; attempt++) {
+      const t0 = performance.now()
       await type(id, ['ctrl-a', 'backspace', ...keysFor(prompt)])
+      const typedMs = Math.round(performance.now() - t0)
+      let lastSeen = 'nothing polled'
       const landed = await until(
         'launcher composer shows typed text or remounts',
         async () => {
           const r = await tree()
           const box = launcherComposer(r)
-          if (!box) return null
+          if (!box) {
+            lastSeen = `no launcher composer (heading ${launcherOpen(r) ? 'shown' : 'gone'})`
+            return null
+          }
           if (box.id !== id) return { remounted: box.id }
           const empty = find(
             r,
             (n) => byText(COMPOSER_PLACEHOLDER)(n) && n.bounds?.y === box.bounds?.y
           )
+          lastSeen = empty ? `placeholder still shown in ${box.id}` : 'text landed'
           return empty ? null : { remounted: null }
         },
         20_000
       ).catch(() => ({ remounted: id }))
+      if (process.env.PERF_DEBUG)
+        console.log(
+          `[debug] "${prompt}" attempt ${attempt}: typed in ${typedMs} ms, then ${Math.round(performance.now() - t0 - typedMs)} ms waiting; last seen: ${lastSeen}; next ${landed.remounted ?? 'done'}`
+        )
       if (landed.remounted === null) return
       id = landed.remounted
     }
+    await debugSnapshot(`type-${prompt}`, 0)
     throw new Error(`launcher composer never accepted "${prompt}"`)
+  }
+
+  /**
+   * A drag at a person's pace. The app paints its drop zones a frame after
+   * `dragstart`, and the compat layer hit-tests the last painted frame, so a
+   * burst of moves and a release land before any zone exists to take the drop.
+   */
+  const humanDrag = async (from: { x: number; y: number }, to: { x: number; y: number }) => {
+    const step = (t: number) => ({
+      x: from.x + (to.x - from.x) * t,
+      y: from.y + (to.y - from.y) * t
+    })
+    await app.mouse.down(from).catch(queued)
+    for (let i = 1; i <= 12; i++) {
+      await app.mouse.move(step(i / 12), { pressedButton: 0 }).catch(queued)
+      await Bun.sleep(25)
+    }
+    for (let i = 0; i < 4; i++) {
+      await Bun.sleep(100)
+      await app.mouse.move({ x: to.x, y: to.y + (i % 2) }, { pressedButton: 0 }).catch(queued)
+    }
+    await app.mouse.up(to).catch(queued)
+  }
+
+  const debugSnapshot = async (label: string, expected: number) => {
+    const dir = process.env.PERF_DEBUG
+    if (!dir) return
+    const r = await tree().catch(() => null)
+    if (!r) return console.log(`[debug] ${label}: tree unavailable`)
+    const box = launcherComposer(r)
+    const placeholder =
+      !!box && !!find(r, (n) => byText(COMPOSER_PLACEHOLDER)(n) && n.bounds?.y === box.bounds?.y)
+    console.log(
+      `[debug] ${label}: launcher ${launcherOpen(r) ? 'open' : 'closed'}, composer ${box ? (placeholder ? 'empty' : 'has text') : 'none'}, cards ${chatCards(r).length}, panes ${visibleTranscripts(r).length}, expected more than ${expected}`
+    )
+    await app
+      .screenshot({ path: path.join(dir, `${label.replace(/\W+/g, '-')}.png`) })
+      .catch(() => undefined)
   }
 
   // An inactive chat tab is out of layout, so only on-screen transcripts have bounds.
@@ -341,6 +391,9 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
       await until('a new chat card and a closed launcher', async () => {
         const r = await tree()
         return chatCards(r).length > before && !launcherOpen(r)
+      }).catch(async (err) => {
+        await debugSnapshot(`start-${prompt}`, before)
+        throw err
       })
       parts.push({
         typeMs: Math.round(clicked - typed),
@@ -367,16 +420,17 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
       const pane = [...panes].sort((a, b) => (a.bounds?.x ?? 0) - (b.bounds?.x ?? 0))[0]
       if (!pane?.bounds) throw new Error('no pane on screen')
       // The right drop zone is the pane's right quarter.
-      await app.mouse
-        .drag(center(card), {
-          x: pane.bounds.x + pane.bounds.width * 0.9,
-          y: pane.bounds.y + pane.bounds.height / 2
-        })
-        .catch(queued)
+      await humanDrag(center(card), {
+        x: pane.bounds.x + pane.bounds.width * 0.9,
+        y: pane.bounds.y + pane.bounds.height / 2
+      })
       await until(
         'a pane of its own',
         async () => visibleTranscripts(await tree()).length > panes.length
-      )
+      ).catch(async (err) => {
+        await debugSnapshot(`split-${title}`, panes.length)
+        throw err
+      })
     },
     visibleChatCount: async () => visibleTranscripts(await tree()).length,
     openTerminal: async () => {
