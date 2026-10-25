@@ -164,16 +164,19 @@ function finalize(acc: Acc, theme: TwTheme, flat: boolean, fallback?: Acc): Styl
     // CSS lists the topmost shadow first; GPUIX paints in list order (last on top).
     const css: CssShadow[] = [...shadow].reverse()
     const width = ring.width ?? 0
-    const offset = ring.inset ? 0 : (ring.offsetWidth ?? 0)
-    if (width > 0) {
-      const current = style.color ?? fallback?.style.color ?? formatColor(theme.colors.foreground)
-      css.push(spread(width + offset, ring.color ?? hexToRgba(current), ring.inset === true))
-    }
-    if (width > 0 && offset > 0) {
-      css.push(spread(offset, ring.offsetColor ?? { r: 1, g: 1, b: 1, a: 1 }, false))
+    const current = style.color ?? fallback?.style.color ?? formatColor(theme.colors.foreground)
+    const ringColor = ring.color ?? hexToRgba(current)
+    if (width > 0 && ring.inset) css.push(spread(width, ringColor, true))
+    // GPUI paints a shadow under the whole box, so a spread ring on a transparent
+    // button fills it; an outer ring is the outline that follows the corners.
+    if (!ring.inset && (width > 0 || (fallback && acc.ring?.width !== undefined))) {
+      style.outlineWidth = width
+      style.outlineColor = formatColor(ringColor)
+      const offset = ring.offsetWidth ?? 0
+      if (offset > 0) style.outlineOffset = offset
     }
     if (css.length > 0) style.boxShadow = css.map(toBoxShadow)
-    else if (fallback) style.boxShadow = NO_SHADOW
+    else if (fallback && (acc.shadow || fallback.shadow || fallback.ring?.inset)) style.boxShadow = NO_SHADOW
   }
   return style
 }
