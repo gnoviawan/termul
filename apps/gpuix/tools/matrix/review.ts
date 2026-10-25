@@ -270,9 +270,19 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'One wheel event of -20000 px scrolls both to the first turn and shows the jump-to-latest button.',
-      "The table card has copy and download buttons but not the web's expand button, its columns split the width differently (Panes mounted is wider), and each row is about 2 px taller.",
+      "The table card has the web's copy, download and fullscreen buttons (G7). Its columns start within 6 px of the web's. Each row is 32 px against the web's 30.5 px (native `mdTableCellPadding` is one value for both axes, 5 px around a 21 px line), and the web's header row has a muted fill that GPUIX lacks.",
       PROSE,
       TREE_TEXT
+    ],
+    cause: 'native override needed',
+    unit: 'prose remainder: text-wrap pretty, table card (unassigned)',
+    impact: 1
+  },
+  'chat.table-fullscreen': {
+    status: 'partial',
+    differences: [
+      'View fullscreen fills the window with the table under a copy, download and exit toolbar in both (G7), at 1.02 % full-frame perceptual difference.',
+      "The web's toolbar buttons are the larger Streamdown menu triggers, so its three icons sit about 48 px apart against 30 px here, and its table cells are padded wider (Route starts at 33 px against 22 px)."
     ],
     cause: 'native override needed',
     unit: 'prose remainder: text-wrap pretty, table card (unassigned)',
