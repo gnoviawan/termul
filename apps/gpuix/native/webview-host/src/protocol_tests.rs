@@ -62,3 +62,23 @@ fn parses_page_messages_and_drops_garbage() {
     assert_eq!(parse_page_message(r#"{"kind":"other"}"#), None);
     assert_eq!(parse_page_message("[]"), None);
 }
+
+#[test]
+fn canvas_commands_and_messages_carry_json_text_unparsed() {
+    let cmd = parse_command(
+        r#"{"op":"createCanvas","req":7,"id":"c1","url":"http://127.0.0.1:1/canvas/a/b/?ms=1","bounds":{"x":0,"y":0,"width":10,"height":10}}"#,
+    )
+    .unwrap();
+    assert_eq!(cmd.req(), Some(7));
+    let data = r#"{"id":1,"method":"node.get","params":"{\"id\":18446744073709551615}","mountSeq":1}"#;
+    let post = parse_command(&format!(r#"{{"op":"post","req":8,"id":"c1","data":{}}}"#, serde_json::to_string(data).unwrap())).unwrap();
+    assert_eq!(post, Command::Post { req: 8, id: "c1".into(), data: data.into() });
+    assert_eq!(
+        parse_page_message(r#"{"kind":"canvasMessage","data":"{\"method\":\"event.ready\"}"}"#),
+        Some(PageMessage::CanvasMessage { data: r#"{"method":"event.ready"}"#.into() })
+    );
+    assert_eq!(
+        encode(&Event::CanvasMessage { id: "c1".into(), data: r#"{"id":1}"#.into() }),
+        r#"{"ev":"canvasMessage","id":"c1","data":"{\"id\":1}"}"#
+    );
+}

@@ -60,8 +60,15 @@ export interface CanvasBridge {
   dispose(): void
 }
 
+/** The part of the editor's iframe the bridge uses: an `HTMLIFrameElement`
+ * in the DOM clients; a desktop shell that hosts the editor elsewhere passes
+ * a stand-in whose `contentWindow` is the source of the editor's messages. */
+export interface CanvasFrame {
+  readonly contentWindow: { postMessage(message: unknown, targetOrigin: string): void } | null
+}
+
 export interface CanvasBridgeOptions {
-  iframe: HTMLIFrameElement
+  iframe: CanvasFrame
   /** Origin the editor is served from; the only one accepted and targeted. */
   canvasOrigin: string
   mountSeq: number

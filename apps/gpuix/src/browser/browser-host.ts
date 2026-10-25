@@ -18,6 +18,7 @@ import type {
   IpcResult
 } from '@/lib/browser-types'
 import { log } from '../log'
+import type { CanvasWebviewHost } from './canvas-relay'
 import { type AckResult, HostProcess } from './host-process'
 import type { HostEvent, HostRequest } from './protocol'
 
@@ -35,7 +36,7 @@ export interface GpuixBrowserHostOptions {
   focusPollMs?: number
 }
 
-export interface GpuixBrowserHost extends BrowserHost {
+export interface GpuixBrowserHost extends BrowserHost, CanvasWebviewHost {
   /** Which tab holds the keyboard, `null` for the app window (tests and diagnostics). */
   keyboardOwner(): string | null
   helperPid(): number | undefined
@@ -70,6 +71,7 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
   const navigated = subscribers<BrowserTabNavigatedPayload>()
   const loaded = subscribers<BrowserTabLoadedPayload>()
   const titles = subscribers<BrowserTabTitleChangedPayload>()
+  const canvasListeners = new Map<string, Set<(data: string) => void>>()
   let helper: HostProcess | null = null
   let keyboard: string | null = null
   let focusPoll: ReturnType<typeof setInterval> | null = null
@@ -103,6 +105,9 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
         else log.info('browser-console', line)
         return
       }
+      case 'canvasMessage':
+        for (const callback of canvasListeners.get(event.id) ?? []) callback(event.data)
+        return
       case 'keyboard':
         keyboard = event.owner
         log.info(SOURCE, `keyboard -> ${keyboard === null ? 'app' : `tab ${keyboard}`}`)
@@ -178,6 +183,29 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
     goForward: (tabId) => tabRequest({ op: 'forward', id: tabId }),
     reload: (tabId) => tabRequest({ op: 'reload', id: tabId }),
     openDevtools: (tabId) => tabRequest({ op: 'devtools', id: tabId }),
+    async createCanvas(tabId, url, bounds) {
+      const result = await request({ op: 'createCanvas', id: tabId, url, bounds })
+      if (!result.ok) {
+        log.error(SOURCE, `create canvas ${tabId} failed: ${result.error}`)
+        return { success: false, error: result.error, code: 'WEBVIEW_HOST' }
+      }
+      log.info(SOURCE, `created canvas ${tabId}`)
+      return { success: true, data: undefined }
+    },
+    postToCanvas: (tabId, data) => tabRequest({ op: 'post', id: tabId, data }),
+    onCanvasMessage(tabId, callback) {
+      const set = canvasListeners.get(tabId) ?? new Set()
+      canvasListeners.set(tabId, set.add(callback))
+      return {
+        unlisten: () => {
+          set.delete(callback)
+          if (set.size === 0) canvasListeners.delete(tabId)
+        }
+      }
+    },
+    releaseKeyboard(tabId) {
+      if (keyboard === tabId) void request({ op: 'blur' })
+    },
     injectAgentation: async () => ({
       success: false,
       error: 'Agentation injection requires Tauri desktop',

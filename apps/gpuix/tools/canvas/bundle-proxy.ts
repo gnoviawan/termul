@@ -101,7 +101,7 @@ export function startBundleProxy(opts: {
     headers.delete('referer')
     return headers
   }
-  const server = Bun.serve<Pipe, undefined>({
+  const server = Bun.serve<Pipe>({
     port: opts.port,
     hostname: '127.0.0.1',
     idleTimeout: 0,

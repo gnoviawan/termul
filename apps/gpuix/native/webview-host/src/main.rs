@@ -5,6 +5,10 @@
 //! keyboard routing between the app window and the webviews: a press inside a webview hands it
 //! the keyboard, a press anywhere else in the app (or a `blur` from the app) takes it back.
 //!
+//! A canvas tab (`createCanvas`) shows `relay.html` from the `termul-canvas:` scheme instead of a
+//! URL: the page frames the FigCraft editor and passes its postMessage traffic to and from the app
+//! (`post` in, `canvasMessage` out), standing in for the parent window the editor expects.
+//!
 //! Lifetime: stdin EOF, `quit`, or the parent process dying ends the helper; each webview owns
 //! its WebKit context, so dropping a tab ends that tab's WebKit processes.
 
@@ -56,6 +60,26 @@ struct Tab {
     /// The X window wry made inside the parent; every window of the webview is below it.
     container: Xid,
     visible: bool,
+    /// Runs the canvas relay page (`relay.html`) rather than a browsed URL.
+    canvas: bool,
+}
+
+/// What a tab shows: a browsed URL, or the canvas relay framing the editor at this URL.
+enum Page {
+    Url(String),
+    Canvas(String),
+}
+
+/// The canvas relay's origin is `termul-canvas://localhost`; the editor is told it as its host.
+const CANVAS_SCHEME: &str = "termul-canvas";
+const RELAY_URL: &str = "termul-canvas://localhost/";
+const RELAY_HTML: &str = include_str!("relay.html");
+
+fn relay_response() -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
+    wry::http::Response::builder()
+        .header("Content-Type", "text/html; charset=utf-8")
+        .body(std::borrow::Cow::Borrowed(RELAY_HTML.as_bytes()))
+        .expect("static relay response")
 }
 
 struct Host {
@@ -171,14 +195,15 @@ impl Host {
         }
     }
 
-    fn create(&mut self, id: String, url: String, bounds: Bounds) -> Result<(), String> {
+    fn create(&mut self, id: String, page: Page, bounds: Bounds) -> Result<(), String> {
         if self.tabs.contains_key(&id) {
             self.destroy(&id)?;
         }
         let (nav_id, load_id, title_id, ipc_id) = (id.clone(), id.clone(), id.clone(), id.clone());
         let parent = Parent(self.parent);
-        let view = WebViewBuilder::new_with_web_context(&mut self.context)
-            .with_url(&url)
+        // The scheme handler belongs to the context, so only the first canvas registers it.
+        let register_relay = !self.context.is_custom_protocol_registered(CANVAS_SCHEME);
+        let builder = WebViewBuilder::new_with_web_context(&mut self.context)
             // wry scales creation bounds by the screen's DPI but not later ones, and GTK then
             // ignores a move to the unscaled spot; start tiny and place it with set_bounds.
             .with_bounds(rect(&Bounds { x: 0.0, y: 0.0, width: 1.0, height: 1.0 }))
@@ -188,23 +213,51 @@ impl Host {
             .with_ipc_handler(move |request| match protocol::parse_page_message(request.body()) {
                 Some(PageMessage::Console { level, text }) => emit(Event::Console { id: ipc_id.clone(), level, text }),
                 Some(PageMessage::Url { url }) => emit(Event::Navigated { id: ipc_id.clone(), url }),
+                Some(PageMessage::CanvasMessage { data }) => emit(Event::CanvasMessage { id: ipc_id.clone(), data }),
                 None => {}
             })
-            .with_document_title_changed_handler(move |title| emit(Event::Title { id: title_id.clone(), title }))
-            .with_on_page_load_handler(move |phase, url| match phase {
-                PageLoadEvent::Started => emit(Event::Navigated { id: nav_id.clone(), url }),
-                PageLoadEvent::Finished => {
-                    emit(Event::Navigated { id: load_id.clone(), url: url.clone() });
-                    emit(Event::Loaded { id: load_id.clone(), url });
+            .with_document_title_changed_handler(move |title| emit(Event::Title { id: title_id.clone(), title }));
+        let builder = match &page {
+            Page::Url(url) => builder
+                .with_url(url)
+                .with_on_page_load_handler(move |phase, url| match phase {
+                    PageLoadEvent::Started => emit(Event::Navigated { id: nav_id.clone(), url }),
+                    PageLoadEvent::Finished => {
+                        emit(Event::Navigated { id: load_id.clone(), url: url.clone() });
+                        emit(Event::Loaded { id: load_id.clone(), url });
+                    }
+                }),
+            // No navigation events: the relay's URL is fixed and the framed URL carries the
+            // canvas token, which must not reach a log.
+            Page::Canvas(frame_url) => {
+                let frame = serde_json::to_string(frame_url).map_err(|e| e.to_string())?;
+                let builder = builder
+                    .with_initialization_script_for_main_only(format!("window.__termulCanvasFrameUrl = {frame};"), true)
+                    .with_url(RELAY_URL);
+                if register_relay {
+                    builder.with_custom_protocol(CANVAS_SCHEME.into(), |_, _| relay_response())
+                } else {
+                    builder
                 }
-            })
-            .build_as_child(&parent)
-            .map_err(|e| format!("create webview: {e}"))?;
+            }
+        };
+        let view = builder.build_as_child(&parent).map_err(|e| format!("create webview: {e}"))?;
         let container = container_of(&view)?;
         view.set_bounds(rect(&bounds)).map_err(|e| e.to_string())?;
         self.x.key_gate(container, false);
-        self.tabs.insert(id, Tab { view, container, visible: false });
+        self.tabs.insert(id, Tab { view, container, visible: false, canvas: matches!(page, Page::Canvas(_)) });
         Ok(())
+    }
+
+    fn post(&self, id: &str, data: &str) -> Result<(), String> {
+        let tab = self.tab(id)?;
+        if !tab.canvas {
+            return Err(format!("tab {id} is not a canvas"));
+        }
+        let text = serde_json::to_string(data).map_err(|e| e.to_string())?;
+        tab.view
+            .evaluate_script(&format!("window.__termulCanvasRelay && window.__termulCanvasRelay.deliver({text})"))
+            .map_err(|e| e.to_string())
     }
 
     fn set_visible(&mut self, id: &str, visible: bool) -> Result<(), String> {
@@ -243,7 +296,9 @@ impl Host {
 
     fn handle(&mut self, cmd: Command) -> Result<(), String> {
         match cmd {
-            Command::Create { id, url, bounds, .. } => self.create(id, url, bounds),
+            Command::Create { id, url, bounds, .. } => self.create(id, Page::Url(url), bounds),
+            Command::CreateCanvas { id, url, bounds, .. } => self.create(id, Page::Canvas(url), bounds),
+            Command::Post { id, data, .. } => self.post(&id, &data),
             Command::Bounds { id, bounds, .. } => {
                 self.tab(&id)?.view.set_bounds(rect(&bounds)).map_err(|e| e.to_string())?;
                 flush();
@@ -282,7 +337,12 @@ fn quit() -> ! {
 
 fn dispatch(line: String) {
     if std::env::var_os("TERMUL_WEBVIEW_HOST_TRACE").is_some() {
-        log(&format!("command {line}"));
+        // A canvas URL carries its token; posted messages can be whole documents.
+        if line.contains(r#""op":"createCanvas""#) || line.contains(r#""op":"post""#) {
+            log(&format!("command {}", line.split(',').next().unwrap_or_default()));
+        } else {
+            log(&format!("command {line}"));
+        }
     }
     let cmd = match protocol::parse_command(&line) {
         Ok(cmd) => cmd,

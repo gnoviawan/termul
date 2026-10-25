@@ -58,6 +58,12 @@ describe('protocol', () => {
       title: 'Docs'
     })
     expect(parseEvent('{"ev":"ack","req":4,"ok":false}')).toBeNull()
+    expect(parseEvent('{"ev":"canvasMessage","id":"c1","data":"{\\"id\\":1}"}')).toEqual({
+      ev: 'canvasMessage',
+      id: 'c1',
+      data: '{"id":1}'
+    })
+    expect(parseEvent('{"ev":"canvasMessage","id":"c1"}')).toBeNull()
     expect(parseEvent('{"ev":"title","id":"t1"}')).toBeNull()
     expect(parseEvent('{"ev":"keyboard","owner":3}')).toBeNull()
     expect(parseEvent('{"ev":"later"}')).toBeNull()

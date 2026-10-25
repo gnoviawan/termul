@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Termul Canvas</title>
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+iframe { display: block; border: 0; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<iframe id="canvas" title="Termul Canvas" allow="clipboard-read; clipboard-write"></iframe>
+<script>
+// The parent page of a canvas tab. The editor talks to its parent window with postMessage, as it
+// does inside the desktop app's iframe, so this page is that parent: it forwards what the editor
+// posts to the helper over window.ipc, and what the helper delivers to the editor. Only messages
+// from its own frame at the editor's origin go out, and deliveries target that origin only.
+(function () {
+  var url = window.__termulCanvasFrameUrl;
+  var frame = document.getElementById('canvas');
+  if (typeof url !== 'string') return;
+  var origin = new URL(url).origin;
+  window.__termulCanvasRelay = {
+    deliver: function (text) {
+      if (frame.contentWindow) frame.contentWindow.postMessage(JSON.parse(text), origin);
+    }
+  };
+  window.addEventListener('message', function (event) {
+    if (event.source !== frame.contentWindow || event.origin !== origin) return;
+    window.ipc.postMessage(JSON.stringify({ kind: 'canvasMessage', data: JSON.stringify(event.data) }));
+  });
+  frame.src = url;
+})();
+</script>
+</body>
+</html>
