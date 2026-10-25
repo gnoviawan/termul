@@ -1,0 +1,142 @@
+diff --git a/packages/native/src/backdrop.rs b/packages/native/src/backdrop.rs
+new file mode 100644
+index 0000000..e0d079c
+--- /dev/null
++++ b/packages/native/src/backdrop.rs
+@@ -0,0 +1,96 @@
++//! The `backdropBlur` style: CSS `backdrop-filter: blur(<px>)`. Wraps the
++//! element so the backdrop is painted, through GPUI's `paint_backdrop_blur`,
++//! before the element's own background and children.
++
++use crate::style::StyleDesc;
++use gpui::{
++    AnyElement, App, Bounds, Corners, Element, GlobalElementId, InspectorElementId, IntoElement,
++    LayoutId, Pixels, Window, px,
++};
++
++pub(crate) fn wrap(child: AnyElement, style: Option<&StyleDesc>) -> AnyElement {
++    let Some(style) = style else { return child };
++    let sigma = style.backdrop_blur.unwrap_or(0.0);
++    if !(sigma > 0.0) || !sigma.is_finite() {
++        return child;
++    }
++    let base = style.border_radius.unwrap_or(0.0);
++    let radius = |corner: Option<f64>| px(corner.unwrap_or(base).max(0.0) as f32);
++    BackdropBlur {
++        child,
++        sigma: px(sigma as f32),
++        opacity: style.opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f32,
++        corner_radii: Corners {
++            top_left: radius(style.border_top_left_radius),
++            top_right: radius(style.border_top_right_radius),
++            bottom_right: radius(style.border_bottom_right_radius),
++            bottom_left: radius(style.border_bottom_left_radius),
++        },
++    }
++    .into_any_element()
++}
++
++struct BackdropBlur {
++    child: AnyElement,
++    sigma: Pixels,
++    opacity: f32,
++    corner_radii: Corners<Pixels>,
++}
++
++impl IntoElement for BackdropBlur {
++    type Element = Self;
++    fn into_element(self) -> Self {
++        self
++    }
++}
++
++impl Element for BackdropBlur {
++    type RequestLayoutState = ();
++    type PrepaintState = ();
++
++    fn id(&self) -> Option<gpui::ElementId> {
++        None
++    }
++
++    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
++        None
++    }
++
++    fn request_layout(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> (LayoutId, ()) {
++        (self.child.request_layout(window, cx), ())
++    }
++
++    fn prepaint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        _: Bounds<Pixels>,
++        _: &mut (),
++        window: &mut Window,
++        cx: &mut App,
++    ) {
++        self.child.prepaint(window, cx);
++    }
++
++    fn paint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        bounds: Bounds<Pixels>,
++        _: &mut (),
++        _: &mut (),
++        window: &mut Window,
++        cx: &mut App,
++    ) {
++        // The element's own opacity applies inside the child's paint, after
++        // this call, so it is passed here as well.
++        window.paint_backdrop_blur(bounds, self.corner_radii, self.sigma, self.opacity);
++        self.child.paint(window, cx);
++    }
++}
+diff --git a/packages/native/src/lib.rs b/packages/native/src/lib.rs
+index c5f4fa1..0c87534 100644
+--- a/packages/native/src/lib.rs
++++ b/packages/native/src/lib.rs
+@@ -12,6 +12,7 @@ use napi::bindgen_prelude::*;
+ use napi_derive::napi;
+ 
+ mod accessibility;
++mod backdrop;
+ #[cfg(target_os = "macos")]
+ mod app_menu;
+ mod automation;
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index 4f7420d..f72371b 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -5349,7 +5349,8 @@ pub(crate) fn build_element(
+         // listener, and then silently did nothing.
+         "div" | "text" => {
+             ctx.custom_registry.destroy(id);
+-            build_host_container(element, style, ctx, window, cx)
++            let built = build_host_container(element, style, ctx, window, cx);
++            crate::backdrop::wrap(built, style)
+         }
+         "virtual-list" => {
+             ctx.custom_registry.destroy(id);
+diff --git a/packages/native/src/style.rs b/packages/native/src/style.rs
+index e69a7cb..e44be8f 100644
+--- a/packages/native/src/style.rs
++++ b/packages/native/src/style.rs
+@@ -204,6 +204,9 @@ pub struct StyleDesc {
+     pub background_color: Option<String>,
+     pub color: Option<String>,
+     pub opacity: Option<f64>,
++    /// CSS `backdrop-filter: blur(<px>)`: the Gaussian's standard deviation.
++    /// Blurs what is painted behind the element, inside its rounded box.
++    pub backdrop_blur: Option<f64>,
+ 
+     // Border
+     pub border_width: Option<f64>,

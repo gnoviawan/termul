@@ -9,7 +9,7 @@ import { renameSync, writeFileSync } from 'node:fs'
 import { type GpuixTheme, type PublicInstance, render, useGpuixRequired } from '@gpuix/react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { registerTerminalFonts } from '../../src/terminal/fonts'
-import { LONG_VALUE, SAMPLES, SCENE, type Sample } from './samples'
+import { BLUR, CODE_PAD, LONG_VALUE, SAMPLES, type Sample, SCENE } from './samples'
 
 const [readyFile] = process.argv.slice(2)
 
@@ -21,12 +21,21 @@ const mono: GpuixTheme = {
   fontMono: 'Paper Mono',
   metrics: { mdTextSize: 32, mdLineHeight: 44 }
 }
-const THEMES: Record<'link' | 'codeFull' | 'codeHalf', GpuixTheme> = {
+type MarkdownSample = 'link' | 'codeFull' | 'codeHalf' | 'codeTight' | 'codePad'
+const THEMES: Record<MarkdownSample, GpuixTheme> = {
   link: { ...mono, link: '#ff0000', linkUnderline: '#ff0000' },
   codeFull: mono,
-  codeHalf: { ...mono, metrics: { ...mono.metrics, mdInlineCodeScale: 0.5 } }
+  codeHalf: { ...mono, metrics: { ...mono.metrics, mdInlineCodeScale: 0.5 } },
+  codeTight: { ...mono, metrics: { ...mono.metrics, mdInlineCodePaddingX: 0 } },
+  codePad: { ...mono, metrics: { ...mono.metrics, mdInlineCodePaddingX: CODE_PAD } }
 }
-const SOURCES = { link: '[lllllll](https://x.dev)', codeFull: '`MMMMMMM`', codeHalf: '`MMMMMMM`' }
+const SOURCES: Record<MarkdownSample, string> = {
+  link: '[lllllll](https://x.dev)',
+  codeFull: '`MMMMMMM`',
+  codeHalf: '`MMMMMMM`',
+  codeTight: 'M`M`M',
+  codePad: 'M`M`M'
+}
 
 function App() {
   const renderer = useGpuixRequired()
@@ -51,7 +60,10 @@ function App() {
       const handle = (
         renderer as { getNativeWindowHandle?(): { kind: string; id?: number | null } | null }
       ).getNativeWindowHandle?.()
-      writeFileSync(`${readyFile}.tmp`, JSON.stringify({ bounds, handle: handle ?? null, pid: process.pid }))
+      writeFileSync(
+        `${readyFile}.tmp`,
+        JSON.stringify({ bounds, handle: handle ?? null, pid: process.pid })
+      )
       renameSync(`${readyFile}.tmp`, readyFile as string)
     }, 800)
     return () => {
@@ -73,7 +85,9 @@ function App() {
   )
   const glyphs = { fontFamily: 'Paper Mono', fontSize: 48, lineHeight: 60, color: '#ffffff' }
   return (
-    <div style={{ width: '100%', height: '100%', backgroundColor: '#000000', flexDirection: 'column' }}>
+    <div
+      style={{ width: '100%', height: '100%', backgroundColor: '#000000', flexDirection: 'column' }}
+    >
       <div style={{ flexDirection: 'row' }}>
         {box('upright', <text style={glyphs}>|||||||</text>)}
         {box('italic', <text style={{ ...glyphs, fontStyle: 'italic' }}>|||||||</text>)}
@@ -81,12 +95,51 @@ function App() {
       {(['link', 'codeFull', 'codeHalf'] as const).map((sample) =>
         box(sample, <markdown source={SOURCES[sample]} theme={THEMES[sample]} />)
       )}
+      <div style={{ flexDirection: 'row' }}>
+        {(['codeTight', 'codePad'] as const).map((sample) =>
+          box(sample, <markdown source={SOURCES[sample]} theme={THEMES[sample]} />)
+        )}
+      </div>
       {box(
         'input',
         <input
           value={url}
-          style={{ width: 240, height: 40, fontFamily: 'Paper Mono', fontSize: 28, color: '#ffffff' }}
+          style={{
+            width: 240,
+            height: 40,
+            fontFamily: 'Paper Mono',
+            fontSize: 28,
+            color: '#ffffff'
+          }}
         />
+      )}
+      {box(
+        'blur',
+        <div
+          style={{ display: 'flex', width: BLUR.width, height: BLUR.height, flexDirection: 'row' }}
+        >
+          {Array.from({ length: BLUR.width / BLUR.stripe }, (_, i) => (
+            <div
+              key={i}
+              style={{
+                width: BLUR.stripe,
+                height: BLUR.height,
+                backgroundColor: i % 2 ? '#000000' : '#ffffff'
+              }}
+            />
+          ))}
+          <div
+            style={{
+              position: 'absolute',
+              left: BLUR.width / 2,
+              top: 0,
+              width: BLUR.width / 2,
+              height: BLUR.height,
+              borderRadius: BLUR.radius,
+              backdropBlur: BLUR.sigma
+            }}
+          />
+        </div>
       )}
     </div>
   )

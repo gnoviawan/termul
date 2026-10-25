@@ -103,7 +103,6 @@ export function geometryFor(
 const PROBE_CHARS = 100
 const RESIZE_DEBOUNCE_MS = 50
 const BLINK_MS = 600
-const FOCUS_POLL_MS = 150
 const MOUSE_BUTTONS: Record<number, MouseButton> = { 0: 'left', 1: 'middle', 2: 'right' }
 
 interface RowProps {
@@ -355,19 +354,6 @@ export function TerminalView(props: TerminalViewProps) {
 
   const onFocus = useCallback(() => setHasFocus(true), [])
   const onBlur = useCallback(() => setHasFocus(false), [])
-  // GPUIX did not deliver onFocus/onBlur for this host while
-  // getFocusedElementId() named it (measured 2026-10-23, Xvfb and lavapipe),
-  // so the focused cursor also follows the renderer's focus directly.
-  useEffect(() => {
-    if (!visible || focusedProp !== undefined || !renderer?.getFocusedElementId) return
-    const sync = () => {
-      const id = host.current?.id
-      setHasFocus(id !== undefined && renderer.getFocusedElementId?.() === id)
-    }
-    sync()
-    const timer = setInterval(sync, FOCUS_POLL_MS)
-    return () => clearInterval(timer)
-  }, [visible, focusedProp, renderer])
 
   const setHost = useCallback(
     (instance: PublicInstance | null) => {

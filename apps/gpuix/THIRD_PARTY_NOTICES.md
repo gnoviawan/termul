@@ -7,7 +7,12 @@ bounded prose pieces after the approach of kybern's
 `apps/gpuix/src/transcript/markdown.tsx` (`markdownParts`, `textChunks`),
 rewritten for Termul. The transcript's rule of one `<virtual-list>` row per
 reply block (`src/chat/AgentReplyRows.tsx`) follows kybern's
-`transcript/Transcript.tsx`. Read from a local clone of the kybern repository.
+`transcript/Transcript.tsx`. The backdrop blur patch
+(`native/gpuix-native/patches/zed/0003-backdrop-blur.patch`) follows the shape
+of kybern's Metal backdrop (`apps/gpuix/native/patches/backdrop_gpui.py`,
+`backdrop.rs`): a scene primitive that is an ordering barrier, painted by a
+wrapper element before its child. The wgpu passes are Termul's own. Read from
+a local clone of the kybern repository.
 
 ```
 MIT License

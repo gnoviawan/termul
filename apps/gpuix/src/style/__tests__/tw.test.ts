@@ -31,6 +31,7 @@ const CASES: [string, StyleDesc][] = [
       bottom: 0,
       left: 0,
       backgroundColor: '#00000099',
+      backdropBlur: 8,
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center'
