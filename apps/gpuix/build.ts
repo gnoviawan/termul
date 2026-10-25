@@ -325,7 +325,7 @@ function productionEntry(bundle: string): string {
 export async function buildClient(
   entry: string = ENTRY,
   outdir: string = OUT_DIR,
-  options: { production?: boolean } = {}
+  options: { production?: boolean; plugins?: BunPlugin[] } = {}
 ): Promise<BuildResult> {
   const reactResolves: ReactResolve[] = []
   const name = path.basename(entry).replace(/\.tsx?$/, '')
@@ -338,6 +338,7 @@ export async function buildClient(
     // react and react-dom are not listed: the plugins decide per importer.
     external: ['@gpuix/react', '@gpuix/react/*', '@gpuix/native', '@gpuix/native/*'],
     plugins: [
+      ...(options.plugins ?? []),
       rawPlugin(),
       globPlugin(),
       compatPlugin(),

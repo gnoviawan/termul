@@ -27,6 +27,7 @@
  */
 
 import path from 'node:path'
+import { installCometFrames } from './comet-frames'
 import type { ClientConfig } from './config'
 import { installDom } from './dom'
 import { createSessionHistory } from './history'
@@ -77,6 +78,7 @@ export function installBrowserEnv(config: ClientConfig, viewport: Viewport): Bro
   Object.assign(document, { defaultView: window })
 
   installDom(viewport, { reducedMotion: process.env.GPUIX_REDUCED_MOTION === '1' })
+  installCometFrames(path.join(config.stateDir, 'comet-frames'))
   installed = { location, history, localStorage, sessionStorage }
   return installed
 }

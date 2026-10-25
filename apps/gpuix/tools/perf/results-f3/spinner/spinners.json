@@ -1,0 +1,198 @@
+{
+  "args": {
+    "runs": "3",
+    "counts": "1,10",
+    "seconds": "15",
+    "out": "/tmp/gpuix-f3/spinner-final/spinners.json"
+  },
+  "samples": [
+    {
+      "mode": "source",
+      "count": 1,
+      "wallS": 15.076472851999998,
+      "uiCpuPct": 14,
+      "processCpuPct": 72,
+      "pssMB": 183.0986328125,
+      "threads": {
+        "bun": 10,
+        "mi-scavenger": 2,
+        "gpuix-ui": 14,
+        "llvmpipe-N": 43,
+        "WSI swapchain q": 3
+      }
+    },
+    {
+      "mode": "frames",
+      "count": 1,
+      "wallS": 15.00436611,
+      "uiCpuPct": 9,
+      "processCpuPct": 63,
+      "pssMB": 177.9228515625,
+      "threads": {
+        "bun": 6,
+        "mi-scavenger": 3,
+        "JITWorker": 1,
+        "gpuix-ui": 9,
+        "llvmpipe-N": 41,
+        "WSI swapchain q": 3
+      }
+    },
+    {
+      "mode": "source",
+      "count": 10,
+      "wallS": 15.016104975000003,
+      "uiCpuPct": 12,
+      "processCpuPct": 86,
+      "pssMB": 202.830078125,
+      "threads": {
+        "bun": 28,
+        "mi-scavenger": 4,
+        "JITWorker": 3,
+        "gpuix-ui": 12,
+        "llvmpipe-N": 37,
+        "WSI swapchain q": 2
+      }
+    },
+    {
+      "mode": "frames",
+      "count": 10,
+      "wallS": 15.015533684,
+      "uiCpuPct": 15,
+      "processCpuPct": 74,
+      "pssMB": 184.970703125,
+      "threads": {
+        "bun": 9,
+        "mi-scavenger": 2,
+        "JITWorker": 3,
+        "gpuix-ui": 15,
+        "llvmpipe-N": 41,
+        "WSI swapchain q": 4
+      }
+    },
+    {
+      "mode": "frames",
+      "count": 10,
+      "wallS": 15.006966712999999,
+      "uiCpuPct": 11,
+      "processCpuPct": 70,
+      "pssMB": 183.5078125,
+      "threads": {
+        "bun": 6,
+        "mi-scavenger": 1,
+        "JITWorker": 2,
+        "gpuix-ui": 11,
+        "llvmpipe-N": 47,
+        "WSI swapchain q": 3
+      }
+    },
+    {
+      "mode": "source",
+      "count": 10,
+      "wallS": 15.011090543,
+      "uiCpuPct": 13,
+      "processCpuPct": 79,
+      "pssMB": 194.1328125,
+      "threads": {
+        "bun": 17,
+        "mi-scavenger": 3,
+        "JITWorker": 2,
+        "gpuix-ui": 13,
+        "llvmpipe-N": 41,
+        "WSI swapchain q": 3
+      }
+    },
+    {
+      "mode": "frames",
+      "count": 1,
+      "wallS": 15.004105378,
+      "uiCpuPct": 13,
+      "processCpuPct": 64,
+      "pssMB": 178.2119140625,
+      "threads": {
+        "bun": 5,
+        "gpuix-ui": 13,
+        "llvmpipe-N": 44,
+        "WSI swapchain q": 2
+      }
+    },
+    {
+      "mode": "source",
+      "count": 1,
+      "wallS": 15.030007859999998,
+      "uiCpuPct": 14,
+      "processCpuPct": 71,
+      "pssMB": 181.259765625,
+      "threads": {
+        "bun": 8,
+        "mi-scavenger": 2,
+        "gpuix-ui": 14,
+        "llvmpipe-N": 44,
+        "WSI swapchain q": 3
+      }
+    },
+    {
+      "mode": "source",
+      "count": 1,
+      "wallS": 15.006147855,
+      "uiCpuPct": 12,
+      "processCpuPct": 73,
+      "pssMB": 181.1123046875,
+      "threads": {
+        "bun": 11,
+        "mi-scavenger": 3,
+        "JITWorker": 1,
+        "gpuix-ui": 12,
+        "llvmpipe-N": 44,
+        "WSI swapchain q": 2
+      }
+    },
+    {
+      "mode": "frames",
+      "count": 1,
+      "wallS": 15.003098966000001,
+      "uiCpuPct": 14,
+      "processCpuPct": 70,
+      "pssMB": 178.6630859375,
+      "threads": {
+        "bun": 9,
+        "mi-scavenger": 5,
+        "JITWorker": 1,
+        "gpuix-ui": 14,
+        "llvmpipe-N": 36,
+        "WSI swapchain q": 5
+      }
+    },
+    {
+      "mode": "source",
+      "count": 10,
+      "wallS": 15.004159374999999,
+      "uiCpuPct": 15,
+      "processCpuPct": 90,
+      "pssMB": 196.0068359375,
+      "threads": {
+        "bun": 23,
+        "mi-scavenger": 7,
+        "JITWorker": 2,
+        "gpuix-ui": 15,
+        "llvmpipe-N": 40,
+        "WSI swapchain q": 3
+      }
+    },
+    {
+      "mode": "frames",
+      "count": 10,
+      "wallS": 15.003924471,
+      "uiCpuPct": 12,
+      "processCpuPct": 70,
+      "pssMB": 184.6298828125,
+      "threads": {
+        "bun": 6,
+        "mi-scavenger": 1,
+        "JITWorker": 2,
+        "gpuix-ui": 12,
+        "llvmpipe-N": 46,
+        "WSI swapchain q": 3
+      }
+    }
+  ]
+}

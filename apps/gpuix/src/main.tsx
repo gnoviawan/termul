@@ -18,6 +18,7 @@ import { launch } from './launcher'
 import { createDesktopHost } from './launcher/desktop-host'
 import { readHostLocalToken } from './launcher/host-local'
 import { log } from './log'
+import { recordRendererStats } from './renderer-stats'
 import { captureZoomRoots } from './shims/window-zoom'
 import { FONT_FILES } from './style/fonts'
 
@@ -77,6 +78,12 @@ boot(config, {
   window: windowSize,
   fonts,
   hostLocalToken: hostLocalTokenFile ? () => readHostLocalToken(hostLocalTokenFile) : null,
+  onRenderer: (renderer) =>
+    recordRendererStats(
+      renderer,
+      process.env.TERMUL_GPUIX_STATS,
+      process.env.TERMUL_GPUIX_STATS_OPS === '1'
+    ),
   onFocusControl: (control) => {
     focusControl = control
   }

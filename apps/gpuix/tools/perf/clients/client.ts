@@ -1,4 +1,5 @@
 import type { PageMetrics } from '../../../../../tools/perf/types.ts'
+import type { TreeCensus } from '../tree-census.ts'
 
 export type ClientKind = 'chromium' | 'gpuix'
 
@@ -64,4 +65,6 @@ export interface ClientDriver {
   /** In-page metrics, when the client is a web page; null otherwise. */
   beginPhase(name: string): Promise<void>
   endPhase(name: string): Promise<PageMetrics | null>
+  /** What the client's last frame built, when the client can tell (GPUIX). */
+  census?(): Promise<TreeCensus>
 }
