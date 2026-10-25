@@ -10,8 +10,6 @@
  * - `park` (dist): the branch as committed.
  * - `base` (dist-sbase): `parkHiddenPanes` does nothing, so hidden panes stay
  *   in the GPUI frame as on exp/gpuix-client before F3.
- * - `presrc` (dist-spresrc): `src/ui/spinner.tsx` as of `dfee0529`, whose
- *   spinners each keep their own timer and resend the SVG markup every step.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -22,11 +20,9 @@ import { APP_DIR, buildClient, ENTRY } from '../../build'
 type Edit = { file: string; from: string; to: string } | { file: string; rev: string }
 
 const PARK = path.join(APP_DIR, 'src/compat/park.ts')
-const SPINNER = path.join(APP_DIR, 'src/ui/spinner.tsx')
 
 const VARIANTS: Record<string, { outdir: string; edits: Edit[] }> = {
   park: { outdir: 'dist', edits: [] },
-  presrc: { outdir: 'dist-spresrc', edits: [{ file: SPINNER, rev: 'dfee0529' }] },
   base: {
     outdir: 'dist-sbase',
     edits: [

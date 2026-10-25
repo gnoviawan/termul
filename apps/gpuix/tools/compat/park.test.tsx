@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import { createRoot, flushSync, type NativeRenderer, type StyleDesc } from '@gpuix/react'
 import { useState } from 'react'
 import { parkHiddenPanes } from '../../src/compat/park'
-import { Spinner } from '../../src/ui/spinner'
 
 /**
  * The retained tree `applyBatch` mutates, with the semantics of GPUIX's
@@ -182,38 +181,6 @@ describe('parkHiddenPanes', () => {
     expect([...tree.nodes.values()].map((node) => node.text).filter(Boolean)).toEqual(['gone'])
     expect(destroyed).toEqual(expect.arrayContaining(parked))
     expect(parking.parked()).toBe(0)
-  })
-
-  test('a spinner in a parked pane stops sending frames until the pane shows', async () => {
-    const tree = new FakeTree()
-    const parking = parkHiddenPanes(tree)
-    let sources = 0
-    const native = tree.applyBatch.bind(tree)
-    tree.applyBatch = (json) => {
-      for (const op of JSON.parse(json) as unknown[][])
-        if (op[0] === 'setCustomProp' && (op[2] === 'src' || op[2] === 'source')) sources++
-      return native(json)
-    }
-    const root = createRoot(tree as unknown as NativeRenderer)
-    const show = (hidden: boolean) =>
-      flushSync(() =>
-        root.render(
-          <div>
-            <div style={hidden ? HIDDEN : SHOWN}>
-              <Spinner />
-            </div>
-          </div>
-        )
-      )
-    show(true)
-    sources = 0
-    await Bun.sleep(150)
-    expect(sources).toBe(0)
-    show(false)
-    await Bun.sleep(150)
-    expect(sources).toBeGreaterThan(3)
-    root.unmount()
-    parking.uninstall()
   })
 
   test('a hidden element that takes room in its parent stays in the tree', () => {

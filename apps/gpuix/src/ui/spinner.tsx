@@ -12,10 +12,8 @@
  * step sends its path as `src`. One clock steps every spinner, so all of them
  * change in one batch and wake the window once per step.
  */
-import type { PublicInstance } from '@gpuix/react'
-import { type RefObject, useContext, useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { isOffFrame } from '../compat/visibility'
 import { useIconStyle } from '../icons/hugeicons'
 import { frameStore } from './internal/frame-store'
 import { UiEnvironmentContext } from './internal/host'
@@ -88,17 +86,12 @@ function onStep(stepper: (step: number) => void): () => void {
   }
 }
 
-function useLapAngle(running: boolean, ref: RefObject<PublicInstance | null>): number {
+function useLapAngle(running: boolean): number {
   const [step, setStep] = useState(0)
   useEffect(() => {
     if (!running) return
-    return onStep((next) => {
-      // A browser does not paint a hidden pane's animation; a parked pane is never drawn.
-      const id = ref.current?.id
-      if (id !== undefined && isOffFrame(id)) return
-      setStep(next)
-    })
-  }, [running, ref])
+    return onStep(setStep)
+  }, [running])
   return step * STEP_DEG
 }
 
@@ -117,12 +110,10 @@ function Spinner({
   label?: string
 }) {
   const { reducedMotion } = useContext(UiEnvironmentContext)
-  const ref = useRef<PublicInstance | null>(null)
-  const angle = useLapAngle(!reducedMotion, ref)
+  const angle = useLapAngle(!reducedMotion)
   const style = useIconStyle(size, cn('shrink-0', className), undefined, undefined)
   return (
     <svg
-      ref={ref}
       {...cometFrame(size, angle)}
       style={style}
       role={decorative ? undefined : 'status'}
