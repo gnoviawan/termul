@@ -4,8 +4,10 @@
  * whose classes name one renders through `ContainerHost`: a `@container`
  * element measures its own width and provides it, and each `@[w]:` variant
  * below it is kept or dropped against the nearest container's width before
- * the string is translated. The first frame renders as if the container were
- * narrow (no width yet), then settles once the container reports its size.
+ * the string is translated. A container's first frame uses the width the last
+ * container with the same tag and classes measured (a remount, such as a
+ * settings section re-rendering its cards, keeps its layout), else renders as
+ * if it were narrow, then settles once it reports its own size.
  *
  * Named containers (`@container/name`, `@[w]/name:`) are not used by Termul
  * and resolve against the nearest container.
@@ -25,6 +27,9 @@ const CONTAINER_TOKEN = /^@(?:\[|container)/
 
 /** Width of the nearest `@container` ancestor; `null` until it has been measured. */
 const ContainerWidth = createContext<number | null>(null)
+
+/** The last width measured per container tag and class string. */
+const measuredWidths = new Map<string, number>()
 
 export function hasContainerClasses(className: unknown): className is string {
   return typeof className === 'string' && className.includes('@') && className.split(/\s+/).some((t) => CONTAINER_TOKEN.test(t))
@@ -72,7 +77,9 @@ function ContainerHost({ tag, dom, isStatic }: ContainerHostProps): ReactElement
   const outer = useContext(ContainerWidth)
   const className = dom.className as string
   const isContainer = CONTAINER.test(className)
-  const [own, setOwn] = useState<number | null>(null)
+  const widthKey = useRef('')
+  widthKey.current = `${tag} ${className}`
+  const [own, setOwn] = useState<number | null>(() => (isContainer ? (measuredWidths.get(widthKey.current) ?? null) : null))
   const observer = useRef<CompatResizeObserver | null>(null)
   const userRef = dom.ref as RefProp
   useEffect(() => () => observer.current?.disconnect(), [])
@@ -86,7 +93,9 @@ function ContainerHost({ tag, dom, isStatic }: ContainerHostProps): ReactElement
       if (!node) return
       const next = new CompatResizeObserver((entries) => {
         const width = entries[entries.length - 1]?.borderBoxSize[0]?.inlineSize
-        if (typeof width === 'number') setOwn(Math.round(width))
+        if (typeof width !== 'number') return
+        measuredWidths.set(widthKey.current, Math.round(width))
+        setOwn(Math.round(width))
       })
       next.observe(node)
       observer.current = next
