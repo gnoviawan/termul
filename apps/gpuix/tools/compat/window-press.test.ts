@@ -25,10 +25,16 @@ const TREE: TreeJson = {
   ]
 }
 
+let focused: number | null = null
+let blurs = 0
+const focusState = (): { focused: number | null; blurs: number } => ({ focused, blurs })
 const renderer: CompatRenderer = {
   focusElement() {},
-  getFocusedElementId: () => null,
-  blur() {},
+  getFocusedElementId: () => focused,
+  blur() {
+    blurs++
+    focused = null
+  },
   scrollTo() {},
   scrollIntoView() {},
   getScrollOffset: () => null,
@@ -67,6 +73,8 @@ const PRESS = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']
 
 beforeEach(() => {
   log = []
+  focused = null
+  blurs = 0
   saved = { window: g.window, document: g.document }
   g.window = new EventTarget()
   g.document = new EventTarget()
@@ -166,5 +174,48 @@ describe('presses reach document and window', () => {
       'window pointerdown text',
       'document mousedown text'
     ])
+  })
+})
+
+describe('a press moves focus as the DOM default action does', () => {
+  const press = (x: number, y: number) =>
+    sentinelPress({ elementId: 1, eventType: 'mouseDownOutside', x, y, button: 0 } as EventPayload)
+
+  test('a press on text that takes no focus blurs the focused field', async () => {
+    focused = 301
+    press(40, 120)
+    await nextTask()
+    expect(focusState()).toEqual({ focused: null, blurs: 1 })
+  })
+
+  test('a press inside the focused element keeps its focus', async () => {
+    focused = 301
+    press(50, 20)
+    await nextTask()
+    expect(focusState()).toEqual({ focused: 301, blurs: 0 })
+  })
+
+  test('preventDefault in an element mousedown handler keeps focus', async () => {
+    focused = 301
+    mount(302, { onMouseDown: (e: { preventDefault(): void }) => e.preventDefault() })
+    const at = { x: 40, y: 120, button: 0, clickCount: 1 }
+    press(at.x, at.y)
+    fire(302, 'onMouseDown', at)
+    await nextTask()
+    expect(focusState()).toEqual({ focused: 301, blurs: 0 })
+  })
+
+  test('preventDefault in a document mousedown listener keeps focus', async () => {
+    focused = 301
+    g.document?.addEventListener('mousedown', (e) => e.preventDefault())
+    press(40, 120)
+    await nextTask()
+    expect(focusState()).toEqual({ focused: 301, blurs: 0 })
+  })
+
+  test('a press with nothing focused blurs nothing', async () => {
+    press(40, 120)
+    await nextTask()
+    expect(blurs).toBe(0)
   })
 })

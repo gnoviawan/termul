@@ -12,30 +12,65 @@
  *
  * Releases have no sentinel: `pointerup`/`mouseup`/`click` reach the page
  * only for presses an element path saw.
+ *
+ * The press's default action runs once its batch is over (`settleFocus`).
  */
 
 import type { EventPayload } from '@gpuix/react'
 import { hitTest } from './dnd'
-import { nodeOrNull } from './dom-node'
+import { compatReads, nodeOrNull } from './dom-node'
 
 interface PendingPress {
   payload: EventPayload
   target: number | null
   stopped: boolean
+  /** A `pointerdown` or `mousedown` listener called preventDefault, so focus stays put. */
+  prevented: boolean
 }
 
+/** The press not yet handed to `document` and `window`. */
 let pending: PendingPress | null = null
+/** The press whose default action has not run yet. */
+let settling: PendingPress | null = null
 
-const samePoint = (a: EventPayload, b: EventPayload): boolean => a.x === b.x && a.y === b.y
+type Point = Pick<EventPayload, 'x' | 'y'>
+const samePoint = (a: Point, b: Point): boolean => a.x === b.x && a.y === b.y
 
 /** The sentinel's `onMouseDownOutside`: a press somewhere in the window. */
 export function sentinelPress(payload: EventPayload): void {
   flushPress()
-  const press: PendingPress = { payload, target: null, stopped: false }
+  const press: PendingPress = { payload, target: null, stopped: false, prevented: false }
   pending = press
+  settling = press
   setTimeout(() => {
     if (pending === press) flushPress()
+    if (settling !== press) return
+    settling = null
+    settleFocus(press)
   }, 0)
+}
+
+/** A listener of the press at this point called preventDefault (`CompatEvent`). */
+export function pressPrevented(at: Point): void {
+  if (settling && samePoint(settling.payload, at)) settling.prevented = true
+}
+
+/**
+ * The DOM's default action for a press no listener prevented: focus moves to
+ * the focusable element pressed, or else leaves the focused one for `body`.
+ * GPUI has already focused a focusable element it pressed, and the terminal
+ * and editor focus their own host on press. So focus on a box away from the
+ * press point means the press landed on content that takes no focus.
+ */
+function settleFocus(press: PendingPress): void {
+  if (press.prevented) return
+  const reads = compatReads()
+  const focused = reads?.renderer.getFocusedElementId() ?? null
+  if (!reads || focused === null) return
+  const box = reads.bounds(focused)
+  const { x = 0, y = 0 } = press.payload
+  if (box && x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height) return
+  reads.renderer.blur()
 }
 
 /** The element path of a press ran from `target`; `stopped` if a handler stopped it. */
@@ -52,15 +87,16 @@ export function flushPress(): void {
   if (!press) return
   pending = null
   if (press.stopped) return
-  toPage(['pointerdown', 'mousedown'], press.payload, press.target)
+  if (toPage(['pointerdown', 'mousedown'], press.payload, press.target)) press.prevented = true
 }
 
 /**
  * Fire each of `types` at `document`, then `window`, for a press at
  * `payload`'s point. `target` is the element the element path started from;
- * without one, the target is hit-tested when a listener reads it.
+ * without one, the target is hit-tested when a listener reads it. True when a
+ * listener called preventDefault.
  */
-export function toPage(types: readonly string[], payload: EventPayload, target: number | null): void {
+export function toPage(types: readonly string[], payload: EventPayload, target: number | null): boolean {
   const g = globalThis as { document?: EventTarget & { body?: unknown }; window?: EventTarget }
   const resolveTarget = (): unknown =>
     nodeOrNull(target ?? hitTest({ x: payload.x ?? 0, y: payload.y ?? 0 })) ?? g.document?.body ?? null
@@ -69,6 +105,7 @@ export function toPage(types: readonly string[], payload: EventPayload, target: 
     resolved ??= { value: resolveTarget() }
     return resolved.value
   }
+  let prevented = false
   for (const type of types) {
     // Dispatch clears the stop flag when it returns, so the stop is recorded here.
     let stopped = false
@@ -78,8 +115,10 @@ export function toPage(types: readonly string[], payload: EventPayload, target: 
         stopped = true
       })
       host.dispatchEvent(event)
+      if (event.defaultPrevented) prevented = true
     }
   }
+  return prevented
 }
 
 function pageEvent(type: string, payload: EventPayload, target: () => unknown, onStop: () => void): Event {

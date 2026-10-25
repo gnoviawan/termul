@@ -34,7 +34,7 @@ import {
 import { compatWarn } from './log'
 import { hover, occluderHover } from './hover'
 import { tracePointer } from './trace'
-import { elementPressed, flushPress, toPage } from './window-press'
+import { elementPressed, flushPress, pressPrevented, toPage } from './window-press'
 
 type Handler = (event: CompatEvent) => void
 
@@ -102,6 +102,9 @@ function domCode(key: string | undefined): string | undefined {
   if (key === 'space') return 'Space'
   return KEY_NAMES[key] ?? key
 }
+
+/** A press as compat names it (`pointerdown`, `mousedown`) and as a ui primitive gets it from GPUIX. */
+const PRESS_TYPES = new Set(['pointerdown', 'mousedown', 'mouseDown'])
 
 /** The fields React handlers read off a SyntheticEvent. */
 export class CompatEvent {
@@ -193,6 +196,7 @@ export class CompatEvent {
   preventDefault(): void {
     this.defaultPrevented = true
     this.payload.preventDefault?.()
+    if (PRESS_TYPES.has(this.type)) pressPrevented(this.payload)
   }
 
   stopPropagation(): void {
