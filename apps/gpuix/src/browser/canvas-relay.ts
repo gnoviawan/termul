@@ -9,7 +9,6 @@
 
 import type { BrowserHost } from '@/lib/browser-host'
 import type { BrowserBounds, BrowserEventSubscription, IpcResult } from '@/lib/browser-types'
-import type { CanvasFrame } from '@/lib/canvas-bridge'
 import { log } from '../log'
 
 /** The relay page's origin, which the editor is told is its host (`ho=`). */
@@ -33,8 +32,14 @@ export function isCanvasCapableHost(host: BrowserHost | null): host is CanvasCap
   return host !== null && 'createCanvas' in host && 'postToCanvas' in host
 }
 
+/** Structurally `CanvasFrame` of `canvas-bridge.ts`, which this module does not import: that
+ * would pull the renderer's module graph into the plain-Bun units of `src/browser`. */
+export interface RelayFrame {
+  readonly contentWindow: { postMessage(message: unknown, targetOrigin: string): void }
+}
+
 export interface CanvasRelayFrame {
-  frame: CanvasFrame
+  frame: RelayFrame
   dispose(): void
 }
 
@@ -85,11 +90,11 @@ interface SlotRect {
 
 /**
  * Where a canvas webview goes, in the window's logical pixels. It covers its slot while the tab
- * shows, as the DOM iframe does. Otherwise it moves out of the window rather than unmapping: an
- * unmapped WebKit view stops painting frames, and the editor answers bridge calls from its frame
- * loop, so agent calls on a hidden canvas would stall (the DOM client keeps a 1x1 offscreen
- * iframe for the same reason). Under an overlay it keeps its size, so the editor does not relayout
- * each time a menu opens; with no slot it shrinks to 1x1.
+ * shows, as the DOM iframe does. Otherwise it moves out of the window, still mapped and painting,
+ * rather than being hidden: the DOM client keeps a visible 1x1 offscreen iframe because
+ * `display:none` stalls the editor's message handling, and agent calls must keep working on a
+ * hidden canvas. Under an overlay it keeps its size, so the editor does not relayout each time a
+ * menu opens; with no slot it shrinks to 1x1 as the DOM iframe does.
  */
 export function canvasPlacement(
   slot: SlotRect | null,

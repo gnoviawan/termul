@@ -1,11 +1,11 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import type { BrowserEventSubscription, IpcResult } from '@/lib/browser-types'
-import type { CanvasFrame } from '@/lib/canvas-bridge'
 import {
   type CanvasWebviewHost,
   canvasPlacement,
   createCanvasRelayFrame,
-  OFFSCREEN_X
+  OFFSCREEN_X,
+  type RelayFrame
 } from './canvas-relay'
 
 const ORIGIN = 'http://127.0.0.1:8190'
@@ -35,7 +35,7 @@ function fakeHost() {
 }
 
 /** What `createCanvasBridge` sees: `message` events on window, filtered as it filters them. */
-function bridgeView(frame: CanvasFrame, origin: string) {
+function bridgeView(frame: RelayFrame, origin: string) {
   const seen: unknown[] = []
   const listener = (event: Event) => {
     const message = event as MessageEvent

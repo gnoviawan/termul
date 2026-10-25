@@ -61,6 +61,48 @@ interface AgentCall {
   json: Record<string, unknown> | null
 }
 const closers: (() => void)[] = []
+const sumPss = (pids: number[]) =>
+  Math.round(processTable(pids).reduce((sum, p) => sum + p.pssMb, 0))
+
+interface FoundNode {
+  text?: string
+  x: number
+  y: number
+  width: number
+  height: number
+  center: { x: number; y: number }
+  click(): Promise<void>
+}
+
+type TreeNode = { id: number; text?: string; bounds?: Rect; children?: TreeNode[] }
+
+/** The first painted node matching `accept`, with its bounds; clicks go through automation. */
+async function findNodeOrNull(
+  app: App,
+  accept: (n: FoundNode) => boolean
+): Promise<FoundNode | null> {
+  const { tree } = (await app.call('getTree', {})) as { tree: TreeNode }
+  const stack: TreeNode[] = [tree]
+  while (stack.length) {
+    const node = stack.shift() as TreeNode
+    stack.push(...(node.children ?? []))
+    const b = node.bounds
+    if (!b) continue
+    const center = { x: b.x + b.width / 2, y: b.y + b.height / 2 }
+    const found: FoundNode = {
+      text: node.text,
+      ...b,
+      center,
+      click: () => app.mouse.click(center)
+    }
+    if (accept(found)) return found
+  }
+  return null
+}
+
+async function findNode(app: App, accept: (n: FoundNode) => boolean): Promise<FoundNode> {
+  return until('a matching node', () => findNodeOrNull(app, accept))
+}
 const results: { check: string; ok: boolean; detail: unknown }[] = []
 const measures: Record<string, unknown> = {}
 function check(name: string, ok: boolean, detail: unknown = {}): void {
@@ -105,6 +147,15 @@ try {
   const origin = await s.origin()
   const click = (x: number, y: number) =>
     X('click', String(Math.round(origin.x + x)), String(Math.round(origin.y + y)))
+  /** The focused GPUIX field's text, copied out with real keys. */
+  const focusedFieldText = async () => {
+    X('key', 'Control_L+a')
+    X('key', 'Control_L+c')
+    await Bun.sleep(300)
+    const text = X('clipboard')
+    X('key', 'End')
+    return text
+  }
 
   // 1. The rail's Canvas button opens the canvas tab with FigCraft painted in its slot.
   const openedAt = Date.now()
@@ -249,6 +300,167 @@ try {
     'a GPUIX dialog over the canvas is fully visible; the hidden editor still answers; it returns after',
     offscreen !== null && back !== null && !hiddenCall.isError && hiddenId !== undefined,
     { offscreen, back, hiddenCallMs: hiddenCall.ms, hiddenCall: hiddenCall.text.slice(0, 200) }
+  )
+
+  // 5. A click into the canvas hands it the keyboard: Ctrl+Z there undoes the hidden create.
+  click(850, 600)
+  await logged(new RegExp(`keyboard -> tab ${tabId}`))
+  await Bun.sleep(400)
+  X('key', 'Control_L+z')
+  const undone = await until(
+    'Ctrl+Z in the canvas removes the last layer',
+    async () => ((await canvasCall('get_node', { id: hiddenId })).isError ? true : null),
+    15_000
+  ).catch(() => false)
+  const frameStays = !(await canvasCall('get_node', { id: frameId })).isError
+  check('keys typed in the canvas reach FigCraft', undone && frameStays, {
+    undoneLayer: hiddenId,
+    undone,
+    agentFrameKept: frameStays
+  })
+
+  // 6. Split the agent's chat beside the canvas, then hand the keyboard back to its composer.
+  await (
+    await findNode(app, (n) => n.text?.startsWith('canvas-call') === true && n.y > 100)
+  ).click()
+  const chatTab = await until('the chat tab', async () =>
+    findNodeOrNull(app, (n) => n.text?.startsWith('canvas-call') === true && n.y < 45)
+  )
+  await app.mouse.drag(chatTab.center, { x: 1200, y: 420 }, { steps: 12 })
+  const left = await until('canvas webview in the left pane', async () => {
+    const w = childWindows(s.display, parentXid).find((c) => c.id === view.id)
+    return w && w.rect.x >= 0 && w.rect.x + w.rect.width < 900 ? w.rect : null
+  })
+  const composer = await until('composer field', async () =>
+    findNodeOrNull(
+      app,
+      (n) => n.text?.startsWith('Ask anything') === true && n.x > left.x + left.width
+    )
+  )
+  click(left.x + left.width / 2, left.y + left.height - 120)
+  await logged(new RegExp(`keyboard -> tab ${tabId}[\\s\\S]*keyboard -> tab ${tabId}`))
+  click(composer.center.x, composer.center.y)
+  await until('keyboard back with the app', async () =>
+    log().lastIndexOf('keyboard -> app') > log().lastIndexOf(`keyboard -> tab ${tabId}`)
+      ? true
+      : null
+  )
+  await Bun.sleep(600)
+  X('type', 'hello')
+  await Bun.sleep(800)
+  const afterHello = await focusedFieldText()
+  X('move', String(origin.x + left.x + left.width / 2), String(origin.y + left.y + left.height / 2))
+  X('type', 'xyz')
+  await Bun.sleep(800)
+  const afterXyz = await focusedFieldText()
+  await shot('05-split-composer-typed')
+  check(
+    'a click on the GPUIX composer takes the keyboard back from the canvas',
+    afterHello === 'hello' && afterXyz === 'helloxyz',
+    { canvasRect: left, composer: afterHello, composerWithPointerOverCanvas: afterXyz }
+  )
+
+  // 7. Memory of one canvas; closing its tab hides it and keeps the editor (AD-19), as desktop.
+  await Bun.sleep(2000)
+  const oneCanvas = descendants(helperPid)
+  measures.memoryOneCanvas = processTable([helperPid, ...oneCanvas])
+  measures.memoryOneCanvasPssMb = sumPss([helperPid, ...oneCanvas])
+  const closeX = await until("the canvas tab's close button", async () => {
+    const label = await findNodeOrNull(app, (n) => n.text === 'design.figcraft' && n.y < 45)
+    if (!label) return null
+    return findNodeOrNull(
+      app,
+      (n) =>
+        n.width <= 24 &&
+        n.height <= 24 &&
+        n.x > label.x + label.width - 4 &&
+        n.x < label.x + label.width + 40 &&
+        Math.abs(n.center.y - label.center.y) < 6
+    )
+  })
+  click(closeX.center.x, closeX.center.y)
+  const parked = await until('closed tab parks the webview offscreen', async () => {
+    const w = childWindows(s.display, parentXid).find((c) => c.id === view.id)
+    return w && w.rect.x < 0 && w.rect.width === 1 ? w.rect : null
+  }).catch(() => null)
+  const stillAnswers = await canvasCall('get_node', { id: frameId })
+  check(
+    'closing the canvas tab hides the editor and keeps it answering agents (AD-19, as desktop)',
+    parked !== null && oneCanvas.every(alive) && !stillAnswers.isError,
+    {
+      parked,
+      webkitPids: processTable(oneCanvas).map((p) => `${p.pid} ${p.comm}`),
+      callMs: stillAnswers.ms
+    }
+  )
+
+  // 8. A second project's canvas: its own WebKit web process.
+  await app.getByText('beta').click()
+  await app.getByText('What should we do in beta?').waitFor({ timeoutMs: 15_000 })
+  await app.getByText('Canvas').click()
+  const betaTab = (await logged(/created canvas (canvas-parity-beta\S*)/))[1]
+  await app.getByText('Ready').waitFor({ timeoutMs: 60_000 })
+  await Bun.sleep(3000)
+  await shot('06-beta-canvas')
+  const twoCanvases = descendants(helperPid)
+  const betaPids = twoCanvases.filter((pid) => !oneCanvas.includes(pid))
+  measures.memoryTwoCanvases = processTable([helperPid, ...twoCanvases])
+  measures.memoryTwoCanvasesPssMb = sumPss([helperPid, ...twoCanvases])
+  measures.extraCanvasPssMb =
+    (measures.memoryTwoCanvasesPssMb as number) - (measures.memoryOneCanvasPssMb as number)
+  check('a second canvas runs in its own WebKit process', betaPids.length > 0, {
+    betaTab,
+    betaPids: processTable(betaPids).map((p) => `${p.pid} ${p.comm}`),
+    pssOneCanvasMb: measures.memoryOneCanvasPssMb,
+    pssTwoCanvasesMb: measures.memoryTwoCanvasesPssMb,
+    perExtraCanvasMb: measures.extraCanvasPssMb
+  })
+
+  // 9. Another window takes alpha's canvas (AD-30): this one unmounts it and its WebKit process ends.
+  const alphaWebProcs = oneCanvas.filter((pid) =>
+    /WebKitWebProces/.test(processTable([pid])[0]?.comm ?? '')
+  )
+  const takeover = await fetch(`${server.baseUrl}/canvas/open`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${server.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      projectId: PROJECT,
+      docPath: docFile,
+      clientInstanceId: 'v1-other-window'
+    })
+  }).then((r) => r.json() as Promise<{ success: boolean }>)
+  await logged(new RegExp(`destroyed tab ${tabId}`), 20_000)
+  const alphaGone = await until("alpha canvas's WebKit process exits", async () =>
+    alphaWebProcs.every((pid) => !alive(pid)) ? true : null
+  ).catch(() => false)
+  const betaAlive = betaPids.every(alive)
+  check(
+    'unmounting a canvas ends exactly its WebKit web process',
+    takeover.success && alphaWebProcs.length > 0 && alphaGone && betaAlive,
+    {
+      takeover: takeover.success,
+      alphaWebProcesses: alphaWebProcs,
+      alphaGone,
+      betaStillAlive: betaAlive,
+      stillRunning: processTable(descendants(helperPid).filter(alive)).map(
+        (p) => `${p.pid} ${p.comm}`
+      )
+    }
+  )
+
+  // 10. Closing the window quits the app, the helper and every WebKit process.
+  const everything = [helperPid, ...descendants(helperPid)]
+  closeWindow(s.display, parentXid)
+  const exitCode = await Promise.race([s.exited, Bun.sleep(15_000).then(() => 'timeout' as const)])
+  const leftovers = await until(
+    'helper and WebKit processes exit',
+    async () => (everything.filter(alive).length === 0 ? [] : null),
+    10_000
+  ).catch(() => everything.filter(alive))
+  check(
+    'closing the window quits the app and leaves no helper or WebKit process',
+    exitCode !== 'timeout' && leftovers.length === 0,
+    { appExit: exitCode, watched: everything.length, leftovers: processTable(leftovers) }
   )
 } catch (error) {
   check('run', false, String(error))
