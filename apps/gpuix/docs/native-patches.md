@@ -168,7 +168,7 @@ NAPI_RS_NATIVE_LIBRARY_PATH=/tmp/pkg-verify/install/opt/termul-gpuix/node_module
   bun run native:patch-check
 ```
 
-Measured on 2026-10-25: the .deb is 61,186,892 bytes (58.4 MiB, 222.5 MiB installed), `package:verify` passes 11/11, the browser helper starts with `--parent 0x200001` (patch `0003`), and the patch check passes every row on the stripped 38,957,440-byte packaged addon.
+Measured on 2026-10-25 with the full series (`zed/0001` to `0004`, `gpuix/0001` to `0007`): the .deb is 61,225,856 bytes (58.4 MiB, 222.6 MiB installed), `package:verify` passes 11/11, the browser helper starts with `--parent 0x200001` (patch `0003`), and the patch check passes all 11 rows, blur, run padding and focus events included, on the stripped 39,002,496-byte packaged addon.
 
 ## Known gaps
 
