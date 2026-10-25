@@ -58,6 +58,12 @@ describe('protocol', () => {
       title: 'Docs'
     })
     expect(parseEvent('{"ev":"ack","req":4,"ok":false}')).toBeNull()
+    expect(parseEvent('{"ev":"canvasMessage","id":"c1","data":"{\\"id\\":1}"}')).toEqual({
+      ev: 'canvasMessage',
+      id: 'c1',
+      data: '{"id":1}'
+    })
+    expect(parseEvent('{"ev":"canvasMessage","id":"c1"}')).toBeNull()
     expect(parseEvent('{"ev":"title","id":"t1"}')).toBeNull()
     expect(parseEvent('{"ev":"keyboard","owner":3}')).toBeNull()
     expect(parseEvent('{"ev":"later"}')).toBeNull()
@@ -172,6 +178,36 @@ describe('GPUIX browser host over the helper protocol', () => {
     await until(() => h.helperPid() === undefined)
     expect((await h.create('t2', 'http://127.0.0.1:9/', BOUNDS)).success).toBe(true)
     expect(h.helperPid()).not.toBe(first)
+  })
+
+  test('a canvas passes messages both ways; its helper dying reports it gone, a destroyed one not', async () => {
+    const h = fakeHost()
+    expect(await h.createCanvas('c1', 'http://127.0.0.1:9/canvas/a/b/', BOUNDS)).toEqual({
+      success: true,
+      data: undefined
+    })
+    expect(await h.createCanvas('c2', 'http://127.0.0.1:9/canvas/a/b/', BOUNDS)).toEqual({
+      success: true,
+      data: undefined
+    })
+    await h.destroy('c2')
+    const gone: string[] = []
+    h.onCanvasGone('c1', (reason) => gone.push(`c1 ${reason}`))
+    h.onCanvasGone('c2', (reason) => gone.push(`c2 ${reason}`))
+    expect(await h.postToCanvas('c1', '{"id":1}')).toEqual({ success: true, data: undefined })
+    void h.postToCanvas('c1', '"die"')
+    await until(() => gone.length > 0)
+    expect(gone).toEqual(['c1 webview host exited with 3'])
+  })
+
+  test('a canvas helper that is shut down reports nothing gone', async () => {
+    const h = fakeHost()
+    await h.createCanvas('c1', 'http://127.0.0.1:9/canvas/a/b/', BOUNDS)
+    const gone: string[] = []
+    h.onCanvasGone('c1', (reason) => gone.push(reason))
+    h.shutdown()
+    await until(() => h.helperPid() === undefined)
+    expect(gone).toEqual([])
   })
 
   test('shutdown ends the helper', async () => {

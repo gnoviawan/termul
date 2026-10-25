@@ -16,6 +16,10 @@ pub struct Bounds {
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum Command {
     Create { req: u64, id: String, url: String, bounds: Bounds },
+    /// A canvas tab: the relay page, which frames `url` and passes messages both ways.
+    CreateCanvas { req: u64, id: String, url: String, bounds: Bounds },
+    /// Deliver `data` (one message as JSON text) to a canvas tab's framed page.
+    Post { req: u64, id: String, data: String },
     Bounds { req: u64, id: String, bounds: Bounds },
     Show { req: u64, id: String },
     Hide { req: u64, id: String },
@@ -34,6 +38,8 @@ impl Command {
     pub fn req(&self) -> Option<u64> {
         match self {
             Command::Create { req, .. }
+            | Command::CreateCanvas { req, .. }
+            | Command::Post { req, .. }
             | Command::Bounds { req, .. }
             | Command::Show { req, .. }
             | Command::Hide { req, .. }
@@ -64,6 +70,8 @@ pub enum Event {
     Loaded { id: String, url: String },
     Title { id: String, title: String },
     Console { id: String, level: String, text: String },
+    /// A message a canvas tab's framed page posted to its parent, as JSON text.
+    CanvasMessage { id: String, data: String },
     /// Which webview holds the keyboard; `None` means the app window does.
     Keyboard { owner: Option<String> },
     /// The helper cannot run (no parent window, no X display) and exits.
@@ -78,6 +86,8 @@ pub enum Event {
 pub enum PageMessage {
     Console { level: String, text: String },
     Url { url: String },
+    /// The canvas relay page forwarding one message from its frame.
+    CanvasMessage { data: String },
 }
 
 pub fn parse_command(line: &str) -> Result<Command, String> {

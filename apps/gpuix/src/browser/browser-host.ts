@@ -18,6 +18,7 @@ import type {
   IpcResult
 } from '@/lib/browser-types'
 import { log } from '../log'
+import type { CanvasWebviewHost } from './canvas-relay'
 import { type AckResult, HostProcess } from './host-process'
 import type { HostEvent, HostRequest } from './protocol'
 
@@ -35,7 +36,7 @@ export interface GpuixBrowserHostOptions {
   focusPollMs?: number
 }
 
-export interface GpuixBrowserHost extends BrowserHost {
+export interface GpuixBrowserHost extends BrowserHost, CanvasWebviewHost {
   /** Which tab holds the keyboard, `null` for the app window (tests and diagnostics). */
   keyboardOwner(): string | null
   helperPid(): number | undefined
@@ -66,10 +67,29 @@ function subscribers<T>() {
   }
 }
 
+function listenFor<T>(
+  listeners: Map<string, Set<(value: T) => void>>,
+  tabId: string,
+  callback: (value: T) => void
+): BrowserEventSubscription {
+  const set = listeners.get(tabId) ?? new Set()
+  listeners.set(tabId, set.add(callback))
+  return {
+    unlisten: () => {
+      set.delete(callback)
+      if (set.size === 0) listeners.delete(tabId)
+    }
+  }
+}
+
 export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixBrowserHost {
   const navigated = subscribers<BrowserTabNavigatedPayload>()
   const loaded = subscribers<BrowserTabLoadedPayload>()
   const titles = subscribers<BrowserTabTitleChangedPayload>()
+  const canvasListeners = new Map<string, Set<(data: string) => void>>()
+  const canvasGone = new Map<string, Set<(reason: string) => void>>()
+  /** Canvas tabs the running helper holds; they die with it. */
+  const liveCanvases = new Set<string>()
   let helper: HostProcess | null = null
   let keyboard: string | null = null
   let focusPoll: ReturnType<typeof setInterval> | null = null
@@ -103,6 +123,9 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
         else log.info('browser-console', line)
         return
       }
+      case 'canvasMessage':
+        for (const callback of canvasListeners.get(event.id) ?? []) callback(event.data)
+        return
       case 'keyboard':
         keyboard = event.owner
         log.info(SOURCE, `keyboard -> ${keyboard === null ? 'app' : `tab ${keyboard}`}`)
@@ -138,6 +161,11 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
         if (helper === started) helper = null
         keyboard = null
         stopFocusPoll()
+        const lost = [...liveCanvases]
+        liveCanvases.clear()
+        for (const tabId of lost) {
+          for (const callback of canvasGone.get(tabId) ?? []) callback(`webview host ${detail}`)
+        }
       }
     })
     log.info(SOURCE, `started webview host ${started.pid ?? '?'} (${options.binary})`)
@@ -170,6 +198,7 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
     show: (tabId) => tabRequest({ op: 'show', id: tabId }),
     hide: (tabId) => tabRequest({ op: 'hide', id: tabId }),
     async destroy(tabId) {
+      liveCanvases.delete(tabId)
       const result = await tabRequest({ op: 'destroy', id: tabId })
       if (result.success) log.info(SOURCE, `destroyed tab ${tabId}`)
       return result
@@ -178,6 +207,22 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
     goForward: (tabId) => tabRequest({ op: 'forward', id: tabId }),
     reload: (tabId) => tabRequest({ op: 'reload', id: tabId }),
     openDevtools: (tabId) => tabRequest({ op: 'devtools', id: tabId }),
+    async createCanvas(tabId, url, bounds) {
+      const result = await request({ op: 'createCanvas', id: tabId, url, bounds })
+      if (!result.ok) {
+        log.error(SOURCE, `create canvas ${tabId} failed: ${result.error}`)
+        return { success: false, error: result.error, code: 'WEBVIEW_HOST' }
+      }
+      log.info(SOURCE, `created canvas ${tabId}`)
+      liveCanvases.add(tabId)
+      return { success: true, data: undefined }
+    },
+    postToCanvas: (tabId, data) => tabRequest({ op: 'post', id: tabId, data }),
+    onCanvasMessage: (tabId, callback) => listenFor(canvasListeners, tabId, callback),
+    onCanvasGone: (tabId, callback) => listenFor(canvasGone, tabId, callback),
+    releaseKeyboard(tabId) {
+      if (keyboard === tabId) void request({ op: 'blur' })
+    },
     injectAgentation: async () => ({
       success: false,
       error: 'Agentation injection requires Tauri desktop',
@@ -189,10 +234,12 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
     keyboardOwner: () => keyboard,
     helperPid: () => (helper?.alive ? helper.pid : undefined),
     shutdown() {
+      liveCanvases.clear()
       stopFocusPoll()
       helper?.quit()
     },
     kill() {
+      liveCanvases.clear()
       helper?.kill()
     }
   }

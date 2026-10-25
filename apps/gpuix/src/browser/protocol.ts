@@ -16,6 +16,10 @@ type TabOp = 'show' | 'hide' | 'back' | 'forward' | 'reload' | 'devtools' | 'des
 /** A command without its `req`; the process wrapper numbers it. */
 export type HostRequest =
   | { op: 'create'; id: string; url: string; bounds: Bounds }
+  /** A canvas tab: the helper's relay page frames `url` and passes messages both ways. */
+  | { op: 'createCanvas'; id: string; url: string; bounds: Bounds }
+  /** Deliver one message (JSON text) to a canvas tab's framed editor. */
+  | { op: 'post'; id: string; data: string }
   | { op: 'bounds'; id: string; bounds: Bounds }
   | { op: 'navigate'; id: string; url: string }
   | { op: TabOp; id: string }
@@ -32,6 +36,8 @@ export type HostEvent =
   | { ev: 'loaded'; id: string; url: string }
   | { ev: 'title'; id: string; title: string }
   | { ev: 'console'; id: string; level: string; text: string }
+  /** A message a canvas tab's editor posted to its parent, as JSON text. */
+  | { ev: 'canvasMessage'; id: string; data: string }
   /** The tab holding the keyboard; `null` means the app window. */
   | { ev: 'keyboard'; owner: string | null }
   | { ev: 'fatal'; error: string }
@@ -80,6 +86,10 @@ export function parseEvent(line: string): HostEvent | null {
     case 'console':
       return str(o, 'id') && str(o, 'level') && str(o, 'text')
         ? { ev: 'console', id: o.id as string, level: o.level as string, text: o.text as string }
+        : null
+    case 'canvasMessage':
+      return str(o, 'id') && str(o, 'data')
+        ? { ev: 'canvasMessage', id: o.id as string, data: o.data as string }
         : null
     case 'keyboard':
       return o.owner === null || str(o, 'owner')

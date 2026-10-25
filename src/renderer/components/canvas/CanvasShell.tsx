@@ -14,9 +14,10 @@
  * `postMessage` channel, both of which a sandbox would cut.
  */
 
-import { type CSSProperties, useEffect, useRef, useState } from 'react'
+import { type CSSProperties, useEffect, useRef } from 'react'
 import { buildCanvasEmbedUrl, canvasOriginOf, createCanvasBridge } from '@/lib/canvas-bridge'
 import { type CanvasMount, useCanvasStore } from '@/stores/canvas-store'
+import { useSlotRect } from './use-slot-rect'
 
 interface CanvasShellProps {
   projectId: string
@@ -33,49 +34,6 @@ export const OFFSCREEN_FRAME_STYLE: CSSProperties = {
   top: '0px',
   width: '1px',
   height: '1px'
-}
-
-interface SlotRect {
-  left: number
-  top: number
-  width: number
-  height: number
-}
-
-function sameRect(a: SlotRect | null, b: SlotRect): boolean {
-  return (
-    a !== null &&
-    a.left === b.left &&
-    a.top === b.top &&
-    a.width === b.width &&
-    a.height === b.height
-  )
-}
-
-/** The slot's viewport rectangle, followed every frame while there is a
- * slot: pane resizes, splits and sidebar moves all shift it. */
-function useSlotRect(slot: HTMLElement | null): SlotRect | null {
-  const [rect, setRect] = useState<SlotRect | null>(null)
-  useEffect(() => {
-    if (!slot) {
-      setRect(null)
-      return
-    }
-    let frame = 0
-    let last: SlotRect | null = null
-    const follow = (): void => {
-      const box = slot.getBoundingClientRect()
-      const next = { left: box.left, top: box.top, width: box.width, height: box.height }
-      if (!sameRect(last, next)) {
-        last = next
-        setRect(next)
-      }
-      frame = requestAnimationFrame(follow)
-    }
-    follow()
-    return () => cancelAnimationFrame(frame)
-  }, [slot])
-  return slot ? rect : null
 }
 
 export function CanvasShell({
