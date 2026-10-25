@@ -23,6 +23,7 @@
     "src/native-patches.d.ts",
     "src/terminal",
     "tools/terminal",
+    "tools/native",
     "src/overrides/components/terminal",
     "src/overrides/hooks/use-terminal-clipboard.ts",
     "../../src/renderer/vite-env.d.ts"
