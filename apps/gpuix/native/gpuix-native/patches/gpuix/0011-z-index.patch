@@ -1,0 +1,556 @@
+diff --git a/packages/native/src/custom_elements/anchored.rs b/packages/native/src/custom_elements/anchored.rs
+index fc8922d..c335d0c 100644
+--- a/packages/native/src/custom_elements/anchored.rs
++++ b/packages/native/src/custom_elements/anchored.rs
+@@ -292,6 +292,7 @@ impl CustomElement for AnchoredElement {
+     ) -> gpui::AnyElement {
+         use gpui::prelude::*;
+ 
++        let ctx_layer = ctx.layer;
+         // The overlay, not the trigger, is what a user clicks, so the recorded
+         // box has to be this content div after `anchored` placed it. Only gpui
+         // knows where that is, so it reports its own painted box instead of
+@@ -356,7 +357,7 @@ impl CustomElement for AnchoredElement {
+         let anchored = anchored.child(content);
+         let layer = if self.deferred {
+             gpui::deferred(anchored)
+-                .with_priority(self.priority)
++                .with_priority(ctx_layer.unwrap_or(self.priority))
+                 .into_any_element()
+         } else {
+             anchored.into_any_element()
+diff --git a/packages/native/src/custom_elements/mod.rs b/packages/native/src/custom_elements/mod.rs
+index 158269f..4abb606 100644
+--- a/packages/native/src/custom_elements/mod.rs
++++ b/packages/native/src/custom_elements/mod.rs
+@@ -57,6 +57,9 @@ pub struct CustomRenderContext<'a> {
+     pub highlight_set: Option<std::sync::Arc<crate::text::HighlightContext>>,
+     /// Retained custom props, including `role` and `aria-*`.
+     pub props: &'a HashMap<String, serde_json::Value>,
++    /// The priority this element paints at when it is a paint layer, floor
++    /// applied (`crate::layer::of`).
++    pub layer: Option<usize>,
+ }
+ 
+ impl CustomRenderContext<'_> {
+diff --git a/packages/native/src/layer.rs b/packages/native/src/layer.rs
+new file mode 100644
+index 0000000..b0cc1f6
+--- /dev/null
++++ b/packages/native/src/layer.rs
+@@ -0,0 +1,204 @@
++//! Paint layers: the deferred `anchored` element and the `zIndex` style.
++//!
++//! GPUI paints in tree order, then its deferred draws sorted by priority. A
++//! positive `zIndex` puts an element in that deferred pass, at priority
++//! `zIndex`, while its layout stays in the flow: the CSS stacking order of
++//! positioned siblings, without moving any element in the tree.
++//!
++//! Deferred draws are sorted over the whole window, so a layer nested in
++//! another never gets a lower priority than the one around it: it would paint
++//! under its own container. The floor is the enclosing layer's priority.
++//!
++//! The build (`renderer::build_element`), the hit test
++//! (`RetainedTree::elements_at`) and the automation tree all read the layer
++//! from `of`, so what is hit and reported is what was painted.
++
++use std::cell::RefCell;
++use std::rc::Rc;
++
++use crate::retained_tree::RetainedElement;
++use crate::style::StyleDesc;
++use gpui::{
++    AnyElement, App, Bounds, ContentMask, Element, GlobalElementId, InspectorElementId,
++    IntoElement, LayoutId, Pixels, Window,
++};
++
++/// `anchored`'s own defaults; see `custom_elements::anchored`.
++const ANCHORED_PRIORITY: usize = 1;
++
++/// The priority this element paints at when it is a layer, given the
++/// enclosing layer's priority. `None` for an element painted in tree order.
++pub(crate) fn of(element: &RetainedElement, floor: Option<usize>) -> Option<usize> {
++    let own = if element.element_type == "anchored" {
++        let props = element.custom_props();
++        let deferred = props
++            .get("deferred")
++            .and_then(|value| value.as_bool())
++            .unwrap_or(true);
++        if !deferred {
++            return None;
++        }
++        props
++            .get("priority")
++            .and_then(|value| value.as_u64())
++            .map_or(ANCHORED_PRIORITY, |value| value as usize)
++    } else if element.element_type == "div" || element.element_type == "text" {
++        z_index(element.style.as_deref())?
++    } else {
++        return None;
++    };
++    Some(own.max(floor.unwrap_or(0)))
++}
++
++fn z_index(style: Option<&StyleDesc>) -> Option<usize> {
++    let z = style?.z_index?;
++    (z > 0).then_some(z as usize)
++}
++
++/// Paint `child` in the deferred pass at `priority`, keeping its layout here
++/// and the clip of the elements around it.
++pub(crate) fn lift(child: AnyElement, priority: usize) -> AnyElement {
++    let mask = Rc::new(RefCell::new(None));
++    Lift {
++        child: Some(
++            Clipped {
++                child,
++                mask: mask.clone(),
++            }
++            .into_any_element(),
++        ),
++        mask,
++        priority,
++    }
++    .into_any_element()
++}
++
++/// In the tree: lays the child out, then hands it to the deferred pass.
++struct Lift {
++    child: Option<AnyElement>,
++    mask: Rc<RefCell<Option<ContentMask<Pixels>>>>,
++    priority: usize,
++}
++
++/// In the deferred pass: the child under the clip it had in the tree.
++/// gpui's deferred prepaint runs without the recorded clip (only the paint
++/// gets it), so hitboxes would otherwise reach past a scroll container.
++struct Clipped {
++    child: AnyElement,
++    mask: Rc<RefCell<Option<ContentMask<Pixels>>>>,
++}
++
++impl IntoElement for Lift {
++    type Element = Self;
++    fn into_element(self) -> Self {
++        self
++    }
++}
++
++impl IntoElement for Clipped {
++    type Element = Self;
++    fn into_element(self) -> Self {
++        self
++    }
++}
++
++impl Element for Lift {
++    type RequestLayoutState = ();
++    type PrepaintState = ();
++
++    fn id(&self) -> Option<gpui::ElementId> {
++        None
++    }
++
++    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
++        None
++    }
++
++    fn request_layout(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> (LayoutId, ()) {
++        let child = self.child.as_mut().expect("a lift is laid out once");
++        (child.request_layout(window, cx), ())
++    }
++
++    fn prepaint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        _: Bounds<Pixels>,
++        _: &mut (),
++        window: &mut Window,
++        _: &mut App,
++    ) {
++        let Some(child) = self.child.take() else { return };
++        let mask = window.content_mask();
++        *self.mask.borrow_mut() = Some(mask.clone());
++        let offset = window.element_offset();
++        window.defer_draw(child, offset, self.priority, Some(mask));
++    }
++
++    fn paint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        _: Bounds<Pixels>,
++        _: &mut (),
++        _: &mut (),
++        _: &mut Window,
++        _: &mut App,
++    ) {
++    }
++}
++
++impl Element for Clipped {
++    type RequestLayoutState = ();
++    type PrepaintState = ();
++
++    fn id(&self) -> Option<gpui::ElementId> {
++        None
++    }
++
++    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
++        None
++    }
++
++    fn request_layout(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> (LayoutId, ()) {
++        (self.child.request_layout(window, cx), ())
++    }
++
++    fn prepaint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        _: Bounds<Pixels>,
++        _: &mut (),
++        window: &mut Window,
++        cx: &mut App,
++    ) {
++        let mask = self.mask.borrow().clone();
++        window.with_content_mask(mask, |window| self.child.prepaint(window, cx));
++    }
++
++    fn paint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        _: Bounds<Pixels>,
++        _: &mut (),
++        _: &mut (),
++        window: &mut Window,
++        cx: &mut App,
++    ) {
++        self.child.paint(window, cx);
++    }
++}
+diff --git a/packages/native/src/lib.rs b/packages/native/src/lib.rs
+index 0c87534..f2ceefa 100644
+--- a/packages/native/src/lib.rs
++++ b/packages/native/src/lib.rs
+@@ -13,6 +13,7 @@ use napi_derive::napi;
+ 
+ mod accessibility;
+ mod backdrop;
++mod layer;
+ #[cfg(target_os = "macos")]
+ mod app_menu;
+ mod automation;
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index c594aec..ec19704 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -4509,6 +4509,8 @@ pub(crate) struct Inherited {
+     /// render returns, and on Windows and Linux the Node thread can edit text
+     /// in between, so a stale range would paint over the wrong glyphs.
+     pub highlight: Option<Arc<crate::text::HighlightContext>>,
++    /// Priority of the nearest enclosing paint layer (`crate::layer`).
++    pub layer: Option<usize>,
+ }
+ 
+ /// Opacity multiplier for every other focusable element while a control has
+@@ -4552,6 +4554,7 @@ impl Inherited {
+             selectable: true,
+             selection_wash: wash,
+             highlight: None,
++            layer: None,
+         }
+     }
+ 
+@@ -5433,6 +5436,10 @@ pub(crate) fn build_element(
+     // elements see the same cascade.
+     let parent_inherited = ctx.inherited.clone();
+     ctx.inherited = parent_inherited.clone().descend(style);
++    let layer = crate::layer::of(element, parent_inherited.layer);
++    if layer.is_some() {
++        ctx.inherited.layer = layer;
++    }
+ 
+     // A `highlight` here replaces any ancestor's: the nearest declaration wins,
+     // and `GroupList::collect` skips nested declarations so an ancestor never
+@@ -5461,7 +5468,11 @@ pub(crate) fn build_element(
+         "div" | "text" => {
+             ctx.custom_registry.destroy(id);
+             let built = build_host_container(element, style, ctx, window, cx);
+-            crate::backdrop::wrap(built, style)
++            let built = crate::backdrop::wrap(built, style);
++            match layer {
++                Some(priority) => crate::layer::lift(built, priority),
++                None => built,
++            }
+         }
+         "virtual-list" => {
+             ctx.custom_registry.destroy(id);
+@@ -5491,6 +5502,7 @@ pub(crate) fn build_element(
+                 selection_wash: inherited.selection_wash,
+                 highlight_set: inherited.highlight.clone(),
+                 props: element.custom_props(),
++                layer,
+             };
+             ctx.custom_registry
+                 .render(custom_type, element.custom_props(), render_ctx, window, cx)
+diff --git a/packages/native/src/retained_tree.rs b/packages/native/src/retained_tree.rs
+index ee95967..fd4f7fc 100644
+--- a/packages/native/src/retained_tree.rs
++++ b/packages/native/src/retained_tree.rs
+@@ -17,8 +17,8 @@ struct HitWalk<'a> {
+     x: f64,
+     y: f64,
+     painted_box: &'a dyn Fn(u64) -> Option<crate::automation::ElementBounds>,
+-    /// Deferred `anchored` layers met so far, each with its priority and hits.
+-    layers: Vec<(u64, Vec<u64>)>,
++    /// Paint layers met so far (`crate::layer`): priority, nesting round, hits.
++    layers: Vec<(usize, usize, Vec<u64>)>,
+ }
+ 
+ pub struct RetainedElement {
+@@ -623,23 +623,30 @@ impl RetainedTree {
+         };
+         let mut hits = Vec::new();
+         if let Some(root_id) = self.root_id {
+-            self.collect_hits(root_id, false, false, &mut walk, &mut hits);
++            self.collect_hits(root_id, false, false, None, 0, &mut walk, &mut hits);
+         }
+-        // Stable, so layers of one priority stay topmost first.
+-        walk.layers.sort_by(|a, b| b.0.cmp(&a.0));
+-        let mut ordered: Vec<u64> = walk.layers.into_iter().flat_map(|(_, layer)| layer).collect();
++        // gpui paints deferred draws by priority, then in the order they were
++        // registered: round by round (a layer inside a layer is registered
++        // while the outer one prepaints), tree order within a round. The walk
++        // meets layers last to first, so a stable sort keeps that reversed.
++        walk.layers.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
++        let mut ordered: Vec<u64> = walk.layers.into_iter().flat_map(|(_, _, layer)| layer).collect();
+         ordered.extend(hits);
+         ordered
+     }
+ 
+     /// `none` is the inherited `pointer-events: none`. `clipped` means an
+     /// ancestor's clip excludes the point, so only deferred layers below can
+-    /// still be hit.
++    /// still be hit. `floor` and `round` are the enclosing paint layer's
++    /// priority and how many layers enclose this element.
++    #[allow(clippy::too_many_arguments)]
+     fn collect_hits(
+         &self,
+         id: u64,
+         none: bool,
+         clipped: bool,
++        floor: Option<usize>,
++        round: usize,
+         walk: &mut HitWalk,
+         hits: &mut Vec<u64>,
+     ) {
+@@ -673,29 +680,24 @@ impl RetainedTree {
+             _ => none,
+         };
+ 
+-        if element.element_type == "anchored" {
+-            let deferred = element
+-                .custom_props()
+-                .get("deferred")
+-                .and_then(|value| value.as_bool())
+-                .unwrap_or(true);
+-            if deferred {
+-                let priority = element
+-                    .custom_props()
+-                    .get("priority")
+-                    .and_then(|value| value.as_u64())
+-                    .unwrap_or(1);
+-                let mut layer = Vec::new();
+-                for &child in element.children.iter().rev() {
+-                    self.collect_hits(child, none, false, walk, &mut layer);
+-                }
+-                walk.layers.push((priority, layer));
+-                return;
++        if let Some(priority) = crate::layer::of(element, floor) {
++            // An `anchored` layer paints outside the clip around it; a
++            // `zIndex` layer keeps it.
++            let anchored = element.element_type == "anchored";
++            let clipped = clipped && !anchored;
++            let mut layer = Vec::new();
++            for &child in element.children.iter().rev() {
++                self.collect_hits(child, none, clipped, Some(priority), round + 1, walk, &mut layer);
++            }
++            if !anchored && !clipped && !none && own_box.is_some_and(|bounds| inside(&bounds, true, true)) {
++                layer.push(id);
+             }
++            walk.layers.push((priority, round + 1, layer));
++            return;
+         }
+ 
+         for &child in element.children.iter().rev() {
+-            self.collect_hits(child, none, clipped, walk, hits);
++            self.collect_hits(child, none, clipped, floor, round, walk, hits);
+         }
+         if !clipped && !none && own_box.is_some_and(|bounds| inside(&bounds, true, true)) {
+             hits.push(id);
+@@ -708,7 +710,7 @@ impl RetainedTree {
+         include_details: bool,
+     ) -> serde_json::Value {
+         match self.root_id {
+-            Some(root_id) => element_to_json(root_id, self, bounds, include_details),
++            Some(root_id) => element_to_json(root_id, self, bounds, include_details, None),
+             None => serde_json::Value::Null,
+         }
+     }
+@@ -719,10 +721,12 @@ fn element_to_json(
+     tree: &RetainedTree,
+     bounds: &std::collections::HashMap<u64, crate::automation::ElementBounds>,
+     include_details: bool,
++    floor: Option<usize>,
+ ) -> serde_json::Value {
+     let Some(element) = tree.elements.get(&id) else {
+         return serde_json::Value::Null;
+     };
++    let layer = crate::layer::of(element, floor);
+ 
+     let mut obj = serde_json::Map::new();
+     obj.insert(
+@@ -745,6 +749,10 @@ fn element_to_json(
+         );
+     }
+ 
++    if let Some(priority) = layer {
++        obj.insert("layer".to_string(), serde_json::json!(priority));
++    }
++
+     if let Some(rect) = bounds.get(&id) {
+         obj.insert(
+             "bounds".to_string(),
+@@ -796,7 +804,7 @@ fn element_to_json(
+         let children: Vec<serde_json::Value> = element
+             .children
+             .iter()
+-            .map(|&cid| element_to_json(cid, tree, bounds, include_details))
++            .map(|&cid| element_to_json(cid, tree, bounds, include_details, layer.or(floor)))
+             .filter(|v| !v.is_null())
+             .collect();
+         if !children.is_empty() {
+@@ -1297,6 +1305,94 @@ mod tests {
+         assert_eq!(tree.elements_at(10.0, 10.0, &boxed(&boxes)), vec![5, 3, 1]);
+     }
+ 
++    fn z(value: i64) -> Arc<StyleDesc> {
++        Arc::new(StyleDesc {
++            z_index: Some(value),
++            ..Default::default()
++        })
++    }
++
++    /// The composer card (`relative z-10`) and the strip after it that
++    /// overlaps its bottom (`relative z-0 -mt-4`).
++    #[test]
++    fn elements_at_puts_a_z_index_sibling_above_a_later_one() {
++        let mut tree = RetainedTree::new();
++        for id in 1..=3 {
++            tree.create_element(id, "div".to_string());
++        }
++        tree.set_root(1);
++        tree.append_child(1, 2);
++        tree.append_child(1, 3);
++        let boxes = [
++            (1, (0.0, 0.0, 100.0, 100.0)),
++            (2, (0.0, 0.0, 100.0, 50.0)),
++            (3, (0.0, 40.0, 100.0, 50.0)),
++        ];
++        assert_eq!(tree.elements_at(10.0, 45.0, &boxed(&boxes)), vec![3, 2, 1]);
++        tree.set_style(2, z(10));
++        tree.set_style(3, z(0));
++        assert_eq!(tree.elements_at(10.0, 45.0, &boxed(&boxes)), vec![2, 3, 1]);
++    }
++
++    /// ConfirmDialog (`fixed z-50`, an anchored layer at 50) and the status
++    /// bar after it (`relative z-50`): equal priority, so tree order wins.
++    /// A `zIndex` layer keeps the clip of its scroller, unlike `anchored`.
++    #[test]
++    fn elements_at_orders_z_index_with_anchored_layers_and_keeps_the_clip() {
++        let mut tree = RetainedTree::new();
++        for (id, kind) in [(1, "div"), (2, "anchored"), (3, "div"), (4, "div"), (5, "div"), (6, "div")] {
++            tree.create_element(id, kind.to_string());
++        }
++        tree.set_root(1);
++        for (parent, child) in [(1, 2), (2, 3), (1, 4), (1, 5), (5, 6)] {
++            tree.append_child(parent, child);
++        }
++        tree.set_custom_prop(2, "priority".to_string(), serde_json::json!(50));
++        tree.set_style(4, z(50));
++        tree.set_style(
++            5,
++            Arc::new(StyleDesc {
++                overflow: Some("hidden".to_string()),
++                ..Default::default()
++            }),
++        );
++        tree.set_style(6, z(60));
++        let boxes = [
++            (1, (0.0, 0.0, 100.0, 100.0)),
++            (3, (0.0, 0.0, 100.0, 100.0)),
++            (4, (0.0, 90.0, 100.0, 10.0)),
++            (5, (0.0, 0.0, 10.0, 10.0)),
++            (6, (0.0, 0.0, 100.0, 100.0)),
++        ];
++        assert_eq!(tree.elements_at(50.0, 95.0, &boxed(&boxes)), vec![4, 3, 1]);
++        assert_eq!(tree.elements_at(5.0, 5.0, &boxed(&boxes)), vec![6, 3, 5, 1]);
++    }
++
++    /// A layer inside a layer never sorts under it: the outer priority is its
++    /// floor, and it paints in the later round.
++    #[test]
++    fn elements_at_keeps_a_nested_layer_above_its_container() {
++        let mut tree = RetainedTree::new();
++        for (id, kind) in [(1, "div"), (2, "anchored"), (3, "div"), (4, "div")] {
++            tree.create_element(id, kind.to_string());
++        }
++        tree.set_root(1);
++        for (parent, child) in [(1, 2), (2, 3), (3, 4)] {
++            tree.append_child(parent, child);
++        }
++        tree.set_custom_prop(2, "priority".to_string(), serde_json::json!(51));
++        tree.set_style(4, z(10));
++        let boxes = [
++            (1, (0.0, 0.0, 100.0, 100.0)),
++            (3, (0.0, 0.0, 100.0, 100.0)),
++            (4, (0.0, 0.0, 50.0, 50.0)),
++        ];
++        assert_eq!(tree.elements_at(10.0, 10.0, &boxed(&boxes)), vec![4, 3, 1]);
++        let json = tree.to_json_detail(&HashMap::new(), false);
++        assert_eq!(json["children"][0]["layer"], serde_json::json!(51));
++        assert_eq!(json["children"][0]["children"][0]["children"][0]["layer"], serde_json::json!(51));
++    }
++
+     #[test]
+     fn cold_event_and_prop_storage_is_released_when_empty() {
+         let mut tree = tree_with_child();
+diff --git a/packages/native/src/style.rs b/packages/native/src/style.rs
+index e44be8f..ee21853 100644
+--- a/packages/native/src/style.rs
++++ b/packages/native/src/style.rs
+@@ -207,6 +207,9 @@ pub struct StyleDesc {
+     /// CSS `backdrop-filter: blur(<px>)`: the Gaussian's standard deviation.
+     /// Blurs what is painted behind the element, inside its rounded box.
+     pub backdrop_blur: Option<f64>,
++    /// CSS `z-index`. A positive value paints the element, laid out in place,
++    /// in GPUI's deferred pass at that priority (`crate::layer`). Not inherited.
++    pub z_index: Option<i64>,
+ 
+     // Border
+     pub border_width: Option<f64>,

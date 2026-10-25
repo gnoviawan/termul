@@ -23,6 +23,7 @@ import { compatWarn } from './log'
 import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
 import { layoutListener } from './resize'
 import { SVG_CHILD_TAGS, svgElement } from './svg'
+import { fixedPriority } from './stacking'
 import { translation, type Translation, unreverse } from './translate'
 
 export type DomProps = Readonly<Record<string, unknown>> & {
@@ -299,7 +300,11 @@ export function buildElement(
     return wrapFillMinus(grown, tr.fillMinus, side, key)
   }
   if (tr.fixed) {
-    return jsx('anchored' as never, { fill: 'window', style: { backgroundColor: 'transparent' }, children: element }, key)
+    return jsx(
+      'anchored' as never,
+      { fill: 'window', priority: fixedPriority(tr.zIndex), style: { backgroundColor: 'transparent' }, children: element },
+      key
+    )
   }
   if (tr.autoMargin) return wrapAutoMargin(element, tr.autoMargin, key)
   return element

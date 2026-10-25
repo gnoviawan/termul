@@ -33,6 +33,7 @@ import {
   useState
 } from 'react'
 import { registerPortal } from '../../compat/dom-node'
+import { LAYER } from '../../compat/stacking'
 import { tw } from '../../style/tw'
 import { SANS_FAMILY } from '../../style/utilities'
 import { useWebviewOcclusion } from './occlusion'
@@ -249,7 +250,7 @@ export function Floating({
   alignOffset = 0,
   avoidCollisions = true,
   position,
-  priority = 1,
+  priority = LAYER.popover,
   onDismiss,
   focusContent,
   returnFocus = true,

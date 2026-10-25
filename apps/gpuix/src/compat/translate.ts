@@ -14,6 +14,7 @@ import { type CompiledStyle, createTw, type Tw } from '../style/tw'
 import { MONO_FAMILY } from '../style/utilities'
 import type { Condition } from '../style/variants'
 import { SCOPES, type ScopeName } from './scope'
+import { zIndexToken } from './stacking'
 
 export type HostType = 'div' | 'text' | 'svg' | 'img' | 'input' | 'textarea'
 
@@ -52,6 +53,12 @@ export interface Translation {
   readonly listMarker: 'disc' | 'decimal' | null
   readonly hidden: boolean
   readonly fixed: boolean
+  /**
+   * The `z-*` class's z-index, `null` for none or `z-auto`. In `base` as the
+   * `zIndex` style unless the element is `fixed`, whose `<anchored>` layer
+   * takes it as its priority instead (`stacking.ts`).
+   */
+  readonly zIndex: number | null
   readonly nowrap: boolean
   /** Paints a box (fill, border, padding, size): cannot merge into a parent's text run. */
   readonly paints: boolean
@@ -156,6 +163,7 @@ interface Lifted {
   fillMinus: number | null
   /** `left-1/4`-style offsets as percent strings, placed by `percentPlacement`. */
   insets: Record<string, string> | null
+  zIndex: number | null
 }
 
 const FRACTION_INSET = /^(top|right|bottom|left|inset|inset-x|inset-y)-(\d+)\/(\d+)$/
@@ -185,7 +193,8 @@ function lift(className: string): Lifted {
     svg: [],
     placement: null,
     fillMinus: null,
-    insets: null
+    insets: null,
+    zIndex: null
   }
   const placed = liftPlacement(className.split(/\s+/))
   lifted.placement = placed.placement
@@ -206,6 +215,11 @@ function lift(className: string): Lifted {
     const svg = svgToken(token)
     if (svg !== null) {
       lifted.svg.push(svg)
+      continue
+    }
+    const z = zIndexToken(token)
+    if (z !== undefined) {
+      lifted.zIndex = z
       continue
     }
     if (token === 'group' || token.startsWith('group/')) {
@@ -352,7 +366,9 @@ function translate(tw: Tw, tag: string, className: string): Translation {
   const ownLayout = tag === 'button' && compiled.base.display !== undefined && compiled.base.display !== 'none'
   const merged: StyleDesc = defaults && !ownLayout ? { ...defaults, ...compiled.base } : compiled.base
   const fixed = layoutFixes(merged, lifted.classes)
-  const base = lifted.insets ? { ...fixed, ...lifted.insets } : fixed
+  const placedBase = lifted.insets ? { ...fixed, ...lifted.insets } : fixed
+  const isFixed = placedBase.position === 'fixed'
+  const base = lifted.zIndex !== null && !isFixed ? { ...placedBase, zIndex: lifted.zIndex } : placedBase
   let ruleMode: RuleMode = 'static'
   for (const rule of compiled.rules) {
     if (rule.when.some(needsHost)) {
@@ -382,7 +398,8 @@ function translate(tw: Tw, tag: string, className: string): Translation {
     autoMargin: lifted.autoMargin,
     listMarker: lifted.listMarker,
     hidden: display === 'none',
-    fixed: base.position === 'fixed',
+    fixed: isFixed,
+    zIndex: lifted.zIndex,
     nowrap: base.whiteSpace === 'nowrap',
     paints: hasAny(compiled.base, PAINT_KEYS) || (defaults !== undefined && 'display' in defaults),
     hoverable: base.hover !== undefined || base.active !== undefined,

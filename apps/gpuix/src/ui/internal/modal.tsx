@@ -20,6 +20,7 @@ import { Box, type HostProps, Inherit, mergeRefs, useTw, wrapText } from './host
 import { useWebviewOcclusion } from './occlusion'
 import { bodyText, useControllableState, useFocusFirstTabbable } from './overlay'
 import { Slot } from './slot'
+import { LAYER } from '../../compat/stacking'
 
 interface ModalState {
   open: boolean
@@ -166,34 +167,38 @@ export const ModalContent = forwardRef<
     })
     return stop
   }
+  // GPUIX's portal is an `<anchored>` at priority 0; this layer lifts it to a
+  // dialog's (`stacking.ts`). It takes no pointer: the portal does.
   return (
-    <DialogPrimitive.Portal style={bodyText()}>
-      <DialogPrimitive.Backdrop
-        style={overlay}
-        onMouseDown={() => {
-          if (!dismissOnBackdrop) return
-          if (prevented(onPointerDownOutside) || prevented(onInteractOutside)) return
-          modal.setOpen(false)
-        }}
-      />
-      <DialogPrimitive.Popup
-        ref={mergeRefs(ref, popup)}
-        testId={props['data-testid'] as string | undefined}
-        aria-label={props['aria-label'] as string | undefined}
-        role={props.role ?? 'dialog'}
-        style={merged}
-        finalFocus={() => modal.trigger.current ?? true}
-        onKeyDown={(event) => {
-          if (event.key === 'escape' && prevented(onEscapeKeyDown)) event.preventDefault()
-        }}
-      >
-        <Inherit color={merged.color as string | undefined} svgClasses={svgClasses}>
-          {/* The portal centres the popup, so its height is always its content's. */}
-          {wrapText(merged.height === undefined ? contentBasis(children) : children)}
-          {after}
-        </Inherit>
-      </DialogPrimitive.Popup>
-    </DialogPrimitive.Portal>
+    <anchored fill="window" priority={LAYER.dialog} occlude={false} style={{ backgroundColor: 'transparent' }}>
+      <DialogPrimitive.Portal style={bodyText()}>
+        <DialogPrimitive.Backdrop
+          style={overlay}
+          onMouseDown={() => {
+            if (!dismissOnBackdrop) return
+            if (prevented(onPointerDownOutside) || prevented(onInteractOutside)) return
+            modal.setOpen(false)
+          }}
+        />
+        <DialogPrimitive.Popup
+          ref={mergeRefs(ref, popup)}
+          testId={props['data-testid'] as string | undefined}
+          aria-label={props['aria-label'] as string | undefined}
+          role={props.role ?? 'dialog'}
+          style={merged}
+          finalFocus={() => modal.trigger.current ?? true}
+          onKeyDown={(event) => {
+            if (event.key === 'escape' && prevented(onEscapeKeyDown)) event.preventDefault()
+          }}
+        >
+          <Inherit color={merged.color as string | undefined} svgClasses={svgClasses}>
+            {/* The portal centres the popup, so its height is always its content's. */}
+            {wrapText(merged.height === undefined ? contentBasis(children) : children)}
+            {after}
+          </Inherit>
+        </DialogPrimitive.Popup>
+      </DialogPrimitive.Portal>
+    </anchored>
   )
 })
 

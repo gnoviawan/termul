@@ -196,30 +196,64 @@ function inside(b: Bounds, p: Point): boolean {
   return p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height
 }
 
+/** A paint layer met by `deepest`: what was hit in it, and where it paints. */
+interface LayerHit {
+  priority: number
+  round: number
+  hit: number | null
+}
+
 /**
  * The DOM's hit test over the last painted tree: the last-painted, deepest
  * element whose box holds the point, inside every ancestor's box, skipping
  * `pointer-events: none` as CSS inherits it. GPUIX's own `getElementsAt`
  * cannot answer this: compat's click-through boxes carry `pointer-events:
  * none`, which hides their whole subtree from it.
+ *
+ * Paint layers (`layer` in the tree: `<anchored>` and `zIndex`, see
+ * `stacking.ts`) paint after the tree, by priority, then round by round
+ * (a layer inside a layer later), then in tree order, so they are hit first
+ * in that order.
  */
-function deepest(node: TreeJson, p: Point, inheritedNone: boolean): number | null {
+function deepest(node: TreeJson, p: Point, inheritedNone: boolean, round: number, layers: LayerHit[]): number | null {
   if (node.bounds && !inside(node.bounds, p)) return null
   const own = trackedInstance(node.id)?.props.__dom?.pointerEvents
   const none = own === undefined ? inheritedNone : own === 'none'
+  if (node.layer !== undefined) {
+    const entry: LayerHit = { priority: node.layer, round: round + 1, hit: null }
+    entry.hit = ownHit(node, p, none, round + 1, layers)
+    layers.push(entry)
+    return null
+  }
+  return ownHit(node, p, none, round, layers)
+}
+
+function ownHit(node: TreeJson, p: Point, none: boolean, round: number, layers: LayerHit[]): number | null {
   const kids = node.children ?? []
+  let hit: number | null = null
+  // Every child under the point is walked, for the layers a hit above would hide.
   for (let i = kids.length - 1; i >= 0; i--) {
     const kid = kids[i]
-    const hit = kid ? deepest(kid, p, none) : null
-    if (hit !== null) return hit
+    const kidHit = kid ? deepest(kid, p, none, round, layers) : null
+    hit ??= kidHit
   }
-  if (!node.bounds || none || transparent.has(node.id)) return null
+  if (hit !== null || !node.bounds || none || transparent.has(node.id)) return hit
   return node.id
+}
+
+/** `deepest` over a whole tree, layers first. */
+export function hitTree(tree: TreeJson, point: Point): number | null {
+  const layers: LayerHit[] = []
+  const main = deepest(tree, point, false, 0, layers)
+  // Met last to first, so a stable sort keeps tree order reversed within a round.
+  layers.sort((a, b) => b.priority - a.priority || b.round - a.round)
+  for (const layer of layers) if (layer.hit !== null) return layer.hit
+  return main
 }
 
 export function hitTest(point: Point): number | null {
   const tree = treeIndex().tree
-  return tree ? deepest(tree, point, false) : null
+  return tree ? hitTree(tree, point) : null
 }
 
 function pointOf(payload: EventPayload): Point {
