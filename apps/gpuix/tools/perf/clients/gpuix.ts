@@ -467,6 +467,7 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
       const nodes = terminalNodes(await tree())
       const node = nodes.find((t) => t.testId === terminalId)
       if (!node) {
+        await debugSnapshot(`terminal-${terminalId.slice(-6)}`, nodes.length)
         throw new Error(
           `terminal ${terminalId} is not in the tree; present: ${nodes.map((t) => t.testId).join(', ') || 'none'}`
         )
