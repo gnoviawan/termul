@@ -23,6 +23,7 @@ import {
 import { type CompatElement, trackedInstance } from '../dom-node'
 import { domPropsOf } from '../create'
 import { compatWarn } from '../log'
+import { LAYER } from '../stacking'
 
 // biome-ignore lint/suspicious/noExplicitAny: a Radix stand-in passes arbitrary DOM props through
 type AnyProps = { children?: ReactNode; [prop: string]: any }
@@ -183,6 +184,7 @@ export function makeContent(part: string) {
         gap={sideOffset as number}
         fit="switch"
         deferred
+        priority={LAYER.popover}
         style={{ backgroundColor: 'transparent' }}
         onMouseDownOutside={() => ctx.setOpen(false)}
       >
@@ -249,7 +251,7 @@ export const DialogContent = forwardRef<HTMLDivElement, AnyProps>(function Dialo
   }, [ctx.open, onOpenAutoFocus])
   if (!ctx.open && !forceMount) return null
   return (
-    <anchored fill="window" style={{ backgroundColor: 'transparent' }}>
+    <anchored fill="window" priority={LAYER.dialog} style={{ backgroundColor: 'transparent' }}>
       <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div role="dialog" data-state="open" {...props} ref={composeRefs(ref, contentRef)}>
           {children}
@@ -263,7 +265,7 @@ export const DialogOverlay = forwardRef<HTMLDivElement, AnyProps>(function Dialo
   const ctx = useOverlay('Dialog.Overlay')
   if (!ctx.open && !forceMount) return null
   return (
-    <anchored fill="window" style={{ backgroundColor: 'transparent' }}>
+    <anchored fill="window" priority={LAYER.dialog} style={{ backgroundColor: 'transparent' }}>
       <div data-state="open" {...props} ref={ref} />
     </anchored>
   )

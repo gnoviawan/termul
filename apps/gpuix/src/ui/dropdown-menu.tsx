@@ -20,6 +20,7 @@ import {
   MenuSubTriggerBase,
   useRadio
 } from './internal/menu-parts'
+import { LAYER } from '../compat/stacking'
 import { useOverlay } from './internal/overlay'
 import { TriggerBase, type TriggerProps } from './internal/trigger'
 import {
@@ -92,7 +93,7 @@ const DropdownMenuSubContent = forwardRef<PublicInstance, MenuContentProps>(
       side="right"
       align="start"
       sub
-      priority={3}
+      priority={LAYER.submenu}
       {...props}
       className={cn(MENU_CONTENT_CLASS, 'shadow-lg', MENU_MOTION_CLASS, className)}
     />

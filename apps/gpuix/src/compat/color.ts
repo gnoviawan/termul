@@ -11,3 +11,10 @@ export const ColorContext = createContext<string | undefined>(undefined)
 
 /** `[&_svg]:…` classes of an ancestor: they style every icon below it, as the descendant selector does. */
 export const SvgClassContext = createContext<string | undefined>(undefined)
+
+/**
+ * Degrees an ancestor turns its content (`rotate-*`, a motion `rotate`).
+ * GPUIX has no transforms; an icon below bakes the turn into its markup,
+ * about its centre, which is where a CSS rotation of the icon's box turns it.
+ */
+export const RotateContext = createContext(0)

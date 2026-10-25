@@ -16,6 +16,13 @@ declare module '@gpuix/native/host' {
      * inside its rounded box. Not inherited.
      */
     backdropBlur?: number
+    /**
+     * CSS `z-index` (patch gpuix/0011-z-index). A positive value paints the
+     * element, laid out in place and under the clip around it, in GPUI's
+     * deferred pass at that priority, ordered with `<anchored>` layers. A layer
+     * inside a layer never sorts under the enclosing one. Not inherited.
+     */
+    zIndex?: number
   }
   interface GpuixTheme {
     /** Markdown link text (patch 0002-markdown-theme). Unset: the text colour. */

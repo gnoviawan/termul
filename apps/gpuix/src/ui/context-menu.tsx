@@ -21,6 +21,7 @@ import {
   MenuSubTriggerBase,
   useRadio
 } from './internal/menu-parts'
+import { LAYER } from '../compat/stacking'
 import { useOverlay } from './internal/overlay'
 import { Slot } from './internal/slot'
 import { useTriggerRef } from './internal/trigger'
@@ -98,7 +99,7 @@ const ContextMenuSubContent = forwardRef<PublicInstance, MenuContentProps>(
       side="right"
       align="start"
       sub
-      priority={3}
+      priority={LAYER.submenu}
       {...props}
       className={cn(MENU_CONTENT_CLASS, MENU_MOTION_CLASS, MENU_REDUCED_MOTION_CLASS, className)}
     />

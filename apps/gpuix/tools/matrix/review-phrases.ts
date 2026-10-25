@@ -10,7 +10,7 @@ export const TEXTAREA_LINE =
 export const BLUR =
   'The scrim dims and blurs the page behind it as on the web (N2 backdrop blur, native patches zed/0003 and gpuix/0005).'
 export const CONFIRM_Z =
-  'The web paints the workspace status bar sharp above the confirm scrim: ConfirmDialog is an inline `fixed z-50` overlay and StatusBar a later `relative z-50` sibling, so DOM order puts the bar on top. GPUIX puts the fixed overlay above everything, so the bar is dimmed and blurred with the rest. G7 traced it: ConfirmDialog is not a ui/dialog; compat turns its `fixed` motion.div into an `<anchored fill="window">` layer, which GPUI paints after the whole tree, and z-index is not translated.'
+  "The workspace status bar stays sharp above the confirm scrim, as on the web, where ConfirmDialog is an inline `fixed z-50` overlay and StatusBar a later `relative z-50` sibling (G9: compat gives the fixed overlay its z-index as its `<anchored>` priority, and native patch gpuix/0011 paints the `relative z-50` bar in the same deferred pass, after it in tree order; status-bar text 75 against the web's 72, dimmed to 11 before)."
 export const PROSE =
   "Links paint in medium primary with their underline, inline code sits in the smaller chip with its padding, and italics are real (N1 and N2 native patches). Task-list items draw Chromium's disabled checkbox at the web's place (G7). The paragraph holding inline code breaks at the same words as the web (G8): its lines end at 1210, 1190 and 743 px against the web's 1198, 1175 and 739 px, so GPUIX runs are about 1 % wider. `text-wrap: pretty` is not a cause: `tools/chat/wrap-probe.ts` lays every transcript paragraph out both ways and none breaks differently."
 export const RUN_ORDER =
@@ -34,6 +34,6 @@ export const TOAST =
 export const COMPOSER_FOCUS =
   "The composer shows its focus border and inset ring while it holds the caret, as on the web (I4: its native textarea and key-capture div listen for focus, so the wrapper's `focus-within:` sees it; top edge 35 and 57 against the web's 36 and 58). At rest on the dashboard neither client focuses it: the web's mount focus finds the editor read-only while the agent loads (`document.activeElement` stays `BODY`), and GPUIX skips mount focus for a composer that mounts read-only."
 export const COMPOSER_Z =
-  "The workspace strip under the composer paints over the bottom 16 px of the card. The web stacks the card (`relative z-10`) above the strip that follows it (`relative z-0 -mt-4`); compat does not translate z-index, so DOM order wins. The strip's `bg-card/60` dims the lower 7 px of the send button and covers the card's bottom border (bottom edge 32 and 23 against the web's 58 and 36)."
+  "The composer card paints over the top of the workspace strip that follows it, as on the web (G9: the card's `relative z-10` paints in GPUI's deferred pass at priority 10 through native patch gpuix/0011, laid out in place; the card's bottom border is 28 in both, and the send button is undimmed, 30 against the web's 30, 22 before)."
 export const COMPOSER_PICK =
   'After the switch the beta composer shows Chat Scenario Agent in both. GPUIX gets there later: the agent chip appeared 967 ms (rail) and 586 ms (palette) after the switch in GPUIX and within 82 ms on the web (G6 run; the step now waits for it, so the frames match).'

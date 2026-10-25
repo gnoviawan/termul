@@ -41,6 +41,8 @@ export interface TreeJson {
   id: number
   type: string
   bounds?: Bounds
+  /** The paint priority of a layer (`<anchored>`, `zIndex`), patch gpuix/0011. */
+  layer?: number
   children?: (TreeJson | null)[]
 }
 

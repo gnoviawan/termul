@@ -383,12 +383,18 @@ export interface GpuixDriveOptions {
   /** The client's X display and the folder `choose` paths are relative to. */
   display?: string
   filesDir?: string
+  /**
+   * The window's origin when the run keeps it active. A window manager hands
+   * the X focus back to the window a dialog closes over; Xvfb runs none, so
+   * `choose` does it.
+   */
+  activeAt?: Point
 }
 
 export function gpuixDriver(
   app: GpuixApp,
   points: Map<string, Point>,
-  { x11, display, filesDir = '' }: GpuixDriveOptions = {}
+  { x11, display, filesDir = '', activeAt }: GpuixDriveOptions = {}
 ): Driver {
   const resolve = async (
     target: Target,
@@ -485,6 +491,11 @@ export function gpuixDriver(
             log.via = via
             await app.call('click', { ...point })
             await answerFileChooser(display, 'Open File', path.join(filesDir, action.file))
+            if (activeAt) {
+              // After the portal has answered: focusing the window while the chooser unmaps loses the pick.
+              await Bun.sleep(1000)
+              await activateWindow(display, activeAt)
+            }
             break
           }
         }

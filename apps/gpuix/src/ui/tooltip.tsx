@@ -14,6 +14,7 @@ import {
   useRef
 } from 'react'
 import { cn } from '@/lib/utils'
+import { LAYER } from '../compat/stacking'
 import { Box, type HostProps } from './internal/host'
 import {
   type Align,
@@ -221,7 +222,7 @@ const TooltipContent = forwardRef<PublicInstance, TooltipContentProps>(function 
       sideOffset={sideOffset}
       alignOffset={alignOffset}
       avoidCollisions={avoidCollisions}
-      priority={2}
+      priority={LAYER.tooltip}
       returnFocus={false}
       occludes={false}
       onDismiss={timing.close}

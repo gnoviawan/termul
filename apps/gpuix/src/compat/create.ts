@@ -14,7 +14,7 @@ import { applyRules } from '../style/tw'
 import type { TwState } from '../style/variants'
 import { checkboxElement } from './checkbox'
 import { childInfo, contentBasis, divideChildren, layoutChildren, wrapAutoMargin } from './children'
-import { ColorContext, SvgClassContext } from './color'
+import { ColorContext, RotateContext, SvgClassContext } from './color'
 import { ScopeContext, withScopedClasses } from './scope'
 import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
 import { convertDomStyle } from './dom-style'
@@ -23,6 +23,7 @@ import { compatWarn } from './log'
 import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
 import { layoutListener } from './resize'
 import { SVG_CHILD_TAGS, svgElement } from './svg'
+import { fixedPriority } from './stacking'
 import { translation, type Translation, unreverse } from './translate'
 
 export type DomProps = Readonly<Record<string, unknown>> & {
@@ -239,7 +240,7 @@ export function buildElement(
 
   let element: ReactElement
   if (tr.type === 'svg') {
-    element = svgElement(props, style, native, key)
+    element = svgElement(props, style, native, key, tr.rotate)
   } else if (tr.type === 'img') {
     native.src = props.src
     element = jsx('img', native, key)
@@ -276,6 +277,10 @@ export function buildElement(
       kids = (laid.isStatic && !wrapped ? jsxs : jsx)(SvgClassContext.Provider, { value: tr.svgClasses, children: kids })
       wrapped = true
     }
+    if (nested && tr.rotate !== null) {
+      kids = (laid.isStatic && !wrapped ? jsxs : jsx)(RotateContext.Provider, { value: tr.rotate, children: kids })
+      wrapped = true
+    }
     if (nested && tr.scope) {
       kids = (laid.isStatic && !wrapped ? jsxs : jsx)(ScopeContext.Provider, { value: tr.scope, children: kids })
       wrapped = true
@@ -299,7 +304,11 @@ export function buildElement(
     return wrapFillMinus(grown, tr.fillMinus, side, key)
   }
   if (tr.fixed) {
-    return jsx('anchored' as never, { fill: 'window', style: { backgroundColor: 'transparent' }, children: element }, key)
+    return jsx(
+      'anchored' as never,
+      { fill: 'window', priority: fixedPriority(tr.zIndex), style: { backgroundColor: 'transparent' }, children: element },
+      key
+    )
   }
   if (tr.autoMargin) return wrapAutoMargin(element, tr.autoMargin, key)
   return element

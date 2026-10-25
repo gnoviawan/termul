@@ -12,6 +12,7 @@ import { bubbleNativeFocus, noteWindowKey, windowKeyEvent } from './events'
 import { parkHiddenPanes } from './park'
 import { setOverlayLayer } from './react-dom'
 import { compatThemeId, compatTw, subscribeCompatTheme } from './translate'
+import { LAYER } from './stacking'
 import { syncViewport } from './viewport'
 import { sentinelPress } from './window-press'
 
@@ -21,7 +22,9 @@ const OVERLAY = {
   right: 0,
   bottom: 0,
   left: 0,
-  pointerEvents: 'none'
+  pointerEvents: 'none',
+  // `document.body`'s portals paint over the page's own z-50 layers, as they do on the web.
+  zIndex: LAYER.dialog
 } as const
 
 /** Sees every press in the window for `document`/`window` listeners (`window-press.ts`). */

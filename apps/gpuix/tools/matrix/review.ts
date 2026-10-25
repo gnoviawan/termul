@@ -64,15 +64,12 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'rail.project-remove': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Delete from the context menu asks for confirmation and removes delta in both.',
       BLUR,
       CONFIRM_Z
-    ],
-    cause: 'compat translator gap',
-    unit: 'confirm dialog stacking (unassigned)',
-    impact: 1
+    ]
   },
   'rail.project-colour': {
     status: 'ported',
@@ -217,11 +214,8 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Unstaging app.ts moves it to Changes in both.', TEXTAREA_LINE]
   },
   'git.discard': {
-    status: 'partial',
-    differences: ['The confirm dialog matches.', BLUR, CONFIRM_Z],
-    cause: 'compat translator gap',
-    unit: 'confirm dialog stacking (unassigned)',
-    impact: 1
+    status: 'ported',
+    differences: ['The confirm dialog matches.', BLUR, CONFIRM_Z]
   },
   'git.commit': {
     status: 'ported',
@@ -309,33 +303,25 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'composer.mention': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Both show "No files or folders match" for a bare @ on this server, so the file list itself is not compared here (tools/composer/e2e.ts covers it).',
       COMPOSER_FOCUS,
       COMPOSER_Z
-    ],
-    cause: 'compat translator gap',
-    unit: 'z-index between in-flow siblings (unassigned)',
-    impact: 1
+    ]
   },
   'composer.slash': {
-    status: 'partial',
-    differences: ['The Skills menu matches row for row.', COMPOSER_FOCUS, COMPOSER_Z],
-    cause: 'compat translator gap',
-    unit: 'z-index between in-flow siblings (unassigned)',
-    impact: 1
+    status: 'ported',
+    differences: ['The Skills menu matches row for row.', COMPOSER_FOCUS, COMPOSER_Z]
   },
   'composer.attach': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Attach files opens the OS file chooser in both, and the picked matrix-attach.md shows as the same file chip above the prompt (G7: the GPUIX desktop host answers `dialogApi` and the composer picker with GPUI\'s portal dialog; the matrix drives the real GTK chooser with X key events, and the web answers Playwright\'s file chooser). The "Failed to open file picker" toast is gone.',
-      'After the pick the web composer shows its focus border (top edge 36 and 58) and GPUIX the resting one (28). The Attach files button sits inside the card, so the web card likely keeps `focus-within:` through the click; GPUIX does not hold focus in the card once the portal dialog closes. Not traced further (I4).',
+      "After the pick both composers show the focus border (top edge 37 and 59 against the web's 37 and 58). G9 traced the resting border of earlier runs to the harness: GPUIX restores focus when its window gets the X input focus back (native patch gpuix/0006), which a window manager does when a dialog closes and Xvfb, which runs none, never did; the matrix now hands the focus back after answering the chooser.",
+      TITLE_TIP,
       COMPOSER_Z
-    ],
-    cause: 'compat translator gap',
-    unit: 'focus after the native file dialog (unassigned)',
-    impact: 1
+    ]
   },
   'terminal.open': {
     status: 'ported',
@@ -397,11 +383,11 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'The pinned Plan panel and the inline plan card show the same three entries, Medium chips, the struck-through finished entry and the 1/3 count, and the short transcript starts at the top in both.',
-      'The card frames differ. The web card is `bg-card/30` with a `ring-1 ring-border/50` hairline and a divider under its header; GPUIX fills it lighter, with no ring and no divider, and its collapse chevron points down because GPUIX draws no `rotate-180`.',
+      'The card frames differ. The web card is `bg-card/30` with a `ring-1 ring-border/50` hairline and a divider under its header; GPUIX fills it lighter, with no ring and no divider. The collapse chevron points up in both (G9: compat lifts `rotate-180` and the icon bakes the turn into its SVG).',
       RUN_ORDER
     ],
     cause: 'compat translator gap',
-    unit: 'plan card ring and rotate (unassigned)',
+    unit: 'plan card ring (unassigned)',
     impact: 1
   },
   'chat.permission': {
@@ -413,16 +399,13 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'chat.queue': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'The matrix hold bubble, the Working row with "Holding this turn open for the queue." and its block caret, the 1 Queued panel with queued follow-up, and the stop button match. G7 traced the empty transcript of 3 of 3 earlier runs: virtual-list rows were laid out at their fit width, and a row whose only text is a <markdown> (the live narration under Working…) took the markdown\'s 0 max-content width, wrapped each character onto its own line (a 76 by 809 px row) and pushed the other rows out of view. Rows now span the list.',
-      'The Working chevron points right in GPUIX while the web turns it down for the open group: `TurnActivityTrigger` rotates it with a motion `rotate`, which GPUIX does not paint.',
+      'The Working chevron turns down for the open group in both (G9: the motion shim passes `animate.rotate` to the icons below, which bake the turn into their SVG about its centre).',
       'The narration check fails only because natively painted markdown text is not in the automation tree.',
       RUN_ORDER
-    ],
-    cause: 'compat translator gap',
-    unit: 'plan card ring and rotate (unassigned)',
-    impact: 1
+    ]
   },
   'terminal.vim-replies': {
     status: 'ported',

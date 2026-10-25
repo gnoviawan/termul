@@ -8,6 +8,8 @@
 import type { PublicInstance, StyleDesc } from '@gpuix/react'
 import { forwardRef, type Ref, useContext } from 'react'
 import { wrapAutoMargin } from '../compat/children'
+import { RotateContext } from '../compat/color'
+import { rotateSource } from '../compat/svg'
 import { translation } from '../compat/translate'
 import { tw } from '../style/tw'
 import { CurrentColorContext, SvgClassContext } from '../ui/internal/host'
@@ -124,10 +126,11 @@ export const HugeiconsIcon = forwardRef<PublicInstance, HugeiconsIconProps>(func
   const resolved = useIconStyle(size, className, primaryColor ?? color, style)
   const descendant = useContext(SvgClassContext)
   const filled = FILL_CURRENT.test(className ?? '') || FILL_CURRENT.test(descendant ?? '')
+  const turn = useContext(RotateContext) + ((className ? translation('svg', className).rotate : null) ?? 0)
   const svg = (
     <svg
       ref={ref as Ref<PublicInstance>}
-      source={iconSource(current, stroke, filled)}
+      source={rotateSource(iconSource(current, stroke, filled), turn)}
       style={resolved}
       testId={testId}
       role={ariaLabel ? 'img' : undefined}
