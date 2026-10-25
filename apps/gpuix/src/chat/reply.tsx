@@ -44,6 +44,15 @@ export type ReplyRow =
   | { key: string; kind: 'image'; url: string; alt: string; flow: FlowBlock }
   | { key: string; kind: 'fence'; part: Extract<ProsePart, { kind: 'fence' }>; flow: FlowBlock }
 
+/**
+ * Streamdown's `caret="block"`: ` ▋` as `::after` content of the reply's last
+ * block while it streams. After a paragraph or heading it runs on in the
+ * text; after other blocks it would sit on a line of its own, so those keep
+ * none here.
+ */
+const STREAM_CARET = ' \u258B'
+const INLINE_CARET: ReadonlySet<FlowBlock['kind']> = new Set(['paragraph', 'heading'])
+
 /** Every block of a reply in paint order, with the margins its web twin has. */
 function replyRows(text: string, streaming: boolean, linkFiles: boolean): ReplyRow[] {
   const parts = proseParts(text)
@@ -75,6 +84,10 @@ function replyRows(text: string, streaming: boolean, linkFiles: boolean): ReplyR
       }
     })
   })
+  const last = rows.at(-1)
+  if (streaming && last?.kind === 'markdown' && INLINE_CARET.has(last.flow.kind)) {
+    last.source += STREAM_CARET
+  }
   return rows
 }
 

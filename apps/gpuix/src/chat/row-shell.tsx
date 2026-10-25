@@ -42,6 +42,12 @@ export function RowShell({
       testId={testId}
       style={{
         display: 'flex',
+        // A row is a block in the web list: as wide as the list, whatever it
+        // holds. Left to fit its content, a row whose only text is a
+        // <markdown> sizes to the markdown's max-content width, which is 0
+        // until it has laid out, and then wraps every character onto its own
+        // line (a live turn's narration under Working…, chat.queue).
+        width: '100%',
         justifyContent: 'center',
         paddingLeft: GUTTER,
         paddingRight: GUTTER,
