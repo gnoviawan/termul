@@ -164,6 +164,7 @@ impl HostPlanServer {
                         }
                     };
                     let port = listener.local_addr().map(|addr| addr.port()).unwrap_or(0);
+                    crate::host_perimeter::claim_for_process(port);
                     let _ = server_for_thread.port.set(port);
                     let _ = port_tx.send(port);
                     log::info!("[host-mcp] listening on 127.0.0.1:{port}");
@@ -428,6 +429,10 @@ impl HostPlanServer {
             return FrameReply::err("auth rejected");
         }
 
+        if req.kind == FrameKind::Describe {
+            return describe_reply();
+        }
+
         // The real session_id must be bound (post `session/new`). If not, the
         // agent called the tool before the session was created — shouldn't
         // happen, but reject defensively.
@@ -482,42 +487,44 @@ impl HostPlanServer {
 
         match req.kind {
             FrameKind::Browser => {
-                let Some(action) = req.browser_action else {
-                    // Every other reject path logs a boundary line — this
-                    // one must too: invalid_params, the `action` key name
-                    // (the missing argument), redacted session. The action
-                    // itself is absent, so the line reports "unknown".
-                    log::warn!(
-                        "{}",
-                        crate::browser_automation::boundary_failure_line(
-                            crate::browser_automation::ERR_INVALID_PARAMS,
-                            "unknown",
-                            &["action"],
-                            &auth.agent_id,
-                            &crate::logging::redact_session_id(&real_session_id),
-                        )
-                    );
-                    return FrameReply::err("browser_action is required");
+                let deadline = crate::browser_automation::budgets::Deadline::after(
+                    crate::browser_automation::budgets::FRAME_BUDGET,
+                );
+                let raw = req.browser_input.unwrap_or(serde_json::Value::Null);
+                let input = match crate::acp::host_mcp::TermulBrowserInput::parse(raw) {
+                    Ok(input) => input,
+                    // Without a host every call fails closed, malformed or
+                    // not. The parser already logged the rejection.
+                    Err(_) if crate::browser_automation::browser_host().is_none() => {
+                        return browser_failure(&crate::browser_automation::no_host_error());
+                    }
+                    Err(message) => {
+                        return browser_failure(&crate::browser_automation::BrowserError::invalid(
+                            message,
+                        ));
+                    }
                 };
+                let action = input.action.clone();
                 let call = crate::browser_automation::BrowserCall {
-                    // Cloned for the failure log below (the call consumes
-                    // the original).
-                    action: action.clone(),
-                    args: req.browser_args.unwrap_or(serde_json::Value::Null),
-                    element: req.browser_element,
+                    action: input.action,
+                    args: input.args,
+                    element: input.element,
                 };
-                match crate::browser_automation::dispatch(&real_session_id, &auth.agent_id, call)
-                    .await
+                match crate::browser_automation::dispatch(
+                    &real_session_id,
+                    &auth.agent_id,
+                    call,
+                    deadline,
+                )
+                .await
                 {
-                    Ok(result) => FrameReply::ok_with(result),
+                    Ok(success) => FrameReply::ok_with(success.to_json()),
                     Err(e) => {
                         // Durable boundary log: wire code + action + argument
                         // KEY NAMES + agent id + redacted session. Never the
                         // error message — messages can embed argument values
                         // (urls, refs, typed text; CWE-532). The agent-facing
-                        // reply below keeps the full message. The agent id
-                        // correlates with the neighboring host-mcp route
-                        // logs (which print it unredacted).
+                        // reply below keeps the full message.
                         log::warn!(
                             "{}",
                             crate::browser_automation::boundary_failure_line(
@@ -528,10 +535,11 @@ impl HostPlanServer {
                                 &crate::logging::redact_session_id(&real_session_id),
                             )
                         );
-                        FrameReply::err_code(e.code, e.message)
+                        browser_failure(&e)
                     }
                 }
             }
+            FrameKind::Describe => describe_reply(),
             FrameKind::Canvas => {
                 self.canvas_call(
                     &real_session_id,
@@ -629,6 +637,23 @@ impl HostPlanServer {
                 }
             }
         }
+    }
+}
+
+/// A failed browser call: the reply JSON the child forwards verbatim, with
+/// the code and message mirrored on the frame.
+fn browser_failure(e: &crate::browser_automation::BrowserError) -> FrameReply {
+    FrameReply {
+        result: Some(e.to_json()),
+        ..FrameReply::err_code(e.code, e.message.clone())
+    }
+}
+
+/// The `browser` tool schema for a child's `describe` frame.
+fn describe_reply() -> FrameReply {
+    match serde_json::to_value(crate::browser_automation::describe()) {
+        Ok(schema) => FrameReply::ok_with(schema),
+        Err(_) => FrameReply::err("describe failed"),
     }
 }
 

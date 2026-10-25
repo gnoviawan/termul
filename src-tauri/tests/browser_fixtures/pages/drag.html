@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Drag fixture</title>
+<style>
+  body { margin: 0; font: 14px sans-serif; user-select: none; -webkit-user-select: none; }
+  h1 { margin: 8px 16px; font-size: 18px; }
+  #track { position: absolute; left: 40px; top: 80px; width: 300px; height: 20px; background: #eee; }
+  #thumb { position: absolute; left: 0; top: 0; width: 20px; height: 20px; background: #333; }
+  #max { position: absolute; left: 360px; top: 76px; width: 60px; height: 28px; }
+  #volume { position: absolute; left: 40px; top: 112px; margin: 0; }
+  #list { position: absolute; left: 40px; top: 160px; width: 200px; margin: 0; padding: 0; list-style: none; }
+  #list li { height: 32px; line-height: 32px; padding: 0 8px; border: 1px solid #999; background: #fff; box-sizing: border-box; }
+  #order { position: absolute; left: 40px; top: 270px; margin: 0; }
+  #events { position: absolute; left: 40px; top: 296px; margin: 0; }
+</style>
+</head>
+<body>
+<h1>Drag fixture</h1>
+<div id="track"><div id="thumb" role="slider" tabindex="0" aria-label="Volume"></div></div>
+<button id="max" type="button">Max</button>
+<p id="volume">Volume: 0</p>
+<ul id="list">
+  <li tabindex="0">Alpha</li>
+  <li tabindex="0">Bravo</li>
+  <li tabindex="0">Charlie</li>
+</ul>
+<p id="order">Order: Alpha, Bravo, Charlie</p>
+<p id="events">Events: none</p>
+<script>
+(function () {
+  var track = document.getElementById('track');
+  var thumb = document.getElementById('thumb');
+  var list = document.getElementById('list');
+  var state = null;
+  function text(id, value) { document.getElementById(id).textContent = value; }
+  document.addEventListener('pointerdown', function (e) {
+    var item = e.target.closest('#list li');
+    if (e.target.closest('#thumb')) state = { kind: 'thumb', x: e.clientX, left: thumb.offsetLeft };
+    else if (item) state = { kind: 'item', item: item };
+    else return;
+    state.trusted = e.isTrusted;
+    text('events', 'Events: pending');
+  });
+  document.addEventListener('pointermove', function (e) {
+    if (!state || e.buttons !== 1) return;
+    state.trusted = state.trusted && e.isTrusted;
+    if (state.kind !== 'thumb') return;
+    var room = track.clientWidth - thumb.offsetWidth;
+    var left = Math.max(0, Math.min(room, state.left + e.clientX - state.x));
+    thumb.style.left = left + 'px';
+    text('volume', 'Volume: ' + Math.round((left / room) * 100));
+  });
+  document.addEventListener('pointerup', function (e) {
+    if (!state) return;
+    var done = state;
+    state = null;
+    if (done.kind === 'item') {
+      var over = document.elementFromPoint(e.clientX, e.clientY);
+      var target = over && over.closest('#list li');
+      if (target && target !== done.item) {
+        var items = Array.prototype.slice.call(list.children);
+        var after = items.indexOf(done.item) < items.indexOf(target);
+        list.insertBefore(done.item, after ? target.nextSibling : target);
+        text('order', 'Order: ' + Array.prototype.map.call(list.children, function (li) {
+          return li.textContent;
+        }).join(', '));
+      }
+    }
+    text('events', 'Events: ' + (done.trusted && e.isTrusted ? 'trusted' : 'synthetic'));
+  });
+})();
+</script>
+</body>
+</html>

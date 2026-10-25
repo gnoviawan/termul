@@ -210,6 +210,7 @@ async fn start_host() -> StartedHost {
             registry,
             RemoteBindMode::Localhost,
             false,
+            false,
             &data,
             None,
             None,

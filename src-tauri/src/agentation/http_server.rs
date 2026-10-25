@@ -9,8 +9,12 @@
 //!   GET /sessions/:id/events (SSE), GET /events (global SSE),
 //!   POST /mcp (HTTP MCP transport — stubbed, rmcp stdio is primary).
 //!
-//! Runs on `127.0.0.1:0` (dynamic port) with `tower-http::cors` strict
-//! origin allowlist and `CancellationToken` shutdown.
+//! Runs on `127.0.0.1:0` (dynamic port) with `CancellationToken` shutdown.
+//! Every route lives under a per-run secret path segment. The toolbar runs
+//! inside the annotated page, at that page's own origin, so CORS cannot name
+//! the callers; the secret is what keeps other pages (agent tabs, any site in
+//! any browser on this machine) from reading or writing annotations. Only
+//! user tabs with annotation mode on are handed the endpoint.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -315,10 +319,8 @@ async fn global_sse(
 // Router
 // ---------------------------------------------------------------------------
 
-pub fn router(state: AppState) -> Router {
-    // Server binds to 127.0.0.1 only — no remote access possible.
-    // The toolbar runs inside child-webview pages at arbitrary origins,
-    // so CORS must allow any origin (not just portless 127.0.0.1).
+/// The routes, served under `/{secret}`.
+pub fn router(state: AppState, secret: &str) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(tower_http::cors::Any)
         .allow_methods([
@@ -330,7 +332,7 @@ pub fn router(state: AppState) -> Router {
         ])
         .allow_headers(tower_http::cors::Any);
 
-    Router::new()
+    let router = Router::new()
         .route("/sessions/{id}/annotations", post(add_annotation))
         .route("/sessions/{id}/pending", get(get_pending))
         .route("/sessions/{id}/events", get(session_sse))
@@ -345,8 +347,11 @@ pub fn router(state: AppState) -> Router {
                 .delete(delete_annotation),
         )
         .route("/pending", get(get_all_pending))
-        .route("/events", get(global_sse))
-        .layer(cors)
+        .route("/events", get(global_sse));
+    let router = Router::new()
+        .nest(&format!("/{secret}"), router)
+        .layer(cors);
+    crate::web::host_allow::layer(router, crate::web::host_allow::HostAllowList::loopback())
         .with_state(state)
 }
 
@@ -354,21 +359,29 @@ pub fn router(state: AppState) -> Router {
 // Server lifecycle
 // ---------------------------------------------------------------------------
 
-/// Start the HTTP server on a dynamic port. Returns (addr, shutdown_token).
-pub async fn start_server(
-    store: Arc<SqliteStore>,
-) -> Result<(SocketAddr, tokio_util::sync::CancellationToken), String> {
-    let state = AppState { store };
-    let app = router(state);
+/// A running server: its address, the endpoint the toolbar is given (the
+/// secret path included, so it is never logged) and its shutdown token.
+pub struct Listening {
+    pub addr: SocketAddr,
+    pub endpoint: String,
+    pub shutdown: tokio_util::sync::CancellationToken,
+}
+
+/// Start the HTTP server on a dynamic port under a fresh secret path.
+pub async fn start_server(store: Arc<SqliteStore>) -> Result<Listening, String> {
+    let secret = uuid::Uuid::new_v4().simple().to_string();
+    let app = router(AppState { store }, &secret);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| format!("Failed to bind: {e}"))?;
     let addr = listener
         .local_addr()
         .map_err(|e| format!("Local addr: {e}"))?;
+    let owned_port = crate::host_perimeter::OwnedPort::claim(addr.port());
     let token = tokio_util::sync::CancellationToken::new();
     let t = token.clone();
     tokio::spawn(async move {
+        let _owned_port = owned_port;
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {
                 t.cancelled().await;
@@ -377,7 +390,11 @@ pub async fn start_server(
             .ok();
     });
     log::info!("[Agentation] HTTP server listening on {addr}");
-    Ok((addr, token))
+    Ok(Listening {
+        addr,
+        endpoint: format!("http://{addr}/{secret}"),
+        shutdown: token,
+    })
 }
 
 // ---------------------------------------------------------------------------

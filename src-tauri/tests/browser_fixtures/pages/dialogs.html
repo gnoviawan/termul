@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dialog fixture</title>
+</head>
+<body>
+<main>
+<h1>Dialog fixture</h1>
+<button id="alert" type="button">Show alert</button>
+<button id="confirm" type="button">Show confirm</button>
+<button id="prompt" type="button">Show prompt</button>
+<button id="guard" type="button">Guard unload</button>
+<p id="result">Result: none</p>
+</main>
+<script>
+function show(text) {
+  document.getElementById('result').textContent = 'Result: ' + text;
+}
+if (location.search === '?alert-on-load') {
+  alert('Load alert');
+  show('load alert closed');
+}
+document.getElementById('alert').addEventListener('click', function () {
+  alert('Fixture alert');
+  show('alert closed');
+});
+document.getElementById('confirm').addEventListener('click', function () {
+  show('confirm ' + confirm('Fixture confirm?'));
+});
+document.getElementById('prompt').addEventListener('click', function () {
+  show('prompt [' + prompt('Fixture prompt?', 'default name') + ']');
+});
+document.getElementById('guard').addEventListener('click', function () {
+  window.addEventListener('beforeunload', function (e) {
+    e.preventDefault();
+    e.returnValue = '';
+  });
+  show('unload guarded');
+});
+</script>
+</body>
+</html>

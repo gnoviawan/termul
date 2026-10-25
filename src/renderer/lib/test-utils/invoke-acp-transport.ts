@@ -305,6 +305,9 @@ export function createInvokeAcpTransport(): AcpTransport {
     answerQuestion: async (agentId, questionId, values) => {
       await invoke('acp_answer_question', { agentId, questionId, values })
     },
+    stopBrowserAgent: async (sessionId) => {
+      await invoke('browser_stop', { sessionId })
+    },
     authenticate: (agentId, methodId, gateway, options) =>
       invokeCommandVoid('acp_authenticate', { agentId, methodId, gateway }, options),
     deliverAuthRedirect: (agentId, url, options) =>

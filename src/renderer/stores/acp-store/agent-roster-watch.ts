@@ -21,13 +21,19 @@ import type {
   BrowserOpenRequestEvent
 } from '@/lib/acp-api'
 import type { WatchClient } from '@/lib/acp-transport/watch-client'
+import { publishBrowserPolicyChange, requestBrowserPolicyResync } from '@/lib/browser-policy-api'
 import { logFrontendError } from '@/lib/log-api'
 import type { AcpState } from './types'
 
 /** Start watching the roster; returns the unsubscribe. */
 export function attachAgentRosterWatch(watches: WatchClient, getState: () => AcpState): () => void {
   return watches.subscribe<WsAgentSummary[], AgentsWatchDelta>('agents', {
-    onState: (summaries) => reconcileRoster(getState(), summaries),
+    onState: (summaries) => {
+      reconcileRoster(getState(), summaries)
+      // A resubscribe means deltas may have been lost, and a policy change
+      // hint travels as a delta that no state repairs.
+      requestBrowserPolicyResync()
+    },
     onDelta: (delta) => applyRosterDelta(getState(), delta)
   })
 }
@@ -50,6 +56,11 @@ function reconcileRoster(state: AcpState, summaries: WsAgentSummary[]): void {
 }
 
 function applyRosterDelta(state: AcpState, delta: AgentsWatchDelta): void {
+  if (delta?.event === 'browser_policy_changed') {
+    // Not roster state: a hint that one browser policy scope changed.
+    publishBrowserPolicyChange(delta.payload)
+    return
+  }
   const agentId = (delta?.payload as { agentId?: unknown } | null | undefined)?.agentId
   if (typeof agentId !== 'string') {
     void logFrontendError({

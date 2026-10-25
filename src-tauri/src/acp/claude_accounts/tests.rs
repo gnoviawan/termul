@@ -1,6 +1,8 @@
 use super::{links, ClaudeAccountStore, BUILTIN_ACCOUNT_ID};
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 struct Fixture {
     _root: tempfile::TempDir,

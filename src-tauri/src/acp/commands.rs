@@ -154,6 +154,7 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
         .local_addr()
         .map_err(|e| format!("failed to get callback port: {e}"))?
         .port();
+    let _owned_port = crate::host_perimeter::OwnedPort::claim(port);
     let redirect_uri = format!(
         "http://127.0.0.1:{port}{}",
         crate::acp::mcp_oauth::OAUTH_REDIRECT_PATH
@@ -205,9 +206,21 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
         match listener.accept() {
             Ok((mut stream, _addr)) => {
                 use std::io::{BufRead, BufReader, Write};
+                // Accepted sockets inherit the listener's non-blocking mode;
+                // the header block must be read whole for the Host check.
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
                 let reader = BufReader::new(&mut stream);
                 let mut lines = reader.lines();
                 if let Some(Ok(first_line)) = lines.next() {
+                    if !crate::web::host_allow::HostAllowList::loopback()
+                        .allows_header_block(&mut lines)
+                    {
+                        log::warn!("[mcp-oauth] rejected callback request: foreign or missing host");
+                        let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        let _ = stream.flush();
+                        continue;
+                    }
                     // Parse the request target. Stray browser requests
                     // (preconnect, favicon, malformed) must not break the
                     // loop — only the callback path with a `code` param

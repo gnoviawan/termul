@@ -407,7 +407,7 @@ describe('Parity Checklist Automation', () => {
     it('registers both host surfaces through the shared Rust service', () => {
       const root = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
       const tauri = readFileSync(join(root, 'lib.rs'), 'utf-8')
-      const router = readFileSync(join(root, 'web', 'router.rs'), 'utf-8')
+      const router = readFileSync(join(root, 'web', 'router', 'mod.rs'), 'utf-8')
       expect(tauri).toMatch(/acp_factory_key_status/)
       expect(tauri).toMatch(/acp_factory_key_save/)
       expect(router).toMatch(/\/acp\/factory-key/)
@@ -1013,7 +1013,7 @@ describe('Parity Checklist Automation', () => {
     const Facade = join(LIB_DIR, 'worktree-api.ts')
     const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
     const WebRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web')
-    const RouterRust = join(WebRust, 'router.rs')
+    const RouterRust = join(WebRust, 'router', 'mod.rs')
     const WorktreeApiRust = join(WebRust, 'worktree_api.rs')
     const WorktreeSymlinksRust = join(WebRust, 'worktree_api', 'symlinks.rs')
     const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands')
@@ -1169,7 +1169,7 @@ describe('Parity Checklist Automation', () => {
     const SrcTauri = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
     const Facade = join(LIB_DIR, 'git-api.ts')
     const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-    const RouterRust = join(SrcTauri, 'web', 'router.rs')
+    const RouterRust = join(SrcTauri, 'web', 'router', 'mod.rs')
     const HunkApiRust = join(SrcTauri, 'web', 'git_hunk_api.rs')
     const CommandsGitRust = join(SrcTauri, 'commands', 'git.rs')
     const LibRust = join(SrcTauri, 'lib.rs')
@@ -1235,7 +1235,17 @@ describe('Parity Checklist Automation', () => {
     const FsFacade = join(LIB_DIR, 'tauri-filesystem-api.ts')
     const WebFileNameSearch = join(LIB_DIR, 'web-filename-search.ts')
     const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-    const RouterRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'router.rs')
+    const RouterRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'web',
+      'router',
+      'mod.rs'
+    )
     const SearchApiRust = join(
       LIB_DIR,
       '..',
@@ -1536,7 +1546,7 @@ describe('Parity Checklist Automation', () => {
         join(RustRoot, 'web', 'canvas_persistence_api.rs'),
         'utf-8'
       )
-      const router = readFileSync(join(RustRoot, 'web', 'router.rs'), 'utf-8')
+      const router = readFileSync(join(RustRoot, 'web', 'router', 'mod.rs'), 'utf-8')
       const bundlePath = readFileSync(join(RustRoot, 'canvas', 'bundle_path.rs'), 'utf-8')
       expect(router, 'the bearer gate exempts only bundle paths').toContain('is_bundle_path')
       const lib = readFileSync(join(RustRoot, 'lib.rs'), 'utf-8')
@@ -1726,7 +1736,7 @@ describe('Git diff stat parity (shell revamp story 8)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const GitApiFacade = join(LIB_DIR, 'git-api.ts')
   const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-  const RouterRust = join(SRC_TAURI, 'web', 'router.rs')
+  const RouterRust = join(SRC_TAURI, 'web', 'router', 'mod.rs')
   const RouteRust = join(SRC_TAURI, 'web', 'git_diff_stat_api.rs')
   const ServiceRust = join(SRC_TAURI, 'trackers', 'git_tracker', 'diff_stat.rs')
   const CommandsGitRust = join(SRC_TAURI, 'commands', 'git.rs')
@@ -1781,7 +1791,7 @@ describe('Worktree branch rename parity (shell revamp story 16)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const WorktreeFacade = join(LIB_DIR, 'worktree-api.ts')
   const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-  const RouterRust = join(SRC_TAURI, 'web', 'router.rs')
+  const RouterRust = join(SRC_TAURI, 'web', 'router', 'mod.rs')
   const RouteRust = join(SRC_TAURI, 'web', 'worktree_rename_api.rs')
   const ManagerRust = join(SRC_TAURI, 'acp', 'manager', 'worktree_branch.rs')
   const CommandsWorktreeRust = join(SRC_TAURI, 'commands', 'worktree.rs')
@@ -2079,7 +2089,7 @@ describe('Git History commit detail parity', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const GitApiFacade = join(LIB_DIR, 'git-api.ts')
   const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-  const RouterRust = join(SRC_TAURI, 'web', 'router.rs')
+  const RouterRust = join(SRC_TAURI, 'web', 'router', 'mod.rs')
   const RouteRust = join(SRC_TAURI, 'web', 'git_history_api.rs')
   const ServiceRust = join(SRC_TAURI, 'trackers', 'git_tracker', 'commit_detail.rs')
   const CommandsGitRust = join(SRC_TAURI, 'commands', 'git.rs')
@@ -2143,6 +2153,169 @@ describe('Git History commit detail parity', () => {
     expect(content).toMatch(/IpcBody/)
     expect(content).toMatch(/spawn_blocking/)
     expect(content).toMatch(/tracing::/)
+  })
+})
+
+describe('Browser policy parity', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const Facade = join(LIB_DIR, 'browser-policy-api.ts')
+  const RouterRust = join(SRC_TAURI, 'web', 'router', 'mod.rs')
+  const RouteRust = join(SRC_TAURI, 'web', 'browser_policy_api.rs')
+  const CommandsRust = join(SRC_TAURI, 'commands', 'browser_policy.rs')
+  const LibRust = join(SRC_TAURI, 'lib.rs')
+  const WireRust = join(SRC_TAURI, 'acp', 'browser_policy', 'wire.rs')
+  const ServiceRust = join(SRC_TAURI, 'acp', 'browser_policy', 'service.rs')
+  const SourcesRust = join(SRC_TAURI, 'web', 'watch', 'sources.rs')
+  const ContractTs = join(LIB_DIR, '..', '..', 'shared', 'types', 'browser-policy.types.ts')
+
+  const OPERATIONS = [
+    {
+      method: 'getProject',
+      command: 'browser_policy_get_project',
+      route: '/host/browser-policy/project',
+      service: 'project_view'
+    },
+    {
+      method: 'getApp',
+      command: 'browser_policy_get_app',
+      route: '/host/browser-policy/app',
+      service: 'app_view'
+    },
+    {
+      method: 'applyProject',
+      command: 'browser_policy_apply_project',
+      route: '/host/browser-policy/project',
+      service: 'apply_project'
+    },
+    {
+      method: 'applyApp',
+      command: 'browser_policy_apply_app',
+      route: '/host/browser-policy/app',
+      service: 'apply_app'
+    }
+  ] as const
+
+  for (const op of OPERATIONS) {
+    it(`${op.method} goes through ${op.command} on desktop and ${op.route} on web`, () => {
+      const facade = readFileSync(Facade, 'utf-8')
+      expect(facade).toContain(`${op.method}:`)
+      expect(facade).toContain(`'${op.command}'`)
+      expect(facade).toContain('POLICY_BASE')
+      expect(facade).toMatch(/isTauriContext\(\) \? desktopBrowserPolicyApi : webBrowserPolicyApi/)
+      expect(readFileSync(RouteRust, 'utf-8')).toContain(`"${op.route}"`)
+    })
+
+    it(`${op.command} is defined, registered in lib.rs and calls the shared service (${op.service})`, () => {
+      const commands = readFileSync(CommandsRust, 'utf-8')
+      expect(commands).toContain(`pub async fn ${op.command}(`)
+      expect(commands).toContain(`.${op.service}(`)
+      expect(readFileSync(LibRust, 'utf-8')).toContain(`commands::${op.command},`)
+    })
+
+    it(`the ${op.route} route calls the same shared service method (${op.service})`, () => {
+      expect(readFileSync(RouteRust, 'utf-8')).toContain(`.${op.service}(`)
+    })
+  }
+
+  it('router.rs merges the policy router in BOTH router variants', () => {
+    const content = readFileSync(RouterRust, 'utf-8')
+    const occurrences = content.split('browser_policy_router(').length - 1
+    expect(occurrences, 'both router() and router_with_static() merge it').toBe(2)
+  })
+
+  it('every policy route sits under a bearer-gated prefix', () => {
+    const gate = readFileSync(join(SRC_TAURI, 'web', 'router', 'gate.rs'), 'utf-8')
+    expect(gate).toMatch(/const GATED_PREFIXES[^;]*"\/host\/"/s)
+    for (const route of new Set(OPERATIONS.map((op) => op.route))) {
+      expect(route.startsWith('/host/')).toBe(true)
+    }
+  })
+
+  it('commands run only from the main webview', () => {
+    const commands = readFileSync(CommandsRust, 'utf-8')
+    expect(commands).toMatch(/webview\.label\(\) != "main"/)
+  })
+
+  it('the TypeScript operations and the Rust wire operations are the same set', () => {
+    const rust = readFileSync(WireRust, 'utf-8')
+    const ts = readFileSync(ContractTs, 'utf-8')
+    const variants: Record<string, string> = {
+      add_origin: 'AddOrigin',
+      remove_origin: 'RemoveOrigin',
+      add_preapproval: 'AddPreapproval',
+      remove_preapproval: 'RemovePreapproval',
+      set_ephemeral: 'SetEphemeral',
+      set_global_profile: 'SetGlobalProfile',
+      set_ask_before_password_submit: 'SetAskBeforePasswordSubmit',
+      clear_global_profile: 'ClearGlobalProfile'
+    }
+    for (const [name, variant] of Object.entries(variants)) {
+      expect(ts, name).toContain(`op: '${name}'`)
+      expect(rust, name).toContain(variant)
+    }
+    const tsOps = new Set([...ts.matchAll(/op: '([a-z_]+)'/g)].map((m) => m[1]))
+    expect(tsOps).toEqual(new Set(Object.keys(variants)))
+  })
+
+  it('change events reach every client: fanned out by the service, carried by the agents watch, routed by the roster watch', () => {
+    expect(readFileSync(ServiceRust, 'utf-8')).toContain('"acp:browser_policy_changed"')
+    expect(readFileSync(SourcesRust, 'utf-8')).toMatch(
+      /AGENT_TRANSIENT_EVENTS[^;]*"browser_policy_changed"/s
+    )
+    const roster = readFileSync(
+      join(LIB_DIR, '..', 'stores', 'acp-store', 'agent-roster-watch.ts'),
+      'utf-8'
+    )
+    expect(roster).toContain("'browser_policy_changed'")
+    expect(roster).toContain('publishBrowserPolicyChange')
+  })
+
+  it('the settings section is registered and the facade logs through log-api', () => {
+    const categories = readFileSync(
+      join(LIB_DIR, '..', 'pages', 'app-preferences', 'categories.tsx'),
+      'utf-8'
+    )
+    expect(categories).toContain("id: 'browser'")
+    expect(readFileSync(Facade, 'utf-8')).toContain("from './log-api'")
+  })
+})
+
+// Browser consent tickets and Stop: the desktop answers through its
+// `main`-webview commands, a remote client through `/ws`, and the facade
+// picks the carrier. Source-grep checks pin that every carrier exists.
+describe('Browser consent and Stop parity', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const read = (...parts: string[]): string => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
+  const facade = readFileSync(join(LIB_DIR, 'browser-consent-api.ts'), 'utf-8')
+
+  it('the facade branches on isTauriContext() between the commands and the transport', () => {
+    expect(facade).toMatch(/invokeIpc<null>\('browser_ticket_respond'/)
+    expect(facade).toMatch(/invokeIpc<null>\('browser_stop'/)
+    expect(facade).toMatch(/getAcpTransport\(\)\.respondPermission\(/)
+    expect(facade).toMatch(/getAcpTransport\(\)\.stopBrowserAgent\(/)
+    expect(readFileSync(join(LIB_DIR, 'acp-transport', 'ws-transport.ts'), 'utf-8')).toMatch(
+      /this\.request\('browser_stop', \{ sessionId \}\)/
+    )
+  })
+
+  it('registers both desktop commands and routes both /ws requests to the host paths', () => {
+    const lib = read('lib.rs')
+    expect(lib).toContain('commands::browser_ticket_respond,')
+    expect(lib).toContain('commands::browser_stop,')
+    const dispatch = read('web', 'ws', 'dispatch.rs')
+    expect(dispatch).toMatch(/handle_respond_host_ticket\(id, &req\.payload, env\)/)
+    expect(dispatch).toMatch(/"browser_stop" => handle_browser_stop\(id, &req\.payload, env\)/)
+  })
+
+  it('both carriers resolve through the same host ticket table and stop latch', () => {
+    expect(read('commands', 'browser.rs')).toMatch(/tickets\.answer\(Approver::Desktop/)
+    expect(read('web', 'permissions.rs')).toMatch(/\.answer\(approver, request_id, option_id\)/)
+    expect(read('commands', 'browser.rs')).toMatch(
+      /browser_automation::stop_session\(&session_id\)/
+    )
+    expect(read('web', 'ws', 'subscribe.rs')).toMatch(
+      /browser_automation::stop_session\(&parsed\.session_id\)/
+    )
   })
 })
 

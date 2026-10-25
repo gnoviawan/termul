@@ -50,13 +50,25 @@ standalone-server = []
 # `--features custom-protocol`. `build.rs` fails a release desktop build that
 # lacks it.
 custom-protocol = ["tauri/custom-protocol"]
+# Exposes the library's `conformance_support` seam to the browser conformance
+# runner below. Only that test target enables it; shipping builds never do.
+conformance = []
+
+# Runs the real automation host on a real webview, so it needs its own `main`
+# (tao requires the main thread on macOS). Skips unless
+# TERMUL_BROWSER_CONFORMANCE is set.
+[[test]]
+name = "browser_conformance"
+path = "tests/browser_conformance/main.rs"
+harness = false
+required-features = ["conformance"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
 # unstable is required for child/multi-webview support used by BrowserTabManager
-tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
+tauri = { version = "2.12.3", features = ["unstable", "devtools", "tray-icon"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
 notify = "8"
@@ -132,7 +144,7 @@ rmcp = { version = "3.5.0", features = [
 # `Headless` or `Attached` backends or a figcraft `Session` (AD-17). Pinned by
 # the fork's `termul-*` release tag, which `scripts/canvas/check-figcraft-pin.mjs`
 # compares with canvas/figcraft.pin.
-figcraft-mcp = { git = "https://github.com/gnoviawan/figcraft", tag = "termul-v0.2.0" }
+figcraft-mcp = { git = "https://github.com/gnoviawan/figcraft", tag = "termul-v0.3.0" }
 # OAuth2 — needed for the `TokenResponse` trait used by the MCP OAuth flow
 # (rmcp's `auth` feature pulls this transitively, but we use it directly).
 oauth2 = "5.0"
@@ -222,7 +234,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["compat", "rt"] }
 
 [dev-dependencies]
-tauri = { version = "2.0", features = ["test"] }
+tauri = { version = "2.12.3", features = ["test"] }
 tower = { version = "0.5", features = ["util"] }
 # Swap/rollback file tests in `server_update` use a temp dir so they never
 # touch the real binary path.
@@ -238,6 +250,16 @@ notify-rust = "4.18"
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }
 notify-rust = "4.18"
+# WKWebView isolated-world eval, history stepping and AppKit input for agent
+# browser automation (browser_automation::engine::wkwebview). Already in the tree via wry; keep
+# them on the versions wry resolves so the WKWebView behind tauri's
+# PlatformWebview is the type these crates name.
+objc2 = "0.6.4"
+block2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSDictionary", "NSError", "NSData", "NSArray", "NSURL"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKFrameInfo", "WKContentWorld", "WKNavigation", "WKUIDelegate", "WKOpenPanelParameters", "WKSnapshotConfiguration", "WKWebViewConfiguration", "WKPreferences"] }
+# Agent-tab screenshots: NSImage to PNG (browser_automation::engine::wkwebview).
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage", "NSBitmapImageRep", "NSImageRep"] }
 
 # Linux Secret Service (persistent across reboots) with pure-Rust crypto so we
 # don't require a system OpenSSL/Perl build toolchain.
@@ -245,6 +267,16 @@ notify-rust = "4.18"
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 gtk = "0.18"
 notify-rust = "4.18"
+# WebKitGTK isolated-world eval for agent browser automation
+# (browser_automation::engine::webkitgtk): `v2_40` adds
+# call_async_javascript_function with a script world. Pinned to the
+# versions wry resolves so the WebView behind tauri's PlatformWebview is
+# the type these crates name.
+webkit2gtk = { version = "=2.0.2", features = ["v2_40"] }
+javascriptcore-rs = { version = "=1.1.2", features = ["v2_28"] }
+# Agent-tab screenshots: the snapshot surface written as PNG
+# (browser_automation::engine::webkitgtk). The version webkit2gtk resolves.
+cairo-rs = { version = "0.18", features = ["png"] }
 
 # Symlink-safe (O_NOFOLLOW) open of the persisted web auth token file
 # (web::auth::open_token_file). Already in the tree transitively.
@@ -257,10 +289,10 @@ rustix = { version = "1", features = ["fs"] }
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 # WebView2 CDP for agent browser automation (browser_automation::cdp).
-# Already in the tree transitively via wry — same major keeps the
-# ICoreWebView2 type identity shared with `with_webview`'s PlatformWebview.
-webview2-com = "0.38"
-windows-core = "0.61"
+# Already in the tree transitively via wry. Keep it on the wry-resolved 0.39 line so the
+# ICoreWebView2 type identity is shared with `with_webview`'s PlatformWebview.
+webview2-com = "0.39"
+windows-core = "0.62"
 windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",

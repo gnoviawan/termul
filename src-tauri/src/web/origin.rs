@@ -82,6 +82,13 @@ impl OriginPolicy {
         self.extra.is_empty()
     }
 
+    /// Host names of the extra origins, for the `Host` allow-list.
+    pub(crate) fn hosts(&self) -> impl Iterator<Item = String> + '_ {
+        self.extra
+            .iter()
+            .filter_map(|origin| parse_origin(origin).map(|parsed| parsed.host))
+    }
+
     /// Whether `origin` (any accepted spelling) is in the extra list.
     pub fn contains(&self, origin: &str) -> bool {
         parse_origin(origin).is_some_and(|parsed| self.extra.contains(&canonical(&parsed)))
@@ -244,7 +251,7 @@ fn parse_origin(raw: &str) -> Option<ParsedOrigin> {
     Some(ParsedOrigin { scheme, host, port })
 }
 
-fn split_host_port(raw: &str) -> Option<(String, Option<u16>)> {
+pub(crate) fn split_host_port(raw: &str) -> Option<(String, Option<u16>)> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;

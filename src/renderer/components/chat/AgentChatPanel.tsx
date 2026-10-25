@@ -5,6 +5,7 @@ import {
   emptyPendingLauncherOptions,
   overlayPendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
+import { BrowserAgentIndicator } from '@/components/browser/BrowserAgentStop'
 import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
 import { SkillFilesProvider } from '@/components/chat/skill-file-links'
 import { TermulMark } from '@/components/TermulMark'
@@ -27,7 +28,6 @@ import {
   replaceCommandTokensInline,
   replaceFileTokensInline
 } from '@/lib/skill-tokens'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { getProjectRootPath } from '@/lib/worktree-context'
 import {
   type ChatMessage,
@@ -40,6 +40,7 @@ import { isResumeFailureError } from '@/stores/acp-store/helpers'
 import { isLaunchPlaceholderSessionId } from '@/stores/acp-store/live-turn'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
+import { useSessionDrivesBrowser } from '@/stores/browser-control-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useGitSheetStore } from '@/stores/git-sheet-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -212,6 +213,8 @@ export function AgentChatPanel({
   // CAP-5: the panel owns the fallback card while the strip is not hosting —
   // mirrored by the render gate below (`showBrowserConsentCard`).
   const stripHosting = useIsConsentStripHosting()
+  // The agent-control indicator with Stop shows while an agent drives a tab.
+  const drivesBrowser = useSessionDrivesBrowser(sessionId)
   const overlayOpen = useInterfaceOverlayOpen()
   const registerConsentCard = useConsentCardHost((s) => s.register)
   const unregisterConsentCard = useConsentCardHost((s) => s.unregister)
@@ -773,7 +776,7 @@ export function AgentChatPanel({
 
   const isClosed = session.status === 'closed'
   const showBrowserConsentCard =
-    pendingBrowserConsent != null && !isClosed && !stripHosting && !overlayOpen && isTauriContext()
+    pendingBrowserConsent != null && !isClosed && !stripHosting && !overlayOpen
   // Failed launches keep the Retry affordance even without a user prompt in
   // the transcript (the retry relaunches without re-sending).
   const isFailedLaunch = session.status === 'error' && Boolean(session.launchConfigId)
@@ -956,6 +959,13 @@ export function AgentChatPanel({
           next to the composer and while a structured question is pending.
           The gate covers every suppression term so the strip, remote clients,
           and closed sessions never leave an empty gutter block. */}
+      {!isClosed && drivesBrowser && (
+        <div className={`${CHAT_GUTTER_X} pt-2`}>
+          <div className="mx-auto w-full max-w-3xl">
+            <BrowserAgentIndicator sessionId={sessionId} />
+          </div>
+        </div>
+      )}
       {showBrowserConsentCard && (
         <div className={`${CHAT_GUTTER_X} pb-2 pt-3`}>
           <div className="mx-auto w-full max-w-3xl">
