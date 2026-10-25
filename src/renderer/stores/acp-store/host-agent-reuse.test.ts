@@ -111,6 +111,7 @@ import {
   _resetSessionIndexLoadGenerationForTesting,
   useAcpStore
 } from '@/stores/acp-store'
+import { ensureLiveAgent } from './shared-state'
 import { FRESH } from './testkit'
 
 /** Reuse-key separator (see `acp-reuse-keys.ts`). */
@@ -566,5 +567,67 @@ describe('acp-store: host agent reuse on web (#837)', () => {
     expect(session?.status).not.toBe('closed')
     expect(session?.lastError).toContain('Resume failed')
     expect(session?.lastError).toContain('socket closed')
+  })
+
+  describe('a reopen adopting the host owner while another agent holds the reuse key', () => {
+    const CANONICAL = 'acp-registry:claude-acp' + NUL + '/w' + NUL + 'project' + NUL + 'p1'
+    const OWNER_SUMMARY = {
+      id: HOST_AGENT,
+      name: 'Claude',
+      configId: 'acp-registry:claude-acp',
+      capabilities: { loadSession: true },
+      ownsSession: ['s-host']
+    }
+
+    function spawnWarmAgent(transport: ReturnType<typeof fakeWebTransport>): {
+      warm: Promise<string | null>
+      finish: () => void
+    } {
+      let finish!: () => void
+      transport.spawnAgent.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = () => resolve({ agentId: 'agent-warm', capabilities: { loadSession: true } })
+          })
+      )
+      const warm = ensureLiveAgent(
+        useAcpStore.getState,
+        useAcpStore.setState,
+        'acp-registry:claude-acp',
+        '/w',
+        { projectId: 'p1', holder: 'warm' }
+      )
+      return { warm, finish: () => finish() }
+    }
+
+    it('keeps the key on the agent that already holds it and registers the owner detached', async () => {
+      const transport = fakeWebTransport([OWNER_SUMMARY], { 's-host': seededPayload('s-host') })
+      _setAcpTransportForTests(transport)
+      const { warm, finish } = spawnWarmAgent(transport)
+      finish()
+      await warm
+
+      await useAcpStore.getState().openHistorySession('s-host')
+
+      expect(useAcpStore.getState().configToLiveAgent).toEqual({
+        [CANONICAL]: 'agent-warm',
+        [CANONICAL + NUL + HOST_AGENT]: HOST_AGENT
+      })
+    })
+
+    it('keeps the adopted owner resolvable when a spawn for the key lands after it', async () => {
+      const transport = fakeWebTransport([OWNER_SUMMARY], { 's-host': seededPayload('s-host') })
+      _setAcpTransportForTests(transport)
+      const { warm, finish } = spawnWarmAgent(transport)
+
+      await useAcpStore.getState().openHistorySession('s-host')
+      finish()
+      await warm
+
+      expect(useAcpStore.getState().configToLiveAgent).toEqual({
+        [CANONICAL]: 'agent-warm',
+        [CANONICAL + NUL + HOST_AGENT]: HOST_AGENT
+      })
+    })
   })
 })

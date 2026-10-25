@@ -33,7 +33,8 @@ import {
   configIdFromReuseKey,
   detachedReuseKey,
   isDetachedReuseKey,
-  parseReuseKey
+  parseReuseKey,
+  withLiveAgent
 } from '../acp-reuse-keys'
 import { ephemeralSessionIds } from './ephemeral-ids'
 import { isReusableStatus, SWITCH_SPLICE_ID_PREFIX, type SwitchMarkerFacts } from './helpers'
@@ -760,9 +761,11 @@ export async function adoptHostOwnedAgent(
     // NOT be registered under the requested config+cwd reuse key — a later
     // startChat for that config would silently reuse a different agent's
     // process (CodeRabbit: mismatched owner registration).
+    // An agent that already holds the key keeps it (a warm or chat agent the
+    // launcher spawned for the same Project); the owner is registered detached.
     configToLiveAgent:
       match.configId === configId
-        ? { ...s.configToLiveAgent, [reuseKey]: match.id }
+        ? withLiveAgent(s.configToLiveAgent, reuseKey, match.id, 'keep')
         : s.configToLiveAgent
   }))
   return { adopted: match.id, listingTrusted: true }
@@ -988,7 +991,9 @@ export function ensureLiveAgent(
           inFlightWarms.get(reuseKey) === spawnPromise
             ? reuseKey
             : detachedReuseKey(reuseKey, agentId)
-        set((s) => ({ configToLiveAgent: { ...s.configToLiveAgent, [key]: agentId } }))
+        set((s) => ({
+          configToLiveAgent: withLiveAgent(s.configToLiveAgent, key, agentId, 'take')
+        }))
         for (const holder of holders) holdAgent(agentId, holder)
         return agentId
       }

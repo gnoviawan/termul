@@ -62,6 +62,24 @@ export function detachedReuseKey(reuseKey: string, agentId: string): string {
 }
 
 /**
+ * `map` with `agentId` registered under the canonical `reuseKey`. The key names
+ * one agent. When another agent holds it, `take` moves that agent to its
+ * detached key and `keep` registers `agentId` detached instead. Both agents stay
+ * resolvable, so the chats open on either keep their agent config.
+ */
+export function withLiveAgent<A extends string>(
+  map: Readonly<Record<string, A>>,
+  reuseKey: string,
+  agentId: A,
+  holder: 'take' | 'keep'
+): Record<string, A> {
+  const current = map[reuseKey]
+  if (current === undefined || current === agentId) return { ...map, [reuseKey]: agentId }
+  if (holder === 'keep') return { ...map, [detachedReuseKey(reuseKey, agentId)]: agentId }
+  return { ...map, [detachedReuseKey(reuseKey, current)]: current, [reuseKey]: agentId }
+}
+
+/**
  * True when `key` carries a detached agent-id segment. Only meaningful for
  * `configToLiveAgent` keys — prepare-chat keys ALWAYS have a third segment
  * (the `mcpKey`), which is not a detach marker (see the module docstring).
