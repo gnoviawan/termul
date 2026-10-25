@@ -62,6 +62,8 @@ Any other `--<flag> <number>` overrides a scenario default, for example `--agent
 
 The scenarios keep the shape of `tools/perf`, so the numbers line up with the Windows desktop lane.
 
+**multi-pane.** The scenario opens `panes` (default 4) streaming chats, then drags the sidebar card of every chat but the first onto the right edge of the left-most pane, so each chat gets a pane of its own and all of them are on screen. The phases are `open-chats`, `split`, `warmup` (5 s), and `measure` (20 s). `chatsVisible` counts the chats on screen after the splits. The card is dragged rather than the tab because a narrow pane's tab strip clips its later tabs.
+
 **idle.** The client boots, then 20 s pass in `settle` and 20 s in `measure`, with no input and no chats. Run it with `--scenarios idle`. It is not in the default list.
 
 **stream-storm.** The runner registers the fake ACP agent from `tools/perf/fake-agent/fake-agent.ts` in the server store, with seed 42, 20 updates per second per chat, 120-character chunks, and streaming until cancelled. `PERF_AGENT_UNIQUE_SESSIONS=1` gives each agent process its own session id, because `termul-server` starts one agent process per chat. The scenario opens `agents × sessions-per-agent` chats (default 4 × 2 = 8) through the launcher UI, the way a user does. The phases are:

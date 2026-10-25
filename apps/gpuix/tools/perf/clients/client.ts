@@ -54,6 +54,14 @@ export interface ClientDriver {
   startChat(prompt: string): Promise<void>
   chatCount(): Promise<number>
   switchToChat(index: number): Promise<void>
+  /**
+   * Drags the sidebar card of the chat titled `title` onto the right edge of
+   * the left-most pane, splitting the chat into a pane of its own. The card
+   * rather than the tab: a narrow pane's tab strip clips its later tabs.
+   */
+  splitChatRight(title: string): Promise<void>
+  /** Chats on screen at once, one per pane. */
+  visibleChatCount(): Promise<number>
   /** Opens one terminal tab with the default shell and focuses it. */
   openTerminal(): Promise<void>
   /** Types a command into the focused terminal and presses Enter. */

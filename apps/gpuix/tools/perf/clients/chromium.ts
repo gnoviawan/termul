@@ -180,6 +180,27 @@ export function chromiumDriver(handle: ChromiumHandle): ClientDriver {
         .first()
         .click({ timeout: ACTION_MS })
     },
+    splitChatRight: async (title) => {
+      const panes = page.locator('[data-pane-content]')
+      const card = page
+        .locator(`button[data-chat-card-index][title=${JSON.stringify(title)}]`)
+        .first()
+      const pane = panes.first()
+      const box = await pane.boundingBox({ timeout: ACTION_MS })
+      if (!box) throw new Error('no pane on screen')
+      const before = await panes.count()
+      // The right drop zone is the pane's right quarter.
+      await card.dragTo(pane, {
+        targetPosition: { x: box.width * 0.9, y: box.height * 0.5 },
+        timeout: ACTION_MS
+      })
+      await page.waitForFunction(
+        (n) => document.querySelectorAll('[data-pane-content]').length > n,
+        before,
+        { timeout: ACTION_MS }
+      )
+    },
+    visibleChatCount: () => page.locator('[data-chat-tab-state="visible"]').count(),
     openTerminal: async () => {
       const before = await page.locator('.xterm').count()
       // The default shell, as the GPUIX lane's status-bar Terminal button opens.

@@ -258,6 +258,15 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
     throw new Error(`launcher composer never accepted "${prompt}"`)
   }
 
+  // An inactive chat tab is out of layout, so only on-screen transcripts have bounds.
+  const visibleTranscripts = (root: TreeNode): TreeNode[] => {
+    const out: TreeNode[] = []
+    walk(root, (n) => {
+      if (n.testId === 'chat-transcript' && (n.bounds?.width ?? 0) > 0) out.push(n)
+    })
+    return out
+  }
+
   const terminalNodes = (root: TreeNode): TreeNode[] => {
     const out: TreeNode[] = []
     walk(root, (n) => {
@@ -349,6 +358,27 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
       if (!card) throw new Error(`no chat card titled ${title}`)
       await click(card)
     },
+    splitChatRight: async (title) => {
+      const root = await tree()
+      const panes = visibleTranscripts(root)
+      const list = find(root, byTestId('chats-list-scroll'))
+      const card = list && find(list, byText(title))
+      if (!card) throw new Error(`no chat card titled ${title}`)
+      const pane = [...panes].sort((a, b) => (a.bounds?.x ?? 0) - (b.bounds?.x ?? 0))[0]
+      if (!pane?.bounds) throw new Error('no pane on screen')
+      // The right drop zone is the pane's right quarter.
+      await app.mouse
+        .drag(center(card), {
+          x: pane.bounds.x + pane.bounds.width * 0.9,
+          y: pane.bounds.y + pane.bounds.height / 2
+        })
+        .catch(queued)
+      await until(
+        'a pane of its own',
+        async () => visibleTranscripts(await tree()).length > panes.length
+      )
+    },
+    visibleChatCount: async () => visibleTranscripts(await tree()).length,
     openTerminal: async () => {
       const root = await tree()
       const seen = new Set(terminalNodes(root).map((t) => t.testId))

@@ -4,7 +4,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import type { ClientDriver } from './clients/client.ts'
 import { PERF_PROJECT_NAME } from './server.ts'
 
-export type ScenarioName = 'idle' | 'stream-storm' | 'pty-flood'
+export type ScenarioName = 'idle' | 'stream-storm' | 'pty-flood' | 'multi-pane'
 export type Flags = Record<string, number>
 
 /** One measured window. The runner wraps it with proc, byte and page capture. */
@@ -36,6 +36,8 @@ export const DEFAULTS: Record<ScenarioName, Flags> = {
     measure: 20,
     'switch-every-ms': 5000
   },
+  // `panes` streaming chats, each split into a pane of its own, all on screen.
+  'multi-pane': { panes: 4, rate: 20, warmup: 5, measure: 20 },
   // Same shape as tools/perf pty-flood: T terminals at lines-per-sec each.
   'pty-flood': {
     terminals: 3,
@@ -161,6 +163,30 @@ async function ptyFlood({ driver, clock, flags, seed, scratch }: ScenarioEnv): P
   })
 }
 
+async function multiPane({ driver, clock, flags }: ScenarioEnv): Promise<void> {
+  const titles = Array.from({ length: flags.panes }, (_, i) => `perf pane ${i}`)
+  const startMs: number[] = []
+  await clock.phase('open-chats', async () => {
+    for (const title of titles) {
+      const t0 = performance.now()
+      await driver.startChat(title)
+      startMs.push(Math.round(performance.now() - t0))
+    }
+  })
+  clock.note('chatStartMs', startMs)
+  // The first chat stays in the pane that holds every tab; each other chat
+  // moves into a pane of its own.
+  await clock.phase('split', async () => {
+    for (const title of titles.slice(1).reverse()) {
+      await driver.splitChatRight(title).catch((err) => clock.error(`split ${title}: ${err}`))
+    }
+  })
+  clock.note('chatsVisible', await driver.visibleChatCount())
+  clock.note('chatsOpen', await driver.chatCount())
+  await clock.phase('warmup', () => sleep(flags.warmup * 1000))
+  await clock.phase('measure', () => sleep(flags.measure * 1000))
+}
+
 async function idle({ clock, flags }: ScenarioEnv): Promise<void> {
   await clock.phase('settle', () => sleep(flags.settle * 1000))
   await clock.phase('measure', () => sleep(flags.measure * 1000))
@@ -169,5 +195,6 @@ async function idle({ clock, flags }: ScenarioEnv): Promise<void> {
 export const SCENARIOS: Record<ScenarioName, (env: ScenarioEnv) => Promise<void>> = {
   idle,
   'stream-storm': streamStorm,
-  'pty-flood': ptyFlood
+  'pty-flood': ptyFlood,
+  'multi-pane': multiPane
 }

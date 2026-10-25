@@ -368,6 +368,7 @@ async function runOnce(
   // side (replies kept coming after the client closed), so it does not time the client.
   if (!WIN) Object.assign(metrics, probeMetrics(notes))
   if (typeof notes.chatsOpen === 'number') metrics.chatsOpen = notes.chatsOpen
+  if (typeof notes.chatsVisible === 'number') metrics.chatsVisible = notes.chatsVisible
   const chatStart = notes.chatStartMs as number[] | undefined
   if (chatStart?.length) {
     metrics['chat.firstStartMs'] = chatStart[0]
