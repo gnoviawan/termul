@@ -3,6 +3,8 @@
  * composer, terminal and status bar.
  */
 
+import { mkdirSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import {
   HOLD_REPLY,
   MATRIX_PROMPTS,
@@ -10,13 +12,11 @@ import {
   PERMISSION_TITLE,
   PLAN_ENTRIES
 } from '../agent'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import path from 'node:path'
 import type { Surface } from '../types'
 import { ensureProject, resetAlpha } from '../world'
 import {
-  choose,
   COMPOSER_READY,
+  choose,
   click,
   css,
   DASHBOARD,

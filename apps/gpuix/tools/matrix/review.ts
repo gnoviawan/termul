@@ -10,6 +10,7 @@ import {
   BLUR,
   COMPOSER_FOCUS,
   COMPOSER_PICK,
+  COMPOSER_Z,
   CONFIRM_Z,
   LAMP,
   PROSE,
@@ -310,27 +311,29 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Both show "No files or folders match" for a bare @ on this server, so the file list itself is not compared here (tools/composer/e2e.ts covers it).',
-      COMPOSER_FOCUS
+      COMPOSER_FOCUS,
+      COMPOSER_Z
     ],
-    cause: 'native override needed',
-    unit: 'composer focus listeners (G7)',
+    cause: 'compat translator gap',
+    unit: 'z-index between in-flow siblings (unassigned)',
     impact: 1
   },
   'composer.slash': {
     status: 'partial',
-    differences: ['The Skills menu matches row for row.', COMPOSER_FOCUS],
-    cause: 'native override needed',
-    unit: 'composer focus listeners (G7)',
+    differences: ['The Skills menu matches row for row.', COMPOSER_FOCUS, COMPOSER_Z],
+    cause: 'compat translator gap',
+    unit: 'z-index between in-flow siblings (unassigned)',
     impact: 1
   },
   'composer.attach': {
     status: 'partial',
     differences: [
       'Attach files opens the OS file chooser in both, and the picked matrix-attach.md shows as the same file chip above the prompt (G7: the GPUIX desktop host answers `dialogApi` and the composer picker with GPUI\'s portal dialog; the matrix drives the real GTK chooser with X key events, and the web answers Playwright\'s file chooser). The "Failed to open file picker" toast is gone.',
-      COMPOSER_FOCUS
+      'After the pick the web composer shows its focus border (top edge 36 and 58) and GPUIX the resting one (28). The Attach files button sits inside the card, so the web card likely keeps `focus-within:` through the click; GPUIX does not hold focus in the card once the portal dialog closes. Not traced further (I4).',
+      COMPOSER_Z
     ],
     cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
+    unit: 'focus after the native file dialog (unassigned)',
     impact: 1
   },
   'terminal.open': {

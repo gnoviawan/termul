@@ -32,6 +32,8 @@ export const BAND_FOCUS =
 export const TOAST =
   'The toast matches the web card (G4 native toaster): check icon, close button over the top-left corner, Arial text (sonner sets its own font stack); the toast crop differs 0.85 % perceptual.'
 export const COMPOSER_FOCUS =
-  "The web composer shows its focus border and inset ring while it holds the caret; GPUIX shows the resting border. The composer's native textarea and its key-capture div (src/overrides ChatComposerEditor) have no onFocus/onBlur, so GPUIX emits no focus event for the wrapper's `focus-within:`. A G6 probe that gave both an empty onFocus and onBlur drew the border and ring as on the web (top edge 35 and 57 against 36 and 58)."
+  "The composer shows its focus border and inset ring while it holds the caret, as on the web (I4: its native textarea and key-capture div listen for focus, so the wrapper's `focus-within:` sees it; top edge 35 and 57 against the web's 36 and 58). At rest on the dashboard neither client focuses it: the web's mount focus finds the editor read-only while the agent loads (`document.activeElement` stays `BODY`), and GPUIX skips mount focus for a composer that mounts read-only."
+export const COMPOSER_Z =
+  "The workspace strip under the composer paints over the bottom 16 px of the card. The web stacks the card (`relative z-10`) above the strip that follows it (`relative z-0 -mt-4`); compat does not translate z-index, so DOM order wins. The strip's `bg-card/60` dims the lower 7 px of the send button and covers the card's bottom border (bottom edge 32 and 23 against the web's 58 and 36)."
 export const COMPOSER_PICK =
   'After the switch the beta composer shows Chat Scenario Agent in both. GPUIX gets there later: the agent chip appeared 967 ms (rail) and 586 ms (palette) after the switch in GPUIX and within 82 ms on the web (G6 run; the step now waits for it, so the frames match).'
