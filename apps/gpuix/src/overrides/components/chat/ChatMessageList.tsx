@@ -9,8 +9,9 @@
  * shorter than the pane starts at the top. The data path is the web's: the same
  * turn grouping, identity stabilisation and row components.
  *
- * Agent replies span one row per block (`AgentReplyRows`), so GPUI lays out
- * only the blocks near the viewport while a reply streams.
+ * Agent replies span one row per block (`AgentReplyRows`) and a turn's
+ * activity one row per entry (`TurnActivityRows`), so GPUI lays out only the
+ * rows near the viewport while a turn streams.
  *
  * Follow state comes from the list's scroll event: with the last row out of
  * view the reader has scrolled away, so the jump-to-latest button shows.
@@ -32,7 +33,6 @@ import { RowReveal } from '@/components/chat/RowReveal'
 import { SubagentDetailsDialog } from '@/components/chat/SubagentDetailsDialog'
 import { ThoughtGroup } from '@/components/chat/ThoughtGroup'
 import { ToolCallCard } from '@/components/chat/ToolCallCard'
-import { TurnActivity } from '@/components/chat/TurnActivity'
 import { type EnterTracker, useEnterTracker } from '@/components/chat/use-enter-tracker'
 import { WorktreeCreationCard } from '@/components/chat/WorktreeCreationCard'
 import { ArrowDown } from '@/components/icons'
@@ -43,6 +43,7 @@ import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
 import { AgentReplyRows, hasMediaBlocks } from '../../../chat/AgentReplyRows'
 import { RowCountContext, RowShell } from '../../../chat/row-shell'
+import { TurnActivityRows } from '../../../chat/TurnActivityRows'
 import { log } from '../../../log'
 import { tw } from '../../../style/tw'
 
@@ -79,7 +80,7 @@ function timelineItemId(it: TimelineItem): string {
 }
 
 interface RowProps {
-  item: TurnTimelineItem
+  item: TimelineItem
   index: number
   count: number
   lastMsgIndex: number
@@ -89,7 +90,6 @@ interface RowProps {
   filePathContext?: FilePathResolutionContext
   onOpenSubagent: (toolCall: ToolCall) => void
   parentTurnActive: boolean
-  statusLine: string | null
 }
 
 function RowContent({
@@ -102,24 +102,8 @@ function RowContent({
   onRetry,
   filePathContext,
   onOpenSubagent,
-  parentTurnActive,
-  statusLine
+  parentTurnActive
 }: RowProps) {
-  if (item.kind === 'activity') {
-    return (
-      <TurnActivity
-        items={item.items}
-        active={item.active}
-        durationMs={item.durationMs}
-        attentionRequired={item.attentionRequired}
-        hasFinalResponse={item.hasFinalResponse}
-        enter={enter}
-        statusLine={item.active ? statusLine : null}
-        filePathContext={filePathContext}
-        onOpenSubagent={onOpenSubagent}
-      />
-    )
-  }
   if (item.kind === 'tool') {
     const id = item.tool.toolCallId
     return (
@@ -459,6 +443,19 @@ export function ChatMessageList({
         <RowCountContext.Provider value={rowCounts}>
           {stableItems.map((item, index) => {
             const edges = { first: index === 0, last: index === count - 1 }
+            if (item.kind === 'activity') {
+              return (
+                <TurnActivityRows
+                  key={item.key}
+                  item={item}
+                  enter={enter}
+                  statusLine={item.active ? statusLine : null}
+                  filePathContext={filePathContext}
+                  onOpenSubagent={openSubagent}
+                  edges={edges}
+                />
+              )
+            }
             if (
               item.kind === 'message' &&
               item.message.role !== 'user' &&
@@ -493,7 +490,6 @@ export function ChatMessageList({
                   filePathContext={filePathContext}
                   onOpenSubagent={openSubagent}
                   parentTurnActive={showRunningIndicator}
-                  statusLine={statusLine}
                 />
               </RowShell>
             )

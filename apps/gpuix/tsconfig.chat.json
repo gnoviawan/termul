@@ -29,7 +29,7 @@
       "@/components/chat/ToolCallCard": [
         "./src/chat/dom-components.d.ts"
       ],
-      "@/components/chat/TurnActivity": [
+      "@/components/chat/WorkRunGroup": [
         "./src/chat/dom-components.d.ts"
       ],
       "@/components/chat/WorktreeCreationCard": [

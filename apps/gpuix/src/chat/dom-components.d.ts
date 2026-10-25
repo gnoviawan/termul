@@ -16,7 +16,7 @@ export declare const ChatMessage: SharedComponent
 export declare const RowReveal: SharedComponent
 export declare const SubagentDetailsDialog: SharedComponent
 export declare const ToolCallCard: SharedComponent
-export declare const TurnActivity: SharedComponent
+export declare const WorkRunGroup: SharedComponent
 export declare const WorktreeCreationCard: SharedComponent
 export declare const TermulPlanRenderer: SharedComponent
 export declare const MessageActions: SharedComponent

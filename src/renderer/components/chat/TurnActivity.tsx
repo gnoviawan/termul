@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useMemo } from 'react'
 import { ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -10,13 +10,12 @@ import { ChatMessage } from './ChatMessage'
 import { CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
 import type { TimelineItem } from './chat-timeline'
-import { formatTurnDuration } from './format-turn-duration'
 import { RowReveal } from './RowReveal'
 import { ThinkingStatus } from './ThinkingStatus'
 import { ThoughtGroup } from './ThoughtGroup'
-import { summarizeToolActivity, type ToolActivitySummary } from './tool-call-summary'
+import { turnActivityLabel, turnActivityModel, useTurnActivityOpen } from './turn-activity-model'
 import type { EnterTracker } from './use-enter-tracker'
-import { DiffStat, WorkRunGroup, type WorkRunItem } from './WorkRunGroup'
+import { DiffStat, WorkRunGroup } from './WorkRunGroup'
 
 interface TurnActivityProps {
   items: TimelineItem[]
@@ -45,74 +44,9 @@ function TurnActivityComponent({
   onOpenSubagent
 }: TurnActivityProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
-  const [open, setOpen] = useState(active || (!attentionRequired && !hasFinalResponse))
-  const wasActive = useRef(active)
-
-  useEffect(() => {
-    if (active) {
-      setOpen(true)
-    } else if (wasActive.current && (hasFinalResponse || attentionRequired)) {
-      setOpen(false)
-    }
-    wasActive.current = active
-  }, [active, attentionRequired, hasFinalResponse])
-
-  const duration = formatTurnDuration(durationMs)
-  const lastItem = items[items.length - 1]
-  // Each contiguous run of thoughts and tool calls gets its own nested
-  // disclosure, so narration between two runs keeps its seat: work, text,
-  // work. `workRuns` maps every member's key to its run, so a lone thought
-  // (absent) still renders bare. `summary` still covers every call in the
-  // turn for the trigger's aggregate diffstat.
-  const { summary, workRuns } = useMemo(() => {
-    const allCalls: ToolCall[] = []
-    const runs = new Map<
-      string,
-      {
-        items: WorkRunItem[]
-        summary: ToolActivitySummary
-        failed: boolean
-      }
-    >()
-    let run: WorkRunItem[] | null = null
-    const flush = (): void => {
-      if (run) {
-        const calls = run.flatMap((item) => (item.kind === 'tool' ? [item.tool] : []))
-        const runSummary =
-          calls.length > 0
-            ? summarizeToolActivity(calls, { thoughts: run.length - calls.length })
-            : null
-        if (runSummary) {
-          const entry = {
-            items: run,
-            summary: runSummary,
-            failed: run.some((member) => member.kind === 'tool' && member.tool.status === 'failed')
-          }
-          for (const member of run) runs.set(member.key, entry)
-        }
-      }
-      run = null
-    }
-    for (const item of items) {
-      if (item.kind === 'tool' || item.kind === 'thought-group') {
-        if (item.kind === 'tool') allCalls.push(item.tool)
-        if (!run) run = []
-        run.push(item)
-      } else {
-        flush()
-      }
-    }
-    flush()
-    return { summary: summarizeToolActivity(allCalls), workRuns: runs }
-  }, [items])
-  const label =
-    active && statusLine
-      ? statusLine
-      : active
-        ? 'Working…'
-        : duration
-          ? `Worked for ${duration}`
-          : 'Worked'
+  const [open, setOpen] = useTurnActivityOpen(active, attentionRequired, hasFinalResponse)
+  const { entries, summary } = useMemo(() => turnActivityModel(items, active), [items, active])
+  const label = turnActivityLabel(active, durationMs, statusLine)
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="my-1 min-w-0">
@@ -139,59 +73,40 @@ function TurnActivityComponent({
       <CollapsibleContent forceMount>
         <CollapseExpandMotion open={open} motion="chat">
           <div className="min-w-0 pb-1 pl-4">
-            {items.map((item, index) => {
-              const run = workRuns.get(item.key)
-              if (run) {
-                // Only a run's first item renders — as the group's disclosure;
-                // the rest live inside it.
-                if (run.items[0] !== item) return null
+            {entries.map((entry) => {
+              if (entry.kind === 'work-run') {
                 return (
                   <WorkRunGroup
-                    key={item.key}
-                    items={run.items}
-                    summary={run.summary}
+                    key={entry.key}
+                    items={entry.items}
+                    summary={entry.summary}
                     active={active}
-                    // Lets a still-streaming thought inside the run keep streaming.
-                    isLiveTail={active && run.items[run.items.length - 1] === lastItem}
-                    failed={run.failed}
+                    isLiveTail={entry.isLiveTail}
+                    failed={entry.failed}
                     enter={enter}
                     filePathContext={filePathContext}
                     onOpenSubagent={onOpenSubagent}
                   />
                 )
               }
-              if (item.kind === 'thought-group') {
+              if (entry.kind === 'thought') {
                 return (
                   <RowReveal
-                    key={item.key}
-                    animate={enter.animate(item.key)}
-                    staggerIndex={enter.staggerIndex(item.key)}
+                    key={entry.key}
+                    animate={enter.animate(entry.key)}
+                    staggerIndex={enter.staggerIndex(entry.key)}
                   >
-                    <ThoughtGroup
-                      messages={item.messages}
-                      isLiveTail={active && index === items.length - 1}
-                    />
+                    <ThoughtGroup messages={entry.messages} isLiveTail={entry.isLiveTail} />
                   </RowReveal>
                 )
               }
-              // Every tool sits in a run above. CAP-2 / worktree progress: switch
-              // markers and worktree rows never reach the turn bucket
-              // (groupTurnActivity emits them top-level), but guard the render
-              // so the type stays exhaustive.
-              if (
-                item.kind === 'tool' ||
-                item.kind === 'switch' ||
-                item.kind === 'worktree' ||
-                item.kind === 'reload'
-              )
-                return null
               return (
                 <ChatMessage
-                  key={item.key}
-                  message={item.message}
+                  key={entry.key}
+                  message={entry.message}
                   showHeader={false}
-                  isLast={active && index === items.length - 1}
-                  animateEnter={enter.animate(item.message.id)}
+                  isLast={entry.isLast}
+                  animateEnter={enter.animate(entry.message.id)}
                   filePathContext={filePathContext}
                 />
               )

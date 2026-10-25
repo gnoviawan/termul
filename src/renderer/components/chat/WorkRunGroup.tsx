@@ -8,15 +8,12 @@ import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
-import type { TimelineItem } from './chat-timeline'
 import { RowReveal } from './RowReveal'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
 import type { ToolActivitySummary } from './tool-call-summary'
+import type { WorkRunItem } from './turn-activity-model'
 import type { EnterTracker } from './use-enter-tracker'
-
-/** One step of agent work between two narration messages. */
-export type WorkRunItem = Extract<TimelineItem, { kind: 'tool' } | { kind: 'thought-group' }>
 
 interface DiffStatProps {
   added: number
