@@ -147,8 +147,9 @@ pane, SSH and remote access score 0, and notifications and snapshots 50 %,
 only because a surface in each has no web reference.
 
 Against the page before this run (88.2 % weighted, 91 ported), two surfaces
-moved from ported to partial and none moved up. Both are new findings, not
-new code:
+moved from ported to partial, none moved up, and one partial gap got worse.
+These are findings of this review, not changes in the code since the last
+runs:
 
 - Ctrl+B and Ctrl+Shift+B leave the GPUIX composer focused, where the web
   composer loses focus (shortcuts.toggle-side-panel and
@@ -157,7 +158,8 @@ new code:
   unfocused on the dashboard then. It now rests focused in both clients, so
   the web's blur after the key shows.
 - The table fullscreen view paints under the chat composer and the status
-  bar (chat.table-fullscreen, 3 of 3 runs). This is a regression from G9.
+  bar (chat.table-fullscreen, 3 of 3 runs). This is a regression from G9
+  (inferred from the code and from G8's row, measured before gpuix/0011).
   The view's `<anchored>` layer has no priority, and gpuix/0011 now paints
   the composer's `z-10` and the bar's `z-50` in the same deferred pass. The
   surface was already partial; its impact is now 2, which puts it first in
