@@ -34,8 +34,9 @@ import { CodeCard } from './CodeCard'
 import { transcriptProbe } from './perf-probe'
 import { type FlowBlock, flowGap, leadingMargin } from './prose-flow'
 import { type ProsePart, proseParts } from './prose-parts'
-import { fileLinkPath, listItems, proseBlocks, unquote } from './prose-source'
+import { fileLinkPath, listItems, proseBlocks, taskMarker, unquote } from './prose-source'
 import { TableCard } from './TableCard'
+import { TaskItem } from './TaskItem'
 import { transcriptThemes } from './theme'
 
 export type ReplyRow =
@@ -230,7 +231,8 @@ const MarkdownBlock = memo(function MarkdownBlock({
   streaming: boolean
   onLink: (url: string) => void
 }) {
-  const themes = transcriptThemes(useColorTheme())
+  const themeId = useColorTheme()
+  const themes = transcriptThemes(themeId)
   const quote = block === 'blockquote'
   const native = (text: string, key?: number) => (
     <markdown
@@ -245,7 +247,18 @@ const MarkdownBlock = memo(function MarkdownBlock({
   )
   const markdown =
     block === 'list' ? (
-      <div style={LIST_BOX}>{listItems(source).map((item, i) => native(item, i))}</div>
+      <div style={LIST_BOX}>
+        {listItems(source).map((item, i) => {
+          const task = taskMarker(item)
+          return task ? (
+            <TaskItem key={i} task={task} themeId={themeId}>
+              {native(task.body)}
+            </TaskItem>
+          ) : (
+            native(item, i)
+          )
+        })}
+      </div>
     ) : (
       native(quote ? unquote(source) : source)
     )

@@ -145,11 +145,12 @@ function blockKind(node: RootContent): BlockKind {
 }
 
 /**
- * GFM task items: native markdown prints `[x]` literally, so the marker
- * becomes a ballot box glyph, the nearest it can paint to the web's checkbox.
+ * Nested GFM task items: native markdown prints `[x]` literally, so the
+ * marker becomes a ballot box glyph. A top-level item keeps its marker: the
+ * transcript paints it as a checkbox (`TaskItem`).
  */
-function taskEdits(source: string, node: Nodes, edits: Edit[]): void {
-  if (node.type === 'listItem' && typeof node.checked === 'boolean') {
+function taskEdits(source: string, node: Nodes, edits: Edit[], depth = 0): void {
+  if (node.type === 'listItem' && depth > 1 && typeof node.checked === 'boolean') {
     const at = span(node)
     if (at) {
       const match = /^([-*+]|\d+[.)])[ \t]+\[[ xX]\]/.exec(source.slice(at[0], at[1]))
@@ -159,8 +160,9 @@ function taskEdits(source: string, node: Nodes, edits: Edit[]): void {
       }
     }
   }
+  const inner = node.type === 'list' ? depth + 1 : depth
   if ('children' in node)
-    for (const child of (node as Parent).children) taskEdits(source, child as Nodes, edits)
+    for (const child of (node as Parent).children) taskEdits(source, child as Nodes, edits, inner)
 }
 
 function applyEdits(source: string, start: number, end: number, edits: Edit[]): string {
@@ -222,6 +224,28 @@ export function proseBlocks(source: string, linkFiles: boolean): ProseBlock[] {
   if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string)
   cache.set(cacheKey, blocks)
   return blocks
+}
+
+const TASK = /^( {0,3})([-*+]|\d{1,9}[.)])[ \t]+\[([ xX])\](?:[ \t]+|$)/
+
+export interface TaskMarker {
+  /** `-`, `*`, `+`, or an ordered marker such as `3.` */
+  marker: string
+  checked: boolean
+  /** The item's text and any continuation lines, without the marker. */
+  body: string
+}
+
+/** The task marker of one list item's source (`listItems`), or null for a plain item. */
+export function taskMarker(item: string): TaskMarker | null {
+  const match = TASK.exec(item)
+  if (!match) return null
+  const rest = item.slice(match[0].length)
+  const body = rest
+    .split('\n')
+    .map((line, i) => (i === 0 ? line : line.replace(/^ {1,4}/, '')))
+    .join('\n')
+  return { marker: match[2], checked: match[3] !== ' ', body }
 }
 
 /** A quote block's content: its lines with the leading `>` marker removed. */

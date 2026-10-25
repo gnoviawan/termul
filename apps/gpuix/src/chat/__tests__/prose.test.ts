@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { flowGap, leadingMargin, trailingMargin } from '../prose-flow'
 import { proseChunks, proseParts } from '../prose-parts'
-import { fileLinkPath, listItems, proseBlocks, unquote } from '../prose-source'
+import { fileLinkPath, listItems, proseBlocks, taskMarker, unquote } from '../prose-source'
 
 describe('proseParts', () => {
   test('splits top-level fences out of prose with their language', () => {
@@ -148,18 +148,44 @@ describe('flowGap', () => {
 })
 
 describe('task lists', () => {
-  test('checked and open task markers become ballot boxes', () => {
+  test('top-level task markers stay for the checkbox row', () => {
     expect(proseBlocks('- [x] done\n- [ ] todo', false)).toEqual([
-      { kind: 'markdown', block: 'list', depth: 0, source: '- ☑ done\n- ☐ todo' }
+      { kind: 'markdown', block: 'list', depth: 0, source: '- [x] done\n- [ ] todo' }
     ])
+  })
+
+  test('nested task markers become ballot boxes', () => {
+    expect(proseBlocks('- parent\n  - [x] done\n  - [ ] todo', false)).toEqual([
+      {
+        kind: 'markdown',
+        block: 'list',
+        depth: 0,
+        source: '- parent\n  - ☑ done\n  - ☐ todo'
+      }
+    ])
+  })
+
+  test('taskMarker splits a task item into its box state and body', () => {
+    expect(taskMarker('- [x] Reject `/c/` with no id')).toEqual({
+      marker: '-',
+      checked: true,
+      body: 'Reject `/c/` with no id'
+    })
+    expect(taskMarker('2. [ ] todo\n   more')).toEqual({
+      marker: '2.',
+      checked: false,
+      body: 'todo\nmore'
+    })
+    expect(taskMarker('- plain item')).toBeNull()
+    expect(taskMarker('- [x]')).toEqual({ marker: '-', checked: true, body: '' })
   })
 })
 
 describe('unquote', () => {
   test('drops the quote marker of every line, keeping inline markdown', () => {
-    expect(unquote('> The chat route is a *restore* mechanism,\n> not a view.\n>\n>  Indented')).toBe(
-      'The chat route is a *restore* mechanism,\nnot a view.\n\n Indented'
-    )
+    expect(
+      unquote('> The chat route is a *restore* mechanism,\n> not a view.\n>\n>  Indented')
+    ).toBe('The chat route is a *restore* mechanism,\nnot a view.\n\n Indented')
   })
 })
 
