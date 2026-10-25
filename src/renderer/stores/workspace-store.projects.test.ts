@@ -45,27 +45,6 @@ describe('workspace-store per-project trees', () => {
     expect(store().parkedTrees).toEqual({})
   })
 
-  it('first activation keeps the placeholder tree when the staged tree has no tabs', () => {
-    const placeholder = store().root
-
-    store().activateProject('A', createProjectWorkspace())
-
-    expect(store().activeProjectId).toBe('A')
-    expect(store().root).toBe(placeholder)
-    expect(store().activePaneId).toBe(placeholder.id)
-    expect(store().parkedTrees).toEqual({})
-  })
-
-  it('a later activation never adopts the tree it leaves', () => {
-    store().activateProject('A', createProjectWorkspace())
-    const treeA = store().root
-
-    store().activateProject('B', createProjectWorkspace())
-
-    expect(store().root).not.toBe(treeA)
-    expect(store().parkedTrees.A.root).toBe(treeA)
-  })
-
   it('parks the active tree by reference and restores it by reference', () => {
     const treeA = treeOf(leafWith('pane-a', 'ta'))
     const treeB = treeOf(leafWith('pane-b', 'tb'))

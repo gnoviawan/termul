@@ -8,7 +8,7 @@ import { StatusBar } from '@/components/StatusBar'
 import { useTopRow } from '@/components/shell/top-row-context'
 import { Button } from '@/components/ui/button'
 import { ProjectSwitchIndicator } from '@/components/workspace/ProjectSwitchIndicator'
-import { ProjectTreeHost, useMountedProjectHosts } from '@/components/workspace/ProjectTreeHost'
+import { ProjectTreeHost, useMountedProjectIds } from '@/components/workspace/ProjectTreeHost'
 import { useMobileActiveLeaf } from '@/hooks/use-mobile-active-leaf'
 import { ShellSkeleton } from '@/layouts/workspace-layout/ShellSkeleton'
 import type { SSHWorkspaceState } from '@/layouts/workspace-layout/use-ssh-workspace'
@@ -54,7 +54,7 @@ export function WorkspaceMain({
   const { renameTerminal } = useTerminalActions()
   const appDefaultShell = useDefaultShell()
   // Every visited project's tree stays mounted; only the active one is visible.
-  const mountedProjectHosts = useMountedProjectHosts()
+  const mountedProjectIds = useMountedProjectIds()
   const activeTreeProjectId = useWorkspaceStore((state) => state.activeProjectId)
   // Flagged shell only: the SSH header is the top row when it owns the window
   // controls (no provider on the classic and mobile shells = unchanged).
@@ -104,11 +104,11 @@ export function WorkspaceMain({
               <ChatRoute />
               <div className="relative h-full min-h-0 flex-1 overflow-hidden">
                 <ProjectSwitchIndicator />
-                {mountedProjectHosts.map(({ projectId, key }) => {
+                {mountedProjectIds.map((projectId) => {
                   const isActiveProject = projectId === activeTreeProjectId
                   return (
                     <ProjectTreeHost
-                      key={key}
+                      key={projectId}
                       projectId={projectId}
                       isActiveProject={isActiveProject}
                       leafOverride={isActiveProject ? mobileActiveLeaf : null}
