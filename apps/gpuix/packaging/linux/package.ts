@@ -2,6 +2,7 @@
  * Build the Linux x64 package of the GPUIX desktop app: `bun run package:linux`.
  *
  *   bun packaging/linux/package.ts [--out DIR] [--server-bin FILE] [--webview-host FILE]
+ *                                  [--native-addon self-built|npm]
  *
  * The package is a directory app under /opt/termul-gpuix: the Bun runtime that runs this script,
  * the production client bundle, its fonts, the four runtime packages it leaves external
@@ -14,6 +15,10 @@
  * `$CARGO_TARGET_DIR`, else `src-tauri/target`. The server build embeds `dist-web/`; without
  * `--server-bin` this runs `bun run build:web` first when the repo has no `dist-web/` yet, or
  * always with `--rebuild-web`.
+ *
+ * `--native-addon self-built` (the default) ships the patched addon `bun run native:build` writes
+ * (docs/native-patches.md) in place of the npm one. When that file is missing the package falls
+ * back to the npm addon and says so loudly; `--native-addon npm` asks for the npm addon outright.
  */
 
 import {
@@ -51,9 +56,17 @@ const { values } = parseArgs({
     'server-bin': { type: 'string' },
     'webview-host': { type: 'string' },
     'keep-stage': { type: 'boolean', default: false },
-    'rebuild-web': { type: 'boolean', default: false }
+    'rebuild-web': { type: 'boolean', default: false },
+    'native-addon': { type: 'string', default: 'self-built' }
   }
 })
+if (values['native-addon'] !== 'self-built' && values['native-addon'] !== 'npm') {
+  throw new Error(`--native-addon takes self-built or npm, not ${values['native-addon']}`)
+}
+const SELF_BUILT_ADDON = path.join(
+  APP_DIR,
+  'native/gpuix-native/build/gpuix-native.linux-x64-gnu.node'
+)
 
 const VERSION: string = (await Bun.file(path.join(REPO_DIR, 'package.json')).json()).version
 const OUT = path.resolve(values.out!)
@@ -191,6 +204,27 @@ const addon = path.join(
   ROOT,
   'node_modules/@gpuix/native-linux-x64-gnu/gpuix-native.linux-x64-gnu.node'
 )
+let nativeAddon: 'self-built' | 'npm' = 'npm'
+if (values['native-addon'] === 'self-built') {
+  if (existsSync(SELF_BUILT_ADDON)) {
+    copyFileSync(SELF_BUILT_ADDON, addon)
+    nativeAddon = 'self-built'
+  } else {
+    console.error(
+      [
+        '',
+        '!'.repeat(78),
+        `[package] ERROR: no self-built @gpuix/native at ${SELF_BUILT_ADDON}.`,
+        '[package] Shipping the npm addon WITHOUT the Termul patch series (italics, link colour,',
+        '[package] inline-code chip, window handle). Run `bun run native:build`',
+        '[package] first, or pass --native-addon npm to ship the npm addon on purpose.',
+        '!'.repeat(78),
+        ''
+      ].join('\n')
+    )
+  }
+}
+step(`native addon: ${nativeAddon}`)
 run(['strip', '--strip-unneeded', addon])
 
 step('termul-server')
@@ -252,6 +286,7 @@ if (!values['keep-stage']) rmSync(STAGE, { recursive: true })
 console.log(
   JSON.stringify({
     deb,
+    nativeAddon,
     debBytes: statSync(deb).size,
     debSize: mib(statSync(deb).size),
     installed: mib(installedBytes),

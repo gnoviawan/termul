@@ -124,7 +124,23 @@ To move to a new release:
 
 ## Shipping the self-built addon in the .deb
 
-Not wired yet; `bun run package:linux` still ships the npm addon. The package step that installs the runtime packages (`packaging/linux/package.ts`, step 2) leaves the addon at `node_modules/@gpuix/native-linux-x64-gnu/gpuix-native.linux-x64-gnu.node`, which the script then strips. To ship the self-built addon, copy `native/gpuix-native/build/gpuix-native.linux-x64-gnu.node` over that file before the `strip` call. The loader then picks it with no wrapper change, and `package:verify`'s `ldd` pass covers it like any other ELF file. Setting `NAPI_RS_NATIVE_LIBRARY_PATH` in the wrapper would also work, but it leaves two addons in the package and splits the choice between two files.
+`bun run package:linux` ships the self-built addon by default. After it installs the runtime packages, it copies `native/gpuix-native/build/gpuix-native.linux-x64-gnu.node` over `node_modules/@gpuix/native-linux-x64-gnu/gpuix-native.linux-x64-gnu.node`, then strips it. The loader picks it up with no wrapper change, and `package:verify`'s `ldd` pass covers it like any other ELF file. The summary line names the addon it shipped: `"nativeAddon":"self-built"` or `"npm"`.
+
+| Flag | Result |
+|---|---|
+| none, or `--native-addon self-built` | The self-built addon. If `bun run native:build` has not run, the script prints an error banner and ships the npm addon; the summary says `"npm"`. |
+| `--native-addon npm` | The npm addon, with no error. |
+
+To prove the packaged addon carries the series, run the patch check on the file `package:verify` extracts:
+
+```sh
+bun run package:linux --out /tmp/pkg --server-bin <termul-server> --webview-host <termul-webview-host>
+bun run package:verify --deb /tmp/pkg/termul-gpuix_<version>_amd64.deb --root /tmp/pkg-verify
+NAPI_RS_NATIVE_LIBRARY_PATH=/tmp/pkg-verify/install/opt/termul-gpuix/node_modules/@gpuix/native-linux-x64-gnu/gpuix-native.linux-x64-gnu.node \
+  bun run native:patch-check
+```
+
+Measured on 2026-10-25: the .deb is 61,186,892 bytes (58.4 MiB, 222.5 MiB installed), `package:verify` passes 11/11, the browser helper starts with `--parent 0x200001` (patch `0003`), and the patch check passes every row on the stripped 38,957,440-byte packaged addon.
 
 ## Known gaps
 
