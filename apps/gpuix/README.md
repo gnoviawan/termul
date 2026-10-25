@@ -346,3 +346,41 @@ never reaches X) and a test server on a free port in 8190-8199:
 - `bun tools/browser/unsupported-check.ts [--case missing-helper|wayland]`
   checks the unsupported state.
 
+## Canvas (FigCraft, Linux X11, `src/browser/canvas-relay.ts`)
+
+The canvas is a helper webview too. GPUIX has no iframe, so
+`src/overrides/components/canvas/CanvasShell.tsx` replaces the DOM shell: it
+asks the browser host for a canvas tab (`createCanvas`), and the helper loads
+`native/webview-host/src/relay.html` from its `termul-canvas://localhost`
+scheme. That page iframes the editor URL (the same one the DOM shell builds,
+with `ho=termul-canvas://localhost`) and is the parent window FigCraft talks
+to: what the editor posts goes to the app as `canvasMessage` events, and the
+app's `post` commands are delivered to the editor. `createCanvasRelayFrame`
+gives `canvas-bridge.ts` a frame whose `contentWindow` sends through the
+helper and whose messages arrive on `window` as `message` events from that
+`contentWindow`, so the bridge, the store and the agent gateway run unchanged.
+
+- **Placement.** The webview covers the panel slot (`use-slot-rect.ts`, shared
+  with the DOM shell). With no slot (tab closed or not shown) it moves out of
+  the window at 1x1, as the DOM iframe does; under an overlay it moves out at
+  its size. It stays mapped either way, so agent calls keep working on a
+  hidden canvas. Closing the tab does not unmount the editor (AD-19); an
+  unmount (another window takes the canvas, the app quits, the project goes)
+  destroys the webview and ends its WebKit web process.
+- **Theme.** `src/overrides/lib/canvas-theme.ts` reads the `host.theme` tokens
+  from the GPUIX theme, since this process has no computed style.
+- **Unsupported.** Without a canvas-capable host (Wayland, no helper, not
+  Linux) the slot shows a notice instead of the editor.
+
+`bun tools/canvas/canvas-check.ts` drives the real shell under Xvfb: Canvas
+from the rail, agent `create_node` and `get_node` through the host's canvas
+MCP tools (`tools/canvas/canvas-agent.ts`), Save, Preferences over the canvas
+with an agent call while it is hidden, Ctrl+Z typed into the canvas, a split
+with the chat composer taking the keyboard back, closing the tab, a second
+project's canvas, a takeover that unmounts the first, and quitting. The test
+server has no FigCraft bundle, so the check puts `tools/canvas/bundle-proxy.ts`
+in front of it with the bundle `canvas/figcraft.pin` names (fetched and
+sha256-checked by `scripts/canvas/fetch-figcraft-bundle.mjs`). For tools that
+start their own server, `TERMUL_SERVER_BIN=tools/canvas/server-with-bundle.ts`
+does the same, e.g. `bun tools/matrix/run.ts --only canvas.open`.
+
