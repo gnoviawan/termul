@@ -12,7 +12,7 @@ export const BLUR =
 export const CONFIRM_Z =
   'The web paints the workspace status bar sharp above the confirm scrim: ConfirmDialog is an inline `fixed z-50` overlay and StatusBar a later `relative z-50` sibling, so DOM order puts the bar on top. GPUIX puts the fixed overlay above everything, so the bar is dimmed and blurred with the rest.'
 export const PROSE =
-  'Links paint in medium primary with their underline, inline code sits in the smaller chip with its padding, and italics are real (N1 and N2 native patches). Two prose differences remain: task-list items draw ☑ and ☐ text glyphs where the web draws checkbox boxes, and a paragraph holding inline code wraps about 60 px wider than the web column, so its lines break at different words.'
+  "Links paint in medium primary with their underline, inline code sits in the smaller chip with its padding, and italics are real (N1 and N2 native patches). Task-list items draw Chromium's disabled checkbox at the web's place (G7). One prose difference remains: a paragraph holding inline code breaks its lines at different words. G7 traced it to `text-wrap: pretty` on `.chat-streamdown`: Chromium rebalances a paragraph's last lines to avoid a short final line (the web's three lines end at 1198, 1175 and 739 px, GPUIX's greedy lines at 1261, 1220 and 660 px), and native markdown wraps greedily."
 export const RUN_ORDER =
   'The GPUIX Chats list holds more cards because its pass runs after the web pass on the same server.'
 export const TREE_TEXT =

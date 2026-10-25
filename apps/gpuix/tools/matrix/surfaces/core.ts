@@ -440,6 +440,17 @@ const CHAT: Surface[] = [
     ]
   },
   {
+    id: 'chat.table-fullscreen',
+    area: 'chat',
+    title: 'Table card fullscreen view',
+    steps: [
+      DASHBOARD,
+      step('b-open', [openChat, wait(1500)]),
+      step('c-top', [wheel(txt('One more place parses it', false), -20000), wait(1200)]),
+      step('d-fullscreen', [click(label('View fullscreen')), wait(800)], see('WorkspaceSnapshots'))
+    ]
+  },
+  {
     id: 'chat.new-chat',
     area: 'chat',
     title: 'New chat button',

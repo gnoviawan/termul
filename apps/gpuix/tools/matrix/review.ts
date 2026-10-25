@@ -263,7 +263,7 @@ export const REVIEWS: Record<string, Review> = {
       TREE_TEXT
     ],
     cause: 'native override needed',
-    unit: 'O5 prose remainder: task boxes, wrap width, tables',
+    unit: 'prose remainder: text-wrap pretty, table card (unassigned)',
     impact: 1
   },
   'chat.scroll-top': {
@@ -275,7 +275,7 @@ export const REVIEWS: Record<string, Review> = {
       TREE_TEXT
     ],
     cause: 'native override needed',
-    unit: 'O5 prose remainder: task boxes, wrap width, tables',
+    unit: 'prose remainder: text-wrap pretty, table card (unassigned)',
     impact: 1
   },
   'chat.new-chat': {
@@ -308,7 +308,7 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: ['The running chat shows the agent chip and composer like the web.', PROSE],
     cause: 'native override needed',
-    unit: 'O5 prose remainder: task boxes, wrap width, tables',
+    unit: 'prose remainder: text-wrap pretty, table card (unassigned)',
     impact: 1
   },
   'composer.mention': {
@@ -414,14 +414,16 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'chat.queue': {
-    status: 'broken',
+    status: 'partial',
     differences: [
-      'A prompt sent while the turn runs shows under 1 Queued with the stop button in place of send in GPUIX as on the web, but the GPUIX transcript differs in 3 of 3 runs. In the full run and the second rerun it stays empty: no matrix hold bubble and no Working row with "Holding this turn open for the queue." In the first rerun the follow-up was sent as a new turn instead of queued (the type action timed out waiting for the GPUI key command) and the first turn showed as finished.',
-      'In the full run the composer chip also read "Agent" instead of Chat Scenario Agent, and the Chats list shows a second matrix hold card marked New.'
+      'The matrix hold bubble, the Working row with "Holding this turn open for the queue." and its block caret, the 1 Queued panel with queued follow-up, and the stop button match. G7 traced the empty transcript of 3 of 3 earlier runs: virtual-list rows were laid out at their fit width, and a row whose only text is a <markdown> (the live narration under Working…) took the markdown\'s 0 max-content width, wrapped each character onto its own line (a 76 by 809 px row) and pushed the other rows out of view. Rows now span the list.',
+      'The Working chevron points right in GPUIX while the web turns it down for the open group: `TurnActivityTrigger` rotates it with a motion `rotate`, which GPUIX does not paint.',
+      'The narration check fails only because natively painted markdown text is not in the automation tree.',
+      RUN_ORDER
     ],
-    cause: 'needs diagnosis',
-    unit: 'chat started from the launcher renders late (unassigned)',
-    impact: 2
+    cause: 'compat translator gap',
+    unit: 'plan card ring and rotate (unassigned)',
+    impact: 1
   },
   'terminal.vim-replies': {
     status: 'ported',
