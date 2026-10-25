@@ -416,3 +416,30 @@ fn touched_ids_are_deduplicated_and_capped_to_the_last_ones() {
     assert_eq!(ids.iter().filter(|id| **id == 50).count(), 1);
     assert!(!ids.contains(&1), "the oldest ids are dropped");
 }
+
+#[test]
+fn a_result_wrapped_with_its_layout_issues_still_names_the_layers() {
+    let checked = |command: &str, params: Value| json!({ "command": command, "params": params, "issues": true });
+    let issues = json!([{ "id": 7, "name": "Title", "kind": "low_contrast", "message": "Raise the contrast." }]);
+    let created = json!({ "result": { "id": 7 }, "issues": issues }).to_string();
+    let create = checked("node.create", json!({ "type": "text" }));
+    assert_eq!(
+        derive_activity("create_node", EXECUTE, &create, &created),
+        write(ids(&[7]))
+    );
+    let batch = checked(
+        "command.batch",
+        json!({ "commands": [{ "command": "node.create", "params": { "type": "frame" } }] }),
+    );
+    let built = json!({ "result": [{ "id": 8 }], "issues": issues }).to_string();
+    assert_eq!(
+        derive_activity("batch", EXECUTE, &batch, &built),
+        write(ids(&[8]))
+    );
+    let duplicate = checked("object.duplicate", json!({}));
+    let duplicated = json!({ "result": { "ids": [9] }, "issues": [] }).to_string();
+    assert_eq!(
+        derive_activity("run_command", EXECUTE, &duplicate, &duplicated),
+        write(ids(&[9]))
+    );
+}
