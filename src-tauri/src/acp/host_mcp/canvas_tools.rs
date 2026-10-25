@@ -37,7 +37,12 @@ Termul chooses the file and ignores any path you pass. Do not create or edit .fi
 .op files on disk, do not call open_file, and do not look for other design tools, MCP servers or \
 canvas apps: these tools are the canvas. Agents cannot open the canvas. A CANVAS_CLOSED error \
 means it is not open, so ask the user to open it with the Canvas button in Termul's left rail, \
-then retry. The canvas editor is FigCraft, and the rest of this section is its own guide.";
+then retry. Before your first canvas edit in a session, call read_canvas_guide with no topic to \
+read the termul-canvas skill index (SKILL.md), then call it again for the required topics \
+canvas-basics and working-protocol and for the guide that fits the request. When the user \
+gives no brand or style, call get_canvas_style, pick one, run its apply batch and tell the user \
+which style you chose. The canvas editor is FigCraft, and the rest of this section is its own \
+guide.";
 
 /// The canvas part of the session `instructions`.
 #[must_use]

@@ -1,0 +1,479 @@
+{
+  "styles": [
+    {
+      "name": "Warm Editorial",
+      "mood": "Cream paper, dark cocoa ink and a terracotta accent, set like a printed menu.",
+      "bestFor": ["bakery", "cafe", "restaurant", "craft shop", "recipe or food blog"],
+      "fonts": {
+        "family": "Inter",
+        "heading": "Bold",
+        "body": "Regular",
+        "preferredPairing": "A display serif such as Playfair Display for headings, once the canvas can render it"
+      },
+      "typeScale": [
+        { "name": "display", "size": 72, "face": "Bold", "lineHeight": 76, "letterSpacing": "-3%" },
+        { "name": "h1", "size": 48, "face": "Bold", "lineHeight": 54, "letterSpacing": "-2%" },
+        { "name": "h2", "size": 32, "face": "Semi Bold", "lineHeight": 40, "letterSpacing": "-1%" },
+        { "name": "h3", "size": 22, "face": "Semi Bold", "lineHeight": 30 },
+        { "name": "body", "size": 18, "face": "Regular", "lineHeight": 28 },
+        { "name": "small", "size": 15, "face": "Regular", "lineHeight": 22 },
+        { "name": "label", "size": 13, "face": "Semi Bold", "lineHeight": 16, "letterSpacing": "10%" }
+      ],
+      "colors": {
+        "light": {
+          "bg": "#FBF6EE",
+          "surface": "#F3EADB",
+          "text": "#2B1D14",
+          "muted": "#6B5446",
+          "primary": "#A8432A",
+          "onPrimary": "#FFFFFF",
+          "accent": "#7A5A12",
+          "border": "#E2D4BE"
+        },
+        "dark": {
+          "bg": "#1E1611",
+          "surface": "#2A201A",
+          "text": "#F6EDE1",
+          "muted": "#C9B6A3",
+          "primary": "#E07A5A",
+          "onPrimary": "#1E1611",
+          "accent": "#D9B45A",
+          "border": "#3E3128"
+        }
+      },
+      "spacing": [4, 8, 16, 24, 40, 64, 104],
+      "radius": { "small": 4, "medium": 8, "large": 16 },
+      "composition": [
+        "Wide margins and a narrow, left-aligned text column, like a magazine page.",
+        "Separate sections with thin rules in `border` or a change to `surface`, not with cards.",
+        "Put prices, hours and the address in plain text rows; the copy carries the warmth.",
+        "Use the small uppercase `label` step above headlines as a kicker."
+      ]
+    },
+    {
+      "name": "Clean SaaS",
+      "mood": "White space, slate text and one confident indigo; quiet, precise and modern.",
+      "bestFor": ["software product", "pricing page", "startup landing page", "B2B tool", "sign-up flow"],
+      "fonts": { "family": "Inter", "heading": "Semi Bold", "body": "Regular" },
+      "typeScale": [
+        { "name": "display", "size": 64, "face": "Semi Bold", "lineHeight": 70, "letterSpacing": "-3%" },
+        { "name": "h1", "size": 44, "face": "Semi Bold", "lineHeight": 52, "letterSpacing": "-2%" },
+        { "name": "h2", "size": 30, "face": "Semi Bold", "lineHeight": 38, "letterSpacing": "-1%" },
+        { "name": "h3", "size": 20, "face": "Semi Bold", "lineHeight": 28 },
+        { "name": "body", "size": 17, "face": "Regular", "lineHeight": 26 },
+        { "name": "small", "size": 14, "face": "Regular", "lineHeight": 20 },
+        { "name": "label", "size": 13, "face": "Semi Bold", "lineHeight": 16 }
+      ],
+      "colors": {
+        "light": {
+          "bg": "#FFFFFF",
+          "surface": "#F5F7FA",
+          "text": "#0F172A",
+          "muted": "#526075",
+          "primary": "#4338CA",
+          "onPrimary": "#FFFFFF",
+          "accent": "#0E7490",
+          "border": "#E2E8F0"
+        },
+        "dark": {
+          "bg": "#0B1020",
+          "surface": "#141B2D",
+          "text": "#E8ECF4",
+          "muted": "#9AA6BC",
+          "primary": "#8B87F5",
+          "onPrimary": "#0B1020",
+          "accent": "#38BDD8",
+          "border": "#263049"
+        }
+      },
+      "spacing": [4, 8, 12, 16, 24, 32, 48, 80],
+      "radius": { "small": 6, "medium": 10, "large": 16 },
+      "composition": [
+        "Centre the hero, left-align everything below it.",
+        "One primary button per view; secondary actions are text buttons or outlines in `border`.",
+        "Feature grids of three or four columns with an icon-sized shape, a short title and one sentence; no card boxes unless the items are clickable.",
+        "Use `surface` bands to group a section instead of wrapping each item."
+      ]
+    },
+    {
+      "name": "Bold Athletic",
+      "mood": "Near-black, heavy uppercase headlines and an electric lime; loud, fast and physical.",
+      "bestFor": ["gym", "sports club", "fitness app", "event", "energy drink promo"],
+      "fonts": {
+        "family": "Inter",
+        "heading": "Bold",
+        "body": "Regular",
+        "preferredPairing": "A condensed grotesque for headlines, once the canvas can render it"
+      },
+      "typeScale": [
+        { "name": "display", "size": 96, "face": "Bold", "lineHeight": 92, "letterSpacing": "-4%" },
+        { "name": "h1", "size": 56, "face": "Bold", "lineHeight": 58, "letterSpacing": "-3%" },
+        { "name": "h2", "size": 36, "face": "Bold", "lineHeight": 40, "letterSpacing": "-2%" },
+        { "name": "h3", "size": 22, "face": "Bold", "lineHeight": 28 },
+        { "name": "body", "size": 17, "face": "Regular", "lineHeight": 26 },
+        { "name": "small", "size": 14, "face": "Regular", "lineHeight": 20 },
+        { "name": "label", "size": 13, "face": "Bold", "lineHeight": 16, "letterSpacing": "12%" }
+      ],
+      "colors": {
+        "light": {
+          "bg": "#F4F4F0",
+          "surface": "#E8E8E2",
+          "text": "#0A0A0A",
+          "muted": "#4A4A46",
+          "primary": "#0A0A0A",
+          "onPrimary": "#D4FF3A",
+          "accent": "#4D7C0F",
+          "border": "#CFCFC8"
+        },
+        "dark": {
+          "bg": "#0A0A0A",
+          "surface": "#171717",
+          "text": "#FAFAFA",
+          "muted": "#A3A3A3",
+          "primary": "#D4FF3A",
+          "onPrimary": "#0A0A0A",
+          "accent": "#FF5A1F",
+          "border": "#2E2E2E"
+        }
+      },
+      "spacing": [4, 8, 16, 24, 32, 56, 96],
+      "radius": { "small": 2, "medium": 4, "large": 8 },
+      "composition": [
+        "Prefer the dark mode; use light only when the user asks for it.",
+        "Headlines in uppercase (`textCase: upper`) at the display step, set tight and big enough to dominate the frame.",
+        "Hard edges: small radii, no soft shadows, no gradients.",
+        "Show numbers big (class times, prices, member counts) as visual anchors."
+      ]
+    },
+    {
+      "name": "Soft Friendly",
+      "mood": "Pale lavender and mint, round corners and warm plain words; calm and welcoming.",
+      "bestFor": ["school", "kindergarten", "community group", "health clinic", "kids or family app"],
+      "fonts": {
+        "family": "Inter",
+        "heading": "Bold",
+        "body": "Regular",
+        "preferredPairing": "A rounded sans such as Nunito Sans, once the canvas can render it"
+      },
+      "typeScale": [
+        { "name": "display", "size": 60, "face": "Bold", "lineHeight": 68, "letterSpacing": "-2%" },
+        { "name": "h1", "size": 42, "face": "Bold", "lineHeight": 50, "letterSpacing": "-1%" },
+        { "name": "h2", "size": 30, "face": "Bold", "lineHeight": 38 },
+        { "name": "h3", "size": 21, "face": "Semi Bold", "lineHeight": 28 },
+        { "name": "body", "size": 18, "face": "Regular", "lineHeight": 28 },
+        { "name": "small", "size": 15, "face": "Regular", "lineHeight": 22 },
+        { "name": "label", "size": 14, "face": "Semi Bold", "lineHeight": 18 }
+      ],
+      "colors": {
+        "light": {
+          "bg": "#FAF8FF",
+          "surface": "#EFEAFE",
+          "text": "#241B3A",
+          "muted": "#5E5577",
+          "primary": "#6D4AE0",
+          "onPrimary": "#FFFFFF",
+          "accent": "#0F7A5C",
+          "border": "#E0D8F7"
+        },
+        "dark": {
+          "bg": "#17132A",
+          "surface": "#231C3D",
+          "text": "#F1EDFF",
+          "muted": "#B9AFD8",
+          "primary": "#B49CFF",
+          "onPrimary": "#17132A",
+          "accent": "#5FD4AE",
+          "border": "#382E5C"
+        }
+      },
+      "spacing": [4, 8, 12, 20, 32, 48, 80],
+      "radius": { "small": 10, "medium": 18, "large": 28 },
+      "composition": [
+        "Large radii on every container, and pill-shaped buttons (`cornerRadius` of half the height).",
+        "Soft colour blocks in `surface` hold groups; avoid borders and shadows.",
+        "Friendly, direct copy in short sentences; one idea per block.",
+        "Use simple circles or rounded shapes as decoration, sparingly."
+      ]
+    },
+    {
+      "name": "Minimal Mono",
+      "mood": "Black on white, a single red signal and a lot of empty space; gallery-quiet.",
+      "bestFor": ["photographer portfolio", "architect", "designer portfolio", "art gallery", "personal site"],
+      "fonts": { "family": "Inter", "heading": "Semi Bold", "body": "Regular" },
+      "typeScale": [
+        { "name": "display", "size": 80, "face": "Semi Bold", "lineHeight": 84, "letterSpacing": "-4%" },
+        { "name": "h1", "size": 48, "face": "Semi Bold", "lineHeight": 54, "letterSpacing": "-3%" },
+        { "name": "h2", "size": 28, "face": "Semi Bold", "lineHeight": 34, "letterSpacing": "-1%" },
+        { "name": "h3", "size": 18, "face": "Semi Bold", "lineHeight": 24 },
+        { "name": "body", "size": 16, "face": "Regular", "lineHeight": 26 },
+        { "name": "small", "size": 14, "face": "Regular", "lineHeight": 20 },
+        { "name": "label", "size": 12, "face": "Regular", "lineHeight": 16, "letterSpacing": "8%" }
+      ],
+      "colors": {
+        "light": {
+          "bg": "#FFFFFF",
+          "surface": "#F4F4F4",
+          "text": "#111111",
+          "muted": "#5C5C5C",
+          "primary": "#111111",
+          "onPrimary": "#FFFFFF",
+          "accent": "#D62B1F",
+          "border": "#E4E4E4"
+        },
+        "dark": {
+          "bg": "#0E0E0E",
+          "surface": "#1A1A1A",
+          "text": "#F2F2F2",
+          "muted": "#A6A6A6",
+          "primary": "#F2F2F2",
+          "onPrimary": "#0E0E0E",
+          "accent": "#FF5A4E",
+          "border": "#2A2A2A"
+        }
+      },
+      "spacing": [4, 8, 16, 24, 48, 80, 128],
+      "radius": { "small": 0, "medium": 0, "large": 2 },
+      "composition": [
+        "The work is the content: big image blocks in an asymmetric grid, captions small underneath.",
+        "No radius, no shadow, no fill behind text; hairline rules in `border` only where they help.",
+        "Navigation as a single line of small text, left name and right links.",
+        "Use `accent` for at most one thing per screen."
+      ]
+    },
+    {
+      "name": "Fresh Natural",
+      "mood": "Off-white, sage green and clay; grounded, organic and unhurried.",
+      "bestFor": ["plant shop", "organic food", "wellness or yoga studio", "clinic", "eco brand"],
+      "fonts": {
+        "family": "Inter",
+        "heading": "Semi Bold",
+        "body": "Regular",
+        "preferredPairing": "A humanist serif such as Source Serif 4 for headings, once the canvas can render it"
+      },
+      "typeScale": [
+        { "name": "display", "size": 64, "face": "Semi Bold", "lineHeight": 70, "letterSpacing": "-2%" },
+        { "name": "h1", "size": 44, "face": "Semi Bold", "lineHeight": 52, "letterSpacing": "-1%" },
+        { "name": "h2", "size": 30, "face": "Semi Bold", "lineHeight": 38 },
+        { "name": "h3", "size": 20, "face": "Semi Bold", "lineHeight": 28 },
+        { "name": "body", "size": 17, "face": "Regular", "lineHeight": 27 },
+        { "name": "small", "size": 14, "face": "Regular", "lineHeight": 21 },
+        { "name": "label", "size": 13, "face": "Semi Bold", "lineHeight": 16, "letterSpacing": "6%" }
+      ],
+      "colors": {
+        "light": {
+          "bg": "#F7F6F1",
+          "surface": "#ECEDE3",
+          "text": "#1F2A1F",
+          "muted": "#536051",
+          "primary": "#3F6B4A",
+          "onPrimary": "#FFFFFF",
+          "accent": "#9A4E2E",
+          "border": "#D9DCCD"
+        },
+        "dark": {
+          "bg": "#131A14",
+          "surface": "#1C251D",
+          "text": "#EEF2EA",
+          "muted": "#AEB9AA",
+          "primary": "#8CC49A",
+          "onPrimary": "#131A14",
+          "accent": "#E09A76",
+          "border": "#2F3A2F"
+        }
+      },
+      "spacing": [4, 8, 16, 24, 36, 56, 96],
+      "radius": { "small": 6, "medium": 12, "large": 24 },
+      "composition": [
+        "Split heroes: copy on one half, a large soft-cornered image block on the other.",
+        "Muted backgrounds in `surface` alternate with `bg` to pace long pages.",
+        "Lists of benefits as short lines with a small leaf-green dot, not as cards.",
+        "Keep buttons modest: medium radius, `primary` fill, one per section."
+      ]
+    },
+    {
+      "name": "Trusted Institution",
+      "mood": "Navy, white and a measured teal; dependable, formal and easy to scan.",
+      "bestFor": ["school profile", "bank or finance", "law firm", "government service", "hospital"],
+      "fonts": { "family": "Inter", "heading": "Bold", "body": "Regular" },
+      "typeScale": [
+        { "name": "display", "size": 56, "face": "Bold", "lineHeight": 64, "letterSpacing": "-2%" },
+        { "name": "h1", "size": 40, "face": "Bold", "lineHeight": 48, "letterSpacing": "-1%" },
+        { "name": "h2", "size": 28, "face": "Bold", "lineHeight": 36 },
+        { "name": "h3", "size": 20, "face": "Semi Bold", "lineHeight": 28 },
+        { "name": "body", "size": 17, "face": "Regular", "lineHeight": 27 },
+        { "name": "small", "size": 14, "face": "Regular", "lineHeight": 21 },
+        { "name": "label", "size": 13, "face": "Semi Bold", "lineHeight": 16, "letterSpacing": "4%" }
+      ],
+      "colors": {
+        "light": {
+          "bg": "#FFFFFF",
+          "surface": "#F1F5F9",
+          "text": "#0B1F3A",
+          "muted": "#4B5B70",
+          "primary": "#123E7C",
+          "onPrimary": "#FFFFFF",
+          "accent": "#0F766E",
+          "border": "#D8E0EA"
+        },
+        "dark": {
+          "bg": "#08162B",
+          "surface": "#0F2240",
+          "text": "#EAF0F8",
+          "muted": "#A7B5C9",
+          "primary": "#7FB0F0",
+          "onPrimary": "#08162B",
+          "accent": "#4FD1C5",
+          "border": "#1F3557"
+        }
+      },
+      "spacing": [4, 8, 12, 16, 24, 40, 64],
+      "radius": { "small": 4, "medium": 6, "large": 10 },
+      "composition": [
+        "A full-width `primary` header band with the name in white, then a calm white body.",
+        "Facts in tidy rows and two-column grids: figures, dates, contacts, accreditation.",
+        "Plain, formal copy; headings say what the section contains.",
+        "Small radii and thin `border` dividers; no playful shapes."
+      ]
+    },
+    {
+      "name": "Sunny Pop",
+      "mood": "Sunny yellow, hot coral and deep plum in big flat shapes; cheerful and loud.",
+      "bestFor": ["social media promo", "coffee or snack promo", "festival", "sale announcement", "kids event"],
+      "fonts": { "family": "Inter", "heading": "Bold", "body": "Semi Bold" },
+      "typeScale": [
+        { "name": "display", "size": 120, "face": "Bold", "lineHeight": 112, "letterSpacing": "-4%" },
+        { "name": "h1", "size": 72, "face": "Bold", "lineHeight": 72, "letterSpacing": "-3%" },
+        { "name": "h2", "size": 44, "face": "Bold", "lineHeight": 48, "letterSpacing": "-2%" },
+        { "name": "h3", "size": 28, "face": "Bold", "lineHeight": 34 },
+        { "name": "body", "size": 22, "face": "Semi Bold", "lineHeight": 30 },
+        { "name": "small", "size": 18, "face": "Semi Bold", "lineHeight": 24 },
+        { "name": "label", "size": 16, "face": "Bold", "lineHeight": 20, "letterSpacing": "6%" }
+      ],
+      "colors": {
+        "light": {
+          "bg": "#FFD23F",
+          "surface": "#FFE58A",
+          "text": "#2A0E36",
+          "muted": "#5B2F5E",
+          "primary": "#2A0E36",
+          "onPrimary": "#FFD23F",
+          "accent": "#B4231F",
+          "border": "#E8B91E"
+        },
+        "dark": {
+          "bg": "#2A0E36",
+          "surface": "#3C1A4B",
+          "text": "#FFF4D6",
+          "muted": "#E6C9E8",
+          "primary": "#FFD23F",
+          "onPrimary": "#2A0E36",
+          "accent": "#FF6B5B",
+          "border": "#55306A"
+        }
+      },
+      "spacing": [8, 16, 24, 32, 48, 72, 112],
+      "radius": { "small": 8, "medium": 20, "large": 40 },
+      "composition": [
+        "One message, set huge; the offer or price is the second biggest thing.",
+        "Flat colour shapes (circles, blobs, stripes) behind the type; no gradients.",
+        "Rotate one badge or sticker a few degrees for energy, never the headline.",
+        "Keep a safe margin of at least 64 units on posts and stories."
+      ]
+    },
+    {
+      "name": "Night Tech",
+      "mood": "Deep navy, cool grey and a cyan-violet glow; technical, focused and premium.",
+      "bestFor": ["developer tool", "AI product", "startup pitch deck", "crypto or fintech app", "analytics dashboard"],
+      "fonts": { "family": "Inter", "heading": "Semi Bold", "body": "Regular" },
+      "typeScale": [
+        { "name": "display", "size": 72, "face": "Semi Bold", "lineHeight": 76, "letterSpacing": "-4%" },
+        { "name": "h1", "size": 48, "face": "Semi Bold", "lineHeight": 54, "letterSpacing": "-3%" },
+        { "name": "h2", "size": 32, "face": "Semi Bold", "lineHeight": 40, "letterSpacing": "-2%" },
+        { "name": "h3", "size": 20, "face": "Semi Bold", "lineHeight": 28 },
+        { "name": "body", "size": 16, "face": "Regular", "lineHeight": 25 },
+        { "name": "small", "size": 14, "face": "Regular", "lineHeight": 20 },
+        { "name": "label", "size": 12, "face": "Semi Bold", "lineHeight": 16, "letterSpacing": "8%" }
+      ],
+      "colors": {
+        "light": {
+          "bg": "#F7F8FC",
+          "surface": "#EDEFF7",
+          "text": "#0D1226",
+          "muted": "#4E5675",
+          "primary": "#5B3FD9",
+          "onPrimary": "#FFFFFF",
+          "accent": "#0B7A99",
+          "border": "#DADDEB"
+        },
+        "dark": {
+          "bg": "#070B18",
+          "surface": "#0F1530",
+          "text": "#E6E9F5",
+          "muted": "#9097B3",
+          "primary": "#7C6CFF",
+          "onPrimary": "#070B18",
+          "accent": "#22D3EE",
+          "border": "#1E2747"
+        }
+      },
+      "spacing": [4, 8, 12, 16, 24, 40, 64, 96],
+      "radius": { "small": 6, "medium": 10, "large": 14 },
+      "composition": [
+        "Prefer the dark mode; it is the point of this style.",
+        "Thin `border` outlines on `surface` panels instead of shadows.",
+        "At most one gradient, primary to accent, on a single hero element or chart line.",
+        "Numbers and code-like labels in the label step, spaced out and uppercase."
+      ]
+    },
+    {
+      "name": "Luxe Neutral",
+      "mood": "Warm greige, charcoal and a bronze line; refined, slow and expensive.",
+      "bestFor": ["beauty salon", "fashion brand", "boutique hotel", "jewellery", "wedding services"],
+      "fonts": {
+        "family": "Inter",
+        "heading": "Regular",
+        "body": "Regular",
+        "preferredPairing": "A high-contrast serif for headings, once the canvas can render it"
+      },
+      "typeScale": [
+        { "name": "display", "size": 76, "face": "Regular", "lineHeight": 80, "letterSpacing": "-3%" },
+        { "name": "h1", "size": 48, "face": "Regular", "lineHeight": 56, "letterSpacing": "-2%" },
+        { "name": "h2", "size": 30, "face": "Regular", "lineHeight": 38, "letterSpacing": "-1%" },
+        { "name": "h3", "size": 19, "face": "Semi Bold", "lineHeight": 26 },
+        { "name": "body", "size": 16, "face": "Regular", "lineHeight": 27 },
+        { "name": "small", "size": 14, "face": "Regular", "lineHeight": 21 },
+        { "name": "label", "size": 12, "face": "Semi Bold", "lineHeight": 16, "letterSpacing": "16%" }
+      ],
+      "colors": {
+        "light": {
+          "bg": "#F5F1EB",
+          "surface": "#EAE3D9",
+          "text": "#1F1B17",
+          "muted": "#5F574E",
+          "primary": "#1F1B17",
+          "onPrimary": "#F5F1EB",
+          "accent": "#8A6328",
+          "border": "#D8CDBE"
+        },
+        "dark": {
+          "bg": "#14110E",
+          "surface": "#1F1A15",
+          "text": "#F2ECE3",
+          "muted": "#B8AC9C",
+          "primary": "#F2ECE3",
+          "onPrimary": "#14110E",
+          "accent": "#C9A062",
+          "border": "#352D25"
+        }
+      },
+      "spacing": [4, 8, 16, 32, 48, 80, 128],
+      "radius": { "small": 0, "medium": 2, "large": 4 },
+      "composition": [
+        "Light headline weights at large sizes; contrast comes from size and space, not weight.",
+        "Spaced uppercase labels in `accent` above section titles.",
+        "Tall image blocks and generous margins; never crowd the page.",
+        "Outline buttons with a 1-unit `text` stroke, or text links with an underline."
+      ]
+    }
+  ]
+}

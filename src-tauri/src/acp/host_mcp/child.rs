@@ -29,6 +29,7 @@ use tokio::net::TcpStream;
 
 use serde::Deserialize;
 
+use crate::acp::host_mcp::canvas_skill::{self, GetCanvasStyleInput, ReadCanvasGuideInput};
 use crate::acp::host_mcp::canvas_tools;
 use crate::acp::host_mcp::{
     session_instructions, FrameKind, FrameReply, FrameRequest, TermulAskUserInput,
@@ -291,6 +292,33 @@ impl TermulPlanServer {
             Ok(msg) => msg,
             Err(e) => format!("set_session_title error: {e}"),
         }
+    }
+
+    #[tool(
+        name = "read_canvas_guide",
+        description = "Termul Canvas design guide (the termul-canvas skill). Call it with no topic before your first canvas edit in a session: it returns SKILL.md, the index with the general and taste rules and the list of topics. Then read the required topics canvas-basics and working-protocol, vague-prompts when the request is short, and the one domain guide that fits (landing-page, web-app, mobile-app, dashboard, slides, social-post or design-system). Returns Markdown.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn read_canvas_guide(
+        &self,
+        Parameters(input): Parameters<ReadCanvasGuideInput>,
+    ) -> Result<String, String> {
+        canvas_skill::read_guide(input.topic.as_deref())
+            .map(str::to_string)
+            .inspect_err(|e| eprintln!("[host-mcp-child] read_canvas_guide: {e}"))
+    }
+
+    #[tool(
+        name = "get_canvas_style",
+        description = "Termul Canvas style archetypes for designs whose user gave no brand. With no name, lists the curated styles with their mood and what they suit. With a name, returns that style: Inter faces and a type scale, light and dark colour tokens, spacing and radius scales, composition notes, and `apply`, the arguments for one batch call that creates the style's canvas variables. Returns JSON.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_canvas_style(
+        &self,
+        Parameters(input): Parameters<GetCanvasStyleInput>,
+    ) -> Result<String, String> {
+        canvas_skill::get_style(input.name.as_deref())
+            .inspect_err(|e| eprintln!("[host-mcp-child] get_canvas_style: {e}"))
     }
 
     #[tool(
