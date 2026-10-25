@@ -180,3 +180,24 @@ async fn kill_all_waits_for_teardowns_detached_by_kill() {
     );
     assert!(manager.claims.generation(&id).is_none());
 }
+
+/// A `kill` that has taken its teardown token but not spawned the teardown yet
+/// (the terminal is already out of the registry) must hold `kill_all` open.
+#[cfg(unix)]
+#[tokio::test]
+async fn kill_all_waits_for_a_teardown_token_taken_before_the_spawn() {
+    let manager = crate::web::test_pty_manager();
+    let token = manager.teardown_tasks.token();
+
+    let waiting = manager.clone();
+    let kill_all = tokio::spawn(async move { waiting.kill_all().await });
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!kill_all.is_finished(), "kill_all ignored the pending teardown");
+
+    drop(token);
+    tokio::time::timeout(Duration::from_secs(5), kill_all)
+        .await
+        .expect("kill_all never finished after the token dropped")
+        .expect("kill_all task panicked");
+}

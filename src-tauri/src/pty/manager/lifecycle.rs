@@ -105,13 +105,19 @@ impl PtyManager {
             return Ok(());
         }
 
+        // Taken BEFORE the terminal leaves the registry: once it is gone, a
+        // concurrent `kill_all` sees neither it nor (yet) its teardown task, so
+        // the token is what keeps `kill_all`'s wait open until the teardown
+        // that follows has been spawned and finished.
+        let token = self.teardown_tasks.token();
         let instance = self
             .terminals
             .write()
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
-        self.detach_and_teardown(id.to_string(), instance).await;
+        self.detach_and_teardown(id.to_string(), instance, token)
+            .await;
         Ok(())
     }
 
@@ -125,13 +131,19 @@ impl PtyManager {
     /// registry before this returns, so project remove/archive and spawn
     /// rollback callers observe it gone immediately.
     pub async fn force_kill(&self, id: &str) -> Result<(), String> {
+        // Taken BEFORE the terminal leaves the registry: once it is gone, a
+        // concurrent `kill_all` sees neither it nor (yet) its teardown task, so
+        // the token is what keeps `kill_all`'s wait open until the teardown
+        // that follows has been spawned and finished.
+        let token = self.teardown_tasks.token();
         let instance = self
             .terminals
             .write()
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
-        self.detach_and_teardown(id.to_string(), instance).await;
+        self.detach_and_teardown(id.to_string(), instance, token)
+            .await;
         Ok(())
     }
 
@@ -148,7 +160,12 @@ impl PtyManager {
     ///
     /// `instance` must already be removed from `terminals` so the terminal is
     /// unlisted and unattachable the moment this is reached.
-    async fn detach_and_teardown(&self, id: String, instance: Arc<TerminalInstance>) {
+    async fn detach_and_teardown(
+        &self,
+        id: String,
+        instance: Arc<TerminalInstance>,
+        token: tokio_util::task::task_tracker::TaskTrackerToken,
+    ) {
         // Quick kill syscall under the async mutex: the process is signalled
         // before we return; the (slow) exit poll, reap and thread joins happen
         // in the background task below. cleanup_terminal_resources_sync's own
@@ -164,14 +181,19 @@ impl PtyManager {
         // before the event hub entry is removed.
         self.set_observer.notify(instance.project_id.as_deref());
 
-        self.spawn_background_teardown(id, instance);
+        self.spawn_background_teardown(id, instance, token);
     }
 
     /// Run the blocking PTY teardown and the per-terminal tracker cleanup on a
     /// detached task. See [`detach_and_teardown`](Self::detach_and_teardown).
     /// The set-observer notification already fired synchronously there, so it
     /// is deliberately not repeated here.
-    fn spawn_background_teardown(&self, id: String, instance: Arc<TerminalInstance>) {
+    fn spawn_background_teardown(
+        &self,
+        id: String,
+        instance: Arc<TerminalInstance>,
+        token: tokio_util::task::task_tracker::TaskTrackerToken,
+    ) {
         let cwd_tracker = self.cwd_tracker.clone();
         let git_tracker = self.git_tracker.clone();
         let exit_code_tracker = self.exit_code_tracker.clone();
@@ -179,6 +201,8 @@ impl PtyManager {
         let claims = self.claims.clone();
 
         self.teardown_tasks.spawn(async move {
+            // Held until the teardown finishes (see `kill`).
+            let _token = token;
             let cleanup = instance.clone();
             if let Err(e) = tokio::task::spawn_blocking(move || {
                 Self::cleanup_terminal_resources_sync(cleanup, true);
