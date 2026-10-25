@@ -293,13 +293,14 @@ export const REVIEWS: Record<string, Review> = {
     differences: [
       'Typing and Enter start a chat and the scripted reply streams in both.',
       "The chat starts on the device's picked agent even when Enter comes before the launcher has restored that pick: the send waits for the pick (G8 AGENT-PICK; `tools/matrix/agent-pick.ts` sends the moment the composer appears and lands 4 of 4 web and 4 of 4 GPUIX chats on the picked agent, 2 of 4 and 1 of 4 before).",
-      'Mermaid shows as source ("Mermaid diagrams are shown as source in this client") where the web draws the diagram.',
+      'The mermaid diagram is drawn as on the web (G10 MERMAID): the webview helper renders it with the web\'s mermaid 11.16.0 and config and the card fits the PNG to its frame, 714 by 191 px against the web\'s 714 by 195 px (WebKit measures the monospace labels 2 % wider). The pan and zoom buttons and the fullscreen action are missing; Download saves the source.',
+      "On f57dbb11 plus the G10 BOOT-REMOUNT change the GPUIX chat card and composer pill read \"Agent\" instead of the agent's name in 7 of 10 runs (0 of 8 without it), so that change is backed out; see the BOOT-REMOUNT note in the G10 report.",
       PROSE,
       RUN_ORDER
     ],
     cause: 'missing GPUIX capability',
-    unit: 'mermaid diagrams (unassigned)',
-    impact: 2
+    unit: 'mermaid pan, zoom and fullscreen (unassigned)',
+    impact: 1
   },
   'chat.model-selector': {
     status: 'partial',
