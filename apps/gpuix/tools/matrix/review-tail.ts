@@ -1,7 +1,7 @@
 /** Reviews for settings, palette, shortcuts, themes and the long tail (see `review.ts`). */
 
 import type { Review } from './review'
-import { BLUR, DIVIDERS, FIELD_FOCUS, SELECT, SETTINGS_BASE, TOAST } from './review-phrases'
+import { BLUR, COMPOSER_PICK, DIVIDERS, FIELD_FOCUS, SELECT, SETTINGS_BASE, TOAST } from './review-phrases'
 
 const THEME_FAMILIES = [
   'termul',
@@ -57,14 +57,11 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: ['The Create Snapshot modal matches.', BLUR]
   },
   'palette.open-canvas': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Open Canvas opens design.figcraft in both, and the FigCraft editor reaches Ready in GPUIX through the browser-pane webview (V1) with the pinned bundle (run with `tools/canvas/server-with-bundle.ts`).',
-      "GPUIX shows the whole editor in FigCraft's light theme (white panels, page colour F5F5F5) where the web shows it dark (page 1E1E1E); see canvas.open."
-    ],
-    cause: 'needs diagnosis',
-    unit: 'canvas theme handoff (unassigned)',
-    impact: 2
+      'The editor is dark in both, page colour 1E1E1E (G6: the webview helper starts on the dark GTK theme while Termul is dark, so WebKitGTK reports prefers-color-scheme dark before host.theme arrives).'
+    ]
   },
   'palette.project-settings': {
     status: 'ported',
@@ -79,14 +76,11 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     ]
   },
   'palette.switch-project': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Typing beta filters to the beta row and Enter switches to beta in both.',
-      'After the switch the GPUIX beta composer was not ready when the frame was grabbed in 2 of 3 runs (Loading model… in the full run, Composer unavailable in the first rerun); the web composer showed Chat Scenario Agent in all three. rail.project-list shows the same.'
-    ],
-    cause: 'needs diagnosis',
-    unit: 'composer agent pick after a project switch (unassigned)',
-    impact: 2
+      COMPOSER_PICK
+    ]
   },
   'palette.command-history': {
     status: 'ported',
@@ -96,11 +90,8 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     ]
   },
   'palette.color-theme': {
-    status: 'partial',
-    differences: ['Change Color Theme opens the Color Themes popover in both.', FIELD_FOCUS],
-    cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
-    impact: 1
+    status: 'ported',
+    differences: ['Change Color Theme opens the Color Themes popover in both.', FIELD_FOCUS]
   },
   'palette.shortcut-menu': {
     status: 'ported',
@@ -110,36 +101,26 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     ]
   },
   'palette.report-bug': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Opens the Report a bug dialog, laid out as in dialogs.bug-report.',
       BLUR,
       FIELD_FOCUS
-    ],
-    cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
-    impact: 1
+    ]
   },
   'shortcuts.toggle-projects': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      'Ctrl+Shift+B collapses the rail in both.',
-      'The collapsed rail has no Open canvas button in GPUIX (see rail.collapse).'
-    ],
-    cause: 'needs diagnosis',
-    unit: 'collapsed rail canvas button (unassigned)',
-    impact: 1
+      'Ctrl+Shift+B collapses the rail in both, with the Open canvas pencil under Search (see rail.collapse).'
+    ]
   },
   'shortcuts.toggle-side-panel': {
     status: 'ported',
     differences: ['Ctrl+B hides the side panel in both.']
   },
   'shortcuts.theme-picker': {
-    status: 'partial',
-    differences: ['Ctrl+Alt+T opens the Color Themes popover in both.', FIELD_FOCUS],
-    cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
-    impact: 1
+    status: 'ported',
+    differences: ['Ctrl+Alt+T opens the Color Themes popover in both.', FIELD_FOCUS]
   },
   'shortcuts.zoom-in': {
     status: 'partial',
@@ -160,15 +141,12 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
 
   'notifications.toast': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Typing the branch name and pressing Enter creates toast-branch and shows the success toast in both.',
       TOAST,
-      'After Enter the status-bar branch button holds focus. The web draws a focus ring around "toast-branch"; GPUIX fills the button with a light wash that leaves its label unreadable.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
-    impact: 1
+      'After Enter the status-bar branch button holds focus and both draw a 1 px ring around "toast-branch" (G6: an outer ring paints as an outline; GPUI had painted the spread shadow under the whole transparent button, a light wash over the label).'
+    ]
   },
 
   'ssh.workspace': {
@@ -192,21 +170,21 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [...SETTINGS_BASE, DIVIDERS],
     cause: 'compat translator gap',
-    unit: 'settings divide-y (unassigned)',
+    unit: 'inline label line height in settings rows (unassigned)',
     impact: 1
   },
   'settings.editor': {
     status: 'partial',
     differences: [SELECT, SETTINGS_BASE[1], DIVIDERS],
     cause: 'compat translator gap',
-    unit: 'settings divide-y (unassigned)',
+    unit: 'inline label line height in settings rows (unassigned)',
     impact: 1
   },
   'settings.appearance': {
     status: 'partial',
     differences: [SELECT, SETTINGS_BASE[1], DIVIDERS],
     cause: 'compat translator gap',
-    unit: 'settings divide-y (unassigned)',
+    unit: 'inline label line height in settings rows (unassigned)',
     impact: 1
   },
   'settings.shell': {
@@ -233,18 +211,19 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [...SETTINGS_BASE, DIVIDERS],
     cause: 'compat translator gap',
-    unit: 'settings divide-y (unassigned)',
+    unit: 'inline label line height in settings rows (unassigned)',
     impact: 1
   },
   'settings.provider': {
-    status: 'broken',
+    status: 'partial',
     differences: [
-      'GPUIX shows the Claude Code header over two loading skeleton rows, in 3 of 3 runs (the full run and two reruns); the web lists the Default account, Signed in, with "Usage is not available right now" and the `termul-server claude account` hint.',
+      'Accounts lists the Default account, Signed in, with "Usage is not available right now", Try again and the `termul-server claude account` hint in both. The skeleton M2 saw was the frame grab racing the list: the step checked for the nav label it had just clicked. It now waits for "1 account", which GPUIX painted 1871 ms after the click and the web 158 ms after (G6 run).',
+      'GPUIX puts the usage note under the account name, where the web sets it beside the name in the wide layout.',
       SETTINGS_BASE[1]
     ],
-    cause: 'needs diagnosis',
-    unit: 'accounts list stays loading (unassigned)',
-    impact: 2
+    cause: 'compat translator gap',
+    unit: 'account row wide layout (unassigned)',
+    impact: 1
   },
   'settings.mcp-servers': {
     status: 'partial',
@@ -261,7 +240,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       'GPUIX lists the desktop keymap (Ctrl+R, Ctrl+T, Ctrl+,) where the web lists its defaults (Press keys…, Alt+T, Alt+,), by design since G4.'
     ],
     cause: 'compat translator gap',
-    unit: 'settings divide-y (unassigned)',
+    unit: 'inline label line height in settings rows (unassigned)',
     impact: 1
   },
   'settings.diagnostics': {
@@ -272,7 +251,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       'Server version reads termul-server v0.4.52 in both: GPUIX asks the server (G4).'
     ],
     cause: 'compat translator gap',
-    unit: 'settings divide-y (unassigned)',
+    unit: 'inline label line height in settings rows (unassigned)',
     impact: 1
   },
 
@@ -295,35 +274,26 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
 
   'theme.picker': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'The Color Themes popover, groups, swatches and the current-theme check match, and labels antialias in grayscale as on the web (C8 fixed in G3).',
       FIELD_FOCUS
-    ],
-    cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
-    impact: 1
+    ]
   },
   'dialogs.bug-report': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'The Report a bug dialog paints its Title, What happened, Screenshots and Preview sections at the web width and wraps the same lines. The web draws a resize grip in the What happened corner; GPUIX has none.',
       FIELD_FOCUS,
       BLUR
-    ],
-    cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
-    impact: 1
+    ]
   },
   'canvas.open': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Clicking Canvas opens design.figcraft and the FigCraft editor reaches Ready in both: pages, layers, design panel, toolbar and Save (V1: the editor runs in a `termul-webview-host` webview placed over the pane; this run used the pinned bundle, sha256 verified against canvas/figcraft.pin).',
-      "The theme does not carry over in GPUIX. Here its panels are dark but the page is light (F5F5F5 against the web's 1E1E1E), and in palette.open-canvas the whole editor is light."
-    ],
-    cause: 'needs diagnosis',
-    unit: 'canvas theme handoff (unassigned)',
-    impact: 2
+      'Panels and page are dark in both, page colour 1E1E1E (G6, see palette.open-canvas).'
+    ]
   },
   'browser.pane': {
     status: 'blocked',
