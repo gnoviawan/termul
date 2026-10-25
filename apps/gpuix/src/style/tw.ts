@@ -166,7 +166,11 @@ function finalize(acc: Acc, theme: TwTheme, flat: boolean, fallback?: Acc): Styl
     const width = ring.width ?? 0
     const current = style.color ?? fallback?.style.color ?? formatColor(theme.colors.foreground)
     const ringColor = ring.color ?? hexToRgba(current)
-    if (width > 0 && ring.inset) css.push(spread(width, ringColor, true))
+    // CSS draws an inset shadow inside the padding box; GPUI from the border
+    // box edge, under the border. Growing it by the border width puts the ring
+    // inside the border, as on the web.
+    const border = Number(style.borderWidth ?? fallback?.style.borderWidth ?? 0)
+    if (width > 0 && ring.inset) css.push(spread(width + border, ringColor, true))
     // GPUI paints a shadow under the whole box, so a spread ring on a transparent
     // button fills it; an outer ring is the outline that follows the corners.
     if (!ring.inset && (width > 0 || (fallback && acc.ring?.width !== undefined))) {

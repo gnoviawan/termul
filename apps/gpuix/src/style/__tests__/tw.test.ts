@@ -619,9 +619,12 @@ describe('tw() rings', () => {
     expect(style.focusVisible).toEqual({ outlineWidth: 1, outlineColor: '#e5e5e6' })
   })
 
-  test('an inset ring stays an inset shadow, and a state can take a ring away', () => {
+  test('an inset ring stays an inset shadow inside the border, and a state can take a ring away', () => {
     expect(tw('ring-1 ring-inset ring-border').boxShadow).toEqual([
       { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 1, color: '#242526', inset: true }
+    ])
+    expect(tw('border border-border ring-1 ring-inset ring-border').boxShadow).toEqual([
+      { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 2, color: '#242526', inset: true }
     ])
     expect(tw('ring-2 ring-primary data-[state=open]:ring-0', { attrs: { 'data-state': 'open' } })).toMatchObject({
       outlineWidth: 0
