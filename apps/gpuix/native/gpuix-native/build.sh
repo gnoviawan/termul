@@ -104,6 +104,7 @@ check() {
   trap 'rm -rf "$scratch"' EXIT
   for repo in gpuix zed; do
     if [ "$repo" = gpuix ]; then dir=$src pin=$GPUIX_COMMIT; else dir=$zed pin=$ZED_COMMIT; fi
+    git -C "$dir" worktree prune
     git -C "$dir" worktree add -q --detach "$scratch/$repo" "$pin"
     for p in "$here/patches/$repo"/*.patch; do
       [ -e "$p" ] || continue

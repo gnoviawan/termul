@@ -12,6 +12,6 @@
       "#app/boot": ["./src/boot-contract.ts"]
     }
   },
-  "include": ["tools/ui/gallery", "../../src/renderer/vite-env.d.ts"],
+  "include": ["src/native-patches.d.ts", "tools/ui/gallery", "../../src/renderer/vite-env.d.ts"],
   "exclude": ["tools/ui/gallery/web"]
 }

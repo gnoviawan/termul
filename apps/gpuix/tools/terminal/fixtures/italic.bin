@@ -1,0 +1,6 @@
+$ printf italics
+[3mitalic Paper Mono: The quick brown fox jumps over 0123456789[0m
+[1;3mbold italic: The quick brown fox jumps over the lazy dog[0m
+upright: The quick brown fox jumps over the lazy dog
+[3;32mgreen italic[0m and [3;4munderlined italic[0m and plain
+$ 

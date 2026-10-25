@@ -9,6 +9,8 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { log } from '../log'
 import boldFile from './fonts/PaperMono-Bold.ttf' with { type: 'file' }
+import boldItalicFile from './fonts/PaperMono-BoldItalic.ttf' with { type: 'file' }
+import italicFile from './fonts/PaperMono-Italic.ttf' with { type: 'file' }
 import regularFile from './fonts/PaperMono-Regular.ttf' with { type: 'file' }
 
 export const TERMINAL_FONT_FAMILY = 'Paper Mono'
@@ -19,7 +21,9 @@ export const TERMINAL_FONT_WEIGHT_BOLD = 700
 /** Bun's file loader yields an absolute path from source and a bundle-relative one from a bundle. */
 export const TERMINAL_FONT_FILES = {
   regular: resolve(import.meta.dir, regularFile),
-  bold: resolve(import.meta.dir, boldFile)
+  bold: resolve(import.meta.dir, boldFile),
+  italic: resolve(import.meta.dir, italicFile),
+  boldItalic: resolve(import.meta.dir, boldItalicFile)
 } as const
 
 interface FontRegistrar {
@@ -33,8 +37,7 @@ export function registerTerminalFonts(renderer: FontRegistrar): void {
   if (!renderer.registerFont) throw new Error('GPUIX renderer has no registerFont')
   const started = performance.now()
   try {
-    renderer.registerFont(readFileSync(TERMINAL_FONT_FILES.regular))
-    renderer.registerFont(readFileSync(TERMINAL_FONT_FILES.bold))
+    for (const file of Object.values(TERMINAL_FONT_FILES)) renderer.registerFont(readFileSync(file))
   } catch (error) {
     log.error('terminal', `fonts.register-failed ${JSON.stringify({ error: String(error) })}`)
     throw error

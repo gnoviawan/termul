@@ -22,6 +22,20 @@ export function tokenColor(token: string): string {
 export const PROSE_TEXT = 14
 export const PROSE_LINE = 21
 
+/**
+ * `.chat-streamdown` inline-code chip: 0.88em glyphs, `padding: 0.08em 0.3em`,
+ * radius 0.25rem. The native wash is paint only, so the 0.3em (3.7px at
+ * 12.32px) reaches past the glyphs without pushing the neighbours as CSS does.
+ * The 0.08em top and bottom on Paper Mono's 1.2em content box leave about 2px
+ * of the 21px line above and below.
+ */
+const PROSE_CHIP = {
+  mdInlineCodeRadius: 4,
+  mdInlineCodeScale: 0.88,
+  mdInlineCodePaddingX: 3.7,
+  mdInlineCodeInsetY: 2
+}
+
 function syntaxTheme(themeId: string): SyntaxTheme {
   const c = resolveSyntaxColors(getColorThemeDefinition(normalizeThemeFamilyId(themeId)))
   return {
@@ -58,7 +72,10 @@ const cache = new Map<
 
 /**
  * - `prose`: an agent reply block (`.chat-streamdown`): 14/21 body, inline
- *   code chips on muted/55. Headings take Streamdown's utility sizes
+ *   code chips on muted/55 at 0.88em with 0.3em side padding (index.css),
+ *   links in primary (`LINK_CLASS` in chat-agent-prose.tsx). Link colour and
+ *   the chip's size and padding need the patched addon (patch 0002); the
+ *   published one keeps body-size chips and text-coloured links. Headings take Streamdown's utility sizes
  *   (`text-3xl` .. `text-lg`): utilities beat index.css's components layer.
  *   Native markdown tints list markers and the quote rail with `accent`; the
  *   web's markers are the text colour, so accent is the foreground.
@@ -84,6 +101,8 @@ export function transcriptThemes(themeId: string) {
     bg: tokenColor('sidebar'),
     codeText: tokenColor('foreground'),
     codeWash: tokenColor('muted/55'),
+    link: tokenColor('primary'),
+    linkUnderline: tokenColor('primary'),
     caret: tokenColor('foreground'),
     syntax
   }
@@ -97,7 +116,7 @@ export function transcriptThemes(themeId: string) {
         mdHeadingSizes: [30, 24, 20, 18],
         mdHeadingLineHeights: [36, 32, 28, 28],
         mdTableCellPadding: 5,
-        mdInlineCodeRadius: 4,
+        ...PROSE_CHIP,
         mdCodePaddingX: 16,
         mdCodePaddingY: 16,
         mdCodeRadius: 6
@@ -110,7 +129,7 @@ export function transcriptThemes(themeId: string) {
         mdTextSize: PROSE_TEXT,
         mdLineHeight: PROSE_LINE,
         mdBlockGap: 4,
-        mdInlineCodeRadius: 4
+        ...PROSE_CHIP
       }
     },
     thought: {
@@ -123,7 +142,11 @@ export function transcriptThemes(themeId: string) {
         mdBlockGap: 10.8,
         mdHeadingSizes: [12, 12, 12, 12],
         mdHeadingLineHeights: [16, 16, 16, 16],
-        mdInlineCodeRadius: 3
+        // `.thought-markdown` chip: 0.85em, padding 0 0.22em, radius 0.2rem.
+        mdInlineCodeRadius: 3,
+        mdInlineCodeScale: 0.85,
+        mdInlineCodePaddingX: 2.2,
+        mdInlineCodeInsetY: 2
       }
     },
     code: {

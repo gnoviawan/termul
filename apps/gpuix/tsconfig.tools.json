@@ -27,6 +27,7 @@
     }
   },
   "include": [
+    "src/native-patches.d.ts",
     "src/main.tsx",
     "src/env",
     "src/log.ts",

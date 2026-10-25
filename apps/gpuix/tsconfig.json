@@ -24,6 +24,7 @@
     "noEmit": true
   },
   "include": [
+    "src/native-patches.d.ts",
     "src/window.ts",
     "src/shims",
     "src/style",

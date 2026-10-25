@@ -20,6 +20,7 @@
     }
   },
   "include": [
+    "src/native-patches.d.ts",
     "src/terminal",
     "tools/terminal",
     "src/overrides/components/terminal",

@@ -10,6 +10,6 @@
       "react/*": ["./node_modules/@types/react/*"]
     }
   },
-  "include": ["tools/composer/scene/boot.tsx", "../../src/renderer/vite-env.d.ts"],
+  "include": ["src/native-patches.d.ts", "tools/composer/scene/boot.tsx", "../../src/renderer/vite-env.d.ts"],
   "exclude": []
 }
