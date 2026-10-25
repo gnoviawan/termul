@@ -19,6 +19,7 @@
 import type { StyleDesc } from '@gpuix/react'
 import { cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
+import { INHERITED_LEADING, ROOT_FONT_SIZE } from '../style/scale'
 import { liftPlacement, placeStyle } from './placement'
 import { applyTextTransform, type AutoMargin, type Translation, translation } from './translate'
 
@@ -31,6 +32,8 @@ export interface ChildInfo {
   autoMargin?: { margin: AutoMargin; inner: ReactElement }
   /** Absolutely positioned: painted after its in-flow siblings. */
   positioned?: boolean
+  /** An inline-block whose baseline is its bottom margin edge: a textarea, which scrolls. */
+  baselineAtBottom?: boolean
 }
 
 export const childInfo = new WeakMap<object, ChildInfo>()
@@ -272,6 +275,35 @@ function trimTextRuns(out: Slot[], tr: Translation): void {
   }
 }
 
+/** Inter's ascent and descent per px of font size, as Chromium reads them. */
+const INTER_ASCENT = 0.96875
+const INTER_DESCENT = 0.2421875
+
+/**
+ * How far a block container's strut reaches below the baseline: the rounded
+ * font descent plus half the leading. Taken from the container's own font, or
+ * the root's when it sets none.
+ */
+function strutDescent(style: StyleDesc): number {
+  const size = typeof style.fontSize === 'number' ? style.fontSize : ROOT_FONT_SIZE
+  const lineHeight = typeof style.lineHeight === 'number' ? style.lineHeight : size * INHERITED_LEADING
+  const ascent = Math.round(size * INTER_ASCENT)
+  const descent = Math.round(size * INTER_DESCENT)
+  return Math.max(0, descent + (lineHeight - ascent - descent) / 2)
+}
+
+/**
+ * A textarea is inline-block: in a block container it sits on a line whose
+ * baseline is its bottom margin edge, so the line box reaches the strut's
+ * descent below it. GPUIX lays it out as a block; a padded wrapper stands in
+ * for the line box.
+ */
+function belowStrut(node: ReactElement, strut: number): ReactElement {
+  const line = jsx('div', { style: { paddingBottom: strut }, children: node }, node.key ?? undefined)
+  childInfo.set(line, { inline: false })
+  return line
+}
+
 export function layoutChildren(
   tr: Translation,
   style: StyleDesc,
@@ -290,6 +322,9 @@ export function layoutChildren(
     const info = infoOf(children)
     if (info?.autoMargin && isValidElement(children)) {
       return { children: placeAutoMargin(children, info.autoMargin, tr.flexDirection === 'row'), isStatic: false }
+    }
+    if (tr.blockFlow && info?.baselineAtBottom && isValidElement(children)) {
+      return { children: belowStrut(children, strutDescent(style)), isStatic: false }
     }
     if (tr.listMarker) return { children: withMarkers([children], tr.listMarker, tr.listInside), isStatic: true }
     // A span's content is inline by definition, whatever the component renders.
@@ -336,10 +371,12 @@ export function layoutChildren(
     const row = style.display === 'flex' && style.flexDirection !== 'column' && style.flexDirection !== 'column-reverse'
     const grows = row && slots.some(growsInFlow)
     trimTextRuns(out, tr)
+    const strut = tr.blockFlow ? strutDescent(style) : 0
     for (let i = 0; i < out.length; i++) {
       const slot = out[i]
       const info = infoOf(slot)
       if (info?.autoMargin && isValidElement(slot)) out[i] = placeAutoMargin(slot, info.autoMargin, row, grows)
+      else if (strut > 0 && info?.baselineAtBottom && isValidElement(slot)) out[i] = belowStrut(slot, strut)
     }
     return { children: paintPositionedLast(out), isStatic }
   }

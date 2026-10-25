@@ -66,6 +66,12 @@ export interface Translation {
   readonly placement: Placement | null
   /** px subtracted by a `w-[calc(100%-x)]` width, or null. */
   readonly fillMinus: number | null
+  /**
+   * A block container in CSS (no flex, grid or inline display class), even
+   * when the translation lowers `space-y` to a flex column: inline-level
+   * children sit in line boxes there.
+   */
+  readonly blockFlow: boolean
 }
 
 const PHRASING = new Set([
@@ -117,6 +123,7 @@ const NAMED_GROUP_VARIANT = /(^|:)(group-[a-z-]*(?:\[[^\]]*\])?)\/[\w-]+(?=:)/g
 const TRANSFORMS = new Set(['uppercase', 'lowercase', 'capitalize'])
 const INLINE_DISPLAY = new Set(['inline', 'inline-block', 'inline-flex', 'inline-grid'])
 const BLOCK_DISPLAY = new Set(['block', 'flex', 'grid', 'table', 'flow-root', 'list-item'])
+const NON_BLOCK_CONTAINER = new Set(['flex', 'inline-flex', 'grid', 'inline-grid', 'table', 'contents'])
 const PAINT_KEYS: readonly (keyof StyleDesc)[] = [
   'backgroundColor', 'background', 'borderWidth', 'borderTopWidth', 'borderRightWidth',
   'borderBottomWidth', 'borderLeftWidth', 'paddingTop', 'paddingRight', 'paddingBottom',
@@ -141,6 +148,8 @@ interface Lifted {
   listMarker: Translation['listMarker']
   listInside: boolean
   display: 'inline' | 'block' | null
+  /** A flex, grid, table or `contents` display class: not a block container. */
+  formatsChildren: boolean
   scope: ScopeName | null
   svg: string[]
   placement: Placement | null
@@ -171,6 +180,7 @@ function lift(className: string): Lifted {
     listMarker: null,
     listInside: false,
     display: null,
+    formatsChildren: false,
     scope: null,
     svg: [],
     placement: null,
@@ -228,6 +238,7 @@ function lift(className: string): Lifted {
     }
     if (token === 'list-none') continue
     if (SCOPES.has(token)) lifted.scope = token as ScopeName
+    if (NON_BLOCK_CONTAINER.has(token)) lifted.formatsChildren = true
     if (INLINE_DISPLAY.has(token)) lifted.display = 'inline'
     else if (BLOCK_DISPLAY.has(token) || token === 'hidden') lifted.display = 'block'
     kept.push(token)
@@ -379,7 +390,8 @@ function translate(tw: Tw, tag: string, className: string): Translation {
     listInside: lifted.listInside,
     svgClasses: lifted.svg.length > 0 ? lifted.svg.join(' ') : null,
     placement: lifted.placement,
-    fillMinus: lifted.fillMinus
+    fillMinus: lifted.fillMinus,
+    blockFlow: !inline && !lifted.formatsChildren && defaults?.display === undefined
   }
 }
 

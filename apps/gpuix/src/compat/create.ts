@@ -323,6 +323,7 @@ export function createDomElement(
       ? host(tag, tr, props, key, isStatic)
       : buildElement(tag, tr, props, key, isStatic)
   domSource.set(element, { tag, props, key })
+  if (tag === 'textarea') childInfo.set(element, { inline: true, ...childInfo.get(element), baselineAtBottom: true })
   return element
 }
 

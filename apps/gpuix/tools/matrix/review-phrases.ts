@@ -5,8 +5,8 @@ export const LAMP =
 
 export const TITLE_TIP =
   'A title tooltip paints at once under the pointer after a click, anchored over the element, where the web shows none in the frame.'
-export const TEXTAREA_GAP =
-  'The commit footer below the description field sits 6 px higher: in CSS a textarea is inline-block, so its line box adds the strut descent under it, and GPUIX lays it out as a block (C5 follow-up).'
+export const TEXTAREA_LINE =
+  'The commit footer below the description field lines up with the web (G5: a textarea in a block container gets the line box\'s strut descent under it, 6 px, as CSS inline-block does).'
 export const BACKDROP =
   'The scrim has the web dim and colour (a flat patch reads 4,5,6 on the web and 5,5,6 in GPUIX), but GPUIX has no backdrop blur, so the page behind stays sharp and readable.'
 export const PROSE =
