@@ -26,6 +26,8 @@ interface PendingPress {
   stopped: boolean
   /** A `pointerdown` or `mousedown` listener called preventDefault, so focus stays put. */
   prevented: boolean
+  /** The focused element when the press reached JS, after GPUI focused a focusable element pressed. */
+  focused: number | null
 }
 
 /** The press not yet handed to `document` and `window`. */
@@ -42,7 +44,8 @@ const samePoint = (a: Point, b: Point): boolean => a.x === b.x && a.y === b.y
 export function sentinelPress(payload: EventPayload): void {
   flushPress()
   lastPress = { seq: (lastPress?.seq ?? 0) + 1, payload }
-  const press: PendingPress = { payload, target: null, stopped: false, prevented: false }
+  const focused = compatReads()?.renderer.getFocusedElementId() ?? null
+  const press: PendingPress = { payload, target: null, stopped: false, prevented: false, focused }
   pending = press
   settling = press
   setTimeout(() => {
@@ -72,12 +75,17 @@ export function pressPrevented(at: Point): void {
  * GPUI has already focused a focusable element it pressed, and the terminal
  * and editor focus their own host on press. So focus on a box away from the
  * press point means the press landed on content that takes no focus.
+ *
+ * It runs once the batch is over, after the release and click of an
+ * automation click, which come in the same batch. When a handler moved focus
+ * meanwhile (a menu's Rename item focusing the field it opens), that focus is
+ * the click's doing, which the DOM keeps.
  */
 function settleFocus(press: PendingPress): void {
   if (press.prevented) return
   const reads = compatReads()
   const focused = reads?.renderer.getFocusedElementId() ?? null
-  if (!reads || focused === null) return
+  if (!reads || focused === null || focused !== press.focused) return
   const box = reads.bounds(focused)
   const { x = 0, y = 0 } = press.payload
   if (box && x >= box.x && x < box.x + box.width && y >= box.y && y < box.y + box.height) return

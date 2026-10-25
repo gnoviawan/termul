@@ -213,6 +213,19 @@ describe('a press moves focus as the DOM default action does', () => {
     expect(focusState()).toEqual({ focused: 301, blurs: 0 })
   })
 
+  test('focus a click handler moves to a field away from the press stays there', async () => {
+    const at = { x: 40, y: 120, button: 0, clickCount: 1 }
+    mount(302, {
+      onClick: () => {
+        focused = 301
+      }
+    })
+    press(at.x, at.y)
+    fire(302, 'onClick', at)
+    await nextTask()
+    expect(focusState()).toEqual({ focused: 301, blurs: 0 })
+  })
+
   test('a press with nothing focused blurs nothing', async () => {
     press(40, 120)
     await nextTask()
