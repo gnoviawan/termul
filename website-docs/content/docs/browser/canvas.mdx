@@ -43,7 +43,7 @@ The editor includes one font, Inter. On Windows, the desktop app also lends the 
 
 Termul saves your changes on its own a moment after you stop editing. A dot next to the file name means there are unsaved changes. To save right away, click **Save** at the right end of the bar. If a save fails, the bar shows **Save failed**.
 
-When you close a project or the canvas, Termul saves first. If that save fails, Termul asks what to do: **Retry**, **Keep editing**, or **Discard changes**.
+When Termul unmounts the canvas, for example when you close a project or quit Termul, it saves first. If that save fails, Termul asks what to do: **Retry**, **Keep editing**, or **Discard changes**. Closing the canvas tab does not unmount the canvas, so it doesn't start this save or show these choices.
 
 ## When the file changes outside Termul
 
