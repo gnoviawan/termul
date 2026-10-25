@@ -30,6 +30,11 @@ function activeTreeOf(state: WorkspaceState): ProjectWorkspace {
   }
 }
 
+/** A split or any tab: something of the project's own that a placeholder must not cover. */
+function hasLayout(tree: ProjectWorkspace): boolean {
+  return tree.root.type !== 'leaf' || tree.root.tabs.length > 0
+}
+
 export const createProjectsSlice: StateCreator<WorkspaceState, [], [], ProjectsSliceState> = (
   set,
   get
@@ -46,7 +51,12 @@ export const createProjectsSlice: StateCreator<WorkspaceState, [], [], ProjectsS
       return
     }
     if (state.activeProjectId) parkedTrees[state.activeProjectId] = activeTreeOf(state)
-    const incoming = parkedTrees[projectId] ?? tree ?? createProjectWorkspace()
+    // The first commit keeps the placeholder tree the user may already be typing
+    // into (the project store names the project before its tree is staged),
+    // unless the project brings a layout of its own.
+    const placeholder =
+      !state.activeProjectId && !(tree && hasLayout(tree)) ? activeTreeOf(state) : undefined
+    const incoming = parkedTrees[projectId] ?? placeholder ?? tree ?? createProjectWorkspace()
     delete parkedTrees[projectId]
     set({
       activeProjectId: projectId,
