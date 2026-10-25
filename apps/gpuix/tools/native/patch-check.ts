@@ -7,6 +7,9 @@
  *   0002-markdown-theme    a markdown link paints in `theme.link`;
  *                          `mdInlineCodeScale: 0.5` halves inline-code glyphs
  *   0003-window-handle     `getNativeWindowHandle()` names this X11 window
+ *   0004-input-unfocused-scroll
+ *                          an unfocused input given a long value shows its
+ *                          start, not the end with the caret (URL-INPUT)
  *
  * On the published addon every assertion fails, which is what makes it a test.
  *
@@ -100,6 +103,12 @@ function count(sample: Sample, test: (rgb: readonly [number, number, number]) =>
   return n
 }
 
+function litIn(x0: number, x1: number, y0: number, y1: number): number {
+  let n = 0
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (lit(pixel(x, y))) n++
+  return n
+}
+
 function inkWidth(sample: Sample): number {
   const { x0, y0, x1, y1 } = region(sample)
   let min = Number.POSITIVE_INFINITY
@@ -117,6 +126,10 @@ const uprightSlant = slant('upright')
 const italicSlant = slant('italic')
 const linkRed = count('link', ([r, g, b]) => r > 160 && g < 90 && b < 90)
 const codeRatio = inkWidth('codeHalf') / Math.max(1, inkWidth('codeFull'))
+const inputStartInk = (() => {
+  const { x0, y0, x1, y1 } = region('input')
+  return litIn(x0, x1, y0, Math.round((y0 + y1) / 2))
+})()
 const handleId = ready.handle?.kind === 'x11' ? ready.handle.id : null
 const handleWindow =
   typeof handleId === 'number'
@@ -128,7 +141,8 @@ const checks = [
   { patch: '0001-font-style', what: "fontStyle 'italic' slants strokes (Blink oblique is 0.25)", value: italicSlant, ok: italicSlant > 0.15 && italicSlant < 0.35 },
   { patch: '0002-markdown-theme', what: 'link pixels in theme.link red', value: linkRed, ok: linkRed > 100 },
   { patch: '0002-markdown-theme', what: 'mdInlineCodeScale 0.5 halves the code ink width', value: codeRatio, ok: codeRatio > 0.4 && codeRatio < 0.6 },
-  { patch: '0003-window-handle', what: 'getNativeWindowHandle names the scene window', value: ready.handle, ok: handleWindow !== null }
+  { patch: '0003-window-handle', what: 'getNativeWindowHandle names the scene window', value: ready.handle, ok: handleWindow !== null },
+  { patch: '0004-input-unfocused-scroll', what: 'unfocused input shows the start of a long value (ink above the baseline)', value: inputStartInk, ok: inputStartInk > 150 }
 ]
 for (const check of checks)
   console.log(`${check.ok ? 'PASS' : 'FAIL'} ${check.patch} ${check.what}: ${JSON.stringify(check.value)}`)

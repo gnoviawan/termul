@@ -1,0 +1,73 @@
+diff --git a/packages/native/src/custom_elements/input.rs b/packages/native/src/custom_elements/input.rs
+index 7be2d25..08f1dbc 100644
+--- a/packages/native/src/custom_elements/input.rs
++++ b/packages/native/src/custom_elements/input.rs
+@@ -348,13 +348,14 @@ impl CustomElement for TextEditorElement {
+     fn render(
+         &mut self,
+         ctx: CustomRenderContext,
+-        _window: &mut Window,
++        window: &mut Window,
+         cx: &mut Context<crate::renderer::GpuixView>,
+     ) -> gpui::AnyElement {
+         let focus_handle = ctx
+             .focus_handle
+             .cloned()
+             .unwrap_or_else(|| cx.focus_handle());
++        let focused = focus_handle.is_focused(window);
+         let emits_change = ctx.events.contains("change");
+         let emits_submit = ctx.events.contains("submit");
+         let emits_key_down = ctx.events.contains("keyDown");
+@@ -398,7 +399,7 @@ impl CustomElement for TextEditorElement {
+                     drag_autoscroll_active: false,
+                     scroll_top: 0.0,
+                     scroll_left: 0.0,
+-                    follow_cursor: true,
++                    follow_cursor: focused,
+                     last_lines: Vec::new(),
+                     line_starts: vec![0],
+                     last_bounds: None,
+@@ -437,7 +438,7 @@ impl CustomElement for TextEditorElement {
+                 cx.notify();
+             }
+             if prop_changed {
+-                state.sync_prop_value(self.value.clone(), cx);
++                state.sync_prop_value(self.value.clone(), focused, cx);
+             }
+         });
+         self.last_prop_value = Some(self.value.clone());
+@@ -716,7 +717,7 @@ impl TextEditorState {
+         }
+     }
+ 
+-    fn sync_prop_value(&mut self, value: String, cx: &mut Context<Self>) {
++    fn sync_prop_value(&mut self, value: String, focused: bool, cx: &mut Context<Self>) {
+         if let Some(index) = self
+             .pending_values
+             .iter()
+@@ -726,10 +727,14 @@ impl TextEditorState {
+             return;
+         }
+         self.pending_values.clear();
+-        self.set_external_text(value, cx);
++        self.set_external_text(value, focused, cx);
+     }
+ 
+-    fn set_external_text(&mut self, value: String, cx: &mut Context<Self>) {
++    /// The caret lands at the end, as when a DOM input's `value` is set. Like
++    /// the DOM, an unfocused field still shows the start of the text: only a
++    /// focused one scrolls to keep the caret in view (a URL bar after a
++    /// navigation in a narrow pane).
++    fn set_external_text(&mut self, value: String, focused: bool, cx: &mut Context<Self>) {
+         if self.content == value {
+             return;
+         }
+@@ -740,7 +745,7 @@ impl TextEditorState {
+         self.marked_range = None;
+         self.scroll_top = 0.0;
+         self.scroll_left = 0.0;
+-        self.follow_cursor = true;
++        self.follow_cursor = focused;
+         self.reset_blink(cx);
+         self.undo_stack.clear();
+         self.redo_stack.clear();

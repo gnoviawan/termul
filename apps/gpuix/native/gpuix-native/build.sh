@@ -8,6 +8,8 @@
 #                         the pinned (or overridden) upstream; non-zero exit
 #                         names the patch that no longer applies
 #   ./build.sh build      cargo build + package (assumes patch ran)
+#   ./build.sh test       the napi crate's unit tests on the patched source
+#                         (shares the release dependency builds; ~15 min cold)
 #
 # Pins live in pins.env; any pin can be overridden from the environment, e.g.
 #   GPUIX_COMMIT=<sha> ZED_COMMIT=<sha> ./build.sh check
@@ -176,12 +178,22 @@ build() {
   say "loads: $out ($(du -h "$out" | cut -f1))"
 }
 
+unit_tests() {
+  link_shims
+  (
+    cd "$src/packages/native"
+    CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$target" \
+      exec nice -n 19 cargo "+$RUST_TOOLCHAIN" test --release --lib --locked --no-default-features
+  )
+}
+
 mkdir -p "$work"
 case "${1:-all}" in
   fetch) fetch ;;
   patch) patch ;;
   check) check ;;
   build) build ;;
+  test) patch; unit_tests ;;
   all) fetch; patch; build ;;
   *) die "unknown command: $1" ;;
 esac

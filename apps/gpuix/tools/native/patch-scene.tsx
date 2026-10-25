@@ -9,7 +9,7 @@ import { renameSync, writeFileSync } from 'node:fs'
 import { type GpuixTheme, type PublicInstance, render, useGpuixRequired } from '@gpuix/react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { registerTerminalFonts } from '../../src/terminal/fonts'
-import { SAMPLES, SCENE, type Sample } from './samples'
+import { LONG_VALUE, SAMPLES, SCENE, type Sample } from './samples'
 
 const [readyFile] = process.argv.slice(2)
 
@@ -33,12 +33,14 @@ function App() {
   const refs = useRef<Partial<Record<Sample, PublicInstance | null>>>({})
   // GPUI resolves a family at first use, so nothing names Paper Mono before registerFont returns.
   const [fontsReady, setFontsReady] = useState(false)
+  const [url, setUrl] = useState('about:blank')
   useEffect(() => {
     registerTerminalFonts(renderer)
     setFontsReady(true)
   }, [renderer])
   useEffect(() => {
     if (!fontsReady) return
+    const navigate = setTimeout(() => setUrl(LONG_VALUE), 200)
     const timer = setTimeout(() => {
       const bounds = Object.fromEntries(
         SAMPLES.map((sample) => {
@@ -52,7 +54,10 @@ function App() {
       writeFileSync(`${readyFile}.tmp`, JSON.stringify({ bounds, handle: handle ?? null, pid: process.pid }))
       renameSync(`${readyFile}.tmp`, readyFile as string)
     }, 800)
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(navigate)
+      clearTimeout(timer)
+    }
   }, [renderer, fontsReady])
   if (!fontsReady) return null
   const box = (sample: Sample, child: ReactNode) => (
@@ -75,6 +80,13 @@ function App() {
       </div>
       {(['link', 'codeFull', 'codeHalf'] as const).map((sample) =>
         box(sample, <markdown source={SOURCES[sample]} theme={THEMES[sample]} />)
+      )}
+      {box(
+        'input',
+        <input
+          value={url}
+          style={{ width: 240, height: 40, fontFamily: 'Paper Mono', fontSize: 28, color: '#ffffff' }}
+        />
       )}
     </div>
   )
