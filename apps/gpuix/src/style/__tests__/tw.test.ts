@@ -582,3 +582,32 @@ describe('tw() bookkeeping', () => {
     })
   })
 })
+
+describe('tw() divide-*', () => {
+  test("SettingsCard's divide-y divide-border is a 1 px border-colour line between rows", () => {
+    const compiled = tw.compile(
+      '@container flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-card'
+    )
+    expect(compiled.divide).toEqual({ axis: 'y', width: 1, color: '#242526' })
+    expect(compiled.base.borderWidth).toBe(1)
+  })
+
+  test('width, axis and colour come from their own classes; the colour defaults to border', () => {
+    expect(tw.compile('divide-x-2').divide).toEqual({ axis: 'x', width: 2, color: '#242526' })
+    expect(tw.compile('divide-y-[3px] divide-primary/50').divide).toEqual({
+      axis: 'y',
+      width: 3,
+      color: '#3b82f680'
+    })
+    expect(tw.compile('divide-border').divide).toBeUndefined()
+  })
+
+  test('reverse and state-variant divides are reported, not drawn', () => {
+    const compiled = tw.compile('divide-y-reverse hover:divide-y')
+    expect(compiled.divide).toBeUndefined()
+    expect(compiled.issues.map((i) => [i.token, i.kind])).toEqual([
+      ['divide-y-reverse', 'unsupported'],
+      ['hover:divide-y', 'unsupported']
+    ])
+  })
+})

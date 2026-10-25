@@ -57,6 +57,8 @@ export interface Fragment {
   space?: { axis: 'x' | 'y'; px: number }
   /** One part of a two-stop linear gradient (direction, a stop colour or position). */
   gradient?: GradientParts
+  /** divide-x / divide-y and divide-<colour>: a hairline between child elements. */
+  divide?: { axis?: 'x' | 'y'; width?: number; color?: Rgba }
 }
 
 /** CSS blur radius B is a Gaussian of sigma B/2; GPUI takes sigma directly. */
@@ -368,6 +370,12 @@ const HANDLERS: Record<string, Handler> = {
     if (css === undefined) return color(v) ? unsupported('shadow colour override') : undefined
     return frag({ shadow: parseShadowList(css, v.theme.vars) })
   },
+  'divide-x': (v) => withDivide(v, 'x'),
+  'divide-y': (v) => withDivide(v, 'y'),
+  divide: (v) => {
+    const c = color(v)
+    return c ? frag({ divide: { color: c } }) : undefined
+  },
   ring: (v) => {
     if (v.value === 'inset') return frag({ ring: { inset: true } })
     if (v.value === '' || /^\d+$/.test(v.value))
@@ -445,7 +453,6 @@ const HANDLERS: Record<string, Handler> = {
   'drop-shadow': () => unsupported('filters: GPUIX has no CSS filters'),
   overscroll: () => unsupported('overscroll behaviour is GPUI-defined'),
   touch: () => unsupported('touch-action has no GPUIX equivalent'),
-  divide: () => unsupported('child selectors: put the border on each child'),
   order: () => unsupported('flex order: reorder the children'),
   'col-span': () => unsupported('grid spans (gpuix#103)'),
   'row-span': () => unsupported('grid spans (gpuix#103)'),
@@ -482,6 +489,13 @@ function withSpace(v: Value, axis: 'x' | 'y'): UtilityResult | undefined {
     rank: 0,
     approx: 'child margins lowered to a flex gap on the parent'
   }
+}
+
+function withDivide(v: Value, axis: 'x' | 'y'): UtilityResult | undefined {
+  if (v.value === 'reverse') return unsupported('divide-*-reverse: GPUIX children are never reversed for it')
+  const raw = arbitrary(v.value)
+  const width = v.value === '' ? 1 : /^\d+$/.test(v.value) ? Number(v.value) : raw?.endsWith('px') ? parseLength(raw, v.theme.vars) : undefined
+  return width === undefined ? undefined : frag({ divide: { axis, width } })
 }
 
 function leadingOf(v: Value): Leading | undefined {

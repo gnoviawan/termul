@@ -43,9 +43,18 @@ interface Rule {
   style: StyleDesc
 }
 
+/** `divide-x` / `divide-y`: a line between child elements, Tailwind's `> :not(:last-child)` border. */
+export interface Divide {
+  axis: 'x' | 'y'
+  width: number
+  color: string
+}
+
 export interface CompiledStyle {
   /** Unconditional style with native hover / active / focusVisible nested. */
   base: StyleDesc
+  /** Drawn by the compat runtime between the element's children. */
+  divide?: Divide
   /** State-dependent styles, applied in order by tw(classes, state). */
   rules: Rule[]
   issues: ClassIssue[]
@@ -60,6 +69,7 @@ interface Acc {
   leading?: Fragment['leading']
   space?: Fragment['space']
   gradient?: Fragment['gradient']
+  divide?: Fragment['divide']
 }
 
 interface Ranked {
@@ -96,6 +106,7 @@ function accOf(frags: Ranked[]): Acc {
     if (frag.leading) acc.leading = frag.leading
     if (frag.space) acc.space = frag.space
     if (frag.gradient) acc.gradient = { ...acc.gradient, ...frag.gradient }
+    if (frag.divide) acc.divide = { ...acc.divide, ...frag.divide }
   }
   return acc
 }
@@ -243,6 +254,10 @@ export function compile(
       return
     }
     if (result.approx) issues.push({ token, kind: 'approximate', reason: result.approx })
+    if (result.frag.divide && (native || when.length > 0)) {
+      issues.push({ token, kind: 'unsupported', reason: 'divide-* under a state variant' })
+      return
+    }
     const key = `${native ?? ''}|${when.map(conditionKey).join('&')}`
     const bucket = buckets.get(key) ?? { when, native, frags: [] }
     bucket.frags.push({ frag: result.frag, rank: result.rank + variantRank, index })
@@ -265,7 +280,9 @@ export function compile(
       rules.push({ when: bucket.when, native: bucket.native, style })
     }
   }
-  return { base, rules, issues }
+  const { axis, width = 1, color } = baseAcc.divide ?? {}
+  if (axis === undefined) return { base, rules, issues }
+  return { base, rules, issues, divide: { axis, width, color: formatColor(color ?? theme.colors.border) } }
 }
 
 /** CSS never matches :hover or :active on a pointer-events: none element. */
