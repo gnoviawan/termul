@@ -122,3 +122,53 @@ describe('a placeholder chat remapped while the launcher is open again', () => {
     expect(routeHash()).toBe('#/c/s-b')
   })
 })
+
+describe('a launcher opened before the started chat route first runs', () => {
+  beforeEach(() => {
+    window.location.hash = '#/'
+    const root: LeafNode = { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null }
+    useWorkspaceStore.setState({
+      root,
+      activePaneId: 'pane-1',
+      fullscreenPaneId: null,
+      agentLauncherPaneId: null
+    })
+    setSessions(['s-a', 's-b'])
+    renderRoutes()
+  })
+
+  it('keeps the launcher the user opened after the store routed to the new chat', async () => {
+    await act(async () => {
+      useWorkspaceStore.getState().addAgentChatTab('s-a', 'pane-1')
+      window.dispatchEvent(new Event('pointerdown'))
+    })
+
+    // The router commits the new route in a transition: under load the
+    // route's first effect lands after the user already clicked New chat.
+    await act(async () => {
+      useWorkspaceStore.getState().addAgentChatTab('s-b', 'pane-1')
+      useWorkspaceStore.getState().showAgentLauncher('pane-1')
+    })
+
+    const state = useWorkspaceStore.getState()
+    expect(state.agentLauncherPaneId).toBe('pane-1')
+    expect((state.root as LeafNode).activeTabId).toBe('chat-s-b')
+    expect(routeHash()).toBe('#/c/s-b')
+  })
+
+  it('still activates a chat when the route changes outside the store (Back, a link)', async () => {
+    await act(async () => {
+      useWorkspaceStore.getState().addAgentChatTab('s-a', 'pane-1')
+      useWorkspaceStore.getState().addAgentChatTab('s-b', 'pane-1')
+      window.dispatchEvent(new Event('pointerdown'))
+    })
+    expect((useWorkspaceStore.getState().root as LeafNode).activeTabId).toBe('chat-s-b')
+
+    await act(async () => {
+      window.location.hash = '#/c/s-a'
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    expect((useWorkspaceStore.getState().root as LeafNode).activeTabId).toBe('chat-s-a')
+  })
+})
