@@ -127,7 +127,7 @@ describe('divide-y', () => {
     const line = { type: 'div', style: { height: 1, alignSelf: 'stretch', flexShrink: 0, backgroundColor: '#242526' } }
     const row = { type: 'div', style: { height: 32 } }
     const slots = (shape(card) as Shape).children as (Shape | string)[]
-    const flat = slots.flatMap((slot) =>
+    const flat = slots.flatMap((slot): (Shape | string)[] =>
       typeof slot === 'string' ? ['empty'] : slot.type === String(Symbol.for('react.fragment')) ? (slot.children as Shape[]) : [slot]
     )
     expect(flat).toEqual([row, line, 'empty', row, line, row, 'null'])
