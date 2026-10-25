@@ -306,13 +306,19 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // Single-update CTA for the CURRENTLY SELECTED agent (no batch): the
   // registry agent behind the selected entry's drift, when one exists.
   const targetRegistry = usingRemoteRegistry ? activeRegistry : remoteRegistry
+  // An empty id means the last-selected agent is still being restored. No entry
+  // stands in for it then: a default would show, prewarm and launch an agent the
+  // user did not pick.
+  const selectionRestoring = selectedConfigId === ''
   const selectedEntry = useMemo(
     () =>
-      supportedAgents.find((entry) => entry.configId === selectedConfigId) ??
-      pickDefaultSupportedAgent(supportedAgents) ??
-      supportedAgents[0] ??
-      null,
-    [supportedAgents, selectedConfigId]
+      selectionRestoring
+        ? null
+        : (supportedAgents.find((entry) => entry.configId === selectedConfigId) ??
+          pickDefaultSupportedAgent(supportedAgents) ??
+          supportedAgents[0] ??
+          null),
+    [supportedAgents, selectedConfigId, selectionRestoring]
   )
   const {
     selectedUpdateAgent,
@@ -504,8 +510,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
   const imageCapable = Boolean(promptCaps?.image)
   const embedCapable = Boolean(promptCaps?.embeddedContext)
+  // Typing stays open while the pick restores; a send then waits for it (`launchQueuedRef`).
   const composerDisabled =
-    Boolean(installingConfigId) || savingManualPath || selectedEntry?.status !== 'ready'
+    Boolean(installingConfigId) ||
+    savingManualPath ||
+    (!selectionRestoring && selectedEntry?.status !== 'ready')
   const {
     attachments,
     addFiles,
@@ -1486,9 +1495,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
   }, [preparedSessionId, pendingOptions])
 
+  // A send while the pick is restoring waits for it; the effect after `launch` replays it.
+  const launchQueuedRef = useRef(false)
   const launch = useCallback(async () => {
     if (!activeProjectId || !projectRoot) {
       toast.error('No active project')
+      return
+    }
+    if (selectionRestoring) {
+      launchQueuedRef.current = true
       return
     }
     if (!selectedConfig || selectedEntry?.status !== 'ready' || launchInFlightRef.current) return
@@ -1721,6 +1736,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   }, [
     activeProjectId,
     projectRoot,
+    selectionRestoring,
     selectedConfig,
     selectedEntry?.status,
     acpConfigs,
@@ -1743,6 +1759,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     baseBranch,
     existingWorktreeId
   ])
+
+  useEffect(() => {
+    if (selectionRestoring || !launchQueuedRef.current) return
+    launchQueuedRef.current = false
+    void launch()
+  }, [selectionRestoring, launch])
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent): boolean | undefined => {
@@ -1779,8 +1801,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
 
   const canLaunch =
-    Boolean(selectedConfig) &&
-    selectedEntry?.status === 'ready' &&
+    (selectionRestoring || (Boolean(selectedConfig) && selectedEntry?.status === 'ready')) &&
     (prompt.trim().length > 0 || attachments.length > 0) &&
     // CAP-2: worktree mode requires an explicit base branch before launch —
     // covers detached HEAD (no current) and any case where the picker has

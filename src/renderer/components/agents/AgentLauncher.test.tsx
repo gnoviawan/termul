@@ -761,6 +761,12 @@ function preparedSession(
   })
 }
 
+/** Render, then let the last-selected restore settle so the launcher acts on a resolved pick. */
+async function renderRestoredLauncher(): Promise<void> {
+  renderLauncher()
+  await act(async () => {})
+}
+
 function renderLauncher(): void {
   render(
     <TooltipProvider>
@@ -886,8 +892,8 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('opens chat instantly via placeholder then finalizes ACP in the background', async () => {
-    const defaultAgent = defaultReadyAgent()
-    renderLauncher()
+    const defaultAgent = firstSupportedAgent()
+    await renderRestoredLauncher()
 
     setComposerValue('hello acp')
     fireEvent.click(screen.getByLabelText('Start agent chat'))
@@ -919,11 +925,11 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('claims a prepared session so launch skips the placeholder path', async () => {
-    const defaultAgent = defaultReadyAgent()
+    const defaultAgent = firstSupportedAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     mockClaimPreparedChat.mockReturnValue('prepared-ready-1')
     acpStateRef.current.preparedSessions = { [key]: 'prepared-ready-1' }
-    renderLauncher()
+    await renderRestoredLauncher()
 
     setComposerValue('ready now')
     fireEvent.click(screen.getByLabelText('Start agent chat'))
@@ -1021,6 +1027,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('keeps the AuthRequiredBanner (not the non-auth banner) for auth failures', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.prepareChatErrors = {
@@ -1030,7 +1037,7 @@ describe('AgentLauncher ACP new thread', () => {
         detail: 'run /login'
       }
     }
-    renderLauncher()
+    await renderRestoredLauncher()
 
     // Auth failures keep the sign-in banner; the non-auth banner must not
     // also render (its 'Agent: label' prefix is the marker).
@@ -1245,7 +1252,7 @@ describe('AgentLauncher ACP new thread', () => {
         ]
       }
     }
-    renderLauncher()
+    await renderRestoredLauncher()
 
     fireEvent.click(screen.getByRole('button', { name: 'Factory API Key' }))
     const input = screen.getByLabelText('Factory API key')
@@ -1286,7 +1293,7 @@ describe('AgentLauncher ACP new thread', () => {
         ]
       }
     }
-    renderLauncher()
+    await renderRestoredLauncher()
     fireEvent.click(screen.getByRole('button', { name: 'Login' }))
     await waitFor(() =>
       expect(mockAuthenticateAgent).toHaveBeenCalledWith('factory-live', 'device-pairing')
@@ -1335,7 +1342,7 @@ describe('AgentLauncher ACP new thread', () => {
     acpStateRef.current.preparedSessions = {
       [`${factory.configId}\0/work\0`]: 'factory-ready'
     }
-    renderLauncher()
+    await renderRestoredLauncher()
 
     expect(screen.queryByLabelText('Factory API key')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Currently Factory Droid/ }))
@@ -1654,6 +1661,39 @@ describe('AgentLauncher ACP new thread', () => {
     await waitFor(() =>
       expect(mockRetargetWarmPool).toHaveBeenCalledWith('acp-registry:opencode', '/work', 'p1')
     )
+  })
+
+  it('launches the restored agent when the prompt is sent before the restore resolves', async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG, OTHER_ACP_CONFIG]
+    let resolvePick!: (value: unknown) => void
+    mockPersistRead.mockImplementation((key: string) =>
+      key === 'agents/last-selected'
+        ? new Promise((resolve) => {
+            resolvePick = resolve
+          })
+        : Promise.resolve({ success: true, data: undefined })
+    )
+    renderLauncher()
+
+    setComposerValue('hello early')
+    pressComposerKey('Enter')
+    expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolvePick({ success: true, data: { agentId: 'acp-registry:opencode', mode: 'acp' } })
+    })
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configId: 'acp-registry:opencode',
+        initialBlocks: [{ type: 'text', text: 'hello early' }]
+      })
+    )
+    expect(mockPersistWrite).not.toHaveBeenCalledWith('agents/last-selected', {
+      agentId: 'acp-registry:claude-acp',
+      mode: 'acp'
+    })
   })
 
   it('uses model config and native Agent/mode picker actions without duplicate Agent chips', async () => {
@@ -2050,7 +2090,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('still shows Loading model when cache has modes only (no model options)', async () => {
-    const defaultAgent = defaultReadyAgent()
+    const defaultAgent = firstSupportedAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.preparingChatKeys = { [key]: true }
     acpStateRef.current.agentOptionsCache = {
@@ -2064,7 +2104,7 @@ describe('AgentLauncher ACP new thread', () => {
         updatedAt: Date.now()
       }
     }
-    renderLauncher()
+    await renderRestoredLauncher()
 
     expect(await screen.findByRole('button', { name: /Loading model/ })).toBeInTheDocument()
   })
@@ -2110,10 +2150,10 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('keeps composer usable with loading chip when cold and no cache', async () => {
-    const defaultAgent = defaultReadyAgent()
+    const defaultAgent = firstSupportedAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.preparingChatKeys = { [key]: true }
-    renderLauncher()
+    await renderRestoredLauncher()
 
     expect(screen.getByLabelText('Agent prompt')).not.toBeDisabled()
     expect(await screen.findByRole('button', { name: /Loading model/ })).toBeInTheDocument()
@@ -2143,7 +2183,7 @@ describe('AgentLauncher ACP new thread', () => {
           }
         })
     )
-    renderLauncher()
+    await renderRestoredLauncher()
 
     setComposerValue('hello cold')
     fireEvent.click(screen.getByLabelText('Start agent chat'))
@@ -2434,7 +2474,7 @@ describe('AgentLauncher file pills (inline tokens)', () => {
 
 describe('AgentLauncher composer drag-drop', () => {
   it('stages a dropped image as an attachment on the launcher composer', async () => {
-    const defaultAgent = defaultReadyAgent()
+    const defaultAgent = firstSupportedAgent()
     const session = { ...preparedSession(defaultAgent.configId), id: 'prepared-drop-1' }
     acpStateRef.current.preparedSessions = {
       [`${defaultAgent.configId}\0/work\0`]: 'prepared-drop-1'
@@ -2446,7 +2486,7 @@ describe('AgentLauncher composer drag-drop', () => {
         capabilities: { promptCapabilities: { image: true } }
       }
     }
-    renderLauncher()
+    await renderRestoredLauncher()
     const composer = document.querySelector('[data-agent-launcher-composer]')
     expect(composer).not.toBeNull()
     const file = new File(['screenshot'], 'screenshot.png', { type: 'image/png' })
@@ -3500,7 +3540,7 @@ describe('AgentLauncher per-agent update badge', () => {
     mockRegistryCatalogState.usingRemoteRegistry = false
     mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.219.0')]
 
-    renderLauncher()
+    await renderRestoredLauncher()
 
     // Single-update CTA for the CURRENTLY SELECTED agent — no batch pill.
     expect(screen.queryByTestId('agent-update-badge')).toBeNull()
@@ -3546,6 +3586,7 @@ describe('AgentLauncher per-agent update badge', () => {
       </TooltipProvider>
     )
     const view = render(renderTree())
+    await act(async () => {})
 
     fireEvent.click(screen.getByRole('button', { name: /update .+ to version 0\.228\.0/i }))
     await waitFor(() => expect(mockApplyAgentUpdate).toHaveBeenCalledTimes(1))
@@ -3597,6 +3638,7 @@ describe('AgentLauncher per-agent update badge', () => {
       </TooltipProvider>
     )
     const view = render(renderTree())
+    await act(async () => {})
 
     fireEvent.click(screen.getByRole('button', { name: /update .+ to version 0\.228\.0/i }))
     await waitFor(() => expect(mockApplyAgentUpdate).toHaveBeenCalledTimes(1))
