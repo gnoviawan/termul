@@ -6,7 +6,20 @@
 
 import type { Check, Surface } from '../types'
 import { resetAlpha, setTheme } from '../world'
-import { CANVAS_READY, click, DASHBOARD, gone, label, press, see, step, txt, type, wait } from './dsl'
+import {
+  CANVAS_READY,
+  COMPOSER_READY,
+  click,
+  DASHBOARD,
+  gone,
+  label,
+  press,
+  see,
+  step,
+  txt,
+  type,
+  wait
+} from './dsl'
 
 const SETTINGS_SECTIONS: Array<[id: string, nav: string, expect: string]> = [
   ['interface', 'Interface', 'Interface zoom'],
@@ -17,7 +30,8 @@ const SETTINGS_SECTIONS: Array<[id: string, nav: string, expect: string]> = [
   ['terminal-profiles', 'Profiles', 'No terminal profiles'],
   ['ai-agents', 'Agent chats', 'Close idle chats after'],
   ['skills', 'Skills', 'Skills'],
-  ['provider', 'Accounts', 'Accounts'],
+  // The nav label alone would pass before the Account list loads.
+  ['provider', 'Accounts', '1 account'],
   ['mcp-servers', 'MCP servers', 'MCP servers'],
   ['shortcuts', 'Keyboard shortcuts', 'Command Palette'],
   ['diagnostics', 'Logs', 'Application log'],
@@ -83,7 +97,9 @@ const TOAST_BRANCH = 'toast-branch'
  * GPUIX, a registered desktop host, has the desktop table (K2), so where the
  * two differ the fifth field is the key GPUIX presses.
  */
-const SHORTCUTS: Array<[id: string, keys: string, title: string, expect: Check[], gpuixKeys?: string]> = [
+const SHORTCUTS: Array<
+  [id: string, keys: string, title: string, expect: Check[], gpuixKeys?: string]
+> = [
   ['toggle-projects', 'ctrl-shift-b', 'collapse the project rail', [gone('gamma')]],
   ['toggle-side-panel', 'ctrl-b', 'hide the side panel', [gone('Explorer')]],
   ['theme-picker', 'ctrl-alt-t', 'theme picker', see('Color Themes')],
@@ -137,7 +153,11 @@ const PALETTE: Surface[] = [
         step(
           'c-run',
           [commandId === 'switch-project' ? press('enter') : click(txt(command)), wait(1200)],
-          commandId === 'open-canvas' ? [...see(expect), CANVAS_READY] : see(expect)
+          commandId === 'open-canvas'
+            ? [...see(expect), CANVAS_READY]
+            : commandId === 'switch-project'
+              ? [...see(expect), ...COMPOSER_READY]
+              : see(expect)
         )
       ]
     })
@@ -199,7 +219,10 @@ const LONG_TAIL: Surface[] = [
     id: 'canvas.open',
     area: 'canvas',
     title: 'Canvas',
-    steps: [DASHBOARD, step('b-open', [click(label('Open canvas'))], [...see('Canvas'), CANVAS_READY])]
+    steps: [
+      DASHBOARD,
+      step('b-open', [click(label('Open canvas'))], [...see('Canvas'), CANVAS_READY])
+    ]
   },
   {
     id: 'browser.pane',

@@ -13,6 +13,7 @@ import {
 import type { Surface } from '../types'
 import { ensureProject, resetAlpha } from '../world'
 import {
+  COMPOSER_READY,
   click,
   css,
   DASHBOARD,
@@ -52,7 +53,11 @@ const RAIL: Surface[] = [
         [],
         see('alpha', 'beta', 'gamma', 'delta', 'What should we do in alpha?')
       ),
-      step('b-switch-beta', [click(id('project-item-m1-beta'))], see('What should we do in beta?'))
+      step(
+        'b-switch-beta',
+        [click(id('project-item-m1-beta'))],
+        [...see('What should we do in beta?'), ...COMPOSER_READY]
+      )
     ]
   },
   {

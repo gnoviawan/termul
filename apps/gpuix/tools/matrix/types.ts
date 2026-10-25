@@ -114,6 +114,8 @@ export interface CheckLog {
   text: string
   expect: 'present' | 'gone'
   pass: boolean
+  /** How long the check waited for its text, so a late paint reads apart from a missing one. */
+  ms?: number
 }
 
 export interface ClientRun {
