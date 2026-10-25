@@ -484,7 +484,10 @@ const CHAT: Surface[] = [
       step(
         'c-reply',
         [press('enter'), wait(4000)],
-        see('The router docs cover the hash variant in more depth')
+        [
+          ...see('The router docs cover the hash variant in more depth'),
+          { text: 'Chat Scenario Agent', within: 'agent-model-selector-trigger' }
+        ]
       )
     ]
   },
