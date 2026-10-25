@@ -67,9 +67,10 @@ export function TaskItem({
         <text
           style={{
             position: 'absolute',
-            right: '100%',
+            left: -4,
             top: 0,
-            marginRight: -BOX_LEFT + 6,
+            width: BOX_LEFT,
+            textAlign: 'right',
             fontSize: 14,
             lineHeight: 21,
             color: tokenColor('foreground')
