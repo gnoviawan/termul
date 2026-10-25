@@ -36,6 +36,19 @@ export interface GpuixBrowserHostOptions {
   blurApp(): void
   /** How often to look for a GPUIX focus change while a webview holds the keyboard. */
   focusPollMs?: number
+  /** Whether Termul's theme is dark when the helper starts: its pages then match `prefers-color-scheme: dark`. */
+  prefersDark?(): boolean
+}
+
+/**
+ * WebKitGTK answers `prefers-color-scheme` from the GTK theme, and a `GTK_THEME`
+ * ending in `:dark` makes it dark. FigCraft picks a new page's colour from it
+ * before Termul's `host.theme` arrives, so a dark Termul needs it at start.
+ */
+export function helperEnv(env: NodeJS.ProcessEnv, dark: boolean): NodeJS.ProcessEnv {
+  if (!dark) return env
+  const theme = env.GTK_THEME?.replace(/:.*$/, '') || 'Adwaita'
+  return { ...env, GTK_THEME: `${theme}:dark` }
 }
 
 export interface GpuixBrowserHost extends BrowserHost, CanvasWebviewHost {
@@ -155,6 +168,7 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
     const started = new HostProcess({
       binary: options.binary,
       args: [...parent, ...(options.dataDir ? ['--data-dir', options.dataDir] : [])],
+      env: helperEnv(process.env, options.prefersDark?.() ?? false),
       onEvent,
       onStderr: (line) => log.info('webview-host', line),
       onExit: (detail) => {

@@ -43,9 +43,18 @@ interface Rule {
   style: StyleDesc
 }
 
+/** `divide-x` / `divide-y`: a line between child elements, Tailwind's `> :not(:last-child)` border. */
+export interface Divide {
+  axis: 'x' | 'y'
+  width: number
+  color: string
+}
+
 export interface CompiledStyle {
   /** Unconditional style with native hover / active / focusVisible nested. */
   base: StyleDesc
+  /** Drawn by the compat runtime between the element's children. */
+  divide?: Divide
   /** State-dependent styles, applied in order by tw(classes, state). */
   rules: Rule[]
   issues: ClassIssue[]
@@ -60,6 +69,7 @@ interface Acc {
   leading?: Fragment['leading']
   space?: Fragment['space']
   gradient?: Fragment['gradient']
+  divide?: Fragment['divide']
 }
 
 interface Ranked {
@@ -96,6 +106,7 @@ function accOf(frags: Ranked[]): Acc {
     if (frag.leading) acc.leading = frag.leading
     if (frag.space) acc.space = frag.space
     if (frag.gradient) acc.gradient = { ...acc.gradient, ...frag.gradient }
+    if (frag.divide) acc.divide = { ...acc.divide, ...frag.divide }
   }
   return acc
 }
@@ -153,16 +164,23 @@ function finalize(acc: Acc, theme: TwTheme, flat: boolean, fallback?: Acc): Styl
     // CSS lists the topmost shadow first; GPUIX paints in list order (last on top).
     const css: CssShadow[] = [...shadow].reverse()
     const width = ring.width ?? 0
-    const offset = ring.inset ? 0 : (ring.offsetWidth ?? 0)
-    if (width > 0) {
-      const current = style.color ?? fallback?.style.color ?? formatColor(theme.colors.foreground)
-      css.push(spread(width + offset, ring.color ?? hexToRgba(current), ring.inset === true))
-    }
-    if (width > 0 && offset > 0) {
-      css.push(spread(offset, ring.offsetColor ?? { r: 1, g: 1, b: 1, a: 1 }, false))
+    const current = style.color ?? fallback?.style.color ?? formatColor(theme.colors.foreground)
+    const ringColor = ring.color ?? hexToRgba(current)
+    // CSS draws an inset shadow inside the padding box; GPUI from the border
+    // box edge, under the border. Growing it by the border width puts the ring
+    // inside the border, as on the web.
+    const border = Number(style.borderWidth ?? fallback?.style.borderWidth ?? 0)
+    if (width > 0 && ring.inset) css.push(spread(width + border, ringColor, true))
+    // GPUI paints a shadow under the whole box, so a spread ring on a transparent
+    // button fills it; an outer ring is the outline that follows the corners.
+    if (!ring.inset && (width > 0 || (fallback && acc.ring?.width !== undefined))) {
+      style.outlineWidth = width
+      style.outlineColor = formatColor(ringColor)
+      const offset = ring.offsetWidth ?? 0
+      if (offset > 0) style.outlineOffset = offset
     }
     if (css.length > 0) style.boxShadow = css.map(toBoxShadow)
-    else if (fallback) style.boxShadow = NO_SHADOW
+    else if (fallback && (acc.shadow || fallback.shadow || fallback.ring?.inset)) style.boxShadow = NO_SHADOW
   }
   return style
 }
@@ -243,6 +261,10 @@ export function compile(
       return
     }
     if (result.approx) issues.push({ token, kind: 'approximate', reason: result.approx })
+    if (result.frag.divide && (native || when.length > 0)) {
+      issues.push({ token, kind: 'unsupported', reason: 'divide-* under a state variant' })
+      return
+    }
     const key = `${native ?? ''}|${when.map(conditionKey).join('&')}`
     const bucket = buckets.get(key) ?? { when, native, frags: [] }
     bucket.frags.push({ frag: result.frag, rank: result.rank + variantRank, index })
@@ -265,7 +287,9 @@ export function compile(
       rules.push({ when: bucket.when, native: bucket.native, style })
     }
   }
-  return { base, rules, issues }
+  const { axis, width = 1, color } = baseAcc.divide ?? {}
+  if (axis === undefined) return { base, rules, issues }
+  return { base, rules, issues, divide: { axis, width, color: formatColor(color ?? theme.colors.border) } }
 }
 
 /** CSS never matches :hover or :active on a pointer-events: none element. */

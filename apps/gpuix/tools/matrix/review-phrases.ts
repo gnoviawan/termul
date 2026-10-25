@@ -20,18 +20,18 @@ export const TREE_TEXT =
 export const SELECT =
   'Each select is one closed dropdown like the web (G2), and its trigger is 240px wide beside the label as on the web (G5: the GPUIX ui primitives resolve `@[35rem]:w-60` against the settings card container). The web truncates a long value (`[&>span]:line-clamp-1`); GPUIX shows it in full inside the 240px.'
 export const DIVIDERS =
-  'Rows inside a settings group have no divider lines and sit about 5 px tighter: SettingsGroup separates its rows with `divide-y divide-border`, and the GPUIX style layer has no `divide-*` utilities.'
+  'Rows inside a settings group are separated by the divider line as on the web (G6: `divide-y divide-border` in the style layer). Each row is about 4 px shorter in GPUIX: the label is an inline `<label>` whose CSS line box takes the 24 px strut of its block parent, and GPUIX lays it out at its own 20 px line height (inferred from the row heights).'
 export const SETTINGS_BASE = [
   'The section content and navigation match.',
   'The scrim dims and blurs the page behind it as on the web (N2).'
 ]
 export const FIELD_FOCUS =
-  "The focused field shows its caret, or nothing, but not the web's focus border (`focus-visible:border-ring`). G5 recorded that border in GPUIX, so this is a regression since G5. A candidate cause, not traced: gpui applies a `focus_visible` style only while the last input was the keyboard (`last_input_was_keyboard()` in its div.rs), and Chromium matches `:focus-visible` on any focused text field."
+  "The focused field shows its focus border as on the web (G6: native patch gpuix/0009 applies a text field's `focus-visible:` style on any focus, in the frame focus moves)."
 export const BAND_FOCUS =
-  "The popover's search band keeps its plain hairline where the web turns it `ring` while the field has focus (`focus-within:border-ring`, BAND_FOCUS_CLASS)."
+  "The popover's search band turns its hairline `ring` while the field has focus, as on the web (G6: a native field's focus bubbles to its compat ancestors, and the ui Box tracks `focus-within:`)."
 export const TOAST =
   'The toast matches the web card (G4 native toaster): check icon, close button over the top-left corner, Arial text (sonner sets its own font stack); the toast crop differs 0.85 % perceptual.'
 export const COMPOSER_FOCUS =
-  'The web composer shows its focus border and ring while it holds the caret; GPUIX shows the caret with the resting border.'
+  "The web composer shows its focus border and inset ring while it holds the caret; GPUIX shows the resting border. The composer's native textarea and its key-capture div (src/overrides ChatComposerEditor) have no onFocus/onBlur, so GPUIX emits no focus event for the wrapper's `focus-within:`. A G6 probe that gave both an empty onFocus and onBlur drew the border and ring as on the web (top edge 35 and 57 against 36 and 58)."
 export const COMPOSER_PICK =
-  'After the switch the GPUIX beta composer was not ready when the frame was grabbed in 3 of 3 runs (Composer unavailable once, Loading model… twice), where the web composer already showed Chat Scenario Agent. palette.switch-project shows the same in 2 of 3 runs.'
+  'After the switch the beta composer shows Chat Scenario Agent in both. GPUIX gets there later: the agent chip appeared 967 ms (rail) and 586 ms (palette) after the switch in GPUIX and within 82 ms on the web (G6 run; the step now waits for it, so the frames match).'

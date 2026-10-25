@@ -13,7 +13,7 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 import { applyRules } from '../style/tw'
 import type { TwState } from '../style/variants'
 import { checkboxElement } from './checkbox'
-import { childInfo, contentBasis, layoutChildren, wrapAutoMargin } from './children'
+import { childInfo, contentBasis, divideChildren, layoutChildren, wrapAutoMargin } from './children'
 import { ColorContext, SvgClassContext } from './color'
 import { ScopeContext, withScopedClasses } from './scope'
 import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
@@ -265,7 +265,8 @@ export function buildElement(
     const laid = layoutChildren(tr, style, children, isStatic, flipped !== null)
     if (laid.runStyle) native.style = { ...style, ...laid.runStyle }
     const nested = laid.children !== undefined && typeof laid.children !== 'string'
-    let kids: ReactNode = laid.children
+    const divide = tr.compiled.divide
+    let kids: ReactNode = divide ? divideChildren(laid.children, divide, style) : laid.children
     let wrapped = false
     if (nested && style.color !== undefined) {
       kids = (laid.isStatic ? jsxs : jsx)(ColorContext.Provider, { value: style.color, children: kids })
@@ -304,23 +305,6 @@ export function buildElement(
   return element
 }
 
-const NON_TEXT_INPUTS = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'range', 'color', 'image', 'hidden'])
-const FOCUS_VISIBLE_VARIANT = /(^|\s|:)focus-visible:/g
-
-function isTextField(tag: string, type: unknown): boolean {
-  return tag === 'textarea' || (tag === 'input' && !NON_TEXT_INPUTS.has(String(type ?? 'text')))
-}
-
-/**
- * Chromium matches `:focus-visible` on a focused text field however it got
- * focus (a click, `autoFocus`, `.focus()`), since typing follows. GPUI's
- * `focusVisible` needs the last input to be a key, so a text field's
- * `focus-visible:` classes key on plain focus instead.
- */
-function focusVisibleOnFocus(className: string | undefined): string | undefined {
-  return className?.includes('focus-visible:') ? className.replace(FOCUS_VISIBLE_VARIANT, '$1focus:') : className
-}
-
 /** The runtime entry for string types. `CompatHost` handles 'host' translations. */
 export function createDomElement(
   tag: string,
@@ -333,8 +317,7 @@ export function createDomElement(
   if (tag === 'br' || tag === 'wbr') return jsx('div', { style: tag === 'br' ? BREAK : HIDDEN }, key)
   if (UNSUPPORTED_TAGS.has(tag)) compatWarn('element-unsupported', tag)
   if (SVG_CHILD_TAGS.has(tag)) return jsx(tag as never, props, key)
-  const scoped = withScopedClasses(tag, props['data-streamdown'], props.className)
-  const className = isTextField(tag, props.type) ? focusVisibleOnFocus(scoped) : scoped
+  const className = withScopedClasses(tag, props['data-streamdown'], props.className)
   const tr = translation(tag, className)
   const element =
     tr.ruleMode === 'host' || tr.group !== null

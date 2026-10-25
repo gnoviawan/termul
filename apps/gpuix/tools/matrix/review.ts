@@ -42,15 +42,12 @@ export interface Review {
 /** Daily-core surfaces; the settings, palette, shortcut, theme and long-tail reviews live in `review-tail.ts`. */
 export const REVIEWS: Record<string, Review> = {
   'rail.project-list': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Same layout and order; switching to beta works by click in both (H1 fixed the lost clicks: `bun tools/clickloss/run.ts --trials 20` switched projects 60/60 through automation and XTEST).',
       COMPOSER_PICK,
       LAMP
-    ],
-    cause: 'needs diagnosis',
-    unit: 'composer agent pick after a project switch (unassigned)',
-    impact: 2
+    ]
   },
   'rail.project-menu': {
     status: 'ported',
@@ -101,14 +98,11 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'rail.collapse': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      'The collapsed rail matches (icons, project letters, Changes badge) except one control: GPUIX paints no Open canvas (pencil) button under Search, here and in shortcuts.toggle-projects. RailCollapsed renders it as a RailButton right after Search, and the icon exists in src/icons; why GPUIX drops it is not diagnosed.',
+      "The collapsed rail matches: icons, project letters, Changes badge, and the Open canvas pencil under Search (G6: the action column is `flex-1` above an `mt-auto` footer, and the footer's auto-margin wrapper grew too and took half the free space, so the column clipped the pencil; a column now holds the wrapper back beside a growing sibling, as a row did).",
       LAMP
-    ],
-    cause: 'needs diagnosis',
-    unit: 'collapsed rail canvas button (unassigned)',
-    impact: 2
+    ]
   },
   'rail.project-settings': {
     status: 'ported',
@@ -135,14 +129,11 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'side.workspace-switcher': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'The Working copies popover matches; GPUIX omits the small terminal glyph on the web row hover.',
       BAND_FOCUS
-    ],
-    cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
-    impact: 1
+    ]
   },
   'side.hide': {
     status: 'ported',
@@ -236,24 +227,18 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['The commit lands (4 commits, bump version) in both.', TOAST]
   },
   'git.branch-picker': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Branch popover, Local group, feature/login and Create branch row match.',
       BAND_FOCUS
-    ],
-    cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
-    impact: 1
+    ]
   },
   'git.worktree-create': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Typing a new name shows No matching working copies and Create worktree feat-matrix in both.',
       BAND_FOCUS
-    ],
-    cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
-    impact: 1
+    ]
   },
   'chat.transcript': {
     status: 'partial',
@@ -327,15 +312,15 @@ export const REVIEWS: Record<string, Review> = {
       'Both show "No files or folders match" for a bare @ on this server, so the file list itself is not compared here (tools/composer/e2e.ts covers it).',
       COMPOSER_FOCUS
     ],
-    cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
+    cause: 'native override needed',
+    unit: 'composer focus listeners (G7)',
     impact: 1
   },
   'composer.slash': {
     status: 'partial',
     differences: ['The Skills menu matches row for row.', COMPOSER_FOCUS],
-    cause: 'compat translator gap',
-    unit: 'focus styles on fields (unassigned)',
+    cause: 'native override needed',
+    unit: 'composer focus listeners (G7)',
     impact: 1
   },
   'composer.attach': {

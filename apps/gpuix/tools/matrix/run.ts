@@ -87,7 +87,11 @@ async function runSteps(
       if (!log.ok) run.ok = false
     }
     for (const check of step.expect) {
-      const log = await driver.check(step.name, check)
+      const checkStarted = performance.now()
+      const log = {
+        ...(await driver.check(step.name, check)),
+        ms: Math.round(performance.now() - checkStarted)
+      }
       run.checks.push(log)
       if (!log.pass) run.ok = false
     }

@@ -265,8 +265,8 @@ const CASES: [string, StyleDesc][] = [
       lineHeight: 16.8,
       hover: { backgroundColor: '#e5e5e608', color: '#e5e5e6' },
       focusVisible: {
-        outlineWidth: 0,
-        boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 1, color: '#e5e5e6' }]
+        outlineWidth: 1,
+        outlineColor: '#e5e5e6'
       }
     }
   ],
@@ -388,10 +388,9 @@ const CASES: [string, StyleDesc][] = [
   [
     'ring-2 ring-primary ring-offset-2 ring-offset-background',
     {
-      boxShadow: [
-        { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 4, color: '#3b82f6' },
-        { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 2, color: '#08090a' }
-      ]
+      outlineWidth: 2,
+      outlineColor: '#3b82f6',
+      outlineOffset: 2
     }
   ],
   [
@@ -523,9 +522,10 @@ describe('tw() state variants', () => {
 describe('tw() flat elevation (termul-light)', () => {
   const light = createTw(resolveTwTheme('termul-light'))
 
-  test('drops shadow-* but keeps rings, as index.css does', () => {
+  test('drops shadow-* but keeps rings, as index.css does; an outer ring paints as an outline', () => {
     expect(light('shadow-lg ring-1 ring-border')).toEqual({
-      boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 1, color: '#e5e5e5' }]
+      outlineWidth: 1,
+      outlineColor: '#e5e5e5'
     })
   })
 
@@ -579,6 +579,55 @@ describe('tw() bookkeeping', () => {
     expect(classifyClass('bg-nonexistent-token')).toEqual({
       kind: 'unknown',
       reason: 'no utility bg-nonexistent-token'
+    })
+  })
+})
+
+describe('tw() divide-*', () => {
+  test("SettingsCard's divide-y divide-border is a 1 px border-colour line between rows", () => {
+    const compiled = tw.compile(
+      '@container flex flex-col divide-y divide-border overflow-hidden rounded-lg border border-border bg-card'
+    )
+    expect(compiled.divide).toEqual({ axis: 'y', width: 1, color: '#242526' })
+    expect(compiled.base.borderWidth).toBe(1)
+  })
+
+  test('width, axis and colour come from their own classes; the colour defaults to border', () => {
+    expect(tw.compile('divide-x-2').divide).toEqual({ axis: 'x', width: 2, color: '#242526' })
+    expect(tw.compile('divide-y-[3px] divide-primary/50').divide).toEqual({
+      axis: 'y',
+      width: 3,
+      color: '#3b82f680'
+    })
+    expect(tw.compile('divide-border').divide).toBeUndefined()
+  })
+
+  test('reverse and state-variant divides are reported, not drawn', () => {
+    const compiled = tw.compile('divide-y-reverse hover:divide-y')
+    expect(compiled.divide).toBeUndefined()
+    expect(compiled.issues.map((i) => [i.token, i.kind])).toEqual([
+      ['divide-y-reverse', 'unsupported'],
+      ['hover:divide-y', 'unsupported']
+    ])
+  })
+})
+
+describe('tw() rings', () => {
+  test('a focus ring on a transparent button is an outline, so it never fills the button', () => {
+    const style = tw('rounded px-2 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring')
+    expect(style.boxShadow).toBeUndefined()
+    expect(style.focusVisible).toEqual({ outlineWidth: 1, outlineColor: '#e5e5e6' })
+  })
+
+  test('an inset ring stays an inset shadow inside the border, and a state can take a ring away', () => {
+    expect(tw('ring-1 ring-inset ring-border').boxShadow).toEqual([
+      { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 1, color: '#242526', inset: true }
+    ])
+    expect(tw('border border-border ring-1 ring-inset ring-border').boxShadow).toEqual([
+      { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 2, color: '#242526', inset: true }
+    ])
+    expect(tw('ring-2 ring-primary data-[state=open]:ring-0', { attrs: { 'data-state': 'open' } })).toMatchObject({
+      outlineWidth: 0
     })
   })
 })

@@ -24,6 +24,12 @@ export const choose = (target: Target, file: string): Action => ({ do: 'choose',
 
 export const see = (...texts: string[]): Check[] => texts.map((text) => ({ text }))
 export const gone = (text: string): Check => ({ text, gone: true })
+/** The launcher composer once its agent has answered: shown alike in both clients after a project switch. */
+export const COMPOSER_READY: Check[] = [
+  { text: 'Chat Scenario Agent' },
+  gone('Loading model…'),
+  gone('Composer unavailable')
+]
 /** The canvas status once FigCraft is up: GPUIX takes 5 to 14 s to get there (V1). */
 export const CANVAS_READY: Check = { text: 'Ready', timeoutMs: 30_000 }
 

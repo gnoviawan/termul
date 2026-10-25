@@ -4,9 +4,9 @@
  * `e.target.value`, `placeholder`, `disabled`, `readOnly`.
  *
  * GPUIX paints placeholders in a fixed #8f8f8f, so the placeholder is drawn
- * here in the field's `placeholder:` colour, over an empty field. Browsers match
- * `:focus-visible` on a text field however it got focus; GPUI only after
- * keyboard focus, so the field applies its focus-visible style while focused.
+ * here in the field's `placeholder:` colour, over an empty field. The native
+ * text field applies its `focusVisible` style on any focus, as browsers match
+ * `:focus-visible` on a focused text field (native patch gpuix/0009).
  */
 import type { EventPayload, PublicInstance, StyleDesc } from '@gpuix/react'
 import { forwardRef, type Ref, useState } from 'react'
@@ -99,8 +99,7 @@ export const Field = forwardRef<
   const controlled = value !== undefined
   const text = controlled ? (asText(value) ?? '') : own
   const { style: twStyle } = useTw(className, { disabled, focus: focused }, props)
-  const { focusVisible, ...rest } = twStyle
-  const merged: StyleDesc = { ...rest, ...(focused ? focusVisible : undefined), ...style }
+  const merged: StyleDesc = { ...twStyle, ...style }
   const { outer, inner } = splitStyle(merged)
   const handlers = nativeHandlers(props)
   const placeholderColor = tw(placeholderClass(className ?? '')).color
