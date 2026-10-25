@@ -69,19 +69,18 @@ async fn kill_returns_before_the_teardown_finishes_and_detaches_immediately() {
     // The background teardown still completes: it joins the (slow) reader
     // thread, reaps the child and clears the claim record.
     assert!(
-        eventually(Duration::from_secs(10), || instance
-            .reader_handle
-            .try_lock()
-            .map(|g| g.is_none())
-            .unwrap_or(false))
+        eventually(Duration::from_secs(10), || manager
+            .claims
+            .generation(&id)
+            .is_none())
         .await,
-        "the background teardown never joined the reader thread"
+        "the background teardown never finished"
+    );
+    assert!(
+        instance.reader_handle.lock().await.is_none(),
+        "reader thread not joined"
     );
     assert!(instance.child.lock().await.is_none(), "child not reaped");
-    assert!(
-        manager.claims.generation(&id).is_none(),
-        "claim record not cleared by the background teardown"
-    );
 }
 
 #[cfg(unix)]
@@ -107,15 +106,17 @@ async fn force_kill_returns_before_the_teardown_finishes_and_detaches_immediatel
     assert!(manager.list_preserved("a", None).is_empty());
 
     assert!(
-        eventually(Duration::from_secs(10), || instance
-            .reader_handle
-            .try_lock()
-            .map(|g| g.is_none())
-            .unwrap_or(false))
+        eventually(Duration::from_secs(10), || manager
+            .claims
+            .generation(&id)
+            .is_none())
         .await,
-        "the background teardown never joined the reader thread"
+        "the background teardown never finished"
     );
-    assert!(manager.claims.generation(&id).is_none());
+    assert!(
+        instance.reader_handle.lock().await.is_none(),
+        "reader thread not joined"
+    );
 }
 
 /// Unknown ids still fail fast on both paths (the detach is driven by removal
@@ -156,4 +157,26 @@ async fn kill_all_still_waits_for_the_teardown() {
     );
     assert!(manager.get(&id).is_none());
     assert_eq!(manager.get_count(), 0);
+}
+
+/// `kill_all` also waits for teardowns already detached by `kill`, so exit
+/// does not cut one off mid-join.
+#[cfg(unix)]
+#[tokio::test]
+async fn kill_all_waits_for_teardowns_detached_by_kill() {
+    let manager = crate::web::test_pty_manager();
+    let spawned = manager.spawn(long_lived("a"), None).await.expect("spawn");
+    let id = spawned.info.id.clone();
+    let instance = manager.get(&id).expect("tracked");
+
+    make_teardown_slow(&instance, Duration::from_millis(800)).await;
+    manager.kill(&id).await.expect("kill");
+
+    manager.kill_all().await;
+
+    assert!(
+        instance.reader_handle.lock().await.is_none(),
+        "kill_all returned before the detached teardown joined the reader"
+    );
+    assert!(manager.claims.generation(&id).is_none());
 }

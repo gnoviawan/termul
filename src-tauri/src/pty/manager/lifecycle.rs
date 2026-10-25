@@ -178,7 +178,7 @@ impl PtyManager {
         let terminal_events = self.terminal_events.clone();
         let claims = self.claims.clone();
 
-        tokio::spawn(async move {
+        self.teardown_tasks.spawn(async move {
             let cleanup = instance.clone();
             if let Err(e) = tokio::task::spawn_blocking(move || {
                 Self::cleanup_terminal_resources_sync(cleanup, true);
@@ -360,6 +360,18 @@ impl PtyManager {
             self.claims.remove(&id);
             self.set_observer.notify(project_id.as_deref());
         }
+
+        // Also wait for teardowns already detached by `kill`/`force_kill`, so
+        // exit does not cut one off mid-join. Bounded so a stuck teardown can
+        // never hang app exit; reopened so the manager stays usable.
+        self.teardown_tasks.close();
+        if tokio::time::timeout(Duration::from_secs(5), self.teardown_tasks.wait())
+            .await
+            .is_err()
+        {
+            log::warn!("[PtyManager] detached teardowns still running at kill_all timeout");
+        }
+        self.teardown_tasks.reopen();
     }
 
     /// The live terminal whose spawn carried `command_id` (AD-5 entity

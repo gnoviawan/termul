@@ -95,6 +95,10 @@ pub struct PtyManager {
     is_hidden: Arc<AtomicBool>,
     /// Told when a project's terminal set changes (the `terminals` watch).
     set_observer: TerminalSetObserver,
+    /// Detached terminal teardowns (#1300). `kill_all` waits on this so the
+    /// app-exit safety net does not cut off a teardown still joining the
+    /// reader/flusher threads and reaping the child.
+    teardown_tasks: tokio_util::task::TaskTracker,
 }
 
 impl PtyManager {
@@ -121,6 +125,7 @@ impl PtyManager {
             exit_code_tracker,
             claims: Arc::new(crate::pty::claims::TerminalClaimRegistry::new()),
             set_observer: TerminalSetObserver::default(),
+            teardown_tasks: tokio_util::task::TaskTracker::new(),
         }
     }
 
