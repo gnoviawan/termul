@@ -177,6 +177,7 @@ const RowView = memo(function RowView({
                 fontFamily: TERMINAL_FONT_FAMILY,
                 fontSize,
                 fontWeight: run.bold ? TERMINAL_FONT_WEIGHT_BOLD : 400,
+                ...(run.italic ? { fontStyle: 'italic' } : {}),
                 color: run.fg,
                 ...(run.underline
                   ? { textDecoration: 'underline' }

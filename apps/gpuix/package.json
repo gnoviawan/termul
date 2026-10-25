@@ -15,6 +15,9 @@
   "scripts": {
     "build": "bun build.ts",
     "build:webview-host": "bun tools/webview-host.ts",
+    "native:build": "sh native/gpuix-native/build.sh",
+    "native:check": "sh native/gpuix-native/build.sh check",
+    "native:patch-check": "NAPI_RS_NATIVE_LIBRARY_PATH=${NAPI_RS_NATIVE_LIBRARY_PATH:-native/gpuix-native/build/gpuix-native.linux-x64-gnu.node} bun tools/native/patch-check.ts",
     "package:linux": "bun packaging/linux/package.ts",
     "package:verify": "bun packaging/linux/verify.ts",
     "dev": "bun tools/dev.ts",

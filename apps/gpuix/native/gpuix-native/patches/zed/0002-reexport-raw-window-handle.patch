@@ -1,0 +1,13 @@
+diff --git a/crates/gpui/src/gpui.rs b/crates/gpui/src/gpui.rs
+index f2b6751..49fb12b 100644
+--- a/crates/gpui/src/gpui.rs
++++ b/crates/gpui/src/gpui.rs
+@@ -85,6 +85,8 @@ pub use accesskit::Action as AccessibleAction;
+ pub use accesskit::{Orientation, Role, Toggled};
+ pub use action::*;
+ pub use anyhow::Result;
++/// For hosts that embed or locate the native window (`Window: HasWindowHandle`).
++pub use raw_window_handle;
+ pub use app::*;
+ pub(crate) use arena::*;
+ pub use asset_cache::*;

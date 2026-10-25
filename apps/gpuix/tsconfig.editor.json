@@ -19,6 +19,7 @@
     }
   },
   "include": [
+    "src/native-patches.d.ts",
     "src/editor",
     "tools/editor",
     "src/overrides/components/editor",

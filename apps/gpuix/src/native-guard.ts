@@ -28,6 +28,7 @@ const QUERIES = {
   getScrollOffset: null,
   getElementBounds: null,
   getWindowSize: null,
+  getNativeWindowHandle: null,
   getWindowInsets: null
 } as const
 

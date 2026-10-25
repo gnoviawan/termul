@@ -65,6 +65,7 @@
     }
   },
   "include": [
+    "src/native-patches.d.ts",
     "src/chat",
     "src/overrides/components/chat",
     "tools/chat/scene/boot.tsx",
