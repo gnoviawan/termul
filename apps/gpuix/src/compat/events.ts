@@ -498,7 +498,7 @@ export function noteWindowKey(payload: KeyEvent, prevented: boolean): void {
   }
   const held = fresh(typeAhead) && typeAhead?.field === focused ? typeAhead.text : ''
   typeAhead = { text: held + ch, at: performance.now(), field: focused }
-  if (focused === null && focusTarget && fresh(focusTarget)) replayTypeAhead(focusTarget.id)
+  if (focused === null && focusTarget && fresh(focusTarget)) replayTypeAhead(focusTarget.id, null)
 }
 
 function isControlledField(id: number): boolean {
@@ -506,9 +506,10 @@ function isControlledField(id: number): boolean {
   return (dom?.tag === 'input' || dom?.tag === 'textarea') && dom.attrs.value !== undefined
 }
 
-function replayTypeAhead(id: number): void {
+/** Gives `id` the keys held for `heldFor`: a focused field's own, or (null) the next focus() target's. */
+function replayTypeAhead(id: number, heldFor: number | null): void {
   const pending = typeAhead
-  if (!pending || (pending.field !== null && pending.field !== id)) return
+  if (!pending || pending.field !== heldFor) return
   typeAhead = null
   if (!fresh(pending) || !isControlledField(id)) return
   const current = inputValues.get(id) ?? String(domOf(id)?.attrs.value)
@@ -517,7 +518,7 @@ function replayTypeAhead(id: number): void {
 
 onFocusCall((id) => {
   focusTarget = { id, at: performance.now() }
-  replayTypeAhead(id)
+  replayTypeAhead(id, null)
 })
 
 /** Focus moved: the element's own handler, ancestors' React onFocus (it bubbles), then document focusin. */
@@ -538,7 +539,7 @@ function focusListener(type: 'focus' | 'blur') {
     const related = type === 'focus' ? nodeOrNull(lastFocused) : null
     if (type === 'focus') lastFocused = id
     else if (lastFocused === id) lastFocused = null
-    if (type === 'focus' && typeAhead?.field === id) replayTypeAhead(id)
+    if (type === 'focus') replayTypeAhead(id, id)
     // Not on focus: JS sees the field's focus before the keys GPUI dispatched ahead of it.
     if (type === 'blur' && focusTarget?.id === id) focusTarget = null
     const event = new CompatEvent(type, target, payload, related)

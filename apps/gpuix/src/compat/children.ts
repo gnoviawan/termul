@@ -243,16 +243,16 @@ export function contentBasis(children: ReactNode): ReactNode {
   return clone
 }
 
+function holdsText(slots: Slot[]): boolean {
+  return slots.some((slot) => isText(slot) || (Array.isArray(slot) && holdsText(slot)))
+}
+
 /**
  * Each contiguous text run of a flex or block box becomes one trimmed
  * anonymous box, in place. A nested array (a component's
  * `{icon}{children}{after}`) is the same box's content in CSS, so its runs
  * are trimmed too; only its text changes, never its order or its elements.
  */
-function holdsText(slots: Slot[]): boolean {
-  return slots.some((slot) => isText(slot) || (Array.isArray(slot) && holdsText(slot)))
-}
-
 function trimTextRuns(out: Slot[], tr: Translation): void {
   let first = -1
   for (let i = 0; i <= out.length; i++) {
