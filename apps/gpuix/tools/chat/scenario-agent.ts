@@ -212,6 +212,8 @@ function handle(message: Incoming): void {
         protocolVersion: 1,
         agentCapabilities: {
           loadSession: false,
+          // As Claude Code's and Codex's adapters: the composer embeds attached files.
+          promptCapabilities: { image: true, embeddedContext: true },
           sessionCapabilities: { list: false, resume: false, close: false }
         },
         authMethods: []

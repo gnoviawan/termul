@@ -36,6 +36,12 @@ export type Action =
   | { do: 'wheel'; target: Target; deltaY: number }
   | { do: 'drag'; from: Target; to: Target }
   | { do: 'wait'; ms: number }
+  /**
+   * Click `target`, which opens the OS file chooser, and pick `file` (a path
+   * inside the world's root). The web answers Playwright's file chooser; GPUIX
+   * answers the real portal dialog with X key events (x11-file-chooser.py).
+   */
+  | { do: 'choose'; target: Target; file: string }
 
 /**
  * A text both clients must paint (or have stopped painting) once the step

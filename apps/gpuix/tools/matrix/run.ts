@@ -167,7 +167,7 @@ async function runWeb(
     const result = await runSteps(
       surface,
       'web',
-      webDriver(page, points),
+      webDriver(page, points, world.root),
       async (file) => {
         await page.evaluate(() => document.fonts.ready)
         await page.waitForTimeout(400)
@@ -211,7 +211,12 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
       const origin = await windowOrigin(display, SIZE.width, SIZE.height)
       if (!values['inactive-window']) await activateWindow(display, origin)
       const x11 = values['x11-input'] ? { display, origin } : undefined
-      return runSteps(surface, 'gpuix', gpuixDriver(app, points, x11), grab)
+      return runSteps(
+        surface,
+        'gpuix',
+        gpuixDriver(app, points, { x11, display, filesDir: world.root }),
+        grab
+      )
     }
   )
 }

@@ -1,0 +1,210 @@
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index faa18a0..c594aec 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -444,6 +444,11 @@ enum UiCommand {
+         options: gpui::PathPromptOptions,
+         deferred: PathPromptDeferred,
+     },
++    PromptForNewPath {
++        directory: std::path::PathBuf,
++        suggested_name: Option<String>,
++        deferred: NewPathPromptDeferred,
++    },
+     SetDebugFrameOverlay(gpui::DebugFrameOverlayMode),
+     CycleDebugFrameOverlay {
+         response: SyncSender<String>,
+@@ -585,6 +590,17 @@ async fn run_ui_commands(
+                 settle_path_prompt(background_executor, receiver, deferred);
+                 Ok(())
+             }
++            UiCommand::PromptForNewPath {
++                directory,
++                suggested_name,
++                deferred,
++            } => {
++                let background_executor = cx.background_executor().clone();
++                let receiver =
++                    cx.update(|cx| cx.prompt_for_new_path(&directory, suggested_name.as_deref()));
++                settle_new_path_prompt(background_executor, receiver, deferred);
++                Ok(())
++            }
+             UiCommand::SetDebugFrameOverlay(mode) => {
+                 window.update(cx, move |_view, window, _cx| {
+                     window.set_debug_frame_overlay_mode(mode);
+@@ -1064,6 +1080,70 @@ impl GpuixRenderer {
+         }
+     }
+ 
++    fn begin_new_path_prompt(
++        &self,
++        directory: std::path::PathBuf,
++        suggested_name: Option<String>,
++        deferred: NewPathPromptDeferred,
++    ) {
++        #[cfg(target_os = "macos")]
++        {
++            let prompt = GPUI_APP.with(|app| {
++                let app = app.borrow();
++                let app = app
++                    .as_ref()
++                    .ok_or_else(|| Error::from_reason("GPUI application is not initialized"))?;
++                Ok(app.update(|cx| {
++                    (
++                        cx.background_executor().clone(),
++                        cx.prompt_for_new_path(&directory, suggested_name.as_deref()),
++                    )
++                }))
++            });
++            match prompt {
++                Ok((background_executor, receiver)) => {
++                    settle_new_path_prompt(background_executor, receiver, deferred)
++                }
++                Err(error) => deferred.reject(error),
++            }
++            return;
++        }
++
++        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
++        {
++            if !self.ui_running.load(Ordering::Acquire) {
++                deferred.reject(Error::from_reason("The GPUI UI thread is not running"));
++                return;
++            }
++            let sender = self.ui_commands.lock().unwrap().as_ref().cloned();
++            let Some(sender) = sender else {
++                deferred.reject(Error::from_reason("GPUI application is not initialized"));
++                return;
++            };
++            if let Err(error) = sender.unbounded_send(UiCommand::PromptForNewPath {
++                directory,
++                suggested_name,
++                deferred,
++            }) {
++                if let UiCommand::PromptForNewPath { deferred, .. } = error.into_inner() {
++                    deferred.reject(Error::from_reason("The GPUI UI thread is not running"));
++                }
++            }
++            return;
++        }
++
++        #[cfg(not(any(
++            target_os = "macos",
++            target_os = "windows",
++            target_os = "linux",
++            target_os = "freebsd"
++        )))]
++        {
++            let _ = (directory, suggested_name);
++            deferred.reject(Error::from_reason("Unsupported operating system"));
++        }
++    }
++
+     #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
+     fn dispatch_mouse_input(&self, input: MouseInput) -> Result<()> {
+         let (response_sender, response_receiver) = sync_channel(1);
+@@ -1969,6 +2049,23 @@ impl GpuixRenderer {
+         Ok(promise)
+     }
+ 
++    /// Open the platform save dialog in `directory`, prefilled with `suggestedName`.
++    /// Resolves to the chosen path, or null when the user cancels.
++    #[napi(ts_return_type = "Promise<string | null>")]
++    pub fn prompt_for_new_path<'env>(
++        &self,
++        env: &'env Env,
++        options: NewPathPromptOptions,
++    ) -> Result<Object<'env>> {
++        let (deferred, promise): (NewPathPromptDeferred, Object<'env>) = env.create_deferred()?;
++        self.begin_new_path_prompt(
++            std::path::PathBuf::from(options.directory),
++            options.suggested_name,
++            deferred,
++        );
++        Ok(promise)
++    }
++
+     #[napi]
+     pub fn focus_element(&self, element_id: f64) -> Result<()> {
+         let id = to_element_id(element_id)?;
+@@ -7301,6 +7398,59 @@ fn settle_path_prompt(
+         .detach();
+ }
+ 
++#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++type NewPathPromptReceiver = oneshot::Receiver<anyhow::Result<Option<std::path::PathBuf>>>;
++
++#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++type NewPathPromptResolver = Box<dyn FnOnce(Env) -> Result<Option<String>> + Send>;
++
++#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++type NewPathPromptDeferred = JsDeferred<Option<String>, NewPathPromptResolver>;
++
++#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++fn new_path_prompt_result(
++    result: anyhow::Result<Option<std::path::PathBuf>>,
++) -> Result<Option<String>> {
++    result
++        .map_err(|error| Error::from_reason(error.to_string()))?
++        .map(|path| {
++            path.into_os_string()
++                .into_string()
++                .map_err(|_| Error::from_reason("The selected path is not valid Unicode"))
++        })
++        .transpose()
++}
++
++#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++fn settle_new_path_prompt(
++    executor: gpui::BackgroundExecutor,
++    receiver: NewPathPromptReceiver,
++    deferred: NewPathPromptDeferred,
++) {
++    executor
++        .spawn(async move {
++            let result = receiver
++                .await
++                .map_err(|_| Error::from_reason("The save prompt closed without a result"))
++                .and_then(new_path_prompt_result);
++            match result {
++                Ok(path) => deferred.resolve(Box::new(move |_env| Ok(path))),
++                Err(error) => deferred.reject(error),
++            }
++        })
++        .detach();
++}
++
++/// Options for `promptForNewPath`.
++#[derive(Debug, Clone, Default)]
++#[cfg_attr(not(all(target_arch = "wasm32", target_os = "unknown")), napi(object))]
++pub struct NewPathPromptOptions {
++    /// Folder the dialog opens in.
++    pub directory: String,
++    /// File name the dialog starts with.
++    pub suggested_name: Option<String>,
++}
++
+ #[derive(Debug, Clone, Default)]
+ #[cfg_attr(not(all(target_arch = "wasm32", target_os = "unknown")), napi(object))]
+ pub struct PathPromptOptions {
+@@ -8234,6 +8384,20 @@ mod path_prompt_options_tests {
+     fn an_empty_platform_selection_is_cancellation() {
+         assert_eq!(path_prompt_result(Ok(Some(Vec::new()))).unwrap(), None);
+     }
++
++    #[test]
++    fn a_save_prompt_returns_the_chosen_path_or_cancellation() {
++        assert_eq!(
++            new_path_prompt_result(Ok(Some(std::path::PathBuf::from("/home/me/app.conf"))))
++                .unwrap(),
++            Some("/home/me/app.conf".to_string())
++        );
++        assert_eq!(new_path_prompt_result(Ok(None)).unwrap(), None);
++        assert!(new_path_prompt_result(Err(anyhow::anyhow!("portal missing")))
++            .expect_err("a failed prompt must reject")
++            .reason
++            .contains("portal missing"));
++    }
+ }
+ 
+ #[cfg(test)]

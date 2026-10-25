@@ -329,14 +329,14 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'composer.attach': {
-    status: 'broken',
+    status: 'partial',
     differences: [
-      'Clicking Attach files shows a red "Failed to open file picker" toast in GPUIX, in 2 of 2 runs. Outside Tauri the composer takes the browser path (`pickAttachmentFilesBrowser` in use-composer-attachments.ts), which needs a DOM file input that GPUIX cannot open. The web opens the native file chooser, which Playwright does not paint, so its frame shows nothing.',
-      'GPUIX has a native path dialog (`promptForPaths`), so an override of the picker that uses it would close this.'
+      'Attach files opens the OS file chooser in both, and the picked matrix-attach.md shows as the same file chip above the prompt (G7: the GPUIX desktop host answers `dialogApi` and the composer picker with GPUI\'s portal dialog; the matrix drives the real GTK chooser with X key events, and the web answers Playwright\'s file chooser). The "Failed to open file picker" toast is gone.',
+      COMPOSER_FOCUS
     ],
-    cause: 'native override needed',
-    unit: 'attach file dialog (unassigned)',
-    impact: 2
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
+    impact: 1
   },
   'terminal.open': {
     status: 'ported',

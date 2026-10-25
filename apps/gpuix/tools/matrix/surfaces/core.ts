@@ -10,9 +10,12 @@ import {
   PERMISSION_TITLE,
   PLAN_ENTRIES
 } from '../agent'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import type { Surface } from '../types'
 import { ensureProject, resetAlpha } from '../world'
 import {
+  choose,
   click,
   css,
   DASHBOARD,
@@ -31,6 +34,7 @@ import {
   wheel
 } from './dsl'
 
+const ATTACH_FILE = 'matrix-attach.md'
 export const CHAT_TITLE = 'How does the web client decide which routes rend'
 const openChat = click(txt(CHAT_TITLE, false))
 const explorer = click(txt('Explorer'))
@@ -542,8 +546,19 @@ const COMPOSER: Surface[] = [
   {
     id: 'composer.attach',
     area: 'composer',
-    title: 'Attach files button',
-    steps: [DASHBOARD, step('b-click', [click(label('Attach files'))])]
+    title: 'Attach a file from the OS file chooser',
+    prepare: async (world) => {
+      mkdirSync(path.join(world.root, 'attach'), { recursive: true })
+      writeFileSync(path.join(world.root, 'attach', ATTACH_FILE), '# Matrix attachment\n')
+    },
+    steps: [
+      DASHBOARD,
+      step(
+        'b-attach',
+        [choose(label('Attach files'), path.join('attach', ATTACH_FILE)), wait(800)],
+        [...see(ATTACH_FILE), gone('Failed to open file picker')]
+      )
+    ]
   }
 ]
 

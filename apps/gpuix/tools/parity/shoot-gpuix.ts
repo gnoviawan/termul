@@ -52,6 +52,36 @@ export async function startXvfb(
   return { display, stop: () => child.kill() }
 }
 
+/**
+ * A private D-Bus session bus for one client run, with the display in its
+ * activation environment, so GPUI's file dialogs reach xdg-desktop-portal
+ * (and its GTK backend) as on a desktop. Without `dbus-daemon` the run goes
+ * on without a bus and the dialogs fail with GPUI's "portal missing" error.
+ */
+export async function startSessionBus(
+  display: string
+): Promise<{ address: string | null; stop(): void }> {
+  if (!Bun.which('dbus-daemon')) return { address: null, stop: () => {} }
+  const child = Bun.spawn(['dbus-daemon', '--session', '--nofork', '--print-address=1'], {
+    stdout: 'pipe',
+    stderr: 'ignore'
+  })
+  const reader = child.stdout.getReader()
+  const { value } = await reader.read()
+  reader.releaseLock()
+  const address = new TextDecoder().decode(value).split('\n')[0].trim()
+  if (!address) {
+    child.kill()
+    return { address: null, stop: () => {} }
+  }
+  Bun.spawnSync(['dbus-update-activation-environment', `DISPLAY=${display}`], {
+    env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: address },
+    stdout: 'ignore',
+    stderr: 'ignore'
+  })
+  return { address, stop: () => child.kill() }
+}
+
 export interface Point {
   x: number
   y: number
@@ -128,6 +158,7 @@ export async function withGpuix<T>(
   body: (session: GpuixSession) => Promise<T>
 ): Promise<T> {
   const xvfb = await startXvfb(opts.width + SCREEN_MARGIN, opts.height + SCREEN_MARGIN)
+  const bus = await startSessionBus(xvfb.display)
   try {
     // GPUIX_STDERR_FILE appends the client's stderr there; automation pipes it and never reads it.
     const stderrFile = process.env.GPUIX_STDERR_FILE
@@ -138,6 +169,7 @@ export async function withGpuix<T>(
       env: {
         ...process.env,
         DISPLAY: xvfb.display,
+        ...(bus.address && { DBUS_SESSION_BUS_ADDRESS: bus.address }),
         VK_ICD_FILENAMES: process.env.VK_ICD_FILENAMES ?? LAVAPIPE_ICD,
         GPUIX_BACKGROUND: '1',
         GPUIX_WINDOW_SIZE: `${opts.width}x${opts.height}`,
@@ -160,6 +192,7 @@ export async function withGpuix<T>(
       await app.close()
     }
   } finally {
+    bus.stop()
     xvfb.stop()
   }
 }

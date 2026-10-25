@@ -43,7 +43,9 @@ export function describe(action: Action): string {
     case 'hover':
       return `${action.do} ${target(action.target)}`
     case 'press':
-      return action.gpuixKeys ? `press ${action.keys} (GPUIX ${action.gpuixKeys})` : `press ${action.keys}`
+      return action.gpuixKeys
+        ? `press ${action.keys} (GPUIX ${action.gpuixKeys})`
+        : `press ${action.keys}`
     case 'type':
       return `type "${action.text}"`
     case 'wheel':
@@ -52,6 +54,8 @@ export function describe(action: Action): string {
       return `drag ${target(action.from)} -> ${target(action.to)}`
     case 'wait':
       return `wait ${action.ms} ms`
+    case 'choose':
+      return `choose ${action.file} from ${target(action.target)}`
   }
 }
 
@@ -115,7 +119,7 @@ function webLocator(page: Page, target: Target): Locator {
   return page.locator(target.css).filter({ visible: true }).first()
 }
 
-export function webDriver(page: Page, points: Map<string, Point>): Driver {
+export function webDriver(page: Page, points: Map<string, Point>, filesDir = ''): Driver {
   /** Where the web client acts on `target`: its centre, or the `at` / `frac` spot inside it. */
   const pointOf = async (key: string, target: Target): Promise<Point> => {
     const locator = webLocator(page, target)
@@ -199,6 +203,15 @@ export function webDriver(page: Page, points: Map<string, Point>): Driver {
             log.via = 'none'
             await page.waitForTimeout(action.ms)
             break
+          case 'choose': {
+            await pointOf(key, action.target)
+            const [chooser] = await Promise.all([
+              page.waitForEvent('filechooser', { timeout: PRESENT_TIMEOUT_MS }),
+              webLocator(page, action.target).click()
+            ])
+            await chooser.setFiles(path.join(filesDir, action.file))
+            break
+          }
         }
         await page.waitForTimeout(SETTLE_AFTER_ACTION_MS)
       } catch (error) {
@@ -337,7 +350,46 @@ export async function activateWindow(display: string, origin: Point): Promise<vo
     throw new Error(`x11-focus failed: ${await new Response(proc.stderr).text()}`)
 }
 
-export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11Input): Driver {
+const X11_FILE_CHOOSER = path.join(import.meta.dir, 'x11-file-chooser.py')
+
+/** Answer the portal's GTK file chooser on `display` with `file` (see x11-file-chooser.py). */
+export async function answerFileChooser(
+  display: string,
+  title: string,
+  file: string
+): Promise<void> {
+  const proc = Bun.spawn(
+    [
+      'uv',
+      'run',
+      '--quiet',
+      '--with',
+      'python-xlib==0.33',
+      'python',
+      '-I',
+      X11_FILE_CHOOSER,
+      title,
+      file
+    ],
+    { env: { ...process.env, DISPLAY: display }, stdout: 'ignore', stderr: 'pipe' }
+  )
+  if ((await proc.exited) !== 0)
+    throw new Error(`x11-file-chooser failed: ${await new Response(proc.stderr).text()}`)
+}
+
+export interface GpuixDriveOptions {
+  /** Real X clicks instead of automation clicks (`--x11-input`). */
+  x11?: X11Input
+  /** The client's X display and the folder `choose` paths are relative to. */
+  display?: string
+  filesDir?: string
+}
+
+export function gpuixDriver(
+  app: GpuixApp,
+  points: Map<string, Point>,
+  { x11, display, filesDir = '' }: GpuixDriveOptions = {}
+): Driver {
   const resolve = async (
     target: Target,
     key: string
@@ -427,6 +479,14 @@ export function gpuixDriver(app: GpuixApp, points: Map<string, Point>, x11?: X11
           case 'wait':
             await Bun.sleep(action.ms)
             break
+          case 'choose': {
+            if (!display) throw new Error('choose needs the client display')
+            const { point, via } = await resolve(action.target, key)
+            log.via = via
+            await app.call('click', { ...point })
+            await answerFileChooser(display, 'Open File', path.join(filesDir, action.file))
+            break
+          }
         }
         await Bun.sleep(SETTLE_AFTER_ACTION_MS)
       } catch (error) {

@@ -20,6 +20,7 @@ export const type = (text: string): Action => ({ do: 'type', text })
 export const wait = (ms: number): Action => ({ do: 'wait', ms })
 export const drag = (from: Target, to: Target): Action => ({ do: 'drag', from, to })
 export const wheel = (target: Target, deltaY: number): Action => ({ do: 'wheel', target, deltaY })
+export const choose = (target: Target, file: string): Action => ({ do: 'choose', target, file })
 
 export const see = (...texts: string[]): Check[] => texts.map((text) => ({ text }))
 export const gone = (text: string): Check => ({ text, gone: true })

@@ -17,6 +17,9 @@
  *   run-padding            after a chip padded by CODE_PAD moves 2 x CODE_PAD
  *   0006-focus-events      `focus-check.ts`: an active window gets the DOM's
  *                          focus and blur sequence, autoFocus included
+ *   0008-prompt-for-new-path
+ *                          `dialog-check.ts`: the portal's save dialog returns
+ *                          the path typed into it
  *
  * On the published addon every assertion fails, which is what makes it a test.
  *
@@ -189,6 +192,11 @@ const focusRun = Bun.spawnSync(
   { env: process.env }
 )
 const focusLines = focusRun.stdout.toString().trim().split('\n')
+const dialogRun = Bun.spawnSync(
+  ['bun', path.join(import.meta.dir, 'dialog-check.ts'), '--out', path.join(out, 'dialog')],
+  { env: process.env }
+)
+const dialogLines = dialogRun.stdout.toString().trim().split('\n')
 
 const checks = [
   {
@@ -256,6 +264,12 @@ const checks = [
     what: 'an active window gets the DOM focus and blur events at every focus-check step',
     value: focusLines.filter((line) => line.startsWith('FAIL')),
     ok: focusRun.exitCode === 0
+  },
+  {
+    patch: '0008-prompt-for-new-path',
+    what: 'the open, save and cancelled portal dialogs resolve as dialog-check expects',
+    value: dialogLines.filter((line) => line.startsWith('FAIL')),
+    ok: dialogRun.exitCode === 0
   }
 ]
 for (const check of checks)
