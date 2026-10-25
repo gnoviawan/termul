@@ -9,7 +9,16 @@ import { renameSync, writeFileSync } from 'node:fs'
 import { type GpuixTheme, type PublicInstance, render, useGpuixRequired } from '@gpuix/react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { registerTerminalFonts } from '../../src/terminal/fonts'
-import { BLUR, CODE_PAD, LONG_VALUE, SAMPLES, type Sample, SCENE } from './samples'
+import {
+  BLUR,
+  CODE_PAD,
+  LONG_VALUE,
+  SAMPLES,
+  type Sample,
+  SCENE,
+  TABLE,
+  TABLE_HEADER_FILL
+} from './samples'
 
 const [readyFile] = process.argv.slice(2)
 
@@ -21,20 +30,32 @@ const mono: GpuixTheme = {
   fontMono: 'Paper Mono',
   metrics: { mdTextSize: 32, mdLineHeight: 44 }
 }
-type MarkdownSample = 'link' | 'codeFull' | 'codeHalf' | 'codeTight' | 'codePad'
+type MarkdownSample = 'link' | 'codeFull' | 'codeHalf' | 'codeTight' | 'codePad' | 'table'
 const THEMES: Record<MarkdownSample, GpuixTheme> = {
   link: { ...mono, link: '#ff0000', linkUnderline: '#ff0000' },
   codeFull: mono,
   codeHalf: { ...mono, metrics: { ...mono.metrics, mdInlineCodeScale: 0.5 } },
   codeTight: { ...mono, metrics: { ...mono.metrics, mdInlineCodePaddingX: 0 } },
-  codePad: { ...mono, metrics: { ...mono.metrics, mdInlineCodePaddingX: CODE_PAD } }
+  codePad: { ...mono, metrics: { ...mono.metrics, mdInlineCodePaddingX: CODE_PAD } },
+  table: {
+    ...mono,
+    tableHeaderBg: TABLE_HEADER_FILL,
+    metrics: {
+      mdTextSize: 16,
+      mdLineHeight: 44,
+      mdTableCellPadding: 4,
+      mdTableCellPaddingY: TABLE.padY,
+      mdTableLineHeight: TABLE.lineHeight
+    }
+  }
 }
 const SOURCES: Record<MarkdownSample, string> = {
   link: '[lllllll](https://x.dev)',
   codeFull: '`MMMMMMM`',
   codeHalf: '`MMMMMMM`',
   codeTight: 'M`M`M',
-  codePad: 'M`M`M'
+  codePad: 'M`M`M',
+  table: '| A | B |\n|---|---|\n| c | d |'
 }
 
 function App() {
@@ -98,6 +119,12 @@ function App() {
       <div style={{ flexDirection: 'row' }}>
         {(['codeTight', 'codePad'] as const).map((sample) =>
           box(sample, <markdown source={SOURCES[sample]} theme={THEMES[sample]} />)
+        )}
+        {box(
+          'table',
+          <div style={{ width: 160 }}>
+            <markdown source={SOURCES.table} theme={THEMES.table} />
+          </div>
         )}
       </div>
       {box(

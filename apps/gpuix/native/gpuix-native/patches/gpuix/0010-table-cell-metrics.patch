@@ -1,0 +1,154 @@
+diff --git a/packages/native/src/markdown/render.rs b/packages/native/src/markdown/render.rs
+index 0a614ba..4533cfa 100644
+--- a/packages/native/src/markdown/render.rs
++++ b/packages/native/src/markdown/render.rs
+@@ -574,7 +574,7 @@ fn render_table(
+     let mut content = vec![0.0f32; cols];
+     for (row_ix, row) in all.iter().enumerate() {
+         let weight = if has_header && row_ix == 0 {
+-            FontWeight::BOLD
++            FontWeight(m.md_table_header_weight)
+         } else {
+             FontWeight::NORMAL
+         };
+@@ -607,6 +607,16 @@ fn render_table(
+         flats.push(out);
+     }
+     let geo = table_columns(&content, m);
++    let pad_y = if m.md_table_cell_padding_y < 0.0 {
++        m.md_table_cell_padding
++    } else {
++        m.md_table_cell_padding_y
++    };
++    let line_height = if m.md_table_line_height > 0.0 {
++        m.md_table_line_height
++    } else {
++        m.md_line_height
++    };
+ 
+     let mut inner = div()
+         .flex()
+@@ -618,15 +628,19 @@ fn render_table(
+             inner = inner.child(div().flex_none().h(px(TABLE_DIVIDER)).w_full().bg(hairline));
+         }
+         let mut row_el = div().flex().flex_row();
++        if let (true, 0, Some(fill)) = (has_header, row_ix, theme.table_header_bg) {
++            row_el = row_el.bg(fill);
++        }
+         for (col, cell_flat) in row.iter().enumerate() {
+             let mut cell = div()
+                 .flex_grow(geo.naturals[col])
+                 .flex_shrink(geo.naturals[col])
+                 .flex_basis(px(0.0))
+                 .min_w(px(geo.minimums[col]))
+-                .p(px(m.md_table_cell_padding))
++                .px(px(m.md_table_cell_padding))
++                .py(px(pad_y))
+                 .text_size(px(m.md_text_size))
+-                .line_height(px(m.md_line_height));
++                .line_height(px(line_height));
+             cell = match align.get(col).copied().unwrap_or_default() {
+                 TableAlign::Left => cell,
+                 TableAlign::Center => cell.text_center(),
+diff --git a/packages/native/src/theme.rs b/packages/native/src/theme.rs
+index 9e1a788..8425f5c 100644
+--- a/packages/native/src/theme.rs
++++ b/packages/native/src/theme.rs
+@@ -234,7 +234,14 @@ pub struct Metrics {
+     pub md_heading_sizes: [f32; 4],
+     /// Line height for h1, h2, h3, and h4-h6.
+     pub md_heading_line_heights: [f32; 4],
++    /// Horizontal cell padding, and vertical unless `md_table_cell_padding_y` is set.
+     pub md_table_cell_padding: f32,
++    /// Vertical cell padding; negative follows `md_table_cell_padding`.
++    pub md_table_cell_padding_y: f32,
++    /// Cell line height; zero follows `md_line_height`.
++    pub md_table_line_height: f32,
++    /// Header row font weight.
++    pub md_table_header_weight: f32,
+     /// Width below which a column stops shrinking; wider content wraps.
+     pub md_table_min_column_width: f32,
+     /// Floor for a column's max-content share, so a short column beside a prose
+@@ -313,6 +320,9 @@ impl Metrics {
+         set(&mut self.md_line_height, o.md_line_height);
+         set(&mut self.md_block_gap, o.md_block_gap);
+         set(&mut self.md_table_cell_padding, o.md_table_cell_padding);
++        set(&mut self.md_table_cell_padding_y, o.md_table_cell_padding_y);
++        set(&mut self.md_table_line_height, o.md_table_line_height);
++        set(&mut self.md_table_header_weight, o.md_table_header_weight);
+         set(
+             &mut self.md_table_min_column_width,
+             o.md_table_min_column_width,
+@@ -385,6 +395,9 @@ impl Metrics {
+             self.md_line_height,
+             self.md_block_gap,
+             self.md_table_cell_padding,
++            self.md_table_cell_padding_y,
++            self.md_table_line_height,
++            self.md_table_header_weight,
+             self.md_table_min_column_width,
+             self.md_table_min_column_content,
+             self.md_inline_code_radius,
+@@ -431,6 +444,9 @@ impl Default for Metrics {
+             md_heading_sizes: [19.0, 16.0, 15.0, 14.0],
+             md_heading_line_heights: [27.0, 24.0, 22.0, 22.0],
+             md_table_cell_padding: 12.0,
++            md_table_cell_padding_y: -1.0,
++            md_table_line_height: 0.0,
++            md_table_header_weight: 700.0,
+             md_table_min_column_width: 96.0,
+             md_table_min_column_content: 48.0,
+             md_inline_code_radius: 4.5,
+@@ -475,6 +491,8 @@ pub struct Theme {
+     pub code_text: Hsla,
+     /// Rounded wash behind inline code, violet-400 at 12%.
+     pub code_wash: Hsla,
++    /// Fill behind a markdown table's header row. Unset, no fill.
++    pub table_header_bg: Option<Hsla>,
+     /// Markdown link text. Unset, links keep the text colour.
+     pub link: Option<Hsla>,
+     /// Markdown link underline. Unset, `text_muted`.
+@@ -515,6 +533,7 @@ impl Theme {
+             caret: oklch(0.673, 0.182, 276.935),
+             code_text: oklch(0.811, 0.111, 293.571),
+             code_wash: with_alpha(oklch(0.702, 0.183, 293.541), 0.12),
++            table_header_bg: None,
+             link: None,
+             link_underline: None,
+             link_weight: None,
+@@ -542,6 +561,7 @@ impl Theme {
+             caret: oklch(0.511, 0.262, 276.966),
+             code_text: oklch(0.491, 0.27, 292.581),
+             code_wash: with_alpha(oklch(0.541, 0.281, 293.009), 0.10),
++            table_header_bg: None,
+             link: None,
+             link_underline: None,
+             link_weight: None,
+@@ -571,6 +591,9 @@ impl Theme {
+         set(&mut self.caret, &o.caret);
+         set(&mut self.code_text, &o.code_text);
+         set(&mut self.code_wash, &o.code_wash);
++        if let Some(color) = o.table_header_bg.as_deref().and_then(crate::color::parse_color_rgba) {
++            self.table_header_bg = Some(color.into());
++        }
+         if let Some(color) = o.link.as_deref().and_then(crate::color::parse_color_rgba) {
+             self.link = Some(color.into());
+         }
+@@ -701,6 +724,7 @@ pub struct ThemeOverride {
+     pub caret: Option<String>,
+     pub code_text: Option<String>,
+     pub code_wash: Option<String>,
++    pub table_header_bg: Option<String>,
+     pub link: Option<String>,
+     pub link_underline: Option<String>,
+     pub link_weight: Option<f64>,
+@@ -743,6 +767,9 @@ pub struct MetricsOverride {
+     pub md_heading_sizes: Option<Vec<f64>>,
+     pub md_heading_line_heights: Option<Vec<f64>>,
+     pub md_table_cell_padding: Option<f64>,
++    pub md_table_cell_padding_y: Option<f64>,
++    pub md_table_line_height: Option<f64>,
++    pub md_table_header_weight: Option<f64>,
+     pub md_table_min_column_width: Option<f64>,
+     pub md_table_min_column_content: Option<f64>,
+     pub md_inline_code_radius: Option<f64>,

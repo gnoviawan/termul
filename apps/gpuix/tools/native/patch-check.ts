@@ -17,6 +17,9 @@
  *   run-padding            after a chip padded by CODE_PAD moves 2 x CODE_PAD
  *   0006-focus-events      `focus-check.ts`: an active window gets the DOM's
  *                          focus and blur sequence, autoFocus included
+ *   0010-table-cell-metrics
+ *                          a table row is 2 x mdTableCellPaddingY + mdTableLineHeight
+ *                          tall and the header row paints tableHeaderBg
  *   0008-prompt-for-new-path
  *                          `dialog-check.ts`: the portal's save dialog returns
  *                          the path typed into it
@@ -37,7 +40,7 @@ import {
   startXvfb,
   windowOrigin
 } from '../parity/shoot-gpuix'
-import { BLUR, CODE_PAD, type Sample, SCENE, type SceneReady } from './samples'
+import { BLUR, CODE_PAD, type Sample, SCENE, type SceneReady, TABLE } from './samples'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -177,6 +180,23 @@ const cornerStripe = (() => {
   const { x0, y0 } = region('blur')
   return pixel(x0 + 8 + half + 1, y0 + 8 + 1)[0]
 })()
+const red = ([r, g, b]: readonly [number, number, number]) => r > 200 && g < 60 && b < 60
+/** Rows of the table sample holding the header fill, and the table's height inside the 8 px box padding. */
+const tableFillRows = (() => {
+  const { x0, y0, x1, y1 } = region('table')
+  let rows = 0
+  for (let y = y0; y < y1; y++) {
+    let n = 0
+    for (let x = x0; x < x1; x++) if (red(pixel(x, y))) n++
+    if (n >= 100) rows++
+  }
+  return rows
+})()
+const tableHeight = (() => {
+  const b = ready.bounds.table
+  return b ? Math.round(b.height - 16) : 0
+})()
+const tableRow = 2 * TABLE.padY + TABLE.lineHeight
 const handleId = ready.handle?.kind === 'x11' ? ready.handle.id : null
 const handleWindow =
   typeof handleId === 'number'
@@ -234,6 +254,18 @@ const checks = [
     what: `inline-code padding ${CODE_PAD} widens M\`M\`M by twice the padding (px)`,
     value: codePadShift,
     ok: Math.abs(codePadShift - 2 * CODE_PAD) <= 1
+  },
+  {
+    patch: '0010-table-cell-metrics',
+    what: `mdTableCellPaddingY ${TABLE.padY} and mdTableLineHeight ${TABLE.lineHeight} give ${TABLE.rows} rows of ${tableRow} px and a 1 px rule (px)`,
+    value: tableHeight,
+    ok: tableHeight === TABLE.rows * tableRow + 1
+  },
+  {
+    patch: '0010-table-cell-metrics',
+    what: `tableHeaderBg fills the header row, ${tableRow} px tall (rows)`,
+    value: tableFillRows,
+    ok: Math.abs(tableFillRows - tableRow) <= 1
   },
   {
     patch: '0004-input-unfocused-scroll',

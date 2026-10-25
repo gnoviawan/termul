@@ -113,13 +113,20 @@ export function transcriptThemes(themeId: string) {
   const themes = {
     prose: {
       ...base,
+      // `thead` is `bg-muted/80` and each `th` adds `bg-muted/35`: muted at 87%.
+      tableHeaderBg: tokenColor('muted/87'),
       metrics: {
         mdTextSize: PROSE_TEXT,
         mdLineHeight: PROSE_LINE,
         mdBlockGap: 4,
         mdHeadingSizes: [30, 24, 20, 18],
         mdHeadingLineHeights: [36, 32, 28, 28],
-        mdTableCellPadding: 5,
+        // Streamdown cells: `px-4 py-2` under `.chat-streamdown` comes out at
+        // 8px by 4.8px, `text-sm` on a 20px line, semibold header.
+        mdTableCellPadding: 8,
+        mdTableCellPaddingY: 4.8,
+        mdTableLineHeight: 20,
+        mdTableHeaderWeight: 600,
         ...PROSE_CHIP,
         mdCodePaddingX: 16,
         mdCodePaddingY: 16,

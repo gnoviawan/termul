@@ -26,6 +26,8 @@ declare module '@gpuix/native/host' {
     linkWeight?: number
     /** Every markdown run italic (a CSS-italic blockquote). */
     fontStyle?: 'normal' | 'italic'
+    /** Fill behind a markdown table's header row (patch 0010-table-cell-metrics). Unset: none. */
+    tableHeaderBg?: string
   }
   interface GpuixMetrics {
     /** Inline-code glyph size as a fraction of the paragraph's, like CSS `0.88em`. */
@@ -34,5 +36,11 @@ declare module '@gpuix/native/host' {
     mdInlineCodePaddingX?: number
     /** Inset of the inline-code wash from the top and bottom of the line box. */
     mdInlineCodeInsetY?: number
+    /** Vertical table cell padding (patch 0010); `mdTableCellPadding` stays the horizontal one. */
+    mdTableCellPaddingY?: number
+    /** Table cell line height (patch 0010). Unset: `mdLineHeight`. */
+    mdTableLineHeight?: number
+    /** Table header row weight (patch 0010). Unset: 700. */
+    mdTableHeaderWeight?: number
   }
 }
