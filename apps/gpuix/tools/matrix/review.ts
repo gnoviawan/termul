@@ -41,7 +41,10 @@ export interface Review {
 export const REVIEWS: Record<string, Review> = {
   'rail.project-list': {
     status: 'ported',
-    differences: ['Same layout and order; switching to beta works by click.', LAMP]
+    differences: [
+      'Same layout and order; switching to beta works by click, with GPUIX automation and with real X input (--x11-input). H1 fixed the lost clicks: `bun tools/clickloss/run.ts --trials 20` switches projects 60/60 by row click through automation and XTEST, against 41/60 on exp/gpuix-client at 9747b6c2.',
+      LAMP
+    ]
   },
   'rail.project-menu': {
     status: 'partial',
@@ -67,11 +70,14 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Change Color opens the Select Color popover with the same nine swatches and the current one ringed.']
   },
   'rail.project-reorder': {
-    status: 'ported',
+    status: 'partial',
     differences: [
       'Dragging gamma onto alpha reorders the list to alpha, gamma, beta in both (C3 fixed in G3: the framer-motion shim drives Reorder from pointer moves with framer\'s one-neighbour-per-move rule). The dragged row does not follow the pointer in GPUIX, which has no transforms; the list reorders live under it.',
-      'After the drop the web paints alpha and gamma in their hover state (gear and Ctrl+1/Ctrl+2); GPUIX shows alpha\'s diff stat with no hover.'
-    ]
+      'After the drop the web opens gamma, the dragged row, and paints alpha and gamma in their hover state (gear and Ctrl+1/Ctrl+2). GPUIX stays on alpha: D1 withholds the click that ends a drag. GPUIX paints alpha hovered, but its +4 -1 diff stat shows through the action strip\'s fade (bg-gradient-to-l from-[var(--rail-keycap)] from-60%), so Ctrl+1 is drawn over it.'
+    ],
+    cause: 'compat translator gap',
+    unit: 'click after a Reorder drag; strip fade over the diff stat (unassigned)',
+    impact: 1
   },
   'rail.add-menu': {
     status: 'partial',
@@ -88,15 +94,16 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Collapsed rail matches: icons, project letters, Changes badge.', LAMP]
   },
   'rail.project-settings': {
-    status: 'broken',
+    status: 'partial',
     differences: [
-      'When the gear opens Project settings, it shows General with the same fields in both.',
+      'Clicking the gear opens Project settings with General and the same fields in both, with GPUIX automation and with real X input (--x11-input).',
       BACKDROP,
-      'In GPUIX the click on the gear often does nothing: it failed in 10 of 11 G3 runs, with or without a hover on the row first. The gear shows only while its row is hovered (hidden group-hover:flex), and once the pointer has moved, no mouse-down reaches a compat listener at all. A plain click on a rail row has the same problem with real X input (--x11-input): 4 of 5 runs did not switch projects without the C3 Reorder change, and 2 of 9 with it. Cause not found.'
+      'H1 fixed the lost gear click. GPUIX ends a hit test at the first absolutely placed or filled interactive box, and that box also blocks its own ancestors, so the row lost its hover as soon as its hover-revealed action strip painted under the pointer, hid the strip and the gear, and looped. The press landed on whichever frame was up. Compat now keeps an element hovered while a blocking box inside it is hovered (`src/compat/hover.ts`). `bun tools/clickloss/run.ts --trials 20` opens the modal 60/60 through automation and XTEST, against 27/60 on exp/gpuix-client at 9747b6c2.',
+      'In the --x11-input frame the gear and its Project settings tooltip still paint above the modal. The automation frame has neither, and in clickloss traces the row, rail and gear get their leave once the scrim paints, so this is the hover settle catching up after the modal mounts (inferred).'
     ],
-    cause: 'needs diagnosis',
-    unit: 'press after hover lost (unassigned)',
-    impact: 3
+    cause: 'missing GPUIX capability',
+    unit: 'C6 overlay backdrop',
+    impact: 1
   },
   'side.chats': {
     status: 'ported',

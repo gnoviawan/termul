@@ -217,7 +217,7 @@ function deepest(node: TreeJson, p: Point, inheritedNone: boolean): number | nul
   return node.id
 }
 
-function hitTest(point: Point): number | null {
+export function hitTest(point: Point): number | null {
   const tree = treeIndex().tree
   return tree ? deepest(tree, point, false) : null
 }
