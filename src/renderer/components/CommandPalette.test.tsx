@@ -446,6 +446,21 @@ describe('CommandPalette', () => {
     consoleWarn.mockRestore()
   })
 
+  it('takes focus from the terminal in the commit that opens it, so type-ahead lands in the search', () => {
+    const terminal = document.createElement('textarea')
+    document.body.appendChild(terminal)
+    terminal.focus()
+    const { rerender, props } = renderPalette({ isOpen: false })
+
+    rerender(<CommandPalette {...props} isOpen />)
+
+    const search = screen.getByPlaceholderText('Search commands, projects, settings...')
+    expect(document.activeElement).toBe(search)
+    fireEvent.change(document.activeElement as Element, { target: { value: 'theme' } })
+    expect(search).toHaveValue('theme')
+    terminal.remove()
+  })
+
   it('closes on Escape and backdrop click', () => {
     const { container, props } = renderPalette()
 
