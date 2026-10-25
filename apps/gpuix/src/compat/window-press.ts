@@ -32,6 +32,8 @@ interface PendingPress {
 let pending: PendingPress | null = null
 /** The press whose default action has not run yet. */
 let settling: PendingPress | null = null
+/** The latest press the sentinel saw, numbered. */
+let lastPress: { seq: number; payload: EventPayload } | null = null
 
 type Point = Pick<EventPayload, 'x' | 'y'>
 const samePoint = (a: Point, b: Point): boolean => a.x === b.x && a.y === b.y
@@ -39,6 +41,7 @@ const samePoint = (a: Point, b: Point): boolean => a.x === b.x && a.y === b.y
 /** The sentinel's `onMouseDownOutside`: a press somewhere in the window. */
 export function sentinelPress(payload: EventPayload): void {
   flushPress()
+  lastPress = { seq: (lastPress?.seq ?? 0) + 1, payload }
   const press: PendingPress = { payload, target: null, stopped: false, prevented: false }
   pending = press
   settling = press
@@ -48,6 +51,14 @@ export function sentinelPress(payload: EventPayload): void {
     settling = null
     settleFocus(press)
   }, 0)
+}
+
+/**
+ * The number of the latest press, when it was at this point: the press a
+ * delivery of a down, up or click there belongs to. Null when no press was.
+ */
+export function pressAt(at: Point): number | null {
+  return lastPress && samePoint(lastPress.payload, at) ? lastPress.seq : null
 }
 
 /** A listener of the press at this point called preventDefault (`CompatEvent`). */

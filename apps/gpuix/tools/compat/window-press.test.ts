@@ -219,3 +219,40 @@ describe('a press moves focus as the DOM default action does', () => {
     expect(blurs).toBe(0)
   })
 })
+
+describe('one click delivered to a button and then to its row is one gesture', () => {
+  test("the button's stopPropagation keeps the click from the row however long its handler ran", async () => {
+    const at = { x: 50, y: 20, button: 0, clickCount: 1 }
+    mount(300, { onClick: () => log.push('row click') })
+    const realNow = performance.now.bind(performance)
+    let lag = 0
+    performance.now = () => realNow() + lag
+    try {
+      mount(301, {
+        onClick: (e: { stopPropagation(): void }) => {
+          e.stopPropagation()
+          log.push('button click')
+          lag = 150
+        }
+      })
+      sentinelPress({ elementId: 1, eventType: 'mouseDownOutside', ...at } as EventPayload)
+      fire(301, 'onClick', at)
+      fire(300, 'onClick', at)
+    } finally {
+      performance.now = realNow
+    }
+    await nextTask()
+    expect(log.filter((line) => line.endsWith('click'))).toEqual(['button click'])
+  })
+
+  test('a second press at the same point is a new gesture', async () => {
+    const at = { x: 50, y: 20, button: 0, clickCount: 1 }
+    mount(301, { onClick: () => log.push('button click') })
+    for (let i = 0; i < 2; i++) {
+      sentinelPress({ elementId: 1, eventType: 'mouseDownOutside', ...at } as EventPayload)
+      fire(301, 'onClick', at)
+    }
+    await nextTask()
+    expect(log.filter((line) => line === 'button click')).toEqual(['button click', 'button click'])
+  })
+})

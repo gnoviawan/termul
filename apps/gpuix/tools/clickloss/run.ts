@@ -6,7 +6,10 @@
  * dashboard of that project shows), the hover-revealed gear (success: the
  * Project settings modal shows) and the fade at the start of the hover-revealed
  * action strip (success: the row's project opens, as a click there does on
- * the web), each through one input path:
+ * the web), and the git panel's per-row Stage / Unstage button on README.md
+ * (`stage`; success: the index changed and the click opened no diff, as
+ * RowAction stops the click from reaching the row), each through one input
+ * path:
  *
  * - `auto`: GPUIX automation `click` at the point, no move first.
  * - `auto-move`: automation `mouseMove` to the point, then `click`.
@@ -27,11 +30,11 @@ import { buildClient } from '../../build'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { LAVAPIPE_ICD, READY_TIMEOUT_MS, SCREEN_MARGIN, windowOrigin } from '../parity/shoot-gpuix'
 import { pickPort, stateRoot } from '../shared/seed'
-import { createWorld, PROJECTS, prepareDevice, setTheme } from '../matrix/world'
+import { createWorld, PROJECTS, prepareDevice, resetAlphaChanges, setTheme } from '../matrix/world'
 import { startX, waitForQuietHost, type XServer } from './x'
 
 type Mode = 'auto' | 'auto-move' | 'xtest' | 'xtest-nofocus'
-type Target = 'row' | 'gear' | 'fade'
+type Target = 'row' | 'gear' | 'fade' | 'stage'
 type App = Awaited<ReturnType<typeof launch>>
 interface Point {
   x: number
@@ -61,6 +64,8 @@ const BOOT_TEXT = 'What should we do in alpha?'
 const X11_CLICK = path.join(import.meta.dir, 'x11-press.py')
 
 const dashboard = (name: string) => `What should we do in ${name}?`
+const NO_DIFF = 'No diff available'
+const STAGED_FILE = 'README.md'
 
 async function seen(app: App, text: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
@@ -141,6 +146,64 @@ async function stripOf(app: App, row: Point): Promise<Box | null> {
   return null
 }
 
+/** README.md's index state in alpha: `git diff --cached` names it once staged. */
+function readmeStaged(alpha: string): boolean {
+  const out = Bun.spawnSync(['git', '-C', alpha, 'diff', '--cached', '--name-only']).stdout.toString()
+  return out.split('\n').includes(STAGED_FILE)
+}
+
+/** The rightmost icon on the row that names `text`: the row's last hover action. */
+async function rowAction(app: App, text: string): Promise<Point> {
+  const label = (await app.getByText(text).all()).map((n) => n.bounds as Box | undefined).find((b) => b && b.x < 480)
+  if (!label) throw new Error(`no ${text} row`)
+  const y = label.y + label.height / 2
+  await app.call('mouseMove', { x: label.x + 4, y })
+  const deadline = Date.now() + 3000
+  while (Date.now() < deadline) {
+    const icons = (await app.getByType('svg').all())
+      .map((n) => n.bounds as Box | undefined)
+      .filter((b): b is Box => !!b && b.x > label.x && b.x < 480 && b.y <= y && y <= b.y + b.height)
+    if (icons.length > 0) {
+      const last = icons.reduce((a, b) => (b.x > a.x ? b : a))
+      return { x: last.x + last.width / 2, y: last.y + last.height / 2 }
+    }
+    await Bun.sleep(100)
+  }
+  const { tree } = (await app.call('getTree', {})) as { tree: { type: string; bounds?: Box; children?: unknown[] } | null }
+  const seenTypes: string[] = []
+  const walk = (n: { type: string; bounds?: Box; children?: unknown[] } | null) => {
+    if (!n) return
+    const b = n.bounds
+    if (b && b.x > label.x && b.x < 480 && b.y <= y && y <= b.y + b.height && b.width < 40) seenTypes.push(`${n.type}@${Math.round(b.x)}`)
+    for (const c of n.children ?? []) walk(c as never)
+  }
+  walk(tree)
+  throw new Error(`${text} row hover did not reveal its actions (small boxes: ${seenTypes.join(' ')})`)
+}
+
+/** Stage README.md when it is unstaged, else unstage it, with the row's own button. */
+async function stageTrial(app: App, inp: Input, alpha: string): Promise<boolean> {
+  const wasStaged = readmeStaged(alpha)
+  await inp.move(PARK)
+  await Bun.sleep(200)
+  await inp.click(await rowAction(app, STAGED_FILE))
+  const deadline = Date.now() + 3000
+  while (Date.now() < deadline && readmeStaged(alpha) === wasStaged) await Bun.sleep(100)
+  await Bun.sleep(700)
+  const diffOpened = (await app.getByText(NO_DIFF).count()) > 0
+  if (diffOpened) console.error(`[clickloss] stage: the click also opened ${STAGED_FILE}'s diff`)
+  return readmeStaged(alpha) !== wasStaged && !diffOpened
+}
+
+/** Open alpha's Changes tab, the panel the `stage` trials press in. */
+async function openChanges(app: App, inp: Input): Promise<void> {
+  const tab = (await app.getByText('Changes').all()).map((n) => n.bounds as Box | undefined).find((b) => b && b.y < 100)
+  if (!tab) throw new Error('no Changes tab')
+  await inp.click({ x: tab.x + tab.width / 2, y: tab.y + tab.height / 2 })
+  if (!(await seen(app, STAGED_FILE, 5000))) throw new Error('Changes did not list README.md')
+  await Bun.sleep(500)
+}
+
 async function trial(app: App, inp: Input, target: Target, name: string): Promise<boolean> {
   const id = PROJECTS[name as keyof typeof PROJECTS].id
   await inp.move(PARK)
@@ -217,6 +280,12 @@ async function main(): Promise<void> {
           const origin = await windowOrigin(xs.display, WINDOW_WIDTH, WINDOW_HEIGHT)
           const inp = input(mode, app, xs, origin)
           for (const target of TARGETS) {
+            if (target === 'stage') {
+              resetAlphaChanges(world.dirs.alpha, world.alphaHead)
+              await inp.click(await centre(app, `project-item-${PROJECTS.alpha.id}`))
+              await seen(app, dashboard('alpha'), 3000)
+              await openChanges(app, inp)
+            }
             const key = `${mode}/${target}`
             const r = { ok: 0, total: 0, failures: [] as string[] }
             results[key] = r
@@ -226,7 +295,7 @@ async function main(): Promise<void> {
               let ok = false
               let error = ''
               try {
-                ok = await trial(app, inp, target, name)
+                ok = target === 'stage' ? await stageTrial(app, inp, world.dirs.alpha) : await trial(app, inp, target, name)
               } catch (e) {
                 error = e instanceof Error ? e.message : String(e)
               }

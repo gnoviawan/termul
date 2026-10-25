@@ -34,7 +34,7 @@ import {
 import { compatWarn } from './log'
 import { hover, occluderHover } from './hover'
 import { tracePointer } from './trace'
-import { elementPressed, flushPress, pressPrevented, toPage } from './window-press'
+import { elementPressed, flushPress, pressAt, pressPrevented, toPage } from './window-press'
 
 type Handler = (event: CompatEvent) => void
 
@@ -229,21 +229,38 @@ function call(handler: Handler | undefined, event: CompatEvent, id: number): voi
  * One native gesture reaches JS once per element GPUIX delivers it to. The
  * first delivery (the deepest element) bubbles it through the ancestors;
  * later deliveries of the same gesture to those ancestors are dropped.
+ *
+ * A delivery belongs to the gesture of the press the window sentinel saw at
+ * its point, until the next press: the deliveries come one handler run
+ * apart, and a slow handler (staging a file on a loaded host) can take longer
+ * than any fixed window. Without such a press, deliveries 100 ms apart are one
+ * gesture.
  */
 interface Gesture {
   key: string
   at: number
+  /** The press it belongs to (`pressAt`), or null. */
+  press: number | null
   handled: Set<number>
   stopped: boolean
 }
 
 let gesture: Gesture | null = null
 
+const UNPRESSED_WINDOW_MS = 100
+const PRESSED_WINDOW_MS = 2000
+
 function gestureFor(payload: EventPayload): Gesture {
   const key = `${payload.eventType}:${payload.x}:${payload.y}:${payload.clickCount ?? 0}:${payload.button ?? 0}`
   const now = performance.now()
-  if (gesture && gesture.key === key && now - gesture.at < 100) return gesture
-  gesture = { key, at: now, handled: new Set(), stopped: false }
+  const press = pressAt(payload)
+  if (gesture && gesture.key === key) {
+    const age = now - gesture.at
+    const same =
+      gesture.press !== null ? gesture.press === press && age < PRESSED_WINDOW_MS : press === null && age < UNPRESSED_WINDOW_MS
+    if (same) return gesture
+  }
+  gesture = { key, at: now, press, handled: new Set(), stopped: false }
   return gesture
 }
 
