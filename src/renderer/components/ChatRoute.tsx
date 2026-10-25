@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { logFrontendError } from '@/lib/log-api'
 import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
-import { isChatRouteCurrent } from '@/lib/router-navigate'
+import { consumeStorePlacedRoute, isChatRouteCurrent } from '@/lib/router-navigate'
 import { clearChatClosedOnRoute, isChatClosedOnRoute } from '@/lib/web-tab-session'
 import { sessionProjectId, useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -130,6 +130,14 @@ export function ChatRoute(): null {
     const firstRun = isFirstRunRef.current
     isFirstRunRef.current = false
     const tabId = agentChatTabId(sessionId)
+    // The store placed and activated this chat's tab before it navigated
+    // here; placing it again now could close a launcher or undo a tab the
+    // reader picked since the navigation.
+    if (firstRun && consumeStorePlacedRoute(sessionId)) {
+      chatPaneIdRef.current =
+        findPaneContainingTab(useWorkspaceStore.getState().root, tabId)?.id ?? null
+      return
+    }
     // Boot window: from mount until the first real user interaction, boot
     // machinery (terminal restore's same-pane steal racing the async open)
     // must not outrank the route — the pane-id gate below stays disarmed.

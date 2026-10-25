@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react'
+import { cleanup, render } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { useEffect } from 'react'
 import { MemoryRouter, useNavigate } from 'react-router-dom'
@@ -169,6 +169,7 @@ vi.mock('@/lib/log-api', () => ({
 
 import { ChatRoute } from '@/components/ChatRoute'
 import { logFrontendError } from '@/lib/log-api'
+import { followChatRemap, navigateToChatSession, setRouterNavigate } from '@/lib/router-navigate'
 
 type Rerender = (ui: ReactElement) => void
 
@@ -264,6 +265,47 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
     renderChatRoute('/c/s-live')
     expect(mockAddAgentChatTab).toHaveBeenCalledTimes(1)
     expect(mockAddAgentChatTab).toHaveBeenCalledWith('s-live')
+  })
+
+  it('leaves the tab alone when a remap carried the route over to the new id', () => {
+    seedLiveSession('s-real')
+    workspaceRootRef.current = leafWithChat('s-real')
+    setRouterNavigate(() => {})
+    window.location.hash = '#/c/launch-1'
+    followChatRemap('launch-1', 's-real')
+    setRouterNavigate(null)
+
+    renderChatRoute('/c/s-real')
+
+    expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+  })
+
+  it('leaves the tab alone when the store placed it before navigating here', () => {
+    seedLiveSession('s-new')
+    workspaceRootRef.current = leafWithChat('s-new')
+    setRouterNavigate(() => {})
+    window.location.hash = '#/'
+    navigateToChatSession('s-new')
+    setRouterNavigate(null)
+
+    renderChatRoute('/c/s-new')
+
+    expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+  })
+
+  it('still activates on a later visit to a chat a remap once carried the route to', () => {
+    seedLiveSession('s-real')
+    workspaceRootRef.current = leafWithChat('s-real')
+    setRouterNavigate(() => {})
+    window.location.hash = '#/c/launch-1'
+    followChatRemap('launch-1', 's-real')
+    setRouterNavigate(null)
+    renderChatRoute('/c/s-real')
+    cleanup()
+
+    renderChatRoute('/c/s-real')
+
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('s-real')
   })
 
   it('delegates once per route entry (two mounts of the same session → two calls)', () => {

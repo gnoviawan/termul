@@ -880,6 +880,48 @@ describe('workspace-store agent-chat mountKey (remap mount continuity)', () => {
     expect(leaf.tabs.filter((t) => t.type === 'agent-chat')).toHaveLength(1)
   })
 
+  describe('a remap that lands after the reader moved on', () => {
+    const navigate = vi.fn()
+    beforeEach(() => {
+      navigate.mockReset()
+      setRouterNavigate(navigate)
+    })
+    afterEach(() => {
+      setRouterNavigate(null)
+      window.location.hash = ''
+    })
+
+    it('leaves the launcher the reader opened in that pane open', () => {
+      const store = useWorkspaceStore.getState()
+      store.addAgentChatTab('launch-1')
+      store.showAgentLauncher('pane-root')
+
+      store.remapAgentChatSession('launch-1', 's-real')
+
+      expect(useWorkspaceStore.getState().agentLauncherPaneId).toBe('pane-root')
+      expect(agentChatTab('s-real').mountKey).toBe('chat-launch-1')
+    })
+
+    it('does not navigate away from the chat the reader is on', () => {
+      useWorkspaceStore.getState().addAgentChatTab('launch-1')
+      window.location.hash = '#/c/other-chat'
+      navigate.mockClear()
+
+      useWorkspaceStore.getState().remapAgentChatSession('launch-1', 's-real')
+
+      expect(navigate).not.toHaveBeenCalled()
+    })
+
+    it('follows the swap when the reader is still on the placeholder chat', () => {
+      useWorkspaceStore.getState().addAgentChatTab('launch-1')
+      window.location.hash = '#/c/launch-1'
+
+      useWorkspaceStore.getState().remapAgentChatSession('launch-1', 's-real')
+
+      expect(navigate).toHaveBeenCalledWith('/c/s-real')
+    })
+  })
+
   it('chained remaps keep the original mountKey', () => {
     const store = useWorkspaceStore.getState()
     store.addAgentChatTab('launch-1')
