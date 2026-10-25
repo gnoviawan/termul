@@ -94,3 +94,42 @@ describe('native ui text runs', () => {
     expect(texts).toEqual(['+3', ' ', '−1'])
   })
 })
+
+describe('auto margins in a column', () => {
+  const rail = (middle: string) =>
+    jsxs('div', {
+      className: 'flex h-full flex-col',
+      children: [
+        jsx('div', { className: middle, children: jsx('button', { className: 'size-9' }) }),
+        jsx('div', { className: 'mt-auto flex flex-col', children: jsx('button', { className: 'size-9' }) })
+      ]
+    })
+  const footer = (node: ReactNode) => (shape(node) as Shape).children?.[1] as Shape
+
+  test('beside a flex-1 sibling the mt-auto footer does not grow, so the sibling keeps the free space', () => {
+    expect(footer(rail('flex min-h-0 flex-1 flex-col'))).toMatchObject({
+      type: 'div',
+      style: { flexGrow: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }
+    })
+  })
+
+  test('with no growing sibling the footer grows to push itself to the bottom', () => {
+    expect(footer(rail('flex flex-col'))).toMatchObject({ style: { flexGrow: 1, justifyContent: 'flex-end' } })
+  })
+})
+
+describe('divide-y', () => {
+  test('a line follows every row but the last, in the divide colour', () => {
+    const card = jsxs('div', {
+      className: 'flex flex-col divide-y divide-border',
+      children: [jsx('div', { className: 'h-8' }), false, jsx('div', { className: 'h-8' }), jsx('div', { className: 'h-8' })]
+    })
+    const line = { type: 'div', style: { height: 1, alignSelf: 'stretch', flexShrink: 0, backgroundColor: '#242526' } }
+    const row = { type: 'div', style: { height: 32 } }
+    const slots = (shape(card) as Shape).children as (Shape | string)[]
+    const flat = slots.flatMap((slot): (Shape | string)[] =>
+      typeof slot === 'string' ? ['empty'] : slot.type === String(Symbol.for('react.fragment')) ? (slot.children as Shape[]) : [slot]
+    )
+    expect(flat).toEqual([row, line, 'empty', row, line, row, 'null'])
+  })
+})

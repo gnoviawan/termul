@@ -117,6 +117,11 @@ function needsOf(tr: Translation): Needs {
   return needs
 }
 
+/** Whether the translation has `focus:` or `focus-within:` rules: its element must track focus. */
+export function readsFocus(tr: Translation): boolean {
+  return needsOf(tr).focus
+}
+
 const styleCache = new WeakMap<Translation, Map<string, StyleDesc>>()
 
 /**

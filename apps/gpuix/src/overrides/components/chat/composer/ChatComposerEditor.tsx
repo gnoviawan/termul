@@ -77,6 +77,12 @@ const PROBE_STYLE = {
   height: 0,
   overflow: 'hidden'
 } as const
+/**
+ * GPUIX emits focus and blur only for an element with its own listener. With
+ * one, the root bubbles the composer's focus to the wrapper's `focus-within:`
+ * (compat `bubbleNativeFocus`), so the focus border paints as on the web.
+ */
+const TRACK_FOCUS = { onFocus: () => {}, onBlur: () => {} }
 
 /**
  * Set by the composer scene: the automation tree does not carry a textarea's
@@ -328,8 +334,9 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
           aria-label={ariaLabel}
           value={text}
           readOnly={disabled}
+          // The web focuses once at mount and a read-only editor takes no focus, so a composer that mounts disabled stays unfocused.
           // biome-ignore lint/a11y/noAutofocus: hosts opt in (focus on chat open), as with the web editor's mount focus.
-          autoFocus={autoFocus}
+          autoFocus={autoFocus && !disabled}
           minRows={1}
           maxRows={Math.max(1, Math.floor(maxHeight / lineHeight))}
           style={{ ...textStyle, width: '100%', minHeight }}
@@ -337,6 +344,7 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
           onChange={onChange}
           onSubmit={onSubmit}
           onKeyDown={onTextareaKeyDown}
+          {...TRACK_FOCUS}
         />
         {text.length === 0 && placeholder ? (
           <div style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}>
@@ -353,6 +361,7 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
         tabIndex={-1}
         style={CAPTURE_STYLE}
         onKeyDown={onCaptureKeyDown}
+        {...TRACK_FOCUS}
       />
       {testHooksEnabled() ? (
         <div style={PROBE_STYLE}>

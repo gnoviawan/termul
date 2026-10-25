@@ -3,6 +3,8 @@
  * composer, terminal and status bar.
  */
 
+import { mkdirSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import {
   HOLD_REPLY,
   MATRIX_PROMPTS,
@@ -10,11 +12,10 @@ import {
   PERMISSION_TITLE,
   PLAN_ENTRIES
 } from '../agent'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import path from 'node:path'
 import type { Surface } from '../types'
 import { ensureProject, resetAlpha } from '../world'
 import {
+  COMPOSER_READY,
   choose,
   click,
   css,
@@ -56,7 +57,11 @@ const RAIL: Surface[] = [
         [],
         see('alpha', 'beta', 'gamma', 'delta', 'What should we do in alpha?')
       ),
-      step('b-switch-beta', [click(id('project-item-m1-beta'))], see('What should we do in beta?'))
+      step(
+        'b-switch-beta',
+        [click(id('project-item-m1-beta'))],
+        [...see('What should we do in beta?'), ...COMPOSER_READY]
+      )
     ]
   },
   {

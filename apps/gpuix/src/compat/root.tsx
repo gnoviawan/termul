@@ -8,7 +8,7 @@ import { type PublicInstance, type RenderOptions, useGpuixRequired } from '@gpui
 import { Fragment, type ReactNode, useCallback, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import { dragPreview, hitTransparent, subscribeDragPreview } from './dnd'
 import { type CompatRenderer, bindCompatRenderer } from './dom-node'
-import { noteWindowKey, windowKeyEvent } from './events'
+import { bubbleNativeFocus, noteWindowKey, windowKeyEvent } from './events'
 import { parkHiddenPanes } from './park'
 import { setOverlayLayer } from './react-dom'
 import { compatThemeId, compatTw, subscribeCompatTheme } from './translate'
@@ -104,9 +104,10 @@ function hostPlatform(): string | undefined {
  */
 export const compatRenderOptions: Pick<
   RenderOptions,
-  'onKeyDown' | 'onKeyUp' | 'keyboardFocusDim' | 'windowBackground'
+  'onEvent' | 'onKeyDown' | 'onKeyUp' | 'keyboardFocusDim' | 'windowBackground'
 > = {
   keyboardFocusDim: false,
+  onEvent: bubbleNativeFocus,
   ...(hostPlatform() === 'linux' ? { windowBackground: 'transparent' } : {}),
   onKeyDown: (event) => {
     const dom = windowKeyEvent('keydown', event)

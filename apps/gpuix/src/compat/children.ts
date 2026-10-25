@@ -17,9 +17,10 @@
  */
 
 import type { StyleDesc } from '@gpuix/react'
-import { cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react'
+import { cloneElement, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { INHERITED_LEADING, ROOT_FONT_SIZE } from '../style/scale'
+import type { Divide } from '../style/tw'
 import { liftPlacement, placeStyle } from './placement'
 import { applyTextTransform, type AutoMargin, type Translation, translation } from './translate'
 
@@ -113,10 +114,12 @@ function growsInFlow(slot: Slot): boolean {
 }
 
 /**
- * In a row the wrapper grows to stand in for the auto margin. CSS gives auto
- * margins only the space left after `flex-grow`, so when a sibling grows the
- * wrapper must not: sharing the free space squeezed a `flex-1` tab strip to
- * half the bar beside its `ml-auto` actions.
+ * The wrapper grows along the main axis to stand in for the auto margin. CSS
+ * gives auto margins only the space left after `flex-grow`, so when a sibling
+ * grows the wrapper must not: sharing the free space squeezed a `flex-1` tab
+ * strip to half the bar beside its `ml-auto` actions, and the collapsed rail's
+ * `flex-1` action column to half the rail above its `mt-auto` footer, which
+ * clipped Search's neighbour, Open canvas.
  */
 function placeAutoMargin(
   node: ReactElement,
@@ -133,8 +136,9 @@ function placeAutoMargin(
   }
   const h = horizontal(info.margin)
   const v = vertical(info.margin)
-  const style = h ? COLUMN_PUSH[h] : v ? COLUMN_PUSH[v] : undefined
-  if (!style) return node
+  const push = h ? COLUMN_PUSH[h] : v ? COLUMN_PUSH[v] : undefined
+  if (!push) return node
+  const style = siblingGrows && push.flexGrow ? { ...push, flexGrow: 0 } : push
   // In block flow a block box with `mx-auto` is as wide as the line allows (up
   // to its max-width) and the auto margins split what is left; in the flex
   // wrapper that is a growing item.
@@ -369,7 +373,7 @@ export function layoutChildren(
   if (flex || blocks > 0 || texts === 0) {
     // Flex items, or block flow: contiguous text is one anonymous box.
     const row = style.display === 'flex' && style.flexDirection !== 'column' && style.flexDirection !== 'column-reverse'
-    const grows = row && slots.some(growsInFlow)
+    const grows = slots.some(growsInFlow)
     trimTextRuns(out, tr)
     const strut = tr.blockFlow ? strutDescent(style) : 0
     for (let i = 0; i < out.length; i++) {
@@ -489,4 +493,41 @@ function paintPositionedLast(out: Slot[]): Slot[] {
     return null
   })
   return [...kept, ...moved]
+}
+
+function countElements(slots: Slot[]): number {
+  let n = 0
+  for (const slot of slots) n += Array.isArray(slot) ? countElements(slot) : isValidElement(slot) ? 1 : 0
+  return n
+}
+
+/**
+ * `divide-y` / `divide-x`: CSS borders the far side of every child element
+ * but the last. The child may be a component, whose element this parent
+ * cannot restyle, so a line of that width follows it instead: the same pixels
+ * in a flex container, where the line spans the cross axis as the child does.
+ * With a gap the line pulls back over it, so the order stays child, line, gap.
+ * Every element gets the same Fragment slot, line or not, so a sibling that
+ * appears or goes away never remounts it.
+ */
+export function divideChildren(children: ReactNode, divide: Divide, style: StyleDesc): ReactNode {
+  if (!Array.isArray(children)) return children
+  const total = countElements(children)
+  if (total < 2) return children
+  const y = divide.axis === 'y'
+  const gap = (y ? style.rowGap : style.columnGap) ?? style.gap
+  const line: StyleDesc = y
+    ? { height: divide.width, alignSelf: 'stretch', flexShrink: 0, backgroundColor: divide.color }
+    : { width: divide.width, alignSelf: 'stretch', flexShrink: 0, backgroundColor: divide.color }
+  if (typeof gap === 'number' && gap > 0) line[y ? 'marginTop' : 'marginLeft'] = -gap
+  let seen = 0
+  const walk = (slots: Slot[]): Slot[] =>
+    slots.map((slot, i) => {
+      if (Array.isArray(slot)) return walk(slot)
+      if (!isValidElement(slot)) return slot
+      seen++
+      const drawn = seen < total && !childInfo.get(slot)?.positioned
+      return jsxs(Fragment, { children: [slot, drawn ? jsx('div', { style: line }) : null] }, slot.key ?? `divide-${i}`)
+    })
+  return walk(children as Slot[])
 }

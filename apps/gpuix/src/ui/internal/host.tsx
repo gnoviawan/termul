@@ -12,12 +12,14 @@ import {
   type ReactElement,
   type ReactNode,
   type Ref,
-  useContext
+  useContext,
+  useState
 } from 'react'
 import { layoutChildren } from '../../compat/children'
 import { ColorContext, SvgClassContext } from '../../compat/color'
 import { useContainerClasses } from '../../compat/container'
 import { buildElement, type DomProps, domAttrs, resolveStyle } from '../../compat/create'
+import { readsFocus } from '../../compat/host'
 import { nodeFor } from '../../compat/dom-node'
 import { CompatEvent, domKey as compatDomKey } from '../../compat/events'
 import { splitDescendantClasses as compatSplit, translation } from '../../compat/translate'
@@ -222,13 +224,30 @@ export const Box = forwardRef<PublicInstance, BoxProps>(function Box(props, ref)
   const env = useContext(UiEnvironmentContext)
   const className = useContainerClasses(classes)
   const tr = translation('div', className)
+  const [focus, setFocus] = useState({ self: false, within: false })
   const resolved = resolveStyle(tr, {
     viewportWidth: env.viewportWidth,
     reducedMotion: env.reducedMotion,
+    focus: focus.self,
+    focusWithin: focus.within,
     ...state,
     attrs: { ...(domAttrs(rest as DomProps) as TwState['attrs']), ...state?.attrs }
   })
-  const dom = { ...rest, className, ref } as unknown as DomProps
+  const focusHandlers = readsFocus(tr)
+    ? {
+        // Focus bubbles here from the box and from any descendant, as React's onFocus does.
+        onFocus: (event: UiFocusEvent) => {
+          const self = event.target === event.currentTarget
+          setFocus((f) => (f.within && f.self === (f.self || self) ? f : { self: f.self || self, within: true }))
+          rest.onFocus?.(event)
+        },
+        onBlur: (event: UiFocusEvent) => {
+          setFocus({ self: false, within: false })
+          rest.onBlur?.(event)
+        }
+      }
+    : null
+  const dom = { ...rest, ...focusHandlers, className, ref } as unknown as DomProps
   return buildElement('div', tr, dom, undefined, false, {
     style: resolved,
     nativeStyle: style,

@@ -586,6 +586,19 @@ function focusListener(type: 'focus' | 'blur') {
 const onFocus = focusListener('focus')
 const onBlur = focusListener('blur')
 
+/**
+ * GPUIX delivers focus and blur only to the element's own listener. A compat
+ * element's listener bubbles them (`focusListener`); a native element under
+ * compat ancestors (a ui `Field`'s `<input>`) has its own listener, so its
+ * focus reaches the ancestors' onFocus (`focus-within:`) and `document` here,
+ * from the root's `onEvent`, which runs after every dispatched event.
+ */
+export function bubbleNativeFocus(payload: EventPayload): void {
+  if (payload.eventType !== 'focus' && payload.eventType !== 'blur') return
+  if (domOf(payload.elementId)) return
+  ;(payload.eventType === 'focus' ? onFocus : onBlur)(payload)
+}
+
 export interface GpuixListeners {
   onFileDrop?: typeof fileDrop
   onSubmit?: typeof inputSubmit

@@ -13,6 +13,8 @@ export type AckResult = { ok: true } | { ok: false; error: string }
 export interface HostProcessOptions {
   binary: string
   args: readonly string[]
+  /** The helper's environment; this process's when absent. */
+  env?: NodeJS.ProcessEnv
   onEvent(event: HostEvent): void
   onStderr(line: string): void
   onExit(detail: string): void
@@ -25,7 +27,10 @@ export class HostProcess {
   private exited: string | null = null
 
   constructor(private readonly options: HostProcessOptions) {
-    this.child = spawn(options.binary, [...options.args], { stdio: ['pipe', 'pipe', 'pipe'] })
+    this.child = spawn(options.binary, [...options.args], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: options.env ?? process.env
+    })
     if (!this.child.stdout || !this.child.stderr || !this.child.stdin) {
       throw new Error('webview host spawned without stdio pipes')
     }

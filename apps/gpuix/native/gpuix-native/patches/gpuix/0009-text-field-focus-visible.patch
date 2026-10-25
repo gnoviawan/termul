@@ -1,0 +1,18 @@
+diff --git a/packages/native/src/custom_elements/input.rs b/packages/native/src/custom_elements/input.rs
+index 08f1dbc..64b1593 100644
+--- a/packages/native/src/custom_elements/input.rs
++++ b/packages/native/src/custom_elements/input.rs
+@@ -462,6 +462,13 @@ impl CustomElement for TextEditorElement {
+                 editor = editor.overflow_hidden();
+             }
+         }
++        // Browsers match :focus-visible on a focused text field however it got
++        // focus (a click, autoFocus, focus()), since typing follows. gpui's
++        // focus_visible needs the last input to be a key, so a text field also
++        // applies the style on plain focus, in the frame focus moves.
++        if let Some(declared) = ctx.style.and_then(|style| style.focus_visible.as_deref()) {
++            editor = editor.focus(|refinement| crate::renderer::apply_styles(refinement, declared));
++        }
+         editor = crate::renderer::apply_focus_visible(
+             editor,
+             ctx.id,
