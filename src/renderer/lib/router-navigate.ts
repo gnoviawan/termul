@@ -1,4 +1,6 @@
 let navigateFn: ((path: string) => void) | null = null
+/** The chat the store last routed to after activating its tab itself. */
+let storeRoutedSessionId: string | null = null
 
 export function setRouterNavigate(fn: ((path: string) => void) | null): void {
   navigateFn = fn
@@ -15,11 +17,27 @@ export function isChatRouteCurrent(sessionId: string): boolean {
   return path === `/c/${sessionId}`
 }
 
+/**
+ * Route to a chat whose tab the caller (the workspace store) has already
+ * activated or renamed in place.
+ */
 export function navigateToChatSession(sessionId: string): void {
   if (!navigateFn) return
   if (!isChatRouteCurrent(sessionId)) {
+    storeRoutedSessionId = sessionId
     navigateFn(`/c/${sessionId}`)
   }
+}
+
+/**
+ * Whether the route change to `sessionId` came from `navigateToChatSession`,
+ * whose caller already put the chat on screen. Clears the mark, so a later
+ * Back/Forward or link to the same chat counts as a route of its own.
+ */
+export function takeStoreRoutedChat(sessionId: string | null): boolean {
+  const routed = sessionId !== null && storeRoutedSessionId === sessionId
+  storeRoutedSessionId = null
+  return routed
 }
 
 /**

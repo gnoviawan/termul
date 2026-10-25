@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
 import { logFrontendError } from '@/lib/log-api'
 import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
-import { isChatRouteCurrent } from '@/lib/router-navigate'
+import { isChatRouteCurrent, takeStoreRoutedChat } from '@/lib/router-navigate'
 import { clearChatClosedOnRoute, isChatClosedOnRoute } from '@/lib/web-tab-session'
 import { sessionProjectId, useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -98,13 +98,6 @@ function openRouteInOwnerProject(sessionId: string): boolean {
   return true
 }
 
-function chatMountKey(sessionId: string): string | null {
-  const tabId = agentChatTabId(sessionId)
-  const pane = findPaneContainingTab(useWorkspaceStore.getState().root, tabId)
-  const tab = pane?.type === 'leaf' ? pane.tabs.find((t) => t.id === tabId) : undefined
-  return tab?.type === 'agent-chat' ? (tab.mountKey ?? tab.id) : null
-}
-
 export function ChatRoute(): null {
   const location = useLocation()
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
@@ -113,7 +106,7 @@ export function ChatRoute(): null {
   const chatPaneIdRef = useRef<string | null>(null)
   const hasInteractedRef = useRef(false)
   const lastSessionIdRef = useRef<string | null>(null)
-  const routedMountKeyRef = useRef<string | null>(null)
+  const storeRoutedRef = useRef(false)
 
   const sessionId = useMemo(() => {
     const match = location.pathname.match(/^\/c\/(.+)$/)
@@ -126,30 +119,25 @@ export function ChatRoute(): null {
   // route's closed/suppression state). The closed-on-route mark belongs to
   // the OLD session: clear it so a later return to that chat re-opens.
   //
-  // A remap (placeholder -> real session, agent switch) renames the routed
-  // chat in place, and the renamed tab keeps its mountKey. That is the same
-  // chat on the same route, not a navigation: its route state carries over,
-  // so a launcher the user reopened meanwhile stays open.
+  // A route the workspace store made (starting, selecting or remapping a
+  // chat) already has its chat on screen. Its first run must not activate
+  // the chat again: the router commits in a transition that can land seconds
+  // late under load, after the user reopened the launcher or moved on.
   if (lastSessionIdRef.current !== sessionId) {
     if (lastSessionIdRef.current) clearChatClosedOnRoute(lastSessionIdRef.current)
     lastSessionIdRef.current = sessionId
-    const renamed =
-      sessionId !== null &&
-      routedMountKeyRef.current !== null &&
-      chatMountKey(sessionId) === routedMountKeyRef.current
-    if (!renamed) {
-      isFirstRunRef.current = true
-      chatPaneIdRef.current = null
-      routedMountKeyRef.current = null
-    }
+    isFirstRunRef.current = true
+    chatPaneIdRef.current = null
+    storeRoutedRef.current = takeStoreRoutedChat(sessionId)
   }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: root intentionally retriggers the effect; the gate below is about WHEN to re-delegate, not a duplicate of the store's activation no-op predicate
   useEffect(() => {
     if (!sessionId || !isChatRouteCurrent(sessionId)) return
-    routedMountKeyRef.current = chatMountKey(sessionId) ?? routedMountKeyRef.current
     const firstRun = isFirstRunRef.current
     isFirstRunRef.current = false
+    const storeRouted = firstRun && storeRoutedRef.current
+    storeRoutedRef.current = false
     const tabId = agentChatTabId(sessionId)
     // Boot window: from mount until the first real user interaction, boot
     // machinery (terminal restore's same-pane steal racing the async open)
@@ -208,7 +196,7 @@ export function ChatRoute(): null {
       // single source of truth) — it no-ops when the chat tab already exists
       // and is its pane's active, focused tab, so a route re-entry costs one
       // getState walk, not a second pane-tree rebuild.
-      useWorkspaceStore.getState().addAgentChatTab(sessionId)
+      if (!storeRouted) useWorkspaceStore.getState().addAgentChatTab(sessionId)
       // The chat is open on this route again — a closed-on-route mark from
       // a previous visit (the module-level mark survives component unmount)
       // must not suppress later re-runs. A future close re-marks it.
