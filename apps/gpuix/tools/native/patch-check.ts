@@ -10,6 +10,9 @@
  *   0004-input-unfocused-scroll
  *                          an unfocused input given a long value shows its
  *                          start, not the end with the caret (URL-INPUT)
+ *   zed/0003 + gpuix/0005  `backdropBlur` flattens the stripes under its box,
+ *   backdrop-blur          leaves the stripes beside it and outside its
+ *                          rounded corner sharp
  *
  * On the published addon every assertion fails, which is what makes it a test.
  *
@@ -20,8 +23,14 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { PNG } from 'pngjs'
-import { grabFrame, LAVAPIPE_ICD, SCREEN_MARGIN, startXvfb, windowOrigin } from '../parity/shoot-gpuix'
-import { SCENE, type Sample, type SceneReady } from './samples'
+import {
+  grabFrame,
+  LAVAPIPE_ICD,
+  SCREEN_MARGIN,
+  startXvfb,
+  windowOrigin
+} from '../parity/shoot-gpuix'
+import { BLUR, type Sample, SCENE, type SceneReady } from './samples'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -57,7 +66,13 @@ try {
   const origin = await windowOrigin(xvfb.display, SCENE.width, SCENE.height)
   await grabFrame(xvfb.display, SCENE.width, SCENE.height, shot, origin)
   ready = JSON.parse(readFileSync(readyFile, 'utf8')) as SceneReady
-  xwininfo = Bun.spawnSync(['xwininfo', '-root', '-tree', '-display', xvfb.display]).stdout.toString()
+  xwininfo = Bun.spawnSync([
+    'xwininfo',
+    '-root',
+    '-tree',
+    '-display',
+    xvfb.display
+  ]).stdout.toString()
 } finally {
   scene.kill()
   await scene.exited
@@ -72,7 +87,16 @@ const pixel = (x: number, y: number) => {
 function region(sample: Sample) {
   const b = ready.bounds[sample]
   if (!b) throw new Error(`${sample} has no bounds`)
-  return { x0: Math.round(b.x), y0: Math.round(b.y), x1: Math.round(b.x + b.width), y1: Math.round(b.y + b.height) }
+  if (b.x + b.width > png.width || b.y + b.height > png.height)
+    throw new Error(
+      `${sample} at ${JSON.stringify(b)} is outside the ${png.width}x${png.height} window`
+    )
+  return {
+    x0: Math.round(b.x),
+    y0: Math.round(b.y),
+    x1: Math.round(b.x + b.width),
+    y1: Math.round(b.y + b.height)
+  }
 }
 const lit = ([r, g, b]: readonly [number, number, number]) => r + g + b > 384
 
@@ -130,21 +154,90 @@ const inputStartInk = (() => {
   const { x0, y0, x1, y1 } = region('input')
   return litIn(x0, x1, y0, Math.round((y0 + y1) / 2))
 })()
+/** Mean distance from mid-grey of the stripes on the middle row, over [from, to) of the stripe strip. */
+function stripeContrast(from: number, to: number): number {
+  const { x0, y0 } = region('blur')
+  const y = y0 + 8 + BLUR.height / 2
+  let sum = 0
+  for (let x = x0 + 8 + from; x < x0 + 8 + to; x++) sum += Math.abs(pixel(x, y)[0] - 127.5)
+  return sum / (to - from)
+}
+const half = BLUR.width / 2
+const sharpStripes = stripeContrast(16, half - 16)
+const blurredStripes = stripeContrast(half + 3 * BLUR.sigma, BLUR.width - 3 * BLUR.sigma)
+const cornerStripe = (() => {
+  const { x0, y0 } = region('blur')
+  return pixel(x0 + 8 + half + 1, y0 + 8 + 1)[0]
+})()
 const handleId = ready.handle?.kind === 'x11' ? ready.handle.id : null
 const handleWindow =
   typeof handleId === 'number'
-    ? (xwininfo.match(new RegExp(`0x${handleId.toString(16)} "termul-native-patch-check".*${SCENE.width}x${SCENE.height}`)) ?? null)
+    ? (xwininfo.match(
+        new RegExp(
+          `0x${handleId.toString(16)} "termul-native-patch-check".*${SCENE.width}x${SCENE.height}`
+        )
+      ) ?? null)
     : null
 
 const checks = [
-  { patch: '0001-font-style', what: 'upright strokes stand straight', value: uprightSlant, ok: Math.abs(uprightSlant) < 0.05 },
-  { patch: '0001-font-style', what: "fontStyle 'italic' slants strokes (Blink oblique is 0.25)", value: italicSlant, ok: italicSlant > 0.15 && italicSlant < 0.35 },
-  { patch: '0002-markdown-theme', what: 'link pixels in theme.link red', value: linkRed, ok: linkRed > 100 },
-  { patch: '0002-markdown-theme', what: 'mdInlineCodeScale 0.5 halves the code ink width', value: codeRatio, ok: codeRatio > 0.4 && codeRatio < 0.6 },
-  { patch: '0003-window-handle', what: 'getNativeWindowHandle names the scene window', value: ready.handle, ok: handleWindow !== null },
-  { patch: '0004-input-unfocused-scroll', what: 'unfocused input shows the start of a long value (ink above the baseline)', value: inputStartInk, ok: inputStartInk > 150 }
+  {
+    patch: '0001-font-style',
+    what: 'upright strokes stand straight',
+    value: uprightSlant,
+    ok: Math.abs(uprightSlant) < 0.05
+  },
+  {
+    patch: '0001-font-style',
+    what: "fontStyle 'italic' slants strokes (Blink oblique is 0.25)",
+    value: italicSlant,
+    ok: italicSlant > 0.15 && italicSlant < 0.35
+  },
+  {
+    patch: '0002-markdown-theme',
+    what: 'link pixels in theme.link red',
+    value: linkRed,
+    ok: linkRed > 100
+  },
+  {
+    patch: '0002-markdown-theme',
+    what: 'mdInlineCodeScale 0.5 halves the code ink width',
+    value: codeRatio,
+    ok: codeRatio > 0.4 && codeRatio < 0.6
+  },
+  {
+    patch: '0003-window-handle',
+    what: 'getNativeWindowHandle names the scene window',
+    value: ready.handle,
+    ok: handleWindow !== null
+  },
+  {
+    patch: '0004-input-unfocused-scroll',
+    what: 'unfocused input shows the start of a long value (ink above the baseline)',
+    value: inputStartInk,
+    ok: inputStartInk > 150
+  },
+  {
+    patch: 'backdrop-blur',
+    what: 'stripes beside the box stay sharp (distance from grey, 127.5 is sharp)',
+    value: sharpStripes,
+    ok: sharpStripes > 120
+  },
+  {
+    patch: 'backdrop-blur',
+    what: `backdropBlur ${BLUR.sigma} flattens the stripes under the box (0 is flat)`,
+    value: blurredStripes,
+    ok: blurredStripes < 8
+  },
+  {
+    patch: 'backdrop-blur',
+    what: 'the rounded corner leaves its outside pixel sharp (0 or 255)',
+    value: cornerStripe,
+    ok: cornerStripe === 0 || cornerStripe === 255
+  }
 ]
 for (const check of checks)
-  console.log(`${check.ok ? 'PASS' : 'FAIL'} ${check.patch} ${check.what}: ${JSON.stringify(check.value)}`)
+  console.log(
+    `${check.ok ? 'PASS' : 'FAIL'} ${check.patch} ${check.what}: ${JSON.stringify(check.value)}`
+  )
 console.log(`screenshot ${shot}`)
 if (checks.some((check) => !check.ok)) process.exit(1)

@@ -13,7 +13,9 @@ import {
   type Rgba,
   withAlpha
 } from './css-value'
+import { GRADIENT_SIDES, type GradientParts } from './gradient'
 import {
+  BLURS,
   CONTAINERS,
   FONT_SIZES,
   FONT_WEIGHTS,
@@ -22,7 +24,6 @@ import {
   SHADOWS,
   SPACING_UNIT
 } from './scale'
-import { GRADIENT_SIDES, type GradientParts } from './gradient'
 import type { TwTheme } from './theme'
 
 export const SANS_FAMILY = 'Inter Variable'
@@ -432,7 +433,14 @@ const HANDLERS: Record<string, Handler> = {
   scale: () => unsupported(TRANSFORM),
   rotate: () => unsupported(TRANSFORM),
   origin: () => unsupported(TRANSFORM),
-  backdrop: () => unsupported('backdrop filters: GPUIX has no per-element blur'),
+  // Blur only: the patched addon draws it (docs/native-patches.md); the
+  // published addon ignores the key and leaves the content behind sharp.
+  'backdrop-blur': (v) => {
+    const raw = arbitrary(v.value)
+    const px = raw === undefined ? BLURS[v.value] : parseLength(raw, v.theme.vars)
+    return px === undefined ? undefined : ok({ backdropBlur: px })
+  },
+  backdrop: () => unsupported('backdrop filters other than blur'),
   blur: () => unsupported('filters: GPUIX has no CSS filters'),
   'drop-shadow': () => unsupported('filters: GPUIX has no CSS filters'),
   overscroll: () => unsupported('overscroll behaviour is GPUI-defined'),

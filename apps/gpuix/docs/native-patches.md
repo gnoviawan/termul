@@ -81,6 +81,8 @@ Unset it to return to the published addon. The published addon ignores the style
 | `gpuix/0002-markdown-theme` | `<markdown>` theme fields: `link`, `linkUnderline`, `linkWeight`, `fontStyle` (every run italic), and metrics `mdInlineCodeScale`, `mdInlineCodePaddingX`, `mdInlineCodeInsetY`. | `src/chat/theme.ts`: links in medium primary, inline code at `0.88em` with `0.3em` padding, italic quotes. |
 | `gpuix/0003-native-window-handle` | `GpuixRenderer.getNativeWindowHandle()`: `{ kind: 'x11', id }` on X11, `{ kind: 'wayland' }` on Wayland, `null` before a window exists. | The browser-pane helper starts with `--parent <id>`; without an id it falls back to `--parent-pid` and the `_NET_WM_PID` search. |
 | `gpuix/0004-input-unfocused-scroll` | An unfocused `<input>` given a new value shows the start of the text, as a DOM input does. Only a focused field scrolls to keep the caret in view. | The browser URL bar in a narrow pane (URL-INPUT). |
+| `zed/0003-backdrop-blur` | A `Backdrop` scene primitive and `Window::paint_backdrop_blur(bounds, corner_radii, sigma, opacity)`. A backdrop is an ordering barrier: everything painted before it draws first, everything after it draws on top. The wgpu renderer ends the main pass at a backdrop, copies the frame region under it plus a 3-sigma halo, blurs it with a separable Gaussian (downsampled by powers of two until sigma is at most 4 texels, Skia's rule), and composites the result inside the rounded box. The surface is configured with `COPY_SRC` when it allows it; otherwise backdrops are skipped. Metal and DirectX skip them. | `gpuix/0005`. |
+| `gpuix/0005-backdrop-blur` | The style prop `backdropBlur: <px>` (CSS `blur()` standard deviation) on `<div>` and `<text>`, painted before the element's background and children, with its border radii and opacity. Not inherited. | Tailwind `backdrop-blur-*` through `src/style/utilities.ts`: the overlay scrims (`bg-overlay/60 backdrop-blur-sm`). |
 
 Italics also need italic faces. `tools/style/build-fonts.py` builds Inter's real italics and a Paper Mono oblique. Paper Mono has no italic, so the browser draws a synthetic one; the oblique bakes Blink's skew (`SkFont::setSkewX(-1/4)`) into the outlines. The terminal's own Paper Mono files get the same treatment. On the published addon, the prose italics of `<markdown>` already use these faces; `fontStyle` needs patch `0001`.
 
@@ -96,12 +98,29 @@ Italics also need italic faces. `tools/style/build-fonts.py` builds Inter's real
 | Inline-code ink width, scale 0.5 over 1.0 | 0.50 | 1.00 (FAIL) |
 | `getNativeWindowHandle()` names the window | `{ kind: 'x11', id: 0x200001 }` | `null` (FAIL) |
 | Unfocused input given a long value, ink above the baseline at its start | 1000 px | 0 px, only the trailing dots show (FAIL) |
+| 4 px stripes beside a `backdropBlur: 8` box, distance from grey (127.5 is sharp) | 127.5 | 127.5 |
+| The same stripes under the box (0 is flat) | 0.5 | 127.5 (FAIL) |
+| Pixel just outside the box's 12 px rounded corner | 255 (sharp) | 255 |
 
 Parity against the web client, measured on 2026-10-25:
 
 - Terminal SGR 3 (`tools/terminal/parity.ts --bytes tools/terminal/fixtures/italic.bin`). The perceptual diff of the italic rows against xterm.js falls from 14.87% to 12.85%; the upright control row stays at 7.23%. The slant now matches: shifting the top and bottom halves of the italic row against the web gives the same best offset (-0.75 px), against a -0.25 px offset for the upright row. A steeper skew lowers the row diff slightly (12.0% at 0.40) only by cancelling that constant 0.5 px offset, while the slant stops matching, so the oblique keeps Blink's 0.25.
 - Terminal default fixture (`less`, `vim`, `done`): identical cells and pixels on both addons (2.45%, 3.61%, 10.69% exact before; 2.45%, 3.61%, 10.68% after).
 - Chat transcript (`tools/chat/parity.ts`), ROI perceptual diff before and after: bottom 3.53% and 3.51%, middle 10.05% and 10.06%, top 6.04% and 5.94%. The whole-ROI number is dominated by layout offsets and the Mermaid diagram the native client shows as source. Line by line, after aligning each line on its own text, a table row with inline code falls from 10.37% to 7.23%, and the link paragraph from 27.80% to 26.39%. Running text that does not overlay the web's glyph for glyph saturates near 45% exact, so the italic quote reads as a match in the crops (`chat-after2/top`) without moving its number.
+
+Backdrop blur against the web client, measured on 2026-10-25 with `bun run parity:matrix` on the published addon (before) and the self-built addon (after), then `bun tools/native/blur-parity.ts <before> <after> <surfaces>`. The number is the mean absolute channel difference (0 to 255) between the two clients over the scrim strip left of each dialog (x < 120 px):
+
+| Surface | Before | After | Whole-frame perceptual diff, before and after |
+|---|---|---|---|
+| `palette.command-history` (`bg-overlay/40 backdrop-blur-sm`) | 3.00 | 0.51 | 1.33% and 0.33% |
+| `palette.save-snapshot` (`bg-overlay/60 backdrop-blur-sm`) | 2.24 | 0.68 | 1.03% and 0.17% |
+| `settings.interface` (`bg-overlay/60 backdrop-blur-sm`) | 2.29 | 0.71 | 1.22% and 0.97% |
+| `settings.editor` | 2.29 | 0.71 | 1.04% and 0.87% |
+| `dialogs.bug-report` (control: `ui/dialog`'s overlay has no blur on the web either) | 0.10 | 0.10 | 0.83% and 0.93% |
+
+Tailwind v4's `backdrop-blur-sm` is `blur(8px)` (`--blur-sm`), which the shipped `dist-web` CSS confirms; the mapping follows the v4 scale (`xs` 4, `sm` 8, `md` 12, `lg` 16, `xl` 24, `2xl` 40, `3xl` 64, bare 8).
+
+Frame cost under lavapipe (`bun tools/native/blur-cost.ts --runs 3`): a 1280x800 window redrawing as fast as it can, with a full-window `bg-overlay/60` scrim, took a median 92 ms per frame without blur and 189 ms with `backdropBlur: 8` (load average 4 to 6 from other work on the 8-core host, so single runs vary by 2x). The first, undownsampled version cost 815 ms per frame on the same scene. The blur runs only on frames that redraw; an open dialog with no changes costs nothing. A hardware GPU was not measured.
 
 The browser-pane acceptance (`tools/browser/pane-check.ts`) passes all 13 checks on the self-built addon, and the app log shows the helper started with `--parent 2097153`, the id the check reads from X (`0x200001`).
 
@@ -144,6 +163,8 @@ Measured on 2026-10-25: the .deb is 61,186,892 bytes (58.4 MiB, 222.5 MiB instal
 
 ## Known gaps
 
+- Backdrop blur is wgpu only (Linux, and the web build of GPUI). The Metal and DirectX renderers skip the primitive, so on macOS and Windows the content behind stays sharp. CSS backdrop filters other than `blur()` (saturate, brightness) are not implemented.
+- The blur samples with clamp-to-edge at the window border; Chromium's backdrop filter mirrors. The difference is a few pixels wide at the window edge.
 - CSS inline padding takes layout space; the native chip's padding is paint only, so text after a chip sits about 7 px closer to it than on the web.
 - The run scale is implemented for the Linux text system (cosmic-text) only. On macOS and Windows a scaled font renders at the line's size.
 - `0004` does not add a selection or scroll API. A focused field that receives a new value still scrolls to the caret at the end, as a DOM input does.

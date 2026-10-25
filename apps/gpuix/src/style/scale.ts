@@ -85,6 +85,19 @@ export const CONTAINERS: Record<string, number> = {
   prose: 65 * 8.5
 }
 
+/** Tailwind v4 `--blur-*` (px), the CSS `blur()` standard deviation; bare `blur` is 8px. */
+export const BLURS: Record<string, number> = {
+  '': 8,
+  none: 0,
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
+  '2xl': 40,
+  '3xl': 64
+}
+
 export const SHADOWS: Record<string, string> = {
   '2xs': '0 1px rgb(0 0 0 / 0.05)',
   xs: '0 1px 2px 0 rgb(0 0 0 / 0.05)',

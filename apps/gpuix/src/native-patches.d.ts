@@ -10,6 +10,12 @@ declare module '@gpuix/native/host' {
   interface StyleDesc {
     /** Picks the family's italic face (patch 0001-font-style). Inherited like the rest of the text style. */
     fontStyle?: 'normal' | 'italic'
+    /**
+     * CSS `backdrop-filter: blur(<px>)` (patch zed/0003 + gpuix/0005): the
+     * Gaussian's standard deviation. Blurs what is painted behind the element,
+     * inside its rounded box. Not inherited.
+     */
+    backdropBlur?: number
   }
   interface GpuixTheme {
     /** Markdown link text (patch 0002-markdown-theme). Unset: the text colour. */

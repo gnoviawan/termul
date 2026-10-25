@@ -1,8 +1,18 @@
 /** Shared by the patch scene and its checker. */
-export const SCENE = { width: 640, height: 420 } as const
-export const SAMPLES = ['upright', 'italic', 'link', 'codeFull', 'codeHalf', 'input'] as const
+export const SCENE = { width: 640, height: 500 } as const
+export const SAMPLES = [
+  'upright',
+  'italic',
+  'link',
+  'codeFull',
+  'codeHalf',
+  'input',
+  'blur'
+] as const
 /** Set on the unfocused input after mount, like a URL bar after a navigation: ink at the start, dots at the end. */
 export const LONG_VALUE = `${'M'.repeat(10)}${'.'.repeat(120)}`
+/** The blur sample: 4 px black and white stripes, the right half under a `backdropBlur` box. */
+export const BLUR = { width: 320, height: 48, stripe: 4, sigma: 8, radius: 12 } as const
 export type Sample = (typeof SAMPLES)[number]
 export interface SceneReady {
   bounds: Record<Sample, { x: number; y: number; width: number; height: number } | null>
