@@ -463,16 +463,25 @@ function inputChange(payload: EventPayload): void {
 
 /**
  * Keys typed in the same burst as a shortcut that opens a field (Ctrl+K then
- * "theme") reach `window` with nothing focused: the field's focus() runs in a
- * later JS turn than GPUI dispatches them, and GPUIX applies it a frame later
- * still. In the DOM that focus lands before the next keystroke, so the field
- * gets them. Printable keys no handler prevented are held here and given to a
- * controlled text field that focus() targets soon before or after
+ * "theme") are lost in GPUIX two ways, where in the DOM the field's focus
+ * lands before the next keystroke and gets them:
+ *
+ * - they reach `window` with nothing focused: the field's focus() runs in a
+ *   later JS turn than GPUI dispatches them, and GPUIX applies it a frame
+ *   later still;
+ * - the field holds focus but has not painted focused yet, so GPUI has no
+ *   text input handler for it and drops the text. Its focus event comes after
+ *   that paint, behind those keys.
+ *
+ * Printable keys no handler prevented are held here: the first kind for a
+ * controlled text field that focus() targets soon before or after, the second
+ * for the focused field, given to it when its focus event arrives
  * (palette.type-ahead). The window is wide because rendering what the
  * shortcut opens can take over a second on a loaded host.
  */
 const TYPE_AHEAD_MS = 3000
-let typeAhead: { text: string; at: number } | null = null
+/** `field`: held for that focused field until its focus event; null: for the next focus() target. */
+let typeAhead: { text: string; at: number; field: number | null } | null = null
 let focusTarget: { id: number; at: number } | null = null
 
 const fresh = (entry: { at: number } | null): boolean =>
@@ -482,21 +491,27 @@ export function noteWindowKey(payload: KeyEvent, prevented: boolean): void {
   const ch = payload.keyChar
   const mods = payload.modifiers
   if (prevented || !ch || ch.length !== 1 || mods?.ctrl || mods?.alt || mods?.cmd) return
-  if (compatRenderer()?.getFocusedElementId() != null) {
+  const focused = compatRenderer()?.getFocusedElementId() ?? null
+  if (focused !== null && (focused === lastFocused || !isControlledField(focused))) {
     focusTarget = null
     return
   }
-  typeAhead = { text: (fresh(typeAhead) ? typeAhead?.text : '') + ch, at: performance.now() }
-  if (focusTarget && fresh(focusTarget)) replayTypeAhead(focusTarget.id)
+  const held = fresh(typeAhead) && typeAhead?.field === focused ? typeAhead.text : ''
+  typeAhead = { text: held + ch, at: performance.now(), field: focused }
+  if (focused === null && focusTarget && fresh(focusTarget)) replayTypeAhead(focusTarget.id)
+}
+
+function isControlledField(id: number): boolean {
+  const dom = domOf(id)
+  return (dom?.tag === 'input' || dom?.tag === 'textarea') && dom.attrs.value !== undefined
 }
 
 function replayTypeAhead(id: number): void {
   const pending = typeAhead
+  if (!pending || (pending.field !== null && pending.field !== id)) return
   typeAhead = null
-  if (!pending || !fresh(pending)) return
-  const dom = domOf(id)
-  if ((dom?.tag !== 'input' && dom?.tag !== 'textarea') || dom.attrs.value === undefined) return
-  const current = inputValues.get(id) ?? String(dom.attrs.value)
+  if (!fresh(pending) || !isControlledField(id)) return
+  const current = inputValues.get(id) ?? String(domOf(id)?.attrs.value)
   inputChange({ elementId: id, value: current + pending.text } as EventPayload)
 }
 
@@ -523,6 +538,7 @@ function focusListener(type: 'focus' | 'blur') {
     const related = type === 'focus' ? nodeOrNull(lastFocused) : null
     if (type === 'focus') lastFocused = id
     else if (lastFocused === id) lastFocused = null
+    if (type === 'focus' && typeAhead?.field === id) replayTypeAhead(id)
     // Not on focus: JS sees the field's focus before the keys GPUI dispatched ahead of it.
     if (type === 'blur' && focusTarget?.id === id) focusTarget = null
     const event = new CompatEvent(type, target, payload, related)

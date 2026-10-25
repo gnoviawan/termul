@@ -33,15 +33,13 @@ const THEME_REVIEWS: Record<string, Review> = Object.fromEntries(
 export const TAIL_REVIEWS: Record<string, Review> = {
   ...THEME_REVIEWS,
   'palette.type-ahead': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Typing "theme" straight after Ctrl+K filters the palette in both, and the rows rank the same (C16 fixed in G3: the cmdk shim scores with cmdk\'s command-score and sorts as cmdk does), Open Canvas first under Workspace.',
-      'The step races in both clients: in some runs the web drops the first key ("heme") and in some GPUIX does (an empty filter); GPUIX failed this check in 5 of 9 G3 runs, 3 of 6 with the C16 change and 2 of 3 without it.',
+      'GPUIX is deterministic (G5): keys typed after the palette input took focus but before it first painted focused, which GPUI drops for want of a text input handler, are held and given to the field on its focus event. It passed 4 of 4 G5 runs, where it had failed 3 of 5 with the window active (an empty filter).',
+      'The web still races: CommandPalette blurs the active element and focuses its input in a setTimeout(0), so keys that beat that timeout are dropped ("eme" in 2 of 9 G5 runs). That is a real web bug a fast typist can hit, not a harness artifact.',
       'The search field shows its focus underline as on the web (G5: the matrix makes the GPUIX window the active X window, as the Playwright page is focused; an inactive GPUI window gets no focus events).'
-    ],
-    cause: 'compat translator gap',
-    unit: 'focus ring on focused fields (unassigned)',
-    impact: 1
+    ]
   },
   'palette.new-terminal': {
     status: 'ported',
