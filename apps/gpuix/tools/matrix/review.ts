@@ -6,7 +6,11 @@
  */
 
 import {
-  BACKDROP,
+  BAND_FOCUS,
+  BLUR,
+  COMPOSER_FOCUS,
+  COMPOSER_PICK,
+  CONFIRM_Z,
   LAMP,
   PROSE,
   RUN_ORDER,
@@ -38,11 +42,15 @@ export interface Review {
 /** Daily-core surfaces; the settings, palette, shortcut, theme and long-tail reviews live in `review-tail.ts`. */
 export const REVIEWS: Record<string, Review> = {
   'rail.project-list': {
-    status: 'ported',
+    status: 'partial',
     differences: [
-      'Same layout and order; switching to beta works by click, with GPUIX automation and with real X input (--x11-input). H1 fixed the lost clicks: `bun tools/clickloss/run.ts --trials 20` switches projects 60/60 by row click through automation and XTEST, against 41/60 on exp/gpuix-client at 9747b6c2.',
+      'Same layout and order; switching to beta works by click in both (H1 fixed the lost clicks: `bun tools/clickloss/run.ts --trials 20` switched projects 60/60 through automation and XTEST).',
+      COMPOSER_PICK,
       LAMP
-    ]
+    ],
+    cause: 'needs diagnosis',
+    unit: 'composer agent pick after a project switch (unassigned)',
+    impact: 2
   },
   'rail.project-menu': {
     status: 'ported',
@@ -56,48 +64,51 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Rename from the context menu edits the row in place and Enter saves gamma-renamed in both.']
   },
   'rail.project-remove': {
-    status: 'ported',
-    differences: ['Delete from the context menu asks for confirmation and removes delta in both.', BACKDROP]
+    status: 'partial',
+    differences: ['Delete from the context menu asks for confirmation and removes delta in both.', BLUR, CONFIRM_Z],
+    cause: 'compat translator gap',
+    unit: 'confirm dialog stacking (unassigned)',
+    impact: 1
   },
   'rail.project-colour': {
     status: 'ported',
     differences: ['Change Color opens the Select Color popover with the same nine swatches and the current one ringed.']
   },
   'rail.project-reorder': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Dragging gamma onto alpha reorders the list to alpha, gamma, beta in both (C3 fixed in G3: the framer-motion shim drives Reorder from pointer moves with framer\'s one-neighbour-per-move rule). The dragged row does not follow the pointer in GPUIX, which has no transforms; the list reorders live under it.',
-      'After the drop the web opens gamma, the dragged row, and paints alpha and gamma in their hover state (gear and Ctrl+1/Ctrl+2). GPUIX stays on alpha: D1 withholds the click that ends a drag. GPUIX paints alpha hovered, and the action strip\'s fade covers its +4 -1 diff stat as on the web (G5: two-stop Tailwind gradients translate to GPUIX linear-gradient backgrounds).'
-    ],
-    cause: 'compat translator gap',
-    unit: 'click after a Reorder drag (unassigned)',
-    impact: 1
+      'After the drop both clients stay on alpha and paint alpha and gamma in their hover state (gear and Ctrl+1/Ctrl+2), with the action strip\'s fade over alpha\'s +4 -1 diff stat.'
+    ]
   },
   'rail.add-menu': {
     status: 'partial',
     differences: [
       'Clicking + opens the New project / New folder group menu and New project opens the Create New Project modal with the same fields in both.',
-      BACKDROP
+      BLUR,
+      'GPUIX paints the + button\'s "Add project or folder group" title tooltip above the modal and its scrim; the web shows none. The footnote wraps "memory-only" at a different word.'
     ],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
+    cause: 'compat translator gap',
+    unit: 'title tooltips (unassigned)',
     impact: 1
   },
   'rail.collapse': {
-    status: 'ported',
-    differences: ['Collapsed rail matches: icons, project letters, Changes badge.', LAMP]
-  },
-  'rail.project-settings': {
     status: 'partial',
     differences: [
-      'Clicking the gear opens Project settings with General and the same fields in both, with GPUIX automation and with real X input (--x11-input).',
-      BACKDROP,
-      'H1 fixed the lost gear click. GPUIX ends a hit test at the first absolutely placed or filled interactive box, and that box also blocks its own ancestors, so the row lost its hover as soon as its hover-revealed action strip painted under the pointer, hid the strip and the gear, and looped. The press landed on whichever frame was up. Compat now keeps an element hovered while a blocking box inside it is hovered (`src/compat/hover.ts`). `bun tools/clickloss/run.ts --trials 20` opens the modal 60/60 through automation and XTEST, against 27/60 on exp/gpuix-client at 9747b6c2.',
-      'In the --x11-input frame the gear and its Project settings tooltip still paint above the modal. The automation frame has neither, and in clickloss traces the row, rail and gear get their leave once the scrim paints, so this is the hover settle catching up after the modal mounts (inferred).'
+      'The collapsed rail matches (icons, project letters, Changes badge) except one control: GPUIX paints no Open canvas (pencil) button under Search, here and in shortcuts.toggle-projects. RailCollapsed renders it as a RailButton right after Search, and the icon exists in src/icons; why GPUIX drops it is not diagnosed.',
+      LAMP
     ],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
-    impact: 1
+    cause: 'needs diagnosis',
+    unit: 'collapsed rail canvas button (unassigned)',
+    impact: 2
+  },
+  'rail.project-settings': {
+    status: 'ported',
+    differences: [
+      'Clicking the gear opens Project settings with General and the same fields in both.',
+      BLUR,
+      'H1 fixed the lost gear click: compat keeps an element hovered while a blocking box inside it is hovered (`src/compat/hover.ts`); `bun tools/clickloss/run.ts --trials 20` opened the modal 60/60 through automation and XTEST.'
+    ]
   },
   'side.chats': {
     status: 'ported',
@@ -114,10 +125,14 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Right-click on a chat card opens the same five-row menu with Delete Chat in red.']
   },
   'side.workspace-switcher': {
-    status: 'ported',
+    status: 'partial',
     differences: [
-      'The Working copies popover matches; GPUIX omits the small terminal glyph on the web row hover.'
-    ]
+      'The Working copies popover matches; GPUIX omits the small terminal glyph on the web row hover.',
+      BAND_FOCUS
+    ],
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
+    impact: 1
   },
   'side.hide': {
     status: 'ported',
@@ -158,7 +173,7 @@ export const REVIEWS: Record<string, Review> = {
   'editor.markdown': {
     status: 'partial',
     differences: [
-      'Preview has the "On this page" outline (G4): the heading and paragraph rows land on the web rows (126, 195, 257 px), heading sizes follow BlockNote (48/32 px). List items sit 1 px off and the bullet is the native one; the heading has no -0.018em letter spacing (GPUIX has none), so "Alpha guide" is 10 px wider.',
+      'Preview has the "On this page" outline (G4) and the heading and paragraph rows land on the web rows; heading sizes follow BlockNote (48/32 px). The heading has no -0.018em letter spacing (GPUIX has none), so "Alpha guide" is about 10 px wider, and the list bullets are larger and brighter, with the items set further right.',
       'The tab reads "guide.md" in full at the web width (C15 fixed in G5).',
       TITLE_TIP
     ],
@@ -201,9 +216,9 @@ export const REVIEWS: Record<string, Review> = {
   },
   'git.discard': {
     status: 'partial',
-    differences: ['The confirm dialog matches.', BACKDROP],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
+    differences: ['The confirm dialog matches.', BLUR, CONFIRM_Z],
+    cause: 'compat translator gap',
+    unit: 'confirm dialog stacking (unassigned)',
     impact: 1
   },
   'git.commit': {
@@ -211,14 +226,21 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['The commit lands (4 commits, bump version) in both.', TOAST]
   },
   'git.branch-picker': {
-    status: 'ported',
-    differences: ['Branch popover, Local group, feature/login and Create branch row match.']
+    status: 'partial',
+    differences: ['Branch popover, Local group, feature/login and Create branch row match.', BAND_FOCUS],
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
+    impact: 1
   },
   'git.worktree-create': {
-    status: 'ported',
+    status: 'partial',
     differences: [
-      'Typing a new name shows No matching working copies and Create worktree feat-matrix in both.'
-    ]
+      'Typing a new name shows No matching working copies and Create worktree feat-matrix in both.',
+      BAND_FOCUS
+    ],
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
+    impact: 1
   },
   'chat.transcript': {
     status: 'partial',
@@ -227,20 +249,21 @@ export const REVIEWS: Record<string, Review> = {
       PROSE,
       TREE_TEXT
     ],
-    cause: 'missing GPUIX capability',
-    unit: 'O5 native prose styling',
-    impact: 3
+    cause: 'native override needed',
+    unit: 'O5 prose remainder: task boxes, wrap width, tables',
+    impact: 1
   },
   'chat.scroll-top': {
     status: 'partial',
     differences: [
       'One wheel event of -20000 px scrolls both to the first turn and shows the jump-to-latest button.',
+      'The table card has copy and download buttons but not the web\'s expand button, its columns split the width differently (Panes mounted is wider), and each row is about 2 px taller.',
       PROSE,
       TREE_TEXT
     ],
-    cause: 'missing GPUIX capability',
-    unit: 'O5 native prose styling',
-    impact: 2
+    cause: 'native override needed',
+    unit: 'O5 prose remainder: task boxes, wrap width, tables',
+    impact: 1
   },
   'chat.new-chat': {
     status: 'ported',
@@ -249,7 +272,8 @@ export const REVIEWS: Record<string, Review> = {
   'chat.agent-launcher': {
     status: 'partial',
     differences: [
-      'The agent and model popover opens above the pill in both, with the search field, the agent chip and This agent gives no model choice. In GPUIX the chip stretches across the panel and the more button wraps to a second line.'
+      'The agent and model popover opens above the pill in both, with the search field, the agent chip and This agent gives no model choice. In GPUIX the agent chip is narrower and truncates to "Chat Scen…", with the more button beside it.',
+      BAND_FOCUS
     ],
     cause: 'compat translator gap',
     unit: 'C2 menus and popovers',
@@ -264,46 +288,50 @@ export const REVIEWS: Record<string, Review> = {
       RUN_ORDER
     ],
     cause: 'missing GPUIX capability',
-    unit: 'O5 native prose styling',
+    unit: 'mermaid diagrams (unassigned)',
     impact: 2
   },
   'chat.model-selector': {
     status: 'partial',
-    differences: [
-      'The running chat shows the agent chip and composer like the web.',
-      PROSE
-    ],
-    cause: 'missing GPUIX capability',
-    unit: 'O5 native prose styling',
+    differences: ['The running chat shows the agent chip and composer like the web.', PROSE],
+    cause: 'native override needed',
+    unit: 'O5 prose remainder: task boxes, wrap width, tables',
     impact: 1
   },
   'composer.mention': {
-    status: 'ported',
+    status: 'partial',
     differences: [
       'Both show "No files or folders match" for a bare @ on this server, so the file list itself is not compared here (tools/composer/e2e.ts covers it).',
-      'The web draws a focus ring on the composer; GPUIX does not.'
-    ]
+      COMPOSER_FOCUS
+    ],
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
+    impact: 1
   },
   'composer.slash': {
-    status: 'ported',
-    differences: ['The Skills menu matches row for row.', 'No focus ring on the GPUIX composer.']
+    status: 'partial',
+    differences: ['The Skills menu matches row for row.', COMPOSER_FOCUS],
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
+    impact: 1
   },
   'composer.attach': {
-    status: 'ported',
+    status: 'broken',
     differences: [
-      'Clicking Attach files opens nothing visible in either client in this headless run (the web file chooser is a native dialog Playwright does not paint).'
-    ]
+      'Clicking Attach files shows a red "Failed to open file picker" toast in GPUIX, in 2 of 2 runs. Outside Tauri the composer takes the browser path (`pickAttachmentFilesBrowser` in use-composer-attachments.ts), which needs a DOM file input that GPUIX cannot open. The web opens the native file chooser, which Playwright does not paint, so its frame shows nothing.',
+      'GPUIX has a native path dialog (`promptForPaths`), so an override of the picker that uses it would close this.'
+    ],
+    cause: 'native override needed',
+    unit: 'attach file dialog (unassigned)',
+    impact: 2
   },
   'terminal.open': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Terminal tab, its full "Terminal 1" title at the web width, and the prompt match (C15 fixed in G5).',
       LAMP,
-      'The status-bar Terminal button\'s title tooltip paints under the pointer after the click; the web frame shows none.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'title tooltips (unassigned)',
-    impact: 1
+      'Flake: in the full run the GPUIX frame was grabbed before the prompt painted, with the status-bar title tooltip up; the rerun matched.'
+    ]
   },
   'terminal.type': { status: 'ported', differences: ['echo output matches cell for cell.'] },
   'terminal.file-link': {
@@ -317,14 +345,15 @@ export const REVIEWS: Record<string, Review> = {
   'terminal.tab-reorder': {
     status: 'ported',
     differences: [
-      'Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both, and both clients read Terminal 2, Terminal 1 with full titles at the web widths (C15 fixed in G5). The web paints Terminal 1 in its hover state because the pointer rests on it.',
-      'With the window inactive (before G5 the matrix never focused it) the click on Bash in the just-opened New tab menu was lost in 2 of 2 runs; with the window active it opens the second terminal.'
+      'Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both, and both clients read Terminal 2, Terminal 1 with full titles at the web widths (C15 fixed in G5).',
+      'Flake: the full run failed at the terminal limit (harness leak, fixed); in the first rerun the GPUIX click on Bash in the just-opened New tab menu was lost, so only Terminal 1 opened; the second rerun matched.'
     ]
   },
   'terminal.split': {
     status: 'ported',
     differences: [
-      "Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1), and each pane's tab shows its full title with its close button (C15 fixed in G5)."
+      "Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1), and each pane's tab shows its full title with its close button (C15 fixed in G5).",
+      'In the full run both clients failed here at the server\'s terminal limit (10 per project), a harness leak: preserved PTYs from earlier surfaces piled up. The matrix now closes them before each client run (`tools/matrix/terminals.ts`), and the rerun matched.'
     ]
   },
   'statusbar.items': {
@@ -353,12 +382,15 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'chat.plan': {
-    status: 'ported',
+    status: 'partial',
     differences: [
-      'The pinned Plan panel and the inline plan card match: three entries, Medium chips, the struck-through finished entry and the 1/3 count. The short transcript starts at the top in both.',
-      'The tab title reads in full at the web width (C15 fixed in G5).',
+      'The pinned Plan panel and the inline plan card show the same three entries, Medium chips, the struck-through finished entry and the 1/3 count, and the short transcript starts at the top in both.',
+      'The card frames differ. The web card is `bg-card/30` with a `ring-1 ring-border/50` hairline and a divider under its header; GPUIX fills it lighter, with no ring and no divider, and its collapse chevron points down because GPUIX draws no `rotate-180`.',
       RUN_ORDER
-    ]
+    ],
+    cause: 'compat translator gap',
+    unit: 'plan card ring and rotate (unassigned)',
+    impact: 1
   },
   'chat.permission': {
     status: 'ported',
@@ -369,14 +401,14 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'chat.queue': {
-    status: 'partial',
+    status: 'broken',
     differences: [
-      'A prompt sent while the turn runs shows under 1 Queued in both, and the stop button replaces send.',
-      PROSE
+      'A prompt sent while the turn runs shows under 1 Queued with the stop button in place of send in GPUIX as on the web, but the GPUIX transcript differs in 3 of 3 runs. In the full run and the second rerun it stays empty: no matrix hold bubble and no Working row with "Holding this turn open for the queue." In the first rerun the follow-up was sent as a new turn instead of queued (the type action timed out waiting for the GPUI key command) and the first turn showed as finished.',
+      'In the full run the composer chip also read "Agent" instead of Chat Scenario Agent, and the Chats list shows a second matrix hold card marked New.'
     ],
-    cause: 'missing GPUIX capability',
-    unit: 'O5 native prose styling',
-    impact: 1
+    cause: 'needs diagnosis',
+    unit: 'chat started from the launcher renders late (unassigned)',
+    impact: 2
   },
   'terminal.vim-replies': {
     status: 'ported',

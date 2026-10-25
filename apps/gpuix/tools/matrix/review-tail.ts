@@ -1,7 +1,7 @@
 /** Reviews for settings, palette, shortcuts, themes and the long tail (see `review.ts`). */
 
 import type { Review } from './review'
-import { BACKDROP, SELECT, SETTINGS_BASE, TOAST } from './review-phrases'
+import { BLUR, DIVIDERS, FIELD_FOCUS, SELECT, SETTINGS_BASE, TOAST } from './review-phrases'
 
 const THEME_FAMILIES = [
   'termul',
@@ -43,88 +43,93 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
   'palette.new-terminal': {
     status: 'ported',
-    differences: ['New Terminal opens Terminal 1 in both.']
+    differences: [
+      'New Terminal opens Terminal 1 in both.',
+      'In the full run both clients hit the server\'s terminal limit (a harness leak, fixed by `tools/matrix/terminals.ts`); the rerun matched. That frame also showed the GPUIX error toast too narrow for its message: the text runs past the window edge, where the web toast wraps to two lines.'
+    ]
   },
   'palette.agent-launcher': {
     status: 'ported',
     differences: ['Agent Launcher shows the launcher with its close button in both.']
   },
   'palette.save-snapshot': {
-    status: 'partial',
-    differences: ['The Create Snapshot modal matches.', BACKDROP],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
-    impact: 1
+    status: 'ported',
+    differences: ['The Create Snapshot modal matches.', BLUR]
   },
   'palette.open-canvas': {
-    status: 'blocked',
+    status: 'partial',
     differences: [
-      'Opens the canvas tab in both; see canvas.open for why the canvas itself is not compared.'
+      'Open Canvas opens design.figcraft in both, and the FigCraft editor reaches Ready in GPUIX through the browser-pane webview (V1) with the pinned bundle (run with `tools/canvas/server-with-bundle.ts`).',
+      'GPUIX shows the whole editor in FigCraft\'s light theme (white panels, page colour F5F5F5) where the web shows it dark (page 1E1E1E); see canvas.open.'
     ],
-    cause: 'missing GPUIX capability',
-    unit: 'V1 canvas host',
-    impact: 1
+    cause: 'needs diagnosis',
+    unit: 'canvas theme handoff (unassigned)',
+    impact: 2
   },
   'palette.project-settings': {
-    status: 'partial',
-    differences: ['Project settings opens on General with the same fields.', BACKDROP],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
-    impact: 1
+    status: 'ported',
+    differences: ['Project settings opens on General with the same fields.', BLUR]
   },
   'palette.app-preferences': {
-    status: 'partial',
-    differences: ['Preferences opens on Interface.', BACKDROP],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
-    impact: 1
-  },
-  'palette.switch-project': {
-    status: 'ported',
-    differences: ['Typing beta filters to the beta row and Enter switches to beta in both.']
-  },
-  'palette.command-history': {
-    status: 'partial',
-    differences: [
-      'The Command History modal, its scope picker and empty state match.',
-      BACKDROP,
-      'The search field shows its focus ring as on the web (G5).'
-    ],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
-    impact: 1
-  },
-  'palette.color-theme': {
     status: 'ported',
     differences: [
-      'Change Color Theme opens the Color Themes popover in both; see theme.picker for its tint.'
+      'Preferences opens on Interface in both, laid out wide.',
+      BLUR,
+      'Flake, 2 of 3 runs differ: in the full run the GPUIX launch crashed with "Timed out after 2 seconds waiting for the automation bounds query" (C13), and in the first rerun GPUIX grabbed the Interface rows laid out narrow (zoom stepper and swatches under their descriptions), the container-query first frame before the card has measured itself. The second rerun matched.'
     ]
   },
-  'palette.shortcut-menu': {
+  'palette.switch-project': {
     status: 'partial',
-    differences: ['Opens the Shortcut Menu in both.', BACKDROP],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
+    differences: [
+      'Typing beta filters to the beta row and Enter switches to beta in both.',
+      'After the switch the GPUIX beta composer was not ready when the frame was grabbed in 2 of 3 runs (Loading model… in the full run, Composer unavailable in the first rerun); the web composer showed Chat Scenario Agent in all three. rail.project-list shows the same.'
+    ],
+    cause: 'needs diagnosis',
+    unit: 'composer agent pick after a project switch (unassigned)',
+    impact: 2
+  },
+  'palette.command-history': {
+    status: 'ported',
+    differences: [
+      'The Command History modal, its scope picker and empty state match, and the search field shows its focus border in both.',
+      BLUR
+    ]
+  },
+  'palette.color-theme': {
+    status: 'partial',
+    differences: ['Change Color Theme opens the Color Themes popover in both.', FIELD_FOCUS],
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
     impact: 1
+  },
+  'palette.shortcut-menu': {
+    status: 'ported',
+    differences: ['Opens the Shortcut Menu in both; GPUIX shows the desktop keymap chips (see shortcuts.menu).', BLUR]
   },
   'palette.report-bug': {
     status: 'partial',
-    differences: ['Opens the Report a bug dialog, laid out as in dialogs.bug-report.'],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
+    differences: ['Opens the Report a bug dialog, laid out as in dialogs.bug-report.', BLUR, FIELD_FOCUS],
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
     impact: 1
   },
   'shortcuts.toggle-projects': {
-    status: 'ported',
-    differences: ['Ctrl+Shift+B collapses the rail in both.']
+    status: 'partial',
+    differences: ['Ctrl+Shift+B collapses the rail in both.', 'The collapsed rail has no Open canvas button in GPUIX (see rail.collapse).'],
+    cause: 'needs diagnosis',
+    unit: 'collapsed rail canvas button (unassigned)',
+    impact: 1
   },
   'shortcuts.toggle-side-panel': {
     status: 'ported',
     differences: ['Ctrl+B hides the side panel in both.']
   },
   'shortcuts.theme-picker': {
-    status: 'ported',
-    differences: ['Ctrl+Alt+T opens the Color Themes popover in both.']
+    status: 'partial',
+    differences: ['Ctrl+Alt+T opens the Color Themes popover in both.', FIELD_FOCUS],
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
+    impact: 1
   },
   'shortcuts.zoom-in': {
     status: 'partial',
@@ -145,19 +150,22 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
 
   'notifications.toast': {
-    status: 'ported',
+    status: 'partial',
     differences: [
       'Typing the branch name and pressing Enter creates toast-branch and shows the success toast in both.',
-      TOAST
-    ]
+      TOAST,
+      'After Enter the status-bar branch button holds focus. The web draws a focus ring around "toast-branch"; GPUIX fills the button with a light wash that leaves its label unreadable.'
+    ],
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
+    impact: 1
   },
 
   'ssh.workspace': {
     status: 'blocked',
     differences: [
       'No web reference: SSH needs a host-local client and a browser never is one, so the web client shows no SSH section.',
-      'R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render.',
-      'The SFTP Modified column wrapped times such as 12:26 AM onto two lines in gpuix-ssh-connected.png, and Chromium wraps them too: the tabular-figure time is 57 px in a w-14 (56 px) column. G3 widened the shared column to w-16 in SftpEntryRow, a web fix (C14).'
+      'R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render. Not rerun here.'
     ]
   },
   'settings.accounts-claude': {
@@ -167,119 +175,107 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     ]
   },
   'settings.interface': {
-    status: 'partial',
-    differences: SETTINGS_BASE,
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
-    impact: 1
+    status: 'ported',
+    differences: SETTINGS_BASE
   },
   'settings.notifications': {
     status: 'partial',
-    differences: [
-      ...SETTINGS_BASE,
-      'Row dividers inside a group are missing and rows sit tighter.'
-    ],
+    differences: [...SETTINGS_BASE, DIVIDERS],
     cause: 'compat translator gap',
-    unit: 'settings row layout (unassigned)',
+    unit: 'settings divide-y (unassigned)',
     impact: 1
   },
   'settings.editor': {
     status: 'partial',
-    differences: [SELECT, ...SETTINGS_BASE.slice(1)],
+    differences: [SELECT, SETTINGS_BASE[1], DIVIDERS],
     cause: 'compat translator gap',
-    unit: 'C6 overlay backdrop',
+    unit: 'settings divide-y (unassigned)',
     impact: 1
   },
   'settings.appearance': {
     status: 'partial',
-    differences: [
-      SELECT,
-      'Renderer and Scrollback descriptions now wrap normally beside the closed select.',
-      ...SETTINGS_BASE.slice(1)
-    ],
+    differences: [SELECT, SETTINGS_BASE[1], DIVIDERS],
     cause: 'compat translator gap',
-    unit: 'C9 dialog body layout',
+    unit: 'settings divide-y (unassigned)',
     impact: 1
   },
   'settings.shell': {
-    status: 'partial',
-    differences: [SELECT, ...SETTINGS_BASE.slice(1)],
-    cause: 'compat translator gap',
-    unit: 'C6 overlay backdrop',
-    impact: 1
+    status: 'ported',
+    differences: [SELECT, SETTINGS_BASE[1]]
   },
   'settings.terminal-profiles': {
-    status: 'partial',
-    differences: SETTINGS_BASE,
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
-    impact: 1
+    status: 'ported',
+    differences: SETTINGS_BASE
   },
   'settings.ai-agents': {
     status: 'partial',
     differences: [
       SELECT,
-      'The agents list shows No agents match while the web lists the registry.', 'The rows lay out beside their selects once the settings card has measured itself (the first frame lays container queries out narrow). The section remounts its cards once after it opens, which resets their measured width, so the frame is often grabbed narrow: the Close idle chats after row shows stacked with a full-width select in 3 of 4 G5 runs.'
+      'The agents list shows No agents match "" while the web lists the registry (Agoragentic first).',
+      DIVIDERS,
+      SETTINGS_BASE[1]
     ],
-    cause: 'compat translator gap',
-    unit: 'C9 dialog body layout',
-    impact: 1
+    cause: 'needs diagnosis',
+    unit: 'agent registry list in settings (unassigned)',
+    impact: 2
   },
   'settings.skills': {
     status: 'partial',
-    differences: SETTINGS_BASE,
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
+    differences: [...SETTINGS_BASE, DIVIDERS],
+    cause: 'compat translator gap',
+    unit: 'settings divide-y (unassigned)',
     impact: 1
   },
   'settings.provider': {
-    status: 'partial',
-    differences: [...SETTINGS_BASE, 'The usage line moves under the account instead of beside it.'],
-    cause: 'compat translator gap',
-    unit: 'settings row layout (unassigned)',
-    impact: 1
+    status: 'broken',
+    differences: [
+      'GPUIX shows the Claude Code header over two loading skeleton rows, in 3 of 3 runs (the full run and two reruns); the web lists the Default account, Signed in, with "Usage is not available right now" and the `termul-server claude account` hint.',
+      SETTINGS_BASE[1]
+    ],
+    cause: 'needs diagnosis',
+    unit: 'accounts list stays loading (unassigned)',
+    impact: 2
   },
   'settings.mcp-servers': {
     status: 'partial',
     differences: [...SETTINGS_BASE, 'The inline code in the footnote breaks onto its own line.'],
     cause: 'compat translator gap',
-    unit: 'settings row layout (unassigned)',
+    unit: 'inline code wrap in settings text (unassigned)',
     impact: 1
   },
   'settings.shortcuts': {
     status: 'partial',
-    differences: SETTINGS_BASE,
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
+    differences: [
+      ...SETTINGS_BASE,
+      DIVIDERS,
+      'GPUIX lists the desktop keymap (Ctrl+R, Ctrl+T, Ctrl+,) where the web lists its defaults (Press keys…, Alt+T, Alt+,), by design since G4.'
+    ],
+    cause: 'compat translator gap',
+    unit: 'settings divide-y (unassigned)',
     impact: 1
   },
   'settings.diagnostics': {
     status: 'partial',
     differences: [
       ...SETTINGS_BASE,
+      DIVIDERS,
       'Server version reads termul-server v0.4.52 in both: GPUIX asks the server (G4).'
     ],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
+    cause: 'compat translator gap',
+    unit: 'settings divide-y (unassigned)',
     impact: 1
   },
 
   'settings.reset': {
-    status: 'partial',
-    differences: SETTINGS_BASE,
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
-    impact: 1
+    status: 'ported',
+    differences: SETTINGS_BASE
   },
   'shortcuts.menu': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      'Shortcut Menu rows, descriptions and key chips match, including the blank Command History chip in both.',
-      BACKDROP
-    ],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
-    impact: 1
+      'Shortcut Menu rows, descriptions and key chips line up. GPUIX shows the desktop keymap chips (Ctrl+R, Ctrl+,, Ctrl+=) where the web shows its Alt defaults and a blank Command History chip (G4, by design).',
+      BLUR
+    ]
   },
   'shortcuts.settings-shortcut': {
     status: 'ported',
@@ -289,46 +285,46 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
 
   'theme.picker': {
-    status: 'ported',
+    status: 'partial',
     differences: [
       'The Color Themes popover, groups, swatches and the current-theme check match, and labels antialias in grayscale as on the web (C8 fixed in G3).',
-      'The search field shows its focus ring as on the web (G5: the matrix makes the GPUIX window the active X window, as the Playwright page is focused; an inactive GPUI window gets no focus events).'
-    ]
+      FIELD_FOCUS
+    ],
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
+    impact: 1
   },
   'dialogs.bug-report': {
     status: 'partial',
     differences: [
-      'The Report a bug dialog paints its Title, What happened, Screenshots and Preview sections at the web width and wraps the same lines.',
-      'The Title field opens focused with its ring in both (G5: the matrix makes the GPUIX window the active X window, as the Playwright page is focused; an inactive GPUI window gets no focus events). The web draws a resize grip in the What happened corner; GPUIX has none.',
-      'The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp.'
+      'The Report a bug dialog paints its Title, What happened, Screenshots and Preview sections at the web width and wraps the same lines. The web draws a resize grip in the What happened corner; GPUIX has none.',
+      FIELD_FOCUS,
+      BLUR
     ],
-    cause: 'missing GPUIX capability',
-    unit: 'C6 overlay backdrop',
+    cause: 'compat translator gap',
+    unit: 'focus styles on fields (unassigned)',
     impact: 1
   },
   'canvas.open': {
-    status: 'blocked',
+    status: 'partial',
     differences: [
-      'This server build ships no figcraft bundle, so the web tab shows the BUNDLE_MISSING error JSON; GPUIX stays on Loading editor... and paints neither that error nor an editor.',
-      'The canvas is a figcraft iframe (CanvasMountLayer), which GPUIX 0.11 cannot host.'
+      'Clicking Canvas opens design.figcraft and the FigCraft editor reaches Ready in both: pages, layers, design panel, toolbar and Save (V1: the editor runs in a `termul-webview-host` webview placed over the pane; this run used the pinned bundle, sha256 verified against canvas/figcraft.pin).',
+      'The theme does not carry over in GPUIX. Here its panels are dark but the page is light (F5F5F5 against the web\'s 1E1E1E), and in palette.open-canvas the whole editor is light.'
     ],
-    cause: 'missing GPUIX capability',
-    unit: 'V1 canvas host',
+    cause: 'needs diagnosis',
+    unit: 'canvas theme handoff (unassigned)',
     impact: 2
   },
   'browser.pane': {
     status: 'blocked',
     differences: [
-      'Not compared: browser tabs are Tauri webviews with no web-client reference, and GPUIX 0.11 has no webview element. Replacing Tauri loses the browser pane until a native webview exists.'
-    ],
-    cause: 'missing GPUIX capability',
-    unit: 'V2 native webview',
-    impact: 2
+      'Not compared: the web client offers no browser tab, so there is no reference. GPUIX does have browser panes, a WebKitGTK webview in the `termul-webview-host` helper placed as an X11 child window (README, Browser panes), and `bun run package:verify` loads a local page in one from the .deb; neither was rerun here.'
+    ]
   },
   'update.toast': {
     status: 'blocked',
     differences: [
-      "Not compared: the update toast and the what's new modal render only under isTauriContext(), so neither client shows them (the web hides them by design). GPUIX shows its version like the web (Preferences, Logs: termul-server v0.4.52). A GPUIX update check against the release feed is not built yet."
+      "Not compared: the update toast and the what's new modal render only under isTauriContext(), so neither client shows them (the web hides them by design). The packaged GPUIX app has a command-line check, `termul-gpuix --check-update`, against the release feed, but no in-app toast."
     ],
     cause: 'native override needed',
     unit: "U1 GPUIX updater and what's new",
@@ -338,11 +334,8 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'theme.tokyonight-light': {
     status: 'ported',
     differences: [
-      'Colours match the web dashboard.',
-      'In the first full run this GPUIX launch crashed to "Uncaught runtime errors: Timed out after 2 seconds waiting for the automation bounds query" (compat live-reads from a tanstack-virtual resize); the rerun booted cleanly, so the crash is intermittent.'
-    ],
-    cause: 'needs diagnosis',
-    unit: 'C13 live-read timeout under load',
-    impact: 1
-  }
+      'Background, panel, card, border, text and accent colours match the web dashboard.',
+      'The differences left are not the theme.'
+    ]
+  },
 }
