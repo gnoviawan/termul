@@ -173,10 +173,7 @@ fn count_untracked_lines_caps_file_count() {
     }
     // Entries past the cap are never read.
     listing.extend_from_slice(b"one.txt\0one.txt\0");
-    assert_eq!(
-        untracked_total(&dir, &listing),
-        MAX_UNTRACKED_FILES as u64
-    );
+    assert_eq!(untracked_total(&dir, &listing), MAX_UNTRACKED_FILES as u64);
 }
 
 #[cfg(unix)]
