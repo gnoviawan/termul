@@ -144,7 +144,7 @@ rmcp = { version = "3.5.0", features = [
 # `Headless` or `Attached` backends or a figcraft `Session` (AD-17). Pinned by
 # the fork's `termul-*` release tag, which `scripts/canvas/check-figcraft-pin.mjs`
 # compares with canvas/figcraft.pin.
-figcraft-mcp = { git = "https://github.com/gnoviawan/figcraft", tag = "termul-v0.3.0" }
+figcraft-mcp = { git = "https://github.com/gnoviawan/figcraft", rev = "a0f50c87842f32cd7e154cfdd9618ea74b99a586" }
 # OAuth2 — needed for the `TokenResponse` trait used by the MCP OAuth flow
 # (rmcp's `auth` feature pulls this transitively, but we use it directly).
 oauth2 = "5.0"

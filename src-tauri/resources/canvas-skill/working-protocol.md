@@ -33,7 +33,8 @@ For a thin prompt, read `vague-prompts` first.
 ## 5. Build one section per call
 
 - Make each section a child frame with `sizingH: "fill"`, `sizingV: "hug"`, its own `layout`, `padding` and `gap`, and `"fills": []` unless it has its own background.
-- Build the whole section, from the frame down to its last text layer, in one `batch` with `{"$step": n}` references.
+- Build the whole section, from the frame down to its last text layer, in one `batch`. Give each frame that other layers go into a name with `"as"`, and point its children at it with `{"$name": "..."}`.
+- Keep the `names` map from the result. It gives the id of every named layer, so you can check and fix the section without searching for ids.
 - Write the final copy now. Do not leave placeholder text to replace later.
 
 ## 6. Check the section, then fix it
@@ -54,7 +55,7 @@ Fix what fails before you start the next section:
 
 - Change the layers you have with `set_properties` on their ids. Do not delete a section and draw it again; that loses names, bindings and the user's trust in what they saw.
 - Move a layer into another parent with `run_command` and `node.reparent`.
-- If a `batch` fails, nothing changed. Correct the step the error names and send the batch again.
+- If a `batch` fails, nothing changed. The error names the failing step by its index and its `as` name. Correct that step and send the batch again.
 - If a whole step went wrong, `undo` it once and redo it properly.
 - If the same problem comes back after two fixes, stop and read the relevant part of `canvas-basics` again; the cause is usually sizing.
 

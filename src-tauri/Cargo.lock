@@ -1970,7 +1970,7 @@ dependencies = [
 [[package]]
 name = "figcraft-collab"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "base64 0.22.1",
  "figcraft-doc",
@@ -1984,7 +1984,7 @@ dependencies = [
 [[package]]
 name = "figcraft-collab-net"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "base64 0.22.1",
  "figcraft-collab",
@@ -2006,7 +2006,7 @@ dependencies = [
 [[package]]
 name = "figcraft-color"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "kurbo",
  "serde",
@@ -2015,7 +2015,7 @@ dependencies = [
 [[package]]
 name = "figcraft-doc"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "figcraft-color",
  "figcraft-geom",
@@ -2028,7 +2028,7 @@ dependencies = [
 [[package]]
 name = "figcraft-engine"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "base64 0.22.1",
  "figcraft-collab",
@@ -2054,7 +2054,7 @@ dependencies = [
 [[package]]
 name = "figcraft-format"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "figcraft-doc",
  "figcraft-pathops",
@@ -2070,7 +2070,7 @@ dependencies = [
 [[package]]
 name = "figcraft-geom"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "kurbo",
  "serde",
@@ -2079,7 +2079,7 @@ dependencies = [
 [[package]]
 name = "figcraft-layout"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
@@ -2088,7 +2088,7 @@ dependencies = [
 [[package]]
 name = "figcraft-mcp"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "base64 0.22.1",
  "figcraft-collab-net",
@@ -2103,7 +2103,7 @@ dependencies = [
 [[package]]
 name = "figcraft-pathops"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
@@ -2113,7 +2113,7 @@ dependencies = [
 [[package]]
 name = "figcraft-pdf"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "figcraft-color",
  "figcraft-doc",
@@ -2130,7 +2130,7 @@ dependencies = [
 [[package]]
 name = "figcraft-plugin"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "figcraft-color",
  "serde",
@@ -2143,7 +2143,7 @@ dependencies = [
 [[package]]
 name = "figcraft-render"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "crc32fast",
  "figcraft-color",
@@ -2162,7 +2162,7 @@ dependencies = [
 [[package]]
 name = "figcraft-svg"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "base64 0.22.1",
  "figcraft-color",
@@ -2179,7 +2179,7 @@ dependencies = [
 [[package]]
 name = "figcraft-text"
 version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.3.0#245506a52a594a4bef71dbf30f6b7a4f1a61529c"
+source = "git+https://github.com/gnoviawan/figcraft?rev=a0f50c87842f32cd7e154cfdd9618ea74b99a586#a0f50c87842f32cd7e154cfdd9618ea74b99a586"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
