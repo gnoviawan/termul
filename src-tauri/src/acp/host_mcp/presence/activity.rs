@@ -101,10 +101,12 @@ const QUIET_NAMESPACES: &[&str] = &[
 pub fn derive_activity(tool: &str, method: &str, params: &Value, result: &str) -> Option<Activity> {
     let command = (method == EXECUTE).then(|| executed(params)).flatten();
     match (tool, method, command) {
-        ("create_node", _, Some(("node.create", _))) => write(nodes(ids_in(&parse(result)), None)),
+        ("create_node", _, Some(("node.create", _))) => {
+            write(nodes(ids_in(&command_result(params, result)), None))
+        }
         ("set_properties", _, Some(("node.set", inner))) => write(named_or_selection(inner)),
         ("run_command" | "batch" | "undo" | "redo", _, Some((command, inner))) => {
-            command_activity(command, inner, result)
+            command_activity(command, inner, &|| command_result(params, result))
         }
         ("type_text", _, Some(("text.edit.begin", inner))) => write(nodes(ids_in(inner), None)),
         ("select", _, Some(("select.set", inner))) => read(nodes(ids_in(inner), None)),
@@ -127,7 +129,7 @@ pub fn derive_activity(tool: &str, method: &str, params: &Value, result: &str) -
 }
 
 /// A command the agent ran by name (`run_command`, `batch`, `undo`, `redo`).
-fn command_activity(command: &str, params: &Value, result: &str) -> Option<Activity> {
+fn command_activity(command: &str, params: &Value, result: &dyn Fn() -> Value) -> Option<Activity> {
     let namespace = command
         .split_once('.')
         .map_or(command, |(namespace, _)| namespace);
@@ -144,7 +146,7 @@ fn command_activity(command: &str, params: &Value, result: &str) -> Option<Activ
                     ids.extend(ids_in(inner));
                 }
             }
-            for step in parse(result).as_array().into_iter().flatten() {
+            for step in result().as_array().into_iter().flatten() {
                 ids.extend(ids_in(step));
             }
             write(if ids.is_empty() {
@@ -161,7 +163,7 @@ fn command_activity(command: &str, params: &Value, result: &str) -> Option<Activ
         _ if QUIET_NAMESPACES.contains(&namespace) => None,
         _ => {
             let mut ids = ids_in(params);
-            ids.extend(ids_in(&parse(result)));
+            ids.extend(ids_in(&result()));
             write(if ids.is_empty() {
                 Targets::Selection
             } else {
@@ -195,6 +197,18 @@ fn shown(kind: Look, targets: Targets) -> Option<Activity> {
 
 fn parse(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or(Value::Null)
+}
+
+/// The command's own result in the reply to the `engine.execute` frame
+/// `params`. figcraft-mcp asks for the layout issues of a mutating call
+/// (`issues: true`), and the editor then wraps the result as
+/// `{result, issues}`.
+fn command_result(params: &Value, result: &str) -> Value {
+    let reply = parse(result);
+    if params.get("issues") != Some(&Value::Bool(true)) {
+        return reply;
+    }
+    reply.get("result").cloned().unwrap_or(Value::Null)
 }
 
 /// The ids, deduplicated in order of last mention, at most the last
