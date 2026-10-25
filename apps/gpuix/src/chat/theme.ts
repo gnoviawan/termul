@@ -73,13 +73,15 @@ const cache = new Map<
 /**
  * - `prose`: an agent reply block (`.chat-streamdown`): 14/21 body, inline
  *   code chips on muted/55 at 0.88em with 0.3em side padding (index.css),
- *   links in primary (`LINK_CLASS` in chat-agent-prose.tsx). Link colour and
- *   the chip's size and padding need the patched addon (patch 0002); the
- *   published one keeps body-size chips and text-coloured links. Headings take Streamdown's utility sizes
+ *   links medium in primary (`LINK_CLASS` in chat-agent-prose.tsx). Link
+ *   colour and weight, the chip's size and padding, and the italic quote
+ *   need the patched addon (patch 0002); the published one keeps body-size
+ *   chips, text-coloured links and upright quotes. Headings take Streamdown's utility sizes
  *   (`text-3xl` .. `text-lg`): utilities beat index.css's components layer.
  *   Native markdown tints list markers and the quote rail with `accent`; the
  *   web's markers are the text colour, so accent is the foreground.
- * - `quote`: a quote's content, muted like Streamdown's `text-muted-foreground`.
+ * - `quote`: a quote's content, muted and italic like Streamdown's
+ *   `text-muted-foreground italic`.
  * - `thought`: the reasoning body (`.thought-markdown`), 12px muted.
  * - `code`: a fenced block body. Shiki's `<pre>` paints 13px mono at 20px
  *   rows (measured in Chromium; the 1.55 line-height applies to the body div).
@@ -103,6 +105,7 @@ export function transcriptThemes(themeId: string) {
     codeWash: tokenColor('muted/55'),
     link: tokenColor('primary'),
     linkUnderline: tokenColor('primary'),
+    linkWeight: 500,
     caret: tokenColor('foreground'),
     syntax
   }
@@ -125,6 +128,7 @@ export function transcriptThemes(themeId: string) {
     quote: {
       ...base,
       text: tokenColor('muted-foreground'),
+      fontStyle: 'italic' as const,
       metrics: {
         mdTextSize: PROSE_TEXT,
         mdLineHeight: PROSE_LINE,

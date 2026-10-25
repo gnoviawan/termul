@@ -16,6 +16,10 @@ declare module '@gpuix/native/host' {
     link?: string
     /** Markdown link underline. Unset: `textMuted`. */
     linkUnderline?: string
+    /** Markdown link weight. Unset: the paragraph's. */
+    linkWeight?: number
+    /** Every markdown run italic (a CSS-italic blockquote). */
+    fontStyle?: 'normal' | 'italic'
   }
   interface GpuixMetrics {
     /** Inline-code glyph size as a fraction of the paragraph's, like CSS `0.88em`. */

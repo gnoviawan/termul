@@ -1,5 +1,5 @@
 diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
-index ffa8f2d..42b722f 100644
+index ffa8f2d..4f7420d 100644
 --- a/packages/native/src/renderer.rs
 +++ b/packages/native/src/renderer.rs
 @@ -499,6 +499,9 @@ enum UiCommand {
@@ -74,7 +74,7 @@ index ffa8f2d..42b722f 100644
 +#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 +fn native_window_handle(window: &gpui::Window) -> Option<NativeWindowHandle> {
 +    use gpui::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-+    let handle = window.window_handle().ok()?;
++    let handle = HasWindowHandle::window_handle(window).ok()?;
 +    let (kind, id) = match handle.as_raw() {
 +        RawWindowHandle::Xcb(h) => ("x11", Some(h.window.get() as f64)),
 +        RawWindowHandle::Xlib(h) => ("x11", Some(h.window as f64)),
