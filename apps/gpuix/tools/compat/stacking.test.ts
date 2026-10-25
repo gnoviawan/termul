@@ -5,10 +5,54 @@ import type { ReactElement } from 'react'
 import { hitTree } from '../../src/compat/dnd'
 import { jsx } from '../../src/compat/jsx-runtime'
 import type { Bounds, TreeJson } from '../../src/compat/live-reads'
+import { type Placement, placeStyle } from '../../src/compat/placement'
 import { LAYER, zIndexToken } from '../../src/compat/stacking'
 import { translation } from '../../src/compat/translate'
 
 const RENDERER = path.resolve(import.meta.dir, '../../../../src/renderer')
+const GPUIX_SRC = path.resolve(import.meta.dir, '../../src')
+
+function sourceFiles(dir: string, out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    const file = path.join(dir, name)
+    if (statSync(file).isDirectory()) sourceFiles(file, out)
+    else if (/\.tsx?$/.test(name) && !/\.(test|d)\.tsx?$/.test(name)) out.push(file)
+  }
+  return out
+}
+
+/** The text from `open` (a `<` or `{`) to the `>` or `}` that closes it, skipping nested braces. */
+function balanced(text: string, from: number, close: '>' | '}'): string {
+  let depth = 0
+  for (let at = from; at < text.length; at++) {
+    const ch = text[at]
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (close === '}' && depth === 0) return text.slice(from, at + 1)
+    } else if (ch === close && depth === 0 && at > from) return text.slice(from, at + 1)
+  }
+  return text.slice(from)
+}
+
+/** Each `<anchored>` element in the GPUIX sources (JSX or `jsx('anchored')`), with its props' text. */
+function anchoredSites(): { site: string; props: string }[] {
+  const sites: { site: string; props: string }[] = []
+  for (const file of sourceFiles(GPUIX_SRC)) {
+    const text = readFileSync(file, 'utf8')
+    const line = (at: number) => `${path.relative(GPUIX_SRC, file)}:${text.slice(0, at).split('\n').length}`
+    for (const match of text.matchAll(/<anchored\s/g)) {
+      const lineStart = text.lastIndexOf('\n', match.index) + 1
+      if (/^\s*(\*|\/\/)/.test(text.slice(lineStart, match.index))) continue
+      sites.push({ site: line(match.index), props: balanced(text, match.index, '>') })
+    }
+    for (const match of text.matchAll(/\(\s*'anchored' as never,\s*\{/g)) {
+      const open = match.index + match[0].length - 1
+      sites.push({ site: line(match.index), props: balanced(text, open, '}') })
+    }
+  }
+  return sites
+}
 
 type Props = {
   style?: Record<string, unknown>
@@ -80,6 +124,25 @@ describe('z-index classes', () => {
 })
 
 describe('overlay layers sort above in-flow z-50', () => {
+  test('every <anchored> layer names its priority, so none sorts at 0 under a z-index box by accident', () => {
+    const sites = anchoredSites()
+    expect(sites.length).toBeGreaterThan(5)
+    const missing = sites.filter(({ props }) => !/\bpriority\b/.test(props)).map(({ site }) => site)
+    expect(missing).toEqual([])
+  })
+
+  test('a top-full or bottom-full popup takes its z-index as its layer priority', () => {
+    const popup = (classes: string) => {
+      const tr = translation('div', classes)
+      const placed = placeStyle(tr.base, tr.placement as Placement)
+      return { inner: placed?.inner, props: placed?.wrap(jsx('div', {})).props as { priority?: number } }
+    }
+    const lifted = popup('absolute bottom-full left-0 z-50 mb-1')
+    expect(lifted.props.priority).toBe(50)
+    expect(lifted.inner).not.toHaveProperty('zIndex')
+    expect(popup('absolute top-full left-0 mt-1').props.priority).toBe(0)
+  })
+
   test('dialogs, popovers, tooltips and submenus keep their order above the web overlays z-50', () => {
     expect([LAYER.dialog, LAYER.popover, LAYER.tooltip, LAYER.submenu]).toEqual([51, 52, 53, 54])
   })

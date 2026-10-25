@@ -12,6 +12,7 @@
 import { useState } from 'react'
 import { Maximize2, X } from '@/components/icons'
 import { IconActionButton, IconActionGroup } from '@/components/ui/icon-action-button'
+import { LAYER } from '../compat/stacking'
 import { tw } from '../style/tw'
 import { CopyAction, DownloadAction } from './CodeCard'
 
@@ -42,7 +43,7 @@ function TableFullscreen({
         <Maximize2 />
       </IconActionButton>
       {open ? (
-        <anchored fill="window" style={{ backgroundColor: 'transparent' }}>
+        <anchored fill="window" priority={LAYER.dialog} style={{ backgroundColor: 'transparent' }}>
           <div
             role="dialog"
             aria-label="Full screen table"

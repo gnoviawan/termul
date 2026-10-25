@@ -19,6 +19,7 @@ import { type ReactElement, useCallback, useLayoutEffect, useState, useSyncExter
 import { jsx } from 'react/jsx-runtime'
 import { hitTransparent } from './dnd'
 import { compatReads, treeIndex } from './dom-node'
+import { fixedPriority } from './stacking'
 import { subscribeViewport, viewportWidth } from './viewport'
 
 export interface Placement {
@@ -71,9 +72,11 @@ export function placeStyle(style: StyleDesc, placement: Placement): { inner: Sty
     const gap = typeof inner[marginKey] === 'number' ? (inner[marginKey] as number) : 0
     const own: Record<string, unknown> = { ...inner }
     delete own[marginKey]
+    delete own.zIndex
+    const priority = fixedPriority(typeof inner.zIndex === 'number' ? inner.zIndex : null)
     return {
       inner: own as StyleDesc,
-      wrap: (element, key) => jsx(AnchoredPopup, { side: placement.popup, gap, offsets, children: element }, key)
+      wrap: (element, key) => jsx(AnchoredPopup, { side: placement.popup, gap, offsets, priority, children: element }, key)
     }
   }
   const wrapper: Record<string, unknown> = {
@@ -169,6 +172,8 @@ interface AnchoredPopupProps {
   side: 'top' | 'bottom'
   gap: number
   offsets: Offsets
+  /** The popup's z-index, as a `fixed` element's layer takes it (`stacking.ts`). */
+  priority: number
   children: ReactElement
 }
 
@@ -191,7 +196,7 @@ function useParentWidth(stretch: boolean): [(instance: PublicInstance | null) =>
 
 const noSubscribe = () => () => {}
 
-function AnchoredPopup({ side, gap, offsets, children }: AnchoredPopupProps): ReactElement {
+function AnchoredPopup({ side, gap, offsets, priority, children }: AnchoredPopupProps): ReactElement {
   const stretch = offsets.left !== undefined && offsets.right !== undefined
   const [ref, parentWidth] = useParentWidth(stretch)
   const align = offsets.left === undefined && offsets.right !== undefined ? 'end' : 'start'
@@ -205,6 +210,7 @@ function AnchoredPopup({ side, gap, offsets, children }: AnchoredPopupProps): Re
     offset: { x, y: 0 },
     fit: 'snap',
     deferred: true,
+    priority,
     style: { backgroundColor: 'transparent', ...(width !== undefined ? { width } : {}) },
     children: width !== undefined ? jsx('div', { style: { display: 'flex', flexDirection: 'column', width }, children }) : children
   })
