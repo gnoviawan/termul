@@ -10,9 +10,7 @@ import {
   LAMP,
   PROSE,
   RUN_ORDER,
-  TAB_TRUNC,
   TEXTAREA_GAP,
-  TAB_TITLE,
   TITLE_TIP,
   TOAST,
   TREE_TEXT
@@ -165,21 +163,19 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Preview has the "On this page" outline (G4): the heading and paragraph rows land on the web rows (126, 195, 257 px), heading sizes follow BlockNote (48/32 px). List items sit 1 px off and the bullet is the native one; the heading has no -0.018em letter spacing (GPUIX has none), so "Alpha guide" is 10 px wider.',
-      'The tab title truncates to "guid..." where the web shows "guide.md".',
+      'The tab reads "guide.md" in full at the web width (C15 fixed in G5).',
       TITLE_TIP
     ],
-    cause: 'compat translator gap',
-    unit: 'C15 tab title width',
+    cause: 'native override needed',
+    unit: 'E2 markdown preview parity',
     impact: 1
   },
   'editor.tabs': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      'Switching tabs works; the README preview matches the web, outline included. The tab title truncates to "READ...".'
-    ],
-    cause: 'compat translator gap',
-    unit: 'C15 tab title width',
-    impact: 1
+      'Switching tabs works; the README preview matches the web, outline included. The tabs read README.md and app.ts in full at the web widths (C15 fixed in G5).',
+      TREE_TEXT
+    ]
   },
   'git.changes': {
     status: 'partial',
@@ -314,14 +310,13 @@ export const REVIEWS: Record<string, Review> = {
   'terminal.open': {
     status: 'partial',
     differences: [
-      'Terminal tab and prompt match.',
-      TAB_TRUNC,
+      'Terminal tab, its full "Terminal 1" title at the web width, and the prompt match (C15 fixed in G5).',
       LAMP,
       'The status-bar Terminal button\'s title tooltip paints under the pointer after the click; the web frame shows none.'
     ],
     cause: 'compat translator gap',
-    unit: 'C15 tab title width',
-    impact: 2
+    unit: 'title tooltips (unassigned)',
+    impact: 1
   },
   'terminal.type': { status: 'ported', differences: ['echo output matches cell for cell.'] },
   'terminal.file-link': {
@@ -335,22 +330,18 @@ export const REVIEWS: Record<string, Review> = {
   'terminal.tab-reorder': {
     status: 'partial',
     differences: [
-      'Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both; in GPUIX the active tab moves to the front, but both titles read "Ter...", so the order is inferred from the active tab, not read.',
-      TAB_TRUNC
+      'Pane tabs read "Terminal 1" in full at the web width (C15 fixed in G5).',
+      'In GPUIX the click on Bash in the open New tab menu was lost in 2 of 2 G5 runs (before and after the C15 change), so no second terminal opened and nothing was reordered; terminal.split runs the same steps and opened it.'
     ],
-    cause: 'compat translator gap',
-    unit: 'C15 tab title width',
+    cause: 'needs diagnosis',
+    unit: 'click loss on a just-opened menu (unassigned)',
     impact: 1
   },
   'terminal.split': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      "Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1).",
-      TAB_TRUNC
-    ],
-    cause: 'compat translator gap',
-    unit: 'C15 tab title width',
-    impact: 1
+      "Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1), and each pane's tab shows its full title with its close button (C15 fixed in G5)."
+    ]
   },
   'statusbar.items': {
     status: 'ported',
@@ -378,26 +369,20 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'chat.plan': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'The pinned Plan panel and the inline plan card match: three entries, Medium chips, the struck-through finished entry and the 1/3 count. The short transcript starts at the top in both.',
-      TAB_TITLE,
+      'The tab title reads in full at the web width (C15 fixed in G5).',
       RUN_ORDER
-    ],
-    cause: 'compat translator gap',
-    unit: 'C15 tab title width',
-    impact: 1
+    ]
   },
   'chat.permission': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'The Approval needed card, its Allow and Reject buttons, the Needs you badge and the status-bar pill match; clicking Allow answers allow-once in both. The short transcript starts at the top in both.',
-      TAB_TITLE,
+      'The tab title reads in full at the web width (C15 fixed in G5).',
       RUN_ORDER
-    ],
-    cause: 'compat translator gap',
-    unit: 'C15 tab title width',
-    impact: 1
+    ]
   },
   'chat.queue': {
     status: 'partial',

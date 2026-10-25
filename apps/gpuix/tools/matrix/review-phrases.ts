@@ -17,10 +17,6 @@ export const TREE_TEXT =
   'The text check fails only because natively painted text is not in the automation tree.'
 export const SELECT =
   'Each select is one closed dropdown like the web (G2), but its trigger sizes to its value where the web gives it 240px (`@[35rem]:w-60`: container queries are not translated).'
-export const TAB_TRUNC =
-  'Pane tab titles truncate to three letters and an ellipsis ("Ter...", "note...") where the web shows the whole title, so two terminals cannot be told apart.'
-export const TAB_TITLE =
-  'The GPUIX tab title truncates to a few letters ("matr...") where the web shows the whole title.'
 export const SETTINGS_BASE = [
   'The section content and navigation match.',
   'The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp.'

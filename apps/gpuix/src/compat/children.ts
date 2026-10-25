@@ -101,8 +101,33 @@ export function wrapAutoMargin(inner: ReactElement, margin: AutoMargin, key: unk
   return wrapper
 }
 
-function placeAutoMargin(node: ReactElement, info: NonNullable<ChildInfo['autoMargin']>, row: boolean): ReactElement {
-  if (row) return node
+/** An in-flow flex item with a positive `flex-grow` that is not an auto-margin wrapper. */
+function growsInFlow(slot: Slot): boolean {
+  if (!isValidElement<{ style?: StyleDesc }>(slot)) return false
+  const info = childInfo.get(slot)
+  if (info?.autoMargin || info?.positioned) return false
+  return (slot.props.style?.flexGrow ?? 0) > 0
+}
+
+/**
+ * In a row the wrapper grows to stand in for the auto margin. CSS gives auto
+ * margins only the space left after `flex-grow`, so when a sibling grows the
+ * wrapper must not: sharing the free space squeezed a `flex-1` tab strip to
+ * half the bar beside its `ml-auto` actions.
+ */
+function placeAutoMargin(
+  node: ReactElement,
+  info: NonNullable<ChildInfo['autoMargin']>,
+  row: boolean,
+  siblingGrows = false
+): ReactElement {
+  if (row) {
+    if (!siblingGrows) return node
+    const style = (node as ReactElement<{ style?: StyleDesc }>).props.style
+    const held = cloneElement(node as ReactElement<{ style?: StyleDesc }>, { style: { ...style, flexGrow: 0 } })
+    childInfo.set(held, { inline: false, autoMargin: info })
+    return held
+  }
   const h = horizontal(info.margin)
   const v = vertical(info.margin)
   const style = h ? COLUMN_PUSH[h] : v ? COLUMN_PUSH[v] : undefined
@@ -277,6 +302,7 @@ export function layoutChildren(
   if (flex || blocks > 0 || texts === 0) {
     // Flex items, or block flow: contiguous text is one anonymous box.
     const row = style.display === 'flex' && style.flexDirection !== 'column' && style.flexDirection !== 'column-reverse'
+    const grows = row && slots.some(growsInFlow)
     let first = -1
     for (let i = 0; i <= out.length; i++) {
       const slot = out[i]
@@ -292,7 +318,7 @@ export function layoutChildren(
         first = -1
       }
       const info = i < out.length ? infoOf(slot) : undefined
-      if (info?.autoMargin && isValidElement(slot)) out[i] = placeAutoMargin(slot, info.autoMargin, row)
+      if (info?.autoMargin && isValidElement(slot)) out[i] = placeAutoMargin(slot, info.autoMargin, row, grows)
     }
     return { children: paintPositionedLast(out), isStatic }
   }
