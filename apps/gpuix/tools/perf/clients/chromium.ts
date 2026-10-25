@@ -180,20 +180,35 @@ export function chromiumDriver(handle: ChromiumHandle): ClientDriver {
         .first()
         .click({ timeout: ACTION_MS })
     },
+    // The tab, at a person's pace, as in the GPUIX lane: sidebar cards reorder
+    // while chats stream, and a burst of moves can release before the pane
+    // paints the drop zones that `dragstart` turns on.
     splitChatRight: async (title) => {
       const panes = page.locator('[data-pane-content]')
-      const card = page
-        .locator(`button[data-chat-card-index][title=${JSON.stringify(title)}]`)
-        .first()
       const pane = panes.first()
       const box = await pane.boundingBox({ timeout: ACTION_MS })
       if (!box) throw new Error('no pane on screen')
+      const tab = pane.locator(`[role=tablist] [aria-label^=${JSON.stringify(title)}]`).first()
+      const from = await tab.boundingBox({ timeout: ACTION_MS })
+      if (!from) throw new Error(`no tab titled ${title} in the left pane`)
       const before = await panes.count()
+      const start = { x: from.x + from.width / 2, y: from.y + from.height / 2 }
       // The right drop zone is the pane's right quarter.
-      await card.dragTo(pane, {
-        targetPosition: { x: box.width * 0.9, y: box.height * 0.5 },
-        timeout: ACTION_MS
-      })
+      const end = { x: box.x + box.width * 0.9, y: box.y + box.height / 2 }
+      await page.mouse.move(start.x, start.y)
+      await page.mouse.down()
+      for (let i = 1; i <= 12; i++) {
+        await page.mouse.move(
+          start.x + ((end.x - start.x) * i) / 12,
+          start.y + ((end.y - start.y) * i) / 12
+        )
+        await new Promise((r) => setTimeout(r, 25))
+      }
+      for (let i = 0; i < 4; i++) {
+        await new Promise((r) => setTimeout(r, 100))
+        await page.mouse.move(end.x, end.y + (i % 2))
+      }
+      await page.mouse.up()
       await page.waitForFunction(
         (n) => document.querySelectorAll('[data-pane-content]').length > n,
         before,
