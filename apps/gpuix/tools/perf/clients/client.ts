@@ -55,9 +55,9 @@ export interface ClientDriver {
   chatCount(): Promise<number>
   switchToChat(index: number): Promise<void>
   /**
-   * Drags the sidebar card of the chat titled `title` onto the right edge of
-   * the left-most pane, splitting the chat into a pane of its own. The card
-   * rather than the tab: a narrow pane's tab strip clips its later tabs.
+   * Drags the chat titled `title` onto the right edge of the left-most pane,
+   * splitting it into a pane of its own. Each lane drags what holds still in
+   * its client: the sidebar card in the DOM lanes, the tab in GPUIX.
    */
   splitChatRight(title: string): Promise<void>
   /** Chats on screen at once, one per pane. */

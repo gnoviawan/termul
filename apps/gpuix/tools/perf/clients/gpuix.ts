@@ -411,19 +411,29 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
       if (!card) throw new Error(`no chat card titled ${title}`)
       await click(card)
     },
+    // The tab, not the sidebar card: with every chat streaming the sidebar
+    // reorders its cards by latest activity, so the card under the press can
+    // differ from the one the tree placed there a moment before. Tabs hold
+    // still; the scenario splits the first tab each time, which no narrow
+    // pane clips.
     splitChatRight: async (title) => {
       const root = await tree()
       const panes = visibleTranscripts(root)
-      const list = find(root, byTestId('chats-list-scroll'))
-      const card = list && find(list, byText(title))
-      if (!card) throw new Error(`no chat card titled ${title}`)
       const pane = [...panes].sort((a, b) => (a.bounds?.x ?? 0) - (b.bounds?.x ?? 0))[0]
-      if (!pane?.bounds) throw new Error('no pane on screen')
+      const box = pane?.bounds
+      if (!box) throw new Error('no pane on screen')
+      const tab = find(
+        root,
+        (n) =>
+          byText(title)(n) &&
+          !!n.bounds &&
+          n.bounds.y < box.y &&
+          n.bounds.x >= box.x &&
+          n.bounds.x < box.x + box.width
+      )
+      if (!tab) throw new Error(`no tab titled ${title} in the left pane`)
       // The right drop zone is the pane's right quarter.
-      await humanDrag(center(card), {
-        x: pane.bounds.x + pane.bounds.width * 0.9,
-        y: pane.bounds.y + pane.bounds.height / 2
-      })
+      await humanDrag(center(tab), { x: box.x + box.width * 0.9, y: box.y + box.height / 2 })
       await until(
         'a pane of its own',
         async () => visibleTranscripts(await tree()).length > panes.length

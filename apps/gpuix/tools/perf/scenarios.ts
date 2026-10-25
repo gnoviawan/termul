@@ -174,10 +174,11 @@ async function multiPane({ driver, clock, flags }: ScenarioEnv): Promise<void> {
     }
   })
   clock.note('chatStartMs', startMs)
-  // The first chat stays in the pane that holds every tab; each other chat
-  // moves into a pane of its own.
+  // The last chat stays in the pane that holds every tab; each other chat
+  // moves into a pane of its own, in order, so the chat to split is always
+  // that pane's first tab, which no narrow pane clips.
   await clock.phase('split', async () => {
-    for (const title of titles.slice(1).reverse()) {
+    for (const title of titles.slice(0, -1)) {
       await driver.splitChatRight(title).catch((err) => clock.error(`split ${title}: ${err}`))
     }
   })
