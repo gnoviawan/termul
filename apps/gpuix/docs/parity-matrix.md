@@ -147,9 +147,7 @@ pane, SSH and remote access score 0, and notifications and snapshots 50 %,
 only because a surface in each has no web reference.
 
 Against the page before this run (88.2 % weighted, 91 ported), two surfaces
-moved from ported to partial, none moved up, and one partial gap got worse.
-These are findings of this review, not changes in the code since the last
-runs:
+moved from ported to partial, none moved up, and one partial gap got worse:
 
 - Ctrl+B and Ctrl+Shift+B leave the GPUIX composer focused, where the web
   composer loses focus (shortcuts.toggle-side-panel and
