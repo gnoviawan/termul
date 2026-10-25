@@ -315,14 +315,11 @@ export const REVIEWS: Record<string, Review> = {
   },
   'terminal.new-tab-menu': { status: 'ported', differences: ['The new tab menu matches.'] },
   'terminal.tab-reorder': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      'Pane tabs read "Terminal 1" in full at the web width (C15 fixed in G5).',
-      'In GPUIX the click on Bash in the open New tab menu was lost in 2 of 2 G5 runs (before and after the C15 change), so no second terminal opened and nothing was reordered; terminal.split runs the same steps and opened it.'
-    ],
-    cause: 'needs diagnosis',
-    unit: 'click loss on a just-opened menu (unassigned)',
-    impact: 1
+      'Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both, and both clients read Terminal 2, Terminal 1 with full titles at the web widths (C15 fixed in G5). The web paints Terminal 1 in its hover state because the pointer rests on it.',
+      'With the window inactive (before G5 the matrix never focused it) the click on Bash in the just-opened New tab menu was lost in 2 of 2 runs; with the window active it opens the second terminal.'
+    ]
   },
   'terminal.split': {
     status: 'ported',

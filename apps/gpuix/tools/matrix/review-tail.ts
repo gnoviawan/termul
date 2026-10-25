@@ -219,7 +219,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       SELECT,
-      'The agents list shows No agents match while the web lists the registry.', 'The rows lay out beside their selects once the settings card has measured itself; on a loaded host the frame can be grabbed before that (the first frame lays container queries out narrow), so the Close idle chats after row shows stacked with a full-width select in some runs (2 of 3 in G5).'
+      'The agents list shows No agents match while the web lists the registry.', 'The rows lay out beside their selects once the settings card has measured itself (the first frame lays container queries out narrow). The section remounts its cards once after it opens, which resets their measured width, so the frame is often grabbed narrow: the Close idle chats after row shows stacked with a full-width select in 3 of 4 G5 runs.'
     ],
     cause: 'compat translator gap',
     unit: 'C9 dialog body layout',
