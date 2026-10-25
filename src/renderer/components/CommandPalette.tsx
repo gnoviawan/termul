@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Bot,
   Bug,
@@ -424,15 +424,12 @@ export function CommandPalette({
 
   const inputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
+  // Focus moves from the terminal to the search in the commit that opens the
+  // palette: a deferred focus left keys typed right after Ctrl+K on the body.
+  useLayoutEffect(() => {
     if (isOpen) {
       setQuery('')
-      // Explicitly blur active element first so terminal doesn't hold focus,
-      // then focus the command palette input after the overlay renders.
-      if (document.activeElement instanceof HTMLElement) {
-        document.activeElement.blur()
-      }
-      setTimeout(() => inputRef.current?.focus(), 0)
+      inputRef.current?.focus()
     }
   }, [isOpen])
 
