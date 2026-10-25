@@ -206,7 +206,8 @@ Tools:
   a server without XI2 was not tried. The loss was not an X artifact: at
   20 trials per target, exp/gpuix-client at 9747b6c2 lost 68 of 180 clicks,
   52 of them through automation input, which never touches X. With
-  `hover.ts`, the same 180 trials lost none. `--entry` runs another checkout's built
+  `hover.ts`, the same 180 trials lost none. Real X input with and without the
+  script's input focus then passed 120 of 120. `--entry` runs another checkout's built
   `dist/main.js` for such a comparison.
 
 - `bun tools/compat/parity.ts [fixture…] --port N` diffs StatusBar, ShellRail,
