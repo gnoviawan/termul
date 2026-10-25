@@ -145,3 +145,42 @@ The runner adds three things for this comparison:
 - **`chat.typeUnderLoadP50Ms` and `chat.openUnderLoadP50Ms`.** The typing part of a chat start, and the part from the **Start** click until the chat shows.
 
 A run whose client replaced its UI with a crash report (the GPUIX runtime-error overlay) is recorded with a `fatal: app crashed: ...` error and status `failed`, and stays out of `aggregate.json`.
+
+## Run on Windows
+
+The runner also runs on Windows, where both clients draw on the interactive desktop with the machine's GPU. Use it to compare the clients on the hardware that most Termul desktop users have. Numbers from Windows and Linux are not comparable.
+
+```bash
+bun run build
+bun run perf --client gpuix,chromium --scenarios idle,stream-storm,pty-flood --runs 5 --page-metrics off \
+  --server-bin-gpuix <gpuix termul-server.exe> --server-bin-chromium <other termul-server.exe> \
+  --server-bin <gpuix termul-server.exe> --dist-web <web client dist-web> --out <dir>
+```
+
+`--server-bin-<client>` gives one client its own server binary, for example the web client of another branch against that branch's server. `--server-bin` is the fallback for a client without one. Each run records its binary in `meta.serverBin`.
+
+What differs from Linux:
+
+- **No Xvfb and no lavapipe.** `--gl` defaults to `gpu`. Both windows open on the real desktop, so do not use the machine during a run: a covered or minimized window can stop drawing.
+- **No `screen.*` keys.** X DAMAGE has no Windows counterpart here, so `--screen-frames` is always off. Frame rate needs PresentMon, which needs an elevated shell.
+- **Process counters come from `win32.ts`** (kernel32 and ntdll through `bun:ffi`). `rss*` is the working set. `pss*` is the private working set, Task Manager's Memory column, because Windows has no PSS. Like PSS, it counts no page shared with another process. CPU and per-thread CPU come from `GetProcessTimes` and `GetThreadTimes`, and thread names from `GetThreadDescription`.
+- **The terminal is the default shell, Command Prompt.** The probe runs from a `.cmd` file in the project dir, the terminal's start dir, typed as `.\<name>.cmd` because the server sets `NoDefaultCurrentDirectoryInExePath`.
+- **No `probe.*` keys.** The probe's cursor position request is answered on the server side, most likely by the console host behind the server's ConPTY: with the client closed in the middle of a paced probe, every later probe still got a reply, in about 0.25 ms. So the probe would time the server, not the client. The pty-flood phases still load the client with the same output, so their process, thread, and byte numbers stay valid, and the raw probe results stay in `notes`.
+- **The server runs in a hidden console of its own and keeps no log.** A console child on Windows inherits redirected std handles, so with the server's output going to a file, every shell in a ConPTY would write into that file and its terminal would stay blank.
+- **The server's process tree is killed with `taskkill /T`**, because ending `termul-server` on Windows leaves its agents and shells running.
+- The default state root is `%TEMP%\gpuixb0`.
+
+### The shipped desktop app (`--client tauri`)
+
+`--client tauri --tauri-exe <termul-manager.exe>` runs the Windows desktop app, Tauri on WebView2, through the same Chromium driver over the WebView2 debug port. The app has its own Rust core, so this lane starts no `termul-server` and has no `bytes*` or `server.*` keys: its agents, shells, and probes are children of the app and count in its `proc.*` keys. To compare it with a server client, read the `product.*` keys, which add the client and its server tree for every lane.
+
+Before each run the lane writes `projects.json` and the retired plugin-store file `termul-data.json` (the fake agent and the last-selected agent) into the app-data dir, and the app imports them on its first connection. It deletes `%APPDATA%\com.termul-manager.app.perf` and `%LOCALAPPDATA%\com.termul-manager.app.perf` before and after each run, so the build must use that perf-only identifier and never a real install's.
+
+The exe must open the WebView2 debug port, which shipped builds refuse. Build a release exe whose engine-debug scrub honors `TERMUL_DEV_ALLOW_ENGINE_DEBUG=1` in release (in `src-tauri/src/host_perimeter/`, pass `true` as `debug_build` to `env_scrub::plan` and read the opt-in in every build; never commit that), with the perf identifier:
+
+```bash
+echo '{"identifier":"com.termul-manager.app.perf"}' > tauri.conf.perf.json
+bun x tauri build --no-bundle --config tauri.conf.perf.json
+```
+
+A build with `debug_assertions` would also open the port, but it changes logging and other code paths, so it does not stand in for the shipped app.

@@ -182,8 +182,25 @@ export function chromiumDriver(handle: ChromiumHandle): ClientDriver {
     },
     openTerminal: async () => {
       const before = await page.locator('.xterm').count()
-      await page.locator('button[aria-label="New tab"]').first().click({ timeout: ACTION_MS })
-      await page.locator('[role=menuitem]').filter({ hasText: /^Bash/ }).first().click()
+      // The default shell, as the GPUIX lane's status-bar Terminal button opens.
+      const shell = process.platform === 'win32' ? /^Command Prompt/ : /^Bash/
+      const item = page.locator('[role=menuitem]').filter({ hasText: shell }).first()
+      // A click that lands while a new terminal takes focus can leave the menu
+      // closed, so open it again rather than wait out the action timeout.
+      for (let attempt = 1; ; attempt++) {
+        await page
+          .locator('button[aria-label="New tab"]:visible')
+          .first()
+          .click({ timeout: ACTION_MS })
+        const shown = await item.waitFor({ timeout: 5_000 }).then(
+          () => true,
+          () => false
+        )
+        if (shown) break
+        if (attempt === 3) throw new Error(`the New tab menu never listed ${shell}`)
+        await page.keyboard.press('Escape')
+      }
+      await item.click({ timeout: ACTION_MS })
       await page.waitForFunction((n) => document.querySelectorAll('.xterm').length > n, before, {
         timeout: ACTION_MS
       })

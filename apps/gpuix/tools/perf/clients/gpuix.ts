@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { TreeNode } from '@gpuix/native/automation'
@@ -9,6 +10,18 @@ import { PERF_AGENT_NAME, PERF_DEVICE_ID, PERF_PROJECT_NAME, PERF_TOKEN } from '
 import type { ChatStartPart, ClientDriver, ClientHandle, ClientLaunchOptions } from './client.ts'
 
 type App = Awaited<ReturnType<typeof launch>>
+
+const WIN = process.platform === 'win32'
+/** Read once at load, outside every timed window. */
+const WINDOWS_GPU = WIN
+  ? execFileSync('powershell', [
+      '-NoProfile',
+      '-Command',
+      '(Get-CimInstance Win32_VideoController | Select-Object -First 1).Name'
+    ])
+      .toString()
+      .trim()
+  : ''
 
 export interface GpuixHandle extends ClientHandle {
   app: App
@@ -27,7 +40,8 @@ export const GPUIX_ENTRY = path.join(APP_DIR, 'dist', 'main.js')
 export async function launchGpuix(
   opts: ClientLaunchOptions & { clientStateDir: string }
 ): Promise<GpuixHandle> {
-  if (opts.gl !== 'lavapipe') throw new Error('the GPUIX lane renders with lavapipe only')
+  if (opts.gl !== (WIN ? 'gpu' : 'lavapipe'))
+    throw new Error(`the GPUIX lane renders with ${WIN ? 'the GPU on Windows' : 'lavapipe'} only`)
   const origin = new URL(opts.url)
   const storage = path.join(
     opts.clientStateDir,
@@ -47,8 +61,7 @@ export async function launchGpuix(
     cwd: APP_DIR,
     env: {
       ...process.env,
-      DISPLAY: opts.display,
-      VK_ICD_FILENAMES: LAVAPIPE_ICD,
+      ...(WIN ? {} : { DISPLAY: opts.display, VK_ICD_FILENAMES: LAVAPIPE_ICD }),
       GPUIX_BACKGROUND: '1',
       GPUIX_WINDOW_SIZE: `${opts.width}x${opts.height}`,
       TERMUL_SERVER_URL: opts.url,
@@ -86,6 +99,7 @@ function gpuixVersion(): string {
 
 /** Which Vulkan driver the app actually loaded, from its memory maps. */
 function vulkanDriver(pid: number): string {
+  if (WIN) return `GPUI on ${WINDOWS_GPU}`
   const maps = readFileSync(`/proc/${pid}/maps`, 'utf8')
   const lib = /\S*libvulkan_\w+\.so\S*/.exec(maps)?.[0]
   return lib ? `GPUI Vulkan, ${path.basename(lib)}` : 'no Vulkan ICD mapped'
@@ -344,11 +358,12 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
       )
       if (!button) throw new Error('no status-bar Terminal button')
       await click(button)
-      // Keys typed before bash prints its prompt are lost, so wait for the prompt.
+      // Keys typed before the shell prints its prompt are lost, so wait for the
+      // prompt: bash's `$`/`#`, or Command Prompt's `>` on Windows.
       const opened = await until('a new terminal with a prompt', async () =>
         terminalNodes(await tree()).find(
           (t) =>
-            !seen.has(t.testId) && (t.children ?? []).some((row) => /[#$] *$/.test(textOf(row)))
+            !seen.has(t.testId) && (t.children ?? []).some((row) => /[#$>] *$/.test(textOf(row)))
         )
       )
       terminalId = opened.testId ?? null

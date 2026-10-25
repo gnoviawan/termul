@@ -1,6 +1,7 @@
 import type { PageMetrics } from '../../../../../tools/perf/types.ts'
 
-export type ClientKind = 'chromium' | 'gpuix'
+export type ClientKind = 'chromium' | 'gpuix' | 'tauri'
+export type GlMode = 'lavapipe' | 'swiftshader' | 'cpu' | 'gpu'
 
 export interface ClientLaunchOptions {
   /** Origin the client loads or connects to (the byte proxy, not the server). */
@@ -10,8 +11,8 @@ export interface ClientLaunchOptions {
   height: number
   /** Built web client served in place of the server's compiled-in assets. */
   distWeb: string
-  /** Software rasterizer. lavapipe is the Vulkan driver the GPUIX lane uses. */
-  gl: 'lavapipe' | 'swiftshader' | 'cpu'
+  /** Rasterizer. lavapipe is the Vulkan driver the GPUIX lane uses on Linux; `gpu` is the machine's GPU (Windows). */
+  gl: GlMode
   /** Skip the in-page observers, whose rAF loop keeps an idle page drawing. */
   noPageMetrics?: boolean
 }
@@ -28,6 +29,11 @@ export interface ClientHandle {
   rootPid: number
   /** Wall ms from launch() call until the process tree existed. */
   launchedMs: number
+  /**
+   * Ms the harness spent before the client process existed that is not the
+   * client's startup (the desktop lane's PowerShell launch); startup times omit it.
+   */
+  launchOverheadMs?: number
   version: string
   /** Free-form facts about the rendering backend, recorded with the run. */
   backend: string

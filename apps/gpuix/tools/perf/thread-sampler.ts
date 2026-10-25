@@ -1,8 +1,7 @@
-import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
-import { descendants } from './proc-sampler.ts'
+import { CLK_TCK, descendants } from './proc-sampler.ts'
 
-const CLK_TCK = Number(execFileSync('getconf', ['CLK_TCK']).toString().trim()) || 100
+const win = process.platform === 'win32' ? await import('./win32.ts') : null
 
 /** utime+stime ticks per thread of every process under `rootPid`, keyed `pid/tid`. */
 export interface ThreadSnapshot {
@@ -11,6 +10,7 @@ export interface ThreadSnapshot {
 }
 
 export function snapshotThreads(rootPid: number): ThreadSnapshot {
+  if (win) return { t: Date.now(), ticks: win.threadTicks(new Set(descendants(rootPid))) }
   const ticks = new Map<string, { comm: string; ticks: number }>()
   for (const pid of descendants(rootPid)) {
     let tids: string[]

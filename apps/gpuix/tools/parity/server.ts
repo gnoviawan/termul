@@ -16,6 +16,11 @@ export interface TestServer {
   stop(): Promise<void>
 }
 
+/** A server this process started; `pid` is the termul-server process. */
+export interface StartedServer extends TestServer {
+  pid: number
+}
+
 export interface SeedProject {
   id: string
   name: string
@@ -65,38 +70,49 @@ export async function startTestServer(opts: {
   token: string
   stateDir: string
   binary?: string
-}): Promise<TestServer> {
+}): Promise<StartedServer> {
   const binary = opts.binary ?? defaultServerBinary()
   await rm(opts.stateDir, { recursive: true, force: true })
   await mkdir(opts.stateDir, { recursive: true })
   const baseUrl = `http://127.0.0.1:${opts.port}`
-  const logFile = Bun.file(path.join(opts.stateDir, 'server.log'))
-  const child = Bun.spawn(
-    [
-      binary,
-      '--host',
-      '127.0.0.1',
-      '--port',
-      String(opts.port),
-      '--state-dir',
-      opts.stateDir,
-      '--sessions-dir',
-      path.join(opts.stateDir, 'sessions'),
-      '--projects-file',
-      path.join(opts.stateDir, 'projects.json'),
-      '--store-file',
-      path.join(opts.stateDir, 'store.json')
-    ],
-    {
-      env: {
-        ...process.env,
-        TERMUL_WEB_AUTH_TOKEN: opts.token,
-        RUST_LOG: 'termul_manager_lib=info'
-      },
-      stdout: logFile,
-      stderr: logFile
+  const argv = [
+    binary,
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(opts.port),
+    '--state-dir',
+    opts.stateDir,
+    '--sessions-dir',
+    path.join(opts.stateDir, 'sessions'),
+    '--projects-file',
+    path.join(opts.stateDir, 'projects.json'),
+    '--store-file',
+    path.join(opts.stateDir, 'store.json')
+  ]
+  const env = {
+    ...process.env,
+    TERMUL_WEB_AUTH_TOKEN: opts.token,
+    RUST_LOG: 'termul_manager_lib=info'
+  }
+  if (process.platform === 'win32') {
+    const server = startInOwnConsole(argv, env)
+    try {
+      await waitForHealth(baseUrl, server.exited)
+    } catch (error) {
+      await server.stop()
+      throw error
     }
-  )
+    return {
+      baseUrl,
+      token: opts.token,
+      stateDir: opts.stateDir,
+      pid: server.pid,
+      stop: server.stop
+    }
+  }
+  const logFile = Bun.file(path.join(opts.stateDir, 'server.log'))
+  const child = Bun.spawn(argv, { env, stdout: logFile, stderr: logFile })
   const stop = async (): Promise<void> => {
     if (child.exitCode === null && child.signalCode === null) {
       child.kill('SIGTERM')
@@ -116,7 +132,55 @@ export async function startTestServer(opts: {
     await stop()
     throw error
   }
-  return { baseUrl, token: opts.token, stateDir: opts.stateDir, stop }
+  return { baseUrl, token: opts.token, stateDir: opts.stateDir, pid: child.pid, stop }
+}
+
+/**
+ * Starts the server in a hidden console of its own. On Windows a console
+ * child without explicit std handles inherits redirected ones, so with the
+ * server's output going to a log file, every shell it starts in a ConPTY
+ * would write into that file and its terminal would stay blank. The server
+ * therefore keeps no log here. Stopping kills the whole tree, because ending
+ * the server alone leaves its agents and shells running.
+ */
+function startInOwnConsole(
+  argv: string[],
+  env: Record<string, string | undefined>
+): { pid: number; exited: Promise<number>; stop(): Promise<void> } {
+  const quote = (s: string) => `'${s.replace(/'/g, "''")}'`
+  const ps = Bun.spawnSync(
+    [
+      'powershell',
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `(Start-Process -FilePath ${quote(argv[0])} -ArgumentList ${argv
+        .slice(1)
+        .map((a) => quote(`"${a}"`))
+        .join(',')} -WindowStyle Hidden -PassThru).Id`
+    ],
+    { env }
+  )
+  const pid = Number(ps.stdout.toString().trim())
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw new Error(`could not start termul-server: ${ps.stderr.toString().trim()}`)
+  }
+  const alive = () => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const exited = (async () => {
+    while (alive()) await Bun.sleep(500)
+    return 0
+  })()
+  const stop = async () => {
+    Bun.spawnSync(['taskkill', '/T', '/F', '/PID', String(pid)])
+  }
+  return { pid, exited, stop }
 }
 
 async function serverFetch(

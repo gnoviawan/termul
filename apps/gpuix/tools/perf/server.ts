@@ -3,8 +3,12 @@ import path from 'node:path'
 import { scopedKey } from '../../../../src/shared/types/persistence.types.ts'
 import { WS_PROTOCOL_VERSION } from '../../../../src/shared/types/web-protocol.types.ts'
 import { REPO_DIR } from '../../build.ts'
-import { addProject, startTestServer, type TestServer } from '../parity/server.ts'
-import { descendants, readCmdline } from './proc-sampler.ts'
+import {
+  addProject,
+  type StartedServer,
+  startTestServer,
+  type TestServer
+} from '../parity/server.ts'
 
 export const PERF_TOKEN = 'perf-token'
 export const PERF_DEVICE_ID = 'perf-device'
@@ -12,10 +16,8 @@ export const PERF_AGENT_CONFIG_ID = 'custom-perfstub'
 export const PERF_AGENT_NAME = 'Perf Stub Agent'
 export const PERF_PROJECT_NAME = 'perf-project'
 
-export interface PerfServer extends TestServer {
-  /** The termul-server process; the fake agents and PTYs it spawns are its children. */
-  pid: number
-}
+/** The fake agents and PTYs that the server spawns are children of its `pid`. */
+export type PerfServer = StartedServer
 
 /**
  * Fails when anything already listens on `port`. Without this, /health can
@@ -48,10 +50,6 @@ export async function startPerfServer(opts: {
     stateDir: path.join(opts.stateRoot, 'server')
   })
   try {
-    const pid = descendants(process.pid).find(
-      (p) => p !== process.pid && readCmdline(p).includes(opts.binary)
-    )
-    if (pid === undefined) throw new Error('could not find the spawned termul-server process')
     await addProject(server, {
       id: 'perf-project-0001',
       name: PERF_PROJECT_NAME,
@@ -59,7 +57,7 @@ export async function startPerfServer(opts: {
       color: 'blue'
     })
     await seedFakeAgent(server, opts.agentEnv)
-    return { ...server, pid }
+    return server
   } catch (err) {
     await server.stop()
     throw err

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { ClientDriver } from './clients/client.ts'
+import { PERF_PROJECT_NAME } from './server.ts'
 
 export type ScenarioName = 'idle' | 'stream-storm' | 'pty-flood'
 export type Flags = Record<string, number>
@@ -78,7 +79,7 @@ async function streamStorm({ driver, clock, flags }: ScenarioEnv): Promise<void>
   await clock.phase('measure', () => sleep(flags.measure * 1000))
 }
 
-const PROBE = path.join(path.dirname(new URL(import.meta.url).pathname), 'terminal-probe.ts')
+const PROBE = path.join(import.meta.dir, 'terminal-probe.ts')
 
 /**
  * Writes the probe invocation to a script and returns the short command that
@@ -87,6 +88,17 @@ const PROBE = path.join(path.dirname(new URL(import.meta.url).pathname), 'termin
  */
 function probeCommand(script: string, env: Record<string, string | number>): string {
   const vars = Object.entries(env).map(([k, v]) => `PERF_PROBE_${k}=${v}`)
+  if (process.platform === 'win32') {
+    // The Windows default shell is Command Prompt, started in the project dir
+    // with NoDefaultCurrentDirectoryInExePath set, so `.\` is the shortest command.
+    const name = path.basename(script).replace(/\.sh$/, '.cmd')
+    const lines = [...vars.map((v) => `@set ${v}`), `@"${process.execPath}" "${PROBE}"`]
+    writeFileSync(
+      path.join(path.dirname(script), PERF_PROJECT_NAME, name),
+      `${lines.join('\r\n')}\r\n`
+    )
+    return `.\\${name}`
+  }
   writeFileSync(script, `${vars.join(' ')} exec bun ${PROBE}\n`)
   return `sh ${script}`
 }

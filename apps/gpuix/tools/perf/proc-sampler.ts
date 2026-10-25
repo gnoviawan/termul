@@ -4,12 +4,15 @@ import { readdirSync, readFileSync } from 'node:fs'
 /**
  * Linux /proc sampler for one client process tree. It reads only kernel
  * counters, so it measures Chromium, WebKitGTK and GPUIX the same way.
+ * On Windows the same reads go through win32.ts.
  *
  * RSS counts shared pages once per process, so a multi-process browser's
  * RSS sum overstates its footprint. PSS splits shared pages between the
  * processes that map them, so the PSS sum is the honest total. Both are
  * kept. CPU is in percent of one core (top's convention), from utime+stime.
  */
+
+const win = process.platform === 'win32' ? await import('./win32.ts') : null
 
 export type RoleOf = (pid: number, cmdline: string) => string
 
@@ -28,8 +31,14 @@ export interface ProcSampler {
   processes(): Array<{ pid: number; role: string; cmd: string }>
 }
 
-const CLK_TCK = Number(execFileSync('getconf', ['CLK_TCK']).toString().trim()) || 100
-const PAGE = Number(execFileSync('getconf', ['PAGESIZE']).toString().trim()) || 4096
+const getconf = (key: string, fallback: number) =>
+  win ? fallback : Number(execFileSync('getconf', [key]).toString().trim()) || fallback
+export const CLK_TCK = win ? win.TICKS_PER_S : getconf('CLK_TCK', 100)
+const PAGE = getconf('PAGESIZE', 4096)
+
+function readTicks(pid: number): number | null {
+  return win ? win.processTicks(pid) : (readStat(pid)?.ticks ?? null)
+}
 
 function readStat(pid: number): { ppid: number; ticks: number } | null {
   try {
@@ -42,6 +51,7 @@ function readStat(pid: number): { ppid: number; ticks: number } | null {
 }
 
 function readMem(pid: number): { rss: number; pss: number } {
+  if (win) return win.processMem(pid)
   let rss = 0
   let pss = 0
   try {
@@ -56,6 +66,7 @@ function readMem(pid: number): { rss: number; pss: number } {
 }
 
 export function readCmdline(pid: number): string {
+  if (win) return win.processCmdline(pid)
   try {
     return readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim()
   } catch {
@@ -65,14 +76,19 @@ export function readCmdline(pid: number): string {
 
 export function descendants(rootPid: number): number[] {
   const children = new Map<number, number[]>()
-  for (const name of readdirSync('/proc')) {
-    const pid = Number(name)
-    if (!Number.isInteger(pid)) continue
-    const stat = readStat(pid)
-    if (!stat) continue
-    const list = children.get(stat.ppid) ?? []
+  const parents: Iterable<[number, number]> = win
+    ? [...win.processTable()].map(([pid, p]) => [pid, p.ppid])
+    : readdirSync('/proc').flatMap((name) => {
+        const pid = Number(name)
+        const stat = Number.isInteger(pid) ? readStat(pid) : null
+        return stat ? [[pid, stat.ppid] as [number, number]] : []
+      })
+  for (const [pid, ppid] of parents) {
+    // pid 0 (the idle process) is its own parent on Windows.
+    if (pid === ppid) continue
+    const list = children.get(ppid) ?? []
     list.push(pid)
-    children.set(stat.ppid, list)
+    children.set(ppid, list)
   }
   const out = [rootPid]
   for (let i = 0; i < out.length; i++) out.push(...(children.get(out[i]) ?? []))
@@ -93,17 +109,17 @@ export function startProcSampler(rootPid: number, roleOf: RoleOf, cadenceMs = 50
     const total = { rss: 0, pss: 0, cpu: 0, count: 0 }
     const pids: ProcSample['pids'] = {}
     for (const pid of descendants(rootPid)) {
-      const stat = readStat(pid)
-      if (!stat) continue
+      const ticks = readTicks(pid)
+      if (ticks === null) continue
       let info = known.get(pid)
       if (!info) {
         const cmd = readCmdline(pid)
         info = { role: roleOf(pid, cmd), cmd: cmd.slice(0, 200) }
         known.set(pid, info)
       }
-      const prev = lastTicks.get(pid) ?? (first ? stat.ticks : 0)
-      lastTicks.set(pid, stat.ticks)
-      const cpu = first || dt <= 0 ? 0 : ((stat.ticks - prev) / CLK_TCK / dt) * 100
+      const prev = lastTicks.get(pid) ?? (first ? ticks : 0)
+      lastTicks.set(pid, ticks)
+      const cpu = first || dt <= 0 ? 0 : ((ticks - prev) / CLK_TCK / dt) * 100
       const mem = readMem(pid)
       pids[pid] = { ...mem, cpu }
       roles[info.role] ??= { rss: 0, pss: 0, cpu: 0, count: 0 }
@@ -174,6 +190,7 @@ export interface MachineSample {
 }
 
 function readBusyTicks(): { busy: number; total: number } {
+  if (win) return win.systemTicks()
   const fields = readFileSync('/proc/stat', 'utf8')
     .split('\n')[0]
     .trim()

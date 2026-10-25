@@ -13,8 +13,9 @@ import { REPO_DIR } from '../../build.ts'
 import { DIST_WEB } from '../parity/shoot-web.ts'
 import { startByteProxy } from './byte-proxy.ts'
 import { chromiumDriver, launchChromium } from './clients/chromium.ts'
-import type { ChatStartPart, ClientDriver, ClientKind } from './clients/client.ts'
+import type { ChatStartPart, ClientDriver, ClientKind, GlMode } from './clients/client.ts'
 import { gpuixDriver, launchGpuix } from './clients/gpuix.ts'
+import { launchTauri, tauriDriver } from './clients/tauri.ts'
 import {
   chromiumRole,
   type MachineSample,
@@ -27,7 +28,7 @@ import {
 } from './proc-sampler.ts'
 import { DEFAULTS, type Flags, type PhaseClock, SCENARIOS, type ScenarioName } from './scenarios.ts'
 import { type ScreenLog, startScreenLog, summarizeScreen } from './screen-frames.ts'
-import { startPerfServer } from './server.ts'
+import { PERF_PROJECT_NAME, startPerfServer } from './server.ts'
 import { aggregate, median, type Numbers, summarizePage, summarizeProc } from './stats.ts'
 import { snapshotThreads, type ThreadSnapshot, threadCpu } from './thread-sampler.ts'
 
@@ -37,8 +38,12 @@ interface Options {
   scenarios: ScenarioName[]
   runs: number
   clients: ClientKind[]
-  gl: 'lavapipe' | 'swiftshader' | 'cpu'
+  gl: GlMode
   serverBin: string
+  /** Per-client server binary, so each client can run against its own branch's server. */
+  serverBinOf: Partial<Record<ClientKind, string>>
+  /** The Windows desktop app build for the `tauri` client (see README). */
+  tauriExe: string
   port: number
   display: string
   width: number
@@ -70,12 +75,19 @@ function parseArgs(argv: string[]): Options {
     return v
   }
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const serverBinOf: Options['serverBinOf'] = {}
+  for (const client of CLIENTS) {
+    const bin = take(`server-bin-${client}`, '')
+    if (bin) serverBinOf[client] = path.resolve(bin)
+  }
   const opts: Options = {
     scenarios: take('scenarios', 'stream-storm,pty-flood').split(',') as ScenarioName[],
     runs: Number(take('runs', '3')),
     clients: take('client', 'chromium').split(',') as ClientKind[],
-    gl: take('gl', 'lavapipe') as 'lavapipe' | 'swiftshader' | 'cpu',
-    serverBin: take('server-bin', '/root/gpuix-bin/termul-server'),
+    gl: take('gl', WIN ? 'gpu' : 'lavapipe') as GlMode,
+    serverBin: path.resolve(take('server-bin', '/root/gpuix-bin/termul-server')),
+    serverBinOf,
+    tauriExe: take('tauri-exe', ''),
     port: Number(take('port', '8196')),
     display: take('display', ':181'),
     width: Number(take('width', '1440')),
@@ -84,8 +96,14 @@ function parseArgs(argv: string[]): Options {
     quietBelowPct: Number(take('quiet-below', '150')),
     quietWaitS: Number(take('quiet-wait', '600')),
     noPageMetrics: take('page-metrics', 'on') === 'off',
-    screenFrames: take('screen-frames', 'on') !== 'off',
-    stateRoot: path.resolve(take('state-root', process.env.GPUIX_STATE_ROOT ?? '/tmp/gpuix-b0')),
+    // X DAMAGE frame logging has no Windows counterpart here.
+    screenFrames: !WIN && take('screen-frames', 'on') !== 'off',
+    stateRoot: path.resolve(
+      take(
+        'state-root',
+        process.env.GPUIX_STATE_ROOT ?? (WIN ? path.join(os.tmpdir(), 'gpuixb0') : '/tmp/gpuix-b0')
+      )
+    ),
     distWeb: path.resolve(take('dist-web', DIST_WEB)),
     outDir: path.resolve(take('out', path.join(HERE, 'results', `linux-${stamp}`))),
     overrides: {}
@@ -96,10 +114,23 @@ function parseArgs(argv: string[]): Options {
   return opts
 }
 
-const CLIENTS: ClientKind[] = ['chromium', 'gpuix']
+const CLIENTS: ClientKind[] = ['chromium', 'gpuix', 'tauri']
+const WIN = process.platform === 'win32'
 
 /** The GPUIX client is one Bun process; anything it starts would be `other`. */
-const gpuixRole: RoleOf = (_pid, cmd) => (cmd.includes('dist/main.js') ? 'app' : 'other')
+const gpuixRole: RoleOf = (_pid, cmd) => (/dist[\\/]main\.js/.test(cmd) ? 'app' : 'other')
+
+/**
+ * The desktop app runs its Rust core in process, so its tree also holds what
+ * the server tree holds for the other clients: agents, shells and probes.
+ */
+const tauriRole: RoleOf = (pid, cmd) => {
+  if (cmd.includes('fake-agent')) return 'agent'
+  if (cmd.includes('terminal-probe')) return 'probe'
+  if (/msedgewebview2/i.test(cmd)) return chromiumRole(pid, cmd)
+  if (/termul-manager/i.test(cmd)) return 'app'
+  return 'other'
+}
 
 const serverRole: RoleOf = (_pid, cmd) => {
   if (cmd.includes('termul-server')) return 'server'
@@ -108,7 +139,13 @@ const serverRole: RoleOf = (_pid, cmd) => {
   return 'other'
 }
 
-async function startXvfb(display: string, width: number, height: number): Promise<ChildProcess> {
+/** Windows clients draw on the interactive desktop, so there is no display to start. */
+async function startXvfb(
+  display: string,
+  width: number,
+  height: number
+): Promise<ChildProcess | null> {
+  if (WIN) return null
   const xvfb = spawn(
     'Xvfb',
     [display, '-screen', '0', `${width}x${height}x24`, '-nolisten', 'tcp'],
@@ -151,21 +188,21 @@ async function runOnce(
 
   const xvfb = await startXvfb(opts.display, opts.width, opts.height)
   const screen: ScreenLog | null = opts.screenFrames ? await startScreenLog(opts.display) : null
-  const server = await startPerfServer({
-    binary: opts.serverBin,
-    port: opts.port,
-    stateRoot: scratch,
-    agentEnv: {
-      PERF_AGENT_SEED: String(opts.seed),
-      PERF_AGENT_RATE: String(flags.rate ?? 20),
-      PERF_AGENT_CHUNK_CHARS: '120',
-      PERF_AGENT_UNIQUE_SESSIONS: '1'
-    }
-  })
-  const serverSampler = startProcSampler(server.pid, serverRole)
+  const agentEnv = {
+    PERF_AGENT_SEED: String(opts.seed),
+    PERF_AGENT_RATE: String(flags.rate ?? 20),
+    PERF_AGENT_CHUNK_CHARS: '120',
+    PERF_AGENT_UNIQUE_SESSIONS: '1'
+  }
+  // The desktop app carries its own core; every other client talks to a server.
+  const serverBin = client === 'tauri' ? null : (opts.serverBinOf[client] ?? opts.serverBin)
+  const server = serverBin
+    ? await startPerfServer({ binary: serverBin, port: opts.port, stateRoot: scratch, agentEnv })
+    : null
+  const serverSampler = server ? startProcSampler(server.pid, serverRole) : null
   const machineSampler = startMachineSampler()
   const proxy = await startByteProxy(opts.port, opts.port + 1).catch(async (err) => {
-    await server.stop()
+    await server?.stop()
     throw err
   })
   let driver: ClientDriver | null = null
@@ -194,6 +231,16 @@ async function runOnce(
       })
       sampler = startProcSampler(handle.rootPid, gpuixRole)
       driver = gpuixDriver(handle)
+    } else if (client === 'tauri') {
+      if (!opts.tauriExe) throw new Error('the tauri client needs --tauri-exe')
+      const handle = await launchTauri({
+        ...launchOpts,
+        exe: opts.tauriExe,
+        projectDir: path.join(scratch, PERF_PROJECT_NAME),
+        agentEnv
+      })
+      sampler = startProcSampler(handle.rootPid, tauriRole)
+      driver = tauriDriver(handle, opts.width, opts.height)
     } else {
       const handle = await launchChromium(launchOpts)
       sampler = startProcSampler(handle.rootPid, chromiumRole)
@@ -203,10 +250,11 @@ async function runOnce(
     notes.client = handle.version
     notes.backend = handle.backend
     startup['startup.processUpMs'] = Math.round(handle.launchedMs)
+    const since = () => Math.round(performance.now() - t0 - (handle.launchOverheadMs ?? 0))
     await driver.waitForProjectList()
-    startup['startup.projectListMs'] = Math.round(performance.now() - t0)
+    startup['startup.projectListMs'] = since()
     await driver.waitForLauncher()
-    startup['startup.launcherReadyMs'] = Math.round(performance.now() - t0)
+    startup['startup.launcherReadyMs'] = since()
     const bootPage = await driver.endPhase('boot')
     windows.push({
       name: 'startup',
@@ -255,7 +303,7 @@ async function runOnce(
       clientSamples = sampler.stop()
       processes = sampler.processes()
       const roleOfPid = new Map(processes.map((p) => [p.pid, p.role]))
-      if (client === 'chromium') notes.pageRendererPid = withPageRenderer(clientSamples, roleOfPid)
+      if (client !== 'gpuix') notes.pageRendererPid = withPageRenderer(clientSamples, roleOfPid)
       const pageRenderer = notes.pageRendererPid
       const role = (pid: number) =>
         pid === pageRenderer ? 'page-renderer' : (roleOfPid.get(pid) ?? 'other')
@@ -268,10 +316,10 @@ async function runOnce(
     await driver?.handle.close()
     await screen?.stop()
     await proxy.close()
-    serverSamples = serverSampler.stop()
+    serverSamples = serverSampler?.stop() ?? []
     machineSamples = machineSampler.stop()
-    await server.stop()
-    xvfb.kill()
+    await server?.stop()
+    xvfb?.kill()
     notes.serverSamples = serverSamples.length
     notes.serverProc = Object.fromEntries(
       windows.map((w) => [w.name, summarizeProc(within(serverSamples, w.from, w.to), 'server.')])
@@ -291,21 +339,34 @@ async function runOnce(
         metrics,
         prefixed(w.name, summarizeScreen(screen.frames(w.from, w.to), w.to - w.from))
       )
-    const serverCpu =
-      summarizeProc(within(serverSamples, w.from, w.to), 'server.')['server.total.cpuMeanPct'] ?? 0
+    const serverProc = summarizeProc(within(serverSamples, w.from, w.to), 'server.')
+    const serverCpu = serverProc['server.total.cpuMeanPct'] ?? 0
     const machine = within(machineSamples, w.from, w.to).map((m) => m.busy)
     const machineCpu = machine.length ? machine.reduce((a, b) => a + b, 0) / machine.length : 0
     const clientCpu = metrics[`${w.name}.proc.total.cpuMeanPct`] ?? 0
-    metrics[`${w.name}.server.cpuMeanPct`] = serverCpu
     metrics[`${w.name}.machine.cpuBusyPct`] = Math.round(machineCpu)
     metrics[`${w.name}.machine.foreignCpuPct`] = Math.round(
       Math.max(0, machineCpu - clientCpu - serverCpu)
     )
     metrics[`${w.name}.durationS`] = Math.round(seconds * 10) / 10
-    metrics[`${w.name}.bytesDownKBps`] = Math.round(w.bytes.down / 1024 / seconds)
-    metrics[`${w.name}.bytesUpKBps`] = Math.round(w.bytes.up / 1024 / seconds)
+    // The whole product: the client plus the backend, agents and shells it
+    // relies on, which live in the server tree or, for the desktop app, its own.
+    metrics[`${w.name}.product.cpuMeanPct`] = Math.round((clientCpu + serverCpu) * 10) / 10
+    metrics[`${w.name}.product.pssMedianMB`] =
+      Math.round(
+        ((metrics[`${w.name}.proc.total.pssMedianMB`] ?? 0) +
+          (serverProc['server.total.pssMedianMB'] ?? 0)) *
+          10
+      ) / 10
+    if (client !== 'tauri') {
+      metrics[`${w.name}.server.cpuMeanPct`] = serverCpu
+      metrics[`${w.name}.bytesDownKBps`] = Math.round(w.bytes.down / 1024 / seconds)
+      metrics[`${w.name}.bytesUpKBps`] = Math.round(w.bytes.up / 1024 / seconds)
+    }
   }
-  Object.assign(metrics, probeMetrics(notes))
+  // On Windows the probe's cursor position request is answered on the server
+  // side (replies kept coming after the client closed), so it does not time the client.
+  if (!WIN) Object.assign(metrics, probeMetrics(notes))
   if (typeof notes.chatsOpen === 'number') metrics.chatsOpen = notes.chatsOpen
   const chatStart = notes.chatStartMs as number[] | undefined
   if (chatStart?.length) {
@@ -330,6 +391,8 @@ async function runOnce(
       clientVersion: notes.client,
       backend: notes.backend,
       gl: opts.gl,
+      serverBin,
+      platform: process.platform,
       pageMetrics: client === 'chromium' && !opts.noPageMetrics,
       screenFrames: opts.screenFrames,
       seed: opts.seed,
