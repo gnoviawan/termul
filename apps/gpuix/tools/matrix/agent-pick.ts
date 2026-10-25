@@ -1,5 +1,5 @@
 /**
- * `bun tools/matrix/agent-pick.ts [--client web,gpuix] [--rounds N] [--port N] [--state DIR]`
+ * `bun tools/matrix/agent-pick.ts [--client web,gpuix] [--rounds N] [--modes send,hold] [--hold-ms N] [--port N] [--state DIR]`
  *
  * The launcher must start a chat with the device's picked agent even when the
  * prompt is typed and sent the moment the composer appears, before the
@@ -7,6 +7,11 @@
  * whose last-selected agent is the matrix's scripted agent, types a unique
  * prompt into the first composer it can reach, presses Enter, and reads the
  * agent of the chat the server persisted for that prompt.
+ *
+ * A `send` round presses Enter right after typing. A `hold` round waits
+ * `--hold-ms` first, past the boot's first project commit, and requires the
+ * composer to still hold the typed prompt: a launcher remounted at boot drops
+ * it (G10 BOOT-REMOUNT).
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -28,6 +33,8 @@ const { values } = parseArgs({
   options: {
     client: { type: 'string', default: 'web,gpuix' },
     rounds: { type: 'string', default: '3' },
+    modes: { type: 'string', default: 'send,hold' },
+    'hold-ms': { type: 'string', default: '3000' },
     port: { type: 'string' },
     state: { type: 'string', default: '/tmp/gpuix-g8/agent-pick' }
   }
@@ -35,6 +42,11 @@ const { values } = parseArgs({
 
 const SIZE = { width: WINDOW_WIDTH, height: WINDOW_HEIGHT }
 const SESSION_TIMEOUT_MS = 20_000
+const HOLD_MS = Number(values['hold-ms'])
+
+type Mode = 'send' | 'hold'
+// The GPUIX composer mirrors its text into the automation tree under test hooks.
+process.env.TERMUL_GPUIX_TEST_HOOKS = '1'
 
 interface PersistedSession {
   sessionId: string
@@ -43,13 +55,21 @@ interface PersistedSession {
   createdAt: number
 }
 
-interface Round {
+interface Typed {
+  /** ms from the composer first being reachable to Enter. */
+  typedAfterMs: number
+  /** The composer's text just before Enter. */
+  composerText: string
+  /** The composer typed into is still the one on screen just before Enter (no remount). */
+  sameComposer: boolean
+}
+
+interface Round extends Typed {
   client: 'web' | 'gpuix'
+  mode: Mode
   prompt: string
   /** The persisted chat's agent namespace, or null when no chat for the prompt appeared. */
   namespace: string | null
-  /** ms from the composer first being reachable to Enter. */
-  typedAfterMs: number
 }
 
 async function sessionFor(world: World, prompt: string): Promise<PersistedSession | null> {
@@ -63,7 +83,12 @@ async function sessionFor(world: World, prompt: string): Promise<PersistedSessio
   return null
 }
 
-async function webRound(world: World, deviceId: string, prompt: string): Promise<number> {
+async function webRound(
+  world: World,
+  deviceId: string,
+  prompt: string,
+  mode: Mode
+): Promise<Typed> {
   const browser = await chromium.launch({
     args: ['--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks']
   })
@@ -94,14 +119,24 @@ async function webRound(world: World, deviceId: string, prompt: string): Promise
     const editor = page.locator('[data-composer-editor="true"]').filter({ visible: true }).first()
     await editor.waitFor({ state: 'visible', timeout: READY_TIMEOUT_MS })
     const reachable = performance.now()
+    await editor.evaluate((node) => {
+      ;(node as { agentPickTyped?: boolean }).agentPickTyped = true
+    })
     await editor.click()
     await page.keyboard.type(prompt)
+    if (mode === 'hold') await Bun.sleep(HOLD_MS)
+    const composerText = ((await editor.textContent()) ?? '').trim()
+    const sameComposer = await page.evaluate(() =>
+      [...document.querySelectorAll('[data-composer-editor="true"]')].some(
+        (node) => (node as { agentPickTyped?: boolean }).agentPickTyped === true
+      )
+    )
     await page.keyboard.press('Enter')
     const typedAfterMs = performance.now() - reachable
     if (!(await sessionFor(world, prompt)))
       await page.screenshot({ path: path.join(root, `${deviceId}.png`) })
     await context.close()
-    return typedAfterMs
+    return { typedAfterMs, composerText, sameComposer }
   } finally {
     await browser.close()
   }
@@ -111,8 +146,9 @@ async function gpuixRound(
   entry: string,
   world: World,
   deviceId: string,
-  prompt: string
-): Promise<number> {
+  prompt: string,
+  mode: Mode
+): Promise<Typed> {
   const clientStateDir = path.join(values.state as string, 'clients', deviceId)
   await rm(clientStateDir, { recursive: true, force: true })
   const host = new URL(world.server.baseUrl).host.replace(/[^A-Za-z0-9.-]/g, '_')
@@ -124,21 +160,29 @@ async function gpuixRound(
   return withGpuix(
     { server: world.server, entry, clientStateDir, ...SIZE },
     async ({ app, grab }) => {
-      await app.getByTestId('composer-editor').waitFor({ timeoutMs: READY_TIMEOUT_MS })
+      const typedInto = await app
+        .getByTestId('composer-editor')
+        .waitFor({ timeoutMs: READY_TIMEOUT_MS })
       const reachable = performance.now()
       await app.getByTestId('composer-editor').click()
       await app.call('keystrokes', {
         keys: [...prompt].map((c) => (c === ' ' ? 'space' : c)).join(' ')
       })
+      if (mode === 'hold') await Bun.sleep(HOLD_MS)
+      const state = JSON.parse(await app.getByTestId('composer-editor-state').textContent()) as {
+        text: string
+      }
+      const sameComposer = (await app.getByTestId('composer-editor').element()).id === typedInto.id
       await app.call('keystrokes', { keys: 'enter' })
       const typedAfterMs = performance.now() - reachable
       if (!(await sessionFor(world, prompt))) await grab(path.join(root, `${deviceId}.png`))
-      return typedAfterMs
+      return { typedAfterMs, composerText: state.text.trim(), sameComposer }
     }
   )
 }
 
 const clients = (values.client as string).split(',') as Round['client'][]
+const modes = (values.modes as string).split(',') as Mode[]
 const rounds = Number(values.rounds)
 const root = values.state as string
 await rm(root, { recursive: true, force: true })
@@ -157,53 +201,61 @@ const world = await createWorld({
 })
 const expected = `config:${world.agent.configId}`
 const results: Round[] = []
+const passed = (round: Round) =>
+  round.namespace === expected &&
+  round.composerText === round.prompt &&
+  (round.mode === 'send' || round.sameComposer)
 try {
   for (const client of clients) {
-    for (let n = 0; n < rounds; n++) {
-      const deviceId = `g8-pick-${client}-${n}`
-      const prompt = `agentpick ${client} ${n}`
-      await prepareDevice(world, deviceId)
-      const typedAfterMs =
-        client === 'web'
-          ? await webRound(world, deviceId, prompt)
-          : await gpuixRound(entry, world, deviceId, prompt)
-      const session = await sessionFor(world, prompt)
-      const round = {
-        client,
-        prompt,
-        namespace: session?.stableAgentNamespace ?? null,
-        typedAfterMs
-      }
-      results.push(round)
-      const ok = round.namespace === expected
-      if (!ok) {
-        const agents = await world.ws.request<{ name: string; namespace: string }[]>(
-          'list_agents',
-          {}
-        )
+    for (const mode of modes) {
+      for (let n = 0; n < rounds; n++) {
+        const deviceId = `pick-${client}-${mode}-${n}`
+        const prompt = `agentpick ${client} ${mode} ${n}`
+        await prepareDevice(world, deviceId)
+        const typed =
+          client === 'web'
+            ? await webRound(world, deviceId, prompt, mode)
+            : await gpuixRound(entry, world, deviceId, prompt, mode)
+        const session = await sessionFor(world, prompt)
+        const round = {
+          client,
+          mode,
+          prompt,
+          namespace: session?.stableAgentNamespace ?? null,
+          ...typed
+        }
+        results.push(round)
+        if (round.namespace !== expected) {
+          const agents = await world.ws.request<{ name: string; namespace: string }[]>(
+            'list_agents',
+            {}
+          )
+          console.log(
+            `     live agents: ${agents.map((a) => `${a.name} (${a.namespace})`).join(', ')}`
+          )
+          const ws = await connectWs({
+            baseUrl: world.server.baseUrl,
+            token: TOKEN,
+            deviceId,
+            clientInstanceId: `${deviceId}-check`
+          })
+          const pick = await ws.request('store_read', {
+            key: scopedKey('agents/last-selected', deviceId)
+          })
+          ws.close()
+          console.log(`     device last-selected after the round: ${JSON.stringify(pick)}`)
+        }
         console.log(
-          `     live agents: ${agents.map((a) => `${a.name} (${a.namespace})`).join(', ')}`
+          `${passed(round) ? 'ok  ' : 'FAIL'} ${client} ${mode} round ${n}: sent ${Math.round(round.typedAfterMs)} ms after the composer appeared; ${round.sameComposer ? 'same composer' : 'composer REMOUNTED'} holding ${JSON.stringify(round.composerText)}; chat agent ${round.namespace ?? '(no chat)'}`
         )
-        const ws = await connectWs({
-          baseUrl: world.server.baseUrl,
-          token: TOKEN,
-          deviceId,
-          clientInstanceId: `${deviceId}-check`
-        })
-        const pick = await ws.request('store_read', {
-          key: scopedKey('agents/last-selected', deviceId)
-        })
-        ws.close()
-        console.log(`     device last-selected after the round: ${JSON.stringify(pick)}`)
       }
-      console.log(
-        `${ok ? 'ok  ' : 'FAIL'} ${client} round ${n}: sent ${Math.round(typedAfterMs)} ms after the composer appeared; chat agent ${round.namespace ?? '(no chat)'}`
-      )
     }
   }
 } finally {
   await world.server.stop()
 }
-const failed = results.filter((round) => round.namespace !== expected)
-console.log(`${results.length - failed.length}/${results.length} chats started on ${expected}`)
+const failed = results.filter((round) => !passed(round))
+console.log(
+  `${results.length - failed.length}/${results.length} rounds kept the typed prompt and started on ${expected}`
+)
 process.exit(failed.length > 0 ? 1 : 0)

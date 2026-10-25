@@ -85,13 +85,18 @@ const PROBE_STYLE = {
 const TRACK_FOCUS = { onFocus: () => {}, onBlur: () => {} }
 
 /**
- * Set by the composer scene: the automation tree does not carry a textarea's
- * value, so the editor mirrors its state into an unpainted text node, as the
- * web editor exposes itself on its DOM node in test mode.
+ * Set by the composer scene, or by TERMUL_GPUIX_TEST_HOOKS=1 for the whole app:
+ * the automation tree does not carry a textarea's value, so the editor mirrors
+ * its state into an unpainted text node, as the web editor exposes itself on
+ * its DOM node in test mode.
  */
 function testHooksEnabled(): boolean {
+  const scope = globalThis as {
+    __TERMUL_GPUIX_TEST_HOOKS__?: boolean
+    process?: { env: Record<string, string | undefined> }
+  }
   return (
-    (globalThis as { __TERMUL_GPUIX_TEST_HOOKS__?: boolean }).__TERMUL_GPUIX_TEST_HOOKS__ === true
+    scope.__TERMUL_GPUIX_TEST_HOOKS__ === true || scope.process?.env.TERMUL_GPUIX_TEST_HOOKS === '1'
   )
 }
 
