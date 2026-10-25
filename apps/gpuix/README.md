@@ -100,8 +100,9 @@ host-local features (Claude accounts, SSH).
 
 ### The patched native addon
 
-Italic text, the chat's link colour and inline-code chip, overlay backdrop
-blur, DOM-ordered focus events and the browser pane's window lookup need
+Italic text, the chat's link colour, inline-code chip and table cells,
+overlay backdrop blur, DOM-ordered focus events, focus rings on text fields,
+`z-index` stacking, the save dialog and the browser pane's window lookup need
 Termul's patches to `@gpuix/native` 0.11.0
 ([docs/native-patches.md](./docs/native-patches.md)). A checkout runs the
 published npm addon until you build the patched one and point the app at it:
@@ -109,7 +110,7 @@ published npm addon until you build the patched one and point the app at it:
 ```sh
 sudo apt install gcc g++ libfontconfig-dev libwayland-dev libxkbcommon-x11-dev \
   libx11-xcb-dev libssl-dev libzstd-dev libvulkan1    # and rustup
-bun run native:build       # about 20 min cold, 2 to 4 min after a patch change; ~4 GB in ~/gpuix-native-target
+bun run native:build       # about 20 min cold, 2 to 4 min after a patch change, seconds when unchanged; ~4 GB in ~/gpuix-native-target
 export NAPI_RS_NATIVE_LIBRARY_PATH=$PWD/native/gpuix-native/build/gpuix-native.linux-x64-gnu.node
 bun run native:patch-check # one on-screen check per patch; fails on the published addon
 bun run dev
