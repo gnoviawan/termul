@@ -2,6 +2,7 @@ import type { PublicInstance } from '@gpuix/react'
 import { cva, type VariantProps } from 'class-variance-authority'
 import { forwardRef } from 'react'
 import { cn } from '@/lib/utils'
+import type { InlineLevel } from '../compat/children'
 import { Box, type HostProps } from './internal/host'
 
 const labelVariants = cva(
@@ -23,5 +24,7 @@ const Label = forwardRef<PublicInstance, LabelProps>(
   )
 )
 Label.displayName = 'Label'
+// The web's Radix Label renders an inline `<label>`: in a block container it sits on the strut's line.
+;(Label as InlineLevel).inlineLevel = true
 
 export { Label }

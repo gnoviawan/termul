@@ -308,6 +308,53 @@ function belowStrut(node: ReactElement, strut: number): ReactElement {
   return line
 }
 
+/** The line-height of a block container's strut: its own, or the root's. */
+function strutHeight(style: StyleDesc): number {
+  const size = typeof style.fontSize === 'number' ? style.fontSize : ROOT_FONT_SIZE
+  return typeof style.lineHeight === 'number' ? style.lineHeight : size * INHERITED_LEADING
+}
+
+/** A component that renders an inline-level box (`<label>`), as compat cannot tell from the element. */
+export interface InlineLevel {
+  inlineLevel?: true
+}
+
+/** An in-flow inline-level box: a compat inline element, or a component marked `inlineLevel`. */
+function isInlineLevel(slot: Slot): slot is ReactElement {
+  if (!isValidElement<{ style?: StyleDesc }>(slot) || isPositioned(slot) || slot.props.style?.position === 'absolute') return false
+  const info = infoOf(slot)
+  if (info) return info.inline && !info.baselineAtBottom && !info.autoMargin
+  return typeof slot.type !== 'string' && (slot.type as InlineLevel).inlineLevel === true
+}
+
+/**
+ * An inline-level box alone on a line of a block container: the line box is
+ * at least the container's strut tall, so a 14 px label under a 16 px root
+ * sits on a 24 px line. GPUIX lays the box out as a block; a wrapper of the
+ * strut's height, centring it, stands in for the line box.
+ */
+function onStrutLine(node: ReactElement, height: number): ReactElement {
+  const line = jsx(
+    'div',
+    { style: { minHeight: height, display: 'flex', flexDirection: 'column', justifyContent: 'center' }, children: node },
+    node.key ?? undefined
+  )
+  childInfo.set(line, { inline: false })
+  return line
+}
+
+/** Whether the slot at `i` shares its line with no text or inline neighbour. */
+function aloneOnLine(slots: Slot[], i: number): boolean {
+  const neighbour = (step: number): Slot => {
+    for (let j = i + step; j >= 0 && j < slots.length; j += step) {
+      const slot = slots[j]
+      if (!isEmpty(slot) && !isPositioned(slot) && !(isText(slot) && String(slot).trim() === '')) return slot
+    }
+    return null
+  }
+  return [neighbour(-1), neighbour(1)].every((slot) => slot === null || (!isText(slot) && !isInlineLevel(slot)))
+}
+
 export function layoutChildren(
   tr: Translation,
   style: StyleDesc,
@@ -329,6 +376,9 @@ export function layoutChildren(
     }
     if (tr.blockFlow && info?.baselineAtBottom && isValidElement(children)) {
       return { children: belowStrut(children, strutDescent(style)), isStatic: false }
+    }
+    if (tr.blockFlow && isInlineLevel(children)) {
+      return { children: onStrutLine(children, strutHeight(style)), isStatic: false }
     }
     if (tr.listMarker) return { children: withMarkers([children], tr.listMarker, tr.listInside), isStatic: true }
     // A span's content is inline by definition, whatever the component renders.
@@ -381,6 +431,7 @@ export function layoutChildren(
       const info = infoOf(slot)
       if (info?.autoMargin && isValidElement(slot)) out[i] = placeAutoMargin(slot, info.autoMargin, row, grows)
       else if (strut > 0 && info?.baselineAtBottom && isValidElement(slot)) out[i] = belowStrut(slot, strut)
+      else if (tr.blockFlow && isInlineLevel(slot) && aloneOnLine(slots, i)) out[i] = onStrutLine(slot, strutHeight(style))
     }
     return { children: paintPositionedLast(out), isStatic }
   }
