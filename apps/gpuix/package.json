@@ -15,6 +15,8 @@
   "scripts": {
     "build": "bun build.ts",
     "build:webview-host": "bun tools/webview-host.ts",
+    "native:build": "sh native/gpuix-native/build.sh",
+    "native:check": "sh native/gpuix-native/build.sh check",
     "package:linux": "bun packaging/linux/package.ts",
     "package:verify": "bun packaging/linux/verify.ts",
     "dev": "bun tools/dev.ts",

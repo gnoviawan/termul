@@ -1,0 +1,94 @@
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index ffa8f2d..42b722f 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -499,6 +499,9 @@ enum UiCommand {
+     GetWindowSize {
+         response: SyncSender<WindowSize>,
+     },
++    GetNativeWindowHandle {
++        response: SyncSender<Option<NativeWindowHandle>>,
++    },
+     GetElementBounds {
+         id: u64,
+         response: SyncSender<Option<crate::automation::ElementBounds>>,
+@@ -733,6 +736,11 @@ async fn run_ui_commands(
+                         .ok();
+                 })
+             }
++            UiCommand::GetNativeWindowHandle { response } => {
++                window.update(cx, move |_view, window, _cx| {
++                    response.send(native_window_handle(window)).ok();
++                })
++            }
+             UiCommand::GetAutomationBounds { response } => {
+                 window.update(cx, move |_view, window, cx| {
+                     cx.notify();
+@@ -1675,6 +1683,32 @@ impl GpuixRenderer {
+         ))
+     }
+ 
++    /// The platform window behind this renderer, for helpers that embed into it
++    /// or stack above it: `{ kind: "x11", id: <XID> }` on X11, `{ kind:
++    /// "wayland" }` (no portable id) on Wayland, `null` before a window exists.
++    #[napi]
++    pub fn get_native_window_handle(&self) -> Result<Option<NativeWindowHandle>> {
++        #[cfg(target_os = "macos")]
++        return update_window(|_view, window, _cx| native_window_handle(window));
++
++        #[cfg(any(target_os = "windows", target_os = "linux", target_os = "freebsd"))]
++        {
++            let (response, receiver) = sync_channel(1);
++            self.send_ui_command(UiCommand::GetNativeWindowHandle { response })?;
++            return recv_ui_response(receiver, "the native window handle query");
++        }
++
++        #[cfg(not(any(
++            target_os = "macos",
++            target_os = "windows",
++            target_os = "linux",
++            target_os = "freebsd"
++        )))]
++        Err(Error::from_reason(
++            "The production GPUIX renderer does not support this operating system",
++        ))
++    }
++
+     #[napi]
+     pub fn get_window_insets(&self) -> Result<WindowInsets> {
+         #[cfg(target_os = "macos")]
+@@ -7332,6 +7366,34 @@ pub struct WindowSize {
+     pub height: f64,
+ }
+ 
++#[derive(Debug, Clone, PartialEq)]
++#[cfg_attr(not(all(target_arch = "wasm32", target_os = "unknown")), napi(object))]
++pub struct NativeWindowHandle {
++    /// `"x11"`, `"wayland"`, `"appkit"` or `"win32"`.
++    pub kind: String,
++    /// The X11 window id or the Win32 HWND. Absent where the platform has no
++    /// id another process can use (Wayland, AppKit).
++    pub id: Option<f64>,
++}
++
++#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
++fn native_window_handle(window: &gpui::Window) -> Option<NativeWindowHandle> {
++    use gpui::raw_window_handle::{HasWindowHandle, RawWindowHandle};
++    let handle = window.window_handle().ok()?;
++    let (kind, id) = match handle.as_raw() {
++        RawWindowHandle::Xcb(h) => ("x11", Some(h.window.get() as f64)),
++        RawWindowHandle::Xlib(h) => ("x11", Some(h.window as f64)),
++        RawWindowHandle::Wayland(_) => ("wayland", None),
++        RawWindowHandle::AppKit(_) => ("appkit", None),
++        RawWindowHandle::Win32(h) => ("win32", Some(h.hwnd.get() as f64)),
++        _ => return None,
++    };
++    Some(NativeWindowHandle {
++        kind: kind.to_string(),
++        id,
++    })
++}
++
+ #[derive(Debug, Clone, Default)]
+ #[cfg_attr(not(all(target_arch = "wasm32", target_os = "unknown")), napi(object))]
+ pub struct EdgeInsets {

@@ -40,6 +40,12 @@ export interface FocusControl {
   focusedElement(): number | null
   /** Clear GPUIX focus. */
   blur(): void
+  /**
+   * This window's X11 id, from the patched addon's `getNativeWindowHandle`
+   * (patch 0003). `null` on the published addon, on Wayland, and before the
+   * window exists.
+   */
+  x11Window(): number | null
 }
 
 export type BootFn = (config: ClientConfig, options: BootOptions) => void

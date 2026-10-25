@@ -131,8 +131,27 @@ guard() {
   done
 }
 
+# GPUI links -lxkbcommon-x11 and -lX11-xcb. Their unversioned .so symlinks
+# come with the -dev packages (libxkbcommon-x11-dev, libx11-xcb-dev); a box
+# with only the runtime libraries gets the symlinks here, on LIBRARY_PATH (the
+# cc linker driver reads it, and cargo does not fingerprint it).
+link_shims() {
+  shims=$work/syslib
+  mkdir -p "$shims"
+  for lib in xkbcommon-x11 X11-xcb; do
+    if ! ldconfig -p | grep -q "lib$lib\.so "; then
+      runtime=$(ldconfig -p | awk -v l="lib$lib.so." 'index($1, l) == 1 {print $NF; exit}')
+      [ -n "$runtime" ] || die "lib$lib is missing; install its -dev package"
+      ln -sf "$runtime" "$shims/lib$lib.so"
+      say "link shim lib$lib.so -> $runtime"
+    fi
+  done
+  export LIBRARY_PATH="$shims${LIBRARY_PATH:+:$LIBRARY_PATH}"
+}
+
 build() {
   [ "$(free_gb)" -ge "$min_free_gb" ] || die "only $(free_gb)G free on /, need ${min_free_gb}G"
+  link_shims
   rm -f "$work/budget-stop"
   say "cargo build (release, no default features, as the published linux-x64-gnu addon)"
   start=$(date +%s)
