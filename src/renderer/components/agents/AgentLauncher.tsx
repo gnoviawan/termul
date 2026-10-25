@@ -231,6 +231,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   })
 
   const acpConfigs = useAcpStore((s) => s.agentConfigs)
+  const acpConfigsLoaded = useAcpStore((s) => s.agentConfigsLoaded)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
   const mcpServers = useAcpStore((s) => s.mcpServers) ?? EMPTY_MCP_SERVERS
   const mcpCount = mcpServers.length
@@ -954,9 +955,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // re-running on every options change would re-seed and fight user edits.
   }, [activeConfigId])
 
-  // Restore the last-selected agent on mount if no agent is selected yet.
+  // Restore the last-selected agent on mount if no agent is selected yet. It
+  // waits for the saved configs: before they load, a custom pick is missing
+  // from `supportedAgents` and a catalog default would be persisted over it.
   useEffect(() => {
-    if (selectedConfigId || supportedAgents.length === 0) return
+    if (selectedConfigId || supportedAgents.length === 0 || !acpConfigsLoaded) return
     let cancelled = false
     // Issue #840: on web the fallback default must be a CONFIGURED agent —
     // the catalog-derived preferred default (Codex via `npx`) would
@@ -1007,7 +1010,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     return () => {
       cancelled = true
     }
-  }, [acpConfigs, persistSelection, selectedConfigId, supportedAgents])
+  }, [acpConfigs, acpConfigsLoaded, persistSelection, selectedConfigId, supportedAgents])
 
   // CAP-2: resolve the origin-aware default base branch and local branch list
   // once per desktop git project so the context-strip picker is ready when the

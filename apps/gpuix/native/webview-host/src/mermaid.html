@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body { margin: 0; background: transparent; }
+    </style>
+    <script src="termul-mermaid://localhost/mermaid.min.js"></script>
+  </head>
+  <body>
+    <script>
+      (function () {
+        var post = function (m) {
+          try { window.ipc.postMessage(JSON.stringify(m)); } catch (e) {}
+        };
+        // The web's mermaid config: @streamdown/mermaid's defaults. Without the
+        // script every render answers with the load error instead of hanging.
+        try {
+          mermaid.initialize({
+            startOnLoad: false,
+            theme: 'default',
+            securityLevel: 'strict',
+            fontFamily: 'monospace',
+            suppressErrorRendering: true
+          });
+        } catch (e) {}
+        // Rasterized at twice the diagram's CSS size, so it stays sharp on a 2x screen.
+        var SCALE = 2;
+
+        function size(svg) {
+          var box = svg.viewBox && svg.viewBox.baseVal;
+          if (box && box.width > 0 && box.height > 0) return { width: box.width, height: box.height };
+          return { width: parseFloat(svg.getAttribute('width')) || 0, height: parseFloat(svg.getAttribute('height')) || 0 };
+        }
+
+        async function rasterize(id, source) {
+          var out = await mermaid.render('termul-mermaid-' + id, source);
+          var svg = new DOMParser().parseFromString(out.svg, 'image/svg+xml').documentElement;
+          var box = size(svg);
+          if (!(box.width > 0 && box.height > 0)) throw new Error('the diagram has no size');
+          svg.setAttribute('width', String(box.width));
+          svg.setAttribute('height', String(box.height));
+          svg.style.maxWidth = 'none';
+          var img = new Image();
+          img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+          await img.decode();
+          var canvas = document.createElement('canvas');
+          canvas.width = Math.ceil(box.width * SCALE);
+          canvas.height = Math.ceil(box.height * SCALE);
+          var context = canvas.getContext('2d');
+          context.scale(SCALE, SCALE);
+          context.drawImage(img, 0, 0, box.width, box.height);
+          return { png: canvas.toDataURL('image/png'), width: box.width, height: box.height };
+        }
+
+        // mermaid.render keeps global state per call, so renders run one at a time.
+        var queue = Promise.resolve();
+        window.__termulMermaid = {
+          render: function (id, source) {
+            queue = queue.then(function () {
+              return rasterize(id, source).then(
+                function (r) { post({ kind: 'mermaid', id: id, ok: true, png: r.png, width: r.width, height: r.height, error: null }); },
+                function (e) { post({ kind: 'mermaid', id: id, ok: false, png: null, width: null, height: null, error: String((e && e.message) || e) }); }
+              );
+            });
+          }
+        };
+        post({ kind: 'mermaidReady' });
+      })();
+    </script>
+  </body>
+</html>

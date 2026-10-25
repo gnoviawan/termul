@@ -20,6 +20,7 @@ import type {
 import { log } from '../log'
 import type { CanvasWebviewHost } from './canvas-relay'
 import { type AckResult, HostProcess } from './host-process'
+import type { MermaidRender, MermaidRenderHost } from './mermaid-render'
 import type { HostEvent, HostRequest } from './protocol'
 
 export interface GpuixBrowserHostOptions {
@@ -38,6 +39,8 @@ export interface GpuixBrowserHostOptions {
   focusPollMs?: number
   /** Whether Termul's theme is dark when the helper starts: its pages then match `prefers-color-scheme: dark`. */
   prefersDark?(): boolean
+  /** How long a mermaid render may take before it answers as failed. */
+  mermaidTimeoutMs?: number
 }
 
 /**
@@ -51,7 +54,7 @@ export function helperEnv(env: NodeJS.ProcessEnv, dark: boolean): NodeJS.Process
   return { ...env, GTK_THEME: `${theme}:dark` }
 }
 
-export interface GpuixBrowserHost extends BrowserHost, CanvasWebviewHost {
+export interface GpuixBrowserHost extends BrowserHost, CanvasWebviewHost, MermaidRenderHost {
   /** Which tab holds the keyboard, `null` for the app window (tests and diagnostics). */
   keyboardOwner(): string | null
   helperPid(): number | undefined
@@ -107,6 +110,8 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
   const liveCanvases = new Set<string>()
   let helper: HostProcess | null = null
   let keyboard: string | null = null
+  const mermaidRenders = new Map<string, (result: MermaidRender) => void>()
+  let nextMermaid = 1
   let focusPoll: ReturnType<typeof setInterval> | null = null
 
   const stopFocusPoll = () => {
@@ -141,6 +146,16 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
       case 'canvasMessage':
         for (const callback of canvasListeners.get(event.id) ?? []) callback(event.data)
         return
+      case 'mermaid': {
+        const resolve = mermaidRenders.get(event.id)
+        mermaidRenders.delete(event.id)
+        resolve?.(
+          event.ok
+            ? { ok: true, png: event.png, width: event.width, height: event.height }
+            : { ok: false, error: event.error }
+        )
+        return
+      }
       case 'keyboard':
         keyboard = event.owner
         log.info(SOURCE, `keyboard -> ${keyboard === null ? 'app' : `tab ${keyboard}`}`)
@@ -176,6 +191,9 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
         if (helper === started) helper = null
         keyboard = null
         stopFocusPoll()
+        for (const resolve of mermaidRenders.values())
+          resolve({ ok: false, error: `webview host ${detail}` })
+        mermaidRenders.clear()
         const lost = [...liveCanvases]
         liveCanvases.clear()
         for (const tabId of lost) {
@@ -238,6 +256,25 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
     postToCanvas: (tabId, data) => tabRequest({ op: 'post', id: tabId, data }),
     onCanvasMessage: (tabId, callback) => listenFor(canvasListeners, tabId, callback),
     onCanvasGone: (tabId, callback) => listenFor(canvasGone, tabId, callback),
+    renderMermaid(source) {
+      const id = `m${nextMermaid++}`
+      return new Promise<MermaidRender>((resolve) => {
+        const timer = setTimeout(() => {
+          if (mermaidRenders.delete(id))
+            resolve({ ok: false, error: `no answer in ${options.mermaidTimeoutMs ?? 20_000} ms` })
+        }, options.mermaidTimeoutMs ?? 20_000)
+        mermaidRenders.set(id, (result) => {
+          clearTimeout(timer)
+          resolve(result)
+        })
+        void request({ op: 'renderMermaid', id, source }).then((ack) => {
+          if (ack.ok) return
+          mermaidRenders.delete(id)
+          clearTimeout(timer)
+          resolve({ ok: false, error: ack.error })
+        })
+      })
+    },
     releaseKeyboard(tabId) {
       if (keyboard === tabId) void request({ op: 'blur' })
     },

@@ -230,3 +230,35 @@ describe('helper environment', () => {
     expect(helperEnv(env, false)).toBe(env)
   })
 })
+
+describe('mermaid renders', () => {
+  test('answers each render with its own PNG or error', async () => {
+    const browser = fakeHost()
+    const [drawn, broken] = await Promise.all([
+      browser.renderMermaid('flowchart LR\n  A --> B'),
+      browser.renderMermaid('not a diagram')
+    ])
+    expect(drawn).toEqual({ ok: true, png: 'data:image/png;base64,AA', width: 120, height: 40 })
+    expect(broken).toEqual({ ok: false, error: 'No diagram type detected' })
+  })
+
+  test('a render the helper never answers fails after the timeout', async () => {
+    host = createGpuixBrowserHost({
+      binary: FAKE,
+      parentPid: process.pid,
+      focusedElement: () => null,
+      blurApp: () => {},
+      mermaidTimeoutMs: 50
+    })
+    expect(await host.renderMermaid('flowchart silent')).toEqual({
+      ok: false,
+      error: 'no answer in 50 ms'
+    })
+  })
+
+  test('a helper that dies fails its pending renders', async () => {
+    const result = await fakeHost().renderMermaid('flowchart die')
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.error).toStartWith('webview host exited with 3')
+  })
+})

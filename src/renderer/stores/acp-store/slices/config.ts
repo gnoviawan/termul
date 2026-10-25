@@ -90,6 +90,7 @@ function startSharedConfigSync(set: AcpSet, get: AcpGet): void {
 type ConfigSliceState = Pick<
   AcpState,
   | 'agentConfigs'
+  | 'agentConfigsLoaded'
   | 'configToLiveAgent'
   | 'warmingConfigs'
   | 'agentOptionsCache'
@@ -107,6 +108,7 @@ type ConfigSliceState = Pick<
 
 export const createConfigSlice: StateCreator<AcpState, [], [], ConfigSliceState> = (set, get) => ({
   agentConfigs: [],
+  agentConfigsLoaded: false,
   configToLiveAgent: {},
   warmingConfigs: {},
   agentOptionsCache: {},
@@ -122,7 +124,7 @@ export const createConfigSlice: StateCreator<AcpState, [], [], ConfigSliceState>
         changed = true
         return migrated
       })
-      set({ agentConfigs: configs })
+      set({ agentConfigs: configs, agentConfigsLoaded: true })
       if (changed) {
         try {
           const fresh = await loadAgentConfigsFromDisk()
@@ -155,6 +157,7 @@ export const createConfigSlice: StateCreator<AcpState, [], [], ConfigSliceState>
       // lands after a test run's last tick races vitest's worker RPC teardown
       // ("onUserConsoleLog pending") and has failed CI on otherwise green runs
       // (seen on #689 and #690's CI runs).
+      set({ agentConfigsLoaded: true })
       void logFrontendError({
         level: 'warn',
         source: 'acp.loadAgentConfigs',

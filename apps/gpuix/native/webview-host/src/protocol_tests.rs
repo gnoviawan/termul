@@ -82,3 +82,33 @@ fn canvas_commands_and_messages_carry_json_text_unparsed() {
         r#"{"ev":"canvasMessage","id":"c1","data":"{\"id\":1}"}"#
     );
 }
+
+#[test]
+fn parses_render_mermaid_and_encodes_its_answer() {
+    let cmd = parse_command(r#"{"op":"renderMermaid","req":5,"id":"m1","source":"flowchart LR\n A --> B"}"#).unwrap();
+    assert_eq!(cmd, Command::RenderMermaid { req: 5, id: "m1".into(), source: "flowchart LR\n A --> B".into() });
+    assert_eq!(cmd.req(), Some(5));
+    assert_eq!(
+        parse_page_message(r#"{"kind":"mermaid","id":"m1","ok":false,"error":"Parse error"}"#),
+        Some(PageMessage::Mermaid {
+            id: "m1".into(),
+            ok: false,
+            png: None,
+            width: None,
+            height: None,
+            error: Some("Parse error".into()),
+        })
+    );
+    assert_eq!(parse_page_message(r#"{"kind":"mermaidReady"}"#), Some(PageMessage::MermaidReady));
+    assert_eq!(
+        encode(&Event::Mermaid {
+            id: "m1".into(),
+            ok: true,
+            png: Some("data:image/png;base64,AA".into()),
+            width: Some(10.5),
+            height: Some(4.0),
+            error: None,
+        }),
+        r#"{"ev":"mermaid","id":"m1","ok":true,"png":"data:image/png;base64,AA","width":10.5,"height":4.0}"#
+    );
+}
