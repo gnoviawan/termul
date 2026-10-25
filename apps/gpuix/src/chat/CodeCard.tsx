@@ -4,6 +4,11 @@
  * language header, Download and Copy in the top-right group, and the code on
  * the background fill. The code itself is GPUIX's native `<code>`, which
  * highlights in Rust and scrolls horizontally on its own.
+ *
+ * A finished mermaid fence draws its diagram as Streamdown's mermaid block
+ * does, from a PNG the webview helper renders (`mermaid.ts`). While it draws
+ * the card keeps the diagram's frame; without the helper, or when mermaid
+ * rejects the source, the card shows the source.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -19,6 +24,7 @@ import { useColorTheme } from '@/stores/app-settings-store'
 import { log } from '../log'
 import { tw } from '../style/tw'
 import { copyText } from '../terminal/clipboard'
+import { canDrawMermaid, useMermaid } from './mermaid'
 import { transcriptThemes } from './theme'
 
 /** Fence info strings GPUIX's `<code>` has a grammar for, under the alias it expects. */
@@ -62,6 +68,9 @@ const HEADER_LABEL = tw('ml-1 font-mono text-xs text-muted-foreground')
 const ACTIONS = tw('absolute top-2 right-2 flex items-center')
 const BODY = tw('rounded-md border border-border bg-background p-4')
 const NOTE = tw('px-1 text-xs text-muted-foreground')
+const DIAGRAM_BODY = tw('overflow-hidden rounded-md border border-border bg-background')
+/** Streamdown's mermaid frame: at least 7rem tall, the diagram fit to its width and centred. */
+const DIAGRAM_STAGE = tw('flex min-h-28 w-full flex-col items-center justify-center')
 
 function downloadsDir(): string {
   return process.env.XDG_DOWNLOAD_DIR || path.join(homedir(), 'Downloads')
@@ -149,11 +158,8 @@ export interface CodeCardProps {
   streaming: boolean
 }
 
-function CodeCardComponent({ code, language, open, streaming }: CodeCardProps) {
+function SourceCard({ code, language, streaming }: Omit<CodeCardProps, 'open'>) {
   const themes = transcriptThemes(useColorTheme())
-  if (language === 'termul-plan') {
-    return <TermulPlanRenderer code={code} isIncomplete={open} language={language} />
-  }
   const label = language || 'text'
   const grammar = LANGUAGE_ALIASES[label]
   return (
@@ -178,6 +184,62 @@ function CodeCardComponent({ code, language, open, streaming }: CodeCardProps) {
       ) : null}
     </div>
   )
+}
+
+/** The diagram at its own size, or scaled down to the frame's width. */
+function fitted(
+  width: number,
+  height: number,
+  available: number
+): { width: number; height: number } {
+  const scale = Math.min(1, available / width)
+  return { width: width * scale, height: height * scale }
+}
+
+function MermaidCard({ code, streaming }: { code: string; streaming: boolean }) {
+  const diagram = useMermaid(code)
+  // An image needs a definite size; the frame's width decides it, as the web fits the SVG to it.
+  const [stageWidth, setStageWidth] = useState(0)
+  if (diagram.status === 'done' && !diagram.ok)
+    return <SourceCard code={code} language="mermaid" streaming={streaming} />
+  return (
+    <div style={CARD} testId="chat-mermaid-card">
+      <div style={HEADER}>
+        <text style={HEADER_LABEL}>mermaid</text>
+      </div>
+      <div style={ACTIONS}>
+        <IconActionGroup>
+          <DownloadAction code={code} language="mermaid" disabled={streaming} />
+          <CopyAction code={code} disabled={streaming} />
+        </IconActionGroup>
+      </div>
+      <div style={DIAGRAM_BODY}>
+        <div
+          style={DIAGRAM_STAGE}
+          onLayout={(event: { width?: number }) => setStageWidth(event.width ?? 0)}
+        >
+          {diagram.status === 'done' && diagram.ok && stageWidth > 0 ? (
+            <img
+              src={diagram.png}
+              objectFit="contain"
+              alt="Mermaid chart"
+              testId="chat-mermaid-diagram"
+              style={fitted(diagram.width, diagram.height, stageWidth)}
+            />
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CodeCardComponent({ code, language, open, streaming }: CodeCardProps) {
+  if (language === 'termul-plan') {
+    return <TermulPlanRenderer code={code} isIncomplete={open} language={language} />
+  }
+  if (language === 'mermaid' && !open && canDrawMermaid())
+    return <MermaidCard code={code} streaming={streaming} />
+  return <SourceCard code={code} language={language} streaming={streaming} />
 }
 
 export const CodeCard = memo(CodeCardComponent)

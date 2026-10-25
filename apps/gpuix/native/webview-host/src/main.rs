@@ -9,9 +9,13 @@
 //! URL: the page frames the FigCraft editor and passes its postMessage traffic to and from the app
 //! (`post` in, `canvasMessage` out), standing in for the parent window the editor expects.
 //!
+//! `renderMermaid` draws a chat transcript's mermaid diagram in a hidden webview (`mermaid.rs`)
+//! and answers with a PNG.
+//!
 //! Lifetime: stdin EOF, `quit`, or the parent process dying ends the helper; each webview owns
 //! its WebKit context, so dropping a tab ends that tab's WebKit processes.
 
+mod mermaid;
 mod protocol;
 mod x11;
 
@@ -91,6 +95,8 @@ struct Host {
     tabs: HashMap<String, Tab>,
     /// The tab holding the keyboard; `None` means the app window does.
     keyboard: Option<String>,
+    /// Started by the first `renderMermaid`.
+    mermaid: Option<mermaid::Renderer>,
 }
 
 thread_local! {
@@ -214,7 +220,8 @@ impl Host {
                 Some(PageMessage::Console { level, text }) => emit(Event::Console { id: ipc_id.clone(), level, text }),
                 Some(PageMessage::Url { url }) => emit(Event::Navigated { id: ipc_id.clone(), url }),
                 Some(PageMessage::CanvasMessage { data }) => emit(Event::CanvasMessage { id: ipc_id.clone(), data }),
-                None => {}
+                // A browsed page cannot answer renders; only the hidden renderer page does.
+                Some(PageMessage::MermaidReady | PageMessage::Mermaid { .. }) | None => {}
             })
             .with_document_title_changed_handler(move |title| emit(Event::Title { id: title_id.clone(), title }));
         let builder = match &page {
@@ -290,6 +297,15 @@ impl Host {
         Ok(())
     }
 
+    fn render_mermaid(&mut self, id: String, source: String) -> Result<(), String> {
+        if self.mermaid.is_none() {
+            let started = std::time::Instant::now();
+            self.mermaid = Some(mermaid::Renderer::new(&mut self.context, on_mermaid_message)?);
+            log(&format!("mermaid renderer created in {} ms", started.elapsed().as_millis()));
+        }
+        self.mermaid.as_mut().expect("just created").render(id, source)
+    }
+
     fn eval(&self, id: &str, js: &str) -> Result<(), String> {
         self.tab(id)?.view.evaluate_script(js).map_err(|e| e.to_string())
     }
@@ -320,8 +336,28 @@ impl Host {
                 self.give_keyboard_to_app();
                 Ok(())
             }
+            Command::RenderMermaid { id, source, .. } => self.render_mermaid(id, source),
             Command::Quit => unreachable!("dispatch handles quit"),
         }
+    }
+}
+
+fn on_mermaid_message(body: &str) {
+    match protocol::parse_page_message(body) {
+        Some(PageMessage::Mermaid { id, ok, png, width, height, error }) => {
+            emit(Event::Mermaid { id, ok, png, width, height, error })
+        }
+        // Not inside this callback: it can run while a command holds the host.
+        Some(PageMessage::MermaidReady) => {
+            glib::idle_add_local_once(|| {
+                let errors = with_host(|host| host.mermaid.as_mut().map(|r| r.mark_ready()).unwrap_or_default());
+                log("mermaid renderer ready");
+                for error in errors.unwrap_or_default() {
+                    log(&format!("mermaid render not started: {error}"));
+                }
+            });
+        }
+        _ => {}
     }
 }
 
@@ -418,7 +454,7 @@ fn main() {
     let fd = x.fd();
     let context = WebContext::new(arg(&args, "--data-dir").map(std::path::PathBuf::from));
     HOST.with(|cell| {
-        *cell.borrow_mut() = Some(Host { parent, x, context, tabs: HashMap::new(), keyboard: None })
+        *cell.borrow_mut() = Some(Host { parent, x, context, tabs: HashMap::new(), keyboard: None, mermaid: None })
     });
     emit(Event::Ready { parent, pid: std::process::id() });
     log(&format!("ready, parent window {parent:#x}"));

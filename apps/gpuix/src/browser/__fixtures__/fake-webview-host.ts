@@ -21,6 +21,22 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     send({ ev: 'title', id: cmd.id, title: `title of ${cmd.id}` })
     send({ ev: 'console', id: cmd.id, level: 'log', text: 'page says hi' })
   }
+  if (cmd.op === 'renderMermaid') {
+    if (cmd.source.includes('die')) process.exit(3)
+    if (cmd.source.includes('silent')) return
+    send(
+      cmd.source.startsWith('flowchart')
+        ? {
+            ev: 'mermaid',
+            id: cmd.id,
+            ok: true,
+            png: 'data:image/png;base64,AA',
+            width: 120,
+            height: 40
+          }
+        : { ev: 'mermaid', id: cmd.id, ok: false, error: 'No diagram type detected' }
+    )
+  }
   if (cmd.op === 'show' && cmd.id === 'grab') send({ ev: 'keyboard', owner: 'grab' })
   if (cmd.op === 'blur') send({ ev: 'keyboard', owner: null })
   console.error(`fake host got ${cmd.op}`)
