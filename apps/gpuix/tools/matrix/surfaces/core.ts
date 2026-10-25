@@ -645,7 +645,7 @@ const TERMINAL: Surface[] = [
           openTerminal,
           wait(2000),
           click(label('New tab')),
-          click(label('Bash', 'menuitem')),
+          click(txt('Bash')),
           wait(2000)
         ],
         see('Terminal 1', 'Terminal 2')
@@ -671,7 +671,7 @@ const TERMINAL: Surface[] = [
           openTerminal,
           wait(2000),
           click(label('New tab')),
-          click(label('Bash', 'menuitem')),
+          click(txt('Bash')),
           wait(2000)
         ],
         see('Terminal 1', 'Terminal 2')
