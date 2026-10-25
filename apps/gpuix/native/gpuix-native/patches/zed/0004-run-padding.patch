@@ -1,0 +1,144 @@
+diff --git a/crates/gpui_wgpu/src/cosmic_text_system.rs b/crates/gpui_wgpu/src/cosmic_text_system.rs
+index 9e00a5a..0f11ac3 100644
+--- a/crates/gpui_wgpu/src/cosmic_text_system.rs
++++ b/crates/gpui_wgpu/src/cosmic_text_system.rs
+@@ -60,6 +60,9 @@ struct LoadedFont {
+     /// feature. A scaled font is its own FontId, so layout caches and the
+     /// glyph atlas key on it without further changes.
+     scale: f32,
++    /// Horizontal space laid out before and after each run of this font, in
++    /// pixels, from the `tpdx` pseudo feature: CSS inline padding.
++    pad: f32,
+     is_known_emoji_font: bool,
+     /// resolved at load time so `layout_line` shares one chain across faces.
+     /// `Arc` keeps clone cheap on the per-run hot path.
+@@ -68,6 +71,7 @@ struct LoadedFont {
+ 
+ struct FontMatchProperties {
+     scale: f32,
++    pad: f32,
+     primary_family_name: SharedString,
+     stretch: Stretch,
+     style: Style,
+@@ -258,6 +262,7 @@ impl CosmicTextSystemState {
+ 
+         Some(FontMatchProperties {
+             scale: loaded_font.scale,
++            pad: loaded_font.pad,
+             primary_family_name: first_family.0.clone().into(),
+             stretch: face.stretch,
+             style: face.style,
+@@ -346,6 +351,7 @@ impl CosmicTextSystemState {
+ 
+         let cosmic_features = cosmic_font_features(features)?;
+         let scale = font_scale_feature(features);
++        let pad = font_padding_feature(features);
+ 
+         let mut loaded_font_ids = SmallVec::new();
+         for (font_id, postscript_name) in families {
+@@ -373,6 +379,7 @@ impl CosmicTextSystemState {
+                 font,
+                 features: cosmic_features.clone(),
+                 scale,
++                pad,
+                 is_known_emoji_font: check_is_known_emoji_font(&postscript_name),
+                 user_fallback_chain: Arc::clone(&user_fallback_chain),
+             });
+@@ -503,7 +510,9 @@ impl CosmicTextSystemState {
+         if let Some(ix) = self
+             .loaded_fonts
+             .iter()
+-            .position(|loaded_font| loaded_font.font.id() == id && loaded_font.scale == 1.0)
++            .position(|loaded_font| {
++                loaded_font.font.id() == id && loaded_font.scale == 1.0 && loaded_font.pad == 0.0
++            })
+         {
+             Ok(FontId(ix))
+         } else {
+@@ -522,6 +531,7 @@ impl CosmicTextSystemState {
+                 font,
+                 features: CosmicFontFeatures::new(),
+                 scale: 1.0,
++                pad: 0.0,
+                 is_known_emoji_font: check_is_known_emoji_font(&face.post_script_name),
+                 user_fallback_chain: Arc::from(Vec::new()),
+             });
+@@ -633,6 +643,7 @@ impl CosmicTextSystemState {
+         font_runs: &[FontRun],
+     ) -> LineLayout {
+         let mut attrs_list = AttrsList::new(&Attrs::new());
++        let mut padded: SmallVec<[(Range<usize>, f32); 2]> = SmallVec::new();
+         let mut offs = 0;
+         for run in font_runs {
+             let run_end = offs + run.len;
+@@ -641,6 +652,14 @@ impl CosmicTextSystemState {
+                 offs = run_end;
+                 continue;
+             };
++            if properties.pad > 0.0 {
++                match padded.last_mut() {
++                    Some((range, pad)) if range.end == offs && *pad == properties.pad => {
++                        range.end = run_end;
++                    }
++                    _ => padded.push((offs..run_end, properties.pad)),
++                }
++            }
+ 
+             let mut primary_attrs =
+                 properties.attributes(run.font_id, &properties.primary_family_name);
+@@ -763,9 +782,27 @@ impl CosmicTextSystemState {
+             }
+         }
+ 
++        let mut width = layout.w;
++        if !padded.is_empty() {
++            // Left-to-right only: a glyph moves right by the padding of every
++            // padded range that starts at or before it, and again for every
++            // one that ended before it.
++            for glyph in runs.iter_mut().flat_map(|run| run.glyphs.iter_mut()) {
++                let shift: f32 = padded
++                    .iter()
++                    .map(|(range, pad)| {
++                        pad * ((glyph.index >= range.start) as u8 + (glyph.index >= range.end) as u8)
++                            as f32
++                    })
++                    .sum();
++                glyph.position.x += gpui::px(shift);
++            }
++            width += padded.iter().map(|(_, pad)| 2.0 * pad).sum::<f32>();
++        }
++
+         LineLayout {
+             font_size,
+-            width: layout.w.into(),
++            width: width.into(),
+             ascent: layout.max_ascent.into(),
+             descent: layout.max_descent.into(),
+             runs,
+@@ -1007,9 +1044,25 @@ fn font_scale_feature(features: &FontFeatures) -> f32 {
+         .map_or(1.0, |(_, per_mille)| (*per_mille as f32 / 1000.0).clamp(0.25, 4.0))
+ }
+ 
++/// `tpdx` is not an OpenType feature: its value is inline padding in
++/// hundredths of a pixel, laid out on both sides of each run of the font.
++const FONT_PADDING_FEATURE: &str = "tpdx";
++
++fn font_padding_feature(features: &FontFeatures) -> f32 {
++    features
++        .0
++        .iter()
++        .find(|(tag, _)| tag == FONT_PADDING_FEATURE)
++        .map_or(0.0, |(_, hundredths)| (*hundredths as f32 / 100.0).min(64.0))
++}
++
+ fn cosmic_font_features(features: &FontFeatures) -> Result<CosmicFontFeatures> {
+     let mut result = CosmicFontFeatures::new();
+-    for feature in features.0.iter().filter(|(tag, _)| tag != FONT_SCALE_FEATURE) {
++    for feature in features
++        .0
++        .iter()
++        .filter(|(tag, _)| tag != FONT_SCALE_FEATURE && tag != FONT_PADDING_FEATURE)
++    {
+         let name_bytes: [u8; 4] = feature
+             .0
+             .as_bytes()

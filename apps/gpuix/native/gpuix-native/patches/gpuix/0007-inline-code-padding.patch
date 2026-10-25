@@ -1,0 +1,50 @@
+diff --git a/packages/native/src/markdown/render.rs b/packages/native/src/markdown/render.rs
+index e1b9483..0a614ba 100644
+--- a/packages/native/src/markdown/render.rs
++++ b/packages/native/src/markdown/render.rs
+@@ -69,6 +69,18 @@ fn scaled_font(mut f: gpui::Font, scale: f32) -> gpui::Font {
+     f
+ }
+ 
++/// GPUI's per-run inline padding (Termul's zed patch 0004-run-padding): a
++/// pseudo feature whose value is the padding in hundredths of a pixel, laid
++/// out on both sides of the run like CSS inline padding.
++fn padded_font(mut f: gpui::Font, pad: f32) -> gpui::Font {
++    if pad > 0.0 {
++        let mut features: Vec<(String, u32)> = f.features.0.iter().cloned().collect();
++        features.push(("tpdx".into(), (pad * 100.0).round() as u32));
++        f.features = gpui::FontFeatures(std::sync::Arc::new(features));
++    }
++    f
++}
++
+ // ── Flattened inline text ────────────────────────────────────────────
+ 
+ /// Inline runs flattened into one string plus gpui `TextRun`s, with the byte
+@@ -98,7 +110,10 @@ pub fn flatten_runs(runs: &[InlineRun], theme: &Theme, base_weight: FontWeight)
+         text.push_str(&run.text);
+ 
+         let mut f = if run.style.code {
+-            scaled_font(font(theme.font_mono.clone()), theme.metrics.md_inline_code_scale)
++            padded_font(
++                scaled_font(font(theme.font_mono.clone()), theme.metrics.md_inline_code_scale),
++                theme.metrics.md_inline_code_padding_x,
++            )
+         } else {
+             font(theme.font_sans.clone())
+         };
+@@ -379,7 +394,13 @@ fn flat_text_element(flat: &FlatText, ctx: &mut MdContext) -> AnyElement {
+     } else {
+         Some(Box::new(move |layout, window| {
+             for range in &code_ranges {
+-                for rect in range_rects(layout, range, pad_x, inset_y) {
++                // The padding is laid out around the run, so the range's end
++                // already sits after the trailing padding.
++                let mut rects = range_rects(layout, range, pad_x, inset_y);
++                if let Some(last) = rects.last_mut() {
++                    last.size.width -= px(pad_x);
++                }
++                for rect in rects {
+                     window.paint_quad(gpui::quad(
+                         rect,
+                         px(radius),

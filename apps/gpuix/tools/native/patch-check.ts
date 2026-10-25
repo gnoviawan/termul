@@ -13,6 +13,8 @@
  *   zed/0003 + gpuix/0005  `backdropBlur` flattens the stripes under its box,
  *   backdrop-blur          leaves the stripes beside it and outside its
  *                          rounded corner sharp
+ *   zed/0004 + gpuix/0007  inline-code padding takes layout space: the text
+ *   run-padding            after a chip padded by CODE_PAD moves 2 x CODE_PAD
  *   0006-focus-events      `focus-check.ts`: an active window gets the DOM's
  *                          focus and blur sequence, autoFocus included
  *
@@ -32,7 +34,7 @@ import {
   startXvfb,
   windowOrigin
 } from '../parity/shoot-gpuix'
-import { BLUR, type Sample, SCENE, type SceneReady } from './samples'
+import { BLUR, CODE_PAD, type Sample, SCENE, type SceneReady } from './samples'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -152,6 +154,7 @@ const uprightSlant = slant('upright')
 const italicSlant = slant('italic')
 const linkRed = count('link', ([r, g, b]) => r > 160 && g < 90 && b < 90)
 const codeRatio = inkWidth('codeHalf') / Math.max(1, inkWidth('codeFull'))
+const codePadShift = inkWidth('codePad') - inkWidth('codeTight')
 const inputStartInk = (() => {
   const { x0, y0, x1, y1 } = region('input')
   return litIn(x0, x1, y0, Math.round((y0 + y1) / 2))
@@ -217,6 +220,12 @@ const checks = [
     what: 'getNativeWindowHandle names the scene window',
     value: ready.handle,
     ok: handleWindow !== null
+  },
+  {
+    patch: 'run-padding',
+    what: `inline-code padding ${CODE_PAD} widens M\`M\`M by twice the padding (px)`,
+    value: codePadShift,
+    ok: Math.abs(codePadShift - 2 * CODE_PAD) <= 1
   },
   {
     patch: '0004-input-unfocused-scroll',

@@ -84,6 +84,8 @@ Unset it to return to the published addon. The published addon ignores the style
 | `zed/0003-backdrop-blur` | A `Backdrop` scene primitive and `Window::paint_backdrop_blur(bounds, corner_radii, sigma, opacity)`. A backdrop is an ordering barrier: everything painted before it draws first, everything after it draws on top. The wgpu renderer ends the main pass at a backdrop, copies the frame region under it plus a 3-sigma halo, blurs it with a separable Gaussian (downsampled by powers of two until sigma is at most 4 texels, Skia's rule), and composites the result inside the rounded box. The surface is configured with `COPY_SRC` when it allows it; otherwise backdrops are skipped. Metal and DirectX skip them. | `gpuix/0005`. |
 | `gpuix/0005-backdrop-blur` | The style prop `backdropBlur: <px>` (CSS `blur()` standard deviation) on `<div>` and `<text>`, painted before the element's background and children, with its border radii and opacity. Not inherited. | Tailwind `backdrop-blur-*` through `src/style/utilities.ts`: the overlay scrims (`bg-overlay/60 backdrop-blur-sm`). |
 | `gpuix/0006-focus-events` | `focus` and `blur` events derived each frame from the focused handle, in the DOM's order: blur before focus, a focus event for an element focused as it mounts (`autoFocus`, `focusElement`), and blur and focus when the window loses and regains the X input focus. Upstream subscribed per element through GPUI's `on_focus`/`on_blur`, which activate only after the frame that created them and fire in creation order. | `TerminalView`'s focused cursor (its 150 ms `getFocusedElementId` poll is gone), every compat `onFocus`/`onBlur`. |
+| `zed/0004-run-padding` | A per-run inline padding in GPUI's Linux text system. A font requested with the pseudo feature `tpdx` (value in hundredths of a pixel) gets that much space laid out before and after each run of it, as CSS inline padding does: the glyphs after it move, the line is wider, and wrapping, hit testing and caret positions see the space. Adjacent runs with the same padding share one box. Left-to-right text only. | `gpuix/0007`. |
+| `gpuix/0007-inline-code-padding` | `<markdown>` inline code requests `tpdx` from `mdInlineCodePaddingX`, and the chip wash spans the laid-out padding instead of painting past the glyphs. | `src/chat/theme.ts`: the `0.3em` chip padding now pushes the text after a chip as the web's does. |
 
 Italics also need italic faces. `tools/style/build-fonts.py` builds Inter's real italics and a Paper Mono oblique. Paper Mono has no italic, so the browser draws a synthetic one; the oblique bakes Blink's skew (`SkFont::setSkewX(-1/4)`) into the outlines. The terminal's own Paper Mono files get the same treatment. On the published addon, the prose italics of `<markdown>` already use these faces; `fontStyle` needs patch `0001`.
 
@@ -102,6 +104,7 @@ Italics also need italic faces. `tools/style/build-fonts.py` builds Inter's real
 | 4 px stripes beside a `backdropBlur: 8` box, distance from grey (127.5 is sharp) | 127.5 | 127.5 |
 | The same stripes under the box (0 is flat) | 0.5 | 127.5 (FAIL) |
 | Pixel just outside the box's 12 px rounded corner | 255 (sharp) | 255 |
+| `M\`M\`M` with `mdInlineCodePaddingX: 12`, ink width minus the unpadded one (px) | 24 | 0 (FAIL) |
 | `focus-check.ts`: focus events in an active window, 5 steps | 5 PASS | mount `autoFocus` gets no event; `focusElement(A)` after B gives `focus A` before `blur B` (FAIL) |
 
 Parity against the web client, measured on 2026-10-25:
@@ -129,6 +132,8 @@ The browser-pane acceptance (`tools/browser/pane-check.ts`) passes all 13 checks
 The drop-in proof for the unpatched build: `bun run typecheck`, `bun run test` (297 pass), `tools/parity/workspace-checks.ts` (14 ok) and `tools/terminal/shell-check.ts` (9 PASS) all pass with `NAPI_RS_NATIVE_LIBRARY_PATH` set.
 
 Focus under Xvfb, measured on 2026-10-25 with `bun tools/native/focus-check.ts`. The published addon delivered focus and blur for a plain `focusElement` switch and for window (de)activation, so the 2026-10-23 report of no events at all was the harness: no window manager runs under Xvfb, nothing gives the window the X input focus, and an inactive GPUI window reports no focus changes. Two defects were real and showed in an active window too: an element focused as it mounted never got its `focus` event, and a switch back to an older element delivered `focus` before the other element's `blur`. That first defect is why the terminal's focused cursor needed the poll. The inactive-window run stays at zero events on both addons, which matches a browser: an element in a window without focus is not focused. Tools that screenshot focus state under Xvfb activate the window first (`tools/matrix/x11-focus.py`).
+
+Inline-code padding against the web client, measured on 2026-10-25 with `tools/chat/parity.ts` on the addon before and after `zed/0004` and `gpuix/0007`. On the line "Reject `/c/` with no id" the blank columns between the chip's text and the words around it were 6 and 5 px before, 10 and 10 px after, and 10 and 9 px on the web. The ROI perceptual diff moved from 3.51% to 3.48% (bottom) and 5.94% to 5.97% (top); most of each ROI is unchanged text and layout offsets. The middle ROI holds no inline code: its GPUIX shots are identical before and after, and its number moved from 10.06% to 11.00% only because the web's Mermaid render differed between the two runs.
 
 ## Upstream drift
 
@@ -169,7 +174,8 @@ Measured on 2026-10-25: the .deb is 61,186,892 bytes (58.4 MiB, 222.5 MiB instal
 
 - Backdrop blur is wgpu only (Linux, and the web build of GPUI). The Metal and DirectX renderers skip the primitive, so on macOS and Windows the content behind stays sharp. CSS backdrop filters other than `blur()` (saturate, brightness) are not implemented.
 - The blur samples with clamp-to-edge at the window border; Chromium's backdrop filter mirrors. The difference is a few pixels wide at the window edge.
-- CSS inline padding takes layout space; the native chip's padding is paint only, so text after a chip sits about 7 px closer to it than on the web.
+- Inline-code padding (`zed/0004`) assumes left-to-right text. In a right-to-left run the space lands on the wrong side of the glyphs.
+- The native markdown list puts its content column about 9 px right of the web's (marker `min_w(18)` plus an 8 px gap). With the chip padding laid out, a chip that starts a list item shows the offset as 9 px instead of 5 px.
 - The run scale is implemented for the Linux text system (cosmic-text) only. On macOS and Windows a scaled font renders at the line's size.
 - `0004` does not add a selection or scroll API. A focused field that receives a new value still scrolls to the caret at the end, as a DOM input does.
 - The patches carry Rust unit tests only where they are pure (`theme.rs`). `build.sh test` runs them: 39 pass for the `theme`, `style` and `markdown` modules.

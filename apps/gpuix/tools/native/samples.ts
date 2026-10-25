@@ -1,11 +1,13 @@
 /** Shared by the patch scene and its checker. */
-export const SCENE = { width: 640, height: 500 } as const
+export const SCENE = { width: 640, height: 600 } as const
 export const SAMPLES = [
   'upright',
   'italic',
   'link',
   'codeFull',
   'codeHalf',
+  'codeTight',
+  'codePad',
   'input',
   'blur'
 ] as const
@@ -13,6 +15,8 @@ export const SAMPLES = [
 export const LONG_VALUE = `${'M'.repeat(10)}${'.'.repeat(120)}`
 /** The blur sample: 4 px black and white stripes, the right half under a `backdropBlur` box. */
 export const BLUR = { width: 320, height: 48, stripe: 4, sigma: 8, radius: 12 } as const
+/** Inline padding of the `codePad` chip; the chip's text moves the text after it by twice this. */
+export const CODE_PAD = 12
 export type Sample = (typeof SAMPLES)[number]
 export interface SceneReady {
   bounds: Record<Sample, { x: number; y: number; width: number; height: number } | null>
