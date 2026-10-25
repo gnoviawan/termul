@@ -263,29 +263,29 @@ export const REVIEWS: Record<string, Review> = {
       TREE_TEXT
     ],
     cause: 'native override needed',
-    unit: 'prose remainder: text-wrap pretty, table card (unassigned)',
+    unit: 'prose remainder: glyph advances, table card toolbar (unassigned)',
     impact: 1
   },
   'chat.scroll-top': {
     status: 'partial',
     differences: [
       'One wheel event of -20000 px scrolls both to the first turn and shows the jump-to-latest button.',
-      "The table card has the web's copy, download and fullscreen buttons (G7). Its columns start within 6 px of the web's. Each row is 32 px against the web's 30.5 px (native `mdTableCellPadding` is one value for both axes, 5 px around a 21 px line), and the web's header row has a muted fill that GPUIX lacks.",
+      "The table card has the web's copy, download and fullscreen buttons (G7). Its columns start within 6 px of the web's. Rows are 31 px against the web's 30.6 px, with the semibold header on the web's muted fill (G8 patch gpuix/0010-table-cell-metrics: 8 by 4.8 px cells on a 20 px line; before it rows were 32 px with no header fill).",
       PROSE,
       TREE_TEXT
     ],
     cause: 'native override needed',
-    unit: 'prose remainder: text-wrap pretty, table card (unassigned)',
+    unit: 'prose remainder: glyph advances, table card toolbar (unassigned)',
     impact: 1
   },
   'chat.table-fullscreen': {
     status: 'partial',
     differences: [
-      'View fullscreen fills the window with the table under a copy, download and exit toolbar in both (G7), at 1.02 % full-frame perceptual difference.',
-      "The web's toolbar buttons are the larger Streamdown menu triggers, so its three icons sit about 48 px apart against 30 px here, and its table cells are padded wider (Route starts at 33 px against 22 px)."
+      'View fullscreen fills the window with the table under a copy, download and exit toolbar in both (G7), at 1.01 % full-frame perceptual difference (G8 run).',
+      "The web's toolbar buttons are the larger Streamdown menu triggers, so its three icons sit about 48 px apart against 30 px here, and its table cells are padded wider (Route starts at 34 px against 26 px; G8 widened the native cell padding from 5 to the chat table's 8 px, and the fullscreen table pads its cells more than the chat card does)."
     ],
     cause: 'native override needed',
-    unit: 'prose remainder: text-wrap pretty, table card (unassigned)',
+    unit: 'prose remainder: glyph advances, table card toolbar (unassigned)',
     impact: 1
   },
   'chat.new-chat': {
@@ -306,6 +306,7 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Typing and Enter start a chat and the scripted reply streams in both.',
+      "The chat starts on the device's picked agent even when Enter comes before the launcher has restored that pick: the send waits for the pick (G8 AGENT-PICK; `tools/matrix/agent-pick.ts` sends the moment the composer appears and lands 4 of 4 web and 4 of 4 GPUIX chats on the picked agent, 2 of 4 and 1 of 4 before).",
       'Mermaid shows as source ("Mermaid diagrams are shown as source in this client") where the web draws the diagram.',
       PROSE,
       RUN_ORDER
@@ -318,7 +319,7 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: ['The running chat shows the agent chip and composer like the web.', PROSE],
     cause: 'native override needed',
-    unit: 'prose remainder: text-wrap pretty, table card (unassigned)',
+    unit: 'prose remainder: glyph advances, table card toolbar (unassigned)',
     impact: 1
   },
   'composer.mention': {
