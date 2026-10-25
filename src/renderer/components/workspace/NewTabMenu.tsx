@@ -8,8 +8,8 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
+import { nativeBrowserPanesAvailable } from '@/lib/browser-panes'
 import { openProjectCanvas } from '@/lib/open-project-canvas'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useActiveProject } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -96,7 +96,7 @@ export function NewTabMenu({
           </DropdownMenuGroup>
         )}
 
-        {onAddBrowserTab && isTauriContext() && (
+        {onAddBrowserTab && nativeBrowserPanesAvailable() && (
           <DropdownMenuItem className={ROW_CLASS} onSelect={() => onAddBrowserTab()}>
             <Globe size={11} />
             <span className="truncate">New browser tab</span>

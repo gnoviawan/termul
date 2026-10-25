@@ -2259,6 +2259,39 @@ describe('Desktop host seam parity (GPUIX)', () => {
   })
 })
 
+// GPUIX browser host seam (apps/gpuix, unit B2): a non-Tauri desktop shell
+// registers native webviews through `browser-host.ts`; every browser-api
+// facade asks it first, and the browser-pane entry points are gated on
+// `nativeBrowserPanesAvailable()` (`browser-panes.ts`) instead of
+// `isTauriContext()`. Behavior is covered by `browser-host.web.test.ts`; this
+// block pins the wiring.
+describe('Browser host seam parity (GPUIX)', () => {
+  const RENDERER_DIR = join(LIB_DIR, '..')
+  const api = readFileSync(join(LIB_DIR, 'browser-api.ts'), 'utf-8')
+
+  it('every exported browser-api function consults the host', () => {
+    const exported = [...api.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1])
+    expect(exported.length).toBe(14)
+    for (const name of exported) {
+      const body = api.slice(api.indexOf(`function ${name}(`)).split(/\n}\n/)[0]
+      expect(body, `${name} should ask getBrowserHost()`).toMatch(/getBrowserHost\(\)/)
+    }
+  })
+
+  it('browser-pane entry points and occlusion gate on nativeBrowserPanesAvailable', () => {
+    for (const file of [
+      'components/workspace/NewTabMenu.tsx',
+      'layouts/workspace-layout/use-workspace-keyboard.ts',
+      'hooks/use-native-webview-occlusion.ts'
+    ]) {
+      const content = readFileSync(join(RENDERER_DIR, file), 'utf-8')
+      expect(content, `${file} should gate on nativeBrowserPanesAvailable`).toMatch(
+        /nativeBrowserPanesAvailable\(\)/
+      )
+    }
+  })
+})
+
 describe('SSH parity (desktop Tauri commands and host-local /ws)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const read = (...parts: string[]): string => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')

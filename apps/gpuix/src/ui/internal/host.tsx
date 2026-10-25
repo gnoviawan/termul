@@ -6,7 +6,14 @@
  * against the GPUIX components unchanged.
  */
 import type { EventPayload, KeyEvent, PublicInstance, StyleDesc } from '@gpuix/react'
-import { createContext, forwardRef, type ReactElement, type ReactNode, type Ref, useContext } from 'react'
+import {
+  createContext,
+  forwardRef,
+  type ReactElement,
+  type ReactNode,
+  type Ref,
+  useContext
+} from 'react'
 import { layoutChildren } from '../../compat/children'
 import { ColorContext, SvgClassContext } from '../../compat/color'
 import { buildElement, type DomProps, domAttrs, resolveStyle } from '../../compat/create'

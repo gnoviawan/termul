@@ -3,9 +3,9 @@ import { toast } from 'sonner'
 import { useUpdateAppSetting, useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { getShortcutTargetContext } from '@/layouts/workspace-layout/shortcut-target'
 import { keyboardApi } from '@/lib/api'
+import { nativeBrowserPanesAvailable } from '@/lib/browser-panes'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { cycleSSHTab, requestCloseSSHSession } from '@/lib/ssh-sessions'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { getWebAuthGateState } from '@/lib/web-auth-gate'
 import { useUiZoomLevel } from '@/stores/app-settings-store'
 import { useCanvasStore } from '@/stores/canvas-store'
@@ -284,13 +284,13 @@ export function useWorkspaceKeyboard({
         return
       }
 
-      // New browser tab (Ctrl+Shift+N) - workspace only, desktop only.
+      // New browser tab (Ctrl+Shift+N) - workspace only, native browser panes only.
       // Story 8 (web honesty): browser tabs are native child webviews — the
       // web client cannot create them, so the shortcut must no-op there
       // instead of adding a tab whose pane renders blank (rejected
       // browserTabCreate).
       if (matchesShortcut(e, getActiveKey('newBrowserTab'))) {
-        if (!isWorkspaceRoute || !isTauriContext()) return
+        if (!isWorkspaceRoute || !nativeBrowserPanesAvailable()) return
         e.preventDefault()
         e.stopPropagation()
         handleNewBrowserTab()

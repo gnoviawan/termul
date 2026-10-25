@@ -33,6 +33,15 @@ export interface BootOptions {
   hostLocalToken: (() => string | null) | null
   /** Called once with the native renderer; perf runs wrap it to count round trips. */
   onRenderer?: (renderer: object) => void
+  /** Receives the window's focus controls once the renderer exists (browser-pane keyboard pairing). */
+  onFocusControl?(control: FocusControl): void
+}
+
+export interface FocusControl {
+  /** The focused GPUIX element, `null` when none is. */
+  focusedElement(): number | null
+  /** Clear GPUIX focus. */
+  blur(): void
 }
 
 export type BootFn = (config: ClientConfig, options: BootOptions) => void

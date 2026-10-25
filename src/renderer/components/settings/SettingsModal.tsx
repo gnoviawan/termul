@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { type ReactNode, useEffect, useRef } from 'react'
+import { useNativeWebviewOcclusion } from '@/hooks/use-native-webview-occlusion'
 
 const FOCUSABLE_SELECTOR =
   'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
@@ -44,6 +45,8 @@ export function SettingsModal({
 }: SettingsModalProps): React.JSX.Element {
   const cardRef = useRef<HTMLDivElement>(null)
   const previouslyFocusedRef = useRef<HTMLElement | null>(null)
+  // A custom fixed overlay: browser-pane webviews paint above it unless they hide.
+  useNativeWebviewOcclusion(isOpen)
 
   // Focus management: move focus into the dialog on open, trap Tab within
   // its focusable controls, and restore focus to the trigger on close.

@@ -223,6 +223,7 @@ const TooltipContent = forwardRef<PublicInstance, TooltipContentProps>(function 
       avoidCollisions={avoidCollisions}
       priority={2}
       returnFocus={false}
+      occludes={false}
       onDismiss={timing.close}
     >
       <Box

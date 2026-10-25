@@ -32,6 +32,8 @@ import {
   withheldClickTarget
 } from './dnd'
 import { compatWarn } from './log'
+import { hover, occluderHover } from './hover'
+import { tracePointer } from './trace'
 
 type Handler = (event: CompatEvent) => void
 
@@ -430,14 +432,6 @@ function onDragSourceUp(payload: EventPayload): void {
   if (clicked !== null) clickBubbling({ ...payload, eventType: 'click', elementId: clicked, clickCount: 1 })
 }
 
-const onMouseEnter = direct((h) => [
-  ['pointerenter', h.onPointerEnter],
-  ['mouseenter', h.onMouseEnter]
-])
-const onMouseLeave = direct((h) => [
-  ['pointerleave', h.onPointerLeave],
-  ['mouseleave', h.onMouseLeave]
-])
 const onScroll = direct((h) => [['wheel', h.onWheel]])
 const onScrollChange = direct((h) => [['scroll', h.onScroll]])
 
@@ -552,8 +546,8 @@ export interface GpuixListeners {
   onMouseDown?: (payload: EventPayload) => void
   onMouseUp?: (payload: EventPayload) => void
   onMouseMove?: typeof onMouseMove
-  onMouseEnter?: typeof onMouseEnter
-  onMouseLeave?: typeof onMouseLeave
+  onMouseEnter?: (payload: EventPayload) => void
+  onMouseLeave?: (payload: EventPayload) => void
   onKeyDown?: typeof onKeyDown
   onKeyUp?: typeof onKeyUp
   onFocus?: typeof onFocus
@@ -563,15 +557,30 @@ export interface GpuixListeners {
   onScrollChange?: typeof onScrollChange
 }
 
+const traced = {
+  click: tracePointer('click', onClick),
+  auxClick: tracePointer('auxclick', onAuxClick),
+  down: tracePointer('down', onMouseDown),
+  up: tracePointer('up', onMouseUp),
+  move: tracePointer('move', onMouseMove),
+  enter: tracePointer('enter', hover.enter),
+  leave: tracePointer('leave', hover.leave),
+  occluderEnter: tracePointer('occluder-enter', occluderHover.enter),
+  occluderLeave: tracePointer('occluder-leave', occluderHover.leave),
+  sourceDown: tracePointer('source-down', onDragSourceDown),
+  sourceMove: tracePointer('source-move', onDragSourceMove),
+  sourceUp: tracePointer('source-up', onDragSourceUp)
+}
+
 /**
  * Listeners a form control needs whatever its handlers: a field replays Enter
  * (`inputSubmit`) and a submit button submits its form on click.
  */
 export function addFormListeners(tag: string, type: unknown, out: GpuixListeners): void {
   if (tag === 'input' && type !== 'checkbox') out.onSubmit = inputSubmit
-  if ((tag === 'button' && (type === undefined || type === 'submit')) || (tag === 'input' && type === 'submit')) out.onClick = onClick
+  if ((tag === 'button' && (type === undefined || type === 'submit')) || (tag === 'input' && type === 'submit')) out.onClick = traced.click
   // A checkbox toggles on click, and so does the control a label names.
-  if ((tag === 'input' && type === 'checkbox') || tag === 'label') out.onClick = onClick
+  if ((tag === 'input' && type === 'checkbox') || tag === 'label') out.onClick = traced.click
 }
 
 /**
@@ -598,25 +607,44 @@ export function adaptHandlers(
     out.onBlur = onBlur
   }
   if (!handlers) return null
-  if (handlers.onClick || handlers.onDoubleClick) out.onClick = onClick
-  if (handlers.onContextMenu) out.onAuxClick = onAuxClick
-  if (handlers.onMouseDown || handlers.onPointerDown) out.onMouseDown = onMouseDown
-  if (handlers.onMouseUp || handlers.onPointerUp) out.onMouseUp = onMouseUp
-  if (handlers.onMouseMove || handlers.onPointerMove) out.onMouseMove = onMouseMove
-  if (handlers.onMouseEnter || handlers.onPointerEnter) out.onMouseEnter = onMouseEnter
-  if (handlers.onMouseLeave || handlers.onPointerLeave) out.onMouseLeave = onMouseLeave
+  if (handlers.onClick || handlers.onDoubleClick) out.onClick = traced.click
+  if (handlers.onContextMenu) out.onAuxClick = traced.auxClick
+  if (handlers.onMouseDown || handlers.onPointerDown) out.onMouseDown = traced.down
+  if (handlers.onMouseUp || handlers.onPointerUp) out.onMouseUp = traced.up
+  if (handlers.onMouseMove || handlers.onPointerMove) out.onMouseMove = traced.move
+  if (handlers.onMouseEnter || handlers.onPointerEnter) out.onMouseEnter = traced.enter
+  if (handlers.onMouseLeave || handlers.onPointerLeave) out.onMouseLeave = traced.leave
   if (handlers.onKeyDown) out.onKeyDown = onKeyDown
   if (handlers.onKeyUp) out.onKeyUp = onKeyUp
   if (handlers.onWheel) out.onScroll = onScroll
   if (handlers.onScroll) out.onScrollChange = onScrollChange
   if (text && (handlers.onChange || handlers.onInput)) out.onChange = inputChange
   if (draggable) {
-    out.onMouseDown = onDragSourceDown
-    out.onMouseMove = onDragSourceMove
-    out.onMouseUp = onDragSourceUp
+    out.onMouseDown = traced.sourceDown
+    out.onMouseMove = traced.sourceMove
+    out.onMouseUp = traced.sourceUp
   }
   if (handlers.onDrop || handlers.onDragOver || handlers.onDragEnter) out.onFileDrop = fileDrop
   return handlers
+}
+
+/**
+ * A box GPUIX makes block the pointer (absolutely placed, or filled and
+ * interactive) also blocks its own ancestors, which the DOM never does. It
+ * gets the listeners that hand clicks and hover on to them: a click on the
+ * fade of a row's action strip still clicks the row, and the row stays
+ * hovered while the pointer is over the strip (`hover.ts`). Presses
+ * (`mousedown`/`mouseup`) are not handed on: an ancestor that starts a gesture
+ * on press (a Reorder item, a drag source) relies on GPUIX's pointer capture
+ * to see the release, and a forwarded press arms no capture.
+ */
+export function addOccluderListeners(out: GpuixListeners, disabled: boolean): void {
+  out.onMouseEnter = traced.occluderEnter
+  out.onMouseLeave = traced.occluderLeave
+  // A disabled control takes no click, and the DOM does not bubble one from it.
+  if (disabled) return
+  out.onClick ??= traced.click
+  out.onAuxClick ??= traced.auxClick
 }
 
 /** A real `Event` carrying `extra` as own properties, for `window`/`document` listeners. */

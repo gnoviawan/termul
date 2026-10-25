@@ -21,4 +21,5 @@ export {
 } from '../select'
 
 const Through = ({ children }: { children?: ReactNode }) => <>{children}</>
+
 export { Through as Icon, Through as Portal, Through as Viewport }

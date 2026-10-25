@@ -18,7 +18,7 @@ import { ColorContext, SvgClassContext } from './color'
 import { ScopeContext, withScopedClasses } from './scope'
 import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
 import { convertDomStyle } from './dom-style'
-import { adaptHandlers, addFormListeners, type GpuixListeners } from './events'
+import { adaptHandlers, addFormListeners, addOccluderListeners, type GpuixListeners } from './events'
 import { compatWarn } from './log'
 import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
 import { layoutListener } from './resize'
@@ -103,6 +103,14 @@ function passThrough(style: StyleDesc): StyleDesc {
     passive.set(style, hit)
   }
   return hit
+}
+
+/** GPUIX's `should_occlude`: the boxes that end a mouse hit test. */
+function occludes(style: StyleDesc): boolean {
+  if (style.pointerEvents === 'none') return false
+  if (style.pointerEvents === 'auto' || style.position === 'absolute' || style.position === 'fixed') return true
+  const fill = style.backgroundColor
+  return (fill !== undefined && fill !== 'transparent') || (style as { background?: unknown }).background !== undefined
 }
 
 type AdaptedRef = (instance: TrackedInstance | null) => (() => void) | undefined
@@ -201,10 +209,12 @@ export function buildElement(
   if (!disabled) addFormListeners(tag, props.type, listeners)
   const interactive = handlers !== null || focusable || tr.hoverable || style.overflow === 'scroll' || listeners.onClick !== undefined
   if (!interactive) style = passThrough(style)
+  const occluder = occludes(style)
+  if (occluder) addOccluderListeners(listeners, disabled)
 
   const userRef = props.ref
   const tracked =
-    userRef != null || handlers !== null || focusable || attrs !== NO_ATTRS || pointerEvents !== undefined || listeners.onClick !== undefined
+    userRef != null || handlers !== null || focusable || attrs !== NO_ATTRS || pointerEvents !== undefined || listeners.onClick !== undefined || occluder
   const dom: DomInfo = {
     tag,
     className: props.className ?? '',

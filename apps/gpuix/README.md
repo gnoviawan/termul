@@ -35,6 +35,11 @@ Scripts:
   `src/`, `../../src/renderer` or `../../src/shared` change. A rebuild remounts
   the tree in the same window; state resets (GPUIX has no React Refresh on desktop).
 - `bun run build` writes the production bundle (`dist/main.js` sets `NODE_ENV=production`, then loads the minified `dist/main.bundle.js`; `--dev` builds React's development bundle instead); `bun run start` builds and runs it once.
+- `bun run build` also builds the browser-pane helper on Linux (see Browser
+  panes below); `bun run build:webview-host` builds only the helper.
+- `bun run package:linux` builds the installable `.deb` (Bun, the bundle, `termul-server`, the
+  helper), and `bun run package:verify` runs it from `env -i` under Xvfb. See
+  [docs/packaging.md](./docs/packaging.md).
 - `bun run typecheck` runs both tsc projects (see below).
 - `bun run check:react` proves the bundle shares one React 19 with `@gpuix/react`.
 - `bun run parity <scenario>` runs the pixel-parity harness.
@@ -142,6 +147,16 @@ and `src/compat/shims`.
   wrapping row of word runs.
 - `events.ts` turns DOM handlers into GPUIX listeners and bubbles mouse
   events through ancestors, which GPUIX does not do past a filled box.
+- `hover.ts` gives `mouseenter`/`mouseleave` DOM semantics. GPUIX ends a hit
+  test at the first absolutely placed or filled interactive box, and that box
+  blocks its own ancestors too, so a rail row lost its hover as soon as its
+  hover-revealed action strip painted under the pointer, hid the strip, and
+  looped. Every such box now reports its GPUI hover and hands clicks on to
+  its ancestors (`addOccluderListeners`), and an element counts as hovered
+  while GPUI hovers it or a blocking box inside it. Presses (`mousedown`,
+  `mouseup`) are not handed on. The first settle that meets a blocking box reads the
+  painted tree for its ancestors, which waits for a frame (about 75 ms under
+  lavapipe); the chain is then kept for the box's life.
 - `dom-node.ts` is what `ref`, `event.target` and `document.activeElement`
   return. Tree queries read a mirror of the retained tree.
 - `host.tsx` is the only per-element component. It is used only for
@@ -182,6 +197,23 @@ Tools:
   dropped on a pane. Output goes to `/tmp/gpuix-d1/dnd/`.
 - `bun tools/dnd/parity.ts` shoots the same pane drag in the web client and
   GPUIX (two tabs, right zone held, split) and diffs them.
+- `bun tools/clickloss/run.ts [--trials N] [--modes auto,auto-move,xtest,xtest-nofocus]`
+  clicks rail rows, the hover-revealed gear and the fade of the action strip
+  on a seeded server through GPUIX automation and through real X input
+  (XTEST), and exits non-zero on any lost click. `COMPAT_TRACE_POINTER=1`
+  (set by the tool) logs every compat pointer listener to stderr; the logs
+  land in `$GPUIX_STATE_ROOT` (default `/tmp/gpuix-h1`). Real X input under
+  Xvfb is a valid harness: Xvfb has XInput 2.0 with a master pointer, and
+  GPUI's "Found no xinput mouse pointers" only means no pointer has a scroll
+  class (`tools/clickloss/xi-devices.py` prints them), so presses and motion
+  arrive as from a mouse. This Xvfb keeps XInput 2.0 even with
+  `-extension XInputExtension`, and the host has no Xephyr, Xvnc or Xorg, so
+  a server without XI2 was not tried. The loss was not an X artifact: at
+  20 trials per target, exp/gpuix-client at 9747b6c2 lost 68 of 180 clicks,
+  52 of them through automation input, which never touches X. With
+  `hover.ts`, the same 180 trials lost none. Real X input with and without the
+  script's input focus then passed 120 of 120. `--entry` runs another checkout's built
+  `dist/main.js` for such a comparison.
 
 - `bun tools/compat/parity.ts [fixture…] --port N` diffs StatusBar, ShellRail,
   ChatMessage and ConfirmDialog against the web build. Output goes to
@@ -249,3 +281,68 @@ authenticated `/ws` client; `seed.ts`, port picking and agent registration)
 and bundle their scenes with `buildClient` from `build.ts`. They keep server
 state and output under `/tmp/gpuix-o2` and `/tmp/gpuix-o3`; set
 `GPUIX_STATE_ROOT` to use another directory.
+
+## Browser panes (Linux X11, `native/webview-host`, `src/browser`)
+
+A browser tab is a WebKitGTK webview in a helper process, `termul-webview-host`
+(wry 0.55.1, the version `src-tauri` uses). The helper builds each webview as
+an X11 child window of the GPUIX window, so the X server moves and clips it
+with the app. The shared `BrowserPanel` and `useBrowserWebview` run unchanged:
+`main.tsx` registers a browser host through `src/renderer/lib/browser-host.ts`,
+and every `browser-api.ts` facade asks that host before its Tauri `invoke`.
+The same registration turns on the New browser tab entry points and webview
+occlusion (`nativeBrowserPanesAvailable()` in `browser-panes.ts`).
+
+The app and the helper speak JSON lines over stdio (`src/browser/protocol.ts`
+and `native/webview-host/src/protocol.rs`). Each command carries a `req` and
+gets one `ack`; the helper also reports navigation, load, title, page console
+output and keyboard ownership. Page console lines go to the client log as
+`browser-console: [<tab id>] <level>: <text>`.
+
+- **Build.** `bun run build` runs `cargo build` on `native/webview-host` and
+  hard-links the binary to `dist/termul-webview-host`, where the client looks
+  for it (`TERMUL_WEBVIEW_HOST_BIN` overrides). Cargo writes to
+  `$CARGO_TARGET_DIR`, else to the repo's `src-tauri/target` when that already
+  exists; with neither the helper is skipped instead of compiling GTK and
+  WebKit from scratch. `TERMUL_GPUIX_SKIP_WEBVIEW_HOST=1` skips it outright.
+- **Lifetime.** The helper starts with the first tab and runs one WebKit
+  context for all tabs under `<state dir>/webview` (one profile, as in the
+  desktop app): one network process, and a web process per tab that ends when
+  its tab closes. Closing the window, `quit`, stdin EOF or the app dying
+  (`PR_SET_PDEATHSIG`) ends the helper and its WebKit processes.
+- **Overlays.** Webviews paint above GPUIX. The ui twins' dialogs, sheets,
+  menus, popovers and selects register an occluder while open (boot hands
+  them the renderer's `useNativeWebviewOcclusion`, see
+  `src/ui/internal/occlusion.ts`), so the webviews unmap until the last
+  overlay closes, as on the desktop. Shared code on the compat Radix path
+  occludes through the shared `components/ui` wrappers, as it does on the
+  desktop. Tooltips do not occlude, as on the web.
+- **Bounds.** `useBrowserWebview` resizes the webview from its
+  ResizeObserver callback. The compat ResizeObserver hands the box `onLayout`
+  reported to the read memo (`src/compat/live-reads.ts`), so the callback's
+  `getBoundingClientRect` answers without waiting for another frame. Like the
+  DOM, a move without a size change reports nothing.
+- **Keyboard.** A button press anywhere on the display is watched through
+  XInput2 raw events. A press inside a webview gives it the X input focus; a
+  press elsewhere in the window, or any GPUIX focus change, gives it back.
+  While a webview does not have the keyboard, its X windows do not select key
+  events, so keys never follow the pointer into it.
+- **Unsupported.** Other platforms, a session without `DISPLAY`, and Wayland
+  sessions get no browser panes and log why (`browser panes off: ...`). GPUI
+  picks Wayland whenever `WAYLAND_DISPLAY` is set and does not fall back to
+  XWayland, so there is no X11 window to embed into.
+
+Checks, each under Xvfb with real X input through XTest (GPUIX automation input
+never reaches X) and a test server on a free port in 8190-8199:
+
+- `bun tools/browser/pane-check.ts` drives the real shell: URL bar, link,
+  back and forward, a split, a stepped divider drag (30 fps strip capture)
+  and continuous drags both ways (60 fps strip capture, counting the GPUIX
+  divider positions the webview trails), Preferences with a dropdown and the
+  New tab menu over the webview, keys into the page and back to the
+  composer, two tabs and their WebKit processes, and quitting. It waits for a
+  quiet machine before the divider drags (`waitForQuiet`) and records how
+  busy it was. PNGs and `results.json` go to `/tmp/gpuix-b2/pane-check`.
+- `bun tools/browser/unsupported-check.ts [--case missing-helper|wayland]`
+  checks the unsupported state.
+

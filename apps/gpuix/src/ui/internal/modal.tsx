@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils'
 import { contentBasis } from '../../compat/children'
 import type { TwState } from '../../style/tw'
 import { Box, type HostProps, Inherit, mergeRefs, useTw, wrapText } from './host'
+import { useWebviewOcclusion } from './occlusion'
 import { bodyText, useControllableState, useFocusFirstTabbable } from './overlay'
 import { Slot } from './slot'
 
@@ -148,6 +149,7 @@ export const ModalContent = forwardRef<
   ref
 ) {
   const modal = useModal('DialogContent')
+  useWebviewOcclusion(modal.open)
   const attrs = { ...props, 'data-state': modal.open ? 'open' : 'closed' }
   const overlay = useTw(overlayClassName, {}, attrs).style
   const { style: popupStyle, svgClasses } = useTw(className, {}, attrs)
