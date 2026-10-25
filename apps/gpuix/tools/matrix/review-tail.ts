@@ -6,6 +6,7 @@ import {
   COMPOSER_PICK,
   DIVIDERS,
   FIELD_FOCUS,
+  LAYOUT_FOCUS,
   SELECT,
   SETTINGS_BASE,
   TOAST
@@ -53,7 +54,16 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'ported',
     differences: [
       'New Terminal opens Terminal 1 in both.',
-      "In the full run both clients hit the server's terminal limit (a harness leak, fixed by `tools/matrix/terminals.ts`); the rerun matched. That frame also showed the GPUIX error toast too narrow for its message: the text runs past the window edge, where the web toast wraps to two lines."
+      'A focused terminal blinks its cursor in both, so a frame shows the block or not by timing.',
+      "M2's terminal-limit frame showed the GPUIX error toast too narrow for its message: the text runs past the window edge, where the web toast wraps to two lines. M3 hit no limit, so that toast was not seen again."
+    ]
+  },
+  'palette.open': {
+    status: 'ported',
+    differences: [
+      'Ctrl+K opens the palette, typing "theme" filters it to the same groups and rows in both, and Escape closes it.',
+      "The Agent Launcher row's chip reads ctrl+t in GPUIX and alt+t on the web (the G4 desktop keymap).",
+      BLUR
     ]
   },
   'palette.agent-launcher': {
@@ -80,7 +90,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: [
       'Preferences opens on Interface in both, laid out wide.',
       BLUR,
-      'Flake, 2 of 3 runs differ: in the full run the GPUIX launch crashed with "Timed out after 2 seconds waiting for the automation bounds query" (C13), and in the first rerun GPUIX grabbed the Interface rows laid out narrow (zoom stepper and swatches under their descriptions), the container-query first frame before the card has measured itself. The second rerun matched.'
+      'M3 matched in its full run. M2 saw two flakes here: the automation bounds-query timeout (C13) and a frame grabbed at the container-query first layout, before the card measured itself.'
     ]
   },
   'palette.switch-project': {
@@ -117,14 +127,21 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     ]
   },
   'shortcuts.toggle-projects': {
-    status: 'ported',
+    status: 'partial',
     differences: [
-      'Ctrl+Shift+B collapses the rail in both, with the Open canvas pencil under Search (see rail.collapse).'
-    ]
+      'Ctrl+Shift+B collapses the rail in both, with the Open canvas pencil under Search (see rail.collapse).',
+      LAYOUT_FOCUS
+    ],
+    cause: 'needs diagnosis',
+    unit: 'composer focus across layout shortcuts (unassigned)',
+    impact: 1
   },
   'shortcuts.toggle-side-panel': {
-    status: 'ported',
-    differences: ['Ctrl+B hides the side panel in both.']
+    status: 'partial',
+    differences: ['Ctrl+B hides the side panel in both.', LAYOUT_FOCUS],
+    cause: 'needs diagnosis',
+    unit: 'composer focus across layout shortcuts (unassigned)',
+    impact: 1
   },
   'shortcuts.theme-picker': {
     status: 'ported',
@@ -134,7 +151,8 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       "Each client presses its own key (G3: the web Alt+=, GPUIX the desktop Ctrl+= from G4's keymap), and both zoom: the rail and sidebar widen alike (G4, shims/window-zoom.ts; tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both).",
-      'The zoomed web page runs past the window bottom, so its status bar is cut off and the dashboard heading sits 25 px lower; GPUIX keeps the status bar in the window.'
+      'The zoomed web page runs past the window bottom, so its status bar is cut off and the dashboard heading sits 25 px lower; GPUIX keeps the status bar in the window.',
+      LAYOUT_FOCUS
     ],
     cause: 'needs diagnosis',
     unit: 'web zoom overflow (unassigned)',

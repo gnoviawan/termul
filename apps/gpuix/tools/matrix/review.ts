@@ -144,7 +144,7 @@ export const REVIEWS: Record<string, Review> = {
   'explorer.expand': {
     status: 'ported',
     differences: [
-      'Clicking src expands it to app.ts and utils.ts in both, with no tooltip over the row. The web frame also catches the row name hint that FileTreeNode shows after 900 ms of hover; the GPUIX frame is grabbed before it fires.'
+      'Clicking src expands it to app.ts and utils.ts in both. Both clients show the row name hint FileTreeNode raises after 900 ms of hover, so a frame catches it or not by timing: in M3 the full run caught it in GPUIX only and the rerun in neither.'
     ]
   },
   'explorer.context-menu': {
@@ -207,7 +207,11 @@ export const REVIEWS: Record<string, Review> = {
   },
   'git.stage': {
     status: 'ported',
-    differences: ['Staging README.md moves it to Staged 2 in both.', TEXTAREA_LINE]
+    differences: [
+      'Staging README.md moves it to Staged 2 in both.',
+      TEXTAREA_LINE,
+      'In 1 of 3 M3 runs (the full run) the GPUIX click on the row\'s Stage changes button also opened README.md\'s working-tree diff ("No diff available"), as a click on the row does; the two reruns staged without opening it, and the row is from the first rerun. The cause is not traced; RowAction stops propagation, so a click reaching the row is a GPUIX event-path bug if it repeats.'
+    ]
   },
   'git.unstage': {
     status: 'ported',
@@ -261,12 +265,13 @@ export const REVIEWS: Record<string, Review> = {
   'chat.table-fullscreen': {
     status: 'partial',
     differences: [
-      'View fullscreen fills the window with the table under a copy, download and exit toolbar in both (G7), at 1.01 % full-frame perceptual difference (G8 run).',
+      'View fullscreen fills the window with the table under a copy, download and exit toolbar in both (G7).',
+      "In GPUIX the chat composer card and the status bar paint over the bottom right of the fullscreen view, in 3 of 3 M3 runs (1.28 % full-frame perceptual; 1.01 % in G8's run, before patch gpuix/0011). The view is an `<anchored>` layer with no `priority` (`src/chat/TableCard.tsx`), so it sorts at 0, under the composer's `relative z-10` and the status bar's `z-50`, which paint in the same deferred pass since G9. The dialog priority (`LAYER.dialog`, as `src/ui/internal/modal.tsx` uses) is the likely fix (inferred from the code; not tried, since M3 changes no product code).",
       "The web's toolbar buttons are the larger Streamdown menu triggers, so its three icons sit about 48 px apart against 30 px here, and its table cells are padded wider (Route starts at 34 px against 26 px; G8 widened the native cell padding from 5 to the chat table's 8 px, and the fullscreen table pads its cells more than the chat card does)."
     ],
     cause: 'native override needed',
-    unit: 'prose remainder: glyph advances, table card toolbar (unassigned)',
-    impact: 1
+    unit: 'table fullscreen layer priority (unassigned)',
+    impact: 2
   },
   'chat.new-chat': {
     status: 'ported',
@@ -329,7 +334,7 @@ export const REVIEWS: Record<string, Review> = {
     differences: [
       'Terminal tab, its full "Terminal 1" title at the web width, and the prompt match (C15 fixed in G5).',
       LAMP,
-      'Flake: in the full run the GPUIX frame was grabbed before the prompt painted, with the status-bar title tooltip up; the rerun matched.'
+      'A focused terminal blinks its cursor in both, so a frame shows the block or not by timing.'
     ]
   },
   'terminal.type': { status: 'ported', differences: ['echo output matches cell for cell.'] },
@@ -340,19 +345,24 @@ export const REVIEWS: Record<string, Review> = {
       TREE_TEXT
     ]
   },
-  'terminal.new-tab-menu': { status: 'ported', differences: ['The new tab menu matches.'] },
+  'terminal.new-tab-menu': {
+    status: 'ported',
+    differences: [
+      'The new tab menu matches. GPUIX adds New browser tab, since only the GPUIX client has browser panes.'
+    ]
+  },
   'terminal.tab-reorder': {
     status: 'ported',
     differences: [
       'Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both, and both clients read Terminal 2, Terminal 1 with full titles at the web widths (C15 fixed in G5).',
-      'Flake: the full run failed at the terminal limit (harness leak, fixed); in the first rerun the GPUIX click on Bash in the just-opened New tab menu was lost, so only Terminal 1 opened; the second rerun matched.'
+      'In the full M3 run, and in 1 of 4 runs of terminal.split, GPUIX opened the New tab menu but only Terminal 1: the Bash click replayed the web point before GPUIX had painted the menu. The surfaces now click Bash by its text, which waits for the item (M3 harness fix); 4 of 4 runs then passed, and the row is from one of them.'
     ]
   },
   'terminal.split': {
     status: 'ported',
     differences: [
       "Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1), and each pane's tab shows its full title with its close button (C15 fixed in G5).",
-      "In the full run both clients failed here at the server's terminal limit (10 per project), a harness leak: preserved PTYs from earlier surfaces piled up. The matrix now closes them before each client run (`tools/matrix/terminals.ts`), and the rerun matched."
+      'Both focus the moved Terminal 2: its block cursor is the focused one in both (M3 runs after the Bash fix; see terminal.tab-reorder for the lost click).'
     ]
   },
   'statusbar.items': {
