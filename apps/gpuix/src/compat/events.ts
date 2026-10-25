@@ -557,17 +557,46 @@ export interface GpuixListeners {
   onScrollChange?: typeof onScrollChange
 }
 
+/** A press and the click GPUIX reports after it are one action. */
+const PRESS_ACTION_MS = 150
+let lastWindowPress = -Infinity
+
+/**
+ * The DOM bubbles every press up to `window`; GPUIX reports a press only to
+ * an element with a handler, and compat bubbling stops at its ancestors. Code
+ * that waits on `window` for the reader's first press (`ChatRoute`'s boot
+ * window, which re-activates its chat on every tree change until then) never
+ * saw one, so each press is announced there once.
+ */
+function announcingPress<T extends (payload: EventPayload) => void>(listener: T): T {
+  return ((payload: EventPayload) => {
+    const now = performance.now()
+    if (now - lastWindowPress > PRESS_ACTION_MS) {
+      lastWindowPress = now
+      ;(globalThis as { window?: EventTarget }).window?.dispatchEvent(
+        domEvent('pointerdown', {
+          target: nodeOrNull(payload.elementId),
+          clientX: payload.x,
+          clientY: payload.y,
+          button: payload.button ?? 0
+        })
+      )
+    }
+    listener(payload)
+  }) as T
+}
+
 const traced = {
-  click: tracePointer('click', onClick),
-  auxClick: tracePointer('auxclick', onAuxClick),
-  down: tracePointer('down', onMouseDown),
+  click: tracePointer('click', announcingPress(onClick)),
+  auxClick: tracePointer('auxclick', announcingPress(onAuxClick)),
+  down: tracePointer('down', announcingPress(onMouseDown)),
   up: tracePointer('up', onMouseUp),
   move: tracePointer('move', onMouseMove),
   enter: tracePointer('enter', hover.enter),
   leave: tracePointer('leave', hover.leave),
   occluderEnter: tracePointer('occluder-enter', occluderHover.enter),
   occluderLeave: tracePointer('occluder-leave', occluderHover.leave),
-  sourceDown: tracePointer('source-down', onDragSourceDown),
+  sourceDown: tracePointer('source-down', announcingPress(onDragSourceDown)),
   sourceMove: tracePointer('source-move', onDragSourceMove),
   sourceUp: tracePointer('source-up', onDragSourceUp)
 }
