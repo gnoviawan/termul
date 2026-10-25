@@ -13,6 +13,8 @@
  *   zed/0003 + gpuix/0005  `backdropBlur` flattens the stripes under its box,
  *   backdrop-blur          leaves the stripes beside it and outside its
  *                          rounded corner sharp
+ *   0006-focus-events      `focus-check.ts`: an active window gets the DOM's
+ *                          focus and blur sequence, autoFocus included
  *
  * On the published addon every assertion fails, which is what makes it a test.
  *
@@ -179,6 +181,12 @@ const handleWindow =
       ) ?? null)
     : null
 
+const focusRun = Bun.spawnSync(
+  ['bun', path.join(import.meta.dir, 'focus-check.ts'), '--out', path.join(out, 'focus')],
+  { env: process.env }
+)
+const focusLines = focusRun.stdout.toString().trim().split('\n')
+
 const checks = [
   {
     patch: '0001-font-style',
@@ -233,6 +241,12 @@ const checks = [
     what: 'the rounded corner leaves its outside pixel sharp (0 or 255)',
     value: cornerStripe,
     ok: cornerStripe === 0 || cornerStripe === 255
+  },
+  {
+    patch: '0006-focus-events',
+    what: 'an active window gets the DOM focus and blur events at every focus-check step',
+    value: focusLines.filter((line) => line.startsWith('FAIL')),
+    ok: focusRun.exitCode === 0
   }
 ]
 for (const check of checks)

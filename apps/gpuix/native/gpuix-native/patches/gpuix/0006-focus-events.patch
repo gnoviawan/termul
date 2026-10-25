@@ -1,0 +1,140 @@
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index f72371b..faa18a0 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -3694,8 +3694,10 @@ pub(crate) struct GpuixView {
+     /// Handles persist across renders so GPUI maintains focus state.
+     pub(crate) focus_handles: HashMap<u64, gpui::FocusHandle>,
+     pending_focus_element: Option<PendingFocus>,
+-    /// Active focus/blur subscriptions keyed by element and event type.
+-    pub(crate) focus_subscriptions: HashMap<(u64, String), gpui::Subscription>,
++    /// The element JS last got a `focus` event for: the DOM's focused
++    /// element. None while the window is inactive, as a browser blurs the
++    /// focused element when its window loses focus.
++    pub(crate) focus_event_target: Option<u64>,
+     /// Registry for custom element types (input, editor, diff, etc.).
+     /// Stores factories (one per type) and live instances (one per element ID).
+     pub(crate) custom_registry: CustomElementRegistry,
+@@ -4009,7 +4011,7 @@ impl GpuixView {
+             reported_selection: None,
+             focus_handles: HashMap::new(),
+             pending_focus_element: None,
+-            focus_subscriptions: HashMap::new(),
++            focus_event_target: None,
+             custom_registry: CustomElementRegistry::with_defaults(),
+             scroll_handles: HashMap::new(),
+             motion_states: HashMap::new(),
+@@ -5059,42 +5061,54 @@ impl GpuixView {
+             self.pending_focus_element = None;
+         }
+ 
+-        self.focus_subscriptions.retain(|(id, event), _| {
+-            tree.elements
+-                .get(id)
+-                .is_some_and(|element| element.events().contains(event))
+-        });
+-        for &id in &tree.focusable_ids {
+-            let (Some(element), Some(handle)) =
+-                (tree.elements.get(&id), self.focus_handles.get(&id).cloned())
+-            else {
+-                continue;
+-            };
+-            let focus_key = (id, "focus".to_string());
+-            if element.events().contains("focus")
+-                && !self.focus_subscriptions.contains_key(&focus_key)
+-            {
+-                let callback = callback.clone();
+-                let subscription = cx.on_focus(&handle, window, move |_this, _window, _cx| {
+-                    emit_event_full(&callback, id, "focus", |_| {});
+-                });
+-                self.focus_subscriptions.insert(focus_key, subscription);
+-            }
+-            let blur_key = (id, "blur".to_string());
+-            if element.events().contains("blur")
+-                && !self.focus_subscriptions.contains_key(&blur_key)
+-            {
+-                let callback = callback.clone();
+-                let subscription = cx.on_blur(&handle, window, move |_this, _window, _cx| {
+-                    emit_event_full(&callback, id, "blur", |_| {});
+-                });
+-                self.focus_subscriptions.insert(blur_key, subscription);
+-            }
+-        }
+-
+         // Clean up handles for elements that no longer exist.
+         self.focus_handles
+             .retain(|id, _| tree.focusable_ids.contains(id));
++
++        self.emit_focus_events(tree, callback, window, cx);
++    }
++
++    /// Focus and blur are derived from the focused handle each frame instead
++    /// of per-element GPUI focus listeners. GPUI activates a listener only
++    /// after the frame that created it, so an element focused as it mounted
++    /// (`autoFocus`, `focusElement`) never got its focus event, and listeners
++    /// run in creation order, so a newer element's focus could arrive before
++    /// the older one's blur. Every focus change and window (de)activation
++    /// refreshes the window, so this runs after each one. Like the DOM: blur
++    /// before focus, nothing for an element that is gone, and an inactive
++    /// window has no focused element.
++    fn emit_focus_events(
++        &mut self,
++        tree: &RetainedTree,
++        callback: &Option<EventCallback>,
++        window: &gpui::Window,
++        cx: &gpui::App,
++    ) {
++        let focused = window
++            .is_window_active()
++            .then(|| window.focused(cx))
++            .flatten()
++            .and_then(|focused| {
++                self.focus_handles
++                    .iter()
++                    .find(|(_, handle)| handle.id() == focused.id())
++                    .map(|(&id, _)| id)
++            });
++        if focused == self.focus_event_target {
++            return;
++        }
++        let listens = |id: u64, event: &str| {
++            tree.elements
++                .get(&id)
++                .is_some_and(|element| element.events().contains(event))
++        };
++        if let Some(previous) = self.focus_event_target.filter(|&id| listens(id, "blur")) {
++            emit_event_full(callback, previous, "blur", |_| {});
++        }
++        if let Some(current) = focused.filter(|&id| listens(id, "focus")) {
++            emit_event_full(callback, current, "focus", |_| {});
++        }
++        self.focus_event_target = focused;
+     }
+ }
+ 
+@@ -5926,9 +5940,9 @@ pub(crate) fn build_host_container(
+             }
+ 
+             // ── Focus / Blur ─────────────────────────────────────
+-            // Event emission is handled by FocusHandle subscriptions
+-            // set up in GpuixView::sync_focus_handles(). The handle is
+-            // attached to this element via .track_focus() above.
++            // Emitted by GpuixView::emit_focus_events() from the focused
++            // handle. The handle is attached to this element via
++            // .track_focus() above.
+             "focus" | "blur" => {}
+ 
+             _ => {}
+diff --git a/packages/native/src/test_renderer.rs b/packages/native/src/test_renderer.rs
+index fe53084..8a365f6 100644
+--- a/packages/native/src/test_renderer.rs
++++ b/packages/native/src/test_renderer.rs
+@@ -66,7 +66,7 @@ impl Drop for VisualTestState {
+                     tree.root_id = None;
+                 }
+                 view.custom_registry.destroy_all();
+-                view.focus_subscriptions.clear();
++                view.focus_event_target = None;
+                 view.focus_handles.clear();
+                 cx.notify();
+             });

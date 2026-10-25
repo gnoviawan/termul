@@ -83,6 +83,7 @@ Unset it to return to the published addon. The published addon ignores the style
 | `gpuix/0004-input-unfocused-scroll` | An unfocused `<input>` given a new value shows the start of the text, as a DOM input does. Only a focused field scrolls to keep the caret in view. | The browser URL bar in a narrow pane (URL-INPUT). |
 | `zed/0003-backdrop-blur` | A `Backdrop` scene primitive and `Window::paint_backdrop_blur(bounds, corner_radii, sigma, opacity)`. A backdrop is an ordering barrier: everything painted before it draws first, everything after it draws on top. The wgpu renderer ends the main pass at a backdrop, copies the frame region under it plus a 3-sigma halo, blurs it with a separable Gaussian (downsampled by powers of two until sigma is at most 4 texels, Skia's rule), and composites the result inside the rounded box. The surface is configured with `COPY_SRC` when it allows it; otherwise backdrops are skipped. Metal and DirectX skip them. | `gpuix/0005`. |
 | `gpuix/0005-backdrop-blur` | The style prop `backdropBlur: <px>` (CSS `blur()` standard deviation) on `<div>` and `<text>`, painted before the element's background and children, with its border radii and opacity. Not inherited. | Tailwind `backdrop-blur-*` through `src/style/utilities.ts`: the overlay scrims (`bg-overlay/60 backdrop-blur-sm`). |
+| `gpuix/0006-focus-events` | `focus` and `blur` events derived each frame from the focused handle, in the DOM's order: blur before focus, a focus event for an element focused as it mounts (`autoFocus`, `focusElement`), and blur and focus when the window loses and regains the X input focus. Upstream subscribed per element through GPUI's `on_focus`/`on_blur`, which activate only after the frame that created them and fire in creation order. | `TerminalView`'s focused cursor (its 150 ms `getFocusedElementId` poll is gone), every compat `onFocus`/`onBlur`. |
 
 Italics also need italic faces. `tools/style/build-fonts.py` builds Inter's real italics and a Paper Mono oblique. Paper Mono has no italic, so the browser draws a synthetic one; the oblique bakes Blink's skew (`SkFont::setSkewX(-1/4)`) into the outlines. The terminal's own Paper Mono files get the same treatment. On the published addon, the prose italics of `<markdown>` already use these faces; `fontStyle` needs patch `0001`.
 
@@ -101,6 +102,7 @@ Italics also need italic faces. `tools/style/build-fonts.py` builds Inter's real
 | 4 px stripes beside a `backdropBlur: 8` box, distance from grey (127.5 is sharp) | 127.5 | 127.5 |
 | The same stripes under the box (0 is flat) | 0.5 | 127.5 (FAIL) |
 | Pixel just outside the box's 12 px rounded corner | 255 (sharp) | 255 |
+| `focus-check.ts`: focus events in an active window, 5 steps | 5 PASS | mount `autoFocus` gets no event; `focusElement(A)` after B gives `focus A` before `blur B` (FAIL) |
 
 Parity against the web client, measured on 2026-10-25:
 
@@ -125,6 +127,8 @@ Frame cost under lavapipe (`bun tools/native/blur-cost.ts --runs 3`): a 1280x800
 The browser-pane acceptance (`tools/browser/pane-check.ts`) passes all 13 checks on the self-built addon, and the app log shows the helper started with `--parent 2097153`, the id the check reads from X (`0x200001`).
 
 The drop-in proof for the unpatched build: `bun run typecheck`, `bun run test` (297 pass), `tools/parity/workspace-checks.ts` (14 ok) and `tools/terminal/shell-check.ts` (9 PASS) all pass with `NAPI_RS_NATIVE_LIBRARY_PATH` set.
+
+Focus under Xvfb, measured on 2026-10-25 with `bun tools/native/focus-check.ts`. The published addon delivered focus and blur for a plain `focusElement` switch and for window (de)activation, so the 2026-10-23 report of no events at all was the harness: no window manager runs under Xvfb, nothing gives the window the X input focus, and an inactive GPUI window reports no focus changes. Two defects were real and showed in an active window too: an element focused as it mounted never got its `focus` event, and a switch back to an older element delivered `focus` before the other element's `blur`. That first defect is why the terminal's focused cursor needed the poll. The inactive-window run stays at zero events on both addons, which matches a browser: an element in a window without focus is not focused. Tools that screenshot focus state under Xvfb activate the window first (`tools/matrix/x11-focus.py`).
 
 ## Upstream drift
 
