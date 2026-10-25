@@ -1,5 +1,9 @@
-import { appendFileSync } from 'node:fs'
 import type { NativeRenderer } from '@gpuix/react'
+
+interface Runtime {
+  process?: { env?: Record<string, string | undefined> }
+  Bun?: { file(path: string): { writer(): { write(chunk: string): void; flush(): void } } }
+}
 
 /**
  * With `TERMUL_GPUIX_FRAME_STATS=<file>`, appends one JSON line a second: the
@@ -8,17 +12,18 @@ import type { NativeRenderer } from '@gpuix/react'
  * into frames per second and cost per frame.
  */
 export function startFrameStats(renderer: NativeRenderer): void {
-  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
-    ?.env
-  const file = env?.TERMUL_GPUIX_FRAME_STATS
-  if (!file || !renderer.getDebugFrameOverlayStats) return
+  const { process, Bun } = globalThis as Runtime
+  const file = process?.env?.TERMUL_GPUIX_FRAME_STATS
+  if (!file || !Bun || !renderer.getDebugFrameOverlayStats) return
+  const out = Bun.file(file).writer()
   renderer.setDebugFrameOverlay?.('minimal')
   setInterval(() => {
     // The read waits at most 2s for the UI thread; a busier thread skips the sample.
     try {
       const stats = renderer.getDebugFrameOverlayStats?.()
       renderer.resetDebugFrameOverlayStats?.()
-      appendFileSync(file, `${JSON.stringify({ t: Date.now(), ...stats })}\n`)
+      out.write(`${JSON.stringify({ t: Date.now(), ...stats })}\n`)
+      out.flush()
     } catch {}
   }, 1000)
 }

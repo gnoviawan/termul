@@ -103,7 +103,6 @@ try {
 
   if (process.env.CENSUS_GROWTH) {
     for (let i = 0; i < Number(process.env.CENSUS_GROWTH); i++) {
-      const rows = (await tree()) && 0
       await measure(`t+${(i + 1) * (windowS + 12)}s`, async (until) => {
         await Bun.sleep(until - Date.now())
         let n = 0
@@ -116,7 +115,7 @@ try {
           if (node.type === 'markdown' || node.type === 'text')
             textChars += (node.text ?? '').length
         })
-        return `${n + rows} transcript nodes, ${textChars} chars of text${crash ? ` CRASH ${crash.slice(0, 200)}` : ''}`
+        return `${n} transcript nodes, ${textChars} chars of text${crash ? ` CRASH ${crash.slice(0, 200)}` : ''}`
       })
       await Bun.sleep(12_000)
     }
