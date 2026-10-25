@@ -218,7 +218,12 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
       return runSteps(
         surface,
         'gpuix',
-        gpuixDriver(app, points, { x11, display, filesDir: world.root }),
+        gpuixDriver(app, points, {
+          x11,
+          display,
+          filesDir: world.root,
+          activeAt: values['inactive-window'] ? undefined : origin
+        }),
         grab
       )
     }
