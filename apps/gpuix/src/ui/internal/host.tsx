@@ -16,6 +16,7 @@ import {
 } from 'react'
 import { layoutChildren } from '../../compat/children'
 import { ColorContext, SvgClassContext } from '../../compat/color'
+import { useContainerClasses } from '../../compat/container'
 import { buildElement, type DomProps, domAttrs, resolveStyle } from '../../compat/create'
 import { nodeFor } from '../../compat/dom-node'
 import { CompatEvent, domKey as compatDomKey } from '../../compat/events'
@@ -167,9 +168,9 @@ export const UiEnvironmentContext = createContext<UiEnvironment>({
 export const splitDescendantClasses = compatSplit
 
 /** The element's style: the compat translation of its classes under the given variant state. */
-export function useTw(className: string | undefined, state: TwState = {}, props: object = {}) {
+export function useTw(classes: string | undefined, state: TwState = {}, props: object = {}) {
   const env = useContext(UiEnvironmentContext)
-  const tr = translation('div', className)
+  const tr = translation('div', useContainerClasses(classes))
   const style = resolveStyle(tr, {
     viewportWidth: env.viewportWidth,
     reducedMotion: env.reducedMotion,
@@ -217,8 +218,9 @@ export interface BoxProps extends HostProps {
  * The forwarded ref is the GPUIX instance.
  */
 export const Box = forwardRef<PublicInstance, BoxProps>(function Box(props, ref): ReactElement {
-  const { className, style, state, native, ...rest } = props
+  const { className: classes, style, state, native, ...rest } = props
   const env = useContext(UiEnvironmentContext)
+  const className = useContainerClasses(classes)
   const tr = translation('div', className)
   const resolved = resolveStyle(tr, {
     viewportWidth: env.viewportWidth,

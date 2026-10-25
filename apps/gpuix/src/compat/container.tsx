@@ -50,6 +50,16 @@ export function resolveContainerClasses(className: string, width: number | null)
   return out.join(' ')
 }
 
+/**
+ * `className` with its `@[w]:` variants resolved against the nearest
+ * container, for components that translate a class string themselves (the
+ * GPUIX ui primitives) instead of going through `compatElement`.
+ */
+export function useContainerClasses(className: string | undefined): string | undefined {
+  const width = useContext(ContainerWidth)
+  return hasContainerClasses(className) ? resolveContainerClasses(className, width) : className
+}
+
 interface ContainerHostProps {
   tag: string
   dom: DomProps

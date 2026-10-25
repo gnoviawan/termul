@@ -221,7 +221,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       SELECT,
-      'The Close idle chats after row stacks its full-width select under the label, where the web puts it beside; the agents list shows No agents match while the web lists the registry.'
+      'The agents list shows No agents match while the web lists the registry.', 'The rows lay out beside their selects once the settings card has measured itself; on a loaded host the frame can be grabbed before that (the first frame lays container queries out narrow), so the Close idle chats after row shows stacked with a full-width select in some runs (2 of 3 in G5).'
     ],
     cause: 'compat translator gap',
     unit: 'C9 dialog body layout',

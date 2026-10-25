@@ -16,7 +16,7 @@ export const RUN_ORDER =
 export const TREE_TEXT =
   'The text check fails only because natively painted text is not in the automation tree.'
 export const SELECT =
-  'Each select is one closed dropdown like the web (G2), but its trigger sizes to its value where the web gives it 240px (`@[35rem]:w-60`: container queries are not translated).'
+  'Each select is one closed dropdown like the web (G2), and its trigger is 240px wide beside the label as on the web (G5: the GPUIX ui primitives resolve `@[35rem]:w-60` against the settings card container). The web truncates a long value (`[&>span]:line-clamp-1`); GPUIX shows it in full inside the 240px.'
 export const SETTINGS_BASE = [
   'The section content and navigation match.',
   'The scrim has the web dim and colour, but GPUIX has no backdrop blur, so the page behind stays sharp.'
