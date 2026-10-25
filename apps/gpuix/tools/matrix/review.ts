@@ -45,15 +45,11 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'rail.project-menu': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      'Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete. The menu box now sits where the web puts it (G3: Radix opens a context menu 2 px right of the pointer).',
-      'Every row label sits 3 px right of the web one: a row\'s children reach layout as a nested array ({indicator}{children}{after}), so the " Label" text after the icon keeps its leading space. Laying nested arrays out like the parent\'s own slots fixed the menu (region perceptual 1.75%) but broke the editor check\'s README preview click, so it was reverted.',
+      'Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete, at the same place (G3: Radix opens a context menu 2 px right of the pointer). Row labels sit where the web puts them (G5: the " Label" text in a row\'s nested {icon}{children}{after} array is trimmed like any flex text run; it had kept its leading space, 3 px).',
       'Under the open menu GPUIX keeps the hovered beta row\'s gear and shortcut; the web hides them, since a modal Radix menu turns pointer events off on the page.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'nested children text runs (unassigned)',
-    impact: 1
+    ]
   },
   'rail.project-rename': {
     status: 'ported',

@@ -240,6 +240,38 @@ export function contentBasis(children: ReactNode): ReactNode {
   return clone
 }
 
+/**
+ * Each contiguous text run of a flex or block box becomes one trimmed
+ * anonymous box, in place. A nested array (a component's
+ * `{icon}{children}{after}`) is the same box's content in CSS, so its runs
+ * are trimmed too; only its text changes, never its order or its elements.
+ */
+function holdsText(slots: Slot[]): boolean {
+  return slots.some((slot) => isText(slot) || (Array.isArray(slot) && holdsText(slot)))
+}
+
+function trimTextRuns(out: Slot[], tr: Translation): void {
+  let first = -1
+  for (let i = 0; i <= out.length; i++) {
+    const slot = out[i]
+    if (i < out.length && isText(slot)) {
+      if (first < 0) first = i
+      continue
+    }
+    if (first >= 0) {
+      const joined = collapse(out.slice(first, i).join('')).trim()
+      out[first] = joined === '' ? null : applyTextTransform(joined, tr.transform)
+      for (let j = first + 1; j < i; j++) out[j] = null
+      first = -1
+    }
+    if (Array.isArray(slot) && holdsText(slot)) {
+      const nested = slot.slice()
+      trimTextRuns(nested, tr)
+      out[i] = nested
+    }
+  }
+}
+
 export function layoutChildren(
   tr: Translation,
   style: StyleDesc,
@@ -303,21 +335,10 @@ export function layoutChildren(
     // Flex items, or block flow: contiguous text is one anonymous box.
     const row = style.display === 'flex' && style.flexDirection !== 'column' && style.flexDirection !== 'column-reverse'
     const grows = row && slots.some(growsInFlow)
-    let first = -1
-    for (let i = 0; i <= out.length; i++) {
+    trimTextRuns(out, tr)
+    for (let i = 0; i < out.length; i++) {
       const slot = out[i]
-      if (i < out.length && isText(slot)) {
-        if (first < 0) first = i
-        continue
-      }
-      if (first >= 0) {
-        const joined = collapse(slots.slice(first, i).join(''))
-        const text = joined.trim() === '' ? null : applyTextTransform(flex ? joined.trim() : joined.trim(), tr.transform)
-        out[first] = text
-        for (let j = first + 1; j < i; j++) out[j] = null
-        first = -1
-      }
-      const info = i < out.length ? infoOf(slot) : undefined
+      const info = infoOf(slot)
       if (info?.autoMargin && isValidElement(slot)) out[i] = placeAutoMargin(slot, info.autoMargin, row, grows)
     }
     return { children: paintPositionedLast(out), isStatic }
