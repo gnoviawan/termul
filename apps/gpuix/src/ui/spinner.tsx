@@ -2,16 +2,22 @@
  * The comet ring (web `.tm-comet`): a ring whose alpha climbs from 0 at the
  * top, clockwise, to the full colour, with a round head at the top. GPUIX has
  * no conic gradients, masks or transforms, so the ring is SVG: wedges of
- * rising opacity, rotated by re-rendering the source in 10-degree steps. One
- * lap is 700ms; reduced motion holds it at rest, like the paused animation.
+ * rising opacity, rotated by re-rendering the source in 30-degree steps. One
+ * lap is 1s; reduced motion holds it at rest, like the paused animation.
+ *
+ * Each step costs a full GPUIX frame, 15 to 18ms on the UI thread with one
+ * chat open, whatever the SVG holds. At the web's 10-degree steps over 700ms
+ * (51 frames a second) the spinners alone kept the UI thread at 95% of a
+ * core; twelve steps a second, the cadence of a classic activity indicator,
+ * cost about a fifth of that.
  */
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useSyncExternalStore } from 'react'
 import { cn } from '@/lib/utils'
 import { useIconStyle } from '../icons/hugeicons'
 import { UiEnvironmentContext } from './internal/host'
 
-const LAP_MS = 700
-const STEP_DEG = 10
+const LAP_MS = 1000
+const STEP_DEG = 30
 const WEDGES = 72
 
 const sources = new Map<string, string>()
@@ -45,21 +51,43 @@ export function cometSource(size: number, angle: number): string {
   return source
 }
 
+/**
+ * One clock for every spinner, so the spinners on screen together (a running
+ * chat shows one in its tab and one in its sidebar card) step in one frame
+ * instead of one frame each. It ticks only while a spinner is mounted.
+ */
+const lapClock = (() => {
+  const listeners = new Set<() => void>()
+  let angle = 0
+  let timer: ReturnType<typeof setInterval> | null = null
+  const tick = () => {
+    const turn = (Date.now() % LAP_MS) / LAP_MS
+    const next = Math.floor((turn * 360) / STEP_DEG) * STEP_DEG
+    if (next === angle) return
+    angle = next
+    for (const listener of listeners) listener()
+  }
+  return {
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      timer ??= setInterval(tick, LAP_MS / (360 / STEP_DEG))
+      return () => {
+        listeners.delete(listener)
+        if (listeners.size === 0 && timer !== null) {
+          clearInterval(timer)
+          timer = null
+        }
+      }
+    },
+    angle: () => angle
+  }
+})()
+
+const atRest = () => () => {}
+
 function useLapAngle(running: boolean): number {
-  const [angle, setAngle] = useState(0)
-  useEffect(() => {
-    if (!running) return
-    const started = Date.now()
-    const timer = setInterval(
-      () => {
-        const turn = ((Date.now() - started) % LAP_MS) / LAP_MS
-        setAngle(Math.floor((turn * 360) / STEP_DEG) * STEP_DEG)
-      },
-      LAP_MS / (360 / STEP_DEG)
-    )
-    return () => clearInterval(timer)
-  }, [running])
-  return angle
+  const angle = useSyncExternalStore(running ? lapClock.subscribe : atRest, lapClock.angle)
+  return running ? angle : 0
 }
 
 function Spinner({

@@ -36,10 +36,8 @@ import {
 } from '@/stores/workspace-store/pane-context'
 import type { LeafNode } from '@/types/workspace.types'
 import { DropZoneOverlay } from './DropZoneOverlay'
+import { INACTIVE_CHAT_PANE_CLASS, INACTIVE_TAB_PANE_CLASS } from './inactive-pane-classes'
 import { WorkspaceTabBar } from './WorkspaceTabBar'
-
-/** Inactive tabs stay mounted but must not intercept clicks on the active tab beneath. */
-const INACTIVE_TAB_PANE_CLASS = 'w-full h-full absolute inset-0 invisible pointer-events-none'
 
 const AgentChatPanel = lazy(() =>
   import('@/components/chat/AgentChatPanel').then((m) => ({ default: m.AgentChatPanel }))
@@ -591,7 +589,7 @@ export function PaneContent({
                   // change on the same mounted AgentChatPanel.
                   <motion.div
                     key={tab.mountKey ?? tab.id}
-                    className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
+                    className={isVisible ? 'w-full h-full' : INACTIVE_CHAT_PANE_CLASS}
                     data-chat-tab-state={isVisible ? 'visible' : 'hidden'}
                     initial={reducedMotion ? false : { opacity: 0 }}
                     animate={{ opacity: 1 }}
