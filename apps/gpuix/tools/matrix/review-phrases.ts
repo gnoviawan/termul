@@ -6,7 +6,7 @@ export const LAMP =
 export const TITLE_TIP =
   'A title tooltip paints at once under the pointer after a click, anchored over the element, where the web shows none in the frame.'
 export const TEXTAREA_LINE =
-  'The commit footer below the description field lines up with the web (G5: a textarea in a block container gets the line box\'s strut descent under it, 6 px, as CSS inline-block does).'
+  "The commit footer below the description field lines up with the web (G5: a textarea in a block container gets the line box's strut descent under it, 6 px, as CSS inline-block does)."
 export const BLUR =
   'The scrim dims and blurs the page behind it as on the web (N2 backdrop blur, native patches zed/0003 and gpuix/0005).'
 export const CONFIRM_Z =
@@ -26,9 +26,9 @@ export const SETTINGS_BASE = [
   'The scrim dims and blurs the page behind it as on the web (N2).'
 ]
 export const FIELD_FOCUS =
-  'The focused field shows its caret, or nothing, but not the web\'s focus border (`focus-visible:border-ring`). G5 recorded that border in GPUIX, so this is a regression since G5. A candidate cause, not traced: gpui applies a `focus_visible` style only while the last input was the keyboard (`last_input_was_keyboard()` in its div.rs), and Chromium matches `:focus-visible` on any focused text field.'
+  "The focused field shows its caret, or nothing, but not the web's focus border (`focus-visible:border-ring`). G5 recorded that border in GPUIX, so this is a regression since G5. A candidate cause, not traced: gpui applies a `focus_visible` style only while the last input was the keyboard (`last_input_was_keyboard()` in its div.rs), and Chromium matches `:focus-visible` on any focused text field."
 export const BAND_FOCUS =
-  'The popover\'s search band keeps its plain hairline where the web turns it `ring` while the field has focus (`focus-within:border-ring`, BAND_FOCUS_CLASS).'
+  "The popover's search band keeps its plain hairline where the web turns it `ring` while the field has focus (`focus-within:border-ring`, BAND_FOCUS_CLASS)."
 export const TOAST =
   'The toast matches the web card (G4 native toaster): check icon, close button over the top-left corner, Arial text (sonner sets its own font stack); the toast crop differs 0.85 % perceptual.'
 export const COMPOSER_FOCUS =

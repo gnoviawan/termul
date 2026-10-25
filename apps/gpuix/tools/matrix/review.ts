@@ -56,29 +56,37 @@ export const REVIEWS: Record<string, Review> = {
     status: 'ported',
     differences: [
       'Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete, at the same place (G3: Radix opens a context menu 2 px right of the pointer). Row labels sit where the web puts them (G5: the " Label" text in a row\'s nested {icon}{children}{after} array is trimmed like any flex text run; it had kept its leading space, 3 px).',
-      'Under the open menu GPUIX keeps the hovered beta row\'s gear and shortcut; the web hides them, since a modal Radix menu turns pointer events off on the page.'
+      "Under the open menu GPUIX keeps the hovered beta row's gear and shortcut; the web hides them, since a modal Radix menu turns pointer events off on the page."
     ]
   },
   'rail.project-rename': {
     status: 'ported',
-    differences: ['Rename from the context menu edits the row in place and Enter saves gamma-renamed in both.']
+    differences: [
+      'Rename from the context menu edits the row in place and Enter saves gamma-renamed in both.'
+    ]
   },
   'rail.project-remove': {
     status: 'partial',
-    differences: ['Delete from the context menu asks for confirmation and removes delta in both.', BLUR, CONFIRM_Z],
+    differences: [
+      'Delete from the context menu asks for confirmation and removes delta in both.',
+      BLUR,
+      CONFIRM_Z
+    ],
     cause: 'compat translator gap',
     unit: 'confirm dialog stacking (unassigned)',
     impact: 1
   },
   'rail.project-colour': {
     status: 'ported',
-    differences: ['Change Color opens the Select Color popover with the same nine swatches and the current one ringed.']
+    differences: [
+      'Change Color opens the Select Color popover with the same nine swatches and the current one ringed.'
+    ]
   },
   'rail.project-reorder': {
     status: 'ported',
     differences: [
-      'Dragging gamma onto alpha reorders the list to alpha, gamma, beta in both (C3 fixed in G3: the framer-motion shim drives Reorder from pointer moves with framer\'s one-neighbour-per-move rule). The dragged row does not follow the pointer in GPUIX, which has no transforms; the list reorders live under it.',
-      'After the drop both clients stay on alpha and paint alpha and gamma in their hover state (gear and Ctrl+1/Ctrl+2), with the action strip\'s fade over alpha\'s +4 -1 diff stat.'
+      "Dragging gamma onto alpha reorders the list to alpha, gamma, beta in both (C3 fixed in G3: the framer-motion shim drives Reorder from pointer moves with framer's one-neighbour-per-move rule). The dragged row does not follow the pointer in GPUIX, which has no transforms; the list reorders live under it.",
+      "After the drop both clients stay on alpha and paint alpha and gamma in their hover state (gear and Ctrl+1/Ctrl+2), with the action strip's fade over alpha's +4 -1 diff stat."
     ]
   },
   'rail.add-menu': {
@@ -122,7 +130,9 @@ export const REVIEWS: Record<string, Review> = {
   },
   'side.chat-card-menu': {
     status: 'ported',
-    differences: ['Right-click on a chat card opens the same five-row menu with Delete Chat in red.']
+    differences: [
+      'Right-click on a chat card opens the same five-row menu with Delete Chat in red.'
+    ]
   },
   'side.workspace-switcher': {
     status: 'partial',
@@ -227,7 +237,10 @@ export const REVIEWS: Record<string, Review> = {
   },
   'git.branch-picker': {
     status: 'partial',
-    differences: ['Branch popover, Local group, feature/login and Create branch row match.', BAND_FOCUS],
+    differences: [
+      'Branch popover, Local group, feature/login and Create branch row match.',
+      BAND_FOCUS
+    ],
     cause: 'compat translator gap',
     unit: 'focus styles on fields (unassigned)',
     impact: 1
@@ -257,7 +270,7 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'One wheel event of -20000 px scrolls both to the first turn and shows the jump-to-latest button.',
-      'The table card has copy and download buttons but not the web\'s expand button, its columns split the width differently (Panes mounted is wider), and each row is about 2 px taller.',
+      "The table card has copy and download buttons but not the web's expand button, its columns split the width differently (Panes mounted is wider), and each row is about 2 px taller.",
       PROSE,
       TREE_TEXT
     ],
@@ -353,7 +366,7 @@ export const REVIEWS: Record<string, Review> = {
     status: 'ported',
     differences: [
       "Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1), and each pane's tab shows its full title with its close button (C15 fixed in G5).",
-      'In the full run both clients failed here at the server\'s terminal limit (10 per project), a harness leak: preserved PTYs from earlier surfaces piled up. The matrix now closes them before each client run (`tools/matrix/terminals.ts`), and the rerun matched.'
+      "In the full run both clients failed here at the server's terminal limit (10 per project), a harness leak: preserved PTYs from earlier surfaces piled up. The matrix now closes them before each client run (`tools/matrix/terminals.ts`), and the rerun matched."
     ]
   },
   'statusbar.items': {

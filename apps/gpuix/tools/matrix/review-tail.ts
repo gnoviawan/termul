@@ -45,7 +45,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'ported',
     differences: [
       'New Terminal opens Terminal 1 in both.',
-      'In the full run both clients hit the server\'s terminal limit (a harness leak, fixed by `tools/matrix/terminals.ts`); the rerun matched. That frame also showed the GPUIX error toast too narrow for its message: the text runs past the window edge, where the web toast wraps to two lines.'
+      "In the full run both clients hit the server's terminal limit (a harness leak, fixed by `tools/matrix/terminals.ts`); the rerun matched. That frame also showed the GPUIX error toast too narrow for its message: the text runs past the window edge, where the web toast wraps to two lines."
     ]
   },
   'palette.agent-launcher': {
@@ -60,7 +60,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Open Canvas opens design.figcraft in both, and the FigCraft editor reaches Ready in GPUIX through the browser-pane webview (V1) with the pinned bundle (run with `tools/canvas/server-with-bundle.ts`).',
-      'GPUIX shows the whole editor in FigCraft\'s light theme (white panels, page colour F5F5F5) where the web shows it dark (page 1E1E1E); see canvas.open.'
+      "GPUIX shows the whole editor in FigCraft's light theme (white panels, page colour F5F5F5) where the web shows it dark (page 1E1E1E); see canvas.open."
     ],
     cause: 'needs diagnosis',
     unit: 'canvas theme handoff (unassigned)',
@@ -104,18 +104,28 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
   'palette.shortcut-menu': {
     status: 'ported',
-    differences: ['Opens the Shortcut Menu in both; GPUIX shows the desktop keymap chips (see shortcuts.menu).', BLUR]
+    differences: [
+      'Opens the Shortcut Menu in both; GPUIX shows the desktop keymap chips (see shortcuts.menu).',
+      BLUR
+    ]
   },
   'palette.report-bug': {
     status: 'partial',
-    differences: ['Opens the Report a bug dialog, laid out as in dialogs.bug-report.', BLUR, FIELD_FOCUS],
+    differences: [
+      'Opens the Report a bug dialog, laid out as in dialogs.bug-report.',
+      BLUR,
+      FIELD_FOCUS
+    ],
     cause: 'compat translator gap',
     unit: 'focus styles on fields (unassigned)',
     impact: 1
   },
   'shortcuts.toggle-projects': {
     status: 'partial',
-    differences: ['Ctrl+Shift+B collapses the rail in both.', 'The collapsed rail has no Open canvas button in GPUIX (see rail.collapse).'],
+    differences: [
+      'Ctrl+Shift+B collapses the rail in both.',
+      'The collapsed rail has no Open canvas button in GPUIX (see rail.collapse).'
+    ],
     cause: 'needs diagnosis',
     unit: 'collapsed rail canvas button (unassigned)',
     impact: 1
@@ -134,7 +144,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'shortcuts.zoom-in': {
     status: 'partial',
     differences: [
-      'Each client presses its own key (G3: the web Alt+=, GPUIX the desktop Ctrl+= from G4\'s keymap), and both zoom: the rail and sidebar widen alike (G4, shims/window-zoom.ts; tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both).',
+      "Each client presses its own key (G3: the web Alt+=, GPUIX the desktop Ctrl+= from G4's keymap), and both zoom: the rail and sidebar widen alike (G4, shims/window-zoom.ts; tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both).",
       'The zoomed web page runs past the window bottom, so its status bar is cut off and the dashboard heading sits 25 px lower; GPUIX keeps the status bar in the window.'
     ],
     cause: 'needs diagnosis',
@@ -309,7 +319,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Clicking Canvas opens design.figcraft and the FigCraft editor reaches Ready in both: pages, layers, design panel, toolbar and Save (V1: the editor runs in a `termul-webview-host` webview placed over the pane; this run used the pinned bundle, sha256 verified against canvas/figcraft.pin).',
-      'The theme does not carry over in GPUIX. Here its panels are dark but the page is light (F5F5F5 against the web\'s 1E1E1E), and in palette.open-canvas the whole editor is light.'
+      "The theme does not carry over in GPUIX. Here its panels are dark but the page is light (F5F5F5 against the web's 1E1E1E), and in palette.open-canvas the whole editor is light."
     ],
     cause: 'needs diagnosis',
     unit: 'canvas theme handoff (unassigned)',
@@ -337,5 +347,5 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       'Background, panel, card, border, text and accent colours match the web dashboard.',
       'The differences left are not the theme.'
     ]
-  },
+  }
 }
