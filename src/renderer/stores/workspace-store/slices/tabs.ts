@@ -5,7 +5,7 @@
 import type { StateCreator } from 'zustand'
 import { commitDiffTabId, diffTabIdentity } from '@/lib/diff-tab-identity'
 import { logFrontendError } from '@/lib/log-api'
-import { navigateToChatSession } from '@/lib/router-navigate'
+import { isChatRouteCurrent, navigateToChatSession } from '@/lib/router-navigate'
 import {
   AGENT_BROWSER_SPLIT_SIZES,
   agentChatTabId,
@@ -419,13 +419,15 @@ export const createTabsSlice: StateCreator<WorkspaceState, [], [], TabsSliceStat
     }
     const fromId = agentChatTabId(fromSessionId)
     const toId = agentChatTabId(toSessionId)
-    const { root, agentLauncherPaneId } = get()
+    const { root } = get()
     const pane = findPaneContainingTab(root, fromId)
     if (!pane) {
       get().addAgentChatTab(toSessionId, targetPaneId)
       return
     }
-    const { fullscreenPaneId } = get()
+    // A rename in place: while the session started the user may have
+    // reopened the launcher, focused another pane or moved to another chat,
+    // so focus, the launcher and the route stay theirs.
     const nextRoot = updateLeaf(root, pane.id, (leaf) => {
       const tabs = leaf.tabs
         // Drop a pre-existing destination tab before the swap so the
@@ -447,12 +449,8 @@ export const createTabsSlice: StateCreator<WorkspaceState, [], [], TabsSliceStat
         activeTabId: leaf.activeTabId === fromId ? toId : leaf.activeTabId
       }
     })
-    set({
-      root: nextRoot,
-      activePaneId: resolveActivePaneId(fullscreenPaneId, pane.id),
-      agentLauncherPaneId: agentLauncherPaneId === pane.id ? null : agentLauncherPaneId
-    })
-    navigateToChatSession(toSessionId)
+    set({ root: nextRoot })
+    if (isChatRouteCurrent(fromSessionId)) navigateToChatSession(toSessionId)
   },
 
   renameEditorTab: (fromPath: string, toPath: string): void => {

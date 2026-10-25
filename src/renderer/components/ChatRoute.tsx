@@ -98,6 +98,13 @@ function openRouteInOwnerProject(sessionId: string): boolean {
   return true
 }
 
+function chatMountKey(sessionId: string): string | null {
+  const tabId = agentChatTabId(sessionId)
+  const pane = findPaneContainingTab(useWorkspaceStore.getState().root, tabId)
+  const tab = pane?.type === 'leaf' ? pane.tabs.find((t) => t.id === tabId) : undefined
+  return tab?.type === 'agent-chat' ? (tab.mountKey ?? tab.id) : null
+}
+
 export function ChatRoute(): null {
   const location = useLocation()
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
@@ -106,6 +113,7 @@ export function ChatRoute(): null {
   const chatPaneIdRef = useRef<string | null>(null)
   const hasInteractedRef = useRef(false)
   const lastSessionIdRef = useRef<string | null>(null)
+  const routedMountKeyRef = useRef<string | null>(null)
 
   const sessionId = useMemo(() => {
     const match = location.pathname.match(/^\/c\/(.+)$/)
@@ -117,16 +125,29 @@ export function ChatRoute(): null {
   // navigated to from another chat must re-open, not inherit the old
   // route's closed/suppression state). The closed-on-route mark belongs to
   // the OLD session: clear it so a later return to that chat re-opens.
+  //
+  // A remap (placeholder -> real session, agent switch) renames the routed
+  // chat in place, and the renamed tab keeps its mountKey. That is the same
+  // chat on the same route, not a navigation: its route state carries over,
+  // so a launcher the user reopened meanwhile stays open.
   if (lastSessionIdRef.current !== sessionId) {
     if (lastSessionIdRef.current) clearChatClosedOnRoute(lastSessionIdRef.current)
     lastSessionIdRef.current = sessionId
-    isFirstRunRef.current = true
-    chatPaneIdRef.current = null
+    const renamed =
+      sessionId !== null &&
+      routedMountKeyRef.current !== null &&
+      chatMountKey(sessionId) === routedMountKeyRef.current
+    if (!renamed) {
+      isFirstRunRef.current = true
+      chatPaneIdRef.current = null
+      routedMountKeyRef.current = null
+    }
   }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: root intentionally retriggers the effect; the gate below is about WHEN to re-delegate, not a duplicate of the store's activation no-op predicate
   useEffect(() => {
     if (!sessionId || !isChatRouteCurrent(sessionId)) return
+    routedMountKeyRef.current = chatMountKey(sessionId) ?? routedMountKeyRef.current
     const firstRun = isFirstRunRef.current
     isFirstRunRef.current = false
     const tabId = agentChatTabId(sessionId)
