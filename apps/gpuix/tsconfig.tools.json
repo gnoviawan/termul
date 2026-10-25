@@ -27,6 +27,7 @@
     }
   },
   "include": [
+    "src/native-patches.d.ts",
     "src/main.tsx",
     "src/env",
     "src/log.ts",
@@ -39,5 +40,5 @@
     "src/style/__tests__",
     "src/composer/__tests__"
   ],
-  "exclude": ["tools/terminal", "tools/chat/scene/boot.tsx", "tools/composer/scene/boot.tsx", "tools/composer/scene/dom-components.d.ts", "tools/ui/gallery", "tools/compat/fixtures/dom", "tools/compat/bench/dom", "src/compat/radix", "src/compat/shims", "tools/compat/web/main.tsx", "tools/compat/fixtures/boot.tsx", "tools/compat/bench/app.tsx", "tools/compat/bench/HandList.tsx", "tools/compat/bench/data.ts"]
+  "exclude": ["tools/terminal", "tools/native", "tools/chat/scene/boot.tsx", "tools/composer/scene/boot.tsx", "tools/composer/scene/dom-components.d.ts", "tools/ui/gallery", "tools/compat/fixtures/dom", "tools/compat/bench/dom", "src/compat/radix", "src/compat/shims", "tools/compat/web/main.tsx", "tools/compat/fixtures/boot.tsx", "tools/compat/bench/app.tsx", "tools/compat/bench/HandList.tsx", "tools/compat/bench/data.ts"]
 }

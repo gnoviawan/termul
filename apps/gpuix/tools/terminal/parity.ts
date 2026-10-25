@@ -7,6 +7,7 @@
  * between the two grids with P0's `diffPngs`.
  *
  * bun tools/terminal/parity.ts [--out DIR] [--renderer webgl|dom] [--checkpoint NAME ...]
+ * bun tools/terminal/parity.ts --bytes FILE   (one checkpoint, "all", over a raw byte stream)
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -36,9 +37,12 @@ const { values } = parseArgs({
   options: {
     out: { type: 'string', default: '/tmp/gpuix-t1/parity' },
     renderer: { type: 'string', default: 'webgl' },
-    checkpoint: { type: 'string', multiple: true, default: ['less', 'vim', 'done'] }
+    checkpoint: { type: 'string', multiple: true },
+    bytes: { type: 'string' }
   }
 })
+const bytesFile = values.bytes ? path.resolve(values.bytes) : FIXTURE_BYTES
+const checkpoints = values.checkpoint ?? (values.bytes ? ['all'] : ['less', 'vim', 'done'])
 const renderer = values.renderer === 'dom' ? 'dom' : 'webgl'
 
 /**
@@ -92,7 +96,7 @@ async function checkpoint(name: string, limit: number, bytes: Uint8Array) {
   const gpuix = await runEntry<GpuixReady>({
     entry: 'parity-gpuix',
     args: [
-      FIXTURE_BYTES,
+      bytesFile,
       String(limit),
       path.join(outDir, 'gpuix-ready.json'),
       String(FIXTURE_COLS),
@@ -141,10 +145,12 @@ async function checkpoint(name: string, limit: number, bytes: Uint8Array) {
   }
 }
 
-const bytes = new Uint8Array(await Bun.file(FIXTURE_BYTES).arrayBuffer())
-const offsets = JSON.parse(readFileSync(FIXTURE_CHECKPOINTS, 'utf8')) as Record<string, number>
+const bytes = new Uint8Array(await Bun.file(bytesFile).arrayBuffer())
+const offsets = values.bytes
+  ? { all: bytes.length }
+  : (JSON.parse(readFileSync(FIXTURE_CHECKPOINTS, 'utf8')) as Record<string, number>)
 const results = []
-for (const name of values.checkpoint) {
+for (const name of checkpoints) {
   const limit = offsets[name]
   if (limit === undefined) throw new Error(`no checkpoint ${name} in ${FIXTURE_CHECKPOINTS}`)
   results.push(await checkpoint(name, limit, bytes))

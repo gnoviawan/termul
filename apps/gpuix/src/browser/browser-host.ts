@@ -24,8 +24,10 @@ import type { HostEvent, HostRequest } from './protocol'
 
 export interface GpuixBrowserHostOptions {
   binary: string
-  /** This process; the helper finds the GPUIX window by its `_NET_WM_PID`. */
+  /** This process; the helper finds the GPUIX window by its `_NET_WM_PID` when `parentWindow` has no id. */
   parentPid: number
+  /** The GPUIX window's X11 id when the addon reports it (patched addon only). */
+  parentWindow?(): number | null
   /** Cookies, storage and cache of every tab (one profile, as in the desktop app). */
   dataDir?: string
   /** GPUIX's focused element id, polled while a webview holds the keyboard. */
@@ -147,13 +149,12 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
 
   const ensure = (): HostProcess => {
     if (helper?.alive) return helper
+    const window = options.parentWindow?.() ?? null
+    const parent =
+      window === null ? ['--parent-pid', String(options.parentPid)] : ['--parent', String(window)]
     const started = new HostProcess({
       binary: options.binary,
-      args: [
-        '--parent-pid',
-        String(options.parentPid),
-        ...(options.dataDir ? ['--data-dir', options.dataDir] : [])
-      ],
+      args: [...parent, ...(options.dataDir ? ['--data-dir', options.dataDir] : [])],
       onEvent,
       onStderr: (line) => log.info('webview-host', line),
       onExit: (detail) => {
@@ -168,7 +169,10 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
         }
       }
     })
-    log.info(SOURCE, `started webview host ${started.pid ?? '?'} (${options.binary})`)
+    log.info(
+      SOURCE,
+      `started webview host ${started.pid ?? '?'} (${options.binary}) ${parent.join(' ')}`
+    )
     helper = started
     return started
   }

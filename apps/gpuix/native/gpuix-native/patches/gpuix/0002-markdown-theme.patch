@@ -1,0 +1,231 @@
+diff --git a/packages/native/src/markdown/render.rs b/packages/native/src/markdown/render.rs
+index 456e6b2..e1b9483 100644
+--- a/packages/native/src/markdown/render.rs
++++ b/packages/native/src/markdown/render.rs
+@@ -58,10 +58,16 @@ pub fn table_columns(content_widths: &[f32], m: &Metrics) -> TableColumns {
+         min_table_width,
+     }
+ }
+-/// Inline-code wash overhang: x extends past the glyphs, y insets from the line
+-/// box. Paint only, so neither can move a glyph.
+-const INLINE_CODE_PAD_X: f32 = 2.0;
+-const INLINE_CODE_INSET_Y: f32 = 2.0;
++/// GPUI's per-run glyph scale (Termul's zed patch 0001-run-font-scale): a
++/// pseudo feature whose value is the scale in per mille.
++fn scaled_font(mut f: gpui::Font, scale: f32) -> gpui::Font {
++    if (scale - 1.0).abs() > f32::EPSILON {
++        let mut features: Vec<(String, u32)> = f.features.0.iter().cloned().collect();
++        features.push(("tszl".into(), (scale * 1000.0).round() as u32));
++        f.features = gpui::FontFeatures(std::sync::Arc::new(features));
++    }
++    f
++}
+ 
+ // ── Flattened inline text ────────────────────────────────────────────
+ 
+@@ -92,16 +98,18 @@ pub fn flatten_runs(runs: &[InlineRun], theme: &Theme, base_weight: FontWeight)
+         text.push_str(&run.text);
+ 
+         let mut f = if run.style.code {
+-            font(theme.font_mono.clone())
++            scaled_font(font(theme.font_mono.clone()), theme.metrics.md_inline_code_scale)
+         } else {
+             font(theme.font_sans.clone())
+         };
+         f.weight = if run.style.bold && base_weight.0 < FontWeight::SEMIBOLD.0 {
+             FontWeight::SEMIBOLD
++        } else if let Some(weight) = theme.link_weight.filter(|_| run.style.link.is_some()) {
++            FontWeight(weight.0.max(base_weight.0))
+         } else {
+             base_weight
+         };
+-        f.style = if run.style.italic {
++        f.style = if run.style.italic || theme.italic {
+             FontStyle::Italic
+         } else {
+             FontStyle::Normal
+@@ -130,12 +138,14 @@ pub fn flatten_runs(runs: &[InlineRun], theme: &Theme, base_weight: FontWeight)
+             // with an underline, because accent is reserved for actions.
+             color: if run.style.code {
+                 theme.code_text
++            } else if run.style.link.is_some() {
++                theme.link.unwrap_or(theme.text)
+             } else {
+                 theme.text
+             },
+             background_color: None,
+             underline: run.style.link.is_some().then_some(UnderlineStyle {
+-                color: Some(theme.text_muted),
++                color: Some(theme.link_underline.unwrap_or(theme.text_muted)),
+                 thickness: px(1.0),
+                 wavy: false,
+             }),
+@@ -361,13 +371,15 @@ fn flat_text_element(flat: &FlatText, ctx: &mut MdContext) -> AnyElement {
+     let code_ranges = flat.code_ranges.clone();
+     let wash = ctx.theme.code_wash;
+     let radius = ctx.theme.metrics.md_inline_code_radius;
++    let pad_x = ctx.theme.metrics.md_inline_code_padding_x;
++    let inset_y = ctx.theme.metrics.md_inline_code_inset_y;
+     let extra: Option<Box<dyn Fn(&gpui::TextLayout, &mut gpui::Window)>> = if code_ranges.is_empty()
+     {
+         None
+     } else {
+         Some(Box::new(move |layout, window| {
+             for range in &code_ranges {
+-                for rect in range_rects(layout, range, INLINE_CODE_PAD_X, INLINE_CODE_INSET_Y) {
++                for rect in range_rects(layout, range, pad_x, inset_y) {
+                     window.paint_quad(gpui::quad(
+                         rect,
+                         px(radius),
+diff --git a/packages/native/src/theme.rs b/packages/native/src/theme.rs
+index e952167..9e1a788 100644
+--- a/packages/native/src/theme.rs
++++ b/packages/native/src/theme.rs
+@@ -241,6 +241,13 @@ pub struct Metrics {
+     /// column keeps a readable width.
+     pub md_table_min_column_content: f32,
+     pub md_inline_code_radius: f32,
++    /// Inline-code glyph size as a fraction of the paragraph's (CSS `0.88em`).
++    pub md_inline_code_scale: f32,
++    /// How far the inline-code wash reaches past the glyphs on each side. Paint
++    /// only: it moves no glyph, unlike CSS inline padding.
++    pub md_inline_code_padding_x: f32,
++    /// How far the wash is inset from the top and bottom of the line box.
++    pub md_inline_code_inset_y: f32,
+     // The fenced-block card. `<code>` paints no card of its own, so these are
+     // markdown-only: a document renderer owns its layout, a primitive does not.
+     pub md_code_padding_x: f32,
+@@ -315,6 +322,9 @@ impl Metrics {
+             o.md_table_min_column_content,
+         );
+         set(&mut self.md_inline_code_radius, o.md_inline_code_radius);
++        set(&mut self.md_inline_code_scale, o.md_inline_code_scale);
++        set(&mut self.md_inline_code_padding_x, o.md_inline_code_padding_x);
++        set(&mut self.md_inline_code_inset_y, o.md_inline_code_inset_y);
+         if let Some(sizes) = &o.md_heading_sizes {
+             for (slot, value) in self.md_heading_sizes.iter_mut().zip(sizes) {
+                 *slot = *value as f32;
+@@ -378,6 +388,9 @@ impl Metrics {
+             self.md_table_min_column_width,
+             self.md_table_min_column_content,
+             self.md_inline_code_radius,
++            self.md_inline_code_scale,
++            self.md_inline_code_padding_x,
++            self.md_inline_code_inset_y,
+         ] {
+             feed(value);
+         }
+@@ -421,6 +434,9 @@ impl Default for Metrics {
+             md_table_min_column_width: 96.0,
+             md_table_min_column_content: 48.0,
+             md_inline_code_radius: 4.5,
++            md_inline_code_scale: 1.0,
++            md_inline_code_padding_x: 2.0,
++            md_inline_code_inset_y: 2.0,
+             md_code_padding_x: 12.0,
+             md_code_padding_y: 10.0,
+             md_code_radius: 10.0,
+@@ -459,6 +475,15 @@ pub struct Theme {
+     pub code_text: Hsla,
+     /// Rounded wash behind inline code, violet-400 at 12%.
+     pub code_wash: Hsla,
++    /// Markdown link text. Unset, links keep the text colour.
++    pub link: Option<Hsla>,
++    /// Markdown link underline. Unset, `text_muted`.
++    pub link_underline: Option<Hsla>,
++    /// Markdown link weight. Unset, the paragraph's.
++    pub link_weight: Option<gpui::FontWeight>,
++    /// Every markdown run italic, like CSS `font-style: italic` on a
++    /// blockquote. Emphasis inside stays italic.
++    pub italic: bool,
+     /// Diff added lines, emerald-400.
+     pub diff_add: Hsla,
+     /// Diff deleted lines, red-400.
+@@ -490,6 +515,10 @@ impl Theme {
+             caret: oklch(0.673, 0.182, 276.935),
+             code_text: oklch(0.811, 0.111, 293.571),
+             code_wash: with_alpha(oklch(0.702, 0.183, 293.541), 0.12),
++            link: None,
++            link_underline: None,
++            link_weight: None,
++            italic: false,
+             diff_add: oklch(0.765, 0.177, 163.223),
+             diff_del: oklch(0.704, 0.191, 22.216),
+             diff_hunk_bg: hsla(0.6, 0.35, 0.6, 0.05),
+@@ -513,6 +542,10 @@ impl Theme {
+             caret: oklch(0.511, 0.262, 276.966),
+             code_text: oklch(0.491, 0.27, 292.581),
+             code_wash: with_alpha(oklch(0.541, 0.281, 293.009), 0.10),
++            link: None,
++            link_underline: None,
++            link_weight: None,
++            italic: false,
+             diff_add: oklch(0.596, 0.145, 163.225),
+             diff_del: oklch(0.577, 0.245, 27.325),
+             diff_hunk_bg: hsla(0.6, 0.35, 0.35, 0.07),
+@@ -538,6 +571,20 @@ impl Theme {
+         set(&mut self.caret, &o.caret);
+         set(&mut self.code_text, &o.code_text);
+         set(&mut self.code_wash, &o.code_wash);
++        if let Some(color) = o.link.as_deref().and_then(crate::color::parse_color_rgba) {
++            self.link = Some(color.into());
++        }
++        if let Some(color) = o.link_underline.as_deref().and_then(crate::color::parse_color_rgba) {
++            self.link_underline = Some(color.into());
++        }
++        if let Some(weight) = o.link_weight.filter(|w| w.is_finite()) {
++            self.link_weight = Some(gpui::FontWeight((weight as f32).clamp(1.0, 1000.0)));
++        }
++        match o.font_style.as_deref() {
++            Some("italic") => self.italic = true,
++            Some("normal") => self.italic = false,
++            _ => {}
++        }
+         set(&mut self.diff_add, &o.diff_add);
+         set(&mut self.diff_del, &o.diff_del);
+         set(&mut self.diff_hunk_bg, &o.diff_hunk_bg);
+@@ -654,6 +701,11 @@ pub struct ThemeOverride {
+     pub caret: Option<String>,
+     pub code_text: Option<String>,
+     pub code_wash: Option<String>,
++    pub link: Option<String>,
++    pub link_underline: Option<String>,
++    pub link_weight: Option<f64>,
++    /// `"italic"` or `"normal"` for every markdown run.
++    pub font_style: Option<String>,
+     pub diff_add: Option<String>,
+     pub diff_del: Option<String>,
+     pub diff_hunk_bg: Option<String>,
+@@ -694,6 +746,9 @@ pub struct MetricsOverride {
+     pub md_table_min_column_width: Option<f64>,
+     pub md_table_min_column_content: Option<f64>,
+     pub md_inline_code_radius: Option<f64>,
++    pub md_inline_code_scale: Option<f64>,
++    pub md_inline_code_padding_x: Option<f64>,
++    pub md_inline_code_inset_y: Option<f64>,
+     pub md_code_padding_x: Option<f64>,
+     pub md_code_padding_y: Option<f64>,
+     pub md_code_radius: Option<f64>,
+@@ -839,6 +894,22 @@ mod tests {
+         assert_eq!(hash(&base), hash(&Metrics::default()));
+     }
+ 
++    #[test]
++    fn link_and_inline_code_fields_override() {
++        let o: ThemeOverride = serde_json::from_str(
++            r##"{ "link": "#0000ff", "linkWeight": 500, "fontStyle": "italic", "metrics": { "mdInlineCodeScale": 0.88, "mdInlineCodePaddingX": 4, "mdInlineCodeInsetY": 1 } }"##,
++        )
++        .unwrap();
++        let t = Theme::dark().with_override(&o);
++        assert_eq!(t.link, Some(gpui::rgba(0x0000ffff).into()));
++        assert_eq!(t.link_underline, None);
++        assert_eq!(t.link_weight, Some(gpui::FontWeight(500.0)));
++        assert!(t.italic);
++        assert_eq!(t.metrics.md_inline_code_scale, 0.88);
++        assert_eq!(t.metrics.md_inline_code_padding_x, 4.0);
++        assert_eq!(t.metrics.md_inline_code_inset_y, 1.0);
++    }
++
+     #[test]
+     fn light_appearance_switches_the_base() {
+         let o: ThemeOverride = serde_json::from_str(r#"{ "appearance": "light" }"#).unwrap();

@@ -1,0 +1,30 @@
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index 8c104a4..ffa8f2d 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -6498,6 +6498,11 @@ pub(crate) fn apply_styles<E: gpui::Styled>(mut el: E, style: &StyleDesc) -> E {
+     if let Some(ref weight) = style.font_weight {
+         el = el.font_weight(parse_font_weight(weight));
+     }
++    match style.font_style.as_deref() {
++        Some("italic") | Some("oblique") => el = el.italic(),
++        Some("normal") => el = el.not_italic(),
++        _ => {}
++    }
+     // `textAlign` was in the style type but implemented nowhere.
+     match style.text_align.as_deref() {
+         Some("center") => el = el.text_center(),
+diff --git a/packages/native/src/style.rs b/packages/native/src/style.rs
+index 5c2aba8..e69a7cb 100644
+--- a/packages/native/src/style.rs
++++ b/packages/native/src/style.rs
+@@ -232,6 +232,9 @@ pub struct StyleDesc {
+     pub font_size: Option<f64>,
+     pub font_family: Option<String>,
+     pub font_weight: Option<FontWeightValue>,
++    /// `"italic"` or `"normal"`. Inherited down the tree like the rest of the
++    /// text style; GPUI picks the family's italic face, so register one.
++    pub font_style: Option<String>,
+     pub text_align: Option<String>,
+     pub line_height: Option<f64>,
+     pub white_space: Option<String>,

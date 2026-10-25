@@ -29,6 +29,7 @@
     }
   },
   "include": [
+    "src/native-patches.d.ts",
     "src/boot.tsx",
     "src/App.tsx",
     "tools/compat/fixtures/boot.tsx",

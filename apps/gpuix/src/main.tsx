@@ -51,6 +51,7 @@ if (browserSupport.kind === 'x11') {
   const browserHost = createGpuixBrowserHost({
     binary: browserSupport.binary,
     parentPid: process.pid,
+    parentWindow: () => focusControl?.x11Window() ?? null,
     dataDir: path.join(config.stateDir, 'webview'),
     focusedElement: () => focusControl?.focusedElement() ?? null,
     blurApp: () => focusControl?.blur()

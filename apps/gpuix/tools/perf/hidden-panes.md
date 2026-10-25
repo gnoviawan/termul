@@ -191,6 +191,32 @@ Read the `rows` columns with the chats-open row beside them. Every GPUIX run los
 
 The likely cause, read from the code and consistent with these runs but not reproduced in isolation, is in shared code: `remapAgentChatSession` (`src/renderer/stores/workspace-store/slices/tabs.ts`). A launch without a prepared session opens a placeholder chat and, once the agent's real session exists, remaps the placeholder's tab to it. The remap clears `agentLauncherPaneId` for that pane and navigates to the chat. When the user (here the driver) has already opened the launcher again for the next chat, the remap closes it and brings the previous chat back. The driver types into a launcher that is going away, or clicks Start on a window that has moved on. The same race exists on the web; it shows on GPUIX more because the GPUIX launcher starts more chats from a placeholder (inferred: Chromium's starts in these runs did not fail, which fits a prepared session claimed at once). Two harness-side experiments did not change the count, a steady-composer wait and forwarding presses to `window` (so `ChatRoute`'s first-interaction gate closes, which compat never did), and neither was kept. If that is confirmed, the fix belongs in the remap: leave a launcher that was opened after the launch alone and do not navigate when the placeholder's tab is no longer active.
 
+### stream-storm, 4 chats, one row per activity entry
+
+The same build as `rows` above (`c0084353` with the merge), `bun tools/perf/ab.ts --variants rows=gpuix:dist,chromium=chromium --runs 5 --out tools/perf/results-f3/storm4-rows -- --scenarios stream-storm --agents 2 --page-metrics off --quiet-wait 300 --port 8192 --display :184`. The machine was busy: in four runs the quiet gate gave up after 300 s (busy 241 to 489% at the start). `bun tools/perf/ab-table.ts tools/perf/results-f3/storm4-rows rows chromium`, cells list runs 1 to 5:
+
+| Metric | rows | chromium |
+|---|---|---|
+| Run status | ok, ok, ok, ok, ok | ok, ok, ok, ok, ok |
+| Errors (lost chat starts, timeouts) | 0, 0, 1, 2, 1 | 0, 0, 0, 0, 0 |
+| Chats open at the end | 4, 4, 4, 3, 3 | 4, 4, 4, 4, 4 |
+| Frames on screen, measure (fps) | 4.6, 4.3, 3.3, 4.7, 4.6 | 1.7, 1.8, 2.6, 2.2, 2.6 |
+| Frames on screen, sustained stream with chat switches (fps) | 4.9, 4.8, 4.2, 2.7, 4.6 | 2.7, 6, 6.1, 5.5, 5.3 |
+| Chat start while others stream, p50 (ms) | 14106, 11408, 13762, 15951, 12448 | 19409, 25168, 23613, 23905, 19157 |
+| Typing a 13-character prompt, p50 (ms) | 9577, 7875, 8738, 10453, 8986 | 9124, 18950, 14472, 15291, 13190 |
+| `gpuix-ui` CPU, measure (% of a core) | 24.1, 24.9, 28.9, 22.7, 25.2 | -, -, -, -, - |
+| `llvmpipe` CPU, measure (% of a core) | 116.2, 146.4, 120.1, 158.7, 130.8 | -, -, -, -, - |
+| Client CPU, measure (% of a core) | 230.3, 271, 252, 224.1, 250.6 | 210.5, 165.4, 149.7, 159.9, 172 |
+| Client PSS, measure, median (MB) | 900.8, 898, 869.8, 646.8, 1013 | 1076.1, 1053, 1071.3, 1073.7, 1114.7 |
+| Client PSS, measure, peak (MB) | 1081.6, 1059.6, 1045.4, 666.8, 1142.4 | 1097.2, 1084.6, 1095, 1088.5, 1126.1 |
+| Elements reachable from the root, measure | 5304, 5304, 5462, 992, 5273 | -, -, -, -, - |
+| Of those, built (not culled by a list) | 367, 367, 380, 319, 336 | -, -, -, -, - |
+| Mutation JSON sent, measure (KB/s) | 32, 35, 33, 14, 31 | -, -, -, -, - |
+| Load average at start | 6.9, 8.9, 6.9, 7.6, 7.8 | 4.6, 12.3, 9.4, 12.9, 7.8 |
+| Runs with a crash | 0 | 0 |
+
+With 4 chats `rows` draws more frames than Chromium in the measure phase (3.3 to 4.7 against 1.7 to 2.6 fps, rank-sum p = 0.008), starts a chat faster (11.4 to 16.0 s against 19.2 to 25.2 s, p = 0.008), types the prompt faster (7.9 to 10.5 s against 9.1 to 19.0 s, p = 0.032) and uses less memory (PSS 647 to 1,013 MB against 1,053 to 1,115 MB, p = 0.008). With chat switches the two are not distinguishable (2.7 to 4.9 against 2.7 to 6.1 fps, p = 0.10). GPUI built 319 to 380 elements per frame. No run crashed. Three GPUIX runs lost a chat start to the launcher race above and ended with 3 of 4 chats open.
+
 ## What still limits it
 
 - **The live turn, before `TurnActivityRows`.** After parking, one transcript row held nearly all of the reachable tree: the live turn's activity row (`chat-row-activity:<id>`), one child per narration message, thought and tool run of the turn. In `storm8-frames` run 2 it held 20,246 of 20,654 reachable elements, and the run where it reached 21,668 drew 0.4 fps and used 3.9 GB. A `virtual-list` culls whole rows only. `TurnActivityRows` (above) makes each entry a row.
