@@ -334,8 +334,9 @@ export function ChatComposerEditor(props: ChatComposerEditorProps): React.JSX.El
           aria-label={ariaLabel}
           value={text}
           readOnly={disabled}
+          // The web focuses once at mount and a read-only editor takes no focus, so a composer that mounts disabled stays unfocused.
           // biome-ignore lint/a11y/noAutofocus: hosts opt in (focus on chat open), as with the web editor's mount focus.
-          autoFocus={autoFocus}
+          autoFocus={autoFocus && !disabled}
           minRows={1}
           maxRows={Math.max(1, Math.floor(maxHeight / lineHeight))}
           style={{ ...textStyle, width: '100%', minHeight }}
