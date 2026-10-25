@@ -16,6 +16,7 @@ import { compatRenderOptions } from './compat/root'
 import { ServerGate } from './launcher/ServerGate'
 import { log } from './log'
 import { guardNativeQueries } from './native-guard'
+import { startFrameStats } from './perf/frame-stats'
 import { provideWebviewOcclusion } from './ui/internal/occlusion'
 import { DESKTOP_WINDOW } from './window'
 
@@ -25,6 +26,7 @@ export const boot: BootFn = (config, options) => {
   setHostLocalTokenSource(options.hostLocalToken)
   const onRenderer = (renderer: NativeRenderer) => {
     guardNativeQueries(renderer)
+    startFrameStats(renderer)
     for (const font of options.fonts)
       renderer.registerFont?.(font as Parameters<NonNullable<NativeRenderer['registerFont']>>[0])
     log.info('boot', `registered ${options.fonts.length} font faces`)
