@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import path from 'node:path'
-import { createGpuixBrowserHost, type GpuixBrowserHost } from './browser-host'
+import { createGpuixBrowserHost, type GpuixBrowserHost, helperEnv } from './browser-host'
 import { encodeCommand, parseEvent } from './protocol'
 import { detectBrowserSupport } from './support'
 
@@ -216,5 +216,17 @@ describe('GPUIX browser host over the helper protocol', () => {
     expect(h.helperPid()).toBeNumber()
     h.shutdown()
     await until(() => h.helperPid() === undefined)
+  })
+})
+
+describe('helper environment', () => {
+  test('a dark Termul starts WebKitGTK on the dark variant of the GTK theme', () => {
+    expect(helperEnv({ PATH: '/bin' }, true)).toEqual({ PATH: '/bin', GTK_THEME: 'Adwaita:dark' })
+    expect(helperEnv({ GTK_THEME: 'Yaru:light' }, true)).toEqual({ GTK_THEME: 'Yaru:dark' })
+  })
+
+  test('a light Termul leaves the environment as it is', () => {
+    const env = { GTK_THEME: 'Yaru' }
+    expect(helperEnv(env, false)).toBe(env)
   })
 })

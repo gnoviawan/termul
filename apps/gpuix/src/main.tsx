@@ -44,17 +44,21 @@ registerDesktopHost(createDesktopHost())
 let focusControl: FocusControl | null = null
 const browserSupport = detectBrowserSupport(process.env, process.platform, import.meta.dir)
 if (browserSupport.kind === 'x11') {
-  const [{ registerBrowserHost }, { createGpuixBrowserHost }] = await Promise.all([
-    import('@/lib/browser-host'),
-    import('./browser/browser-host')
-  ])
+  const [{ registerBrowserHost }, { createGpuixBrowserHost }, { getLastAppliedColorThemeId }, { resolveTwTheme }] =
+    await Promise.all([
+      import('@/lib/browser-host'),
+      import('./browser/browser-host'),
+      import('@/lib/themes/apply-color-theme'),
+      import('./style/theme')
+    ])
   const browserHost = createGpuixBrowserHost({
     binary: browserSupport.binary,
     parentPid: process.pid,
     parentWindow: () => focusControl?.x11Window() ?? null,
     dataDir: path.join(config.stateDir, 'webview'),
     focusedElement: () => focusControl?.focusedElement() ?? null,
-    blurApp: () => focusControl?.blur()
+    blurApp: () => focusControl?.blur(),
+    prefersDark: () => resolveTwTheme(getLastAppliedColorThemeId()).appearance !== 'light'
   })
   registerBrowserHost(browserHost)
   process.on('exit', () => browserHost.kill())
