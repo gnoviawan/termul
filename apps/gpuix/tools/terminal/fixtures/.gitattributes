@@ -1,0 +1,2 @@
+# Recorded PTY byte streams: CR LF is data, never normalise it.
+*.bin -text
