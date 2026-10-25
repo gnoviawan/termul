@@ -34,6 +34,7 @@ import {
 import { compatWarn } from './log'
 import { hover, occluderHover } from './hover'
 import { tracePointer } from './trace'
+import { elementPressed, flushPress, toPage } from './window-press'
 
 type Handler = (event: CompatEvent) => void
 
@@ -243,12 +244,22 @@ function gestureFor(payload: EventPayload): Gesture {
 }
 
 type Pick = (handlers: DomHandlers, payload: EventPayload) => [string, Handler | undefined][]
+/**
+ * What `document` and `window` see of a gesture (`window-press.ts`): `before`
+ * runs ahead of its element path, `after` once that path is done, with where
+ * it started and whether a handler stopped it.
+ */
+interface PagePhase {
+  before?: () => void
+  after: (payload: EventPayload, target: number, stopped: boolean) => void
+}
 
-function bubbling(pick: Pick) {
+function bubbling(pick: Pick, page?: PagePhase) {
   return (payload: EventPayload): Map<string, CompatEvent> | null => {
     const g = gestureFor(payload)
     const id = payload.elementId
     if (g.stopped || g.handled.has(id)) return null
+    page?.before?.()
     const target = nodeFor(id)
     const chain = [id, ...ancestorIds(id)]
     const events = new Map<string, CompatEvent>()
@@ -268,14 +279,28 @@ function bubbling(pick: Pick) {
         if (event.propagationStopped) g.stopped = true
       }
     }
+    page?.after(payload, id, g.stopped)
     return events
   }
 }
 
-const clickBubbling = bubbling((h, p) => [
-  ['click', h.onClick],
-  ['dblclick', p.clickCount === 2 ? h.onDoubleClick : undefined]
-])
+/** A release reaches the page after the press it ends, which goes first. */
+function releaseToPage(types: (payload: EventPayload) => string[]): PagePhase {
+  return {
+    before: flushPress,
+    after: (payload, target, stopped) => {
+      if (!stopped) toPage(types(payload), payload, target)
+    }
+  }
+}
+
+const clickBubbling = bubbling(
+  (h, p) => [
+    ['click', h.onClick],
+    ['dblclick', p.clickCount === 2 ? h.onDoubleClick : undefined]
+  ],
+  releaseToPage((p) => (p.clickCount === 2 ? ['click', 'dblclick'] : ['click']))
+)
 /** Click what a plain press on a capturing `source` clicks in the DOM (`withheldClickTarget`). */
 export function clickWithheldByCapture(source: number, point: { x: number; y: number }): void {
   const target = withheldClickTarget(source, point)
@@ -393,14 +418,20 @@ function inputSubmit(payload: EventPayload): void {
   if (!event.defaultPrevented) submitImplicitly(id, payload)
 }
 const onAuxClick = bubbling((h, p) => [['contextmenu', p.isRightClick ? h.onContextMenu : undefined]])
-const onMouseDown = bubbling((h) => [
-  ['pointerdown', h.onPointerDown],
-  ['mousedown', h.onMouseDown]
-])
-const onMouseUp = bubbling((h) => [
-  ['pointerup', h.onPointerUp],
-  ['mouseup', h.onMouseUp]
-])
+const onMouseDown = bubbling(
+  (h) => [
+    ['pointerdown', h.onPointerDown],
+    ['mousedown', h.onMouseDown]
+  ],
+  { after: elementPressed }
+)
+const onMouseUp = bubbling(
+  (h) => [
+    ['pointerup', h.onPointerUp],
+    ['mouseup', h.onMouseUp]
+  ],
+  releaseToPage(() => ['pointerup', 'mouseup'])
+)
 
 function direct(pick: (h: DomHandlers) => [string, Handler | undefined][]) {
   return (payload: EventPayload) => {

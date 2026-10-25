@@ -13,6 +13,7 @@ import { parkHiddenPanes } from './park'
 import { setOverlayLayer } from './react-dom'
 import { compatThemeId, compatTw, subscribeCompatTheme } from './translate'
 import { syncViewport } from './viewport'
+import { sentinelPress } from './window-press'
 
 const OVERLAY = {
   position: 'absolute',
@@ -22,6 +23,9 @@ const OVERLAY = {
   left: 0,
   pointerEvents: 'none'
 } as const
+
+/** Sees every press in the window for `document`/`window` listeners (`window-press.ts`). */
+const PRESS_SENTINEL = { position: 'absolute', left: 0, top: 0, width: 0, height: 0 } as const
 
 export interface CompatRootProps {
   children: ReactNode
@@ -59,6 +63,7 @@ export function CompatRoot({ children, onRenderer }: CompatRootProps): ReactNode
     <div style={{ ...root, fontSize: 16, lineHeight: 24 }} onLayout={() => syncViewport(renderer)}>
       {ready && layer ? <Fragment key={themeId}>{children}</Fragment> : null}
       <div ref={layerRef} style={OVERLAY} />
+      <div ref={hitTransparent as never} style={PRESS_SENTINEL} onMouseDownOutside={sentinelPress} />
       <DragPreviewBox />
     </div>
   )
