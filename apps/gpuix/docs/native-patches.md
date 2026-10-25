@@ -95,12 +95,15 @@ Italics also need italic faces. `tools/style/build-fonts.py` builds Inter's real
 | Link pixels in `theme.link` red | 1025 | 40 (FAIL) |
 | Inline-code ink width, scale 0.5 over 1.0 | 0.50 | 1.00 (FAIL) |
 | `getNativeWindowHandle()` names the window | `{ kind: 'x11', id: 0x200001 }` | `null` (FAIL) |
+| Unfocused input given a long value, ink above the baseline at its start | 1000 px | 0 px, only the trailing dots show (FAIL) |
 
 Parity against the web client, measured on 2026-10-25:
 
 - Terminal SGR 3 (`tools/terminal/parity.ts --bytes tools/terminal/fixtures/italic.bin`). The perceptual diff of the italic rows against xterm.js falls from 14.87% to 12.85%; the upright control row stays at 7.23%. The slant now matches: shifting the top and bottom halves of the italic row against the web gives the same best offset (-0.75 px), against a -0.25 px offset for the upright row. A steeper skew lowers the row diff slightly (12.0% at 0.40) only by cancelling that constant 0.5 px offset, while the slant stops matching, so the oblique keeps Blink's 0.25.
 - Terminal default fixture (`less`, `vim`, `done`): identical cells and pixels on both addons (2.45%, 3.61%, 10.69% exact before; 2.45%, 3.61%, 10.68% after).
 - Chat transcript (`tools/chat/parity.ts`), ROI perceptual diff before and after: bottom 3.53% and 3.51%, middle 10.05% and 10.06%, top 6.04% and 5.94%. The whole-ROI number is dominated by layout offsets and the Mermaid diagram the native client shows as source. Line by line, after aligning each line on its own text, a table row with inline code falls from 10.37% to 7.23%, and the link paragraph from 27.80% to 26.39%. Running text that does not overlay the web's glyph for glyph saturates near 45% exact, so the italic quote reads as a match in the crops (`chat-after2/top`) without moving its number.
+
+The browser-pane acceptance (`tools/browser/pane-check.ts`) passes all 13 checks on the self-built addon, and the app log shows the helper started with `--parent 2097153`, the id the check reads from X (`0x200001`).
 
 The drop-in proof for the unpatched build: `bun run typecheck`, `bun run test` (297 pass), `tools/parity/workspace-checks.ts` (14 ok) and `tools/terminal/shell-check.ts` (9 PASS) all pass with `NAPI_RS_NATIVE_LIBRARY_PATH` set.
 
@@ -111,7 +114,7 @@ bun run native:check
 GPUIX_COMMIT=<sha> ZED_COMMIT=<its zed pin> bun run native:check
 ```
 
-`check` applies the series to scratch worktrees of the pinned (or overridden) commits. It fails with the name of the first patch that no longer applies, and it refuses a `ZED_COMMIT` that is not the gpuix commit's submodule pointer.
+`check` applies the series to scratch worktrees of the pinned (or overridden) commits. It fails with the name of the first patch that no longer applies, and it refuses a `ZED_COMMIT` that is not the gpuix commit's submodule pointer. Measured on 2026-10-25: the series applies unchanged to `@gpuix/native@0.10.0` (`9fcd628`, Zed `81c99f8`), and against `0.6.0` (`dfb83f3`, Zed `8b94def`) the check exits 1 with `DRIFT: gpuix/0003-native-window-handle.patch does not apply`.
 
 To move to a new release:
 

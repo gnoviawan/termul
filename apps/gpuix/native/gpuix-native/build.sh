@@ -103,7 +103,7 @@ patch() {
 check() {
   fetch
   scratch=$(mktemp -d "$work/check.XXXXXX")
-  trap 'rm -rf "$scratch"' EXIT
+  trap 'rm -rf "$scratch"; git -C "$src" worktree prune; git -C "$zed" worktree prune' EXIT
   for repo in gpuix zed; do
     if [ "$repo" = gpuix ]; then dir=$src pin=$GPUIX_COMMIT; else dir=$zed pin=$ZED_COMMIT; fi
     git -C "$dir" worktree prune
