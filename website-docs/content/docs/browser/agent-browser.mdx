@@ -26,7 +26,7 @@ Some sites never ask:
 
 Choose one:
 
-- **Allow for this session** lets the agent open that site for the rest of this chat's agent session.
+- **Allow for this session** lets the agent open that site for the rest of this chat's agent session. If you select **Stop**, Termul takes the session's site access back, so the agent asks again after your next message. See [Stop the agent](#stop-the-agent).
 - **Always allow for this project** adds the site to the project's **Allowed sites** list.
 - **Deny** stops the request. The agent gets an error. If it tries again later, Termul asks again.
 
@@ -41,13 +41,13 @@ Some actions ask every time, even on a site you allowed:
 - Keeping a download.
 - Sending data from a page to a different site.
 
-For these, the options are **Allow once**, **Always allow on this site for this project**, and **Deny**. You can pre-approve uploads, downloads, and passwords in the browser settings. Payment forms always ask on the shared agent profile.
+For these, the options are **Allow once** and **Deny**. When the agent browses logged out, prompts for eligible actions also offer **Always allow on this site for this project**. With the shared agent profile, and for some actions even when logged out, they offer only **Allow once** and **Deny**. You can pre-approve uploads, downloads, and passwords in the browser settings. Payment forms always ask on the shared agent profile.
 
 Submitting a password doesn't ask by default, so the agent can sign in to sites for you. To be asked first, turn on **Ask before an agent submits a password** in the browser settings.
 
 ## Stop the agent
 
-Select **Stop** on the bar in the chat, or the stop button on the agent's browser tab. The agent's next browser action is refused, and any wait it is running ends. The bar then reads "Browsing stopped until your next message." When you send the agent a new message, it can use the browser again.
+Select **Stop** on the bar in the chat, or the stop button on the agent's browser tab. The agent's next browser action is refused, and any wait it is running ends. The bar then reads "Browsing stopped until your next message." When you send the agent a new message, it can use the browser again, but sites you allowed only for the session need your approval again.
 
 You can also close the agent's browser tab. The agent loses control of that tab, but it can open a new one. When the agent session ends, Termul closes the agent's browser tabs.
 
