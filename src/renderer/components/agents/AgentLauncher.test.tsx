@@ -184,6 +184,7 @@ const {
   acpStateRef: {
     current: {
       agentConfigs: [] as StoredAgentConfig[],
+      agentConfigsLoaded: true,
       preparedSessions: {} as Record<string, string>,
       preparingChatKeys: {} as Record<string, true>,
       prepareChatErrors: {} as Record<string, unknown>,
@@ -789,6 +790,7 @@ beforeEach(() => {
   mockResolvedAgentsOverride.current = null
   acpStateRef.current = {
     agentConfigs: [],
+    agentConfigsLoaded: true,
     preparedSessions: {},
     preparingChatKeys: {},
     prepareChatErrors: {},
@@ -1694,6 +1696,61 @@ describe('AgentLauncher ACP new thread', () => {
       agentId: 'acp-registry:claude-acp',
       mode: 'acp'
     })
+  })
+
+  it('restores a custom pick only once the agent configs have loaded', async () => {
+    const custom: StoredAgentConfig = {
+      id: 'custom-scripted',
+      name: 'Scripted',
+      command: '/opt/scripted-acp',
+      args: [],
+      env: {}
+    }
+    const customEntry: SupportedAcpAgentEntry = {
+      id: custom.id,
+      configId: custom.id,
+      agent: { id: custom.id, name: custom.name, version: '', description: '', distribution: {} },
+      config: custom,
+      status: 'ready',
+      install: null,
+      manualInstall: null,
+      runtimeLauncher: null,
+      unavailableReason: null
+    }
+    const catalog = buildSupportedAcpAgents([], 'windows-x86_64')
+    acpStateRef.current.agentConfigsLoaded = false
+    mockResolvedAgentsOverride.current = catalog
+    mockPersistRead.mockImplementation((key: string) =>
+      Promise.resolve(
+        key === 'agents/last-selected'
+          ? { success: true, data: { agentId: custom.id, mode: 'acp' } }
+          : { success: true, data: undefined }
+      )
+    )
+    const view = render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    await act(async () => {})
+
+    acpStateRef.current.agentConfigs = [custom]
+    acpStateRef.current.agentConfigsLoaded = true
+    mockResolvedAgentsOverride.current = [...catalog, customEntry]
+    view.rerender(
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    await act(async () => {})
+
+    const picks = mockPersistWrite.mock.calls.filter(([key]) => key === 'agents/last-selected')
+    expect(picks).toEqual([['agents/last-selected', { agentId: 'custom-scripted', mode: 'acp' }]])
+    expect(screen.getByRole('button', { name: /Currently Scripted/ })).toBeInTheDocument()
   })
 
   it('uses model config and native Agent/mode picker actions without duplicate Agent chips', async () => {

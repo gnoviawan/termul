@@ -409,6 +409,12 @@ export interface AcpState {
   // User-configured agents (persisted, distinct from the live `agents` map)
   agentConfigs: StoredAgentConfig[]
   /**
+   * True once the first `loadAgentConfigs` settled (loaded, or failed and left
+   * the list empty). Until then an empty `agentConfigs` means "not read yet",
+   * not "none saved".
+   */
+  agentConfigsLoaded: boolean
+  /**
    * Maps a per-project agent reuse key (`agentReuseKey(configId, cwd, projectId)`) to its
    * live spawned AgentId (for reuse). Keyed by config+cwd — not config alone —
    * so the same configured agent runs an independent process per project/cwd
