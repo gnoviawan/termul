@@ -3,62 +3,108 @@ title: Let an agent use the browser
 description: Allow an agent to open pages, click, and type in a Termul browser tab while you watch.
 ---
 
-<Callout type="info">This works in the desktop app only.</Callout>
+<Callout type="info">This works in the desktop app on Windows, macOS, and Linux.</Callout>
 
-An agent in a Termul chat can use a browser tab by itself. It can open your app, click through it, fill in a form, and check the result. You see every step in a visible tab, and the agent asks for your permission first.
-
-## Allow the agent to use the browser
-
-The first time an agent in a chat tries to use the browser, Termul asks you. The prompt reads **Allow browser automation?** and names the agent and what it wants to do, for example "Claude wants to drive this app's browser for this session. It wants to navigate."
-
-The prompt shows up in one of two places:
-
-- In the chat, as a card below the agent's latest messages. This is the usual place.
-- At the top of the agent's browser tab, as a narrow bar, when you are looking at that tab.
-
-Choose one:
-
-- **Allow for this session** lets the agent use the browser for the rest of this chat's agent session. Termul doesn't ask again in this chat.
-- **Deny** stops the request. The agent gets an error. If it tries again later, Termul asks again.
-
-If you don't answer within 2 minutes, Termul denies the request.
-
-The prompt appears only in the desktop app. If you follow the chat from a phone or the browser version, you won't see it. Answer it on the desktop, or the request is denied after 2 minutes.
+An agent in a Termul chat can use a browser tab by itself. It can open your app, click through it, fill in a form, and check the result. You see every step in a visible tab. Termul asks you before the agent opens a new site or does something risky, and you can stop it at any time.
 
 ## Watch the agent work
 
 When the agent opens its first page, Termul splits the pane you are working in and puts the agent's browser tab on the right. Your cursor stays in the chat. Later pages from the same chat open in that same pane.
 
-You can tell an agent's tab by:
+The agent's tab has an **Agent** label. While the agent uses the browser, the chat shows a bar that reads "The agent is using the browser."
 
-- An **Agent** label on the tab.
-- A colored border around the page.
+The agent works only in tabs that it opened. It can't see or control the browser tabs that you opened.
+
+## Allow a site
+
+Termul asks you the first time the agent wants to open a site in a chat. The prompt reads **Allow the agent to open this site?** and names the agent and the site, for example "Claude wants to open https://example.com in the agent browser."
+
+Some sites never ask:
+
+- Local addresses such as `localhost`, so the agent can test your dev server.
+- Sites on your **Allowed sites** list. See [Browser rules](#browser-rules).
+
+Choose one:
+
+- **Allow for this session** lets the agent open that site for the rest of this chat's agent session.
+- **Always allow for this project** adds the site to the project's **Allowed sites** list.
+- **Deny** stops the request. The agent gets an error. If it tries again later, Termul asks again.
+
+The prompt shows up in the chat as a card, and at the top of the agent's browser tab when you are looking at that tab. You can also answer it from the [phone app](/docs/remote/phone) or the [web version](/docs/remote/web-browser). If you don't answer within 2 minutes, Termul denies the request. If no one can answer at all, the agent is told right away.
+
+## Risky actions
+
+Some actions ask every time, even on a site you allowed:
+
+- Submitting payment details, including "Place order" buttons and card fields.
+- Uploading a file.
+- Keeping a download.
+- Sending data from a page to a different site.
+
+For these, the options are **Allow once**, **Always allow on this site for this project**, and **Deny**. You can pre-approve uploads, downloads, and passwords in the browser settings. Payment forms always ask on the shared agent profile.
+
+Submitting a password doesn't ask by default, so the agent can sign in to sites for you. To be asked first, turn on **Ask before an agent submits a password** in the browser settings.
+
+## Stop the agent
+
+Select **Stop** on the bar in the chat, or the stop button on the agent's browser tab. The agent's next browser action is refused, and any wait it is running ends. The bar then reads "Browsing stopped until your next message." When you send the agent a new message, it can use the browser again.
+
+You can also close the agent's browser tab. The agent loses control of that tab, but it can open a new one. When the agent session ends, Termul closes the agent's browser tabs.
+
+## Logins
+
+Agents don't use your own logins. They have their own browser profile, separate from the tabs you open.
+
+- By default, every project shares one **agent profile**. When the agent signs in to a site, it stays signed in in later chats and other projects. Termul never clears it by itself.
+- To keep a project separate, turn on **Browse logged out in this project**. The agent then starts logged out in every chat, and everything it saved is deleted when the chat ends.
+
+To sign the agent out of every site, select **Clear agent profile** in the browser settings. Termul asks you to confirm and closes the agent tabs that use the shared profile.
+
+On macOS, the shared agent profile needs macOS 14 or later. On older versions, agents always browse logged out.
+
+## Browser rules
+
+There are two places to set what agents may do in the browser. Changes in both save as you make them.
+
+In **Application Preferences**, open the **Browser** tab. It applies to every project:
+
+- **Shared agent profile** turns the shared agent profile on or off. Off: agents always browse logged out.
+- **Ask before an agent submits a password**.
+- **Clear agent profile** deletes the agent's logins and site data.
+- **Pre-approved actions in every project** lists actions the agent may take on a site without asking, when it uses the shared profile.
+
+In a project's settings, open the **Browser** tab. It applies to that project only:
+
+- **Browse logged out in this project**.
+- **Allowed sites** lists sites the agent opens without asking. Use `https://*.example.com` to include every subdomain.
+- **Pre-approved actions** lists actions the agent may take on a site without asking, when it browses logged out in this project.
+
+You can read these settings from the phone app and the web version, but you can change them only in the desktop app.
 
 ## What the agent can do
 
 In its own browser tabs, the agent can:
 
-- Open `http` and `https` addresses. Other kinds of addresses are refused.
+- Open `http` and `https` addresses. Other kinds of addresses, and a few local addresses, are refused.
 - Go back, go forward, and reload.
-- Read the page's structure: its buttons, links, fields, and text.
-- Click, fill in fields, type, press keys, scroll, and hover.
-- Wait for a set time or until some text appears.
-- Open, list, and close its own tabs.
-- Take a screenshot of the page (Windows only).
+- Read the page's structure, its buttons, links, fields, and text, and read long text in parts. This includes frames and the inside of web components.
+- Click, fill in fields, type, press keys, scroll, hover, pick an option in a list, check and uncheck boxes, and drag.
+- Wait for a set time or until something appears on the page.
+- Answer page dialogs, pick a file for an upload, and keep downloads.
+- Open, list, switch between, and close its own tabs, including popups.
+- Take a screenshot of the page.
+- Read the page's console messages.
 
-The agent works only in tabs that it opened. It can't see or control the browser tabs that you opened.
+Pages in agent tabs can't use your camera, microphone, or location.
 
 ## Differences between Windows, macOS, and Linux
 
-On Windows, the agent has the full set of actions. Its clicks are real mouse clicks, and it can take screenshots.
+On Windows, the agent's clicks are real mouse clicks, and it can read the page's network requests.
 
 On macOS and Linux:
 
-- The agent can't take screenshots.
-- Clicks come from a script inside the page, not from the mouse. Some pages ignore clicks like these.
+- Clicks and keys come from a script inside the page, not from the mouse and keyboard. Some pages ignore input like this.
+- The agent can't read inside a frame that comes from a different site.
+- On macOS, the agent can't read network requests.
 
-## Stop the agent
-
-Close the agent's browser tab. The agent loses control of that tab.
-
-Your permission still lasts for the rest of the chat's agent session. The agent can open a new tab without asking again. When the agent session ends, Termul closes the agent's browser tabs and forgets the permission.
+On Linux, the agent browser needs WebKitGTK 2.40 or later. Debian 12, Ubuntu 24.04, and an updated Ubuntu 22.04 have it.
