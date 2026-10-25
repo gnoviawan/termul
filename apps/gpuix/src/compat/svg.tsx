@@ -105,7 +105,7 @@ function CompatSvg({ native, rotate }: CompatSvgProps): ReactElement {
   if (descendant) style = { ...style, ...translation('svg', descendant).base }
   if (style.color === undefined && inherited !== undefined) style = { ...style, color: inherited }
   const source = native.source as string
-  const turned = turn % 360 === 0 ? source : rotateSource(source, turn)
+  const turned = rotateSource(source, turn)
   if (style === native.style && turned === source) return jsx('svg', native)
   return jsx('svg', { ...native, style, source: turned })
 }

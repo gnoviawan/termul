@@ -10,7 +10,7 @@ export const TEXTAREA_LINE =
 export const BLUR =
   'The scrim dims and blurs the page behind it as on the web (N2 backdrop blur, native patches zed/0003 and gpuix/0005).'
 export const CONFIRM_Z =
-  'The workspace status bar stays sharp above the confirm scrim, as on the web, where ConfirmDialog is an inline `fixed z-50` overlay and StatusBar a later `relative z-50` sibling (G9: compat gives the fixed overlay its z-index as its `<anchored>` priority, and native patch gpuix/0011 paints the `relative z-50` bar in the same deferred pass, after it in tree order; status-bar text 75 against the web\'s 72, dimmed to 11 before).'
+  "The workspace status bar stays sharp above the confirm scrim, as on the web, where ConfirmDialog is an inline `fixed z-50` overlay and StatusBar a later `relative z-50` sibling (G9: compat gives the fixed overlay its z-index as its `<anchored>` priority, and native patch gpuix/0011 paints the `relative z-50` bar in the same deferred pass, after it in tree order; status-bar text 75 against the web's 72, dimmed to 11 before)."
 export const PROSE =
   "Links paint in medium primary with their underline, inline code sits in the smaller chip with its padding, and italics are real (N1 and N2 native patches). Task-list items draw Chromium's disabled checkbox at the web's place (G7). One prose difference remains: a paragraph holding inline code breaks its lines at different words. G7 traced it to `text-wrap: pretty` on `.chat-streamdown`: Chromium rebalances a paragraph's last lines to avoid a short final line (the web's three lines end at 1198, 1175 and 739 px, GPUIX's greedy lines at 1261, 1220 and 660 px), and native markdown wraps greedily."
 export const RUN_ORDER =

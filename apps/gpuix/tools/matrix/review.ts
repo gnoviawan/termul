@@ -317,7 +317,7 @@ export const REVIEWS: Record<string, Review> = {
     status: 'ported',
     differences: [
       'Attach files opens the OS file chooser in both, and the picked matrix-attach.md shows as the same file chip above the prompt (G7: the GPUIX desktop host answers `dialogApi` and the composer picker with GPUI\'s portal dialog; the matrix drives the real GTK chooser with X key events, and the web answers Playwright\'s file chooser). The "Failed to open file picker" toast is gone.',
-      'After the pick both composers show the focus border (top edge 37 and 59 against the web\'s 37 and 58). G9 traced the resting border of earlier runs to the harness: GPUIX restores focus when its window gets the X input focus back (native patch gpuix/0006), which a window manager does when a dialog closes and Xvfb, which runs none, never did; the matrix now hands the focus back after answering the chooser.',
+      "After the pick both composers show the focus border (top edge 37 and 59 against the web's 37 and 58). G9 traced the resting border of earlier runs to the harness: GPUIX restores focus when its window gets the X input focus back (native patch gpuix/0006), which a window manager does when a dialog closes and Xvfb, which runs none, never did; the matrix now hands the focus back after answering the chooser.",
       TITLE_TIP,
       COMPOSER_Z
     ]

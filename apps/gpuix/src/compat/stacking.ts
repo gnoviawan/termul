@@ -16,7 +16,7 @@
  */
 
 /** The `z-index` of the web's overlay wrappers (`components/ui/*`). */
-export const PORTAL_Z = 50
+const PORTAL_Z = 50
 
 export const LAYER = {
   /** Modal dialogs and the `<body>` portal layer. */

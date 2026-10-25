@@ -10,7 +10,12 @@ import { translation } from '../../src/compat/translate'
 
 const RENDERER = path.resolve(import.meta.dir, '../../../../src/renderer')
 
-type Props = { style?: Record<string, unknown>; priority?: number; fill?: string; children?: unknown }
+type Props = {
+  style?: Record<string, unknown>
+  priority?: number
+  fill?: string
+  children?: unknown
+}
 
 describe('z-index classes', () => {
   test('an in-flow element carries its z-index as the zIndex style', () => {
@@ -27,7 +32,9 @@ describe('z-index classes', () => {
     const tr = translation('div', 'fixed inset-0 bg-overlay/60 z-50 flex')
     expect(tr.zIndex).toBe(50)
     expect(tr.base.zIndex).toBeUndefined()
-    const layer = jsx('div', { className: 'fixed inset-0 bg-overlay/60 z-50 flex' }) as ReactElement<Props>
+    const layer = jsx('div', {
+      className: 'fixed inset-0 bg-overlay/60 z-50 flex'
+    }) as ReactElement<Props>
     expect(layer.type as unknown).toBe('anchored')
     expect(layer.props.fill).toBe('window')
     expect(layer.props.priority).toBe(50)
@@ -39,7 +46,10 @@ describe('z-index classes', () => {
   })
 
   test('the composer card and the strip under it keep their classes otherwise', () => {
-    const card = jsx('div', { className: 'relative z-10 w-full', children: 'card' }) as ReactElement<Props>
+    const card = jsx('div', {
+      className: 'relative z-10 w-full',
+      children: 'card'
+    }) as ReactElement<Props>
     expect(card.props.style?.zIndex).toBe(10)
     expect(card.props.style?.position).toBe('relative')
   })
@@ -52,7 +62,9 @@ describe('z-index classes', () => {
         if (statSync(file).isDirectory()) {
           if (name !== '__tests__') walk(file)
         } else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) {
-          for (const match of readFileSync(file, 'utf8').matchAll(/(?<=["'`\s])-?z-(?:\[[^\]\s]+\]|\d+|auto)(?=["'`\s])/g)) {
+          for (const match of readFileSync(file, 'utf8').matchAll(
+            /(?<=["'`\s])-?z-(?:\[[^\]\s]+\]|\d+|auto)(?=["'`\s])/g
+          )) {
             tokens.set(match[0], zIndexToken(match[0]) ?? null)
           }
         }
@@ -73,7 +85,12 @@ describe('overlay layers sort above in-flow z-50', () => {
   })
 })
 
-const box = (x: number, y: number, width: number, height: number): Bounds => ({ x, y, width, height })
+const box = (x: number, y: number, width: number, height: number): Bounds => ({
+  x,
+  y,
+  width,
+  height
+})
 const div = (id: number, bounds: Bounds, children?: TreeJson[], layer?: number): TreeJson => ({
   id,
   type: 'div',
@@ -88,13 +105,19 @@ describe('the DnD hit test reads paint layers', () => {
   const strip = div(3, box(0, 40, 100, 50))
 
   test('a z-index layer is hit over a later sibling', () => {
-    expect(hitTree(div(1, box(0, 0, 100, 100), [div(2, box(0, 0, 100, 50)), strip]), { x: 10, y: 45 })).toBe(3)
+    expect(
+      hitTree(div(1, box(0, 0, 100, 100), [div(2, box(0, 0, 100, 50)), strip]), { x: 10, y: 45 })
+    ).toBe(3)
     expect(hitTree(div(1, box(0, 0, 100, 100), [card, strip]), { x: 10, y: 45 })).toBe(2)
     expect(hitTree(div(1, box(0, 0, 100, 100), [card, strip]), { x: 10, y: 80 })).toBe(3)
   })
 
   test('equal priorities go by tree order, a higher priority wins', () => {
-    const dialog = (layer: number) => ({ ...div(2, box(0, 0, 100, 100), [div(4, box(0, 0, 100, 100))]), type: 'anchored', layer })
+    const dialog = (layer: number) => ({
+      ...div(2, box(0, 0, 100, 100), [div(4, box(0, 0, 100, 100))]),
+      type: 'anchored',
+      layer
+    })
     const bar = div(3, box(0, 90, 100, 10), [], 50)
     expect(hitTree(div(1, box(0, 0, 100, 100), [dialog(50), bar]), { x: 10, y: 95 })).toBe(3)
     expect(hitTree(div(1, box(0, 0, 100, 100), [dialog(51), bar]), { x: 10, y: 95 })).toBe(4)
@@ -102,7 +125,11 @@ describe('the DnD hit test reads paint layers', () => {
 
   test('a layer inside a layer is hit before its container', () => {
     const inner = div(4, box(0, 0, 50, 50), [], 51)
-    const dialog = { ...div(2, box(0, 0, 100, 100), [div(3, box(0, 0, 100, 100), [inner])]), type: 'anchored', layer: 51 }
+    const dialog = {
+      ...div(2, box(0, 0, 100, 100), [div(3, box(0, 0, 100, 100), [inner])]),
+      type: 'anchored',
+      layer: 51
+    }
     const later = div(5, box(0, 0, 100, 100), [], 51)
     expect(hitTree(div(1, box(0, 0, 100, 100), [dialog]), { x: 10, y: 10 })).toBe(4)
     expect(hitTree(div(1, box(0, 0, 100, 100), [dialog]), { x: 80, y: 80 })).toBe(3)

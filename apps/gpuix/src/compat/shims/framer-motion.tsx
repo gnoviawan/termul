@@ -1,7 +1,8 @@
 /**
  * framer-motion for the compat prototype: `motion.<tag>` renders the plain
  * tag at its `animate` end state (opacity, and a `rotate` that the icons
- * below bake in, `color.ts`; other transforms have no GPUIX target) and drops every motion prop. Animation fidelity is not attempted.
+ * below bake in, see `RotateContext`; other transforms have no GPUIX
+ * target) and drops every motion prop. Animation fidelity is not attempted.
  */
 
 import {

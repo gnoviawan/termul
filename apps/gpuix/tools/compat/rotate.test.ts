@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { rotateSource } from '../../src/compat/svg'
 import { translation } from '../../src/compat/translate'
 
-const CHEVRON = '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg>'
+const CHEVRON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg>'
 
 describe('rotation baked into icons', () => {
   test('rotate-* classes are lifted as degrees', () => {
