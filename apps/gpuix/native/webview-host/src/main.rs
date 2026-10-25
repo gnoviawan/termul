@@ -10,7 +10,8 @@
 //! (`post` in, `canvasMessage` out), standing in for the parent window the editor expects.
 //!
 //! `renderMermaid` draws a chat transcript's mermaid diagram in a hidden webview (`mermaid.rs`)
-//! and answers with a PNG.
+//! and answers with a PNG. The webview and its WebKit process go after `MERMAID_IDLE` without a
+//! render; the next render starts them again.
 //!
 //! Lifetime: stdin EOF, `quit`, or the parent process dying ends the helper; each webview owns
 //! its WebKit context, so dropping a tab ends that tab's WebKit processes.
@@ -78,6 +79,8 @@ enum Page {
 const CANVAS_SCHEME: &str = "termul-canvas";
 const RELAY_URL: &str = "termul-canvas://localhost/";
 const RELAY_HTML: &str = include_str!("relay.html");
+/// The mermaid renderer's web process holds about 470 MiB once it has drawn a diagram.
+const MERMAID_IDLE: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn relay_response() -> wry::http::Response<std::borrow::Cow<'static, [u8]>> {
     wry::http::Response::builder()
@@ -95,8 +98,10 @@ struct Host {
     tabs: HashMap<String, Tab>,
     /// The tab holding the keyboard; `None` means the app window does.
     keyboard: Option<String>,
-    /// Started by the first `renderMermaid`.
+    /// Started by the first `renderMermaid`, dropped `MERMAID_IDLE` after its last answer.
     mermaid: Option<mermaid::Renderer>,
+    /// The pending drop of an idle `mermaid`.
+    mermaid_release: Option<glib::SourceId>,
 }
 
 thread_local! {
@@ -298,12 +303,29 @@ impl Host {
     }
 
     fn render_mermaid(&mut self, id: String, source: String) -> Result<(), String> {
+        if let Some(release) = self.mermaid_release.take() {
+            release.remove();
+        }
         if self.mermaid.is_none() {
             let started = std::time::Instant::now();
             self.mermaid = Some(mermaid::Renderer::new(&mut self.context, on_mermaid_message)?);
             log(&format!("mermaid renderer created in {} ms", started.elapsed().as_millis()));
         }
         self.mermaid.as_mut().expect("just created").render(id, source)
+    }
+
+    fn mermaid_answered(&mut self) {
+        let Some(renderer) = self.mermaid.as_mut() else { return };
+        if !renderer.answered() || self.mermaid_release.is_some() {
+            return;
+        }
+        self.mermaid_release = Some(glib::timeout_add_local_once(MERMAID_IDLE, || {
+            with_host(|host| {
+                host.mermaid_release = None;
+                host.mermaid = None;
+            });
+            log(&format!("mermaid renderer released after {} s idle", MERMAID_IDLE.as_secs()));
+        }));
     }
 
     fn eval(&self, id: &str, js: &str) -> Result<(), String> {
@@ -345,7 +367,10 @@ impl Host {
 fn on_mermaid_message(body: &str) {
     match protocol::parse_page_message(body) {
         Some(PageMessage::Mermaid { id, ok, png, width, height, error }) => {
-            emit(Event::Mermaid { id, ok, png, width, height, error })
+            emit(Event::Mermaid { id, ok, png, width, height, error });
+            glib::idle_add_local_once(|| {
+                with_host(Host::mermaid_answered);
+            });
         }
         // Not inside this callback: it can run while a command holds the host.
         Some(PageMessage::MermaidReady) => {
@@ -454,7 +479,7 @@ fn main() {
     let fd = x.fd();
     let context = WebContext::new(arg(&args, "--data-dir").map(std::path::PathBuf::from));
     HOST.with(|cell| {
-        *cell.borrow_mut() = Some(Host { parent, x, context, tabs: HashMap::new(), keyboard: None, mermaid: None })
+        *cell.borrow_mut() = Some(Host { parent, x, context, tabs: HashMap::new(), keyboard: None, mermaid: None, mermaid_release: None })
     });
     emit(Event::Ready { parent, pid: std::process::id() });
     log(&format!("ready, parent window {parent:#x}"));

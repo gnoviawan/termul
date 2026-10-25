@@ -30,6 +30,8 @@ pub struct Renderer {
     _window: gtk::OffscreenWindow,
     ready: bool,
     queue: Vec<(String, String)>,
+    /// Renders asked for and not answered yet, queued ones included.
+    pending: usize,
 }
 
 impl Renderer {
@@ -48,10 +50,24 @@ impl Renderer {
         };
         let view = builder.build_gtk(&window).map_err(|e| format!("create mermaid renderer: {e}"))?;
         window.show_all();
-        Ok(Self { view, _window: window, ready: false, queue: Vec::new() })
+        Ok(Self { view, _window: window, ready: false, queue: Vec::new(), pending: 0 })
     }
 
     pub fn render(&mut self, id: String, source: String) -> Result<(), String> {
+        let sent = self.send(id, source);
+        if sent.is_ok() {
+            self.pending += 1;
+        }
+        sent
+    }
+
+    /// Count one answer; true when none is outstanding.
+    pub fn answered(&mut self) -> bool {
+        self.pending = self.pending.saturating_sub(1);
+        self.pending == 0
+    }
+
+    fn send(&mut self, id: String, source: String) -> Result<(), String> {
         if !self.ready {
             self.queue.push((id, source));
             return Ok(());
@@ -68,7 +84,8 @@ impl Renderer {
         self.ready = true;
         let mut errors = Vec::new();
         for (id, source) in std::mem::take(&mut self.queue) {
-            if let Err(error) = self.render(id.clone(), source) {
+            if let Err(error) = self.send(id.clone(), source) {
+                self.pending = self.pending.saturating_sub(1);
                 errors.push(format!("{id}: {error}"));
             }
         }

@@ -4,7 +4,8 @@
  * Drives the webview helper's mermaid renderer over its stdio protocol and measures it: the
  * helper's memory before and after its first diagram, the first render (renderer page and mermaid
  * load included), a warm render of a new diagram, the same diagram again, and a source mermaid
- * rejects. Runs under its own Xvfb; the helper's parent is that display's root window. Writes each
+ * rejects, then the memory once the helper has released the idle renderer and the first render
+ * after that. Runs under its own Xvfb; the helper's parent is that display's root window. Writes each
  * PNG to `--out` and prints one JSON report.
  */
 
@@ -43,9 +44,15 @@ const SEQUENCE = `sequenceDiagram
   Web->>Server: list_persisted_sessions
   Server-->>Web: rows`
 const BROKEN = 'flowchart LR\n  A -->'
+const STATE = `stateDiagram-v2
+  [*] --> Idle
+  Idle --> Rendering: renderMermaid
+  Rendering --> Idle: mermaid`
+/** The helper's `MERMAID_IDLE` (30 s) plus time for WebKit to end the web process. */
+const RELEASED_AFTER_MS = 33_000
 
-/** Resident memory of `pid` and every process below it, in MiB. */
-function treeRssMiB(pid: number): number {
+/** Resident memory of `pid` and every process below it, in MiB, in total and per process. */
+function treeRss(pid: number): { total: number; byProcess: Record<string, number> } {
   const children = new Map<number, number[]>()
   for (const entry of readdirSync('/proc')) {
     if (!/^\d+$/.test(entry)) continue
@@ -55,18 +62,25 @@ function treeRssMiB(pid: number): number {
       children.set(ppid, [...(children.get(ppid) ?? []), Number(entry)])
     } catch {}
   }
+  const mib = (kib: number) => Math.round(kib / 102.4) / 10
   let kib = 0
+  const byProcess: Record<string, number> = {}
   const stack = [pid]
   while (stack.length > 0) {
     const next = stack.pop() as number
     try {
-      const rss = /VmRSS:\s+(\d+)/.exec(readFileSync(`/proc/${next}/status`, 'utf8'))
-      kib += Number(rss?.[1] ?? 0)
+      const status = readFileSync(`/proc/${next}/status`, 'utf8')
+      const rss = Number(/VmRSS:\s+(\d+)/.exec(status)?.[1] ?? 0)
+      const name = `${/Name:\s+(\S+)/.exec(status)?.[1] ?? '?'} ${next}`
+      kib += rss
+      byProcess[name] = mib(rss)
     } catch {}
     stack.push(...(children.get(next) ?? []))
   }
-  return Math.round(kib / 102.4) / 10
+  return { total: mib(kib), byProcess }
 }
+
+const treeRssMiB = (pid: number) => treeRss(pid).total
 
 const out = values.out as string
 await mkdir(out, { recursive: true })
@@ -127,12 +141,23 @@ try {
   const warm = await timed('warm', SEQUENCE)
   const repeat = await timed('repeat', ROUTER)
   const broken = await timed('broken', BROKEN)
+  const afterAll = treeRss(pid)
+  await Bun.sleep(RELEASED_AFTER_MS)
+  const released = treeRss(pid)
+  const afterIdle = await timed('after-idle', STATE)
   console.log(
     JSON.stringify(
       {
         binary: values.binary,
-        memoryMiB: { idle: idleMiB, afterFirst: afterFirstMiB, afterAll: treeRssMiB(pid) },
-        renders: [first, warm, repeat, broken]
+        memoryMiB: {
+          idle: idleMiB,
+          afterFirst: afterFirstMiB,
+          afterAll: afterAll.total,
+          released: released.total,
+          afterIdleRender: treeRssMiB(pid)
+        },
+        processesMiB: { afterAll: afterAll.byProcess, released: released.byProcess },
+        renders: [first, warm, repeat, broken, afterIdle]
       },
       null,
       2
