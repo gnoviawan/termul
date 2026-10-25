@@ -6,46 +6,148 @@ standalone `termul-server` over the HTTP and WebSocket transport the browser
 client already uses. The stores, facades and hooks come from `src/renderer`
 through the bundler; nothing is copied.
 
-## Run it
+## How to build and try it
 
-Requirements: Bun 1.4, the repo root's `node_modules` installed (`bun install`
-at the root; without it Bun auto-installs packages from its cache and those
-bypass the bundler's aliases), and a `termul-server` to talk to.
+Linux x64 on X11 is the tested platform. Under Wayland the app runs, but
+browser panes are off.
+
+### System libraries
+
+To run the app (the `.deb` lists these as dependencies):
 
 ```sh
-# a server on a spare port, token-gated
-TERMUL_WEB_AUTH_TOKEN=dev-token termul-server --port 8192 --state-dir /tmp/termul-gpuix-dev
+sudo apt install libxcb1 libxkbcommon0 libxkbcommon-x11-0 libvulkan1 \
+  mesa-vulkan-drivers libwebkit2gtk-4.1-0 libgtk-3-0
+```
+
+The GPUIX addon links the X11 and xkbcommon libraries and loads Vulkan at run
+time. `mesa-vulkan-drivers` is the Vulkan driver for Intel, AMD and lavapipe
+(software); with an NVIDIA card its driver provides one. WebKitGTK and GTK are
+for the browser-pane helper and for `termul-server`, which links them through
+the shared Tauri crate.
+
+To build from a checkout you also need Bun 1.4, `bun install` at the repo root
+(without the root `node_modules` Bun auto-installs packages that bypass the
+bundler's aliases), and Rust for `termul-server`.
+
+### Run from the checkout
+
+```sh
+bun install && bun run build:web               # at the repo root
+(cd src-tauri && cargo build --release --bin termul-server --features standalone-server)
 
 cd apps/gpuix
 bun install
+TERMUL_SERVER_BIN=$PWD/../../src-tauri/target/release/termul-server \
+TERMUL_GPUIX_DATA_DIR=/tmp/termul-gpuix-try \
+  bun run dev
+```
+
+`bun run dev` bundles the client, runs it under `bun --hot`, and rebuilds when
+`src/`, `../../src/renderer` or `../../src/shared` change. A rebuild remounts
+the tree in the same window and resets its state. `bun run start` builds once
+and runs the production bundle.
+
+With no `TERMUL_SERVER_URL`, the app manages its own server
+([docs/launcher.md](./docs/launcher.md)). It starts `termul-server` on a free
+loopback port with a fresh token, waits for it, and stops it when the window
+closes. The binary is `TERMUL_SERVER_BIN`, else a `termul-server` beside
+`dist/main.js`, else the first one on `PATH`.
+
+### Where the data lives
+
+The managed server opens the Tauri desktop app's data dir, so projects,
+sessions and installed agents carry over:
+
+| Platform | Data dir |
+| --- | --- |
+| Linux | `$XDG_DATA_HOME/com.termul-manager.app`, else `~/.local/share/com.termul-manager.app` |
+| macOS | `~/Library/Application Support/com.termul-manager.app` |
+| Windows | `%APPDATA%\com.termul-manager.app` |
+
+Only one app can hold that dir. While the Tauri app runs, GPUIX shows
+"Another Termul host owns <dir>" with a Retry button. Set
+`TERMUL_GPUIX_DATA_DIR` to a scratch dir, as above, to try GPUIX without
+touching your real data or quitting the Tauri app.
+
+Per-device UI state (terminal layout, editor state, settings, command history)
+does not carry over: the GPUIX client registers as a new device. The client
+keeps its own state, the managed server's record and its log
+(`launcher/server.log`) in `TERMUL_GPUIX_STATE_DIR`, default
+`$XDG_STATE_HOME/termul-gpuix` (`~/.local/state/termul-gpuix`).
+
+To attach to a server you started yourself instead:
+
+```sh
+TERMUL_WEB_AUTH_TOKEN=dev-token termul-server --port 8192 --state-dir /tmp/termul-gpuix-dev
 TERMUL_SERVER_URL=http://127.0.0.1:8192 TERMUL_SERVER_TOKEN=dev-token bun run dev
 ```
 
-| Variable                 | Meaning                                                           | Default                            |
-| ------------------------ | ----------------------------------------------------------------- | ---------------------------------- |
-| `TERMUL_SERVER_URL`      | Origin of the server (no path)                                    | `http://127.0.0.1:8190`            |
-| `TERMUL_SERVER_TOKEN`    | Bearer token for a gated server                                   | none                               |
-| `TERMUL_GPUIX_STATE_DIR` | Where the client keeps its persisted web storage                  | `$XDG_STATE_HOME/termul-gpuix`     |
-| `TERMUL_GPUIX_DATA_DIR`  | The server's `--state-dir`. A launched server uses it; an attached client on the same host reads the server's `host-local.token` from it, so it gets Claude Accounts and SSH | the desktop app data dir (launched), unset (attached) |
-| `GPUIX_BACKGROUND=1`     | Open the window without taking focus (headless and agent runs)    | unset                              |
+An attached client never starts or stops that server. Set
+`TERMUL_GPUIX_DATA_DIR` to the server's `--state-dir` as well to get the
+host-local features (Claude accounts, SSH).
 
-Scripts:
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `TERMUL_SERVER_URL`, `TERMUL_SERVER_TOKEN` | Attach to this server (an origin, no path) with this bearer token | unset: manage a server |
+| `TERMUL_SERVER_BIN` | The `termul-server` to start | beside `dist/main.js`, then `PATH` |
+| `TERMUL_GPUIX_DATA_DIR` | The server's `--state-dir`: where a managed server keeps its data; for an attached client, where to read `host-local.token` | the Tauri data dir (managed), unset (attached) |
+| `TERMUL_GPUIX_STATE_DIR` | The client's own state (web storage, launcher record and log) | `$XDG_STATE_HOME/termul-gpuix` |
+| `TERMUL_GPUIX_SERVER_PORT` | Pin the managed server's port | the last port, else a free one |
+| `TERMUL_GPUIX_KEEP_SERVER=1` | Leave the managed server running on quit for the next launch to reuse | unset |
+| `NAPI_RS_NATIVE_LIBRARY_PATH` | Load this `@gpuix/native` addon instead of the npm one | unset |
+| `GPUIX_BACKGROUND=1` | Open the window without taking focus (headless and agent runs) | unset |
 
-- `bun run dev` bundles, runs the bundle under `bun --hot`, and rebuilds when
-  `src/`, `../../src/renderer` or `../../src/shared` change. A rebuild remounts
-  the tree in the same window; state resets (GPUIX has no React Refresh on desktop).
-- `bun run build` writes the production bundle (`dist/main.js` sets `NODE_ENV=production`, then loads the minified `dist/main.bundle.js`; `--dev` builds React's development bundle instead); `bun run start` builds and runs it once.
-- `bun run build` also builds the browser-pane helper on Linux (see Browser
-  panes below); `bun run build:webview-host` builds only the helper.
-- `bun run package:linux` builds the installable `.deb` (Bun, the bundle, `termul-server`, the
-  helper), and `bun run package:verify` runs it from `env -i` under Xvfb. See
-  [docs/packaging.md](./docs/packaging.md).
-- `bun run typecheck` runs both tsc projects (see below).
+### The patched native addon
+
+Italic text, the chat's link colour and inline-code chip, overlay backdrop
+blur, DOM-ordered focus events and the browser pane's window lookup need
+Termul's patches to `@gpuix/native` 0.11.0
+([docs/native-patches.md](./docs/native-patches.md)). A checkout runs the
+published npm addon until you build the patched one and point the app at it:
+
+```sh
+sudo apt install gcc g++ libfontconfig-dev libwayland-dev libxkbcommon-x11-dev \
+  libx11-xcb-dev libssl-dev libzstd-dev libvulkan1    # and rustup
+bun run native:build       # about 20 min cold, 2 to 4 min after a patch change; ~4 GB in ~/gpuix-native-target
+export NAPI_RS_NATIVE_LIBRARY_PATH=$PWD/native/gpuix-native/build/gpuix-native.linux-x64-gnu.node
+bun run native:patch-check # one on-screen check per patch; fails on the published addon
+bun run dev
+```
+
+`TERMUL_GPUIX_NATIVE_WORK` moves the work dir. The build stops itself past
+14 GB of work dir or under 8 GB free on `/`.
+
+### Build the `.deb`
+
+```sh
+bun run native:build                       # first, so the package ships the patched addon
+CARGO_TARGET_DIR=<a target dir with the desktop build> bun run package:linux
+sudo apt install ./dist-package/termul-gpuix_<version>_amd64.deb
+termul-gpuix                               # or "Termul Manager (GPUIX)" in the app menu
+```
+
+The package installs under `/opt/termul-gpuix` with its own Bun, the client
+bundle and fonts, the native addon, a release `termul-server` (built with
+`--features standalone-server`, embedding `dist-web/`), ripgrep and the
+webview helper. It ships the self-built addon by default. When that file is
+missing it falls back to the npm addon and prints an error;
+`--native-addon npm` asks for the npm addon on purpose. `--server-bin FILE`
+and `--webview-host FILE` reuse prebuilt binaries and skip cargo. It installs
+beside the Tauri package (`termul-manager`) and opens the same data dir.
+`termul-gpuix --check-update` reports a newer release; the app never installs
+updates itself. `bun run package:verify` extracts the `.deb` under `/tmp` and
+drives it under Xvfb without installing it. See
+[docs/packaging.md](./docs/packaging.md).
+
+### Other scripts
+
+- `bun run build` writes the production bundle (`dist/main.js` sets `NODE_ENV=production`, then loads the minified `dist/main.bundle.js`; `--dev` builds React's development bundle instead). On Linux it also builds the browser-pane helper; `bun run build:webview-host` builds only the helper.
+- `bun run typecheck` runs the tsc projects (see below), `bun run test` the unit tests.
 - `bun run check:react` proves the bundle shares one React 19 with `@gpuix/react`.
-- `bun run parity <scenario>` runs the pixel-parity harness.
+- `bun run parity <scenario>` runs the pixel-parity harness; `bun run parity:matrix` the full parity matrix ([docs/parity-matrix.md](./docs/parity-matrix.md)).
 - `TERMUL_SERVER_BIN=<fresh termul-server> bun tools/launcher/host-local-e2e.ts` runs the real launcher against that server and checks the `/ws` grant: `hostLocal` with the credential, not without it, not through a proxy header, and for an attached client only with `TERMUL_GPUIX_DATA_DIR`.
-- `bun tools/live-rename.ts` shoots the project list, renames a project through
-  the server API while the app runs, and shoots again.
+- `bun tools/live-rename.ts` shoots the project list, renames a project through the server API while the app runs, and shoots again.
 
 ## How the shared code runs under Bun
 
