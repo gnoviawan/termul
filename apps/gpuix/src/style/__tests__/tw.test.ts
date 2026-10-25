@@ -416,6 +416,47 @@ const CASES: [string, StyleDesc][] = [
       top: -4,
       right: -4
     }
+  ],
+  [
+    // project-item.tsx: the rail action strip's fade over the diff stat
+    'absolute inset-y-0 right-0 bg-gradient-to-l to-transparent pl-6 from-[var(--rail-keycap)] from-60%',
+    {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      right: 0,
+      paddingLeft: 24,
+      background: {
+        type: 'linear-gradient',
+        angle: 270,
+        stops: [
+          { color: '#1d1e1f', position: 0.6 },
+          { color: '#1d1e1f00', position: 1 }
+        ],
+        colorSpace: 'oklab'
+      }
+    }
+  ],
+  [
+    // WorkspaceTabBar.tsx: the tab strip's overflow fade
+    'absolute right-0 top-0 h-full w-8 bg-gradient-to-l from-card to-transparent pointer-events-none',
+    {
+      position: 'absolute',
+      right: 0,
+      top: 0,
+      height: '100%',
+      width: 32,
+      pointerEvents: 'none',
+      background: {
+        type: 'linear-gradient',
+        angle: 270,
+        stops: [
+          { color: '#0f1011', position: 0 },
+          { color: '#0f101100', position: 1 }
+        ],
+        colorSpace: 'oklab'
+      }
+    }
   ]
 ]
 

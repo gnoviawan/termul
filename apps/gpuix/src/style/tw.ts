@@ -12,6 +12,7 @@
 import type { StyleDesc } from '@gpuix/react'
 import { log } from '../log'
 import { type CssShadow, formatColor, type Rgba } from './css-value'
+import { gradientBackground } from './gradient'
 import { INHERITED_LEADING, ROOT_FONT_SIZE } from './scale'
 import { resolveTwTheme, type TwTheme } from './theme'
 import { type BoxShadow, type Fragment, type Ring, resolveUtility, toBoxShadow } from './utilities'
@@ -58,6 +59,7 @@ interface Acc {
   fontSize?: Fragment['fontSize']
   leading?: Fragment['leading']
   space?: Fragment['space']
+  gradient?: Fragment['gradient']
 }
 
 interface Ranked {
@@ -93,6 +95,7 @@ function accOf(frags: Ranked[]): Acc {
     if (frag.fontSize) acc.fontSize = frag.fontSize
     if (frag.leading) acc.leading = frag.leading
     if (frag.space) acc.space = frag.space
+    if (frag.gradient) acc.gradient = { ...acc.gradient, ...frag.gradient }
   }
   return acc
 }
@@ -132,6 +135,10 @@ function finalize(acc: Acc, theme: TwTheme, flat: boolean, fallback?: Acc): Styl
         : leading.ratio * px
       : (size?.leading ?? INHERITED_LEADING) * px
     style.lineHeight = Math.round(lineHeight * 100) / 100
+  }
+  if (acc.gradient) {
+    const background = gradientBackground({ ...fallback?.gradient, ...acc.gradient })
+    if (background) style.background = background
   }
   if (acc.space) {
     const { axis, px } = acc.space

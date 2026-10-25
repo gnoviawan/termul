@@ -67,10 +67,10 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Dragging gamma onto alpha reorders the list to alpha, gamma, beta in both (C3 fixed in G3: the framer-motion shim drives Reorder from pointer moves with framer\'s one-neighbour-per-move rule). The dragged row does not follow the pointer in GPUIX, which has no transforms; the list reorders live under it.',
-      'After the drop the web opens gamma, the dragged row, and paints alpha and gamma in their hover state (gear and Ctrl+1/Ctrl+2). GPUIX stays on alpha: D1 withholds the click that ends a drag. GPUIX paints alpha hovered, but its +4 -1 diff stat shows through the action strip\'s fade (bg-gradient-to-l from-[var(--rail-keycap)] from-60%), so Ctrl+1 is drawn over it.'
+      'After the drop the web opens gamma, the dragged row, and paints alpha and gamma in their hover state (gear and Ctrl+1/Ctrl+2). GPUIX stays on alpha: D1 withholds the click that ends a drag. GPUIX paints alpha hovered, and the action strip\'s fade covers its +4 -1 diff stat as on the web (G5: two-stop Tailwind gradients translate to GPUIX linear-gradient backgrounds).'
     ],
     cause: 'compat translator gap',
-    unit: 'click after a Reorder drag; strip fade over the diff stat (unassigned)',
+    unit: 'click after a Reorder drag (unassigned)',
     impact: 1
   },
   'rail.add-menu': {

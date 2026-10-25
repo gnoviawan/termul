@@ -22,6 +22,7 @@ import {
   SHADOWS,
   SPACING_UNIT
 } from './scale'
+import { GRADIENT_SIDES, type GradientParts } from './gradient'
 import type { TwTheme } from './theme'
 
 export const SANS_FAMILY = 'Inter Variable'
@@ -53,6 +54,8 @@ export interface Fragment {
   leading?: Leading
   /** space-y / space-x: lowered to a flex gap on the element itself. */
   space?: { axis: 'x' | 'y'; px: number }
+  /** One part of a two-stop linear gradient (direction, a stop colour or position). */
+  gradient?: GradientParts
 }
 
 /** CSS blur radius B is a Gaussian of sigma B/2; GPUI takes sigma directly. */
@@ -91,6 +94,16 @@ const frag = (fragment: Fragment, rank = 0): UtilityResult => ({
   rank
 })
 const unsupported = (reason: string): UtilityResult => ({ kind: 'unsupported', reason })
+
+/** `from-<colour>` / `from-60%` (and `to-`): one stop's colour or position. */
+function gradientStop(v: Value, stop: 'from' | 'to'): UtilityResult | undefined {
+  const percent = (arbitrary(v.value) ?? v.value).match(/^(\d+(?:\.\d+)?)%$/)?.[1]
+  if (percent !== undefined) {
+    return frag({ gradient: { [stop === 'from' ? 'fromAt' : 'toAt']: Number(percent) / 100 } })
+  }
+  const c = color(v)
+  return c ? frag({ gradient: { [stop]: c } }) : undefined
+}
 const approx = (style: StyleDesc, reason: string): UtilityResult => ({
   kind: 'style',
   frag: { style },
@@ -297,8 +310,10 @@ const HANDLERS: Record<string, Handler> = {
   tracking: () => unsupported('letter-spacing: GPUIX has no letterSpacing (gpuix#60)'),
   bg: (v) => {
     if (v.value === 'none') return ok({})
+    const side = v.value.match(/^(?:gradient|linear)-to-(t|tr|r|br|b|bl|l|tl)$/)?.[1]
+    if (side) return frag({ gradient: { angle: GRADIENT_SIDES[side] } })
     if (v.value.startsWith('gradient') || v.value.startsWith('linear')) {
-      return unsupported('gradients need the structured two-stop background')
+      return unsupported('only bg-gradient-to-<side> / bg-linear-to-<side> gradients')
     }
     const c = color(v)
     return c ? ok({ backgroundColor: formatColor(c) }) : undefined
@@ -406,9 +421,9 @@ const HANDLERS: Record<string, Handler> = {
   'spin-in': () => unsupported(MOTION),
   'spin-out': () => unsupported(MOTION),
   placeholder: () => unsupported('placeholder colour is an <input> prop'),
-  from: () => unsupported('gradients need the structured two-stop background'),
-  via: () => unsupported('gradients need the structured two-stop background'),
-  to: () => unsupported('gradients need the structured two-stop background'),
+  from: (v) => gradientStop(v, 'from'),
+  via: () => unsupported('GPUIX gradients have two stops; via- adds a third'),
+  to: (v) => gradientStop(v, 'to'),
   'row-start': () => unsupported('grid placement (gpuix#103)'),
   'col-start': () => unsupported('grid placement (gpuix#103)'),
   translate: () => unsupported(TRANSFORM),
