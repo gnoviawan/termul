@@ -32,6 +32,7 @@ const HARNESS_TOOLS = new Set(['read_canvas_guide', 'get_canvas_style'])
 const PARENT_TOOLS = new Set(['plan', 'browser', 'ask_user', 'set_session_title'])
 const READ_ONLY = new Set([
   'list_commands',
+  'list_issues',
   'inspect_document',
   'get_node',
   'screenshot',
