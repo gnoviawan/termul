@@ -23,6 +23,8 @@ The script does these steps in order:
 6. Strip every ELF file in the package. Each binary is copied before it is stripped, so the cargo artifacts are not changed.
 7. Write the wrapper, the `/usr/bin` link, the `.desktop` entry and the icons, then run `dpkg-deb --build --root-owner-group -Zxz`.
 
+Cargo recompiles the `termul-manager` crate on every run here (about 10 minutes), most likely because `build.rs` watches `canvas/bundle`, which does not exist in this checkout (inferred). Pass `--server-bin` to reuse a server you already built.
+
 `--server-bin FILE` and `--webview-host FILE` use prebuilt binaries and skip cargo for that binary. Cargo writes to `$CARGO_TARGET_DIR`, else `src-tauri/target`. Before each cargo build the script stops if the disk has less than 8 GiB free.
 
 ## What the package installs
@@ -108,18 +110,19 @@ PNGs and `results.json` go to `parity-out/packaging/`.
 
 ## Measured
 
-Measured on 2026-10-25 on this host: 8 cores, Xvfb with lavapipe (software Vulkan), with other units' benchmarks running at the same time.
+Measured on 2026-10-25 on this host by `bun run package:verify`: 8 cores, Xvfb with lavapipe (software Vulkan), load average 11.9 while other units' benchmarks ran. The server is ready in about 160 ms, so most of the startup is Bun loading the bundle, GPUI starting on software Vulkan and the first render (inferred, not profiled). The numbers are for this contended host, not a desktop with a GPU.
 
 | | |
 |---|---|
-| `.deb` size | MEASURE_DEB |
-| Installed size | MEASURE_INSTALLED |
-| Startup, spawn to painted project rail | MEASURE_STARTUP |
-| Server ready (spawn to authenticated `/ws`), from the launcher log | MEASURE_SERVER |
-| Quit, `WM_DELETE_WINDOW` to no process left | MEASURE_QUIT |
+| `.deb` size | 58.0 MiB (60,869,196 bytes) |
+| Installed size | 221.1 MiB: `termul-server` 70 MB stripped (it embeds `dist-web/`), Bun 78 MB, the GPUIX addon in `node_modules` 59 MB total, the bundle about 15 MB |
+| Startup, spawn to painted project rail | median 2363 ms over 5 warm launches (2254, 2904, 2363, 3491, 2121). The first launch after extracting took 7325 ms |
+| Server ready (spawn to authenticated `/ws`), from the launcher log | median 162 ms (162, 175, 158, 155, 222) |
+| Quit, `WM_DELETE_WINDOW` to no process left | 954 ms with a terminal and a browser tab open |
 
 ## Not done
 
+- **The terminal shell under `env -i`.** With no `SHELL` in the environment, the terminal runs `/bin/sh` (dash in the verify PNG). A desktop session sets `SHELL`, so a user launch gets their shell.
 - **No AppImage.** cargo-packager and appimagetool are not installed here. An AppImage needs the AppImage runtime, so it is a separate unit. That unit should also add self-update, because an AppImage is a user-owned file.
 - **No `bun build --compile`.** A compiled probe that imports `@gpuix/native` failed with "Cannot find native binding": the napi loader loads the addon by a dynamic path, so `--compile` does not embed it (measured with Bun 1.4.0). Kybern ships the `.node` beside a compiled binary and sets `NAPI_RS_NATIVE_LIBRARY_PATH`. The GPUIX entry also resolves `@gpuix/react`'s reconciler file and the font directory from disk (`src/main.tsx`). A compiled binary would still contain Bun, so it would not be much smaller than the directory layout (inferred).
 - **No signing.** The `.deb` is unsigned, like local builds of the Tauri app.
