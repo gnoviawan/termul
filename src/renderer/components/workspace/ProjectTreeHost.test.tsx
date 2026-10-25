@@ -27,6 +27,7 @@ const { probes } = vi.hoisted(() => ({
     chatVisible: {} as Record<string, boolean>,
     chatMessageCount: {} as Record<string, number>,
     terminalMounts: {} as Record<string, number>,
+    launcherMounts: {} as Record<string, number>,
     terminalVisible: {} as Record<string, boolean>
   }
 }))
@@ -40,9 +41,17 @@ vi.mock('@/components/workspace/WorkspaceTabBar', () => ({
   WorkspaceTabBar: () => <div data-testid="tabbar-stub" />
 }))
 vi.mock('@/components/workspace/DropZoneOverlay', () => ({ DropZoneOverlay: () => null }))
-vi.mock('@/components/agents/AgentLauncher', () => ({
-  AgentLauncher: () => <div data-testid="launcher-stub" />
-}))
+vi.mock('@/components/agents/AgentLauncher', async () => {
+  const React = await import('react')
+  return {
+    AgentLauncher: ({ paneId }: { paneId: string }) => {
+      React.useEffect(() => {
+        probes.launcherMounts[paneId] = (probes.launcherMounts[paneId] ?? 0) + 1
+      }, [paneId])
+      return <div data-testid="launcher-stub" />
+    }
+  }
+})
 vi.mock('@/components/editor/EditorPanel', () => ({
   EditorPanel: ({ filePath }: { filePath: string }) => (
     <div data-testid="editor-stub" data-filepath={filePath} />
@@ -93,7 +102,7 @@ vi.mock('@/components/chat/AgentChatPanel', async () => {
   }
 })
 
-import { ProjectTreeHost, useMountedProjectIds } from './ProjectTreeHost'
+import { ProjectTreeHost, useMountedProjectHosts } from './ProjectTreeHost'
 
 function leaf(id: string, tabs: LeafNode['tabs']): LeafNode {
   return { type: 'leaf', id, tabs, activeTabId: tabs[0]?.id ?? null }
@@ -122,12 +131,12 @@ function message(id: string): ChatMessage {
 }
 
 function Trees(): React.JSX.Element {
-  const ids = useMountedProjectIds()
+  const hosts = useMountedProjectHosts()
   const active = useWorkspaceStore((s) => s.activeProjectId)
   return (
     <div>
-      {ids.map((id) => (
-        <ProjectTreeHost key={id} projectId={id} isActiveProject={id === active} />
+      {hosts.map(({ projectId, key }) => (
+        <ProjectTreeHost key={key} projectId={projectId} isActiveProject={projectId === active} />
       ))}
     </div>
   )
@@ -247,6 +256,19 @@ describe('ProjectTreeHost', () => {
     expect(await screen.findByTestId('editor-stub')).toHaveAttribute('data-filepath', '/a/file.ts')
     // The launcher leaves through an exit transition.
     await waitFor(() => expect(screen.queryByTestId('launcher-stub')).toBeNull())
+  })
+
+  it('keeps the launcher typed into before the first commit mounted when the project brings no tabs', async () => {
+    const placeholderPane = useWorkspaceStore.getState().root.id
+    render(<Trees />)
+    expect(await screen.findByTestId('launcher-stub')).toBeInTheDocument()
+
+    act(() => useWorkspaceStore.getState().activateProject('A', createProjectWorkspace()))
+
+    expect(stateOf('A')).toBe('active')
+    expect(document.querySelectorAll('[data-project-tree]')).toHaveLength(1)
+    expect(screen.getByTestId('launcher-stub')).toBeInTheDocument()
+    expect(probes.launcherMounts).toEqual({ [placeholderPane]: 1 })
   })
 
   it('drops a host when its project tree is dropped', async () => {

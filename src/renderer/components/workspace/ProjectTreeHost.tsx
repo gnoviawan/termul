@@ -31,21 +31,37 @@ export interface ProjectTreeHostProps {
 const HIDDEN_HOST_CLASS = 'absolute inset-0 invisible pointer-events-none'
 const HIDDEN_HOST_ATTRS = { 'aria-hidden': true, inert: '' } as const
 
+export interface MountedProjectHost {
+  projectId: string
+  /** React key of the host. The first committed project inherits the placeholder's. */
+  key: string
+}
+
 /**
- * Ids of the projects whose trees stay mounted: the active one plus every
- * parked one, ordered by first visit. The order never reshuffles on a switch
- * (a keyed DOM move would reload iframes/webviews inside a tree); a project
- * whose tree was dropped simply leaves the list.
+ * The projects whose trees stay mounted: the active one plus every parked
+ * one, ordered by first visit. The order never reshuffles on a switch (a keyed
+ * DOM move would reload iframes/webviews inside a tree); a project whose tree
+ * was dropped simply leaves the list. The first committed project takes over
+ * the placeholder ('') host in place, so the tree it adopts from the
+ * placeholder keeps its mounted panels (and a launcher keeps its typed text).
  */
-export function useMountedProjectIds(): string[] {
+export function useMountedProjectHosts(): MountedProjectHost[] {
   const activeProjectId = useWorkspaceStore((state) => state.activeProjectId)
   const parkedIds = useWorkspaceStore(useShallow((state) => Object.keys(state.parkedTrees)))
-  const orderRef = useRef<string[]>([])
+  const hostsRef = useRef<MountedProjectHost[]>([])
   const live = [activeProjectId, ...parkedIds]
-  const ordered = orderRef.current.filter((id) => live.includes(id))
-  for (const id of live) if (!ordered.includes(id)) ordered.push(id)
-  orderRef.current = ordered
-  return ordered
+  const previous = hostsRef.current
+  const hosts = previous.flatMap((host): MountedProjectHost[] => {
+    if (live.includes(host.projectId)) return [host]
+    const takesPlaceholder =
+      host.projectId === '' && !previous.some((other) => other.projectId === activeProjectId)
+    return takesPlaceholder ? [{ projectId: activeProjectId, key: host.key }] : []
+  })
+  for (const id of live) {
+    if (!hosts.some((host) => host.projectId === id)) hosts.push({ projectId: id, key: id })
+  }
+  hostsRef.current = hosts
+  return hosts
 }
 
 /**
