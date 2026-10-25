@@ -5,8 +5,8 @@ import { launch } from '@gpuix/react/automation'
 import { APP_DIR } from '../../../build.ts'
 import { LAVAPIPE_ICD } from '../../parity/shoot-gpuix.ts'
 import { descendants, readCmdline } from '../proc-sampler.ts'
-import { treeCensus } from '../tree-census.ts'
 import { PERF_AGENT_NAME, PERF_DEVICE_ID, PERF_PROJECT_NAME, PERF_TOKEN } from '../server.ts'
+import { treeCensus } from '../tree-census.ts'
 import type { ChatStartPart, ClientDriver, ClientHandle, ClientLaunchOptions } from './client.ts'
 
 export const RENDERER_STATS_FILE = 'renderer-stats.jsonl'
@@ -16,6 +16,8 @@ type App = Awaited<ReturnType<typeof launch>>
 export interface GpuixHandle extends ClientHandle {
   app: App
   windowHeight: number
+  /** Saves the whole X screen as `<scratch>/<name>.png` and returns the path, or null. */
+  snapshot(name: string): string | null
 }
 
 /** The production bundle (`bun run build`), which sets NODE_ENV=production. */
@@ -71,6 +73,25 @@ export async function launchGpuix(
     backend: vulkanDriver(rootPid),
     app,
     windowHeight: opts.height,
+    snapshot: (name) => {
+      const file = path.join(path.dirname(opts.clientStateDir), `${name}.png`)
+      const grab = Bun.spawnSync([
+        'ffmpeg',
+        '-loglevel',
+        'error',
+        '-y',
+        '-f',
+        'x11grab',
+        '-video_size',
+        `${opts.width}x${opts.height}`,
+        '-i',
+        opts.display,
+        '-frames:v',
+        '1',
+        file
+      ])
+      return grab.exitCode === 0 ? file : null
+    },
     close: () => app.close().catch(() => undefined)
   }
 }
@@ -225,6 +246,7 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
   // landed" is the placeholder going away; a new composer id means a remount.
   const typeIntoLauncher = async (firstId: number, prompt: string) => {
     let id = firstId
+    const seen: string[] = []
     for (let attempt = 0; attempt < 5; attempt++) {
       await type(id, ['ctrl-a', 'backspace', ...keysFor(prompt)])
       const landed = await until(
@@ -241,11 +263,19 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
           return empty ? null : { remounted: null }
         },
         20_000
-      ).catch(() => ({ remounted: id }))
+      ).catch(() => ({ remounted: id, stuck: true }))
       if (landed.remounted === null) return
+      seen.push(
+        'stuck' in landed
+          ? `${id} kept its placeholder 20 s`
+          : `${id} remounted as ${landed.remounted}`
+      )
       id = landed.remounted
     }
-    throw new Error(`launcher composer never accepted "${prompt}"`)
+    const shot = handle.snapshot(`composer-${prompt.replace(/\W+/g, '-')}`)
+    throw new Error(
+      `launcher composer never accepted "${prompt}": ${seen.join('; ')}; screen ${shot}`
+    )
   }
 
   const terminalNodes = (root: TreeNode): TreeNode[] => {
@@ -319,9 +349,16 @@ export function gpuixDriver(handle: GpuixHandle): ClientDriver {
       }
       if (!start) throw new Error('no Start button after the agent picker')
       await click(start)
+      let last = { cards: before, launcher: true }
       await until('a new chat card and a closed launcher', async () => {
         const r = await tree()
-        return chatCards(r).length > before && !launcherOpen(r)
+        last = { cards: chatCards(r).length, launcher: launcherOpen(r) }
+        return last.cards > before && !last.launcher
+      }).catch((err) => {
+        const shot = handle.snapshot(`start-${prompt.replace(/\W+/g, '-')}`)
+        throw new Error(
+          `${err}: cards ${before} -> ${last.cards}, launcher ${last.launcher ? 'open' : 'closed'}; screen ${shot}`
+        )
       })
       parts.push({
         typeMs: Math.round(clicked - typed),
