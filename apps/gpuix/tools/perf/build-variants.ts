@@ -10,6 +10,8 @@
  * - `park` (dist): the branch as committed.
  * - `base` (dist-sbase): `parkHiddenPanes` does nothing, so hidden panes stay
  *   in the GPUI frame as on exp/gpuix-client before F3.
+ * - `onerow` (dist-sonerow): the transcript list as of `6752b1b3`, where a
+ *   turn's activity is one row instead of one row per entry.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -20,9 +22,11 @@ import { APP_DIR, buildClient, ENTRY } from '../../build'
 type Edit = { file: string; from: string; to: string } | { file: string; rev: string }
 
 const PARK = path.join(APP_DIR, 'src/compat/park.ts')
+const LIST = path.join(APP_DIR, 'src/overrides/components/chat/ChatMessageList.tsx')
 
 const VARIANTS: Record<string, { outdir: string; edits: Edit[] }> = {
   park: { outdir: 'dist', edits: [] },
+  onerow: { outdir: 'dist-sonerow', edits: [{ file: LIST, rev: '6752b1b3' }] },
   base: {
     outdir: 'dist-sbase',
     edits: [
