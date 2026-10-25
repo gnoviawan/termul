@@ -1019,6 +1019,7 @@ export function AgentChatPanel({
           <ChatChangedFilesPanel
             cwd={session.cwd}
             toolCalls={toolCalls}
+            turnActive={session.activeTurn}
             forceCollapsed={compactDock}
             onOpenGitChanges={
               isMobileShell ? (opener) => openGitSheet(session.cwd, opener) : undefined
