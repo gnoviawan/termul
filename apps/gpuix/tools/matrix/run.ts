@@ -24,6 +24,7 @@ import { pickPort } from '../shared/seed'
 import { activateWindow, type Driver, gpuixDriver, type Point, webDriver } from './drive'
 import { writeReport } from './report'
 import { SURFACES } from './surfaces'
+import { killTerminals } from './terminals'
 import type { AutoStatus, Client, ClientRun, StepDiff, Surface, SurfaceResult } from './types'
 import { createWorld, prepareDevice, setTheme, TOKEN, type World } from './world'
 
@@ -101,6 +102,11 @@ async function runSteps(
   return { run, rects }
 }
 
+async function sweepTerminals(world: World): Promise<void> {
+  const killed = await killTerminals(world)
+  if (killed > 0) console.error(`[matrix] closed ${killed} terminals an earlier run left open`)
+}
+
 function failedRun(error: unknown, started: number): ClientRun {
   return {
     ok: false,
@@ -119,6 +125,7 @@ async function runWeb(
   points: Map<string, Point>
 ) {
   const deviceId = `m1-${slug(surface.id)}-web`
+  await sweepTerminals(world)
   await prepareDevice(world, deviceId)
   await setTheme(world, 'termul', 'dark')
   await surface.prepare?.(world)
@@ -185,6 +192,7 @@ async function runWeb(
 
 async function runGpuix(entry: string, world: World, surface: Surface, points: Map<string, Point>) {
   const deviceId = `m1-${slug(surface.id)}-gpuix`
+  await sweepTerminals(world)
   await prepareDevice(world, deviceId)
   await setTheme(world, 'termul', 'dark')
   await surface.prepare?.(world)
