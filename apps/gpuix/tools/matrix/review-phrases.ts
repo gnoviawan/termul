@@ -34,7 +34,7 @@ export const TOAST =
 export const COMPOSER_FOCUS =
   "The composer shows its focus border and inset ring while it holds the caret, as on the web (I4: its native textarea and key-capture div listen for focus, so the wrapper's `focus-within:` sees it; top edge 35 and 57 against the web's 36 and 58). At rest on the dashboard both clients now show it focused: M3's full run shows the focus border on 88 of 88 web and 81 of 88 GPUIX dashboard frames, and the other 7 GPUIX frames show the resting border."
 export const LAYOUT_FOCUS =
-  "After the shortcut the web composer loses focus (its top edge drops to the resting 28) and the GPUIX composer keeps its focus border and caret (36 and 58), in every M3 run (3 of 3 for Ctrl+B and Ctrl+Shift+B, 2 of 2 for zoom). The cause is not traced."
+  'After the shortcut the web composer loses focus (its top edge drops to the resting 28) and the GPUIX composer keeps its focus border and caret (36 and 58), in every M3 run (3 of 3 for Ctrl+B and Ctrl+Shift+B, 2 of 2 for zoom). The cause is not traced.'
 export const COMPOSER_Z =
   "The composer card paints over the top of the workspace strip that follows it, as on the web (G9: the card's `relative z-10` paints in GPUI's deferred pass at priority 10 through native patch gpuix/0011, laid out in place; the card's bottom border is 28 in both, and the send button is undimmed, 30 against the web's 30, 22 before)."
 export const COMPOSER_PICK =

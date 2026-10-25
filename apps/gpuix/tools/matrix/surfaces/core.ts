@@ -641,13 +641,7 @@ const TERMINAL: Surface[] = [
       DASHBOARD,
       step(
         'b-two',
-        [
-          openTerminal,
-          wait(2000),
-          click(label('New tab')),
-          click(txt('Bash')),
-          wait(2000)
-        ],
+        [openTerminal, wait(2000), click(label('New tab')), click(txt('Bash')), wait(2000)],
         see('Terminal 1', 'Terminal 2')
       ),
       step('c-reordered', [
@@ -667,13 +661,7 @@ const TERMINAL: Surface[] = [
       DASHBOARD,
       step(
         'b-two',
-        [
-          openTerminal,
-          wait(2000),
-          click(label('New tab')),
-          click(txt('Bash')),
-          wait(2000)
-        ],
+        [openTerminal, wait(2000), click(label('New tab')), click(txt('Bash')), wait(2000)],
         see('Terminal 1', 'Terminal 2')
       ),
       step(

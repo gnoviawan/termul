@@ -12,7 +12,7 @@ generated. The prose around them is written by hand from the PNG pairs.
 ```sh
 bun run build:web                        # at the repo root: the web client under test
 cd apps/gpuix
-bun run parity:matrix                    # every surface, about 50 minutes
+bun run parity:matrix                    # every surface, about 45 minutes
 bun run parity:matrix --only git.diff,chat.send
 bun run parity:matrix --area terminal
 bun run parity:matrix --report-only      # regenerate this page from results.json and review.ts
@@ -114,181 +114,106 @@ dominate; weighting by area avoids that.
 
 ## Findings
 
-**G8 update (2026-10-25).** G8 reran the chat and composer areas on branch gpuix/g8 at 8a1edd00, the merge of exp/gpuix-client after I4 (self-built addon with patches gpuix/0001 to 0010), so their rows come from that run. No reviewed status moved, so the scores stand. The launcher no longer sends an early prompt to the default agent (AGENT-PICK, `tools/matrix/agent-pick.ts`). `text-wrap: pretty` changes no transcript line break (`tools/chat/wrap-probe.ts`: 0 of 5 paragraphs), and the inline-code paragraph now breaks at the web's words in GPUIX too, so no native line breaker was added. Table rows are 31 px against the web's 30.6 px with the header fill (patch gpuix/0010). The composer surfaces read about 0.5 points higher than G7's because more chat cards sit in the list by then: run alone on the base and on this branch, `composer.mention` is 1.55 % and 1.50 %, `chat.permission` 0.88 % and 0.88 % (G8, before the I4 merge). `composer.attach` is flaky in sequence: in 5 runs on this head GPUIX missed the attachment once and the web once; the row is from a passing rerun.
+**How this run was made (M3, 2026-10-25).** Every row comes from one head,
+a1661ef6 on `exp/gpuix-client`, and one full `bun run parity:matrix` run of
+all 117 surfaces. GPUIX ran on the self-built patched addon, the build the
+`.deb` ships: `bun run native:build` with the full series (zed 0001 to 0004,
+gpuix 0001 to 0011, series hash 319baede), then
+`NAPI_RS_NATIVE_LIBRARY_PATH=native/gpuix-native/build/gpuix-native.linux-x64-gnu.node`.
+`bun run native:patch-check` passed 14 of 14 checks on that file first. The
+web client was the worktree's own `bun run build:web`. The window was active
+(the harness default). Every surface, the canvas ones included, ran with
+`TERMUL_SERVER_BIN=tools/canvas/server-with-bundle.ts`, the webview helper
+from `bun run build:webview-host`, and the pinned FigCraft bundle, whose zip
+hashed to the sha256 in `canvas/figcraft.pin`. The full run took 44 minutes.
+Surfaces that differed for a reason that might be timing or the harness ran
+up to two more times. Every PNG pair was looked at before it was classified.
 
-**G9 stacking and rotation (2026-10-25).** On `gpuix/g9`, with the series
-self-built through the new `gpuix/0011-z-index`, composer.mention,
-composer.slash, composer.attach, git.discard, rail.project-remove,
-chat.plan, chat.queue, dialogs.bug-report and palette.save-snapshot ran
-again, and their rows come from that run. A positive `zIndex` style now
-paints the element, laid out in place and under the clip around it, in
-GPUI's deferred pass at that priority, with the `<anchored>` layers; a
-layer inside a layer never sorts under the enclosing one. Compat lifts
-`z-*` classes into it, gives a `fixed` element its z-index as the priority
-of its window layer, and puts every overlay just above the web's `z-50`
-portals (`src/compat/stacking.ts`). The hit test, the automation tree and
-the DnD hit test read the same layers. So the composer card paints over the
-workspace strip, and the status bar stays sharp above ConfirmDialog's
-scrim, as on the web; those four surfaces are ported. `rotate-*` classes
-and a motion `rotate` now turn the icons below them (baked into the SVG),
-so the Working and plan chevrons match. The attach surface's resting
-border was the harness: Xvfb runs no window manager to hand the X focus
-back after the file chooser, so the matrix now does. Not covered: a
-`zIndex` layer paints without its ancestors' opacity (GPUI keeps element
-opacity private to its paint pass), and rotation reaches icons only, not
-text or boxes. Rerun as a regression sample, the eight other rail
-surfaces, chat.agent-launcher, chat.model-selector, side.chats,
-statusbar.items, palette.open, notifications.toast, theme.picker,
-explorer.context-menu, git.changes and terminal.open passed every check
-they passed before; chat.model-selector's last frame moved from 1.79 % to
-2.07 % perceptual from a 3 px transcript scroll offset (inferred from the
-diff, which shifts every transcript line and nothing else).
+No other unit ran; an idle V1 test server stayed up on port 8194. Over the
+full run the 1-minute load average, sampled every 30 s (87 samples), had a
+median of 6.3 and a maximum of 12.3 on 8 cores. The matrix itself (Bun with
+lavapipe, Chromium, Xvfb) was the top process in nearly every sample. The
+codebase-memory indexer, which this unit does not control, was among the top
+three processes in 6 samples.
 
-**I4 integration (2026-10-25).** `gpuix/g6` is merged into
-`exp/gpuix-client` after G7. G6's text-field focus-visible patch is now
-`gpuix/0009`, after G7's `gpuix/0008-prompt-for-new-path`. The generated
-block starts from G6's full run, with G7's final run for the 13 chat and
-composer surfaces G7 re-measured. On the merged head, with the merged
-series self-built (`bun run native:patch-check` passed 12 of 12), the chat
-area, composer.mention, composer.slash, composer.attach, theme.picker,
-palette.color-theme, rail.collapse and settings.notifications ran again, and
-their rows come from that run. The composer's native textarea and
-key-capture div now listen for focus, so the card paints its focus border
-and inset ring while it holds the caret. A composer that mounts read-only
-takes no mount focus, as on the web, so the dashboard's composer rests
-unfocused in both clients. composer.mention and composer.slash stayed partial
-for one stacking gap, the workspace strip over the bottom of the card
-(fixed in G9, above). chat.agent-launcher missed
-its popover once in three runs, under a 1-minute load average near 8.
+**Where it stands.** 117 surfaces: 89 ported, 21 partial, 0 broken, 7
+blocked. The usage-weighted score is 88.0 % over all surfaces and 90.9 %
+over the 110 measured ones. Unweighted, it is 85.0 % and 90.5 %. By area,
+the composer, terminal, git, explorer, side panel, status bar, palette,
+themes, dialogs and canvas are at 100 %. The rail is at 95 % and the editor
+at 87.5 %. Chat (65 %), shortcuts (64.3 %) and settings (60.7 %) are the
+measured areas below that, and chat carries the most weight. The browser
+pane, SSH and remote access score 0, and notifications and snapshots 50 %,
+only because a surface in each has no web reference.
 
-**G6 rerun.** The generated tables now come from G6's full run on
-`gpuix/g6` (2026-10-25), on the self-built addon with the focus-visible patch, then numbered
-`gpuix/0008` (`bun run native:patch-check` passed 11 of 11 first), the worktree's own
-`bun run build:web`, and `tools/canvas/server-with-bundle.ts` with the pinned
-FigCraft bundle for every surface. palette.save-snapshot lost a GPUI key
-command once under load (1-minute load average up to 22 while a sibling
-unit ran) and matched on a rerun. Against M2's run the reviewed count went
-from 70 to 85 ported and the usage-weighted score from 71.7 % to 76.3 % over
-all surfaces. G6 closed these gaps:
+Against the page before this run (88.2 % weighted, 91 ported), two surfaces
+moved from ported to partial and none moved up. Both are new findings, not
+new code:
 
-- Focus styles on fields. A focused text field paints `focus-visible:` in
-  the frame it gains focus (native patch `gpuix/0009`, `0008` on `gpuix/g6`); a native field's
-  focus bubbles to its compat ancestors and the ui Box tracks
-  `focus-within:`, so the popover search bands ring; an outer ring paints as
-  an outline, so the focused status-bar branch button is no longer filled;
-  an inset ring sits inside the border. The composer still lacks its focus
-  border: its native textarea and key-capture div emit no focus events
-  (composer.mention, composer.slash).
-- Settings dividers: `divide-x`/`divide-y` in the style layer.
-- The Accounts skeleton and the composer after a project switch were the
-  frame grab racing a slower GPUIX, not wrong state. The steps now wait for
-  the loaded state, and every check records its wait (`ms` in
-  `results.json`).
-- The collapsed rail's Open canvas button: a column `mt-auto` wrapper no
-  longer takes half the space of a `flex-1` sibling.
-- The FigCraft page colour: the webview helper starts on the dark GTK theme
-  when Termul is dark.
+- Ctrl+B and Ctrl+Shift+B leave the GPUIX composer focused, where the web
+  composer loses focus (shortcuts.toggle-side-panel and
+  shortcuts.toggle-projects, 3 of 3 runs each; shortcuts.zoom-in shows the
+  same). Earlier reviews could not see it, because the composer rested
+  unfocused on the dashboard then. It now rests focused in both clients, so
+  the web's blur after the key shows.
+- The table fullscreen view paints under the chat composer and the status
+  bar (chat.table-fullscreen, 3 of 3 runs). This is a regression from G9.
+  The view's `<anchored>` layer has no priority, and gpuix/0011 now paints
+  the composer's `z-10` and the bar's `z-50` in the same deferred pass. The
+  surface was already partial; its impact is now 2, which puts it first in
+  the ranked gaps.
 
-The rest of this section is M2's account of its run, kept for its
-diagnoses; its numbers are M2's.
+**Ranked remaining gaps.** By the usage-weighted points each unit would win
+back (the Proposed units table below), with its cause class:
 
-Every row below comes from one head, 89047fd5 on `exp/gpuix-client`, run by
-M2 on 2026-10-25. GPUIX ran on the self-built patched addon
-(`bun run native:build`, then
-`NAPI_RS_NATIVE_LIBRARY_PATH=native/gpuix-native/build/gpuix-native.linux-x64-gnu.node`),
-the build the `.deb` ships, and `bun run native:patch-check` passed all 11
-checks on it first. The web client was the worktree's own `bun run
-build:web`. The window was active (the harness default). The full run took
-51 minutes. The canvas surfaces ran afterwards with
-`TERMUL_SERVER_BIN=tools/canvas/server-with-bundle.ts` and the pinned
-FigCraft bundle, whose zip hashed to the sha256 in `canvas/figcraft.pin`.
-Surfaces that differed for a reason that might be the harness ran up to two
-more times. Every pair was looked at before it was classified.
-
-No other unit ran; an idle V1 test server stayed up on port 8194. Over
-the full run the 1-minute load average, sampled every 30 s, had a median of
-6.3 and a maximum of 11.0 on 8 cores. The matrix itself (Bun, Chromium, Xvfb
-and lavapipe) accounts for most of that. The codebase-memory indexer, which
-this unit does not control, was among the top three processes in 14 of the
-154 samples taken across the session.
-
-**G7 update (2026-10-25).** G7 reran the chat and composer areas on branch gpuix/g7 at 80ba1b1d (self-built addon with patch gpuix/0008), so their rows come from that run, not 89047fd5. `composer.attach` now attaches a file through the real GTK portal chooser in GPUIX (the matrix drives it with X key events) and is partial only for the composer focus border. `chat.queue` paints its transcript: the empty transcript of 3 of 3 M2 runs was a row laid out at its fit width, which a lone `<markdown>` collapses to 0 px. Task-list items paint the web's checkbox, a streaming reply ends in Streamdown's caret, and the table card has its fullscreen view (new surface `chat.table-fullscreen`). The usage-weighted score moved from 71.7 % to 74.8 % over all surfaces (74.0 % to 77.1 % over measured ones); the remaining chat prose gap is the web's `text-wrap: pretty`.
-
-**Where it stands.** 116 surfaces: 70 ported, 36 partial, 3 broken, 7
-blocked. The usage-weighted score is 71.7 % over all surfaces and 74.0 %
-over the 109 measured ones. Unweighted, it is 75.9 % and 80.7 %. By area,
-the terminal, explorer and status bar are at 100 %, themes at 97.6 %, the
-side panel at 90 %, the editor at 87.5 %, the palette at 86.4 %, git at
-83.3 % and the rail at 75 %. Settings (57.1 %), chat (55.6 %) and the
-composer (33.3 %) hold the score down, and chat and the composer carry the
-most weight.
-
-These numbers are lower than the 83.4 % the page showed before, for two
-reasons. The first is a stricter review. Earlier reviews let a missing focus
-ring pass as ported; this one counts it as partial, because a user does see
-whether the field they type into is highlighted. The "focus styles on fields" unit below covers 11 partial surfaces, most
-of which differ only in that border, and would win back 7.3 points. The second is that one head shows defects that runs on
-many heads hid. Attach files fails in GPUIX, the queued-prompt chat renders
-wrong in 3 of 3 runs, the collapsed rail lost its canvas button, the
-Accounts section never loads, and settings groups lose their dividers.
-
-The native patch series closed the two largest gaps of the previous page.
-Backdrop blur (N2) now matches the web on every modal, so the
-Project settings, palette, Preferences and Create Snapshot surfaces that
-were partial for the sharp page behind the scrim are ported. Chat prose
-(N1, N2) paints links in primary with their underline, inline code in the
-smaller padded chip, and real italics.
-
-**Ranked remaining gaps.** The generated tables below rank every gap. By
-the usage-weighted points each unit would win back:
-
-1. Focus styles on fields, a compat translator gap: +7.3 over 11 surfaces.
-   The composer, popover search bands, the theme search and the bug report
-   title show a caret but no focus border. G5 recorded these borders in
-   GPUIX, so this regressed since G5. A candidate cause is gpui's rule that
-   `focus_visible` styles apply only after keyboard input; it is not traced.
-2. Attach files, a native override: +4.7. Outside Tauri the composer opens
-   a DOM file input, which GPUIX cannot show, and GPUIX answers with "Failed
-   to open file picker". GPUIX has `promptForPaths` for this.
-3. The rest of the chat prose, a native override: +2.8 over 3 surfaces.
-   Task-list boxes draw as text glyphs, a paragraph with inline code wraps
-   about 60 px wider than the web column, and the table card lacks its
-   expand button and splits its columns differently.
-4. The queued-prompt chat, needs diagnosis: +1.9. In GPUIX the transcript of
-   a chat started from the launcher stays empty, or the follow-up is sent
-   instead of queued.
-5. Confirm dialog stacking, a compat translator gap: +1.0. The web keeps the
-   status bar above ConfirmDialog's inline scrim by DOM order; GPUIX puts
-   the fixed overlay on top.
-6. Smaller units of about +0.9 each: Mermaid as source (a missing GPUIX
-   capability), the composer's agent pick after a project switch (needs
-   diagnosis), settings `divide-y` (compat), the agent chip in the agent
-   popover (C2), the plan card's ring and chevron (compat) and markdown
-   preview spacing (E2). The collapsed-rail canvas button, title tooltips,
-   the Accounts list, the canvas theme handoff, the agent registry list in
-   settings and four more follow with 0.1 to 0.5 each.
+1. Chat prose remainder, native override needed: +2.6 over chat.transcript,
+   chat.scroll-top and chat.model-selector. GPUIX text runs are about 1 %
+   wider than Chromium's, and the table card's toolbar and cells are spaced
+   differently.
+2. Inline label line height in settings rows, compat translator gap: +0.9
+   over 6 settings sections. Each row is about 4 px shorter, because GPUIX
+   lays out an inline `<label>` without its block parent's 24 px strut.
+3. Markdown preview (E2), native override needed: +0.9. Heading letter
+   spacing and list bullets differ.
+4. Four chat units at +0.8 each: the table fullscreen layer priority (native
+   override needed; by inspection one `priority` prop in
+   `src/chat/TableCard.tsx`), the agent chip that truncates in the agent
+   popover (C2, compat translator gap), Mermaid's missing pan, zoom and
+   fullscreen buttons (missing GPUIX capability) and the plan card's ring
+   and divider (compat translator gap).
+5. Title tooltips over a modal (compat translator gap, +0.5), and the two
+   Tauri-only surfaces that have a unit: the update toast (U1, native
+   override needed, +0.5) and the remote access popover (R4, server route
+   needed, +0.5).
+6. Five units at +0.1 each: the agent registry list in settings (needs
+   diagnosis), the Accounts row's wide layout and the inline code wrap in
+   the MCP footnote (compat translator gaps), and the composer focus after
+   layout shortcuts and the web's zoom overflow (needs diagnosis).
 
 **What 99 % parity requires.** On the usage-weighted score, 99 % allows
 losing about one point of the 100 weight. If every unit in the table fixed
-every surface it names, the score would be 97.8 %. The remaining 2.2 points
-are surfaces with no web reference: the browser pane (1.0), SSH (0.5),
-Claude accounts (0.29 of settings), the snapshots page (0.25) and the
-desktop keymap (0.14 of shortcuts). GPUIX has a browser pane and SSH; the
-matrix cannot score them against a web client that has neither. Three kinds
-of work reach 99 %.
+every surface it names, the score would be 97.8 %. The other 2.2 points are
+surfaces with no web reference: the browser pane (1.0), SSH (0.5), Claude
+accounts (0.29 of settings), the snapshots page (0.25) and the desktop
+keymap (0.14 of shortcuts). GPUIX has a browser pane and SSH; the matrix
+cannot score them against a web client that has neither. So 99 % takes
+three kinds of work.
 
-1. Land the units in the order above. The focus-style, attach and prose
-   units are worth 14.8 points together, more than all others combined.
-2. Diagnose the four "needs diagnosis" gaps first among the small ones,
-   because each may be a functional bug rather than a cosmetic one: the
-   queued-prompt transcript, the Accounts skeleton, the composer agent
-   pick and the missing collapsed-rail button.
-3. Give the reference-less surfaces a reference: a Tauri screenshot
-   harness, or a GPUIX-only functional check (R2's SSH run is one) that the
-   matrix accepts as the score.
+1. Land the chat units first. Chat is 17 of the 100 weight and holds 7 of
+   the 21 partial surfaces. The prose remainder and the four +0.8 chat units
+   are worth 5.8 points together, more than all other units combined. The
+   table fullscreen priority is the cheapest of them.
+2. Diagnose the gaps that may be behavior bugs rather than cosmetic ones:
+   the empty agent registry list in settings, the composer focus after
+   layout shortcuts, and the one GPUIX Stage click that also opened a diff
+   (see Flakes).
+3. Give the reference-less surfaces a reference: a Tauri screenshot harness,
+   or a GPUIX-only functional check (R2's SSH run is one) that the matrix
+   accepts as the score.
 
 Ninety-nine percent also means every partial surface reaches ported, so the
-cosmetic units count even when no single one looks important.
+cosmetic settings and editor units count even though no single one looks
+important.
 
 **Flakes.** A surface that differed in the full run and matched on a rerun
 is recorded here and scored from its matching run. A surface that differed
@@ -296,20 +221,45 @@ in every run is a gap above, not a flake.
 
 | Surface | Runs that differed | What happened |
 | --- | --- | --- |
-| `terminal.open` | 1 of 2 | The GPUIX frame was grabbed before the prompt painted. |
-| `terminal.split` | 1 of 2 | Harness: both clients hit the server's 10-per-project terminal limit, because preserved PTYs from earlier surfaces piled up. Fixed in `tools/matrix/terminals.ts`, which closes them before each client run. |
-| `palette.new-terminal` | 1 of 2 | Harness: the same terminal limit, in both clients. |
-| `terminal.tab-reorder` | 2 of 3 | The terminal limit in the full run; then the GPUIX click on Bash in the just-opened New tab menu was lost once. |
-| `palette.app-preferences` | 2 of 3 | GPUIX crashed with the automation bounds-query timeout (C13) once, and grabbed the Interface rows laid out narrow once (the container-query first frame). |
-| `canvas.open`, `palette.open-canvas` | 1 of 2 | Harness setup: the full run had no FigCraft bundle and no webview helper in this worktree's `dist/`. The canvas run had both. |
+| `terminal.tab-reorder` | 1 of 4 | Harness: the Bash click replayed the web point before GPUIX had painted the New tab menu, so only Terminal 1 opened. Fixed in M3: the terminal surfaces click Bash by its text, which waits for the item; 4 of 4 runs then passed. |
+| `terminal.split` | 2 of 5 | The same lost Bash click once. In the full run GPUIX kept focus on Terminal 1 after the split; the three later runs focused the moved Terminal 2, as the web does. |
+| `git.stage` | 1 of 3 | In the full run the GPUIX Stage changes click also opened README.md's working-tree diff, as a click on the row does; the two reruns did not. Not traced. If it repeats, it is a GPUIX event-path bug, not the harness. |
+| `rail.project-settings` | 1 of 2 | GPUIX painted the gear's "Project settings" title tooltip over the modal; the rerun showed none. |
+| `explorer.expand` | 1 of 2 | The GPUIX frame caught the row name hint that FileTreeNode shows after 900 ms of hover, and the web frame did not. Both clients show the hint, so this is timing; the row stays ported. |
 
-Gaps that repeated on every rerun: `chat.queue` (3 of 3),
-`settings.provider` (3 of 3), `composer.attach` (2 of 2) and the beta
-composer not ready after a switch in `rail.project-list` (3 of 3) and
-`palette.switch-project` (2 of 3). The same race shows on the dashboard
-frames of the theme surfaces: 7 of 20 GPUIX frames and 2 of 20 web frames
-show Loading model…, Composer unavailable or another agent. The theme rows
-stay ported because their colours match.
+Gaps that repeated on every rerun: `chat.table-fullscreen` (3 of 3) and the
+composer focus after Ctrl+B and Ctrl+Shift+B (3 of 3 each). The flakes that
+earlier units recorded (the terminal limit, C13's automation timeout, the
+container-query first frame, `composer.attach` missing its file) did not
+show in this run.
+
+**Earlier units, in short.** These diagnoses still hold. Their numbers are
+superseded by the run above.
+
+- G6 made a focused text field paint its `focus-visible:` style in the frame
+  it gains focus (native patch gpuix/0009), added `divide-x` and `divide-y`
+  to the style layer, and traced the Accounts skeleton and the composer
+  after a project switch to the frame grab racing a slower GPUIX. The steps
+  now wait for the loaded state, and every check records its wait (`ms` in
+  `results.json`).
+- G7 attached files through the real GTK portal chooser (patch gpuix/0008),
+  fixed the empty queued-prompt transcript (a lone `<markdown>` row laid out
+  at its 0 px fit width), and added task-list checkboxes, the streaming
+  caret and the table fullscreen view.
+- I4 made the composer's native textarea and key-capture div report focus,
+  so the card paints its focus border and inset ring.
+- G8 stopped the launcher sending an early prompt to the default agent
+  (`tools/matrix/agent-pick.ts`), showed that `text-wrap: pretty` changes no
+  transcript line break (`tools/chat/wrap-probe.ts`), and sized table rows
+  with patch gpuix/0010.
+- G9 added `zIndex` (patch gpuix/0011) and compat stacking
+  (`src/compat/stacking.ts`), so the composer card and the status bar stack
+  as on the web, and baked `rotate-*` into icons. A `zIndex` layer paints
+  without its ancestors' opacity, and rotation reaches icons only.
+- G10 drew Mermaid through the webview helper with the web's mermaid
+  11.16.0 and kept the boot launcher mounted across the first project
+  commit. G11 made the composer pill name the chat's agent after a boot
+  reopen.
 
 **G4 and the keymap.** Since G4 the GPUIX client takes the desktop keymap, like
 Tauri: Ctrl+, opens Preferences and Ctrl+= zooms, and the web's Alt+, and
@@ -487,7 +437,7 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
 | `terminal.vim-replies` Terminal query replies after vim (T1 fixture shape) | terminal | ported | ported | 8/8 | 8/8 | 4.2% / 1.25% |  | With the O1 fixture's command (vim -u NONE -N notes.txt, then :q!) typed into the full app, both clients return to a clean prompt; neither echoes ^[[>0;276;0c or rgb: replies. So the echo in O1's GPUIX shot does not reproduce in the full app with typed input: it belongs to the fixture, which writes its inputs to the PTY back to back, not to GPUIX (inferred; the fixture itself was not rerun here). |
 | `terminal.file-link` Ctrl+click a file path in terminal output opens it in the editor | terminal | ported | broken | 8/8 | 7/8 | 5.2% / 1.26% |  | Ctrl+click on src/app.ts in terminal output opens app.ts in a new tab in both. The text check fails only because natively painted text is not in the automation tree. |
 | `terminal.new-tab-menu` New tab menu (terminal, browser, ...) | terminal | ported | ported | 3/3 | 3/3 | 9.0% / 1.69% |  | The new tab menu matches. GPUIX adds New browser tab, since only the GPUIX client has browser panes. |
-| `terminal.tab-reorder` Reorder terminal tabs by dragging | terminal | ported | ported | 10/10 | 10/10 | 2.5% / 0.57% |  | Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both, and both clients read Terminal 2, Terminal 1 with full titles at the web widths (C15 fixed in G5). In the full M3 run, and in 1 of 4 runs of terminal.split, GPUIX opened the New tab menu but only Terminal 1: the Bash click replayed the web point before GPUIX had painted the menu. The surfaces now click Bash by its text, which waits for the item (M3 harness fix); 4 of 4 runs then passed, and the row is from one of them. |
+| `terminal.tab-reorder` Reorder terminal tabs by dragging | terminal | ported | ported | 10/10 | 10/10 | 2.5% / 0.57% |  | Dropping Terminal 2 on the left edge of Terminal 1 moves it first in both, and both clients read Terminal 2, Terminal 1 with full titles at the web widths (C15 fixed in G5). In the full M3 run, and in 1 of 5 runs of terminal.split, GPUIX opened the New tab menu but only Terminal 1: the Bash click replayed the web point before GPUIX had painted the menu. The surfaces now click Bash by its text, which waits for the item (M3 harness fix); 4 of 4 runs then passed, and the row is from one of them. |
 | `terminal.split` Split panes: drag a second terminal tab to the pane edge | terminal | ported | ported | 12/12 | 12/12 | 2.8% / 0.88% |  | Dragging the Terminal 2 tab to the pane's right edge splits the pane in both (D1), and each pane's tab shows its full title with its close button (C15 fixed in G5). Both focus the moved Terminal 2: its block cursor is the focused one in both (M3 runs after the Bash fix; see terminal.tab-reorder for the lost click). |
 | `statusbar.items` Status bar items | statusbar | ported | partial | 2/2 | 2/2 | 7.7% / 1.73% | 12.3% / 4.76% | Branch, path, Terminal and settings items line up. The status-bar connection lamp is a filled dot as on the web (C7 fixed in G3: fill-current fills the icon), 1 px higher. The rest of the region diff is glyph antialiasing: Chromium draws the status bar text with subpixel (LCD) colour fringes, and GPUIX draws it in grayscale (C8). |
 | `statusbar.context-bar` Context bar settings popover | statusbar | ported | ported | 3/3 | 3/3 | 8.5% / 1.78% |  | The Show in Context Bar popover opens with the same five toggles and states. |
