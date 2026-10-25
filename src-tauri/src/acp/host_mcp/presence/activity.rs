@@ -144,7 +144,10 @@ fn command_activity(command: &str, params: &Value, result: &str) -> Option<Activ
                     ids.extend(ids_in(inner));
                 }
             }
-            for step in parse(result).as_array().into_iter().flatten() {
+            // A batch with named steps answers {results, names} instead of the array.
+            let result = parse(result);
+            let steps = result.get("results").unwrap_or(&result);
+            for step in steps.as_array().into_iter().flatten() {
                 ids.extend(ids_in(step));
             }
             write(if ids.is_empty() {
@@ -223,7 +226,7 @@ fn named_or_selection(params: &Value) -> Targets {
 }
 
 /// `ids` (an array or one id) and `id` of an object. Ids are u64 numbers;
-/// a `$step` reference or any other shape is skipped.
+/// a `$step` or `$name` reference or any other shape is skipped.
 fn ids_in(value: &Value) -> Vec<u64> {
     let mut ids = Vec::new();
     match value.get("ids") {
