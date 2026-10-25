@@ -9,8 +9,9 @@ const ITALICS = ['Italic', 'MediumItalic', 'SemiBoldItalic', 'BoldItalic'] as co
 /**
  * Static TTF instances of the faces the web client loads as variable WOFF2
  * (built by tools/style/build-fonts.py). Family names match font-stacks.ts.
- * The italic faces serve `fontStyle: 'italic'`, which only the patched addon
- * applies; the tabular twin has none, as the web never italicises figures.
+ * The italic faces serve markdown emphasis and, on the patched addon,
+ * `fontStyle: 'italic'`; the tabular twin has none, as the web never
+ * italicises figures.
  */
 export const FONT_FILES: readonly string[] = [
   ...['Inter', 'InterTabular', 'PaperMono'].flatMap((face) =>

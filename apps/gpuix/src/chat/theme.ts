@@ -76,8 +76,9 @@ const cache = new Map<
  *   links medium in primary (`LINK_CLASS` in chat-agent-prose.tsx). Link
  *   colour and weight, the chip's size and padding, and the italic quote
  *   need the patched addon (patch 0002); the published one keeps body-size
- *   chips, text-coloured links and upright quotes. Headings take Streamdown's utility sizes
- *   (`text-3xl` .. `text-lg`): utilities beat index.css's components layer.
+ *   chips, text-coloured links and upright quotes. Headings take
+ *   Streamdown's utility sizes (`text-3xl` .. `text-lg`): utilities beat
+ *   index.css's components layer.
  *   Native markdown tints list markers and the quote rail with `accent`; the
  *   web's markers are the text colour, so accent is the foreground.
  * - `quote`: a quote's content, muted and italic like Streamdown's
