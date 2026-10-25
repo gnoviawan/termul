@@ -1,5 +1,9 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["src/overrides/components/canvas", "../../src/renderer/vite-env.d.ts"],
+  "include": [
+    "src/overrides/components/canvas",
+    "src/overrides/lib/canvas-theme.ts",
+    "../../src/renderer/vite-env.d.ts"
+  ],
   "exclude": []
 }

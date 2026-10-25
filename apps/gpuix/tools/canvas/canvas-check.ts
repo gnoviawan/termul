@@ -22,6 +22,7 @@ import {
   closeWindow,
   descendants,
   mapState,
+  pixelAt,
   processTable,
   type Rect,
   xinput
@@ -161,6 +162,7 @@ try {
   const openedAt = Date.now()
   await app.getByText('Canvas').click()
   const tabId = (await logged(/created canvas (\S+)/))[1]
+  measures.openToWebviewCreatedMs = Date.now() - openedAt
   const parentXid = (await logged(/attached to window (0x[0-9a-f]+)/))[1]
   const helperPid = Number((await logged(/started webview host (\d+)/))[1])
   const view = await until('canvas webview over its slot', async () => {
@@ -174,13 +176,26 @@ try {
   await Bun.sleep(1500)
   await shot('01-canvas-open')
   const colors = regionColors(path.join(OUT, '01-canvas-open.png'), view.rect)
-  check('the Canvas button opens FigCraft in a webview over the canvas slot', colors > 50, {
-    tabId,
-    helperPid,
-    view,
-    distinctColorsInSlot: colors,
-    openToReadyMs: measures.openToReadyMs
-  })
+  // FigCraft's own default is light; Termul's dark theme reaches it over the bridge (host.theme).
+  const panel = pixelAt(
+    path.join(OUT, '01-canvas-open.png'),
+    view.rect.x + view.rect.width - 100,
+    view.rect.y + 600
+  )
+  const themed = Math.max(...panel) < 80
+  check(
+    "the Canvas button opens FigCraft in a webview over the canvas slot, in Termul's theme",
+    colors > 50 && themed,
+    {
+      rightPanelPixel: panel,
+      tabId,
+      helperPid,
+      view,
+      distinctColorsInSlot: colors,
+      openToWebviewCreatedMs: measures.openToWebviewCreatedMs,
+      openToReadyMs: measures.openToReadyMs
+    }
+  )
 
   // 2. An agent's canvas MCP tools: host gateway -> this renderer -> bridge -> relay -> FigCraft.
   const ws = await connectWs({
