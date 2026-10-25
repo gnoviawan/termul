@@ -68,11 +68,12 @@ import {
   type CanvasBridgeReply,
   type JsonText
 } from '@/lib/canvas-bridge'
-import { sameCanvasDoc } from '@/lib/canvas-doc'
+import { canvasDocFile, sameCanvasDoc } from '@/lib/canvas-doc'
 import { readCanvasThemeTokens } from '@/lib/canvas-theme'
 import { logFrontendError } from '@/lib/log-api'
 import { basename } from '@/lib/path-basename'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
+import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
 export interface CanvasMount {
@@ -368,6 +369,32 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     return loaded.data
   }
 
+  /** #1421: the editor embeds only Inter, so symbols, CJK and emoji come
+   * from the system fonts the desktop lends it. They load before the
+   * document, so its first render and an agent's first screenshot have
+   * them. A failure costs only those characters, never the mount. */
+  const loadFallbackFonts = async (projectId: string, mount: CanvasMount, bridge: CanvasBridge) => {
+    const urls = mount.info.fallbackFonts
+    if (urls.length === 0) return
+    const reply = await bridge.call('host.fallbackFonts', asJsonText(JSON.stringify({ urls })))
+    if (!reply.ok) {
+      // UNKNOWN_METHOD: a bundle older than `host.fallbackFonts`.
+      logCanvas(
+        reply.error.code === 'UNKNOWN_METHOD' ? 'info' : 'warn',
+        'fonts',
+        `fallback fonts not loaded for project ${projectId}: ${reply.error.code} ${reply.error.message}`
+      )
+      return
+    }
+    if (!/"failed"\s*:\s*\[\s*\]/.test(reply.result)) {
+      logCanvas(
+        'warn',
+        'fonts',
+        `some fallback fonts failed for project ${projectId}: ${reply.result}`
+      )
+    }
+  }
+
   const completeMount = async (projectId: string, mount: CanvasMount): Promise<void> => {
     const bridge = currentBridge(projectId, mount.mountSeq)
     if (!bridge) return
@@ -388,6 +415,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       )
       return
     }
+    await loadFallbackFonts(projectId, mount, bridge)
+    if (currentBridge(projectId, mount.mountSeq) !== bridge) return
     const view = await loadDocument(projectId, mount, bridge)
     if (view === null) return
     logCanvas(
@@ -398,6 +427,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     patchSession(projectId, { phase: { kind: 'ready', mount }, ...projectionOf(view) })
     get().pushTheme(projectId)
     get().pushLocale(projectId)
+    pushFile(projectId)
   }
 
   const setSaving = (projectId: string, delta: 1 | -1): void => {
@@ -543,6 +573,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     if (!isLiveMount(projectId, mountSeq)) return false
     if (!loaded.success) return reloadNotTaken(projectId, mountSeq, loaded.code)
     patchSession(projectId, projectionOf(loaded.data))
+    pushFile(projectId)
     return true
   }
 
@@ -584,6 +615,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       if (!reply.ok) {
         logCanvas('warn', method, `${method} failed for project ${projectId}: ${reply.error.code}`)
       }
+    })
+  }
+
+  /** The editor knows nothing of the file it shows: without this it names
+   * the document by what is stored inside it ("Untitled"). A document load
+   * resets it, so it follows every load. */
+  const pushFile = (projectId: string): void => {
+    sendHostCall(projectId, 'host.file', () => {
+      const docPath = get().sessions[projectId]?.docPath ?? ''
+      const project = useProjectStore.getState().projects.find((p) => p.id === projectId)
+      return asJsonText(JSON.stringify(canvasDocFile(docPath, project)))
     })
   }
 

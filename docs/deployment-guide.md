@@ -88,7 +88,7 @@ Every record must have a nonempty URL and minisign signature. Missing keys, malf
 
 ### Linux and Browser Bundle
 
-Linux desktop and standalone-server builds preserve the current Ubuntu 22.04 dependency setup, including WebKitGTK, appindicator, SVG, D-Bus, and `patchelf`. The standalone server builds natively on both architectures: `ubuntu-22.04` for x64 and `ubuntu-22.04-arm` for arm64, with no cross-compilation. Both build paths create and validate `dist-web/index.html` before Rust compilation so the in-process browser client is embedded rather than relying on files outside the installation.
+Linux desktop and standalone-server builds preserve the current Ubuntu 22.04 dependency setup, including WebKitGTK 2.40 or later (the agent browser links a call added in 2.40), appindicator, SVG, D-Bus, and `patchelf`. The standalone server builds natively on both architectures: `ubuntu-22.04` for x64 and `ubuntu-22.04-arm` for arm64, with no cross-compilation. Both build paths create and validate `dist-web/index.html` before Rust compilation so the in-process browser client is embedded rather than relying on files outside the installation.
 
 #### Installing `termul-server`
 
@@ -204,7 +204,9 @@ termul-server --host 127.0.0.1 --port 8080 \
 
 Comma-separate several origins, or repeat `--allowed-origins`. The flag replaces `TERMUL_ALLOWED_ORIGINS` when both are set. The server does not send `Access-Control-Allow-Origin`.
 
-The desktop app talks to the host through Tauri IPC, not these HTTP or WebSocket routes. The desktop shared-live server uses the same host check. Browser clients of that server are served by it, so they match the request host; a proxy in front of it that keeps the public `Host` header does too.
+A server that runs without a bearer token also checks the `Host` header, so a DNS-rebinding page cannot reach it. It answers IP literals, `localhost`, and the hosts of `--allowed-origins`, and returns `403` for any other name. To reach a token-less server by a host name, such as a proxy that keeps the public `Host` header, list that origin with `--allowed-origins`. A server that requires the token accepts any `Host`, because a rebinding page cannot present the token.
+
+The desktop app talks to the host through Tauri IPC, not these HTTP or WebSocket routes. The desktop shared-live server uses the same origin check. Browser clients of that server are served by it, so they match the request host. It always requires its token, so like a gated standalone server it answers any `Host` (its cloudflared tunnel host, a LAN or MagicDNS name, a reverse proxy name).
 
 ## Run in Docker
 

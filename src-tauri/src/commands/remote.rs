@@ -63,6 +63,7 @@ pub async fn remote_server_start(
             // The cloudflared tunnel starts right after the bind below, so the
             // host must be token-gated from the first request.
             true,
+            crate::browser_automation::browser_host().is_some(),
             shared_live_data.inner(),
             acp_catalog,
             acp_install,

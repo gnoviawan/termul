@@ -49,16 +49,10 @@ impl Bridge {
             token: self.config.token.clone(),
             session_id: self.config.session_id.clone(),
             kind: FrameKind::Canvas,
-            todos: Vec::new(),
-            title: None,
-            branch: None,
-            browser_action: None,
-            browser_args: None,
-            browser_element: None,
-            ask: None,
             canvas_method: Some(method.to_string()),
             canvas_params: Some(params.to_string()),
             canvas_tool: self.tool.clone(),
+            ..FrameRequest::default()
         };
         let mut line = serde_json::to_vec(&frame).map_err(|error| {
             CanvasError::new(
@@ -132,7 +126,7 @@ fn exchange(port: u16, line: &[u8]) -> Result<FrameReply, String> {
 impl Backend for Bridge {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.request(method, &params)
-            .map_err(|error| error.to_backend_string())
+            .map_err(|error| error.to_backend_string_for(self.tool.as_deref()))
     }
 
     fn has_ui(&self) -> bool {
@@ -156,7 +150,7 @@ impl Backend for Bridge {
                 CanvasErrorCode::EngineError,
                 "host.renderPng returned no base64",
             )
-            .to_backend_string());
+            .to_backend_string_for(self.tool.as_deref()));
         };
         base64::engine::general_purpose::STANDARD
             .decode(encoded.trim())
@@ -165,7 +159,7 @@ impl Backend for Bridge {
                     CanvasErrorCode::EngineError,
                     format!("host.renderPng returned invalid base64: {error}"),
                 )
-                .to_backend_string()
+                .to_backend_string_for(self.tool.as_deref())
             })
     }
 }

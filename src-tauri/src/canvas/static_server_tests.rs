@@ -58,6 +58,7 @@ async fn open_canvas_mints_one_token_per_project_until_close() {
     let base = CanvasBundleBase {
         base_url: "http://127.0.0.1:4567".into(),
         pin_tag: "termul-test".into(),
+        fallback_fonts: vec!["host-fonts/a.ttf".into()],
     };
     let project = "project-open-canvas";
     let canvas_id = canvas_id_for_project(project);
@@ -82,6 +83,7 @@ async fn open_canvas_mints_one_token_per_project_until_close() {
             "docKey": "C:/p/design.figcraft",
             "mountSeq": first.mount_seq,
             "evicted": [],
+            "fallbackFonts": ["host-fonts/a.ttf"],
         })
     );
     assert!(
@@ -196,6 +198,7 @@ fn bundle_base_has_the_same_shape_on_both_surfaces() {
     let desktop = serde_json::to_value(super::static_server::CanvasBundleBase {
         base_url: "http://127.0.0.1:1".into(),
         pin_tag: pinned_tag().into(),
+        fallback_fonts: Vec::new(),
     })
     .unwrap();
     let keys = |value: &serde_json::Value| -> Vec<String> {
@@ -461,6 +464,43 @@ mod served_from_dev_dir {
         }
     }
 
+    async fn get_from(router: axum::Router, uri: String) -> Response {
+        router
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_the_desktop_listener_lends_the_fallback_fonts() {
+        let _bundle = Bundle::standard();
+        let id = "cv_fallback_fonts";
+        let token = bundle_tokens().issue(id).unwrap();
+        assert!(
+            same_origin_base().fallback_fonts.is_empty(),
+            "termul-server and shared-live list none"
+        );
+        for url in super::super::fallback_fonts::urls() {
+            let desktop = get_from(bundle_router(), format!("/canvas/{id}/{token}/{url}")).await;
+            assert_eq!(desktop.status(), StatusCode::OK, "{url}");
+            let content_type = desktop.headers()[header::CONTENT_TYPE].to_str().unwrap();
+            assert!(content_type.starts_with("font/"), "{url}: {content_type}");
+            assert!(!body_text(desktop).await.is_empty(), "{url}");
+            let web = get_from(web_router(), format!("/canvas/{id}/{token}/{url}")).await;
+            assert_eq!(web.status(), StatusCode::NOT_FOUND, "the web router: {url}");
+            let stranger = get_from(bundle_router(), format!("/canvas/{id}/nope/{url}")).await;
+            assert_eq!(stranger.status(), StatusCode::UNAUTHORIZED, "{url}");
+        }
+        for name in ["arial.ttf", "../index.html", "..%5C..%5Cwin.ini", ""] {
+            let other = get_from(
+                bundle_router(),
+                format!("/canvas/{id}/{token}/host-fonts/{name}"),
+            )
+            .await;
+            assert_eq!(other.status(), StatusCode::NOT_FOUND, "{name}");
+        }
+    }
+
     #[tokio::test]
     async fn fetched_bundle_is_served_through_the_embed_set_when_present() {
         let _bundle = Bundle::embedded();
@@ -525,6 +565,18 @@ mod served_from_dev_dir {
             .unwrap();
         assert_eq!(script.status(), 200, "a sub-resource needs no cookie");
 
+        let first_addr = server.addr().unwrap();
+        assert!(crate::host_perimeter::is_owned_port(first_addr.port()));
+        let page_path = format!("/canvas/{id}/{token}/");
+        assert_eq!(
+            raw_status(first_addr, &page_path, "attacker.example").await,
+            "HTTP/1.1 403 Forbidden"
+        );
+        assert_eq!(
+            raw_status(first_addr, &page_path, &first_addr.to_string()).await,
+            "HTTP/1.1 200 OK"
+        );
+
         server.drop_listener();
         let second = loop {
             if server.bind_count() == 2 {
@@ -540,6 +592,8 @@ mod served_from_dev_dir {
             .await
             .unwrap();
         assert_eq!(page.status(), 200, "rebuilt base URL serves the bundle");
+        let second_port = server.addr().unwrap().port();
+        assert!(crate::host_perimeter::is_owned_port(second_port));
 
         server.shutdown();
         tokio::time::timeout(Duration::from_secs(5), supervisor)
@@ -547,6 +601,23 @@ mod served_from_dev_dir {
             .unwrap()
             .unwrap();
         assert_eq!(server.base(), None);
+        assert!(
+            !crate::host_perimeter::is_owned_port(second_port),
+            "port released after shutdown"
+        );
+    }
+
+    /// Raw HTTP/1.1 GET so the `Host` header is exactly the one a rebinding
+    /// page would send.
+    async fn raw_status(addr: std::net::SocketAddr, path: &str, host: &str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        response.lines().next().unwrap_or_default().to_string()
     }
 }
 

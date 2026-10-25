@@ -73,6 +73,7 @@ const { addAgentChatTabSpy, setTabFocusedSessionIdSpy, workspaceStateRef } = vi.
   workspaceStateRef: {
     current: {
       root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+      openChatSessionIds: new Set<string>(),
       removeTab: vi.fn(),
       remapAgentChatSession: vi.fn()
     }
@@ -100,7 +101,7 @@ vi.mock('@/stores/workspace-store', () => {
     getAllTreeRoots: (state: { root: PaneNodeLike }) => [state.root],
     findPaneContainingTab,
     agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
-    getAgentChatSessionIdsInAllTrees: () => new Set<string>(),
+    getAgentChatSessionIdsInAllTrees: () => workspaceStateRef.current.openChatSessionIds,
     useWorkspaceStore: {
       subscribe: () => () => {},
       getState: () => ({
@@ -186,6 +187,7 @@ describe('acp-store', () => {
     _resetSessionIndexLoadGenerationForTesting()
     _resetHistorySeqWatermarksForTesting()
     _resetLiveSwitchSourcesForTesting()
+    workspaceStateRef.current.openChatSessionIds.clear()
     useAcpStore.setState(FRESH)
   })
 
@@ -439,6 +441,72 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().agentStatus['agent-1']).toBe('error')
     expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  it('agent_disconnected cancels subagents the host still marked running', () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState({
+      messages: {
+        s1: [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hi' }],
+            timestamp: 1
+          }
+        ]
+      },
+      toolCalls: {
+        s1: [
+          {
+            toolCallId: 'termul-subagent:child-1',
+            status: 'in_progress',
+            rawInput: { description: 'Review', prompt: 'p' },
+            subagentLifecycle: { state: 'running', agentId: 'child-1' }
+          }
+        ]
+      }
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagentLifecycle?.state).toBe('cancelled')
+  })
+
+  it('session close applies a buffered tool update before cancelling running subagents', () => {
+    seedSession('s1', 'agent-1', false)
+    workspaceStateRef.current.openChatSessionIds.add('s1')
+    useAcpStore.setState({
+      messages: {
+        s1: [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hi' }],
+            timestamp: 1
+          }
+        ]
+      },
+      toolCalls: {
+        s1: [
+          {
+            toolCallId: 'termul-subagent:child-1',
+            status: 'in_progress',
+            rawInput: { description: 'Review', prompt: 'p' }
+          }
+        ]
+      }
+    })
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      update: {
+        toolCallId: 'termul-subagent:child-1',
+        _meta: { 'termul/subagent': { state: 'running', sessionId: 'child-1' } }
+      }
+    })
+    useAcpStore
+      .getState()
+      ._onSessionClosed({ agentId: 'agent-1', sessionId: 's1', reason: 'closed' })
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagentLifecycle?.state).toBe('cancelled')
   })
 
   it.each([

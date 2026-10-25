@@ -20,8 +20,9 @@ import type {
   AvailableCommand,
   acpApi,
   BrowserAgentTabEvent,
-  BrowserConsentRequestEvent,
   BrowserOpenRequestEvent,
+  BrowserStopChangedEvent,
+  BrowserTicketClosedEvent,
   CommandsUpdateEvent,
   ConfigOptionsUpdateEvent,
   ContentBlock,
@@ -60,6 +61,7 @@ import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import type { TurnEndNotice } from '@/lib/agent-chat-notify'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
+import type { BrowserConsentOptionId, BrowserConsentTicket } from '@/lib/browser-consent-api'
 import type { CommandState } from '@/lib/command-engine'
 import type { LogPoint } from '@/stores/agent-chat-unread-store'
 import type { QueuedPrompt } from '../prompt-queue-orchestration'
@@ -128,6 +130,14 @@ export interface ChatMessage {
  * Options for one history open. A reload passes the current MCP list and
  * asks for a new agent process. A normal history open omits both.
  */
+export interface AgentReloadMark {
+  afterMessageId: string | null
+  /** Highest message or tool-call seq at the reload; null for an empty chat. */
+  afterSeq?: number | null
+  /** Client clock (epoch ms) of the reload, for items without a seq. */
+  reloadedAt?: number
+}
+
 export interface OpenHistoryOptions {
   mcpServers?: McpServer[]
   /** Skip adopting the process that already owns this session. */
@@ -382,12 +392,11 @@ export interface AcpState {
    */
   autoOpenBrowserUrl: Record<AgentId, string>
   /**
-   * Agent browser automation consent prompts keyed by `requestId`
-   * (`acp:browser_consent_request`). Once-per-session grant; the dialog
-   * resolves each entry via `respondBrowserConsent`. Entries are host-side
-   * deduped per session.
+   * Host-originated browser consent tickets keyed by `requestId` (`host:`
+   * ids carried by `acp:permission_request`). Resolved via
+   * `respondBrowserConsent`; dropped on `acp:browser_ticket_closed`.
    */
-  pendingBrowserConsents: Record<string, BrowserConsentRequestEvent>
+  pendingBrowserConsents: Record<string, BrowserConsentTicket>
   /**
    * Applied-update versions awaiting a user-facing chat (configId → applied
    * version). Set by `applyAgentUpdate`; cleared when a non-ephemeral chat
@@ -402,9 +411,11 @@ export interface AcpState {
   reloadingChatIds: Record<SessionId, true>
   /**
    * In-memory "Agent reloaded" mark. `afterMessageId` is the last message at
-   * the moment of reload, so later messages stay below the line. Not persisted.
+   * the moment of reload, so later messages stay below the line. The live
+   * window can trim that message, so `afterSeq` (the highest transcript seq)
+   * and `reloadedAt` place the line without it. Not persisted.
    */
-  agentReloadMarks: Record<SessionId, { afterMessageId: string | null }>
+  agentReloadMarks: Record<SessionId, AgentReloadMark>
 
   // User-configured agents (persisted, distinct from the live `agents` map)
   agentConfigs: StoredAgentConfig[]
@@ -959,11 +970,13 @@ export interface AcpState {
    * open/close a visible agent-controlled browser tab.
    */
   _onBrowserAgentTab: (e: BrowserAgentTabEvent) => void
-  /**
-   * `acp:browser_consent_request` — queue the once-per-session grant prompt.
-   */
-  _onBrowserConsentRequest: (e: BrowserConsentRequestEvent) => void
-  respondBrowserConsent: (requestId: string, allowed: boolean) => void
+  /** A browser consent ticket arrived on the permission contract. */
+  _onBrowserConsentTicket: (ticket: BrowserConsentTicket) => void
+  /** `acp:browser_ticket_closed`: the ticket was settled somewhere. */
+  _onBrowserTicketClosed: (e: BrowserTicketClosedEvent) => void
+  /** `acp:browser_stop_changed`. */
+  _onBrowserStopChanged: (e: BrowserStopChangedEvent) => void
+  respondBrowserConsent: (requestId: string, optionId: BrowserConsentOptionId) => void
 }
 
 export type TurnEndSetter = (

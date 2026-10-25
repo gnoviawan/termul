@@ -71,6 +71,7 @@ mod close;
 mod exit;
 pub(crate) use gates::{ConfigOptionValue, GatewayAuthInput};
 mod history;
+mod native_subagents;
 mod project_binding;
 mod reopen;
 mod spawn_error;
@@ -96,6 +97,10 @@ mod test_driver;
 pub(crate) use test_driver::{FakeAuth, FakeDriver, FakeTurn};
 #[cfg(test)]
 mod real_loop_tests;
+#[cfg(test)]
+mod native_subagents_loop_tests;
+#[cfg(test)]
+mod native_subagents_tests;
 
 pub(crate) use history::*;
 pub use reopen::*;
@@ -481,6 +486,13 @@ pub struct AcpManager {
 }
 
 impl AcpManager {
+    /// Loopback port of the in-process host tool listener the agents' MCP
+    /// children connect to.
+    #[must_use]
+    pub fn host_plan_server_port(&self) -> u16 {
+        self.host_plan_server.port()
+    }
+
     /// Create a new manager that fans `acp:*` events out to the given sinks.
     ///
     /// Pass a `WsRelaySink`-backed list (the desktop app and the headless

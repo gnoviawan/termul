@@ -31,6 +31,7 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use super::fallback_fonts;
 use super::persistence::{
     autosave_delay, autosave_max_wait, canvas_mounts, crash_timeouts, lease_grace, mount_cap,
     CloseMode, CloseOutcome, Eviction, LeaseChange, MountRequest, RendererId,
@@ -102,12 +103,16 @@ pub fn bundle_tokens() -> &'static BundleTokens {
 pub struct CanvasBundleBase {
     pub base_url: String,
     pub pin_tag: String,
+    /// Font URLs, relative to the bundle page, for `host.fallbackFonts`.
+    /// Only the desktop loopback listener serves any ([`fallback_fonts`]).
+    pub fallback_fonts: Vec<String>,
 }
 
 pub fn same_origin_base() -> CanvasBundleBase {
     CanvasBundleBase {
         base_url: String::new(),
         pin_tag: pinned_tag().to_string(),
+        fallback_fonts: Vec::new(),
     }
 }
 
@@ -128,6 +133,8 @@ pub struct CanvasOpenInfo {
     /// Canvases this open unloaded to stay under `canvas.max_mounted` (AD-26),
     /// each saved first. The renderer shows them as unloaded.
     pub evicted: Vec<Eviction>,
+    /// [`CanvasBundleBase::fallback_fonts`].
+    pub fallback_fonts: Vec<String>,
 }
 
 /// What a renderer's open carries besides the document: the one shape both
@@ -220,6 +227,7 @@ pub async fn open_canvas(
         doc_key,
         mount_seq,
         evicted: admitted.evicted,
+        fallback_fonts: base.fallback_fonts,
     })
 }
 
@@ -423,15 +431,22 @@ pub fn log_bundle_status() {
 }
 
 async fn desktop_bundle_handler(method: Method, uri: Uri, headers: HeaderMap) -> Response {
-    serve_bundle(&method, &uri, &headers)
+    let font = BundlePath::parse(uri.path())
+        .filter(|path| bundle_tokens().authorize(path.canvas_id, path.token))
+        .and_then(|path| path.tail?.strip_prefix(fallback_fonts::ROUTE));
+    match font {
+        Some(file) => fallback_fonts::response(&method, file).await,
+        None => serve_bundle(&method, &uri, &headers),
+    }
 }
 
 /// The loopback listener's whole route set.
 pub fn bundle_router() -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/canvas/{id}", any(desktop_bundle_handler))
         .route("/canvas/{id}/", any(desktop_bundle_handler))
-        .route("/canvas/{id}/{*rest}", any(desktop_bundle_handler))
+        .route("/canvas/{id}/{*rest}", any(desktop_bundle_handler));
+    crate::web::host_allow::layer(router, crate::web::host_allow::HostAllowList::loopback())
 }
 
 /// Supervisor of the desktop loopback listener. Drive [`StaticServer::run`]
@@ -462,6 +477,7 @@ impl StaticServer {
         self.addr().map(|addr| CanvasBundleBase {
             base_url: format!("http://{addr}"),
             pin_tag: pinned_tag().to_string(),
+            fallback_fonts: fallback_fonts::urls(),
         })
     }
 
@@ -509,6 +525,7 @@ impl StaticServer {
             let Ok(addr) = listener.local_addr() else {
                 continue;
             };
+            let _owned_port = crate::host_perimeter::OwnedPort::claim(addr.port());
             let restart = self.binds.fetch_add(1, Ordering::Relaxed) > 0;
             log::info!(
                 "[canvas] bundle listener {} on {addr}",

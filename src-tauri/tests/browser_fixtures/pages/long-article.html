@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Long article fixture</title>
+</head>
+<body>
+<main>
+<h1>Long article fixture</h1>
+<article id="article"></article>
+<nav>
+<a href="/form-done.html?page=2">Next page</a>
+<button type="button">Load more</button>
+</nav>
+<form action="/form-done.html" method="get">
+<textarea name="comment" aria-label="Comment"></textarea>
+<button type="submit">Post comment</button>
+</form>
+</main>
+<script>
+var article = document.getElementById('article');
+var words = 'the quick brown fox jumps over the lazy dog while the agent reads on ';
+for (var n = 1; n <= 40; n++) {
+  var p = document.createElement('p');
+  p.textContent = 'Paragraph ' + (n < 10 ? '0' : '') + n + '. ' + words.repeat(36);
+  article.appendChild(p);
+}
+</script>
+</body>
+</html>

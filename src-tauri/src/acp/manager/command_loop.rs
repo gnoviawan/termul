@@ -32,7 +32,10 @@ pub(super) async fn run_command_loop(
     let init_request = InitializeRequest::new(ProtocolVersion::V1)
         .client_capabilities(client::client_capabilities(allow_terminal))
         .client_info(Implementation::new("termul", env!("CARGO_PKG_VERSION")).title("Termul"));
-    let init_message = match initialize_message(&init_request) {
+    if profile.native_subagents {
+        log::info!("[acp] agent {agent_id}: advertising native subagent sessions");
+    }
+    let init_message = match initialize_message(&init_request, profile.native_subagents) {
         Ok(message) => message,
         Err(error) => {
             let _ = init_tx.send(Err(error.clone()));
@@ -674,6 +677,8 @@ pub(super) async fn run_command_loop(
                 // routed to this accepted prompt's session, even when the agent
                 // reuses an MCP child created for an older session.
                 host_plan_server.begin_turn(&agent_id.0, &session_id.0);
+                // The user's prompt turn ends a browser Stop for the session.
+                crate::browser_automation::user_turn(&session_id.0);
                 // Story 1.8 T3.2: capture the client turn-id to echo on prompt_complete.
                 let turn_turn_id = turn_id.clone();
                 let spawn_result = cx.spawn(async move {
@@ -1478,10 +1483,16 @@ pub(super) fn send_reply<T>(slot: &ReplySlot<T>, value: Result<T, String>) {
     }
 }
 
-/// Typed initialize plus the Codex gateway auth capability, which SDK 1.3
-/// cannot set on `AuthCapabilities`.
-fn initialize_message(request: &InitializeRequest) -> Result<UntypedMessage, String> {
+/// Typed initialize plus the capabilities SDK 1.3 cannot set: Codex gateway
+/// auth, and (Claude only) native subagent sessions.
+pub(super) fn initialize_message(
+    request: &InitializeRequest,
+    native_subagents: bool,
+) -> Result<UntypedMessage, String> {
     let mut value = serde_json::to_value(request).map_err(|error| error.to_string())?;
+    if native_subagents {
+        super::native_subagents::advertise_subagents(&mut value);
+    }
     if let Some(auth) = value
         .get_mut("clientCapabilities")
         .and_then(|caps| caps.get_mut("auth"))

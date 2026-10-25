@@ -246,41 +246,109 @@ fn names_a_stream_or_device(part: &str) -> bool {
     numbered("COM") || numbered("LPT")
 }
 
+/// Why an export path is refused. Each reason names its own cause so the
+/// agent can tell what to change.
+#[derive(Debug)]
+enum PathRefusal {
+    NoFile,
+    Absolute,
+    ClimbsWithDotDot,
+    StreamOrDevice {
+        part: String,
+    },
+    /// `link` (`/`-separated, from the root) is the first part that resolves
+    /// outside the project, to `target`.
+    LinkOutside {
+        link: String,
+        target: PathBuf,
+    },
+    /// `part` exists but could not be resolved, such as a dangling link.
+    Unresolvable {
+        part: String,
+        error: std::io::Error,
+    },
+    /// Resolved outside the project although no single part does now: the
+    /// folders changed between the check and the diagnosis.
+    ResolvesOutside,
+}
+
+impl PathRefusal {
+    fn into_error(self, requested: &str) -> CanvasError {
+        let message = match self {
+            Self::NoFile => {
+                format!("export needs a file path inside the project; `{requested}` names no file")
+            }
+            Self::Absolute => format!(
+                "export writes only to a path relative to the project folder; `{requested}` is \
+                 absolute or starts at a drive or root"
+            ),
+            Self::ClimbsWithDotDot => format!(
+                "export does not follow `..`; name `{requested}` from the project folder down \
+                 without it"
+            ),
+            Self::StreamOrDevice { part } => format!(
+                "export does not write to `{requested}`: `{part}` names a Windows stream or device"
+            ),
+            Self::LinkOutside { link, target } => format!(
+                "export writes only inside the project; in `{requested}`, `{link}` is a link to \
+                 `{}`, which is outside the project; export to a folder inside the project instead",
+                crate::path_validation::strip_verbatim_prefix(&target.to_string_lossy())
+            ),
+            Self::Unresolvable { part, error } => format!(
+                "export cannot tell whether `{part}` in `{requested}` stays inside the project: {error}"
+            ),
+            Self::ResolvesOutside => format!(
+                "export writes only inside the project; `{requested}` resolves outside it"
+            ),
+        };
+        CanvasError::new(CanvasErrorCode::UnsupportedInKiosk, message)
+    }
+}
+
+/// Name the first of `parts`, walked down from the canonical `root`, that
+/// resolves outside it. Only explains a refusal already decided.
+fn escaping_part(root: &Path, parts: &[String]) -> PathRefusal {
+    let mut path = root.to_path_buf();
+    for (index, part) in parts.iter().enumerate() {
+        path.push(part);
+        let named = parts[..=index].join("/");
+        match std::fs::canonicalize(&path) {
+            Ok(resolved) if resolved.starts_with(root) => {}
+            Ok(target) => {
+                return PathRefusal::LinkOutside {
+                    link: named,
+                    target,
+                }
+            }
+            Err(_) if path.symlink_metadata().is_err() => break,
+            Err(error) => return PathRefusal::Unresolvable { part: named, error },
+        }
+    }
+    PathRefusal::ResolvesOutside
+}
+
 /// Check `requested` names a file inside `root`: relative, no `..`, no
 /// stream or device name, and no existing part of it a link that resolves
 /// outside the root.
 pub fn resolve_project_file(root: &Path, requested: &str) -> Result<ProjectFile, CanvasError> {
-    let outside = || {
-        CanvasError::new(
-            CanvasErrorCode::UnsupportedInKiosk,
-            format!(
-                "export writes only to a relative path inside the project; `{requested}` is not one"
-            ),
-        )
-    };
+    let refuse = |reason: PathRefusal| reason.into_error(requested);
     let mut parts = Vec::new();
     for component in Path::new(requested).components() {
         match component {
             Component::Normal(part) => {
                 let part = part.to_string_lossy().into_owned();
                 if names_a_stream_or_device(&part) {
-                    return Err(CanvasError::new(
-                        CanvasErrorCode::UnsupportedInKiosk,
-                        format!(
-                            "export does not write to `{requested}`: `{part}` names a Windows stream or device"
-                        ),
-                    ));
+                    return Err(refuse(PathRefusal::StreamOrDevice { part }));
                 }
                 parts.push(part);
             }
             Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(outside())
-            }
+            Component::ParentDir => return Err(refuse(PathRefusal::ClimbsWithDotDot)),
+            Component::RootDir | Component::Prefix(_) => return Err(refuse(PathRefusal::Absolute)),
         }
     }
     if parts.is_empty() {
-        return Err(outside());
+        return Err(refuse(PathRefusal::NoFile));
     }
     let root = std::fs::canonicalize(root).map_err(|error| {
         CanvasError::new(
@@ -300,7 +368,7 @@ pub fn resolve_project_file(root: &Path, requested: &str) -> Result<ProjectFile,
             absolute,
             relative: parts.join("/"),
         }),
-        _ => Err(outside()),
+        _ => Err(refuse(escaping_part(&root, &parts))),
     }
 }
 
@@ -329,12 +397,8 @@ pub fn write_project_file(
     let resolved_parent = std::fs::canonicalize(parent).map_err(failed)?;
     let resolved_root = std::fs::canonicalize(root).map_err(failed)?;
     if !resolved_parent.starts_with(&resolved_root) {
-        return Err(CanvasError::new(
-            CanvasErrorCode::UnsupportedInKiosk,
-            format!(
-                "export writes only to a relative path inside the project; `{requested}` is not one"
-            ),
-        ));
+        let parts: Vec<String> = file.relative.split('/').map(str::to_owned).collect();
+        return Err(escaping_part(&resolved_root, &parts).into_error(requested));
     }
     write_in_real_folder(&resolved_root, &resolved_parent, name, bytes).map_err(failed)?;
     Ok(file)

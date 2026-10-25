@@ -82,6 +82,7 @@ import { asJsonText, createCanvasBridge } from '@/lib/canvas-bridge'
 import type { LeafNode } from '@/types/workspace.types'
 import { useAppSettingsStore } from '../app-settings-store'
 import { type CanvasMount, pinVerdict, useCanvasStore } from '../canvas-store'
+import { useProjectStore } from '../project-store'
 import { useWorkspaceStore } from '../workspace-store'
 
 const PROJECT = 'proj-1'
@@ -98,7 +99,8 @@ const INFO: CanvasOpenInfo = {
   pinTag: PIN,
   docKey: DOC_A,
   mountSeq: 41,
-  evicted: []
+  evicted: [],
+  fallbackFonts: []
 }
 
 function openInfo(overrides: Partial<CanvasOpenInfo> = {}): IpcResult<CanvasOpenInfo> {
@@ -483,11 +485,27 @@ describe('mount and load', () => {
     ])
   })
 
+  it('names the loaded file for the editor by its project path and project', async () => {
+    useProjectStore.setState({
+      projects: [{ id: PROJECT, name: 'Proj', color: 'blue', path: 'c:\\proj' }]
+    })
+    const editor = await mountReady()
+    expect(editor.sent('host.file').map((r) => JSON.parse(r.params))).toEqual([
+      { name: 'design', path: 'design.figcraft', location: 'Proj' }
+    ])
+    const methods = editor.posted.map((r) => r.method)
+    expect(methods.indexOf('host.file')).toBeGreaterThan(methods.indexOf('host.openDocument'))
+    useProjectStore.setState({ projects: [] })
+  })
+
   it('a document that does not exist yet starts empty: no host.openDocument, null ack', async () => {
     const editor = await mountReady(null)
     expect(editor.sent('host.openDocument')).toHaveLength(0)
     expect(documentLoaded).toHaveBeenCalledWith(PROJECT, 41, null)
     expect(session()?.phase.kind).toBe('ready')
+    expect(editor.sent('host.file').map((r) => JSON.parse(r.params))).toEqual([
+      { name: 'design', path: 'design.figcraft', location: null }
+    ])
   })
 
   it('a document the editor cannot open fails the mount and never reports it loaded', async () => {
@@ -656,6 +674,69 @@ describe('mount and load', () => {
       .applyRemount(PROJECT, { previousMountSeq: 7, mountSeq: 8, reason: 'x', lost: null })
     expect(applied).toBe(false)
     expect(currentMount().mountSeq).toBe(41)
+  })
+})
+
+describe('fallback fonts (#1421)', () => {
+  const FONTS = ['host-fonts/seguisym.ttf', 'host-fonts/msyh.ttc']
+
+  beforeEach(async () => {
+    open.mockResolvedValueOnce(openInfo({ fallbackFonts: FONTS }))
+    await useCanvasStore.getState().openCanvas(PROJECT, DOC_A)
+    readDocument.mockResolvedValueOnce(ok({ bytes: 'AAEC' }))
+    documentLoaded.mockResolvedValueOnce(ok(view()))
+  })
+
+  it('the lent fonts load before the document, so its first render has them', async () => {
+    const editor = mountEditor()
+    editor.ready()
+    editor.reply('host.describe', JSON.stringify({ tag: PIN, engineVersion: '0.6.0' }))
+    await flush()
+    expect(editor.sent('host.fallbackFonts').map((r) => JSON.parse(r.params))).toEqual([
+      { urls: FONTS }
+    ])
+    expect(editor.sent('host.openDocument')).toHaveLength(0)
+
+    editor.reply('host.fallbackFonts', '{"families":["Segoe UI Symbol"],"failed":[]}')
+    await flush()
+    editor.reply('host.openDocument', '{"contentVersion":3}')
+    await flush()
+    expect(session()?.phase.kind).toBe('ready')
+  })
+
+  it('a bundle without host.fallbackFonts still mounts', async () => {
+    const editor = mountEditor()
+    editor.ready()
+    editor.reply('host.describe', JSON.stringify({ tag: PIN, engineVersion: '0.6.0' }))
+    await flush()
+    editor.fail('host.fallbackFonts', 'UNKNOWN_METHOD')
+    await flush()
+    editor.reply('host.openDocument', '{"contentVersion":3}')
+    await flush()
+
+    expect(session()?.phase.kind).toBe('ready')
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'info', message: expect.stringContaining('UNKNOWN_METHOD') })
+    )
+  })
+
+  it('a font the editor could not load is logged and the mount goes on', async () => {
+    const editor = mountEditor()
+    editor.ready()
+    editor.reply('host.describe', JSON.stringify({ tag: PIN, engineVersion: '0.6.0' }))
+    await flush()
+    editor.reply(
+      'host.fallbackFonts',
+      '{"families":[],"failed":[{"url":"host-fonts/msyh.ttc","error":"HTTP 404"}]}'
+    )
+    await flush()
+    editor.reply('host.openDocument', '{"contentVersion":3}')
+    await flush()
+
+    expect(session()?.phase.kind).toBe('ready')
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warn', message: expect.stringContaining('HTTP 404') })
+    )
   })
 })
 
@@ -873,6 +954,7 @@ describe('disk changes (AD-27)', () => {
     expect(documentLoaded).toHaveBeenLastCalledWith(PROJECT, 41, '{"contentVersion":9}')
     expect(session()?.savedVersion).toBe('9')
     expect(toastWarning).not.toHaveBeenCalled()
+    expect(editor.sent('host.file'), 'the reloaded document is named again').toHaveLength(2)
   })
 
   it('a reload is not applied once the editor moved past the version the host judged clean', async () => {

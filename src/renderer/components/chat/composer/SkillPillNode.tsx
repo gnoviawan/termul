@@ -1,7 +1,7 @@
 import { mergeAttributes, Node } from '@tiptap/core'
 import { NodeViewWrapper, type ReactNodeViewProps, ReactNodeViewRenderer } from '@tiptap/react'
 import { cn } from '@/lib/utils'
-import { SkillChip } from '../SkillChip'
+import { SkillChipLink } from '../skill-file-links'
 
 /**
  * Inline atomic Tiptap node for an Agent Skill "pill". Replaces the
@@ -80,6 +80,8 @@ export const SkillPill = Node.create({
  * React NodeView for the skill pill. Renders the shared `<SkillChip>` component
  * (the single source of truth for the chip visual — also used by the slash-menu
  * skill row and the timeline user-bubble) so the three surfaces cannot drift.
+ * `SkillChipLink` makes the chip open its `SKILL.md` (the pick-time `path`
+ * attr first, else the `SkillFilesProvider` index).
  * `NodeViewWrapper as="span"` keeps it inline (the node is `inline: true`); the
  * `selected` ring + `data-skill-*` attrs live on the wrapper so ProseMirror
  * selection state and clipboard serialization work without touching the
@@ -99,7 +101,7 @@ function SkillPillNodeView({ node, selected }: ReactNodeViewProps): React.JSX.El
       data-skill-name={name}
       data-skill-path={String(attrs.path ?? '')}
     >
-      <SkillChip name={name} />
+      <SkillChipLink name={name} path={String(attrs.path ?? '')} surface="composer" />
     </NodeViewWrapper>
   )
 }

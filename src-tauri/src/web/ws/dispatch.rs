@@ -103,7 +103,15 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         // decision through the server-side rendezvous (first-response-wins,
         // TOCTOU re-validation, at-most-one) to `AcpManager::respond_permission`,
         // which resolves the agent's `Responder` on the driver thread.
+        "respond_permission"
+            if crate::web::PermissionRendezvous::is_host_ticket(
+                req.payload["requestId"].as_str().unwrap_or_default(),
+            ) =>
+        {
+            handle_respond_host_ticket(id, &req.payload, env)
+        }
         "respond_permission" => handle_respond_permission(id, &req.payload, relay, env.connection_id).await,
+        "browser_stop" => handle_browser_stop(id, &req.payload, env),
         // Issue #411: `answer_question` — route the browser's structured-question
         // answer through the server-side question rendezvous (first-response-wins,
         // TOCTOU re-validation) to `AcpManager::answer_question`, which resolves

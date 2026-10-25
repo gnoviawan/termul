@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>External app fixture</title>
+</head>
+<body>
+<main>
+<h1>External app fixture</h1>
+<a id="mail" href="mailto:someone@example.com">Mail link</a>
+<a id="custom" href="termul-fixture-app://open">Custom scheme link</a>
+<button id="script" type="button">Scripted launch</button>
+<p id="result">Result: still here</p>
+</main>
+<script>
+document.getElementById('script').addEventListener('click', function () {
+  location.href = 'ms-settings:privacy';
+});
+</script>
+</body>
+</html>

@@ -10,6 +10,7 @@ import { commandToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import type { AcpSession } from '@/stores/acp-store'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
+import { useBrowserControlStore } from '@/stores/browser-control-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 
 const {
@@ -378,6 +379,9 @@ vi.mock('./ChatChangedFilesPanel', () => ({
     // A marker, so the dock tests can assert the bar sits inside the dock wrapper.
     return <div data-testid="changed-files-stub" />
   }
+}))
+vi.mock('./claude-account/ClaudeLimitNotice', () => ({
+  ClaudeLimitNotice: () => <div data-testid="claude-limit-notice-stub" />
 }))
 const { chatInputBarPropsRef } = vi.hoisted(() => ({
   chatInputBarPropsRef: {
@@ -1565,6 +1569,16 @@ describe('AgentChatPanel ChatChangedFilesPanel mounting', () => {
     render(<AgentChatPanel sessionId="s2" isVisible />)
     expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
   })
+
+  // The panel's negative bottom margin tucks it under the composer, so a notice
+  // between the two is painted over and its "Switch to" button cannot be clicked.
+  it('renders the Claude limit notice above the changed-files panel', () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    const notice = screen.getByTestId('claude-limit-notice-stub')
+    const panel = screen.getByTestId('changed-files-stub')
+    expect(notice.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
 })
 
 // Web/desktop parity: `filePathContext` drives the `termul-file-path`
@@ -2197,14 +2211,30 @@ describe('AgentChatPanel browser consent card mounting (CAP-5)', () => {
     expect(browserConsentCardPropsRef.current).toBeNull()
   })
 
-  it('mounts no card outside Tauri (remote clients never see the prompt)', () => {
+  it('mounts the card on a remote client too, which has no browser pane', () => {
     runtimeState.tauri = false
     seedActiveSession('s1')
     pendingBrowserConsentsRef.current = {
       'req-1': { requestId: 'req-1', sessionId: 's1' }
     }
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(browserConsentCardPropsRef.current).toBeNull()
+    expect(browserConsentCardPropsRef.current?.consent).toMatchObject({ requestId: 'req-1' })
+  })
+
+  it('shows the agent-control indicator with Stop only while the session drives a tab', () => {
+    seedActiveSession('s1')
+    useBrowserControlStore.setState({ tabSessions: {}, stoppedSessions: {} })
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.queryByTestId('browser-agent-indicator')).not.toBeInTheDocument()
+
+    useBrowserControlStore.setState({ tabSessions: { 'agent-1': 's1' } })
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.getByTestId('browser-agent-indicator')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop agent browsing' })).toBeInTheDocument()
+
+    useBrowserControlStore.setState({ tabSessions: { 'agent-1': 's-other' } })
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.queryByTestId('browser-agent-indicator')).not.toBeInTheDocument()
   })
 
   it('registers a visible card host for the session and unregisters on unmount', () => {

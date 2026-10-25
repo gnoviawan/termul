@@ -22,6 +22,7 @@ pub(super) fn emit_chunk(host: &Host) {
             agent_client_protocol::schema::v1::TextContent::new("chunk"),
         ),
         message_id: None,
+        parent_tool_call_id: None,
     };
     let sinks: Vec<Arc<dyn crate::web::EventSink>> = vec![host.relay.clone()];
     events::fan_out(&sinks, Some(SESSION), events::EVENT_MESSAGE_CHUNK, &event);
@@ -208,6 +209,7 @@ async fn start_host() -> StartedHost {
             relay,
             registry,
             RemoteBindMode::Localhost,
+            false,
             false,
             &data,
             None,

@@ -184,6 +184,97 @@ jobs:
         shell: bash
         run: test -f dist-web/index.html && test -s dist-web/index.html
 
+      # --- macOS signing & notarization (#1498) --------------------------------
+      # Nightlies used to ship ad-hoc signed + unnotarized, so Gatekeeper
+      # blocked them on first launch ("damaged and can't be opened"). When
+      # the Apple credentials are configured (same secrets as release.yml),
+      # port the release signing chain: import the Developer ID certificate,
+      # shadow xcrun so stapler retries transient CloudKit failures, and let
+      # tauri-action sign + notarize. Without the secrets the build proceeds
+      # exactly as before (ad-hoc) rather than killing the nightly pipeline.
+      - name: Resolve Apple signing availability
+        id: apple
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_SIGNING_IDENTITY \
+            APPLE_ID \
+            APPLE_PASSWORD \
+            APPLE_TEAM_ID; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if [[ "${#missing[@]}" -eq 0 ]]; then
+            echo "apple_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            printf 'Apple signing secrets missing (%s) — nightly macOS build will be ad-hoc signed and Gatekeeper-blocked (#1498).\n' "${missing[*]}" >&2
+            echo "apple_ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import Apple Developer certificate
+        if: startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          keychain_password="$(openssl rand -base64 32)"
+          p12="$RUNNER_TEMP/certificate.p12"
+          keychain="$RUNNER_TEMP/build.keychain-db"
+          rm -f "$p12"
+          trap 'rm -f "$p12"' EXIT
+          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A > "$p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security default-keychain -s "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -t 3600 -u "$keychain"
+          security import "$p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          if ! security find-identity -v -p codesigning "$keychain" | grep -F "$APPLE_SIGNING_IDENTITY" >/dev/null; then
+            echo "Imported keychain does not contain the configured signing identity." >&2
+            exit 1
+          fi
+
+      # Tauri ignores the stapler's exit status, so a transient CloudKit
+      # failure ships an unstapled .app (release.yml hit this as #1388).
+      # Shadow xcrun so `stapler staple` retries and logs its output.
+      - name: Retry stapler staple during the macOS build
+        if: startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shim_dir="$RUNNER_TEMP/xcrun-shim"
+          mkdir -p "$shim_dir"
+          cat > "$shim_dir/xcrun" <<'SH'
+          #!/bin/bash
+          set -o pipefail
+          if [[ "${1-}" == stapler && "${2-}" == staple ]]; then
+            for delay in 0 15 30 60 120; do
+              sleep "$delay"
+              /usr/bin/xcrun "$@" 2>&1 | tee -a "$RUNNER_TEMP/stapler-staple.log" && exit 0
+            done
+            exit 1
+          fi
+          exec /usr/bin/xcrun "$@"
+          SH
+          chmod +x "$shim_dir/xcrun"
+          echo "$shim_dir" >> "$GITHUB_PATH"
+
       - name: Build platform artifacts locally
         id: tauri
         uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
@@ -191,6 +282,10 @@ jobs:
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true' && secrets.APPLE_TEAM_ID || '' }}
         with:
           tauriScript: bun run tauri
           args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
@@ -200,6 +295,39 @@ jobs:
         env:
           ARTIFACT_PATHS: ${{ steps.tauri.outputs.artifactPaths }}
         run: printf '%s\n' "$ARTIFACT_PATHS" > tauri-artifact-paths.json
+
+      # tauri-action notarizes + staples the .app only; the DMG is signed but
+      # never submitted (release.yml hit this). Notarize + staple the DMG so
+      # Gatekeeper accepts it on user machines.
+      - name: Notarize and staple macOS DMG
+        if: startsWith(matrix.platform, 'macos-') && steps.apple.outputs.apple_ok == 'true'
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          if [[ ! -s "$RUNNER_TEMP/stapler-staple.log" ]]; then
+            echo "Tauri's stapler staple never reached the xcrun shim." >&2
+            exit 1
+          fi
+          echo "::group::Tauri .app staple output"
+          cat "$RUNNER_TEMP/stapler-staple.log"
+          echo "::endgroup::"
+          dmgs=("src-tauri/target/$RUST_TARGET/release/bundle/dmg"/*.dmg)
+          if [[ "${#dmgs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one macOS DMG before notarization." >&2
+            exit 1
+          fi
+          xcrun notarytool submit "${dmgs[0]}" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "${dmgs[0]}"
 
       - name: Collect platform release assets and updater manifest
         shell: bash

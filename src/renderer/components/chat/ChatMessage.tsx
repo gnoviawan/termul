@@ -19,7 +19,6 @@ import {
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
-import { CommandChip } from './CommandChip'
 import { AgentProse } from './chat-agent-prose'
 import {
   blockData,
@@ -43,7 +42,7 @@ import {
   resolveMessageActionsMode,
   supportsLongPressMenu
 } from './MessageActions'
-import { SkillChip } from './SkillChip'
+import { CommandChipLink, SkillChipLink } from './skill-file-links'
 
 // The markdown renderer moved to `chat-agent-prose.tsx` to keep this file under
 // the ~800-line limit. Re-exported so existing importers keep their paths.
@@ -66,7 +65,9 @@ function blocksToText(blocks: ContentBlock[]): string {
  * segment for command tokens, then each command text segment for file tokens
  * — all pill types render at their correct positions when inline together. A
  * command token renders as a `CommandChip` (terminal icon, muted `/name`),
- * the same chip as the composer's `CommandPill`. Plain text (no tokens)
+ * the same chip as the composer's `CommandPill`. Skill chips and skill-backed
+ * command chips open their `SKILL.md` on click (see `skill-file-links`).
+ * Plain text (no tokens)
  * renders verbatim with `whitespace-pre-wrap` to preserve the original
  * spacing. `MessageActions` still receives the sanitized copy text (tokens →
  * readable text) while edit keeps the raw token text so the composer
@@ -132,9 +133,9 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
         ? text
         : flat.map((seg, i) =>
             seg.kind === 'skill' ? (
-              <SkillChip key={`skill-${i}`} name={seg.name} />
+              <SkillChipLink key={`skill-${i}`} name={seg.name} surface="bubble" />
             ) : seg.kind === 'command' ? (
-              <CommandChip key={`command-${i}`} name={seg.name} />
+              <CommandChipLink key={`command-${i}`} name={seg.name} surface="bubble" />
             ) : seg.kind === 'file' ? (
               <FileChip key={`file-${i}`} name={seg.display} kind={seg.dir ? 'dir' : 'file'} />
             ) : (

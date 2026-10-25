@@ -49,6 +49,7 @@ use tracing::{info, warn};
 use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager};
 use crate::pty::PtyManager;
 use crate::web::auth::{self, WebAuth, WebAuthOrigin, WebAuthResolution};
+use crate::web::host_allow::HostAllowList;
 use crate::web::sink::WsRelaySink;
 use crate::web::store::WebStore;
 use crate::web::{serve_router, ProjectRegistry, ServerConfig};
@@ -103,11 +104,18 @@ impl RemoteBindMode {
 }
 
 /// Whether the shared-live host must require the bearer token (AD-3): it is
-/// ungated only on loopback with no tunnel advertised. Decided BEFORE the
-/// server starts so there is never a window where an exposed host is open.
+/// ungated only on loopback with no tunnel advertised and no browser
+/// automation host registered. Pages in browser tabs can reach loopback, so
+/// while tabs can exist the host never serves them unauthenticated. Decided
+/// BEFORE the server starts so there is never a window where an exposed host
+/// is open.
 #[must_use]
-pub fn shared_live_requires_token(bind_mode: RemoteBindMode, tunnel_planned: bool) -> bool {
-    tunnel_planned || bind_mode.is_lan_exposed()
+pub fn shared_live_requires_token(
+    bind_mode: RemoteBindMode,
+    tunnel_planned: bool,
+    browser_host_registered: bool,
+) -> bool {
+    tunnel_planned || bind_mode.is_lan_exposed() || browser_host_registered
 }
 
 /// Durable inputs the desktop hands the shared-live host (AD-14).
@@ -288,6 +296,8 @@ impl RemoteServerState {
     /// bind mode it decides, BEFORE the listener binds, whether the bearer
     /// token is required ([`shared_live_requires_token`]); the token is
     /// resolved from `data.data_dir` and the shared URL carries it.
+    /// `browser_host_registered` also forces the token: tab pages can reach
+    /// loopback.
     ///
     /// `data.store` is the desktop's single already-opened web store; this
     /// host never opens one, so stop/start cycles reuse the same instance.
@@ -300,6 +310,7 @@ impl RemoteServerState {
         registry: Arc<ProjectRegistry>,
         requested_bind_mode: RemoteBindMode,
         tunnel_planned: bool,
+        browser_host_registered: bool,
         data: &SharedLiveData,
         acp_catalog: Option<Arc<AcpCatalogService>>,
         acp_install: Option<Arc<AcpInstallService>>,
@@ -323,7 +334,8 @@ impl RemoteServerState {
         // an exposed host is never open even for an instant. The token lives
         // under the desktop's `app_data_dir` (never the service-account dir)
         // and is never logged — only its source path.
-        let requires_token = shared_live_requires_token(requested_bind_mode, tunnel_planned);
+        let requires_token =
+            shared_live_requires_token(requested_bind_mode, tunnel_planned, browser_host_registered);
         let web_auth: Option<Arc<WebAuth>> =
             match auth::resolve_shared_live(requires_token, &data.data_dir)
                 .map_err(|e| format!("Failed to start remote server: {e}"))?
@@ -399,6 +411,16 @@ impl RemoteServerState {
             info!("Shared-live web server shutting down…");
         };
 
+        // A gated host serves any `Host`, as the token-gated standalone server
+        // does: a rebinding page cannot present the token, and phones reach
+        // the host by LAN, MagicDNS or tunnel names it cannot know in advance.
+        // An ungated host stays on loopback names, so a tunnel attached to it
+        // is refused.
+        let host_allow = if web_auth.is_some() {
+            HostAllowList::any()
+        } else {
+            HostAllowList::loopback()
+        };
         let (addr, serve_handle) = serve_router(
             acp,
             Arc::clone(&pty),
@@ -409,6 +431,7 @@ impl RemoteServerState {
             ws_relay,
             registry,
             cfg,
+            host_allow,
             shutdown,
             acp_catalog,
             acp_install,

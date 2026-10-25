@@ -31,6 +31,9 @@ vi.mock('@/components/settings/SettingsLayout', () => ({
   SettingsSection: ({ children }: { children: React.ReactNode }) => <section>{children}</section>
 }))
 
+vi.mock('@/components/settings/BrowserPolicySettings', () => ({
+  BrowserProjectPolicy: () => null
+}))
 vi.mock('@/components/NewProjectModal', () => ({ NewProjectModal: () => null }))
 vi.mock('@/components/ConfirmDialog', () => ({ ConfirmDialog: () => null }))
 

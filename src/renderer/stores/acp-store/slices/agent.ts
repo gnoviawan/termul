@@ -8,7 +8,6 @@ import {
   type AgentId,
   type AuthMethod,
   acpApi,
-  browserConsentRespond,
   parseAcpErrorDetail,
   type SessionId
 } from '@/lib/acp-api'
@@ -18,9 +17,11 @@ import {
   describeProviderFailure,
   isAmbiguousAuthError
 } from '@/lib/agents/acp-spawn-errors'
+import { answerBrowserConsent } from '@/lib/browser-consent-api'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { useBrowserControlStore } from '@/stores/browser-control-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useProjectStore } from '@/stores/project-store'
 import {
@@ -56,6 +57,7 @@ import {
   rejectTerminalAssistCollector,
   terminalAssistCollectors
 } from '../shared-state'
+import { cancelRunningSubagents } from '../subagent-lifecycle'
 import type { AcpState, AgentStatus, SessionStatus } from '../types'
 import { clearPromptReconcile } from './prompt-reconcile'
 import {
@@ -552,7 +554,9 @@ type AgentSliceState = Pick<
   | '_onAgentDisconnected'
   | '_onBrowserOpenRequest'
   | '_onBrowserAgentTab'
-  | '_onBrowserConsentRequest'
+  | '_onBrowserConsentTicket'
+  | '_onBrowserTicketClosed'
+  | '_onBrowserStopChanged'
   | 'respondBrowserConsent'
 >
 
@@ -1052,6 +1056,15 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       }
       return { agentStatus, launchingSessionIds, preparedSessions, sessions }
     })
+    const endedAt = Date.now()
+    const crashedSessions = Object.entries(get().sessions)
+      .filter(([, session]) => session.agentId === e.agentId)
+      .map(([id]) => id)
+    if (e.sessionId && !crashedSessions.includes(e.sessionId)) crashedSessions.push(e.sessionId)
+    set((s) => {
+      const toolCalls = cancelRunningSubagents(s.toolCalls, crashedSessions, endedAt)
+      return toolCalls === s.toolCalls ? {} : { toolCalls }
+    })
     if (
       e.sessionId &&
       get().sessions[e.sessionId] &&
@@ -1084,6 +1097,9 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     // a same-id re-spawn would skip `authenticate` and a stopped agent would
     // accumulate a stale auth entry).
     authenticatedAgents.delete(e.agentId)
+    const goneSessionIds = Object.entries(get().sessions)
+      .filter(([, session]) => session.agentId === e.agentId)
+      .map(([id]) => id)
     dropInFlightAuthForAgent(e.agentId)
     lastAuthAttempt.delete(e.agentId)
     autoOpenGrantedFlight.delete(e.agentId)
@@ -1193,6 +1209,11 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     // A dead process can never finish its browser-open flow — drop the
     // captured URL so the dialog dismisses.
     get().clearPendingBrowserOpen(e.agentId)
+    const endedAt = Date.now()
+    set((s) => {
+      const toolCalls = cancelRunningSubagents(s.toolCalls, goneSessionIds, endedAt)
+      return toolCalls === s.toolCalls ? {} : { toolCalls }
+    })
     // Persist closed status + transcript while maps still hold content, then
     // free WebView heap for every session this disconnect retired.
     for (const id of affected) {
@@ -1268,10 +1289,16 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     // runs `browserTabCreate`, which resolves the host's pending open waiter.
     // "close": drop the workspace tab + session record (the host already
     // destroyed the native webview; the unmount's destroy is a benign miss).
-    // Remote/web clients have no native browser pane — the event is
-    // informational there; only the desktop host opens the tab.
-    if (!isTauriContext()) return
+    // Remote/web clients have no native browser pane: there the event only
+    // feeds the Stop indicator; only the desktop host opens the tab.
     if (typeof e.tabId !== 'string' || e.tabId.length === 0) return
+    const control = useBrowserControlStore.getState()
+    if (e.action === 'open' && typeof e.sessionId === 'string' && e.sessionId.length > 0) {
+      control.trackAgentTab(e.tabId, e.sessionId)
+    } else if (e.action === 'close') {
+      control.untrackAgentTab(e.tabId)
+    }
+    if (!isTauriContext()) return
     if (e.action === 'open') {
       const url = typeof e.url === 'string' && /^https?:\/\//i.test(e.url) ? e.url : undefined
       useBrowserSessionStore.getState().createTab(e.tabId, url)
@@ -1289,11 +1316,9 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     }
   },
 
-  _onBrowserConsentRequest: (e) => {
-    if (typeof e.requestId !== 'string' || e.requestId.length === 0) return
-    if (typeof e.sessionId !== 'string' || e.sessionId.length === 0) return
+  _onBrowserConsentTicket: (ticket) => {
     set((s) => ({
-      pendingBrowserConsents: { ...s.pendingBrowserConsents, [e.requestId]: e }
+      pendingBrowserConsents: { ...s.pendingBrowserConsents, [ticket.requestId]: ticket }
     }))
     // CAP-5 reachability: the in-chat consent card is CSS-invisible while the
     // session's chat tab is hidden behind another tab in its pane. When a
@@ -1303,56 +1328,66 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     // can ever show it (non-workspace routes, SSH mode, sessions without a
     // mounted chat tab) are covered by the root-level BrowserConsentCardHost.
     const ws = useWorkspaceStore.getState()
-    const id = agentChatTabId(e.sessionId)
+    const id = agentChatTabId(ticket.sessionId)
     const pane = findPaneContainingTab(ws.root, id)
     if (pane && pane.activeTabId !== id) {
-      ws.addAgentChatTab(e.sessionId)
+      ws.addAgentChatTab(ticket.sessionId)
       void logFrontendError({
         level: 'info',
-        message: `[acp] browser consent request activated chat tab (requestId=${e.requestId}, sessionId=${e.sessionId})`,
-        source: 'acp-store:_onBrowserConsentRequest'
+        message: `[acp] browser consent ticket activated chat tab (requestId=${ticket.requestId}, sessionId=${ticket.sessionId})`,
+        source: 'acp-store:_onBrowserConsentTicket'
       })
     }
   },
 
-  respondBrowserConsent: (requestId, allowed) => {
+  _onBrowserTicketClosed: (e) => {
+    if (typeof e.requestId !== 'string') return
+    set((s) => {
+      if (!s.pendingBrowserConsents[e.requestId]) return s
+      const next = { ...s.pendingBrowserConsents }
+      delete next[e.requestId]
+      return { pendingBrowserConsents: next }
+    })
+  },
+
+  _onBrowserStopChanged: (e) => {
+    if (typeof e.sessionId !== 'string' || e.sessionId.length === 0) return
+    useBrowserControlStore.getState().setStopped(e.sessionId, e.stopped === true)
+  },
+
+  respondBrowserConsent: (requestId, optionId) => {
     const original = get().pendingBrowserConsents[requestId]
+    if (!original) return
     set((s) => {
       const next = { ...s.pendingBrowserConsents }
       delete next[requestId]
       return { pendingBrowserConsents: next }
     })
-    // A failed respond restores the pending entry so the user can retry —
-    // the card remounts enabled (no one-response flag). The Rust-side
-    // timeout still auto-denies fail-closed; warn-log for field diagnosis.
-    const restore = (): void => {
-      if (!original) return
+    // A refused answer restores the entry so the user can answer again; an
+    // answer that lost to another surface (or a withdrawn ticket) stays gone.
+    const restore = (message: string): void => {
       set((s) =>
         s.pendingBrowserConsents[requestId]
           ? s
           : { pendingBrowserConsents: { ...s.pendingBrowserConsents, [requestId]: original } }
       )
-      toast.error('Could not send the consent response. Try again.')
+      toast.error(message)
     }
-    void browserConsentRespond(requestId, allowed)
-      .then((ok) => {
-        if (!ok) {
-          restore()
-          void logFrontendError({
-            level: 'warn',
-            message: `browser consent respond failed: requestId=${requestId} allowed=${allowed}`,
-            source: 'acp-store:respondBrowserConsent'
-          })
-        }
-      })
-      // The wrapper never rejects today; stay safe if it ever does.
-      .catch(() => {
-        restore()
+    const agentId = get().sessions[original.sessionId]?.agentId ?? ''
+    void answerBrowserConsent(original, optionId, agentId)
+      .then((result) => {
+        if (result === 'ok' || result === 'stale') return
+        restore(
+          result === 'too_early'
+            ? 'That was too quick. Check the request, then choose again.'
+            : 'Could not send the browser consent answer. Try again.'
+        )
         void logFrontendError({
           level: 'warn',
-          message: `browser consent respond threw: requestId=${requestId} allowed=${allowed}`,
+          message: `browser consent answer refused: requestId=${requestId} result=${result}`,
           source: 'acp-store:respondBrowserConsent'
         })
       })
+      .catch(() => restore('Could not send the browser consent answer. Try again.'))
   }
 })

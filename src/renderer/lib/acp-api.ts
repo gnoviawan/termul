@@ -210,7 +210,29 @@ export interface ToolCall {
   /** Subagent usage scalars lifted from `_meta.claudeCode.toolResponse` at ingest
    * (the next update replaces `_meta`, so the store keeps just these). */
   subagentUsage?: { totalTokens?: number; totalDurationMs?: number; totalToolUseCount?: number }
+  /** Lifecycle of a subagent dispatch, kept apart from the tool-call status:
+   * a background launch completes its tool call long before the agent ends. */
+  subagentLifecycle?: SubagentLifecycle
+  /** Subagent dispatch that made this call (`_meta.claudeCode.parentToolUseId`).
+   * The timeline shows such a call inside its subagent, not in the main turn. */
+  parentToolCallId?: string
+  /** Latest text the subagent wrote (bounded tail), kept on its dispatch call. */
+  subagentText?: string
   [k: string]: unknown
+}
+
+export type SubagentLifecycleState = 'running' | 'completed' | 'failed' | 'cancelled'
+
+export interface SubagentLifecycle {
+  /** The dispatch returned at launch; the agent continues after its tool call completes. */
+  background?: boolean
+  /** Latest known agent state. Absent when only the launch is known. */
+  state?: SubagentLifecycleState
+  /** Host clock (epoch ms) when the agent reached a terminal state. */
+  endedAt?: number
+  agentId?: string
+  /** File that receives the background agent's output, when the agent names one. */
+  outputFile?: string
 }
 
 export interface ToolCallUpdate {
@@ -224,6 +246,8 @@ export interface ToolCallUpdate {
   rawOutput?: unknown
   /** See {@link ToolCall.diffStat} — carried by durable recovery records. */
   diffStat?: { added: number; removed: number }
+  /** See {@link ToolCall.subagentLifecycle} — derived at ingest. */
+  subagentLifecycle?: SubagentLifecycle
   [k: string]: unknown
 }
 
@@ -461,6 +485,8 @@ export interface MessageChunkEvent {
   content: ContentBlock
   /** ACP message id. Equal ids belong to one message. */
   messageId?: string
+  /** Subagent dispatch that wrote this chunk; its text stays out of the main reply. */
+  parentToolCallId?: string
 }
 export interface ToolCallEvent {
   agentId: AgentId
@@ -749,21 +775,26 @@ export const ACP_EVENTS = {
   agentSwitch: 'acp:agent_switch',
   usageUpdate: 'acp:usage_update',
   browserOpenRequest: 'acp:browser_open_request',
-  browserConsentRequest: 'acp:browser_consent_request',
-  browserAgentTab: 'acp:browser_agent_tab'
+  browserAgentTab: 'acp:browser_agent_tab',
+  browserTicketClosed: 'acp:browser_ticket_closed',
+  browserStopChanged: 'acp:browser_stop_changed',
+  /** An agent tab's URL, title, loading state or epoch changed. The
+   *  desktop pane mirrors the Tauri event of the same name instead. */
+  browserTabUpdated: 'acp:browser_tab_updated',
+  browserTabClosed: 'acp:browser_tab_closed'
 } as const
 
-/** Host asks the user to grant browser automation for a session
- * (`browser` tool first call). Once-per-session; deny re-prompts on the
- * agent's next call. */
-export interface BrowserConsentRequestEvent {
-  requestId: string
+/** A browser consent ticket was answered, timed out or withdrawn. */
+export interface BrowserTicketClosedEvent {
   sessionId: string
-  agentId: string
-  /** The action the agent is trying to run (e.g. "navigate"). */
-  action: string
-  /** Agent-stated intent for a mutating action, when provided. */
-  element?: string
+  requestId: string
+  outcome: string
+}
+
+/** Stop latched (`stopped: true`) or the user's next message cleared it. */
+export interface BrowserStopChangedEvent {
+  sessionId: string
+  stopped: boolean
 }
 
 /** Agent browser tab lifecycle — the host asks the desktop renderer to open
@@ -773,22 +804,6 @@ export interface BrowserAgentTabEvent {
   tabId: string
   url?: string
   sessionId: string
-}
-
-/**
- * Respond to `acp:browser_consent_request`. Tauri-only — remote
- * (WS-relayed) clients never render the prompt (the consent strip and card
- * surfaces are desktop-only); the host times out and denies (fail-closed).
- * Returns false for unknown/expired requests.
- */
-export async function browserConsentRespond(requestId: string, allowed: boolean): Promise<boolean> {
-  if (!isTauriContext()) return false
-  try {
-    await invoke('browser_consent_respond', { requestId, allowed })
-    return true
-  } catch {
-    return false
-  }
 }
 
 // --- Command wrappers ------------------------------------------------------

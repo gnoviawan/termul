@@ -57,10 +57,15 @@ pub struct TerminalStateSnapshot {
     pub exited: bool,
 }
 
+type DesktopEmit = Arc<dyn Fn(&str, serde_json::Value) -> Result<(), tauri::Error> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct TerminalEventHub {
     tx: Arc<broadcast::Sender<TerminalEvent>>,
-    tauri: Option<AppHandle>,
+    /// Desktop renderer bridge. Type-erased so this struct (and its drop glue)
+    /// never names `AppHandle<Wry>`: the standalone server must not link the
+    /// Wry runtime.
+    tauri: Option<DesktopEmit>,
     snapshots: Arc<RwLock<HashMap<String, TerminalStateSnapshot>>>,
 }
 
@@ -68,7 +73,9 @@ impl TerminalEventHub {
     pub fn tauri(app_handle: AppHandle) -> Self {
         Self {
             tx: Arc::new(broadcast::channel(EVENT_CAPACITY).0),
-            tauri: Some(app_handle),
+            tauri: Some(Arc::new(move |event, payload| {
+                app_handle.emit(event, payload)
+            })),
             snapshots: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -150,32 +157,32 @@ impl TerminalEventHub {
                 terminal_id,
                 exit_code,
                 signal,
-            } => app.emit(
+            } => app(
                 "terminal-exit",
                 serde_json::json!({ "id": terminal_id, "exitCode": exit_code, "signal": signal }),
             ),
-            TerminalEvent::CwdChanged { terminal_id, cwd } => app.emit(
+            TerminalEvent::CwdChanged { terminal_id, cwd } => app(
                 "terminal-cwd-changed",
                 serde_json::json!({ "terminalId": terminal_id, "cwd": cwd }),
             ),
             TerminalEvent::GitBranchChanged {
                 terminal_id,
                 branch,
-            } => app.emit(
+            } => app(
                 "terminal-git-branch-changed",
                 serde_json::json!({ "terminalId": terminal_id, "branch": branch }),
             ),
             TerminalEvent::GitStatusChanged {
                 terminal_id,
                 status,
-            } => app.emit(
+            } => app(
                 "terminal-git-status-changed",
                 serde_json::json!({ "terminalId": terminal_id, "status": status }),
             ),
             TerminalEvent::ExitCodeChanged {
                 terminal_id,
                 exit_code,
-            } => app.emit(
+            } => app(
                 "terminal-exit-code-changed",
                 serde_json::json!({ "terminalId": terminal_id, "exitCode": exit_code }),
             ),

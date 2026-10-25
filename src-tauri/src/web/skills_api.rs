@@ -4,7 +4,8 @@
 //! Mirrors the desktop `#[tauri::command] list_agent_skills_cmd` /
 //! `read_agent_skill_cmd` handlers over HTTP, reusing the SAME pure-Rust
 //! skill discovery logic in `crate::skills` (`list_agent_skills`,
-//! `read_agent_skill`). These functions read `~/.agents/skills/` (global) +
+//! `read_agent_skill`). These functions read Claude Code skills
+//! (`~/.claude/skills/` and enabled plugins), `~/.agents/skills/` (global), and
 //! `{project}/.agents/skills/` (project-local) — no `AppHandle` needed, so they
 //! work as-is on the standalone server.
 //!
@@ -25,12 +26,15 @@ use axum::{
 };
 use serde::Deserialize;
 
+use crate::skills::files::SkillFileEntry;
 use crate::skills::{AgentSkillContent, AgentSkillSummary};
 use crate::web::fs_api::IpcBody;
 use crate::web::ws::AppState;
 
 /// `GET /skills?projectRoot=` query. `projectRoot` is optional: when omitted,
-/// only global skills (`~/.agents/skills/`) are listed.
+/// project `.agents/skills/` and project Claude settings are not read. User
+/// skills (`~/.agents/skills/`, `~/.claude/skills/`, and user-enabled plugins)
+/// are still listed.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillsQuery {
@@ -143,6 +147,72 @@ pub async fn read(
                 format!("skills read task failed: {e}"),
                 "SKILL_READ_ERROR",
             )
+        }
+    };
+    (StatusCode::OK, Json(body))
+}
+
+/// `GET /skills-index?projectRoot=` — index every skill `SKILL.md` an agent
+/// can load (Termul's `.agents` roots plus the harness roots). Reuses
+/// `crate::skills::files::list_skill_files` (same function the
+/// `#[tauri::command] list_skill_files_cmd` calls). Not nested under
+/// `/skills/` so it cannot shadow a skill named by `/skills/{name}`; the
+/// `/skills` gate prefix still covers it. Degrades to an empty list.
+///
+/// Unlike `/skills`, the index walks the project root's ancestors up to a git
+/// root, so an unresolvable `projectRoot` cannot be let through: a missing
+/// path inside another repository would walk into that repository. Such a
+/// root is dropped (global roots only), and a resolved root is indexed by its
+/// canonical path, never the raw query string.
+pub async fn files(
+    State(state): State<AppState>,
+    Query(q): Query<SkillsQuery>,
+) -> impl IntoResponse {
+    let project_root = match q.project_root.as_deref().filter(|pr| !pr.is_empty()) {
+        None => None,
+        Some(pr) => match std::path::Path::new(pr).canonicalize() {
+            Err(e) => {
+                tracing::warn!(
+                    "/skills-index: projectRoot '{pr}' does not resolve ({e}); indexing global roots only"
+                );
+                None
+            }
+            Ok(canonical) => {
+                if let Some(err) = crate::web::git_api::ensure_within_project_boundary::<
+                    Vec<SkillFileEntry>,
+                >(&canonical, &state.registry)
+                {
+                    tracing::warn!(
+                        "[Security] /skills-index rejected: projectRoot '{}' outside every registered project",
+                        canonical.display()
+                    );
+                    return (StatusCode::OK, Json(err));
+                }
+                Some(
+                    crate::path_validation::strip_verbatim_prefix(&canonical.to_string_lossy())
+                        .into_owned(),
+                )
+            }
+        },
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        crate::skills::files::list_skill_files(project_root.as_deref())
+    })
+    .await
+    .map_err(|e| format!("skill index task failed: {e}"));
+
+    let body = match result {
+        Ok(Ok(entries)) => {
+            tracing::debug!("skill index listed {} skill file(s)", entries.len());
+            IpcBody::ok(entries)
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("skill index failed (degrading to empty list): {e}");
+            IpcBody::ok(Vec::<SkillFileEntry>::new())
+        }
+        Err(e) => {
+            tracing::error!("skill index task panicked: {e}");
+            IpcBody::ok(Vec::<SkillFileEntry>::new())
         }
     };
     (StatusCode::OK, Json(body))

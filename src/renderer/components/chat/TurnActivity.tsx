@@ -9,14 +9,14 @@ import { cn } from '@/lib/utils'
 import { ChatMessage } from './ChatMessage'
 import { CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
-import { activityNeedsAttention, type TimelineItem } from './chat-timeline'
+import type { TimelineItem } from './chat-timeline'
 import { formatTurnDuration } from './format-turn-duration'
 import { RowReveal } from './RowReveal'
 import { ThinkingStatus } from './ThinkingStatus'
 import { ThoughtGroup } from './ThoughtGroup'
-import { DiffStat, ToolCallGroup, type ToolTimelineItem } from './ToolCallGroup'
 import { summarizeToolActivity, type ToolActivitySummary } from './tool-call-summary'
 import type { EnterTracker } from './use-enter-tracker'
+import { DiffStat, WorkRunGroup, type WorkRunItem } from './WorkRunGroup'
 
 interface TurnActivityProps {
   items: TimelineItem[]
@@ -59,36 +59,43 @@ function TurnActivityComponent({
 
   const duration = formatTurnDuration(durationMs)
   const lastItem = items[items.length - 1]
-  // Each contiguous run of tool calls gets its own nested disclosure, so a
-  // reply between two batches keeps its seat: tools, text, tools. `summary`
-  // still covers every call in the turn for the trigger's aggregate diffstat.
-  const { summary, toolRuns } = useMemo(() => {
+  // Each contiguous run of thoughts and tool calls gets its own nested
+  // disclosure, so narration between two runs keeps its seat: work, text,
+  // work. `workRuns` maps every member's key to its run, so a lone thought
+  // (absent) still renders bare. `summary` still covers every call in the
+  // turn for the trigger's aggregate diffstat.
+  const { summary, workRuns } = useMemo(() => {
     const allCalls: ToolCall[] = []
     const runs = new Map<
       string,
       {
-        items: ToolTimelineItem[]
+        items: WorkRunItem[]
         summary: ToolActivitySummary
-        attentionRequired: boolean
+        failed: boolean
       }
     >()
-    let run: ToolTimelineItem[] | null = null
+    let run: WorkRunItem[] | null = null
     const flush = (): void => {
-      if (run?.length) {
-        const runSummary = summarizeToolActivity(run.map((item) => item.tool))
+      if (run) {
+        const calls = run.flatMap((item) => (item.kind === 'tool' ? [item.tool] : []))
+        const runSummary =
+          calls.length > 0
+            ? summarizeToolActivity(calls, { thoughts: run.length - calls.length })
+            : null
         if (runSummary) {
-          runs.set(run[0].key, {
+          const entry = {
             items: run,
             summary: runSummary,
-            attentionRequired: activityNeedsAttention(run)
-          })
+            failed: run.some((member) => member.kind === 'tool' && member.tool.status === 'failed')
+          }
+          for (const member of run) runs.set(member.key, entry)
         }
       }
       run = null
     }
     for (const item of items) {
-      if (item.kind === 'tool') {
-        allCalls.push(item.tool)
+      if (item.kind === 'tool' || item.kind === 'thought-group') {
+        if (item.kind === 'tool') allCalls.push(item.tool)
         if (!run) run = []
         run.push(item)
       } else {
@@ -96,7 +103,7 @@ function TurnActivityComponent({
       }
     }
     flush()
-    return { summary: summarizeToolActivity(allCalls), toolRuns: runs }
+    return { summary: summarizeToolActivity(allCalls), workRuns: runs }
   }, [items])
   const label =
     active && statusLine
@@ -133,22 +140,20 @@ function TurnActivityComponent({
         <CollapseExpandMotion open={open} motion="chat">
           <div className="min-w-0 pb-1 pl-4">
             {items.map((item, index) => {
-              if (item.kind === 'tool') {
-                // Only a run's first call renders — as the group's disclosure;
+              const run = workRuns.get(item.key)
+              if (run) {
+                // Only a run's first item renders — as the group's disclosure;
                 // the rest live inside it.
-                const run = toolRuns.get(item.key)
-                if (!run) return null
+                if (run.items[0] !== item) return null
                 return (
-                  <ToolCallGroup
+                  <WorkRunGroup
                     key={item.key}
                     items={run.items}
                     summary={run.summary}
                     active={active}
-                    // The run is the turn's live edge while its last call is
-                    // the timeline's last item; anything arriving after it
-                    // (thought, reply, another run) folds the group.
+                    // Lets a still-streaming thought inside the run keep streaming.
                     isLiveTail={active && run.items[run.items.length - 1] === lastItem}
-                    attentionRequired={run.attentionRequired}
+                    failed={run.failed}
                     enter={enter}
                     filePathContext={filePathContext}
                     onOpenSubagent={onOpenSubagent}
@@ -169,10 +174,16 @@ function TurnActivityComponent({
                   </RowReveal>
                 )
               }
-              // CAP-2 / worktree progress: switch markers and worktree rows
-              // never reach the turn bucket (groupTurnActivity emits them
-              // top-level), but guard the render so the type stays exhaustive.
-              if (item.kind === 'switch' || item.kind === 'worktree' || item.kind === 'reload')
+              // Every tool sits in a run above. CAP-2 / worktree progress: switch
+              // markers and worktree rows never reach the turn bucket
+              // (groupTurnActivity emits them top-level), but guard the render
+              // so the type stays exhaustive.
+              if (
+                item.kind === 'tool' ||
+                item.kind === 'switch' ||
+                item.kind === 'worktree' ||
+                item.kind === 'reload'
+              )
                 return null
               return (
                 <ChatMessage

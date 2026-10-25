@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Labelled form</title>
+</head>
+<body>
+<main>
+<h1>Labelled form</h1>
+<form method="post" action="/labelled-submit">
+<p><label for="first">First name</label> <input id="first" name="first" type="text"></p>
+<p><label>Last name <input name="last" type="text"></label></p>
+<p><span id="city-label">City</span> <input name="city" type="text" aria-labelledby="city-label"></p>
+<p><input name="email" type="text" placeholder="Email address"></p>
+<p><input name="note1" type="text"> <input name="note2" type="text"></p>
+<p><input type="submit" value="Send"></p>
+</form>
+</main>
+</body>
+</html>

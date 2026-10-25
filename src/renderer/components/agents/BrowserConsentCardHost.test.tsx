@@ -1,20 +1,21 @@
 /**
- * spec-acp-browser-automation-v2 CAP-5 coverage: the root-level
- * BrowserConsentCardHost is the reachability fallback for pending consents
- * that no visible chat-panel card hosts (non-workspace routes, SSH mode,
- * warm-pool sessions without a chat tab, chat tabs hidden behind another
- * tab) — and never renders while the in-pane strip is hosting.
+ * The root-level BrowserConsentCardHost is the reachability fallback for
+ * pending consent tickets that no visible chat-panel card hosts
+ * (non-workspace routes, SSH mode, warm-pool sessions without a chat tab,
+ * chat tabs hidden behind another tab, remote clients) and never renders
+ * while the in-pane strip is hosting.
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { BrowserConsentRequestEvent } from '@/lib/acp-api'
+import type { BrowserConsentTicket } from '@/lib/browser-consent-api'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 
 const { mockRespond, acpState, workspaceState, runtimeState } = vi.hoisted(() => ({
   mockRespond: vi.fn(),
   acpState: {
-    pendingBrowserConsents: {} as Record<string, BrowserConsentRequestEvent>,
+    pendingBrowserConsents: {} as Record<string, BrowserConsentTicket>,
+    sessions: {} as Record<string, { agentId: string }>,
     configToLiveAgent: {} as Record<string, string>,
     agentConfigs: [] as Array<{ id: string; name?: string }>
   },
@@ -48,6 +49,7 @@ vi.mock('@/lib/log-api', () => ({
 }))
 
 import { BrowserConsentStrip } from '@/components/browser/BrowserConsentStrip'
+import { CONSENT_ARM_DELAY_MS } from '@/components/browser/consent-intent'
 import {
   NativeWebviewOccluder,
   resetNativeWebviewOcclusionForTests,
@@ -59,14 +61,16 @@ import { BrowserConsentCardHost } from './BrowserConsentCardHost'
 
 const TAB_ID = 'browser-tab-1'
 
-function consentEvent(
-  overrides: Partial<BrowserConsentRequestEvent> = {}
-): BrowserConsentRequestEvent {
+function consentEvent(overrides: Partial<BrowserConsentTicket> = {}): BrowserConsentTicket {
   return {
     requestId: 'req-1',
     sessionId: 'sess-1',
-    agentId: 'agent-1',
+    origin: 'https://docs.example.com',
+    targetUrl: 'https://docs.example.com/',
+    targetUrlBytes: 25,
     action: 'navigate',
+    profile: 'global',
+    options: ['allow_session', 'allow_project', 'deny'],
     ...overrides
   }
 }
@@ -78,6 +82,7 @@ function browserTab(id = TAB_ID): WorkspaceTab {
 beforeEach(() => {
   mockRespond.mockReset()
   acpState.pendingBrowserConsents = {}
+  acpState.sessions = {}
   acpState.configToLiveAgent = {}
   acpState.agentConfigs = []
   workspaceState.activeTab = undefined
@@ -119,7 +124,7 @@ describe('BrowserConsentCardHost (root fallback)', () => {
     useConsentCardHost.setState({ hostedSessionIds: new Set(['sess-1']) })
     render(<BrowserConsentCardHost />)
     expect(screen.getAllByTestId('browser-consent-card')).toHaveLength(1)
-    expect(screen.getByText(/The agent wants to drive/)).toBeInTheDocument()
+    expect(screen.getByText(/The agent wants to open/)).toBeInTheDocument()
   })
 
   it('renders nothing while the strip hosts the focused browser tab', () => {
@@ -130,11 +135,11 @@ describe('BrowserConsentCardHost (root fallback)', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('renders nothing outside Tauri', () => {
+  it('renders on a remote client too, which has no browser pane', () => {
     runtimeState.tauri = false
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
-    const { container } = render(<BrowserConsentCardHost />)
-    expect(container).toBeEmptyDOMElement()
+    render(<BrowserConsentCardHost />)
+    expect(screen.getByTestId('browser-consent-card')).toBeInTheDocument()
   })
 
   it('renders nothing with no pending consent', () => {
@@ -142,11 +147,16 @@ describe('BrowserConsentCardHost (root fallback)', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('routes Allow through respondBrowserConsent', () => {
+  it('routes Allow through respondBrowserConsent once the answers arm', () => {
+    vi.useFakeTimers()
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
     render(<BrowserConsentCardHost />)
+    act(() => {
+      vi.advanceTimersByTime(CONSENT_ARM_DELAY_MS)
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Allow for this session' }))
-    expect(mockRespond).toHaveBeenCalledWith('req-1', true)
+    expect(mockRespond).toHaveBeenCalledWith('req-1', 'allow_session')
+    vi.useRealTimers()
   })
 
   it('keeps every browser webview out of the way while a fallback card is showing', () => {
@@ -174,6 +184,23 @@ describe('BrowserConsentCardHost (root fallback)', () => {
     rerender(<Page />)
 
     expect(screen.getByTestId('occlusion')).toHaveTextContent('clear')
+  })
+})
+
+describe('consent arming in the strip', () => {
+  it('arms the strip answers only after the delay, then routes the choice', () => {
+    vi.useFakeTimers()
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    workspaceState.activeTab = browserTab()
+    render(<BrowserConsentStrip browserTabId={TAB_ID} />)
+    const always = screen.getByRole('button', { name: 'Always allow for this project' })
+    expect(always).toBeDisabled()
+    act(() => {
+      vi.advanceTimersByTime(CONSENT_ARM_DELAY_MS)
+    })
+    fireEvent.click(always)
+    expect(mockRespond).toHaveBeenCalledWith('req-1', 'allow_project')
+    vi.useRealTimers()
   })
 })
 

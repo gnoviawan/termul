@@ -191,3 +191,29 @@ async fn slicing_preserves_crlf_and_trailing_newline() {
 
     let _ = std::fs::remove_dir_all(&workspace);
 }
+
+#[test]
+fn chunk_parent_tool_call_id_reads_the_claude_subagent_stamp() {
+    use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        "claudeCode".to_string(),
+        serde_json::json!({ "parentToolUseId": "toolu_agent" }),
+    );
+    let stamped = ContentChunk::new(ContentBlock::Text(TextContent::new("x"))).meta(meta);
+    assert_eq!(
+        super::chunk_parent_tool_call_id(&stamped).as_deref(),
+        Some("toolu_agent")
+    );
+
+    let plain = ContentChunk::new(ContentBlock::Text(TextContent::new("x")));
+    assert_eq!(super::chunk_parent_tool_call_id(&plain), None);
+
+    let mut oversized = serde_json::Map::new();
+    oversized.insert(
+        "claudeCode".to_string(),
+        serde_json::json!({ "parentToolUseId": "x".repeat(600) }),
+    );
+    let oversized = ContentChunk::new(ContentBlock::Text(TextContent::new("x"))).meta(oversized);
+    assert_eq!(super::chunk_parent_tool_call_id(&oversized), None);
+}

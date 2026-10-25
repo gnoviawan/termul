@@ -32,7 +32,8 @@ const INFO: CanvasOpenInfo = {
   pinTag: 'termul-v1',
   docKey: DOC,
   mountSeq: 4,
-  evicted: []
+  evicted: [],
+  fallbackFonts: []
 }
 
 function setPhase(phase: CanvasPhase, projection: Partial<CanvasSession> = {}): void {

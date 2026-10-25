@@ -365,6 +365,60 @@ describe('summarizeToolActivity', () => {
     // +3 −1 from the live diff (LCS of [a,b,c] vs [a,B,c,d,e]), +5 −1 restored.
     expect(summary).toEqual({ label: 'Edited 2 files, ran 1 command', added: 8, removed: 2 })
   })
+
+  it('leads with a single thought before the tool phrases', () => {
+    const summary = summarizeToolActivity([call({ kind: 'execute' }), call({ kind: 'execute' })], {
+      thoughts: 1
+    })
+    expect(summary).toEqual({ label: 'Thought, ran 2 commands', added: 0, removed: 0 })
+  })
+
+  it('counts repeated thoughts as "thought n times"', () => {
+    const summary = summarizeToolActivity(
+      [
+        call({ kind: 'execute' }),
+        call({
+          kind: 'edit',
+          content: [{ type: 'diff', path: 'a.ts', oldText: 'a', newText: 'b' }]
+        })
+      ],
+      { thoughts: 3 }
+    )
+    expect(summary).toEqual({
+      label: 'Thought 3 times, ran 1 command, edited 1 file',
+      added: 1,
+      removed: 1
+    })
+  })
+
+  it('summarizes thoughts without any tool calls', () => {
+    expect(summarizeToolActivity([], { thoughts: 1 })).toEqual({
+      label: 'Thought',
+      added: 0,
+      removed: 0
+    })
+    expect(summarizeToolActivity([], { thoughts: 2 })?.label).toBe('Thought 2 times')
+  })
+
+  it('returns null for zero thoughts and no calls', () => {
+    expect(summarizeToolActivity([], { thoughts: 0 })).toBeNull()
+  })
+
+  it('counts the thought phrase toward the four-phrase cap', () => {
+    const summary = summarizeToolActivity(
+      [
+        call({ kind: 'execute' }),
+        call({ kind: 'read' }),
+        call({ kind: 'search' }),
+        call({ kind: 'fetch' }),
+        call({ kind: 'fetch' })
+      ],
+      { thoughts: 2 }
+    )
+    expect(summary?.label).toBe(
+      'Thought 2 times, ran 1 command, read 1 file, ran 1 search, and 2 more'
+    )
+  })
 })
 
 describe('toolCallPath', () => {
@@ -418,5 +472,19 @@ describe('isSubagentRunning', () => {
   it('is not running once completed or failed, even in an active turn', () => {
     expect(isSubagentRunning(call({ status: 'completed' }), true)).toBe(false)
     expect(isSubagentRunning(call({ status: 'failed' }), true)).toBe(false)
+  })
+
+  it('stays running after the turn when the host still reports running', () => {
+    const live = call({ status: 'in_progress', subagentLifecycle: { state: 'running' } })
+    expect(isSubagentRunning(live, false)).toBe(true)
+    expect(
+      isSubagentRunning(
+        call({ status: 'in_progress', subagentLifecycle: { state: 'completed' } }),
+        true
+      )
+    ).toBe(false)
+    expect(
+      isSubagentRunning(call({ status: 'failed', subagentLifecycle: { state: 'running' } }), false)
+    ).toBe(false)
   })
 })

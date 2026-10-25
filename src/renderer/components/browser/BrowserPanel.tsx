@@ -1,7 +1,5 @@
-import { useEffect } from 'react'
 import { Spinner } from '@/components/ui/spinner'
 import { useBrowserWebview } from '@/hooks/use-browser-webview'
-import { onBrowserTabTitleChanged } from '@/lib/browser-api'
 import { cn } from '@/lib/utils'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { BrowserConsentStrip } from './BrowserConsentStrip'
@@ -24,16 +22,6 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
   // Visibility is owned solely by useBrowserWebview — it serializes
   // show/hide after create and inspects IpcResult.success.
   const { containerRef } = useBrowserWebview(browserTabId, isVisible, url)
-
-  // Listen for title changes and update store
-  useEffect(() => {
-    const subscription = onBrowserTabTitleChanged((payload) => {
-      if (payload.browserTabId === browserTabId) {
-        useBrowserSessionStore.getState().updateTitle(browserTabId, payload.title)
-      }
-    })
-    return () => subscription.unlisten()
-  }, [browserTabId])
 
   return (
     <div

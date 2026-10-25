@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Input frame</title>
+<style>
+  body { margin: 0; }
+  #inner { position: absolute; left: 0; top: 0; width: 160px; height: 40px; margin: 0; }
+</style>
+</head>
+<body>
+<button id="inner" type="button">Inner</button>
+<script>
+document.getElementById('inner').addEventListener('click', function (e) {
+  var o = { src: 'agent', ev: 'click', id: 'inner', trusted: e.isTrusted };
+  try { fetch('/report', { method: 'POST', body: JSON.stringify(o), keepalive: true }); } catch (err) {}
+});
+</script>
+</body>
+</html>

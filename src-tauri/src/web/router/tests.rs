@@ -1,4 +1,8 @@
+use super::gate::{requires_token, PUBLIC_PATHS};
 use super::*;
+use axum::extract::ConnectInfo;
+use axum::http::StatusCode;
+use std::net::SocketAddr;
 use crate::web::origin::OriginPolicy;
 use axum::body::Body;
 use axum::http::Request;
@@ -707,6 +711,7 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
         "/search/content",
         "/skills",
         "/skills/x",
+        "/skills-index",
         "/log/frontend-error",
         "/log/diagnostics",
         "/log/report-bug",
@@ -748,7 +753,7 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
 /// the allowlist fails this test instead of shipping ungated.
 #[test]
 fn every_registered_route_is_public_or_gated() {
-    let src = include_str!("../router.rs");
+    let src = include_str!("mod.rs");
     let mut checked = 0usize;
     let mut rest = src;
     while let Some(pos) = rest.find(".route(\"") {

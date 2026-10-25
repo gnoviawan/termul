@@ -77,6 +77,8 @@ export interface SelectorPanelProps {
   fastOn: boolean
   onToggleFast: (() => void) | null
   genericOptions: SessionConfigOption[]
+  /** The effective agent's config id; keys persisted option-value rejections. */
+  agentConfigId: string | null
   onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
   /** Session context usage for the summary row (chat only; launcher omits it). */
   usage?: SessionUsage | null
@@ -507,6 +509,7 @@ export function SelectorPanel(props: SelectorPanelProps): React.JSX.Element {
       onSetConfig={props.onSetConfig}
       disabled={disabled}
       touch={touch}
+      agentConfigId={effectiveId}
     />
   )
   // The footer controls the composer's agent only. Another agent's tab shows

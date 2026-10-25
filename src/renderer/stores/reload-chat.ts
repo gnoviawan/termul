@@ -6,16 +6,58 @@
  * The control stays disabled while a reply, queue, or question is open.
  */
 
+import { selectCurrentTurnSubagents, type TurnBoundary } from '@/components/chat/subagent-strip'
+import { isSubagentRunning } from '@/components/chat/tool-call-summary'
 import { acpApi, type McpServer, type SessionId } from '@/lib/acp-api'
 import { selectMcpServersForAgent } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
 import { logFrontendError } from '@/lib/log-api'
-import { type AcpState, switchBlockedReason, useAcpStore } from '@/stores/acp-store'
+import {
+  type AcpState,
+  type ChatMessage,
+  switchBlockedReason,
+  useAcpStore
+} from '@/stores/acp-store'
 import { ephemeralSessionIds } from '@/stores/acp-store/ephemeral-ids'
 import { liveSiblingCount, reloadInFlight } from '@/stores/acp-store/reload-guard'
+import { cancelRunningSubagents } from '@/stores/acp-store/subagent-lifecycle'
 import { sessionAgentConfigId } from '@/stores/claude-account-switch'
 
 const CANNOT_REOPEN = 'This agent cannot reload a chat. Open a new chat to use the new settings.'
+const BACKGROUND_AGENTS_RUNNING =
+  'Background agents are still running. Wait until they finish, or stop the reply.'
+
+function lastUserBoundary(messages: readonly ChatMessage[] | undefined): TurnBoundary | null {
+  if (!messages) return null
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message?.role === 'user') return { seq: message.seq, timestamp: message.timestamp }
+  }
+  return null
+}
+
+/**
+ * Agents that a reload would stop. A host `running` state counts in every
+ * turn: a native subagent keeps running after the user sends another message.
+ * A background launch with no host state is only inferred for the current
+ * turn, and only while that turn is active.
+ */
+export function runningBackgroundAgentCount(state: AcpState, sessionId: SessionId): number {
+  const toolCalls = state.toolCalls?.[sessionId]
+  if (!toolCalls || toolCalls.length === 0) return 0
+  const turnActive = Boolean(state.sessions?.[sessionId]?.activeTurn)
+  const boundary = lastUserBoundary(state.messages?.[sessionId])
+  const knownRunning = selectCurrentTurnSubagents(toolCalls, null).filter(
+    (tc) => tc.subagentLifecycle?.state === 'running'
+  ).length
+  const inferredRunning = selectCurrentTurnSubagents(toolCalls, boundary).filter(
+    (tc) =>
+      tc.subagentLifecycle?.state !== 'running' &&
+      tc.subagentLifecycle?.background === true &&
+      isSubagentRunning(tc, turnActive)
+  ).length
+  return knownRunning + inferredRunning
+}
 
 export function agentCanReopenChat(
   capabilities: AcpState['agents'][string]['capabilities'] | null | undefined
@@ -44,7 +86,11 @@ export function reloadChatBlockedReason(state: AcpState, sessionId: SessionId): 
     },
     sessionId
   )
-  if (blocked) return 'Wait until this reply finishes.'
+  if (blocked) {
+    return runningBackgroundAgentCount(state, sessionId) > 0
+      ? BACKGROUND_AGENTS_RUNNING
+      : 'Wait until this reply finishes.'
+  }
   if (state.reloadingChatIds?.[sessionId]) return 'This chat is reloading.'
   const capabilities = session.agentId ? state.agents?.[session.agentId]?.capabilities : null
   if (capabilities && !agentCanReopenChat(capabilities)) return CANNOT_REOPEN
@@ -116,6 +162,15 @@ export async function reloadAgentChat(sessionId: SessionId): Promise<void> {
       })
     }
 
+    // The old process is gone. Settle before the reopen reads the transcript
+    // back, so the new chat does not show those subagents as still running.
+    const endedAt = Date.now()
+    useAcpStore.setState((s) => {
+      const toolCalls = cancelRunningSubagents(s.toolCalls, [sessionId], endedAt)
+      return toolCalls === s.toolCalls ? {} : { toolCalls }
+    })
+    useAcpStore.getState().flushLiveSessionSaves()
+
     try {
       await useAcpStore.getState().openHistorySession(sessionId, {
         mcpServers,
@@ -134,10 +189,19 @@ export async function reloadAgentChat(sessionId: SessionId): Promise<void> {
 
     const reopened = useAcpStore.getState().sessions[sessionId]
     if (reopened?.status !== 'active') return
-    const messages = useAcpStore.getState().messages[sessionId] ?? []
+    const after = useAcpStore.getState()
+    const messages = after.messages[sessionId] ?? []
     const afterMessageId = messages.length > 0 ? (messages[messages.length - 1]?.id ?? null) : null
+    const seqs = [...messages, ...(after.toolCalls[sessionId] ?? [])]
+      .map((item) => item.seq)
+      .filter((seq): seq is number => typeof seq === 'number')
+    const afterSeq = seqs.length > 0 ? Math.max(...seqs) : null
+    const reloadedAt = Date.now()
     useAcpStore.setState((s) => ({
-      agentReloadMarks: { ...s.agentReloadMarks, [sessionId]: { afterMessageId } }
+      agentReloadMarks: {
+        ...s.agentReloadMarks,
+        [sessionId]: { afterMessageId, afterSeq, reloadedAt }
+      }
     }))
     void logFrontendError({
       level: 'info',

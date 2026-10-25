@@ -256,22 +256,27 @@ fn a_relative_path_inside_the_project_resolves_under_its_root() {
 }
 
 #[test]
-fn absolute_traversal_and_empty_paths_are_refused() {
+fn absolute_traversal_and_empty_paths_are_refused_naming_their_cause() {
     let project = Project::new();
     let absolute = project.root().join("assets").join("a.png");
-    for requested in [
-        "../outside.png",
-        "assets/../../outside.png",
-        "",
-        ".",
-        absolute.to_str().unwrap(),
-        "/etc/passwd",
+    for (requested, cause) in [
+        ("../outside.png", "`..`"),
+        ("assets/../../outside.png", "`..`"),
+        ("", "names no file"),
+        (".", "names no file"),
+        (absolute.to_str().unwrap(), "absolute"),
+        ("/etc/passwd", "absolute"),
     ] {
         let error = resolve_project_file(&project.root(), requested).unwrap_err();
         assert_eq!(
             error.code,
             CanvasErrorCode::UnsupportedInKiosk,
             "{requested:?}"
+        );
+        assert!(
+            error.message.contains(cause),
+            "{requested:?}: {}",
+            error.message
         );
     }
 }
@@ -302,6 +307,11 @@ fn alternate_stream_and_device_names_are_refused_on_every_platform() {
             CanvasErrorCode::UnsupportedInKiosk,
             "{requested:?}"
         );
+        assert!(
+            error.message.contains("stream or device"),
+            "{requested:?}: {}",
+            error.message
+        );
     }
 }
 
@@ -328,9 +338,61 @@ fn names_that_only_resemble_device_names_resolve() {
 fn drive_relative_and_rooted_windows_paths_are_refused() {
     let project = Project::new();
     for requested in ["C:a.png", r"\a.png", r"\\server\share\a.png"] {
+        let error = resolve_project_file(&project.root(), requested).unwrap_err();
         assert!(
-            resolve_project_file(&project.root(), requested).is_err(),
+            error.message.contains("absolute"),
+            "{requested}: {}",
+            error.message
+        );
+    }
+}
+
+/// A real NTFS junction on Windows, which is how a worktree links a shared
+/// folder; a symlink elsewhere.
+fn junction(target: &std::path::Path, link: &std::path::Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J failed");
+    }
+}
+
+#[test]
+fn a_link_out_of_the_project_is_refused_naming_the_link_and_its_target() {
+    let project = Project::new();
+    let outside = project.0.join("main-checkout").join("out");
+    std::fs::create_dir_all(&outside).unwrap();
+    junction(&outside, &project.root().join("out"));
+    junction(&outside, &project.root().join("assets").join("shared"));
+    let target = std::fs::canonicalize(&outside).unwrap();
+    let target =
+        crate::path_validation::strip_verbatim_prefix(&target.to_string_lossy()).into_owned();
+    for (requested, link) in [
+        ("out/landing/x.png", "`out`"),
+        ("out/x.png", "`out`"),
+        ("out", "`out`"),
+        ("assets/shared/x.png", "`assets/shared`"),
+    ] {
+        let error = resolve_project_file(&project.root(), requested).unwrap_err();
+        assert_eq!(
+            error.code,
+            CanvasErrorCode::UnsupportedInKiosk,
             "{requested}"
+        );
+        assert!(
+            error.message.contains(&format!(
+                "{link} is a link to `{target}`, which is outside the project"
+            )),
+            "{requested}: {}",
+            error.message
         );
     }
 }

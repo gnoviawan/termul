@@ -6,8 +6,10 @@ import { AcpTransportError } from '@/lib/acp-transport/types'
 import { useAcpStore } from '@/stores/acp-store'
 import { FRESH } from '@/stores/acp-store/testkit'
 import { ClaudeAccountChip } from './ClaudeAccountChip'
-import { ClaudeLimitNotice, useClaudeResumeStore } from './ClaudeLimitNotice'
+import { ClaudeLimitNotice } from './ClaudeLimitNotice'
+import { ClaudeLimitWarning } from './ClaudeLimitWarning'
 import { ClaudeSignInAction } from './ClaudeSignInAction'
+import { useClaudeResumeStore } from './use-claude-limit'
 
 const { api, switcher, openApp } = vi.hoisted(() => ({
   openApp: vi.fn(),
@@ -108,16 +110,16 @@ describe('ClaudeLimitNotice', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('warns calmly near the limit and offers the account with the most room', async () => {
+  it('leaves the near-limit warning to the composer', async () => {
     seed(limit('allowed_warning', 84))
-    render(<ClaudeLimitNotice sessionId="s1" />)
-    expect(await screen.findByText(/Personal has used 84% of its 5-hour limit/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Switch to Work' }))
-    await waitFor(() =>
-      expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12', {
-        continueSessionId: undefined
-      })
+    render(
+      <>
+        <ClaudeLimitNotice sessionId="s1" />
+        <ClaudeLimitWarning sessionId="s1" atTop />
+      </>
     )
+    expect(await screen.findByRole('status')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('at the limit switches to the best account and continues this chat', async () => {
@@ -155,6 +157,46 @@ describe('ClaudeLimitNotice', () => {
     seed({ ...limit('rejected', 100), overageInUse: true })
     const { container } = render(<ClaudeLimitNotice sessionId="s1" />)
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('ClaudeLimitWarning', () => {
+  it('warns calmly near the limit and offers the account with the most room', async () => {
+    seed(limit('allowed_warning', 84))
+    render(<ClaudeLimitWarning sessionId="s1" atTop />)
+    expect(await screen.findByText(/Personal has used 84% of its 5-hour limit/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Work' }))
+    await waitFor(() =>
+      expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12', {
+        continueSessionId: undefined
+      })
+    )
+  })
+
+  it('warns from 80% of an allowed window', async () => {
+    seed(limit('allowed', 80))
+    render(<ClaudeLimitWarning sessionId="s1" atTop />)
+    expect(await screen.findByText(/Personal has used 80%/)).toBeInTheDocument()
+  })
+
+  it('hides after Dismiss', async () => {
+    seed(limit('allowed_warning', 91, 1_900_000_000))
+    render(<ClaudeLimitWarning sessionId="s1" atTop />)
+    await screen.findByText(/Personal has used 91%/)
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('leaves the at-limit state to the card', async () => {
+    seed(limit('rejected', 100))
+    render(
+      <>
+        <ClaudeLimitNotice sessionId="s1" />
+        <ClaudeLimitWarning sessionId="s1" atTop />
+      </>
+    )
+    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 })
 

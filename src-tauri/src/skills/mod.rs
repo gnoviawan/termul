@@ -1,5 +1,8 @@
 //! Agent Skills discovery — Zed-compatible `SKILL.md` packages under
-//! `~/.agents/skills/` (global) and `{project}/.agents/skills/` (project-local).
+//! `~/.agents/skills/` (global) and `{project}/.agents/skills/` (project-local),
+//! plus Claude Code skills under `~/.claude/skills/` and enabled plugins
+//! recorded in `~/.claude/plugins/installed_plugins.json` (project- and
+//! local-scoped plugin installs apply only inside their own project).
 //!
 //! Surfaced to the renderer slash-command menu and the Settings list via
 //! `commands.rs`. An installed skill stays in the menu. A harness command that
@@ -7,6 +10,7 @@
 //! hidden. Comparison is case-insensitive (see `slash-menu-model`).
 
 pub mod commands;
+pub mod files;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -37,11 +41,11 @@ pub struct AgentSkillContent {
     pub path: String,
 }
 
-fn home_skills_root() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME")
+fn user_home() -> Result<PathBuf, String> {
+    std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| "could not resolve user home directory".to_string())?;
-    Ok(PathBuf::from(home).join(".agents").join("skills"))
+        .map(PathBuf::from)
+        .map_err(|_| "could not resolve user home directory".to_string())
 }
 
 /// Zed-compatible skill names: lowercase letters, digits, hyphens; no traversal.
@@ -196,114 +200,494 @@ fn scan_skills_dir(
 /// List installed skills. Project-local entries override global names.
 ///
 /// `home_root` is the global skills root (`~/.agents/skills`) to scan, injected
-/// so tests can supply a temp home without mutating the process-wide `HOME`
-/// (which would race with other tests reading `home_skills_root()`).
+/// so tests can supply a temp directory without mutating the process-wide `HOME`.
+/// This seam does not read Claude Code directories. Production listing goes
+/// through `list_agent_skills`, which passes the real `~/.claude` root.
+#[cfg(test)]
 pub fn list_agent_skills_with_home(
     home_root: &Path,
     project_root: Option<&str>,
 ) -> Result<Vec<AgentSkillSummary>, String> {
-    log::debug!("listing agent skills, project_root={project_root:?}");
-    let mut by_name: HashMap<String, AgentSkillSummary> = HashMap::new();
+    list_agent_skills_with_roots(home_root, None, project_root)
+}
 
-    scan_skills_dir(home_root, "global", &mut by_name)?;
-
-    if let Some(root) = project_root.filter(|s| !s.is_empty()) {
-        // Reject a relative project root early: a relative path would scan the
-        // process CWD (undefined for a Tauri command) rather than the intended
-        // project. The renderer always passes an absolute `session.cwd`.
-        let root_path = PathBuf::from(root);
-        if !root_path.is_absolute() {
-            return Err(format!("project root must be absolute, got: {root}"));
-        }
-        let project_skills = root_path.join(".agents").join("skills");
-        scan_skills_dir(&project_skills, "project", &mut by_name)?;
-    }
-
-    let mut skills: Vec<AgentSkillSummary> = by_name.into_values().collect();
+/// Same listing as `list_agent_skills_with_home`, plus an optional Claude Code
+/// home (`~/.claude`: `skills/`, `settings.json`, `plugins/installed_plugins.json`).
+/// `None` keeps the call hermetic.
+pub(crate) fn list_agent_skills_with_roots(
+    agents_skills: &Path,
+    claude_home: Option<&Path>,
+    project_root: Option<&str>,
+) -> Result<Vec<AgentSkillSummary>, String> {
+    let mut skills: Vec<AgentSkillSummary> =
+        discover_skills(agents_skills, claude_home, project_root)?
+            .into_values()
+            .collect();
     skills.sort_by(|a, b| a.name.cmp(&b.name));
     log::debug!("listed {} agent skill(s)", skills.len());
     Ok(skills)
 }
 
-/// List installed skills using the real user home (`~/.agents/skills`).
+/// List installed skills using the real user home.
+///
+/// Scans `~/.claude` plugin and user skills, then `~/.agents/skills/`, then the
+/// project `.agents/skills/` directory. A missing Claude directory is an empty
+/// source, not an error.
 pub fn list_agent_skills(project_root: Option<&str>) -> Result<Vec<AgentSkillSummary>, String> {
-    list_agent_skills_with_home(&home_skills_root()?, project_root)
+    let home = user_home()?;
+    list_agent_skills_with_roots(
+        &home.join(".agents").join("skills"),
+        Some(&home.join(".claude")),
+        project_root,
+    )
 }
 
-fn resolve_skill_path_with_home(
-    name: &str,
+/// Reject a relative project root before any scan. A relative path would scan
+/// the process CWD (undefined for a Tauri command). The renderer always passes
+/// an absolute `session.cwd`.
+fn absolute_project_root(project_root: Option<&str>) -> Result<Option<PathBuf>, String> {
+    let Some(root) = project_root.filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let root_path = PathBuf::from(root);
+    if !root_path.is_absolute() {
+        return Err(format!("project root must be absolute, got: {root}"));
+    }
+    Ok(Some(root_path))
+}
+
+fn read_text_optional(path: &Path) -> Option<String> {
+    match fs::read_to_string(path) {
+        Ok(raw) => Some(raw),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            log::warn!("failed to read {}: {error}", path.display());
+            None
+        }
+    }
+}
+
+/// `enabledPlugins` from one Claude settings file. Missing, unreadable, or
+/// malformed JSON contributes no flags. Unknown keys are ignored. Only boolean
+/// values count.
+fn enabled_flags(path: &Path) -> HashMap<String, bool> {
+    let Some(raw) = read_text_optional(path) else {
+        return HashMap::new();
+    };
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(error) => {
+            log::warn!(
+                "failed to parse Claude settings {}: {error}",
+                path.display()
+            );
+            return HashMap::new();
+        }
+    };
+    let Some(flags) = value
+        .get("enabledPlugins")
+        .and_then(|item| item.as_object())
+    else {
+        return HashMap::new();
+    };
+    flags
+        .iter()
+        .filter_map(|(id, flag)| flag.as_bool().map(|enabled| (id.clone(), enabled)))
+        .collect()
+}
+
+fn merged_enabled_flags(claude_home: &Path, project_root: Option<&Path>) -> HashMap<String, bool> {
+    let mut flags = enabled_flags(&claude_home.join("settings.json"));
+    if let Some(project_root) = project_root {
+        let claude = project_root.join(".claude");
+        flags.extend(enabled_flags(&claude.join("settings.json")));
+        flags.extend(enabled_flags(&claude.join("settings.local.json")));
+    }
+    flags
+}
+
+fn parse_rfc3339(stamp: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    chrono::DateTime::parse_from_rfc3339(stamp).ok()
+}
+
+/// Project- and local-scoped installs are recorded per project: they are only
+/// eligible when their `projectPath` matches the active project root. User
+/// scope (and unknown scope values) applies to every project. This mirrors
+/// Claude Code's own record-eligibility behavior — a foreign project's record
+/// never loads in another project.
+fn record_applies_to_project(
+    record: &serde_json::Map<String, serde_json::Value>,
+    project_root: Option<&Path>,
+) -> bool {
+    let scope = record
+        .get("scope")
+        .and_then(|item| item.as_str())
+        .unwrap_or("user");
+    if scope != "project" && scope != "local" {
+        return true;
+    }
+    let Some(active_root) = project_root else {
+        return false;
+    };
+    let Some(record_root) = record
+        .get("projectPath")
+        .and_then(|item| item.as_str())
+        .map(PathBuf::from)
+    else {
+        return false;
+    };
+    if !record_root.is_absolute() {
+        return false;
+    }
+    same_project_root(&record_root, active_root)
+}
+
+/// Same-project check that tolerates symlinks and trailing separators: the
+/// canonical forms are compared when both paths exist, otherwise the paths as
+/// written.
+fn same_project_root(record_root: &Path, active_root: &Path) -> bool {
+    match (fs::canonicalize(record_root), fs::canonicalize(active_root)) {
+        (Ok(record_canonical), Ok(active_canonical)) => record_canonical == active_canonical,
+        _ => record_root == active_root,
+    }
+}
+
+/// One install path per plugin id. Records whose `lastUpdated` is missing or
+/// not RFC3339, or whose `installPath` is relative or not a directory, are
+/// skipped. Project- and local-scoped records apply only when their
+/// `projectPath` matches the active project root; user-scoped records apply
+/// everywhere. The newest stamp wins. Equal stamps keep the later array
+/// element.
+fn chosen_plugin_installs(
+    claude_home: &Path,
+    project_root: Option<&Path>,
+) -> Vec<(String, PathBuf)> {
+    let index_path = claude_home.join("plugins").join("installed_plugins.json");
+    let Some(raw) = read_text_optional(&index_path) else {
+        return Vec::new();
+    };
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(error) => {
+            log::warn!(
+                "failed to parse Claude plugin index {}: {error}",
+                index_path.display()
+            );
+            return Vec::new();
+        }
+    };
+    let Some(plugins) = value.get("plugins").and_then(|item| item.as_object()) else {
+        log::warn!(
+            "Claude plugin index {} has no plugins object",
+            index_path.display()
+        );
+        return Vec::new();
+    };
+
+    let mut ids: Vec<&String> = plugins.keys().collect();
+    ids.sort();
+    let mut chosen = Vec::new();
+    for id in ids {
+        let Some(records) = plugins.get(id).and_then(|item| item.as_array()) else {
+            log::warn!("Claude plugin '{id}' is not an install array; skipping");
+            continue;
+        };
+        let mut best: Option<(chrono::DateTime<chrono::FixedOffset>, PathBuf)> = None;
+        for record in records {
+            let Some(record) = record.as_object() else {
+                continue;
+            };
+            if !record_applies_to_project(record, project_root) {
+                log::debug!("skipping plugin install record not applicable to the active project");
+                continue;
+            }
+            let Some(install_path) = record.get("installPath").and_then(|item| item.as_str())
+            else {
+                continue;
+            };
+            let install_path = PathBuf::from(install_path);
+            if !install_path.is_absolute() || !install_path.is_dir() {
+                continue;
+            }
+            let Some(updated) = record
+                .get("lastUpdated")
+                .and_then(|item| item.as_str())
+                .and_then(parse_rfc3339)
+            else {
+                continue;
+            };
+            let replace = best
+                .as_ref()
+                .is_none_or(|(previous, _)| updated >= *previous);
+            if replace {
+                best = Some((updated, install_path));
+            }
+        }
+        if let Some((_, install_path)) = best {
+            chosen.push((id.clone(), install_path));
+        }
+    }
+    chosen
+}
+
+/// Only `.claude-plugin/plugin.json` is read. A missing, unreadable, or
+/// malformed manifest is `None`; callers apply Claude Code's own defaults.
+fn read_plugin_manifest(install_path: &Path) -> Option<serde_json::Value> {
+    let manifest = install_path.join(".claude-plugin").join("plugin.json");
+    let raw = read_text_optional(&manifest)?;
+    match serde_json::from_str(&raw) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            log::warn!(
+                "failed to parse plugin manifest {}: {error}",
+                manifest.display()
+            );
+            None
+        }
+    }
+}
+
+/// Missing manifest, missing field, or malformed JSON means enabled. Claude
+/// Code's own default is `true`.
+fn plugin_default_enabled(install_path: &Path) -> bool {
+    let Some(manifest) = read_plugin_manifest(install_path) else {
+        return true;
+    };
+    manifest
+        .get("defaultEnabled")
+        .and_then(|item| item.as_bool())
+        .unwrap_or(true)
+}
+
+/// Skill directories the manifest's `skills` key declares in addition to the
+/// default `skills/` directory: a single path or an array of paths, relative
+/// to the install root. Absolute, rooted, drive-prefixed, and traversal paths
+/// are skipped — a plugin must not reach outside itself.
+fn manifest_skill_dirs(install_path: &Path) -> Vec<PathBuf> {
+    let Some(manifest) = read_plugin_manifest(install_path) else {
+        return Vec::new();
+    };
+    let declared: Vec<&str> = match manifest.get("skills") {
+        None => return Vec::new(),
+        Some(serde_json::Value::String(path)) => vec![path.as_str()],
+        Some(serde_json::Value::Array(paths)) => {
+            paths.iter().filter_map(|path| path.as_str()).collect()
+        }
+        Some(_) => {
+            log::warn!(
+                "plugin manifest in {} has an unsupported 'skills' field; ignoring it",
+                install_path.display()
+            );
+            return Vec::new();
+        }
+    };
+    let mut dirs = Vec::new();
+    for path in declared {
+        let candidate = Path::new(path.trim());
+        if candidate.as_os_str().is_empty() {
+            continue;
+        }
+        if candidate.components().any(|component| {
+            !matches!(
+                component,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        }) {
+            log::warn!(
+                "plugin manifest in {} declares a skills path '{path}' outside the install root; skipping",
+                install_path.display()
+            );
+            continue;
+        }
+        // Drop interior `.` segments (`./skills`) so surfaced skill paths stay
+        // clean; `..`, rooted, drive-prefixed, and absolute forms were already
+        // rejected above.
+        dirs.push(
+            install_path
+                .join(candidate)
+                .components()
+                .collect::<PathBuf>(),
+        );
+    }
+    dirs
+}
+
+fn plugin_id_skill_name(plugin_id: &str) -> &str {
+    plugin_id
+        .split_once('@')
+        .map(|(name, _)| name)
+        .unwrap_or(plugin_id)
+}
+
+/// Parse one `SKILL.md` package. The name comes from frontmatter, falling back
+/// to `fallback_name` (the plugin id segment, or the package folder name).
+fn skill_md_summary(skill_md: &Path, fallback_name: &str) -> Option<AgentSkillSummary> {
+    if !skill_md.is_file() {
+        return None;
+    }
+    let raw = fs::read_to_string(skill_md).ok()?;
+    let (frontmatter, _) = parse_skill_md(&raw).ok()?;
+    let name = frontmatter
+        .get("name")
+        .cloned()
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| fallback_name.to_string());
+    validate_skill_name(&name).ok()?;
+    Some(AgentSkillSummary {
+        name,
+        description: frontmatter.get("description").cloned().unwrap_or_default(),
+        scope: "global".to_string(),
+        path: skill_md.to_string_lossy().to_string(),
+    })
+}
+
+/// A plugin with no valid skill under its skill directories can still ship a
+/// single root `SKILL.md`, named by the plugin id when frontmatter lacks one.
+fn root_plugin_skill(install_path: &Path, plugin_id: &str) -> Option<AgentSkillSummary> {
+    skill_md_summary(
+        &install_path.join("SKILL.md"),
+        plugin_id_skill_name(plugin_id),
+    )
+}
+
+fn scan_plugin_skills(
+    install_path: &Path,
+    plugin_id: &str,
+    out: &mut HashMap<String, AgentSkillSummary>,
+) {
+    let mut found = HashMap::new();
+    // One directory level, same as every other skills root. Nested SKILL.md
+    // files under a skill package are supporting docs, not more skills.
+    scan_plugin_skill_dir(&install_path.join("skills"), &mut found);
+    // The manifest's `skills` key adds directories to the default location.
+    // A declared path that directly contains `SKILL.md` is a single skill
+    // package; anything else is scanned as a package container.
+    for dir in manifest_skill_dirs(install_path) {
+        let fallback_name = dir
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if let Some(skill) = skill_md_summary(&dir.join("SKILL.md"), &fallback_name) {
+            found.insert(skill.name.clone(), skill);
+        } else {
+            scan_plugin_skill_dir(&dir, &mut found);
+        }
+    }
+    if found.is_empty() {
+        if let Some(skill) = root_plugin_skill(install_path, plugin_id) {
+            found.insert(skill.name.clone(), skill);
+        }
+    }
+    out.extend(found);
+}
+
+fn scan_plugin_skill_dir(dir: &Path, found: &mut HashMap<String, AgentSkillSummary>) {
+    if let Err(error) = scan_skills_dir(dir, "global", found) {
+        log::warn!("failed to scan plugin skills in {}: {error}", dir.display());
+    }
+}
+
+/// Later inserts win: enabled plugins (ids ascending), `~/.claude/skills`,
+/// `~/.agents/skills`, then project `.agents/skills`.
+fn discover_skills(
+    agents_skills: &Path,
+    claude_home: Option<&Path>,
     project_root: Option<&str>,
-    home_root: &Path,
-) -> Result<(PathBuf, String), String> {
-    validate_skill_name(name)?;
+) -> Result<HashMap<String, AgentSkillSummary>, String> {
+    log::debug!("listing agent skills, project_root={project_root:?}");
+    let project_root = absolute_project_root(project_root)?;
+    let mut by_name = HashMap::new();
 
-    if let Some(root) = project_root.filter(|s| !s.is_empty()) {
-        // Reject a relative project root before constructing skill paths (mirrors
-        // the check in `list_agent_skills_with_home`).
-        let root_path = PathBuf::from(root);
-        if !root_path.is_absolute() {
-            return Err(format!("project root must be absolute, got: {root}"));
+    if let Some(claude_home) = claude_home {
+        let flags = merged_enabled_flags(claude_home, project_root.as_deref());
+        for (plugin_id, install_path) in
+            chosen_plugin_installs(claude_home, project_root.as_deref())
+        {
+            let enabled = flags
+                .get(&plugin_id)
+                .copied()
+                .unwrap_or_else(|| plugin_default_enabled(&install_path));
+            if !enabled {
+                continue;
+            }
+            scan_plugin_skills(&install_path, &plugin_id, &mut by_name);
         }
-        let project_skill = root_path
-            .join(".agents")
-            .join("skills")
-            .join(name)
-            .join("SKILL.md");
-        if project_skill.is_file() {
-            return Ok((project_skill, "project".to_string()));
-        }
+        scan_skills_dir(&claude_home.join("skills"), "global", &mut by_name)?;
     }
 
-    let global_skill = home_root.join(name).join("SKILL.md");
-    if global_skill.is_file() {
-        return Ok((global_skill, "global".to_string()));
+    scan_skills_dir(agents_skills, "global", &mut by_name)?;
+    if let Some(project_root) = &project_root {
+        scan_skills_dir(
+            &project_root.join(".agents").join("skills"),
+            "project",
+            &mut by_name,
+        )?;
     }
-
-    Err(format!("skill '{name}' not found"))
+    Ok(by_name)
 }
 
 /// Read a skill's markdown body. Project-local overrides global.
 ///
 /// `home_root` is injected (see `list_agent_skills_with_home`) so tests can
 /// resolve a global skill against a temp home without mutating `HOME`.
+/// This seam does not read Claude Code directories.
+#[cfg(test)]
 pub fn read_agent_skill_with_home(
     name: &str,
     home_root: &Path,
     project_root: Option<&str>,
 ) -> Result<AgentSkillContent, String> {
-    let (path, scope) =
-        resolve_skill_path_with_home(name, project_root, home_root).map_err(|e| {
-            log::warn!("agent skill '{name}' could not be resolved: {e}");
-            e
+    read_agent_skill_with_roots(name, home_root, None, project_root)
+}
+
+pub(crate) fn read_agent_skill_with_roots(
+    name: &str,
+    agents_skills: &Path,
+    claude_home: Option<&Path>,
+    project_root: Option<&str>,
+) -> Result<AgentSkillContent, String> {
+    validate_skill_name(name)?;
+    let summary = discover_skills(agents_skills, claude_home, project_root)?
+        .get(name)
+        .cloned()
+        .ok_or_else(|| {
+            log::warn!("agent skill '{name}' could not be resolved");
+            format!("skill '{name}' not found")
         })?;
-    let raw = fs::read_to_string(&path).map_err(|e| {
-        log::warn!("failed to read skill '{}': {e}", path.display());
-        format!("read {}: {e}", path.display())
+    let path = PathBuf::from(&summary.path);
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        log::warn!("failed to read skill '{}': {error}", path.display());
+        format!("read {}: {error}", path.display())
     })?;
     let (frontmatter, body) = parse_skill_md(&raw)?;
     let skill_name = frontmatter
         .get("name")
         .cloned()
-        .filter(|n| !n.is_empty())
+        .filter(|skill_name| !skill_name.is_empty())
         .unwrap_or_else(|| name.to_string());
     let description = frontmatter.get("description").cloned().unwrap_or_default();
-    let path = path.to_string_lossy().to_string();
 
     Ok(AgentSkillContent {
         name: skill_name,
         description,
-        scope,
+        scope: summary.scope,
         body,
-        path,
+        path: summary.path,
     })
 }
 
-/// Read a skill's markdown body using the real user home (`~/.agents/skills`).
+/// Read a skill's markdown body using the real user home.
 pub fn read_agent_skill(
     name: &str,
     project_root: Option<&str>,
 ) -> Result<AgentSkillContent, String> {
-    read_agent_skill_with_home(name, &home_skills_root()?, project_root)
+    let home = user_home()?;
+    read_agent_skill_with_roots(
+        name,
+        &home.join(".agents").join("skills"),
+        Some(&home.join(".claude")),
+        project_root,
+    )
 }
 
 #[cfg(test)]

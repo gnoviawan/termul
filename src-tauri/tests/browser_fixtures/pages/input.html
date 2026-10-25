@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Input fixture</title>
+<style>
+  body { margin: 0; height: 3000px; font: 14px sans-serif; }
+  .box { position: absolute; left: 40px; width: 160px; height: 40px; box-sizing: border-box; }
+  #btn { top: 40px; }
+  #field { top: 120px; width: 240px; height: 32px; }
+  #hov { top: 200px; background: #ddd; }
+  #hov:hover { background: #f00; }
+  #track { position: absolute; left: 40px; top: 280px; width: 300px; height: 20px; background: #eee; }
+  #handle { position: absolute; left: 0; top: 0; width: 20px; height: 20px; background: #333; }
+  #frame { position: absolute; left: 40px; top: 340px; width: 200px; height: 60px; border: 0; }
+</style>
+</head>
+<body>
+<h1 style="position:absolute;left:300px;top:0">Input fixture</h1>
+<button id="btn" class="box" type="button">Press me</button>
+<input id="field" class="box" type="text" aria-label="Field">
+<div id="hov" class="box">Hover target</div>
+<div id="track"><div id="handle"></div></div>
+<iframe id="frame" title="Inner frame" src="/input-frame.html"></iframe>
+<script>
+function report(o) {
+  o.src = 'agent';
+  try { fetch('/report', { method: 'POST', body: JSON.stringify(o), keepalive: true }); } catch (e) {}
+}
+function log(target, types) {
+  types.forEach(function (type) {
+    target.addEventListener(type, function (e) {
+      report({ ev: type, id: (e.target && e.target.id) || '', trusted: e.isTrusted,
+        buttons: typeof e.buttons === 'number' ? e.buttons : null,
+        key: e.key || null, value: e.target && 'value' in e.target ? e.target.value : null,
+        hover: document.getElementById('hov').matches(':hover') });
+    }, true);
+  });
+}
+log(document.getElementById('btn'), ['click']);
+['pointerdown', 'mousedown', 'mouseup'].forEach(function (type) {
+  window.addEventListener(type, function (e) {
+    report({ ev: type, id: (e.target && e.target.id) || '', trusted: e.isTrusted, x: e.clientX, y: e.clientY });
+  }, true);
+});
+log(document.getElementById('field'), ['focus', 'keydown', 'beforeinput', 'input']);
+log(document.getElementById('hov'), ['mouseover']);
+window.addEventListener('wheel', function (e) {
+  report({ ev: 'wheel', trusted: e.isTrusted, deltaY: e.deltaY });
+}, { capture: true, passive: true });
+window.addEventListener('scroll', function () {
+  report({ ev: 'scroll', scrollY: window.scrollY });
+}, { passive: true });
+(function () {
+  var handle = document.getElementById('handle'), track = document.getElementById('track');
+  var drag = null;
+  handle.addEventListener('mousedown', function (e) {
+    drag = { x: e.clientX, left: handle.offsetLeft, trusted: e.isTrusted };
+  });
+  window.addEventListener('mousemove', function (e) {
+    if (!drag || e.buttons !== 1) return;
+    var left = Math.max(0, Math.min(track.clientWidth - 20, drag.left + e.clientX - drag.x));
+    handle.style.left = left + 'px';
+    drag.trusted = drag.trusted && e.isTrusted;
+  });
+  window.addEventListener('mouseup', function (e) {
+    if (!drag) return;
+    report({ ev: 'dragged', left: handle.offsetLeft, trusted: drag.trusted && e.isTrusted });
+    drag = null;
+  });
+})();
+window.addEventListener('load', function () { report({ ev: 'ready' }); });
+</script>
+</body>
+</html>
