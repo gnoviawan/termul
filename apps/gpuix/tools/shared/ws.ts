@@ -40,6 +40,8 @@ export async function connectWs(opts: {
   token: string
   deviceId: string
   clientInstanceId: string
+  /** The server's host-local credential, for a client acting as one on the host. */
+  hostLocalToken?: string
 }): Promise<WsClient> {
   const socket = new WebSocket(`${opts.baseUrl.replace(/^http/, 'ws')}/ws`)
   const pending = new Map<string, { resolve(v: unknown): void; reject(e: Error): void }>()
@@ -93,7 +95,8 @@ export async function connectWs(opts: {
     protocolVersion: WS_PROTOCOL_VERSION,
     deviceId: opts.deviceId,
     clientInstanceId: opts.clientInstanceId,
-    token: opts.token
+    token: opts.token,
+    ...(opts.hostLocalToken && { hostLocalToken: opts.hostLocalToken })
   })
 
   return {

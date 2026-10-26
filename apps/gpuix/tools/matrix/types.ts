@@ -24,6 +24,8 @@ export type Target =
       role?: 'button' | 'tab' | 'menuitem' | 'option' | 'switch' | 'combobox' | 'checkbox' | 'link'
     }
   | { css: string; at?: { x: number; y: number }; frac?: { x: number; y: number } }
+  /** A point in the window, for a surface whose reference has no DOM to name targets in (`tauri`). */
+  | { point: { x: number; y: number } }
 
 /** Keys are written in GPUI keystroke syntax (`ctrl-k`, `alt-,`, `escape`). */
 export type Action =
@@ -121,6 +123,8 @@ export interface Surface {
   start?: { hash: string; ready: string }
   /** Web selector of the surface's region, measured after the last step and cropped from both frames. */
   roi?: string
+  /** The region as a fixed window rectangle, for a reference with no DOM to measure it in (`tauri`). */
+  roiRect?: Rect
   /** Not driven: the surface waits on another unit. */
   pending?: { unit: string; reason: string }
   /** Not driven: no reference to compare against, for the reason given. */
@@ -133,7 +137,7 @@ export interface ActionLog {
   step: string
   action: string
   /** How the element was found: natively, or at the point the web client clicked. */
-  via: 'testid' | 'text' | 'web-point' | 'dom' | 'key' | 'none'
+  via: 'testid' | 'text' | 'web-point' | 'gpuix-point' | 'point' | 'dom' | 'key' | 'none'
   ok: boolean
   error?: string
 }

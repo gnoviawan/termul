@@ -14,7 +14,7 @@
  * tabs, side-panel tab, layout) never leaks from one run into the next.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { SCRIPT_PROMPTS } from '../chat/script'
 import { agentConfig, sendPrompt } from '../chat/seed'
@@ -295,20 +295,37 @@ export const SSH_PROFILES = [
 ]
 
 /**
- * Put the SSH hosts in the server-side store, once. The first host-local
- * client to list hosts copies the stored ones to the host's own list
- * (`ssh-api.ts`, `copyStoreProfilesToHost`), so both clients then list them.
+ * Save the SSH hosts in the host's own list over a host-local socket, and set
+ * the create-only `ssh/profiles-migrated` marker, so no client starts the
+ * one-time copy of store profiles to the host (`ssh-api.ts`,
+ * `copyStoreProfilesToHost`) during a run. Saving an existing id replaces it.
  */
 export async function seedSshProfiles(world: World): Promise<void> {
-  const key = 'shared/cas/ssh/profiles'
-  const current = await world.ws
-    .request<StoreRead>('store_read', { key })
-    .catch((): StoreRead => ({}))
-  if (current.value) return
-  await world.ws.request('store_write', {
-    key,
-    value: { _version: 1, data: SSH_PROFILES },
-    expected: null,
-    commandId: commandId('ssh-seed')
+  const ws = await connectWs({
+    baseUrl: world.server.baseUrl,
+    token: TOKEN,
+    deviceId: 'm1-ssh-seed',
+    clientInstanceId: 'm1-ssh-seed',
+    hostLocalToken: readFileSync(
+      path.join(world.server.stateDir, 'host-local.token'),
+      'utf8'
+    ).trim()
   })
+  try {
+    for (const profile of SSH_PROFILES)
+      await ws.request('ssh_save_profile', { profile }, { commandId: commandId('ssh-seed') })
+    const marker = 'shared/cas/ssh/profiles-migrated'
+    const current = await ws
+      .request<StoreRead>('store_read', { key: marker })
+      .catch((): StoreRead => ({}))
+    if (current.value) return
+    await ws.request('store_write', {
+      key: marker,
+      value: { _version: 1, data: { copiedAt: '2026-10-26T00:00:00.000Z', count: 0 } },
+      expected: null,
+      commandId: commandId('ssh-marker')
+    })
+  } finally {
+    ws.close()
+  }
 }

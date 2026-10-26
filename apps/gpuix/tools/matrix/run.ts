@@ -20,6 +20,7 @@ import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { cropPng, diffPngs, type Rect } from '../parity/diff'
 import { READY_TIMEOUT_MS, windowOrigin, withGpuix } from '../parity/shoot-gpuix'
 import { DIST_WEB } from '../parity/shoot-web'
+import { tauriDriver, withTauri } from '../reference/tauri'
 import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import { pickPort } from '../shared/seed'
 import { activateWindow, type Driver, gpuixDriver, type Point, webDriver } from './drive'
@@ -82,7 +83,7 @@ const slug = (id: string) => id.replace(/[^a-z0-9-]/gi, '-')
 
 async function runSteps(
   surface: Surface,
-  client: Client,
+  client: Client | 'tauri',
   driver: Driver,
   grab: (file: string) => Promise<void>,
   measure?: () => Promise<Rect | null>
@@ -96,7 +97,8 @@ async function runSteps(
       run.actions.push(log)
       if (!log.ok) run.ok = false
     }
-    for (const check of step.expect) {
+    for (const check of driver.check ? step.expect : []) {
+      if (!driver.check) break
       const checkStarted = performance.now()
       const log = {
         ...(await driver.check(step.name, check)),
@@ -252,6 +254,13 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
   )
 }
 
+async function runTauri(world: World, surface: Surface, points: Map<string, Point>) {
+  const home = path.join(values.state as string, 'tauri', slug(surface.id))
+  return withTauri({ world, home, ...SIZE }, (session) =>
+    runSteps(surface, 'tauri', tauriDriver(session, points), session.grab)
+  )
+}
+
 function autoStatus(
   surface: Surface,
   web?: ClientRun,
@@ -353,14 +362,32 @@ async function main(): Promise<void> {
         const points = new Map<string, Point>()
         let started = performance.now()
         let rects: (Rect | null)[] = []
-        try {
-          const web = await runWeb(browser, world, surface, points)
-          result.web = web.run
-          rects = web.rects
-        } catch (error) {
-          result.web = failedRun(error, started)
+        if (surface.reference === 'tauri') {
+          // GPUIX runs first: the desktop app has no DOM, so it clicks where GPUIX found each target.
+          try {
+            result.gpuix = (await runGpuix(build.entry, world, surface, points)).run
+          } catch (error) {
+            result.gpuix = failedRun(error, started)
+          }
+          started = performance.now()
+          try {
+            result.web = (await runTauri(world, surface, points)).run
+          } catch (error) {
+            result.web = failedRun(error, started)
+          }
+          rects = surface.steps.map(() => surface.roiRect ?? null)
+          if (result.web && result.gpuix)
+            result.diffs = diffSurface(surface, result.web, result.gpuix, rects)
+        } else {
+          try {
+            const web = await runWeb(browser, world, surface, points)
+            result.web = web.run
+            rects = web.rects
+          } catch (error) {
+            result.web = failedRun(error, started)
+          }
         }
-        if (!values['web-only']) {
+        if (!values['web-only'] && surface.reference !== 'tauri') {
           started = performance.now()
           try {
             result.gpuix = (await runGpuix(build.entry, world, surface, points)).run

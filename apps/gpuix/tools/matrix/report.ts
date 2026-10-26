@@ -52,7 +52,10 @@ export function previousRows(doc: string): Map<string, PreviousRow> {
   for (const line of lines) {
     const row = /^\| `([^`]+)` .*?\| [^|]+ \| ([a-z-]+) \| ((?:[^|]*\|){5})/.exec(line)
     if (!row) continue
-    const cells = row[3].split('|').slice(0, 5).map((c) => c.trim())
+    const cells = row[3]
+      .split('|')
+      .slice(0, 5)
+      .map((c) => c.trim())
     rows.set(row[1], { status: row[2] as Status, cells, interactions: '' })
   }
   for (let i = 0; i < lines.length; i++) {
@@ -241,7 +244,13 @@ export function renderMatrix(
   out.push('| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |')
   for (const row of rows) {
     const [full, roi] = mismatch(row.result)
-    const measuredCells = row.previous?.cells ?? [row.result?.auto ?? '', passed(row.result?.web), passed(row.result?.gpuix), full, roi]
+    const measuredCells = row.previous?.cells ?? [
+      row.result?.auto ?? '',
+      passed(row.result?.web),
+      passed(row.result?.gpuix),
+      full,
+      roi
+    ]
     out.push(
       `| \`${row.surface.id}\` ${cell(row.surface.title)} | ${row.surface.area} | ${row.status} | ${measuredCells.join(' | ')} | ${cell(row.review?.differences.join(' ') ?? '')} |`
     )

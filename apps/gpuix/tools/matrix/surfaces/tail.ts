@@ -5,6 +5,7 @@
  */
 
 import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
+import { PAGE_TITLE, PAGE_URL, servePage } from '../../reference/page'
 import type { Check, Surface } from '../types'
 import { resetAlpha, SHORTCUTS_KEY, seedSshProfiles, setTheme, writeShared } from '../world'
 import {
@@ -174,6 +175,10 @@ const DESKTOP_BINDINGS = Object.fromEntries(
   ])
 )
 
+/** `[data-pane-content]` on the 1280x800 dashboard, measured in the web client: the pane the browser tab fills. */
+const PANE_RECT = { x: 477, y: 9, width: 794, height: 754 }
+/** The browser controls' URL field, under the pane's tab bar. */
+const URL_BAR = { point: { x: 800, y: 63 } }
 const LONG_TAIL: Surface[] = [
   {
     id: 'shortcuts.menu',
@@ -274,9 +279,20 @@ const LONG_TAIL: Surface[] = [
     id: 'browser.pane',
     area: 'browser',
     title: 'Browser pane',
-    blocked:
-      'Browser tabs are Tauri native webviews; the web client offers no New Browser Tab, so there is no reference, and GPUIX 0.11 has no webview element',
-    steps: []
+    // The web client has no browser tab; the desktop app's is a native WebKitGTK
+    // webview, and so is GPUIX's (the termul-webview-host helper).
+    reference: 'tauri',
+    roiRect: PANE_RECT,
+    prepare: async () => servePage(),
+    steps: [
+      step('a-dashboard', [wait(2000)], see('What should we do in alpha?')),
+      step('b-new-tab', [press('ctrl-shift-n'), wait(2500)]),
+      step(
+        'c-page',
+        [click(URL_BAR), wait(600), type(PAGE_URL), press('enter'), wait(5000)],
+        see(PAGE_TITLE)
+      )
+    ]
   },
   {
     id: 'notifications.toast',
@@ -325,7 +341,7 @@ const LONG_TAIL: Surface[] = [
       // Continue would start a real claude.ai sign-in on the host, so the run stops at the name.
       step(
         'd-add',
-        [click(txt('Add account')), type('Work')],
+        [click(txt('Add account')), wait(800), type('Work')],
         see('Give it a short name. Termul shows this name, never the email.')
       )
     ]
@@ -345,7 +361,7 @@ const LONG_TAIL: Surface[] = [
     // No desktop shell links to the route (only the mobile drawer does), so both start on it.
     start: { hash: '#/snapshots', ready: 'Workspace Snapshots' },
     steps: [
-      step('a-page', [], see('Workspace Snapshots', 'Create New Snapshot')),
+      step('a-page', [], see('Workspace Snapshots', 'Create New Snapshot', 'No snapshots yet')),
       step('b-create', [click(txt('Create New Snapshot'))], see('Create Snapshot'))
     ]
   }

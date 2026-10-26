@@ -35,7 +35,9 @@ export function describe(action: Action): string {
         ? `"${t.text}"`
         : 'label' in t
           ? `[${t.label}]`
-          : t.css
+          : 'point' in t
+            ? `@${t.point.x},${t.point.y}`
+            : t.css
   switch (action.do) {
     case 'click':
       return `${action.button === 'right' ? 'right-click' : action.modifiers ? `${action.modifiers}-click` : 'click'} ${target(action.target)}`
@@ -100,7 +102,8 @@ async function poll(fn: () => Promise<boolean>, timeoutMs: number): Promise<bool
 
 export interface Driver {
   act(step: string, index: number, action: Action): Promise<ActionLog>
-  check(step: string, check: Check): Promise<CheckLog>
+  /** Absent for a client whose text cannot be read (the Tauri app): its frames are the record. */
+  check?(step: string, check: Check): Promise<CheckLog>
 }
 
 function webLocator(page: Page, target: Target): Locator {
@@ -116,10 +119,11 @@ function webLocator(page: Page, target: Target): Locator {
       .filter({ visible: true })
       .first()
   }
+  if ('point' in target) throw new Error('a point target names no DOM element')
   return page.locator(target.css).filter({ visible: true }).first()
 }
 
-export function webDriver(page: Page, points: Map<string, Point>, filesDir = ''): Driver {
+export function webDriver(page: Page, points: Map<string, Point>, filesDir = ''): Required<Driver> {
   /** Where the web client acts on `target`: its centre, or the `at` / `frac` spot inside it. */
   const pointOf = async (key: string, target: Target): Promise<Point> => {
     const locator = webLocator(page, target)
@@ -395,11 +399,12 @@ export function gpuixDriver(
   app: GpuixApp,
   points: Map<string, Point>,
   { x11, display, filesDir = '', activeAt }: GpuixDriveOptions = {}
-): Driver {
+): Required<Driver> {
   const resolve = async (
     target: Target,
     key: string
   ): Promise<{ point: Point; via: ActionLog['via'] }> => {
+    if ('point' in target) return { point: target.point, via: 'point' }
     const web = points.get(key)
     let native: Point | null = null
     let via: ActionLog['via'] = 'web-point'
@@ -418,7 +423,11 @@ export function gpuixDriver(
       native = nearest(nodes, web)
       via = 'text'
     }
-    if (native) return { point: native, via }
+    if (native) {
+      // With no web run before it (a `tauri` reference), the reference clicks where GPUIX did.
+      if (!web) points.set(key, native)
+      return { point: native, via }
+    }
     if (web) return { point: web, via: 'web-point' }
     throw new Error('no native match and no web point')
   }
