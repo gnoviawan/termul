@@ -272,7 +272,10 @@ pub(crate) mod test_support;
 mod tests;
 
 // AppImage env tests run on Linux (every unix) — not gated by `cfg(windows)`
-// like the console tests above. Declared here (beside `mod appimage_env`) so the
-// sibling `process_util/appimage_env_tests.rs` is found without a `#[path]`.
-#[cfg(test)]
+// like the console tests above. They are unix-only because the planner splits
+// and rejoins path lists with `std::env::split_paths`/`join_paths`, which use
+// `;` on Windows, while the fixtures use `:` lists and `/` paths. The scrub
+// itself is a no-op outside Linux. Declared here (beside `mod appimage_env`) so
+// the sibling `process_util/appimage_env_tests.rs` is found without a `#[path]`.
+#[cfg(all(test, unix))]
 mod appimage_env_tests;
