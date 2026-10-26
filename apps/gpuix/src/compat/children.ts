@@ -17,10 +17,11 @@
  */
 
 import type { StyleDesc } from '@gpuix/react'
-import { cloneElement, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
+import { cloneElement, Fragment, isValidElement, type ReactElement, type ReactNode, useContext } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { INHERITED_LEADING, ROOT_FONT_SIZE } from '../style/scale'
 import type { Divide } from '../style/tw'
+import { FontContext, lineHeightOf } from './font'
 import { liftPlacement, placeStyle } from './placement'
 import { applyTextTransform, type AutoMargin, type Translation, translation } from './translate'
 
@@ -354,16 +355,32 @@ function isInlineLevel(slot: Slot): slot is ReactElement {
  * An inline-level box alone on a line of a block container: the line box is
  * at least the container's strut tall, so a 14 px label under a 16 px root
  * sits on a 24 px line. GPUIX lays the box out as a block; a wrapper of the
- * strut's height, centring it, stands in for the line box.
+ * strut's height, centring it, stands in for the line box. A container that
+ * sets no line height of its own has the one it inherits (`FontContext`),
+ * which a class string translated alone cannot see. `space-y` gives the box a
+ * bottom margin, which CSS ignores on an inline box; compat lowered it to the
+ * container's row gap, so a line that a sibling follows takes the gap back.
  */
-function onStrutLine(node: ReactElement, height: number): ReactElement {
-  const line = jsx(
-    'div',
-    { style: { minHeight: height, display: 'flex', flexDirection: 'column', justifyContent: 'center' }, children: node },
-    node.key ?? undefined
-  )
+function onStrutLine(node: ReactElement, style: StyleDesc, followed: boolean): ReactElement {
+  const own = typeof style.lineHeight === 'number' ? style.lineHeight : undefined
+  const gap = followed && typeof style.rowGap === 'number' ? style.rowGap : 0
+  const line = jsx(StrutLine, { own, gap, children: node }, node.key ?? undefined)
   childInfo.set(line, { inline: false })
   return line
+}
+
+function StrutLine({ own, gap, children }: { own: number | undefined; gap: number; children: ReactElement }): ReactElement {
+  const inherited = useContext(FontContext)
+  return jsx('div', {
+    style: {
+      minHeight: own ?? lineHeightOf(inherited),
+      ...(gap > 0 ? { marginBottom: -gap } : {}),
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center'
+    },
+    children
+  })
 }
 
 /** Whether the slot at `i` shares its line with no text or inline neighbour. */
@@ -401,7 +418,7 @@ export function layoutChildren(
       return { children: belowStrut(children, strutDescent(style)), isStatic: false }
     }
     if (tr.blockFlow && isInlineLevel(children)) {
-      return { children: onStrutLine(children, strutHeight(style)), isStatic: false }
+      return { children: onStrutLine(children, style, false), isStatic: false }
     }
     if (tr.listMarker) return { children: withMarkers([children], tr.listMarker, tr.listInside), isStatic: true }
     // A span's content is inline by definition, whatever the component renders.
@@ -454,7 +471,8 @@ export function layoutChildren(
       const info = infoOf(slot)
       if (info?.autoMargin && isValidElement(slot)) out[i] = placeAutoMargin(slot, info.autoMargin, row, grows)
       else if (strut > 0 && info?.baselineAtBottom && isValidElement(slot)) out[i] = belowStrut(slot, strut)
-      else if (tr.blockFlow && isInlineLevel(slot) && aloneOnLine(slots, i)) out[i] = onStrutLine(slot, strutHeight(style))
+      else if (tr.blockFlow && isInlineLevel(slot) && aloneOnLine(slots, i))
+        out[i] = onStrutLine(slot, style, slots.slice(i + 1).some((next) => !isEmpty(next) && !isPositioned(next)))
     }
     return { children: paintPositionedLast(out), isStatic }
   }
