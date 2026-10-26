@@ -201,3 +201,69 @@ async fn kill_all_waits_for_a_teardown_token_taken_before_the_spawn() {
         .expect("kill_all never finished after the token dropped")
         .expect("kill_all task panicked");
 }
+
+/// #1515: cancelling the close future while the child lock is contended must
+/// not strand the teardown. The old `kill` removed the terminal and then
+/// `.await`ed `child.lock()`; a close future cancelled on that contended lock
+/// dropped the teardown token with the child unsignalled and no cleanup task
+/// spawned, so `kill_all` — finding neither the removed terminal nor a teardown
+/// task — missed it and the claim and child process leaked. The teardown is now
+/// spawned (owning the token) with no `.await` between the removal and the
+/// spawn, so a cancelled caller can never drop it.
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelling_a_contended_close_cannot_strand_the_teardown() {
+    let manager = crate::web::test_pty_manager();
+    let spawned = manager.spawn(long_lived("a"), None).await.expect("spawn");
+    let id = spawned.info.id.clone();
+    let instance = manager.get(&id).expect("tracked");
+
+    // A slow reader join keeps the owned teardown (and its token) observably
+    // alive after the caller returns.
+    make_teardown_slow(&instance, Duration::from_millis(300)).await;
+
+    // Contend the child lock: this is exactly the window the old awaited
+    // `child.lock().await` blocked — and could be cancelled — on. The fix's
+    // best-effort `try_lock` kill is skipped here, so the background teardown is
+    // what must signal the child.
+    let child_guard = instance.child.lock().await;
+
+    // Close the terminal on its own task, then cancel it. With the fix, `kill`
+    // has no `.await` after the removal, so by the time it has detached the
+    // terminal it has already spawned the token-owning teardown and the abort
+    // is a no-op. With the old code the task would still be suspended on the
+    // contended `child.lock().await`, and aborting it would drop the token and
+    // the teardown with it.
+    let closing = {
+        let manager = manager.clone();
+        let id = id.clone();
+        tokio::spawn(async move {
+            let _ = manager.kill(&id).await;
+        })
+    };
+
+    // The removal is synchronous on both the old and new paths, so this is true
+    // while the old task is still suspended on the contended lock — the precise
+    // moment a cancellation stranded the teardown.
+    assert!(
+        eventually(Duration::from_secs(5), || manager.get(&id).is_none()).await,
+        "kill never detached the terminal from the registry"
+    );
+    closing.abort();
+    let _ = closing.await;
+
+    // Release the contended lock so the owned teardown can run to completion.
+    drop(child_guard);
+
+    // The teardown was never stranded: `kill_all` waits on its token and the
+    // per-terminal cleanup finishes — the claim is cleared and the child reaped.
+    manager.kill_all().await;
+    assert!(
+        manager.claims.generation(&id).is_none(),
+        "the cancelled close stranded the teardown — the claim leaked"
+    );
+    assert!(
+        instance.child.lock().await.is_none(),
+        "the cancelled close stranded the teardown — the child was never reaped"
+    );
+}

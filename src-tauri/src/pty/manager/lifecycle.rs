@@ -83,12 +83,13 @@ impl PtyManager {
     /// Kill a terminal.
     ///
     /// The terminal is removed from the registry and its child signalled to
-    /// exit synchronously, so the caller (a user closing a tab) returns at
-    /// once and the terminal is immediately unlisted and unattachable. The
-    /// slow part of the teardown — the child-exit poll and the reader/flusher
-    /// thread joins — plus the per-terminal tracker cleanup run on a detached
-    /// background task (#1300). Kept `async` because the child is signalled
-    /// under its async mutex (and to preserve the caller's `.await`).
+    /// exit (best-effort, synchronously), so the caller (a user closing a tab)
+    /// returns at once and the terminal is immediately unlisted and
+    /// unattachable. The slow part of the teardown — the child-exit poll and
+    /// the reader/flusher thread joins — plus the per-terminal tracker cleanup
+    /// run on a detached background task (#1300). Kept `async` only to preserve
+    /// the caller's `.await`; the body no longer awaits (see
+    /// [`detach_and_teardown`](Self::detach_and_teardown)).
     ///
     /// When app window is hidden, kill is deferred to prevent ConPTY lifecycle
     /// issues on Windows where minimize can cause terminal processes to die.
@@ -116,8 +117,7 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
-        self.detach_and_teardown(id.to_string(), instance, token)
-            .await;
+        self.detach_and_teardown(id.to_string(), instance, token);
         Ok(())
     }
 
@@ -142,36 +142,49 @@ impl PtyManager {
             .remove(id)
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
-        self.detach_and_teardown(id.to_string(), instance, token)
-            .await;
+        self.detach_and_teardown(id.to_string(), instance, token);
         Ok(())
     }
 
     /// Signal a removed terminal's child to exit now, then finish its teardown
     /// off the caller's path (#1300).
     ///
-    /// The child is killed synchronously so a closed terminal's process is
-    /// always signalled before the caller returns — even if the app exits
-    /// before the background task runs. Everything slow — the child-exit poll
-    /// and reap, the reader/flusher thread joins, and the per-terminal tracker
-    /// cleanup — happens on the detached task spawned here, matching the
-    /// sweeper's teardown (`ExitSweep::remove_expired`) so the ordering and
-    /// semantics are identical apart from the removed `await`.
+    /// The child is signalled best-effort before the caller returns — in the
+    /// common (uncontended) case the kill syscall runs here synchronously.
+    /// Everything slow — the child-exit poll and reap, the reader/flusher
+    /// thread joins, and the per-terminal tracker cleanup — happens on the
+    /// detached task spawned here, matching the sweeper's teardown
+    /// (`ExitSweep::remove_expired`) so the ordering and semantics are
+    /// identical apart from the removed `await`.
+    ///
+    /// This is deliberately NOT `async`: once the terminal has left the
+    /// registry, there must be no `.await` before the teardown token is moved
+    /// into the owned task below. An awaited `child.lock().await` here was a
+    /// cancellation point — if the close future was dropped while that lock was
+    /// contended, the token (and the whole teardown) was dropped before the
+    /// child was signalled or the cleanup spawned, and a concurrent `kill_all`
+    /// — seeing neither the removed terminal nor a spawned teardown — missed it
+    /// entirely (#1515). With no `.await`, the body runs to completion in a
+    /// single poll, so the caller's cancellation can never strand the teardown.
     ///
     /// `instance` must already be removed from `terminals` so the terminal is
     /// unlisted and unattachable the moment this is reached.
-    async fn detach_and_teardown(
+    fn detach_and_teardown(
         &self,
         id: String,
         instance: Arc<TerminalInstance>,
         token: tokio_util::task::task_tracker::TaskTrackerToken,
     ) {
-        // Quick kill syscall under the async mutex: the process is signalled
-        // before we return; the (slow) exit poll, reap and thread joins happen
-        // in the background task below. cleanup_terminal_resources_sync's own
-        // kill is then idempotent (a second kill of a dead child is a no-op).
-        if let Some(child) = instance.child.lock().await.as_mut() {
-            let _ = child.kill();
+        // Best-effort quick kill syscall: `try_lock` keeps this off any
+        // `.await`, so the process is signalled before we return without
+        // reintroducing the cancellation point above. On the rare lock
+        // contention the kill is deferred to the background task below, whose
+        // cleanup_terminal_resources_sync kills the child unconditionally — and
+        // that kill is idempotent (a second kill of a dead child is a no-op).
+        if let Ok(mut guard) = instance.child.try_lock() {
+            if let Some(child) = guard.as_mut() {
+                let _ = child.kill();
+            }
         }
 
         // The terminal is already out of the registry, so announce the set
