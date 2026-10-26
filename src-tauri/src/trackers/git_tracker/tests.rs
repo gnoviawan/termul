@@ -302,6 +302,15 @@ fn test_git_get_status_detail_uses_rename_destination_path() {
     assert!(!details[1].staged);
 }
 
+#[test]
+fn test_git_get_status_detail_unquotes_c_quoted_paths() {
+    let details = git_get_status_detail_from_output(
+        " M \"caf\\303\\251.txt\"\nR  \"old\\tname.txt\" -> \"new\\tname.txt\"\n D \"say \\\"hi\\\".txt\"\n",
+    );
+    let paths: Vec<&str> = details.iter().map(|d| d.path.as_str()).collect();
+    assert_eq!(paths, vec!["café.txt", "new\tname.txt", "say \"hi\".txt"]);
+}
+
 // ========== parse_git_log unit tests ==========
 
 /// Build one NUL-delimited, record-terminated log record matching the
