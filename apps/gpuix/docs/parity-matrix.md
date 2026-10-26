@@ -57,7 +57,8 @@ deleted at the start and end of the run, so keep `--out` outside
    for permission) and `matrix hold` (a turn that stays open, so the next
    prompt queues).
 2. Each surface in `surfaces/` runs in the web client (Playwright chromium,
-   1280x800, dark, reduced motion) and then in GPUIX (Xvfb, lavapipe,
+   1280x800, dark, reduced motion, slight font hinting as on a desktop:
+   `tools/shared/chromium.ts`) and then in GPUIX (Xvfb, lavapipe,
    automation). Both start on the dashboard as a fresh device, so per-device
    UI state never leaks between runs. A surface's `prepare` re-seeds what an
    earlier run changed (git state, a renamed or deleted project, the theme).
@@ -160,6 +161,26 @@ ported and none moved down:
   `LAYER.dialog`, and a test fails when any `<anchored>` in apps/gpuix/src
   names no priority. What differs now is the web's larger toolbar and wider
   cell padding.
+
+**After this run (N3, 2026-10-26, settings and chat areas only).** Two
+changes moved the numbers below G12's tables. The web reference now lays
+text out with `--font-render-hinting=slight`: headless Chromium's default
+`full` hinting put text on whole-pixel hinted advances, which is where the
+"1 % wider" prose runs and the table's 6 to 7 px column offset came from
+(`tools/native/typo-check.ts`, [native-patches.md](./native-patches.md)).
+Native patch zed/0005 sets text lines at their fractional line height. Three
+partial runs of `--area settings,chat`, last-step full-frame perceptual
+diff: G12's setup, then the slight reference on the old addon, then both.
+settings.skills 1.78, 1.13 and 0.65 %; settings.shortcuts 1.40, 0.82 and
+0.42 %; settings.diagnostics 1.30, 0.92 and 0.51 %; chat.scroll-top 2.84,
+2.52 and 2.42 %; chat.transcript 2.04, 1.74 and 1.70 %. Every settings
+surface but the blocked Claude accounts came out ported. On the frames the
+skills section's last row sits at 658 against the web's 659 (654 before),
+the transcript table's header labels start at 517, 738 and 1077 against
+517, 737 and 1077 (517, 738 and 1077 against 517, 732 and 1070 before), and
+the inline-code paragraph's lines end at 1210, 1190 and 743 against 1210,
+1189 and 746. The tables below still hold G12's full run. The reference
+change moves every surface, so the next full run is a new baseline.
 
 **Ranked remaining gaps.** By the usage-weighted points each unit would win
 back (the Proposed units table below), with its cause class:
