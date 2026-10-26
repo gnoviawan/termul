@@ -4,12 +4,14 @@
  * what's new).
  */
 
+import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
 import type { Check, Surface } from '../types'
-import { resetAlpha, setTheme } from '../world'
+import { resetAlpha, SHORTCUTS_KEY, seedSshProfiles, setTheme, writeShared } from '../world'
 import {
   CANVAS_READY,
   COMPOSER_READY,
   click,
+  css,
   DASHBOARD,
   gone,
   label,
@@ -164,6 +166,14 @@ const PALETTE: Surface[] = [
   )
 ]
 
+/** The desktop table's keys for the bindings `shortcuts.desktop-keymap` presses, as custom keys. */
+const DESKTOP_BINDINGS = Object.fromEntries(
+  ['newTerminal', 'closeTab', 'commandHistory', 'settings', 'zoomIn'].map((id) => [
+    id,
+    { customKey: DEFAULT_KEYBOARD_SHORTCUTS[id].defaultKey }
+  ])
+)
+
 const LONG_TAIL: Surface[] = [
   {
     id: 'shortcuts.menu',
@@ -199,9 +209,45 @@ const LONG_TAIL: Surface[] = [
     id: 'shortcuts.desktop-keymap',
     area: 'shortcuts',
     title: 'Desktop key bindings (Ctrl+T, Ctrl+W, Ctrl+R, Ctrl+, and Ctrl+=)',
-    blocked:
-      'No web reference: the web client swaps browser-reserved keys for Alt combos, and GPUIX inherits that keymap because it is not a Tauri context',
-    steps: []
+    // Both press the desktop keys. GPUIX has them as its defaults; the web
+    // client gets them as custom bindings, as a web user can set them.
+    prepare: (world, client) =>
+      client === 'web' ? writeShared(world, SHORTCUTS_KEY, DESKTOP_BINDINGS) : Promise.resolve(),
+    steps: [
+      DASHBOARD,
+      step(
+        'b-terminal',
+        [click(css('button[aria-label^="Open terminal at"]')), wait(2500)],
+        [...see('Terminal 1'), gone('What should we do in alpha?')]
+      ),
+      step(
+        'c-launcher',
+        [click(txt('Projects')), press('ctrl-t'), wait(1000)],
+        see('What should we do in alpha?')
+      ),
+      step(
+        'd-launcher-again',
+        [click(txt('Projects')), press('ctrl-t'), wait(1000)],
+        [gone('What should we do in alpha?')]
+      ),
+      step(
+        'e-close-tab',
+        [click(txt('Projects')), press('ctrl-w'), wait(1000)],
+        see('Close Terminal')
+      ),
+      step('f-closed', [click(txt('Close')), wait(1000)], [gone('Terminal 1')]),
+      step(
+        'g-history',
+        [click(txt('Projects')), press('ctrl-r'), wait(800)],
+        see('Command History')
+      ),
+      step(
+        'h-settings',
+        [press('escape'), click(txt('Projects')), press('ctrl-,'), wait(800)],
+        see('Interface zoom')
+      ),
+      step('i-zoom', [press('escape'), click(txt('Projects')), press('ctrl-='), wait(1000)])
+    ]
   },
   {
     id: 'theme.picker',
@@ -258,17 +304,31 @@ const LONG_TAIL: Surface[] = [
     id: 'ssh.workspace',
     area: 'ssh',
     title: 'SSH profiles and sessions',
-    blocked:
-      'No web reference: SSH needs a host-local client (useHostGate(canUseHostSsh)), which a browser never is; R2 drove the GPUIX flow against a throwaway sshd (reports/r2-shots)',
-    steps: []
+    reference: 'web-host-local',
+    prepare: seedSshProfiles,
+    steps: [
+      step('a-sidebar', [], see('What should we do in alpha?', 'staging', 'build-box')),
+      step('b-hosts', [click(label('Open SSH hosts'))], see('Favorites', 'Servers')),
+      step('c-new-host', [click(label('New host'))], see('New host'))
+    ]
   },
   {
     id: 'settings.accounts-claude',
     area: 'settings',
     title: 'Claude account sign-in',
-    blocked:
-      'No web reference: Claude account management needs a host-local client, which a browser never is; the R1-R3 e2e kit (reports/r1-e2e, accounts mode) covers the server path',
-    steps: []
+    reference: 'web-host-local',
+    roi: '[role="dialog"]',
+    steps: [
+      DASHBOARD,
+      step('b-open', [click(label('Settings'))], see('Interface zoom')),
+      step('c-section', [click(txt('Accounts'))], see('1 account', 'Keep work and personal apart')),
+      // Continue would start a real claude.ai sign-in on the host, so the run stops at the name.
+      step(
+        'd-add',
+        [click(txt('Add account')), type('Work')],
+        see('Give it a short name. Termul shows this name, never the email.')
+      )
+    ]
   },
   {
     id: 'update.toast',
@@ -282,9 +342,12 @@ const LONG_TAIL: Surface[] = [
     id: 'snapshots.page',
     area: 'snapshots',
     title: 'Snapshots page (#/snapshots)',
-    blocked:
-      'The desktop shell has no link to the route; only the mobile drawer navigates to it, and GPUIX cannot start on a hash route yet',
-    steps: []
+    // No desktop shell links to the route (only the mobile drawer does), so both start on it.
+    start: { hash: '#/snapshots', ready: 'Workspace Snapshots' },
+    steps: [
+      step('a-page', [], see('Workspace Snapshots', 'Create New Snapshot')),
+      step('b-create', [click(txt('Create New Snapshot'))], see('Create Snapshot'))
+    ]
   }
 ]
 

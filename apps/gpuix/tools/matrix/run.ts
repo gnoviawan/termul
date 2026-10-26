@@ -23,11 +23,20 @@ import { DIST_WEB } from '../parity/shoot-web'
 import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import { pickPort } from '../shared/seed'
 import { activateWindow, type Driver, gpuixDriver, type Point, webDriver } from './drive'
+import { grantHostLocal, hostLocalTokenPath } from './host-local'
 import { writeReport } from './report'
 import { SURFACES } from './surfaces'
 import { killTerminals } from './terminals'
 import type { AutoStatus, Client, ClientRun, StepDiff, Surface, SurfaceResult } from './types'
-import { createWorld, prepareDevice, setTheme, TOKEN, type World } from './world'
+import {
+  createWorld,
+  prepareDevice,
+  SHORTCUTS_KEY,
+  setTheme,
+  TOKEN,
+  type World,
+  writeShared
+} from './world'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -133,7 +142,8 @@ async function runWeb(
   await sweepTerminals(world)
   await prepareDevice(world, deviceId)
   await setTheme(world, 'termul', 'dark')
-  await surface.prepare?.(world)
+  await writeShared(world, SHORTCUTS_KEY, {})
+  await surface.prepare?.(world, 'web')
   const context = await browser.newContext({
     viewport: SIZE,
     deviceScaleFactor: 1,
@@ -157,6 +167,7 @@ async function runWeb(
       }
       await route.continue()
     })
+    if (surface.reference === 'web-host-local') await grantHostLocal(context, world)
     await context.addInitScript(
       ({ token, deviceId }) => {
         localStorage.setItem('termul.webAuthToken', token)
@@ -167,8 +178,11 @@ async function runWeb(
     const page = await context.newPage()
     const errors: string[] = []
     page.on('pageerror', (error) => errors.push(error.message))
-    await page.goto(`${world.server.baseUrl}/`)
-    await page.getByText(BOOT_TEXT).first().waitFor({ state: 'visible', timeout: READY_TIMEOUT_MS })
+    await page.goto(`${world.server.baseUrl}/${surface.start?.hash ?? ''}`)
+    await page
+      .getByText(surface.start?.ready ?? BOOT_TEXT)
+      .first()
+      .waitFor({ state: 'visible', timeout: READY_TIMEOUT_MS })
     const result = await runSteps(
       surface,
       'web',
@@ -200,7 +214,8 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
   await sweepTerminals(world)
   await prepareDevice(world, deviceId)
   await setTheme(world, 'termul', 'dark')
-  await surface.prepare?.(world)
+  await writeShared(world, SHORTCUTS_KEY, {})
+  await surface.prepare?.(world, 'gpuix')
   const clientStateDir = path.join(values.state as string, 'clients', slug(surface.id))
   await rm(clientStateDir, { recursive: true, force: true })
   const host = new URL(world.server.baseUrl).host.replace(/[^A-Za-z0-9.-]/g, '_')
@@ -209,10 +224,16 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
     path.join(clientStateDir, 'web-storage', `${host}.json`),
     JSON.stringify({ 'termul.deviceId': deviceId })
   )
+  const env: Record<string, string> = {}
+  if (surface.reference === 'web-host-local')
+    env.TERMUL_GPUIX_DATA_DIR = path.dirname(hostLocalTokenPath(world))
+  if (surface.start) env.GPUIX_START_HASH = surface.start.hash
   return withGpuix(
-    { server: world.server, entry, clientStateDir, ...SIZE },
+    { server: world.server, entry, clientStateDir, ...SIZE, env },
     async ({ app, display, grab }) => {
-      await app.getByText(BOOT_TEXT).waitFor({ timeoutMs: READY_TIMEOUT_MS })
+      await app
+        .getByText(surface.start?.ready ?? BOOT_TEXT)
+        .waitFor({ timeoutMs: READY_TIMEOUT_MS })
       const origin = await windowOrigin(display, SIZE.width, SIZE.height)
       if (!values['inactive-window']) await activateWindow(display, origin)
       const x11 = values['x11-input'] ? { display, origin } : undefined
@@ -322,6 +343,7 @@ async function main(): Promise<void> {
         id: surface.id,
         ranAt: new Date().toISOString(),
         auto: 'pending-unit',
+        reference: surface.reference,
         diffs: []
       }
       if (surface.pending || surface.blocked) {

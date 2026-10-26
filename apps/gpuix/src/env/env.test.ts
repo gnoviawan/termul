@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { createHashHistory } from '@remix-run/router'
 import { cssEscape, MediaList } from './dom'
-import { createSessionHistory } from './history'
+import { createSessionHistory, startHash } from './history'
 import { readInitialWindowSize } from './window-size'
 
 const ORIGIN = new URL('http://127.0.0.1:8190')
@@ -31,7 +31,9 @@ describe('session history', () => {
     const events = new EventTarget()
     const { location, history } = createSessionHistory(ORIGIN, events)
     const changes: string[] = []
-    events.addEventListener('hashchange', (event) => changes.push((event as HashChangeEvent).newURL))
+    events.addEventListener('hashchange', (event) =>
+      changes.push((event as HashChangeEvent).newURL)
+    )
 
     history.replaceState({ termulOverlay: true }, '', '#/')
     expect(history.state).toEqual({ termulOverlay: true })
@@ -41,6 +43,15 @@ describe('session history', () => {
     expect(history.length).toBe(2)
     await tick()
     expect(changes).toEqual(['http://127.0.0.1:8190/#/snapshots'])
+  })
+
+  test('a start hash is the first entry, and only a #/ route is taken', () => {
+    const { location, history } = createSessionHistory(ORIGIN, new EventTarget(), '#/snapshots')
+    expect(location.href).toBe('http://127.0.0.1:8190/#/snapshots')
+    expect(history.length).toBe(1)
+    expect(startHash(' #/snapshots ')).toBe('#/snapshots')
+    expect(startHash('/snapshots')).toBe('')
+    expect(startHash(undefined)).toBe('')
   })
 
   test('a cross-origin URL is refused', () => {
@@ -76,8 +87,14 @@ describe('initial window size', () => {
   })
 
   test('GPUIX_WINDOW_SIZE pins it, raised to the desktop minimum', () => {
-    expect(readInitialWindowSize({ GPUIX_WINDOW_SIZE: '1280x800' })).toEqual({ width: 1280, height: 800 })
-    expect(readInitialWindowSize({ GPUIX_WINDOW_SIZE: '640x480' })).toEqual({ width: 800, height: 600 })
+    expect(readInitialWindowSize({ GPUIX_WINDOW_SIZE: '1280x800' })).toEqual({
+      width: 1280,
+      height: 800
+    })
+    expect(readInitialWindowSize({ GPUIX_WINDOW_SIZE: '640x480' })).toEqual({
+      width: 800,
+      height: 600
+    })
   })
 
   test('a malformed size is refused', () => {

@@ -246,3 +246,69 @@ export async function setTheme(
     baseRevision: current.revision ?? 0
   })
 }
+
+interface StoreRead {
+  revision?: number
+  value?: { _version?: number; data?: unknown } | null
+}
+
+/** The shared key bindings. Every client run starts with `{}` there: each client's own default keymap. */
+export const SHORTCUTS_KEY = 'settings/keyboard-shortcuts'
+
+/**
+ * Replace a shared last-writer-wins key (`settings/keyboard-shortcuts`) the way
+ * its store writes it, against the revision the server holds.
+ */
+export async function writeShared(world: World, logicalKey: string, data: unknown): Promise<void> {
+  const key = `shared/lww/${logicalKey}`
+  const current = await world.ws.request<StoreRead>('store_read', { key })
+  await world.ws.request('store_write', {
+    key,
+    value: { _version: 1, data },
+    baseRevision: current.revision ?? 0
+  })
+}
+
+/** The SSH hosts the `ssh.workspace` surface lists. */
+export const SSH_PROFILES = [
+  {
+    id: 'm1-ssh-staging',
+    name: 'staging',
+    host: 'staging.example.invalid',
+    port: 22,
+    username: 'deploy',
+    authMethod: 'agent',
+    portForwards: [],
+    group: 'Servers'
+  },
+  {
+    id: 'm1-ssh-build',
+    name: 'build-box',
+    host: '10.0.0.7',
+    port: 2222,
+    username: 'ci',
+    authMethod: 'key',
+    privateKeyPath: '~/.ssh/id_matrix',
+    portForwards: [],
+    favorite: true
+  }
+]
+
+/**
+ * Put the SSH hosts in the server-side store, once. The first host-local
+ * client to list hosts copies the stored ones to the host's own list
+ * (`ssh-api.ts`, `copyStoreProfilesToHost`), so both clients then list them.
+ */
+export async function seedSshProfiles(world: World): Promise<void> {
+  const key = 'shared/cas/ssh/profiles'
+  const current = await world.ws
+    .request<StoreRead>('store_read', { key })
+    .catch((): StoreRead => ({}))
+  if (current.value) return
+  await world.ws.request('store_write', {
+    key,
+    value: { _version: 1, data: SSH_PROFILES },
+    expected: null,
+    commandId: commandId('ssh-seed')
+  })
+}

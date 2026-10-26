@@ -17,6 +17,7 @@ import { DIST_WEB } from '../parity/shoot-web'
 import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import { pickPort } from '../shared/seed'
 import { webDriver } from './drive'
+import { grantHostLocal } from './host-local'
 import { SURFACES } from './surfaces'
 import { createWorld, prepareDevice, TOKEN } from './world'
 
@@ -45,7 +46,7 @@ try {
     console.log(`===== ${surface.id}`)
     const deviceId = `m1-probe-${n}`
     await prepareDevice(world, deviceId)
-    await surface.prepare?.(world)
+    await surface.prepare?.(world, 'web')
     const context = await browser.newContext({
       viewport: { width: WINDOW_WIDTH, height: WINDOW_HEIGHT },
       colorScheme: 'dark',
@@ -59,6 +60,7 @@ try {
         return route.fulfill({ path: file })
       return route.continue()
     })
+    if (surface.reference === 'web-host-local') await grantHostLocal(context, world)
     await context.addInitScript(
       ({ token, deviceId }) => {
         localStorage.setItem('termul.webAuthToken', token)
@@ -67,8 +69,11 @@ try {
       { token: TOKEN, deviceId }
     )
     const page = await context.newPage()
-    await page.goto(`${world.server.baseUrl}/`)
-    await page.getByText('What should we do in alpha?').first().waitFor({ timeout: 30_000 })
+    await page.goto(`${world.server.baseUrl}/${surface.start?.hash ?? ''}`)
+    await page
+      .getByText(surface.start?.ready ?? 'What should we do in alpha?')
+      .first()
+      .waitFor({ timeout: 30_000 })
     const driver = webDriver(page, new Map())
     for (const step of surface.steps) {
       let failed = false

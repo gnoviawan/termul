@@ -29,8 +29,25 @@ function hashEvent(type: 'hashchange', oldURL: string, newURL: string): Event {
   return Object.assign(new Event(type), { oldURL, newURL })
 }
 
-export function createSessionHistory(origin: URL, events: EventTarget): SessionHistory {
-  const entries: Entry[] = [{ url: new URL('/', origin), state: null }]
+/**
+ * `GPUIX_START_HASH`, a hash route (`#/snapshots`) to boot on. The parity
+ * matrix uses it for a route no desktop shell links to; anything not shaped
+ * `#/...` is ignored.
+ */
+export function startHash(raw: string | undefined): string {
+  const hash = raw?.trim() ?? ''
+  if (hash === '' || hash.startsWith('#/')) return hash
+  log.warn('history', `GPUIX_START_HASH ${JSON.stringify(hash)} is not a #/ route; ignored`)
+  return ''
+}
+
+/** `startHash` (`#/snapshots`) is the first entry's fragment: the route the app boots on. */
+export function createSessionHistory(
+  origin: URL,
+  events: EventTarget,
+  startHash = ''
+): SessionHistory {
+  const entries: Entry[] = [{ url: new URL(`/${startHash}`, origin), state: null }]
   let index = 0
   const current = () => entries[index]
 
@@ -38,7 +55,10 @@ export function createSessionHistory(origin: URL, events: EventTarget): SessionH
     if (url === null || url === undefined) return new URL(current().url)
     const next = new URL(String(url), current().url)
     if (next.origin !== origin.origin) {
-      throw new DOMException(`history: ${next.href} is not same-origin with ${origin.origin}`, 'SecurityError')
+      throw new DOMException(
+        `history: ${next.href} is not same-origin with ${origin.origin}`,
+        'SecurityError'
+      )
     }
     return next
   }

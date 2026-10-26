@@ -91,11 +91,34 @@ export type AreaId =
   | 'snapshots'
   | 'dialogs'
 
+/**
+ * What GPUIX is compared against.
+ *
+ * - `web`: the DOM web client in Chromium.
+ * - `web-host-local`: the web client with the server's host-local credential
+ *   added to its `/ws` handshake by a Playwright WebSocket route (no product
+ *   code), and GPUIX attached with the same credential. Both then render the
+ *   shared components only a host-local client gets (SSH, Claude account
+ *   management), as the launched GPUIX app does.
+ * - `tauri`: the shipped desktop app (Tauri on WebKitGTK) built from the same
+ *   checkout, driven with X input (`tools/reference/`), for a surface the web
+ *   client cannot render at all (the browser pane's native webview).
+ */
+export type Reference = 'web' | 'web-host-local' | 'tauri'
+
 export interface Surface {
   id: string
   area: AreaId
   title: string
   steps: Step[]
+  /** Default `web`. */
+  reference?: Reference
+  /**
+   * Start both clients on this hash route (`#/snapshots`) instead of the
+   * dashboard, and wait for `ready` instead of the dashboard's launcher text.
+   * GPUIX starts there through `GPUIX_START_HASH`.
+   */
+  start?: { hash: string; ready: string }
   /** Web selector of the surface's region, measured after the last step and cropped from both frames. */
   roi?: string
   /** Not driven: the surface waits on another unit. */
@@ -103,7 +126,7 @@ export interface Surface {
   /** Not driven: no reference to compare against, for the reason given. */
   blocked?: string
   /** Server-side setup run before each client's run (re-seeds what an earlier run changed). */
-  prepare?(world: import('./world').World): Promise<void>
+  prepare?(world: import('./world').World, client: Client): Promise<void>
 }
 
 export interface ActionLog {
@@ -147,6 +170,9 @@ export interface SurfaceResult {
   id: string
   ranAt: string
   auto: AutoStatus
+  /** Which client `web` holds; absent means the web client. */
+  reference?: Reference
+  /** The reference client's run: the web client's, or the Tauri app's when `reference` is `tauri`. */
   web?: ClientRun
   gpuix?: ClientRun
   diffs: StepDiff[]

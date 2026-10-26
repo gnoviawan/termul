@@ -97,6 +97,7 @@ host-local features (Claude accounts, SSH).
 | `TERMUL_GPUIX_KEEP_SERVER=1` | Leave the managed server running on quit for the next launch to reuse | unset |
 | `NAPI_RS_NATIVE_LIBRARY_PATH` | Load this `@gpuix/native` addon instead of the npm one | unset |
 | `GPUIX_BACKGROUND=1` | Open the window without taking focus (headless and agent runs) | unset |
+| `GPUIX_START_HASH` | Boot on this hash route (`#/snapshots`); the parity matrix uses it for a route no desktop shell links to | unset: the dashboard |
 
 ### The patched native addon
 

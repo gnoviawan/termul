@@ -30,7 +30,7 @@ import path from 'node:path'
 import { installCometFrames } from './comet-frames'
 import type { ClientConfig } from './config'
 import { installDom } from './dom'
-import { createSessionHistory } from './history'
+import { createSessionHistory, startHash } from './history'
 import { FileStorage, MemoryStorage } from './storage'
 
 export interface BrowserEnv {
@@ -63,7 +63,11 @@ export function installBrowserEnv(config: ClientConfig, viewport: Viewport): Bro
   })
   // The page's global object is `window`; Bun's global is already an event target.
   const window = globalThis as unknown as EventTarget & Record<string, unknown>
-  const { location, history } = createSessionHistory(config.serverUrl, window)
+  const { location, history } = createSessionHistory(
+    config.serverUrl,
+    window,
+    startHash(process.env.GPUIX_START_HASH)
+  )
   Object.assign(window, {
     window,
     self: window,

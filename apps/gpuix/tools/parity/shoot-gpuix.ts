@@ -143,6 +143,8 @@ export interface GpuixSessionOptions {
   width: number
   height: number
   clientStateDir: string
+  /** More environment for the client (`TERMUL_GPUIX_DATA_DIR`, `GPUIX_START_HASH`). */
+  env?: Record<string, string>
 }
 
 export interface GpuixSession {
@@ -175,7 +177,8 @@ export async function withGpuix<T>(
         GPUIX_WINDOW_SIZE: `${opts.width}x${opts.height}`,
         TERMUL_SERVER_URL: opts.server.baseUrl,
         TERMUL_SERVER_TOKEN: opts.server.token,
-        TERMUL_GPUIX_STATE_DIR: opts.clientStateDir
+        TERMUL_GPUIX_STATE_DIR: opts.clientStateDir,
+        ...opts.env
       }
     })
     try {
