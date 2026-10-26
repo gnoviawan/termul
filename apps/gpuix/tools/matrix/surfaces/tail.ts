@@ -360,8 +360,12 @@ const LONG_TAIL: Surface[] = [
     id: 'update.toast',
     area: 'notifications',
     title: "Update available toast and what's new modal",
-    blocked:
-      'Both render only when isTauriContext() is true (App.tsx WhatsNewModal, UpdateAvailableToast); the web client never shows them, so there is no reference to compare against',
+    reference: 'tauri',
+    pending: {
+      unit: "U1 GPUIX updater and what's new",
+      reason:
+        'GPUIX has neither (App.tsx renders WhatsNewModal and UpdateAvailableToast only under isTauriContext()); the reference is the desktop app, which shows the toast against a release feed and the modal after a version change'
+    },
     steps: []
   },
   {

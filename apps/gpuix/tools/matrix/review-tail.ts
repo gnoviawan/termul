@@ -156,10 +156,15 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
 
   'shortcuts.desktop-keymap': {
-    status: 'blocked',
+    status: 'partial',
     differences: [
-      'No web reference. GPUIX registers a desktop host, which now gets the same Ctrl-based keymap as Tauri (G4): workspace-checks asserts Ctrl+, opens Preferences, Ctrl+R opens command history and Alt+, does nothing.'
-    ]
+      'Reference (R5): the web client with the desktop table bound as custom keys, as a web user can set them in Keyboard shortcuts; GPUIX presses the same keys with its default (desktop) keymap. Headless Chromium hands Ctrl+T, Ctrl+W and Ctrl+R to the page.',
+      'Every key does the same in both: Ctrl+T shows the agent launcher over Terminal 1 and a second Ctrl+T hides it, Ctrl+W asks to close Terminal 1 and Close removes it, Ctrl+R opens Command History, Ctrl+, opens Preferences and Ctrl+= zooms in.',
+      'The last frame differs as in shortcuts.zoom-in: the zoomed web page runs past the window bottom, and GPUIX keeps the status bar in the window.'
+    ],
+    cause: 'needs diagnosis',
+    unit: 'web zoom overflow (unassigned)',
+    impact: 1
   },
 
   'notifications.toast': {
@@ -172,17 +177,25 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
 
   'ssh.workspace': {
-    status: 'blocked',
+    status: 'partial',
     differences: [
-      'No web reference: SSH needs a host-local client and a browser never is one, so the web client shows no SSH section.',
-      'R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render. Not rerun here.'
-    ]
+      'Reference (R5): the web client with the host-local credential added to its handshake, and GPUIX attached with the same credential, as the launched app is. Both list the two seeded hosts in the sidebar SSH section, with the build-box favourite first.',
+      'The Hosts tab matches: the search field, Import and New host, and the Favorites and Servers groups with the same rows.',
+      'The New host dialog differs. The web sets Address and Port on one row (`grid-cols-[1fr_6rem]`); GPUIX stacks Port under Address, so the Organize section is scrolled out of the dialog.'
+    ],
+    cause: 'compat translator gap',
+    unit: 'arbitrary grid columns (unassigned)',
+    impact: 1
   },
   'settings.accounts-claude': {
-    status: 'blocked',
+    status: 'partial',
     differences: [
-      'No web reference: Claude account management needs a host-local client. The R1-R3 e2e kit (reports/r1-e2e, accounts mode) covers the server path; no GPUIX pixel check of the sign-in flow exists yet.'
-    ]
+      'Reference (R5): the web client with the host-local credential, and GPUIX attached with the same credential. Both show Add account, the Keep work and personal apart card, and the Add a Claude account dialog with the name typed. The run stops before Continue, which would start a real claude.ai sign-in on the host.',
+      'The Accounts section has the gap settings.provider has: GPUIX puts the usage note under the account name, and the row menu on a line of its own, where the web sets them beside the name.'
+    ],
+    cause: 'compat translator gap',
+    unit: 'account row wide layout (unassigned)',
+    impact: 1
   },
   'settings.interface': {
     status: 'ported',
@@ -303,21 +316,38 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     ]
   },
   'browser.pane': {
-    status: 'blocked',
+    status: 'partial',
     differences: [
-      'Not compared: the web client offers no browser tab, so there is no reference. GPUIX does have browser panes, a WebKitGTK webview in the `termul-webview-host` helper placed as an X11 child window (README, Browser panes), and `bun run package:verify` loads a local page in one from the .deb; neither was rerun here.'
-    ]
+      'Reference (R5): the desktop app (Tauri on WebKitGTK) built from the same checkout, driven with X input at the same 1280x800 (`tools/reference/tauri.ts`). Ctrl+Shift+N opens a browser tab in both and the typed URL loads the local reference page. Both panes are WebKitGTK webviews, and the page lands on the same pixels; the pane region reads 0.94 % perceptual.',
+      "GPUIX shows the Debug Console button beside the URL field. BrowserControls shows it only when `import.meta.env.PROD` is false, and the GPUIX bundle does not define it; the desktop app's and the web's production builds hide it.",
+      "The desktop app injects its agentation toolbar into every page it loads (browser_tab_manager.rs, enabled by default), a round button at the page's bottom right; the GPUIX helper injects it only on a click.",
+      'The desktop tab still reads 127.0.0.1:8289 after the page loaded; GPUIX names the tab after the page title.',
+      'The desktop app draws its own window buttons at the right of the tab bar; GPUIX leaves them to the window manager. The rail differs outside the pane: the desktop app is host-local (an SSH section) and has no seeded chat.'
+    ],
+    cause: 'missing GPUIX capability',
+    unit: 'browser pane production flag and agentation auto-inject (unassigned)',
+    impact: 1
   },
   'update.toast': {
-    status: 'blocked',
+    status: 'pending-unit',
     differences: [
-      "Not compared: the update toast and the what's new modal render only under isTauriContext(), so neither client shows them (the web hides them by design). The packaged GPUIX app has a command-line check, `termul-gpuix --check-update`, against the release feed, but no in-app toast."
+      "GPUIX has neither the update toast nor the what's new modal; App.tsx renders both only under isTauriContext(). The reference is the desktop app (`tools/reference/tauri.ts`): the toast against a release feed, the modal after a version change. The packaged GPUIX app has a command-line check, `termul-gpuix --check-update`."
     ],
     cause: 'native override needed',
     unit: "U1 GPUIX updater and what's new",
     impact: 1
   },
 
+  'snapshots.page': {
+    status: 'partial',
+    differences: [
+      'Reference (R5): both clients start on #/snapshots, the web by URL and GPUIX through GPUIX_START_HASH; no desktop shell links to the route (only the mobile drawer). The header, Create New Snapshot and the Create Snapshot dialog match.',
+      'GPUIX paints nothing under the header where the web shows the empty state: the camera, No snapshots yet and Create First Snapshot. The text is in the automation tree, so the check passes; the block is not painted.'
+    ],
+    cause: 'needs diagnosis',
+    unit: 'snapshots empty state (unassigned)',
+    impact: 2
+  },
   'theme.tokyonight-light': {
     status: 'ported',
     differences: [

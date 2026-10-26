@@ -697,8 +697,12 @@ const STATUSBAR: Surface[] = [
     id: 'remote.access-popover',
     area: 'remote',
     title: 'Remote access popover (desktop shared-live host)',
-    blocked:
-      'StatusBar renders RemoteAccessPopover only under isTauriContext(); the web client has none to compare, and GPUIX would need the desktop host role from the server',
+    reference: 'tauri',
+    pending: {
+      unit: 'R4 desktop host role over the server',
+      reason:
+        "GPUIX has no remote access popover yet (StatusBar renders it only under isTauriContext()); the reference is the desktop app's status-bar popover (tools/reference/tauri.ts)"
+    },
     steps: []
   }
 ]

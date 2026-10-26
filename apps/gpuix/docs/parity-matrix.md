@@ -32,6 +32,24 @@ FIGCRAFT_BUNDLE_DIR=/tmp/gpuix-<unit>/figcraft-bundle \
   bun run parity:matrix --only canvas.open,palette.open-canvas
 ```
 
+Five surfaces need more than the web client (R5; see References below).
+`ssh.workspace` and `settings.accounts-claude` need a `termul-server` that
+writes the host-local credential: the shared release build does, the older
+`/root/gpuix-bin/termul-server` does not, and the run stops with that
+advice. `browser.pane` needs the desktop app built from the same checkout
+(at the repo root) and the webview helper in `dist/`:
+
+```sh
+CARGO_TARGET_DIR=/root/termul-wt/gpuix/src-tauri/target \
+  bun x tauri build --config src-tauri/tauri.conf.dev.json --no-bundle
+cd apps/gpuix
+CARGO_TARGET_DIR=/root/termul-wt/gpuix/src-tauri/target bun tools/webview-host.ts --release
+TERMUL_SERVER_BIN=/root/termul-wt/gpuix/src-tauri/target/release/termul-server \
+  bun run parity:matrix --only browser.pane,ssh.workspace,settings.accounts-claude,shortcuts.desktop-keymap,snapshots.page
+```
+
+`TERMUL_TAURI_BIN` points the run at another desktop build.
+
 Output goes to `parity-out/matrix/<surface>/<step>/` (`web.png`, `gpuix.png`,
 `diff.png`, the region crops and `pair.png`) and `parity-out/matrix/results.json`.
 A partial run updates only the surfaces it ran. `results.json` and the PNGs
@@ -81,6 +99,19 @@ deleted at the start and end of the run, so keep `--out` outside
 5. One frame is grabbed per step in each client. `diff.ts` counts exact and
    perceptual (pixelmatch 0.1) mismatches for the full frame and for the
    surface's region.
+6. A surface names its reference (`Reference` in `types.ts`). Most compare
+   against the web client. `web-host-local` adds the server's host-local
+   credential to the web client's `/ws` handshake through a Playwright
+   WebSocket route (`host-local.ts`; the web bundle is unchanged) and
+   attaches GPUIX with the same credential, as the launched app is.
+   `tauri` runs GPUIX first and then the desktop app
+   (`tools/reference/tauri.ts`): a fresh Xvfb display, a throwaway HOME
+   seeded with the world's four projects, the window placed at 1280x800,
+   and XTEST keys and clicks. A click lands where GPUIX found the same
+   target. The desktop app's text cannot be read, so it has no checks; each
+   frame is grabbed once two grabs a second apart match, and the region is
+   a fixed rectangle (`roiRect`). A surface can also start both clients on
+   a hash route (`start`); GPUIX boots there through `GPUIX_START_HASH`.
 
 ## Statuses and scores
 
@@ -89,8 +120,8 @@ deleted at the start and end of the run, so keep `--out` outside
 | ported | Every action and check passes in GPUIX, and the pair shows no difference a user would notice beyond font rasterization. |
 | partial | The interactions work, but the pair shows visible or behavioral differences. |
 | broken | An action or check that passes on the web fails in GPUIX, or GPUIX shows the wrong thing. |
-| blocked | There is no web reference to compare (a Tauri-only surface), or a missing platform capability stops it. |
-| pending-unit | Waits on another unit (named in the table). |
+| blocked | No reference exists, or a missing platform capability stops the run. Since R5 no surface is blocked. |
+| pending-unit | Waits on another unit (named in the table), such as a surface GPUIX does not have yet. |
 | unverified | The web reference itself failed; the harness needs work before the surface counts. |
 
 The automatic status in `results.json` only knows the checks and a 2 %
@@ -156,15 +187,72 @@ failed only because native prose was not in the automation tree now pass
 (gpuix/0013), and the wheel over the transcript finds its target by text
 instead of the web's point.
 
-**Where it stands.** 117 surfaces: 98 ported, 12 partial, 0 broken, 7
-blocked. The usage-weighted score is 89.9 % over all surfaces and 92.9 %
-over the 110 measured ones. Unweighted, it is 88.9 % and 94.5 %. By area,
-the composer, terminal, git, explorer, side panel, status bar, palette,
-themes, dialogs and canvas are at 100 %. The rail is at 95 % and the editor
-at 87.5 %. Settings (82.1 %), shortcuts (78.6 %) and chat (70 %) are the
-measured areas below that, and chat carries the most weight. The browser
-pane, SSH and remote access score 0, and notifications and snapshots 50 %,
-only because a surface in each has no web reference.
+**R5 references (2026-10-26).** The seven surfaces G13 scored as blocked
+now each have a reference, rerun on `gpuix/r5` (the `exp/gpuix-client`
+head 1408ef5e plus R5's harness) with the patched addon at series
+4fa19363 (`bun run native:patch-check`: 32 checks pass), the worktree's own
+`bun run build:web`, the shared release `termul-server` (built 2026-10-25,
+the first with the host-local credential), and the desktop app built from
+this checkout with `tauri.conf.dev.json`. Each ran twice; the two runs agree
+within 0.01 point of perceptual mismatch on every surface (last step, full
+frame then region where one is set):
+
+| Surface | Reference | Run 1 | Run 2 | Reviewed |
+| --- | --- | --- | --- | --- |
+| `browser.pane` | the desktop app | 1.09 %, region 0.94 % | 1.10 %, region 0.95 % | partial |
+| `ssh.workspace` | web host-local | 1.47 % | 1.47 % | partial |
+| `settings.accounts-claude` | web host-local | 0.18 %, region 0.27 % | 0.19 %, region 0.27 % | partial |
+| `shortcuts.desktop-keymap` | web, desktop keys bound | 2.32 % | 2.32 % | partial |
+| `snapshots.page` | web on `#/snapshots` | 0.40 % | 0.40 % | partial |
+
+Every action and check passed in both clients in both runs. Each status
+comes from the PNG pairs, and each surface has one gap a user would see:
+
+- browser.pane: the desktop app and GPUIX both run the pane in a WebKitGTK
+  webview, and the reference page lands on the same pixels. GPUIX shows the
+  dev-only Debug Console button beside the URL field, because the GPUIX
+  bundle leaves `import.meta.env.PROD` undefined. GPUIX also does not inject
+  the agentation toolbar on load, as the desktop app does.
+- ssh.workspace: the sidebar section and the Hosts tab match. In the New
+  host dialog GPUIX stacks Port under Address, where `grid-cols-[1fr_6rem]`
+  sets them on one row.
+- settings.accounts-claude: Add account and the dialog's name step match.
+  The account row shows the wide-layout gap settings.provider already had.
+- shortcuts.desktop-keymap: Ctrl+T, Ctrl+W, Ctrl+R, Ctrl+, and Ctrl+= do the
+  same thing in both clients. The last frame shows the web zoom overflow
+  that shortcuts.zoom-in already records.
+- snapshots.page: GPUIX paints nothing under the header where the web shows
+  the empty state (No snapshots yet, Create First Snapshot). The text is in
+  the automation tree, so the check passes and only the pair shows the gap.
+
+The remote access popover and the update toast are not blocked anymore:
+the desktop app is their reference, and GPUIX does not have either surface
+yet. They wait on R4 and U1 (`pending-unit`) and still score 0. The
+desktop harness reaches the popover: one XTEST click on the status bar's
+remote access button opens Remote Agent Access with its Enable remote
+access switch.
+
+R5 also found a product defect outside GPUIX. On its first run the web
+client, as a host-local client against a fresh server, showed the error
+toast 'Could not save "ssh/profiles-migrated": another device changed it
+first. Try again.' The likely cause is two concurrent first host-side lists. Both
+write the create-only marker. `copyStoreProfilesToHost` treats the loser's
+`STORE_CAS_FAILED` as success, but the persistence layer shows the error
+toast anyway (inferred from the code; not reproduced in isolation). The
+matrix now seeds the hosts and the marker over a host-local socket, so no
+client runs that copy.
+
+**Where it stands.** 117 surfaces: 98 ported, 17 partial, 0 broken, 0
+blocked, 2 pending-unit. The usage-weighted score is 91.0 % over all
+surfaces and 91.9 % over the 115 measured ones. Unweighted, it is 91.0 %
+and 92.6 %. Before R5 the score was 89.9 %, and the 92.9 % over measured
+surfaces covered 110 of them. The five new references added 1.1 points,
+because each surface moved from 0 to partial. By area, the composer,
+terminal, git, explorer, side panel, status bar, palette, themes, dialogs
+and canvas are at 100 %. The rail is at 95 %, the editor at 87.5 %, and
+settings and shortcuts at 85.7 %. Snapshots is at 75 %, and chat, the
+browser pane, SSH and notifications at 50 to 70 %. Remote access is at 0,
+because GPUIX does not have its one surface yet.
 
 Against G12 (88.6 % weighted, 94 ported), three surfaces moved from partial
 to ported and none moved down. settings.skills, settings.shortcuts and
@@ -219,28 +307,53 @@ back (the Proposed units table below), with its cause class:
    diagnosis), the Accounts row's wide layout and the inline code wrap in
    the MCP footnote (compat translator gaps), and the web's zoom overflow
    (needs diagnosis).
+6. R5's references added three units and extended two. The browser pane's
+   production flag and agentation auto-inject (+0.5), arbitrary grid
+   columns (+0.3) and the snapshots empty state (+0.1) are new. The Accounts
+   row layout now covers two surfaces (+0.3), and so does the web zoom
+   overflow (+0.1).
 
-**What 99 % parity requires.** On the usage-weighted score, 99 % allows
-losing about one point of the 100 weight. If every unit in the table fixed
-every surface it names, the score would be 97.8 %. The other 2.2 points are
-surfaces with no web reference: the browser pane (1.0), SSH (0.5), Claude
-accounts (0.29 of settings), the snapshots page (0.25) and the desktop
-keymap (0.14 of shortcuts). GPUIX has a browser pane and SSH; the matrix
-cannot score them against a web client that has neither. So 99 % takes
-three kinds of work.
+**What 99 % parity requires.** Every surface now has a reference, so the
+target can be measured. If every unit in the Proposed units table fixed
+every surface it names, the score would be 100.0 %. Before R5 the limit
+was 97.8 %, because the 2.2 points of reference-less surfaces could never
+score. The score is 91.0 %, so 99 % means winning back 8 of the 9 open
+points. At most one point of the 100 weight can stay open.
+
+Five references are fair comparisons and need no special rule:
+
+- The browser pane (1.0 of the weight) is compared with the desktop app.
+  The web client has no browser tab, and both desktop shells run the page
+  in a WebKitGTK webview.
+- SSH (0.5) and Claude accounts (0.29) are compared with the web client
+  granted the host-local capability that the launched GPUIX app has. Both
+  clients render the same shared components with the same data.
+- The desktop keymap (0.14) is compared with the web client pressing the
+  same keys, bound as custom keys.
+- The snapshots page (0.25) is compared with the web client on the same
+  route.
+
+None of these references is shipped. The WebSocket route exists only in the
+harness. `GPUIX_START_HASH` is an environment flag, unset in normal use.
+The custom keys are a setting that a web user can make.
+
+The units in order of points:
 
 1. Land the chat units first. Chat is 17 of the 100 weight and holds 6 of
-   the 12 partial surfaces. The tail spacing and the four +0.9 chat units
-   are worth 5.3 points together, more than all other units combined.
-2. Diagnose the gap that may be a behavior bug rather than a cosmetic one:
-   the empty agent registry list in settings.
-3. Give the reference-less surfaces a reference: a Tauri screenshot harness,
-   or a GPUIX-only functional check (R2's SSH run is one) that the matrix
-   accepts as the score.
+   the 17 partial surfaces. The tail spacing and the four +0.9 chat units
+   are worth 5.3 points together.
+2. The two pending surfaces are worth 1.0: R4's remote access popover and
+   U1's update toast. Each needs a GPUIX feature, and then a Tauri-driven
+   step for the matrix.
+3. The editor's markdown preview (+0.9), the browser pane (+0.5) and the
+   title tooltips (+0.5) come next.
+4. The six remaining units are each worth 0.3 or less, about 1.0
+   together. That is the most that may stay open, so 99 % needs every unit
+   above them as well.
 
-Ninety-nine percent also means every partial surface reaches ported, so the
-cosmetic settings and editor units count even though no single one looks
-important.
+Two gaps may be behavior bugs rather than cosmetic ones: the empty agent
+registry list in settings, and the unpainted snapshots empty state. Diagnose
+them first.
 
 **Flakes.** A surface that differed in the full run and matched on a rerun
 is recorded here and scored from its matching run. A surface that differed
@@ -326,7 +439,10 @@ prompt with no echoed replies, again in this run. It is most likely a
 fixture artifact, because the fixture writes its inputs to the PTY back to
 back (inferred; the fixture was not rerun). It is not counted as a gap.
 
-**How far to trust a row.** GPUIX text checks read the automation tree.
+**How far to trust a row.** A `tauri` row's reference has no checks: the
+desktop app's text cannot be read, so its frames are the whole record, and
+a click there lands where GPUIX found the target. Read those pairs whole.
+GPUIX text checks read the automation tree.
 Natively painted text (chat prose, the editor, terminal cells) is not in that
 tree, so those checks fail even when the text is on screen. Those rows were
 decided from the PNG pairs. The automatic status in the table is the
@@ -343,16 +459,16 @@ status is the one that counts.
 - Composer pills with real files, because a bare @ lists no files on this
   server in either client.
 - Panel divider resize. D1 reports that it works and persists the size.
-- The mobile layout, the snapshots page and what's new.
+- The mobile layout and what's new.
 
 <!-- matrix:begin (generated by `bun run parity:matrix`; edit tools/matrix/review.ts, not this block) -->
 
-Surfaces: 117 (ported 99, partial 12, broken 0, blocked 6, unverified 0, pending-unit 0).
+Surfaces: 117 (ported 98, partial 17, broken 0, blocked 0, unverified 0, pending-unit 2).
 
 | Score | All surfaces (pending, blocked and unverified count 0) | Measured surfaces only |
 | --- | ---: | ---: |
-| Unweighted | 89.7% | 94.6% |
-| Usage-weighted | 90.1% | 92.9% |
+| Unweighted | 91.0% | 92.6% |
+| Usage-weighted | 91.0% | 91.9% |
 
 ### By area
 
@@ -366,18 +482,18 @@ Surfaces: 117 (ported 99, partial 12, broken 0, blocked 6, unverified 0, pending
 | explorer | 7 | 4 | 4 | 0 | 0 | 0 | 100.0% |
 | editor | 7 | 4 | 3 | 1 | 0 | 0 | 87.5% |
 | side-panel | 5 | 5 | 5 | 0 | 0 | 0 | 100.0% |
-| settings | 4 | 14 | 10 | 3 | 0 | 1 | 82.1% |
+| settings | 4 | 14 | 10 | 4 | 0 | 0 | 85.7% |
 | statusbar | 3 | 3 | 3 | 0 | 0 | 0 | 100.0% |
 | palette | 3 | 11 | 11 | 0 | 0 | 0 | 100.0% |
 | theme | 2 | 21 | 21 | 0 | 0 | 0 | 100.0% |
-| shortcuts | 1 | 7 | 5 | 1 | 0 | 1 | 78.6% |
+| shortcuts | 1 | 7 | 5 | 2 | 0 | 0 | 85.7% |
 | dialogs | 1 | 1 | 1 | 0 | 0 | 0 | 100.0% |
-| browser | 1 | 1 | 0 | 0 | 0 | 1 | 0.0% |
+| browser | 1 | 1 | 0 | 1 | 0 | 0 | 50.0% |
 | notifications | 1 | 2 | 1 | 0 | 0 | 1 | 50.0% |
 | remote | 0.5 | 1 | 0 | 0 | 0 | 1 | 0.0% |
-| snapshots | 0.5 | 2 | 2 | 0 | 0 | 0 | 100.0% |
+| snapshots | 0.5 | 2 | 1 | 1 | 0 | 0 | 75.0% |
 | canvas | 0.5 | 1 | 1 | 0 | 0 | 0 | 100.0% |
-| ssh | 0.5 | 1 | 0 | 0 | 0 | 1 | 0.0% |
+| ssh | 0.5 | 1 | 0 | 1 | 0 | 0 | 50.0% |
 
 ### Ranked gaps
 
@@ -396,9 +512,14 @@ Rank is the reviewed impact (1 to 3) times the area weight.
 | 9 | `editor.markdown` | partial | native override needed | E2 markdown preview parity | 7 | Preview has the "On this page" outline (G4) and the heading and paragraph rows land on the web rows; heading sizes follow BlockNote (48/32 px). The heading has no -0.018em letter spacing (GPUIX has none), so "Alpha guide" is about 10 px wider, and the list bullets are larger and brighter, with the items set further right. The tab reads "guide.md" in full at the web width (C15 fixed in G5). A title tooltip paints at once under the pointer after a click, anchored over the element, where the web shows none in the frame. |
 | 10 | `settings.provider` | partial | compat translator gap | account row wide layout (unassigned) | 4 | Accounts lists the Default account, Signed in, with "Usage is not available right now", Try again and the `termul-server claude account` hint in both. The skeleton M2 saw was the frame grab racing the list: the step checked for the nav label it had just clicked. It now waits for "1 account", which GPUIX painted 1871 ms after the click and the web 158 ms after (G6 run). GPUIX puts the usage note under the account name, where the web sets it beside the name in the wide layout. The scrim dims and blurs the page behind it as on the web (N2). |
 | 11 | `settings.mcp-servers` | partial | compat translator gap | inline code wrap in settings text (unassigned) | 4 | The section content and navigation match. The scrim dims and blurs the page behind it as on the web (N2). The inline code in the footnote breaks onto its own line. |
-| 12 | `shortcuts.zoom-in` | partial | needs diagnosis | web zoom overflow (unassigned) | 1 | Each client presses its own key (G3: the web Alt+=, GPUIX the desktop Ctrl+= from G4's keymap), and both zoom: the rail and sidebar widen alike (G4, shims/window-zoom.ts; tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both). The zoomed web page runs past the window bottom, so its status bar is cut off and the dashboard heading sits 25 px lower; GPUIX keeps the status bar in the window. After the shortcut both composers rest unfocused (G12). The step first clicks the rail's Projects label, and the web blurs the composer there: Chromium's default action for a press no listener prevented moves focus to body when the pressed content takes none. GPUIX now does the same (`compat/window-press.ts`), where GPUI had kept the composer focused. |
-| 13 | `update.toast` | blocked | native override needed | U1 GPUIX updater and what's new | 1 | Not compared: the update toast and the what's new modal render only under isTauriContext(), so neither client shows them (the web hides them by design). The packaged GPUIX app has a command-line check, `termul-gpuix --check-update`, against the release feed, but no in-app toast. |
-| 14 | `remote.access-popover` | blocked | server route needed | R4 desktop host role over the server | 0.5 | Not compared: the popover renders only under isTauriContext(), so the web client has no reference. |
+| 12 | `settings.accounts-claude` | partial | compat translator gap | account row wide layout (unassigned) | 4 | Reference (R5): the web client with the host-local credential, and GPUIX attached with the same credential. Both show Add account, the Keep work and personal apart card, and the Add a Claude account dialog with the name typed. The run stops before Continue, which would start a real claude.ai sign-in on the host. The Accounts section has the gap settings.provider has: GPUIX puts the usage note under the account name, and the row menu on a line of its own, where the web sets them beside the name. |
+| 13 | `shortcuts.zoom-in` | partial | needs diagnosis | web zoom overflow (unassigned) | 1 | Each client presses its own key (G3: the web Alt+=, GPUIX the desktop Ctrl+= from G4's keymap), and both zoom: the rail and sidebar widen alike (G4, shims/window-zoom.ts; tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both). The zoomed web page runs past the window bottom, so its status bar is cut off and the dashboard heading sits 25 px lower; GPUIX keeps the status bar in the window. After the shortcut both composers rest unfocused (G12). The step first clicks the rail's Projects label, and the web blurs the composer there: Chromium's default action for a press no listener prevented moves focus to body when the pressed content takes none. GPUIX now does the same (`compat/window-press.ts`), where GPUI had kept the composer focused. |
+| 14 | `shortcuts.desktop-keymap` | partial | needs diagnosis | web zoom overflow (unassigned) | 1 | Reference (R5): the web client with the desktop table bound as custom keys, as a web user can set them in Keyboard shortcuts; GPUIX presses the same keys with its default (desktop) keymap. Headless Chromium hands Ctrl+T, Ctrl+W and Ctrl+R to the page. Every key does the same in both: Ctrl+T shows the agent launcher over Terminal 1 and a second Ctrl+T hides it, Ctrl+W asks to close Terminal 1 and Close removes it, Ctrl+R opens Command History, Ctrl+, opens Preferences and Ctrl+= zooms in. The last frame differs as in shortcuts.zoom-in: the zoomed web page runs past the window bottom, and GPUIX keeps the status bar in the window. |
+| 15 | `browser.pane` | partial | missing GPUIX capability | browser pane production flag and agentation auto-inject (unassigned) | 1 | Reference (R5): the desktop app (Tauri on WebKitGTK) built from the same checkout, driven with X input at the same 1280x800 (`tools/reference/tauri.ts`). Ctrl+Shift+N opens a browser tab in both and the typed URL loads the local reference page. Both panes are WebKitGTK webviews, and the page lands on the same pixels; the pane region reads 0.94 % perceptual. GPUIX shows the Debug Console button beside the URL field. BrowserControls shows it only when `import.meta.env.PROD` is false, and the GPUIX bundle does not define it; the desktop app's and the web's production builds hide it. The desktop app injects its agentation toolbar into every page it loads (browser_tab_manager.rs, enabled by default), a round button at the page's bottom right; the GPUIX helper injects it only on a click. The desktop tab still reads 127.0.0.1:8289 after the page loaded; GPUIX names the tab after the page title. The desktop app draws its own window buttons at the right of the tab bar; GPUIX leaves them to the window manager. The rail differs outside the pane: the desktop app is host-local (an SSH section) and has no seeded chat. |
+| 16 | `update.toast` | pending-unit | native override needed | U1 GPUIX updater and what's new | 1 | GPUIX has neither the update toast nor the what's new modal; App.tsx renders both only under isTauriContext(). The reference is the desktop app (`tools/reference/tauri.ts`): the toast against a release feed, the modal after a version change. The packaged GPUIX app has a command-line check, `termul-gpuix --check-update`. |
+| 17 | `snapshots.page` | partial | needs diagnosis | snapshots empty state (unassigned) | 1 | Reference (R5): both clients start on #/snapshots, the web by URL and GPUIX through GPUIX_START_HASH; no desktop shell links to the route (only the mobile drawer). The header, Create New Snapshot and the Create Snapshot dialog match. GPUIX paints nothing under the header where the web shows the empty state: the camera, No snapshots yet and Create First Snapshot. The text is in the automation tree, so the check passes; the block is not painted. |
+| 18 | `remote.access-popover` | pending-unit | server route needed | R4 desktop host role over the server | 0.5 | GPUIX has no remote access popover yet; StatusBar renders it only under isTauriContext(). The reference is the desktop app (`tools/reference/tauri.ts`), whose status bar has the button. |
+| 19 | `ssh.workspace` | partial | compat translator gap | arbitrary grid columns (unassigned) | 0.5 | Reference (R5): the web client with the host-local credential added to its handshake, and GPUIX attached with the same credential, as the launched app is. Both list the two seeded hosts in the sidebar SSH section, with the build-box favourite first. The Hosts tab matches: the search field, Import and New host, and the Favorites and Servers groups with the same rows. The New host dialog differs. The web sets Address and Port on one row (`grid-cols-[1fr_6rem]`); GPUIX stacks Port under Address, so the Organize section is scrolled out of the dialog. |
 
 ### Proposed units
 
@@ -413,20 +534,35 @@ Each unit with the surfaces its gaps name. Gain is the usage-weighted score (all
 | 5 | plan card ring (unassigned) | compat translator gap | 1 | 17 | +0.9 |
 | 6 | title tooltips (unassigned) | compat translator gap | 1 | 9 | +0.5 |
 | 7 | agent registry list in settings (unassigned) | needs diagnosis | 1 | 8 | +0.1 |
-| 8 | E2 markdown preview parity | native override needed | 1 | 7 | +0.9 |
-| 9 | account row wide layout (unassigned) | compat translator gap | 1 | 4 | +0.1 |
+| 8 | account row wide layout (unassigned) | compat translator gap | 2 | 8 | +0.3 |
+| 9 | E2 markdown preview parity | native override needed | 1 | 7 | +0.9 |
 | 10 | inline code wrap in settings text (unassigned) | compat translator gap | 1 | 4 | +0.1 |
-| 11 | web zoom overflow (unassigned) | needs diagnosis | 1 | 1 | +0.1 |
-| 12 | U1 GPUIX updater and what's new | native override needed | 1 | 1 | +0.5 |
-| 13 | R4 desktop host role over the server | server route needed | 1 | 0.5 | +0.5 |
+| 11 | web zoom overflow (unassigned) | needs diagnosis | 2 | 2 | +0.1 |
+| 12 | browser pane production flag and agentation auto-inject (unassigned) | missing GPUIX capability | 1 | 1 | +0.5 |
+| 13 | U1 GPUIX updater and what's new | native override needed | 1 | 1 | +0.5 |
+| 14 | snapshots empty state (unassigned) | needs diagnosis | 1 | 1 | +0.1 |
+| 15 | R4 desktop host role over the server | server route needed | 1 | 0.5 | +0.5 |
+| 16 | arbitrary grid columns (unassigned) | compat translator gap | 1 | 0.5 | +0.3 |
 
-If every listed unit landed and fixed its surfaces, the usage-weighted score would be 98.1%.
+If every listed unit landed and fixed its surfaces, the usage-weighted score would be 100.0%.
+
+### References
+
+Every surface is compared against the DOM web client in Chromium except these (`Reference` in `types.ts`).
+
+| Surface | Reference | Status |
+| --- | --- | --- |
+| `remote.access-popover` | tauri | pending-unit |
+| `browser.pane` | tauri | partial |
+| `ssh.workspace` | web-host-local | partial |
+| `settings.accounts-claude` | web-host-local | partial |
+| `update.toast` | tauri | pending-unit |
 
 ### Surfaces
 
-Web and GPUIX columns count passed actions plus checks over the total. Mismatch is exact / perceptual for the last step: the full 1280x800 frame, and the region the surface names (measured in the web client, cropped from both frames).
+The Reference and GPUIX columns count passed actions plus checks over the total. The reference is the web client unless the cell names another: `web host-local` is the web client with the host-local credential, `tauri` the desktop app, which runs the actions but has no checks because its text cannot be read. Mismatch is exact / perceptual for the last step: the full 1280x800 frame, and the region the surface names (measured in the web client, or a fixed rectangle for the desktop app, cropped from both frames).
 
-| Surface | Area | Status | Auto | Web | GPUIX | Full mismatch | Region mismatch | Differences seen |
+| Surface | Area | Status | Auto | Reference | GPUIX | Full mismatch | Region mismatch | Differences seen |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
 | `rail.project-list` Project list and switching | rail | ported | ported | 10/10 | 10/10 | 5.8% / 1.02% | 3.2% / 0.61% | Same layout and order; switching to beta works by click in both (H1 fixed the lost clicks: `bun tools/clickloss/run.ts --trials 20` switched projects 60/60 through automation and XTEST). After the switch the beta composer shows Chat Scenario Agent in both. GPUIX gets there later: the agent chip appeared 967 ms (rail) and 586 ms (palette) after the switch in GPUIX and within 82 ms on the web (G6 run; the step now waits for it, so the frames match). The status-bar connection lamp is a filled dot as on the web (C7 fixed in G3: fill-current fills the icon), 1 px higher. |
 | `rail.project-menu` Project context menu | rail | ported | ported | 3/3 | 3/3 | 7.0% / 1.04% | 6.9% / 0.68% | Right-click opens the project menu with the same rows, icons, submenu chevrons and red Delete, at the same place (G3: Radix opens a context menu 2 px right of the pointer). Row labels sit where the web puts them (G5: the " Label" text in a row's nested {icon}{children}{after} array is trimmed like any flex text run; it had kept its leading space, 3 px). Under the open menu GPUIX keeps the hovered beta row's gear and shortcut; the web hides them, since a modal Radix menu turns pointer events off on the page. |
@@ -482,7 +618,7 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
 | `statusbar.items` Status bar items | statusbar | ported | partial | 2/2 | 2/2 | 7.6% / 1.63% | 12.1% / 4.63% | Branch, path, Terminal and settings items line up. The status-bar connection lamp is a filled dot as on the web (C7 fixed in G3: fill-current fills the icon), 1 px higher. The rest of the region diff is glyph antialiasing: Chromium draws the status bar text with subpixel (LCD) colour fringes, and GPUIX draws it in grayscale (C8). |
 | `statusbar.context-bar` Context bar settings popover | statusbar | ported | ported | 3/3 | 3/3 | 8.4% / 1.60% |  | The Show in Context Bar popover opens with the same five toggles and states. |
 | `statusbar.connection` Connection indicator hover | statusbar | ported | ported | 3/3 | 3/3 | 8.2% / 1.69% |  | Hovering the connection lamp shows the Connected tooltip in both. The status-bar connection lamp is a filled dot as on the web (C7 fixed in G3: fill-current fills the icon), 1 px higher. |
-| `remote.access-popover` Remote access popover (desktop shared-live host) | remote | blocked | blocked | n/a | n/a |  |  | Not compared: the popover renders only under isTauriContext(), so the web client has no reference. |
+| `remote.access-popover` Remote access popover (desktop shared-live host) | remote | pending-unit | pending-unit | n/a | n/a |  |  | GPUIX has no remote access popover yet; StatusBar renders it only under isTauriContext(). The reference is the desktop app (`tools/reference/tauri.ts`), whose status bar has the button. |
 | `settings.interface` Settings: Interface | settings | ported | ported | 5/5 | 5/5 | 31.4% / 0.36% | 3.1% / 0.53% | The section content and navigation match. The scrim dims and blurs the page behind it as on the web (N2). |
 | `settings.notifications` Settings: Notifications | settings | ported | ported | 5/5 | 5/5 | 31.8% / 0.55% | 3.7% / 0.81% | The section content and navigation match. The scrim dims and blurs the page behind it as on the web (N2). Rows inside a settings group are separated by the divider line as on the web (G6: `divide-y divide-border` in the style layer). A row's label sits on the web's 24 px line (G12: the inline `<label>` alone on a line of its block parent gets the parent's strut, so the text column is 45 px against the web's 45.5 and the row 69 against 70; it was 41 and 65, with the label 3 px high). |
 | `settings.editor` Settings: Editor | settings | ported | ported | 5/5 | 5/5 | 31.1% / 0.20% | 2.6% / 0.29% | Each select is one closed dropdown like the web (G2), and its trigger is 240px wide beside the label as on the web (G5: the GPUIX ui primitives resolve `@[35rem]:w-60` against the settings card container). The web truncates a long value (`[&>span]:line-clamp-1`); GPUIX shows it in full inside the 240px. The scrim dims and blurs the page behind it as on the web (N2). Rows inside a settings group are separated by the divider line as on the web (G6: `divide-y divide-border` in the style layer). A row's label sits on the web's 24 px line (G12: the inline `<label>` alone on a line of its block parent gets the parent's strut, so the text column is 45 px against the web's 45.5 and the row 69 against 70; it was 41 and 65, with the label 3 px high). |
@@ -515,16 +651,16 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
 | `shortcuts.toggle-side-panel` Default shortcut ctrl-b: hide the side panel | shortcuts | ported | ported | 5/5 | 5/5 | 5.7% / 0.80% |  | Ctrl+B hides the side panel in both. After the shortcut both composers rest unfocused (G12). The step first clicks the rail's Projects label, and the web blurs the composer there: Chromium's default action for a press no listener prevented moves focus to body when the pressed content takes none. GPUIX now does the same (`compat/window-press.ts`), where GPUI had kept the composer focused. |
 | `shortcuts.theme-picker` Default shortcut ctrl-alt-t: theme picker | shortcuts | ported | ported | 5/5 | 5/5 | 20.2% / 0.92% |  | Ctrl+Alt+T opens the Color Themes popover in both. The focused field shows its focus border as on the web (G6: native patch gpuix/0009 applies a text field's `focus-visible:` style on any focus, in the frame focus moves). |
 | `shortcuts.zoom-in` Default shortcut alt-=: zoom in | shortcuts | partial | partial | 5/5 | 5/5 | 17.4% / 3.59% |  | Each client presses its own key (G3: the web Alt+=, GPUIX the desktop Ctrl+= from G4's keymap), and both zoom: the rail and sidebar widen alike (G4, shims/window-zoom.ts; tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both). The zoomed web page runs past the window bottom, so its status bar is cut off and the dashboard heading sits 25 px lower; GPUIX keeps the status bar in the window. After the shortcut both composers rest unfocused (G12). The step first clicks the rail's Projects label, and the web blurs the composer there: Chromium's default action for a press no listener prevented moves focus to body when the pressed content takes none. GPUIX now does the same (`compat/window-press.ts`), where GPUI had kept the composer focused. |
-| `shortcuts.desktop-keymap` Desktop key bindings (Ctrl+T, Ctrl+W, Ctrl+R, Ctrl+, and Ctrl+=) | shortcuts | blocked | partial | 33/33 | 33/33 | 14.9% / 2.32% |  | No web reference. GPUIX registers a desktop host, which now gets the same Ctrl-based keymap as Tauri (G4): workspace-checks asserts Ctrl+, opens Preferences, Ctrl+R opens command history and Alt+, does nothing. |
+| `shortcuts.desktop-keymap` Desktop key bindings (Ctrl+T, Ctrl+W, Ctrl+R, Ctrl+, and Ctrl+=) | shortcuts | partial | partial | 33/33 | 33/33 | 14.9% / 2.32% |  | Reference (R5): the web client with the desktop table bound as custom keys, as a web user can set them in Keyboard shortcuts; GPUIX presses the same keys with its default (desktop) keymap. Headless Chromium hands Ctrl+T, Ctrl+W and Ctrl+R to the page. Every key does the same in both: Ctrl+T shows the agent launcher over Terminal 1 and a second Ctrl+T hides it, Ctrl+W asks to close Terminal 1 and Close removes it, Ctrl+R opens Command History, Ctrl+, opens Preferences and Ctrl+= zooms in. The last frame differs as in shortcuts.zoom-in: the zoomed web page runs past the window bottom, and GPUIX keeps the status bar in the window. |
 | `theme.picker` Theme picker | theme | ported | ported | 4/4 | 4/4 | 20.2% / 0.92% |  | The Color Themes popover, groups, swatches and the current-theme check match, and labels antialias in grayscale as on the web (C8 fixed in G3). The focused field shows its focus border as on the web (G6: native patch gpuix/0009 applies a text field's `focus-visible:` style on any focus, in the frame focus moves). |
 | `dialogs.bug-report` Report a bug dialog | dialogs | ported | ported | 3/3 | 3/3 | 59.1% / 0.19% |  | The Report a bug dialog paints its Title, What happened, Screenshots and Preview sections at the web width and wraps the same lines. The web draws a resize grip in the What happened corner; GPUIX has none. The focused field shows its focus border as on the web (G6: native patch gpuix/0009 applies a text field's `focus-visible:` style on any focus, in the frame focus moves). The scrim dims and blurs the page behind it as on the web (N2 backdrop blur, native patches zed/0003 and gpuix/0005). |
 | `canvas.open` Canvas | canvas | ported | ported | 4/4 | 4/4 | 4.5% / 1.00% |  | Clicking Canvas opens design.figcraft and the FigCraft editor reaches Ready in both: pages, layers, design panel, toolbar and Save (V1: the editor runs in a `termul-webview-host` webview placed over the pane; this run used the pinned bundle, sha256 verified against canvas/figcraft.pin). Panels and page are dark in both, page colour 1E1E1E (G6, see palette.open-canvas). |
-| `browser.pane` Browser pane | browser | blocked | ported | 9/9 | 11/11 | 2.8% / 1.10% | 1.8% / 0.95% | Not compared: the web client offers no browser tab, so there is no reference. GPUIX does have browser panes, a WebKitGTK webview in the `termul-webview-host` helper placed as an X11 child window (README, Browser panes), and `bun run package:verify` loads a local page in one from the .deb; neither was rerun here. |
+| `browser.pane` Browser pane | browser | partial | ported | tauri 9/9 | 11/11 | 2.8% / 1.10% | 1.8% / 0.95% | Reference (R5): the desktop app (Tauri on WebKitGTK) built from the same checkout, driven with X input at the same 1280x800 (`tools/reference/tauri.ts`). Ctrl+Shift+N opens a browser tab in both and the typed URL loads the local reference page. Both panes are WebKitGTK webviews, and the page lands on the same pixels; the pane region reads 0.94 % perceptual. GPUIX shows the Debug Console button beside the URL field. BrowserControls shows it only when `import.meta.env.PROD` is false, and the GPUIX bundle does not define it; the desktop app's and the web's production builds hide it. The desktop app injects its agentation toolbar into every page it loads (browser_tab_manager.rs, enabled by default), a round button at the page's bottom right; the GPUIX helper injects it only on a click. The desktop tab still reads 127.0.0.1:8289 after the page loaded; GPUIX names the tab after the page title. The desktop app draws its own window buttons at the right of the tab bar; GPUIX leaves them to the window manager. The rail differs outside the pane: the desktop app is host-local (an SSH section) and has no seeded chat. |
 | `notifications.toast` Toast after creating a branch | notifications | ported | ported | 7/7 | 7/7 | 8.4% / 1.68% |  | Typing the branch name and pressing Enter creates toast-branch and shows the success toast in both. The toast matches the web card (G4 native toaster): check icon, close button over the top-left corner, Arial text (sonner sets its own font stack); the toast crop differs 0.85 % perceptual. After Enter the status-bar branch button holds focus and both draw a 1 px ring around "toast-branch" (G6: an outer ring paints as an outline; GPUI had painted the spread shadow under the whole transparent button, a light wash over the label). |
-| `ssh.workspace` SSH profiles and sessions | ssh | blocked | ported | 8/8 | 8/8 | 62.0% / 1.66% |  | No web reference: SSH needs a host-local client and a browser never is one, so the web client shows no SSH section. R2 drove the GPUIX real shell as a host-local client against a throwaway sshd (reports/r2-shots): the sidebar SSH section, the hosts tab, host-key trust, a connected shell and the SFTP file list all render. Not rerun here. |
-| `settings.accounts-claude` Claude account sign-in | settings | blocked | ported | 9/9 | 9/9 | 71.1% / 0.20% | 79.5% / 0.29% | No web reference: Claude account management needs a host-local client. The R1-R3 e2e kit (reports/r1-e2e, accounts mode) covers the server path; no GPUIX pixel check of the sign-in flow exists yet. |
-| `update.toast` Update available toast and what's new modal | notifications | blocked | blocked | n/a | n/a |  |  | Not compared: the update toast and the what's new modal render only under isTauriContext(), so neither client shows them (the web hides them by design). The packaged GPUIX app has a command-line check, `termul-gpuix --check-update`, against the release feed, but no in-app toast. |
-| `snapshots.page` Snapshots page (#/snapshots) | snapshots | ported | ported | 4/4 | 4/4 | 81.2% / 0.40% |  |  |
+| `ssh.workspace` SSH profiles and sessions | ssh | partial | ported | web host-local 8/8 | 8/8 | 62.0% / 1.47% |  | Reference (R5): the web client with the host-local credential added to its handshake, and GPUIX attached with the same credential, as the launched app is. Both list the two seeded hosts in the sidebar SSH section, with the build-box favourite first. The Hosts tab matches: the search field, Import and New host, and the Favorites and Servers groups with the same rows. The New host dialog differs. The web sets Address and Port on one row (`grid-cols-[1fr_6rem]`); GPUIX stacks Port under Address, so the Organize section is scrolled out of the dialog. |
+| `settings.accounts-claude` Claude account sign-in | settings | partial | ported | web host-local 10/10 | 10/10 | 71.1% / 0.19% | 79.5% / 0.27% | Reference (R5): the web client with the host-local credential, and GPUIX attached with the same credential. Both show Add account, the Keep work and personal apart card, and the Add a Claude account dialog with the name typed. The run stops before Continue, which would start a real claude.ai sign-in on the host. The Accounts section has the gap settings.provider has: GPUIX puts the usage note under the account name, and the row menu on a line of its own, where the web sets them beside the name. |
+| `update.toast` Update available toast and what's new modal | notifications | pending-unit | pending-unit | n/a | n/a |  |  | GPUIX has neither the update toast nor the what's new modal; App.tsx renders both only under isTauriContext(). The reference is the desktop app (`tools/reference/tauri.ts`): the toast against a release feed, the modal after a version change. The packaged GPUIX app has a command-line check, `termul-gpuix --check-update`. |
+| `snapshots.page` Snapshots page (#/snapshots) | snapshots | partial | ported | 5/5 | 5/5 | 81.2% / 0.40% |  | Reference (R5): both clients start on #/snapshots, the web by URL and GPUIX through GPUIX_START_HASH; no desktop shell links to the route (only the mobile drawer). The header, Create New Snapshot and the Create Snapshot dialog match. GPUIX paints nothing under the header where the web shows the empty state: the camera, No snapshots yet and Create First Snapshot. The text is in the automation tree, so the check passes; the block is not painted. |
 | `theme.termul-dark` Theme termul (dark) | theme | ported | ported | 2/2 | 2/2 | 7.7% / 1.68% |  | Background, panel, card, border, text and accent colours match the web dashboard. The differences left are not the theme. |
 | `theme.termul-light` Theme termul (light) | theme | ported | ported | 2/2 | 2/2 | 5.5% / 1.77% |  | Background, panel, card, border, text and accent colours match the web dashboard. The differences left are not the theme. |
 | `theme.cursor-dark` Theme cursor (dark) | theme | ported | ported | 2/2 | 2/2 | 5.0% / 1.52% |  | Background, panel, card, border, text and accent colours match the web dashboard. The differences left are not the theme. |
@@ -742,7 +878,7 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
 - `statusbar.connection` (frames `/root/termul-wt/gpuix-g13/apps/gpuix/parity-out/matrix/statusbar-connection/`):
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-hover`: hover [Connected] (web ok; gpuix ok via web-point); wait 1200 ms (web ok; gpuix ok via none)
-- `remote.access-popover`: StatusBar renders RemoteAccessPopover only under isTauriContext(); the web client has none to compare, and GPUIX would need the desktop host role from the server
+- `remote.access-popover`: pending R4 desktop host role over the server: GPUIX has no remote access popover yet (StatusBar renders it only under isTauriContext()); the reference is the desktop app's status-bar popover (tools/reference/tauri.ts)
 - `settings.interface` (frames `/root/termul-wt/gpuix-g13/apps/gpuix/parity-out/matrix/settings-interface/`):
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-open`: click [Settings] (web ok; gpuix ok via web-point); present "Interface zoom": web pass, gpuix pass
@@ -885,9 +1021,9 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
 - `canvas.open` (frames `/root/termul-wt/gpuix-g13/apps/gpuix/parity-out/matrix/canvas-open/`):
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-open`: click [Open canvas] (web ok; gpuix ok via web-point); present "Canvas": web pass, gpuix pass; present "Ready": web pass, gpuix pass
-- `browser.pane` (frames `/tmp/gpuix-r5/browser-run2/browser-pane/`):
-  - `a-dashboard`: wait 2000 ms (web ok; gpuix ok via none)
-  - `b-page`: press ctrl-shift-n (web ok; gpuix ok via key); wait 2500 ms (web ok; gpuix ok via none); click @800,63 (web ok; gpuix ok via point); wait 600 ms (web ok; gpuix ok via none); press ctrl-a (web ok; gpuix ok via key); type "http://127.0.0.1:8289/reference" (web ok; gpuix ok via key); press enter (web ok; gpuix ok via key); wait 3000 ms (web ok; gpuix ok via none)
+- `browser.pane` (frames `/root/termul-wt/gpuix-r5/apps/gpuix/parity-out/matrix/browser-pane/`):
+  - `a-dashboard`: wait 2000 ms (tauri ok via none; gpuix ok via none); present "What should we do in alpha?": tauri frame only, gpuix pass
+  - `b-page`: press ctrl-shift-n (tauri ok via key; gpuix ok via key); wait 2500 ms (tauri ok via none; gpuix ok via none); click @800,63 (tauri ok via point; gpuix ok via point); wait 600 ms (tauri ok via none; gpuix ok via none); press ctrl-a (tauri ok via key; gpuix ok via key); type "http://127.0.0.1:8289/reference" (tauri ok via key; gpuix ok via key); press enter (tauri ok via key; gpuix ok via key); wait 3000 ms (tauri ok via none; gpuix ok via none); present "R5 reference page": tauri frame only, gpuix pass
 - `notifications.toast` (frames `/root/termul-wt/gpuix-g13/apps/gpuix/parity-out/matrix/notifications-toast/`):
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-picker`: click [Switch git branch] (web ok; gpuix ok via web-point); click "Create branch from" (web ok; gpuix ok via text)
@@ -900,10 +1036,10 @@ Web and GPUIX columns count passed actions plus checks over the total. Mismatch 
   - `a-dashboard`: present "What should we do in alpha?": web pass, gpuix pass
   - `b-open`: click [Settings] (web ok; gpuix ok via web-point); present "Interface zoom": web pass, gpuix pass
   - `c-section`: click "Accounts" (web ok; gpuix ok via text); present "1 account": web pass, gpuix pass; present "Keep work and personal apart": web pass, gpuix pass
-  - `d-add`: click "Add account" (web ok; gpuix ok via text); type "Work" (web ok; gpuix ok via key); present "Give it a short name. Termul shows this name, never the email.": web pass, gpuix pass
-- `update.toast`: Both render only when isTauriContext() is true (App.tsx WhatsNewModal, UpdateAvailableToast); the web client never shows them, so there is no reference to compare against
+  - `d-add`: click "Add account" (web ok; gpuix ok via text); wait 800 ms (web ok; gpuix ok via none); type "Work" (web ok; gpuix ok via key); present "Give it a short name. Termul shows this name, never the email.": web pass, gpuix pass
+- `update.toast`: pending U1 GPUIX updater and what's new: GPUIX has neither (App.tsx renders WhatsNewModal and UpdateAvailableToast only under isTauriContext()); the reference is the desktop app, which shows the toast against a release feed and the modal after a version change
 - `snapshots.page` (frames `/root/termul-wt/gpuix-r5/apps/gpuix/parity-out/matrix/snapshots-page/`):
-  - `a-page`: present "Workspace Snapshots": web pass, gpuix pass; present "Create New Snapshot": web pass, gpuix pass
+  - `a-page`: present "Workspace Snapshots": web pass, gpuix pass; present "Create New Snapshot": web pass, gpuix pass; present "No snapshots yet": web pass, gpuix pass
   - `b-create`: click "Create New Snapshot" (web ok; gpuix ok via text); present "Create Snapshot": web pass, gpuix pass
 - `theme.termul-dark` (frames `/root/termul-wt/gpuix-g13/apps/gpuix/parity-out/matrix/theme-termul-dark/`):
   - `a-dashboard`: wait 800 ms (web ok; gpuix ok via none); present "What should we do in alpha?": web pass, gpuix pass

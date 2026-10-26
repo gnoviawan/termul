@@ -11,7 +11,7 @@ import path from 'node:path'
 import { APP_DIR } from '../../build'
 import { REVIEWS, type Review } from './review'
 import { SURFACES } from './surfaces'
-import type { AreaId, ClientRun, Surface, SurfaceResult } from './types'
+import type { AreaId, ClientRun, Reference, Surface, SurfaceResult } from './types'
 import { AREA_WEIGHTS, STATUS_SCORE, type Status } from './weights'
 
 export const DOC = path.join(APP_DIR, 'docs/parity-matrix.md')
@@ -79,6 +79,13 @@ function passed(run?: ClientRun): string {
   return run.error && total === 0 ? 'crash' : `${ok}/${total}`
 }
 
+/** How the surface table names a reference that is not the plain web client. */
+const REFERENCE_LABEL: Record<Reference, string> = {
+  web: '',
+  'web-host-local': 'web host-local ',
+  tauri: 'tauri '
+}
+
 function mismatch(result?: SurfaceResult): [string, string] {
   const last = result?.diffs.at(-1)
   if (!last) return ['', '']
@@ -110,21 +117,26 @@ function interactions(row: Row): string {
     return ` ${surface.pending ? `pending ${surface.pending.unit}: ${surface.pending.reason}` : (surface.blocked ?? 'not run')}`
   }
   const lines: string[] = []
+  const ref = result.reference === 'tauri' ? 'tauri' : 'web'
   for (const step of surface.steps) {
     const parts: string[] = []
     const gpuixActions = result.gpuix?.actions.filter((a) => a.step === step.name) ?? []
     for (const [i, action] of result.web.actions.filter((a) => a.step === step.name).entries()) {
       const g = gpuixActions[i]
       const gpuix = g ? `${g.ok ? 'ok' : `FAIL ${g.error}`} via ${g.via}` : 'not run'
+      const refVia = ref === 'tauri' ? ` via ${action.via}` : ''
       parts.push(
-        `${action.action} (web ${action.ok ? 'ok' : `FAIL ${action.error}`}; gpuix ${gpuix})`
+        `${action.action} (${ref} ${action.ok ? 'ok' : `FAIL ${action.error}`}${refVia}; gpuix ${gpuix})`
       )
     }
+    const refChecks = result.web.checks.filter((c) => c.step === step.name)
     const gpuixChecks = result.gpuix?.checks.filter((c) => c.step === step.name) ?? []
-    for (const [i, check] of result.web.checks.filter((c) => c.step === step.name).entries()) {
-      const g = gpuixChecks[i]
+    // The desktop app's text cannot be read: its checks are GPUIX's alone, and its frame is the record.
+    for (const [i, check] of (ref === 'tauri' ? gpuixChecks : refChecks).entries()) {
+      const g = ref === 'tauri' ? check : gpuixChecks[i]
+      const refResult = ref === 'tauri' ? 'frame only' : check.pass ? 'pass' : 'FAIL'
       parts.push(
-        `${check.expect} "${check.text}": web ${check.pass ? 'pass' : 'FAIL'}, gpuix ${g ? (g.pass ? 'pass' : 'FAIL') : 'not run'}`
+        `${check.expect} "${check.text}": ${ref} ${refResult}, gpuix ${g ? (g.pass ? 'pass' : 'FAIL') : 'not run'}`
       )
     }
     lines.push(`  - \`${step.name}\`: ${parts.length ? cell(parts.join('; ')) : 'frame only'}`)
@@ -233,20 +245,33 @@ export function renderMatrix(
     `If every listed unit landed and fixed its surfaces, the usage-weighted score would be ${pct(base + gainOf(new Set(gaps.map((g) => g.row))))}.`
   )
 
+  out.push('', '### References', '')
+  out.push(
+    'Every surface is compared against the DOM web client in Chromium except these (`Reference` in `types.ts`).',
+    ''
+  )
+  out.push('| Surface | Reference | Status |')
+  out.push('| --- | --- | --- |')
+  for (const row of rows.filter((r) => (r.surface.reference ?? 'web') !== 'web'))
+    out.push(`| \`${row.surface.id}\` | ${row.surface.reference} | ${row.status} |`)
+
   out.push('', '### Surfaces', '')
   out.push(
-    'Web and GPUIX columns count passed actions plus checks over the total. Mismatch is exact / perceptual for the last step: the full 1280x800 frame, and the region the surface names (measured in the web client, cropped from both frames).',
+    'The Reference and GPUIX columns count passed actions plus checks over the total. The reference is the web client unless the cell names another: `web host-local` is the web client with the host-local credential, `tauri` the desktop app, which runs the actions but has no checks because its text cannot be read. Mismatch is exact / perceptual for the last step: the full 1280x800 frame, and the region the surface names (measured in the web client, or a fixed rectangle for the desktop app, cropped from both frames).',
     ''
   )
   out.push(
-    '| Surface | Area | Status | Auto | Web | GPUIX | Full mismatch | Region mismatch | Differences seen |'
+    '| Surface | Area | Status | Auto | Reference | GPUIX | Full mismatch | Region mismatch | Differences seen |'
   )
   out.push('| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |')
   for (const row of rows) {
     const [full, roi] = mismatch(row.result)
+    const reference = row.result?.web
+      ? `${REFERENCE_LABEL[row.result.reference ?? 'web']}${passed(row.result.web)}`
+      : passed(row.result?.web)
     const measuredCells = row.previous?.cells ?? [
       row.result?.auto ?? '',
-      passed(row.result?.web),
+      reference,
       passed(row.result?.gpuix),
       full,
       roi

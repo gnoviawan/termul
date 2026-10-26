@@ -393,9 +393,9 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Hovering the connection lamp shows the Connected tooltip in both.', LAMP]
   },
   'remote.access-popover': {
-    status: 'blocked',
+    status: 'pending-unit',
     differences: [
-      'Not compared: the popover renders only under isTauriContext(), so the web client has no reference.'
+      'GPUIX has no remote access popover yet; StatusBar renders it only under isTauriContext(). The reference is the desktop app (`tools/reference/tauri.ts`), whose status bar has the button.'
     ],
     cause: 'server route needed',
     unit: 'R4 desktop host role over the server',
