@@ -1,8 +1,6 @@
 use super::{links, ClaudeAccountStore, BUILTIN_ACCOUNT_ID};
 use std::fs;
-#[cfg(unix)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 struct Fixture {
     _root: tempfile::TempDir,
@@ -38,6 +36,7 @@ fn age(path: &Path) {
         .unwrap();
 }
 
+#[cfg(unix)]
 fn is_link_to(link: &Path, target: &Path) -> bool {
     fs::symlink_metadata(link).is_ok_and(|m| m.file_type().is_symlink())
         && fs::read_link(link).is_ok_and(|t| t == target)
