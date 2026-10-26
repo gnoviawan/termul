@@ -1,10 +1,17 @@
 import type { Editor } from '@tiptap/core'
 import { TextSelection } from '@tiptap/pm/state'
+import { type MutableRefObject, useEffect } from 'react'
 import { CONTEXT_PILL_NODE } from '@/lib/composer/doc-to-prompt'
 import { contextToAttrs, type SelectionContext } from '@/lib/composer/selection-context'
 import { logFrontendError } from '@/lib/log-api'
 
 const LOG_SOURCE = 'insert-selection-context'
+
+/** A request from the message list to add a context. A new `nonce` re-applies it. */
+export interface SelectionContextInsertRequest {
+  context: SelectionContext
+  nonce: number
+}
 
 /**
  * Insert a selection-context pill at the composer caret (the last caret when
@@ -54,9 +61,14 @@ export function insertSelectionContext(editor: Editor | null, context: Selection
       tr.insertText(' ', pos)
       pos += 1
     }
-    tr.setSelection(TextSelection.create(tr.doc, pos)).scrollIntoView()
+    tr.setSelection(TextSelection.create(tr.doc, pos))
     editor.view.dispatch(tr)
     editor.view.focus()
+    void logFrontendError({
+      level: 'info',
+      source: LOG_SOURCE,
+      message: `Added a selection context (${context.language === undefined ? 'text' : 'code'}, ${context.text.length} chars)`
+    })
   } catch (err) {
     void logFrontendError({
       level: 'warn',
@@ -65,5 +77,24 @@ export function insertSelectionContext(editor: Editor | null, context: Selection
     })
     return false
   }
+  // Best effort, after the insert: a view without layout (jsdom) cannot scroll.
+  try {
+    editor.view.dispatch(editor.view.state.tr.scrollIntoView())
+  } catch {
+    // Not scrollable: the caret stays where it is.
+  }
   return true
+}
+
+/** Apply each new insert request to the composer editor once. */
+export function useSelectionContextInsertRequest(
+  editorRef: MutableRefObject<Editor | null>,
+  request: SelectionContextInsertRequest | undefined
+): void {
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the nonce is the trigger; the request object is read with it.
+  useEffect(() => {
+    if (!request) return
+    // Outside React's commit: the pill NodeView renders with flushSync.
+    queueMicrotask(() => insertSelectionContext(editorRef.current, request.context))
+  }, [request?.nonce, editorRef])
 }

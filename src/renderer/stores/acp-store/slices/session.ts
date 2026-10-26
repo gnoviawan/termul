@@ -33,6 +33,7 @@ import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transpo
 import { classifySetupError } from '@/lib/agents/acp-spawn-errors'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import { serializeSelectionContexts } from '@/lib/composer/selection-context'
 import { logFrontendError } from '@/lib/log-api'
 import { sanitizeDisplayText } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -1911,7 +1912,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       // chips.
       const wireBlocks: ContentBlock[] = lastUserBlocks.map((b) =>
         b.type === 'text' && typeof b.text === 'string'
-          ? { type: 'text', text: sanitizeDisplayText(b.text) }
+          ? { type: 'text', text: sanitizeDisplayText(serializeSelectionContexts(b.text)) }
           : b
       )
       const only = wireBlocks.length === 1 ? wireBlocks[0] : null

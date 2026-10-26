@@ -32,6 +32,7 @@
  * Output is deterministic: no timestamps, ids, or random values participate.
  */
 import type { ContentBlock, ToolCall } from '@/lib/acp-api'
+import { serializeSelectionContexts } from '@/lib/composer/selection-context'
 import { sanitizeDisplayText } from '@/lib/skill-tokens'
 import type { ChatMessage } from '@/stores/acp-store'
 import { describeToolCall } from './tool-call-summary'
@@ -206,7 +207,7 @@ const isTokenNoise = (char: string): boolean => TOKEN_NOISE_CODES.has(char.charC
  * preserved, matching the plain-text send path.
  */
 function sanitizeWireText(value: string): string {
-  return sanitizeDisplayText(value)
+  return sanitizeDisplayText(serializeSelectionContexts(value))
     .split('')
     .filter((ch) => !isTokenNoise(ch))
     .join('')
