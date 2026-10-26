@@ -198,8 +198,15 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'git.diff': {
-    status: 'ported',
-    differences: ['Inline diff, hunk header and STAGE HUNK match closely.', TEXTAREA_LINE]
+    status: 'partial',
+    differences: [
+      'Inline diff, hunk header and STAGE HUNK sit where the web puts them.',
+      'GPUIX slants the diff header lines (`diff --git`, `index`, `---`, `+++`, `@@`) and the STAGE HUNK label, which GitDiffView marks `italic` inside a `font-mono` block. The web draws them upright: Paper Mono has no italic and index.css sets `font-synthesis-style: none` on `.font-mono`, while GPUIX registers baked oblique Paper Mono faces (N1) and uses them (I6, from the PNG pair; earlier reviews missed it).',
+      TEXTAREA_LINE
+    ],
+    cause: 'compat translator gap',
+    unit: 'upright italic in mono text (unassigned)',
+    impact: 1
   },
   'git.amend': {
     status: 'ported',

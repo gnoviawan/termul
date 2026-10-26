@@ -183,7 +183,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       'The Hosts tab matches: the search field, Import and New host, and the Favorites and Servers groups with the same rows.',
       'The New host dialog sets Address and Port on one row in both (G15: compat lays a `grid-cols-[1fr_6rem]` grid out as flex rows with one cell per track). Typing goes to the autofocused Address field and the preview reads user@db.example.com in both.',
       'Each field label sits 8 px further above its input than on the web (Address label centre to input top 19 px against 11 px). A label alone on its line takes a 24 px strut in GPUIX (G12) while the web line inherits a shorter line height, so the Organize section starts lower. The web also rings the focused Address field; GPUIX lightens its border only.',
-      'Measured by G15 on the published @gpuix/native 0.11.0 addon (no native patches), both clients host-local.'
+      'I6 measured it in the full run on the patched addon (series 2fc3aff4), both clients host-local.'
     ],
     cause: 'compat translator gap',
     unit: 'label strut from the inherited line height (unassigned)',
@@ -194,8 +194,8 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: [
       'Both clients are host-local. Both show Add account, the Keep work and personal apart card, and the Add a Claude account dialog with the name typed. The run stops before Continue, which would start a real claude.ai sign-in on the host.',
       'The account row now lays out on one line in GPUIX: its track list grid places itself (`col-span-2`), so compat keeps the equal-track fallback, now with the list\'s four columns (G15), where it had stacked one column. The usage note starts at 585 px against the web\'s 638 px and the row menu at 1035 px against 1105 px, because the four tracks are equal.',
-      'On the published addon the Add a Claude account dialog over Preferences is not painted (its text is in the tree; base and head alike). The patched addon draws it.',
-      'Measured by G15 on the published @gpuix/native 0.11.0 addon (no native patches), both clients host-local.'
+      'The patched addon paints the Add a Claude account dialog over Preferences as on the web (I6: 0.18 % full-frame perceptual on the last step; G15 read 2.88 % on the published addon, which does not paint it).',
+      'I6 measured it in the full run on the patched addon (series 2fc3aff4), both clients host-local.'
     ],
     cause: 'compat translator gap',
     unit: 'account row wide layout (unassigned)',
@@ -203,7 +203,10 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
   'settings.interface': {
     status: 'ported',
-    differences: SETTINGS_BASE
+    differences: [
+      ...SETTINGS_BASE,
+      'The Interface zoom hint wraps one token later in GPUIX ("Alt+- and Alt" / "+0 also work." against the web\'s "Alt+- and" / "Alt+0 also work."): GPUI breaks after a "+", where Chromium keeps "Alt+0" whole (I6 run, cosmetic).'
+    ]
   },
   'settings.notifications': {
     status: 'ported',
@@ -229,14 +232,14 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       SELECT,
-      'The agents list shows No agents match "" while the web lists the registry (Agoragentic first).',
+      'The agents list now shows the registry as on the web, Agoragentic first with its version, Latest and Available (I6 run). GPUIX leaves each agent\'s icon tile empty: AcpAgentsSettings draws the catalog SVG through `dangerouslySetInnerHTML`, which compat does not render.',
       DIVIDERS,
       LABEL_LINE,
       SETTINGS_BASE[1]
     ],
-    cause: 'needs diagnosis',
-    unit: 'agent registry list in settings (unassigned)',
-    impact: 2
+    cause: 'compat translator gap',
+    unit: 'inline SVG agent icons (unassigned)',
+    impact: 1
   },
   'settings.skills': {
     status: 'ported',
@@ -246,7 +249,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Accounts lists the Default account, Signed in, with "Usage is not available right now", Try again and the `termul-server claude account` hint in both. The skeleton M2 saw was the frame grab racing the list: the step checked for the nav label it had just clicked. It now waits for "1 account", which GPUIX painted 1871 ms after the click and the web 158 ms after (G6 run).',
-      'GPUIX puts the usage note under the account name, where the web sets it beside the name in the wide layout.',
+      'The account row lays out on one line as on the web (G15 track lists), but its wide grid places its cells (`col-start-*`, `row-start-*`), so compat keeps four equal tracks: the usage note starts at 586 px against the web\'s 642 px and the row menu at 1034 px against 1104 px (I6 run).',
       SETTINGS_BASE[1]
     ],
     cause: 'compat translator gap',
@@ -327,7 +330,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       'The agentation toolbar\'s round button sits at the page\'s bottom right in both: the webview helper injects the desktop\'s toolbar bundle when each browsed page has loaded (G15). GPUIX has no annotation service, so its toolbar keeps annotations in the page.',
       'GPUIX names the tab after the page title (R5 reference page); the desktop tab reads 127.0.0.1:8289. The renderer prefers the title (browser-tab.tsx); the desktop\'s page poller reports it over Tauri IPC, which the capability file grants only to the main window, so for a remote page it never arrives (inferred from capabilities/default.json and the desktop log, which shows the poller injected and no title activity). G15 left GPUIX\'s titles in place and names the desktop as the side to fix.',
       'The desktop app draws its own window buttons at the right of the tab bar; GPUIX leaves them to the window manager. Both rails show the SSH section now that GPUIX is host-local; the desktop has no seeded chat.',
-      'Measured by G15 on the published @gpuix/native 0.11.0 addon (no native patches), both clients host-local.'
+      'I6 measured it in the full run on the patched addon (series 2fc3aff4), both clients host-local.'
     ],
     cause: 'needs diagnosis',
     unit: 'desktop browser tab titles over remote IPC (unassigned)',
@@ -348,7 +351,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: [
       'Both clients start on #/snapshots, the web by URL and GPUIX through GPUIX_START_HASH; no desktop shell links to the route (only the mobile drawer). The header, Create New Snapshot and the Create Snapshot dialog match.',
       'The empty state paints as on the web: the camera, No snapshots yet at 271 px against 270 px, and Create First Snapshot (G15). The page\'s `<main className="flex-1 flex flex-col">` sits in a block parent, so CSS sizes it to its content and resolves the list\'s `flex-1` 0% basis as content; GPUIX had taken basis 0 literally and clipped the list to its 48 px padding. Compat now drops the zero basis of a lone growing child in a column with no height, min height or clipping.',
-      'Measured by G15 on the published @gpuix/native 0.11.0 addon (no native patches), both clients host-local.'
+      'I6 measured it in the full run on the patched addon (series 2fc3aff4), both clients host-local.'
     ]
   },
   'theme.tokyonight-light': {
