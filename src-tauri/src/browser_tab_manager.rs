@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +22,23 @@ pub struct BrowserBounds {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+/// Keep `tab_id`'s listed title at `title` and answer the `browser-tab-title-changed` payload,
+/// or `None` when the tab already has that title. A title can arrive before `create` lists the
+/// tab; it is still reported.
+pub(crate) fn record_document_title(
+    tabs: &Mutex<HashMap<String, BrowserTabInfo>>,
+    tab_id: &str,
+    title: &str,
+) -> Option<serde_json::Value> {
+    if let Some(info) = tabs.lock().ok()?.get_mut(tab_id) {
+        if info.title == title {
+            return None;
+        }
+        info.title = title.to_string();
+    }
+    Some(serde_json::json!({ "browserTabId": tab_id, "title": title }))
 }
 
 pub struct BrowserTabManager {
@@ -259,6 +276,24 @@ impl BrowserTabManager {
             tab_id.clone(),
             tauri::WebviewUrl::External(parsed_url),
         );
+
+        // A remote page cannot reach the IPC its title poller calls (the capabilities grant
+        // only `main`), so WebKit's own title-changed signal reports it.
+        let title_app = self.app_handle.clone();
+        let title_tabs = Arc::clone(&self.tabs);
+        builder = builder.on_document_title_changed(move |webview, title| {
+            let Some(payload) = record_document_title(&title_tabs, webview.label(), &title) else {
+                return;
+            };
+            log::debug!("[BrowserTab] Title changed: tab={}", webview.label());
+            if let Err(error) = title_app.emit("browser-tab-title-changed", payload) {
+                log::warn!(
+                    "[BrowserTab] Title event failed for tab={}: {}",
+                    webview.label(),
+                    error
+                );
+            }
+        });
 
         // Inject agentation globals via initialization_script (runs before page JS).
         // The toolbar bundle itself is injected via eval AFTER page load,
@@ -657,3 +692,7 @@ impl Drop for BrowserTabManager {
         self.destroy_all();
     }
 }
+
+#[cfg(test)]
+#[path = "browser_tab_manager_tests.rs"]
+mod tests;

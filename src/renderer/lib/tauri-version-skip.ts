@@ -1,17 +1,22 @@
 import { Store } from '@tauri-apps/plugin-store'
+import { getDesktopHost } from './desktop-host'
+import { LocalPluginStore } from './local-plugin-store'
 
 const STORE_FILE = 'updater-preferences.json'
 const SKIPPED_VERSION_KEY = 'updater.skippedVersion'
 
-let storeInstance: Store | null = null
+let storeInstance: Store | LocalPluginStore | null = null
 
-async function getStore(): Promise<Store> {
+async function getStore(): Promise<Store | LocalPluginStore> {
   if (storeInstance) return storeInstance
 
-  storeInstance = await Store.load(STORE_FILE, {
-    autoSave: false,
-    defaults: {}
-  })
+  // A desktop host (GPUIX) has no Tauri store: it keeps the preference with the device.
+  storeInstance = getDesktopHost()
+    ? new LocalPluginStore(STORE_FILE)
+    : await Store.load(STORE_FILE, {
+        autoSave: false,
+        defaults: {}
+      })
 
   return storeInstance
 }

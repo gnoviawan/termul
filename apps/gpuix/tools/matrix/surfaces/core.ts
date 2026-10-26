@@ -35,6 +35,10 @@ import {
   wheel
 } from './dsl'
 
+/** The mermaid card's own fullscreen button; the transcript's table has one too. */
+const MERMAID_FULLSCREEN =
+  '[data-streamdown="mermaid-block-actions"] button[aria-label="View fullscreen"]'
+
 const ATTACH_FILE = 'matrix-attach.md'
 export const CHAT_TITLE = 'How does the web client decide which routes rend'
 const openChat = click(txt(CHAT_TITLE, false))
@@ -488,7 +492,14 @@ const CHAT: Surface[] = [
           ...see('The router docs cover the hash variant in more depth'),
           { text: 'Chat Scenario Agent', within: 'agent-model-selector-trigger' }
         ]
-      )
+      ),
+      step('d-zoom', [click(label('Zoom in')), wait(600)]),
+      step(
+        'e-download-menu',
+        [click(label('Download diagram')), wait(400)],
+        see('SVG', 'PNG', 'MMD')
+      ),
+      step('f-fullscreen', [click(css(MERMAID_FULLSCREEN)), wait(800)], [gone('SVG')])
     ]
   },
   {
@@ -698,12 +709,14 @@ const STATUSBAR: Surface[] = [
     area: 'remote',
     title: 'Remote access popover (desktop shared-live host)',
     reference: 'tauri',
-    pending: {
-      unit: 'R4 desktop host role over the server',
-      reason:
-        "GPUIX has no remote access popover yet (StatusBar renders it only under isTauriContext()); the reference is the desktop app's status-bar popover (tools/reference/tauri.ts)"
-    },
-    steps: []
+    steps: [
+      DASHBOARD,
+      step(
+        'b-popover',
+        [click(id('remote-access-trigger'))],
+        see('Remote Agent Access', 'Enable remote access', 'Not available in this build yet.')
+      )
+    ]
   }
 ]
 

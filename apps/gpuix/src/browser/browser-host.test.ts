@@ -232,14 +232,25 @@ describe('helper environment', () => {
 })
 
 describe('mermaid renders', () => {
-  test('answers each render with its own PNG or error', async () => {
+  test('answers each render with its own PNG and SVG or error', async () => {
     const browser = fakeHost()
     const [drawn, broken] = await Promise.all([
       browser.renderMermaid('flowchart LR\n  A --> B'),
       browser.renderMermaid('not a diagram')
     ])
-    expect(drawn).toEqual({ ok: true, png: 'data:image/png;base64,AA', width: 120, height: 40 })
+    expect(drawn).toEqual({
+      ok: true,
+      png: 'data:image/png;base64,AA2x',
+      svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+      width: 120,
+      height: 40
+    })
     expect(broken).toEqual({ ok: false, error: 'No diagram type detected' })
+  })
+
+  test('asks the helper for the PNG at the scale a render names', async () => {
+    const drawn = await fakeHost().renderMermaid('flowchart LR\n  A --> B', { scale: 5 })
+    expect(drawn.ok && drawn.png).toBe('data:image/png;base64,AA5x')
   })
 
   test('a render the helper never answers fails after the timeout', async () => {

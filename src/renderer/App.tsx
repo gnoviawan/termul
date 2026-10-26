@@ -49,6 +49,7 @@ function RouteFallback(): React.JSX.Element {
 // WebGL is preserved as the GPU renderer with DOM fallback ("canvas" removed in 6.0).
 // See _bmad-output/implementation-artifacts/spec-gh133-xterm-6-1-upgrade-memory-leak-fix.md.
 
+import { isDesktopApp } from '@/lib/desktop-app'
 import { isWindows } from '@/lib/platform'
 import { isTauriContext, primeServerCapability } from '@/lib/tauri-runtime'
 import { ensureClientIdentity } from '@/lib/web-client-identity'
@@ -278,7 +279,7 @@ const App = () => {
             <BrowserConsentCardHost />
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
             <WhatsNewModal
-              isOpen={isTauriContext() && whatsNew.isOpen}
+              isOpen={isDesktopApp() && whatsNew.isOpen}
               version={whatsNew.version}
               notes={whatsNew.notes}
               htmlUrl={whatsNew.htmlUrl}

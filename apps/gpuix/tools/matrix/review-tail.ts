@@ -144,27 +144,21 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: ['Ctrl+Alt+T opens the Color Themes popover in both.', FIELD_FOCUS]
   },
   'shortcuts.zoom-in': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       "Each client presses its own key (G3: the web Alt+=, GPUIX the desktop Ctrl+= from G4's keymap), and both zoom: the rail and sidebar widen alike (G4, shims/window-zoom.ts; tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both).",
-      'The zoomed web page runs past the window bottom, so its status bar is cut off and the dashboard heading sits 25 px lower; GPUIX keeps the status bar in the window.',
+      "The zoomed web page ends at the window bottom with its status bar in view, as GPUIX does (G17 WEB-ZOOM). The web's CSS zoom fallback had grown `h-screen` with the factor (880 px in the 800 px window) and opened context menus and dropdowns 1.1 times their place (a context menu at 62,259 for a press at 54,235); `applyUiZoom` now publishes `--ui-zoom` and index.css divides it back out of `h-screen`, `h-dvh`, `w-screen` and the Radix popper wrapper. `tools/parity/web-zoom-check.ts` failed 3 of 4 checks before and passes 4 of 4: page 800 px tall, the menu at 56,235, the Workspace dropdown at its trigger's left, 4.4 px under it.",
       LAYOUT_FOCUS
-    ],
-    cause: 'needs diagnosis',
-    unit: 'web zoom overflow (unassigned)',
-    impact: 1
+    ]
   },
 
   'shortcuts.desktop-keymap': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Reference (R5): the web client with the desktop table bound as custom keys, as a web user can set them in Keyboard shortcuts; GPUIX presses the same keys with its default (desktop) keymap. Headless Chromium hands Ctrl+T, Ctrl+W and Ctrl+R to the page.',
       'Every key does the same in both: Ctrl+T shows the agent launcher over Terminal 1 and a second Ctrl+T hides it, Ctrl+W asks to close Terminal 1 and Close removes it, Ctrl+R opens Command History, Ctrl+, opens Preferences and Ctrl+= zooms in.',
-      'The last frame differs as in shortcuts.zoom-in: the zoomed web page runs past the window bottom, and GPUIX keeps the status bar in the window.'
-    ],
-    cause: 'needs diagnosis',
-    unit: 'web zoom overflow (unassigned)',
-    impact: 1
+      'In the last frame both zoomed pages end at the window bottom with the status bar in view (G17 WEB-ZOOM, see shortcuts.zoom-in).'
+    ]
   },
 
   'notifications.toast': {
@@ -315,27 +309,24 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     ]
   },
   'browser.pane': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Reference: the desktop app (Tauri on WebKitGTK) built from the same checkout, driven with X input at the same 1280x800 (`tools/reference/tauri.ts`). Ctrl+Shift+N opens a browser tab in both and the typed URL loads the local reference page on the same pixels; the pane region reads 0.71 % perceptual.',
       "The URL bar ends with the agentation button only, as in the desktop app: the GPUIX bundle defines Vite's PROD, DEV and MODE (G15), so the dev-only Debug Console is gone.",
       "The agentation toolbar's round button sits at the page's bottom right in both: the webview helper injects the desktop's toolbar bundle when each browsed page has loaded (G15). GPUIX has no annotation service, so its toolbar keeps annotations in the page.",
-      "GPUIX names the tab after the page title (R5 reference page); the desktop tab reads 127.0.0.1:8289. The renderer prefers the title (browser-tab.tsx); the desktop's page poller reports it over Tauri IPC, which the capability file grants only to the main window, so for a remote page it never arrives (inferred from capabilities/default.json and the desktop log, which shows the poller injected and no title activity). G15 left GPUIX's titles in place and names the desktop as the side to fix.",
+      "Both tabs read the page title, R5 reference page (G17 DESKTOP-TITLES). The desktop's page poller reports the title over Tauri IPC, which the capability file grants only to the main window, so a remote page's title never arrived and the desktop tab read 127.0.0.1:8289. The tab webview now takes WebKit's title-changed signal in Rust (`on_document_title_changed` in browser_tab_manager.rs, tested in browser_tab_manager_tests.rs) and emits the event the renderer already listens for. Measured with the desktop app built from gpuix/g17 at c12eed3a (`TERMUL_TAURI_BIN`).",
       'The desktop app draws its own window buttons at the right of the tab bar; GPUIX leaves them to the window manager. Both rails show the SSH section now that GPUIX is host-local; the desktop has no seeded chat.',
       'I6 measured it in the full run on the patched addon (series 2fc3aff4), both clients host-local.'
-    ],
-    cause: 'needs diagnosis',
-    unit: 'desktop browser tab titles over remote IPC (unassigned)',
-    impact: 1
+    ]
   },
   'update.toast': {
-    status: 'pending-unit',
+    status: 'ported',
     differences: [
-      "GPUIX has neither the update toast nor the what's new modal; App.tsx renders both only under isTauriContext(). The reference is the desktop app (`tools/reference/tauri.ts`): the toast against a release feed, the modal after a version change. The packaged GPUIX app has a command-line check, `termul-gpuix --check-update`."
-    ],
-    cause: 'native override needed',
-    unit: "U1 GPUIX updater and what's new",
-    impact: 1
+      "Reference: the desktop app (`tools/reference/tauri.ts`), both clients on the nightly channel against the real release feeds, with a last-seen version of 0.4.51 (`stores` in the surface). Both open What's New for 0.4.52 with its GitHub notes and toast Nightly update available, Version 0.5.0-nightly…, with Remind me tomorrow and Open download page. Remind me tomorrow closes the toast and Got it the modal in both.",
+      "GPUIX runs the shared updater through the desktop host seam (U1, `src/renderer/lib/desktop-app.ts`): it reads the channel manifest itself, every channel opens the download page and nothing is downloaded or installed. The notes paint as native markdown (`overrides/components/WhatsNewNotes.tsx`), since the web's sanitized HTML goes through `dangerouslySetInnerHTML`. The desktop reserves a scrollbar beside the notes, so its lines wrap a word earlier.",
+      'The toast lays its icon beside the title, as sonner does: the GPUIX toaster resolves the percentage in `basis-[calc(100%-28px)]` against the card (U1; it had dropped the class and put the icon on its own row). Its buttons now close the toast as sonner does. The desktop sets the toast in WebKitGTK\'s system-ui font, where Chromium and GPUIX use Arial (Liberation Sans), so the description wraps after "Open the" on the desktop and after the version in GPUIX; and WebKitGTK paints both toast buttons white (sonner\'s defaults), where the web and GPUIX use the secondary and primary fills.',
+      'The desktop composer shows Codex timing out instead of the Chat Scenario Agent, has no seeded chat, and draws its own window buttons (as in browser.pane).'
+    ]
   },
 
   'snapshots.page': {

@@ -26,10 +26,12 @@ describe('clampUiZoom', () => {
 describe('applyUiZoom', () => {
   beforeEach(() => {
     document.documentElement.style.zoom = ''
+    document.documentElement.style.removeProperty('--ui-zoom')
   })
 
   afterEach(() => {
     document.documentElement.style.zoom = ''
+    document.documentElement.style.removeProperty('--ui-zoom')
     vi.restoreAllMocks()
   })
 
@@ -49,6 +51,16 @@ describe('applyUiZoom', () => {
     const applied = await applyUiZoom(1.2)
     expect(applied).toBe(1.2)
     expect(document.documentElement.style.zoom).toBe('1.2')
+  })
+
+  // CSS zoom scales `vh` and the fixed positions floating-ui computes from
+  // unzoomed pointer and trigger coordinates; index.css divides the factor
+  // back out of the viewport-sized shells and the popper layer.
+  it('publishes the web zoom factor as --ui-zoom for the CSS that undoes it', async () => {
+    await applyUiZoom(1.1)
+    expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe('1.1')
+    await applyUiZoom(1)
+    expect(document.documentElement.style.getPropertyValue('--ui-zoom')).toBe('1')
   })
 
   it('propagates failures from the native zoom call', async () => {

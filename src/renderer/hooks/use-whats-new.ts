@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { isDesktopApp } from '@/lib/desktop-app'
 import {
   compareVersions,
   fetchReleaseNotes,
@@ -6,7 +7,6 @@ import {
   getLastSeenVersion,
   setLastSeenVersion
 } from '@/lib/tauri-release-notes'
-import { isTauriContext } from '@/lib/tauri-runtime'
 
 interface WhatsNewState {
   isOpen: boolean
@@ -51,7 +51,7 @@ export function useWhatsNew(): UseWhatsNewResult {
   // Desktop-app release UX (issue #843): on web the client is a static bundle
   // served with the server, so there is no per-app update event to announce —
   // skip the version/notes fetch entirely and never open the popup.
-  const isDesktop = isTauriContext()
+  const isDesktop = isDesktopApp()
 
   useEffect(() => {
     if (!isDesktop) return

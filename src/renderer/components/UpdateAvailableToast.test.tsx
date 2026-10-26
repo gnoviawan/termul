@@ -54,7 +54,8 @@ vi.mock('@/stores/updater-store', () => ({
 }))
 
 vi.mock('@/lib/tauri-updater-api', () => ({
-  isAurUpdateMode: vi.fn(() => false)
+  isAurUpdateMode: vi.fn(() => false),
+  opensDownloadPage: vi.fn((channel: string) => channel !== 'stable')
 }))
 
 const confirmMock = vi.fn(async (_message: string, _options?: unknown) => true)

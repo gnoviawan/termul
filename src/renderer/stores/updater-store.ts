@@ -1,7 +1,7 @@
 import type { DownloadProgress, UpdateInfo, UpdateState } from '@shared/types/updater.types'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
-import { isTauriContext } from '@/lib/tauri-runtime'
+import { isDesktopApp } from '@/lib/desktop-app'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import {
   getUpdateChannel,
@@ -10,6 +10,7 @@ import {
 import {
   clearPendingUpdate,
   DEFAULT_UPDATE_CHANNEL,
+  isInManualUpdateMode,
   registerUpdateEventHandlers,
   type TauriUpdaterEventHandlers,
   checkForUpdates as tauriCheckForUpdates,
@@ -197,11 +198,16 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       })
 
       if (result.success) {
-        set({
-          downloaded: true,
-          downloadProgress: 100,
-          error: null
-        })
+        // A manual update only opened its download page: nothing was downloaded to install.
+        set(
+          isInManualUpdateMode()
+            ? { error: null }
+            : {
+                downloaded: true,
+                downloadProgress: 100,
+                error: null
+              }
+        )
       } else {
         set({
           error: result.error ?? 'Failed to download update',
@@ -350,8 +356,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     // handlers / state probes on a browser root throws into the error state
     // on every page load. Initialize only on the desktop root; the Updates
     // preferences section already renders a read-only server-version card on
-    // web.
-    if (!isTauriContext()) return
+    // web. A desktop host (GPUIX) runs it as a check-only updater.
+    if (!isDesktopApp()) return
 
     if (initializationPromise) {
       await initializationPromise

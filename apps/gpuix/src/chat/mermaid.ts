@@ -2,7 +2,7 @@
  * Mermaid diagrams for the transcript, drawn by the webview helper (`MermaidRenderHost`) and
  * cached by the source's hash for the life of the process: a transcript that remounts a card, or
  * shows the same diagram twice, renders it once. A failed render is not kept, so the next mount
- * tries again.
+ * tries again. `exportMermaid` answers the card's Download menu with Streamdown's three formats.
  */
 
 import { createHash } from 'node:crypto'
@@ -51,6 +51,47 @@ export function drawMermaid(source: string): Promise<MermaidRender> {
   })
   renders.set(key, render)
   return render
+}
+
+/** A diagram mermaid draws in a few milliseconds; drawing it loads the helper's renderer page. */
+const WARM_SOURCE = 'flowchart LR\n  A'
+
+/**
+ * Start the helper and its mermaid page while a fence still streams, so the diagram can draw as
+ * the fence closes instead of waiting about a second for both (`tools/chat/mermaid-probe.ts`).
+ */
+export function warmMermaid(): void {
+  const host = getBrowserHost()
+  if (!isMermaidRenderHost(host)) return
+  const started = performance.now()
+  void host.renderMermaid(WARM_SOURCE).then((result) => {
+    const ms = Math.round(performance.now() - started)
+    log.info('chat', `mermaid.warmed ${JSON.stringify({ ms, ok: result.ok })}`)
+  })
+}
+
+export type MermaidFormat = 'svg' | 'png' | 'mmd'
+
+export type MermaidExport = { ok: true; data: string | Uint8Array } | { ok: false; error: string }
+
+/** Streamdown rasterizes a downloaded PNG at five times the diagram's size. */
+const EXPORT_PNG_SCALE = 5
+
+function dataUrlBytes(url: string): Uint8Array {
+  return Uint8Array.from(Buffer.from(url.slice(url.indexOf(',') + 1), 'base64'))
+}
+
+/** The file Streamdown's Download menu saves: the SVG mermaid drew, a PNG of it, or the source. */
+export async function exportMermaid(source: string, format: MermaidFormat): Promise<MermaidExport> {
+  if (format === 'mmd') return { ok: true, data: source }
+  if (format === 'svg') {
+    const drawn = await drawMermaid(source)
+    return drawn.ok ? { ok: true, data: drawn.svg } : drawn
+  }
+  const host = getBrowserHost()
+  if (!isMermaidRenderHost(host)) return { ok: false, error: 'no webview helper in this client' }
+  const drawn = await host.renderMermaid(source, { scale: EXPORT_PNG_SCALE })
+  return drawn.ok ? { ok: true, data: dataUrlBytes(drawn.png) } : drawn
 }
 
 export function useMermaid(source: string): MermaidState {

@@ -59,7 +59,9 @@ function scaled(file: string, scale: number, crop?: number[]): PNG {
 }
 
 export function writePair(dir: string, scale: number, crop?: number[]): string | null {
-  const web = path.join(dir, 'web.png')
+  // A `tauri` reference surface names its reference frame after the desktop app.
+  const web =
+    ['web.png', 'tauri.png'].map((f) => path.join(dir, f)).find((f) => existsSync(f)) ?? ''
   const gpuix = path.join(dir, 'gpuix.png')
   if (!existsSync(web) || !existsSync(gpuix)) return null
   const a = scaled(web, scale, crop)

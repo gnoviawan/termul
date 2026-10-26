@@ -53,6 +53,10 @@ vi.mock('@/lib/acp-history-persistence', () => ({
 // Silence sonner toasts in test output.
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
+// The shared-live host exists only in the Tauri desktop app.
+const runtime = vi.hoisted(() => ({ tauri: true }))
+vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => runtime.tauri }))
+
 import { useRemoteStatus } from '@/stores/remote-status-store'
 
 const RUNNING: RemoteStatus = {
@@ -84,6 +88,7 @@ async function openPopover(): Promise<HTMLElement> {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  runtime.tauri = true
   vi.mocked(useRemoteStatus).mockReturnValue(null)
 })
 
@@ -156,5 +161,20 @@ describe('RemoteAccessPopover', () => {
       expect(stopMock).toHaveBeenCalledTimes(1)
     })
     expect(syncMcpRegistryToProjectFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('RemoteAccessPopover without the shared-live host (GPUIX)', () => {
+  it('shows the toggle off and disabled, says why, and never starts the host', async () => {
+    runtime.tauri = false
+    renderPopover()
+
+    const toggle = await openPopover()
+
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(toggle.hasAttribute('disabled')).toBe(true)
+    expect(screen.getByText('Not available in this build yet.')).toBeDefined()
+    await fireEvent.click(toggle)
+    expect(startMock).not.toHaveBeenCalled()
   })
 })

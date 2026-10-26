@@ -1,6 +1,7 @@
 import { getVersion } from '@tauri-apps/api/app'
 import { Store } from '@tauri-apps/plugin-store'
 
+import { LocalPluginStore } from './local-plugin-store'
 import { isTauriContext } from './tauri-runtime'
 
 const STORE_FILE = 'whats-new.json'
@@ -9,65 +10,11 @@ const LAST_SEEN_VERSION_KEY = 'whatsNew.lastSeenVersion'
 const GITHUB_RELEASE_BY_TAG_URL = 'https://api.github.com/repos/gnoviawan/termul/releases/tags'
 const RELEASE_FETCH_TIMEOUT_MS = 8000
 
-/**
- * Adapter shape shared by the Tauri `Store` and the web localStorage-backed
- * store. Both expose `get`/`set`/`save` so the facade methods can branch in
- * `getStore` and the rest of the call site is transport-agnostic.
- */
+/** The Tauri `Store` and the localStorage stand-in share this shape. */
 interface ReleaseNotesStore {
   get<T>(key: string): Promise<T | undefined>
   set(key: string, value: unknown): Promise<void>
   save(): Promise<void>
-}
-
-/**
- * Web-only localStorage-backed store adapter (CAP-3). Mirrors the Tauri
- * `Store` shape over flat composite localStorage keys shaped
- * `${STORE_FILE}::${key}` (e.g. `whats-new.json::whatsNew.lastSeenVersion`),
- * matching the spec's I/O matrix. Each logical key is its own localStorage
- * entry; there is no shared envelope object.
- *
- * `save()` is a no-op — localStorage writes are synchronous, so `set`
- * already persists. All ops swallow `QuotaExceededError`/`SecurityError`/JSON
- * parse failures and degrade silently (the facade is best-effort: the
- * "what's new" popup must never throw on persistence failure).
- */
-class WebReleaseNotesStore implements ReleaseNotesStore {
-  private readonly storageKey: string
-
-  constructor(storageKey: string) {
-    this.storageKey = storageKey
-  }
-
-  private compositeKey(key: string): string {
-    return `${this.storageKey}::${key}`
-  }
-
-  async get<T>(key: string): Promise<T | undefined> {
-    if (typeof localStorage === 'undefined') return undefined
-    try {
-      const raw = localStorage.getItem(this.compositeKey(key))
-      if (raw === null) return undefined
-      return JSON.parse(raw) as T
-    } catch {
-      // Corrupt JSON / SecurityError (private mode) — degrade silently.
-      return undefined
-    }
-  }
-
-  async set(key: string, value: unknown): Promise<void> {
-    if (typeof localStorage === 'undefined') return
-    try {
-      localStorage.setItem(this.compositeKey(key), JSON.stringify(value))
-    } catch {
-      // QuotaExceededError / SecurityError — drop the write silently. The UI
-      // must never throw on persistence; reads return last-good or empty.
-    }
-  }
-
-  async save(): Promise<void> {
-    // no-op — localStorage is synchronous; `set` already persisted.
-  }
 }
 
 let storeInstance: ReleaseNotesStore | null = null
@@ -83,7 +30,7 @@ async function getStore(): Promise<ReleaseNotesStore> {
         autoSave: false,
         defaults: {}
       })
-    : new WebReleaseNotesStore(STORE_FILE)
+    : new LocalPluginStore(STORE_FILE)
 
   return storeInstance
 }

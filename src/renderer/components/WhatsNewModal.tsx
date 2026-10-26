@@ -1,10 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { type KeyboardEvent, useCallback, useEffect, useId, useMemo } from 'react'
+import { type KeyboardEvent, useCallback, useEffect, useId } from 'react'
 import { ExternalLink, Sparkles, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
-import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { openerApi } from '@/lib/tauri-opener-api'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
+import { WhatsNewNotes } from './WhatsNewNotes'
 
 interface WhatsNewModalProps {
   isOpen: boolean
@@ -56,11 +56,6 @@ export function WhatsNewModal({
       void openerApi.openUrlWithSystemBrowser(htmlUrl)
     }
   }, [htmlUrl])
-
-  // Release notes are GitHub-flavored markdown; render to sanitized HTML
-  // (DOMPurify via the shared chat-markdown renderer) so headings, lists, and
-  // links display properly instead of as raw markup.
-  const notesHtml = useMemo(() => (notes ? renderChatMarkdown(notes) : null), [notes])
 
   return (
     <AnimatePresence>
@@ -119,19 +114,7 @@ export function WhatsNewModal({
                 <span className="block text-xs font-medium text-muted-foreground mb-1.5">
                   Release Notes
                 </span>
-                <div className="max-h-[320px] overflow-y-auto pr-1">
-                  {notesHtml ? (
-                    <div
-                      className="chat-prose text-xs leading-relaxed text-foreground"
-                      // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via renderChatMarkdown (DOMPurify)
-                      dangerouslySetInnerHTML={{ __html: notesHtml }}
-                    />
-                  ) : (
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      Release notes aren't available for this version.
-                    </p>
-                  )}
-                </div>
+                <WhatsNewNotes notes={notes ?? null} />
               </div>
             </div>
 

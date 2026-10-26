@@ -314,7 +314,7 @@ impl Host {
         Ok(())
     }
 
-    fn render_mermaid(&mut self, id: String, source: String) -> Result<(), String> {
+    fn render_mermaid(&mut self, id: String, source: String, scale: Option<f64>) -> Result<(), String> {
         if let Some(release) = self.mermaid_release.take() {
             release.remove();
         }
@@ -323,7 +323,7 @@ impl Host {
             self.mermaid = Some(mermaid::Renderer::new(&mut self.context, on_mermaid_message)?);
             log(&format!("mermaid renderer created in {} ms", started.elapsed().as_millis()));
         }
-        self.mermaid.as_mut().expect("just created").render(id, source)
+        self.mermaid.as_mut().expect("just created").render(id, source, scale)
     }
 
     fn mermaid_answered(&mut self) {
@@ -370,7 +370,7 @@ impl Host {
                 self.give_keyboard_to_app();
                 Ok(())
             }
-            Command::RenderMermaid { id, source, .. } => self.render_mermaid(id, source),
+            Command::RenderMermaid { id, source, scale, .. } => self.render_mermaid(id, source, scale),
             Command::Quit => unreachable!("dispatch handles quit"),
         }
     }
@@ -378,8 +378,8 @@ impl Host {
 
 fn on_mermaid_message(body: &str) {
     match protocol::parse_page_message(body) {
-        Some(PageMessage::Mermaid { id, ok, png, width, height, error }) => {
-            emit(Event::Mermaid { id, ok, png, width, height, error });
+        Some(PageMessage::Mermaid { id, ok, png, svg, width, height, error }) => {
+            emit(Event::Mermaid { id, ok, png, svg, width, height, error });
             glib::idle_add_local_once(|| {
                 with_host(Host::mermaid_answered);
             });

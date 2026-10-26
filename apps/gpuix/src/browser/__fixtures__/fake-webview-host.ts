@@ -30,7 +30,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
             ev: 'mermaid',
             id: cmd.id,
             ok: true,
-            png: 'data:image/png;base64,AA',
+            png: `data:image/png;base64,AA${cmd.scale ?? 2}x`,
+            svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
             width: 120,
             height: 40
           }

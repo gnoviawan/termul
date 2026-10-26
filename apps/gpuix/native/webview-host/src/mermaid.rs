@@ -1,7 +1,7 @@
 //! Mermaid diagrams for the chat transcript. GPUIX has no DOM for mermaid to lay out in, so a
 //! hidden webview (an offscreen GTK window, never attached to the app window) runs mermaid at
 //! the version the web client bundles, rasterizes each diagram through a canvas, and posts the PNG
-//! back as a data URL. The page and the script come from the `termul-mermaid:` scheme; renders
+//! back as a data URL with the SVG mermaid drew. The page and the script come from the `termul-mermaid:` scheme; renders
 //! that arrive before the page has loaded wait in `queue`.
 
 use std::borrow::Cow;
@@ -25,11 +25,20 @@ fn response(path: &str) -> Response<Cow<'static, [u8]>> {
     Response::builder().header("Content-Type", kind).body(Cow::Borrowed(body)).expect("static mermaid response")
 }
 
+struct Render {
+    id: String,
+    source: String,
+    scale: f64,
+}
+
+/// Pixels per CSS pixel when a render names none: sharp on a 2x screen.
+const DEFAULT_SCALE: f64 = 2.0;
+
 pub struct Renderer {
     view: WebView,
     _window: gtk::OffscreenWindow,
     ready: bool,
-    queue: Vec<(String, String)>,
+    queue: Vec<Render>,
     /// Renders asked for and not answered yet, queued ones included.
     pending: usize,
 }
@@ -53,8 +62,9 @@ impl Renderer {
         Ok(Self { view, _window: window, ready: false, queue: Vec::new(), pending: 0 })
     }
 
-    pub fn render(&mut self, id: String, source: String) -> Result<(), String> {
-        let sent = self.send(id, source);
+    pub fn render(&mut self, id: String, source: String, scale: Option<f64>) -> Result<(), String> {
+        let scale = scale.filter(|s| s.is_finite() && *s > 0.0).unwrap_or(DEFAULT_SCALE);
+        let sent = self.send(Render { id, source, scale });
         if sent.is_ok() {
             self.pending += 1;
         }
@@ -67,15 +77,16 @@ impl Renderer {
         self.pending == 0
     }
 
-    fn send(&mut self, id: String, source: String) -> Result<(), String> {
+    fn send(&mut self, render: Render) -> Result<(), String> {
         if !self.ready {
-            self.queue.push((id, source));
+            self.queue.push(render);
             return Ok(());
         }
         let call = format!(
-            "window.__termulMermaid.render({}, {})",
-            serde_json::to_string(&id).map_err(|e| e.to_string())?,
-            serde_json::to_string(&source).map_err(|e| e.to_string())?
+            "window.__termulMermaid.render({}, {}, {})",
+            serde_json::to_string(&render.id).map_err(|e| e.to_string())?,
+            serde_json::to_string(&render.source).map_err(|e| e.to_string())?,
+            render.scale
         );
         self.view.evaluate_script(&call).map_err(|e| e.to_string())
     }
@@ -83,8 +94,9 @@ impl Renderer {
     pub fn mark_ready(&mut self) -> Vec<String> {
         self.ready = true;
         let mut errors = Vec::new();
-        for (id, source) in std::mem::take(&mut self.queue) {
-            if let Err(error) = self.send(id.clone(), source) {
+        for render in std::mem::take(&mut self.queue) {
+            let id = render.id.clone();
+            if let Err(error) = self.send(render) {
                 self.pending = self.pending.saturating_sub(1);
                 errors.push(format!("{id}: {error}"));
             }
