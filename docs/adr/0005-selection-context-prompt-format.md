@@ -68,3 +68,15 @@ normalizations never make a prompt show twice.
   never turns typed text into chips, and it undoes that escape.
 - The selected text is sent inline, so a very long selection uses prompt
   tokens. There is no size limit in this version.
+
+## Alternatives considered
+
+- **Store provenance with the prompt record** (a flag that says "this prompt
+  has selection contexts"). This keeps chip-free prompts byte-identical in all
+  cases, but it adds a field to the durable `user_prompt` record, so the Rust
+  store, the web route, and the renderer must all change. Rejected for now:
+  the marker escape only applies to text that contains the label phrase, and
+  an agent reads a Markdown `\[` the same as `[`.
+- **No escape for chip-free prompts.** Rejected: a typed message in the exact
+  prompt shape would restore as chips, so the restored chat would differ from
+  what the user sent.
