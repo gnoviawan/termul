@@ -538,10 +538,11 @@ export interface PersistenceWriteOpts {
   // Idempotency id; a resend of the same write reuses it so the host can
   // recognise its own applied write.
   commandId?: string
-  // The caller re-reads and resends a write that lost a compare-and-set race.
-  // Such a conflict is not reported on the error bus; set it on every attempt
-  // except the last one, so only the final failure reaches the user.
-  retrying?: boolean
+  // The caller handles a lost compare-and-set race itself: it re-reads and
+  // resends, or the conflict means another writer already did the work. Such
+  // a conflict is not reported on the error bus. A retry loop sets it on every
+  // attempt except the last one, so only the final failure reaches the user.
+  conflictHandled?: boolean
 }
 
 // A read that also reports the host's per-key revision stamp.

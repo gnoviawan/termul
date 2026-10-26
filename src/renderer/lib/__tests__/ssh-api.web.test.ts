@@ -147,7 +147,7 @@ describe('sshApi (web branch)', () => {
 
     expect(mockPersistenceApi.write).toHaveBeenCalledWith('ssh/profiles', [expect.anything()], {
       expected: null,
-      retrying: true
+      conflictHandled: true
     })
   })
 
@@ -160,8 +160,8 @@ describe('sshApi (web branch)', () => {
     await api.deleteProfile('drop')
 
     expect(mockPersistenceApi.write.mock.calls.map((c) => c[2])).toEqual([
-      { expected: stored, retrying: true },
-      { expected: stored, retrying: true }
+      { expected: stored, conflictHandled: true },
+      { expected: stored, conflictHandled: true }
     ])
   })
 
@@ -180,8 +180,8 @@ describe('sshApi (web branch)', () => {
 
     expect(result.success).toBe(true)
     expect(mockPersistenceApi.write.mock.calls.map((c) => c[2])).toEqual([
-      { expected: first, retrying: true },
-      { expected: second, retrying: true }
+      { expected: first, conflictHandled: true },
+      { expected: second, conflictHandled: true }
     ])
     expect((mockPersistenceApi.write.mock.calls[1][1] as SSHProfile[]).map((p) => p.id)).toEqual([
       'a',
@@ -201,7 +201,7 @@ describe('sshApi (web branch)', () => {
     expect(await api.saveProfile(profile())).toMatchObject({ code: 'STORE_CAS_FAILED' })
     expect(mockPersistenceApi.write).toHaveBeenCalledTimes(5)
     // Only the last lost race is reported to the user.
-    expect(mockPersistenceApi.write.mock.calls.map((c) => c[2].retrying)).toEqual([
+    expect(mockPersistenceApi.write.mock.calls.map((c) => c[2].conflictHandled)).toEqual([
       true,
       true,
       true,
@@ -399,6 +399,8 @@ describe('sshApi profile copy to the host', () => {
   let beforeStoreWrite: ((key: string) => void) | undefined
   let hostSaveFailsAt: number
   let hostSaves: number
+  /** What the persistence layer would put on its error bus (the user's toast). */
+  let reported: string[]
 
   const asBrowser = () =>
     transport.connectionCapabilities.mockReturnValue({ write: true, hostLocal: false })
@@ -417,17 +419,23 @@ describe('sshApi profile copy to the host', () => {
     beforeStoreWrite = undefined
     hostSaveFailsAt = Number.POSITIVE_INFINITY
     hostSaves = 0
+    reported = []
     mockPersistenceApi.read.mockImplementation(async (key: string) =>
       store.has(key)
         ? { success: true, data: structuredClone(store.get(key)) }
         : { success: false, error: `Key not found: ${key}`, code: 'KEY_NOT_FOUND' }
     )
     mockPersistenceApi.write.mockImplementation(
-      async (key: string, data: unknown, opts?: { expected?: unknown }) => {
+      async (
+        key: string,
+        data: unknown,
+        opts?: { expected?: unknown; conflictHandled?: boolean }
+      ) => {
         beforeStoreWrite?.(key)
         const current = store.has(key) ? store.get(key) : null
         if (opts && 'expected' in opts) {
           if (JSON.stringify(opts.expected ?? null) !== JSON.stringify(current)) {
+            if (!opts.conflictHandled) reported.push(`${key}: STORE_CAS_FAILED`)
             return { success: false, error: 'changed', code: 'STORE_CAS_FAILED' }
           }
         }
@@ -523,6 +531,23 @@ describe('sshApi profile copy to the host', () => {
     )
     expect(markerWrites).toHaveLength(2)
     expect(store.get('ssh/profiles')).toEqual([p1, p2, p3])
+    expect(reported).toEqual([])
+  })
+
+  it('copies once, quietly, when one client lists twice at once', async () => {
+    store.set('ssh/profiles', [p1, p2, p3])
+    const api = createSSHApi()
+
+    const [panel, workspace] = await Promise.all([api.listProfiles(), api.listProfiles()])
+
+    expect(ids(panel.success ? panel.data : undefined)).toEqual(['p-1', 'p-2', 'p-3'])
+    expect(ids(workspace.success ? workspace.data : undefined)).toEqual(['p-1', 'p-2', 'p-3'])
+    expect(hostSaves).toBe(2)
+    const markerWrites = mockPersistenceApi.write.mock.calls.filter(
+      (c) => c[0] === 'ssh/profiles-migrated'
+    )
+    expect(markerWrites).toHaveLength(1)
+    expect(reported).toEqual([])
   })
 
   it('resumes a copy that stopped midway at the next list', async () => {

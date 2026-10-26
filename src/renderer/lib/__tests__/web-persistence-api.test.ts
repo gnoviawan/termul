@@ -865,19 +865,19 @@ describe('createWebPersistenceApi', () => {
 
         const retried = await api.write('ssh/profiles', [{ id: 'mine' }], {
           expected: null,
-          retrying: true
+          conflictHandled: true
         })
         expect(retried).toMatchObject({ success: false, code: 'STORE_CAS_FAILED' })
         expect(events).toEqual([])
 
-        await api.write('ssh/profiles', [{ id: 'mine' }], { expected: null, retrying: false })
+        await api.write('ssh/profiles', [{ id: 'mine' }], { expected: null, conflictHandled: false })
         expect(events).toHaveLength(1)
       })
 
-      it('does not silence other failures of a retrying write', async () => {
+      it('does not silence other failures of a conflict-handling write', async () => {
         const { events } = withEvents()
 
-        await api.write('ssh/profiles', [{ id: 'mine' }], { expected: null, retrying: true })
+        await api.write('ssh/profiles', [{ id: 'mine' }], { expected: null, conflictHandled: true })
 
         // Never read in this page: refused before any compare-and-set happens.
         expect(events.map((e) => e.code)).toEqual(['STORE_BASE_REQUIRED'])
