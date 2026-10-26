@@ -11,7 +11,7 @@ Escape instead (cancel). DISPLAY comes from the environment.
 import sys
 import time
 
-from Xlib import X, XK, display
+from Xlib import X, XK, display, error
 from Xlib.ext import xtest
 
 title, target = sys.argv[1], sys.argv[2]
@@ -24,9 +24,15 @@ NAMED = {"/": "slash", ".": "period", "-": "minus", " ": "space", "=": "equal", 
 
 
 def find(window):
-    if window.get_wm_name() == title:
-        return window
-    for child in window.query_tree().children:
+    # GTK maps and destroys short-lived windows while the dialog starts, so a
+    # window listed by query_tree can be gone by the time it is read.
+    try:
+        if window.get_wm_name() == title:
+            return window
+        children = window.query_tree().children
+    except error.BadWindow:
+        return None
+    for child in children:
         hit = find(child)
         if hit:
             return hit
