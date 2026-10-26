@@ -15,6 +15,8 @@ const CODE_BODY_SELECTOR = '[data-streamdown="code-block-body"]'
 const SHORTCUT_LABEL = isMac ? '⌘L' : 'Ctrl+L'
 const BUTTON_HEIGHT = 32
 const BUTTON_GAP = 6
+/** About half the button width plus a margin: keeps the centred button inside the list. */
+const EDGE_INSET = 90
 
 interface MessageSelection {
   context: SelectionContext
@@ -61,9 +63,13 @@ function readMessageSelection(root: HTMLElement): MessageSelection | null {
       ? range.getBoundingClientRect()
       : start.getBoundingClientRect()
   const layer = root.getBoundingClientRect()
+  const centre = rect.left + rect.width / 2 - layer.left
   return {
     context,
-    x: rect.left + rect.width / 2 - layer.left,
+    x:
+      layer.width > EDGE_INSET * 2
+        ? Math.min(Math.max(centre, EDGE_INSET), layer.width - EDGE_INSET)
+        : centre,
     top: rect.top - layer.top,
     bottom: rect.bottom - layer.top
   }
@@ -207,7 +213,7 @@ export function SelectionContextLayer({
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => add(current, 'button')}
               className={cn(
-                'pointer-events-auto inline-flex h-8 items-center gap-1.5 rounded-lg border border-border',
+                'pointer-events-auto inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border',
                 'bg-popover px-2.5 text-xs font-medium text-popover-foreground shadow-md',
                 'transition-colors hover:bg-foreground/[0.06]',
                 'outline-none focus-visible:ring-2 focus-visible:ring-ring'

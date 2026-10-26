@@ -83,6 +83,30 @@ describe('SelectionContextLayer', () => {
     expect(onAdd).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps the button on one line and inside the list when the selection is at the right edge', () => {
+    renderLayer()
+    const rect = (left: number, width: number) =>
+      ({
+        left,
+        width,
+        right: left + width,
+        top: 200,
+        bottom: 220,
+        height: 20,
+        x: left,
+        y: 200
+      }) as DOMRect
+    const layer = screen.getByTestId('prose').closest('[data-selection-context-source]')
+      ?.parentElement as HTMLElement
+    vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(rect(0, 400))
+    vi.spyOn(screen.getByTestId('prose'), 'getBoundingClientRect').mockReturnValue(rect(380, 20))
+    select('prose')
+    const button = screen.getByRole('button', { name: 'Add to context' })
+    expect(button.className).toContain('whitespace-nowrap')
+    const left = Number.parseFloat((button.parentElement as HTMLElement).style.left)
+    expect(left).toBeLessThanOrEqual(400 - 90)
+  })
+
   it('keeps the code language when the selection is inside a code block', () => {
     const onAdd = renderLayer()
     select('code')
