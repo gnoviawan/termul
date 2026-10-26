@@ -1,5 +1,5 @@
 /** Shared by the patch scene and its checker. */
-export const SCENE = { width: 640, height: 720 } as const
+export const SCENE = { width: 640, height: 800 } as const
 export const SAMPLES = [
   'upright',
   'italic',
@@ -11,7 +11,10 @@ export const SAMPLES = [
   'input',
   'blur',
   'table',
-  'gridSpan'
+  'gridSpan',
+  'untracked',
+  'tracked',
+  'bullet'
 ] as const
 /** Set on the unfocused input after mount, like a URL bar after a navigation: ink at the start, dots at the end. */
 export const LONG_VALUE = `${'M'.repeat(10)}${'.'.repeat(120)}`
@@ -24,6 +27,10 @@ export const TABLE = { padY: 10, lineHeight: 20, rows: 2 } as const
 export const TABLE_HEADER_FILL = '#ff0000'
 /** A grid of GRID.columns equal tracks GRID.width wide; its first cell spans two of them. */
 export const GRID = { width: 300, columns: 3, span: 2 } as const
+/** `letterSpacing` of the `tracked` sample, in em of its 32 px glyphs: 8 px between glyphs. */
+export const TRACKING = { em: 0.25, size: 32, glyphs: 4 } as const
+/** The `bullet` sample's list: a red "•" centred in a `width` column, the item text `gap` after it. */
+export const BULLET = { width: 40, gap: 20, color: '#ff0000' } as const
 export type Sample = (typeof SAMPLES)[number]
 export interface SceneReady {
   bounds: Record<Sample, { x: number; y: number; width: number; height: number } | null>

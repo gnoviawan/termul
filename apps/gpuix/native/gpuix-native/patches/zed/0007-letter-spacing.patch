@@ -1,0 +1,104 @@
+diff --git a/crates/gpui_wgpu/src/cosmic_text_system.rs b/crates/gpui_wgpu/src/cosmic_text_system.rs
+index 0f11ac3..6cb4cc4 100644
+--- a/crates/gpui_wgpu/src/cosmic_text_system.rs
++++ b/crates/gpui_wgpu/src/cosmic_text_system.rs
+@@ -63,6 +63,9 @@ struct LoadedFont {
+     /// Horizontal space laid out before and after each run of this font, in
+     /// pixels, from the `tpdx` pseudo feature: CSS inline padding.
+     pad: f32,
++    /// Space added after each glyph, in em, from the `tlsp` pseudo feature:
++    /// CSS `letter-spacing`.
++    tracking: f32,
+     is_known_emoji_font: bool,
+     /// resolved at load time so `layout_line` shares one chain across faces.
+     /// `Arc` keeps clone cheap on the per-run hot path.
+@@ -72,6 +75,7 @@ struct LoadedFont {
+ struct FontMatchProperties {
+     scale: f32,
+     pad: f32,
++    tracking: f32,
+     primary_family_name: SharedString,
+     stretch: Stretch,
+     style: Style,
+@@ -263,6 +267,7 @@ impl CosmicTextSystemState {
+         Some(FontMatchProperties {
+             scale: loaded_font.scale,
+             pad: loaded_font.pad,
++            tracking: loaded_font.tracking,
+             primary_family_name: first_family.0.clone().into(),
+             stretch: face.stretch,
+             style: face.style,
+@@ -352,6 +357,7 @@ impl CosmicTextSystemState {
+         let cosmic_features = cosmic_font_features(features)?;
+         let scale = font_scale_feature(features);
+         let pad = font_padding_feature(features);
++        let tracking = letter_spacing_feature(features);
+ 
+         let mut loaded_font_ids = SmallVec::new();
+         for (font_id, postscript_name) in families {
+@@ -380,6 +386,7 @@ impl CosmicTextSystemState {
+                 features: cosmic_features.clone(),
+                 scale,
+                 pad,
++                tracking,
+                 is_known_emoji_font: check_is_known_emoji_font(&postscript_name),
+                 user_fallback_chain: Arc::clone(&user_fallback_chain),
+             });
+@@ -511,7 +518,10 @@ impl CosmicTextSystemState {
+             .loaded_fonts
+             .iter()
+             .position(|loaded_font| {
+-                loaded_font.font.id() == id && loaded_font.scale == 1.0 && loaded_font.pad == 0.0
++                loaded_font.font.id() == id
++                    && loaded_font.scale == 1.0
++                    && loaded_font.pad == 0.0
++                    && loaded_font.tracking == 0.0
+             })
+         {
+             Ok(FontId(ix))
+@@ -532,6 +542,7 @@ impl CosmicTextSystemState {
+                 features: CosmicFontFeatures::new(),
+                 scale: 1.0,
+                 pad: 0.0,
++                tracking: 0.0,
+                 is_known_emoji_font: check_is_known_emoji_font(&face.post_script_name),
+                 user_fallback_chain: Arc::from(Vec::new()),
+             });
+@@ -667,6 +678,9 @@ impl CosmicTextSystemState {
+                 let size = f32::from(font_size) * properties.scale;
+                 primary_attrs = primary_attrs.metrics(cosmic_text::Metrics::new(size, size));
+             }
++            if properties.tracking != 0.0 {
++                primary_attrs = primary_attrs.letter_spacing(properties.tracking);
++            }
+             let fallback_attrs: SmallVec<[Attrs<'_>; 4]> = properties
+                 .fallback_chain
+                 .iter()
+@@ -1056,12 +1070,26 @@ fn font_padding_feature(features: &FontFeatures) -> f32 {
+         .map_or(0.0, |(_, hundredths)| (*hundredths as f32 / 100.0).min(64.0))
+ }
+ 
++/// `tlsp` is not an OpenType feature: its value is letter spacing in
++/// ten-thousandths of an em, an `i32` stored in the `u32` feature value.
++const LETTER_SPACING_FEATURE: &str = "tlsp";
++
++fn letter_spacing_feature(features: &FontFeatures) -> f32 {
++    features
++        .0
++        .iter()
++        .find(|(tag, _)| tag == LETTER_SPACING_FEATURE)
++        .map_or(0.0, |(_, value)| (*value as i32 as f32 / 10_000.0).clamp(-0.5, 1.0))
++}
++
+ fn cosmic_font_features(features: &FontFeatures) -> Result<CosmicFontFeatures> {
+     let mut result = CosmicFontFeatures::new();
+     for feature in features
+         .0
+         .iter()
+-        .filter(|(tag, _)| tag != FONT_SCALE_FEATURE && tag != FONT_PADDING_FEATURE)
++        .filter(|(tag, _)| {
++            tag != FONT_SCALE_FEATURE && tag != FONT_PADDING_FEATURE && tag != LETTER_SPACING_FEATURE
++        })
+     {
+         let name_bytes: [u8; 4] = feature
+             .0

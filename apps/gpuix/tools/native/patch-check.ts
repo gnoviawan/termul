@@ -41,6 +41,12 @@
  *                          `typo-check.ts`: an ordered item's line ends where
  *                          Chromium's tabular list marker puts it
  *   0016-grid-span         a gridColumnSpan cell spans its columns
+ *   zed/0007 + gpuix/0017  `letterSpacing` in em widens the ink of a run by
+ *   letter-spacing         the spacing between each pair of glyphs
+ *   0018-markdown-list-marker
+ *                          `listBullet` paints in `listMarker`, centred in
+ *                          an `mdListMarkerWidth` column, with the item text
+ *                          `mdListMarkerGap` after it
  *   0008-prompt-for-new-path
  *                          `dialog-check.ts`: the portal's save dialog returns
  *                          the path typed into it
@@ -64,12 +70,14 @@ import {
 import {
   type AutomationNode,
   BLUR,
+  BULLET,
   CODE_PAD,
   GRID,
   type Sample,
   SCENE,
   type SceneReady,
-  TABLE
+  TABLE,
+  TRACKING
 } from './samples'
 import type { TypoRow } from './typo-samples'
 
@@ -192,6 +200,29 @@ const italicSlant = slant('italic')
 const linkRed = count('link', ([r, g, b]) => r > 160 && g < 90 && b < 90)
 const codeRatio = inkWidth('codeHalf') / Math.max(1, inkWidth('codeFull'))
 const codePadShift = inkWidth('codePad') - inkWidth('codeTight')
+const trackingShift = inkWidth('tracked') - inkWidth('untracked')
+const trackingExpected = TRACKING.em * TRACKING.size * (TRACKING.glyphs - 1)
+/** Mean x of the bullet's red ink, and the first x of the item's white ink, from the list's left edge. */
+const bulletInk = (() => {
+  const { x0, y0, x1, y1 } = region('bullet')
+  const red: number[] = []
+  let white = Number.POSITIVE_INFINITY
+  for (let y = y0; y < y1; y++)
+    for (let x = x0; x < x1; x++) {
+      const [r, g, b] = pixel(x, y)
+      if (r > 160 && g < 90 && b < 90) red.push(x)
+      else if (lit([r, g, b])) white = Math.min(white, x)
+    }
+  const left = x0 + 8
+  const centre = red.length ? red.reduce((a, b) => a + b, 0) / red.length - left : -1
+  return { centre: Math.round(centre * 10) / 10, text: white - left, red: red.length }
+})()
+/** The item's M starts at the column plus the gap, past Paper Mono's left bearing at 32 px (measured on `untracked`). */
+const bearing = (() => {
+  const { x0, y0, x1, y1 } = region('untracked')
+  for (let x = x0; x < x1; x++) if (litIn(x, x + 1, y0, y1) > 0) return x - (x0 + 8)
+  return 0
+})()
 const inputStartInk = (() => {
   const { x0, y0, x1, y1 } = region('input')
   return litIn(x0, x1, y0, Math.round((y0 + y1) / 2))
@@ -303,6 +334,24 @@ const checks = [
     what: `gridColumnSpan ${GRID.span} in a ${GRID.columns}-column grid ${GRID.width} px wide spans ${(GRID.width * GRID.span) / GRID.columns} px (px)`,
     value: ready.bounds.gridSpan?.width ?? 0,
     ok: Math.abs((ready.bounds.gridSpan?.width ?? 0) - (GRID.width * GRID.span) / GRID.columns) <= 1
+  },
+  {
+    patch: 'letter-spacing',
+    what: `letterSpacing ${TRACKING.em}em on ${TRACKING.glyphs} glyphs of ${TRACKING.size} px widens the ink by ${trackingExpected} px (px)`,
+    value: trackingShift,
+    ok: Math.abs(trackingShift - trackingExpected) <= 1
+  },
+  {
+    patch: '0018-markdown-list-marker',
+    what: `listBullet paints in listMarker, centred in a ${BULLET.width} px column (centre x, red pixels)`,
+    value: bulletInk,
+    ok: bulletInk.red > 10 && Math.abs(bulletInk.centre - BULLET.width / 2) <= 1
+  },
+  {
+    patch: '0018-markdown-list-marker',
+    what: `the item text starts ${BULLET.width} + ${BULLET.gap} px plus the glyph bearing (${bearing} px) from the list (px)`,
+    value: bulletInk.text,
+    ok: Math.abs(bulletInk.text - (BULLET.width + BULLET.gap + bearing)) <= 1
   },
   {
     patch: '0010-table-cell-metrics',

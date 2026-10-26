@@ -30,7 +30,7 @@ import {
 } from '@/lib/markdown-frontmatter'
 import { useColorTheme } from '@/stores/app-settings-store'
 import { useEditorStore } from '@/stores/editor-store'
-import { transcriptThemes } from '../../../chat/theme'
+import { tokenColor, transcriptThemes } from '../../../chat/theme'
 import { type MarkdownSection, splitMarkdownSections } from '../../../editor/markdown-sections'
 import { tw } from '../../../style/tw'
 
@@ -53,6 +53,14 @@ const HEADING_TRACKING = -0.018
 const TEXT_LINE_HEIGHT = 1.6
 /** `.bn-block-content` padding; a paragraph's is twice that. */
 const BLOCK_PAD = 0.16 * REM
+/** A list item's `margin-block`; adjacent items' margins collapse to one. */
+const LIST_ITEM_MARGIN = 0.08 * REM
+/**
+ * BlockNote's bullet `::before`: a `min-width: 24px` box with
+ * `padding-right: 4px` that centres "•"; the text starts after it.
+ */
+const BULLET_COLUMN = 20
+const BULLET_GAP = 4
 /**
  * BlockNote's heading margins (1.75rem / 0.35rem) and document top padding
  * (2.25rem), less what the native text boxes add over the web line boxes:
@@ -181,11 +189,16 @@ export function MarkdownEditor({
     const prose = transcriptThemes(themeId).prose
     return {
       ...prose,
+      listBullet: '•',
+      listMarker: tokenColor('muted-foreground/85'),
       metrics: {
         ...prose.metrics,
         mdTextSize: REM,
         mdLineHeight: REM * TEXT_LINE_HEIGHT,
-        mdBlockGap: 4 * BLOCK_PAD
+        mdBlockGap: 4 * BLOCK_PAD,
+        mdListMarkerWidth: BULLET_COLUMN,
+        mdListMarkerGap: BULLET_GAP,
+        mdListItemGap: 2 * BLOCK_PAD + LIST_ITEM_MARGIN
       }
     }
   }, [themeId])

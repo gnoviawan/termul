@@ -11,6 +11,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { registerTerminalFonts } from '../../src/terminal/fonts'
 import {
   BLUR,
+  BULLET,
   CODE_PAD,
   LONG_VALUE,
   SAMPLES,
@@ -18,7 +19,8 @@ import {
   SCENE,
   GRID,
   TABLE,
-  TABLE_HEADER_FILL
+  TABLE_HEADER_FILL,
+  TRACKING
 } from './samples'
 
 const [readyFile] = process.argv.slice(2)
@@ -31,13 +33,19 @@ const mono: GpuixTheme = {
   fontMono: 'Paper Mono',
   metrics: { mdTextSize: 32, mdLineHeight: 44 }
 }
-type MarkdownSample = 'link' | 'codeFull' | 'codeHalf' | 'codeTight' | 'codePad' | 'table'
+type MarkdownSample = 'link' | 'codeFull' | 'codeHalf' | 'codeTight' | 'codePad' | 'table' | 'bullet'
 const THEMES: Record<MarkdownSample, GpuixTheme> = {
   link: { ...mono, link: '#ff0000', linkUnderline: '#ff0000' },
   codeFull: mono,
   codeHalf: { ...mono, metrics: { ...mono.metrics, mdInlineCodeScale: 0.5 } },
   codeTight: { ...mono, metrics: { ...mono.metrics, mdInlineCodePaddingX: 0 } },
   codePad: { ...mono, metrics: { ...mono.metrics, mdInlineCodePaddingX: CODE_PAD } },
+  bullet: {
+    ...mono,
+    listBullet: '•',
+    listMarker: BULLET.color,
+    metrics: { ...mono.metrics, mdListMarkerWidth: BULLET.width, mdListMarkerGap: BULLET.gap }
+  },
   table: {
     ...mono,
     tableHeaderBg: TABLE_HEADER_FILL,
@@ -56,7 +64,8 @@ const SOURCES: Record<MarkdownSample, string> = {
   codeHalf: '`MMMMMMM`',
   codeTight: 'M`M`M',
   codePad: 'M`M`M',
-  table: '| A | B |\n|---|---|\n| c | d |'
+  table: '| A | B |\n|---|---|\n| c | d |',
+  bullet: '- M'
 }
 
 function App() {
@@ -145,6 +154,29 @@ function App() {
           style={{ gridColumnSpan: GRID.span, height: 8, backgroundColor: '#00ff00' }}
         />
         <div style={{ height: 8, backgroundColor: '#0000ff' }} />
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'row' }}>
+        {(['untracked', 'tracked'] as const).map((sample) =>
+          box(
+            sample,
+            <text
+              style={{
+                fontFamily: 'Paper Mono',
+                fontSize: TRACKING.size,
+                color: '#ffffff',
+                ...(sample === 'tracked' ? { letterSpacing: TRACKING.em } : {})
+              }}
+            >
+              {'M'.repeat(TRACKING.glyphs)}
+            </text>
+          )
+        )}
+        {box(
+          'bullet',
+          <div style={{ width: 160 }}>
+            <markdown source={SOURCES.bullet} theme={THEMES.bullet} />
+          </div>
+        )}
       </div>
       {box(
         'input',

@@ -1,0 +1,31 @@
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index 3d88845..1d70c2b 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -6667,6 +6667,12 @@ pub(crate) fn apply_styles<E: gpui::Styled>(mut el: E, style: &StyleDesc) -> E {
+         Some("normal") => el = el.not_italic(),
+         _ => {}
+     }
++    // GPUI has no letter spacing: Termul's zed patch reads the `tlsp` pseudo
++    // feature, in ten-thousandths of an em.
++    if let Some(em) = style.letter_spacing.filter(|em| em.is_finite()) {
++        let value = (em * 10_000.0).round() as i32 as u32;
++        el = el.font_features(gpui::FontFeatures(Arc::new(vec![("tlsp".into(), value)])));
++    }
+     // `textAlign` was in the style type but implemented nowhere.
+     match style.text_align.as_deref() {
+         Some("center") => el = el.text_center(),
+diff --git a/packages/native/src/style.rs b/packages/native/src/style.rs
+index 3f7a171..3317f74 100644
+--- a/packages/native/src/style.rs
++++ b/packages/native/src/style.rs
+@@ -245,6 +245,9 @@ pub struct StyleDesc {
+     /// `"italic"` or `"normal"`. Inherited down the tree like the rest of the
+     /// text style; GPUI picks the family's italic face, so register one.
+     pub font_style: Option<String>,
++    /// CSS `letter-spacing`, in em of the run's font size. Inherited down the
++    /// tree like the rest of the text style.
++    pub letter_spacing: Option<f64>,
+     pub text_align: Option<String>,
+     pub line_height: Option<f64>,
+     pub white_space: Option<String>,

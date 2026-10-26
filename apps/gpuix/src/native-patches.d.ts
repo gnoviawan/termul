@@ -48,6 +48,10 @@ declare module '@gpuix/native/host' {
     tableRule?: string
     /** The digits that open a paragraph in tabular figures, as a list marker (patch 0015-markdown-lead-tabular-nums). */
     leadTabularNums?: boolean
+    /** Unordered list marker glyph, centred in the marker column (patch gpuix/0018). Unset: a 5px disc. */
+    listBullet?: string
+    /** List marker colour (patch gpuix/0018). Unset: `accent` at 85%. */
+    listMarker?: string
   }
   interface GpuixMetrics {
     /** Inline-code glyph size as a fraction of the paragraph's, like CSS `0.88em`. */
@@ -60,6 +64,12 @@ declare module '@gpuix/native/host' {
     mdInlineCodePaddingX?: number
     /** Inset of the inline-code wash from the top and bottom of the line box. */
     mdInlineCodeInsetY?: number
+    /** List marker column width (patch gpuix/0018). Unset: 18. */
+    mdListMarkerWidth?: number
+    /** Space between the marker column and the item (patch gpuix/0018). Unset: 8. */
+    mdListMarkerGap?: number
+    /** Space between list items (patch gpuix/0018). Unset: 4. */
+    mdListItemGap?: number
     /** Vertical table cell padding (patch 0010); `mdTableCellPadding` stays the horizontal one. */
     mdTableCellPaddingY?: number
     /** Table cell line height (patch 0010). Unset: `mdLineHeight`. */

@@ -1,0 +1,208 @@
+diff --git a/packages/native/src/markdown/render.rs b/packages/native/src/markdown/render.rs
+index 89c0470..0160049 100644
+--- a/packages/native/src/markdown/render.rs
++++ b/packages/native/src/markdown/render.rs
+@@ -321,25 +321,37 @@ pub fn render_block(block: &Block, ctx: &mut MdContext, window: &Window) -> AnyE
+             ordered_start,
+             items,
+         } => {
+-            let mut list = div().flex().flex_col().gap(px(4.0));
++            let mut list = div().flex().flex_col().gap(px(m.md_list_item_gap));
++            let marker_color = theme.list_marker.unwrap_or(opacity(theme.accent, 0.85));
+             for (item_ix, item) in items.iter().enumerate() {
+-                // Ordered numbers are accent-tinted text; unordered markers are
+-                // a real 5px disc, because the glyph "•" reads too small at 14px.
+-                let marker: AnyElement = match ordered_start {
+-                    Some(start) => div()
++                // Ordered numbers are tinted text; unordered markers are the
++                // theme's bullet glyph, or a real 5px disc, because the glyph
++                // "•" reads too small at 14px.
++                let marker: AnyElement = match (ordered_start, theme.list_bullet.as_ref()) {
++                    (Some(start), _) => div()
+                         .flex_none()
+-                        .min_w(px(18.0))
++                        .min_w(px(m.md_list_marker_width))
+                         .text_size(px(m.md_text_size))
+                         .line_height(px(m.md_line_height))
+-                        .text_color(opacity(theme.accent, 0.85))
++                        .text_color(marker_color)
+                         .child(crate::text::chrome_text(
+                             SharedString::from(format!("{}.", start + item_ix as u64)),
+                             None,
+                         ))
+                         .into_any_element(),
+-                    None => div()
++                    (None, Some(bullet)) => div()
+                         .flex_none()
+-                        .min_w(px(18.0))
++                        .w(px(m.md_list_marker_width))
++                        .flex()
++                        .justify_center()
++                        .text_size(px(m.md_text_size))
++                        .line_height(px(m.md_line_height))
++                        .text_color(marker_color)
++                        .child(crate::text::chrome_text(bullet.clone(), None))
++                        .into_any_element(),
++                    (None, None) => div()
++                        .flex_none()
++                        .min_w(px(m.md_list_marker_width))
+                         // Centre the disc on the first text line's cap band.
+                         .h(px(m.md_line_height))
+                         .flex()
+@@ -350,7 +362,7 @@ pub fn render_block(block: &Block, ctx: &mut MdContext, window: &Window) -> AnyE
+                                 .w(px(5.0))
+                                 .h(px(5.0))
+                                 .rounded_full()
+-                                .bg(opacity(theme.accent, 0.85)),
++                                .bg(marker_color),
+                         )
+                         .into_any_element(),
+                 };
+@@ -359,15 +371,20 @@ pub fn render_block(block: &Block, ctx: &mut MdContext, window: &Window) -> AnyE
+                     .map(|child| render_block(child, ctx, window))
+                     .collect();
+                 list = list.child(
+-                    div().flex().flex_row().gap(px(8.0)).child(marker).child(
+-                        div()
+-                            .flex_1()
+-                            .min_w_0()
+-                            .flex()
+-                            .flex_col()
+-                            .gap(px(4.0))
+-                            .children(children),
+-                    ),
++                    div()
++                        .flex()
++                        .flex_row()
++                        .gap(px(m.md_list_marker_gap))
++                        .child(marker)
++                        .child(
++                            div()
++                                .flex_1()
++                                .min_w_0()
++                                .flex()
++                                .flex_col()
++                                .gap(px(4.0))
++                                .children(children),
++                        ),
+                 );
+             }
+             list.into_any_element()
+diff --git a/packages/native/src/theme.rs b/packages/native/src/theme.rs
+index c0db206..746388b 100644
+--- a/packages/native/src/theme.rs
++++ b/packages/native/src/theme.rs
+@@ -12,7 +12,7 @@
+ //! Unknown keys are ignored so a JS theme object can carry extra fields.
+ 
+ use crate::syntax::HighlightKind;
+-use gpui::{hsla, Hsla};
++use gpui::{hsla, Hsla, SharedString};
+ use serde::Deserialize;
+ 
+ // ── Colour helpers ───────────────────────────────────────────────────
+@@ -257,6 +257,12 @@ pub struct Metrics {
+     pub md_inline_code_padding_x: f32,
+     /// How far the wash is inset from the top and bottom of the line box.
+     pub md_inline_code_inset_y: f32,
++    /// Width of a list item's marker column.
++    pub md_list_marker_width: f32,
++    /// Space between the marker column and the item's content.
++    pub md_list_marker_gap: f32,
++    /// Space between list items.
++    pub md_list_item_gap: f32,
+     // The fenced-block card. `<code>` paints no card of its own, so these are
+     // markdown-only: a document renderer owns its layout, a primitive does not.
+     pub md_code_padding_x: f32,
+@@ -338,6 +344,9 @@ impl Metrics {
+         set(&mut self.md_inline_code_scale, o.md_inline_code_scale);
+         set(&mut self.md_inline_code_padding_x, o.md_inline_code_padding_x);
+         set(&mut self.md_inline_code_inset_y, o.md_inline_code_inset_y);
++        set(&mut self.md_list_marker_width, o.md_list_marker_width);
++        set(&mut self.md_list_marker_gap, o.md_list_marker_gap);
++        set(&mut self.md_list_item_gap, o.md_list_item_gap);
+         if let Some(sizes) = &o.md_heading_sizes {
+             for (slot, value) in self.md_heading_sizes.iter_mut().zip(sizes) {
+                 *slot = *value as f32;
+@@ -408,6 +417,9 @@ impl Metrics {
+             self.md_inline_code_scale,
+             self.md_inline_code_padding_x,
+             self.md_inline_code_inset_y,
++            self.md_list_marker_width,
++            self.md_list_marker_gap,
++            self.md_list_item_gap,
+         ] {
+             feed(value);
+         }
+@@ -458,6 +470,9 @@ impl Default for Metrics {
+             md_inline_code_scale: 1.0,
+             md_inline_code_padding_x: 2.0,
+             md_inline_code_inset_y: 2.0,
++            md_list_marker_width: 18.0,
++            md_list_marker_gap: 8.0,
++            md_list_item_gap: 4.0,
+             md_code_padding_x: 12.0,
+             md_code_padding_y: 10.0,
+             md_code_radius: 10.0,
+@@ -513,6 +528,11 @@ pub struct Theme {
+     /// as Chromium sets a list marker: for a list item painted as a
+     /// paragraph led by its number.
+     pub lead_tabular_nums: bool,
++    /// Unordered list marker glyph, centred in the marker column. Unset, a
++    /// 5px disc.
++    pub list_bullet: Option<SharedString>,
++    /// List marker colour. Unset, `accent` at 85%.
++    pub list_marker: Option<Hsla>,
+     /// Diff added lines, emerald-400.
+     pub diff_add: Hsla,
+     /// Diff deleted lines, red-400.
+@@ -551,6 +571,8 @@ impl Theme {
+             link_weight: None,
+             italic: false,
+             lead_tabular_nums: false,
++            list_bullet: None,
++            list_marker: None,
+             diff_add: oklch(0.765, 0.177, 163.223),
+             diff_del: oklch(0.704, 0.191, 22.216),
+             diff_hunk_bg: hsla(0.6, 0.35, 0.6, 0.05),
+@@ -581,6 +603,8 @@ impl Theme {
+             link_weight: None,
+             italic: false,
+             lead_tabular_nums: false,
++            list_bullet: None,
++            list_marker: None,
+             diff_add: oklch(0.596, 0.145, 163.225),
+             diff_del: oklch(0.577, 0.245, 27.325),
+             diff_hunk_bg: hsla(0.6, 0.35, 0.35, 0.07),
+@@ -624,6 +648,12 @@ impl Theme {
+         if let Some(tabular) = o.lead_tabular_nums {
+             self.lead_tabular_nums = tabular;
+         }
++        if let Some(bullet) = o.list_bullet.as_ref().filter(|b| !b.is_empty()) {
++            self.list_bullet = Some(SharedString::from(bullet.clone()));
++        }
++        if let Some(color) = o.list_marker.as_deref().and_then(crate::color::parse_color_rgba) {
++            self.list_marker = Some(color.into());
++        }
+         match o.font_style.as_deref() {
+             Some("italic") => self.italic = true,
+             Some("normal") => self.italic = false,
+@@ -753,6 +783,8 @@ pub struct ThemeOverride {
+     /// `"italic"` or `"normal"` for every markdown run.
+     pub font_style: Option<String>,
+     pub lead_tabular_nums: Option<bool>,
++    pub list_bullet: Option<String>,
++    pub list_marker: Option<String>,
+     pub diff_add: Option<String>,
+     pub diff_del: Option<String>,
+     pub diff_hunk_bg: Option<String>,
+@@ -798,6 +830,9 @@ pub struct MetricsOverride {
+     pub md_table_min_column_content: Option<f64>,
+     pub md_inline_code_radius: Option<f64>,
+     pub md_inline_code_scale: Option<f64>,
++    pub md_list_marker_width: Option<f64>,
++    pub md_list_marker_gap: Option<f64>,
++    pub md_list_item_gap: Option<f64>,
+     pub md_inline_code_padding_x: Option<f64>,
+     pub md_inline_code_inset_y: Option<f64>,
+     pub md_code_padding_x: Option<f64>,
