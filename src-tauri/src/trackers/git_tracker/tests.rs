@@ -302,6 +302,15 @@ fn test_git_get_status_detail_uses_rename_destination_path() {
     assert!(!details[1].staged);
 }
 
+#[test]
+fn test_git_get_status_detail_unquotes_c_quoted_paths() {
+    let details = git_get_status_detail_from_output(
+        " M \"caf\\303\\251.txt\"\nR  \"old\\tname.txt\" -> \"new\\tname.txt\"\n D \"say \\\"hi\\\".txt\"\n",
+    );
+    let paths: Vec<&str> = details.iter().map(|d| d.path.as_str()).collect();
+    assert_eq!(paths, vec!["café.txt", "new\tname.txt", "say \"hi\".txt"]);
+}
+
 // ========== parse_git_log unit tests ==========
 
 /// Build one NUL-delimited, record-terminated log record matching the
@@ -1526,6 +1535,30 @@ fn it_status_detail_expands_quoted_untracked_directory_names() {
         untracked.contains(&"we ird\"q/f.txt"),
         "quoted dir must expand to its file, got {untracked:?}"
     );
+    std::fs::remove_dir_all(&repo).ok();
+}
+
+// An expanded path is decoded once: a name that starts and ends with `"`
+// keeps its quotes.
+#[test]
+fn it_status_detail_decodes_expanded_untracked_paths_once() {
+    if git_missing() || cfg!(windows) {
+        return;
+    }
+    let repo = init_repo("untracked-decode-once");
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    std::fs::create_dir_all(repo.join("\"d\"")).unwrap();
+    std::fs::write(repo.join("\"d\"").join("\"q\""), "x\n").unwrap();
+
+    let details = git_get_status_detail(repo.to_str().unwrap()).unwrap();
+    let untracked: Vec<&str> = details
+        .iter()
+        .filter(|d| d.status == "untracked")
+        .map(|d| d.path.as_str())
+        .collect();
+    assert_eq!(untracked, vec!["\"d\"/\"q\""]);
     std::fs::remove_dir_all(&repo).ok();
 }
 

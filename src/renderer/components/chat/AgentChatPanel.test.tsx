@@ -372,6 +372,7 @@ vi.mock('./ChatChangedFilesPanel', () => ({
   ChatChangedFilesPanel: (props: {
     cwd: string
     toolCalls: unknown[]
+    turnActive?: boolean
     forceCollapsed?: boolean
     onOpenGitChanges?: (opener: HTMLElement) => void
   }) => {
@@ -1562,6 +1563,12 @@ describe('AgentChatPanel ChatChangedFilesPanel mounting', () => {
     expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
     expect(changedFilesPanelPropsRef.current[0]).toMatchObject({ cwd: '/w' })
     expect(Array.isArray(changedFilesPanelPropsRef.current[0].toolCalls)).toBe(true)
+  })
+
+  it('passes the agent turn state so a finished turn refreshes git changes', () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w', activeTurn: true })
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(changedFilesPanelPropsRef.current.at(-1)).toMatchObject({ turnActive: true })
   })
 
   it('mounts ChatChangedFilesPanel even for a closed session (renders null internally)', () => {

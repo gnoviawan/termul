@@ -6,7 +6,9 @@
 //! The stat matches git: tracked lines are the totals of
 //! `git diff --numstat HEAD` (staged + unstaged; against the empty tree when
 //! the repository has no HEAD yet), and untracked lines are counted from every
-//! untracked, non-ignored regular file. Binary files contribute 0. The
+//! untracked, non-ignored regular file. Binary files contribute 0. `files`
+//! lists the same counts per repository-root-relative path, so a caller can
+//! show line counts per changed file. The
 //! untracked scan is bounded ([`MAX_UNTRACKED_FILES`] files,
 //! [`MAX_UNTRACKED_FILE_BYTES`] per file) and never follows symlinks.
 //!
@@ -25,12 +27,29 @@ pub(super) const MAX_UNTRACKED_FILES: usize = 5000;
 /// Maximum size of a single untracked file we will read; larger files contribute 0.
 pub(super) const MAX_UNTRACKED_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
-/// Added / removed line totals for a working tree.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+/// Added / removed lines of one changed file. `path` is relative to the
+/// repository root, like `git status --porcelain` paths.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFileDiffStat {
+    pub path: String,
+    pub added: u64,
+    pub removed: u64,
+}
+
+/// Added / removed line totals for a working tree, plus the per-file rows
+/// they sum (tracked files sorted by path, then untracked files).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffStat {
     pub added: u64,
     pub removed: u64,
+    #[serde(default)]
+    pub files: Vec<GitFileDiffStat>,
+    /// Repository root as a host path: the base that `files[].path` and
+    /// `git status --porcelain` paths are relative to.
+    #[serde(default)]
+    pub root: String,
 }
 
 /// Why a diff stat could not be computed: git could not be started or timed
@@ -64,9 +83,10 @@ pub fn git_get_diff_stat(cwd: &str) -> Result<GitDiffStat, DiffStatError> {
     match compute_diff_stat(cwd) {
         Ok(stat) => {
             log::debug!(
-                "[GitTracker] diff stat for {cwd}: +{} -{}",
+                "[GitTracker] diff stat for {cwd}: +{} -{} in {} file(s)",
                 stat.added,
-                stat.removed
+                stat.removed,
+                stat.files.len()
             );
             Ok(stat)
         }
@@ -92,9 +112,11 @@ fn compute_diff_stat(cwd: &str) -> Result<GitDiffStat, DiffStatError> {
         cwd,
         "diff",
         StdoutCap::Unbounded,
-        &["diff", "--numstat", base],
+        // `--no-relative`: a `diff.relative` config must not narrow the rows or
+        // make them cwd-relative.
+        &["diff", "--no-relative", "--numstat", "-z", base],
     )?;
-    let (added, removed) = parse_numstat(&String::from_utf8_lossy(&numstat));
+    let mut files = parse_numstat_files(&String::from_utf8_lossy(&numstat));
 
     // `--full-name` + the `:/` pathspec make the listing repo-wide, matching
     // the repo-wide scope of `git diff --numstat`.
@@ -112,11 +134,17 @@ fn compute_diff_stat(cwd: &str) -> Result<GitDiffStat, DiffStatError> {
             ":/",
         ],
     )?;
-    let untracked_added = count_untracked_lines(&git_path_on_host(cwd, &toplevel), &untracked);
+    let root = git_path_on_host(cwd, &toplevel);
+    files.extend(untracked_file_stats(&root, &untracked));
 
+    let (added, removed) = files.iter().fold((0u64, 0u64), |(a, r), f| {
+        (a.saturating_add(f.added), r.saturating_add(f.removed))
+    });
     Ok(GitDiffStat {
-        added: added.saturating_add(untracked_added),
+        added,
         removed,
+        files,
+        root: root.to_string_lossy().into_owned(),
     })
 }
 
@@ -143,22 +171,19 @@ pub(super) fn probe_head(cwd: &str) -> Result<bool, GitRunError> {
     }
 }
 
-/// Sum a `git diff --numstat` listing. Binary rows (`-\t-\t<path>`) and any
-/// row that does not parse contribute 0.
-pub(super) fn parse_numstat(output: &str) -> (u64, u64) {
-    let mut added = 0u64;
-    let mut removed = 0u64;
-    for line in output.lines() {
-        let mut parts = line.splitn(3, '\t');
-        let (Some(a), Some(r), Some(_path)) = (parts.next(), parts.next(), parts.next()) else {
-            continue;
-        };
-        if let (Ok(a), Ok(r)) = (a.parse::<u64>(), r.parse::<u64>()) {
-            added = added.saturating_add(a);
-            removed = removed.saturating_add(r);
-        }
-    }
-    (added, removed)
+/// Per-file rows of a `git diff --numstat -z` listing, sorted by path. A
+/// rename is keyed by its new path; binary rows (`-\t-`) count 0 lines.
+pub(super) fn parse_numstat_files(output: &str) -> Vec<GitFileDiffStat> {
+    let mut files: Vec<GitFileDiffStat> = super::commit_detail::parse_numstat_z(output)
+        .into_iter()
+        .map(|(path, (added, removed))| GitFileDiffStat {
+            path,
+            added: added.unwrap_or(0),
+            removed: removed.unwrap_or(0),
+        })
+        .collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files
 }
 
 /// Lines in `bytes`: the number of `\n`, plus one when the content is
@@ -171,11 +196,11 @@ pub(super) fn count_lines(bytes: &[u8]) -> u64 {
     }
 }
 
-/// Count lines across the NUL-separated untracked listing (paths relative to
-/// `toplevel`). Bounded by [`MAX_UNTRACKED_FILES`] / [`MAX_UNTRACKED_FILE_BYTES`];
-/// symlinks, directories, unreadable, oversized and binary files add 0.
-pub(super) fn count_untracked_lines(toplevel: &Path, listing: &[u8]) -> u64 {
-    let mut total = 0u64;
+/// Line count per file of the NUL-separated untracked listing (paths relative
+/// to `toplevel`). Bounded by [`MAX_UNTRACKED_FILES`] / [`MAX_UNTRACKED_FILE_BYTES`];
+/// symlinks, directories, unreadable, oversized and binary files get no row.
+pub(super) fn untracked_file_stats(toplevel: &Path, listing: &[u8]) -> Vec<GitFileDiffStat> {
+    let mut files = Vec::new();
     let mut skipped_oversize = 0usize;
 
     for (scanned, raw) in listing
@@ -220,7 +245,11 @@ pub(super) fn count_untracked_lines(toplevel: &Path, listing: &[u8]) -> u64 {
         if bytes.contains(&0) {
             continue;
         }
-        total = total.saturating_add(count_lines(&bytes));
+        files.push(GitFileDiffStat {
+            path: rel.into_owned(),
+            added: count_lines(&bytes),
+            removed: 0,
+        });
     }
 
     if skipped_oversize > 0 {
@@ -228,5 +257,5 @@ pub(super) fn count_untracked_lines(toplevel: &Path, listing: &[u8]) -> u64 {
             "[GitTracker] diff stat: skipped {skipped_oversize} untracked file(s) over {MAX_UNTRACKED_FILE_BYTES} bytes"
         );
     }
-    total
+    files
 }
