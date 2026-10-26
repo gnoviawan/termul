@@ -1118,6 +1118,25 @@ async function openHistorySessionInner(
   const capabilities = get().agents[liveAgentId]?.capabilities ?? null
   let strategy = decideResume({ connected, capabilities })
 
+  // Issue #1420: a reopen (idle-stop auto-resume, manual Resume chat, a
+  // history-row open — any path but Reload this chat) must re-attach the host
+  // `termul` plan server and the user's configured MCP servers, exactly as
+  // Reload does (see reload-chat.ts). With no list the host treats the reopen
+  // as "no MCP" and the agent loses the canvas tools, plan, set_session_title,
+  // ask_user and every configured MCP server. An explicit caller list (Reload)
+  // still wins.
+  const reopenMcpServers =
+    options?.mcpServers ?? selectMcpServersForAgent(get().mcpServers, capabilities).servers
+  if (strategy !== 'local' && options?.mcpServers === undefined) {
+    // Durable boundary log (AGENTS.md): session id + server count only — the
+    // server list carries names/commands/URLs, never logged here.
+    void logFrontendError({
+      level: 'info',
+      source: 'acp.openHistorySession.mcpAttach',
+      message: `Reopen of session ${id} attaches ${reopenMcpServers.length} mcp server(s)`
+    })
+  }
+
   // Point the record at the resolved live agent so streaming events from
   // `session/load` route to this session, and (for 'load') open the replay
   // window BEFORE the IPC is sent — replayed chunks stream in while the load
@@ -1155,7 +1174,7 @@ async function openHistorySessionInner(
       // retry only on an auth-required reply (spec-acp-persistent-auth-reuse).
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/load', 'text', () =>
-          acpApi.loadSession(liveAgentId, id, meta.cwd, reopenRoots, options?.mcpServers)
+          acpApi.loadSession(liveAgentId, id, meta.cwd, reopenRoots, reopenMcpServers)
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -1219,7 +1238,7 @@ async function openHistorySessionInner(
     try {
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/resume', 'text', () =>
-          acpApi.resumeSession(liveAgentId, id, meta.cwd, reopenRoots, options?.mcpServers)
+          acpApi.resumeSession(liveAgentId, id, meta.cwd, reopenRoots, reopenMcpServers)
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -1260,7 +1279,7 @@ async function openHistorySessionInner(
     try {
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/load', 'text', () =>
-          acpApi.loadSession(liveAgentId, id, meta.cwd, reopenRoots, options?.mcpServers)
+          acpApi.loadSession(liveAgentId, id, meta.cwd, reopenRoots, reopenMcpServers)
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
