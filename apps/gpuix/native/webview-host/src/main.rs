@@ -79,6 +79,9 @@ enum Page {
 const CANVAS_SCHEME: &str = "termul-canvas";
 const RELAY_URL: &str = "termul-canvas://localhost/";
 const RELAY_HTML: &str = include_str!("relay.html");
+/// The desktop app's agentation toolbar. `browser_tab_manager.rs` injects it into every browsed
+/// page once the page has loaded; without the desktop's annotation service it mounts unsynced.
+const AGENTATION_TOOLBAR_JS: &str = include_str!("../../../../../src-tauri/resources/agentation-toolbar.js");
 /// The mermaid renderer's web process holds about 470 MiB once it has drawn a diagram.
 const MERMAID_IDLE: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -237,6 +240,15 @@ impl Host {
                     PageLoadEvent::Finished => {
                         emit(Event::Navigated { id: load_id.clone(), url: url.clone() });
                         emit(Event::Loaded { id: load_id.clone(), url });
+                        // The toolbar reads document.head as it loads, so it waits for the page.
+                        let id = load_id.clone();
+                        glib::idle_add_local_once(move || {
+                            match with_host(|host| host.eval(&id, AGENTATION_TOOLBAR_JS)) {
+                                Some(Ok(())) => log(&format!("agentation toolbar injected into tab {id}")),
+                                Some(Err(e)) => log(&format!("agentation toolbar not injected into tab {id}: {e}")),
+                                None => {}
+                            }
+                        });
                     }
                 }),
             // No navigation events: the relay's URL is fixed and the framed URL carries the

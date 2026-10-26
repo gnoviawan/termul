@@ -368,6 +368,27 @@ const CASES: [string, StyleDesc][] = [
   ],
   ['max-w-3xl mx-auto', { maxWidth: 768 }],
   [
+    'grid grid-cols-[1fr_6rem] gap-3',
+    {
+      display: 'grid',
+      gridTemplateColumns: 2,
+      gridTracks: [
+        { kind: 'fr', fr: 1, min: 0 },
+        { kind: 'fixed', px: 96 }
+      ],
+      gap: 12
+    }
+  ],
+  [
+    'grid grid-cols-[minmax(0,1fr)_auto_1.75rem]',
+    {
+      display: 'grid',
+      gridTemplateColumns: 3,
+      gridTracks: [{ kind: 'fr', fr: 1, min: 0 }, { kind: 'content' }, { kind: 'fixed', px: 28 }]
+    }
+  ],
+  ['grid grid-cols-[repeat(3,minmax(0,1fr))]', { display: 'grid', gridTemplateColumns: 3 }],
+  [
     'grid grid-cols-2 gap-x-4 gap-y-2',
     { display: 'grid', gridTemplateColumns: 2, columnGap: 16, rowGap: 8 }
   ],

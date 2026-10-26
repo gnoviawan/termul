@@ -20,6 +20,7 @@ import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackIns
 import { convertDomStyle } from './dom-style'
 import { FontContext, fontHostElement, inheritsFont } from './font'
 import { adaptHandlers, addFormListeners, addOccluderListeners, type GpuixListeners } from './events'
+import { gridLayout, withoutTracks } from './grid'
 import { compatWarn } from './log'
 import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
 import { layoutListener } from './resize'
@@ -262,9 +263,17 @@ export function buildElement(
     if (props.dangerouslySetInnerHTML) compatWarn('prop-unsupported', 'dangerouslySetInnerHTML')
     const flipped = unreverse(style)
     if (flipped) native.style = style = flipped
-    const contentSized = tr.flexDirection === 'column' && style.height === undefined && style.maxHeight !== undefined
-    const children = contentSized ? contentBasis(props.children) : props.children
-    const laid = layoutChildren(tr, style, children, isStatic, flipped !== null)
+    let children = contentBasis(tr, style, props.children)
+    let childrenStatic = isStatic
+    if (style.gridTracks) {
+      const grid = gridLayout(style, style.gridTracks, children, (node) => domSource.get(node)?.props.className)
+      native.style = style = grid ? grid.style : withoutTracks(style)
+      if (grid) {
+        children = grid.children
+        childrenStatic = false
+      }
+    }
+    const laid = layoutChildren(tr, style, children, childrenStatic, flipped !== null)
     if (laid.runStyle) native.style = { ...style, ...laid.runStyle }
     const nested = laid.children !== undefined && typeof laid.children !== 'string'
     const divide = tr.compiled.divide

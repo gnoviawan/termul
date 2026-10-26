@@ -18,7 +18,7 @@ const DEBOUNCE_MS = 120
 
 async function build(): Promise<boolean> {
   const started = performance.now()
-  const result = await buildClient()
+  const result = await buildClient(undefined, undefined, { mode: 'development' })
   for (const line of result.logs) console.error(line)
   console.log(
     `[dev] ${result.ok ? 'built' : 'build failed'} in ${Math.round(performance.now() - started)} ms`

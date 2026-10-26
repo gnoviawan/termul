@@ -169,7 +169,7 @@ async function runWeb(
       }
       await route.continue()
     })
-    if (surface.reference === 'web-host-local') await grantHostLocal(context, world)
+    await grantHostLocal(context, world)
     await context.addInitScript(
       ({ token, deviceId }) => {
         localStorage.setItem('termul.webAuthToken', token)
@@ -226,9 +226,9 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
     path.join(clientStateDir, 'web-storage', `${host}.json`),
     JSON.stringify({ 'termul.deviceId': deviceId })
   )
-  const env: Record<string, string> = {}
-  if (surface.reference === 'web-host-local')
-    env.TERMUL_GPUIX_DATA_DIR = path.dirname(hostLocalTokenPath(world))
+  const env: Record<string, string> = {
+    TERMUL_GPUIX_DATA_DIR: path.dirname(hostLocalTokenPath(world))
+  }
   if (surface.start) env.GPUIX_START_HASH = surface.start.hash
   return withGpuix(
     { server: world.server, entry, clientStateDir, ...SIZE, env },

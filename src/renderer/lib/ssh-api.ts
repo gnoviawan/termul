@@ -206,7 +206,8 @@ async function copyStoreProfilesToHost(hostProfiles: SSHProfile[]): Promise<numb
   const marked = await persistenceApi.write<SshProfilesMigrated>(
     PersistenceKeys.sshProfilesMigrated,
     { copiedAt: new Date().toISOString(), count: missing.length },
-    { expected: null }
+    // Losing this create-only race means another client finished a copy.
+    { expected: null, conflictHandled: true }
   )
   const markerNote =
     marked.success || marked.code === 'STORE_CAS_FAILED'
@@ -268,6 +269,16 @@ function listenDesktop<T>(event: string, callback: (payload: T) => void): () => 
 }
 
 export function createSSHApi(): SSHApi {
+  // The sidebar's SSH section and the SSH workspace both list on mount; they
+  // share one copy instead of racing each other through it.
+  let copying: Promise<number> | null = null
+  const copyOnce = (hostProfiles: SSHProfile[]): Promise<number> => {
+    copying ??= copyStoreProfilesToHost(hostProfiles).finally(() => {
+      copying = null
+    })
+    return copying
+  }
+
   return {
     // Profiles live with the host's SSH on desktop and on a host-local web
     // connection; any other web client keeps them in the server-side store
@@ -276,7 +287,7 @@ export function createSSHApi(): SSHApi {
       if (!(await hostOwnsProfiles())) return readProfilesFromStore()
       const listed = await invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES)
       if (!listed.success || isTauriContext()) return listed
-      const copied = await copyStoreProfilesToHost(listed.data)
+      const copied = await copyOnce(listed.data)
       return copied > 0 ? invokeIpc<SSHProfile[]>(SSH_COMMANDS.LIST_PROFILES) : listed
     },
 
@@ -294,7 +305,7 @@ export function createSSHApi(): SSHApi {
           const res = await persistenceApi.write(PersistenceKeys.sshProfiles, updated, {
             expected: list.data.expected,
             // Only the last lost race is reported to the user.
-            retrying: attempt < PROFILE_WRITE_ATTEMPTS - 1
+            conflictHandled: attempt < PROFILE_WRITE_ATTEMPTS - 1
           })
           if (res.success || res.code !== 'STORE_CAS_FAILED') return res
         }
@@ -315,7 +326,7 @@ export function createSSHApi(): SSHApi {
           const res = await persistenceApi.write(PersistenceKeys.sshProfiles, updated, {
             expected: list.data.expected,
             // Only the last lost race is reported to the user.
-            retrying: attempt < PROFILE_WRITE_ATTEMPTS - 1
+            conflictHandled: attempt < PROFILE_WRITE_ATTEMPTS - 1
           })
           if (res.success || res.code !== 'STORE_CAS_FAILED') return res
         }

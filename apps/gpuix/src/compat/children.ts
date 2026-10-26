@@ -229,18 +229,41 @@ function withMarkers(slots: Slot[], marker: 'disc' | 'decimal', inside: boolean)
  * caller keyed).
  */
 /**
- * A column whose height is its content's (no height, at most a max height) is
- * indefinite, and CSS resolves a child's `flex-1` basis of 0% against it as
- * the child's content size. GPUIX takes basis 0 literally, so a scrolling body
- * (`flex-1 overflow-y-auto`) collapses to nothing. Drop the basis on such
- * children: they size to their content and still shrink under the max height.
+ * A column whose height is its content's is indefinite, and CSS resolves a
+ * child's `flex-1` basis of 0% against it as the child's content size. GPUIX
+ * takes basis 0 literally, so a scrolling body (`flex-1 overflow-y-auto`)
+ * collapses to nothing. Two columns are content-sized:
+ *
+ * - one capped by a max height: every growing child sizes to its content and
+ *   still shrinks under the cap;
+ * - one with no height, no min height and no clipping. A block parent sizes it
+ *   to its content (the snapshots page's `<main className="flex-1 flex
+ *   flex-col">`), and in a flex parent its automatic minimum height is its
+ *   content, which is why shared code writes `min-h-0` where a body must
+ *   scroll. Only a lone growing child is re-based: when the column is
+ *   stretched taller than its content, that child fills it either way, while
+ *   two growers split the space from 0.
  */
-export function contentBasis(children: ReactNode): ReactNode {
-  if (Array.isArray(children)) return children.map(contentBasis)
-  if (!isValidElement<{ style?: StyleDesc }>(children)) return children
-  const style = children.props.style
-  if (style?.flexBasis !== 0 || !style.flexGrow) return children
-  const { flexBasis: _, ...rest } = style
+export function contentBasis(tr: Translation, style: StyleDesc, children: ReactNode): ReactNode {
+  if (tr.flexDirection !== 'column' || style.height !== undefined) return children
+  if (style.maxHeight !== undefined) return dropZeroBasis(children)
+  const clips = style.overflow !== undefined || style.overflowX !== undefined || style.overflowY !== undefined
+  if (style.minHeight !== undefined || clips) return children
+  const growers = (Array.isArray(children) ? children : [children]).filter(growsFromZero)
+  return growers.length === 1 ? dropZeroBasis(children) : children
+}
+
+function growsFromZero(node: unknown): node is ReactElement<{ style?: StyleDesc }> {
+  if (!isValidElement<{ style?: StyleDesc }>(node)) return false
+  const style = node.props.style
+  return style?.flexBasis === 0 && Boolean(style.flexGrow)
+}
+
+/** Every growing child of a content-sized box sizes to its content. */
+export function dropZeroBasis(children: ReactNode): ReactNode {
+  if (Array.isArray(children)) return children.map(dropZeroBasis)
+  if (!growsFromZero(children)) return children
+  const { flexBasis: _, ...rest } = children.props.style as StyleDesc
   const clone = cloneElement(children, { style: rest })
   const info = childInfo.get(children)
   if (info) childInfo.set(clone, info)

@@ -6,6 +6,7 @@
 
 import type { StyleDesc } from '@gpuix/react'
 import { formatColor, parseColor, parseLength } from '../style/css-value'
+import { parseGridTracks } from '../style/grid-tracks'
 import { compatWarn } from './log'
 import { compatTw } from './translate'
 
@@ -92,8 +93,11 @@ export function convertDomStyle(style: Readonly<Record<string, CssValue>>): Styl
       if (Number.isFinite(n)) Object.assign(out, { flexGrow: n, flexShrink: 1, flexBasis: 0 })
     } else if (key === 'gridTemplateColumns') {
       // GPUIX takes a column count: `repeat(N, minmax(0, 1fr))` or `repeat(N, 1fr)`.
+      // Any other track list is laid out by compat/grid.ts.
       const n = typeof value === 'number' ? value : Number(EQUAL_COLUMNS.exec(String(value))?.[1])
+      const tracks = Number.isInteger(n) ? undefined : parseGridTracks(String(value), compatTw().theme.vars)
       if (Number.isInteger(n) && n > 0) out[key] = n
+      else if (tracks) Object.assign(out, { gridTemplateColumns: tracks.length, gridTracks: tracks })
       else compatWarn('style-value', `${key}: ${String(value).slice(0, 40)}`)
     } else if (key in SPAN_KEYS) {
       const n = Number(SPAN.exec(String(value).trim())?.[1])

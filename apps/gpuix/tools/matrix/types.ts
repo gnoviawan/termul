@@ -94,19 +94,17 @@ export type AreaId =
   | 'dialogs'
 
 /**
- * What GPUIX is compared against.
+ * What GPUIX is compared against. GPUIX attaches with the server's host-local
+ * credential, as the launched app does, so it renders what only a host-local
+ * client gets (the SSH section, Claude account management).
  *
- * - `web`: the DOM web client in Chromium.
- * - `web-host-local`: the web client with the server's host-local credential
- *   added to its `/ws` handshake by a Playwright WebSocket route (no product
- *   code), and GPUIX attached with the same credential. Both then render the
- *   shared components only a host-local client gets (SSH, Claude account
- *   management), as the launched GPUIX app does.
+ * - `web`: the DOM web client in Chromium, with the same credential added to
+ *   its `/ws` handshake by a Playwright WebSocket route (no product code).
  * - `tauri`: the shipped desktop app (Tauri on WebKitGTK) built from the same
  *   checkout, driven with X input (`tools/reference/`), for a surface the web
  *   client cannot render at all (the browser pane's native webview).
  */
-export type Reference = 'web' | 'web-host-local' | 'tauri'
+export type Reference = 'web' | 'tauri'
 
 export interface Surface {
   id: string

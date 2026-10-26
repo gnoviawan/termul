@@ -16,7 +16,7 @@
  *   icons, reached by the chat rows) become inlined file text.
  *
  * Run `bun build.ts` for one production build (`--dev` for React's development
- * build), or `bun tools/dev.ts` to rebuild on change.
+ * build and Vite's dev flags), or `bun tools/dev.ts` to rebuild on change.
  */
 
 import { existsSync, readFileSync } from 'node:fs'
@@ -318,6 +318,23 @@ const VERSION_DEFINES = {
   'import.meta.env.VITE_APP_VERSION': JSON.stringify(APP_VERSION)
 }
 
+/**
+ * Vite's mode flags. Bun leaves `import.meta.env.PROD` undefined, so dev-only
+ * UI such as the browser pane's Debug Console showed in the shipped app.
+ * Every bundle gets the shipped app's flags, harness builds included, since
+ * they stand in for it; only the developer loop (`bun tools/dev.ts`,
+ * `bun build.ts --dev`) asks for Vite's dev-server flags.
+ */
+export type BuildMode = 'production' | 'development'
+
+function modeDefines(mode: BuildMode): Record<string, string> {
+  return {
+    'import.meta.env.MODE': JSON.stringify(mode),
+    'import.meta.env.PROD': String(mode === 'production'),
+    'import.meta.env.DEV': String(mode === 'development')
+  }
+}
+
 function productionEntry(bundle: string): string {
   return `process.env.NODE_ENV = 'production'\nawait import(${JSON.stringify(`./${bundle}`)})\n`
 }
@@ -325,7 +342,7 @@ function productionEntry(bundle: string): string {
 export async function buildClient(
   entry: string = ENTRY,
   outdir: string = OUT_DIR,
-  options: { production?: boolean; plugins?: BunPlugin[] } = {}
+  options: { production?: boolean; mode?: BuildMode; plugins?: BunPlugin[] } = {}
 ): Promise<BuildResult> {
   const reactResolves: ReactResolve[] = []
   const name = path.basename(entry).replace(/\.tsx?$/, '')
@@ -353,6 +370,7 @@ export async function buildClient(
     splitting: Boolean(options.production),
     define: {
       ...VERSION_DEFINES,
+      ...modeDefines(options.mode ?? 'production'),
       ...(options.production ? { 'process.env.NODE_ENV': '"production"' } : {})
     },
     // React's production build has no jsxDEV, so a production bundle needs jsx().
@@ -371,7 +389,11 @@ export async function buildClient(
 
 if (import.meta.main) {
   const started = performance.now()
-  const result = await buildClient(ENTRY, OUT_DIR, { production: !Bun.argv.includes('--dev') })
+  const dev = Bun.argv.includes('--dev')
+  const result = await buildClient(ENTRY, OUT_DIR, {
+    production: !dev,
+    mode: dev ? 'development' : 'production'
+  })
   for (const line of result.logs) console.error(line)
   if (!result.ok) process.exit(1)
   console.log(

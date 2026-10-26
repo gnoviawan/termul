@@ -11,7 +11,7 @@ describe('desktop app input', () => {
   })
 })
 
-describe('web-host-local reference', () => {
+describe('host-local credential', () => {
   test('only an authenticate frame gains the credential', () => {
     const auth = JSON.stringify({ id: 'r1', type: 'authenticate', payload: { deviceId: 'd' } })
     expect(JSON.parse(withHostLocalCredential(auth, 'secret'))).toEqual({

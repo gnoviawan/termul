@@ -536,12 +536,10 @@ export function createWebPersistenceApi(opts?: {
   function reportFailure<T>(
     logicalKey: string,
     result: IpcResult<T>,
-    retrying = false
+    conflictHandled = false
   ): IpcResult<T> {
     if (result.success || !isPersistenceErrorCode(result.code)) return result
-    // The caller resends a lost compare-and-set race itself; only its last
-    // failure is worth the user's attention.
-    if (retrying && result.code === 'STORE_CAS_FAILED') return result
+    if (conflictHandled && result.code === 'STORE_CAS_FAILED') return result
     const event = { key: logicalKey, code: result.code, message: result.error }
     for (const listener of Array.from(errorListeners)) {
       try {
@@ -563,7 +561,7 @@ export function createWebPersistenceApi(opts?: {
     writeOpts?: PersistenceWriteOpts
   ): Promise<IpcResult<void>> {
     return attemptWrite(logicalKey, data, writeOpts).then((result) =>
-      reportFailure(logicalKey, result, writeOpts?.retrying)
+      reportFailure(logicalKey, result, writeOpts?.conflictHandled)
     )
   }
 
