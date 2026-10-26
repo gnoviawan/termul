@@ -37,7 +37,9 @@
  *   one more leading backslash (`[Context 1]` -> `\[Context 1]`).
  * - A leading slash command stays first (`/review` + blank line + blocks) so
  *   the agent still runs it.
- * - With no context, the value passes through unchanged.
+ * - With no context, the value passes through unchanged, except that typed
+ *   markers are escaped when the text contains the label, so it can never be
+ *   restored as a prompt with chips.
  *
  * {@link selectionContextsToDisplay} is the exact inverse, used to show chips
  * again when a chat is restored from the wire record.
@@ -231,7 +233,9 @@ export function serializeSelectionContexts(value: string): string {
       sentence += `[${selectionContextLabel(contexts.length)}]`
     }
   }
-  if (contexts.length === 0) return value
+  // No chip: typed markers next to a typed label are escaped, so the restore
+  // can never read the text as a real prompt.
+  if (contexts.length === 0) return value.includes(LABEL_SUFFIX) ? escapeTypedMarkers(value) : value
   sentence = sentence.trim()
   const preamble = contexts.map((c, i) => quoteBlock(c, i + 1)).join('\n\n')
   if (sentence.startsWith(CMD_TOKEN_START)) {
@@ -254,11 +258,19 @@ function decodeQuotedBody(lines: string[]): SelectionContext {
 
 /**
  * Inverse of {@link serializeSelectionContexts} for restored chats. Returns
- * the display string with context tokens, or the input unchanged when it is
- * not an exact selection-context prompt.
+ * the display string with context tokens. Text with the label that is not an
+ * exact prompt only gets the typed-marker escape undone.
  */
 export function selectionContextsToDisplay(text: string): string {
   if (!text.includes(LABEL_SUFFIX)) return text
+  return promptToDisplay(text) ?? text.replace(MARKER_RE, unescapeMarker)
+}
+
+function unescapeMarker(marker: string, slashes: string, n: string): string {
+  return slashes.length > 0 ? `${slashes.slice(1)}[Context ${n}]` : marker
+}
+
+function promptToDisplay(text: string): string | null {
   let prefix = ''
   let rest = text
   const command = /^\/(\S+)\n\n/.exec(rest)
@@ -279,16 +291,16 @@ export function selectionContextsToDisplay(text: string): string {
       quoted.push(lines[i].slice(2))
       i += 1
     }
-    if (quoted.length === 0 || lines[i] !== '') return text
+    if (quoted.length === 0 || lines[i] !== '') return null
     i += 1
     contexts.push(decodeQuotedBody(quoted))
   }
-  if (contexts.length === 0) return text
+  if (contexts.length === 0) return null
   const sentence = lines.slice(i).join('\n')
   let next = 1
   let valid = true
   const display = sentence.replace(MARKER_RE, (_marker, slashes: string, n: string) => {
-    if (slashes.length > 0) return `${slashes.slice(1)}[Context ${n}]`
+    if (slashes.length > 0) return unescapeMarker(_marker, slashes, n)
     if (Number(n) !== next || next > contexts.length) {
       valid = false
       return _marker
@@ -296,6 +308,6 @@ export function selectionContextsToDisplay(text: string): string {
     next += 1
     return selectionContextToken(contexts[Number(n) - 1])
   })
-  if (!valid || next !== contexts.length + 1) return text
+  if (!valid || next !== contexts.length + 1) return null
   return `${prefix}${display}`
 }

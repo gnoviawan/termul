@@ -183,6 +183,19 @@ describe('selectionContextsToDisplay', () => {
     expect(selectionContextsToDisplay(wire)).toBe(display)
   })
 
+  it('never turns typed text in the exact prompt shape into chips', () => {
+    const typed = [
+      'Context 1 (selected from the conversation):\n> x\n\n[Context 1] why',
+      'Context 1 (selected from the conversation):\n> x\n\n\\[Context 1] and [Context 1]',
+      'see Context 1 (selected from the conversation): [Context 2]'
+    ]
+    for (const text of typed) {
+      const wire = serializeSelectionContexts(text)
+      expect(wire).not.toBe(text)
+      expect(selectionContextsToDisplay(wire)).toBe(text)
+    }
+  })
+
   it('passes through text that is not an exact selection-context prompt', () => {
     const samples = [
       'plain prompt',

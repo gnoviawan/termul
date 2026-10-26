@@ -63,7 +63,8 @@ normalizations never make a prompt show twice.
   (prose that is exactly one fenced block is stored as code to keep it so).
 - The label text, the quote prefix, and the marker shape are now a persisted
   contract. A future change must keep a parser for this format.
-- There is no format marker. A typed message that has exactly this shape
-  restores as chips. The chips show the same text the agent received.
+- There is no format marker. When a message has no chip but contains the
+  label text, its typed `[Context N]` markers are escaped too, so the restore
+  never turns typed text into chips, and it undoes that escape.
 - The selected text is sent inline, so a very long selection uses prompt
   tokens. There is no size limit in this version.
