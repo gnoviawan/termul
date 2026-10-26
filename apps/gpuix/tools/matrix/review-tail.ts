@@ -179,19 +179,23 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'ssh.workspace': {
     status: 'partial',
     differences: [
-      'Reference (R5): the web client with the host-local credential added to its handshake, and GPUIX attached with the same credential, as the launched app is. Both list the two seeded hosts in the sidebar SSH section, with the build-box favourite first.',
+      'Both clients are host-local, as the launched app is. Both list the two seeded hosts in the sidebar SSH section, with the build-box favourite first.',
       'The Hosts tab matches: the search field, Import and New host, and the Favorites and Servers groups with the same rows.',
-      'The New host dialog differs. The web sets Address and Port on one row (`grid-cols-[1fr_6rem]`); GPUIX stacks Port under Address, so the Organize section is scrolled out of the dialog.'
+      'The New host dialog sets Address and Port on one row in both (G15: compat lays a `grid-cols-[1fr_6rem]` grid out as flex rows with one cell per track). Typing goes to the autofocused Address field and the preview reads user@db.example.com in both.',
+      'Each field label sits 8 px further above its input than on the web (Address label centre to input top 19 px against 11 px). A label alone on its line takes a 24 px strut in GPUIX (G12) while the web line inherits a shorter line height, so the Organize section starts lower. The web also rings the focused Address field; GPUIX lightens its border only.',
+      'Measured by G15 on the published @gpuix/native 0.11.0 addon (no native patches), both clients host-local.'
     ],
     cause: 'compat translator gap',
-    unit: 'arbitrary grid columns (unassigned)',
+    unit: 'label strut from the inherited line height (unassigned)',
     impact: 1
   },
   'settings.accounts-claude': {
     status: 'partial',
     differences: [
-      'Reference (R5): the web client with the host-local credential, and GPUIX attached with the same credential. Both show Add account, the Keep work and personal apart card, and the Add a Claude account dialog with the name typed. The run stops before Continue, which would start a real claude.ai sign-in on the host.',
-      'The Accounts section has the gap settings.provider has: GPUIX puts the usage note under the account name, and the row menu on a line of its own, where the web sets them beside the name.'
+      'Both clients are host-local. Both show Add account, the Keep work and personal apart card, and the Add a Claude account dialog with the name typed. The run stops before Continue, which would start a real claude.ai sign-in on the host.',
+      'The account row now lays out on one line in GPUIX: its track list grid places itself (`col-span-2`), so compat keeps the equal-track fallback, now with the list\'s four columns (G15), where it had stacked one column. The usage note starts at 585 px against the web\'s 638 px and the row menu at 1035 px against 1105 px, because the four tracks are equal.',
+      'On the published addon the Add a Claude account dialog over Preferences is not painted (its text is in the tree; base and head alike). The patched addon draws it.',
+      'Measured by G15 on the published @gpuix/native 0.11.0 addon (no native patches), both clients host-local.'
     ],
     cause: 'compat translator gap',
     unit: 'account row wide layout (unassigned)',
@@ -318,14 +322,15 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   'browser.pane': {
     status: 'partial',
     differences: [
-      'Reference (R5): the desktop app (Tauri on WebKitGTK) built from the same checkout, driven with X input at the same 1280x800 (`tools/reference/tauri.ts`). Ctrl+Shift+N opens a browser tab in both and the typed URL loads the local reference page. Both panes are WebKitGTK webviews, and the page lands on the same pixels; the pane region reads 0.94 % perceptual.',
-      "GPUIX shows the Debug Console button beside the URL field. BrowserControls shows it only when `import.meta.env.PROD` is false, and the GPUIX bundle does not define it; the desktop app's and the web's production builds hide it.",
-      "The desktop app injects its agentation toolbar into every page it loads (browser_tab_manager.rs, enabled by default), a round button at the page's bottom right; the GPUIX helper injects it only on a click.",
-      'The desktop tab still reads 127.0.0.1:8289 after the page loaded; GPUIX names the tab after the page title.',
-      'The desktop app draws its own window buttons at the right of the tab bar; GPUIX leaves them to the window manager. The rail differs outside the pane: the desktop app is host-local (an SSH section) and has no seeded chat.'
+      'Reference: the desktop app (Tauri on WebKitGTK) built from the same checkout, driven with X input at the same 1280x800 (`tools/reference/tauri.ts`). Ctrl+Shift+N opens a browser tab in both and the typed URL loads the local reference page on the same pixels; the pane region reads 0.71 % perceptual.',
+      'The URL bar ends with the agentation button only, as in the desktop app: the GPUIX bundle defines Vite\'s PROD, DEV and MODE (G15), so the dev-only Debug Console is gone.',
+      'The agentation toolbar\'s round button sits at the page\'s bottom right in both: the webview helper injects the desktop\'s toolbar bundle when each browsed page has loaded (G15). GPUIX has no annotation service, so its toolbar keeps annotations in the page.',
+      'GPUIX names the tab after the page title (R5 reference page); the desktop tab reads 127.0.0.1:8289. The renderer prefers the title (browser-tab.tsx); the desktop\'s page poller reports it over Tauri IPC, which the capability file grants only to the main window, so for a remote page it never arrives (inferred from capabilities/default.json and the desktop log, which shows the poller injected and no title activity). G15 left GPUIX\'s titles in place and names the desktop as the side to fix.',
+      'The desktop app draws its own window buttons at the right of the tab bar; GPUIX leaves them to the window manager. Both rails show the SSH section now that GPUIX is host-local; the desktop has no seeded chat.',
+      'Measured by G15 on the published @gpuix/native 0.11.0 addon (no native patches), both clients host-local.'
     ],
-    cause: 'missing GPUIX capability',
-    unit: 'browser pane production flag and agentation auto-inject (unassigned)',
+    cause: 'needs diagnosis',
+    unit: 'desktop browser tab titles over remote IPC (unassigned)',
     impact: 1
   },
   'update.toast': {
@@ -339,14 +344,12 @@ export const TAIL_REVIEWS: Record<string, Review> = {
   },
 
   'snapshots.page': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      'Reference (R5): both clients start on #/snapshots, the web by URL and GPUIX through GPUIX_START_HASH; no desktop shell links to the route (only the mobile drawer). The header, Create New Snapshot and the Create Snapshot dialog match.',
-      'GPUIX paints nothing under the header where the web shows the empty state: the camera, No snapshots yet and Create First Snapshot. The text is in the automation tree, so the check passes; the block is not painted.'
-    ],
-    cause: 'needs diagnosis',
-    unit: 'snapshots empty state (unassigned)',
-    impact: 2
+      'Both clients start on #/snapshots, the web by URL and GPUIX through GPUIX_START_HASH; no desktop shell links to the route (only the mobile drawer). The header, Create New Snapshot and the Create Snapshot dialog match.',
+      'The empty state paints as on the web: the camera, No snapshots yet at 271 px against 270 px, and Create First Snapshot (G15). The page\'s `<main className="flex-1 flex flex-col">` sits in a block parent, so CSS sizes it to its content and resolves the list\'s `flex-1` 0% basis as content; GPUIX had taken basis 0 literally and clipped the list to its 48 px padding. Compat now drops the zero basis of a lone growing child in a column with no height, min height or clipping.',
+      'Measured by G15 on the published @gpuix/native 0.11.0 addon (no native patches), both clients host-local.'
+    ]
   },
   'theme.tokyonight-light': {
     status: 'ported',
