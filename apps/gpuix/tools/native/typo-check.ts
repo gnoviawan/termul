@@ -35,6 +35,7 @@ import {
   type TextSample,
   TYPO_WINDOW,
   type TypoReady,
+  type TypoRow,
   typoHtml
 } from './typo-samples'
 
