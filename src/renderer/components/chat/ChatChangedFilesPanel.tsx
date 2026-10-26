@@ -289,8 +289,10 @@ export function ChatChangedFilesPanel({
   const files = useMemo((): ChangedFile[] => {
     if (git.state === 'unavailable') return extractChangedFiles(toolCalls, cwd)
     if (git.state === 'loading') return []
-    return git.files.map((file) => ({ ...file, path: resolveFilePath(file.path, cwd) }))
+    return git.files.map((file) => ({ ...file, path: resolveFilePath(file.path, git.root) }))
   }, [git, toolCalls, cwd])
+  // Row subtitles are relative to the base the paths were resolved against.
+  const rowBase = git.state === 'ready' ? git.root : cwd
   const count = files.length
   const totalAdded = useMemo(() => files.reduce((sum, f) => sum + f.added, 0), [files])
   const totalRemoved = useMemo(() => files.reduce((sum, f) => sum + f.removed, 0), [files])
@@ -385,7 +387,7 @@ export function ChatChangedFilesPanel({
               <div className="scroller-thin max-h-48 overflow-y-auto">
                 <div className="space-y-0.5 p-1">
                   {files.map((file) => (
-                    <FileRow key={file.path} file={file} cwd={cwd} onOpen={handleOpenFile} />
+                    <FileRow key={file.path} file={file} cwd={rowBase} onOpen={handleOpenFile} />
                   ))}
                 </div>
               </div>

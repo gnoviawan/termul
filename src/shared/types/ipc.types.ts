@@ -258,6 +258,9 @@ export interface GitDiffStat {
   removed: number
   /** Per-file rows of the totals. Absent from hosts older than this field. */
   files?: GitFileDiffStat[]
+  /** Repository root (host path) that `files[].path` and status paths are
+   * relative to. Absent from hosts older than this field. */
+  root?: string
 }
 
 // A single commit row for the history/graph view.

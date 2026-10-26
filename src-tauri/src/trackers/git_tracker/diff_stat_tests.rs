@@ -78,6 +78,7 @@ fn stat(repo: &std::path::Path) -> GitDiffStat {
     let stat = git_get_diff_stat(repo.to_str().unwrap()).expect("diff stat");
     GitDiffStat {
         files: Vec::new(),
+        root: String::new(),
         ..stat
     }
 }
@@ -205,6 +206,7 @@ fn diff_stat_serializes_camel_case() {
         added: 2,
         removed: 1,
         files: vec![file("a.txt", 2, 1)],
+        root: "/repo".to_string(),
     })
     .expect("serialize");
     assert_eq!(
@@ -212,7 +214,8 @@ fn diff_stat_serializes_camel_case() {
         serde_json::json!({
             "added": 2,
             "removed": 1,
-            "files": [{ "path": "a.txt", "added": 2, "removed": 1 }]
+            "files": [{ "path": "a.txt", "added": 2, "removed": 1 }],
+            "root": "/repo"
         })
     );
 }
@@ -245,7 +248,8 @@ fn it_tracked_edits_count_added_and_removed() {
         GitDiffStat {
             added: 3,
             removed: 1,
-            files: Vec::new()
+            files: Vec::new(),
+            root: String::new()
         }
     );
 }
@@ -265,7 +269,8 @@ fn it_staged_edits_are_counted_like_unstaged() {
         GitDiffStat {
             added: 3,
             removed: 1,
-            files: Vec::new()
+            files: Vec::new(),
+            root: String::new()
         }
     );
 }
@@ -284,7 +289,8 @@ fn it_untracked_file_counts_final_line_without_newline() {
         GitDiffStat {
             added: 5,
             removed: 0,
-            files: Vec::new()
+            files: Vec::new(),
+            root: String::new()
         }
     );
 }
@@ -304,7 +310,8 @@ fn it_mixed_tracked_and_untracked_sum() {
         GitDiffStat {
             added: 3,
             removed: 0,
-            files: Vec::new()
+            files: Vec::new(),
+            root: String::new()
         }
     );
 }
@@ -339,7 +346,8 @@ fn it_no_head_counts_against_empty_tree() {
         GitDiffStat {
             added: 5,
             removed: 0,
-            files: Vec::new()
+            files: Vec::new(),
+            root: String::new()
         }
     );
 }
@@ -361,7 +369,8 @@ fn it_subdirectory_cwd_reports_repo_wide_stat() {
         GitDiffStat {
             added: 4,
             removed: 0,
-            files: Vec::new()
+            files: Vec::new(),
+            root: String::new()
         }
     );
     assert_eq!(
@@ -418,6 +427,39 @@ fn it_files_are_empty_after_commit_and_discard() {
     write(&repo, "a.txt", b"changed\n");
     git(&repo, &["checkout", "--", "a.txt"]);
     assert_eq!(files(&repo), Vec::new());
+}
+
+#[test]
+fn it_files_stay_repo_root_relative_when_diff_relative_is_set() {
+    if git_missing() {
+        return;
+    }
+    let repo = init_repo("files-diff-relative");
+    write(&repo, "a.txt", b"l1\n");
+    write(&repo, "sub/b.txt", b"l1\n");
+    commit_all(&repo);
+    git(&repo, &["config", "diff.relative", "true"]);
+    write(&repo, "a.txt", b"l1\nl2\n");
+    write(&repo, "sub/b.txt", b"l1\nl2\n");
+    assert_eq!(
+        files(&repo.join("sub")),
+        vec![file("a.txt", 1, 0), file("sub/b.txt", 1, 0)]
+    );
+}
+
+#[test]
+fn it_reports_the_repository_root_for_a_subdirectory_cwd() {
+    if git_missing() {
+        return;
+    }
+    let repo = init_repo("root");
+    write(&repo, "sub/b.txt", b"l1\n");
+    commit_all(&repo);
+    let stat = git_get_diff_stat(repo.join("sub").to_str().unwrap()).expect("diff stat");
+    assert_eq!(
+        std::fs::canonicalize(&stat.root).expect("root exists"),
+        std::fs::canonicalize(&*repo).expect("repo exists")
+    );
 }
 
 #[test]

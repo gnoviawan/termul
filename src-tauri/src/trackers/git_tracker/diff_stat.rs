@@ -46,6 +46,10 @@ pub struct GitDiffStat {
     pub removed: u64,
     #[serde(default)]
     pub files: Vec<GitFileDiffStat>,
+    /// Repository root as a host path: the base that `files[].path` and
+    /// `git status --porcelain` paths are relative to.
+    #[serde(default)]
+    pub root: String,
 }
 
 /// Why a diff stat could not be computed: git could not be started or timed
@@ -108,7 +112,9 @@ fn compute_diff_stat(cwd: &str) -> Result<GitDiffStat, DiffStatError> {
         cwd,
         "diff",
         StdoutCap::Unbounded,
-        &["diff", "--numstat", "-z", base],
+        // `--no-relative`: a `diff.relative` config must not narrow the rows or
+        // make them cwd-relative.
+        &["diff", "--no-relative", "--numstat", "-z", base],
     )?;
     let mut files = parse_numstat_files(&String::from_utf8_lossy(&numstat));
 
@@ -128,10 +134,8 @@ fn compute_diff_stat(cwd: &str) -> Result<GitDiffStat, DiffStatError> {
             ":/",
         ],
     )?;
-    files.extend(untracked_file_stats(
-        &git_path_on_host(cwd, &toplevel),
-        &untracked,
-    ));
+    let root = git_path_on_host(cwd, &toplevel);
+    files.extend(untracked_file_stats(&root, &untracked));
 
     let (added, removed) = files.iter().fold((0u64, 0u64), |(a, r), f| {
         (a.saturating_add(f.added), r.saturating_add(f.removed))
@@ -140,6 +144,7 @@ fn compute_diff_stat(cwd: &str) -> Result<GitDiffStat, DiffStatError> {
         added,
         removed,
         files,
+        root: root.to_string_lossy().into_owned(),
     })
 }
 

@@ -786,7 +786,8 @@ describe('ChatChangedFilesPanel with git as the source of truth', () => {
     const stat: GitDiffStat = {
       added: entries.reduce((sum, [, , a]) => sum + a, 0),
       removed: entries.reduce((sum, [, , , r]) => sum + r, 0),
-      files: entries.map(([path, , added, removed]) => ({ path, added, removed }))
+      files: entries.map(([path, , added, removed]) => ({ path, added, removed })),
+      root: '/work'
     }
     gitApiMock.getStatus.mockResolvedValue(status)
     gitApiMock.getDiffStat.mockResolvedValue(stat)
@@ -924,6 +925,42 @@ describe('ChatChangedFilesPanel with git as the source of truth', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Expand changed files' }))
     fireEvent.click(await screen.findByRole('button', { name: '/work/src/a.ts, Modified' }))
     await waitFor(() => expect(openFileRef.current).toHaveBeenCalledWith('/work/src/a.ts'))
+  })
+
+  it('resolves rows against the repository root when the cwd is a subfolder', async () => {
+    seedNotARepo('/work/sub')
+    useGitStatusStore.setState({ errors: {} })
+    gitApiMock.getStatus.mockResolvedValue([
+      { path: 'sub/file.ts', status: 'modified', staged: false },
+      { path: 'top.ts', status: 'modified', staged: false }
+    ])
+    gitApiMock.getDiffStat.mockResolvedValue({
+      added: 2,
+      removed: 0,
+      files: [
+        { path: 'sub/file.ts', added: 1, removed: 0 },
+        { path: 'top.ts', added: 1, removed: 0 }
+      ],
+      root: '/work'
+    })
+    render(<ChatChangedFilesPanel cwd="/work/sub" toolCalls={[]} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand changed files' }))
+    expect(
+      await screen.findByRole('button', { name: '/work/sub/file.ts, Modified' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '/work/top.ts, Modified' })).toBeInTheDocument()
+  })
+
+  it('still lists git rows against the cwd when the diff stat fails', async () => {
+    gitApiMock.getStatus.mockResolvedValue([
+      { path: 'src/a.ts', status: 'modified', staged: false }
+    ])
+    gitApiMock.getDiffStat.mockRejectedValue(new Error('diff stat timed out'))
+    render(panel([]))
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand changed files' }))
+    expect(
+      await screen.findByRole('button', { name: '/work/src/a.ts, Modified' })
+    ).toBeInTheDocument()
   })
 
   it('falls back to the agent tool calls when the cwd is not a git repository', async () => {

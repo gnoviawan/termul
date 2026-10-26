@@ -16,13 +16,16 @@ export interface GitChangedFile {
 }
 
 /**
- * `loading`: no status read for the cwd has finished yet. `unavailable`: the
- * cwd is empty or git status failed before any success (not a repository).
+ * `loading`: the status or the diff stat (which carries the repository root)
+ * for the cwd has not been read yet. `unavailable`: the cwd is empty or git
+ * status failed before any success (not a repository). `root`: the base of the
+ * file paths — the repository root, or the cwd when the diff stat failed or
+ * the host does not report the root.
  */
 export type GitChangedFiles =
   | { state: 'loading' }
   | { state: 'unavailable' }
-  | { state: 'ready'; files: GitChangedFile[] }
+  | { state: 'ready'; root: string; files: GitChangedFile[] }
 
 /** The working-tree state wins; a staged add, rename or delete shows over a
  * later unstaged edit. */
@@ -73,6 +76,9 @@ export function useGitChangedFiles(
   const key = cwd ? normalizePath(cwd) : ''
   const statuses = useGitStatusStore((state) => (key ? state.statuses[key] : undefined))
   const statusError = useGitStatusStore((state) => (key ? state.errors[key]?.status : undefined))
+  const diffStatError = useGitStatusStore((state) =>
+    key ? state.errors[key]?.diffStat : undefined
+  )
   const stat = useGitStatusStore(selectGitDiffStat(cwd))
 
   // Declared before the refresh effect: an unwatched key skips the diff stat.
@@ -102,9 +108,11 @@ export function useGitChangedFiles(
 
   const result = useMemo<GitChangedFiles>(() => {
     if (!key) return UNAVAILABLE
-    if (statuses) return { state: 'ready', files: gitChangedFiles(statuses, stat) }
-    return statusError === undefined ? LOADING : UNAVAILABLE
-  }, [key, statuses, stat, statusError])
+    if (!statuses) return statusError === undefined ? LOADING : UNAVAILABLE
+    if (!stat && diffStatError === undefined) return LOADING
+    const root = stat?.root || cwd
+    return { state: 'ready', root, files: gitChangedFiles(statuses, stat) }
+  }, [key, cwd, statuses, stat, statusError, diffStatError])
 
   const loggedUnavailableFor = useRef<string | null>(null)
   useEffect(() => {
