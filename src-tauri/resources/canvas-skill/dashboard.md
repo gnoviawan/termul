@@ -21,13 +21,13 @@ Before you draw, write down the three to five numbers the owner checks every day
 {
   "label": "Key figures",
   "commands": [
-    { "command": "node.create", "params": { "type": "frame", "name": "Key figures", "width": 1104, "height": 160, "props": { "layout": "horizontal", "gap": 24, "sizingV": "hug", "fills": [] } } },
-    { "command": "node.create", "params": { "type": "frame", "name": "Members tile", "parent": { "$step": 0 }, "props": { "layout": "vertical", "gap": 8, "padding": 24, "sizingH": "fill", "sizingV": "hug", "cornerRadius": 10, "fill": "#141B2D" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Label", "parent": { "$step": 1 }, "text": "Anggota aktif", "props": { "fontSize": 14, "fill": "#9AA6BC" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Value", "parent": { "$step": 1 }, "text": "1.284", "props": { "fontSize": 40, "fontStyle": "Bold", "fill": "#E8ECF4", "features": { "tnum": true } } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Change", "parent": { "$step": 1 }, "text": "+8,2% dari bulan lalu", "props": { "fontSize": 14, "fontStyle": "Semi Bold", "fill": "#38BDD8" } } },
-    { "command": "edit.duplicate", "params": { "ids": [{ "$step": 1 }] } },
-    { "command": "edit.duplicate", "params": { "ids": [{ "$step": 1 }] } }
+    { "command": "node.create", "as": "key-figures", "params": { "type": "frame", "name": "Key figures", "width": 1104, "height": 160, "props": { "layout": "horizontal", "gap": 24, "sizingV": "hug", "fills": [] } } },
+    { "command": "node.create", "as": "members-tile", "params": { "type": "frame", "name": "Members tile", "parent": { "$name": "key-figures" }, "props": { "layout": "vertical", "gap": 8, "padding": 24, "sizingH": "fill", "sizingV": "hug", "cornerRadius": 10, "fill": "#141B2D" } } },
+    { "command": "node.create", "params": { "type": "text", "name": "Label", "parent": { "$name": "members-tile" }, "text": "Anggota aktif", "props": { "fontSize": 14, "fill": "#9AA6BC" } } },
+    { "command": "node.create", "params": { "type": "text", "name": "Value", "parent": { "$name": "members-tile" }, "text": "1.284", "props": { "fontSize": 40, "fontStyle": "Bold", "fill": "#E8ECF4", "features": { "tnum": true } } } },
+    { "command": "node.create", "params": { "type": "text", "name": "Change", "parent": { "$name": "members-tile" }, "text": "+8,2% dari bulan lalu", "props": { "fontSize": 14, "fontStyle": "Semi Bold", "fill": "#38BDD8" } } },
+    { "command": "edit.duplicate", "params": { "ids": [{ "$name": "members-tile" }] } },
+    { "command": "edit.duplicate", "params": { "ids": [{ "$name": "members-tile" }] } }
   ]
 }
 ```
