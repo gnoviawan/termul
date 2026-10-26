@@ -125,14 +125,11 @@ fn expand_untracked_dirs(cwd: &str, output: &str) -> String {
                     let mut any = false;
                     for file in expanded.lines().filter(|l| !l.is_empty()) {
                         any = true;
-                        // ls-files quotes the same names porcelain does —
-                        // unquote to a plain path. Downstream consumers pass
-                        // paths as argv entries (no shell), so quoting is
-                        // not needed and would leak escape syntax into
-                        // diff/stage pathspecs.
-                        let plain = unquote_git_path(file);
+                        // ls-files quotes the same names porcelain does; keep
+                        // the quoted form so the status parser decodes every
+                        // path exactly once.
                         out.push_str("?? ");
-                        out.push_str(&plain);
+                        out.push_str(file);
                         out.push('\n');
                     }
                     if any {
