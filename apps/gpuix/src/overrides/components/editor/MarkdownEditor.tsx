@@ -48,6 +48,8 @@ const DOCUMENT_WIDTH = 48 * REM
 /** BlockNote's `--level` per heading level, in em of the 1rem document text. */
 const HEADING_EM = [3, 2, 1.3, 1, 0.9, 0.8]
 const HEADING_LINE_HEIGHT = 1.25
+/** index.css `.markdown-editor` heading `letter-spacing`, in em. */
+const HEADING_TRACKING = -0.018
 const TEXT_LINE_HEIGHT = 1.6
 /** `.bn-block-content` padding; a paragraph's is twice that. */
 const BLOCK_PAD = 0.16 * REM
@@ -81,6 +83,7 @@ function headingStyle(level: number, first: boolean) {
     fontSize: size,
     lineHeight: size * HEADING_LINE_HEIGHT,
     fontWeight: 650,
+    letterSpacing: HEADING_TRACKING,
     marginTop: first ? 0 : HEADING_MARGIN_TOP,
     marginBottom: HEADING_MARGIN_BOTTOM,
     paddingTop: BLOCK_PAD,

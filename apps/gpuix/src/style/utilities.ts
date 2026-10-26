@@ -23,7 +23,8 @@ import {
   LEADING_RATIOS,
   radiusScale,
   SHADOWS,
-  SPACING_UNIT
+  SPACING_UNIT,
+  TRACKING_EM
 } from './scale'
 import type { TwTheme } from './theme'
 
@@ -311,7 +312,10 @@ const HANDLERS: Record<string, Handler> = {
     const leading = leadingOf(v)
     return leading ? frag({ leading }) : undefined
   },
-  tracking: () => unsupported('letter-spacing: GPUIX has no letterSpacing (gpuix#60)'),
+  tracking: (v) => {
+    const em = TRACKING_EM[v.value] ?? arbitrary(v.value)?.match(/^(-?\d*\.?\d+)em$/)?.[1]
+    return em === undefined ? undefined : ok({ letterSpacing: Number(em) })
+  },
   bg: (v) => {
     if (v.value === 'none') return ok({})
     const side = v.value.match(/^(?:gradient|linear)-to-(t|tr|r|br|b|bl|l|tl)$/)?.[1]

@@ -11,6 +11,11 @@ declare module '@gpuix/native/host' {
     /** Picks the family's italic face (patch 0001-font-style). Inherited like the rest of the text style. */
     fontStyle?: 'normal' | 'italic'
     /**
+     * CSS `letter-spacing` in em of the run's font size (patches zed/0007 +
+     * gpuix/0017). Inherited like the rest of the text style.
+     */
+    letterSpacing?: number
+    /**
      * CSS `backdrop-filter: blur(<px>)` (patch zed/0003 + gpuix/0005): the
      * Gaussian's standard deviation. Blurs what is painted behind the element,
      * inside its rounded box. Not inherited.

@@ -42,6 +42,16 @@ export const FONT_WEIGHTS: Record<string, number> = {
   black: 900
 }
 
+/** Tailwind's `tracking-*` scale, in em (rendered by patches zed/0007 + gpuix/0017). */
+export const TRACKING_EM: Record<string, string> = {
+  tighter: '-0.05',
+  tight: '-0.025',
+  normal: '0',
+  wide: '0.025',
+  wider: '0.05',
+  widest: '0.1'
+}
+
 export const LEADING_RATIOS: Record<string, number> = {
   none: 1,
   tight: 1.25,
