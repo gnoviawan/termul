@@ -34,7 +34,9 @@ export function getAppliedUiZoom(): number {
  * In Tauri this uses the native webview zoom (same mechanism as the View menu),
  * which scales the entire UI — terminal canvas included — crisply, exactly like
  * VS Code / Electron window zoom. In the plain web build it falls back to the
- * CSS `zoom` property on the document root.
+ * CSS `zoom` property on the document root, and publishes the factor as
+ * `--ui-zoom` for the index.css rules that keep viewport-sized shells and
+ * floating layers where native zoom would put them.
  *
  * The call is async because the Tauri `setZoom` IPC is async: callers that care
  * about whether the zoom actually took effect can `await` this and handle a
@@ -62,6 +64,7 @@ export async function applyUiZoom(level: number): Promise<number> {
     await update
   } else if (typeof document !== 'undefined') {
     document.documentElement.style.zoom = String(clamped)
+    document.documentElement.style.setProperty('--ui-zoom', String(clamped))
   }
   return clamped
 }

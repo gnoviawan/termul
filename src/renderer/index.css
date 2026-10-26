@@ -1739,3 +1739,26 @@ html[data-flat-elevation="true"] [class*="shadow-"]:not(button):not([data-keep-s
   --tw-shadow: 0 0 #0000;
   --tw-shadow-colored: 0 0 #0000;
 }
+
+/* Web UI zoom: `applyUiZoom` sets CSS `zoom` on <html> outside Tauri and
+   publishes the factor as --ui-zoom. Under CSS zoom `vh`/`vw` grow with the
+   factor, and floating-ui writes positions measured in unzoomed pointer and
+   trigger coordinates into zoomed CSS px, so both land the factor too far.
+   Viewport-sized shells divide it back out, and the popper wrapper is
+   unzoomed while its content keeps the zoom. At --ui-zoom 1 (Tauri's native
+   zoom, or no zoom) every rule here is the plain value. */
+.h-screen {
+  height: calc(100vh / var(--ui-zoom, 1));
+}
+.h-dvh {
+  height: calc(100dvh / var(--ui-zoom, 1));
+}
+.w-screen {
+  width: calc(100vw / var(--ui-zoom, 1));
+}
+[data-radix-popper-content-wrapper] {
+  zoom: calc(1 / var(--ui-zoom, 1));
+}
+[data-radix-popper-content-wrapper] > * {
+  zoom: var(--ui-zoom, 1);
+}

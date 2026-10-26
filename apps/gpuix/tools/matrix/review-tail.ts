@@ -144,27 +144,21 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: ['Ctrl+Alt+T opens the Color Themes popover in both.', FIELD_FOCUS]
   },
   'shortcuts.zoom-in': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       "Each client presses its own key (G3: the web Alt+=, GPUIX the desktop Ctrl+= from G4's keymap), and both zoom: the rail and sidebar widen alike (G4, shims/window-zoom.ts; tools/parity/zoom-check.ts measures the rail 200 -> 220 px in both).",
-      'The zoomed web page runs past the window bottom, so its status bar is cut off and the dashboard heading sits 25 px lower; GPUIX keeps the status bar in the window.',
+      "The zoomed web page ends at the window bottom with its status bar in view, as GPUIX does (G17 WEB-ZOOM). The web's CSS zoom fallback had grown `h-screen` with the factor (880 px in the 800 px window) and opened context menus and dropdowns 1.1 times their place (a context menu at 62,259 for a press at 54,235); `applyUiZoom` now publishes `--ui-zoom` and index.css divides it back out of `h-screen`, `h-dvh`, `w-screen` and the Radix popper wrapper. `tools/parity/web-zoom-check.ts` failed 3 of 4 checks before and passes 4 of 4: page 800 px tall, the menu at 56,235, the Workspace dropdown at its trigger's left, 4.4 px under it.",
       LAYOUT_FOCUS
-    ],
-    cause: 'needs diagnosis',
-    unit: 'web zoom overflow (unassigned)',
-    impact: 1
+    ]
   },
 
   'shortcuts.desktop-keymap': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Reference (R5): the web client with the desktop table bound as custom keys, as a web user can set them in Keyboard shortcuts; GPUIX presses the same keys with its default (desktop) keymap. Headless Chromium hands Ctrl+T, Ctrl+W and Ctrl+R to the page.',
       'Every key does the same in both: Ctrl+T shows the agent launcher over Terminal 1 and a second Ctrl+T hides it, Ctrl+W asks to close Terminal 1 and Close removes it, Ctrl+R opens Command History, Ctrl+, opens Preferences and Ctrl+= zooms in.',
-      'The last frame differs as in shortcuts.zoom-in: the zoomed web page runs past the window bottom, and GPUIX keeps the status bar in the window.'
-    ],
-    cause: 'needs diagnosis',
-    unit: 'web zoom overflow (unassigned)',
-    impact: 1
+      'In the last frame both zoomed pages end at the window bottom with the status bar in view (G17 WEB-ZOOM, see shortcuts.zoom-in).'
+    ]
   },
 
   'notifications.toast': {

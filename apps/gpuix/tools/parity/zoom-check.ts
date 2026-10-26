@@ -36,10 +36,9 @@ const HEADING = 'What should we do in alpha?'
 const READY = 'Current checkout'
 const ZOOM_SETTLE_MS = 1500
 /**
- * The rail and the side panel's top. The web client zooms with CSS `zoom` on
- * the root, so its `h-screen` shell grows past the viewport and the status
- * bar and the dashboard's centring move off; this corner is laid out the
- * same in both clients, so it is where the zoomed frames are compared.
+ * The rail and the side panel's top, where the zoomed frames are compared.
+ * The web client zooms with CSS `zoom` on the root; `tools/parity/
+ * web-zoom-check.ts` checks that its shell and menus stay in place.
  */
 const CORNER: Rect = { x: 0, y: 0, width: 520, height: 400 }
 
