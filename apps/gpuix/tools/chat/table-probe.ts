@@ -22,7 +22,7 @@ const { values } = parseArgs({
   args: Bun.argv.slice(2),
   options: {
     port: { type: 'string' },
-    state: { type: 'string', default: '/tmp/gpuix-n3/table-probe' }
+    state: { type: 'string', default: '/tmp/gpuix-table-probe' }
   }
 })
 
@@ -131,6 +131,14 @@ try {
       chain.push(box(el))
     return {
       chain,
+      code: Array.from(table.querySelectorAll('code'))
+        .slice(0, 2)
+        .map((c) => ({
+          ...box(c),
+          text: c.textContent,
+          background: getComputedStyle(c).backgroundColor,
+          radius: getComputedStyle(c).borderRadius
+        })),
       cells: Array.from(table.querySelectorAll('th, td'))
         .slice(0, 6)
         .map((c) => ({ ...box(c), text: (c.textContent ?? '').slice(0, 24) })),

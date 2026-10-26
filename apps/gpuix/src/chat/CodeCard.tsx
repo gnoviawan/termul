@@ -86,7 +86,17 @@ function saveCode(code: string, language: string): string {
   return file
 }
 
-export function CopyAction({ code, disabled }: { code: string; disabled: boolean }) {
+type ActionSize = 'default' | 'sm'
+
+export function CopyAction({
+  code,
+  disabled,
+  size = 'sm'
+}: {
+  code: string
+  disabled: boolean
+  size?: ActionSize
+}) {
   const [copied, setCopied] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(
@@ -114,7 +124,7 @@ export function CopyAction({ code, disabled }: { code: string; disabled: boolean
       label={copied ? 'Copied' : 'Copy'}
       onClick={copy}
       disabled={disabled}
-      size="sm"
+      size={size}
     >
       <IconSwap iconKey={copied}>{copied ? <Check className="text-success" /> : <Copy />}</IconSwap>
     </IconActionButton>
@@ -124,11 +134,13 @@ export function CopyAction({ code, disabled }: { code: string; disabled: boolean
 export function DownloadAction({
   code,
   language,
-  disabled
+  disabled,
+  size = 'sm'
 }: {
   code: string
   language: string
   disabled: boolean
+  size?: ActionSize
 }) {
   const download = useCallback(() => {
     if (!code || disabled) return
@@ -142,7 +154,7 @@ export function DownloadAction({
     }
   }, [code, language, disabled])
   return (
-    <IconActionButton label="Download" onClick={download} disabled={disabled} size="sm">
+    <IconActionButton label="Download" onClick={download} disabled={disabled} size={size}>
       <Download />
     </IconActionButton>
   )

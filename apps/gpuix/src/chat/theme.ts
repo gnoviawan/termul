@@ -67,7 +67,13 @@ function syntaxTheme(themeId: string): SyntaxTheme {
 
 const cache = new Map<
   string,
-  { prose: GpuixTheme; quote: GpuixTheme; thought: GpuixTheme; code: GpuixTheme }
+  {
+    prose: GpuixTheme
+    tableFullscreen: GpuixTheme
+    quote: GpuixTheme
+    thought: GpuixTheme
+    code: GpuixTheme
+  }
 >()
 
 /**
@@ -81,6 +87,12 @@ const cache = new Map<
  *   index.css's components layer.
  *   Native markdown tints list markers and the quote rail with `accent`; the
  *   web's markers are the text colour, so accent is the foreground.
+ * - `tableFullscreen`: the table in the fullscreen view, which the web
+ *   portals outside `.chat-streamdown`, so Streamdown's utilities apply
+ *   unscaled: cells `px-4 py-2` (16 by 8 px) on a 20px line, a `bg-muted/80`
+ *   header, and inline code `rounded bg-muted px-1.5 py-0.5 font-mono
+ *   text-sm` (14px glyphs, 6px side padding, the wash the full line tall).
+ *   Measured by `tools/chat/table-probe.ts`.
  * - `quote`: a quote's content, muted and italic like Streamdown's
  *   `text-muted-foreground italic`.
  * - `thought`: the reasoning body (`.thought-markdown`), 12px muted.
@@ -131,6 +143,24 @@ export function transcriptThemes(themeId: string) {
         mdCodePaddingX: 16,
         mdCodePaddingY: 16,
         mdCodeRadius: 6
+      }
+    },
+    tableFullscreen: {
+      ...base,
+      codeWash: tokenColor('muted'),
+      tableHeaderBg: tokenColor('muted/80'),
+      metrics: {
+        mdTextSize: PROSE_TEXT,
+        mdLineHeight: 20,
+        mdBlockGap: 4,
+        mdTableCellPadding: 16,
+        mdTableCellPaddingY: 8,
+        mdTableLineHeight: 20,
+        mdTableHeaderWeight: 600,
+        mdInlineCodeRadius: 4,
+        mdInlineCodeScale: 1,
+        mdInlineCodePaddingX: 6,
+        mdInlineCodeInsetY: 0
       }
     },
     quote: {

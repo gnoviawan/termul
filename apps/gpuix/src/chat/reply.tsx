@@ -278,9 +278,7 @@ const MarkdownBlock = memo(function MarkdownBlock({
   return (
     <div style={{ marginTop, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       {block === 'table' ? (
-        <TableCard source={source} streaming={streaming}>
-          {markdown}
-        </TableCard>
+        <TableCard source={source} streaming={streaming} onLink={onLink} />
       ) : quote ? (
         <div style={QUOTE}>{markdown}</div>
       ) : (
