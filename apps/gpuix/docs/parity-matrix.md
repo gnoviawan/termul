@@ -149,7 +149,46 @@ dominate; weighting by area avoids that.
 
 ## Findings
 
-**How this run was made (G13, 2026-10-26).** Every row comes from one head,
+**How this run was made (I6, 2026-10-26).** Every row on this page comes
+from one head and one full `bun run parity:matrix` run of all 117
+surfaces: `gpuix/i6` at bef8a85d, which is `exp/gpuix-client` after I5
+(da9e6001) with `gpuix/g15` merged (f691845d) and a wait in
+`tools/dnd/check.ts`. GPUIX ran on the self-built patched addon, the build
+the `.deb` ships: `bun run native:build` with the full series (zed 0001 to
+0006, gpuix 0001 to 0016, series hash 2fc3aff4), then
+`NAPI_RS_NATIVE_LIBRARY_PATH=native/gpuix-native/build/gpuix-native.linux-x64-gnu.node`.
+`bun run native:patch-check` passed 37 of 37 checks on that file, and
+`bun run native:check` applied the series cleanly to the pins. Both
+clients attached host-local on every surface. The server was the shared
+release `termul-server` behind `tools/canvas/server-with-bundle.ts`
+(`TERMUL_REAL_SERVER_BIN`), with the FigCraft bundle `canvas/figcraft.pin`
+names (termul-v0.2.0, sha256 verified on fetch). The web client was the
+worktree's own `bun run build:web`. The webview helper came from
+`bun tools/webview-host.ts --release`, and `browser.pane`'s desktop app was
+built from this checkout (`bun x tauri build --config
+src-tauri/tauri.conf.dev.json --no-bundle`), both on the shared
+`CARGO_TARGET_DIR`. The full run took 28 minutes. No other unit ran; an
+idle V1 test server stayed up on port 8194. The 1-minute load average,
+sampled every minute, had a median of 4.8 and a peak of 13.3 on 8 cores,
+the peak in the last minute (the theme surfaces), all of it the run's own
+Chromium, lavapipe and servers.
+
+Every PNG pair was looked at. The five surfaces whose GPUIX text check
+failed (explorer.drag, editor.code, editor.code-edit, editor.tabs and
+terminal.file-link) failed it in the full run and both reruns, for the
+known reason (natively painted editor text is not in the automation tree),
+and their pairs match, so they stay ported. composer.slash and
+rail.project-reorder read higher in the full run than on both reruns; their
+rows come from the first rerun (see Flakes). terminal.split ran twice more
+because its pair needed a second look; it was ported in all three.
+
+**Earlier numbers are superseded.** The G13, G15, N4, R5, G14 and I5
+paragraphs below describe what each unit changed and found. Their scores
+and per-surface numbers came from different heads, addons and references,
+mixed row by row. The I6 run replaces all of them; read them for the
+diagnoses, not the numbers.
+
+**How the G13 run was made (superseded by I6).** Every row comes from one head,
 949b8c16 on `gpuix/g13` (`exp/gpuix-client` at 911f2baf plus G13's
 fullscreen table theme and tool fixes), and one full `bun run parity:matrix`
 run of all 117 surfaces. GPUIX ran on the self-built patched addon, the
@@ -330,11 +369,30 @@ full-frame perceptual diff is within 0.02 points of G14's except
 rail.project-list (1.02 to 0.86 %) and rail.project-reorder (1.35 to
 1.00 %). The totals did not move.
 
-**Where it stands.** 117 surfaces: 102 ported, 13 partial, 0 broken, 0
-blocked, 2 pending-unit. The usage-weighted score is 94.4 % over all
-surfaces and 95.4 % over the 115 measured ones. Unweighted, it is 92.7 %
-and 94.3 %. R5's five new references score partial, so the measured-only
-score sits below G14's 96.4 %, which counted 110 surfaces.
+**Where it stands (I6, one head).** 117 surfaces: 102 ported, 13
+partial, 0 broken, 0 blocked, 2 pending-unit. The usage-weighted score is
+94.0 % over all surfaces and 95.0 % over the 115 measured ones.
+Unweighted, it is 92.7 % and 94.3 %. The mean last-step full-frame
+perceptual diff over the 115 measured surfaces is 1.12 %. By area, the
+composer, terminal, explorer, side panel, status bar, palette, themes,
+dialogs, snapshots and canvas are at 100 %. The rail is at 95 %, git at
+94.4 %, chat at 90 %, the editor at 87.5 %, and settings and shortcuts at
+85.7 %. The browser pane, SSH and notifications are at 50 %, and remote
+access at 0, because GPUIX does not have its one surface yet.
+
+Against I5's mixed rows (94.4 %), three reviews moved. snapshots.page is
+ported (G15's empty-state fix, 0.18 % full-frame perceptual on the patched
+addon). git.diff is now partial: GPUIX slants the diff header lines and the
+STAGE HUNK label, which the web draws upright because Paper Mono has no
+italic and `.font-mono` sets `font-synthesis-style: none`. Earlier reviews
+missed it. settings.ai-agents stays partial, but for a smaller gap: the
+registry list now fills, and only the inline SVG agent icons are missing.
+settings.accounts-claude stays partial for the account row layout; its
+dialog now paints, at 0.18 % against G15's 2.88 % on the published addon.
+
+**Where it stood after I5 (superseded).** 117 surfaces: 102 ported, 13 partial, 0 broken, 0
+blocked, 2 pending-unit. The usage-weighted score was 94.4 % over all
+surfaces and 95.4 % over the 115 measured ones, from rows of several runs.
 
 **Where it stood after N4.** 117 surfaces: 98 ported, 12 partial, 0 broken, 7
 blocked. The usage-weighted score is 89.9 % over all surfaces and 92.9 %
@@ -409,7 +467,7 @@ back (the Proposed units table below), with its cause class:
 target can be measured. If every unit in the Proposed units table fixed
 every surface it names, the score would be 100.0 %. Before R5 the limit
 was 97.8 %, because the 2.2 points of reference-less surfaces could never
-score. The score is 91.0 %, so 99 % means winning back 8 of the 9 open
+score. The score is 94.0 % (I6), so 99 % means winning back 5 of the 6 open
 points. At most one point of the 100 weight can stay open.
 
 Five references are fair comparisons and need no special rule:
@@ -449,13 +507,19 @@ them first.
 
 **Flakes.** A surface that differed in the full run and matched on a rerun
 is recorded here and scored from its matching run. A surface that differed
-in every run is a gap above, not a flake. G13 reran the three surfaces that
+in every run is a gap above, not a flake. I6 reran two surfaces that read
+higher than their earlier rows; both matched on both reruns (first two
+rows below). Outside the matrix, `tools/dnd/check.ts` failed 1 of 5 runs:
+the tab reorder read the old order 500 ms after the drag. It now polls the
+order for up to 3 s and passed 5 of 5. G13 reran the three surfaces that
 failed in its full run, and two that read higher than G12 (terminal.split
 and terminal.tab-reorder, which matched on their full-run pairs and keep
 their full-run rows). All five matched on both reruns.
 
 | Surface | Runs that differed | What happened |
 | --- | --- | --- |
+| `composer.slash` | 1 of 3 (I6) | Full run 2.43 % full-frame perceptual, both reruns 1.34 %, with the same menu in both clients. Not traced; G14 saw the same surface read high when the web frame caught chat.queue's held turn still running (a guess for this run). |
+| `rail.project-reorder` | 1 of 3 (I6) | Full run 1.42 % full frame and 1.11 % region, both reruns 1.08 % and 1.14 %; the drag reordered the list to alpha, gamma, beta in every run. |
 | `editor.markdown` | 1 of 3 (G13) | In the full run the GPUIX click on the docs folder did not expand it: the frame shows the row's name hint and no guide.md, so the next click missed and 3 of 7 GPUIX checks failed. The reruns opened guide.md (1.21 % and 1.44 % full-frame perceptual). Not traced; the click went to the web point. |
 | `composer.mention` | 1 of 3 (G13) | The web frame caught chat.queue's held `matrix hold` turn still running (a spinner on its chat card and on alpha); GPUIX, run later, showed it ended. 2.36 % full-frame perceptual against 1.27 % on both reruns. |
 | `palette.app-preferences` | 1 of 3 (G13) | GPUIX painted the Interface rows in the narrow layout, each control under its text, where the web sets it beside. The reruns had the wide layout (0.36 % both times, 1.46 % in the full run). This is the container-query first frame that earlier units recorded. |
