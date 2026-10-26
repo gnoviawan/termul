@@ -34,7 +34,14 @@ import { CodeCard } from './CodeCard'
 import { transcriptProbe } from './perf-probe'
 import { type FlowBlock, flowGap, leadingMargin } from './prose-flow'
 import { type ProsePart, proseParts } from './prose-parts'
-import { fileLinkPath, listItems, proseBlocks, taskMarker, unquote } from './prose-source'
+import {
+  fileLinkPath,
+  inlineOrderedItem,
+  listItems,
+  proseBlocks,
+  taskMarker,
+  unquote
+} from './prose-source'
 import { TableCard } from './TableCard'
 import { TaskItem } from './TaskItem'
 import { transcriptThemes } from './theme'
@@ -268,7 +275,7 @@ const MarkdownBlock = memo(function MarkdownBlock({
               {native(task.body)}
             </TaskItem>
           ) : (
-            native(item, i)
+            native(inlineOrderedItem(item) ?? item, i)
           )
         })}
       </div>

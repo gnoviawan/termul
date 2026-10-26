@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import { flowGap, leadingMargin, trailingMargin } from '../prose-flow'
 import { proseChunks, proseParts } from '../prose-parts'
-import { fileLinkPath, listItems, proseBlocks, taskMarker, unquote } from '../prose-source'
+import {
+  fileLinkPath,
+  inlineOrderedItem,
+  listItems,
+  proseBlocks,
+  taskMarker,
+  unquote
+} from '../prose-source'
 
 describe('proseParts', () => {
   test('splits top-level fences out of prose with their language', () => {
@@ -204,5 +211,20 @@ describe('listItems', () => {
 
   test('a task list keeps its checkboxes', () => {
     expect(listItems('- [x] done\n- [ ] todo')).toEqual(['- [x] done', '- [ ] todo'])
+  })
+})
+
+describe('inlineOrderedItem', () => {
+  test('a one-paragraph ordered item becomes a paragraph led by its number', () => {
+    expect(inlineOrderedItem('2. `WorkspaceLayout` decides\n   whether to mount')).toBe(
+      '2\\. `WorkspaceLayout` decides\n   whether to mount'
+    )
+    expect(inlineOrderedItem('7) closing paren')).toBe('7\\) closing paren')
+  })
+
+  test('items with nested blocks, and unordered items, keep the native list', () => {
+    expect(inlineOrderedItem('3. first\n   - nested')).toBeNull()
+    expect(inlineOrderedItem('1. one\n\n   two')).toBeNull()
+    expect(inlineOrderedItem('- plain')).toBeNull()
   })
 })

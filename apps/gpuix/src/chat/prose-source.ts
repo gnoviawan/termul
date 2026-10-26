@@ -256,6 +256,26 @@ export function unquote(source: string): string {
     .join('\n')
 }
 
+const ORDERED_MARKER = /^ {0,3}\d{1,9}([.)])[ \t]+/
+
+/**
+ * An ordered item whose content is one paragraph, as a paragraph that starts
+ * with its number. Streamdown's lists are `list-inside`: the marker is inline
+ * text, the content follows it at the width of "1. ", and wrapped lines start
+ * at the item's left edge. Native markdown sets a marker column instead.
+ * Null for any other item, which keeps the native list.
+ */
+export function inlineOrderedItem(item: string): string | null {
+  const marker = ORDERED_MARKER.exec(item)
+  if (!marker) return null
+  const list = fromMarkdown(item, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] })
+    .children[0]
+  if (list?.type !== 'list' || !list.ordered || list.children.length !== 1) return null
+  const blocks = list.children[0]?.children ?? []
+  if (blocks.length !== 1 || blocks[0]?.type !== 'paragraph') return null
+  return `${list.start ?? 1}\\${marker[1]} ${item.slice(marker[0].length)}`
+}
+
 /**
  * A list block's top-level items, each as list source of its own. Native
  * markdown spaces list items a fixed 4px apart; Streamdown's `li` is `py-1`

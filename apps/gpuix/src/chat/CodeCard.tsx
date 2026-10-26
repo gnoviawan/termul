@@ -66,7 +66,11 @@ const CARD = tw(
 const HEADER = tw('flex h-8 items-center text-muted-foreground text-xs')
 const HEADER_LABEL = tw('ml-1 font-mono text-xs text-muted-foreground')
 const ACTIONS = tw('absolute top-2 right-2 flex items-center')
-const BODY = tw('rounded-md border border-border bg-background p-4')
+/** `.chat-streamdown pre`'s `margin-block: 0 0.55em` (7.7px at 14px) sits inside the body's `p-4`. */
+const BODY = {
+  ...tw('rounded-md border border-border bg-background p-4'),
+  paddingBottom: 16 + 0.55 * 14
+}
 const NOTE = tw('px-1 text-xs text-muted-foreground')
 const DIAGRAM_BODY = tw('overflow-hidden rounded-md border border-border bg-background')
 /** Streamdown's mermaid frame: at least 7rem tall, the diagram fit to its width and centred. */
