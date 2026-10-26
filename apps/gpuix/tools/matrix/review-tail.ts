@@ -317,18 +317,15 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     ]
   },
   'browser.pane': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Reference: the desktop app (Tauri on WebKitGTK) built from the same checkout, driven with X input at the same 1280x800 (`tools/reference/tauri.ts`). Ctrl+Shift+N opens a browser tab in both and the typed URL loads the local reference page on the same pixels; the pane region reads 0.71 % perceptual.',
       "The URL bar ends with the agentation button only, as in the desktop app: the GPUIX bundle defines Vite's PROD, DEV and MODE (G15), so the dev-only Debug Console is gone.",
       "The agentation toolbar's round button sits at the page's bottom right in both: the webview helper injects the desktop's toolbar bundle when each browsed page has loaded (G15). GPUIX has no annotation service, so its toolbar keeps annotations in the page.",
-      "GPUIX names the tab after the page title (R5 reference page); the desktop tab reads 127.0.0.1:8289. The renderer prefers the title (browser-tab.tsx); the desktop's page poller reports it over Tauri IPC, which the capability file grants only to the main window, so for a remote page it never arrives (inferred from capabilities/default.json and the desktop log, which shows the poller injected and no title activity). G15 left GPUIX's titles in place and names the desktop as the side to fix.",
+      "Both tabs read the page title, R5 reference page (G17 DESKTOP-TITLES). The desktop's page poller reports the title over Tauri IPC, which the capability file grants only to the main window, so a remote page's title never arrived and the desktop tab read 127.0.0.1:8289. The tab webview now takes WebKit's title-changed signal in Rust (`on_document_title_changed` in browser_tab_manager.rs, tested in browser_tab_manager_tests.rs) and emits the event the renderer already listens for. Measured with the desktop app built from gpuix/g17 at c12eed3a (`TERMUL_TAURI_BIN`).",
       'The desktop app draws its own window buttons at the right of the tab bar; GPUIX leaves them to the window manager. Both rails show the SSH section now that GPUIX is host-local; the desktop has no seeded chat.',
       'I6 measured it in the full run on the patched addon (series 2fc3aff4), both clients host-local.'
-    ],
-    cause: 'needs diagnosis',
-    unit: 'desktop browser tab titles over remote IPC (unassigned)',
-    impact: 1
+    ]
   },
   'update.toast': {
     status: 'ported',
