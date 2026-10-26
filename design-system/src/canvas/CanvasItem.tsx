@@ -188,8 +188,10 @@ export const CanvasItem = memo(function CanvasItem({
           {copyState === 'failed' ? 'Copy unavailable. The name is selected for manual copy.' : ''}
         </span>
       </div>
+      {/* `isolate` keeps a preview's own z-index (the composer's z-10) inside
+          its frame, so portalled popovers in the last layer paint above it. */}
       <div
-        className="relative overflow-auto overscroll-contain rounded-xl border border-border bg-background text-foreground"
+        className="relative isolate overflow-auto overscroll-contain rounded-xl border border-border bg-background text-foreground"
         style={{ height: entry.height }}
         data-preview-frame
       >

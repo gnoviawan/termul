@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Maximize2, Menu, Minus, Plus, RotateCcw } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Kbd } from '@/components/ui/kbd'
+import { PortalContainerContext } from '@/components/ui/portal-container'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import type { CanvasLayout } from '../registry/layout'
@@ -114,6 +115,8 @@ export function Canvas({
 }: CanvasProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const worldRef = useRef<HTMLDivElement>(null)
+  /** Inside the world, so portalled popovers and menus zoom with the previews. */
+  const [portalLayer, setPortalLayer] = useState<HTMLDivElement | null>(null)
   const zoomLabelRef = useRef<HTMLSpanElement>(null)
   const cameraRef = useRef<Camera>(initialCamera ?? DEFAULT_CAMERA)
   const frameRef = useRef<number | null>(null)
@@ -471,6 +474,10 @@ export function Canvas({
     const target = event.target
     if (!viewport || target === viewport || !(target instanceof HTMLElement)) return
     if (!worldRef.current?.contains(target)) return
+    // A popover follows its trigger, which is already in view. Its content can
+    // take focus before Radix places it (at the world origin), so following
+    // it would fling the camera away.
+    if (portalLayer?.contains(target)) return
     const rect = target.getBoundingClientRect()
     const box = viewport.getBoundingClientRect()
     const margin = 48
@@ -524,36 +531,48 @@ export function Canvas({
           className="absolute top-0 left-0 origin-top-left"
           style={{ transform: cameraTransform(cameraRef.current) }}
         >
-          {layout.labels.map((label) => (
-            <div
-              key={label.id}
-              data-canvas-label
-              className="pointer-events-none absolute select-none"
-              style={{ left: label.x, top: label.y, width: label.width }}
-            >
-              {label.kind === 'section' ? (
-                <div className="flex flex-col gap-2">
-                  <h2 className="text-5xl font-semibold tracking-tight text-foreground">
+          <PortalContainerContext.Provider value={portalLayer}>
+            {layout.labels.map((label) => (
+              <div
+                key={label.id}
+                data-canvas-label
+                className="pointer-events-none absolute select-none"
+                style={{ left: label.x, top: label.y, width: label.width }}
+              >
+                {label.kind === 'section' ? (
+                  <div className="flex flex-col gap-2">
+                    <h2 className="text-5xl font-semibold tracking-tight text-foreground">
+                      {label.title}
+                    </h2>
+                    <p className="max-w-2xl text-lg text-muted-foreground">{label.description}</p>
+                  </div>
+                ) : (
+                  <h3 className="border-b border-border pb-2 text-base font-medium text-muted-foreground">
                     {label.title}
-                  </h2>
-                  <p className="max-w-2xl text-lg text-muted-foreground">{label.description}</p>
-                </div>
-              ) : (
-                <h3 className="border-b border-border pb-2 text-base font-medium text-muted-foreground">
-                  {label.title}
-                </h3>
-              )}
-            </div>
-          ))}
-          {layout.entries.map((entry) => (
-            <CanvasItem
-              key={entry.id}
-              entry={entry}
-              position={positions[entry.id] ?? { x: entry.x, y: entry.y }}
-              getZoom={getZoom}
-              onMove={onMove}
-            />
-          ))}
+                  </h3>
+                )}
+              </div>
+            ))}
+            {layout.entries.map((entry) => (
+              <CanvasItem
+                key={entry.id}
+                entry={entry}
+                position={positions[entry.id] ?? { x: entry.x, y: entry.y }}
+                getZoom={getZoom}
+                onMove={onMove}
+              />
+            ))}
+          </PortalContainerContext.Provider>
+          {/* Last, so a flyout paints above every item. The layer is the
+              popovers' containing block (`contain: layout`) and is 1px, not
+              0: Floating UI reads the zoom from its rendered vs layout size,
+              and a zero-size box reads as scale 1, which misplaces popovers
+              at any zoom but 100%. Layout containment does not clip. */}
+          <div
+            ref={setPortalLayer}
+            data-canvas-portal-layer=""
+            className="absolute top-0 left-0 size-px [contain:layout]"
+          />
         </div>
       </div>
 

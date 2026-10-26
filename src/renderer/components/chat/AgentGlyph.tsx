@@ -1,11 +1,19 @@
-import { useMemo } from 'react'
+import { useId, useMemo } from 'react'
 import { Bot } from '@/components/icons'
-import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
+import {
+  agentBrandColor,
+  agentBrandProps,
+  brandGradientId,
+  findBundledIconByKey,
+  withBrandGradient
+} from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import { cn } from '@/lib/utils'
 
 /**
- * Renders an ACP agent's icon (theme-adaptive inline SVG via `currentColor`).
+ * Renders an ACP agent's icon (inline SVG via `currentColor`). An agent with
+ * a registry `brandColor` is drawn in it (per theme, overriding a caller's
+ * text colour); the rest keep `text-foreground/80` unless the caller sets one.
  * Resolution precedence: `icon` prop (persisted custom SVG, bundled or
  * uploaded) → `findBundledIconByKey(`acp:${templateId}`)` (registry catalog) →
  * lucide `<Bot>` fallback.
@@ -35,18 +43,23 @@ export function AgentGlyph({
     const svg = findBundledIconByKey(`acp:${templateId}`)?.svg
     return svg ? sanitizeInlineAgentSvg(svg) : null
   }, [icon, templateId])
+  const gradientId = brandGradientId(useId())
+  const brand = normalized ? agentBrandColor(icon, templateId) : null
+  const brandProps = brand ? agentBrandProps(brand, gradientId) : null
 
   if (normalized) {
     return (
       <span
         aria-hidden="true"
-        style={{ width: size, height: size }}
+        data-agent-brand={brand ? '' : undefined}
+        style={{ width: size, height: size, ...brandProps?.style }}
         className={cn(
           'inline-flex shrink-0 text-foreground/80 [&_svg]:h-full [&_svg]:w-full',
-          className
+          className,
+          brandProps?.className
         )}
         // biome-ignore lint/security/noDangerouslySetInnerHtml: icon SVG is sanitized via sanitizeInlineAgentSvg (DOMPurify)
-        dangerouslySetInnerHTML={{ __html: normalized }}
+        dangerouslySetInnerHTML={{ __html: withBrandGradient(normalized, brand, gradientId) }}
       />
     )
   }

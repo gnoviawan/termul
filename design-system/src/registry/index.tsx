@@ -1,5 +1,6 @@
 import * as C from '../previews/components'
 import * as F from '../previews/foundations'
+import * as M from '../previews/model-selector'
 import * as P from '../previews/patterns'
 import * as S from '../previews/surfaces'
 import * as T from '../previews/tokens'
@@ -8,6 +9,7 @@ import type { CanvasEntry, CanvasSection } from './types'
 const THEMES = 'src/renderer/lib/themes'
 const INDEX_CSS = 'src/renderer/index.css'
 const UI = 'src/renderer/components/ui'
+const PICKER = 'src/renderer/components/chat/agent-model-selector'
 
 function tokens(id: string, name: string, list: readonly F.TokenSpec[], width = 480): CanvasEntry {
   return {
@@ -418,6 +420,46 @@ export const SECTIONS: CanvasSection[] = [
             width: 560,
             height: 432,
             Preview: C.MessagePreview
+          },
+          {
+            id: 'chat.model-selector.v1',
+            name: 'Model selector v1 (current)',
+            source: `${PICKER}/SelectorPanel.tsx`,
+            width: 720,
+            height: 520,
+            Preview: M.ModelSelectorV1
+          },
+          {
+            id: 'chat.model-selector.v2',
+            name: 'Model selector v2 (flag)',
+            source: `${PICKER}/SelectorPanelV2.tsx`,
+            width: 1120,
+            height: 680,
+            Preview: M.ModelSelectorV2
+          },
+          {
+            id: 'chat.model-selector.v2-rail',
+            name: 'Model selector v2 rail (flag)',
+            source: `${PICKER}/SelectorPanelV2.tsx`,
+            width: 1200,
+            height: 680,
+            Preview: M.ModelSelectorV2Rail
+          },
+          {
+            id: 'chat.model-selector.v2-many-agents',
+            name: 'Model selector v2, 14 agents (flag)',
+            source: `${PICKER}/SelectorPanelV2.tsx`,
+            width: 1200,
+            height: 680,
+            Preview: M.ModelSelectorV2ManyAgents
+          },
+          {
+            id: 'chat.model-selector.v2-composer',
+            name: 'Model selector v2 in the chat composer (flag)',
+            source: `${PICKER}/AgentModelSelector.tsx`,
+            width: 820,
+            height: 600,
+            Preview: M.ModelSelectorV2Composer
           }
         ]
       }

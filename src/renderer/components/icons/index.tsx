@@ -119,6 +119,7 @@ import {
   SlidersHorizontalIcon,
   SparklesIcon,
   SquareTerminalIcon,
+  StarIcon,
   Tag01Icon,
   TerminalIcon,
   TriangleAlertIcon,
@@ -302,6 +303,7 @@ export const Scissors = hugeIcon('Scissors', ScissorsIcon)
 export const Server = hugeIcon('Server', ServerIcon)
 export const ShieldAlert = hugeIcon('ShieldAlert', ShieldAlertIcon)
 export const ShieldCheck = hugeIcon('ShieldCheck', ShieldCheckIcon)
+export const Star = hugeIcon('Star', StarIcon)
 export const Shuffle = hugeIcon('Shuffle', ShuffleIcon)
 export const Skull = hugeIcon('Skull', SkullIcon)
 export const Sparkles = hugeIcon('Sparkles', SparklesIcon)
