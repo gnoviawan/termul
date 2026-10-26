@@ -100,6 +100,39 @@ describe('selection context pill in the composer', () => {
     expect(caretDisplayOffset()).toBe(getComposerValue().length)
   })
 
+  it('replaces a select-all selection with the chip in one paragraph, then keeps chip order', async () => {
+    await mount()
+    setComposerValue('old draft')
+    act(() => {
+      editor().commands.selectAll()
+    })
+    insert(ctx('first'))
+    insert(ctx('second'))
+    const first = selectionContextToken(ctx('first'))
+    const second = selectionContextToken(ctx('second'))
+    expect(getComposerValue()).toBe(`${first} ${second} `)
+    expect(editor().state.doc.childCount).toBe(1)
+    expect(chipLabels()).toEqual(['Context 1: first', 'Context 2: second'])
+  })
+
+  it('inserts into an emptied composer after select-all + delete without a stray paragraph', async () => {
+    await mount()
+    setComposerValue('old draft')
+    act(() => {
+      editor().commands.selectAll()
+    })
+    act(() => {
+      editor().commands.deleteSelection()
+    })
+    act(() => {
+      editor().commands.selectAll()
+    })
+    insert(ctx('only'))
+    expect(getComposerValue()).toBe(`${selectionContextToken(ctx('only'))} `)
+    expect(editor().state.doc.childCount).toBe(1)
+    expect(caretDisplayOffset()).toBe(getComposerValue().length)
+  })
+
   it('numbers several chips by their order and renumbers when one is removed', async () => {
     await mount()
     insert(ctx('first'))

@@ -33,24 +33,26 @@ export function insertSelectionContext(editor: Editor | null, context: Selection
   }
   try {
     const { state } = editor.view
-    const { from, to, $from } = state.selection
     const pill = state.schema.nodes[CONTEXT_PILL_NODE].create(contextToAttrs(context))
+    // Delete first, then work from a caret inside a paragraph: a select-all
+    // (Ctrl+A) selection starts at the doc level, outside any paragraph.
+    const tr = state.tr.deleteSelection()
+    const caret = TextSelection.near(tr.doc.resolve(tr.selection.from))
+    const { $from } = caret
     const charBefore = $from.parent.textBetween(
       Math.max(0, $from.parentOffset - 1),
       $from.parentOffset,
       undefined,
       '\uFFFC'
     )
-    const $to = state.selection.$to
-    const charAfter = $to.parent.textBetween(
-      $to.parentOffset,
-      Math.min($to.parent.content.size, $to.parentOffset + 1),
+    const charAfter = $from.parent.textBetween(
+      $from.parentOffset,
+      Math.min($from.parent.content.size, $from.parentOffset + 1),
       undefined,
       '\uFFFC'
     )
     const needsLeadingSpace = charBefore.length > 0 && !/\s/.test(charBefore)
-    const tr = state.tr.deleteRange(from, to)
-    let pos = from
+    let pos = $from.pos
     if (needsLeadingSpace) {
       tr.insertText(' ', pos)
       pos += 1
