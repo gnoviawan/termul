@@ -18,6 +18,7 @@ import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { diffPngs } from '../parity/diff'
 import { addProject, startTestServer, type TestServer } from '../parity/server'
 import { grabFrame, LAVAPIPE_ICD, SCREEN_MARGIN, startXvfb, windowOrigin } from '../parity/shoot-gpuix'
+import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import { stateRoot } from '../shared/seed'
 import { buildFixtures } from './build-fixtures'
 import { FIXTURE_NAMES } from './fixtures/names'
@@ -84,7 +85,7 @@ async function seed(server: TestServer): Promise<void> {
 
 async function shootWeb(server: TestServer, fixture: string, outPath: string) {
   const browser = await chromium.launch({
-    args: ['--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks']
+    args: WEB_REFERENCE_ARGS
   })
   try {
     const context = await browser.newContext({

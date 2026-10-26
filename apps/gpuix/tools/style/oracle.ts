@@ -11,6 +11,7 @@ import type { StyleDesc } from '@gpuix/react'
 import { formatColor, parseColor } from '../../src/style/css-value'
 import { resolveTwTheme } from '../../src/style/theme'
 import { createTw } from '../../src/style/tw'
+import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import { scanRenderer } from './scan-classes'
 import { pageHtml } from './showcase/web'
 import { compileTailwind, REPO } from './tailwind-css'
@@ -161,7 +162,7 @@ const approximate = [...utilities].filter(([u]) =>
 
 const css = await compileTailwind(supported.map(([u]) => u))
 const { chromium } = await import(join(REPO, 'node_modules/playwright/index.mjs'))
-const browser = await chromium.launch()
+const browser = await chromium.launch({ args: WEB_REFERENCE_ARGS })
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
 const html = pageHtml(themeId)
   .replace(/<link[^>]*index\.css">/, `<style>${css}</style>`)

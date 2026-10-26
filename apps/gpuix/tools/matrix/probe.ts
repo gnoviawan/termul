@@ -14,6 +14,7 @@ import { parseArgs } from 'node:util'
 import { chromium } from 'playwright'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { DIST_WEB } from '../parity/shoot-web'
+import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import { pickPort } from '../shared/seed'
 import { webDriver } from './drive'
 import { SURFACES } from './surfaces'
@@ -37,7 +38,7 @@ const world = await createWorld({
   root
 })
 const browser = await chromium.launch({
-  args: ['--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks']
+  args: WEB_REFERENCE_ARGS
 })
 try {
   for (const [n, surface] of (surfaces as NonNullable<(typeof surfaces)[number]>[]).entries()) {

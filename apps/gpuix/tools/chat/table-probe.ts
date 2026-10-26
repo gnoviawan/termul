@@ -15,6 +15,7 @@ import { chromium } from 'playwright'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { createWorld, prepareDevice, TOKEN } from '../matrix/world'
 import { DIST_WEB } from '../parity/shoot-web'
+import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import { pickPort } from '../shared/seed'
 
 const { values } = parseArgs({
@@ -32,7 +33,7 @@ const world = await createWorld({
   root
 })
 const browser = await chromium.launch({
-  args: ['--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks']
+  args: WEB_REFERENCE_ARGS
 })
 try {
   await prepareDevice(world, 'table-probe')
@@ -63,7 +64,7 @@ try {
   await page.evaluate(() => document.fonts.ready)
   const report = await page.evaluate(() => {
     const table = document.querySelector('.chat-streamdown table') as HTMLElement
-    const rect = (el: Element) => {
+    const rect = (el: Element | Range) => {
       const r = el.getBoundingClientRect()
       return [r.left, r.top, r.width, r.height].map((n) => Math.round(n * 100) / 100)
     }

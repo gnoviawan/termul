@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { type Browser, chromium, type Page } from 'playwright'
 import { DIST_WEB } from '../parity/shoot-web'
+import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import type { SeededChat } from './seed'
 
 export interface WebChat {
@@ -37,10 +38,7 @@ export async function openWebChat(
   const browser = await chromium.launch({
     headless: opts.headless ?? true,
     env: opts.env,
-    args: [
-      '--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks',
-      ...(opts.launchArgs ?? [])
-    ]
+    args: [...WEB_REFERENCE_ARGS, ...(opts.launchArgs ?? [])]
   })
   const context = await browser.newContext({
     viewport: { width: opts.width, height: opts.height },

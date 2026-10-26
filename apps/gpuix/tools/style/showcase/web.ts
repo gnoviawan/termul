@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolveThemeTokens } from '@/lib/themes/resolve-theme-tokens'
+import { WEB_REFERENCE_ARGS } from '../../shared/chromium'
 import { compileTailwind, REPO } from '../tailwind-css'
 import { allClasses, cellRect, SWATCHES, type SwatchNode } from './swatches'
 
@@ -77,7 +78,7 @@ export async function serveShowcase(themeId: string) {
 export async function screenshotWeb(out: string, themeId: string): Promise<void> {
   const server = await serveShowcase(themeId)
   const { chromium } = await import(join(REPO, 'node_modules/playwright/index.mjs'))
-  const browser = await chromium.launch()
+  const browser = await chromium.launch({ args: WEB_REFERENCE_ARGS })
   try {
     const page = await browser.newPage({
       viewport: { width: 1280, height: 800 },

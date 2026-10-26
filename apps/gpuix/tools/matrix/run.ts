@@ -20,6 +20,7 @@ import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { cropPng, diffPngs, type Rect } from '../parity/diff'
 import { READY_TIMEOUT_MS, windowOrigin, withGpuix } from '../parity/shoot-gpuix'
 import { DIST_WEB } from '../parity/shoot-web'
+import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import { pickPort } from '../shared/seed'
 import { activateWindow, type Driver, gpuixDriver, type Point, webDriver } from './drive'
 import { writeReport } from './report'
@@ -313,7 +314,7 @@ async function main(): Promise<void> {
   console.error(`[matrix] seeding server on ${port} under ${root}`)
   const world = await createWorld({ port, root })
   const browser = await chromium.launch({
-    args: ['--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks']
+    args: WEB_REFERENCE_ARGS
   })
   try {
     for (const surface of surfaces) {

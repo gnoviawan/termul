@@ -14,6 +14,7 @@ import { PNG } from 'pngjs'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { diffPngs } from '../parity/diff'
 import { DIST_WEB } from '../parity/shoot-web'
+import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import { type GpuixApp, withScene } from './scene/session'
 import { STATE_ROOT, seedComposerServer } from './seed'
 
@@ -122,7 +123,7 @@ const gpuixEditors = new Map<State, Box>()
 try {
   let rootBox: Box
   const browser = await chromium.launch({
-    args: ['--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks']
+    args: WEB_REFERENCE_ARGS
   })
   try {
     const context = await browser.newContext({

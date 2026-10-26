@@ -24,6 +24,7 @@ import { buildClient } from '../../build'
 import { WINDOW_HEIGHT, WINDOW_WIDTH } from '../../src/window'
 import { READY_TIMEOUT_MS, withGpuix } from '../parity/shoot-gpuix'
 import { DIST_WEB } from '../parity/shoot-web'
+import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import { pickPort } from '../shared/seed'
 import { connectWs } from '../shared/ws'
 import { createWorld, prepareDevice, TOKEN, type World } from './world'
@@ -90,7 +91,7 @@ async function webRound(
   mode: Mode
 ): Promise<Typed> {
   const browser = await chromium.launch({
-    args: ['--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks']
+    args: WEB_REFERENCE_ARGS
   })
   try {
     const context = await browser.newContext({

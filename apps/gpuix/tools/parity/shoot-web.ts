@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { chromium, type Page } from 'playwright'
 import { REPO_DIR } from '../../build'
+import { WEB_REFERENCE_ARGS } from '../shared/chromium'
 import type { TestServer } from './server'
 
 export const READY_TIMEOUT_MS = 30_000
@@ -39,7 +40,7 @@ export async function withWeb<T>(opts: WebSessionOptions, body: (session: WebSes
     )
   }
   const browser = await chromium.launch({
-    args: ['--disable-features=LocalNetworkAccessChecks,PrivateNetworkAccessChecks']
+    args: WEB_REFERENCE_ARGS
   })
   try {
     const context = await browser.newContext({

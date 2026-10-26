@@ -14,6 +14,7 @@ import { APP_DIR, REPO_DIR } from '../../../build'
 import { PERCEPTUAL_THRESHOLD } from '../../parity/diff'
 import type { TestServer } from '../../parity/server'
 import { READY_TIMEOUT_MS, withGpuix } from '../../parity/shoot-gpuix'
+import { WEB_REFERENCE_ARGS } from '../../shared/chromium'
 import { buildGpuixGallery, buildWebGallery } from './build'
 import {
   GALLERY_HEIGHT,
@@ -83,7 +84,7 @@ const server = Bun.serve({
 })
 
 const { chromium } = await import(path.join(REPO_DIR, 'node_modules/playwright/index.mjs'))
-const browser = await chromium.launch()
+const browser = await chromium.launch({ args: WEB_REFERENCE_ARGS })
 const rows: string[] = []
 try {
   for (const theme of values.theme) {
