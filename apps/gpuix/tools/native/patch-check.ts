@@ -17,6 +17,9 @@
  *   run-padding            after a chip padded by CODE_PAD moves 2 x CODE_PAD
  *   0006-focus-events      `focus-check.ts`: an active window gets the DOM's
  *                          focus and blur sequence, autoFocus included
+ *   0013-markdown-automation-text
+ *                          the automation tree and getAllText() carry each
+ *                          <markdown>'s rendered text
  *   0010-table-cell-metrics
  *                          a table row is 2 x mdTableCellPaddingY + mdTableLineHeight
  *                          tall and the header row paints tableHeaderBg
@@ -25,6 +28,12 @@
  *                          19.5 px apart, each line's ink where Chromium puts it
  *   run-width              `typo-check.ts`: a line's ink width is Chromium's
  *                          (font-render-hinting slight) within 0.3%
+ *   zed/0006 + gpuix/0007  `typo-check.ts`: inline-code washes, mid-line and
+ *   inline-code-wash       leading a line, start and end within 1 px of
+ *                          Chromium's chips
+ *   0012-table-columns-rules
+ *                          `typo-check.ts`: fullscreen table labels start and
+ *                          rules sit within 1 px of Chromium's
  *   0008-prompt-for-new-path
  *                          `dialog-check.ts`: the portal's save dialog returns
  *                          the path typed into it
@@ -45,7 +54,15 @@ import {
   startXvfb,
   windowOrigin
 } from '../parity/shoot-gpuix'
-import { BLUR, CODE_PAD, type Sample, SCENE, type SceneReady, TABLE } from './samples'
+import {
+  type AutomationNode,
+  BLUR,
+  CODE_PAD,
+  type Sample,
+  SCENE,
+  type SceneReady,
+  TABLE
+} from './samples'
 import type { TypoRow } from './typo-samples'
 
 const { values } = parseArgs({
@@ -203,6 +220,11 @@ const tableHeight = (() => {
   return b ? Math.round(b.height - 16) : 0
 })()
 const tableRow = 2 * TABLE.padY + TABLE.lineHeight
+const markdownTexts = (function walk(node: AutomationNode | null | undefined): string[] {
+  if (!node) return []
+  const own = node.type === 'markdown' && node.text !== undefined ? [node.text] : []
+  return [...own, ...(node.children ?? []).flatMap(walk)]
+})(ready.tree)
 const handleId = ready.handle?.kind === 'x11' ? ready.handle.id : null
 const handleWindow =
   typeof handleId === 'number'
@@ -279,6 +301,18 @@ const checks = [
     what: `tableHeaderBg fills the header row, ${tableRow} px tall (rows)`,
     value: tableFillRows,
     ok: Math.abs(tableFillRows - tableRow) <= 1
+  },
+  {
+    patch: '0013-markdown-automation-text',
+    what: 'the automation tree gives each <markdown> its rendered text (link, chip run, table rows)',
+    value: markdownTexts,
+    ok: ['lllllll', 'MMM', 'A\tB\nc\td'].every((text) => markdownTexts.includes(text))
+  },
+  {
+    patch: '0013-markdown-automation-text',
+    what: 'getAllText() includes the <markdown> text',
+    value: ready.allText.filter((text) => text.includes('lllllll')),
+    ok: ready.allText.includes('lllllll')
   },
   {
     patch: '0004-input-unfocused-scroll',

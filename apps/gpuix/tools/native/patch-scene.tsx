@@ -83,7 +83,13 @@ function App() {
       ).getNativeWindowHandle?.()
       writeFileSync(
         `${readyFile}.tmp`,
-        JSON.stringify({ bounds, handle: handle ?? null, pid: process.pid })
+        JSON.stringify({
+          bounds,
+          handle: handle ?? null,
+          pid: process.pid,
+          allText: renderer.getAllText(),
+          tree: JSON.parse(renderer.getAutomationTree())
+        })
       )
       renameSync(`${readyFile}.tmp`, readyFile as string)
     }, 800)

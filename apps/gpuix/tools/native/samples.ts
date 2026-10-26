@@ -26,4 +26,12 @@ export interface SceneReady {
   bounds: Record<Sample, { x: number; y: number; width: number; height: number } | null>
   handle: { kind: string; id?: number | null } | null
   pid: number
+  /** `getAllText()` and `getAutomationTree()` as the scene saw them. */
+  allText: string[]
+  tree: AutomationNode | null
+}
+export interface AutomationNode {
+  type: string
+  text?: string
+  children?: AutomationNode[]
 }
