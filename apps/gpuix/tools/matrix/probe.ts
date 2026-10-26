@@ -60,7 +60,7 @@ try {
         return route.fulfill({ path: file })
       return route.continue()
     })
-    if (surface.reference === 'web-host-local') await grantHostLocal(context, world)
+    await grantHostLocal(context, world)
     await context.addInitScript(
       ({ token, deviceId }) => {
         localStorage.setItem('termul.webAuthToken', token)

@@ -1,11 +1,12 @@
 /**
- * The `web-host-local` reference: the web client shown the capabilities the
- * launched GPUIX app has. termul-server writes a host-local credential to
- * `<state dir>/host-local.token` at start; a client that presents it at
- * `authenticate` gets `hostLocal` and with it the SSH section and Claude
- * account management. A browser tab never presents it, so the matrix adds it
- * to the web client's handshake frames through a Playwright WebSocket route.
- * The web bundle is unchanged; the route exists only in this harness.
+ * Both clients get the capabilities the launched GPUIX app has.
+ * termul-server writes a host-local credential to `<state dir>/host-local.token`
+ * at start; a client that presents it at `authenticate` gets `hostLocal` and
+ * with it the SSH section and Claude account management. GPUIX reads it from
+ * its data dir, as the launched app does. A browser tab never presents it, so
+ * the matrix adds it to the web client's handshake frames through a Playwright
+ * WebSocket route. The web bundle is unchanged; the route exists only in this
+ * harness.
  */
 
 import { existsSync, readFileSync } from 'node:fs'

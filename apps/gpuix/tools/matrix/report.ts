@@ -82,7 +82,6 @@ function passed(run?: ClientRun): string {
 /** How the surface table names a reference that is not the plain web client. */
 const REFERENCE_LABEL: Record<Reference, string> = {
   web: '',
-  'web-host-local': 'web host-local ',
   tauri: 'tauri '
 }
 
@@ -247,7 +246,7 @@ export function renderMatrix(
 
   out.push('', '### References', '')
   out.push(
-    'Every surface is compared against the DOM web client in Chromium except these (`Reference` in `types.ts`).',
+    'Every surface is compared against the DOM web client in Chromium, holding the host-local credential the launched GPUIX app has, except these (`Reference` in `types.ts`).',
     ''
   )
   out.push('| Surface | Reference | Status |')
@@ -257,7 +256,7 @@ export function renderMatrix(
 
   out.push('', '### Surfaces', '')
   out.push(
-    'The Reference and GPUIX columns count passed actions plus checks over the total. The reference is the web client unless the cell names another: `web host-local` is the web client with the host-local credential, `tauri` the desktop app, which runs the actions but has no checks because its text cannot be read. Mismatch is exact / perceptual for the last step: the full 1280x800 frame, and the region the surface names (measured in the web client, or a fixed rectangle for the desktop app, cropped from both frames).',
+    'The Reference and GPUIX columns count passed actions plus checks over the total. The reference is the web client, holding the host-local credential the launched GPUIX app has, unless the cell names `tauri`: the desktop app, which runs the actions but has no checks because its text cannot be read. Mismatch is exact / perceptual for the last step: the full 1280x800 frame, and the region the surface names (measured in the web client, or a fixed rectangle for the desktop app, cropped from both frames).',
     ''
   )
   out.push(

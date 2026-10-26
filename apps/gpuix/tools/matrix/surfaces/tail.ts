@@ -330,7 +330,6 @@ const LONG_TAIL: Surface[] = [
     id: 'ssh.workspace',
     area: 'ssh',
     title: 'SSH profiles and sessions',
-    reference: 'web-host-local',
     prepare: seedSshProfiles,
     steps: [
       step('a-sidebar', [], see('What should we do in alpha?', 'staging', 'build-box')),
@@ -344,7 +343,6 @@ const LONG_TAIL: Surface[] = [
     id: 'settings.accounts-claude',
     area: 'settings',
     title: 'Claude account sign-in',
-    reference: 'web-host-local',
     roi: '[role="dialog"]',
     steps: [
       DASHBOARD,
