@@ -24,10 +24,10 @@ export const PROSE_LINE = 21
 
 /**
  * `.chat-streamdown` inline-code chip: 0.88em glyphs, `padding: 0.08em 0.3em`,
- * radius 0.25rem. The native wash is paint only, so the 0.3em (3.7px at
- * 12.32px) reaches past the glyphs without pushing the neighbours as CSS does.
- * The 0.08em top and bottom on Paper Mono's 1.2em content box leave about 2px
- * of the 21px line above and below.
+ * radius 0.25rem. The 0.3em (3.7px at 12.32px) is laid out on both sides of
+ * the chip and pushes its neighbours as CSS does (patches zed/0004 and
+ * gpuix/0007). The 0.08em top and bottom on Paper Mono's 1.2em content box
+ * leave about 2px of the 21px line above and below.
  */
 const PROSE_CHIP = {
   mdInlineCodeRadius: 4,
@@ -84,7 +84,8 @@ const cache = new Map<
  *   need the patched addon (patch 0002); the published one keeps body-size
  *   chips, text-coloured links and upright quotes. Headings take
  *   Streamdown's utility sizes (`text-3xl` .. `text-lg`): utilities beat
- *   index.css's components layer.
+ *   index.css's components layer. Table rules are Streamdown's
+ *   `divide-y divide-border`: under the header and between body rows.
  *   Native markdown tints list markers and the quote rail with `accent`; the
  *   web's markers are the text colour, so accent is the foreground.
  * - `tableFullscreen`: the table in the fullscreen view, which the web
@@ -92,7 +93,9 @@ const cache = new Map<
  *   unscaled: cells `px-4 py-2` (16 by 8 px) on a 20px line, a `bg-muted/80`
  *   header, and inline code `rounded bg-muted px-1.5 py-0.5 font-mono
  *   text-sm` (14px glyphs, 6px side padding, the wash the full line tall).
- *   Measured by `tools/chat/table-probe.ts`.
+ *   The table has no `divide-y`, so only the body rows are ruled (`tbody`'s
+ *   `divide-border`), with no rule under the header. Measured by
+ *   `tools/chat/table-probe.ts`.
  * - `quote`: a quote's content, muted and italic like Streamdown's
  *   `text-muted-foreground italic`.
  * - `thought`: the reasoning body (`.thought-markdown`), 12px muted.
@@ -127,6 +130,7 @@ export function transcriptThemes(themeId: string) {
       ...base,
       // `thead` is `bg-muted/80` and each `th` adds `bg-muted/35`: muted at 87%.
       tableHeaderBg: tokenColor('muted/87'),
+      tableRule: tokenColor('border'),
       metrics: {
         mdTextSize: PROSE_TEXT,
         mdLineHeight: PROSE_LINE,
@@ -149,6 +153,7 @@ export function transcriptThemes(themeId: string) {
       ...base,
       codeWash: tokenColor('muted'),
       tableHeaderBg: tokenColor('muted/80'),
+      tableRule: tokenColor('border'),
       metrics: {
         mdTextSize: PROSE_TEXT,
         mdLineHeight: 20,
@@ -157,6 +162,7 @@ export function transcriptThemes(themeId: string) {
         mdTableCellPaddingY: 8,
         mdTableLineHeight: 20,
         mdTableHeaderWeight: 600,
+        mdTableHeaderRule: 0,
         mdInlineCodeRadius: 4,
         mdInlineCodeScale: 1,
         mdInlineCodePaddingX: 6,

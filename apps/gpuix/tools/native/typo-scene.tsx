@@ -10,7 +10,18 @@ import { type PublicInstance, render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
 import { transcriptThemes } from '../../src/chat/theme'
 import { registerTermulFonts } from '../../src/style/fonts'
-import { FAMILY, TABLE_SAMPLE, TEXT_SAMPLES, TYPO_WINDOW, tableMarkdown } from './typo-samples'
+import {
+  FAMILY,
+  FULLSCREEN_TABLE_SAMPLE,
+  RULE_COLOR,
+  TABLE_SAMPLE,
+  TEXT_SAMPLES,
+  TYPO_WINDOW,
+  tableMarkdown,
+  WASH_COLOR,
+  WASH_LEFT,
+  WASH_SAMPLES
+} from './typo-samples'
 
 const [readyFile] = process.argv.slice(2)
 
@@ -26,7 +37,7 @@ function App() {
     if (!fontsReady) return
     const timer = setTimeout(() => {
       const bounds = Object.fromEntries(
-        [...TEXT_SAMPLES, TABLE_SAMPLE].map((s) => {
+        [...TEXT_SAMPLES, TABLE_SAMPLE, FULLSCREEN_TABLE_SAMPLE].map((s) => {
           const node = refs.current[s.id]
           return [s.id, node ? renderer.getElementBounds?.(node.id) : null]
         })
@@ -87,6 +98,43 @@ function App() {
       >
         <markdown source={tableMarkdown()} theme={transcriptThemes('termul').prose} />
       </div>
+      <div
+        ref={(node: PublicInstance | null) => {
+          refs.current[FULLSCREEN_TABLE_SAMPLE.id] = node
+        }}
+        style={{
+          position: 'absolute',
+          left: FULLSCREEN_TABLE_SAMPLE.left,
+          top: FULLSCREEN_TABLE_SAMPLE.top,
+          width: FULLSCREEN_TABLE_SAMPLE.width,
+          borderWidth: 1,
+          borderColor: RULE_COLOR
+        }}
+      >
+        <markdown
+          source={tableMarkdown()}
+          theme={{ ...transcriptThemes('termul').tableFullscreen, tableRule: RULE_COLOR }}
+        />
+      </div>
+      {WASH_SAMPLES.map((s) => (
+        <div
+          key={s.id}
+          style={{
+            position: 'absolute',
+            left: WASH_LEFT,
+            top: s.top,
+            width: TYPO_WINDOW.width - 32
+          }}
+        >
+          <markdown
+            source={s.text}
+            theme={{
+              ...transcriptThemes('termul')[s.theme],
+              codeWash: WASH_COLOR
+            }}
+          />
+        </div>
+      ))}
     </div>
   )
 }

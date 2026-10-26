@@ -3,7 +3,7 @@
  * checker. Every sample sits at a fixed window position in both clients, so
  * the checker compares the two frames in one coordinate system.
  */
-export const TYPO_WINDOW = { width: 960, height: 600 } as const
+export const TYPO_WINDOW = { width: 960, height: 900 } as const
 export const FAMILY = 'Inter Variable'
 
 /** Words of x-height letters only: every wrapped line has the same ink band. */
@@ -83,10 +83,35 @@ export const TABLE_SAMPLE = {
   ]
 } as const
 
+/**
+ * The same table in the fullscreen view, which the web portals outside
+ * `.chat-streamdown`: `w-full border-collapse border border-border`, cells
+ * `px-4 py-2`, rules between body rows only (`tbody` `divide-y`), chips
+ * `px-1.5 py-0.5 text-sm`. Rules paint in RULE_COLOR in both clients, so the
+ * checker finds them.
+ */
+export const FULLSCREEN_TABLE_SAMPLE = {
+  id: 'tableFullscreen',
+  left: 16,
+  top: 690,
+  width: 900
+} as const
+export const RULE_COLOR = '#00ff00'
+
 export function tableMarkdown(): string {
   const [head, ...body] = TABLE_SAMPLE.rows
   const rule = TABLE_SAMPLE.align.map((a) => (a === 'center' ? ':---:' : '---'))
   return [head, rule, ...body].map((cells) => `| ${cells.join(' | ')} |`).join('\n')
+}
+
+function fullscreenTableHtml(): string {
+  const [head, ...body] = TABLE_SAMPLE.rows
+  const cell = (tag: string, text: string, col: number) =>
+    `<${tag} style="text-align:${TABLE_SAMPLE.align[col]}">${text.replace(/`([^`]+)`/g, '<code>$1</code>')}</${tag}>`
+  const row = (tag: string, cells: readonly string[]) =>
+    `<tr>${cells.map((c, i) => cell(tag, c, i)).join('')}</tr>`
+  const { id, left, top, width } = FULLSCREEN_TABLE_SAMPLE
+  return `<div id="${id}" class="fs" style="position:absolute;left:${left}px;top:${top}px;width:${width}px"><table><thead>${row('th', head)}</thead><tbody>${body.map((r) => row('td', r)).join('')}</tbody></table></div>`
 }
 
 function tableHtml(): string {
@@ -97,6 +122,63 @@ function tableHtml(): string {
     `<tr>${cells.map((c, i) => cell(tag, c, i)).join('')}</tr>`
   const { id, left, top, width } = TABLE_SAMPLE
   return `<div id="${id}" class="card" style="position:absolute;left:${left}px;top:${top}px;width:${width - 2}px"><table><thead>${row('th', head)}</thead><tbody>${body.map((r) => row('td', r)).join('')}</tbody></table></div>`
+}
+
+/**
+ * Inline-code chips in one prose line, washed in a colour the checker finds:
+ * `.chat-streamdown`'s chip (0.88em, `padding: 0.08em 0.3em`) and the
+ * fullscreen table's (`text-sm px-1.5 py-0.5`, outside `.chat-streamdown`).
+ * The checker compares each wash's left and right edge.
+ */
+export const WASH_COLOR = '#ff0000'
+const MID_CHIPS = 'Reject `/c/` with no id, then `WorkspaceDashboard` mounts.'
+/** A chip that starts its line: the case GPUI measured from the first glyph. */
+const LEADING_CHIP = '`/c/:sessionId` opens `ChatRoute` in the pane.'
+const PROSE_CHIP = 'font-size:.88em;padding:.08em .3em'
+const FULLSCREEN_CHIP = 'font-size:14px;padding:2px 6px'
+export interface WashSample {
+  id: string
+  theme: 'prose' | 'tableFullscreen'
+  top: number
+  lineHeight: number
+  text: string
+  /** The web chip's own CSS, after `.chat-streamdown` or the fullscreen classes. */
+  css: string
+}
+export const WASH_LEFT = 16
+export const WASH_SAMPLES: readonly WashSample[] = [
+  { id: 'washProse', theme: 'prose', top: 560, lineHeight: 21, text: MID_CHIPS, css: PROSE_CHIP },
+  {
+    id: 'washProseLead',
+    theme: 'prose',
+    top: 590,
+    lineHeight: 21,
+    text: LEADING_CHIP,
+    css: PROSE_CHIP
+  },
+  {
+    id: 'washFullscreen',
+    theme: 'tableFullscreen',
+    top: 620,
+    lineHeight: 20,
+    text: MID_CHIPS,
+    css: FULLSCREEN_CHIP
+  },
+  {
+    id: 'washFullscreenLead',
+    theme: 'tableFullscreen',
+    top: 650,
+    lineHeight: 20,
+    text: LEADING_CHIP,
+    css: FULLSCREEN_CHIP
+  }
+]
+
+function washHtml(): string {
+  return WASH_SAMPLES.map(
+    ({ id, top, lineHeight, text }) =>
+      `<div id="${id}" class="${id}" style="position:absolute;left:${WASH_LEFT}px;top:${top}px;font-size:14px;line-height:${lineHeight}px;white-space:pre">${text.replace(/`([^`]+)`/g, '<code>$1</code>')}</div>`
+  ).join('')
 }
 
 /** One `typo-check.ts` result; `patch-check.ts` prints them with its own rows. */
@@ -121,7 +203,10 @@ export function typoHtml(fontUrl: string, monoUrl: string): string {
         ? Array.from({ length: s.stack }, () => `<div>${s.text}</div>`).join('')
         : `<span>${s.text}</span>`
       return `<div id="${s.id}" style="${style}">${body}</div>`
-    }).join('\n') + tableHtml()
+    }).join('\n') +
+    tableHtml() +
+    fullscreenTableHtml() +
+    washHtml()
   return `<!doctype html><html><head><style>
 @font-face{font-family:'${FAMILY}';src:url(${fontUrl}) format('woff2');font-weight:100 900}
 @font-face{font-family:'Paper Mono';src:url(${monoUrl}) format('woff2');font-weight:100 800}
@@ -132,6 +217,13 @@ th,td{padding:4.8px 8px}
 th{font-weight:600}
 tbody tr{border-top:1px solid #444}
 code{font-family:'Paper Mono',monospace;font-size:.88em;padding:.08em .3em;font-feature-settings:normal;font-variant-ligatures:common-ligatures}
+${WASH_SAMPLES.map(({ id, css }) => `.${id} code{${css};border-radius:.25rem;background:${WASH_COLOR}}`).join('\n')}
+.fs{font-size:14px;line-height:20px}
+.fs table{border:1px solid ${RULE_COLOR}}
+.fs th,.fs td{padding:8px 16px;white-space:nowrap}
+.fs tbody tr{border-top:0}
+.fs tbody tr+tr{border-top:1px solid ${RULE_COLOR}}
+.fs code{font-size:14px;padding:2px 6px;border-radius:.25rem}
 body{font-family:'${FAMILY}',sans-serif;font-feature-settings:"cv11","ss01","ss03","cv02";font-variant-ligatures:contextual}
 </style></head><body>${blocks}</body></html>`
 }

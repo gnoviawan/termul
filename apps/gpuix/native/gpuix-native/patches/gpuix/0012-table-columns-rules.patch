@@ -1,0 +1,142 @@
+diff --git a/packages/native/src/markdown/render.rs b/packages/native/src/markdown/render.rs
+index 4533cfa..bd5c3d5 100644
+--- a/packages/native/src/markdown/render.rs
++++ b/packages/native/src/markdown/render.rs
+@@ -536,9 +536,10 @@ fn render_code_block(language: Option<&str>, code: &str, ctx: &mut MdContext) ->
+ /// A GFM table with the frameless "flat hairline" chrome Comet uses: 1px rules
+ /// under the header and between rows, no outer box, no header fill, no rounding.
+ ///
+-/// Column widths resolve the way the CSS does: each cell is
+-/// `flex: <max-content> <max-content> 0` with `min-width: min(max-content, 96px)`,
+-/// so widths are content-proportional with a readable per-column floor. Naturals
++/// Column widths resolve the way CSS auto table layout does: each cell is
++/// `flex: <max-content> 1 <max-content>` (padding included) with
++/// `min-width: min(max-content, 96px)`, so the table's spare width is shared in
++/// proportion to each column's max-content width, with a readable floor. Naturals
+ /// come from shaping each cell unwrapped; gpui's line-layout cache makes repeat
+ /// frames cheap. When even the floors no longer fit, the rows overflow and the
+ /// table scrolls horizontally instead of crushing every column.
+@@ -566,7 +567,7 @@ fn render_table(
+     // Consume a sub-key up front: a table whose cells are all empty renders no
+     // text and would otherwise share a scroll id with the next such table.
+     let table_sub = ctx.take_sub();
+-    let hairline = hairline(&theme, 0.10);
++    let rule = theme.table_rule.unwrap_or_else(|| hairline(&theme, 0.10));
+ 
+     // Flatten every cell once and take per-column max-content widths.
+     let text_system = window.text_system();
+@@ -624,8 +625,13 @@ fn render_table(
+         .w_full()
+         .min_w(px(geo.min_table_width));
+     for (row_ix, row) in flats.iter().enumerate() {
+-        if row_ix > 0 {
+-            inner = inner.child(div().flex_none().h(px(TABLE_DIVIDER)).w_full().bg(hairline));
++        let rule_height = if has_header && row_ix == 1 {
++            m.md_table_header_rule
++        } else {
++            TABLE_DIVIDER
++        };
++        if row_ix > 0 && rule_height > 0.0 {
++            inner = inner.child(div().flex_none().h(px(rule_height)).w_full().bg(rule));
+         }
+         let mut row_el = div().flex().flex_row();
+         if let (true, 0, Some(fill)) = (has_header, row_ix, theme.table_header_bg) {
+@@ -634,8 +640,8 @@ fn render_table(
+         for (col, cell_flat) in row.iter().enumerate() {
+             let mut cell = div()
+                 .flex_grow(geo.naturals[col])
+-                .flex_shrink(geo.naturals[col])
+-                .flex_basis(px(0.0))
++                .flex_shrink(1.0)
++                .flex_basis(px(geo.naturals[col]))
+                 .min_w(px(geo.minimums[col]))
+                 .px(px(m.md_table_cell_padding))
+                 .py(px(pad_y))
+diff --git a/packages/native/src/theme.rs b/packages/native/src/theme.rs
+index 8425f5c..8a1d969 100644
+--- a/packages/native/src/theme.rs
++++ b/packages/native/src/theme.rs
+@@ -242,6 +242,8 @@ pub struct Metrics {
+     pub md_table_line_height: f32,
+     /// Header row font weight.
+     pub md_table_header_weight: f32,
++    /// Height of the rule under the header row; zero draws none.
++    pub md_table_header_rule: f32,
+     /// Width below which a column stops shrinking; wider content wraps.
+     pub md_table_min_column_width: f32,
+     /// Floor for a column's max-content share, so a short column beside a prose
+@@ -323,6 +325,7 @@ impl Metrics {
+         set(&mut self.md_table_cell_padding_y, o.md_table_cell_padding_y);
+         set(&mut self.md_table_line_height, o.md_table_line_height);
+         set(&mut self.md_table_header_weight, o.md_table_header_weight);
++        set(&mut self.md_table_header_rule, o.md_table_header_rule);
+         set(
+             &mut self.md_table_min_column_width,
+             o.md_table_min_column_width,
+@@ -398,6 +401,7 @@ impl Metrics {
+             self.md_table_cell_padding_y,
+             self.md_table_line_height,
+             self.md_table_header_weight,
++            self.md_table_header_rule,
+             self.md_table_min_column_width,
+             self.md_table_min_column_content,
+             self.md_inline_code_radius,
+@@ -447,6 +451,7 @@ impl Default for Metrics {
+             md_table_cell_padding_y: -1.0,
+             md_table_line_height: 0.0,
+             md_table_header_weight: 700.0,
++            md_table_header_rule: 1.0,
+             md_table_min_column_width: 96.0,
+             md_table_min_column_content: 48.0,
+             md_inline_code_radius: 4.5,
+@@ -493,6 +498,8 @@ pub struct Theme {
+     pub code_wash: Hsla,
+     /// Fill behind a markdown table's header row. Unset, no fill.
+     pub table_header_bg: Option<Hsla>,
++    /// Rules between markdown table rows. Unset, the text colour at 10%.
++    pub table_rule: Option<Hsla>,
+     /// Markdown link text. Unset, links keep the text colour.
+     pub link: Option<Hsla>,
+     /// Markdown link underline. Unset, `text_muted`.
+@@ -534,6 +541,7 @@ impl Theme {
+             code_text: oklch(0.811, 0.111, 293.571),
+             code_wash: with_alpha(oklch(0.702, 0.183, 293.541), 0.12),
+             table_header_bg: None,
++            table_rule: None,
+             link: None,
+             link_underline: None,
+             link_weight: None,
+@@ -562,6 +570,7 @@ impl Theme {
+             code_text: oklch(0.491, 0.27, 292.581),
+             code_wash: with_alpha(oklch(0.541, 0.281, 293.009), 0.10),
+             table_header_bg: None,
++            table_rule: None,
+             link: None,
+             link_underline: None,
+             link_weight: None,
+@@ -594,6 +603,9 @@ impl Theme {
+         if let Some(color) = o.table_header_bg.as_deref().and_then(crate::color::parse_color_rgba) {
+             self.table_header_bg = Some(color.into());
+         }
++        if let Some(color) = o.table_rule.as_deref().and_then(crate::color::parse_color_rgba) {
++            self.table_rule = Some(color.into());
++        }
+         if let Some(color) = o.link.as_deref().and_then(crate::color::parse_color_rgba) {
+             self.link = Some(color.into());
+         }
+@@ -725,6 +737,7 @@ pub struct ThemeOverride {
+     pub code_text: Option<String>,
+     pub code_wash: Option<String>,
+     pub table_header_bg: Option<String>,
++    pub table_rule: Option<String>,
+     pub link: Option<String>,
+     pub link_underline: Option<String>,
+     pub link_weight: Option<f64>,
+@@ -770,6 +783,7 @@ pub struct MetricsOverride {
+     pub md_table_cell_padding_y: Option<f64>,
+     pub md_table_line_height: Option<f64>,
+     pub md_table_header_weight: Option<f64>,
++    pub md_table_header_rule: Option<f64>,
+     pub md_table_min_column_width: Option<f64>,
+     pub md_table_min_column_content: Option<f64>,
+     pub md_inline_code_radius: Option<f64>,

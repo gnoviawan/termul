@@ -30,13 +30,17 @@ import {
   windowOrigin
 } from '../parity/shoot-gpuix'
 import {
+  FULLSCREEN_TABLE_SAMPLE,
   TABLE_SAMPLE,
   TEXT_SAMPLES,
   type TextSample,
   TYPO_WINDOW,
   type TypoReady,
   type TypoRow,
-  typoHtml
+  typoHtml,
+  WASH_LEFT,
+  WASH_SAMPLES,
+  type WashSample
 } from './typo-samples'
 
 const { values } = parseArgs({
@@ -190,8 +194,10 @@ for (const s of TEXT_SAMPLES) {
   })
 }
 /** x where each header label's ink starts: ink runs on the header row, split at gaps over 12 px. */
-function headerStarts(png: Png): number[] {
-  const { left, top, width } = TABLE_SAMPLE
+function headerStarts(
+  png: Png,
+  { left, top, width }: { left: number; top: number; width: number }
+): number[] {
   const x0 = left + 2
   const x1 = left + width - 2
   const tops = bandTops(png, {
@@ -216,15 +222,77 @@ function headerStarts(png: Png): number[] {
   }
   return starts
 }
-const gh = headerStarts(g)
-const wh = headerStarts(w)
-const dx = gh.map((x, i) => x - (wh[i] ?? Number.NaN))
+for (const [name, sample] of [
+  ['transcript', TABLE_SAMPLE],
+  ['fullscreen', FULLSCREEN_TABLE_SAMPLE]
+] as const) {
+  const gh = headerStarts(g, sample)
+  const wh = headerStarts(w, sample)
+  const dx = gh.map((x, i) => x - (wh[i] ?? Number.NaN))
+  rows.push({
+    patch: 'table-columns',
+    what: `${name} table header labels start at ${JSON.stringify(gh)} (Chromium ${JSON.stringify(wh)}), GPUIX minus Chromium (each within 1 px)`,
+    value: dx,
+    ok: gh.length === wh.length && dx.every((d) => Math.abs(d) <= 1)
+  })
+}
+/** Rows of the fullscreen table where RULE_COLOR spans most of its width: the outer border and the rules. */
+function ruleRows(png: Png): number[] {
+  const { left, top, width } = FULLSCREEN_TABLE_SAMPLE
+  const out: number[] = []
+  for (let y = top - 2; y < Math.min(H, top + 240); y++) {
+    let n = 0
+    for (let x = left; x < left + width; x++) {
+      const i = (y * png.width + x) * 4
+      if ((png.data[i + 1] ?? 0) > 150 && (png.data[i] ?? 0) < 90) n++
+    }
+    if (n > width / 2) out.push(y)
+  }
+  return out
+}
+const gr = ruleRows(g)
+const wr = ruleRows(w)
+const dr = gr.map((y, i) => y - (wr[i] ?? Number.NaN))
 rows.push({
-  patch: 'table-columns',
-  what: `transcript table header labels start at ${JSON.stringify(gh)} (Chromium ${JSON.stringify(wh)}), GPUIX minus Chromium (each within 1 px)`,
-  value: dx,
-  ok: gh.length === wh.length && dx.every((d) => Math.abs(d) <= 1)
+  patch: 'table-rules',
+  what: `fullscreen table rules at y ${JSON.stringify(gr)} (Chromium ${JSON.stringify(wr)}), GPUIX minus Chromium (each within 1 px)`,
+  value: dr,
+  ok: gr.length === wr.length && dr.every((d) => Math.abs(d) <= 1)
 })
+/**
+ * [left, right] of each run of columns holding the wash colour on a third of
+ * the sample's line or more (subpixel text fringes are red for a pixel or two).
+ */
+function washSpans(png: Png, s: WashSample): Array<[number, number]> {
+  const red = (x: number, y: number) => {
+    const i = (y * png.width + x) * 4
+    return (png.data[i] ?? 0) > 120 && (png.data[i + 1] ?? 0) < 70 && (png.data[i + 2] ?? 0) < 70
+  }
+  const spans: Array<[number, number]> = []
+  for (let x = WASH_LEFT; x < W - 8; x++) {
+    let rows = 0
+    for (let y = s.top; y < s.top + s.lineHeight; y++) if (red(x, y)) rows++
+    if (rows < s.lineHeight / 3) continue
+    const last = spans.at(-1)
+    if (last && x - last[1] <= 1) last[1] = x
+    else spans.push([x, x])
+  }
+  return spans.filter(([l, r]) => r - l >= 3)
+}
+for (const s of WASH_SAMPLES) {
+  const gs = washSpans(g, s)
+  const ws = washSpans(w, s)
+  const dx = gs.flatMap(([l, r], i) => [
+    l - (ws[i]?.[0] ?? Number.NaN),
+    r - (ws[i]?.[1] ?? Number.NaN)
+  ])
+  rows.push({
+    patch: 'inline-code-wash',
+    what: `${s.id} chip washes span ${JSON.stringify(gs)} (Chromium ${JSON.stringify(ws)}), left and right edges GPUIX minus Chromium (each within 1 px)`,
+    value: dx,
+    ok: gs.length === ws.length && gs.length > 0 && dx.every((d) => Math.abs(d) <= 1)
+  })
+}
 for (const row of rows)
   console.log(`${row.ok ? 'PASS' : 'FAIL'} ${row.what}: ${JSON.stringify(row.value)}`)
 console.log(`screenshots ${gpuix.png} ${webPng}`)

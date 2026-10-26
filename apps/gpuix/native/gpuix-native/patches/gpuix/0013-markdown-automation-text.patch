@@ -1,0 +1,141 @@
+diff --git a/packages/native/src/markdown/parser.rs b/packages/native/src/markdown/parser.rs
+index bfe48d2..ee9c53a 100644
+--- a/packages/native/src/markdown/parser.rs
++++ b/packages/native/src/markdown/parser.rs
+@@ -83,6 +83,53 @@ impl BlockTree {
+     }
+ }
+ 
++/// The text a reader sees: one line per paragraph, heading, list item and
++/// table row, table cells separated by tabs, code blocks verbatim. Automation
++/// reads it as a `<markdown>` element's text.
++pub fn plain_text(source: &str) -> String {
++    let mut out = String::new();
++    for block in &parse(source).blocks {
++        push_block_text(block, &mut out);
++    }
++    out.truncate(out.trim_end().len());
++    out
++}
++
++fn push_runs_text(runs: &[InlineRun], out: &mut String) {
++    for run in runs {
++        out.push_str(&run.text);
++    }
++}
++
++fn push_block_text(block: &Block, out: &mut String) {
++    match block {
++        Block::Paragraph { runs } | Block::Heading { runs, .. } => {
++            push_runs_text(runs, out);
++            out.push('\n');
++        }
++        Block::CodeBlock { code, .. } => {
++            out.push_str(code);
++            if !code.ends_with('\n') {
++                out.push('\n');
++            }
++        }
++        Block::BlockQuote { children } => children.iter().for_each(|b| push_block_text(b, out)),
++        Block::List { items, .. } => items.iter().flatten().for_each(|b| push_block_text(b, out)),
++        Block::Table { header, rows, .. } => {
++            for row in std::iter::once(header).chain(rows).filter(|row| !row.is_empty()) {
++                for (ix, cell) in row.iter().enumerate() {
++                    if ix > 0 {
++                        out.push('\t');
++                    }
++                    push_runs_text(cell, out);
++                }
++                out.push('\n');
++            }
++        }
++        Block::Rule => {}
++    }
++}
++
+ fn options() -> Options {
+     Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS
+ }
+@@ -523,6 +570,15 @@ mod tests {
+         runs.iter().map(|r| r.text.as_str()).collect()
+     }
+ 
++    #[test]
++    fn plain_text_reads_like_the_rendered_markdown() {
++        let source = "# Routes\n\nReject `/c/` with **no** id.\n\n1. one\n2. [two](https://x)\n\n> quoted\n\n| A | B |\n|---|:-:|\n| `x` | y |\n\n```sh\nls -la\n```\n\n---\n";
++        assert_eq!(
++            plain_text(source),
++            "Routes\nReject /c/ with no id.\none\ntwo\nquoted\nA\tB\nx\ty\nls -la"
++        );
++    }
++
+     #[test]
+     fn parses_headings_at_every_level() {
+         let tree = parse("# One\n\n## Two\n\n###### Six");
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index ec19704..42c64ed 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -3048,8 +3048,8 @@ impl GpuixRenderer {
+ 
+ fn collect_text(id: u64, tree: &RetainedTree, texts: &mut Vec<String>) {
+     if let Some(element) = tree.elements.get(&id) {
+-        if let Some(ref content) = element.content {
+-            texts.push(content.clone());
++        if let Some(text) = element.automation_text() {
++            texts.push(text.into_owned());
+         }
+         for &child_id in &element.children {
+             collect_text(child_id, tree, texts);
+diff --git a/packages/native/src/retained_tree.rs b/packages/native/src/retained_tree.rs
+index fd4f7fc..db58c84 100644
+--- a/packages/native/src/retained_tree.rs
++++ b/packages/native/src/retained_tree.rs
+@@ -102,6 +102,19 @@ impl RetainedElement {
+         }
+     }
+ 
++    /// What automation reads as the element's text: its content, or for a
++    /// `<markdown>` the text its source renders to.
++    pub fn automation_text(&self) -> Option<std::borrow::Cow<'_, str>> {
++        if let Some(content) = &self.content {
++            return Some(content.as_str().into());
++        }
++        if self.element_type != "markdown" {
++            return None;
++        }
++        let source = self.custom_props().get("source")?.as_str()?;
++        Some(crate::markdown::parser::plain_text(source).into())
++    }
++
+     pub fn events(&self) -> &HashSet<String> {
+         &self.extras.as_deref().unwrap_or(&EMPTY_EXTRAS).events
+     }
+@@ -742,10 +755,10 @@ fn element_to_json(
+         );
+     }
+ 
+-    if let Some(ref content) = element.content {
++    if let Some(text) = element.automation_text() {
+         obj.insert(
+             "text".to_string(),
+-            serde_json::Value::String(content.clone()),
++            serde_json::Value::String(text.into_owned()),
+         );
+     }
+ 
+diff --git a/packages/native/src/test_renderer.rs b/packages/native/src/test_renderer.rs
+index 8a365f6..09301df 100644
+--- a/packages/native/src/test_renderer.rs
++++ b/packages/native/src/test_renderer.rs
+@@ -1276,8 +1276,8 @@ impl TestGpuixRenderer {
+ 
+     fn collect_text(id: u64, tree: &RetainedTree, texts: &mut Vec<String>) {
+         if let Some(element) = tree.elements.get(&id) {
+-            if let Some(ref content) = element.content {
+-                texts.push(content.clone());
++            if let Some(text) = element.automation_text() {
++                texts.push(text.into_owned());
+             }
+             for &child_id in &element.children {
+                 Self::collect_text(child_id, tree, texts);

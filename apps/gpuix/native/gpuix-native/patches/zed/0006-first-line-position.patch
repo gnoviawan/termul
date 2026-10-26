@@ -1,0 +1,21 @@
+diff --git a/crates/gpui/src/text_system/line_layout.rs b/crates/gpui/src/text_system/line_layout.rs
+index e7362f7..a3479cb 100644
+--- a/crates/gpui/src/text_system/line_layout.rs
++++ b/crates/gpui/src/text_system/line_layout.rs
+@@ -441,7 +441,15 @@ impl WrappedLineLayout {
+                 line_start_ix = line_end_ix;
+                 continue;
+             } else {
+-                let line_start_x = self.unwrapped_layout.x_for_index(line_start_ix);
++                // The first visual line starts at the line's origin, as in
++                // `closest_index_for_position`; its first glyph can sit right
++                // of it (a run with inline padding). Wrapped lines start at
++                // their first glyph.
++                let line_start_x = if ix == 0 {
++                    Pixels::ZERO
++                } else {
++                    self.unwrapped_layout.x_for_index(line_start_ix)
++                };
+                 let x = self.unwrapped_layout.x_for_index(index) - line_start_x;
+                 return Some(point(x, line_y));
+             }

@@ -35,11 +35,17 @@ declare module '@gpuix/native/host' {
     fontStyle?: 'normal' | 'italic'
     /** Fill behind a markdown table's header row (patch 0010-table-cell-metrics). Unset: none. */
     tableHeaderBg?: string
+    /** Markdown table rules (patch 0012-table-columns-rules). Unset: the text colour at 10%. */
+    tableRule?: string
   }
   interface GpuixMetrics {
     /** Inline-code glyph size as a fraction of the paragraph's, like CSS `0.88em`. */
     mdInlineCodeScale?: number
-    /** Paint-only reach of the inline-code wash past the glyphs, each side. */
+    /**
+     * Inline-code padding on each side (patches zed/0004 + gpuix/0007): laid out
+     * like CSS inline padding, so it pushes the text after the chip, and the
+     * wash covers it.
+     */
     mdInlineCodePaddingX?: number
     /** Inset of the inline-code wash from the top and bottom of the line box. */
     mdInlineCodeInsetY?: number
@@ -49,5 +55,7 @@ declare module '@gpuix/native/host' {
     mdTableLineHeight?: number
     /** Table header row weight (patch 0010). Unset: 700. */
     mdTableHeaderWeight?: number
+    /** Height of the rule under a table's header row (patch 0012); 0 draws none. Unset: 1. */
+    mdTableHeaderRule?: number
   }
 }
