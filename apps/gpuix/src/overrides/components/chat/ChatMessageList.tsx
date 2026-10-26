@@ -500,7 +500,7 @@ export function ChatMessageList({
             )
           })}
         </RowCountContext.Provider>
-        <div key="__end" ref={endRef} style={{ height: 1 }} />
+        <div key="__end" ref={endRef} style={{ height: 0 }} />
       </virtual-list>
       <div style={fade('top')} />
       <div style={fade('bottom')} />
