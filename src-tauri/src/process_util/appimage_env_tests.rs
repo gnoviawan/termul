@@ -288,9 +288,15 @@ fn edits_apply_to_std_command_and_explicit_env_wins() {
 fn child_sees_cleaned_env_end_to_end() {
     use std::process::Command;
 
-    // Pollute the CHILD command's env (not the process env), then apply the
-    // planned edits and confirm the child observes the cleaned values.
-    let plan = gated(&[("LD_LIBRARY_PATH", "/tmp/.mount_abc/usr/lib:/opt/host/lib")]);
+    // Drive the real cleaner (plan + apply) through `clean_appimage_env_with`
+    // with a map-backed getter, so the process env is never mutated. Pollute the
+    // CHILD command's env to match, then confirm the child observes the cleaned
+    // values.
+    let get = env(&[
+        ("APPDIR", "/tmp/.mount_abc"),
+        ("APPIMAGE", "/home/u/Termul.AppImage"),
+        ("LD_LIBRARY_PATH", "/tmp/.mount_abc/usr/lib:/opt/host/lib"),
+    ]);
 
     let mut command = Command::new("sh");
     command
@@ -299,7 +305,7 @@ fn child_sees_cleaned_env_end_to_end() {
         .env("LD_LIBRARY_PATH", "/tmp/.mount_abc/usr/lib:/opt/host/lib")
         .env("APPDIR", "/tmp/.mount_abc");
 
-    super::appimage_env::apply_edits(&mut command, &plan);
+    super::appimage_env::clean_appimage_env_with(&mut command, get);
 
     let output = command.output().expect("spawn sh");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "/opt/host/lib|");

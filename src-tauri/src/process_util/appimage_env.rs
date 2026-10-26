@@ -209,14 +209,32 @@ impl AppImageEnvCommand for tokio::process::Command {
 
 /// Scrub AppImage-only variables from a child `Command`'s environment.
 ///
-/// Reads the real process env, plans with [`plan_appimage_env_cleanup`], and
-/// applies the edits via [`AppImageEnvCommand`]. Call this **before** the
-/// caller's own explicit `.env(…)` calls so those explicit values still win.
-/// Outside an AppImage the plan is empty and the command is untouched. Emits one
-/// `debug` line naming the edited variables (never their values) when edits are
-/// applied.
+/// On non-Linux targets this returns the command untouched. On Linux it reads
+/// the real process env, plans with [`plan_appimage_env_cleanup`], and applies
+/// the edits via [`AppImageEnvCommand`]. Call this **before** the caller's own
+/// explicit `.env(…)` calls so those explicit values still win. Outside an
+/// AppImage the plan is empty and the command is untouched.
 pub(crate) fn clean_appimage_env<C: AppImageEnvCommand + ?Sized>(command: &mut C) -> &mut C {
-    let edits = plan_appimage_env_cleanup(|name| std::env::var_os(name));
+    // The AppImage runtime only exists on Linux. On macOS/Windows `APPDIR` and
+    // `APPIMAGE` could still be set for unrelated reasons, so refuse to touch a
+    // child's env there — keeping non-Linux behaviour byte-for-byte unchanged.
+    if !cfg!(target_os = "linux") {
+        return command;
+    }
+    clean_appimage_env_with(command, |name| std::env::var_os(name))
+}
+
+/// Plan and apply the AppImage env cleanup against a caller-supplied env getter.
+///
+/// [`clean_appimage_env`] wraps this with [`std::env::var_os`] after the Linux
+/// gate; tests drive it with a `HashMap`-backed getter so the real process env
+/// is never mutated. Emits one `debug` line naming the edited variables (never
+/// their values) when edits are applied.
+pub(crate) fn clean_appimage_env_with<C: AppImageEnvCommand + ?Sized>(
+    command: &mut C,
+    get: impl Fn(&str) -> Option<OsString>,
+) -> &mut C {
+    let edits = plan_appimage_env_cleanup(get);
     if edits.is_empty() {
         return command;
     }
