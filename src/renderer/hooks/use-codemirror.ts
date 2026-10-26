@@ -12,6 +12,7 @@ import {
 } from '@codemirror/view'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createTermulTheme } from '@/components/editor/codemirror-theme'
+import { editorFind, editorFindKeymap } from '@/components/editor/find/codemirror-find'
 import { requestSaveEditorFile } from '@/lib/editor-save'
 import { logFrontendError } from '@/lib/log-api'
 import {
@@ -265,6 +266,7 @@ export function useCodeMirror(
       indentOnInput(),
       history(),
       highlightSelectionMatches(),
+      editorFind(),
       Prec.highest(
         keymap.of([
           {
@@ -278,7 +280,7 @@ export function useCodeMirror(
           }
         ])
       ),
-      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+      keymap.of([...editorFindKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
       themeCompartment.current.of(createTermulTheme(isDark, syntaxColorsRef.current)),
       updateListener,
       scrollListener,

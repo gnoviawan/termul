@@ -58,6 +58,9 @@ Supporting these are shared layout, navigation, modal, and design-system compone
 - `editor/EditorToolbar.tsx` — markdown/code mode switching
 - `editor/TableOfContents.tsx` and `editor/TocPanel.tsx` — heading navigation
 - `editor/MermaidBlock.tsx` — diagram rendering for markdown workflows
+- `find/FindWidget.tsx` — floating VS Code-style find box: one field with match case / whole word / regex toggles (Alt+C/W/R), an "N of M" count, previous / next / close and an optional replace row. Presentational; the owner holds the query and moves the selection
+- `editor/find/codemirror-find.tsx` — find / replace and go to line for the CodeMirror editors (`CodeEditor`, `SSHFileEditor` via `useCodeMirror`): renders `FindWidget` and `GoToLineWidget` into zero-height CodeMirror panels (own React root, wrapped in `TooltipProvider` and `ErrorBoundary`) so they float over the text, plus VS Code keys (Ctrl+F, Ctrl+H, Ctrl+G, F3, Ctrl+Alt+Enter). Counts up to 1000 matches
+- `editor/find/GoToLineWidget.tsx` — floating go-to-line field (`12`, `12:4`, `+5`, `-5`, `50%`)
 
 ### Agent Chat (ACP) Components
 
