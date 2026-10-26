@@ -21,7 +21,7 @@ const KEEP_CAMEL = new Set([
   'viewBox', 'preserveAspectRatio', 'gradientUnits', 'gradientTransform', 'patternUnits',
   'clipPathUnits', 'maskUnits', 'stdDeviation'
 ])
-const SKIP = new Set(['children', 'className', 'style', 'ref', 'key', 'color', 'size', 'absoluteStrokeWidth'])
+const SKIP = new Set(['children', 'className', 'style', 'ref', 'key', 'color', 'size', 'absoluteStrokeWidth', 'dangerouslySetInnerHTML'])
 
 function attrName(key: string): string {
   if (KEEP_CAMEL.has(key)) return key
@@ -67,6 +67,10 @@ function size(value: unknown): number | undefined {
 const sources = new WeakMap<object, string>()
 
 function sourceOf(props: Record<string, unknown>): string {
+  const inner = (props.dangerouslySetInnerHTML as { __html?: unknown } | undefined)?.__html
+  if (typeof inner === 'string') {
+    return `<svg xmlns="http://www.w3.org/2000/svg"${attrs(props)}>${inner.replace(/currentColor/g, '#000')}</svg>`
+  }
   const children = props.children as object | undefined
   const cached = children && typeof children === 'object' ? sources.get(children) : undefined
   const head = `<svg xmlns="http://www.w3.org/2000/svg"${attrs(props)}>`
@@ -124,4 +128,28 @@ export function svgElement(
     height: style.height ?? size(props.height) ?? 16
   }
   return jsx(CompatSvg, { native, rotate }, key)
+}
+
+const INNER_SVG = /^<svg[\s>][\s\S]*<\/svg>$/
+const PAINT = /\b(?:fill|stroke|stop-color)\s*[=:]\s*["']?\s*(?!currentColor|none|transparent|url\()[#a-z]/i
+
+/**
+ * Markup set through `dangerouslySetInnerHTML` that is one `<svg>` (the
+ * sanitized agent icons): the GPUIX `<svg source>` the same tree would make,
+ * tinted by the inherited colour and sized by the parent's `[&_svg]` classes.
+ * GPUIX's svg is one colour, so markup that paints its own colours becomes a
+ * full-colour `<img>` of the SVG instead. Null for any other markup.
+ */
+export function innerHtmlSvg(html: unknown): ReactElement | null {
+  if (typeof html !== 'string') return null
+  const markup = html.trim()
+  if (!INNER_SVG.test(markup)) return null
+  const namespaced = /^<svg[^>]*\sxmlns=/.test(markup) ? markup : markup.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"')
+  const width = Number(namespaced.match(SIZE_ATTR('width'))?.[1] ?? 16)
+  const height = Number(namespaced.match(SIZE_ATTR('height'))?.[1] ?? 16)
+  if (PAINT.test(namespaced)) {
+    return jsx('img', { src: `data:image/svg+xml;utf8,${encodeURIComponent(namespaced)}`, style: { width, height } })
+  }
+  const source = namespaced.replace(/currentColor/g, '#000')
+  return jsx(CompatSvg, { native: { source, style: { width, height } }, rotate: null })
 }

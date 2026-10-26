@@ -226,13 +226,13 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       SELECT,
-      "The agents list now shows the registry as on the web, Agoragentic first with its version, Latest and Available (I6 run). GPUIX leaves each agent's icon tile empty: AcpAgentsSettings draws the catalog SVG through `dangerouslySetInnerHTML`, which compat does not render.",
+      "AcpAgentsSettings draws each catalog icon through `dangerouslySetInnerHTML`; compat now paints one `<svg>` of markup as a GPUIX svg, and the DOMPurify stand-in passes an icon of shapes (G16 SVG-HTML; the Accounts header's Claude mark shows it). In the G16 runs of 2026-10-26 from 15:30 the GPUIX list itself was empty (No agents match \"\") on this branch and on exp/gpuix-client, on the patched and the published addon, while the web listed Agoragentic first with its version, Latest and Available; a base run at 10:08 the same day listed it in GPUIX too (I6 run likewise). Not diagnosed.",
       DIVIDERS,
       LABEL_LINE,
       SETTINGS_BASE[1]
     ],
-    cause: 'compat translator gap',
-    unit: 'inline SVG agent icons (unassigned)',
+    cause: 'needs diagnosis',
+    unit: 'agent registry list empty in GPUIX (unassigned)',
     impact: 1
   },
   'settings.skills': {
@@ -243,6 +243,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'ported',
     differences: [
       'Accounts lists the Default account, Signed in, with "Usage is not available right now", Try again and the `termul-server claude account` hint in both. The skeleton M2 saw was the frame grab racing the list: the step checked for the nav label it had just clicked. It now waits for "1 account", which GPUIX painted 1871 ms after the click and the web 158 ms after (G6 run).',
+      'The Claude Code header shows its brand mark as on the web (G16 SVG-HTML: ProviderGroupHeader sets the bundled SVG through `dangerouslySetInnerHTML`).',
       "The account row lays out as on the web (G16 ACCOUNT-ROW): its grid places its cells (`col-start-*`, `row-start-*`), and the patched addon now draws its `13.75rem minmax(0,1fr) 8.25rem 1.75rem` track list and the placements natively (zed/0008, gpuix/0019). The usage note starts at 637 px and the row menu's dots at 1099 px, as on the web; they were at 584 px and 1029 px on four equal tracks. The row keeps its 70 px height.",
       SETTINGS_BASE[1]
     ]

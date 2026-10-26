@@ -26,7 +26,7 @@ import { compatWarn } from './log'
 import { linkPeers, markPeer } from './peer'
 import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
 import { layoutListener } from './resize'
-import { SVG_CHILD_TAGS, svgElement } from './svg'
+import { innerHtmlSvg, SVG_CHILD_TAGS, svgElement } from './svg'
 import { fixedPriority } from './stacking'
 import { translation, type Translation, unreverse } from './translate'
 
@@ -262,11 +262,13 @@ export function buildElement(
     if (tag === 'textarea' && typeof props.rows === 'number') native.minRows = props.rows
     element = jsx(tag, native, key)
   } else {
-    if (props.dangerouslySetInnerHTML) compatWarn('prop-unsupported', 'dangerouslySetInnerHTML')
+    const innerSvg = props.dangerouslySetInnerHTML ? innerHtmlSvg((props.dangerouslySetInnerHTML as { __html?: unknown }).__html) : null
+    if (props.dangerouslySetInnerHTML && !innerSvg) compatWarn('prop-unsupported', 'dangerouslySetInnerHTML')
+    if (innerSvg) childInfo.set(innerSvg, { inline: true })
     const flipped = unreverse(style)
     if (flipped) native.style = style = flipped
     linkPeers(props.children)
-    let children = contentBasis(tr, style, props.children)
+    let children = contentBasis(tr, style, innerSvg ?? props.children)
     let childrenStatic = isStatic
     if (style.gridTracks) {
       const grid = gridLayout(style, style.gridTracks, children, (node) => domSource.get(node)?.props.className)

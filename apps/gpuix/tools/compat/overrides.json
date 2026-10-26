@@ -8,18 +8,6 @@
   "components/GlobalContextMenu.tsx": {
     "reasons": ["text-selection"]
   },
-  "components/WhatsNewModal.tsx": {
-    "reasons": ["dangerouslySetInnerHTML"]
-  },
-  "components/agents/AgentIcon.tsx": {
-    "reasons": ["dangerouslySetInnerHTML"]
-  },
-  "components/agents/IconPicker.tsx": {
-    "reasons": ["dangerouslySetInnerHTML"]
-  },
-  "components/agents/launcher/pickers.tsx": {
-    "reasons": ["dangerouslySetInnerHTML"]
-  },
   "components/ai-elements/attachments.tsx": {
     "reasons": ["canvas-media"]
   },
@@ -29,17 +17,11 @@
   "components/canvas/CanvasShell.tsx": {
     "reasons": ["canvas-media"]
   },
-  "components/chat/AgentGlyph.tsx": {
-    "reasons": ["dangerouslySetInnerHTML"]
-  },
   "components/chat/ChatMessageList.tsx": {
     "reasons": ["tanstack-virtual"]
   },
   "components/chat/ThinkingStatus.tsx": {
     "reasons": ["getComputedStyle"]
-  },
-  "components/chat/ToolCallCard.tsx": {
-    "reasons": ["dangerouslySetInnerHTML"]
   },
   "components/chat/chat-agent-prose.tsx": {
     "reasons": ["mermaid", "text-selection"]
@@ -72,12 +54,7 @@
     "reasons": ["MutationObserver", "blocknote"]
   },
   "components/editor/MermaidBlock.tsx": {
-    "reasons": [
-      "MutationObserver",
-      "dangerouslySetInnerHTML",
-      "element.addEventListener",
-      "mermaid"
-    ]
+    "reasons": ["MutationObserver", "element.addEventListener", "mermaid"]
   },
   "components/editor/codemirror-theme.ts": {
     "reasons": ["codemirror"]
@@ -91,12 +68,6 @@
   "components/git/GitHistoryView.tsx": {
     "reasons": ["text-selection"]
   },
-  "components/settings/AcpAgentsSettings.tsx": {
-    "reasons": ["dangerouslySetInnerHTML"]
-  },
-  "components/settings/provider/ProviderGroupHeader.tsx": {
-    "reasons": ["dangerouslySetInnerHTML"]
-  },
   "components/shell/ChatsList.tsx": {
     "reasons": ["tanstack-virtual"]
   },
@@ -105,9 +76,6 @@
   },
   "components/terminal/ConnectedTerminal.tsx": {
     "reasons": ["text-selection", "xterm"]
-  },
-  "components/terminal/TerminalAssistPanel.tsx": {
-    "reasons": ["dangerouslySetInnerHTML"]
   },
   "components/terminal/XTerminal.tsx": {
     "reasons": ["xterm"]

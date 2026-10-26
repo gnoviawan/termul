@@ -42,7 +42,7 @@ export const DOM_APIS: readonly DomApi[] = [
   { id: 'element.addEventListener', pattern: /(?<!(?:window|document|globalThis|media|mql|query|socket|ws|source|controller|signal|transport|channel|worker|emitter|target|fonts|viewport|Viewport)\??)\??\.addEventListener\(\s*['"](?!message|open|close|error|change|abort|loadingdone|resize|scroll)/g, support: 'none', note: 'element listeners are not wired; use JSX handlers' },
   { id: 'text-selection', pattern: /\b(selectionStart|selectionEnd|setSelectionRange|getSelection)\b/g, support: 'none', note: 'GPUIX inputs expose no selection API' },
   { id: 'contentEditable', pattern: /\bcontentEditable\b/g, support: 'none', note: 'no editable host' },
-  { id: 'dangerouslySetInnerHTML', pattern: /\bdangerouslySetInnerHTML\b/g, support: 'none', note: 'no HTML parser' },
+  { id: 'dangerouslySetInnerHTML', pattern: /\bdangerouslySetInnerHTML\b/g, support: 'partial', note: 'one <svg> (agent icons) becomes a GPUIX svg; other markup is dropped' },
   { id: 'html5-dnd', pattern: /\b(dataTransfer|DataTransfer|DragEvent|draggable|onDrop)\b/g, support: 'partial', note: 'compat/dnd.ts: drag events from mouse capture + getElementsAt, OS file drop as Files; no drag-out to the OS, no hover feedback before an OS drop' },
   { id: 'execCommand', pattern: /\bexecCommand\b/g, support: 'none', note: 'no document editing' },
   { id: 'dom-create', pattern: /\bdocument\.create(Element|TextNode|Range|DocumentFragment)\b/g, support: 'none', note: 'no DOM nodes outside React' },
