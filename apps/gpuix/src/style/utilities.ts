@@ -454,8 +454,14 @@ const HANDLERS: Record<string, Handler> = {
   overscroll: () => unsupported('overscroll behaviour is GPUI-defined'),
   touch: () => unsupported('touch-action has no GPUIX equivalent'),
   order: () => unsupported('flex order: reorder the children'),
-  'col-span': () => unsupported('grid spans (gpuix#103)'),
-  'row-span': () => unsupported('grid spans (gpuix#103)'),
+  'col-span': (v) =>
+    /^\d+$/.test(v.value)
+      ? ok({ gridColumnSpan: Number(v.value) })
+      : unsupported('grid spans other than a count'),
+  'row-span': (v) =>
+    /^\d+$/.test(v.value)
+      ? ok({ gridRowSpan: Number(v.value) })
+      : unsupported('grid spans other than a count'),
   decoration: () => unsupported('text-decoration styling beyond underline/line-through'),
   'underline-offset': () => unsupported('text-decoration styling beyond underline/line-through'),
   fill: () => unsupported('SVG paint: tint <svg> with style.color'),

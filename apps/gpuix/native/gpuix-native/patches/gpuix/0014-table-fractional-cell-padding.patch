@@ -1,0 +1,125 @@
+diff --git a/packages/native/src/markdown/render.rs b/packages/native/src/markdown/render.rs
+index bd5c3d5..37d273e 100644
+--- a/packages/native/src/markdown/render.rs
++++ b/packages/native/src/markdown/render.rs
+@@ -12,8 +12,9 @@ use std::ops::Range;
+ use std::sync::Arc;
+ 
+ use gpui::{
+-    div, font, px, AnyElement, BorderStyle, FontStyle, FontWeight, Hsla, SharedString, TextRun,
+-    UnderlineStyle, Window,
++    div, font, px, size, AnyElement, App, Bounds, BorderStyle, Element, FontStyle, FontWeight,
++    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, SharedString, Style,
++    TextRun, UnderlineStyle, Window,
+ };
+ 
+ use super::parser::{Block, BlockTree, InlineRun, TableAlign};
+@@ -634,9 +635,6 @@ fn render_table(
+             inner = inner.child(div().flex_none().h(px(rule_height)).w_full().bg(rule));
+         }
+         let mut row_el = div().flex().flex_row();
+-        if let (true, 0, Some(fill)) = (has_header, row_ix, theme.table_header_bg) {
+-            row_el = row_el.bg(fill);
+-        }
+         for (col, cell_flat) in row.iter().enumerate() {
+             let mut cell = div()
+                 .flex_grow(geo.naturals[col])
+@@ -644,7 +642,6 @@ fn render_table(
+                 .flex_basis(px(geo.naturals[col]))
+                 .min_w(px(geo.minimums[col]))
+                 .px(px(m.md_table_cell_padding))
+-                .py(px(pad_y))
+                 .text_size(px(m.md_text_size))
+                 .line_height(px(line_height));
+             cell = match align.get(col).copied().unwrap_or_default() {
+@@ -659,7 +656,20 @@ fn render_table(
+             }
+             row_el = row_el.child(cell);
+         }
+-        inner = inner.child(row_el);
++        // The vertical cell padding is laid out as struts above and below the
++        // row: GPUI rounds an authored padding to the pixel grid before
++        // layout, so Streamdown's 4.8 px would stack rows 31 px apart, not
++        // Chromium's 30.6.
++        let mut row_box = div()
++            .flex()
++            .flex_col()
++            .child(Strut(pad_y))
++            .child(row_el)
++            .child(Strut(pad_y));
++        if let (true, 0, Some(fill)) = (has_header, row_ix, theme.table_header_bg) {
++            row_box = row_box.bg(fill);
++        }
++        inner = inner.child(row_box);
+     }
+ 
+     // The horizontal scroller: when the floors exceed the viewport the inner
+@@ -694,6 +704,68 @@ fn hairline(theme: &Theme, alpha: f32) -> Hsla {
+     ink(theme, alpha)
+ }
+ 
++/// An empty box as tall as its value, laid out at that fractional height: GPUI keeps a
++/// measured leaf's height as measured (Termul's zed patch
++/// 0005-fractional-line-height) and rounds authored lengths before layout.
++struct Strut(f32);
++
++impl IntoElement for Strut {
++    type Element = Self;
++    fn into_element(self) -> Self {
++        self
++    }
++}
++
++impl Element for Strut {
++    type RequestLayoutState = ();
++    type PrepaintState = ();
++
++    fn id(&self) -> Option<gpui::ElementId> {
++        None
++    }
++
++    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
++        None
++    }
++
++    fn request_layout(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        window: &mut Window,
++        _: &mut App,
++    ) -> (LayoutId, ()) {
++        let height = self.0.max(0.0);
++        let id = window.request_measured_layout(Style::default(), move |_, _, _, _| {
++            size(px(0.0), px(height))
++        });
++        (id, ())
++    }
++
++    fn prepaint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        _: Bounds<Pixels>,
++        _: &mut (),
++        _: &mut Window,
++        _: &mut App,
++    ) {
++    }
++
++    fn paint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        _: Bounds<Pixels>,
++        _: &mut (),
++        _: &mut (),
++        _: &mut Window,
++        _: &mut App,
++    ) {
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;

@@ -23,6 +23,10 @@ declare module '@gpuix/native/host' {
      * inside a layer never sorts under the enclosing one. Not inherited.
      */
     zIndex?: number
+    /** CSS `grid-column: span <n>` (patch gpuix/0016-grid-span). */
+    gridColumnSpan?: number
+    /** CSS `grid-row: span <n>` (patch gpuix/0016-grid-span). */
+    gridRowSpan?: number
   }
   interface GpuixTheme {
     /** Markdown link text (patch 0002-markdown-theme). Unset: the text colour. */
@@ -37,6 +41,8 @@ declare module '@gpuix/native/host' {
     tableHeaderBg?: string
     /** Markdown table rules (patch 0012-table-columns-rules). Unset: the text colour at 10%. */
     tableRule?: string
+    /** The digits that open a paragraph in tabular figures, as a list marker (patch 0015-markdown-lead-tabular-nums). */
+    leadTabularNums?: boolean
   }
   interface GpuixMetrics {
     /** Inline-code glyph size as a fraction of the paragraph's, like CSS `0.88em`. */

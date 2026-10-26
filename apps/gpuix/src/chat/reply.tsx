@@ -254,17 +254,21 @@ const MarkdownBlock = memo(function MarkdownBlock({
   const themeId = useColorTheme()
   const themes = transcriptThemes(themeId)
   const quote = block === 'blockquote'
-  const native = (text: string, key?: number) => (
+  const native = (text: string, key?: number, theme = quote ? themes.quote : themes.prose) => (
     <markdown
       key={key}
       source={text}
-      theme={quote ? themes.quote : themes.prose}
+      theme={theme}
       style={{ minWidth: 0 }}
       onLinkClick={(event) => {
         if (event.value) onLink(event.value)
       }}
     />
   )
+  const orderedItem = (item: string, key: number) => {
+    const inline = inlineOrderedItem(item)
+    return inline === null ? native(item, key) : native(inline, key, themes.orderedItem)
+  }
   const markdown =
     block === 'list' ? (
       <div style={LIST_BOX}>
@@ -275,7 +279,7 @@ const MarkdownBlock = memo(function MarkdownBlock({
               {native(task.body)}
             </TaskItem>
           ) : (
-            native(inlineOrderedItem(item) ?? item, i)
+            orderedItem(item, i)
           )
         })}
       </div>

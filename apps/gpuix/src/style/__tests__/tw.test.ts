@@ -371,6 +371,7 @@ const CASES: [string, StyleDesc][] = [
     'grid grid-cols-2 gap-x-4 gap-y-2',
     { display: 'grid', gridTemplateColumns: 2, columnGap: 16, rowGap: 8 }
   ],
+  ['col-span-2 row-span-3', { gridColumnSpan: 2, gridRowSpan: 3 }],
   ['line-clamp-2 break-words', { lineClamp: 2, overflow: 'hidden' }],
   [
     'rounded-t-lg rounded-b-none border-x border-t',

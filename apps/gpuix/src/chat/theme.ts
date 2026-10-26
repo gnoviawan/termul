@@ -69,6 +69,7 @@ const cache = new Map<
   string,
   {
     prose: GpuixTheme
+    orderedItem: GpuixTheme
     tableFullscreen: GpuixTheme
     quote: GpuixTheme
     thought: GpuixTheme
@@ -88,6 +89,11 @@ const cache = new Map<
  *   `divide-y divide-border`: under the header and between body rows.
  *   Native markdown tints list markers and the quote rail with `accent`; the
  *   web's markers are the text colour, so accent is the foreground.
+ * - `orderedItem`: `prose` for an ordered item painted as a paragraph led by
+ *   its number (`inlineOrderedItem`). Chromium draws a list marker with
+ *   tabular figures, so the number does too (patch
+ *   0015-markdown-lead-tabular-nums); Inter's proportional 1 is 3.39 px
+ *   narrower at 14 px.
  * - `tableFullscreen`: the table in the fullscreen view, which the web
  *   portals outside `.chat-streamdown`, so Streamdown's utilities apply
  *   unscaled: cells `px-4 py-2` (16 by 8 px) on a 20px line, a `bg-muted/80`
@@ -125,30 +131,32 @@ export function transcriptThemes(themeId: string) {
     caret: tokenColor('foreground'),
     syntax
   }
+  const prose: GpuixTheme = {
+    ...base,
+    // `thead` is `bg-muted/80` and each `th` adds `bg-muted/35`: muted at 87%.
+    tableHeaderBg: tokenColor('muted/87'),
+    tableRule: tokenColor('border'),
+    metrics: {
+      mdTextSize: PROSE_TEXT,
+      mdLineHeight: PROSE_LINE,
+      mdBlockGap: 4,
+      mdHeadingSizes: [30, 24, 20, 18],
+      mdHeadingLineHeights: [36, 32, 28, 28],
+      // Streamdown cells: `px-4 py-2` under `.chat-streamdown` comes out at
+      // 8px by 4.8px, `text-sm` on a 20px line, semibold header.
+      mdTableCellPadding: 8,
+      mdTableCellPaddingY: 4.8,
+      mdTableLineHeight: 20,
+      mdTableHeaderWeight: 600,
+      ...PROSE_CHIP,
+      mdCodePaddingX: 16,
+      mdCodePaddingY: 16,
+      mdCodeRadius: 6
+    }
+  }
   const themes = {
-    prose: {
-      ...base,
-      // `thead` is `bg-muted/80` and each `th` adds `bg-muted/35`: muted at 87%.
-      tableHeaderBg: tokenColor('muted/87'),
-      tableRule: tokenColor('border'),
-      metrics: {
-        mdTextSize: PROSE_TEXT,
-        mdLineHeight: PROSE_LINE,
-        mdBlockGap: 4,
-        mdHeadingSizes: [30, 24, 20, 18],
-        mdHeadingLineHeights: [36, 32, 28, 28],
-        // Streamdown cells: `px-4 py-2` under `.chat-streamdown` comes out at
-        // 8px by 4.8px, `text-sm` on a 20px line, semibold header.
-        mdTableCellPadding: 8,
-        mdTableCellPaddingY: 4.8,
-        mdTableLineHeight: 20,
-        mdTableHeaderWeight: 600,
-        ...PROSE_CHIP,
-        mdCodePaddingX: 16,
-        mdCodePaddingY: 16,
-        mdCodeRadius: 6
-      }
-    },
+    prose,
+    orderedItem: { ...prose, leadTabularNums: true },
     tableFullscreen: {
       ...base,
       codeWash: tokenColor('muted'),

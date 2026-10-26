@@ -31,6 +31,8 @@ import {
 } from '../parity/shoot-gpuix'
 import {
   FULLSCREEN_TABLE_SAMPLE,
+  MARKER_LINE,
+  MARKER_SAMPLES,
   TABLE_SAMPLE,
   TEXT_SAMPLES,
   type TextSample,
@@ -236,29 +238,57 @@ for (const [name, sample] of [
     ok: gh.length === wh.length && dx.every((d) => Math.abs(d) <= 1)
   })
 }
-/** Rows of the fullscreen table where RULE_COLOR spans most of its width: the outer border and the rules. */
-function ruleRows(png: Png): number[] {
-  const { left, top, width } = FULLSCREEN_TABLE_SAMPLE
+type Channel = 0 | 1 | 2
+/** Rows of a table where its rule colour (one channel lit) spans most of its width. */
+function ruleRows(
+  png: Png,
+  { left, top, width }: { left: number; top: number; width: number },
+  channel: Channel
+): number[] {
   const out: number[] = []
   for (let y = top - 2; y < Math.min(H, top + 240); y++) {
     let n = 0
     for (let x = left; x < left + width; x++) {
       const i = (y * png.width + x) * 4
-      if ((png.data[i + 1] ?? 0) > 150 && (png.data[i] ?? 0) < 90) n++
+      const on = (png.data[i + channel] ?? 0) > 150
+      const off = ([0, 1, 2] as const).every((c) => c === channel || (png.data[i + c] ?? 0) < 90)
+      if (on && off) n++
     }
     if (n > width / 2) out.push(y)
   }
   return out
 }
-const gr = ruleRows(g)
-const wr = ruleRows(w)
-const dr = gr.map((y, i) => y - (wr[i] ?? Number.NaN))
-rows.push({
-  patch: 'table-rules',
-  what: `fullscreen table rules at y ${JSON.stringify(gr)} (Chromium ${JSON.stringify(wr)}), GPUIX minus Chromium (each within 1 px)`,
-  value: dr,
-  ok: gr.length === wr.length && dr.every((d) => Math.abs(d) <= 1)
-})
+for (const [name, sample, channel, patch] of [
+  ['fullscreen table rules (outer border and body rules)', FULLSCREEN_TABLE_SAMPLE, 1, 'table-rules'],
+  ['transcript table rules, 30.6 px apart in Chromium', TABLE_SAMPLE, 2, '0014-table-fractional-cell-padding']
+] as const) {
+  const gr = ruleRows(g, sample, channel)
+  const wr = ruleRows(w, sample, channel)
+  const dr = gr.map((y, i) => y - (wr[i] ?? Number.NaN))
+  rows.push({
+    patch,
+    what: `${name} at y ${JSON.stringify(gr)} (Chromium ${JSON.stringify(wr)}), GPUIX minus Chromium (each within 1 px)`,
+    value: dr,
+    ok: gr.length === wr.length && gr.length > 0 && dr.every((d) => Math.abs(d) <= 1)
+  })
+}
+/** The last column holding ink on a marker sample's line. */
+function inkRight(png: Png, { left, top }: { left: number; top: number }): number {
+  let right = -1
+  for (let y = top; y < top + MARKER_LINE; y++)
+    for (let x = left; x < Math.min(W, left + 200); x++) if (lit(png, x, y)) right = Math.max(right, x)
+  return right
+}
+for (const s of MARKER_SAMPLES) {
+  const gx = inkRight(g, s)
+  const wx = inkRight(w, s)
+  rows.push({
+    patch: '0015-markdown-lead-tabular-nums',
+    what: `ordered item "${s.n}. ${s.text}" ink ends at x ${gx} (Chromium ${wx}), GPUIX minus Chromium (within 1 px)`,
+    value: gx - wx,
+    ok: gx > 0 && wx > 0 && Math.abs(gx - wx) <= 1
+  })
+}
 /**
  * [left, right] of each run of columns holding the wash colour on a third of
  * the sample's line or more (subpixel text fringes are red for a pixel or two).

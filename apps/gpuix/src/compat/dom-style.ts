@@ -56,6 +56,13 @@ export function normalizeShadow(value: unknown): StyleDesc['boxShadow'] {
 
 const cache = new WeakMap<object, StyleDesc>()
 
+/** `span 2`, `span 2 / span 2`: the only grid placements GPUIX lays out. */
+const SPAN = /^span\s+(\d+)(?:\s*\/\s*span\s+\1)?$/
+const SPAN_KEYS: Readonly<Record<string, 'gridColumnSpan' | 'gridRowSpan'>> = {
+  gridColumn: 'gridColumnSpan',
+  gridRow: 'gridRowSpan'
+}
+
 const EQUAL_COLUMNS = /^repeat\(\s*(\d+)\s*,\s*(?:minmax\(\s*0(?:px)?\s*,\s*1fr\s*\)|1fr)\s*\)$/
 
 export function convertDomStyle(style: Readonly<Record<string, CssValue>>): StyleDesc {
@@ -87,6 +94,10 @@ export function convertDomStyle(style: Readonly<Record<string, CssValue>>): Styl
       // GPUIX takes a column count: `repeat(N, minmax(0, 1fr))` or `repeat(N, 1fr)`.
       const n = typeof value === 'number' ? value : Number(EQUAL_COLUMNS.exec(String(value))?.[1])
       if (Number.isInteger(n) && n > 0) out[key] = n
+      else compatWarn('style-value', `${key}: ${String(value).slice(0, 40)}`)
+    } else if (key in SPAN_KEYS) {
+      const n = Number(SPAN.exec(String(value).trim())?.[1])
+      if (Number.isInteger(n) && n > 0) out[SPAN_KEYS[key] as string] = n
       else compatWarn('style-value', `${key}: ${String(value).slice(0, 40)}`)
     } else if (PASS_STRING.has(key)) {
       out[key] = value

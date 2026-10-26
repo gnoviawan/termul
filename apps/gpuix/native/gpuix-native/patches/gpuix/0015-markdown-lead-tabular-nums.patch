@@ -1,0 +1,121 @@
+diff --git a/packages/native/src/markdown/render.rs b/packages/native/src/markdown/render.rs
+index 37d273e..89c0470 100644
+--- a/packages/native/src/markdown/render.rs
++++ b/packages/native/src/markdown/render.rs
+@@ -147,7 +147,7 @@ pub fn flatten_runs(runs: &[InlineRun], theme: &Theme, base_weight: FontWeight)
+             }
+         }
+ 
+-        out.push(TextRun {
++        let shaped = TextRun {
+             len: run.text.len(),
+             font: f,
+             // Inline code reads violet; links stay the monochrome foreground
+@@ -169,7 +169,31 @@ pub fn flatten_runs(runs: &[InlineRun], theme: &Theme, base_weight: FontWeight)
+                 thickness: px(1.0),
+                 color: Some(theme.text_muted),
+             }),
+-        });
++        };
++        let lead_digits = if theme.lead_tabular_nums && start == 0 && !run.style.code {
++            run.text.bytes().take_while(u8::is_ascii_digit).count()
++        } else {
++            0
++        };
++        if lead_digits > 0 {
++            let mut tabular = shaped.font.clone();
++            let mut features: Vec<(String, u32)> = tabular.features.0.iter().cloned().collect();
++            features.push(("tnum".into(), 1));
++            tabular.features = gpui::FontFeatures(Arc::new(features));
++            out.push(TextRun {
++                len: lead_digits,
++                font: tabular,
++                ..shaped.clone()
++            });
++            if shaped.len > lead_digits {
++                out.push(TextRun {
++                    len: shaped.len - lead_digits,
++                    ..shaped
++                });
++            }
++        } else {
++            out.push(shaped);
++        }
+     }
+ 
+     FlatText {
+@@ -843,6 +867,25 @@ mod tests {
+         assert_eq!(flat.runs[1].background_color, None);
+     }
+ 
++    #[test]
++    fn lead_tabular_nums_sets_only_the_opening_digits_tabular() {
++        let mut theme = Theme::dark();
++        theme.lead_tabular_nums = true;
++        let flat = flatten_runs(
++            &[run("12. Read 3 files", InlineStyle::default())],
++            &theme,
++            FontWeight::NORMAL,
++        );
++        let tnum = |r: &TextRun| r.font.features.0.iter().any(|(tag, on)| tag == "tnum" && *on == 1);
++        assert_eq!(flat.runs.iter().map(|r| r.len).collect::<Vec<_>>(), vec![2, 14]);
++        assert!(tnum(&flat.runs[0]));
++        assert!(!tnum(&flat.runs[1]));
++
++        theme.lead_tabular_nums = false;
++        let plain = flatten_runs(&[run("12. Read", InlineStyle::default())], &theme, FontWeight::NORMAL);
++        assert_eq!(plain.runs.len(), 1);
++    }
++
+     #[test]
+     fn heading_sizes_follow_the_metrics_override() {
+         let mut m = Metrics::default();
+diff --git a/packages/native/src/theme.rs b/packages/native/src/theme.rs
+index 8a1d969..c0db206 100644
+--- a/packages/native/src/theme.rs
++++ b/packages/native/src/theme.rs
+@@ -509,6 +509,10 @@ pub struct Theme {
+     /// Every markdown run italic, like CSS `font-style: italic` on a
+     /// blockquote. Emphasis inside stays italic.
+     pub italic: bool,
++    /// The digits that open a paragraph set with tabular figures (`tnum`),
++    /// as Chromium sets a list marker: for a list item painted as a
++    /// paragraph led by its number.
++    pub lead_tabular_nums: bool,
+     /// Diff added lines, emerald-400.
+     pub diff_add: Hsla,
+     /// Diff deleted lines, red-400.
+@@ -546,6 +550,7 @@ impl Theme {
+             link_underline: None,
+             link_weight: None,
+             italic: false,
++            lead_tabular_nums: false,
+             diff_add: oklch(0.765, 0.177, 163.223),
+             diff_del: oklch(0.704, 0.191, 22.216),
+             diff_hunk_bg: hsla(0.6, 0.35, 0.6, 0.05),
+@@ -575,6 +580,7 @@ impl Theme {
+             link_underline: None,
+             link_weight: None,
+             italic: false,
++            lead_tabular_nums: false,
+             diff_add: oklch(0.596, 0.145, 163.225),
+             diff_del: oklch(0.577, 0.245, 27.325),
+             diff_hunk_bg: hsla(0.6, 0.35, 0.35, 0.07),
+@@ -615,6 +621,9 @@ impl Theme {
+         if let Some(weight) = o.link_weight.filter(|w| w.is_finite()) {
+             self.link_weight = Some(gpui::FontWeight((weight as f32).clamp(1.0, 1000.0)));
+         }
++        if let Some(tabular) = o.lead_tabular_nums {
++            self.lead_tabular_nums = tabular;
++        }
+         match o.font_style.as_deref() {
+             Some("italic") => self.italic = true,
+             Some("normal") => self.italic = false,
+@@ -743,6 +752,7 @@ pub struct ThemeOverride {
+     pub link_weight: Option<f64>,
+     /// `"italic"` or `"normal"` for every markdown run.
+     pub font_style: Option<String>,
++    pub lead_tabular_nums: Option<bool>,
+     pub diff_add: Option<String>,
+     pub diff_del: Option<String>,
+     pub diff_hunk_bg: Option<String>,

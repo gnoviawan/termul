@@ -13,9 +13,12 @@ import { registerTermulFonts } from '../../src/style/fonts'
 import {
   FAMILY,
   FULLSCREEN_TABLE_SAMPLE,
+  MARKER_LINE,
+  MARKER_SAMPLES,
   RULE_COLOR,
   TABLE_SAMPLE,
   TEXT_SAMPLES,
+  TRANSCRIPT_RULE_COLOR,
   TYPO_WINDOW,
   tableMarkdown,
   WASH_COLOR,
@@ -96,7 +99,10 @@ function App() {
           borderColor: '#444444'
         }}
       >
-        <markdown source={tableMarkdown()} theme={transcriptThemes('termul').prose} />
+        <markdown
+          source={tableMarkdown()}
+          theme={{ ...transcriptThemes('termul').prose, tableRule: TRANSCRIPT_RULE_COLOR }}
+        />
       </div>
       <div
         ref={(node: PublicInstance | null) => {
@@ -131,6 +137,17 @@ function App() {
             theme={{
               ...transcriptThemes('termul')[s.theme],
               codeWash: WASH_COLOR
+            }}
+          />
+        </div>
+      ))}
+      {MARKER_SAMPLES.map((s) => (
+        <div key={s.id} style={{ position: 'absolute', left: s.left, top: s.top, width: 180 }}>
+          <markdown
+            source={`${s.n}\\. ${s.text}`}
+            theme={{
+              ...transcriptThemes('termul').orderedItem,
+              metrics: { ...transcriptThemes('termul').orderedItem.metrics, mdLineHeight: MARKER_LINE }
             }}
           />
         </div>
