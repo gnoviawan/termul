@@ -14,6 +14,7 @@ import {
   withAlpha
 } from './css-value'
 import { GRADIENT_SIDES, type GradientParts } from './gradient'
+import { isEqualFrTracks, parseGridTracks } from './grid-tracks'
 import {
   BLURS,
   CONTAINERS,
@@ -399,10 +400,16 @@ const HANDLERS: Record<string, Handler> = {
   opacity: (v) => (/^\d+$/.test(v.value) ? ok({ opacity: Number(v.value) / 100 }) : undefined),
   'line-clamp': (v) =>
     /^\d+$/.test(v.value) ? ok({ lineClamp: Number(v.value), overflow: 'hidden' }) : undefined,
-  'grid-cols': (v) =>
-    /^\d+$/.test(v.value)
-      ? ok({ gridTemplateColumns: Number(v.value) })
-      : unsupported('grid track lists (gpuix#103)'),
+  'grid-cols': (v) => {
+    if (/^\d+$/.test(v.value)) return ok({ gridTemplateColumns: Number(v.value), gridTracks: undefined })
+    const raw = arbitrary(v.value)
+    const tracks = raw === undefined ? undefined : parseGridTracks(raw, v.theme.vars)
+    if (!tracks) return unsupported(`grid track list ${v.value}`)
+    return ok({
+      gridTemplateColumns: tracks.length,
+      gridTracks: isEqualFrTracks(tracks) ? undefined : tracks
+    })
+  },
   'grid-rows': (v) =>
     /^\d+$/.test(v.value)
       ? ok({ gridTemplateRows: Number(v.value) })

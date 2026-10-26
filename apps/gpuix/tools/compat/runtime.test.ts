@@ -133,3 +133,33 @@ describe('divide-y', () => {
     expect(flat).toEqual([row, line, 'empty', row, line, row, 'null'])
   })
 })
+
+describe('grid track lists', () => {
+  const cell = (style: Shape['style'], text: string): Shape => ({ type: 'div', style, children: [{ type: 'div', style: { flexGrow: 1 }, children: text }] })
+  const fr = { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0, display: 'flex', flexDirection: 'column' }
+  const port = { width: 96, flexShrink: 0, display: 'flex', flexDirection: 'column' }
+  const row = { display: 'flex', flexDirection: 'row', columnGap: 12 }
+
+  test('an Address and Port row sets each item in its track, and a short last row keeps the columns', () => {
+    const grid = jsxs('div', {
+      className: 'grid grid-cols-[1fr_6rem] gap-3',
+      children: [jsx('div', { children: 'address' }, 'a'), jsx('div', { children: 'port' }, 'p'), jsx('div', { children: 'note' }, 'n')]
+    })
+    expect(shape(grid)).toEqual({
+      type: 'div',
+      style: { display: 'flex', flexDirection: 'column', rowGap: 12 },
+      children: [
+        { type: 'div', style: row, children: [cell(fr, 'address'), cell(port, 'port')] },
+        { type: 'div', style: row, children: [cell(fr, 'note'), { type: 'div', style: port }] }
+      ]
+    })
+  })
+
+  test('a grid whose items place themselves keeps the equal-track fallback', () => {
+    const grid = jsx('div', {
+      className: 'grid grid-cols-[1fr_6rem]',
+      children: jsx('div', { className: 'col-span-2', children: 'wide' })
+    })
+    expect(shape(grid)).toEqual({ type: 'div', style: { display: 'grid', gridTemplateColumns: 2 }, children: [{ type: 'div', style: {}, children: 'wide' }] })
+  })
+})

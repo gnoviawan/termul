@@ -335,7 +335,9 @@ const LONG_TAIL: Surface[] = [
     steps: [
       step('a-sidebar', [], see('What should we do in alpha?', 'staging', 'build-box')),
       step('b-hosts', [click(label('Open SSH hosts'))], see('Favorites', 'Servers')),
-      step('c-new-host', [click(label('New host'))], see('New host'))
+      step('c-new-host', [click(label('New host'))], see('New host')),
+      // The Address field takes the focus on open, so the typing lands there.
+      step('d-address', [type('db.example.com')], see('@db.example.com'))
     ]
   },
   {
