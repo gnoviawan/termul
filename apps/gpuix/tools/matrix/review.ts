@@ -191,15 +191,12 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'git.diff': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Inline diff, hunk header and STAGE HUNK sit where the web puts them.',
-      'GPUIX slants the diff header lines (`diff --git`, `index`, `---`, `+++`, `@@`) and the STAGE HUNK label, which GitDiffView marks `italic` inside a `font-mono` block. The web draws them upright: Paper Mono has no italic and index.css sets `font-synthesis-style: none` on `.font-mono`, while GPUIX registers baked oblique Paper Mono faces (N1) and uses them (I6, from the PNG pair; earlier reviews missed it).',
+      'The diff header lines (`diff --git`, `index`, `---`, `+++`, `@@`) and the STAGE HUNK label, which GitDiffView marks `italic` inside a `font-mono` block, are upright as on the web (G16 MONO-ITALIC). Paper Mono has no italic and index.css sets `font-synthesis-style: none` on `.font-mono`; GPUIX no longer registers oblique Paper Mono faces, and GPUI never synthesizes one. The terminal keeps SGR 3 slanted through its own Paper Mono Oblique family (`tools/terminal/parity.ts --bytes tools/terminal/fixtures/italic.bin`: the frame is pixel-identical to before, 3.97 % exact and 1.84 % perceptual against xterm.js, every cell equal).',
       TEXTAREA_LINE
-    ],
-    cause: 'compat translator gap',
-    unit: 'upright italic in mono text (unassigned)',
-    impact: 1
+    ]
   },
   'git.amend': {
     status: 'ported',
@@ -279,7 +276,7 @@ export const REVIEWS: Record<string, Review> = {
   'chat.agent-launcher': {
     status: 'ported',
     differences: [
-      "The agent and model popover opens above the pill in both, with the search field, the agent chip and This agent gives no model choice. The agent chip spans two of the track's three columns and reads Chat Scenario Agent in full, as on the web (G14: native patch gpuix/0016-grid-span and compat's `gridColumn: span 2 / span 2`; it had taken one column and truncated to \"Chat Scen…\").",
+      'The agent and model popover opens above the pill in both, with the search field, the agent chip and This agent gives no model choice. The agent chip spans two of the track\'s three columns and reads Chat Scenario Agent in full, as on the web (G14: native patch gpuix/0016-grid-span and compat\'s `gridColumn: span 2 / span 2`; it had taken one column and truncated to "Chat Scen…").',
       "The hairline under the search band turns `ring` while the field has focus, as on the web's `peer-focus-within:` (G16 PEER: compat links a `peer-*` consumer to its nearest earlier `peer` sibling, as for group state). It sits 1 px higher than on the web."
     ]
   },

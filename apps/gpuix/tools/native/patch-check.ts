@@ -3,7 +3,7 @@
  * under Xvfb + lavapipe with whatever addon NAPI_RS_NATIVE_LIBRARY_PATH picks,
  * grabs the window and asserts what each patch paints:
  *
- *   0001-font-style        `fontStyle: 'italic'` slants Paper Mono strokes
+ *   0001-font-style        `fontStyle: 'italic'` picks Inter's italic face
  *   0002-markdown-theme    a markdown link paints in `theme.link`;
  *                          `mdInlineCodeScale: 0.5` halves inline-code glyphs
  *   0003-window-handle     `getNativeWindowHandle()` names this X11 window
@@ -301,9 +301,9 @@ const checks = [
   },
   {
     patch: '0001-font-style',
-    what: "fontStyle 'italic' slants strokes (Blink oblique is 0.25)",
+    what: "fontStyle 'italic' picks Inter Italic, whose strokes slant about 0.19",
     value: italicSlant,
-    ok: italicSlant > 0.15 && italicSlant < 0.35
+    ok: italicSlant > 0.12 && italicSlant < 0.26
   },
   {
     patch: '0002-markdown-theme',

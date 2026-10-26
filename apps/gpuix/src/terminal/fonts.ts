@@ -9,11 +9,17 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { log } from '../log'
 import boldFile from './fonts/PaperMono-Bold.ttf' with { type: 'file' }
-import boldItalicFile from './fonts/PaperMono-BoldItalic.ttf' with { type: 'file' }
-import italicFile from './fonts/PaperMono-Italic.ttf' with { type: 'file' }
 import regularFile from './fonts/PaperMono-Regular.ttf' with { type: 'file' }
+import boldItalicFile from './fonts/PaperMonoOblique-BoldItalic.ttf' with { type: 'file' }
+import italicFile from './fonts/PaperMonoOblique-Italic.ttf' with { type: 'file' }
 
 export const TERMINAL_FONT_FAMILY = 'Paper Mono'
+/**
+ * The terminal's italic faces (SGR 3), Paper Mono with the oblique xterm.js
+ * draws baked in. A family of their own: under "Paper Mono" they would slant
+ * every italic mono run in the app, which the web draws upright.
+ */
+export const TERMINAL_ITALIC_FAMILY = 'Paper Mono Oblique'
 export const TERMINAL_FONT_SIZE = 14
 export const TERMINAL_LINE_HEIGHT = 1.2
 export const TERMINAL_FONT_WEIGHT_BOLD = 700

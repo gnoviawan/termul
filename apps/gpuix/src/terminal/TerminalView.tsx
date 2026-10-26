@@ -17,6 +17,7 @@ import {
   TERMINAL_FONT_FAMILY,
   TERMINAL_FONT_SIZE,
   TERMINAL_FONT_WEIGHT_BOLD,
+  TERMINAL_ITALIC_FAMILY,
   TERMINAL_LINE_HEIGHT,
   terminalCharHeight
 } from './fonts'
@@ -173,7 +174,7 @@ const RowView = memo(function RowView({
                 width: run.cols * cell.width,
                 height: cell.height,
                 lineHeight: cell.height,
-                fontFamily: TERMINAL_FONT_FAMILY,
+                fontFamily: run.italic ? TERMINAL_ITALIC_FAMILY : TERMINAL_FONT_FAMILY,
                 fontSize,
                 fontWeight: run.bold ? TERMINAL_FONT_WEIGHT_BOLD : 400,
                 ...(run.italic ? { fontStyle: 'italic' } : {}),

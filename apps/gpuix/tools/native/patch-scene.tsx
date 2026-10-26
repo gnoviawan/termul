@@ -5,25 +5,30 @@
  *
  * bun tools/native/patch-scene.tsx <ready.json>
  */
-import { renameSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { basename } from 'node:path'
 import { type GpuixTheme, type PublicInstance, render, useGpuixRequired } from '@gpuix/react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { FONT_FILES } from '../../src/style/fonts'
 import { registerTerminalFonts } from '../../src/terminal/fonts'
 import {
   BLUR,
   BULLET,
   CODE_PAD,
+  GRID,
   LONG_VALUE,
   SAMPLES,
   type Sample,
   SCENE,
-  GRID,
   TABLE,
   TABLE_HEADER_FILL,
   TRACKING
 } from './samples'
 
 const [readyFile] = process.argv.slice(2)
+
+/** 0001's family: an upright and an italic face, as the app's italic text has. Paper Mono has no italic. */
+const STYLE_FACES = ['Inter-Regular.ttf', 'Inter-Italic.ttf']
 
 const mono: GpuixTheme = {
   text: '#ffffff',
@@ -33,7 +38,14 @@ const mono: GpuixTheme = {
   fontMono: 'Paper Mono',
   metrics: { mdTextSize: 32, mdLineHeight: 44 }
 }
-type MarkdownSample = 'link' | 'codeFull' | 'codeHalf' | 'codeTight' | 'codePad' | 'table' | 'bullet'
+type MarkdownSample =
+  | 'link'
+  | 'codeFull'
+  | 'codeHalf'
+  | 'codeTight'
+  | 'codePad'
+  | 'table'
+  | 'bullet'
 const THEMES: Record<MarkdownSample, GpuixTheme> = {
   link: { ...mono, link: '#ff0000', linkUnderline: '#ff0000' },
   codeFull: mono,
@@ -76,6 +88,8 @@ function App() {
   const [url, setUrl] = useState('about:blank')
   useEffect(() => {
     registerTerminalFonts(renderer)
+    for (const file of FONT_FILES)
+      if (STYLE_FACES.includes(basename(file))) renderer.registerFont?.(readFileSync(file))
     setFontsReady(true)
   }, [renderer])
   useEffect(() => {
@@ -129,8 +143,13 @@ function App() {
       style={{ width: '100%', height: '100%', backgroundColor: '#000000', flexDirection: 'column' }}
     >
       <div style={{ flexDirection: 'row' }}>
-        {box('upright', <text style={glyphs}>|||||||</text>)}
-        {box('italic', <text style={{ ...glyphs, fontStyle: 'italic' }}>|||||||</text>)}
+        {box('upright', <text style={{ ...glyphs, fontFamily: 'Inter Variable' }}>|||||||</text>)}
+        {box(
+          'italic',
+          <text style={{ ...glyphs, fontFamily: 'Inter Variable', fontStyle: 'italic' }}>
+            |||||||
+          </text>
+        )}
       </div>
       {(['link', 'codeFull', 'codeHalf'] as const).map((sample) =>
         box(sample, <markdown source={SOURCES[sample]} theme={THEMES[sample]} />)

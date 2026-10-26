@@ -10,16 +10,15 @@ const ITALICS = ['Italic', 'MediumItalic', 'SemiBoldItalic', 'BoldItalic'] as co
  * Static TTF instances of the faces the web client loads as variable WOFF2
  * (built by tools/style/build-fonts.py). Family names match font-stacks.ts.
  * The italic faces serve markdown emphasis and, on the patched addon,
- * `fontStyle: 'italic'`; the tabular twin has none, as the web never
- * italicises figures.
+ * `fontStyle: 'italic'`. The tabular twin has none, as the web never
+ * italicises figures, and Paper Mono has none, as the web draws it upright
+ * (see tools/style/build-fonts.py).
  */
 export const FONT_FILES: readonly string[] = [
   ...['Inter', 'InterTabular', 'PaperMono'].flatMap((face) =>
     WEIGHTS.map((weight) => join(FONT_DIR, `${face}-${weight}.ttf`))
   ),
-  ...['Inter', 'PaperMono'].flatMap((face) =>
-    ITALICS.map((style) => join(FONT_DIR, `${face}-${style}.ttf`))
-  )
+  ...ITALICS.map((style) => join(FONT_DIR, `Inter-${style}.ttf`))
 ]
 
 /** Register Inter Variable, its tabular-figure twin and Paper Mono. Returns the count. */

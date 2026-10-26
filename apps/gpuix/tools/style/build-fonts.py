@@ -9,10 +9,13 @@ because GPUIX cannot set font features per element:
   - Inter `tnum`, as a separate family for `tabular-nums`
 
 Italics: Inter's real italic masters become "Inter Variable" italic faces.
-Paper Mono has no italic, so the browser draws a synthetic oblique; the
-Paper Mono italic faces here are the same skew baked into the outlines
-(Blink's synthetic italic, SkFont skewX -1/4), for the prose faces and the
-terminal's own Paper Mono files (src/terminal/fonts).
+Paper Mono has no italic, and index.css turns synthesis off for `.font-mono`,
+code, pre and kbd, so the web draws italic Paper Mono upright; GPUI, which
+never synthesizes, does the same when "Paper Mono" has no italic face.
+xterm.js does slant SGR 3 (its canvas synthesizes an oblique), so the
+terminal gets that skew baked into its own outlines (Blink's synthetic
+italic, SkFont skewX -1/4) as a separate family, "Paper Mono Oblique",
+that only the terminal names (src/terminal/fonts).
 
 Run from apps/gpuix (needs the repo root node_modules):
   uv run --with fonttools --with brotli python -I tools/style/build-fonts.py
@@ -161,15 +164,11 @@ def main():
             italic = inter(weight, tmp, "italic")
             rename(italic, "Inter Variable", weight, italic=True)
             save(italic, f"Inter-{suffix}.ttf")
-            mono = oblique(instance(PAPER_MONO, weight))
-            freeze(mono, "zero")
-            rename(mono, "Paper Mono", weight, italic=True)
-            save(mono, f"PaperMono-{suffix}.ttf")
     for weight in (400, 700):
         upright = os.path.join(TERMINAL_FONTS, f"PaperMono-{WEIGHTS[weight]}.ttf")
         mono = oblique(TTFont(upright))
-        rename(mono, "Paper Mono", weight, italic=True)
-        path = os.path.join(TERMINAL_FONTS, f"PaperMono-{italic_style(weight).replace(' ', '')}.ttf")
+        rename(mono, "Paper Mono Oblique", weight, italic=True)
+        path = os.path.join(TERMINAL_FONTS, f"PaperMonoOblique-{italic_style(weight).replace(' ', '')}.ttf")
         mono.save(path)
         print(f"wrote {os.path.relpath(path, APP)} ({os.path.getsize(path)} bytes)")
 
