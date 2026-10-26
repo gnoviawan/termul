@@ -268,7 +268,6 @@ interface Drawn {
 /** The diagram in its frame with the pan and zoom buttons; inline the frame takes the fitted height. */
 function PanZoomStage({ diagram, mode }: { diagram: Drawn; mode: PanZoomMode }) {
   const { width, height: naturalHeight } = diagram
-  const content: Size = { width, height: naturalHeight }
   const [stage, setStage] = useState<Size>({ width: 0, height: 0 })
   const [view, setView] = useState<PanZoomView>(initialView)
   const drag = useRef<{ from: Point; pan: Point } | null>(null)
@@ -283,7 +282,7 @@ function PanZoomStage({ diagram, mode }: { diagram: Drawn; mode: PanZoomMode }) 
     )
   }, [width, naturalHeight, stage.width, stage.height, mode])
   const height = mode === 'inline' ? Math.max(112, view.stageHeight ?? 0) : stage.height
-  const box = placement(view, content, { width: stage.width, height })
+  const box = placement(view, { width, height: naturalHeight }, { width: stage.width, height })
   const fullscreen = mode === 'fullscreen'
   return (
     <div
@@ -293,7 +292,8 @@ function PanZoomStage({ diagram, mode }: { diagram: Drawn; mode: PanZoomMode }) 
       style={{
         ...tw('relative w-full overflow-hidden'),
         ...(fullscreen ? tw('h-full') : { height }),
-        cursor: drag.current ? 'grabbing' : 'grab',
+        cursor: 'grab',
+        active: { cursor: 'grabbing' },
         pointerEvents: 'auto'
       }}
       onLayout={(event: { width?: number; height?: number }) =>
