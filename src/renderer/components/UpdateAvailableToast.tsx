@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { confirmInstallAndRestart } from '@/lib/confirm-install-update'
-import { isTauriContext } from '@/lib/tauri-runtime'
-import { isAurUpdateMode } from '@/lib/tauri-updater-api'
+import { isDesktopApp } from '@/lib/desktop-app'
+import { isAurUpdateMode, opensDownloadPage } from '@/lib/tauri-updater-api'
 import {
   updaterStore,
   useDownloadProgress,
@@ -63,6 +63,7 @@ function setReminderForTomorrow(): void {
 export function showUpdateToast(version: string, releaseNotes?: string): void {
   const isAur = isAurUpdateMode()
   const channel = updaterStore.getState().updateChannel
+  const manual = opensDownloadPage(channel)
   const title =
     channel === 'insider'
       ? 'Insider update available'
@@ -77,11 +78,11 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
       ? `Version ${version}. What's new: ${releaseNotes.slice(0, 100)}${releaseNotes.length > 100 ? '…' : ''}`
       : isAur
         ? `Version ${version} is available. Update with yay.`
-        : channel !== 'stable'
+        : manual
           ? `Version ${version}. Open the download page to install it manually.`
           : `Version ${version} is ready to download.`,
     action: {
-      label: isAur ? 'Use yay' : channel !== 'stable' ? 'Open download page' : 'Download',
+      label: isAur ? 'Use yay' : manual ? 'Open download page' : 'Download',
       onClick: async () => {
         if (isAur) {
           toast.info('Run in terminal', {
@@ -157,11 +158,12 @@ function dismissDownloadProgressToast(version: string): void {
  *
  * Desktop-only (issue #843): the web client is updated together with the
  * server, so update-available/downloaded/progress toasts never show there.
+ * A desktop host (GPUIX) gets them; its updates open the download page.
  * The hook still subscribes to store state (stable hook order for both
  * roots) but every toast effect no-ops on web.
  */
 export function useUpdateToast(): void {
-  const isDesktop = isTauriContext()
+  const isDesktop = isDesktopApp()
   const { updateAvailable, downloaded, isDownloading, skippedVersion } = useUpdaterState()
   const version = useUpdateVersion()
   const _updateDownloaded = useUpdateDownloaded()

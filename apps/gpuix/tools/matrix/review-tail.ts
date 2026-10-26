@@ -193,7 +193,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Both clients are host-local. Both show Add account, the Keep work and personal apart card, and the Add a Claude account dialog with the name typed. The run stops before Continue, which would start a real claude.ai sign-in on the host.',
-      'The account row now lays out on one line in GPUIX: its track list grid places itself (`col-span-2`), so compat keeps the equal-track fallback, now with the list\'s four columns (G15), where it had stacked one column. The usage note starts at 585 px against the web\'s 638 px and the row menu at 1035 px against 1105 px, because the four tracks are equal.',
+      "The account row now lays out on one line in GPUIX: its track list grid places itself (`col-span-2`), so compat keeps the equal-track fallback, now with the list's four columns (G15), where it had stacked one column. The usage note starts at 585 px against the web's 638 px and the row menu at 1035 px against 1105 px, because the four tracks are equal.",
       'The patched addon paints the Add a Claude account dialog over Preferences as on the web (I6: 0.18 % full-frame perceptual on the last step; G15 read 2.88 % on the published addon, which does not paint it).',
       'I6 measured it in the full run on the patched addon (series 2fc3aff4), both clients host-local.'
     ],
@@ -232,7 +232,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       SELECT,
-      'The agents list now shows the registry as on the web, Agoragentic first with its version, Latest and Available (I6 run). GPUIX leaves each agent\'s icon tile empty: AcpAgentsSettings draws the catalog SVG through `dangerouslySetInnerHTML`, which compat does not render.',
+      "The agents list now shows the registry as on the web, Agoragentic first with its version, Latest and Available (I6 run). GPUIX leaves each agent's icon tile empty: AcpAgentsSettings draws the catalog SVG through `dangerouslySetInnerHTML`, which compat does not render.",
       DIVIDERS,
       LABEL_LINE,
       SETTINGS_BASE[1]
@@ -249,7 +249,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Accounts lists the Default account, Signed in, with "Usage is not available right now", Try again and the `termul-server claude account` hint in both. The skeleton M2 saw was the frame grab racing the list: the step checked for the nav label it had just clicked. It now waits for "1 account", which GPUIX painted 1871 ms after the click and the web 158 ms after (G6 run).',
-      'The account row lays out on one line as on the web (G15 track lists), but its wide grid places its cells (`col-start-*`, `row-start-*`), so compat keeps four equal tracks: the usage note starts at 586 px against the web\'s 642 px and the row menu at 1034 px against 1104 px (I6 run).',
+      "The account row lays out on one line as on the web (G15 track lists), but its wide grid places its cells (`col-start-*`, `row-start-*`), so compat keeps four equal tracks: the usage note starts at 586 px against the web's 642 px and the row menu at 1034 px against 1104 px (I6 run).",
       SETTINGS_BASE[1]
     ],
     cause: 'compat translator gap',
@@ -326,9 +326,9 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Reference: the desktop app (Tauri on WebKitGTK) built from the same checkout, driven with X input at the same 1280x800 (`tools/reference/tauri.ts`). Ctrl+Shift+N opens a browser tab in both and the typed URL loads the local reference page on the same pixels; the pane region reads 0.71 % perceptual.',
-      'The URL bar ends with the agentation button only, as in the desktop app: the GPUIX bundle defines Vite\'s PROD, DEV and MODE (G15), so the dev-only Debug Console is gone.',
-      'The agentation toolbar\'s round button sits at the page\'s bottom right in both: the webview helper injects the desktop\'s toolbar bundle when each browsed page has loaded (G15). GPUIX has no annotation service, so its toolbar keeps annotations in the page.',
-      'GPUIX names the tab after the page title (R5 reference page); the desktop tab reads 127.0.0.1:8289. The renderer prefers the title (browser-tab.tsx); the desktop\'s page poller reports it over Tauri IPC, which the capability file grants only to the main window, so for a remote page it never arrives (inferred from capabilities/default.json and the desktop log, which shows the poller injected and no title activity). G15 left GPUIX\'s titles in place and names the desktop as the side to fix.',
+      "The URL bar ends with the agentation button only, as in the desktop app: the GPUIX bundle defines Vite's PROD, DEV and MODE (G15), so the dev-only Debug Console is gone.",
+      "The agentation toolbar's round button sits at the page's bottom right in both: the webview helper injects the desktop's toolbar bundle when each browsed page has loaded (G15). GPUIX has no annotation service, so its toolbar keeps annotations in the page.",
+      "GPUIX names the tab after the page title (R5 reference page); the desktop tab reads 127.0.0.1:8289. The renderer prefers the title (browser-tab.tsx); the desktop's page poller reports it over Tauri IPC, which the capability file grants only to the main window, so for a remote page it never arrives (inferred from capabilities/default.json and the desktop log, which shows the poller injected and no title activity). G15 left GPUIX's titles in place and names the desktop as the side to fix.",
       'The desktop app draws its own window buttons at the right of the tab bar; GPUIX leaves them to the window manager. Both rails show the SSH section now that GPUIX is host-local; the desktop has no seeded chat.',
       'I6 measured it in the full run on the patched addon (series 2fc3aff4), both clients host-local.'
     ],
@@ -337,13 +337,13 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'update.toast': {
-    status: 'pending-unit',
+    status: 'ported',
     differences: [
-      "GPUIX has neither the update toast nor the what's new modal; App.tsx renders both only under isTauriContext(). The reference is the desktop app (`tools/reference/tauri.ts`): the toast against a release feed, the modal after a version change. The packaged GPUIX app has a command-line check, `termul-gpuix --check-update`."
-    ],
-    cause: 'native override needed',
-    unit: "U1 GPUIX updater and what's new",
-    impact: 1
+      "Reference: the desktop app (`tools/reference/tauri.ts`), both clients on the nightly channel against the real release feeds, with a last-seen version of 0.4.51 (`stores` in the surface). Both open What's New for 0.4.52 with its GitHub notes and toast Nightly update available, Version 0.5.0-nightly…, with Remind me tomorrow and Open download page. Remind me tomorrow closes the toast and Got it the modal in both.",
+      "GPUIX runs the shared updater through the desktop host seam (U1, `src/renderer/lib/desktop-app.ts`): it reads the channel manifest itself, every channel opens the download page and nothing is downloaded or installed. The notes paint as native markdown (`overrides/components/WhatsNewNotes.tsx`), since the web's sanitized HTML goes through `dangerouslySetInnerHTML`. The desktop reserves a scrollbar beside the notes, so its lines wrap a word earlier.",
+      'The toast lays its icon beside the title, as sonner does: the GPUIX toaster resolves the percentage in `basis-[calc(100%-28px)]` against the card (U1; it had dropped the class and put the icon on its own row). Its buttons now close the toast as sonner does. The desktop sets the toast in WebKitGTK\'s system-ui font, where Chromium and GPUIX use Arial (Liberation Sans), so the description wraps after "Open the" on the desktop and after the version in GPUIX; and WebKitGTK paints both toast buttons white (sonner\'s defaults), where the web and GPUIX use the secondary and primary fills.',
+      'The desktop composer shows Codex timing out instead of the Chat Scenario Agent, has no seeded chat, and draws its own window buttons (as in browser.pane).'
+    ]
   },
 
   'snapshots.page': {

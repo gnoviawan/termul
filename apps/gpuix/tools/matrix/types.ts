@@ -127,9 +127,18 @@ export interface Surface {
   pending?: { unit: string; reason: string }
   /** Not driven: no reference to compare against, for the reason given. */
   blocked?: string
+  /**
+   * App preference stores the client starts with, by store file and key
+   * (`{ 'whats-new.json': { 'whatsNew.lastSeenVersion': '0.4.51' } }`): the
+   * desktop app's plugin-store files, and GPUIX's localStorage entries
+   * `<file>::<key>` (`src/renderer/lib/local-plugin-store.ts`).
+   */
+  stores?: AppStores
   /** Server-side setup run before each client's run (re-seeds what an earlier run changed). */
   prepare?(world: import('./world').World, client: Client): Promise<void>
 }
+
+export type AppStores = Record<string, Record<string, unknown>>
 
 export interface ActionLog {
   step: string

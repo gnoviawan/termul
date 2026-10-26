@@ -361,12 +361,30 @@ const LONG_TAIL: Surface[] = [
     area: 'notifications',
     title: "Update available toast and what's new modal",
     reference: 'tauri',
-    pending: {
-      unit: "U1 GPUIX updater and what's new",
-      reason:
-        'GPUIX has neither (App.tsx renders WhatsNewModal and UpdateAvailableToast only under isTauriContext()); the reference is the desktop app, which shows the toast against a release feed and the modal after a version change'
+    // Both clients check the real release feeds. Nightly is ahead of every
+    // release, and a last-seen version below the running one opens What's New
+    // with that version's GitHub notes.
+    stores: {
+      'updater-preferences.json': { 'updater.updateChannel': 'nightly' },
+      'whats-new.json': { 'whatsNew.lastSeenVersion': '0.4.51' }
     },
-    steps: []
+    steps: [
+      step(
+        'a-launch',
+        [wait(1500)],
+        [
+          { text: "What's New", timeoutMs: 20_000 },
+          { text: 'Nightly update available', timeoutMs: 20_000 },
+          ...see('Open download page', 'Remind me tomorrow', 'Got it')
+        ]
+      ),
+      // The desktop's toast can time out (30 s) while its frame settles, so both dismiss it.
+      step(
+        'b-dismiss',
+        [click(txt('Remind me tomorrow')), click(txt('Got it'))],
+        [gone("What's New"), gone('Nightly update available')]
+      )
+    ]
   },
   {
     id: 'snapshots.page',

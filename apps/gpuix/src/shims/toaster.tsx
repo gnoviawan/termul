@@ -84,6 +84,21 @@ const ICON_CLASS: Record<ToastKind, string> = {
 const extra = (classes: string | undefined): StyleDesc =>
   classes ? tw(classes.replace(/!/g, '')) : {}
 
+/** The card's content box: sonner's `--width` less its 16px padding and 1px border. */
+const CONTENT_WIDTH = WIDTH - 2 * 16 - 2
+
+/**
+ * Classes on a child of the card. GPUI lengths have no calc() over a
+ * percentage, so a percentage inside calc() resolves here against the card's
+ * content box, which is fixed (`basis-[calc(100%-28px)]` on the update toast).
+ */
+const childExtra = (classes: string | undefined): StyleDesc =>
+  extra(
+    classes?.replace(/calc\([^)]*\)/g, (expr) =>
+      expr.replace(/(\d+(?:\.\d+)?)%/g, (_, pct) => `${(Number(pct) * CONTENT_WIDTH) / 100}px`)
+    )
+  )
+
 function cardStyle(dark: boolean): StyleDesc {
   return {
     ...tw('bg-card border border-border text-foreground'),
@@ -104,14 +119,17 @@ function cardStyle(dark: boolean): StyleDesc {
   }
 }
 
+/** sonner closes the toast after either button's handler runs. */
 function ButtonBox({
   button,
   classes,
-  base
+  base,
+  onDone
 }: {
   button: ToastButton
   classes: string
   base: string
+  onDone: () => void
 }) {
   return (
     <div
@@ -128,7 +146,10 @@ function ButtonBox({
         flexShrink: 0,
         ...extra(classes)
       }}
-      onClick={button.onClick}
+      onClick={(event) => {
+        button.onClick(event)
+        onDone()
+      }}
     >
       <text>{button.label}</text>
     </div>
@@ -147,11 +168,12 @@ export function Toaster({
   const clocks = useRef(new Map<string | number, { remaining: number; started: number | null }>())
   const dark = useAppearanceMode() !== 'light'
 
-  const remove = useCallback((toast: ToastRecord, reason: 'dismiss' | 'auto') => {
+  /** A button click closes the toast without `onDismiss`, as sonner's `deleteToast` does. */
+  const remove = useCallback((toast: ToastRecord, reason: 'dismiss' | 'auto' | 'button') => {
     clocks.current.delete(toast.id)
     setToasts((list) => list.filter((t) => t.id !== toast.id))
     if (reason === 'auto') toast.onAutoClose?.(toast)
-    else toast.onDismiss?.(toast)
+    else if (reason === 'dismiss') toast.onDismiss?.(toast)
   }, [])
 
   useEffect(
@@ -278,7 +300,7 @@ export function Toaster({
             display: 'flex',
             flexDirection: 'column',
             gap: 2,
-            ...extra(t.classNames?.content)
+            ...childExtra(t.classNames?.content)
           }}
         >
           <text style={{ fontWeight: 500, lineHeight: 19.5, ...extra(t.classNames?.title) }}>
@@ -303,6 +325,7 @@ export function Toaster({
             button={t.cancel}
             classes={t.classNames?.cancelButton ?? ''}
             base="bg-secondary text-secondary-foreground"
+            onDone={() => remove(t, 'button')}
           />
         ) : null}
         {/* Both buttons take `margin-left: auto` in sonner, so the free space splits around the cancel button. */}
@@ -314,6 +337,7 @@ export function Toaster({
             button={t.action}
             classes={t.classNames?.actionButton ?? ''}
             base="bg-primary-fill text-primary-foreground"
+            onDone={() => remove(t, 'button')}
           />
         ) : null}
       </div>

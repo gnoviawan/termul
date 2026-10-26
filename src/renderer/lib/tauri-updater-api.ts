@@ -10,7 +10,9 @@ import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
+import { getDesktopHost } from './desktop-host'
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
+import { getCurrentAppVersion } from './tauri-release-notes'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
 // Stable signed-manifest alias published alongside `latest-stable.json` so the
@@ -366,6 +368,30 @@ async function checkAurUpdate(): Promise<UpdateInfo | null> {
   return compareVersions(latestVersion, currentVersion) > 0 ? mapGitHubReleaseToInfo(release) : null
 }
 
+async function fetchManifestViaIpc(channel: UpdateChannel): Promise<unknown> {
+  const result = await invoke<IpcResult<unknown>>('updater_fetch_channel_manifest', { channel })
+  if (!result.success) {
+    throw new Error(result.error)
+  }
+  return result.data
+}
+
+/** A desktop host's client is not a web page, so it reads the manifest without the IPC hop. */
+async function fetchManifestDirect(channel: UpdateChannel): Promise<unknown> {
+  const url = getChannelManifestUrl(channel)
+  const response = await fetch(url, { signal: AbortSignal.timeout(AUR_UPDATE_CHECK_TIMEOUT_MS) })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+/** Opens the release page for a manual update: the OS browser, through the host when there is one. */
+async function openDownloadPage(url: string): Promise<void> {
+  const host = getDesktopHost()
+  await (host ? host.openUrl(url) : openUrl(url))
+}
+
 interface ChannelManifest {
   version?: string
   notes?: string
@@ -374,11 +400,9 @@ interface ChannelManifest {
 }
 
 async function fetchChannelManifest(channel: UpdateChannel): Promise<ChannelManifest> {
-  const result = await invoke<IpcResult<unknown>>('updater_fetch_channel_manifest', { channel })
-  if (!result.success) {
-    throw new Error(result.error)
-  }
-  const body = result.data
+  const body = getDesktopHost()
+    ? await fetchManifestDirect(channel)
+    : await fetchManifestViaIpc(channel)
   if (typeof body !== 'object' || body === null) {
     throw new Error('Channel manifest is not a JSON object')
   }
@@ -412,7 +436,7 @@ async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | 
   let updateInfo: UpdateInfo | null = null
 
   if (latestVersion) {
-    const currentVersion = await getVersion()
+    const currentVersion = getDesktopHost() ? await getCurrentAppVersion() : await getVersion()
     if (compareVersions(latestVersion, currentVersion) > 0) {
       updateInfo = {
         version: latestVersion,
@@ -455,7 +479,8 @@ export async function checkForUpdates(
 
   // Insider / Nightly consult their per-channel manifest and offer manual
   // download (the signed `check()` flow is stable-only by plugin limitation).
-  if (channel !== DEFAULT_UPDATE_CHANNEL) {
+  // A desktop host never installs, so every channel is a manual download there.
+  if (channel !== DEFAULT_UPDATE_CHANNEL || getDesktopHost()) {
     return checkChannelUpdate(channel)
   }
 
@@ -558,7 +583,7 @@ export async function downloadUpdate(
   }
 
   if (isManualUpdateMode && manualUpdateInfo) {
-    await openUrl(manualUpdateInfo.downloadUrl ?? UPSTREAM_LATEST_RELEASE_URL)
+    await openDownloadPage(manualUpdateInfo.downloadUrl ?? UPSTREAM_LATEST_RELEASE_URL)
     return { success: true, data: undefined }
   }
 
@@ -630,7 +655,7 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
   }
 
   if (isManualUpdateMode && manualUpdateInfo) {
-    await openUrl(manualUpdateInfo.downloadUrl ?? UPSTREAM_LATEST_RELEASE_URL)
+    await openDownloadPage(manualUpdateInfo.downloadUrl ?? UPSTREAM_LATEST_RELEASE_URL)
     return { success: true, data: undefined }
   }
 
@@ -700,6 +725,8 @@ export async function getAutoUpdateEnabled(): Promise<IpcResult<boolean>> {
 }
 
 export function registerUpdateEventHandlers(handlers: TauriUpdaterEventHandlers): () => void {
+  // Recovery metadata backs the Tauri self-install; a desktop host never installs.
+  if (getDesktopHost()) return () => {}
   void syncRecoveryVersionMetadata().catch((error) => {
     handlers.onError?.(
       `Failed to initialize updater recovery metadata: ${getErrorMessage(error, 'Unknown error')}`
@@ -731,6 +758,11 @@ export function _resetUpdaterStateForTesting(): void {
   lastCheckedAt = null
   autoUpdateEnabled = true
   isManualUpdateMode = false
+}
+
+/** Whether an update here is installed by the user from its download page rather than in the app. */
+export function opensDownloadPage(channel: UpdateChannel): boolean {
+  return channel !== DEFAULT_UPDATE_CHANNEL || getDesktopHost() !== null
 }
 
 export function isInManualUpdateMode(): boolean {

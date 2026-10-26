@@ -20,7 +20,7 @@ import path from 'node:path'
 import { PNG } from 'pngjs'
 import { xinput } from '../browser/probes'
 import { type Driver, describe, type Point } from '../matrix/drive'
-import type { Action, ActionLog } from '../matrix/types'
+import type { Action, ActionLog, AppStores } from '../matrix/types'
 import { PROJECTS, type ProjectKey, type World } from '../matrix/world'
 import { grabFrame, SCREEN_MARGIN, startSessionBus, startXvfb } from '../parity/shoot-gpuix'
 
@@ -41,8 +41,11 @@ export interface TauriSession {
   grab(outPath: string): Promise<void>
 }
 
-/** projects.json as the desktop app keeps it (schema 4), listing the world's projects in order. */
-function seedDataDir(home: string, world: World): void {
+/**
+ * projects.json as the desktop app keeps it (schema 4), listing the world's
+ * projects in order, and the plugin-store files the surface starts with.
+ */
+function seedDataDir(home: string, world: World, stores: AppStores = {}): void {
   const dataDir = path.join(home, '.local/share', IDENTIFIER)
   mkdirSync(dataDir, { recursive: true })
   const projects = (Object.keys(PROJECTS) as ProjectKey[]).map((key) => ({
@@ -55,6 +58,8 @@ function seedDataDir(home: string, world: World): void {
     path.join(dataDir, 'projects.json'),
     JSON.stringify({ schemaVersion: 4, projects, imported: false })
   )
+  for (const [file, values] of Object.entries(stores))
+    writeFileSync(path.join(dataDir, file), JSON.stringify(values))
 }
 
 function avatarShown(file: string): boolean {
@@ -103,13 +108,13 @@ function placeWindow(display: string, origin: Point, width: number, height: numb
  * run `body`, then tear everything down.
  */
 export async function withTauri<T>(
-  opts: { world: World; home: string; width: number; height: number },
+  opts: { world: World; home: string; width: number; height: number; stores?: AppStores },
   body: (session: TauriSession) => Promise<T>
 ): Promise<T> {
   if (!existsSync(TAURI_BIN))
     throw new Error(`no desktop app at ${TAURI_BIN} (see tools/reference/tauri.ts)`)
   rmSync(opts.home, { recursive: true, force: true })
-  seedDataDir(opts.home, opts.world)
+  seedDataDir(opts.home, opts.world, opts.stores)
   const xvfb = await startXvfb(opts.width + SCREEN_MARGIN, opts.height + SCREEN_MARGIN)
   const bus = await startSessionBus(xvfb.display)
   const home = opts.home

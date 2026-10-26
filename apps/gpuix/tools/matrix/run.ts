@@ -28,7 +28,15 @@ import { grantHostLocal, hostLocalTokenPath } from './host-local'
 import { writeReport } from './report'
 import { SURFACES } from './surfaces'
 import { killTerminals } from './terminals'
-import type { AutoStatus, Client, ClientRun, StepDiff, Surface, SurfaceResult } from './types'
+import type {
+  AppStores,
+  AutoStatus,
+  Client,
+  ClientRun,
+  StepDiff,
+  Surface,
+  SurfaceResult
+} from './types'
 import {
   createWorld,
   prepareDevice,
@@ -211,6 +219,15 @@ async function runWeb(
   }
 }
 
+/** The stores as the localStorage entries a non-Tauri root reads them from. */
+function localStorageEntries(stores: AppStores = {}): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [file, values] of Object.entries(stores))
+    for (const [key, value] of Object.entries(values))
+      out[`${file}::${key}`] = JSON.stringify(value)
+  return out
+}
+
 async function runGpuix(entry: string, world: World, surface: Surface, points: Map<string, Point>) {
   const deviceId = `m1-${slug(surface.id)}-gpuix`
   await sweepTerminals(world)
@@ -224,7 +241,7 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
   mkdirSync(path.join(clientStateDir, 'web-storage'), { recursive: true })
   writeFileSync(
     path.join(clientStateDir, 'web-storage', `${host}.json`),
-    JSON.stringify({ 'termul.deviceId': deviceId })
+    JSON.stringify({ 'termul.deviceId': deviceId, ...localStorageEntries(surface.stores) })
   )
   const env: Record<string, string> = {
     TERMUL_GPUIX_DATA_DIR: path.dirname(hostLocalTokenPath(world))
@@ -256,7 +273,7 @@ async function runGpuix(entry: string, world: World, surface: Surface, points: M
 
 async function runTauri(world: World, surface: Surface, points: Map<string, Point>) {
   const home = path.join(values.state as string, 'tauri', slug(surface.id))
-  return withTauri({ world, home, ...SIZE }, (session) =>
+  return withTauri({ world, home, stores: surface.stores, ...SIZE }, (session) =>
     runSteps(surface, 'tauri', tauriDriver(session, points), session.grab)
   )
 }
