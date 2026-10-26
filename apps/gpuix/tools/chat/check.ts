@@ -12,8 +12,8 @@
  * the live session and sends each scripted turn through the store.
  * 3. Clicking the button returns to the live edge: the button goes away and
  *    the newest row ends inside the list.
- * 4. Expanding the turn's activity and then its thought group shows the
- *    thought text.
+ * 4. The newest turn's activity row reads "Worked for Ns"; expanding it and
+ *    then its thought group shows the thought text.
  *
  * Exits non-zero on the first failed assertion.
  */
@@ -154,11 +154,11 @@ try {
     },
     async ({ app, grab }) => {
       // The scene starts the chat itself, so it owns the live session; the
-      // scripted turns go through the store as the composer sends them.
-      await Bun.sleep(4000)
+      // scripted turns go through the store as the composer sends them. A
+      // prompt written before the chat has started waits in the scene.
       for (const prompt of SCRIPT_PROMPTS) {
         command({ prompt })
-        await app.getByTestId('chat-scene-turn-active').waitFor({ timeoutMs: 15_000 })
+        await app.getByTestId('chat-scene-turn-active').waitFor({ timeoutMs: 30_000 })
         await turnEnded(app)
       }
       await app.getByTestId('chat-scene-ready').waitFor({ timeoutMs: READY_TIMEOUT_MS })
@@ -229,28 +229,49 @@ try {
 
       // Bring the newest turn's activity row to the top, open it, then its thought.
       const allRows = (await rows(app)).rows
-      let activityIndex = -1
-      allRows.forEach((row, i) => {
-        if (row.testId?.startsWith('chat-row-activity:')) activityIndex = i
-      })
-      command({ scroll: 'row', index: activityIndex, offset: 0 })
-      await Bun.sleep(800)
-      const transcript = await app.getByTestId('chat-transcript-list').element()
-      // Text nodes carry no bounds; the disclosure row around the label does.
-      const newest = lowest(
-        transcript,
-        (node) => (node.bounds?.height ?? 0) < 60 && nodeText(node).includes('Worked for')
+      const activity = [...allRows]
+        .reverse()
+        .find((row) => row.testId?.startsWith('chat-row-activity:'))
+      if (!activity?.testId) throw new Error('no activity row in the transcript')
+      command({ scroll: 'row', index: allRows.indexOf(activity), offset: 0 })
+      // The scene applies the scroll on its next control tick, and the row has
+      // bounds only once a frame has laid it out there: wait for that frame.
+      const listTop = (await rows(app)).list.y
+      const atTop = (y: number) => y >= listTop - 1 && y < listTop + 60
+      const painted = await poll(
+        async () =>
+          (await rows(app)).rows.find(
+            (row) => row.testId === activity.testId && row.bounds && row.bounds.height > 0
+          ),
+        (row) => row?.bounds !== undefined && atTop(row.bounds.y),
+        10_000
       )
-      if (!newest) throw new Error('no painted "Worked for" row')
-      await app.mouse.click({ x: newest.x + newest.width / 2, y: newest.y + newest.height / 2 })
-      await Bun.sleep(800)
-      const run = lowest(
-        await app.getByTestId('chat-transcript-list').element(),
-        (node) => (node.bounds?.height ?? 0) < 60 && nodeText(node).includes('Thought,')
+      const header = painted?.bounds
+      if (!header || !atTop(header.y))
+        throw new Error(
+          `activity row ${activity.testId} not scrolled to the top: bounds ${JSON.stringify(header)}, list top ${listTop}`
+        )
+      const label = nodeText(painted).replace(/\s+/g, ' ').trim()
+      assert(
+        'the newest activity row reads its duration',
+        /Worked for \d+s/.test(label),
+        `label ${JSON.stringify(label.slice(0, 80))}`
+      )
+      await app.mouse.click({ x: header.x + header.width / 2, y: header.y + header.height / 2 })
+      const run = await poll(
+        async () =>
+          lowest(
+            await app.getByTestId('chat-transcript-list').element(),
+            (node) => (node.bounds?.height ?? 0) < 60 && nodeText(node).includes('Thought,')
+          ),
+        (bounds) => bounds !== undefined
       )
       if (!run) throw new Error('no painted work-run row holding the thought')
       await app.mouse.click({ x: run.x + run.width / 2, y: run.y + run.height / 2 })
-      await Bun.sleep(800)
+      await poll(
+        () => app.getByTestId('thought-group-trigger').count(),
+        (n) => n > 0
+      )
       await grab(path.join(OUT, 'activity.png'))
       const triggers = await app.getByTestId('thought-group-trigger').count()
       assert('the activity shows a thought group', triggers > 0, `thought triggers=${triggers}`)

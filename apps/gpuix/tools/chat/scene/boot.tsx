@@ -179,6 +179,9 @@ function useSceneControl(
     const timer = setInterval(() => {
       const raw = io.read(file)
       if (!raw || raw.seq <= last) return
+      // A prompt that comes before the scene's chat has started waits for it
+      // on the next tick instead of being dropped.
+      if ('prompt' in raw && !sessionRef.current) return
       last = raw.seq
       if ('flushPerf' in raw) {
         if (probe && perfOut) io.write(perfOut, JSON.stringify(probe.perf))
