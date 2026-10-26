@@ -16,7 +16,11 @@ export const PROSE =
 export const RUN_ORDER =
   'The GPUIX Chats list holds more cards because its pass runs after the web pass on the same server.'
 export const WASH =
-  "Each inline-code wash sits its padding (3.7 px) left of the web's chip, with the glyphs within 2 px of the web's: native patch gpuix/0007 lays the padding out on both sides of the run and then still widens the wash on the left by the same amount (G13, measured on the transcript table's chips: wash from 734 px against 737, first glyph at 742 against 741)."
+  "Inline-code washes start where the web's chips do (N4: native patch zed/0006 measures a line that opens with a padded chip from the line's origin; GPUI had measured it from the first glyph, so every wash on such a line sat its padding left of the glyphs). On the transcript table the chips' washes start at 516 and 736 px against the web's 516 and 737 px (512 and 734 before N4)."
+export const CODE_CARD =
+  "The bash code card's body is 81 px between its borders in both, and the card 139 px tall in both (N4: the web's `.chat-streamdown pre` keeps a 0.55em bottom margin inside the body; it was 73 px). The task list lands on the web's columns (bullet 527, checkbox 547, text 565 px in both)."
+export const TAIL_OFFSET =
+  "The transcript sits 3 px higher than the web's, from the last reply down: its copy and retry icons end 2 px further above the Changed files bar (545 against 548 px, the bar at 602 against 603 px). It predates N4: the user bubble ends at 387 against 390 px on the exp/gpuix-client head too."
 export const TREE_TEXT =
   'The text check fails only because natively painted text is not in the automation tree.'
 export const SELECT =
