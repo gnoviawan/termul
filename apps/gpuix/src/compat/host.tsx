@@ -159,7 +159,7 @@ function groupOnly(tr: Translation): boolean {
 
 /** A consumer's element as its own `CompatHost` would build it for this group state. */
 function consumerElement(props: CompatHostProps, key: string | null, group: GroupSnapshot): ReactElement {
-  const { tag, tr, dom, isStatic } = props
+  const { tag, tr, dom, isStatic, font } = props
   const attrs = domAttrs(dom)
   const state: TwState = {
     disabled: Boolean(dom.disabled),
@@ -172,7 +172,7 @@ function consumerElement(props: CompatHostProps, key: string | null, group: Grou
     groupAttrs: group.attrs as TwState['groupAttrs']
   }
   const style = hostStyle(tr, needsOf(tr), state, compatDark())
-  const built = buildElement(tag, tr, dom, key ?? undefined, isStatic, { style, handlers: NO_HANDLERS })
+  const built = buildElement(tag, tr, dom, key ?? undefined, isStatic, { style, handlers: NO_HANDLERS, nativeStyle: font })
   domSource.set(built, { tag, props: dom, key: key ?? undefined })
   return claimConsumers(built, group) as ReactElement
 }
@@ -212,9 +212,11 @@ export interface CompatHostProps {
   dom: DomProps
   domKey: string | undefined
   isStatic: boolean
+  /** The line height an inherited font resolves to (`font.tsx`). */
+  font?: StyleDesc
 }
 
-function CompatHost({ tag, tr, dom, domKey, isStatic }: CompatHostProps): ReactElement {
+function CompatHost({ tag, tr, dom, domKey, isStatic, font }: CompatHostProps): ReactElement {
   const needs = needsOf(tr)
   const parentGroup = useContext(GroupContext) ?? NO_GROUP
   useSyncExternalStore(needs.group ? parentGroup.subscribe : noSubscribe, () => parentGroup.keyFor(needs.groupAttrs))
@@ -275,7 +277,7 @@ function CompatHost({ tag, tr, dom, domKey, isStatic }: CompatHostProps): ReactE
     return out
   }, [dom, needs.focus, store])
 
-  const built = buildElement(tag, tr, dom, undefined, isStatic, { style, handlers })
+  const built = buildElement(tag, tr, dom, undefined, isStatic, { style, handlers, nativeStyle: font })
   if (!store) return built
   return jsx(GroupContext.Provider, { value: store, children: claimConsumers(built, { ...store.get(), attrs }) })
 }
@@ -285,7 +287,8 @@ export function hostElement(
   tr: Translation,
   dom: DomProps,
   key: string | undefined,
-  isStatic: boolean
+  isStatic: boolean,
+  font?: StyleDesc
 ): ReactElement {
-  return jsx(CompatHost, { tag, tr, dom, domKey: key, isStatic }, key)
+  return jsx(CompatHost, { tag, tr, dom, domKey: key, isStatic, font }, key)
 }

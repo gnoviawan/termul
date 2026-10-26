@@ -5,8 +5,13 @@ import { Label } from '../../src/ui/label'
 
 type Props = { style?: Record<string, unknown>; children?: unknown }
 
+/** A context provider (the font a `text-sm` element hands down) is not a slot. */
+const isProvider = (node: unknown): node is ReactElement<Props> =>
+  typeof node === 'object' && node !== null && typeof (node as ReactElement).type === 'object'
+
 const kids = (element: unknown): ReactElement<Props>[] => {
-  const children = (element as ReactElement<Props>).props.children
+  let children = (element as ReactElement<Props>).props.children
+  while (isProvider(children)) children = children.props.children
   return (Array.isArray(children) ? children : [children]) as ReactElement<Props>[]
 }
 const lineOf = (slot: ReactElement<Props>) => slot.props.style?.minHeight
