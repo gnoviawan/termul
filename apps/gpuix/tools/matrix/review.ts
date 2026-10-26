@@ -88,15 +88,12 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'rail.add-menu': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Clicking + opens the New project / New folder group menu and New project opens the Create New Project modal with the same fields in both.',
       BLUR,
-      'Both clients show the + button\'s "Add project or folder group" tooltip after the menu closes (focus returns to the button). The web paints it under the modal\'s scrim, blurred, and GPUIX above it (G14 diagnosis): the web\'s TooltipContent has no portal, so it is a `z-50` box in the rail, under the later `fixed inset-0 z-50` NewProjectModal, while GPUIX gives every tooltip `LAYER.tooltip`, above all `z-50` layers. The footnote wraps "memory-only" at a different word.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'tooltip stacking under later z-50 overlays (unassigned)',
-    impact: 1
+      'Both clients show the + button\'s "Add project or folder group" tooltip after the menu closes (focus returns to the button), and both paint it under the modal\'s scrim, blurred (G16 TOOLTIP-Z). The web\'s TooltipContent has no portal, so it is a `z-50` box in the rail, under the later `fixed inset-0 z-50` NewProjectModal. GPUIX\'s tooltip layer now takes 50 too, and its content box no longer carries its own `z-50`, which had made it a nested layer that GPUI draws after every first-level layer of that priority. The footnote wraps "memory-only" at a different word.'
+    ]
   },
   'rail.collapse': {
     status: 'ported',
@@ -173,15 +170,11 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'editor.markdown': {
-    status: 'partial',
+    status: 'ported',
     differences: [
-      'Preview has the "On this page" outline (G4) and the heading and paragraph rows land on the web rows; heading sizes follow BlockNote (48/32 px). The heading has no -0.018em letter spacing (GPUIX has none), so "Alpha guide" is about 10 px wider, and the list bullets are larger and brighter, with the items set further right.',
-      'The tab reads "guide.md" in full at the web width (C15 fixed in G5).',
-      TITLE_TIP
-    ],
-    cause: 'native override needed',
-    unit: 'E2 markdown preview parity',
-    impact: 1
+      'Preview has the "On this page" outline (G4) and the heading and paragraph rows land on the web rows; heading sizes follow BlockNote (48/32 px). The heading takes index.css\'s -0.018em letter spacing (G16 E2: native patches zed/0007 and gpuix/0017), so "Alpha guide" ends at 774 px as on the web, where it ended at 783 px. The list bullets are BlockNote\'s muted glyph at the web\'s place (gpuix/0018): ink 512 to 516 px at brightness 118 against the web\'s 117, where it was 196, and the item text starts at 530 px against 529 px.',
+      'The tab reads "guide.md" in full at the web width (C15 fixed in G5).'
+    ]
   },
   'editor.tabs': {
     status: 'ported',
@@ -284,14 +277,11 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['New chat opens the launcher composer in place.']
   },
   'chat.agent-launcher': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       "The agent and model popover opens above the pill in both, with the search field, the agent chip and This agent gives no model choice. The agent chip spans two of the track's three columns and reads Chat Scenario Agent in full, as on the web (G14: native patch gpuix/0016-grid-span and compat's `gridColumn: span 2 / span 2`; it had taken one column and truncated to \"Chat Scen…\").",
-      "The hairline under the search band stays `border` while the field has focus; the web turns it `ring` through `peer-focus-within:`, a variant compat does not translate."
-    ],
-    cause: 'compat translator gap',
-    unit: 'peer-* variants (unassigned)',
-    impact: 1
+      "The hairline under the search band turns `ring` while the field has focus, as on the web's `peer-focus-within:` (G16 PEER: compat links a `peer-*` consumer to its nearest earlier `peer` sibling, as for group state). It sits 1 px higher than on the web."
+    ]
   },
   'chat.send': {
     status: 'partial',

@@ -143,8 +143,12 @@ describe('overlay layers sort above in-flow z-50', () => {
     expect(popup('absolute top-full left-0 mt-1').props.priority).toBe(0)
   })
 
-  test('dialogs, popovers, tooltips and submenus keep their order above the web overlays z-50', () => {
-    expect([LAYER.dialog, LAYER.popover, LAYER.tooltip, LAYER.submenu]).toEqual([51, 52, 53, 54])
+  test('dialogs, popovers and submenus keep their order above the web overlays z-50', () => {
+    expect([LAYER.dialog, LAYER.popover, LAYER.submenu]).toEqual([51, 52, 54])
+  })
+
+  test('a tooltip takes its own z-50, as the web leaves it unportalled beside its trigger', () => {
+    expect(LAYER.tooltip).toBe(50)
   })
 })
 

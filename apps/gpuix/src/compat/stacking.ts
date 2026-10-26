@@ -12,7 +12,13 @@
  * so it paints over an in-flow `z-50` (the status bar) by DOM order. Here
  * an overlay sits next to its trigger in the tree, so it takes a priority
  * just above 50 instead; the steps keep the order GPUIX's overlays had among
- * themselves (dialogs under menus under tooltips under submenus).
+ * themselves (dialogs under menus under submenus).
+ *
+ * The web's TooltipContent has no portal: Radix's popper wrapper is a
+ * `fixed` box with the content's `z-50`, left next to its trigger. It paints
+ * over earlier z-50 layers and under later ones, the `fixed inset-0 z-50`
+ * modals included, and under every portalled overlay. A tooltip therefore
+ * takes 50 itself: GPUI sorts deferred layers of one priority in tree order.
  */
 
 /** The `z-index` of the web's overlay wrappers (`components/ui/*`). */
@@ -23,7 +29,8 @@ export const LAYER = {
   dialog: PORTAL_Z + 1,
   /** Popovers, menus, selects. */
   popover: PORTAL_Z + 2,
-  tooltip: PORTAL_Z + 3,
+  /** `components/ui/tooltip`, not portalled on the web. */
+  tooltip: PORTAL_Z,
   submenu: PORTAL_Z + 4
 } as const
 

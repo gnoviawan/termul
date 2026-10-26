@@ -238,7 +238,10 @@ const TooltipContent = forwardRef<PublicInstance, TooltipContentProps>(function 
         }}
         onMouseLeave={timing.scheduleClose}
         className={cn(
-          'z-50 rounded-lg border bg-popover px-3 py-1.5 text-sm text-popover-foreground shadow-md',
+          // The web's `z-50` is the anchored layer's priority. A `z-50` box
+          // inside it would be a second layer, drawn after every first-level
+          // layer of that priority, the later modals included.
+          'rounded-lg border bg-popover px-3 py-1.5 text-sm text-popover-foreground shadow-md',
           'animate-tooltip-in',
           className
         )}
