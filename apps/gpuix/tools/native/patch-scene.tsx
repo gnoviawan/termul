@@ -16,6 +16,7 @@ import {
   SAMPLES,
   type Sample,
   SCENE,
+  GRID,
   TABLE,
   TABLE_HEADER_FILL
 } from './samples'
@@ -135,6 +136,15 @@ function App() {
             <markdown source={SOURCES.table} theme={THEMES.table} />
           </div>
         )}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: GRID.columns, width: GRID.width }}>
+        <div
+          ref={(node: PublicInstance | null) => {
+            refs.current.gridSpan = node
+          }}
+          style={{ gridColumnSpan: GRID.span, height: 8, backgroundColor: '#00ff00' }}
+        />
+        <div style={{ height: 8, backgroundColor: '#0000ff' }} />
       </div>
       {box(
         'input',

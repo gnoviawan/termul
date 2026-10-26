@@ -234,7 +234,7 @@ export function typoHtml(fontUrl: string, monoUrl: string): string {
 @font-face{font-family:'${FAMILY}';src:url(${fontUrl}) format('woff2');font-weight:100 900}
 @font-face{font-family:'Paper Mono';src:url(${monoUrl}) format('woff2');font-weight:100 800}
 html,body{margin:0;background:#000;color:#fff}
-.card{border:1px solid #444;font-size:14px;line-height:20px}
+.card{border:1px solid #444;font-size:14px;line-height:calc(1.25 / 0.875)}
 table{width:100%;border-collapse:collapse;text-align:left}
 th,td{padding:4.8px 8px}
 th{font-weight:600}

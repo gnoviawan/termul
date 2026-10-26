@@ -171,8 +171,11 @@ async function shootGpuix(server: TestServer, entry: string, fixture: string, ou
 
 await mkdir(OUT, { recursive: true })
 if (!values['skip-web-build']) {
+  // rolldown is a napi-rs addon too: it would load the self-built GPUIX addon this variable names.
+  const { NAPI_RS_NATIVE_LIBRARY_PATH: _addon, ...viteEnv } = process.env
   const vite = Bun.spawn(['bunx', '--bun', 'vite', 'build', '--config', 'apps/gpuix/tools/compat/web/vite.config.ts'], {
     cwd: REPO_DIR,
+    env: viteEnv,
     stdout: 'ignore',
     stderr: 'pipe'
   })

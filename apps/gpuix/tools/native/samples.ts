@@ -10,7 +10,8 @@ export const SAMPLES = [
   'codePad',
   'input',
   'blur',
-  'table'
+  'table',
+  'gridSpan'
 ] as const
 /** Set on the unfocused input after mount, like a URL bar after a navigation: ink at the start, dots at the end. */
 export const LONG_VALUE = `${'M'.repeat(10)}${'.'.repeat(120)}`
@@ -21,6 +22,8 @@ export const CODE_PAD = 12
 /** The table sample: a header and one body row, 1 px rule between them. */
 export const TABLE = { padY: 10, lineHeight: 20, rows: 2 } as const
 export const TABLE_HEADER_FILL = '#ff0000'
+/** A grid of GRID.columns equal tracks GRID.width wide; its first cell spans two of them. */
+export const GRID = { width: 300, columns: 3, span: 2 } as const
 export type Sample = (typeof SAMPLES)[number]
 export interface SceneReady {
   bounds: Record<Sample, { x: number; y: number; width: number; height: number } | null>
