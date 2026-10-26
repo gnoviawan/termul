@@ -78,17 +78,20 @@ function App() {
           return [sample, node ? renderer.getElementBounds?.(node.id) : null]
         })
       )
-      const handle = (
-        renderer as { getNativeWindowHandle?(): { kind: string; id?: number | null } | null }
-      ).getNativeWindowHandle?.()
+      const native = renderer as {
+        getNativeWindowHandle?(): { kind: string; id?: number | null } | null
+        getAllText?(): string[]
+        getAutomationTree?(): string
+      }
+      const handle = native.getNativeWindowHandle?.()
       writeFileSync(
         `${readyFile}.tmp`,
         JSON.stringify({
           bounds,
           handle: handle ?? null,
           pid: process.pid,
-          allText: renderer.getAllText(),
-          tree: JSON.parse(renderer.getAutomationTree())
+          allText: native.getAllText?.() ?? [],
+          tree: JSON.parse(native.getAutomationTree?.() ?? 'null')
         })
       )
       renameSync(`${readyFile}.tmp`, readyFile as string)
