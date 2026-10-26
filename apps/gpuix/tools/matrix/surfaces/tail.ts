@@ -31,7 +31,8 @@ const SETTINGS_SECTIONS: Array<[id: string, nav: string, expect: string]> = [
   ['appearance', 'Appearance', 'Font size'],
   ['shell', 'Shell', 'Default shell'],
   ['terminal-profiles', 'Profiles', 'No terminal profiles'],
-  ['ai-agents', 'Agent chats', 'Close idle chats after'],
+  // The section paints before its catalog request returns; until then the list reads `No agents match ""`.
+  ['ai-agents', 'Agent chats', 'Agoragentic'],
   ['skills', 'Skills', 'Skills'],
   // The nav label alone would pass before the Account list loads.
   ['provider', 'Accounts', '1 account'],

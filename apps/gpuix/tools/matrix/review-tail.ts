@@ -217,17 +217,15 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: SETTINGS_BASE
   },
   'settings.ai-agents': {
-    status: 'partial',
+    status: 'ported',
     differences: [
+      ...SETTINGS_BASE,
       SELECT,
-      "AcpAgentsSettings draws each catalog icon through `dangerouslySetInnerHTML`; compat now paints one `<svg>` of markup as a GPUIX svg, and the DOMPurify stand-in passes an icon of shapes (G16 SVG-HTML; the Accounts header's Claude mark shows it). In the G16 runs of 2026-10-26 from 15:30 the GPUIX list itself was empty (No agents match \"\") on this branch and on exp/gpuix-client, on the patched and the published addon, while the web listed Agoragentic first with its version, Latest and Available; a base run at 10:08 the same day listed it in GPUIX too (I6 run likewise). Not diagnosed.",
+      'The agents list shows the registry as on the web, Agoragentic first with its icon, version, Latest and Available. The icon tile draws the catalog SVG: AcpAgentsSettings sets it through `dangerouslySetInnerHTML`, compat paints one `<svg>` of markup as a GPUIX svg, and the DOMPurify stand-in passes an icon of shapes (G16 SVG-HTML).',
+      'The list fills in when the section\'s own catalog request returns, 0.42 s after the section mounted in GPUIX on an idle host (D2 run); until then both clients read `No agents match ""`. The G16 and N3 runs that showed an empty GPUIX list grabbed the frame inside that window. The step now waits for Agoragentic (D2).',
       DIVIDERS,
-      LABEL_LINE,
-      SETTINGS_BASE[1]
-    ],
-    cause: 'needs diagnosis',
-    unit: 'agent registry list empty in GPUIX (unassigned)',
-    impact: 1
+      LABEL_LINE
+    ]
   },
   'settings.skills': {
     status: 'ported',
