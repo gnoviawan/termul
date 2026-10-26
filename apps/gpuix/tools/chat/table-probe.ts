@@ -106,7 +106,42 @@ try {
       buttons
     }
   })
-  console.log(JSON.stringify(report, null, 1))
+  await page.getByRole('button', { name: 'View fullscreen' }).first().click()
+  await page.locator('[data-streamdown="table-fullscreen"] table').waitFor()
+  const fullscreen = await page.evaluate(() => {
+    const root = document.querySelector('[data-streamdown="table-fullscreen"]') as HTMLElement
+    const rect = (el: Element) => {
+      const r = el.getBoundingClientRect()
+      return [r.left, r.top, r.width, r.height].map((n) => Math.round(n * 100) / 100)
+    }
+    const box = (el: Element) => {
+      const cs = getComputedStyle(el)
+      return {
+        tag: el.tagName.toLowerCase(),
+        class: (el.getAttribute('class') ?? '').slice(0, 160),
+        rect: rect(el),
+        padding: cs.padding,
+        border: `${cs.borderTopWidth} ${cs.borderStyle} ${cs.borderTopColor}`,
+        font: `${cs.fontSize}/${cs.lineHeight} ${cs.fontWeight}`
+      }
+    }
+    const table = root.querySelector('table') as HTMLElement
+    const chain: ReturnType<typeof box>[] = []
+    for (let el: Element | null = table; el && el !== root.parentElement; el = el.parentElement)
+      chain.push(box(el))
+    return {
+      chain,
+      cells: Array.from(table.querySelectorAll('th, td'))
+        .slice(0, 6)
+        .map((c) => ({ ...box(c), text: (c.textContent ?? '').slice(0, 24) })),
+      buttons: Array.from(root.querySelectorAll('button')).map((b) => ({
+        ...box(b),
+        label: b.getAttribute('aria-label') ?? b.getAttribute('title') ?? b.textContent,
+        svg: b.querySelector('svg') ? rect(b.querySelector('svg') as Element) : null
+      }))
+    }
+  })
+  console.log(JSON.stringify({ ...report, fullscreen }, null, 1))
 } finally {
   await browser.close()
   await world.server.stop()
