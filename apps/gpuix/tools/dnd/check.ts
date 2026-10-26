@@ -327,8 +327,13 @@ try {
       const t1 = await label('Terminal 1')
       const t2 = await label('Terminal 2')
       await handDrag(app, center(t2), { x: t1.x - 8, y: t1.y + t1.height / 2 })
-      await Bun.sleep(500)
-      const after = await terminalTabs()
+      // The reorder can land after 500 ms: one I6 run read the old order
+      // while the frame grabbed right after it showed the new one.
+      let after = await terminalTabs()
+      for (let waited = 0; waited < 3000 && after[0]?.text !== 'Terminal 2'; waited += 250) {
+        await Bun.sleep(250)
+        after = await terminalTabs()
+      }
       await grab(path.join(OUT, 'tabs-after.png'))
       check(
         'dragging tab Terminal 2 before Terminal 1 reorders the tabs',
