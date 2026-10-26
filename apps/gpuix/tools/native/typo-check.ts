@@ -30,6 +30,7 @@ import {
   windowOrigin
 } from '../parity/shoot-gpuix'
 import {
+  TABLE_SAMPLE,
   TEXT_SAMPLES,
   type TextSample,
   TYPO_WINDOW,
@@ -49,6 +50,10 @@ mkdirSync(out, { recursive: true })
 const INTER_WOFF2 = path.resolve(
   import.meta.dir,
   '../../../../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2'
+)
+const PAPER_MONO_WOFF2 = path.resolve(
+  import.meta.dir,
+  '../../../../src/renderer/assets/fonts/paper-mono/PaperMono[wght].woff2'
 )
 const { width: W, height: H } = TYPO_WINDOW
 
@@ -89,8 +94,8 @@ async function shootWeb(hinting: string): Promise<string> {
   const browser = await chromium.launch({ args: [`--font-render-hinting=${hinting}`] })
   try {
     const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 })
-    const font = `data:font/woff2;base64,${readFileSync(INTER_WOFF2).toString('base64')}`
-    await page.setContent(typoHtml(font))
+    const font = (file: string) => `data:font/woff2;base64,${readFileSync(file).toString('base64')}`
+    await page.setContent(typoHtml(font(INTER_WOFF2), font(PAPER_MONO_WOFF2)))
     await page.evaluate(() => document.fonts.ready)
     await page.screenshot({ path: png })
   } finally {
@@ -107,7 +112,7 @@ const lit = (png: Png, x: number, y: number) => {
 
 /** The region a sample can paint in; the same rectangle in both frames. */
 function box(s: TextSample): { x0: number; y0: number; x1: number; y1: number } {
-  const lines = s.stack ?? (s.width ? 20 : 1)
+  const lines = s.stack ?? (s.width ? 10 : 1)
   return {
     x0: s.left,
     y0: s.top,
@@ -183,6 +188,42 @@ for (const s of TEXT_SAMPLES) {
     ok: gt.length === wt.length && offsets.every((d) => Math.abs(d) <= 1)
   })
 }
+/** x where each header label's ink starts: ink runs on the header row, split at gaps over 12 px. */
+function headerStarts(png: Png): number[] {
+  const { left, top, width } = TABLE_SAMPLE
+  const x0 = left + 2
+  const x1 = left + width - 2
+  const tops = bandTops(png, {
+    id: 'table',
+    left: x0,
+    top: top + 2,
+    width: x1 - x0,
+    fontSize: 14,
+    lineHeight: 20,
+    text: '',
+    stack: 1
+  })
+  const y0 = tops[0] ?? top
+  const starts: number[] = []
+  let last = Number.NEGATIVE_INFINITY
+  for (let x = x0; x < x1; x++) {
+    let ink = false
+    for (let y = y0; y < y0 + 12 && !ink; y++) ink = lit(png, x, y)
+    if (!ink) continue
+    if (x - last > 12) starts.push(x)
+    last = x
+  }
+  return starts
+}
+const gh = headerStarts(g)
+const wh = headerStarts(w)
+const dx = gh.map((x, i) => x - (wh[i] ?? Number.NaN))
+rows.push({
+  patch: 'table-columns',
+  what: `transcript table header labels start at ${JSON.stringify(gh)} (Chromium ${JSON.stringify(wh)}), GPUIX minus Chromium (each within 1 px)`,
+  value: dx,
+  ok: gh.length === wh.length && dx.every((d) => Math.abs(d) <= 1)
+})
 for (const row of rows)
   console.log(`${row.ok ? 'PASS' : 'FAIL'} ${row.what}: ${JSON.stringify(row.value)}`)
 console.log(`screenshots ${gpuix.png} ${webPng}`)

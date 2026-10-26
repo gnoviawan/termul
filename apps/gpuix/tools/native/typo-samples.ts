@@ -62,6 +62,43 @@ export const TEXT_SAMPLES: readonly TextSample[] = [
   { id: 'run12', left: 16, top: 520, fontSize: 12, lineHeight: 20, text: RUN_TEXT }
 ]
 
+/**
+ * The matrix transcript's table (tools/chat/script.ts) in a 734 px card, as
+ * `.chat-streamdown` lays it out: `w-full` auto table layout, 8 by 4.8 px
+ * cells, 14/20 text, a semibold header, inline code at 0.88em with 0.3em
+ * side padding. The checker compares where each header label starts.
+ */
+export const TABLE_SAMPLE = {
+  id: 'table',
+  left: 16,
+  top: 236,
+  width: 734,
+  align: ['left', 'left', 'center'] as const,
+  rows: [
+    ['Route', 'Component', 'Panes mounted'],
+    ['`/`', '`WorkspaceDashboard`', 'yes'],
+    ['`/c/:sessionId`', '`ChatRoute`', 'yes'],
+    ['`/snapshots`', '`WorkspaceSnapshots`', 'no'],
+    ['anything else', '`NotFound`', 'no']
+  ]
+} as const
+
+export function tableMarkdown(): string {
+  const [head, ...body] = TABLE_SAMPLE.rows
+  const rule = TABLE_SAMPLE.align.map((a) => (a === 'center' ? ':---:' : '---'))
+  return [head, rule, ...body].map((cells) => `| ${cells.join(' | ')} |`).join('\n')
+}
+
+function tableHtml(): string {
+  const cell = (tag: string, text: string, col: number) =>
+    `<${tag} style="text-align:${TABLE_SAMPLE.align[col]}">${text.replace(/`([^`]+)`/g, '<code>$1</code>')}</${tag}>`
+  const [head, ...body] = TABLE_SAMPLE.rows
+  const row = (tag: string, cells: readonly string[]) =>
+    `<tr>${cells.map((c, i) => cell(tag, c, i)).join('')}</tr>`
+  const { id, left, top, width } = TABLE_SAMPLE
+  return `<div id="${id}" class="card" style="position:absolute;left:${left}px;top:${top}px;width:${width - 2}px"><table><thead>${row('th', head)}</thead><tbody>${body.map((r) => row('td', r)).join('')}</tbody></table></div>`
+}
+
 /** One `typo-check.ts` result; `patch-check.ts` prints them with its own rows. */
 export interface TypoRow {
   /** The patch or gap the row proves: `zed/0005` line pitch, `run-width` advances. */
@@ -76,17 +113,25 @@ export interface TypoReady {
 }
 
 /** The web twin: the web client's Inter Variable and body font features, same positions. */
-export function typoHtml(fontUrl: string): string {
-  const blocks = TEXT_SAMPLES.map((s) => {
-    const style = `position:absolute;left:${s.left}px;top:${s.top}px;font-size:${s.fontSize}px;line-height:${s.lineHeight}px;${s.width ? `width:${s.width}px;` : 'white-space:pre;'}`
-    const body = s.stack
-      ? Array.from({ length: s.stack }, () => `<div>${s.text}</div>`).join('')
-      : `<span>${s.text}</span>`
-    return `<div id="${s.id}" style="${style}">${body}</div>`
-  }).join('\n')
+export function typoHtml(fontUrl: string, monoUrl: string): string {
+  const blocks =
+    TEXT_SAMPLES.map((s) => {
+      const style = `position:absolute;left:${s.left}px;top:${s.top}px;font-size:${s.fontSize}px;line-height:${s.lineHeight}px;${s.width ? `width:${s.width}px;` : 'white-space:pre;'}`
+      const body = s.stack
+        ? Array.from({ length: s.stack }, () => `<div>${s.text}</div>`).join('')
+        : `<span>${s.text}</span>`
+      return `<div id="${s.id}" style="${style}">${body}</div>`
+    }).join('\n') + tableHtml()
   return `<!doctype html><html><head><style>
 @font-face{font-family:'${FAMILY}';src:url(${fontUrl}) format('woff2');font-weight:100 900}
+@font-face{font-family:'Paper Mono';src:url(${monoUrl}) format('woff2');font-weight:100 800}
 html,body{margin:0;background:#000;color:#fff}
+.card{border:1px solid #444;font-size:14px;line-height:20px}
+table{width:100%;border-collapse:collapse;text-align:left}
+th,td{padding:4.8px 8px}
+th{font-weight:600}
+tbody tr{border-top:1px solid #444}
+code{font-family:'Paper Mono',monospace;font-size:.88em;padding:.08em .3em;font-feature-settings:normal;font-variant-ligatures:common-ligatures}
 body{font-family:'${FAMILY}',sans-serif;font-feature-settings:"cv11","ss01","ss03","cv02";font-variant-ligatures:contextual}
 </style></head><body>${blocks}</body></html>`
 }

@@ -8,8 +8,9 @@
 import { renameSync, writeFileSync } from 'node:fs'
 import { type PublicInstance, render, useGpuixRequired } from '@gpuix/react'
 import { useEffect, useRef, useState } from 'react'
+import { transcriptThemes } from '../../src/chat/theme'
 import { registerTermulFonts } from '../../src/style/fonts'
-import { FAMILY, TEXT_SAMPLES, TYPO_WINDOW } from './typo-samples'
+import { FAMILY, TABLE_SAMPLE, TEXT_SAMPLES, TYPO_WINDOW, tableMarkdown } from './typo-samples'
 
 const [readyFile] = process.argv.slice(2)
 
@@ -25,7 +26,7 @@ function App() {
     if (!fontsReady) return
     const timer = setTimeout(() => {
       const bounds = Object.fromEntries(
-        TEXT_SAMPLES.map((s) => {
+        [...TEXT_SAMPLES, TABLE_SAMPLE].map((s) => {
           const node = refs.current[s.id]
           return [s.id, node ? renderer.getElementBounds?.(node.id) : null]
         })
@@ -71,6 +72,21 @@ function App() {
           </div>
         )
       })}
+      <div
+        ref={(node: PublicInstance | null) => {
+          refs.current[TABLE_SAMPLE.id] = node
+        }}
+        style={{
+          position: 'absolute',
+          left: TABLE_SAMPLE.left,
+          top: TABLE_SAMPLE.top,
+          width: TABLE_SAMPLE.width,
+          borderWidth: 1,
+          borderColor: '#444444'
+        }}
+      >
+        <markdown source={tableMarkdown()} theme={transcriptThemes('termul').prose} />
+      </div>
     </div>
   )
 }
