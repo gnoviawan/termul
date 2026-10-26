@@ -48,8 +48,12 @@ Compare [Context 1] with [Context 2]
   escaped with one more leading backslash.
 - Skill framing (`# Agent Skills`) still wraps the whole user text.
 
-`selectionContextsToDisplay` is the exact inverse. It returns the input
-unchanged for any text that is not an exact match.
+`selectionContextsToDisplay` is the inverse for serialized values. The
+serializer trims the sentence and does not record the spacing after a leading
+command pill, so the restore normalizes these. It returns the input unchanged
+for any text that is not an exact match. The live/persisted twin check
+compares both sides in prompt form (`serializeSelectionContexts`), so these
+normalizations never make a prompt show twice.
 
 ## Consequences
 
@@ -59,5 +63,7 @@ unchanged for any text that is not an exact match.
   (prose that is exactly one fenced block is stored as code to keep it so).
 - The label text, the quote prefix, and the marker shape are now a persisted
   contract. A future change must keep a parser for this format.
+- There is no format marker. A typed message that has exactly this shape
+  restores as chips. The chips show the same text the agent received.
 - The selected text is sent inline, so a very long selection uses prompt
   tokens. There is no size limit in this version.

@@ -178,7 +178,8 @@ export function selectionContextPreview(text: string, max = 40): string {
 }
 
 function fenceFor(code: string): string {
-  const longest = Math.max(0, ...(code.match(/`+/g) ?? []).map((run) => run.length))
+  let longest = 0
+  for (const run of code.match(/`+/g) ?? []) longest = Math.max(longest, run.length)
   return '`'.repeat(Math.max(3, longest + 1))
 }
 
@@ -187,7 +188,8 @@ function parseFencedBlock(text: string): SelectionContext | null {
   if (lines.length < 3) return null
   const open = FENCE_LINE_RE.exec(lines[0])
   if (!open || lines[lines.length - 1] !== open[1]) return null
-  return { text: lines.slice(1, -1).join('\n'), language: open[2] }
+  const inner = lines.slice(1, -1).join('\n')
+  return inner.trim().length > 0 ? { text: inner, language: open[2] } : null
 }
 
 function quoteBlock(context: SelectionContext, index: number): string {

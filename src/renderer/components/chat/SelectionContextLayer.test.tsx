@@ -72,6 +72,17 @@ describe('SelectionContextLayer', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Add to context' })).toBeNull())
   })
 
+  it('keeps the button mounted while it is being pressed, so the click lands', () => {
+    const onAdd = renderLayer()
+    select('prose')
+    const button = screen.getByRole('button', { name: 'Add to context' })
+    fireEvent.pointerDown(button, { pointerType: 'mouse' })
+    expect(screen.getByRole('button', { name: 'Add to context' })).toBe(button)
+    fireEvent.pointerUp(button, { pointerType: 'mouse' })
+    fireEvent.click(button)
+    expect(onAdd).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps the code language when the selection is inside a code block', () => {
     const onAdd = renderLayer()
     select('code')

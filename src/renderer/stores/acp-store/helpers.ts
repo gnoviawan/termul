@@ -44,6 +44,7 @@ import {
   isClaudeAccountSignedOutError
 } from '@/lib/agents/acp-spawn-errors'
 import { persistenceApi } from '@/lib/api'
+import { serializeSelectionContexts } from '@/lib/composer/selection-context'
 import { logFrontendError } from '@/lib/log-api'
 import {
   isFolderTokenPath,
@@ -298,7 +299,12 @@ export const SKILL_PAD_BLOCK_RE = new RegExp(
 export function canonicalTwinText(message: ChatMessage): string {
   const text = transcriptText(message)
   const display = message.role === 'user' ? wireTextToDisplay(text) : text
-  return replaceFileTokensInline(display.replace(SKILL_PAD_BLOCK_RE, '')).trim()
+  // Selection contexts compare in prompt form: the restore cannot recover the
+  // spacing after a leading command pill, and typed text in the exact prompt
+  // shape restores as chips.
+  return replaceFileTokensInline(
+    serializeSelectionContexts(display.replace(SKILL_PAD_BLOCK_RE, ''))
+  ).trim()
 }
 
 /**

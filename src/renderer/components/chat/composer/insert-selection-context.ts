@@ -86,14 +86,18 @@ export function insertSelectionContext(editor: Editor | null, context: Selection
   return true
 }
 
-/** Apply each new insert request to the composer editor once. */
+// The request lives in the chat panel and survives a composer remount.
+const appliedRequests = new WeakSet<SelectionContextInsertRequest>()
+
+/** Apply each insert request to the composer editor once, also across remounts. */
 export function useSelectionContextInsertRequest(
   editorRef: MutableRefObject<Editor | null>,
   request: SelectionContextInsertRequest | undefined
 ): void {
   // biome-ignore lint/correctness/useExhaustiveDependencies: the nonce is the trigger; the request object is read with it.
   useEffect(() => {
-    if (!request) return
+    if (!request || appliedRequests.has(request)) return
+    appliedRequests.add(request)
     // Outside React's commit: the pill NodeView renders with flushSync.
     queueMicrotask(() => insertSelectionContext(editorRef.current, request.context))
   }, [request?.nonce, editorRef])

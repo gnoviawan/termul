@@ -140,6 +140,8 @@ export function SelectionContextLayer({
       frame = requestAnimationFrame(refresh)
     }
     const onPointerDown = (event: PointerEvent): void => {
+      // A press on the button itself must not hide it before its click lands.
+      if ((event.target as Element | null)?.closest?.('[data-selection-context-add]')) return
       pointerRef.current = { down: true, type: event.pointerType || 'mouse' }
       setCurrent(null)
     }
@@ -198,6 +200,7 @@ export function SelectionContextLayer({
           >
             <button
               type="button"
+              data-selection-context-add=""
               aria-label="Add to context"
               title={`Add to context (${SHORTCUT_LABEL})`}
               // Keep the selection: a mousedown on the button would collapse it.

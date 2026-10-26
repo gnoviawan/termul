@@ -45,6 +45,17 @@ describe('createSelectionContext', () => {
     expect(createSelectionContext('x', 'text')).toEqual({ text: 'x', language: '' })
   })
 
+  it('keeps an empty fenced block as prose instead of an empty code context', () => {
+    expect(createSelectionContext('```\n\n```')).toEqual({ text: '```\n\n```' })
+    const out = serializeSelectionContexts(prose('```ts\n  \n```'))
+    expect(selectionContextsToDisplay(out)).toBe(prose('```ts\n  \n```'))
+  })
+
+  it('serializes code with very many backtick runs without overflowing', () => {
+    const many = '`a` '.repeat(200_000)
+    expect(() => serializeSelectionContexts(code(many, 'md'))).not.toThrow()
+  })
+
   it('treats a selected fenced block as code with its language', () => {
     expect(createSelectionContext('```py\nprint(1)\n```')).toEqual({
       text: 'print(1)',

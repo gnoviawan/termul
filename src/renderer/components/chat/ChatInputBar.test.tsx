@@ -2273,4 +2273,21 @@ describe('ChatInputBar selection contexts', () => {
     await waitFor(() => expect(getComposerValue()).toBe(''))
     expect(screen.queryByRole('note', { name: /^Context/ })).toBeNull()
   })
+
+  it('does not add a context again when the composer remounts with the same request', async () => {
+    const request = { context: { text: 'once' }, nonce: 1 }
+    const first = renderInputBar({ selectionContextInsert: request })
+    await waitFor(() =>
+      expect(screen.getByRole('note', { name: 'Context 1: once' })).toBeInTheDocument()
+    )
+    setComposerValue('')
+    first.unmount()
+
+    renderInputBar({ selectionContextInsert: request })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(getComposerValue()).toBe('')
+    expect(screen.queryByRole('note')).toBeNull()
+  })
 })

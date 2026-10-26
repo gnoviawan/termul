@@ -783,6 +783,9 @@ export function AgentChatPanel({
   }
 
   const isClosed = session.status === 'closed'
+  // No add while the composer is unmounted (stopped chat, or a question replaces it).
+  const composerHidden =
+    (isClosed && !isResumableStop) || (!isClosed && (pendingElicitation || pendingQuestion))
   const showBrowserConsentCard =
     pendingBrowserConsent != null && !isClosed && !stripHosting && !overlayOpen
   // Failed launches keep the Retry affordance even without a user prompt in
@@ -931,7 +934,7 @@ export function AgentChatPanel({
             showRunningIndicator={showRunningIndicator}
             filePathContext={filePathContext}
             onEditMessage={seedComposer}
-            onAddSelectionContext={isClosed && !isResumableStop ? undefined : addSelectionContext}
+            onAddSelectionContext={composerHidden ? undefined : addSelectionContext}
             onRetry={canOfferRetry ? handleRetry : undefined}
           />
         </SkillFilesProvider>
