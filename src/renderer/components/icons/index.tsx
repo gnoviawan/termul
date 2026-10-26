@@ -76,6 +76,7 @@ import {
   Layers01Icon,
   Layout2ColumnIcon,
   Layout3ColumnIcon,
+  LeftToRightBlockQuoteIcon,
   Link01Icon,
   ListChecksIcon,
   ListIcon,
@@ -271,6 +272,7 @@ export const KeyRound = hugeIcon('KeyRound', KeyRoundIcon)
 export const Keyboard = hugeIcon('Keyboard', KeyboardIcon)
 export const Layers = hugeIcon('Layers', Layers01Icon)
 export const Link2 = hugeIcon('Link2', Link01Icon)
+export const BlockQuote = hugeIcon('BlockQuote', LeftToRightBlockQuoteIcon)
 export const List = hugeIcon('List', ListIcon)
 export const ListChecks = hugeIcon('ListChecks', ListChecksIcon)
 export const Loader2 = hugeIcon('Loader2', Loading02Icon)

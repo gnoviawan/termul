@@ -95,6 +95,19 @@ export function createSelectionContext(raw: string, language?: string): Selectio
   return { text: body, language: lang === 'text' ? '' : lang }
 }
 
+/** Tiptap node attrs for a context pill. `language` is null for prose. */
+export function contextToAttrs(context: SelectionContext): {
+  text: string
+  language: string | null
+} {
+  return { text: context.text, language: context.language ?? null }
+}
+
+export function contextFromAttrs(attrs: Record<string, unknown>): SelectionContext {
+  const text = String(attrs.text ?? '')
+  return typeof attrs.language === 'string' ? { text, language: attrs.language } : { text }
+}
+
 export function selectionContextToken(context: SelectionContext): string {
   const payload = encodeURIComponent(context.text)
   const head = context.language === undefined ? '' : `${context.language}${CONTEXT_TOKEN_SEP}`

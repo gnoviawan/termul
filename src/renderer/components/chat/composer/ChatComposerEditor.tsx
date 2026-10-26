@@ -6,6 +6,7 @@ import StarterKit from '@tiptap/starter-kit'
 import { useEffect, useRef } from 'react'
 import {
   CMD_PILL_NODE,
+  CONTEXT_PILL_NODE,
   docOffsetToDisplayOffset,
   docToDisplayText,
   FILE_PILL_NODE,
@@ -16,6 +17,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { CommandPill } from './CommandPillNode'
 import { FilePill } from './FilePillNode'
+import { SelectionContextPill } from './SelectionContextPillNode'
 import { SkillPill } from './SkillPillNode'
 
 export interface ChatComposerEditorProps {
@@ -77,6 +79,9 @@ export interface ChatComposerEditorProps {
 
 const KEYMAP_KEY = new PluginKey('chatComposerKeymap')
 
+/** Atom pills that one Backspace removes whole (with the splicer's trailing space). */
+const ATOM_PILL_NODES = new Set([SKILL_PILL_NODE, CMD_PILL_NODE, FILE_PILL_NODE, CONTEXT_PILL_NODE])
+
 /**
  * Factory: build a per-instance keymap extension that closes over a stable ref
  * to the host's `onBeforeEditorKeyDown` callback. The ref is created per
@@ -136,22 +141,12 @@ function createComposerKeymap(
                   if (before?.isText && before.text === ' ') {
                     const $prev = state.doc.resolve(Math.max(0, probePos - 1))
                     const prevNode = $prev.nodeBefore
-                    if (
-                      prevNode &&
-                      (prevNode.type.name === SKILL_PILL_NODE ||
-                        prevNode.type.name === CMD_PILL_NODE ||
-                        prevNode.type.name === FILE_PILL_NODE)
-                    ) {
+                    if (prevNode && ATOM_PILL_NODES.has(prevNode.type.name)) {
                       before = prevNode
                       probePos = probePos - 1
                     }
                   }
-                  if (
-                    before &&
-                    (before.type.name === SKILL_PILL_NODE ||
-                      before.type.name === CMD_PILL_NODE ||
-                      before.type.name === FILE_PILL_NODE)
-                  ) {
+                  if (before && ATOM_PILL_NODES.has(before.type.name)) {
                     event.preventDefault()
                     // Delete the pill + any trailing space the splicer appended
                     // (the caret sat after the space) — matches the pre-refactor
@@ -257,6 +252,7 @@ export function ChatComposerEditor({
         SkillPill,
         CommandPill,
         FilePill,
+        SelectionContextPill,
         createComposerKeymap(beforeKeyDownRef),
         Placeholder.configure({
           placeholder: () => placeholderRef.current,
@@ -311,10 +307,9 @@ export function ChatComposerEditor({
           // []), so a malicious clipboard carrying `<span data-skill-pill>` or
           // `<span data-command-pill>` cannot inject pill nodes. Plain-text
           // paste (no sentinel) falls through to ProseMirror's default (text
-          // nodes). The skill sentinel `\uE000` and the command sentinel
-          // `\uE004` both trigger the pill-paste path.
-          if (!text.includes('\uE000') && !text.includes('\uE004') && !text.includes('\uE006'))
-            return false
+          // nodes). The skill `\uE000`, command `\uE004`, file `\uE006`, and
+          // selection-context `\uE008` sentinels trigger the pill-paste path.
+          if (!/[\uE000\uE004\uE006\uE008]/.test(text)) return false
           event.preventDefault()
           try {
             const parsed = view.state.schema.nodeFromJSON(
