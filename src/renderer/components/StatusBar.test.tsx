@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { RECONNECT_GRACE_MS } from '@/hooks/use-delayed-flag'
+import { _resetDesktopHostForTesting, registerDesktopHost } from '@/lib/desktop-host'
 import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
 import { normalizePath, type WorkingCopy } from '@/lib/working-copy'
 import { useAcpStore } from '@/stores/acp-store'
@@ -530,6 +531,25 @@ describe('StatusBar', () => {
       renderWithProviders(<StatusBar project={mockProject} />)
 
       expect(screen.queryByLabelText('Remote terminal access')).toBeNull()
+    })
+
+    it('shows the remote access trigger in a desktop host (GPUIX)', () => {
+      registerDesktopHost({
+        openUrl: async () => {},
+        openPath: async () => {},
+        revealItemInDir: async () => {},
+        notify: async () => {},
+        openFiles: async () => null,
+        saveFile: async () => null,
+        fileAt: (path) => new File([], path)
+      })
+      try {
+        renderWithProviders(<StatusBar project={mockProject} />)
+
+        expect(screen.getByLabelText('Remote terminal access')).toBeDefined()
+      } finally {
+        _resetDesktopHostForTesting()
+      }
     })
   })
   // Story 10 (F1): the global web connection-health lamp lives in the

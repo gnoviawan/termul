@@ -698,12 +698,14 @@ const STATUSBAR: Surface[] = [
     area: 'remote',
     title: 'Remote access popover (desktop shared-live host)',
     reference: 'tauri',
-    pending: {
-      unit: 'R4 desktop host role over the server',
-      reason:
-        "GPUIX has no remote access popover yet (StatusBar renders it only under isTauriContext()); the reference is the desktop app's status-bar popover (tools/reference/tauri.ts)"
-    },
-    steps: []
+    steps: [
+      DASHBOARD,
+      step(
+        'b-popover',
+        [click(id('remote-access-trigger'))],
+        see('Remote Agent Access', 'Enable remote access', 'Not available in this build yet.')
+      )
+    ]
   }
 ]
 

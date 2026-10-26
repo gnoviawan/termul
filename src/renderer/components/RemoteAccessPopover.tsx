@@ -1,10 +1,11 @@
 import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useState } from 'react'
-import { AlertCircle, Check, Copy, Monitor, ShieldAlert } from '@/components/icons'
+import { AlertCircle, Check, Copy, Info, Monitor, ShieldAlert } from '@/components/icons'
 import { STATUS_BAR_HIT_GLYPH, STATUS_BAR_HIT_TARGET } from '@/components/status-bar-hit'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { remoteServerApi } from '@/lib/api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -21,8 +22,14 @@ import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-st
  * Security posture (until Epic 2 ships a real token): cloudflared provides edge
  * TLS; the random ephemeral URL is the only gate. The warning below makes that
  * explicit and tells the user to toggle off to rotate.
+ *
+ * The shared-live host lives in the Tauri desktop app. A desktop host without
+ * it (GPUIX over termul-server) shows the popover with the switch disabled:
+ * termul-server has no mode that refuses the writes a tunnel forwards from
+ * loopback, which the desktop host does.
  */
 export function RemoteAccessPopover(): React.JSX.Element {
+  const hostAvailable = isTauriContext()
   const remoteStatus = useRemoteStatus()
   const [remoteBusy, setRemoteBusy] = useState(false)
   const [remoteError, setRemoteError] = useState<string | null>(null)
@@ -86,6 +93,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
           className={STATUS_BAR_HIT_TARGET}
           aria-label="Remote terminal access"
           aria-pressed={isRunning}
+          data-testid="remote-access-trigger"
         >
           <span className={STATUS_BAR_HIT_GLYPH}>
             <Monitor size={12} className={cn('shrink-0', isRunning && 'text-connection')} />
@@ -111,11 +119,24 @@ export function RemoteAccessPopover(): React.JSX.Element {
             </div>
             <Switch
               checked={isRunning}
-              disabled={remoteBusy}
+              disabled={remoteBusy || !hostAvailable}
               onCheckedChange={(checked) => void handleRemoteToggle(checked)}
               aria-label="Toggle remote terminal access"
             />
           </div>
+
+          {!hostAvailable && (
+            <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded-md px-3 py-2">
+              <Info className="w-4 h-4 mt-0.5 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-foreground">Not available in this build yet.</p>
+                <p>
+                  The server this app runs cannot yet stop a shared link from changing files on this
+                  computer.
+                </p>
+              </div>
+            </div>
+          )}
 
           {remoteError && (
             <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-3 py-2">

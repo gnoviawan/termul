@@ -286,8 +286,8 @@ export const REVIEWS: Record<string, Review> = {
   'chat.agent-launcher': {
     status: 'partial',
     differences: [
-      "The agent and model popover opens above the pill in both, with the search field, the agent chip and This agent gives no model choice. The agent chip spans two of the track's three columns and reads Chat Scenario Agent in full, as on the web (G14: native patch gpuix/0016-grid-span and compat's `gridColumn: span 2 / span 2`; it had taken one column and truncated to \"Chat Scen…\").",
-      "The hairline under the search band stays `border` while the field has focus; the web turns it `ring` through `peer-focus-within:`, a variant compat does not translate."
+      'The agent and model popover opens above the pill in both, with the search field, the agent chip and This agent gives no model choice. The agent chip spans two of the track\'s three columns and reads Chat Scenario Agent in full, as on the web (G14: native patch gpuix/0016-grid-span and compat\'s `gridColumn: span 2 / span 2`; it had taken one column and truncated to "Chat Scen…").',
+      'The hairline under the search band stays `border` while the field has focus; the web turns it `ring` through `peer-focus-within:`, a variant compat does not translate.'
     ],
     cause: 'compat translator gap',
     unit: 'peer-* variants (unassigned)',
@@ -378,6 +378,7 @@ export const REVIEWS: Record<string, Review> = {
     status: 'ported',
     differences: [
       'Branch, path, Terminal and settings items line up.',
+      'GPUIX draws the Remote terminal access button left of Terminal, as the desktop app does (R4); the web client hides it (#843), so the region diff holds the icon.',
       LAMP,
       'The rest of the region diff is glyph antialiasing: Chromium draws the status bar text with subpixel (LCD) colour fringes, and GPUIX draws it in grayscale (C8).'
     ]
@@ -391,12 +392,14 @@ export const REVIEWS: Record<string, Review> = {
     differences: ['Hovering the connection lamp shows the Connected tooltip in both.', LAMP]
   },
   'remote.access-popover': {
-    status: 'pending-unit',
+    status: 'partial',
     differences: [
-      'GPUIX has no remote access popover yet; StatusBar renders it only under isTauriContext(). The reference is the desktop app (`tools/reference/tauri.ts`), whose status bar has the button.'
+      'Reference: the desktop app (`tools/reference/tauri.ts`). The status bar shows the Remote terminal access button at the same place in both (GPUIX draws its connection lamp to the left of it). StatusBar now renders the popover in a desktop host as well as in Tauri (R4, `isDesktopApp()`).',
+      "GPUIX opens the popover with the desktop's title, text and Enable remote access row, but the switch is off and disabled, under a note: Not available in this build yet. The desktop's shared-live host serves the tunnel from its own server, which refuses every write the tunnel forwards from loopback (`remote/host.rs`); termul-server has no such mode, so a GPUIX tunnel would let a shared link write as a local client. R4 gates the control (`isTauriContext()` in RemoteAccessPopover, tested) instead of starting one.",
+      'The XTEST click on the desktop trigger hovers it but does not open the popover in the matrix run (3 of 3 runs); a direct probe opened it once in two tries, with the same title, text and switch row as GPUIX (`parity-out/matrix/remote-access-popover/desktop-probe-open.png`). The last desktop frame therefore shows the closed popover.'
     ],
     cause: 'server route needed',
-    unit: 'R4 desktop host role over the server',
+    unit: 'tunnel write guard in termul-server (unassigned)',
     impact: 1
   },
   'chat.plan': {

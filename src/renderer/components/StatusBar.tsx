@@ -14,8 +14,8 @@ import { useAgentChatProjectSignals } from '@/hooks/use-agent-chat-attention'
 import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { needsYouLabel } from '@/lib/agent-chat-attention'
+import { isDesktopApp } from '@/lib/desktop-app'
 import { openAgentChatInOwnProject } from '@/lib/open-agent-chat'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { normalizePath } from '@/lib/working-copy'
 import { useAcpStore, useSessionIndexTitle } from '@/stores/acp-store'
@@ -185,8 +185,9 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
         {/* #843: "Remote terminal access" is the desktop shared-live host's
             own status — a web client served by termul-server has no
             shared-live host to inspect, so hide the popover instead of
-            rendering a dead desktop-only control. */}
-        {isTauriContext() && <RemoteAccessPopover />}
+            rendering a dead desktop-only control. A desktop host (GPUIX)
+            shows it, gated, as the desktop app's own control. */}
+        {isDesktopApp() && <RemoteAccessPopover />}
 
         {showExitCode && lastExitCode !== null && lastExitCode !== undefined && (
           <StatusTooltip
