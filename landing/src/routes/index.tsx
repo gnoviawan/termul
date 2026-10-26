@@ -2,6 +2,7 @@ import type { RouteObject } from 'react-router';
 
 import { App } from '../App';
 import { HomePage } from './HomePage';
+import { NotFoundPage } from './NotFoundPage';
 import { TestimonialListPage } from './TestimonialListPage';
 import { TestimonialSubmitPage } from './TestimonialSubmitPage';
 
@@ -21,6 +22,10 @@ export const routes: RouteObject[] = [
       {
         path: 'testimonial/list',
         Component: TestimonialListPage,
+      },
+      {
+        path: '*',
+        Component: NotFoundPage,
       },
     ],
   },
