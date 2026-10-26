@@ -36,8 +36,11 @@ export interface ComposerServer {
 function exposeRipgrep(): void {
   const dir = path.join(STATE_ROOT, 'bin')
   const link = path.join(dir, 'rg')
+  // existsSync follows the link: a link left by a deleted worktree reads as
+  // missing, and symlinkSync over it throws EEXIST.
   if (!existsSync(link)) {
     mkdirSync(dir, { recursive: true })
+    rmSync(link, { force: true })
     symlinkSync(path.join(REPO_DIR, 'src-tauri/bin/rg-x86_64-unknown-linux-gnu'), link)
   }
   if (!process.env.PATH?.split(':').includes(dir))
