@@ -20,7 +20,6 @@ import {
   type ReactNode,
   useCallback,
   useContext,
-  useEffect,
   useId,
   useImperativeHandle,
   useLayoutEffect,
@@ -164,11 +163,38 @@ export const PanelGroup = forwardRef<ImperativePanelGroupHandle, AnyProps>(funct
   const ordered = useCallback(() => [...panels.current.values()].sort(byOrder), [])
   const constraintsOf = useCallback(() => ordered().map((p) => p.constraints), [ordered])
 
-  const commit = useCallback((next: number[]) => {
-    if (sameLayout(layoutRef.current, next)) return
-    layoutRef.current = next
-    setLayout(next)
-  }, [])
+  // The package calls onLayout and each panel's onResize as it sets a layout, so
+  // what a consumer stores from them renders with the sizes. Deferred to an
+  // effect, a stored size could land a render after its layout and the
+  // consumer's own setLayout could chase it forever (EditorTocLayout's outline).
+  const report = useCallback(
+    (next: readonly number[]) => {
+      const entries = ordered()
+      if (next.length === 0 || next.length !== entries.length) return
+      if (!reportedLayout.current || !sameLayout(reportedLayout.current, next)) {
+        reportedLayout.current = [...next]
+        onLayoutRef.current?.([...next])
+      }
+      entries.forEach((panel, i) => {
+        const prev = reported.current.get(panel.id)
+        if (prev !== undefined && Math.abs(prev - next[i]) < 1e-6) return
+        reported.current.set(panel.id, next[i])
+        panel.onResize?.(next[i], prev)
+      })
+    },
+    [ordered]
+  )
+
+  /** Registration commits without reporting: the group reports once every panel has registered. */
+  const commit = useCallback(
+    (next: number[], reportNow = true) => {
+      if (sameLayout(layoutRef.current, next)) return
+      layoutRef.current = next
+      setLayout(next)
+      if (reportNow) report(next)
+    },
+    [report]
+  )
 
   // The panel set changed: lay the current panels out from their default sizes.
   const syncPanels = useCallback(() => {
@@ -177,7 +203,7 @@ export const PanelGroup = forwardRef<ImperativePanelGroupHandle, AnyProps>(funct
     setOrder((prev) =>
       prev.length === ids.length && prev.every((p, i) => p === ids[i]) ? prev : ids
     )
-    commit(defaultLayout(entries.map((p) => p.constraints)))
+    commit(defaultLayout(entries.map((p) => p.constraints)), false)
   }, [ordered, commit])
 
   const registerPanel = useCallback(
@@ -234,20 +260,8 @@ export const PanelGroup = forwardRef<ImperativePanelGroupHandle, AnyProps>(funct
     [groupId, commit, constraintsOf]
   )
 
-  // The package reports a layout to onLayout and each panel's onResize after it commits.
-  useEffect(() => {
-    if (layout.length === 0 || layout.length !== order.length) return
-    if (!reportedLayout.current || !sameLayout(reportedLayout.current, layout)) {
-      reportedLayout.current = layout
-      onLayoutRef.current?.([...layout])
-    }
-    order.forEach((panelId, i) => {
-      const prev = reported.current.get(panelId)
-      if (prev !== undefined && Math.abs(prev - layout[i]) < 1e-6) return
-      reported.current.set(panelId, layout[i])
-      panels.current.get(panelId)?.onResize?.(layout[i], prev)
-    })
-  }, [layout, order])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new panel set reports even when its default layout equals the last one
+  useLayoutEffect(() => report(layout), [layout, order, report])
 
   const horizontal = direction === 'horizontal'
   const handleFor = (pivot: number): HandleEntry | undefined =>
