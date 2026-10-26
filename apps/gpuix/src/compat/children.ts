@@ -403,6 +403,12 @@ export function layoutChildren(
   reverse = false
 ): Laid {
   if (isEmpty(children)) return { children: undefined, isStatic: false }
+  // A lone fragment (`footnote={<>text <code>x</code> text</>}`) is its children in
+  // the DOM: inline content of this box, not one block.
+  if (isValidElement<{ children?: ReactNode }>(children) && children.type === Fragment && children.key === null) {
+    const inner = children.props.children
+    return layoutChildren(tr, style, inner, Array.isArray(inner), reverse)
+  }
   if (reverse && Array.isArray(children)) children = [...children].reverse()
   if (isText(children)) {
     const text = applyTextTransform(tr.inline ? collapse(String(children)) : collapse(String(children)).trim(), tr.transform)

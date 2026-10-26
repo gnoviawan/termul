@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isValidElement, type ReactElement, type ReactNode } from 'react'
+import { Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { jsx, jsxs } from '../../src/compat/jsx-runtime'
 import { translation } from '../../src/compat/translate'
 import { DiffStatCounts } from '../../src/ui/diff-stat-counts'
@@ -201,5 +201,14 @@ describe('flex-1 children of a content-sized column', () => {
 
   test('two growing bodies split the column from basis 0', () => {
     expect(basisOf('flex flex-1 flex-col', 2)).toEqual([0, 0])
+  })
+})
+
+describe('a lone fragment child', () => {
+  test("SettingsGroup's footnote fragment of text and inline code lays out as the paragraph's inline content", () => {
+    const fragment = jsxs(Fragment, { children: ['Advertise (', jsx('code', { children: 'acp' }), '). Not read.'] })
+    const flat = shape(jsx('p', { className: 'text-xs', children: fragment })) as Shape
+    const direct = shape(jsx('p', { className: 'text-xs', children: ['Advertise (', jsx('code', { children: 'acp' }), '). Not read.'] })) as Shape
+    expect(flat).toEqual(direct)
   })
 })

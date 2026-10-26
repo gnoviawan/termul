@@ -243,11 +243,11 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     ]
   },
   'settings.mcp-servers': {
-    status: 'partial',
-    differences: [...SETTINGS_BASE, 'The inline code in the footnote breaks onto its own line.'],
-    cause: 'compat translator gap',
-    unit: 'inline code wrap in settings text (unassigned)',
-    impact: 1
+    status: 'ported',
+    differences: [
+      ...SETTINGS_BASE,
+      'The footnote reads on one line with its inline `mcpCapabilities.acp` as on the web (G16 CODE-WRAP: SettingsGroup gets the footnote as one fragment, which compat had laid out as a block of three lines; a lone fragment child is now its children, inline content of the paragraph).'
+    ]
   },
   'settings.shortcuts': {
     status: 'ported',
