@@ -309,7 +309,8 @@ impl ExitSweep {
     }
 }
 
-#[cfg(test)]
+// Every test in it is unix-only (it spawns `sleep`), so the module is too.
+#[cfg(all(test, unix))]
 mod lifecycle_tests;
 #[cfg(test)]
 mod lifetime_tests;
