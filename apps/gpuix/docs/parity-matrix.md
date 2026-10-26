@@ -287,6 +287,22 @@ reference, G14 the other 110. Each row on this page comes from the unit
 that measured it last, and `bun run parity:matrix --report-only`
 regenerated the totals.
 
+**The outline drag crash (I5).** G14 saw `tools/dnd/check.ts` crash the
+Editor Tab with "Maximum update depth exceeded" while it dragged the outline
+handle. It was not G14's: run 20 times each, alternating, on the
+self-built addon of each head, the check crashed there in 8 runs on
+`exp/gpuix-client` (cf6db0f8) and in 1 run on the G14 merge. Logged at
+the crash, the outline width flipped between 201 and 211 px each render
+until React gave up. The `react-resizable-panels` stand-in called
+`onResize` from an effect after the layout rendered, so the width
+EditorTocLayout stores from it could render one layout behind, and the
+layout EditorTocLayout's own effect sets from that width undid the drag
+each time. The package calls `onResize` inside `setLayout` and the drag
+handler, and the stand-in now does too (e54e35ba,
+`tools/compat/resizable-panels.test.tsx` reproduces the loop). After the
+fix, the check passed 20 of 20 times on the merge and 20 of 20 times on
+cf6db0f8 with only the fix applied.
+
 **Where it stands.** 117 surfaces: 102 ported, 13 partial, 0 broken, 0
 blocked, 2 pending-unit. The usage-weighted score is 94.4 % over all
 surfaces and 95.4 % over the 115 measured ones. Unweighted, it is 92.7 %
