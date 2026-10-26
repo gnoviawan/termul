@@ -247,19 +247,19 @@ export const REVIEWS: Record<string, Review> = {
       TREE_TEXT
     ],
     cause: 'native override needed',
-    unit: 'prose remainder: glyph advances, table card toolbar (unassigned)',
+    unit: 'prose remainder: table card toolbar (unassigned)',
     impact: 1
   },
   'chat.scroll-top': {
     status: 'partial',
     differences: [
       'One wheel event of -20000 px scrolls both to the first turn and shows the jump-to-latest button.',
-      "The table card has the web's copy, download and fullscreen buttons (G7). Its columns start within 6 px of the web's. Rows are 31 px against the web's 30.6 px, with the semibold header on the web's muted fill (G8 patch gpuix/0010-table-cell-metrics: 8 by 4.8 px cells on a 20 px line; before it rows were 32 px with no header fill).",
+      "The table card has the web's copy, download and fullscreen buttons (G7). Its header labels start at 517, 738 and 1077 px against the web's 517, 737 and 1077 px (N3: the 6 and 7 px G12 measured were headless Chromium's hinted advances, see native-patches.md). Rows are 31 px against the web's 30.6 px, with the semibold header on the web's muted fill (G8 patch gpuix/0010-table-cell-metrics: 8 by 4.8 px cells on a 20 px line; before it rows were 32 px with no header fill).",
       PROSE,
       TREE_TEXT
     ],
     cause: 'native override needed',
-    unit: 'prose remainder: glyph advances, table card toolbar (unassigned)',
+    unit: 'prose remainder: table card toolbar (unassigned)',
     impact: 1
   },
   'chat.table-fullscreen': {
@@ -267,7 +267,7 @@ export const REVIEWS: Record<string, Review> = {
     differences: [
       'View fullscreen fills the window with the table under a copy, download and exit toolbar in both (G7).',
       "The view paints over the chat composer card and the status bar, as on the web (G12: its `<anchored>` layer takes `LAYER.dialog`; with no priority it had sorted at 0 under the composer's `relative z-10` and the bar's `z-50` since gpuix/0011, 1.28 % full-frame perceptual in M3, 1.01 % after). A test fails when any `<anchored>` in apps/gpuix/src names no priority.",
-      "The web's toolbar buttons are the larger Streamdown menu triggers, so its three icons sit about 48 px apart against 30 px here, and its table cells are padded wider (Route starts at 34 px against 26 px; G8 widened the native cell padding from 5 to the chat table's 8 px, and the fullscreen table pads its cells more than the chat card does)."
+      "The web's toolbar buttons are the larger Streamdown menu triggers, so its three icons sit about 48 px apart against 30 px here, and its table cells are padded wider (Route starts at 34 px against 26 px; G8 widened the native cell padding from 5 to the chat table's 8 px). The web's fullscreen view is portaled outside `.chat-streamdown`: its cells are 16 by 8 px and its buttons 44 px squares 4 px apart with 14 px icons (N3, `tools/chat/table-probe.ts`); matching it needs a fullscreen theme passed from `TableCard.tsx`."
     ],
     cause: 'native override needed',
     unit: 'table fullscreen toolbar and cell padding (unassigned)',
@@ -305,7 +305,7 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: ['The running chat shows the agent chip and composer like the web.', PROSE],
     cause: 'native override needed',
-    unit: 'prose remainder: glyph advances, table card toolbar (unassigned)',
+    unit: 'prose remainder: table card toolbar (unassigned)',
     impact: 1
   },
   'composer.mention': {

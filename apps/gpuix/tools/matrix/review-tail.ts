@@ -222,11 +222,8 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     impact: 2
   },
   'settings.skills': {
-    status: 'partial',
-    differences: [...SETTINGS_BASE, DIVIDERS, HALF_PX_LINES],
-    cause: 'native override needed',
-    unit: 'fractional text line height (unassigned)',
-    impact: 1
+    status: 'ported',
+    differences: [...SETTINGS_BASE, DIVIDERS, HALF_PX_LINES]
   },
   'settings.provider': {
     status: 'partial',
@@ -247,28 +244,22 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'settings.shortcuts': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       ...SETTINGS_BASE,
       DIVIDERS,
       HALF_PX_LINES,
       'GPUIX lists the desktop keymap (Ctrl+R, Ctrl+T, Ctrl+,) where the web lists its defaults (Press keys…, Alt+T, Alt+,), by design since G4.'
-    ],
-    cause: 'native override needed',
-    unit: 'fractional text line height (unassigned)',
-    impact: 1
+    ]
   },
   'settings.diagnostics': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       ...SETTINGS_BASE,
       DIVIDERS,
       HALF_PX_LINES,
       'Server version reads termul-server v0.4.52 in both: GPUIX asks the server (G4).'
-    ],
-    cause: 'native override needed',
-    unit: 'fractional text line height (unassigned)',
-    impact: 1
+    ]
   },
 
   'settings.reset': {

@@ -12,7 +12,7 @@ export const BLUR =
 export const CONFIRM_Z =
   "The workspace status bar stays sharp above the confirm scrim, as on the web, where ConfirmDialog is an inline `fixed z-50` overlay and StatusBar a later `relative z-50` sibling (G9: compat gives the fixed overlay its z-index as its `<anchored>` priority, and native patch gpuix/0011 paints the `relative z-50` bar in the same deferred pass, after it in tree order; status-bar text 75 against the web's 72, dimmed to 11 before)."
 export const PROSE =
-  "Links paint in medium primary with their underline, inline code sits in the smaller chip with its padding, and italics are real (N1 and N2 native patches). Task-list items draw Chromium's disabled checkbox at the web's place (G7). The paragraph holding inline code breaks at the same words as the web (G8): its lines end at 1210, 1190 and 743 px against the web's 1198, 1175 and 739 px, so GPUIX runs are about 1 % wider. `text-wrap: pretty` is not a cause: `tools/chat/wrap-probe.ts` lays every transcript paragraph out both ways and none breaks differently."
+  "Links paint in medium primary with their underline, inline code sits in the smaller chip with its padding, and italics are real (N1 and N2 native patches). Task-list items draw Chromium's disabled checkbox at the web's place (G7). The paragraph holding inline code breaks at the same words as the web (G8), and its lines end at 1210, 1190 and 743 px against the web's 1210, 1189 and 746 px (N3: the web reference lays text out with slight hinting, as desktop Chrome does; headless Chromium's default full hinting ended them at 1198, 1175 and 739 px, which G8 read as GPUIX runs 1 % wider). `text-wrap: pretty` is not a cause: `tools/chat/wrap-probe.ts` lays every transcript paragraph out both ways and none breaks differently."
 export const RUN_ORDER =
   'The GPUIX Chats list holds more cards because its pass runs after the web pass on the same server.'
 export const TREE_TEXT =
@@ -24,7 +24,7 @@ export const DIVIDERS =
 export const LABEL_LINE =
   "A row's label sits on the web's 24 px line (G12: the inline `<label>` alone on a line of its block parent gets the parent's strut, so the text column is 45 px against the web's 45.5 and the row 69 against 70; it was 41 and 65, with the label 3 px high)."
 export const HALF_PX_LINES =
-  "Rows have the web's height to within 1 px, but GPUIX sets each `text-xs leading-relaxed` line 19 px apart where Chromium sets them 19.5 px apart (G12, measured on the frames: lines at 254, 273, 292, 311 against 254, 274, 293, 313), so a section's later rows drift up to 3 px. M3 read this as the inline label line height; the label rows here already matched."
+  "Each `text-xs leading-relaxed` line sits 19.5 px below the last, as on the web, so later rows no longer drift (N3: native patch zed/0005 keeps the line height fractional; on settings.skills the lines start at 254, 274, 293, 313 and 333 against the web's 254, 274, 293, 313 and 332, and the last row at 658 against 659, where G12 measured 19 px steps and a 5 px drift)."
 export const SETTINGS_BASE = [
   'The section content and navigation match.',
   'The scrim dims and blurs the page behind it as on the web (N2).'
