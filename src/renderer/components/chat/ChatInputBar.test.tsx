@@ -2290,4 +2290,19 @@ describe('ChatInputBar selection contexts', () => {
     expect(getComposerValue()).toBe('')
     expect(screen.queryByRole('note')).toBeNull()
   })
+
+  it('keeps a request that could not be applied and applies it on the next mount', async () => {
+    const request = { context: { text: 'later' }, nonce: 7 }
+    const first = renderInputBar({ disabled: true, selectionContextInsert: request })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.queryByRole('note')).toBeNull()
+    first.unmount()
+
+    renderInputBar({ selectionContextInsert: request })
+    await waitFor(() =>
+      expect(screen.getByRole('note', { name: 'Context 1: later' })).toBeInTheDocument()
+    )
+  })
 })

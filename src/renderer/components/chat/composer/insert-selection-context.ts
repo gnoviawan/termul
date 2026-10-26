@@ -97,8 +97,11 @@ export function useSelectionContextInsertRequest(
   // biome-ignore lint/correctness/useExhaustiveDependencies: the nonce is the trigger; the request object is read with it.
   useEffect(() => {
     if (!request || appliedRequests.has(request)) return
-    appliedRequests.add(request)
-    // Outside React's commit: the pill NodeView renders with flushSync.
-    queueMicrotask(() => insertSelectionContext(editorRef.current, request.context))
+    // Outside React's commit: the pill NodeView renders with flushSync. A failed
+    // insert stays unapplied, so the next composer mount retries it.
+    queueMicrotask(() => {
+      if (appliedRequests.has(request)) return
+      if (insertSelectionContext(editorRef.current, request.context)) appliedRequests.add(request)
+    })
   }, [request?.nonce, editorRef])
 }
