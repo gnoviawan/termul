@@ -178,7 +178,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       'The New host dialog sets Address and Port on one row in both (G15: compat lays a `grid-cols-[1fr_6rem]` grid out as flex rows with one cell per track). Typing goes to the autofocused Address field and the preview reads user@db.example.com in both.',
       "Each field label sits over its input as on the web (G16 LABEL-STRUT): the Address input's top border is at 241 px in both, and the label's ink 2 px higher than the web's (224 to 232 px against 226 to 234 px); it was 6 px lower, and the Organize section started lower with it. Two causes: `space-y-1.5` gives the label a bottom margin, which CSS ignores on an inline box and compat had kept as the column's gap, and the label's strut line now takes the line height its container inherits (`FontContext`) instead of the root's 24 px. The web also rings the focused Address field; GPUIX lightens its border only.",
       'I6 measured it in the full run on the patched addon (series 2fc3aff4), both clients host-local.'
-    ],
+    ]
   },
   'settings.accounts-claude': {
     status: 'ported',
