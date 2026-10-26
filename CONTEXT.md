@@ -88,6 +88,10 @@ _Avoid_: badge, unread, notification
 The stored conversation that one Agent chat shows.
 _Avoid_: history item, transcript
 
+**Selection context**:
+Text that the user selected in a message of an Agent chat and added to the composer as an inline chip ("Context 1"). On send, each Selection context becomes a labeled quote block at the start of the prompt, and its chip becomes a `[Context N]` marker in the sentence.
+_Avoid_: quote, snippet, attachment, mention (a mention points to a file)
+
 ### Providers & accounts
 
 **Provider**:
