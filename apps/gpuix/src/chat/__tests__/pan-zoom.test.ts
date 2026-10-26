@@ -9,8 +9,8 @@ import {
   placement,
   reset,
   wheeled,
-  zoomedBy,
-  ZOOM_STEP
+  ZOOM_STEP,
+  zoomedBy
 } from '../pan-zoom'
 
 /** The matrix transcript's router flowchart as Chromium lays it out (`tools/chat/mermaid-card-probe.ts`). */
@@ -27,7 +27,10 @@ describe('the inline diagram frame', () => {
   })
 
   test('one Zoom in grows the diagram by a tenth about the frame centre, as Streamdown does', () => {
-    const view = zoomedBy(fitted(initialView(), ROUTER, { width: 714, height: 0 }, 'inline'), ZOOM_STEP)
+    const view = zoomedBy(
+      fitted(initialView(), ROUTER, { width: 714, height: 0 }, 'inline'),
+      ZOOM_STEP
+    )
     const box = placement(view, ROUTER, { width: 714, height: 195.27 })
     expect([round(box.left), round(box.top), round(box.width), round(box.height)]).toEqual([
       -50.83, -13.9, 815.65, 223.07
@@ -35,13 +38,23 @@ describe('the inline diagram frame', () => {
   })
 
   test('a small diagram keeps its own size', () => {
-    const view = fitted(initialView(), { width: 200, height: 80 }, { width: 714, height: 0 }, 'inline')
+    const view = fitted(
+      initialView(),
+      { width: 200, height: 80 },
+      { width: 714, height: 0 },
+      'inline'
+    )
     expect(view.zoom).toBe(1)
     expect(view.stageHeight).toBe(80)
   })
 
   test('a tall diagram stops at the frame limit and scales to fit under it', () => {
-    const view = fitted(initialView(), { width: 400, height: 1600 }, { width: 714, height: 0 }, 'inline')
+    const view = fitted(
+      initialView(),
+      { width: 400, height: 1600 },
+      { width: 714, height: 0 },
+      'inline'
+    )
     expect(view.stageHeight).toBe(INLINE_MAX_HEIGHT)
     expect(view.zoom).toBe(INLINE_MAX_HEIGHT / 1600)
   })

@@ -5,7 +5,13 @@ import {
   registerBrowserHost
 } from '@/lib/browser-host'
 import type { MermaidRender } from '../../browser/mermaid-render'
-import { _resetMermaidCacheForTesting, canDrawMermaid, drawMermaid, exportMermaid } from '../mermaid'
+import {
+  _resetMermaidCacheForTesting,
+  canDrawMermaid,
+  drawMermaid,
+  exportMermaid,
+  warmMermaid
+} from '../mermaid'
 
 function hostAnswering(answer: (source: string, scale?: number) => MermaidRender): string[] {
   const asked: string[] = []
@@ -101,5 +107,18 @@ describe('exportMermaid', () => {
       ok: false,
       error: 'Parse error on line 1'
     })
+  })
+})
+
+describe('warmMermaid', () => {
+  test('starts the renderer on a tiny diagram and leaves the cache to real ones', async () => {
+    const asked = hostAnswering(() => ({ ok: true, png: 'p', svg: 's', width: 1, height: 1 }))
+    warmMermaid()
+    await drawMermaid('flowchart LR\n  A --> B')
+    expect(asked).toEqual(['flowchart LR\n  A', 'flowchart LR\n  A --> B'])
+  })
+
+  test('does nothing without a helper', () => {
+    expect(() => warmMermaid()).not.toThrow()
   })
 })

@@ -40,14 +40,28 @@ const MIN_ZOOM = 0.5
 export const INLINE_MAX_HEIGHT = 560
 
 export function initialView(): PanZoomView {
-  return { fit: 1, zoom: 1, minZoom: MIN_ZOOM, pan: { x: 0, y: 0 }, touched: false, stageHeight: null }
+  return {
+    fit: 1,
+    zoom: 1,
+    minZoom: MIN_ZOOM,
+    pan: { x: 0, y: 0 },
+    touched: false,
+    stageHeight: null
+  }
 }
 
-function fitOf(content: Size, stage: Size, mode: PanZoomMode): { fit: number; stageHeight: number | null } | null {
+function fitOf(
+  content: Size,
+  stage: Size,
+  mode: PanZoomMode
+): { fit: number; stageHeight: number | null } | null {
   if (!(stage.width > 0 && content.width > 0 && content.height > 0)) return null
   if (mode === 'fullscreen') {
     if (!(stage.height > 0)) return null
-    return { fit: Math.min(stage.width / content.width, stage.height / content.height, 1), stageHeight: null }
+    return {
+      fit: Math.min(stage.width / content.width, stage.height / content.height, 1),
+      stageHeight: null
+    }
   }
   const byWidth = Math.min(stage.width / content.width, 1)
   const stageHeight = Math.min(content.height * byWidth, INLINE_MAX_HEIGHT)
@@ -55,7 +69,12 @@ function fitOf(content: Size, stage: Size, mode: PanZoomMode): { fit: number; st
 }
 
 /** The view after the frame took `stage` (inline reads only its width). */
-export function fitted(view: PanZoomView, content: Size, stage: Size, mode: PanZoomMode): PanZoomView {
+export function fitted(
+  view: PanZoomView,
+  content: Size,
+  stage: Size,
+  mode: PanZoomMode
+): PanZoomView {
   const next = fitOf(content, stage, mode)
   if (!next) return view
   const minZoom = Math.min(MIN_ZOOM, next.fit)
@@ -64,7 +83,11 @@ export function fitted(view: PanZoomView, content: Size, stage: Size, mode: PanZ
 }
 
 export function zoomedBy(view: PanZoomView, delta: number): PanZoomView {
-  return { ...view, zoom: Math.max(view.minZoom, Math.min(MAX_ZOOM, view.zoom + delta)), touched: true }
+  return {
+    ...view,
+    zoom: Math.max(view.minZoom, Math.min(MAX_ZOOM, view.zoom + delta)),
+    touched: true
+  }
 }
 
 /** One wheel event, its `deltaY` in DOM terms (positive turns the wheel toward the user). */
@@ -89,7 +112,11 @@ export function canZoomOut(view: PanZoomView): boolean {
 }
 
 /** Where the diagram's image sits in a `stage`-sized frame: scaled about the frame's centre, then moved by the pan. */
-export function placement(view: PanZoomView, content: Size, stage: Size): Size & { left: number; top: number } {
+export function placement(
+  view: PanZoomView,
+  content: Size,
+  stage: Size
+): Size & { left: number; top: number } {
   const width = content.width * view.zoom
   const height = content.height * view.zoom
   return {

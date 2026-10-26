@@ -294,18 +294,15 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'chat.send': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Typing and Enter start a chat and the scripted reply streams in both.',
       "The chat starts on the device's picked agent even when Enter comes before the launcher has restored that pick: the send waits for the pick (G8 AGENT-PICK; `tools/matrix/agent-pick.ts` sends the moment the composer appears and lands 4 of 4 web and 4 of 4 GPUIX chats on the picked agent, 2 of 4 and 1 of 4 before).",
-      "The mermaid diagram is drawn as on the web (G10 MERMAID): the webview helper renders it with the web's mermaid 11.16.0 and config and the card fits the PNG to its frame, 714 by 191 px against the web's 714 by 195 px (WebKit measures the monospace labels 2 % wider). The pan and zoom buttons and the fullscreen action are missing; Download saves the source.",
+      "The mermaid diagram is drawn as on the web (G10 MERMAID): the webview helper renders it with the web's mermaid 11.16.0 and config and the card fits the PNG to its frame, 714 by 191 px against the web's 714 by 195 px (WebKit measures the monospace labels 2 % wider). G17 MERMAID-CONTROLS added Streamdown's controls (`src/chat/MermaidCard.tsx`, its own 16 px icons): Zoom in, Zoom out and Reset at the frame's lower left, wheel zoom and drag pan (`pan-zoom.ts`: 0.1 steps between min(0.5, fit) and 3 about the frame centre), Download with the SVG, PNG and MMD menu, Copy, and View fullscreen with its own Download, Copy and Exit. After one Zoom in the diagram spans 816 px on the web and 818 px in GPUIX, centred on the frame (d-zoom), the menu opens under Download at the web's place (e-download-menu), and fullscreen shows the diagram at its own size with the controls at the window's corners (f-fullscreen, 0.78 % perceptual). The helper now answers with the SVG mermaid drew and draws the downloaded PNG at 5x, as Streamdown does; `tools/chat/mermaid-controls-check.ts` checks zoom, pan, wheel, reset, the three files, the menu toggle and fullscreen in the launched app (12 of 12). The zoom panel and the fullscreen backdrop are translucent without the web's backdrop blur (GPUIX has none), so the app shows faintly through the fullscreen view. The helper starts on the first diagram; it now starts while a mermaid fence streams, but a short scripted fence still closes first, so in 3 of the 6 G17 runs read on a busy host the c-reply frame showed the empty frame (5.5 % perceptual against 2.6 %) and the diagram drew a second later.",
       'The boot launcher stays mounted across the first project commit (G10 BOOT-REMOUNT, re-landed in G11), and the composer pill names the chat\'s agent: the c-reply step checks "Chat Scenario Agent" inside the pill. Before G11 LABEL a boot reopen adopting the host\'s agent took the reuse key from the agent the new chat ran on, and the pill read "Agent" in 2 of 5 GPUIX runs; with the fix 6 of 6 GPUIX and 6 of 6 web runs pass.',
       PROSE,
       RUN_ORDER
-    ],
-    cause: 'missing GPUIX capability',
-    unit: 'mermaid pan, zoom and fullscreen (unassigned)',
-    impact: 1
+    ]
   },
   'chat.model-selector': {
     status: 'ported',

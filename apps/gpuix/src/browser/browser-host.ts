@@ -268,12 +268,14 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
           resolve(result)
         })
         const scale = render?.scale
-        void request({ op: 'renderMermaid', id, source, ...(scale ? { scale } : {}) }).then((ack) => {
-          if (ack.ok) return
-          mermaidRenders.delete(id)
-          clearTimeout(timer)
-          resolve({ ok: false, error: ack.error })
-        })
+        void request({ op: 'renderMermaid', id, source, ...(scale ? { scale } : {}) }).then(
+          (ack) => {
+            if (ack.ok) return
+            mermaidRenders.delete(id)
+            clearTimeout(timer)
+            resolve({ ok: false, error: ack.error })
+          }
+        )
       })
     },
     releaseKeyboard(tabId) {

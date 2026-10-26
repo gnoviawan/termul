@@ -53,6 +53,23 @@ export function drawMermaid(source: string): Promise<MermaidRender> {
   return render
 }
 
+/** A diagram mermaid draws in a few milliseconds; drawing it loads the helper's renderer page. */
+const WARM_SOURCE = 'flowchart LR\n  A'
+
+/**
+ * Start the helper and its mermaid page while a fence still streams, so the diagram can draw as
+ * the fence closes instead of waiting about a second for both (`tools/chat/mermaid-probe.ts`).
+ */
+export function warmMermaid(): void {
+  const host = getBrowserHost()
+  if (!isMermaidRenderHost(host)) return
+  const started = performance.now()
+  void host.renderMermaid(WARM_SOURCE).then((result) => {
+    const ms = Math.round(performance.now() - started)
+    log.info('chat', `mermaid.warmed ${JSON.stringify({ ms, ok: result.ok })}`)
+  })
+}
+
 export type MermaidFormat = 'svg' | 'png' | 'mmd'
 
 export type MermaidExport = { ok: true; data: string | Uint8Array } | { ok: false; error: string }
