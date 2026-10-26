@@ -267,10 +267,12 @@ export const REVIEWS: Record<string, Review> = {
     differences: [
       'View fullscreen fills the window with the table under a copy, download and exit toolbar in both (G7).',
       "The view paints over the chat composer card and the status bar, as on the web (G12: its `<anchored>` layer takes `LAYER.dialog`; with no priority it had sorted at 0 under the composer's `relative z-10` and the bar's `z-50` since gpuix/0011, 1.28 % full-frame perceptual in M3, 1.01 % after). A test fails when any `<anchored>` in apps/gpuix/src names no priority.",
-      "The web's toolbar buttons are the larger Streamdown menu triggers, so its three icons sit about 48 px apart against 30 px here, and its table cells are padded wider (Route starts at 34 px against 26 px; G8 widened the native cell padding from 5 to the chat table's 8 px). The web's fullscreen view is portaled outside `.chat-streamdown`: its cells are 16 by 8 px and its buttons 44 px squares 4 px apart with 14 px icons (N3, `tools/chat/table-probe.ts`); matching it needs a fullscreen theme passed from `TableCard.tsx`."
+      "The web portals the view outside `.chat-streamdown`, so Streamdown's utilities apply unscaled (`tools/chat/table-probe.ts`). G13 gives the fullscreen `<markdown>` its own theme from `TableCard.tsx`: 16 by 8 px cells on a 20 px line, the `bg-muted/80` header, and 14 px inline code on `bg-muted` with 6 px side padding. Copy, Download and Exit are 44 px squares 4 px apart at x 1117, 1165 and 1213 in both (they were 24 px Copy and Download), and rows are 37 px apart in both (31 before). The toolbar crop's perceptual diff fell from 1.03 to 0.26 %.",
+      'Three native differences remain in the table: each inline-code wash sits its 6 px padding left of the web\'s chip, because gpuix/0007 widens the wash on the left past padding that is already laid out; the second and third columns start about 2 px right of the web\'s, because a native cell grows from a zero basis plus its padding while CSS shares the whole width in proportion to max-content plus padding; and the rules are the text colour at 10 % (rgb 33) with one more rule under the header, where the web draws `border-border` (rgb 36) under body rows only.',
+      TREE_TEXT
     ],
     cause: 'native override needed',
-    unit: 'table fullscreen toolbar and cell padding (unassigned)',
+    unit: 'table fullscreen inline-code wash and column widths (native, unassigned)',
     impact: 1
   },
   'chat.new-chat': {
