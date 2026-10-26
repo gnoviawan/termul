@@ -30,6 +30,7 @@ export const TAURI_BIN =
 const IDENTIFIER = 'com.termul-manager.app.dev'
 const WINDOW_TITLE = 'Termul Manager'
 const READY_TIMEOUT_MS = 90_000
+const SETTLE_TIMEOUT_MS = 20_000
 /** alpha's avatar in the rail, `blue` as the app paints it. */
 const AVATAR_RGB = [60, 131, 246]
 const X11_WINDOW = path.join(import.meta.dir, 'x11-window.py')
@@ -92,7 +93,8 @@ function placeWindow(display: string, origin: Point, width: number, height: numb
     ],
     { env: { ...process.env, DISPLAY: display } }
   )
-  if (proc.exitCode !== 0) throw new Error(`x11-window: ${proc.stderr.toString().trim()}`)
+  if (proc.exitCode !== 0)
+    throw new Error(`x11-window: ${proc.stderr.toString().trim().split('\n').at(-1)}`)
 }
 
 /**
@@ -126,23 +128,40 @@ export async function withTauri<T>(
     stderr: Bun.file(path.join(home, 'app.err.log'))
   })
   const origin = { x: SCREEN_MARGIN / 2, y: SCREEN_MARGIN / 2 }
-  const grab = (outPath: string) =>
+  const shoot = (outPath: string) =>
     grabFrame(xvfb.display, opts.width, opts.height, outPath, origin)
-  try {
-    placeWindow(xvfb.display, origin, opts.width, opts.height)
-    const probe = path.join(home, 'ready.png')
-    const deadline = Date.now() + READY_TIMEOUT_MS
+  /**
+   * Grab until two grabs a second apart match, so `ready` holds on a frame
+   * the app has stopped painting. The app's text cannot be read, so this
+   * stands in for the checks GPUIX waits on (a page still loading keeps its
+   * spinner turning).
+   */
+  const settled = async (outPath: string, ready: () => boolean, timeoutMs: number) => {
+    const deadline = Date.now() + timeoutMs
     let previous = ''
     for (;;) {
       if (app.exitCode !== null) throw new Error(`termul-manager exited with ${app.exitCode}`)
-      await grab(probe)
-      const frame = Bun.hash(await Bun.file(probe).arrayBuffer()).toString()
-      if (frame === previous && avatarShown(probe)) break
-      if (Date.now() > deadline) throw new Error('the desktop app never painted its project rail')
+      await shoot(outPath)
+      const frame = Bun.hash(await Bun.file(outPath).arrayBuffer()).toString()
+      if (frame === previous && ready()) return true
+      if (Date.now() > deadline) return false
       previous = frame
       await Bun.sleep(1000)
     }
-    return await body({ display: xvfb.display, origin, grab })
+  }
+  try {
+    placeWindow(xvfb.display, origin, opts.width, opts.height)
+    const probe = path.join(home, 'ready.png')
+    if (!(await settled(probe, () => avatarShown(probe), READY_TIMEOUT_MS)))
+      throw new Error('the desktop app never painted its project rail')
+    return await body({
+      display: xvfb.display,
+      origin,
+      grab: async (outPath) => {
+        if (!(await settled(outPath, () => true, SETTLE_TIMEOUT_MS)))
+          console.error(`[tauri] ${outPath}: still painting after ${SETTLE_TIMEOUT_MS} ms`)
+      }
+    })
   } finally {
     app.kill()
     await app.exited

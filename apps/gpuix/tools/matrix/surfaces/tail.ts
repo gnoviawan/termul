@@ -286,10 +286,20 @@ const LONG_TAIL: Surface[] = [
     prepare: async () => servePage(),
     steps: [
       step('a-dashboard', [wait(2000)], see('What should we do in alpha?')),
-      step('b-new-tab', [press('ctrl-shift-n'), wait(2500)]),
+      // A new tab starts on the product's default page (www.google.com, from the network),
+      // so the tab is pointed at the local page before the first frame.
       step(
-        'c-page',
-        [click(URL_BAR), wait(600), type(PAGE_URL), press('enter'), wait(5000)],
+        'b-page',
+        [
+          press('ctrl-shift-n'),
+          wait(2500),
+          click(URL_BAR),
+          wait(600),
+          press('ctrl-a'),
+          type(PAGE_URL),
+          press('enter'),
+          wait(3000)
+        ],
         see(PAGE_TITLE)
       )
     ]

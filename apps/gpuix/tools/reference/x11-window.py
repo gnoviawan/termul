@@ -9,7 +9,7 @@ applied as sent, and nothing focuses a window on its own.
 import sys
 import time
 
-from Xlib import X, display
+from Xlib import X, display, error
 
 name = sys.argv[1]
 x, y, w, h = (int(v) for v in sys.argv[2:6])
@@ -24,8 +24,11 @@ def title(win):
 
 def find():
     for win in root.query_tree().children:
-        if title(win) == name and win.get_attributes().map_state == X.IsViewable:
-            return win
+        try:
+            if title(win) == name and win.get_attributes().map_state == X.IsViewable:
+                return win
+        except error.BadWindow:
+            pass  # a window the app destroyed while the tree was walked
     return None
 
 
