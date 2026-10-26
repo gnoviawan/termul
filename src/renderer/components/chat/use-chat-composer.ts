@@ -10,6 +10,7 @@ import type {
   SessionModeState
 } from '@/lib/acp-api'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
+import { hasSelectionContexts, serializeSelectionContexts } from '@/lib/composer/selection-context'
 import { logFrontendError } from '@/lib/log-api'
 import {
   extractCommandNames,
@@ -129,6 +130,8 @@ export interface ChatPromptParts {
    * prefix).
    */
   hasCommand: boolean
+  /** True when the value carries selection-context chips (display keeps the tokens). */
+  hasSelectionContexts: boolean
   /** Wire text dispatched to the agent (skills framed by path, tokens → `(name)`,
    * file tokens → `(display)`). */
   wireText: string
@@ -369,7 +372,9 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     // second pick).
     const commandNames = extractCommandNames(value)
     const commandName = commandNames[0] ?? null
-    const valueWithCommandText = replaceCommandTokensInline(value)
+    // Selection contexts become the leading quote blocks + `[Context N]`
+    // markers first, while a leading command token is still recognizable.
+    const valueWithCommandText = replaceCommandTokensInline(serializeSelectionContexts(value))
     // Extract the inline skill tokens and resolve each name to its SKILL.md
     // path. Paths come from `skillPathsRef` (captured at pick time) first,
     // then fall back to the currently-available skills list — so editing +
@@ -423,6 +428,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
       skills: resolvedSkills,
       hasSkills,
       hasCommand: commandName !== null,
+      hasSelectionContexts: hasSelectionContexts(value),
       wireText,
       displayText,
       wireWithCommand,

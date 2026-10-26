@@ -535,10 +535,21 @@ export const FILE_TOKEN_END = '\uE007'
 export const FILE_TOKEN_SEP = '\u001F'
 
 /**
+ * Selection-context sentinels: `\uE008[<language>\u001F]<payload>\uE009`. The
+ * payload is URI-encoded, so it has no whitespace, `/`, `@`, or sentinel, and
+ * the slash/mention scanners cannot see the quoted text. The token model lives
+ * in `lib/composer/selection-context.ts`.
+ */
+export const CONTEXT_TOKEN_START = '\uE008'
+export const CONTEXT_TOKEN_END = '\uE009'
+export const CONTEXT_TOKEN_SEP = '\u001F'
+
+/**
  * True when a `/` or `@` at `index` is a trigger, not part of a word.
  *
  * The character before `index` is a boundary at the start of the text, on
- * whitespace, or at the end of a pill (`\uE001`, `\uE003`, `\uE005`, `\uE007`).
+ * whitespace, or at the end of a pill (`\uE001`, `\uE003`, `\uE005`, `\uE007`,
+ * `\uE009`).
  * The figure space inside a skill padding block is not a boundary: the scanner
  * stops on the sentinel that closes the pill, so a trigger glued to a pill
  * still opens the menu.
@@ -551,7 +562,8 @@ export function isComposerTriggerBoundary(value: string, index: number): boolean
     prev === SKILL_TOKEN_END ||
     prev === SKILL_PAD_END ||
     prev === CMD_TOKEN_END ||
-    prev === FILE_TOKEN_END
+    prev === FILE_TOKEN_END ||
+    prev === CONTEXT_TOKEN_END
   )
 }
 

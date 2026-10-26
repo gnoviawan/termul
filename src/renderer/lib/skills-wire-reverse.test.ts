@@ -1,3 +1,4 @@
+import { selectionContextToken, serializeSelectionContexts } from '@/lib/composer/selection-context'
 import {
   commandToken,
   fileToken,
@@ -250,5 +251,24 @@ describe('wireBlocksToDisplay', () => {
     expect(text).toContain(SKILL_TOKEN_START)
     expect(text).toContain(SKILL_TOKEN_END)
     expect(text).not.toContain('# Agent Skills')
+  })
+})
+
+describe('wireTextToDisplay with selection contexts', () => {
+  const ctx = selectionContextToken({ text: 'call (git-worktree) first', language: 'sh' })
+
+  it('restores context chips from a plain prompt', () => {
+    const display = `Explain ${ctx} please`
+    expect(wireTextToDisplay(serializeSelectionContexts(display))).toBe(display)
+  })
+
+  it('restores context and skill chips from a skill-framed prompt', () => {
+    const display = `Use ${skillToken('git-worktree')} on ${ctx}`
+    const wire = formatPromptWithSkills(
+      [{ name: 'git-worktree', path: GIT_PATH }],
+      serializeSelectionContexts(display)
+    )
+    expect(wire.startsWith('# Agent Skills')).toBe(true)
+    expect(wireTextToDisplay(wire)).toBe(display)
   })
 })

@@ -7,6 +7,7 @@ import type { SessionConfigOption } from '@/lib/acp-api'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
+import { selectionContextToken } from '@/lib/composer/selection-context'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { useProjectStore } from '@/stores/project-store'
 import { ChatInputBar } from './ChatInputBar'
@@ -2200,5 +2201,141 @@ describe('ChatInputBar mobile dock', () => {
 
     expect(screen.getByTestId('permission-prompt')).toBeInTheDocument()
     expect(editorSurface).toHaveFocus()
+  })
+})
+
+describe('ChatInputBar selection contexts', () => {
+  it('adds chips from the message list and sends them as leading quote blocks, then clears', async () => {
+    const onSend = vi.fn()
+    const onSendBlocks = vi.fn()
+    const first = { text: 'The bug is in parse()' }
+    const second = { text: 'const x = 1', language: 'ts' }
+    const { rerender } = renderInputBar({ onSend, onSendBlocks })
+    setComposerValue('Compare ')
+    setComposerCaret('Compare '.length)
+
+    const s = session()
+    const bar = (nonce: number, context: typeof first | typeof second) => (
+      <TooltipProvider>
+        <ChatInputBar
+          session={s}
+          busy={false}
+          disabled={false}
+          onSend={onSend}
+          onSendBlocks={onSendBlocks}
+          onCancel={vi.fn()}
+          commands={[]}
+          configOptions={[]}
+          modes={s.modes}
+          onSetConfig={mockSetConfig}
+          onSetMode={mockSetMode}
+          onSetModel={mockSetModel}
+          selectionContextInsert={{ context, nonce }}
+        />
+      </TooltipProvider>
+    )
+    rerender(bar(1, first))
+    await waitFor(() =>
+      expect(screen.getByRole('note', { name: /^Context 1:/ })).toBeInTheDocument()
+    )
+    rerender(bar(2, second))
+    await waitFor(() =>
+      expect(screen.getByRole('note', { name: /^Context 2:/ })).toBeInTheDocument()
+    )
+
+    const display = `Compare ${selectionContextToken(first)} ${selectionContextToken(second)}`
+    expect(getComposerValue()).toBe(`${display} `)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => {
+      expect(onSendBlocks).toHaveBeenCalledWith(
+        [
+          {
+            type: 'text',
+            text: [
+              'Context 1 (selected from the conversation):',
+              '> The bug is in parse()',
+              '',
+              'Context 2 (selected from the conversation):',
+              '> ```ts',
+              '> const x = 1',
+              '> ```',
+              '',
+              'Compare [Context 1] [Context 2]'
+            ].join('\n')
+          }
+        ],
+        [{ type: 'text', text: display }]
+      )
+    })
+    expect(onSend).not.toHaveBeenCalled()
+    await waitFor(() => expect(getComposerValue()).toBe(''))
+    expect(screen.queryByRole('note', { name: /^Context/ })).toBeNull()
+  })
+
+  it('does not add a context again when the composer remounts with the same request', async () => {
+    const request = { context: { text: 'once' }, nonce: 1 }
+    const first = renderInputBar({ selectionContextInsert: request })
+    await waitFor(() =>
+      expect(screen.getByRole('note', { name: 'Context 1: once' })).toBeInTheDocument()
+    )
+    setComposerValue('')
+    first.unmount()
+
+    renderInputBar({ selectionContextInsert: request })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(getComposerValue()).toBe('')
+    expect(screen.queryByRole('note')).toBeNull()
+  })
+
+  it('keeps a request that could not be applied and applies it on the next mount', async () => {
+    const request = { context: { text: 'later' }, nonce: 7 }
+    const first = renderInputBar({ disabled: true, selectionContextInsert: request })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.queryByRole('note')).toBeNull()
+    first.unmount()
+
+    renderInputBar({ selectionContextInsert: request })
+    await waitFor(() =>
+      expect(screen.getByRole('note', { name: 'Context 1: later' })).toBeInTheDocument()
+    )
+  })
+
+  it('applies a request that arrived while disabled once the composer is enabled', async () => {
+    const request = { context: { text: 'when ready' }, nonce: 9 }
+    const view = renderInputBar({ disabled: true, selectionContextInsert: request })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.queryByRole('note')).toBeNull()
+
+    const s = session()
+    view.rerender(
+      <TooltipProvider>
+        <ChatInputBar
+          session={s}
+          busy={false}
+          disabled={false}
+          onSend={vi.fn()}
+          onSendBlocks={vi.fn()}
+          onCancel={vi.fn()}
+          commands={[]}
+          configOptions={[]}
+          modes={s.modes}
+          onSetConfig={mockSetConfig}
+          onSetMode={mockSetMode}
+          onSetModel={mockSetModel}
+          selectionContextInsert={request}
+        />
+      </TooltipProvider>
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('note', { name: 'Context 1: when ready' })).toBeInTheDocument()
+    )
   })
 })

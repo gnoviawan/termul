@@ -22,6 +22,7 @@ import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } f
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import { formatAcpAgentError } from '@/lib/agents/acp-spawn-errors'
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
+import { type SelectionContext, serializeSelectionContexts } from '@/lib/composer/selection-context'
 import { logFrontendError } from '@/lib/log-api'
 import {
   extractSkillNames,
@@ -58,6 +59,7 @@ import { ChatStarters } from './chat-start'
 import { buildTimeline, consolidateThoughtGroups, spliceReloadMarker } from './chat-timeline'
 import { ClaudeLimitNotice } from './claude-account/ClaudeLimitNotice'
 import { ClaudeSignInAction } from './claude-account/ClaudeSignInAction'
+import type { SelectionContextInsertRequest } from './composer/insert-selection-context'
 import { ElicitationPrompt } from './ElicitationPrompt'
 import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
@@ -391,6 +393,12 @@ export function AgentChatPanel({
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null)
   const [dismissedError, setDismissedError] = useState<string | null>(null)
   const seedComposer = useCallback((text: string) => setSeed({ text, nonce: Date.now() }), [])
+  const [contextInsert, setContextInsert] = useState<SelectionContextInsertRequest>()
+  const addSelectionContext = useCallback(
+    (context: SelectionContext) =>
+      setContextInsert((prev) => ({ context, nonce: (prev?.nonce ?? 0) + 1 })),
+    []
+  )
 
   const handleRemoveQueued = useCallback(
     (queueId: string) => {
@@ -595,7 +603,7 @@ export function AgentChatPanel({
     // Mirrors `buildPromptParts`: command tokens become `/<name>` where the
     // user typed them. They are not moved to the front of the prompt.
     const tokenText = lastUserText
-    const valueWithCommandText = replaceCommandTokensInline(tokenText)
+    const valueWithCommandText = replaceCommandTokensInline(serializeSelectionContexts(tokenText))
     const skillNames = extractSkillNames(tokenText)
     const skills = skillNames.map((name) => ({
       name,
@@ -775,6 +783,9 @@ export function AgentChatPanel({
   }
 
   const isClosed = session.status === 'closed'
+  // No add while the composer is unmounted (stopped chat, or a question replaces it).
+  const composerHidden =
+    (isClosed && !isResumableStop) || (!isClosed && (pendingElicitation || pendingQuestion))
   const showBrowserConsentCard =
     pendingBrowserConsent != null && !isClosed && !stripHosting && !overlayOpen
   // Failed launches keep the Retry affordance even without a user prompt in
@@ -923,6 +934,7 @@ export function AgentChatPanel({
             showRunningIndicator={showRunningIndicator}
             filePathContext={filePathContext}
             onEditMessage={seedComposer}
+            onAddSelectionContext={composerHidden ? undefined : addSelectionContext}
             onRetry={canOfferRetry ? handleRetry : undefined}
           />
         </SkillFilesProvider>
@@ -1049,6 +1061,7 @@ export function AgentChatPanel({
             onSetModel={handleSetModel}
             seedText={seed?.text}
             seedNonce={seed?.nonce}
+            selectionContextInsert={contextInsert}
             compactTop={hasFileChanges}
             isVisible={isVisible}
           />

@@ -8,12 +8,19 @@ import { Message, MessageContent } from '@/components/ui/message'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ContentBlock } from '@/lib/acp-api'
 import { readAttachmentBytes } from '@/lib/attachment-api'
+import {
+  parseSelectionContextSegments,
+  type SelectionContext,
+  type SelectionContextSegment,
+  serializeSelectionContexts
+} from '@/lib/composer/selection-context'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import {
   isFolderTokenPath,
   parseCommandSegments,
   parseFileSegments,
   parseSkillSegments,
+  type SkillSegment,
   sanitizeDisplayText
 } from '@/lib/skill-tokens'
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
@@ -42,6 +49,7 @@ import {
   resolveMessageActionsMode,
   supportsLongPressMenu
 } from './MessageActions'
+import { SelectionContextChip } from './SelectionContextChip'
 import { CommandChipLink, SkillChipLink } from './skill-file-links'
 
 // The markdown renderer moved to `chat-agent-prose.tsx` to keep this file under
@@ -71,18 +79,20 @@ function blocksToText(blocks: ContentBlock[]): string {
  * renders verbatim with `whitespace-pre-wrap` to preserve the original
  * spacing. `MessageActions` still receives the sanitized copy text (tokens →
  * readable text) while edit keeps the raw token text so the composer
- * re-seeds with chips inline.
+ * re-seeds with chips inline. Selection contexts (`\uE008..\uE009`) are
+ * split out first and render as numbered `SelectionContextChip`s.
  */
 function UserMessageText({ text }: { text: string }): React.JSX.Element {
-  const skillSegments = parseSkillSegments(text)
-  // Flatten: skill segments → command tokens → file tokens (innermost).
+  // Flatten: selection contexts → skill segments → command tokens → file tokens (innermost).
   type FlatSeg =
     | { kind: 'text'; text: string }
     | { kind: 'skill'; name: string }
     | { kind: 'file'; display: string; dir: boolean }
     | { kind: 'command'; name: string }
+    | { kind: 'context'; context: SelectionContext; index: number }
   const flat: FlatSeg[] = []
   let hasPills = false
+  let contextCount = 0
   const pushFileSegments = (segmentText: string): void => {
     const fileSegs = parseFileSegments(segmentText)
     if (fileSegs.length === 1 && fileSegs[0].kind === 'text') {
@@ -103,7 +113,17 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
       }
     }
   }
-  for (const seg of skillSegments) {
+  const segments = parseSelectionContextSegments(text).flatMap(
+    (part): Array<SelectionContextSegment | SkillSegment> =>
+      part.kind === 'context' ? [part] : parseSkillSegments(part.text)
+  )
+  for (const seg of segments) {
+    if (seg.kind === 'context') {
+      contextCount += 1
+      flat.push({ kind: 'context', context: seg.context, index: contextCount })
+      hasPills = true
+      continue
+    }
     if (seg.kind === 'skill') {
       flat.push({ kind: 'skill', name: seg.name })
       hasPills = true
@@ -138,6 +158,13 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
               <CommandChipLink key={`command-${i}`} name={seg.name} surface="bubble" />
             ) : seg.kind === 'file' ? (
               <FileChip key={`file-${i}`} name={seg.display} kind={seg.dir ? 'dir' : 'file'} />
+            ) : seg.kind === 'context' ? (
+              <SelectionContextChip
+                key={`context-${i}`}
+                index={seg.index}
+                context={seg.context}
+                tabIndex={0}
+              />
             ) : (
               <span key={`text-${i}`}>{seg.text}</span>
             )
@@ -425,7 +452,7 @@ function ChatMessageComponent({
     // sentinels. Edit keeps the raw token text so the composer re-seeds with
     // chips inline (command pill included). The row and the mobile menu share
     // both.
-    const copyTextForActions = sanitizeDisplayText(text)
+    const copyTextForActions = sanitizeDisplayText(serializeSelectionContexts(text))
     const editForActions = onEdit && text.length > 0 ? () => onEdit(text) : undefined
     const userMessage = (
       <Message
@@ -454,7 +481,12 @@ function ChatMessageComponent({
               reduced={reduced}
               animateEnter={animateEnter}
             >
-              <Bubble variant="tinted" align="end" className="max-w-full">
+              <Bubble
+                variant="tinted"
+                align="end"
+                className="max-w-full"
+                data-selection-context-source=""
+              >
                 <UserMessageText text={text} />
               </Bubble>
             </StaggerSection>
@@ -517,7 +549,7 @@ function ChatMessageComponent({
             streaming caret still needs a bubble to live in while the turn is
             in progress, even before any text has arrived. */}
         {(proseText.length > 0 || streaming) && (
-          <Bubble variant="ghost" className="w-full">
+          <Bubble variant="ghost" className="w-full" data-selection-context-source="">
             <BubbleContent>
               <StaggerSection
                 delay={proseDelay}
