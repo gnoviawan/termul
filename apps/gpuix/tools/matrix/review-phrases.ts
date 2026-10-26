@@ -15,6 +15,8 @@ export const PROSE =
   "Links paint in medium primary with their underline, inline code sits in the smaller chip with its padding, and italics are real (N1 and N2 native patches). Task-list items draw Chromium's disabled checkbox at the web's place (G7). The paragraph holding inline code breaks at the same words as the web (G8), and its lines end at 1210, 1190 and 743 px against the web's 1210, 1189 and 746 px (N3: the web reference lays text out with slight hinting, as desktop Chrome does; headless Chromium's default full hinting ended them at 1198, 1175 and 739 px, which G8 read as GPUIX runs 1 % wider). `text-wrap: pretty` is not a cause: `tools/chat/wrap-probe.ts` lays every transcript paragraph out both ways and none breaks differently."
 export const RUN_ORDER =
   'The GPUIX Chats list holds more cards because its pass runs after the web pass on the same server.'
+export const WASH =
+  "Each inline-code wash sits its padding (3.7 px) left of the web's chip, with the glyphs within 2 px of the web's: native patch gpuix/0007 lays the padding out on both sides of the run and then still widens the wash on the left by the same amount (G13, measured on the transcript table's chips: wash from 734 px against 737, first glyph at 742 against 741)."
 export const TREE_TEXT =
   'The text check fails only because natively painted text is not in the automation tree.'
 export const SELECT =

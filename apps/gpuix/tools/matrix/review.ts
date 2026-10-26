@@ -18,7 +18,8 @@ import {
   TEXTAREA_LINE,
   TITLE_TIP,
   TOAST,
-  TREE_TEXT
+  TREE_TEXT,
+  WASH
 } from './review-phrases'
 import { TAIL_REVIEWS } from './review-tail'
 import type { Status } from './weights'
@@ -243,11 +244,13 @@ export const REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'The transcript, code card, task list, Worked for row and Changed files bar all render.',
+      "G13, measured on the frames: the bash code card's body is 73 px tall between its borders against the web's 81 px, so the card above the list ends 3 px higher; the task list lands on the web's columns (bullet 527, checkbox 547, text 565 px in both).",
       PROSE,
+      WASH,
       TREE_TEXT
     ],
     cause: 'native override needed',
-    unit: 'prose remainder: table card toolbar (unassigned)',
+    unit: 'prose remainder: code card body, list indent, inline-code wash (unassigned)',
     impact: 1
   },
   'chat.scroll-top': {
@@ -255,11 +258,13 @@ export const REVIEWS: Record<string, Review> = {
     differences: [
       'One wheel event of -20000 px scrolls both to the first turn and shows the jump-to-latest button.',
       "The table card has the web's copy, download and fullscreen buttons (G7). Its header labels start at 517, 738 and 1077 px against the web's 517, 737 and 1077 px (N3: the 6 and 7 px G12 measured were headless Chromium's hinted advances, see native-patches.md). Rows are 31 px against the web's 30.6 px, with the semibold header on the web's muted fill (G8 patch gpuix/0010-table-cell-metrics: 8 by 4.8 px cells on a 20 px line; before it rows were 32 px with no header fill).",
+      "The table card's Copy, Download and View fullscreen icons sit at the web's x (1161, 1190 and 1217 px, G13). The ordered list's item text starts about 10 px right of the web's (WorkspaceLayout's first glyph at 557 against 547 px).",
       PROSE,
+      WASH,
       TREE_TEXT
     ],
     cause: 'native override needed',
-    unit: 'prose remainder: table card toolbar (unassigned)',
+    unit: 'prose remainder: code card body, list indent, inline-code wash (unassigned)',
     impact: 1
   },
   'chat.table-fullscreen': {
@@ -268,7 +273,7 @@ export const REVIEWS: Record<string, Review> = {
       'View fullscreen fills the window with the table under a copy, download and exit toolbar in both (G7).',
       "The view paints over the chat composer card and the status bar, as on the web (G12: its `<anchored>` layer takes `LAYER.dialog`; with no priority it had sorted at 0 under the composer's `relative z-10` and the bar's `z-50` since gpuix/0011, 1.28 % full-frame perceptual in M3, 1.01 % after). A test fails when any `<anchored>` in apps/gpuix/src names no priority.",
       "The web portals the view outside `.chat-streamdown`, so Streamdown's utilities apply unscaled (`tools/chat/table-probe.ts`). G13 gives the fullscreen `<markdown>` its own theme from `TableCard.tsx`: 16 by 8 px cells on a 20 px line, the `bg-muted/80` header, and 14 px inline code on `bg-muted` with 6 px side padding. Copy, Download and Exit are 44 px squares 4 px apart at x 1117, 1165 and 1213 in both (they were 24 px Copy and Download), and rows are 37 px apart in both (31 before). The toolbar crop's perceptual diff fell from 1.03 to 0.26 %.",
-      'Three native differences remain in the table: each inline-code wash sits its 6 px padding left of the web\'s chip, because gpuix/0007 widens the wash on the left past padding that is already laid out; the second and third columns start about 2 px right of the web\'s, because a native cell grows from a zero basis plus its padding while CSS shares the whole width in proportion to max-content plus padding; and the rules are the text colour at 10 % (rgb 33) with one more rule under the header, where the web draws `border-border` (rgb 36) under body rows only.',
+      "Three native differences remain in the table: each inline-code wash sits its 6 px padding left of the web's chip, because gpuix/0007 widens the wash on the left past padding that is already laid out; the second and third columns start about 2 px right of the web's, because a native cell grows from a zero basis plus its padding while CSS shares the whole width in proportion to max-content plus padding; and the rules are the text colour at 10 % (rgb 33) with one more rule under the header, where the web draws `border-border` (rgb 36) under body rows only.",
       TREE_TEXT
     ],
     cause: 'native override needed',
@@ -305,9 +310,14 @@ export const REVIEWS: Record<string, Review> = {
   },
   'chat.model-selector': {
     status: 'partial',
-    differences: ['The running chat shows the agent chip and composer like the web.', PROSE],
+    differences: [
+      'The running chat shows the agent chip and composer like the web.',
+      "G13, measured on the frames: the bash code card's body is 73 px tall between its borders against the web's 81 px, so the card above the list ends 3 px higher; the task list lands on the web's columns (bullet 527, checkbox 547, text 565 px in both).",
+      PROSE,
+      WASH
+    ],
     cause: 'native override needed',
-    unit: 'prose remainder: table card toolbar (unassigned)',
+    unit: 'prose remainder: code card body, list indent, inline-code wash (unassigned)',
     impact: 1
   },
   'composer.mention': {
