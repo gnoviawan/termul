@@ -14,12 +14,17 @@ export type Flag =
   | 'groupHover'
   | 'groupFocus'
   | 'groupFocusVisible'
+  | 'peerHover'
+  | 'peerFocus'
   | 'coarsePointer'
   | 'reducedMotion'
 
+/** Whose attributes an `attr` condition reads: the element, its `group` ancestor, or its `peer` sibling. */
+export type AttrScope = 'self' | 'group' | 'peer'
+
 export type Condition =
   | { kind: 'flag'; flag: Flag; negate?: boolean }
-  | { kind: 'attr'; scope: 'self' | 'group'; attr: string; value?: string }
+  | { kind: 'attr'; scope: AttrScope; attr: string; value?: string }
   | { kind: 'viewport'; min?: number; max?: number }
   | { kind: 'appearance'; dark: boolean }
 
@@ -38,6 +43,8 @@ export interface TwState {
   groupHover?: boolean
   groupFocus?: boolean
   groupFocusVisible?: boolean
+  peerHover?: boolean
+  peerFocus?: boolean
   coarsePointer?: boolean
   reducedMotion?: boolean
   viewportWidth?: number
@@ -45,13 +52,15 @@ export interface TwState {
   attrs?: Readonly<Record<string, string | boolean | undefined>>
   /** The same for the nearest `group` ancestor. */
   groupAttrs?: Readonly<Record<string, string | boolean | undefined>>
+  /** The same for the nearest earlier `peer` sibling. */
+  peerAttrs?: Readonly<Record<string, string | boolean | undefined>>
 }
 
 const flag = (f: Flag, negate = false): VariantResult => ({
   kind: 'condition',
   condition: { kind: 'flag', flag: f, ...(negate ? { negate } : {}) }
 })
-const attr = (name: string, value?: string, scope: 'self' | 'group' = 'self'): VariantResult => ({
+const attr = (name: string, value?: string, scope: AttrScope = 'self'): VariantResult => ({
   kind: 'condition',
   condition: { kind: 'attr', scope, attr: name, ...(value === undefined ? {} : { value }) }
 })
@@ -81,6 +90,11 @@ const STATIC: Record<string, VariantResult> = {
   'group-focus': flag('groupFocus'),
   'group-focus-visible': flag('groupFocusVisible'),
   'group-focus-within': flag('groupFocus'),
+  'peer-hover': flag('peerHover'),
+  'peer-focus': flag('peerFocus'),
+  'peer-focus-visible': flag('peerFocus'),
+  'peer-focus-within': flag('peerFocus'),
+  'peer-disabled': attr('disabled', undefined, 'peer'),
   'pointer-coarse': flag('coarsePointer'),
   'pointer-fine': flag('coarsePointer', true),
   'motion-reduce': flag('reducedMotion'),
@@ -88,11 +102,10 @@ const STATIC: Record<string, VariantResult> = {
   dark: { kind: 'condition', condition: { kind: 'appearance', dark: true } }
 }
 
-function bracketAttr(
-  prefix: 'data' | 'aria',
-  body: string,
-  scope: 'self' | 'group'
-): VariantResult {
+const SCOPE_PREFIX: Readonly<Record<string, AttrScope>> = { 'group-': 'group', 'peer-': 'peer' }
+const scopeOf = (prefix: string | undefined): AttrScope => (prefix ? SCOPE_PREFIX[prefix] : 'self')
+
+function bracketAttr(prefix: 'data' | 'aria', body: string, scope: AttrScope): VariantResult {
   const [name, value] = body.split('=')
   return attr(`${prefix}-${name}`, value?.replace(/^["']|["']$/g, ''), scope)
 }
@@ -101,15 +114,14 @@ export function parseVariant(variant: string): VariantResult {
   const known = STATIC[variant]
   if (known) return known
   if (variant in SHADCN_DATA) return attr(...SHADCN_DATA[variant])
-  const bracket = variant.match(/^(group-)?(data|aria)-\[(.+)\]$/)
-  if (bracket)
-    return bracketAttr(bracket[2] as 'data' | 'aria', bracket[3], bracket[1] ? 'group' : 'self')
+  const bracket = variant.match(/^(group-|peer-)?(data|aria)-\[(.+)\]$/)
+  if (bracket) return bracketAttr(bracket[2] as 'data' | 'aria', bracket[3], scopeOf(bracket[1]))
   const ariaBool = variant.match(
-    /^(group-)?aria-(selected|expanded|checked|disabled|pressed|current)$/
+    /^(group-|peer-)?aria-(selected|expanded|checked|disabled|pressed|current)$/
   )
-  if (ariaBool) return attr(`aria-${ariaBool[2]}`, 'true', ariaBool[1] ? 'group' : 'self')
-  const dataBool = variant.match(/^(group-)?data-([a-z-]+)$/)
-  if (dataBool) return attr(`data-${dataBool[2]}`, undefined, dataBool[1] ? 'group' : 'self')
+  if (ariaBool) return attr(`aria-${ariaBool[2]}`, 'true', scopeOf(ariaBool[1]))
+  const dataBool = variant.match(/^(group-|peer-)?data-([a-z-]+)$/)
+  if (dataBool) return attr(`data-${dataBool[2]}`, undefined, scopeOf(dataBool[1]))
   const minBp = BREAKPOINTS[variant]
   if (minBp !== undefined) return { kind: 'condition', condition: { kind: 'viewport', min: minBp } }
   const maxBp = variant.startsWith('max-') ? BREAKPOINTS[variant.slice(4)] : undefined
@@ -134,16 +146,18 @@ function attrMatches(attrs: TwState['attrs'], name: string, value: string | unde
   return String(actual) === value
 }
 
+const SCOPED_ATTRS: Readonly<Record<AttrScope, (state: TwState) => TwState['attrs']>> = {
+  self: (state) => state.attrs,
+  group: (state) => state.groupAttrs,
+  peer: (state) => state.peerAttrs
+}
+
 export function conditionHolds(condition: Condition, state: TwState, dark: boolean): boolean {
   switch (condition.kind) {
     case 'flag':
       return (state[condition.flag] === true) !== (condition.negate === true)
     case 'attr':
-      return attrMatches(
-        condition.scope === 'group' ? state.groupAttrs : state.attrs,
-        condition.attr,
-        condition.value
-      )
+      return attrMatches(SCOPED_ATTRS[condition.scope](state), condition.attr, condition.value)
     case 'viewport': {
       const width = state.viewportWidth ?? Number.POSITIVE_INFINITY
       return (

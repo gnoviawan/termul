@@ -325,7 +325,7 @@ const NATIVE_STATES: readonly NativeState[] = ['hover', 'active', 'focusVisible'
 /**
  * The native states a matching rule beats in Tailwind's variant order:
  * disabled:, data-*, aria-*, breakpoints and media variants sort after
- * hover/focus-visible/active; focus: sorts after hover only; group-* before all.
+ * hover/focus-visible/active; focus: sorts after hover only; group-* and peer-* before all.
  */
 function outranked(condition: Condition): readonly NativeState[] {
   if (condition.kind !== 'flag') return NATIVE_STATES
@@ -336,6 +336,8 @@ function outranked(condition: Condition): readonly NativeState[] {
     case 'groupHover':
     case 'groupFocus':
     case 'groupFocusVisible':
+    case 'peerHover':
+    case 'peerFocus':
       return []
     default:
       return NATIVE_STATES

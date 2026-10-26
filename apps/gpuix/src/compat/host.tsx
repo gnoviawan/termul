@@ -1,8 +1,9 @@
 /**
  * The stateful host, for the few elements whose classes read state GPUIX
- * does not track: `group-*` variants, `focus:` / `focus-within:`, viewport
- * breakpoints, and the `group` element those variants watch. Everything
- * else is built directly by `createDomElement`.
+ * does not track: `group-*` and `peer-*` variants, `focus:` /
+ * `focus-within:`, viewport breakpoints, and the `group` and `peer` elements
+ * those variants watch (`peer.ts` links a peer to its later siblings).
+ * Everything else is built directly by `createDomElement`.
  *
  * A `group-*` consumer created in the same render as its group (the usual
  * `<div className="group">…<span className="group-hover:…">` in one
@@ -30,14 +31,11 @@ import { jsx } from 'react/jsx-runtime'
 import { applyRules } from '../style/tw'
 import type { Condition, TwState } from '../style/variants'
 import { buildElement, compatDark, type DomProps, domAttrs, domSource } from './create'
+import { ownPeerLink, type PeerSnapshot, type PeerStore, readPeerLink } from './peer'
 import type { Translation } from './translate'
 import { subscribeViewport, viewportWidth } from './viewport'
 
-interface GroupSnapshot {
-  hovered: boolean
-  focused: boolean
-  attrs: Readonly<Record<string, unknown>>
-}
+type GroupSnapshot = PeerSnapshot
 
 function attrValues(attrs: Readonly<Record<string, unknown>>, names: string[]): string {
   let out = ''
@@ -45,8 +43,8 @@ function attrValues(attrs: Readonly<Record<string, unknown>>, names: string[]): 
   return out
 }
 
-/** A `group` element's live state. Consumers subscribe; the group itself never re-renders for it. */
-class GroupStore {
+/** A `group` or `peer` element's live state. Consumers subscribe; a peer never re-renders for it. */
+class GroupStore implements PeerStore {
   private snapshot: GroupSnapshot
   private attrsKey: string
   private readonly listeners = new Set<() => void>()
@@ -89,11 +87,13 @@ const NO_GROUP = new GroupStore()
 
 interface Needs {
   group: boolean
+  peer: boolean
   focus: boolean
   viewport: boolean
   /** Attributes the rules read, on the element itself and on its group. */
   selfAttrs: string[]
   groupAttrs: string[]
+  peerAttrs: string[]
 }
 
 const needsCache = new WeakMap<Translation, Needs>()
@@ -101,14 +101,18 @@ const needsCache = new WeakMap<Translation, Needs>()
 function needsOf(tr: Translation): Needs {
   let needs = needsCache.get(tr)
   if (needs) return needs
-  const out: Needs = { group: false, focus: false, viewport: false, selfAttrs: [], groupAttrs: [] }
+  const out: Needs = { group: false, peer: false, focus: false, viewport: false, selfAttrs: [], groupAttrs: [], peerAttrs: [] }
   const visit = (c: Condition) => {
     if (c.kind === 'viewport') out.viewport = true
     else if (c.kind === 'attr' && c.scope === 'group') {
       out.group = true
       if (!out.groupAttrs.includes(c.attr)) out.groupAttrs.push(c.attr)
+    } else if (c.kind === 'attr' && c.scope === 'peer') {
+      out.peer = true
+      if (!out.peerAttrs.includes(c.attr)) out.peerAttrs.push(c.attr)
     } else if (c.kind === 'attr' && !out.selfAttrs.includes(c.attr)) out.selfAttrs.push(c.attr)
     else if (c.kind === 'flag' && c.flag.startsWith('group')) out.group = true
+    else if (c.kind === 'flag' && c.flag.startsWith('peer')) out.peer = true
     else if (c.kind === 'flag' && (c.flag === 'focus' || c.flag === 'focusWithin')) out.focus = true
   }
   for (const rule of tr.compiled.rules) rule.when.forEach(visit)
@@ -131,11 +135,12 @@ const styleCache = new WeakMap<Translation, Map<string, StyleDesc>>()
  */
 function hostStyle(tr: Translation, needs: Needs, state: TwState, dark: boolean): StyleDesc {
   if (tr.compiled.rules.length === 0) return tr.base
-  const flags = [dark, state.disabled, state.focus, state.focusWithin, state.groupHover, state.groupFocus]
+  const flags = [dark, state.disabled, state.focus, state.focusWithin, state.groupHover, state.groupFocus, state.peerHover, state.peerFocus]
   const key =
     flags.map((flag) => (flag ? '1' : '0')).join('') +
     `${needs.viewport ? state.viewportWidth : ''}${attrValues(state.attrs ?? {}, needs.selfAttrs)}` +
-    attrValues(state.groupAttrs ?? {}, needs.groupAttrs)
+    attrValues(state.groupAttrs ?? {}, needs.groupAttrs) +
+    attrValues(state.peerAttrs ?? {}, needs.peerAttrs)
   let byState = styleCache.get(tr)
   if (!byState) {
     byState = new Map()
@@ -154,7 +159,7 @@ const noSubscribe = () => () => {}
 /** Consumers that read only their group's state (no focus or viewport rules of their own). */
 function groupOnly(tr: Translation): boolean {
   const needs = needsOf(tr)
-  return needs.group && !needs.focus && !needs.viewport && tr.group === null
+  return needs.group && !needs.peer && !needs.focus && !needs.viewport && tr.group === null && !tr.peer
 }
 
 /** A consumer's element as its own `CompatHost` would build it for this group state. */
@@ -221,15 +226,22 @@ function CompatHost({ tag, tr, dom, domKey, isStatic, font }: CompatHostProps): 
   const parentGroup = useContext(GroupContext) ?? NO_GROUP
   useSyncExternalStore(needs.group ? parentGroup.subscribe : noSubscribe, () => parentGroup.keyFor(needs.groupAttrs))
   const group = parentGroup.get()
+  const peerStore = (needs.peer ? readPeerLink(dom)?.store : null) ?? NO_GROUP
+  useSyncExternalStore(needs.peer ? peerStore.subscribe : noSubscribe, () => peerStore.keyFor(needs.peerAttrs))
+  const peer = peerStore.get()
   const [focus, setFocus] = useState({ self: false, within: false })
   const width = useSyncExternalStore(needs.viewport ? subscribeViewport : noSubscribe, viewportWidth)
   const attrs = domAttrs(dom)
-  const attrsKey = tr.group !== null ? JSON.stringify(attrs) : ''
+  const tracked = tr.group !== null || tr.peer
+  const attrsKey = tracked ? JSON.stringify(attrs) : ''
   const ownStore = useRef<GroupStore | null>(null)
-  if (tr.group !== null && !ownStore.current) ownStore.current = new GroupStore(attrs, attrsKey)
+  if (tracked && !ownStore.current) ownStore.current = new GroupStore(attrs, attrsKey)
   const store = ownStore.current
+  const published = tr.peer ? ownPeerLink(dom) : undefined
+  if (published && store) published.store = store
   // The group re-renders for its own hover and focus: it builds the consumers in its children.
-  useSyncExternalStore(store ? store.subscribe : noSubscribe, () => (store ? store.keyFor([]) : ''))
+  const groupStore = tr.group !== null ? store : null
+  useSyncExternalStore(groupStore ? groupStore.subscribe : noSubscribe, () => (groupStore ? groupStore.keyFor([]) : ''))
   const disabled = Boolean(dom.disabled)
   useLayoutEffect(() => {
     store?.setAttrs(attrs, attrsKey)
@@ -244,6 +256,9 @@ function CompatHost({ tag, tr, dom, domKey, isStatic, font }: CompatHostProps): 
     groupFocus: group.focused,
     groupFocusVisible: group.focused,
     groupAttrs: group.attrs as TwState['groupAttrs'],
+    peerHover: peer.hovered,
+    peerFocus: peer.focused,
+    peerAttrs: peer.attrs as TwState['peerAttrs'],
     viewportWidth: width
   }
   const style = hostStyle(tr, needs, state, compatDark())
@@ -278,8 +293,8 @@ function CompatHost({ tag, tr, dom, domKey, isStatic, font }: CompatHostProps): 
   }, [dom, needs.focus, store])
 
   const built = buildElement(tag, tr, dom, undefined, isStatic, { style, handlers, nativeStyle: font })
-  if (!store) return built
-  return jsx(GroupContext.Provider, { value: store, children: claimConsumers(built, { ...store.get(), attrs }) })
+  if (!groupStore) return built
+  return jsx(GroupContext.Provider, { value: groupStore, children: claimConsumers(built, { ...groupStore.get(), attrs }) })
 }
 
 export function hostElement(

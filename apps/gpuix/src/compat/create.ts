@@ -3,7 +3,8 @@
  * a GPUIX element. Everything is decided here, at element creation, from the
  * translation cache: no per-element component, no context read. Only an
  * element whose classes depend on state GPUIX does not track (group-*,
- * focus:, focus-within:, viewport variants) or that declares a `group` is
+ * peer-*, focus:, focus-within:, viewport variants) or that declares a
+ * `group` or `peer` is
  * handed to the stateful `CompatHost`.
  */
 
@@ -22,6 +23,7 @@ import { FontContext, fontHostElement, inheritsFont } from './font'
 import { adaptHandlers, addFormListeners, addOccluderListeners, type GpuixListeners } from './events'
 import { gridLayout, withoutTracks } from './grid'
 import { compatWarn } from './log'
+import { linkPeers, markPeer } from './peer'
 import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
 import { layoutListener } from './resize'
 import { SVG_CHILD_TAGS, svgElement } from './svg'
@@ -263,6 +265,7 @@ export function buildElement(
     if (props.dangerouslySetInnerHTML) compatWarn('prop-unsupported', 'dangerouslySetInnerHTML')
     const flipped = unreverse(style)
     if (flipped) native.style = style = flipped
+    linkPeers(props.children)
     let children = contentBasis(tr, style, props.children)
     let childrenStatic = isStatic
     if (style.gridTracks) {
@@ -350,11 +353,12 @@ export function createDomElement(
   const className = withScopedClasses(tag, props['data-streamdown'], props.className)
   const tr = translation(tag, className)
   const build = (font?: StyleDesc) =>
-    tr.ruleMode === 'host' || tr.group !== null
+    tr.ruleMode === 'host' || tr.group !== null || tr.peer
       ? host(tag, tr, props, key, isStatic, font)
       : buildElement(tag, tr, props, key, isStatic, font && { nativeStyle: font })
   const element = inheritsFont(tr, props) ? fontHostElement(tr, key, build) : build()
   domSource.set(element, { tag, props, key })
+  markPeer(element, tr, props)
   if (tag === 'textarea') childInfo.set(element, { inline: true, ...childInfo.get(element), baselineAtBottom: true })
   return element
 }

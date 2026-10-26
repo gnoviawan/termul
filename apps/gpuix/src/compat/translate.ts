@@ -45,6 +45,8 @@ export interface Translation {
   readonly ruleMode: RuleMode
   /** `group` or `group/<name>` on this element. */
   readonly group: string | null
+  /** `peer` or `peer/<name>` on this element: later siblings' `peer-*` rules read its state. */
+  readonly peer: boolean
   /** Inline-level (span, a, inline-flex, button...) as opposed to block-level. */
   readonly inline: boolean
   /** null when not a flex container. */
@@ -131,7 +133,7 @@ const AUTO_MARGIN: Readonly<Record<string, Partial<AutoMargin>>> = {
   'mb-auto': { bottom: true }
 }
 
-const NAMED_GROUP_VARIANT = /(^|:)(group-[a-z-]*(?:\[[^\]]*\])?)\/[\w-]+(?=:)/g
+const NAMED_GROUP_VARIANT = /(^|:)((?:group|peer)-[a-z-]*(?:\[[^\]]*\])?)\/[\w-]+(?=:)/g
 const TRANSFORMS = new Set(['uppercase', 'lowercase', 'capitalize'])
 const INLINE_DISPLAY = new Set(['inline', 'inline-block', 'inline-flex', 'inline-grid'])
 const BLOCK_DISPLAY = new Set(['block', 'flex', 'grid', 'table', 'flow-root', 'list-item'])
@@ -147,7 +149,7 @@ const PAINT_KEYS: readonly (keyof StyleDesc)[] = [
 /** Conditions that need a component: the state lives outside this element's props. */
 function needsHost(condition: Condition): boolean {
   if (condition.kind === 'viewport') return true
-  if (condition.kind === 'attr') return condition.scope === 'group'
+  if (condition.kind === 'attr') return condition.scope !== 'self'
   if (condition.kind === 'flag') return condition.flag !== 'disabled'
   return false
 }
@@ -155,6 +157,7 @@ function needsHost(condition: Condition): boolean {
 interface Lifted {
   classes: string
   group: string | null
+  peer: boolean
   autoMargin: AutoMargin | null
   transform: Translation['transform']
   listMarker: Translation['listMarker']
@@ -190,6 +193,7 @@ function lift(className: string): Lifted {
   const lifted: Lifted = {
     classes: '',
     group: null,
+    peer: false,
     autoMargin: null,
     transform: null,
     listMarker: null,
@@ -218,7 +222,7 @@ function lift(className: string): Lifted {
       lifted.insets = insets
       continue
     }
-    // `group-hover/name:` binds to the nearest group, whatever its name.
+    // `group-hover/name:` binds to the nearest group, whatever its name; `peer-*/name:` likewise.
     const token = raw.includes('/') ? raw.replace(NAMED_GROUP_VARIANT, '$1$2') : raw
     const svg = svgToken(token)
     if (svg !== null) {
@@ -237,6 +241,10 @@ function lift(className: string): Lifted {
     }
     if (token === 'group' || token.startsWith('group/')) {
       lifted.group = token
+      continue
+    }
+    if (token === 'peer' || token.startsWith('peer/')) {
+      lifted.peer = true
       continue
     }
     const margin = AUTO_MARGIN[token]
@@ -405,6 +413,7 @@ function translate(tw: Tw, tag: string, className: string): Translation {
     base,
     ruleMode,
     group: lifted.group,
+    peer: lifted.peer,
     inline,
     flexDirection,
     transform: lifted.transform,
