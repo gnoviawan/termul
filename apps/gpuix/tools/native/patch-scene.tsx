@@ -16,6 +16,7 @@ import {
   BULLET,
   CODE_PAD,
   GRID,
+  GRID_TRACKS,
   LONG_VALUE,
   SAMPLES,
   type Sample,
@@ -173,6 +174,34 @@ function App() {
           style={{ gridColumnSpan: GRID.span, height: 8, backgroundColor: '#00ff00' }}
         />
         <div style={{ height: 8, backgroundColor: '#0000ff' }} />
+      </div>
+      <div
+        ref={(node: PublicInstance | null) => {
+          refs.current.gridTracks = node
+        }}
+        style={{
+          display: 'grid',
+          gridTemplateColumns: GRID_TRACKS.tracks.length,
+          gridColumnTracks: GRID_TRACKS.tracks,
+          width: GRID_TRACKS.width
+        }}
+      >
+        <div style={{ display: 'flex' }}>
+          <div
+            style={{ width: 8, height: GRID_TRACKS.contentHeight, backgroundColor: '#ffff00' }}
+          />
+        </div>
+        <div
+          ref={(node: PublicInstance | null) => {
+            refs.current.gridPlaced = node
+          }}
+          style={{
+            gridColumnStart: GRID_TRACKS.column,
+            gridRowStart: 1,
+            height: 8,
+            backgroundColor: '#00ffff'
+          }}
+        />
       </div>
       <div style={{ display: 'flex', flexDirection: 'row' }}>
         {(['untracked', 'tracked'] as const).map((sample) =>

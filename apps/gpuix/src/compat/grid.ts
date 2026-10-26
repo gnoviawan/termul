@@ -9,8 +9,9 @@
  *
  * Items are placed in order, as CSS auto-placement does. A grid whose items
  * place themselves (`col-span-2`, `row-start-1`) is left to the native grid
- * of equal tracks, where `col-span-*` and `row-span-*` still span (native
- * patch gpuix/0016); starts and ends are not placed.
+ * (`placedGrid`): the patched addon draws its track list and places its items
+ * (gpuix/0016 spans, gpuix/0019 tracks and starts); the published addon
+ * ignores both and draws equal tracks.
  */
 
 import type { StyleDesc } from '@gpuix/react'
@@ -39,9 +40,14 @@ function cellStyle(track: GridTrack): StyleDesc {
 }
 
 /** The grid's own style minus what only CSS grid understands. */
-export function withoutTracks(style: StyleDesc): StyleDesc {
+function withoutTracks(style: StyleDesc): StyleDesc {
   const { gridTracks: _tracks, ...rest } = style
   return rest
+}
+
+/** The grid's style for the native grid: its track list instead of the compat-only `gridTracks`. */
+export function placedGrid(style: StyleDesc, tracks: readonly GridTrack[]): StyleDesc {
+  return { ...withoutTracks(style), gridColumnTracks: tracks }
 }
 
 export interface GridLayout {

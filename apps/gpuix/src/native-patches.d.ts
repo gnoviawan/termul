@@ -32,6 +32,15 @@ declare module '@gpuix/native/host' {
     gridColumnSpan?: number
     /** CSS `grid-row: span <n>` (patch gpuix/0016-grid-span). */
     gridRowSpan?: number
+    /**
+     * A `grid-template-columns` track list (patch gpuix/0019-grid-tracks-placement),
+     * drawn in place of `gridTemplateColumns`' equal tracks.
+     */
+    gridColumnTracks?: readonly import('./style/grid-tracks').GridTrack[]
+    /** CSS `grid-column-start: <n>` (patch gpuix/0019-grid-tracks-placement). */
+    gridColumnStart?: number
+    /** CSS `grid-row-start: <n>` (patch gpuix/0019-grid-tracks-placement). */
+    gridRowStart?: number
   }
   interface GpuixTheme {
     /** Markdown link text (patch 0002-markdown-theme). Unset: the text colour. */

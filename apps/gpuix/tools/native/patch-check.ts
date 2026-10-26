@@ -47,6 +47,9 @@
  *                          `listBullet` paints in `listMarker`, centred in
  *                          an `mdListMarkerWidth` column, with the item text
  *                          `mdListMarkerGap` after it
+ *   zed/0008 + gpuix/0019  a track list and a column start place a cell in
+ *   grid-tracks-placement  the last track of 100px 1fr 50px, and a cell in a
+ *                          fixed track sizes its row by its content
  *   0008-prompt-for-new-path
  *                          `dialog-check.ts`: the portal's save dialog returns
  *                          the path typed into it
@@ -73,6 +76,7 @@ import {
   BULLET,
   CODE_PAD,
   GRID,
+  GRID_TRACKS,
   type Sample,
   SCENE,
   type SceneReady,
@@ -195,6 +199,10 @@ function inkWidth(sample: Sample): number {
   return max >= min ? max - min + 1 : 0
 }
 
+const gridPlaced = {
+  left: (ready.bounds.gridPlaced?.x ?? 0) - (ready.bounds.gridTracks?.x ?? 0),
+  width: ready.bounds.gridPlaced?.width ?? 0
+}
 const uprightSlant = slant('upright')
 const italicSlant = slant('italic')
 const linkRed = count('link', ([r, g, b]) => r > 160 && g < 90 && b < 90)
@@ -334,6 +342,20 @@ const checks = [
     what: `gridColumnSpan ${GRID.span} in a ${GRID.columns}-column grid ${GRID.width} px wide spans ${(GRID.width * GRID.span) / GRID.columns} px (px)`,
     value: ready.bounds.gridSpan?.width ?? 0,
     ok: Math.abs((ready.bounds.gridSpan?.width ?? 0) - (GRID.width * GRID.span) / GRID.columns) <= 1
+  },
+  {
+    patch: 'grid-tracks-placement',
+    what: `a cell at gridColumnStart ${GRID_TRACKS.column} of tracks 100px 1fr 50px in ${GRID_TRACKS.width} px starts ${GRID_TRACKS.left} px in and is ${GRID_TRACKS.cell} px wide (px)`,
+    value: gridPlaced,
+    ok:
+      Math.abs(gridPlaced.left - GRID_TRACKS.left) <= 1 &&
+      Math.abs(gridPlaced.width - GRID_TRACKS.cell) <= 1
+  },
+  {
+    patch: 'grid-tracks-placement',
+    what: `a content-sized cell in the 100 px track gives the row its ${GRID_TRACKS.contentHeight} px content height (px)`,
+    value: ready.bounds.gridTracks?.height ?? 0,
+    ok: Math.abs((ready.bounds.gridTracks?.height ?? 0) - GRID_TRACKS.contentHeight) <= 1
   },
   {
     patch: 'letter-spacing',

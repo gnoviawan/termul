@@ -1,0 +1,104 @@
+diff --git a/crates/gpui/src/style.rs b/crates/gpui/src/style.rs
+index 4e61a2c..96ca506 100644
+--- a/crates/gpui/src/style.rs
++++ b/crates/gpui/src/style.rs
+@@ -174,6 +174,22 @@ pub struct GridTemplate {
+     pub min_size: GridTemplateMinSize,
+ }
+ 
++/// One track of an explicit `grid-template-columns` list.
++#[derive(Copy, Clone, PartialEq, Debug, JsonSchema, Serialize, Deserialize)]
++pub enum GridTrackSize {
++    /// A track of this many pixels.
++    Fixed(f32),
++    /// `minmax(<min>px, <fr>fr)`: a share of the free space, at least `min` pixels.
++    Fraction {
++        /// The track's flex factor.
++        fr: f32,
++        /// The track's floor in pixels.
++        min: f32,
++    },
++    /// `auto`: as wide as its content.
++    Auto,
++}
++
+ /// The CSS styling that can be applied to an element via the `Styled` trait
+ #[derive(Clone, Refineable, Debug)]
+ #[refineable(Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+@@ -313,6 +329,9 @@ pub struct Style {
+     /// Equivalent to the Tailwind `grid-rows-<number>`
+     pub grid_rows: Option<GridTemplate>,
+ 
++    /// An explicit column track list. Takes precedence over `grid_cols`.
++    pub grid_col_tracks: Option<Vec<GridTrackSize>>,
++
+     /// The grid location of this element
+     pub grid_location: Option<GridLocation>,
+ 
+@@ -856,6 +875,7 @@ impl Default for Style {
+             opacity: None,
+             grid_rows: None,
+             grid_cols: None,
++            grid_col_tracks: None,
+             grid_location: None,
+ 
+             #[cfg(debug_assertions)]
+diff --git a/crates/gpui/src/styled.rs b/crates/gpui/src/styled.rs
+index 2e1d482..908bc37 100644
+--- a/crates/gpui/src/styled.rs
++++ b/crates/gpui/src/styled.rs
+@@ -764,6 +764,12 @@ pub trait Styled: Sized {
+         self
+     }
+ 
++    /// Sets the grid columns to an explicit track list, as CSS `grid-template-columns`.
++    fn grid_col_tracks(mut self, tracks: Vec<crate::GridTrackSize>) -> Self {
++        self.style().grid_col_tracks = Some(tracks);
++        self
++    }
++
+     /// Sets the grid columns with min-content minimum sizing.
+     /// Unlike grid_cols, it won't shrink to width 0 in AvailableSpace::MinContent constraints.
+     fn grid_cols_min_content(mut self, cols: u16) -> Self {
+diff --git a/crates/gpui/src/taffy.rs b/crates/gpui/src/taffy.rs
+index 7fa895b..071e548 100644
+--- a/crates/gpui/src/taffy.rs
++++ b/crates/gpui/src/taffy.rs
+@@ -488,6 +488,22 @@ impl ToTaffy<taffy::style::Style> for Style {
+             .unwrap_or_default()
+         }
+ 
++        let to_track = |track: crate::GridTrackSize| -> taffy::TrackSizingFunction {
++            match track {
++                // `minmax(<px>, 0fr)`, not `<px>`: under taffy 0.13 a content-sized item
++                // whose columns are all fixed-size adds nothing to its auto row's height
++                // (measured: a 38 px avatar cell left the row 20 px tall). A 0fr maximum
++                // takes no free space, so the track stays <px> wide.
++                crate::GridTrackSize::Fixed(px) => {
++                    minmax(length(round_to_device_pixel(px, scale_factor)), fr(0.0_f32))
++                }
++                crate::GridTrackSize::Fraction { fr: share, min } => {
++                    minmax(length(round_to_device_pixel(min, scale_factor)), fr(share))
++                }
++                crate::GridTrackSize::Auto => taffy::style_helpers::auto(),
++            }
++        };
++
+         taffy::style::Style {
+             display: self.display.into(),
+             overflow: self.overflow.into(),
+@@ -512,7 +528,13 @@ impl ToTaffy<taffy::style::Style> for Style {
+             flex_grow: self.flex_grow,
+             flex_shrink: self.flex_shrink,
+             grid_template_rows: to_grid_repeat(&self.grid_rows),
+-            grid_template_columns: to_grid_repeat(&self.grid_cols),
++            grid_template_columns: match &self.grid_col_tracks {
++                Some(tracks) => tracks
++                    .iter()
++                    .map(|track| taffy::GridTemplateComponent::Single(to_track(*track)))
++                    .collect(),
++                None => to_grid_repeat(&self.grid_cols),
++            },
+             grid_row: self
+                 .grid_location
+                 .as_ref()

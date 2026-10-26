@@ -444,8 +444,14 @@ const HANDLERS: Record<string, Handler> = {
   from: (v) => gradientStop(v, 'from'),
   via: () => unsupported('GPUIX gradients have two stops; via- adds a third'),
   to: (v) => gradientStop(v, 'to'),
-  'row-start': () => unsupported('grid placement (gpuix#103)'),
-  'col-start': () => unsupported('grid placement (gpuix#103)'),
+  'row-start': (v) =>
+    /^\d+$/.test(v.value)
+      ? ok({ gridRowStart: Number(v.value) })
+      : unsupported('grid lines other than a number'),
+  'col-start': (v) =>
+    /^\d+$/.test(v.value)
+      ? ok({ gridColumnStart: Number(v.value) })
+      : unsupported('grid lines other than a number'),
   translate: () => unsupported(TRANSFORM),
   'translate-x': () => unsupported(TRANSFORM),
   'translate-y': () => unsupported(TRANSFORM),

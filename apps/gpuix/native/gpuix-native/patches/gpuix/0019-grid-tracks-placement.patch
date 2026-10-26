@@ -1,0 +1,68 @@
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index 1d70c2b..2bda377 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -6478,6 +6478,16 @@ pub(crate) fn apply_styles<E: gpui::Styled>(mut el: E, style: &StyleDesc) -> E {
+     if let Some(span) = style.grid_row_span {
+         el = el.row_span(span.round().clamp(1.0, 64.0) as u16);
+     }
++    if let Some(tracks) = style.grid_column_tracks.as_deref() {
++        el = el.grid_col_tracks(tracks.iter().map(|track| track.to_gpui()).collect());
++    }
++    // After the spans: `col-start-1 col-span-3` is `grid-column: 1 / span 3`.
++    if let Some(start) = style.grid_column_start {
++        el = el.col_start(start.round().clamp(-64.0, 64.0) as i16);
++    }
++    if let Some(start) = style.grid_row_start {
++        el = el.row_start(start.round().clamp(-64.0, 64.0) as i16);
++    }
+     if style.flex_direction.as_deref() == Some("column") {
+         el = el.flex_col();
+     }
+diff --git a/packages/native/src/style.rs b/packages/native/src/style.rs
+index 3317f74..c6a8696 100644
+--- a/packages/native/src/style.rs
++++ b/packages/native/src/style.rs
+@@ -143,6 +143,28 @@ impl<'de> Deserialize<'de> for DimensionValue {
+     }
+ }
+ 
++/// One `grid-template-columns` track, as Termul's compat layer parses it.
++#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
++#[serde(tag = "kind", rename_all = "lowercase")]
++pub enum GridTrackDesc {
++    Fixed { px: f64 },
++    Fr { fr: f64, min: f64 },
++    Content,
++}
++
++impl GridTrackDesc {
++    pub fn to_gpui(self) -> gpui::GridTrackSize {
++        match self {
++            Self::Fixed { px } => gpui::GridTrackSize::Fixed(px as f32),
++            Self::Fr { fr, min } => gpui::GridTrackSize::Fraction {
++                fr: fr as f32,
++                min: min as f32,
++            },
++            Self::Content => gpui::GridTrackSize::Auto,
++        }
++    }
++}
++
+ /// Style description that can be serialized from JS
+ /// Note: This is only used for JSON deserialization, not direct napi binding
+ #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+@@ -173,6 +195,13 @@ pub struct StyleDesc {
+     pub grid_column_span: Option<f64>,
+     /// CSS `grid-row: span <n>`.
+     pub grid_row_span: Option<f64>,
++    /// A `grid-template-columns` track list; takes precedence over
++    /// `grid_template_columns`.
++    pub grid_column_tracks: Option<Vec<GridTrackDesc>>,
++    /// CSS `grid-column-start: <n>`, a line number.
++    pub grid_column_start: Option<f64>,
++    /// CSS `grid-row-start: <n>`.
++    pub grid_row_start: Option<f64>,
+ 
+     // Sizing - now supports both numbers and strings like "100%" or "auto"
+     pub width: Option<DimensionValue>,

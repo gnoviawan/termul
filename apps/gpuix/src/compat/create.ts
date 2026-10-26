@@ -21,7 +21,7 @@ import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackIns
 import { convertDomStyle } from './dom-style'
 import { FontContext, fontHostElement, inheritsFont } from './font'
 import { adaptHandlers, addFormListeners, addOccluderListeners, type GpuixListeners } from './events'
-import { gridLayout, withoutTracks } from './grid'
+import { gridLayout, placedGrid } from './grid'
 import { compatWarn } from './log'
 import { linkPeers, markPeer } from './peer'
 import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
@@ -270,7 +270,7 @@ export function buildElement(
     let childrenStatic = isStatic
     if (style.gridTracks) {
       const grid = gridLayout(style, style.gridTracks, children, (node) => domSource.get(node)?.props.className)
-      native.style = style = grid ? grid.style : withoutTracks(style)
+      native.style = style = grid ? grid.style : placedGrid(style, style.gridTracks)
       if (grid) {
         children = grid.children
         childrenStatic = false

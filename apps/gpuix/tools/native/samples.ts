@@ -12,6 +12,8 @@ export const SAMPLES = [
   'blur',
   'table',
   'gridSpan',
+  'gridTracks',
+  'gridPlaced',
   'untracked',
   'tracked',
   'bullet'
@@ -27,6 +29,23 @@ export const TABLE = { padY: 10, lineHeight: 20, rows: 2 } as const
 export const TABLE_HEADER_FILL = '#ff0000'
 /** A grid of GRID.columns equal tracks GRID.width wide; its first cell spans two of them. */
 export const GRID = { width: 300, columns: 3, span: 2 } as const
+/**
+ * A 300 px grid of tracks 100 px, 1fr and 50 px; one cell placed in the last
+ * track of the first row, and a content-sized cell in the first, whose
+ * content sets the row's height.
+ */
+export const GRID_TRACKS = {
+  width: 300,
+  tracks: [
+    { kind: 'fixed', px: 100 },
+    { kind: 'fr', fr: 1, min: 0 },
+    { kind: 'fixed', px: 50 }
+  ],
+  column: 3,
+  left: 250,
+  cell: 50,
+  contentHeight: 24
+} as const
 /** `letterSpacing` of the `tracked` sample, in em of its 32 px glyphs: 8 px between glyphs. */
 export const TRACKING = { em: 0.25, size: 32, glyphs: 4 } as const
 /** The `bullet` sample's list: a red "•" centred in a `width` column, the item text `gap` after it. */

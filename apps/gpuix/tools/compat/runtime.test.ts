@@ -155,15 +155,29 @@ describe('grid track lists', () => {
     })
   })
 
-  test('a grid whose items place themselves keeps the equal-track fallback, and its spans are native', () => {
-    const grid = jsx('div', {
-      className: 'grid grid-cols-[1fr_6rem]',
-      children: jsx('div', { className: 'col-span-2', children: 'wide' })
+  test('a grid whose items place themselves hands its track list and placements to the native grid', () => {
+    const grid = jsxs('div', {
+      className: 'grid grid-cols-[13.75rem_minmax(0,1fr)_1.75rem]',
+      children: [
+        jsx('div', { className: 'col-span-3 row-start-2', children: 'usage' }, 'u'),
+        jsx('div', { className: 'col-start-3 row-start-1', children: 'menu' }, 'm')
+      ]
     })
     expect(shape(grid)).toEqual({
       type: 'div',
-      style: { display: 'grid', gridTemplateColumns: 2 },
-      children: [{ type: 'div', style: { gridColumnSpan: 2 }, children: 'wide' }]
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 3,
+        gridColumnTracks: [
+          { kind: 'fixed', px: 220 },
+          { kind: 'fr', fr: 1, min: 0 },
+          { kind: 'fixed', px: 28 }
+        ]
+      },
+      children: [
+        { type: 'div', style: { gridColumnSpan: 3, gridRowStart: 2 }, children: 'usage' },
+        { type: 'div', style: { gridColumnStart: 3, gridRowStart: 1 }, children: 'menu' }
+      ]
     })
   })
 })

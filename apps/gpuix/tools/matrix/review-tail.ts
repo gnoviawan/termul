@@ -190,16 +190,13 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'settings.accounts-claude': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Both clients are host-local. Both show Add account, the Keep work and personal apart card, and the Add a Claude account dialog with the name typed. The run stops before Continue, which would start a real claude.ai sign-in on the host.',
-      'The account row now lays out on one line in GPUIX: its track list grid places itself (`col-span-2`), so compat keeps the equal-track fallback, now with the list\'s four columns (G15), where it had stacked one column. The usage note starts at 585 px against the web\'s 638 px and the row menu at 1035 px against 1105 px, because the four tracks are equal.',
+      "The account row lays out as on the web (G16 ACCOUNT-ROW): its grid places its cells (`col-start-*`, `row-start-*`), and the patched addon now draws its `13.75rem minmax(0,1fr) 8.25rem 1.75rem` track list and the placements natively (zed/0008, gpuix/0019). The usage note starts at 637 px and the row menu's dots at 1099 px, as on the web; they were at 584 px and 1029 px on four equal tracks. The row keeps its 70 px height.",
       'The patched addon paints the Add a Claude account dialog over Preferences as on the web (I6: 0.18 % full-frame perceptual on the last step; G15 read 2.88 % on the published addon, which does not paint it).',
       'I6 measured it in the full run on the patched addon (series 2fc3aff4), both clients host-local.'
-    ],
-    cause: 'compat translator gap',
-    unit: 'account row wide layout (unassigned)',
-    impact: 1
+    ]
   },
   'settings.interface': {
     status: 'ported',
@@ -232,7 +229,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       SELECT,
-      'The agents list now shows the registry as on the web, Agoragentic first with its version, Latest and Available (I6 run). GPUIX leaves each agent\'s icon tile empty: AcpAgentsSettings draws the catalog SVG through `dangerouslySetInnerHTML`, which compat does not render.',
+      "The agents list now shows the registry as on the web, Agoragentic first with its version, Latest and Available (I6 run). GPUIX leaves each agent's icon tile empty: AcpAgentsSettings draws the catalog SVG through `dangerouslySetInnerHTML`, which compat does not render.",
       DIVIDERS,
       LABEL_LINE,
       SETTINGS_BASE[1]
@@ -246,15 +243,12 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: [...SETTINGS_BASE, DIVIDERS, HALF_PX_LINES]
   },
   'settings.provider': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'Accounts lists the Default account, Signed in, with "Usage is not available right now", Try again and the `termul-server claude account` hint in both. The skeleton M2 saw was the frame grab racing the list: the step checked for the nav label it had just clicked. It now waits for "1 account", which GPUIX painted 1871 ms after the click and the web 158 ms after (G6 run).',
-      'The account row lays out on one line as on the web (G15 track lists), but its wide grid places its cells (`col-start-*`, `row-start-*`), so compat keeps four equal tracks: the usage note starts at 586 px against the web\'s 642 px and the row menu at 1034 px against 1104 px (I6 run).',
+      "The account row lays out as on the web (G16 ACCOUNT-ROW): its grid places its cells (`col-start-*`, `row-start-*`), and the patched addon now draws its `13.75rem minmax(0,1fr) 8.25rem 1.75rem` track list and the placements natively (zed/0008, gpuix/0019). The usage note starts at 637 px and the row menu's dots at 1099 px, as on the web; they were at 584 px and 1029 px on four equal tracks. The row keeps its 70 px height.",
       SETTINGS_BASE[1]
-    ],
-    cause: 'compat translator gap',
-    unit: 'account row wide layout (unassigned)',
-    impact: 1
+    ]
   },
   'settings.mcp-servers': {
     status: 'partial',
@@ -326,9 +320,9 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     status: 'partial',
     differences: [
       'Reference: the desktop app (Tauri on WebKitGTK) built from the same checkout, driven with X input at the same 1280x800 (`tools/reference/tauri.ts`). Ctrl+Shift+N opens a browser tab in both and the typed URL loads the local reference page on the same pixels; the pane region reads 0.71 % perceptual.',
-      'The URL bar ends with the agentation button only, as in the desktop app: the GPUIX bundle defines Vite\'s PROD, DEV and MODE (G15), so the dev-only Debug Console is gone.',
-      'The agentation toolbar\'s round button sits at the page\'s bottom right in both: the webview helper injects the desktop\'s toolbar bundle when each browsed page has loaded (G15). GPUIX has no annotation service, so its toolbar keeps annotations in the page.',
-      'GPUIX names the tab after the page title (R5 reference page); the desktop tab reads 127.0.0.1:8289. The renderer prefers the title (browser-tab.tsx); the desktop\'s page poller reports it over Tauri IPC, which the capability file grants only to the main window, so for a remote page it never arrives (inferred from capabilities/default.json and the desktop log, which shows the poller injected and no title activity). G15 left GPUIX\'s titles in place and names the desktop as the side to fix.',
+      "The URL bar ends with the agentation button only, as in the desktop app: the GPUIX bundle defines Vite's PROD, DEV and MODE (G15), so the dev-only Debug Console is gone.",
+      "The agentation toolbar's round button sits at the page's bottom right in both: the webview helper injects the desktop's toolbar bundle when each browsed page has loaded (G15). GPUIX has no annotation service, so its toolbar keeps annotations in the page.",
+      "GPUIX names the tab after the page title (R5 reference page); the desktop tab reads 127.0.0.1:8289. The renderer prefers the title (browser-tab.tsx); the desktop's page poller reports it over Tauri IPC, which the capability file grants only to the main window, so for a remote page it never arrives (inferred from capabilities/default.json and the desktop log, which shows the poller injected and no title activity). G15 left GPUIX's titles in place and names the desktop as the side to fix.",
       'The desktop app draws its own window buttons at the right of the tab bar; GPUIX leaves them to the window manager. Both rails show the SSH section now that GPUIX is host-local; the desktop has no seeded chat.',
       'I6 measured it in the full run on the patched addon (series 2fc3aff4), both clients host-local.'
     ],
