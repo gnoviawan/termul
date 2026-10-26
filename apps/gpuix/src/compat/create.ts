@@ -262,8 +262,7 @@ export function buildElement(
     if (props.dangerouslySetInnerHTML) compatWarn('prop-unsupported', 'dangerouslySetInnerHTML')
     const flipped = unreverse(style)
     if (flipped) native.style = style = flipped
-    const contentSized = tr.flexDirection === 'column' && style.height === undefined && style.maxHeight !== undefined
-    let children = contentSized ? contentBasis(props.children) : props.children
+    let children = contentBasis(tr, style, props.children)
     let childrenStatic = isStatic
     if (style.gridTracks) {
       const grid = gridLayout(style, style.gridTracks, children, (node) => domSource.get(node)?.props.className)

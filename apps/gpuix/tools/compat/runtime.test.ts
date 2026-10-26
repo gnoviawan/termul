@@ -163,3 +163,25 @@ describe('grid track lists', () => {
     expect(shape(grid)).toEqual({ type: 'div', style: { display: 'grid', gridTemplateColumns: 2 }, children: [{ type: 'div', style: {}, children: 'wide' }] })
   })
 })
+
+describe('flex-1 children of a content-sized column', () => {
+  const basisOf = (column: string, bodies: number) => {
+    const kids = [jsx('div', { className: 'h-14' }, 'header')]
+    for (let i = 0; i < bodies; i++) kids.push(jsx('div', { className: 'flex-1 overflow-y-auto p-6' }, `body${i}`))
+    const children = (shape(jsxs('div', { className: column, children: kids })) as Shape).children as Shape[]
+    return children.slice(1).map((body) => (body.style as { flexBasis?: number }).flexBasis)
+  }
+
+  test('a lone scrolling body of a column with no height or min height sizes to its content', () => {
+    expect(basisOf('flex-1 flex flex-col min-w-0', 1)).toEqual([undefined])
+  })
+
+  test('a min-h-0 or clipping column keeps the body on basis 0, so it fills and scrolls', () => {
+    expect(basisOf('flex flex-1 min-h-0 flex-col', 1)).toEqual([0])
+    expect(basisOf('flex flex-1 flex-col overflow-hidden', 1)).toEqual([0])
+  })
+
+  test('two growing bodies split the column from basis 0', () => {
+    expect(basisOf('flex flex-1 flex-col', 2)).toEqual([0, 0])
+  })
+})
