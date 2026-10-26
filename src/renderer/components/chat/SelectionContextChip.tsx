@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { BlockQuote } from '@/components/icons'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipPortal, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   type SelectionContext,
   selectionContextLabel,
@@ -55,15 +55,18 @@ export function SelectionContextChip({
           <span className="max-w-[24ch] truncate font-normal text-muted-foreground">{preview}</span>
         </span>
       </TooltipTrigger>
-      <TooltipContent
-        side="top"
-        className={cn(
-          'scroller-thin max-h-60 max-w-md overflow-auto whitespace-pre-wrap break-words text-xs',
-          context.language !== undefined && 'font-mono'
-        )}
-      >
-        {context.text}
-      </TooltipContent>
+      {/* Portaled: the chat list is a scroll container that would clip it. */}
+      <TooltipPortal>
+        <TooltipContent
+          side="top"
+          className={cn(
+            'scroller-thin max-h-60 max-w-md overflow-auto whitespace-pre-wrap break-words text-xs',
+            context.language !== undefined && 'font-mono'
+          )}
+        >
+          {context.text}
+        </TooltipContent>
+      </TooltipPortal>
     </Tooltip>
   )
 }
