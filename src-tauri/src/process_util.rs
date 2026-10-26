@@ -3,6 +3,13 @@
 //! - [`hide_console`] applies Windows `CREATE_NO_WINDOW` so short-lived helper
 //!   processes (git, codex/claude status probes, npm, ACP terminal commands)
 //!   never flash a console window from the GUI app. It is a no-op elsewhere.
+//! - [`background_command_hygiene`] bundles [`hide_console`] with
+//!   [`clean_appimage_env`]: use it at every real background spawn so the child
+//!   gets both the Windows no-console treatment and, inside a Linux AppImage,
+//!   an environment scrubbed of the AppImage-only variables that would
+//!   otherwise make host tools resolve the bundled libraries (see
+//!   [`appimage_env`]). [`clean_appimage_env`] is also exposed on its own for
+//!   the few spawn sites that do not hide a console.
 //! - [`KillOnCloseJob`] (Windows only) wraps a Job Object configured with
 //!   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: terminating the job, or closing its
 //!   last handle (including when Termul itself exits), kills the assigned
@@ -20,6 +27,10 @@
 //! (without that limit such a `CreateProcess` call fails with
 //! `ACCESS_DENIED`). ConPTY terminal jobs do not allow breakaway, so nothing
 //! launched from a terminal can outlive it (#281).
+
+mod appimage_env;
+
+pub(crate) use appimage_env::{clean_appimage_env, AppImageEnvCommand};
 
 /// Windows `CREATE_NO_WINDOW` process creation flag.
 #[cfg(windows)]
@@ -64,6 +75,18 @@ impl ConsoleCommand for tokio::process::Command {
 /// the caller's terminal (interactive logins).
 pub(crate) fn hide_console<C: ConsoleCommand + ?Sized>(command: &mut C) -> &mut C {
     command.hide_console_window()
+}
+
+/// Standard hygiene for a real background spawn: hide the console on Windows
+/// ([`hide_console`]) and scrub AppImage-only variables from the child env on
+/// Linux ([`clean_appimage_env`]). Call it where [`hide_console`] used to be
+/// called — before any explicit `.env(…)`, so those explicit values still win.
+pub(crate) fn background_command_hygiene<C: ConsoleCommand + AppImageEnvCommand + ?Sized>(
+    command: &mut C,
+) -> &mut C {
+    hide_console(command);
+    clean_appimage_env(command);
+    command
 }
 
 #[cfg(windows)]
@@ -247,3 +270,12 @@ mod job {
 pub(crate) mod test_support;
 #[cfg(all(test, windows))]
 mod tests;
+
+// AppImage env tests run on Linux (every unix) — not gated by `cfg(windows)`
+// like the console tests above. They are unix-only because the planner splits
+// and rejoins path lists with `std::env::split_paths`/`join_paths`, which use
+// `;` on Windows, while the fixtures use `:` lists and `/` paths. The scrub
+// itself is a no-op outside Linux. Declared here (beside `mod appimage_env`) so
+// the sibling `process_util/appimage_env_tests.rs` is found without a `#[path]`.
+#[cfg(all(test, unix))]
+mod appimage_env_tests;

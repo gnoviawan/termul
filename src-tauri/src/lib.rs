@@ -651,7 +651,11 @@ fn open_external_url(url: &str) -> Result<(), String> {
 
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn open_external_url(url: &str) -> Result<(), String> {
-    Command::new("xdg-open")
+    // Inside a Linux AppImage, scrub the AppImage-only env so the host
+    // `xdg-open` (and the browser it launches) resolve host libraries.
+    let mut command = Command::new("xdg-open");
+    crate::process_util::clean_appimage_env(&mut command);
+    command
         .arg(url)
         .spawn()
         .map(|_| ())
