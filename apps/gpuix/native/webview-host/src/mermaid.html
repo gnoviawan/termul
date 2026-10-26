@@ -24,8 +24,6 @@
             suppressErrorRendering: true
           });
         } catch (e) {}
-        // Rasterized at twice the diagram's CSS size, so it stays sharp on a 2x screen.
-        var SCALE = 2;
 
         function size(svg) {
           var box = svg.viewBox && svg.viewBox.baseVal;
@@ -33,7 +31,14 @@
           return { width: parseFloat(svg.getAttribute('width')) || 0, height: parseFloat(svg.getAttribute('height')) || 0 };
         }
 
-        async function rasterize(id, source) {
+        // The SVG Streamdown's Download saves: mermaid's markup through an HTML parse.
+        function exported(markup) {
+          var svg = new DOMParser().parseFromString(markup, 'text/html').querySelector('svg');
+          return svg ? new XMLSerializer().serializeToString(svg) : markup;
+        }
+
+        // `scale` is the PNG's pixels per CSS pixel.
+        async function rasterize(id, source, scale) {
           var out = await mermaid.render('termul-mermaid-' + id, source);
           var svg = new DOMParser().parseFromString(out.svg, 'image/svg+xml').documentElement;
           var box = size(svg);
@@ -45,22 +50,22 @@
           img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svg));
           await img.decode();
           var canvas = document.createElement('canvas');
-          canvas.width = Math.ceil(box.width * SCALE);
-          canvas.height = Math.ceil(box.height * SCALE);
+          canvas.width = Math.ceil(box.width * scale);
+          canvas.height = Math.ceil(box.height * scale);
           var context = canvas.getContext('2d');
-          context.scale(SCALE, SCALE);
+          context.scale(scale, scale);
           context.drawImage(img, 0, 0, box.width, box.height);
-          return { png: canvas.toDataURL('image/png'), width: box.width, height: box.height };
+          return { png: canvas.toDataURL('image/png'), svg: exported(out.svg), width: box.width, height: box.height };
         }
 
         // mermaid.render keeps global state per call, so renders run one at a time.
         var queue = Promise.resolve();
         window.__termulMermaid = {
-          render: function (id, source) {
+          render: function (id, source, scale) {
             queue = queue.then(function () {
-              return rasterize(id, source).then(
-                function (r) { post({ kind: 'mermaid', id: id, ok: true, png: r.png, width: r.width, height: r.height, error: null }); },
-                function (e) { post({ kind: 'mermaid', id: id, ok: false, png: null, width: null, height: null, error: String((e && e.message) || e) }); }
+              return rasterize(id, source, scale).then(
+                function (r) { post({ kind: 'mermaid', id: id, ok: true, png: r.png, svg: r.svg, width: r.width, height: r.height, error: null }); },
+                function (e) { post({ kind: 'mermaid', id: id, ok: false, png: null, svg: null, width: null, height: null, error: String((e && e.message) || e) }); }
               );
             });
           }

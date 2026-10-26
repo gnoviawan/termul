@@ -25,8 +25,11 @@ export type HostRequest =
   | { op: TabOp; id: string }
   /** Give the keyboard back to the app window. */
   | { op: 'blur' }
-  /** Draw a mermaid diagram in the hidden renderer page; a `mermaid` event with this `id` answers. */
-  | { op: 'renderMermaid'; id: string; source: string }
+  /**
+   * Draw a mermaid diagram in the hidden renderer page; a `mermaid` event with this `id` answers.
+   * `scale` is the PNG's pixels per CSS pixel, 2 when absent.
+   */
+  | { op: 'renderMermaid'; id: string; source: string; scale?: number }
 
 export type HostCommand = (HostRequest & { req: number }) | { op: 'quit' }
 
@@ -42,8 +45,8 @@ export type HostEvent =
   | { ev: 'canvasMessage'; id: string; data: string }
   /** The tab holding the keyboard; `null` means the app window. */
   | { ev: 'keyboard'; owner: string | null }
-  /** A finished `renderMermaid`: a PNG data URL of the diagram at `width`x`height` CSS pixels. */
-  | { ev: 'mermaid'; id: string; ok: true; png: string; width: number; height: number }
+  /** A finished `renderMermaid`: a PNG data URL of the diagram at `width`x`height` CSS pixels and its SVG. */
+  | { ev: 'mermaid'; id: string; ok: true; png: string; svg: string; width: number; height: number }
   | { ev: 'mermaid'; id: string; ok: false; error: string }
   | { ev: 'fatal'; error: string }
   | { ev: 'invalid'; line: string; error: string }
@@ -102,12 +105,13 @@ export function parseEvent(line: string): HostEvent | null {
         : null
     case 'mermaid':
       if (!str(o, 'id')) return null
-      if (o.ok === true && str(o, 'png') && num(o, 'width') && num(o, 'height')) {
+      if (o.ok === true && str(o, 'png') && str(o, 'svg') && num(o, 'width') && num(o, 'height')) {
         return {
           ev: 'mermaid',
           id: o.id as string,
           ok: true,
           png: o.png as string,
+          svg: o.svg as string,
           width: o.width as number,
           height: o.height as number
         }

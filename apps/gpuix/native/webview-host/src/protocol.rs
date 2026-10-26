@@ -32,7 +32,14 @@ pub enum Command {
     /// Give the keyboard back to the app window (a GPUIX element took focus).
     Blur { req: u64 },
     /// Render a mermaid diagram in the hidden renderer page; `mermaid` with this `id` answers.
-    RenderMermaid { req: u64, id: String, source: String },
+    /// `scale` is the PNG's pixels per CSS pixel, 2 when absent.
+    RenderMermaid {
+        req: u64,
+        id: String,
+        source: String,
+        #[serde(default)]
+        scale: Option<f64>,
+    },
     Quit,
 }
 
@@ -77,12 +84,15 @@ pub enum Event {
     CanvasMessage { id: String, data: String },
     /// Which webview holds the keyboard; `None` means the app window does.
     Keyboard { owner: Option<String> },
-    /// The answer to `renderMermaid`: a PNG data URL at `width`x`height` CSS pixels, or `error`.
+    /// The answer to `renderMermaid`: a PNG data URL at `width`x`height` CSS pixels and the SVG
+    /// mermaid drew, or `error`.
     Mermaid {
         id: String,
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         png: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        svg: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         width: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -111,6 +121,7 @@ pub enum PageMessage {
         id: String,
         ok: bool,
         png: Option<String>,
+        svg: Option<String>,
         width: Option<f64>,
         height: Option<f64>,
         error: Option<String>,

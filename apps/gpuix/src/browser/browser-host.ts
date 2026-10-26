@@ -151,7 +151,7 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
         mermaidRenders.delete(event.id)
         resolve?.(
           event.ok
-            ? { ok: true, png: event.png, width: event.width, height: event.height }
+            ? { ok: true, png: event.png, svg: event.svg, width: event.width, height: event.height }
             : { ok: false, error: event.error }
         )
         return
@@ -256,7 +256,7 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
     postToCanvas: (tabId, data) => tabRequest({ op: 'post', id: tabId, data }),
     onCanvasMessage: (tabId, callback) => listenFor(canvasListeners, tabId, callback),
     onCanvasGone: (tabId, callback) => listenFor(canvasGone, tabId, callback),
-    renderMermaid(source) {
+    renderMermaid(source, render) {
       const id = `m${nextMermaid++}`
       return new Promise<MermaidRender>((resolve) => {
         const timer = setTimeout(() => {
@@ -267,7 +267,8 @@ export function createGpuixBrowserHost(options: GpuixBrowserHostOptions): GpuixB
           clearTimeout(timer)
           resolve(result)
         })
-        void request({ op: 'renderMermaid', id, source }).then((ack) => {
+        const scale = render?.scale
+        void request({ op: 'renderMermaid', id, source, ...(scale ? { scale } : {}) }).then((ack) => {
           if (ack.ok) return
           mermaidRenders.delete(id)
           clearTimeout(timer)

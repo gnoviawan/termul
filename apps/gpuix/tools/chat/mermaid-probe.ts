@@ -100,7 +100,7 @@ const helper = new HostProcess({
     if (event.ev !== 'mermaid') return
     answers.get(event.id)?.(
       event.ok
-        ? { ok: true, png: event.png, width: event.width, height: event.height }
+        ? { ok: true, png: event.png, svg: event.svg, width: event.width, height: event.height }
         : { ok: false, error: event.error }
     )
   },
