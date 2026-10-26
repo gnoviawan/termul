@@ -2305,4 +2305,37 @@ describe('ChatInputBar selection contexts', () => {
       expect(screen.getByRole('note', { name: 'Context 1: later' })).toBeInTheDocument()
     )
   })
+
+  it('applies a request that arrived while disabled once the composer is enabled', async () => {
+    const request = { context: { text: 'when ready' }, nonce: 9 }
+    const view = renderInputBar({ disabled: true, selectionContextInsert: request })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.queryByRole('note')).toBeNull()
+
+    const s = session()
+    view.rerender(
+      <TooltipProvider>
+        <ChatInputBar
+          session={s}
+          busy={false}
+          disabled={false}
+          onSend={vi.fn()}
+          onSendBlocks={vi.fn()}
+          onCancel={vi.fn()}
+          commands={[]}
+          configOptions={[]}
+          modes={s.modes}
+          onSetConfig={mockSetConfig}
+          onSetMode={mockSetMode}
+          onSetModel={mockSetModel}
+          selectionContextInsert={request}
+        />
+      </TooltipProvider>
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('note', { name: 'Context 1: when ready' })).toBeInTheDocument()
+    )
+  })
 })

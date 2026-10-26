@@ -492,7 +492,7 @@ export function ChatInputBar({
     // throws against a destroyed editor.
     scheduleRestoreCaret(next.length)
   }, [seedNonce, scheduleRestoreCaret, updateMentionsStable, setValue])
-  useSelectionContextInsertRequest(editorRef, selectionContextInsert)
+  useSelectionContextInsertRequest(editorRef, selectionContextInsert, disabled)
 
   // Story 5.3 (T2.3): on mobile web, scroll the editor into view once per
   // OSK-open window so iOS Safari doesn't leave the input under the keyboard.
