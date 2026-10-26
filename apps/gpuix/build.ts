@@ -118,7 +118,7 @@ export const PACKAGE_ALIASES: Record<string, string> = {
   '@radix-ui/react-separator': 'radix/simple.tsx',
   '@radix-ui/react-label': 'radix/simple.tsx',
   '@radix-ui/react-collapsible': 'radix/simple.tsx',
-  '@radix-ui/react-accordion': 'radix/generic.tsx',
+  '@radix-ui/react-accordion': 'radix/accordion.tsx',
   '@radix-ui/react-hover-card': 'radix/generic.tsx',
   '@radix-ui/react-switch': 'radix/generic.tsx',
   '@radix-ui/react-select': '../ui/internal/select-primitive.tsx',

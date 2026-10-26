@@ -18,6 +18,7 @@ import { ColorContext, RotateContext, SvgClassContext } from './color'
 import { ScopeContext, withScopedClasses } from './scope'
 import { decorateInstance, type DomInfo, nodeFor, type TrackedInstance, trackInstance } from './dom-node'
 import { convertDomStyle } from './dom-style'
+import { FontContext, fontHostElement, inheritsFont } from './font'
 import { adaptHandlers, addFormListeners, addOccluderListeners, type GpuixListeners } from './events'
 import { compatWarn } from './log'
 import { percentPlacement, placeStyle, wrapFillMinus } from './placement'
@@ -285,6 +286,10 @@ export function buildElement(
       kids = (laid.isStatic && !wrapped ? jsxs : jsx)(ScopeContext.Provider, { value: tr.scope, children: kids })
       wrapped = true
     }
+    if (nested && tr.fontScope) {
+      kids = (laid.isStatic && !wrapped ? jsxs : jsx)(FontContext.Provider, { value: tr.fontScope, children: kids })
+      wrapped = true
+    }
     native.children = kids
     const leaf = typeof laid.children === 'string' && tr.inline
     element = (laid.isStatic && native.children === laid.children ? jsxs : jsx)(leaf ? 'text' : 'div', native, key)
@@ -320,7 +325,14 @@ export function createDomElement(
   props: DomProps,
   key: string | undefined,
   isStatic: boolean,
-  host: (tag: string, tr: Translation, props: DomProps, key: string | undefined, isStatic: boolean) => ReactElement
+  host: (
+    tag: string,
+    tr: Translation,
+    props: DomProps,
+    key: string | undefined,
+    isStatic: boolean,
+    font?: StyleDesc
+  ) => ReactElement
 ): ReactElement {
   if (SKIPPED.has(tag)) return jsx('div', { style: HIDDEN }, key)
   if (tag === 'br' || tag === 'wbr') return jsx('div', { style: tag === 'br' ? BREAK : HIDDEN }, key)
@@ -328,10 +340,11 @@ export function createDomElement(
   if (SVG_CHILD_TAGS.has(tag)) return jsx(tag as never, props, key)
   const className = withScopedClasses(tag, props['data-streamdown'], props.className)
   const tr = translation(tag, className)
-  const element =
+  const build = (font?: StyleDesc) =>
     tr.ruleMode === 'host' || tr.group !== null
-      ? host(tag, tr, props, key, isStatic)
-      : buildElement(tag, tr, props, key, isStatic)
+      ? host(tag, tr, props, key, isStatic, font)
+      : buildElement(tag, tr, props, key, isStatic, font && { nativeStyle: font })
+  const element = inheritsFont(tr, props) ? fontHostElement(tr, key, build) : build()
   domSource.set(element, { tag, props, key })
   if (tag === 'textarea') childInfo.set(element, { inline: true, ...childInfo.get(element), baselineAtBottom: true })
   return element

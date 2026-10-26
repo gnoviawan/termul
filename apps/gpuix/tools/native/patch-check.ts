@@ -34,6 +34,13 @@
  *   0012-table-columns-rules
  *                          `typo-check.ts`: fullscreen table labels start and
  *                          rules sit within 1 px of Chromium's
+ *   0014-table-fractional-cell-padding
+ *                          `typo-check.ts`: transcript table rules 30.6 px
+ *                          apart, each within 1 px of Chromium's
+ *   0015-markdown-lead-tabular-nums
+ *                          `typo-check.ts`: an ordered item's line ends where
+ *                          Chromium's tabular list marker puts it
+ *   0016-grid-span         a gridColumnSpan cell spans its columns
  *   0008-prompt-for-new-path
  *                          `dialog-check.ts`: the portal's save dialog returns
  *                          the path typed into it
@@ -58,6 +65,7 @@ import {
   type AutomationNode,
   BLUR,
   CODE_PAD,
+  GRID,
   type Sample,
   SCENE,
   type SceneReady,
@@ -289,6 +297,12 @@ const checks = [
     what: `inline-code padding ${CODE_PAD} widens M\`M\`M by twice the padding (px)`,
     value: codePadShift,
     ok: Math.abs(codePadShift - 2 * CODE_PAD) <= 1
+  },
+  {
+    patch: '0016-grid-span',
+    what: `gridColumnSpan ${GRID.span} in a ${GRID.columns}-column grid ${GRID.width} px wide spans ${(GRID.width * GRID.span) / GRID.columns} px (px)`,
+    value: ready.bounds.gridSpan?.width ?? 0,
+    ok: Math.abs((ready.bounds.gridSpan?.width ?? 0) - (GRID.width * GRID.span) / GRID.columns) <= 1
   },
   {
     patch: '0010-table-cell-metrics',

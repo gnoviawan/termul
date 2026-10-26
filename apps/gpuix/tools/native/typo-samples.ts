@@ -97,6 +97,28 @@ export const FULLSCREEN_TABLE_SAMPLE = {
   width: 900
 } as const
 export const RULE_COLOR = '#00ff00'
+/** The transcript table's rules, under the header and between body rows: Streamdown's 30.6 px row pitch. */
+export const TRANSCRIPT_RULE_COLOR = '#0000ff'
+
+/**
+ * Ordered items as Streamdown sets them (`list-inside list-decimal`): the
+ * marker inline, in Chromium's tabular figures. GPUIX paints each as a
+ * paragraph led by its number (`inlineOrderedItem`). The checker compares
+ * where each line's ink ends, which moves with the marker's width.
+ */
+export const MARKER_SAMPLES = [
+  { id: 'marker1', n: 1, text: 'Reject nested paths', left: 770, top: 236 },
+  { id: 'marker2', n: 2, text: 'Reject nested paths', left: 770, top: 266 },
+  { id: 'marker7', n: 7, text: 'Reject nested paths', left: 770, top: 296 }
+] as const
+export const MARKER_LINE = 21
+
+function markerHtml(): string {
+  return MARKER_SAMPLES.map(
+    ({ id, n, text, left, top }) =>
+      `<ol id="${id}" start="${n}" style="position:absolute;left:${left}px;top:${top}px;margin:0;padding:0;list-style:decimal inside;font-size:14px;line-height:${MARKER_LINE}px;white-space:pre"><li>${text}</li></ol>`
+  ).join('')
+}
 
 export function tableMarkdown(): string {
   const [head, ...body] = TABLE_SAMPLE.rows
@@ -206,16 +228,17 @@ export function typoHtml(fontUrl: string, monoUrl: string): string {
     }).join('\n') +
     tableHtml() +
     fullscreenTableHtml() +
-    washHtml()
+    washHtml() +
+    markerHtml()
   return `<!doctype html><html><head><style>
 @font-face{font-family:'${FAMILY}';src:url(${fontUrl}) format('woff2');font-weight:100 900}
 @font-face{font-family:'Paper Mono';src:url(${monoUrl}) format('woff2');font-weight:100 800}
 html,body{margin:0;background:#000;color:#fff}
-.card{border:1px solid #444;font-size:14px;line-height:20px}
+.card{border:1px solid #444;font-size:14px;line-height:calc(1.25 / 0.875)}
 table{width:100%;border-collapse:collapse;text-align:left}
 th,td{padding:4.8px 8px}
 th{font-weight:600}
-tbody tr{border-top:1px solid #444}
+tbody tr{border-top:1px solid ${TRANSCRIPT_RULE_COLOR}}
 code{font-family:'Paper Mono',monospace;font-size:.88em;padding:.08em .3em;font-feature-settings:normal;font-variant-ligatures:common-ligatures}
 ${WASH_SAMPLES.map(({ id, css }) => `.${id} code{${css};border-radius:.25rem;background:${WASH_COLOR}}`).join('\n')}
 .fs{font-size:14px;line-height:20px}

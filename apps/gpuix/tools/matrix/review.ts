@@ -92,10 +92,10 @@ export const REVIEWS: Record<string, Review> = {
     differences: [
       'Clicking + opens the New project / New folder group menu and New project opens the Create New Project modal with the same fields in both.',
       BLUR,
-      'GPUIX paints the + button\'s "Add project or folder group" title tooltip above the modal and its scrim; the web shows none. The footnote wraps "memory-only" at a different word.'
+      'Both clients show the + button\'s "Add project or folder group" tooltip after the menu closes (focus returns to the button). The web paints it under the modal\'s scrim, blurred, and GPUIX above it (G14 diagnosis): the web\'s TooltipContent has no portal, so it is a `z-50` box in the rail, under the later `fixed inset-0 z-50` NewProjectModal, while GPUIX gives every tooltip `LAYER.tooltip`, above all `z-50` layers. The footnote wraps "memory-only" at a different word.'
     ],
     cause: 'compat translator gap',
-    unit: 'title tooltips (unassigned)',
+    unit: 'tooltip stacking under later z-50 overlays (unassigned)',
     impact: 1
   },
   'rail.collapse': {
@@ -243,31 +243,25 @@ export const REVIEWS: Record<string, Review> = {
     ]
   },
   'chat.transcript': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'The transcript, code card, task list, Worked for row and Changed files bar all render.',
       CODE_CARD,
       TAIL_OFFSET,
       PROSE,
       WASH
-    ],
-    cause: 'needs diagnosis',
-    unit: 'transcript tail spacing, 3 px (unassigned)',
-    impact: 1
+    ]
   },
   'chat.scroll-top': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'One wheel event of -20000 px scrolls both to the first turn and shows the jump-to-latest button.',
-      "The table card has the web's copy, download and fullscreen buttons (G7). Its header labels start at 517, 737 and 1077 px in both (N4: cells take their max-content width as flex basis, gpuix/0012; 739 before, and the 6 and 7 px G12 measured were headless Chromium's hinted advances, N3). Rows are 31 px against the web's 30.6 px, with the semibold header on the web's muted fill (G8 patch gpuix/0010-table-cell-metrics: 8 by 4.8 px cells on a 20 px line; before it rows were 32 px with no header fill).",
-      "The table card's Copy, Download and View fullscreen icons sit at the web's x (1161, 1190 and 1217 px, G13). Its rules are the web's `border` colour (rgb 36; the text at 10 %, rgb 33, before N4's gpuix/0012).",
-      "An ordered item sets its number inline, as Streamdown's `list-inside` marker does (N4: a one-paragraph item paints as a paragraph led by its number), so its first chip's wash starts at 542, 545 and 544 px against the web's 545 px on all three items (550 before). The first item is 3 px short: Chromium draws list markers with tabular figures, and Inter's proportional 1 is 3.39 px narrower at 14 px (2 and 3 within 0.6 px).",
+      "The table card has the web's copy, download and fullscreen buttons (G7). Its header labels start at 517, 737 and 1077 px in both (N4: cells take their max-content width as flex basis, gpuix/0012). Its rules sit on rows 402, 432, 463 and 493 and the card ends at 524 px in both (G14 native patch gpuix/0014-table-fractional-cell-padding: the 4.8 px cell padding is laid out as fractional struts, so rows are 30.6 px apart as on the web; GPUI had rounded it to 5 px, 31 px rows, and the rules sat at 402, 433, 464 and 495). The semibold header sits on the web's muted fill (G8 gpuix/0010).",
+      "The table card's Copy, Download and View fullscreen icons sit at the web's x (1161, 1190 and 1217 px, G13). Its rules are the web's `border` colour (rgb 36, N4).",
+      "An ordered item sets its number inline, as Streamdown's `list-inside` marker does (N4), and in tabular figures, as Chromium draws list markers (G14 native patch gpuix/0015-markdown-lead-tabular-nums, theme `orderedItem`): the first chip's wash starts at 545 px on all three items against the web's 546 (542, 545 and 544 before; Inter's proportional 1 is 3.39 px narrower at 14 px).",
       PROSE,
       WASH
-    ],
-    cause: 'native override needed',
-    unit: 'table row pitch and tabular list markers (unassigned)',
-    impact: 1
+    ]
   },
   'chat.table-fullscreen': {
     status: 'ported',
@@ -285,11 +279,11 @@ export const REVIEWS: Record<string, Review> = {
   'chat.agent-launcher': {
     status: 'partial',
     differences: [
-      'The agent and model popover opens above the pill in both, with the search field, the agent chip and This agent gives no model choice. In GPUIX the agent chip is narrower and truncates to "Chat Scen…", with the more button beside it.',
-      BAND_FOCUS
+      "The agent and model popover opens above the pill in both, with the search field, the agent chip and This agent gives no model choice. The agent chip spans two of the track's three columns and reads Chat Scenario Agent in full, as on the web (G14: native patch gpuix/0016-grid-span and compat's `gridColumn: span 2 / span 2`; it had taken one column and truncated to \"Chat Scen…\").",
+      "The hairline under the search band stays `border` while the field has focus; the web turns it `ring` through `peer-focus-within:`, a variant compat does not translate."
     ],
     cause: 'compat translator gap',
-    unit: 'C2 menus and popovers',
+    unit: 'peer-* variants (unassigned)',
     impact: 1
   },
   'chat.send': {
@@ -307,17 +301,14 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'chat.model-selector': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'The running chat shows the agent chip and composer like the web.',
       CODE_CARD,
       TAIL_OFFSET,
       PROSE,
       WASH
-    ],
-    cause: 'needs diagnosis',
-    unit: 'transcript tail spacing, 3 px (unassigned)',
-    impact: 1
+    ]
   },
   'composer.mention': {
     status: 'ported',
@@ -402,15 +393,12 @@ export const REVIEWS: Record<string, Review> = {
     impact: 1
   },
   'chat.plan': {
-    status: 'partial',
+    status: 'ported',
     differences: [
       'The pinned Plan panel and the inline plan card show the same three entries, Medium chips, the struck-through finished entry and the 1/3 count, and the short transcript starts at the top in both.',
-      'The card frames differ. The web card is `bg-card/30` with a `ring-1 ring-border/50` hairline and a divider under its header; GPUIX fills it lighter, with no ring and no divider. The collapse chevron points up in both (G9: compat lifts `rotate-180` and the icon bakes the turn into its SVG).',
+      "Both cards are `bg-card/30` with the `ring-1 ring-border/50` hairline and the divider under the header. The entries sit on the web's rows and columns (G14: `@radix-ui/react-accordion` had resolved to the popover stand-in, whose Root renders no element, so the list's `px-2 pb-1.5 pt-0.5` was lost and the entries sat 8 px left and the panels 8 px short; `compat/radix/accordion.tsx` renders Radix's parts). The collapse chevron points up in both (G9). The running entry's spinner arc is drawn thicker.",
       RUN_ORDER
-    ],
-    cause: 'compat translator gap',
-    unit: 'plan card ring (unassigned)',
-    impact: 1
+    ]
   },
   'chat.permission': {
     status: 'ported',

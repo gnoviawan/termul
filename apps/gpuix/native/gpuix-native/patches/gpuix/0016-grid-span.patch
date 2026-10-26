@@ -1,0 +1,32 @@
+diff --git a/packages/native/src/renderer.rs b/packages/native/src/renderer.rs
+index 42c64ed..3d88845 100644
+--- a/packages/native/src/renderer.rs
++++ b/packages/native/src/renderer.rs
+@@ -6472,6 +6472,12 @@ pub(crate) fn apply_styles<E: gpui::Styled>(mut el: E, style: &StyleDesc) -> E {
+             _ => el.grid_rows(count),
+         };
+     }
++    if let Some(span) = style.grid_column_span {
++        el = el.col_span(span.round().clamp(1.0, 64.0) as u16);
++    }
++    if let Some(span) = style.grid_row_span {
++        el = el.row_span(span.round().clamp(1.0, 64.0) as u16);
++    }
+     if style.flex_direction.as_deref() == Some("column") {
+         el = el.flex_col();
+     }
+diff --git a/packages/native/src/style.rs b/packages/native/src/style.rs
+index ee21853..3f7a171 100644
+--- a/packages/native/src/style.rs
++++ b/packages/native/src/style.rs
+@@ -169,6 +169,10 @@ pub struct StyleDesc {
+     pub grid_template_rows: Option<f64>,
+     pub grid_column_min: Option<String>,
+     pub grid_row_min: Option<String>,
++    /// CSS `grid-column: span <n>`: the item spans that many column tracks.
++    pub grid_column_span: Option<f64>,
++    /// CSS `grid-row: span <n>`.
++    pub grid_row_span: Option<f64>,
+ 
+     // Sizing - now supports both numbers and strings like "100%" or "auto"
+     pub width: Option<DimensionValue>,

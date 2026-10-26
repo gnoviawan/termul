@@ -8,6 +8,7 @@
 
 import type { StyleDesc } from '@gpuix/react'
 import { resolveTwTheme } from '../style/theme'
+import { completeFont, type InheritedFont } from './font'
 import { liftFillMinus, liftPlacement, type Placement } from './placement'
 import { viewportHeight, viewportWidth } from './viewport'
 import { type CompiledStyle, createTw, type Tw } from '../style/tw'
@@ -81,6 +82,8 @@ export interface Translation {
    * children sit in line boxes there.
    */
   readonly blockFlow: boolean
+  /** The font the classes declare in full (size and line height): what descendants inherit. */
+  readonly fontScope: InheritedFont | null
 }
 
 const PHRASING = new Set([
@@ -419,7 +422,8 @@ function translate(tw: Tw, tag: string, className: string): Translation {
     svgClasses: lifted.svg.length > 0 ? lifted.svg.join(' ') : null,
     placement: lifted.placement,
     fillMinus: lifted.fillMinus,
-    blockFlow: !inline && !lifted.formatsChildren && defaults?.display === undefined
+    blockFlow: !inline && !lifted.formatsChildren && defaults?.display === undefined,
+    fontScope: completeFont(compiled.font)
   }
 }
 

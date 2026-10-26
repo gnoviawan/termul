@@ -20,7 +20,7 @@ export const WASH =
 export const CODE_CARD =
   "The bash code card's body is 81 px between its borders in both, and the card 139 px tall in both (N4: the web's `.chat-streamdown pre` keeps a 0.55em bottom margin inside the body; it was 73 px). The task list lands on the web's columns (bullet 527, checkbox 547, text 565 px in both)."
 export const TAIL_OFFSET =
-  "The transcript sits 3 px higher than the web's, from the last reply down: its copy and retry icons end 2 px further above the Changed files bar (545 against 548 px, the bar at 602 against 603 px). It predates N4: the user bubble ends at 387 against 390 px on the exp/gpuix-client head too."
+  "The transcript's tail lands on the web's rows (G14): the last reply's copy and retry icons span 537 to 561 px and the Changed files bar starts at 585 px in both (`tools/chat/tail-probe.ts` reads the web's). It sat 3 px higher for two reasons. The bar's count badge (`text-3xs`, a size with no line height) took the root's 1.5 and stood 22 px tall, where CSS inherits `text-xs`'s 4/3 ratio and the badge is 20 px; compat now inherits the font half a class string leaves out (`compat/font.tsx`), so the bar is 60 px as on the web and the viewport ends at 585 px. And the list's 1 px end marker added a pixel under the last row; it now takes no height."
 export const TREE_TEXT =
   'The text check fails only because natively painted text is not in the automation tree.'
 export const SELECT =

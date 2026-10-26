@@ -15,7 +15,7 @@ import { type CssShadow, formatColor, type Rgba } from './css-value'
 import { gradientBackground } from './gradient'
 import { INHERITED_LEADING, ROOT_FONT_SIZE } from './scale'
 import { resolveTwTheme, type TwTheme } from './theme'
-import { type BoxShadow, type Fragment, type Ring, resolveUtility, toBoxShadow } from './utilities'
+import { type BoxShadow, type Fragment, type Leading, type Ring, resolveUtility, toBoxShadow } from './utilities'
 import {
   type Condition,
   conditionHolds,
@@ -58,6 +58,17 @@ export interface CompiledStyle {
   /** State-dependent styles, applied in order by tw(classes, state). */
   rules: Rule[]
   issues: ClassIssue[]
+  /**
+   * The font size and line height the classes declare unconditionally, as
+   * CSS declares them: a size-only `text-2xs` or a ratio `leading-none`
+   * leaves the other half to inheritance. Absent when neither is declared.
+   */
+  font?: OwnFont
+}
+
+export interface OwnFont {
+  size?: number
+  leading?: Leading
 }
 
 /** Fragments merged for one bucket of identical conditions. */
@@ -287,9 +298,19 @@ export function compile(
       rules.push({ when: bucket.when, native: bucket.native, style })
     }
   }
+  const font = ownFont(baseAcc)
+  const compiled: CompiledStyle = font ? { base, rules, issues, font } : { base, rules, issues }
   const { axis, width = 1, color } = baseAcc.divide ?? {}
-  if (axis === undefined) return { base, rules, issues }
-  return { base, rules, issues, divide: { axis, width, color: formatColor(color ?? theme.colors.border) } }
+  if (axis !== undefined) compiled.divide = { axis, width, color: formatColor(color ?? theme.colors.border) }
+  return compiled
+}
+
+function ownFont(acc: Acc): OwnFont | undefined {
+  const size = acc.fontSize?.size
+  const named = acc.fontSize?.leading
+  const leading = acc.leading ?? (named === undefined ? undefined : { ratio: named })
+  if (size === undefined && leading === undefined) return undefined
+  return { ...(size === undefined ? {} : { size }), ...(leading ? { leading } : {}) }
 }
 
 /** CSS never matches :hover or :active on a pointer-events: none element. */
