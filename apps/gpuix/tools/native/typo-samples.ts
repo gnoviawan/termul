@@ -62,6 +62,15 @@ export const TEXT_SAMPLES: readonly TextSample[] = [
   { id: 'run12', left: 16, top: 520, fontSize: 12, lineHeight: 20, text: RUN_TEXT }
 ]
 
+/** One `typo-check.ts` result; `patch-check.ts` prints them with its own rows. */
+export interface TypoRow {
+  /** The patch or gap the row proves: `zed/0005` line pitch, `run-width` advances. */
+  patch: string
+  what: string
+  value: unknown
+  ok: boolean
+}
+
 export interface TypoReady {
   bounds: Record<string, { x: number; y: number; width: number; height: number } | null>
 }

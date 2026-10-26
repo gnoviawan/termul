@@ -17,7 +17,7 @@
  *
  * bun tools/native/typo-check.ts [--out DIR] [--hinting full|slight|...]
  */
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { chromium } from 'playwright'
@@ -152,18 +152,14 @@ const webPng = await shootWeb(values.hinting as string)
 const g = PNG.sync.read(readFileSync(gpuix.png))
 const w = PNG.sync.read(readFileSync(webPng))
 
-interface Row {
-  what: string
-  value: unknown
-  ok: boolean
-}
-const rows: Row[] = []
+const rows: TypoRow[] = []
 for (const s of TEXT_SAMPLES) {
   if (s.id.startsWith('run')) {
     const gw = inkWidth(g, s)
     const ww = inkWidth(w, s)
     const ratio = gw / Math.max(1, ww)
     rows.push({
+      patch: 'run-width',
       what: `${s.id} ink width, GPUIX ${gw} / Chromium ${ww} (within 0.3%)`,
       value: round2(ratio),
       ok: Math.abs(ratio - 1) <= 0.003
@@ -174,12 +170,14 @@ for (const s of TEXT_SAMPLES) {
   const wt = bandTops(w, s)
   const pitch = pitchOf(gt)
   rows.push({
+    patch: '0005-fractional-line-height',
     what: `${s.id} line pitch ${s.fontSize}px/${s.lineHeight} over ${gt.length} lines (Chromium ${round2(pitchOf(wt))} over ${wt.length})`,
     value: round2(pitch),
     ok: Math.abs(pitch - s.lineHeight) <= 0.1
   })
   const offsets = gt.map((top, i) => top - (wt[i] ?? Number.NaN))
   rows.push({
+    patch: '0005-fractional-line-height',
     what: `${s.id} line tops, GPUIX minus Chromium (each within 1 px)`,
     value: offsets,
     ok: gt.length === wt.length && offsets.every((d) => Math.abs(d) <= 1)
@@ -188,4 +186,5 @@ for (const s of TEXT_SAMPLES) {
 for (const row of rows)
   console.log(`${row.ok ? 'PASS' : 'FAIL'} ${row.what}: ${JSON.stringify(row.value)}`)
 console.log(`screenshots ${gpuix.png} ${webPng}`)
+writeFileSync(path.join(out, 'rows.json'), JSON.stringify(rows))
 if (rows.some((row) => !row.ok)) process.exit(1)

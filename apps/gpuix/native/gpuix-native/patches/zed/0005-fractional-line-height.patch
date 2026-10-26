@@ -1,0 +1,54 @@
+diff --git a/crates/gpui/src/elements/text.rs b/crates/gpui/src/elements/text.rs
+index 3470ac9..5823aa9 100644
+--- a/crates/gpui/src/elements/text.rs
++++ b/crates/gpui/src/elements/text.rs
+@@ -633,11 +633,11 @@ impl TextLayout {
+     ) -> LayoutId {
+         let text_style = window.text_style();
+         let font_size = text_style.font_size.to_pixels(window.rem_size());
+-        let line_height = window.pixel_snap(
+-            text_style
+-                .line_height
+-                .to_pixels(font_size.into(), window.rem_size()),
+-        );
++        // Fractional, as CSS line boxes are: a 19.5 px line height stacks
++        // lines 19.5 px apart, and each glyph rounds to the pixel grid at paint.
++        let line_height = text_style
++            .line_height
++            .to_pixels(font_size.into(), window.rem_size());
+ 
+         let runs = if let Some(runs) = runs {
+             runs
+diff --git a/crates/gpui/src/taffy.rs b/crates/gpui/src/taffy.rs
+index b9e583a..7fa895b 100644
+--- a/crates/gpui/src/taffy.rs
++++ b/crates/gpui/src/taffy.rs
+@@ -293,8 +293,9 @@ impl TaffyLayoutEngine {
+     //  1. Pre-layout metric snapping. Before Taffy computes layout, all
+     //     authored absolute lengths are rounded in `to_taffy`. This
+     //     includes borders, padding, gaps, and explicit sizes.
+-    //     Custom-measured leaf nodes have their measured sizes rounded up
+-    //     to integer device-pixel lengths.
++    //     Custom-measured leaf nodes have their measured widths rounded up
++    //     to integer device-pixel lengths; their heights stay fractional,
++    //     like CSS line boxes.
+     //
+     //  2. Post-layout edge snapping. After Taffy resolves the tree, layout
+     //     relationships such as flex shares, grid tracks, percentages, and
+@@ -409,8 +410,15 @@ impl From<LayoutId> for NodeId {
+     }
+ }
+ 
++/// Widths round up, so text never wraps inside the box it measured. Heights
++/// stay fractional, as CSS block heights do: a stack of 19.5 px lines in
++/// separate elements stays 19.5 px apart, and post-layout edge rounding
++/// snaps each box.
+ fn snap_measured_size_to_device_pixels(size: Size<Pixels>, scale_factor: f32) -> Size<f32> {
+-    size.map(|d| ceil_to_device_pixel(d.0.max(0.0), scale_factor))
++    Size {
++        width: ceil_to_device_pixel(size.width.0.max(0.0), scale_factor),
++        height: size.height.0.max(0.0) * scale_factor,
++    }
+ }
+ 
+ fn border_widths_to_taffy(

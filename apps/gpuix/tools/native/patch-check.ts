@@ -20,6 +20,11 @@
  *   0010-table-cell-metrics
  *                          a table row is 2 x mdTableCellPaddingY + mdTableLineHeight
  *                          tall and the header row paints tableHeaderBg
+ *   zed/0005-fractional-line-height
+ *                          `typo-check.ts`: 13px/19.5 and 12px/19.5 lines sit
+ *                          19.5 px apart, each line's ink where Chromium puts it
+ *   run-width              `typo-check.ts`: a line's ink width is Chromium's
+ *                          (font-render-hinting slight) within 0.3%
  *   0008-prompt-for-new-path
  *                          `dialog-check.ts`: the portal's save dialog returns
  *                          the path typed into it
@@ -41,6 +46,7 @@ import {
   windowOrigin
 } from '../parity/shoot-gpuix'
 import { BLUR, CODE_PAD, type Sample, SCENE, type SceneReady, TABLE } from './samples'
+import type { TypoRow } from './typo-samples'
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -217,6 +223,13 @@ const dialogRun = Bun.spawnSync(
   { env: process.env }
 )
 const dialogLines = dialogRun.stdout.toString().trim().split('\n')
+const typoOut = path.join(out, 'typo')
+Bun.spawnSync(['bun', path.join(import.meta.dir, 'typo-check.ts'), '--out', typoOut], {
+  env: process.env
+})
+const typoRows: TypoRow[] = existsSync(path.join(typoOut, 'rows.json'))
+  ? JSON.parse(readFileSync(path.join(typoOut, 'rows.json'), 'utf8'))
+  : [{ patch: 'typo-check', what: 'typo-check.ts wrote its rows', value: null, ok: false }]
 
 const checks = [
   {
@@ -302,7 +315,8 @@ const checks = [
     what: 'the open, save and cancelled portal dialogs resolve as dialog-check expects',
     value: dialogLines.filter((line) => line.startsWith('FAIL')),
     ok: dialogRun.exitCode === 0
-  }
+  },
+  ...typoRows
 ]
 for (const check of checks)
   console.log(
