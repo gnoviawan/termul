@@ -1,6 +1,6 @@
 /**
  * Plain-English labels for catalog states and reasons (SPEC CAP-4). Values in
- * a reason (`transport`, `name`, `registryType`, `runtimeHint`) come from the
+ * a reason (`transport`, `name`, `registryType`, `registry`, `runtimeHint`) come from the
  * registry entry; React renders them as text, never markup.
  */
 
@@ -60,5 +60,7 @@ export function mcpCatalogReasonText(reason: McpCatalogReason): string {
       return "Its package has no fixed version, so Termul can't pin what it runs."
     case 'invalid-package':
       return "Its package name or version isn't valid."
+    case 'unsupported-registry':
+      return `Its package is hosted on ${reason.registry}, which Termul doesn't download from.`
   }
 }
