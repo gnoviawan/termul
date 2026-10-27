@@ -9,7 +9,10 @@ import { Input } from '@/components/ui/input'
 import { PANEL_FIELD_CLASS, PANEL_FIELD_ICON_CLASS } from '@/components/ui/panel-styles'
 import { Spinner } from '@/components/ui/spinner'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
-import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
+import {
+  type AcpAgentCatalogStatus,
+  useResolvedSupportedAcpAgentsState
+} from '@/hooks/use-resolved-supported-acp-agents'
 import { agentPolicy } from '@/lib/agents/acp-registry'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import {
@@ -329,6 +332,58 @@ function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX
   )
 }
 
+/** What the agent list shows in place of rows: loading, a filter miss, or a catalog failure. */
+function AgentListPlaceholder({
+  status,
+  filter,
+  onClearFilter,
+  onRetry
+}: {
+  status: AcpAgentCatalogStatus
+  filter: string
+  onClearFilter: () => void
+  onRetry: () => void
+}): React.JSX.Element {
+  const frame =
+    'flex flex-col items-center gap-2 rounded-lg border border-border bg-card p-5 text-center'
+  if (status === 'loading') {
+    return (
+      <div className={frame} role="status">
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Spinner size={13} decorative />
+          Loading agents…
+        </p>
+      </div>
+    )
+  }
+  if (filter.length > 0) {
+    return (
+      <div className={frame}>
+        <p className="text-xs text-muted-foreground">No agents match "{filter}".</p>
+        <Button type="button" size="xs" variant="outline" onClick={onClearFilter}>
+          Clear filter
+        </Button>
+      </div>
+    )
+  }
+  if (status === 'unavailable') {
+    return (
+      <div className={frame}>
+        <p className="text-xs text-muted-foreground">Couldn't load agents.</p>
+        <Button type="button" size="xs" variant="outline" onClick={onRetry}>
+          <RefreshCw size={13} />
+          Retry
+        </Button>
+      </div>
+    )
+  }
+  return (
+    <div className={frame}>
+      <p className="text-xs text-muted-foreground">No agents available.</p>
+    </div>
+  )
+}
+
 /**
  * Status-only ACP agent list. Agent Chat derives these supported agents without
  * requiring a Preferences toggle; this view only shows availability/debug state.
@@ -349,7 +404,11 @@ export function AcpAgentsSettings(): React.JSX.Element {
   } = useAcpRegistryCatalog()
   const agentConfigs = useAcpStore((s) => s.agentConfigs)
   const applyAgentUpdate = useAcpStore((s) => s.applyAgentUpdate)
-  const supportedAgents = useResolvedSupportedAcpAgents(agentConfigs)
+  const {
+    status: catalogStatus,
+    entries: supportedAgents,
+    retry: retryCatalog
+  } = useResolvedSupportedAcpAgentsState(agentConfigs)
 
   // Per-agent Update Check: drift between each agent's spawn version and the
   // target registry — the applied registry when opted in, otherwise the
@@ -475,12 +534,12 @@ export function AcpAgentsSettings(): React.JSX.Element {
       </div>
 
       {visible.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-lg border border-border bg-card p-5 text-center">
-          <p className="text-xs text-muted-foreground">No agents match "{filter.trim()}".</p>
-          <Button type="button" size="xs" variant="outline" onClick={() => setFilter('')}>
-            Clear filter
-          </Button>
-        </div>
+        <AgentListPlaceholder
+          status={catalogStatus}
+          filter={filter.trim()}
+          onClearFilter={() => setFilter('')}
+          onRetry={retryCatalog}
+        />
       ) : (
         <SettingsCard>
           {visible.map((entry) => (

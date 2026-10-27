@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { mockRegistryCatalog, mockListCatalog } = vi.hoisted(() => ({
@@ -176,6 +176,71 @@ describe('AcpAgentsSettings per-agent update', () => {
     render(<AcpAgentsSettings />)
 
     await screen.findByText('Latest')
+  })
+})
+
+describe('AcpAgentsSettings catalog loading', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useAcpStore.setState({ agentConfigs: [] })
+  })
+
+  it('shows a loading state, not an empty filter result, until the catalog arrives', async () => {
+    let resolveCatalog: (value: unknown) => void = () => {}
+    mockListCatalog.mockReturnValue(new Promise((r) => (resolveCatalog = r)))
+
+    render(<AcpAgentsSettings />)
+
+    expect(screen.getByText('Loading agents…')).toBeTruthy()
+    expect(screen.queryByText(/No agents match/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Clear filter' })).toBeNull()
+
+    seedCatalog()
+    resolveCatalog(await mockListCatalog())
+    await screen.findByText('Factory Droid')
+    expect(screen.queryByText('Loading agents…')).toBeNull()
+  })
+
+  it('recovers the list after a transient catalog failure', async () => {
+    seedCatalog()
+    mockListCatalog.mockResolvedValueOnce({ success: false, error: 'host restarting' })
+
+    render(<AcpAgentsSettings />)
+
+    expect(await screen.findByText('Factory Droid', {}, { timeout: 3_000 })).toBeTruthy()
+    expect(mockListCatalog).toHaveBeenCalledTimes(2)
+  })
+
+  it('offers Retry once the catalog stays unreachable', async () => {
+    vi.useFakeTimers()
+    try {
+      mockListCatalog.mockResolvedValue({ success: false, error: 'host down' })
+      render(<AcpAgentsSettings />)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000)
+      })
+      expect(screen.getByText("Couldn't load agents.")).toBeTruthy()
+
+      seedCatalog()
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(screen.getByText('Factory Droid')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('says no agent matches only when a filter hides a loaded list', async () => {
+    seedCatalog()
+    render(<AcpAgentsSettings />)
+    await screen.findByText('Factory Droid')
+
+    fireEvent.change(screen.getByLabelText('Filter agents'), { target: { value: 'zzz' } })
+
+    expect(screen.getByText('No agents match "zzz".')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Clear filter' })).toBeTruthy()
   })
 })
 
