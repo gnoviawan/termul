@@ -110,6 +110,8 @@ export function TerminalAssistPanel({
             {state.error ?? 'Terminal assist failed'}
           </p>
         ) : (
+          // biome-ignore lint/a11y/noStaticElementInteractions: link clicks are delegated from sanitized HTML; Enter on a focused link fires click
+          // biome-ignore lint/a11y/useKeyWithClickEvents: link clicks are delegated from sanitized HTML; Enter on a focused link fires click
           <div
             className={cn('prose prose-xs max-w-none break-words text-xs')}
             // Sanitized with DOMPurify inside renderChatMarkdown (chat parity).

@@ -129,6 +129,8 @@ export function WhatsNewModal({
                 </span>
                 <div className="max-h-[320px] overflow-y-auto pr-1">
                   {notesHtml ? (
+                    // biome-ignore lint/a11y/noStaticElementInteractions: link clicks are delegated from sanitized HTML; Enter on a focused link fires click
+                    // biome-ignore lint/a11y/useKeyWithClickEvents: link clicks are delegated from sanitized HTML; Enter on a focused link fires click
                     <div
                       className="chat-prose text-xs leading-relaxed text-foreground"
                       // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via renderChatMarkdown (DOMPurify)
