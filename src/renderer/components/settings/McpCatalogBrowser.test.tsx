@@ -172,6 +172,7 @@ describe('McpCatalogBrowser', () => {
     fireEvent.change(screen.getByLabelText('Search the MCP catalog'), {
       target: { value: '  weather ' }
     })
+    expect(screen.getByText('2 servers · catalog from Oct 20, 2026')).toBeInTheDocument()
 
     expect(await screen.findByText('1 match · catalog from Oct 20, 2026')).toBeInTheDocument()
     expect(search.mock.calls[1]).toEqual([{ query: 'weather', limit: 50 }])

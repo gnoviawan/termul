@@ -20,6 +20,8 @@ export const MCP_CATALOG_MAX_ROWS = 500
 export const MCP_CATALOG_SEARCH_DEBOUNCE_MS = 250
 
 export interface McpCatalogResults {
+  /** The trimmed query these rows answer, which can trail the search box. */
+  query: string
   rows: McpCatalogRow[]
   total: number
   nextCursor: string | null
@@ -40,7 +42,7 @@ type Action =
   | { type: 'tooManyTerms' }
   | { type: 'loadMore' }
   | { type: 'loadMoreFailed' }
-  | { type: 'page'; page: McpCatalogPage; append: boolean }
+  | { type: 'page'; page: McpCatalogPage; query: string; append: boolean }
 
 function reduce(state: McpCatalogSearchState, action: Action): McpCatalogSearchState {
   switch (action.type) {
@@ -63,12 +65,13 @@ function reduce(state: McpCatalogSearchState, action: Action): McpCatalogSearchS
       if (state.status !== 'ready') return state
       return { ...state, more: action.type === 'loadMore' ? 'loading' : 'failed' }
     case 'page': {
-      const { page, append } = action
+      const { page, query, append } = action
       const previous = append && state.status === 'ready' ? state.results.rows : []
       return {
         status: 'ready',
         more: 'idle',
         results: {
+          query,
           rows: [...previous, ...page.items],
           total: page.total,
           nextCursor: page.nextCursor,
@@ -131,7 +134,7 @@ export function useMcpCatalogSearch(query: string, active: boolean): McpCatalogS
       .then((result) => {
         if (searchId !== generation.current) return
         if (result.success) {
-          dispatch({ type: 'page', page: result.data, append: false })
+          dispatch({ type: 'page', page: result.data, query: settledQuery, append: false })
         } else {
           logSearchFailure(result.code, false)
           dispatch({ type: 'searchFailed' })
@@ -154,7 +157,7 @@ export function useMcpCatalogSearch(query: string, active: boolean): McpCatalogS
         if (searchId !== generation.current) return
         pageInFlight.current = false
         if (result.success) {
-          dispatch({ type: 'page', page: result.data, append: true })
+          dispatch({ type: 'page', page: result.data, query: settledQuery, append: true })
         } else {
           logSearchFailure(result.code, true)
           dispatch({ type: 'loadMoreFailed' })

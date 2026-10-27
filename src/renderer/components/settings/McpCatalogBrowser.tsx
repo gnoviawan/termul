@@ -38,8 +38,8 @@ function snapshotDate(iso: string): string {
   return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' }).format(new Date(iso))
 }
 
-function summary(results: McpCatalogResults, query: string): string {
-  const noun = query.trim()
+function summary(results: McpCatalogResults): string {
+  const noun = results.query
     ? results.total === 1
       ? 'match'
       : 'matches'
@@ -236,7 +236,7 @@ export function McpCatalogBrowser(): React.JSX.Element {
       ) : (
         <>
           <p aria-live="polite" className="px-1 text-xs text-muted-foreground">
-            {summary(results, query)}
+            {summary(results)}
           </p>
           {results.snapshotFetchedAt === null ? (
             <SettingsNotice tone="warning">
@@ -244,7 +244,7 @@ export function McpCatalogBrowser(): React.JSX.Element {
             </SettingsNotice>
           ) : results.rows.length === 0 ? (
             <div className="flex flex-col items-center gap-2 rounded-lg border border-border bg-card p-5 text-center">
-              <p className="text-xs text-muted-foreground">No servers match "{query.trim()}".</p>
+              <p className="text-xs text-muted-foreground">No servers match "{results.query}".</p>
               <Button type="button" size="xs" variant="outline" onClick={() => setQuery('')}>
                 Clear search
               </Button>
