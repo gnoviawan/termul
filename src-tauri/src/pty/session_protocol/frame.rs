@@ -131,7 +131,7 @@ fn parse_frame(payload: &Value) -> Result<Frame, ParseError> {
         let exit_code = payload
             .get("exit_code")
             .and_then(Value::as_i64)
-            .map(|code| code as i32);
+            .and_then(|code| i32::try_from(code).ok());
         return Ok(Frame::CommandFinished {
             nonce: optional_nonce(payload)?,
             exit_code,

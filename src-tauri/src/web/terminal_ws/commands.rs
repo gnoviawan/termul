@@ -32,10 +32,7 @@ fn required(kind: &str, command_id: Option<&str>) -> Result<String, Failure> {
 
 /// The `spawn` request's `commandId`: the envelope's and the payload's must
 /// agree when both are present; one of them is required.
-fn spawn_command_id(
-    envelope: Option<&str>,
-    payload: Option<&str>,
-) -> Result<String, Failure> {
+fn spawn_command_id(envelope: Option<&str>, payload: Option<&str>) -> Result<String, Failure> {
     if let (Some(envelope), Some(payload)) = (envelope, payload) {
         if envelope != payload {
             return Err((
@@ -111,7 +108,10 @@ pub(super) async fn spawn(
                     format!("project '{project_id}' is being removed or archived"),
                 ));
             }
-            ctx.authorize(&spawned.info.id);
+            ctx.authorize_with_generation(
+                &spawned.info.id,
+                state.pty.claim_generation(&spawned.info.id),
+            );
             spawned
         }
         // A resend: the PTY already exists and the reply carries a FRESH claim.
@@ -144,16 +144,9 @@ pub(super) async fn write(
     let command_id = required(ledgered::WRITE, request.command_id.as_deref())?;
     let pty = state.pty.clone();
     let client_id = ctx.client_id.clone();
+    let authorized = ctx.authorized.clone();
     let owned_terminal = terminal_id.to_string();
     let owned_data = data.to_string();
-    // #851 "single size owner": the device that last typed is
-    // the size owner — record it before the write.
-    let write = async move {
-        if let Some(instance) = pty.get(&owned_terminal) {
-            instance.note_web_size_owner(&client_id);
-        }
-        pty.write(&owned_terminal, &owned_data).await
-    };
     // The chunk is identified by its terminal and length, never its text.
     let length = data.len().to_string();
     let outcome = ledgered::command(
@@ -162,7 +155,25 @@ pub(super) async fn write(
         &command_id,
         &[("terminalId", Some(terminal_id)), ("length", Some(&length))],
         async move {
-            match write.await {
+            // Membership is outside the ledger so a never-authorized caller
+            // leaves no entry. Generation is inside so a successful write
+            // still replays after a later rotate/revoke, while a new write
+            // with a stale claim is UNAUTHORIZED. A missing claim record
+            // (kill) still holds so the existing WRITE_FAILED path runs.
+            let current = pty.claim_generation(&owned_terminal);
+            if !command_editor::claim_generation_holds(&authorized.read(), &owned_terminal, current)
+            {
+                return Effect::Released {
+                    code: "UNAUTHORIZED",
+                    message: format!("Not authorized for terminal {owned_terminal}"),
+                };
+            }
+            // #851 "single size owner": the device that last typed is
+            // the size owner — record it before the write.
+            if let Some(instance) = pty.get(&owned_terminal) {
+                instance.note_web_size_owner(&client_id);
+            }
+            match pty.write(&owned_terminal, &owned_data).await {
                 Ok(()) => Effect::Done(()),
                 Err(message) => Effect::Failed {
                     code: "WRITE_FAILED",
@@ -190,13 +201,16 @@ pub(super) async fn kill(
     // single generic UNAUTHORIZED, so a client holding only the shared
     // web token can neither terminate another connection's PTY nor
     // distinguish "terminal exists but not yours" from "unknown id".
-    let authorized = ctx.is_authorized(terminal_id);
+    // Generation is checked inside the ledgered effect so a later rotate/
+    // revoke cannot kill with a stale claim, while a replay of a successful
+    // kill still answers ok.
 
     // A repeat after a successful kill answers ok from the
     // ledger BEFORE the authorization check could refuse it (the first kill
     // detached the terminal). Authorization is still enforced for the one run
     // that executes: an unauthorized caller releases the id and leaves no entry.
     let pty = state.pty.clone();
+    let authorized = ctx.authorized.clone();
     let owned_terminal = terminal_id.to_string();
     let outcome = ledgered::command(
         state.relay.ledger(),
@@ -204,7 +218,9 @@ pub(super) async fn kill(
         &command_id,
         &[("terminalId", Some(terminal_id))],
         async move {
-            if !authorized {
+            let current = pty.claim_generation(&owned_terminal);
+            if !command_editor::claim_generation_holds(&authorized.read(), &owned_terminal, current)
+            {
                 let (code, message) = unauthorized_error(&owned_terminal);
                 return Effect::Released { code, message };
             }

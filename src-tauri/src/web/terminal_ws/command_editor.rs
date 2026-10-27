@@ -8,6 +8,7 @@ pub(crate) const RESTORE_PROMPT: &str = "command_editor_restore_prompt";
 pub(crate) const SESSION_RPC_NAMES: [&str; 3] = [SUBMIT, REQUEST_COMPLETION, CANCEL_COMPLETION];
 
 use super::*;
+use crate::pty::manager::PtyManager;
 use crate::pty::session_protocol::gate::{AuthenticSession, CompletionRequest, SessionPhase};
 use crate::pty::session_protocol::rpc;
 use crate::trackers::terminal_events::TerminalEvent;
@@ -16,13 +17,14 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 type Failure = (&'static str, String);
+pub(super) type AuthorizedTerminals = Arc<parking_lot::RwLock<HashMap<String, Option<u64>>>>;
 
 pub(super) async fn restore_prompt(
     request: &Request,
     state: &AppState,
     ctx: &ConnectionContext,
 ) -> Result<Value, Failure> {
-    let terminal_id = authorized_terminal_id(request, ctx)?;
+    let terminal_id = authorized_terminal_id(request, ctx, &state.pty)?;
     tracing::debug!("[command-editor] restore prompt received terminal_id={terminal_id}");
     let result = rpc::restore_prompt(&state.pty, terminal_id, ctx.capabilities.write).await;
     serde_json::to_value(result).map_err(|e| ("RESTORE_PROMPT_FAILED", e.to_string()))
@@ -33,7 +35,7 @@ pub(super) async fn submit(
     state: &AppState,
     ctx: &ConnectionContext,
 ) -> Result<Value, Failure> {
-    let terminal_id = authorized_terminal_id(request, ctx)?;
+    let terminal_id = authorized_terminal_id(request, ctx, &state.pty)?;
     // Empty drafts are valid strings; their meaning belongs to the session gate.
     let draft = request.payload["draft"]
         .as_str()
@@ -49,7 +51,7 @@ pub(super) async fn request_completion(
     ctx: &ConnectionContext,
     tx: &mpsc::Sender<Message>,
 ) -> Result<Value, Failure> {
-    let terminal_id = authorized_terminal_id(request, ctx)?;
+    let terminal_id = authorized_terminal_id(request, ctx, &state.pty)?;
     let mut completion: CompletionRequest = serde_json::from_value(request.payload.clone())
         .map_err(|_| ("INVALID_PAYLOAD", "Invalid completion request".to_string()))?;
     tracing::debug!("[command-editor] completion admission terminal_id={terminal_id}");
@@ -72,7 +74,7 @@ pub(super) async fn cancel_completion(
     state: &AppState,
     ctx: &ConnectionContext,
 ) -> Result<Value, Failure> {
-    let terminal_id = authorized_terminal_id(request, ctx)?;
+    let terminal_id = authorized_terminal_id(request, ctx, &state.pty)?;
     let request_id = string_field(&request.payload, "requestId")?;
     tracing::debug!("[command-editor] completion cancellation received terminal_id={terminal_id}");
     let owned_id = rpc::owned_request_id(&ctx.client_id, request_id);
@@ -83,15 +85,35 @@ pub(super) async fn cancel_completion(
 fn authorized_terminal_id<'a>(
     request: &'a Request,
     ctx: &ConnectionContext,
+    pty: &PtyManager,
 ) -> Result<&'a str, Failure> {
     let terminal_id = string_field(&request.payload, "terminalId")?;
-    if !ctx.is_authorized(terminal_id) {
+    if !ctx.claim_generation_holds(terminal_id, pty.claim_generation(terminal_id)) {
         return Err((
             "UNAUTHORIZED",
             format!("Not authorized for terminal {terminal_id}"),
         ));
     }
     Ok(terminal_id)
+}
+
+/// Captured generation still admits this connection.
+///
+/// A missing claim record (`current = None`, after kill) still holds so the
+/// ledgered write path can return `WRITE_FAILED`. A captured `None` is the
+/// test-only `authorize` path and holds against a live generation.
+pub(super) fn claim_generation_holds(
+    authorized: &HashMap<String, Option<u64>>,
+    terminal_id: &str,
+    current: Option<u64>,
+) -> bool {
+    match authorized.get(terminal_id) {
+        None => false,
+        Some(captured) => match current {
+            None => true,
+            Some(current) => captured.is_none_or(|captured| captured == current),
+        },
+    }
 }
 
 #[derive(Default)]
@@ -249,12 +271,27 @@ impl Drop for PendingAttach {
 
 pub(super) type AttachRegistry = Arc<parking_lot::RwLock<AttachState>>;
 
+fn fail_closed_on_lag(authorized: &AuthorizedTerminals, attaching: &AttachRegistry) {
+    let mut attaching = attaching.write();
+    let mut authorized = authorized.write();
+    let ids: Vec<String> = authorized
+        .keys()
+        .cloned()
+        .chain(attaching.buffers.keys().cloned())
+        .collect();
+    for id in ids {
+        attaching.overflowed.insert(id);
+    }
+    authorized.clear();
+}
+
 /// Forwards hub events for authorized terminals; buffers SessionLifecycle while attaching.
 pub(super) fn spawn_event_forwarder(
     tx: mpsc::Sender<Message>,
     mut event_rx: tokio::sync::broadcast::Receiver<TerminalEvent>,
-    authorized: Arc<parking_lot::RwLock<HashSet<String>>>,
+    authorized: AuthorizedTerminals,
     attaching: AttachRegistry,
+    pty: Option<Arc<PtyManager>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -265,15 +302,22 @@ pub(super) fn spawn_event_forwarder(
             };
             match received {
                 Ok(event) => {
-                    if forward_or_buffer_hub_event(&event, &authorized, &attaching, &tx)
-                        .await
-                        .is_err()
+                    if forward_or_buffer_hub_event(
+                        &event,
+                        &authorized,
+                        &attaching,
+                        &tx,
+                        pty.as_deref(),
+                    )
+                    .await
+                    .is_err()
                     {
                         break;
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                     tracing::warn!("[terminal-ws] lifecycle event receiver lagged by {skipped}");
+                    fail_closed_on_lag(&authorized, &attaching);
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
@@ -281,16 +325,43 @@ pub(super) fn spawn_event_forwarder(
     })
 }
 
+fn drop_stale_authorization(
+    authorized: &parking_lot::RwLock<HashMap<String, Option<u64>>>,
+    attaching: &parking_lot::RwLock<AttachState>,
+    terminal_id: &str,
+    pty: Option<&PtyManager>,
+) -> bool {
+    let current = pty.and_then(|pty| pty.claim_generation(terminal_id));
+    if claim_generation_holds(&authorized.read(), terminal_id, current) {
+        return false;
+    }
+    // Same lock order as fail_closed_on_lag and take_attach_batch.
+    let mut attaching = attaching.write();
+    let mut authorized = authorized.write();
+    if claim_generation_holds(&authorized, terminal_id, current) {
+        return false;
+    }
+    authorized.remove(terminal_id);
+    if attaching.buffers.contains_key(terminal_id) {
+        attaching.overflowed.insert(terminal_id.to_owned());
+    }
+    true
+}
+
 pub(super) async fn forward_or_buffer_hub_event(
     event: &TerminalEvent,
-    authorized: &parking_lot::RwLock<HashSet<String>>,
+    authorized: &parking_lot::RwLock<HashMap<String, Option<u64>>>,
     attaching: &parking_lot::RwLock<AttachState>,
     tx: &mpsc::Sender<Message>,
+    pty: Option<&PtyManager>,
 ) -> Result<(), ()> {
     let terminal_id = event.terminal_id();
     if event.lifecycle_sequence().is_some()
         || matches!(event, TerminalEvent::SessionLifecycle { .. })
     {
+        if drop_stale_authorization(authorized, attaching, terminal_id, pty) {
+            return Ok(());
+        }
         let mut attaching = attaching.write();
         if event.lifecycle_sequence().is_some_and(|seq| {
             attaching
@@ -316,7 +387,10 @@ pub(super) async fn forward_or_buffer_hub_event(
             return Ok(());
         }
     }
-    if !authorized.read().contains(terminal_id) {
+    if drop_stale_authorization(authorized, attaching, terminal_id, pty) {
+        return Ok(());
+    }
+    if !authorized.read().contains_key(terminal_id) {
         return Ok(());
     }
     let payload = serde_json::to_value(event).unwrap_or_else(|_| json!({}));
@@ -327,7 +401,11 @@ pub(super) async fn forward_or_buffer_hub_event(
 
 impl ConnectionContext {
     /// Mark attaching before authorize so live lifecycle is buffered, not dropped.
-    pub(super) fn begin_attach(&mut self, terminal_id: &str) -> PendingAttach {
+    pub(super) fn begin_attach(
+        &mut self,
+        terminal_id: &str,
+        generation: Option<u64>,
+    ) -> PendingAttach {
         let mut attaching = self.attaching.write();
         attaching.watermarks.remove(terminal_id);
         attaching.overflowed.remove(terminal_id);
@@ -335,7 +413,7 @@ impl ConnectionContext {
             .buffers
             .insert(terminal_id.to_string(), Vec::new());
         drop(attaching);
-        self.authorize(terminal_id);
+        self.authorize_with_generation(terminal_id, generation);
         PendingAttach {
             registry: self.attaching.clone(),
             terminal_id: terminal_id.to_owned(),

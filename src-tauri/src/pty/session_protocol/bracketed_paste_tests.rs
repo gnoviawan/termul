@@ -29,6 +29,37 @@ fn bracketed_paste_sequence_can_split_across_chunks() {
 }
 
 #[test]
+fn repeated_esc_still_toggles_bracketed_paste() {
+    let tracker = BracketedPasteTracker::default();
+    tracker.observe(b"\x1b\x1b[?2004h");
+    assert!(
+        tracker.enabled(),
+        "ESC ESC [?2004h must keep ESC as the introducer"
+    );
+    tracker.observe(b"\x1b\x1b[?2004l");
+    assert!(
+        !tracker.enabled(),
+        "ESC ESC [?2004l must keep ESC as the introducer"
+    );
+}
+
+#[test]
+fn repeated_esc_toggle_can_split_across_chunks() {
+    let tracker = BracketedPasteTracker::default();
+    tracker.observe(b"\x1b");
+    assert!(!tracker.enabled());
+    tracker.observe(b"\x1b[?2004h");
+    assert!(tracker.enabled(), "split ESC ESC [?2004h must enable paste");
+    tracker.observe(b"\x1b\x1b[?20");
+    assert!(tracker.enabled());
+    tracker.observe(b"04l");
+    assert!(
+        !tracker.enabled(),
+        "split ESC ESC [?2004l must disable paste"
+    );
+}
+
+#[test]
 fn bracketed_paste_tracks_2004_among_other_modes() {
     let tracker = BracketedPasteTracker::default();
     tracker.observe(b"\x1b[?1;2004h");

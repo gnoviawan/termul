@@ -1403,6 +1403,10 @@ async fn missing_command_started_does_not_write_an_in_band_restore() {
 }
 
 fn command_finished_frame(nonce: &str, exit_code: Option<i32>) -> Vec<u8> {
+    command_finished_frame_code(nonce, exit_code.map(i64::from))
+}
+
+fn command_finished_frame_code(nonce: &str, exit_code: Option<i64>) -> Vec<u8> {
     let mut payload = serde_json::json!({"type":"CommandFinished","nonce":nonce});
     if let Some(code) = exit_code {
         payload["exit_code"] = serde_json::json!(code);
@@ -1482,6 +1486,8 @@ async fn authenticated_command_finished_records_exit_code_once() {
 async fn command_finished_without_code_keeps_previous_exit_code() {
     let (gate, tracker, hub, pending, mut filter) = finished_exit_harness();
     let mut events = hub.subscribe();
+    tracker.record_exit_code("test", 2);
+    let _ = exit_code_changed_events(&mut events);
     assert!(process_reader_chunk(
         &mut filter,
         &command_finished_frame("n1", None),
@@ -1494,7 +1500,30 @@ async fn command_finished_without_code_keeps_previous_exit_code() {
         exit_code_changed_events(&mut events).is_empty(),
         "CommandFinished without a code must not emit ExitCodeChanged"
     );
-    assert_eq!(tracker.get_exit_code("test"), None);
+    assert_eq!(tracker.get_exit_code("test"), Some(2));
+}
+
+#[tokio::test]
+async fn command_finished_out_of_i32_range_keeps_previous_exit_code() {
+    let (gate, tracker, hub, pending, mut filter) = finished_exit_harness();
+    let mut events = hub.subscribe();
+    tracker.record_exit_code("test", 2);
+    let _ = exit_code_changed_events(&mut events);
+    for overflow in [i64::from(i32::MAX) + 1, i64::from(i32::MIN) - 1] {
+        assert!(process_reader_chunk(
+            &mut filter,
+            &command_finished_frame_code("n1", Some(overflow)),
+            &pending,
+            &gate,
+            "test",
+            &hub,
+        ));
+        assert!(
+            exit_code_changed_events(&mut events).is_empty(),
+            "an out-of-range exit_code must not emit ExitCodeChanged"
+        );
+        assert_eq!(tracker.get_exit_code("test"), Some(2));
+    }
 }
 
 #[tokio::test]

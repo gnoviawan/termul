@@ -791,8 +791,9 @@ async fn attach_window_with_lifecycle(kind: &str) -> (Vec<serde_json::Value>, St
         state.terminal_events.subscribe(),
         ctx.authorized.clone(),
         ctx.attaching.clone(),
+        None,
     );
-    let _attaching = ctx.begin_attach(&session.id);
+    let _attaching = ctx.begin_attach(&session.id, None);
     let gate = state.pty.get(&session.id).unwrap().session_gate.clone();
     let _snapshot = gate.authentic_session();
     state
@@ -885,8 +886,9 @@ async fn buffered_snapshot_case(executing: bool) -> Vec<serde_json::Value> {
         hub.subscribe(),
         ctx.authorized.clone(),
         ctx.attaching.clone(),
+        None,
     );
-    let _attaching = ctx.begin_attach("test");
+    let _attaching = ctx.begin_attach("test", None);
     let pending = Mutex::new(Vec::new());
     let mut filter = crate::pty::session_protocol::filter::SessionFilter::new();
     let mut frames = vec![
@@ -961,7 +963,7 @@ async fn exit_during_attach_is_not_revived() {
         let mut ctx = super::tests::gate_test_ctx(true);
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
         let events = hub.subscribe();
-        let _pending = ctx.begin_attach("test");
+        let _pending = ctx.begin_attach("test", None);
         let mut sequence = 0;
         if !exit_before_snapshot {
             sequence = super::command_editor::send_authentic_session(
@@ -1001,6 +1003,7 @@ async fn exit_during_attach_is_not_revived() {
             events,
             ctx.authorized.clone(),
             ctx.attaching.clone(),
+            None,
         );
         hub.emit(
             crate::trackers::terminal_events::TerminalEvent::CwdChanged {
@@ -1061,8 +1064,9 @@ async fn attach_buffer_overflow_fails_cleanly() {
         hub.subscribe(),
         ctx.authorized.clone(),
         ctx.attaching.clone(),
+        None,
     );
-    let _attaching = ctx.begin_attach("test");
+    let _attaching = ctx.begin_attach("test", None);
     for sequence in 1..=300 {
         let mut event = lifecycle_event("test", "Desync");
         event.set_lifecycle_sequence(sequence);
@@ -1089,6 +1093,7 @@ async fn forwarder_stops_when_outbound_closed() {
         hub.subscribe(),
         ctx.authorized.clone(),
         ctx.attaching.clone(),
+        None,
     );
     drop(rx);
     let result = tokio::time::timeout(std::time::Duration::from_millis(100), task).await;
@@ -1112,8 +1117,9 @@ async fn desync_after_snapshot_is_delivered_after_replay() {
         hub.subscribe(),
         ctx.authorized.clone(),
         ctx.attaching.clone(),
+        None,
     );
-    let _pending = ctx.begin_attach("test");
+    let _pending = ctx.begin_attach("test", None);
     let sequence =
         super::command_editor::send_authentic_session(&tx, gate.authentic_session(), "test")
             .await
@@ -1232,6 +1238,7 @@ async fn exit_while_replay_send_is_blocked_reaches_the_client() {
         state.terminal_events.subscribe(),
         ctx.authorized.clone(),
         ctx.attaching.clone(),
+        None,
     );
     tx.send(axum::extract::ws::Message::Text("blocked".into()))
         .await
@@ -1403,8 +1410,9 @@ async fn attach_overflow_unauthorizes_and_drops_later_hub_events() {
         hub.subscribe(),
         ctx.authorized.clone(),
         ctx.attaching.clone(),
+        None,
     );
-    let _attaching = ctx.begin_attach("test");
+    let _attaching = ctx.begin_attach("test", None);
     for sequence in 1..=300 {
         let mut event = lifecycle_event("test", "Desync");
         event.set_lifecycle_sequence(sequence);
@@ -1436,6 +1444,342 @@ async fn attach_overflow_unauthorizes_and_drops_later_hub_events() {
         !kinds.iter().any(|kind| kind == "PromptReady"),
         "later hub events must not be forwarded after overflow: {kinds:?}"
     );
+}
+
+/// One past the hub broadcast capacity (`EVENT_CAPACITY` is 256).
+const HUB_LAG_EVENTS: u64 = 257;
+
+fn lagged_hub_receiver(
+    hub: &crate::trackers::terminal_events::TerminalEventHub,
+) -> tokio::sync::broadcast::Receiver<crate::trackers::terminal_events::TerminalEvent> {
+    let rx = hub.subscribe();
+    for sequence in 1..=HUB_LAG_EVENTS {
+        let mut event = lifecycle_event("lag-fill", "Desync");
+        event.set_lifecycle_sequence(sequence);
+        hub.emit(event);
+    }
+    rx
+}
+
+async fn yield_until(mut ready: impl FnMut() -> bool) {
+    for _ in 0..10_000 {
+        if ready() {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("condition not reached");
+}
+
+#[tokio::test]
+async fn lagged_hub_before_begin_attach_unauthorizes() {
+    let mut ctx = super::tests::gate_test_ctx(true);
+    let hub = crate::trackers::terminal_events::TerminalEventHub::standalone();
+    ctx.authorize("test");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let task = super::command_editor::spawn_event_forwarder(
+        tx.clone(),
+        lagged_hub_receiver(&hub),
+        ctx.authorized.clone(),
+        ctx.attaching.clone(),
+        None,
+    );
+    yield_until(|| !ctx.is_authorized("test")).await;
+    hub.emit(lifecycle_event("test", "PromptReady"));
+    for _ in 0..32 {
+        tokio::task::yield_now().await;
+    }
+    drop(tx);
+    task.abort();
+    let mut kinds = Vec::new();
+    while let Some(axum::extract::ws::Message::Text(text)) = rx.recv().await {
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if let Some(kind) = value["payload"]["kind"].as_str() {
+            kinds.push(kind.to_owned());
+        }
+    }
+    assert!(
+        !kinds.iter().any(|kind| kind == "PromptReady"),
+        "lag before attach must not forward later lifecycle: {kinds:?}"
+    );
+}
+
+#[tokio::test]
+async fn lagged_hub_during_attach_fails_finish() {
+    let mut ctx = super::tests::gate_test_ctx(true);
+    let hub = crate::trackers::terminal_events::TerminalEventHub::standalone();
+    let (tx, _rx) = tokio::sync::mpsc::channel(64);
+    let _attaching = ctx.begin_attach("test", None);
+    let task = super::command_editor::spawn_event_forwarder(
+        tx.clone(),
+        lagged_hub_receiver(&hub),
+        ctx.authorized.clone(),
+        ctx.attaching.clone(),
+        None,
+    );
+    yield_until(|| ctx.attaching.read().overflowed.contains("test")).await;
+    let result = ctx.finish_attach(&tx, "test", 0).await;
+    assert!(
+        result.is_err(),
+        "lag during attach must fail the attach: {result:?}"
+    );
+    assert!(!ctx.is_authorized("test"));
+    task.abort();
+}
+
+#[tokio::test]
+async fn lagged_hub_after_attach_drain_unauthorizes() {
+    let mut ctx = super::tests::gate_test_ctx(true);
+    let hub = crate::trackers::terminal_events::TerminalEventHub::standalone();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let _pending = ctx.begin_attach("test", None);
+    ctx.finish_attach(&tx, "test", 0).await.unwrap();
+    let task = super::command_editor::spawn_event_forwarder(
+        tx.clone(),
+        lagged_hub_receiver(&hub),
+        ctx.authorized.clone(),
+        ctx.attaching.clone(),
+        None,
+    );
+    yield_until(|| !ctx.is_authorized("test")).await;
+    hub.emit(lifecycle_event("test", "PromptReady"));
+    for _ in 0..32 {
+        tokio::task::yield_now().await;
+    }
+    drop(tx);
+    task.abort();
+    let mut kinds = Vec::new();
+    while let Some(axum::extract::ws::Message::Text(text)) = rx.recv().await {
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if let Some(kind) = value["payload"]["kind"].as_str() {
+            kinds.push(kind.to_owned());
+        }
+    }
+    assert!(
+        !kinds.iter().any(|kind| kind == "PromptReady"),
+        "lag after attach drain must not keep forwarding lifecycle: {kinds:?}"
+    );
+}
+
+#[tokio::test]
+async fn lagged_hub_allows_fresh_reattach() {
+    let state = super::tests::gate_test_state(None);
+    let session = adopt_session(&state).await;
+    let mut ctx = super::tests::gate_test_ctx(true);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let _pending = ctx.begin_attach(&session.id, None);
+    ctx.finish_attach(&tx, &session.id, 0).await.unwrap();
+    let task = super::command_editor::spawn_event_forwarder(
+        tx.clone(),
+        lagged_hub_receiver(&state.terminal_events),
+        ctx.authorized.clone(),
+        ctx.attaching.clone(),
+        None,
+    );
+    yield_until(|| !ctx.is_authorized(&session.id)).await;
+    let request = super::Request {
+        id: "reattach-after-lag".into(),
+        type_: "attach".into(),
+        command_id: None,
+        payload: json!({"terminalId":session.id, "claim":session.claim}),
+    };
+    super::handle(request, &state, &tx, &mut ctx)
+        .await
+        .expect("fresh attach after lag");
+    while rx.try_recv().is_ok() {}
+    super::command_editor::forward_or_buffer_hub_event(
+        &lifecycle_event(&session.id, "PromptReady"),
+        &ctx.authorized,
+        &ctx.attaching,
+        &tx,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        rx.try_recv().is_ok(),
+        "re-attach after lag must resume forwarding"
+    );
+    task.abort();
+    ctx.release_all(&state);
+    state.pty.force_kill(&session.id).await.unwrap();
+}
+
+fn restore_count(session: &AdoptedSession) -> usize {
+    use crate::pty::session_protocol::RESTORE_PROMPT_SEQUENCE;
+    session
+        .bytes
+        .lock()
+        .unwrap()
+        .windows(RESTORE_PROMPT_SEQUENCE.len())
+        .filter(|part| *part == RESTORE_PROMPT_SEQUENCE.as_bytes())
+        .count()
+}
+
+fn restore_request(id: &str) -> super::Request {
+    super::Request {
+        id: "restore".into(),
+        type_: RESTORE_PROMPT.into(),
+        command_id: None,
+        payload: json!({"terminalId": id}),
+    }
+}
+
+fn rotate_request(id: &str, claim: &str, command_id: &str) -> super::Request {
+    super::Request {
+        id: command_id.into(),
+        type_: "rotate_claim".into(),
+        command_id: Some(command_id.into()),
+        payload: json!({"terminalId": id, "claim": claim}),
+    }
+}
+
+fn revoke_request(id: &str, claim: &str, command_id: &str) -> super::Request {
+    super::Request {
+        id: command_id.into(),
+        type_: "revoke_claim".into(),
+        command_id: Some(command_id.into()),
+        payload: json!({"terminalId": id, "claim": claim}),
+    }
+}
+
+fn write_request(id: &str, data: &str, command_id: &str) -> super::Request {
+    super::Request {
+        id: command_id.into(),
+        type_: "write".into(),
+        command_id: Some(command_id.into()),
+        payload: json!({"terminalId": id, "data": data}),
+    }
+}
+
+#[tokio::test]
+async fn restore_prompt_rejects_stale_claim_after_cross_connection_rotate() {
+    let state = super::tests::gate_test_state(None);
+    let session = adopt_session(&state).await;
+    let mut owner = super::tests::gate_test_ctx(true);
+    let mut other = super::tests::gate_test_ctx(true);
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    super::tests::attach_terminal(&state, &tx, &mut owner, &session.id, &session.claim).await;
+    assert!(owner.is_authorized(&session.id));
+    super::handle(restore_request(&session.id), &state, &tx, &mut owner)
+        .await
+        .expect("authorized restore");
+    assert_eq!(restore_count(&session), 1);
+    let rotated = super::handle(
+        rotate_request(&session.id, &session.claim, "rot-cross-1"),
+        &state,
+        &tx,
+        &mut other,
+    )
+    .await
+    .expect("other connection rotates");
+    let fresh = rotated["claim"]
+        .as_str()
+        .expect("rotated claim")
+        .to_string();
+    let refused = super::handle(restore_request(&session.id), &state, &tx, &mut owner).await;
+    assert_eq!(
+        refused.expect_err("stale restore").0,
+        "UNAUTHORIZED",
+        "restore_prompt must not write after another connection rotates"
+    );
+    assert_eq!(restore_count(&session), 1, "no PTY write after rotation");
+    super::tests::attach_terminal(&state, &tx, &mut owner, &session.id, &fresh).await;
+    super::handle(restore_request(&session.id), &state, &tx, &mut owner)
+        .await
+        .expect("fresh reattach restore");
+    // restore_prompt writes once per restore epoch; reattach recovers
+    // authorization without forcing a second sequence.
+    assert_eq!(restore_count(&session), 1);
+    super::handle(
+        write_request(&session.id, "echo\n", "w-rotate-1"),
+        &state,
+        &tx,
+        &mut owner,
+    )
+    .await
+    .expect("fresh reattach write");
+    owner.release_all(&state);
+    other.release_all(&state);
+    state.pty.force_kill(&session.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn restore_prompt_and_write_reject_stale_claim_after_cross_connection_revoke() {
+    let state = super::tests::gate_test_state(None);
+    let session = adopt_session(&state).await;
+    let mut owner = super::tests::gate_test_ctx(true);
+    let mut other = super::tests::gate_test_ctx(true);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let event_task = super::command_editor::spawn_event_forwarder(
+        tx.clone(),
+        state.terminal_events.subscribe(),
+        owner.authorized.clone(),
+        owner.attaching.clone(),
+        Some(state.pty.clone()),
+    );
+    super::tests::attach_terminal(&state, &tx, &mut owner, &session.id, &session.claim).await;
+    super::handle(
+        write_request(&session.id, "ls\n", "w-revoke-1"),
+        &state,
+        &tx,
+        &mut owner,
+    )
+    .await
+    .expect("authorized write");
+    super::handle(
+        revoke_request(&session.id, &session.claim, "rev-cross-1"),
+        &state,
+        &tx,
+        &mut other,
+    )
+    .await
+    .expect("other connection revokes");
+    let restore = super::handle(restore_request(&session.id), &state, &tx, &mut owner).await;
+    assert_eq!(restore.expect_err("stale restore").0, "UNAUTHORIZED");
+    assert_eq!(restore_count(&session), 0, "no PTY write after revocation");
+    let write = super::handle(
+        write_request(&session.id, "pwd\n", "w-revoke-2"),
+        &state,
+        &tx,
+        &mut owner,
+    )
+    .await;
+    assert_eq!(write.expect_err("stale write").0, "UNAUTHORIZED");
+    let replay = super::handle(
+        write_request(&session.id, "ls\n", "w-revoke-1"),
+        &state,
+        &tx,
+        &mut owner,
+    )
+    .await;
+    assert_eq!(
+        replay,
+        Ok(serde_json::Value::Null),
+        "ledger replay of the earlier write"
+    );
+    while rx.try_recv().is_ok() {}
+    state
+        .terminal_events
+        .emit(lifecycle_event(&session.id, "PromptReady"));
+    for _ in 0..32 {
+        tokio::task::yield_now().await;
+    }
+    let mut kinds = Vec::new();
+    while let Ok(axum::extract::ws::Message::Text(text)) = rx.try_recv() {
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if let Some(kind) = value["payload"]["kind"].as_str() {
+            kinds.push(kind.to_owned());
+        }
+    }
+    assert!(
+        !kinds.iter().any(|kind| kind == "PromptReady"),
+        "lifecycle must not leak after revoked authorization: {kinds:?}"
+    );
+    event_task.abort();
+    owner.release_all(&state);
+    other.release_all(&state);
+    state.pty.force_kill(&session.id).await.unwrap();
 }
 
 fn kinds(snapshot: AuthenticSession) -> Vec<String> {
@@ -1479,6 +1823,7 @@ fn cleanup_forwarder(
                     &authorized,
                     &attaching,
                     &tx,
+                    None,
                 ))
         })
         .join()
@@ -1493,7 +1838,7 @@ async fn overflow_cleanup_blocks_interleaved_forwarding_and_allows_reattach() {
     let session = adopt_session(&state).await;
     let mut ctx = super::tests::gate_test_ctx(true);
     let (tx, mut rx) = mpsc::channel(8);
-    let pending = ctx.begin_attach(&session.id);
+    let pending = ctx.begin_attach(&session.id, None);
     let hook = cleanup_forwarder(&ctx, &tx, &session.id);
     {
         let mut attaching = ctx.attaching.write();
@@ -1519,6 +1864,7 @@ async fn overflow_cleanup_blocks_interleaved_forwarding_and_allows_reattach() {
         &ctx.authorized,
         &ctx.attaching,
         &tx,
+        None,
     )
     .await
     .unwrap();

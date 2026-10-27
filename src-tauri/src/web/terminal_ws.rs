@@ -14,7 +14,7 @@
 //! `project_id` it has been authorized for via spawn or explicit attach.
 
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -124,9 +124,11 @@ where
 
     let write_task = tokio::spawn(write_loop(sink, rx, stop.clone()));
 
-    // Per-connection authorization: terminal IDs this socket may operate on.
+    // Per-connection authorization: terminal IDs this socket may operate on,
+    // with the claim generation captured at spawn/attach.
     // Shared with the event-forwarding task so it can see updates.
-    let authorized: Arc<RwLock<HashSet<String>>> = Arc::new(RwLock::new(HashSet::new()));
+    let authorized: Arc<RwLock<HashMap<String, Option<u64>>>> =
+        Arc::new(RwLock::new(HashMap::new()));
     // #851: per-connection client id (opaque, sequential) — identifies the
     // connection for the "single size owner" (last writer wins) marker and
     // logs. Never exposed to the peer.
@@ -149,6 +151,7 @@ where
         state.terminal_events.subscribe(),
         authorized.clone(),
         attaching.clone(),
+        Some(state.pty.clone()),
     );
 
     let ctx = ConnectionContext {
@@ -288,8 +291,9 @@ impl Drop for PendingAttachCount {
 }
 
 struct ConnectionContext {
-    /// Terminal IDs this connection is authorized to operate on.
-    authorized: Arc<RwLock<HashSet<String>>>,
+    /// Terminal IDs this connection is authorized to operate on, with the
+    /// claim generation captured at spawn or attach.
+    authorized: Arc<RwLock<HashMap<String, Option<u64>>>>,
     /// SessionLifecycle events buffered while that terminal's attach replay is in flight.
     attaching: command_editor::AttachRegistry,
     /// Per-terminal output forwarding attachments (terminal_id -> attachment).
@@ -338,12 +342,23 @@ fn connection_gate(authed: bool, request_type: &str) -> ConnectionGate {
 }
 
 impl ConnectionContext {
+    #[cfg(test)]
     fn authorize(&mut self, terminal_id: &str) {
-        self.authorized.write().insert(terminal_id.to_string());
+        self.authorize_with_generation(terminal_id, None);
+    }
+
+    fn authorize_with_generation(&mut self, terminal_id: &str, generation: Option<u64>) {
+        self.authorized
+            .write()
+            .insert(terminal_id.to_string(), generation);
     }
 
     fn is_authorized(&self, terminal_id: &str) -> bool {
-        self.authorized.read().contains(terminal_id)
+        self.authorized.read().contains_key(terminal_id)
+    }
+
+    fn claim_generation_holds(&self, terminal_id: &str, current: Option<u64>) -> bool {
+        command_editor::claim_generation_holds(&self.authorized.read(), terminal_id, current)
     }
 
     fn detach(&mut self, terminal_id: &str, state: &AppState) {
@@ -453,7 +468,8 @@ async fn handle(
             }
             "resize" => {
                 let terminal_id = string_field(&request.payload, "terminalId")?;
-                if !ctx.is_authorized(terminal_id) {
+                if !ctx.claim_generation_holds(terminal_id, state.pty.claim_generation(terminal_id))
+                {
                     return Err(unauthorized_error(terminal_id));
                 }
                 let cols = u16_field(&request.payload, "cols")?;
@@ -501,7 +517,7 @@ async fn handle(
                 // connection for write/resize/events on this terminal.
                 // Mark attaching first so live SessionLifecycle is buffered
                 // until the replayed session events are sent.
-                let _attaching = ctx.begin_attach(&terminal_id);
+                let _attaching = ctx.begin_attach(&terminal_id, generation);
                 // CodeRabbit (story 5 reattach): track live attachments so
                 // `list_preserved` never reissues a claim under a live forwarder
                 // — a second connection's reload must not invalidate the first
