@@ -28,6 +28,7 @@ fn string_field_rejects_empty_and_missing() {
 fn context_authorize_and_detach_roundtrip() {
     let mut ctx = ConnectionContext {
         authorized: Arc::new(RwLock::new(HashSet::new())),
+        attaching: Default::default(),
         attachments: HashMap::new(),
         // Tests exercise post-gate behavior on an already-authed connection.
         authed: true,
@@ -175,6 +176,7 @@ fn capability_policy(
 pub(super) fn gate_test_ctx(authed: bool) -> ConnectionContext {
     ConnectionContext {
         authorized: Arc::new(RwLock::new(HashSet::new())),
+        attaching: Default::default(),
         attachments: HashMap::new(),
         authed,
         identity: None,
@@ -411,6 +413,7 @@ async fn connection_detach_aborts_attachment_and_clears_authorization() {
     // PtyManager seam and is covered in CI integration, not here.
     let mut ctx = ConnectionContext {
         authorized: Arc::new(RwLock::new(HashSet::new())),
+        attaching: Default::default(),
         attachments: HashMap::new(),
         // Tests exercise post-gate behavior on an already-authed connection.
         authed: true,

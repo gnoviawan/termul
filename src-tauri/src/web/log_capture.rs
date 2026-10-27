@@ -4,6 +4,8 @@ use std::future::Future;
 use std::io;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use tracing_subscriber::layer::SubscriberExt;
+
 #[derive(Clone, Default)]
 struct Sink(Arc<Mutex<Vec<u8>>>);
 
@@ -22,6 +24,18 @@ impl io::Write for Sink {
 /// this thread, one per line. Use on a current-thread runtime (the default
 /// `#[tokio::test]`), where the whole future runs on the capturing thread.
 pub(crate) async fn capture_tracing<F: Future>(work: F) -> (F::Output, String) {
+    // tracing-core 0.1.36's single-dispatcher fast path registers callsites
+    // against the registering thread's default, which may have no subscriber.
+    // Keep an inert dispatcher alive so every capture uses the registry of live
+    // dispatchers, including when another thread first encounters a callsite.
+    // Rebuilding after set_default alone cannot protect those new callsites.
+    static INTEREST_ANCHOR: OnceLock<tracing::Dispatch> = OnceLock::new();
+    INTEREST_ANCHOR.get_or_init(|| {
+        tracing::Dispatch::new(
+            tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::OFF),
+        )
+    });
+
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()

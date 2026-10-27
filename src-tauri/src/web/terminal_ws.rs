@@ -15,8 +15,8 @@
 
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocketUpgrade};
@@ -30,9 +30,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::pty::manager::{PtyManager, SpawnOptions};
-use crate::web::capabilities::{
-    terminal_request_is_view, Capabilities, CapabilityPolicy, Carrier,
-};
+use crate::web::capabilities::{terminal_request_is_view, Capabilities, CapabilityPolicy, Carrier};
 use crate::web::connection_runtime::{send_going_away, SocketLease};
 use crate::web::presence::PresenceGuard;
 use crate::web::ws::{validate_authenticate_handshake, AppState, ClientIdentity};
@@ -56,6 +54,7 @@ struct Request {
     command_id: Option<String>,
 }
 
+mod command_editor;
 mod commands;
 
 /// The peer address (`ConnectInfo`) feeds the connection's capabilities,
@@ -76,7 +75,10 @@ pub async fn terminal_ws_upgrade(
 /// or until the host's drain bound forces an abort.
 async fn serve_socket<S>(lease: SocketLease, socket: S, state: AppState, peer: SocketAddr)
 where
-    S: Stream<Item = Result<Message, axum::Error>> + Sink<Message, Error = axum::Error> + Send + 'static,
+    S: Stream<Item = Result<Message, axum::Error>>
+        + Sink<Message, Error = axum::Error>
+        + Send
+        + 'static,
 {
     let stop = lease.stop_token();
     lease.run(run(socket, state, peer, stop)).await;
@@ -112,7 +114,10 @@ where
 
 async fn run<S>(socket: S, state: AppState, peer: SocketAddr, stop: CancellationToken)
 where
-    S: Stream<Item = Result<Message, axum::Error>> + Sink<Message, Error = axum::Error> + Send + 'static,
+    S: Stream<Item = Result<Message, axum::Error>>
+        + Sink<Message, Error = axum::Error>
+        + Send
+        + 'static,
 {
     let (sink, mut stream) = socket.split();
     let (tx, rx) = mpsc::channel::<Message>(MAX_RECONNECT_FRAMES);
@@ -125,7 +130,10 @@ where
     // #851: per-connection client id (opaque, sequential) — identifies the
     // connection for the "single size owner" (last writer wins) marker and
     // logs. Never exposed to the peer.
-    let client_id = format!("termconn-{}", NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed));
+    let client_id = format!(
+        "termconn-{}",
+        NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed)
+    );
     // Per-terminal output forwarding tasks.
     let attachments: HashMap<String, Attachment> = HashMap::new();
 
@@ -135,38 +143,17 @@ where
         info!("[terminal-ws] client connected (ungated — handshake required)");
     }
 
-    let event_tx = tx.clone();
-    let event_state = state.clone();
-    let event_authorized = authorized.clone();
-    let mut event_rx = event_state.terminal_events.subscribe();
-    let event_task = tokio::spawn(async move {
-        loop {
-            match event_rx.recv().await {
-                Ok(event) => {
-                    let terminal_id = event.terminal_id().to_string();
-                    // Only forward events for terminals this connection is
-                    // authorized to see.
-                    if !event_authorized.read().contains(&terminal_id) {
-                        continue;
-                    }
-                    let payload = serde_json::to_value(&event).unwrap_or_else(|_| json!({}));
-                    if send_json(&event_tx, json!({ "type": "event", "payload": payload }))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    warn!("[terminal-ws] lifecycle event receiver lagged by {skipped}");
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    });
+    let attaching = command_editor::AttachRegistry::default();
+    let event_task = command_editor::spawn_event_forwarder(
+        tx.clone(),
+        state.terminal_events.subscribe(),
+        authorized.clone(),
+        attaching.clone(),
+    );
 
     let ctx = ConnectionContext {
         authorized: authorized.clone(),
+        attaching,
         attachments,
         // Every connection starts un-authed, gated or not; only a valid
         // `authenticate` handshake flips it.
@@ -211,23 +198,11 @@ where
                 continue;
             }
         };
-        let id = request.id.clone();
-        let op_type = request.type_.clone();
-        info!("[terminal-ws] request start type={op_type} id={id}");
-        let handled = tokio::select! {
-            biased;
-            () = stop.cancelled() => break,
-            handled = handle(request, &state, &tx, &mut session.ctx) => handled,
-        };
-        match handled {
-            Ok(data) => {
-                info!("[terminal-ws] request success type={op_type} id={id}");
-                let _ = send_json(&tx, json!({ "id": id, "success": true, "data": data })).await;
-            }
-            Err((code, message)) => {
-                warn!("[terminal-ws] request failed type={op_type} id={id} code={code}");
-                let _ = send_error(&tx, &id, code, message).await;
-            }
+        if command_editor::serve_request(request, &state, &tx, &mut session.ctx, &stop)
+            .await
+            .is_none()
+        {
+            break;
         }
     }
 
@@ -253,6 +228,7 @@ struct SessionTeardown {
 impl Drop for SessionTeardown {
     fn drop(&mut self) {
         self.event_task.abort();
+        command_editor::teardown(&self.ctx.client_id);
         self.ctx.release_all(&self.state);
     }
 }
@@ -314,6 +290,8 @@ impl Drop for PendingAttachCount {
 struct ConnectionContext {
     /// Terminal IDs this connection is authorized to operate on.
     authorized: Arc<RwLock<HashSet<String>>>,
+    /// SessionLifecycle events buffered while that terminal's attach replay is in flight.
+    attaching: command_editor::AttachRegistry,
     /// Per-terminal output forwarding attachments (terminal_id -> attachment).
     attachments: HashMap<String, Attachment>,
     /// Whether this connection has completed a valid `authenticate`
@@ -377,6 +355,7 @@ impl ConnectionContext {
             attachment.end(&state.pty, terminal_id);
         }
         self.authorized.write().remove(terminal_id);
+        self.attaching.write().forget(terminal_id);
     }
 
     /// Connection teardown: end every attachment, releasing each exactly once
@@ -418,15 +397,16 @@ async fn handle(
             }
             // Handshake checks run FIRST (gated and ungated alike) so a stale
             // tab learns it must reload even when its token is also wrong.
-            let identity = validate_authenticate_handshake(&request.payload).map_err(|refusal| {
-                warn!(
-                    "[terminal-ws] authenticate rejected id={} check={} code={}",
-                    request.id,
-                    refusal.check,
-                    refusal.terminal_code()
-                );
-                (refusal.terminal_code(), refusal.message)
-            })?;
+            let identity =
+                validate_authenticate_handshake(&request.payload).map_err(|refusal| {
+                    warn!(
+                        "[terminal-ws] authenticate rejected id={} check={} code={}",
+                        request.id,
+                        refusal.check,
+                        refusal.terminal_code()
+                    );
+                    (refusal.terminal_code(), refusal.message)
+                })?;
             // Gated: validate the presented token (constant-time). A wrong
             // or absent token refuses with the single generic UNAUTHORIZED
             // and leaves the connection un-authed (retry allowed) — the same
@@ -461,6 +441,16 @@ async fn handle(
         ConnectionGate::Allow => match request.type_.as_str() {
             "spawn" => commands::spawn(&request, state, ctx).await,
             "write" => commands::write(&request, state, ctx).await,
+            command_editor::SUBMIT => command_editor::submit(&request, state, ctx).await,
+            command_editor::RESTORE_PROMPT => {
+                command_editor::restore_prompt(&request, state, ctx).await
+            }
+            command_editor::REQUEST_COMPLETION => {
+                command_editor::request_completion(&request, state, ctx, tx).await
+            }
+            command_editor::CANCEL_COMPLETION => {
+                command_editor::cancel_completion(&request, state, ctx).await
+            }
             "resize" => {
                 let terminal_id = string_field(&request.payload, "terminalId")?;
                 if !ctx.is_authorized(terminal_id) {
@@ -509,7 +499,9 @@ async fn handle(
                 // The credential is the gate now (same-connection prior
                 // authorization no longer is): verified attach authorizes the
                 // connection for write/resize/events on this terminal.
-                ctx.authorize(&terminal_id);
+                // Mark attaching first so live SessionLifecycle is buffered
+                // until the replayed session events are sent.
+                let _attaching = ctx.begin_attach(&terminal_id);
                 // CodeRabbit (story 5 reattach): track live attachments so
                 // `list_preserved` never reissues a claim under a live forwarder
                 // — a second connection's reload must not invalidate the first
@@ -542,7 +534,9 @@ async fn handle(
                 // with `reset`.
                 let replay = instance.subscribe_from(last_seq, log_epoch);
                 let attach_result = state.pty.build_attach_result(&instance, &replay);
-                let snapshot = state.terminal_events.snapshot(&terminal_id);
+                let (session_snapshot, snapshot) = instance
+                    .session_gate
+                    .attach_snapshot(&state.terminal_events, &terminal_id);
 
                 // Send replay frame: chunks + gap flag + latest seq + state snapshot.
                 let chunk_payloads: Vec<Value> = replay
@@ -577,6 +571,13 @@ async fn handle(
                 )
                 .await
                 .map_err(|e| ("NETWORK_ERROR", e))?;
+                let sequence =
+                    command_editor::send_authentic_session(tx, session_snapshot, &terminal_id)
+                        .await
+                        .map_err(|e| ("NETWORK_ERROR", e))?;
+                ctx.finish_attach(tx, &terminal_id, sequence)
+                    .await
+                    .map_err(|e| ("NETWORK_ERROR", e))?;
 
                 let output_tx = tx.clone();
                 let attached_id = terminal_id.clone();
@@ -779,6 +780,8 @@ async fn send_error(
     .await
 }
 
+#[cfg(test)]
+mod command_editor_tests;
 #[cfg(test)]
 mod command_tests;
 #[cfg(test)]
