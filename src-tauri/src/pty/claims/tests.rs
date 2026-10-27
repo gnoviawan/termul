@@ -318,7 +318,10 @@ fn rotate_severs_all_shared_holders() {
 
     let successor = registry.rotate("t1", &shared, Some("p1")).unwrap();
     let g1 = registry.generation("t1").unwrap();
-    assert!(g1 > g0, "rotate bumps the generation even from a shared holder");
+    assert!(
+        g1 > g0,
+        "rotate bumps the generation even from a shared holder"
+    );
     assert!(registry.verify("t1", &successor, Some("p1")).is_ok());
     assert_eq!(registry.verify("t1", &primary, Some("p1")), Err(ClaimError));
     assert_eq!(registry.verify("t1", &shared, Some("p1")), Err(ClaimError));
@@ -392,4 +395,72 @@ fn shared_holder_cap_never_evicts_the_primary_credential() {
     // The spawn credential outlives any number of co-attacher cycles.
     assert!(registry.verify("t1", &primary, Some("p1")).is_ok());
     assert!(registry.holder_count("t1") == MAX_SHARED_HOLDERS);
+}
+
+#[test]
+fn generation_holds_matches_captured_or_wildcard() {
+    assert!(generation_holds(Some(3), Some(3)));
+    assert!(!generation_holds(Some(3), Some(4)));
+    assert!(generation_holds(None, Some(9)));
+    assert!(generation_holds(Some(3), None));
+}
+
+#[test]
+fn with_matching_generation_skips_op_after_rotate() {
+    let registry = TerminalClaimRegistry::new();
+    let old = registry.issue("t1", None);
+    let captured = registry.generation("t1");
+    let mut ran = false;
+    assert_eq!(
+        registry.with_matching_generation("t1", captured, || {
+            ran = true;
+            "wrote"
+        }),
+        Some("wrote")
+    );
+    assert!(ran);
+    registry.rotate("t1", &old, None).unwrap();
+    ran = false;
+    assert_eq!(
+        registry.with_matching_generation("t1", captured, || {
+            ran = true;
+            "wrote"
+        }),
+        None
+    );
+    assert!(!ran);
+}
+
+#[test]
+fn with_matching_generation_holds_registry_lock_across_op() {
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let registry = Arc::new(TerminalClaimRegistry::new());
+    let credential = registry.issue("t1", None);
+    let captured = registry.generation("t1");
+    let (started_tx, started_rx) = mpsc::sync_channel(0);
+    let (release_tx, release_rx) = mpsc::sync_channel(0);
+
+    let writer_registry = Arc::clone(&registry);
+    let writer = std::thread::spawn(move || {
+        writer_registry.with_matching_generation("t1", captured, || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            "wrote"
+        })
+    });
+    started_rx.recv().unwrap();
+
+    let rotator_registry = Arc::clone(&registry);
+    let rotator = std::thread::spawn(move || rotator_registry.rotate("t1", &credential, None));
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        !rotator.is_finished(),
+        "rotate must wait for the in-flight write"
+    );
+    release_tx.send(()).unwrap();
+    assert_eq!(writer.join().unwrap(), Some("wrote"));
+    assert!(rotator.join().unwrap().is_ok());
 }

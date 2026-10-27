@@ -26,7 +26,15 @@ pub(super) async fn restore_prompt(
 ) -> Result<Value, Failure> {
     let terminal_id = authorized_terminal_id(request, ctx, &state.pty)?;
     tracing::debug!("[command-editor] restore prompt received terminal_id={terminal_id}");
-    let result = rpc::restore_prompt(&state.pty, terminal_id, ctx.capabilities.write).await;
+    let lease = write_lease(ctx, &state.pty, terminal_id);
+    let result = rpc::restore_prompt_authorized(
+        &state.pty,
+        terminal_id,
+        ctx.capabilities.write,
+        Some(&lease),
+    )
+    .await
+    .map_err(|_| stale_claim(terminal_id))?;
     serde_json::to_value(result).map_err(|e| ("RESTORE_PROMPT_FAILED", e.to_string()))
 }
 
@@ -41,7 +49,16 @@ pub(super) async fn submit(
         .as_str()
         .ok_or(("INVALID_PAYLOAD", "Missing or invalid draft".to_string()))?;
     tracing::debug!("[command-editor] submit received terminal_id={terminal_id}");
-    let result = rpc::submit(&state.pty, terminal_id, draft, ctx.capabilities.write).await;
+    let lease = write_lease(ctx, &state.pty, terminal_id);
+    let result = rpc::submit_authorized(
+        &state.pty,
+        terminal_id,
+        draft,
+        ctx.capabilities.write,
+        Some(&lease),
+    )
+    .await
+    .map_err(|_| stale_claim(terminal_id))?;
     serde_json::to_value(result).map_err(|e| ("SUBMIT_FAILED", e.to_string()))
 }
 
@@ -57,8 +74,16 @@ pub(super) async fn request_completion(
     tracing::debug!("[command-editor] completion admission terminal_id={terminal_id}");
     let local_id = completion.request_id.clone();
     completion.request_id = rpc::owned_request_id(&ctx.client_id, &local_id);
-    let start =
-        rpc::admit_completion(&state.pty, terminal_id, &completion, ctx.capabilities.write).await;
+    let lease = write_lease(ctx, &state.pty, terminal_id);
+    let start = rpc::admit_completion_authorized(
+        &state.pty,
+        terminal_id,
+        &completion,
+        ctx.capabilities.write,
+        Some(&lease),
+    )
+    .await
+    .map_err(|_| stale_claim(terminal_id))?;
     queue_completion_wait(
         ctx.client_id.clone(),
         request.id.clone(),
@@ -109,11 +134,21 @@ pub(super) fn claim_generation_holds(
 ) -> bool {
     match authorized.get(terminal_id) {
         None => false,
-        Some(captured) => match current {
-            None => true,
-            Some(current) => captured.is_none_or(|captured| captured == current),
-        },
+        Some(captured) => crate::pty::claims::generation_holds(*captured, current),
     }
+}
+
+fn write_lease<'a>(
+    ctx: &'a ConnectionContext,
+    pty: &'a PtyManager,
+    terminal_id: &'a str,
+) -> crate::pty::claims::ClaimWriteLease<'a> {
+    pty.claim_write_lease(terminal_id, ctx.captured_generation(terminal_id))
+}
+
+fn stale_claim(terminal_id: &str) -> Failure {
+    tracing::warn!("[command-editor] stale claim generation terminal_id={terminal_id}");
+    unauthorized_error(terminal_id)
 }
 
 #[derive(Default)]

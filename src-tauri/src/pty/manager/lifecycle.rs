@@ -3,6 +3,18 @@ use super::*;
 impl PtyManager {
     /// Write data to a terminal
     pub async fn write(&self, id: &str, data: &str) -> Result<(), String> {
+        self.write_authorized(id, data, None).await
+    }
+
+    /// Write to a terminal, refusing the bytes when `authorization` no longer
+    /// matches. Generation is checked under the claims lock that rotate/revoke
+    /// use to bump it, after this method holds the writer lock.
+    pub async fn write_authorized(
+        &self,
+        id: &str,
+        data: &str,
+        authorization: Option<&crate::pty::claims::ClaimWriteLease<'_>>,
+    ) -> Result<(), String> {
         let instance = self
             .terminals
             .read()
@@ -16,14 +28,21 @@ impl PtyManager {
             .as_mut()
             .ok_or_else(|| "PTY writer unavailable".to_string())?;
 
-        writer
-            .write_all(data.as_bytes())
-            .map_err(|e| format!("Failed to write to PTY: {}", e))?;
-        writer
-            .flush()
-            .map_err(|e| format!("Failed to flush PTY: {}", e))?;
-
-        Ok(())
+        let mut write = || {
+            writer
+                .write_all(data.as_bytes())
+                .map_err(|e| format!("Failed to write to PTY: {}", e))?;
+            writer
+                .flush()
+                .map_err(|e| format!("Failed to flush PTY: {}", e))?;
+            Ok(())
+        };
+        match authorization {
+            None => write(),
+            Some(lease) => lease
+                .if_current(write)
+                .unwrap_or_else(|| Err("Unauthorized".to_string())),
+        }
     }
 
     /// Resize a terminal
@@ -54,7 +73,7 @@ impl PtyManager {
 
                 *instance.cols.write() = cols;
                 *instance.rows.write() = rows;
-                        return Ok(());
+                return Ok(());
             }
         }
 
@@ -298,6 +317,15 @@ impl PtyManager {
         self.claims.generation(terminal_id)
     }
 
+    /// Lease that re-checks `captured` under the claims lock around a PTY write.
+    pub fn claim_write_lease<'a>(
+        &'a self,
+        terminal_id: &'a str,
+        captured: Option<u64>,
+    ) -> crate::pty::claims::ClaimWriteLease<'a> {
+        crate::pty::claims::ClaimWriteLease::new(&self.claims, terminal_id, captured)
+    }
+
     /// Build the shared attach result (byte-identical camelCase shape on both
     /// transports). Resolves the terminal's LIVE cwd from the `CwdTracker`,
     /// falling back to the spawn-time cwd when no tracked value exists.
@@ -376,7 +404,7 @@ impl PtyManager {
                 None => continue,
             };
 
-                let project_id = instance.project_id.clone();
+            let project_id = instance.project_id.clone();
 
             // Wrap blocking cleanup in spawn_blocking to avoid panic
             let instance_clone = instance.clone();
@@ -550,9 +578,13 @@ impl PtyManager {
     pub fn set_hidden(&self, hidden: bool) {
         self.is_hidden.store(hidden, Ordering::Relaxed);
         if hidden {
-            log::info!("[PtyManager] App window hidden — killing and exited-terminal cleanup deferred");
+            log::info!(
+                "[PtyManager] App window hidden — killing and exited-terminal cleanup deferred"
+            );
         } else {
-            log::info!("[PtyManager] App window visible — killing and exited-terminal cleanup resumed");
+            log::info!(
+                "[PtyManager] App window visible — killing and exited-terminal cleanup resumed"
+            );
         }
     }
 

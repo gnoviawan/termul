@@ -361,6 +361,10 @@ impl ConnectionContext {
         command_editor::claim_generation_holds(&self.authorized.read(), terminal_id, current)
     }
 
+    fn captured_generation(&self, terminal_id: &str) -> Option<u64> {
+        self.authorized.read().get(terminal_id).copied().flatten()
+    }
+
     fn detach(&mut self, terminal_id: &str, state: &AppState) {
         // The aborted forwarder never reaches its own release path — end()
         // releases the live-attachment accounting (rotate/revoke tear-down;

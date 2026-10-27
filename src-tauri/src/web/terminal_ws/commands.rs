@@ -173,8 +173,17 @@ pub(super) async fn write(
             if let Some(instance) = pty.get(&owned_terminal) {
                 instance.note_web_size_owner(&client_id);
             }
-            match pty.write(&owned_terminal, &owned_data).await {
+            let captured = authorized.read().get(&owned_terminal).copied().flatten();
+            let lease = pty.claim_write_lease(&owned_terminal, captured);
+            match pty
+                .write_authorized(&owned_terminal, &owned_data, Some(&lease))
+                .await
+            {
                 Ok(()) => Effect::Done(()),
+                Err(message) if message == "Unauthorized" => Effect::Released {
+                    code: "UNAUTHORIZED",
+                    message: format!("Not authorized for terminal {owned_terminal}"),
+                },
                 Err(message) => Effect::Failed {
                     code: "WRITE_FAILED",
                     message,

@@ -1984,3 +1984,83 @@ async fn completion_failures_replay_desync() {
         state.pty.force_kill(&session.id).await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn in_flight_session_writes_refuse_after_revoke_while_writer_is_held() {
+    use super::command_editor::{REQUEST_COMPLETION, SUBMIT};
+    for (name, payload_for) in [
+        (
+            SUBMIT,
+            (|id: &str| json!({"terminalId": id, "draft": "git sta"}))
+                as fn(&str) -> serde_json::Value,
+        ),
+        (
+            RESTORE_PROMPT,
+            (|id: &str| json!({"terminalId": id})) as fn(&str) -> serde_json::Value,
+        ),
+        (
+            REQUEST_COMPLETION,
+            (|id: &str| {
+                json!({
+                    "terminalId": id,
+                    "requestId": "r1",
+                    "bufferRevision": 1,
+                    "cursor": 7,
+                    "draft": "git status",
+                    "promptGeneration": 1,
+                    "cwd": "/tmp"
+                })
+            }) as fn(&str) -> serde_json::Value,
+        ),
+    ] {
+        let state = super::tests::gate_test_state(None);
+        let session = adopt_session(&state).await;
+        let mut owner = super::tests::gate_test_ctx(true);
+        let mut other = super::tests::gate_test_ctx(true);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+        super::tests::attach_terminal(&state, &tx, &mut owner, &session.id, &session.claim).await;
+        let instance = state.pty.get(&session.id).unwrap();
+        let notified = instance.session_gate.about_to_lock_writer.notified();
+        let hold = instance.writer.lock().await;
+        let request = super::Request {
+            id: format!("in-flight-{name}"),
+            type_: name.into(),
+            payload: payload_for(&session.id),
+            command_id: None,
+        };
+        let refused = {
+            let submit = super::handle(request, &state, &tx, &mut owner);
+            tokio::pin!(submit);
+            tokio::pin!(notified);
+            tokio::select! {
+                biased;
+                () = &mut notified => {}
+                result = &mut submit => panic!("{name} finished while the writer lock was held: {result:?}"),
+            }
+            super::handle(
+                revoke_request(&session.id, &session.claim, &format!("rev-{name}")),
+                &state,
+                &tx,
+                &mut other,
+            )
+            .await
+            .expect("other connection revokes while the write waits");
+            drop(hold);
+            submit.await
+        };
+        assert_eq!(
+            refused.expect_err("stale in-flight write").0,
+            "UNAUTHORIZED",
+            "{name} must not complete after revoke"
+        );
+        let written = session.bytes.lock().unwrap().clone();
+        let text = String::from_utf8_lossy(&written);
+        assert!(
+            !text.contains("git sta") && !text.contains("GEN-ONE") && restore_count(&session) == 0,
+            "{name} must not write after revoke: {text:?}"
+        );
+        owner.release_all(&state);
+        other.release_all(&state);
+        state.pty.force_kill(&session.id).await.unwrap();
+    }
+}

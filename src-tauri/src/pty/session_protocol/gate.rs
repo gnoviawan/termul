@@ -15,6 +15,7 @@ use super::frame::SessionRpcResult;
 pub use super::suppression::SuppressionEndReason;
 use super::suppression::SuppressionWindow;
 use super::{CLEAR_LINE_SEQUENCE, RESTORE_PROMPT_SEQUENCE};
+use crate::pty::claims::{ClaimError, ClaimWriteLease};
 
 /// Maximum time submit waits for shell generators to finish before falling back to raw.
 pub(crate) const GENERATOR_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -127,6 +128,10 @@ pub struct SessionGate {
     pub(super) generator_finished: Notify,
     pub(super) trust_loss_sink: OnceLock<TrustLossSink>,
     exit_codes: OnceLock<Arc<crate::trackers::ExitCodeTracker>>,
+    /// Test hook: fired immediately before each writer-lock wait so a
+    /// regression can revoke the claim while the lock is still held.
+    #[cfg(test)]
+    pub(crate) about_to_lock_writer: Notify,
 }
 
 impl SessionGate {
@@ -144,7 +149,15 @@ impl SessionGate {
             generator_finished: Notify::new(),
             trust_loss_sink: OnceLock::new(),
             exit_codes: OnceLock::new(),
+            #[cfg(test)]
+            about_to_lock_writer: Notify::new(),
         }
+    }
+
+    #[allow(clippy::unused_self)]
+    fn notify_about_to_lock_writer(&self) {
+        #[cfg(test)]
+        self.about_to_lock_writer.notify_waiters();
     }
 
     /// Hands the PTY's exit-code tracker to lifecycle delivery.
@@ -365,43 +378,65 @@ impl SessionGate {
         provider: &CompletionProvider,
         allow_write: bool,
     ) -> CompletionStart {
+        self.request_completion_authorized(request, provider, allow_write, None)
+            .await
+            .unwrap_or_else(|_| CompletionStart::without_waiter(SessionRpcResult::NotStarted))
+    }
+
+    /// Same as [`Self::request_completion`], refusing the trigger write when
+    /// `authorization` no longer matches. Generation is checked under the
+    /// claims lock that rotate/revoke use to bump it.
+    pub async fn request_completion_authorized(
+        &self,
+        request: &CompletionRequest,
+        provider: &CompletionProvider,
+        allow_write: bool,
+        authorization: Option<&ClaimWriteLease<'_>>,
+    ) -> Result<CompletionStart, ClaimError> {
         if !allow_write || !provider.restorable || !self.trusted_at_prompt() {
-            return CompletionStart::without_waiter(SessionRpcResult::NotStarted);
+            return Ok(CompletionStart::without_waiter(
+                SessionRpcResult::NotStarted,
+            ));
         }
         let Some(trigger) = completion_trigger(request, provider) else {
-            return CompletionStart::without_waiter(SessionRpcResult::NotStarted);
+            return Ok(CompletionStart::without_waiter(
+                SessionRpcResult::NotStarted,
+            ));
         };
         let request_id = request.request_id.as_str();
+        self.notify_about_to_lock_writer();
         let mut guard = self.writer.lock().await;
-        // Lock order: writer -> publication -> prompt -> completion; no await below.
-        let _publication = self.publication.lock();
-        // Keep trust locked through the write and state update so restore failure cannot overtake them.
-        let mut trusted_at_prompt = self.trusted_at_prompt.lock();
-        let mut completion = self.completion.lock();
-        if !trusted_at_prompt
-            .as_ref()
-            .is_some_and(|prompt| prompt.matches(request))
-            || completion.occupied()
-        {
-            return CompletionStart::without_waiter(SessionRpcResult::NotStarted);
-        }
-        self.suppression.start(request_id);
-        let result = Self::write_and_flush(&mut guard, &[&trigger]);
-        if result != SessionRpcResult::Accepted {
-            self.end_suppression(SuppressionEndReason::TrustLost);
-            if result == SessionRpcResult::Partial {
-                *trusted_at_prompt = None;
-                self.set_host_phase(SessionPhase::Raw);
+        authorized_write(authorization, || {
+            // Lock order: writer -> claims -> publication -> prompt -> completion; no await below.
+            let _publication = self.publication.lock();
+            // Keep trust locked through the write and state update so restore failure cannot overtake them.
+            let mut trusted_at_prompt = self.trusted_at_prompt.lock();
+            let mut completion = self.completion.lock();
+            if !trusted_at_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.matches(request))
+                || completion.occupied()
+            {
+                return CompletionStart::without_waiter(SessionRpcResult::NotStarted);
             }
-            return CompletionStart::without_waiter(result);
-        }
-        let (epoch, waiter) =
-            completion.admit(request.clone(), self.session_identity.lock().issued.clone());
-        CompletionStart {
-            result: SessionRpcResult::Accepted,
-            waiter: Some(waiter),
-            epoch: Some(epoch),
-        }
+            self.suppression.start(request_id);
+            let result = Self::write_and_flush(&mut guard, &[&trigger]);
+            if result != SessionRpcResult::Accepted {
+                self.end_suppression(SuppressionEndReason::TrustLost);
+                if result == SessionRpcResult::Partial {
+                    *trusted_at_prompt = None;
+                    self.set_host_phase(SessionPhase::Raw);
+                }
+                return CompletionStart::without_waiter(result);
+            }
+            let (epoch, waiter) =
+                completion.admit(request.clone(), self.session_identity.lock().issued.clone());
+            CompletionStart {
+                result: SessionRpcResult::Accepted,
+                waiter: Some(waiter),
+                epoch: Some(epoch),
+            }
+        })
     }
 
     /// Returns true while completion output suppression is active.
@@ -416,11 +451,29 @@ impl SessionGate {
 
     /// Clears the shell line and writes the draft once under the writer lock.
     pub async fn submit(&self, draft: &str, allow_write: bool) -> SessionRpcResult {
+        self.submit_authorized(draft, allow_write, None)
+            .await
+            .unwrap_or(SessionRpcResult::NotStarted)
+    }
+
+    /// Same as [`Self::submit`], refusing the draft write when `authorization`
+    /// no longer matches. After drain/paste waits, generation is checked under
+    /// the claims lock that rotate/revoke use to bump it.
+    pub async fn submit_authorized(
+        &self,
+        draft: &str,
+        allow_write: bool,
+        authorization: Option<&ClaimWriteLease<'_>>,
+    ) -> Result<SessionRpcResult, ClaimError> {
         let result = async {
             if !allow_write {
-                return SessionRpcResult::NotStarted;
+                return Ok(SessionRpcResult::NotStarted);
             }
+            self.notify_about_to_lock_writer();
             let mut guard = self.writer.lock().await;
+            if authorization.is_some_and(|lease| !lease.is_current()) {
+                return Err(ClaimError);
+            }
             let cancelled_epoch = self.cancel_active_completion();
             if !self.drain_generators().await {
                 {
@@ -433,15 +486,23 @@ impl SessionGate {
                 }
                 drop(guard);
                 self.notify_trust_loss(SuppressionEndReason::DrainTimeout);
-                return SessionRpcResult::NotStarted;
+                return Ok(SessionRpcResult::NotStarted);
             }
             self.wait_for_bracketed_paste().await;
-            let result = self.write_submitted_draft(&mut guard, draft);
+            let result = authorized_write(authorization, || {
+                self.write_submitted_draft(&mut guard, draft)
+            })?;
             drop(guard);
-            result
+            Ok(result)
         }
         .await;
-        Self::log_write_result("submit", result)
+        match result {
+            Ok(result) => Ok(Self::log_write_result("submit", result)),
+            Err(error) => {
+                tracing::warn!("[session-gate] submit result=Unauthorized");
+                Err(error)
+            }
+        }
     }
 
     async fn wait_for_bracketed_paste(&self) {
@@ -500,24 +561,44 @@ impl SessionGate {
 
     /// Restores the shell prompt without a draft under the writer lock, without requiring trust.
     pub async fn restore_prompt(&self, allow_write: bool) -> SessionRpcResult {
+        self.restore_prompt_authorized(allow_write, None)
+            .await
+            .unwrap_or(SessionRpcResult::NotStarted)
+    }
+
+    /// Same as [`Self::restore_prompt`], refusing the sequence write when
+    /// `authorization` no longer matches. Generation is checked under the
+    /// claims lock that rotate/revoke use to bump it.
+    pub async fn restore_prompt_authorized(
+        &self,
+        allow_write: bool,
+        authorization: Option<&ClaimWriteLease<'_>>,
+    ) -> Result<SessionRpcResult, ClaimError> {
         if !allow_write {
-            return Self::log_write_result("restore_prompt", SessionRpcResult::NotStarted);
+            return Ok(Self::log_write_result(
+                "restore_prompt",
+                SessionRpcResult::NotStarted,
+            ));
         }
+        self.notify_about_to_lock_writer();
         let mut guard = self.writer.lock().await;
-        let publication = self.publication.lock();
-        let mut state = publication.get();
-        if state.restored_epoch == Some(state.restore_epoch) {
-            return Self::log_write_result("restore_prompt", SessionRpcResult::Accepted);
-        }
-        let result = Self::write_and_flush(&mut guard, &[RESTORE_PROMPT_SEQUENCE.as_bytes()]);
-        if matches!(
-            result,
-            SessionRpcResult::Accepted | SessionRpcResult::Partial
-        ) {
-            state.restored_epoch = Some(state.restore_epoch);
-            publication.set(state);
-        }
-        Self::log_write_result("restore_prompt", result)
+        let result = authorized_write(authorization, || {
+            let publication = self.publication.lock();
+            let mut state = publication.get();
+            if state.restored_epoch == Some(state.restore_epoch) {
+                return SessionRpcResult::Accepted;
+            }
+            let result = Self::write_and_flush(&mut guard, &[RESTORE_PROMPT_SEQUENCE.as_bytes()]);
+            if matches!(
+                result,
+                SessionRpcResult::Accepted | SessionRpcResult::Partial
+            ) {
+                state.restored_epoch = Some(state.restore_epoch);
+                publication.set(state);
+            }
+            result
+        })?;
+        Ok(Self::log_write_result("restore_prompt", result))
     }
 
     fn write_and_flush(
@@ -543,6 +624,16 @@ impl SessionGate {
             tracing::warn!("[session-gate] {operation} result={result:?}");
         }
         result
+    }
+}
+
+fn authorized_write<T>(
+    authorization: Option<&ClaimWriteLease<'_>>,
+    op: impl FnOnce() -> T,
+) -> Result<T, ClaimError> {
+    match authorization {
+        None => Ok(op()),
+        Some(lease) => lease.if_current(op).ok_or(ClaimError),
     }
 }
 
