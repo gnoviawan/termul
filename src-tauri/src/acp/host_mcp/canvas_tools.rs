@@ -31,8 +31,8 @@ const CANVAS_GUIDE: &str = "Design canvas: this project has a design canvas, Ter
 Figma-class editor. Its document is the project's .figcraft file (design.figcraft by default). \
 When the user asks for a design, mockup, wireframe, screen or anything \"on the canvas\", build it \
 with this server's canvas tools: create_node, set_properties, list_commands, run_command, batch, \
-inspect_document, get_node, select, screenshot, export, undo and redo (pointer, key, type_text and \
-inspect_ui drive the editor UI and need the canvas on screen). save_file saves the document; \
+list_issues, inspect_document, get_node, select, screenshot, export, undo and redo (pointer, key, \
+type_text and inspect_ui drive the editor UI and need the canvas on screen). save_file saves the document; \
 Termul chooses the file and ignores any path you pass. Do not create or edit .figcraft, .pen or \
 .op files on disk, do not call open_file, and do not look for other design tools, MCP servers or \
 canvas apps: these tools are the canvas. Agents cannot open the canvas. A CANVAS_CLOSED error \

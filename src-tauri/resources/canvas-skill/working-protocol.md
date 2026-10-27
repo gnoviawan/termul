@@ -39,7 +39,17 @@ For a thin prompt, read `vague-prompts` first.
 
 ## 6. Check the section, then fix it
 
-After every section, call `screenshot` with the section's id and compare it with this checklist. Call `get_node` on anything that looks wrong to find the cause.
+Read the result first. When a `create_node`, `set_properties`, `run_command` or `batch` call leaves a layout problem on a layer it touched, its result lists it under `issues`. Each issue has the layer's `id`, a `kind` and a `message` that says what to change:
+
+- `invisible_text`: the text has no visible fill.
+- `low_contrast`: the text colour is too close to what is behind it.
+- `clipped`: a frame that clips its content cuts the text off, or hides a layer completely.
+- `collapsed`: a frame or a text layer is 0 wide or 0 high.
+- `missing_glyph`: no font draws some of the characters, so they show as boxes.
+
+Fix every issue in your next call, before you build more. A `batch` with issues returns `{"results": [...], "names": {...}, "issues": [...]}`, with `names` only when a step is named. The `warnings` in a result say how the canvas read your input. For example, an `x` or `y` on a child of an auto-layout frame is ignored, so leave them out there.
+
+Then call `screenshot` with the section's id and compare it with this checklist. Call `get_node` on anything that looks wrong to find the cause.
 
 - [ ] Nothing has collapsed: no frame is 0 wide or 0 high, and no text layer is 0 wide.
 - [ ] Nothing is cut off: every text layer fits inside its parent, and no line runs past the edge.
@@ -61,6 +71,7 @@ Fix what fails before you start the next section:
 
 ## 7. Finish
 
+- Call `list_issues` with the root frame's id, and fix everything it lists.
 - Call `screenshot` on the root frame and check the whole design against the checklist once more, at a glance this time: does it look like one design?
 - Call `save_file`.
 - Reply in a few lines: what you made, the style you used, and one or two things the user could ask for next. Do not describe every layer.
