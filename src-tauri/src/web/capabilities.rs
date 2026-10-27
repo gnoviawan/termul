@@ -237,6 +237,7 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         | "list_agents"
         | "list_acp_catalog"
         | "fetch_acp_registry_snapshot"
+        | "search_mcp_catalog"
         | "list_claude_accounts"
         | "list_claude_usage"
         | "store_read"

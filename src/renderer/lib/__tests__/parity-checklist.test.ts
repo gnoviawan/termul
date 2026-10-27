@@ -2486,3 +2486,57 @@ describe('Bug report parity (spec-bug-report-dialog)', () => {
     ).toBe(true)
   })
 })
+
+// MCP catalog search (spine AD-1): one host service, reached through
+// `GET /mcp-catalog/search` (web) and the `/ws` request `search_mcp_catalog`
+// (desktop channel and web socket). The Rust suite compares the two replies;
+// this block pins the wiring and the shared facade.
+describe('MCP catalog parity (spine AD-1)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const SHARED_TYPES = join(LIB_DIR, '..', '..', 'shared', 'types')
+
+  it('both carriers answer from the one host service', () => {
+    const dispatch = readFileSync(join(SRC_TAURI, 'web', 'ws', 'dispatch.rs'), 'utf-8')
+    expect(dispatch).toMatch(/"search_mcp_catalog" => \{\s*mcp_catalog::handle_search_mcp_catalog/)
+    const router = readFileSync(join(SRC_TAURI, 'web', 'router', 'mod.rs'), 'utf-8')
+    expect(router.match(/"\/mcp-catalog\/search", get\(mcp_catalog_api::search\)/g)).toHaveLength(2)
+    for (const adapter of [
+      join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'),
+      join(SRC_TAURI, 'web', 'ws', 'mcp_catalog.rs')
+    ]) {
+      expect(readFileSync(adapter, 'utf-8')).toMatch(
+        /McpCatalogService::shared\(\)\.await\.search\(&request\)/
+      )
+    }
+  })
+
+  it('search is a read every connection may make, behind the bearer gate on HTTP', () => {
+    const capabilities = readFileSync(join(SRC_TAURI, 'web', 'capabilities.rs'), 'utf-8')
+    expect(capabilities).toMatch(/\| "search_mcp_catalog"/)
+    const gate = readFileSync(join(SRC_TAURI, 'web', 'router', 'gate.rs'), 'utf-8')
+    expect(gate).toMatch(/"\/mcp-catalog\/",/)
+    const protocol = readFileSync(join(SHARED_TYPES, 'web-protocol.types.ts'), 'utf-8')
+    expect(protocol).toMatch(/'search_mcp_catalog',/)
+    expect(protocol).toMatch(/search_mcp_catalog: \['read', null\]/)
+  })
+
+  it('the facade switches carriers and both impls share the contract types', () => {
+    const facade = readFileSync(join(LIB_DIR, 'mcp-catalog-api.ts'), 'utf-8')
+    expect(facade).toMatch(
+      /isTauriContext\(\)\s*\?\s*createDesktopMcpCatalogApi\(\)\s*:\s*webMcpCatalogApi/
+    )
+    const desktop = readFileSync(join(LIB_DIR, 'desktop-mcp-catalog-api.ts'), 'utf-8')
+    expect(desktop).toMatch(/getAcpTransport\(\)\.searchMcpCatalog\(request\)/)
+    expect(desktop).toMatch(/ipcResultFromTransport/)
+    const web = readFileSync(join(LIB_DIR, 'web-mcp-catalog-api.ts'), 'utf-8')
+    expect(web).toMatch(/\/mcp-catalog\/search/)
+    const transport = readTsModule(join(LIB_DIR, 'acp-transport'))
+    expect(transport).toMatch(/'search_mcp_catalog'/)
+    for (const impl of [desktop, web, facade]) {
+      expect(impl).toMatch(/from '@shared\/types\/mcp-catalog\.types'/)
+    }
+    const types = readFileSync(join(SHARED_TYPES, 'mcp-catalog.types.ts'), 'utf-8')
+    expect(types).toMatch(/export interface McpCatalogApi\b/)
+    expect(existsSync(join(LIB_DIR, 'mcp-catalog-api.test.ts'))).toBe(true)
+  })
+})

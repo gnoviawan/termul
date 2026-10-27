@@ -181,6 +181,11 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "fetch_acp_registry_snapshot" => {
             handle_fetch_acp_registry_snapshot(id, &req.payload, acp_catalog).await
         }
+        // MCP catalog (spine AD-1): host-side paged search over the bundled
+        // registry snapshot. Shares its service with `GET /mcp-catalog/search`.
+        "search_mcp_catalog" => {
+            mcp_catalog::handle_search_mcp_catalog(id, &req.payload).await
+        }
         // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web
         // client installs a catalog agent through `install_acp_agent`; the
         // host resolves the agent by id from the catalog, downloads the HTTPS

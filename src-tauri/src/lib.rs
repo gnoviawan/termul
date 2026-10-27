@@ -21,6 +21,7 @@ pub mod diagnostics;
 mod exit_cleanup;
 mod host_perimeter;
 mod logging;
+pub mod mcp_catalog;
 mod migrations;
 mod path_validation;
 // Console-window hiding + Windows kill-on-close Job Objects for spawned processes.

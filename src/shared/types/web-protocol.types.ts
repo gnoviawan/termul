@@ -184,6 +184,9 @@ export const WS_REQUEST_TYPES = [
   // 'background' }`, answered with the host's `AcpRegistrySnapshot`
   // (`source: 'cache'` when the registry was unreachable).
   'fetch_acp_registry_snapshot',
+  // MCP catalog (spine AD-1): `{ query?, cursor?, limit? }` → one
+  // `McpCatalogPage` of the host's converted registry snapshot. A read.
+  'search_mcp_catalog',
   // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web client
   // installs a catalog agent through `install_acp_agent` (the host downloads +
   // verifies sha256 + extracts + atomically activates). The request is
@@ -337,6 +340,7 @@ export const WS_COMMAND_CLASSES: Readonly<
   list_acp_catalog: ['read', null],
   set_catalog_opt_in: ['idempotent', null],
   fetch_acp_registry_snapshot: ['read', null],
+  search_mcp_catalog: ['read', null],
   install_acp_agent: ['command', 'payload'],
   acp_deliver_auth_redirect: ['command', 'receipt-only'],
   store_read: ['read', null],

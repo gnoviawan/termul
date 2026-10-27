@@ -483,6 +483,7 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `set_catalog_opt_in` | idempotent | Sets the host-persisted opt-in for registry augmentation of the catalog. |
 | `fetch_acp_registry_snapshot` | read | The registry check behind "Check for updates". Every check bypasses the cache TTL. |
 | `install_acp_agent` | command | Installs a catalog agent. The host downloads, verifies the sha256, extracts and activates it atomically. The request is `{agentId}` only. |
+| `search_mcp_catalog` | read | Searches the bundled MCP server catalog (`{query?, cursor?, limit?}`) and returns one ranked page, `{items, nextCursor, total, snapshotFetchedAt}`. The desktop sends it over its `ws_channel_*` relay, and `GET /mcp-catalog/search` gives a browser the same answer. |
 | `list_claude_accounts` | read | Returns the Claude Accounts snapshot. |
 | `list_claude_usage` | read | Returns Account usage windows. The host caches reads for 5 minutes. |
 | `set_default_claude_account` | idempotent | Chooses the Default Account. |

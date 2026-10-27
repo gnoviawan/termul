@@ -68,6 +68,7 @@ mod claude_accounts;
 mod commands;
 mod dispatch;
 mod lifecycle;
+mod mcp_catalog;
 mod projects;
 mod prompts;
 mod relay;
