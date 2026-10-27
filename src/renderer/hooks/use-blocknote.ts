@@ -7,6 +7,7 @@ import {
   defaultBlockSpecs
 } from '@blocknote/core'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createExternalLinkClickExtension } from '@/components/editor/external-link-click-extension'
 import { mermaidBlockSpec } from '@/components/editor/mermaid-block-spec'
 import { areTocHeadingsEqual, type TocHeading } from '@/hooks/use-toc-headings'
 import { requestSaveEditorFile } from '@/lib/editor-save'
@@ -49,6 +50,8 @@ interface UseBlockNoteOptions {
   filePath: string
   initialMarkdown: string
   onChange: (markdown: string) => void
+  /** A link in the document was clicked. Nothing is opened unless this does it. */
+  onLinkClick?: (href: string) => void
 }
 
 interface UseBlockNoteResult {
@@ -85,8 +88,11 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
   // Incrementing token to discard stale replace results
   const replaceTokenRef = useRef(0)
 
+  const onLinkClickRef = useRef(options.onLinkClick)
+
   onChangeRef.current = options.onChange
   filePathRef.current = options.filePath
+  onLinkClickRef.current = options.onLinkClick
 
   const saveShortcutExtension = useMemo(
     () =>
@@ -97,7 +103,10 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
             void requestSaveEditorFile(filePathRef.current)
             return true
           }
-        }
+        },
+        tiptapExtensions: [
+          createExternalLinkClickExtension((href) => onLinkClickRef.current?.(href))
+        ]
       }))(),
     []
   )

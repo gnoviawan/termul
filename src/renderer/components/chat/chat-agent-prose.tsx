@@ -4,25 +4,13 @@ import { toast } from 'sonner'
 import {
   type AllowedTags,
   type Components,
-  defaultComponents,
   defaultRemarkPlugins,
   type LinkSafetyConfig,
-  type LinkSafetyModalProps,
   Streamdown
 } from 'streamdown'
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle
-} from '@/components/ui/alert-dialog'
+import { ConfirmedExternalLink } from '@/components/external-link/ExternalLinkConfirm'
 import { useThrottledStreamingText } from '@/hooks/use-throttled-streaming-text'
-import { openerApi } from '@/lib/api'
 import { readAttachmentBytes } from '@/lib/attachment-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
@@ -105,54 +93,9 @@ const STREAMDOWN_ANIMATED = {
   stagger: 12
 } as const
 
-/**
- * Confirm external links, then hand off to the OS browser.
- *
- * `onLinkCheck` only decides whether to show the confirm UI (never opens).
- * Opening happens in the modal action so Streamdown's default `window.open`
- * path is not used and the dialog actually closes after confirm.
- */
-function StreamdownLinkSafetyModal({
-  isOpen,
-  onClose,
-  url
-}: LinkSafetyModalProps): React.JSX.Element {
-  return (
-    <AlertDialog
-      open={isOpen}
-      onOpenChange={(open) => {
-        if (!open) onClose()
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Open external link?</AlertDialogTitle>
-          <AlertDialogDescription className="break-all">{url}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={() => {
-              void openerApi.openUrlWithSystemBrowser(url)
-              onClose()
-            }}
-          >
-            Open
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  )
-}
-
-const LINK_SAFETY: LinkSafetyConfig = {
-  enabled: true,
-  // Always take the confirm path; never open from the check callback.
-  onLinkCheck: () => false,
-  renderModal: (props) => <StreamdownLinkSafetyModal {...props} />
-}
-
-const StreamdownLink = defaultComponents.a
+// Links are rendered by `ConfirmedExternalLink`; Streamdown's link safety would
+// add a second, competing confirm path that opens via `window.open`.
+const LINK_SAFETY_OFF: LinkSafetyConfig = { enabled: false }
 const LINK_CLASS = 'wrap-anywhere font-medium text-primary underline'
 
 function decodeFragment(href: string): string {
@@ -343,7 +286,6 @@ export function AgentProse({
   const text = useThrottledStreamingText(rawText, streaming)
   const colorTheme = useColorTheme()
   const shikiTheme = useMemo(() => syntaxShikiPair(colorTheme), [colorTheme])
-  const [externalUrl, setExternalUrl] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const components = useMemo<Components>(() => {
     const merged: Components = {
@@ -353,7 +295,7 @@ export function AgentProse({
         const alt = typeof props['data-alt'] === 'string' ? props['data-alt'] : ''
         return <TermulMarkdownImage url={url} alt={alt} cwd={filePathContext?.cwd} />
       },
-      a: ({ href, children, node, className, ...props }) => {
+      a: ({ href, children, node: _node, className, ...props }) => {
         if (href?.startsWith('#')) {
           const { target: _target, rel: _rel, ...anchorProps } = props
           return (
@@ -374,31 +316,19 @@ export function AgentProse({
             </a>
           )
         }
-        if (!filePathContext) {
-          return (
-            <StreamdownLink href={href} node={node} className={className} {...props}>
-              {children}
-            </StreamdownLink>
-          )
-        }
+        // Streamdown's own link safety is off (see `linkSafety` below): every
+        // external link, with or without a workspace, goes through the one
+        // confirm-then-open path.
+        const { target: _target, rel: _rel, ...anchorProps } = props
         return (
-          <a
+          <ConfirmedExternalLink
             href={href}
-            target="_blank"
-            rel="noreferrer"
-            {...props}
+            {...anchorProps}
             className={cn(LINK_CLASS, className)}
             data-streamdown="link"
-            onClick={(event) => {
-              event.preventDefault()
-              if (href) setExternalUrl(href)
-            }}
-            onAuxClick={(event) => {
-              event.preventDefault()
-            }}
           >
             {children}
-          </a>
+          </ConfirmedExternalLink>
         )
       }
     }
@@ -434,19 +364,11 @@ export function AgentProse({
         controls={STREAMDOWN_CONTROLS}
         components={components}
         lineNumbers={false}
-        linkSafety={LINK_SAFETY}
+        linkSafety={LINK_SAFETY_OFF}
         shikiTheme={shikiTheme}
       >
         {text}
       </Streamdown>
-      {externalUrl && (
-        <StreamdownLinkSafetyModal
-          isOpen
-          url={externalUrl}
-          onClose={() => setExternalUrl(null)}
-          onConfirm={() => setExternalUrl(null)}
-        />
-      )}
     </div>
   )
 }

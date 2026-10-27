@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { Streamdown } from 'streamdown'
+import { type Components, Streamdown } from 'streamdown'
+import { ConfirmedExternalLink } from '@/components/external-link/ExternalLinkConfirm'
 import { ArrowDown, Brain, ChevronRight, Maximize2, Minimize2 } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -15,6 +16,17 @@ import { ThinkingStatus } from './ThinkingStatus'
 /** Distance from the bottom (px) within which the reader counts as "pinned"
  * to the live edge. Mirrors MessageScroller's BOTTOM_THRESHOLD_PX. */
 const BOTTOM_THRESHOLD_PX = 48
+
+// Thinking links go through the same confirm-then-open path as replies, not
+// Streamdown's built-in link safety (its modal opens with `window.open`).
+const THOUGHT_COMPONENTS: Components = {
+  a: ({ href, children, node: _node, target: _target, rel: _rel, ...props }) => (
+    <ConfirmedExternalLink href={href} {...props}>
+      {children}
+    </ConfirmedExternalLink>
+  )
+}
+const LINK_SAFETY_OFF = { enabled: false } as const
 
 function blocksToText(blocks: ContentBlock[]): string {
   return blocks
@@ -269,7 +281,8 @@ function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps): Rea
                     parseIncompleteMarkdown={isStreaming}
                     animated={false}
                     controls={false}
-                    linkSafety={{ enabled: true }}
+                    components={THOUGHT_COMPONENTS}
+                    linkSafety={LINK_SAFETY_OFF}
                   >
                     {thoughtMarkdown(text)}
                   </Streamdown>

@@ -1,6 +1,7 @@
 import { BlockNoteViewRaw } from '@blocknote/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FrontmatterProperties } from '@/components/editor/FrontmatterProperties'
+import { useExternalLinkConfirm } from '@/components/external-link/ExternalLinkConfirm'
 import { useBlockNote } from '@/hooks/use-blocknote'
 import {
   registerEditorContentFlusher,
@@ -83,6 +84,8 @@ export function MarkdownEditor({
     [onChange]
   )
 
+  const externalLink = useExternalLinkConfirm()
+
   const {
     editor,
     replaceContent,
@@ -93,7 +96,8 @@ export function MarkdownEditor({
   } = useBlockNote({
     filePath,
     initialMarkdown: initialParsedRef.current.body,
-    onChange: emitFullContent
+    onChange: emitFullContent,
+    onLinkClick: externalLink.requestOpen
   })
 
   const flushFullContent = useCallback(async (): Promise<void> => {
@@ -221,6 +225,7 @@ export function MarkdownEditor({
               filePanel={false}
               tableHandles={false}
             />
+            {externalLink.dialog}
           </div>
         </div>
       </div>
