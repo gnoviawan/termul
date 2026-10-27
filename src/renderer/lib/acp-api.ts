@@ -902,11 +902,14 @@ export async function startMcpOAuth(projectId: string, serverUrl: string): Promi
   }
   // Web path: open a blank window BEFORE the async request so the browser
   // does not block the popup (transient user activation window). Navigate it
-  // once the auth URL is returned.
-  const popup = window.open('about:blank', '_blank', 'noopener')
+  // once the auth URL is returned. No `noopener` feature: the HTML spec makes
+  // window.open return null with it even though the window opened, so the
+  // handle would be lost (#1541).
+  const popup = window.open('about:blank', '_blank')
   if (!popup) {
     throw new Error('Popup blocked — allow popups for this site to start OAuth')
   }
+  popup.opener = null
   let authUrl: string
   try {
     const result = await webServerMcpOAuth.start(projectId, serverUrl)
