@@ -16,7 +16,8 @@ pub fn git_get_status_detail(cwd: &str) -> Result<Vec<GitStatusDetail>, String> 
 }
 
 /// Undo Git's C-style path quoting (`core.quotePath`): handles `\\`, `\"`,
-/// `\t`, `\n`, `\r`, and `\nnn` octal escapes. Unquoted input returns
+/// `\t`, `\n`, `\r`, and `\nnn` octal escapes. Octal escapes are the bytes
+/// of a UTF-8 name, so they are decoded as UTF-8. Unquoted input returns
 /// unchanged.
 fn unquote_git_path(path: &str) -> String {
     if !path.starts_with('"') {
@@ -26,38 +27,42 @@ fn unquote_git_path(path: &str) -> String {
         .strip_prefix('"')
         .and_then(|p| p.strip_suffix('"'))
         .unwrap_or(path);
-    let mut out = String::with_capacity(inner.len());
-    let mut chars = inner.chars();
+    let mut out: Vec<u8> = Vec::with_capacity(inner.len());
+    let mut chars = inner.chars().peekable();
     while let Some(c) = chars.next() {
         if c != '\\' {
-            out.push(c);
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
             continue;
         }
         match chars.next() {
-            Some('\\') => out.push('\\'),
-            Some('"') => out.push('"'),
-            Some('t') => out.push('\t'),
-            Some('n') => out.push('\n'),
-            Some('r') => out.push('\r'),
+            Some('\\') => out.push(b'\\'),
+            Some('"') => out.push(b'"'),
+            Some('t') => out.push(b'\t'),
+            Some('n') => out.push(b'\n'),
+            Some('r') => out.push(b'\r'),
             Some(d @ '0'..='7') => {
                 let mut code = d.to_digit(8).unwrap_or(0);
                 for _ in 0..2 {
-                    if let Some(d2 @ '0'..='7') = chars.next() {
-                        code = code * 8 + d2.to_digit(8).unwrap_or(0);
+                    match chars.peek().and_then(|c| c.to_digit(8)) {
+                        Some(digit) => {
+                            code = code * 8 + digit;
+                            chars.next();
+                        }
+                        None => break,
                     }
                 }
-                if let Some(ch) = char::from_u32(code) {
-                    out.push(ch);
-                }
+                out.push((code & 0xff) as u8);
             }
             Some(other) => {
-                out.push('\\');
-                out.push(other);
+                out.push(b'\\');
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
             }
-            None => out.push('\\'),
+            None => out.push(b'\\'),
         }
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Rewrite `?? <dir>/` porcelain lines into one `?? <file>` line per file
@@ -120,14 +125,11 @@ fn expand_untracked_dirs(cwd: &str, output: &str) -> String {
                     let mut any = false;
                     for file in expanded.lines().filter(|l| !l.is_empty()) {
                         any = true;
-                        // ls-files quotes the same names porcelain does —
-                        // unquote to a plain path. Downstream consumers pass
-                        // paths as argv entries (no shell), so quoting is
-                        // not needed and would leak escape syntax into
-                        // diff/stage pathspecs.
-                        let plain = unquote_git_path(file);
+                        // ls-files quotes the same names porcelain does; keep
+                        // the quoted form so the status parser decodes every
+                        // path exactly once.
                         out.push_str("?? ");
-                        out.push_str(&plain);
+                        out.push_str(file);
                         out.push('\n');
                     }
                     if any {
@@ -158,10 +160,11 @@ pub(super) fn git_get_status_detail_from_output(output: &str) -> Vec<GitStatusDe
                 .rsplit_once(" -> ")
                 .map(|(_, new_path)| new_path)
                 .unwrap_or(raw_path)
-                .to_string()
         } else {
-            raw_path.to_string()
+            raw_path
         };
+        // Quoted names must match the unquoted `diff -z` / `ls-files -z` paths.
+        let path = unquote_git_path(path);
 
         if index_status != ' ' && index_status != '?' {
             details.push(GitStatusDetail {

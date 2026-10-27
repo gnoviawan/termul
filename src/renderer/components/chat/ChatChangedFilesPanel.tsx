@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { useForcedCollapse } from './use-forced-collapse'
+import { useGitChangedFiles } from './use-git-changed-files'
 
 type ChangedFileKind = 'edit' | 'delete' | 'move'
 
@@ -40,11 +41,12 @@ function settledKind(kind: ChangedFileKind, status: ToolCall['status']): Changed
   return kind
 }
 
-/** A file touched by one or more ACP tool calls in this session. */
+/** A changed file: from git status, or (outside a git repository) from the
+ * ACP tool calls of this session. */
 interface ChangedFile {
   /** Resolved full path — forward slashes, cwd-joined. Also the dedupe key. */
   path: string
-  settledKind: ChangedFileKind | null
+  status: GitDisplayStatus | null
   added: number
   removed: number
 }
@@ -124,7 +126,7 @@ function dirName(fullPath: string, cwd: string): string {
  * `resolveFilePath`, so `src/foo.ts` and `/work/src/foo.ts` merge under cwd
  * `/work`. Add/remove counts — `describeToolCall().diffStat`, the same
  * battle-tested path used by ToolCallCard — are summed across all contributing
- * calls; `settledKind` comes from the last call that took effect (see
+ * calls; `status` comes from the last call that took effect (see
  * `settledKind()`). First-appearance order kept. */
 function extractChangedFiles(toolCalls: ToolCall[], cwd: string): ChangedFile[] {
   const files: ChangedFile[] = []
@@ -141,16 +143,17 @@ function extractChangedFiles(toolCalls: ToolCall[], cwd: string): ChangedFile[] 
     if (!path) continue
     const stat = describeToolCall(tc).diffStat ?? { added: 0, removed: 0 }
     const settled = settledKind(kind, tc.status)
+    const status = settled && KIND_STATUS[settled]
     const existing = byPath.get(path)
     if (existing) {
       existing.added += stat.added
       existing.removed += stat.removed
-      existing.settledKind = settled ?? existing.settledKind
+      existing.status = status ?? existing.status
       continue
     }
     const file: ChangedFile = {
       path,
-      settledKind: settled,
+      status,
       added: stat.added,
       removed: stat.removed
     }
@@ -175,8 +178,8 @@ function FileRow({
   // A separators-only path ('/') has no basename — show the path itself.
   const label = baseName(file.path) || file.path
   const hasCounts = file.added > 0 || file.removed > 0
-  const isDeleted = file.settledKind === 'delete'
-  const status = file.settledKind && KIND_STATUS[file.settledKind]
+  const status = file.status
+  const isDeleted = status === 'deleted'
 
   const content = (
     <>
@@ -238,6 +241,8 @@ function FileRow({
 interface ChatChangedFilesPanelProps {
   cwd: string
   toolCalls: ToolCall[]
+  /** The agent turn is running; its end refreshes git state. */
+  turnActive?: boolean
   /**
    * Mobile dock: adds a "Git" action beside the header that opens the Git
    * sheet. It is called with the tapped button, which the Git sheet returns
@@ -255,9 +260,12 @@ interface ChatChangedFilesPanelProps {
 
 /**
  * Collapsible, scrollable "Changed files" panel anchored on top of the
- * ChatInputBar. One row per unique file touched by ACP tool calls
- * (edit/delete/move) in the current session — a file edited by several calls
- * appears once with summed +N −N counts — persists across agent replies.
+ * ChatInputBar. In a git repository it lists the uncommitted files of the
+ * checkout at `cwd` (staged, unstaged and untracked, against HEAD) with their
+ * git line counts, so a committed, discarded or deleted file drops out and a
+ * clean tree hides the panel. Outside a git repository it lists the files
+ * touched by ACP tool calls (edit/delete/move) in the current session — a
+ * file edited by several calls appears once with summed +N −N counts.
  * Clicking a row opens the file in the editor workspace; a deleted file's
  * row opens nothing. View-and-open-only.
  *
@@ -269,6 +277,7 @@ interface ChatChangedFilesPanelProps {
 export function ChatChangedFilesPanel({
   cwd,
   toolCalls,
+  turnActive = false,
   onOpenGitChanges,
   forceCollapsed = false
 }: ChatChangedFilesPanelProps): React.JSX.Element | null {
@@ -276,7 +285,14 @@ export function ChatChangedFilesPanel({
   const { collapsed, toggle } = useForcedCollapse(true, forceCollapsed)
   const expanded = !collapsed
 
-  const files = useMemo(() => extractChangedFiles(toolCalls, cwd), [toolCalls, cwd])
+  const git = useGitChangedFiles(cwd, toolCalls, turnActive)
+  const files = useMemo((): ChangedFile[] => {
+    if (git.state === 'unavailable') return extractChangedFiles(toolCalls, cwd)
+    if (git.state === 'loading') return []
+    return git.files.map((file) => ({ ...file, path: resolveFilePath(file.path, git.root) }))
+  }, [git, toolCalls, cwd])
+  // Row subtitles are relative to the base the paths were resolved against.
+  const rowBase = git.state === 'ready' ? git.root : cwd
   const count = files.length
   const totalAdded = useMemo(() => files.reduce((sum, f) => sum + f.added, 0), [files])
   const totalRemoved = useMemo(() => files.reduce((sum, f) => sum + f.removed, 0), [files])
@@ -371,7 +387,7 @@ export function ChatChangedFilesPanel({
               <div className="scroller-thin max-h-48 overflow-y-auto">
                 <div className="space-y-0.5 p-1">
                   {files.map((file) => (
-                    <FileRow key={file.path} file={file} cwd={cwd} onOpen={handleOpenFile} />
+                    <FileRow key={file.path} file={file} cwd={rowBase} onOpen={handleOpenFile} />
                   ))}
                 </div>
               </div>

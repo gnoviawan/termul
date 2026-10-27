@@ -16,6 +16,7 @@ import {
   Calendar01Icon,
   Camera01Icon,
   CancelCircleIcon,
+  CaseSensitiveIcon,
   CheckIcon,
   CheckmarkCircle02Icon,
   ChevronDownIcon as ChevronDownIconData,
@@ -76,6 +77,7 @@ import {
   Layers01Icon,
   Layout2ColumnIcon,
   Layout3ColumnIcon,
+  LeftToRightBlockQuoteIcon,
   Link01Icon,
   ListChecksIcon,
   ListIcon,
@@ -105,6 +107,9 @@ import {
   PlusIcon,
   RefreshCcwIcon,
   RefreshCwIcon,
+  RegexIcon,
+  ReplaceAllIcon,
+  ReplaceIcon,
   RotateCcwIcon,
   SaveIcon,
   ScissorsIcon,
@@ -126,6 +131,7 @@ import {
   Upload01Icon,
   UserIcon,
   Video01Icon,
+  WholeWordIcon,
   Wifi01Icon,
   WifiOff01Icon,
   Wrench01Icon,
@@ -216,6 +222,7 @@ export const Brain = hugeIcon('Brain', BrainIcon)
 export const Bug = hugeIcon('Bug', Bug01Icon)
 export const Calendar = hugeIcon('Calendar', Calendar01Icon)
 export const Camera = hugeIcon('Camera', Camera01Icon)
+export const CaseSensitive = hugeIcon('CaseSensitive', CaseSensitiveIcon)
 export const CheckCircle2 = hugeIcon('CheckCircle2', CheckmarkCircle02Icon)
 export const ChevronDown = hugeIcon('ChevronDown', ChevronDownIconData)
 export const ChevronLeft = hugeIcon('ChevronLeft', ChevronLeftIcon)
@@ -271,6 +278,7 @@ export const KeyRound = hugeIcon('KeyRound', KeyRoundIcon)
 export const Keyboard = hugeIcon('Keyboard', KeyboardIcon)
 export const Layers = hugeIcon('Layers', Layers01Icon)
 export const Link2 = hugeIcon('Link2', Link01Icon)
+export const BlockQuote = hugeIcon('BlockQuote', LeftToRightBlockQuoteIcon)
 export const List = hugeIcon('List', ListIcon)
 export const ListChecks = hugeIcon('ListChecks', ListChecksIcon)
 export const Loader2 = hugeIcon('Loader2', Loading02Icon)
@@ -295,6 +303,9 @@ export const Pencil = hugeIcon('Pencil', PencilIcon)
 export const Pin = hugeIcon('Pin', PinIcon)
 export const RefreshCcw = hugeIcon('RefreshCcw', RefreshCcwIcon)
 export const RefreshCw = hugeIcon('RefreshCw', RefreshCwIcon)
+export const Regex = hugeIcon('Regex', RegexIcon)
+export const Replace = hugeIcon('Replace', ReplaceIcon)
+export const ReplaceAll = hugeIcon('ReplaceAll', ReplaceAllIcon)
 export const RotateCcw = hugeIcon('RotateCcw', RotateCcwIcon)
 export const Scissors = hugeIcon('Scissors', ScissorsIcon)
 export const Server = hugeIcon('Server', ServerIcon)
@@ -308,6 +319,7 @@ export const TerminalSquare = hugeIcon('TerminalSquare', SquareTerminalIcon)
 export const Tag = hugeIcon('Tag', Tag01Icon)
 export const Type = hugeIcon('Type', TypeIcon)
 export const Unlink = hugeIcon('Unlink', Unlink01Icon)
+export const WholeWord = hugeIcon('WholeWord', WholeWordIcon)
 export const Wifi = hugeIcon('Wifi', Wifi01Icon)
 export const WifiOff = hugeIcon('WifiOff', WifiOff01Icon)
 export const Wrench = hugeIcon('Wrench', Wrench01Icon)

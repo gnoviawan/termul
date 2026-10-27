@@ -143,15 +143,12 @@ pub fn detect_cloudflared_path() -> String {
     detected
 }
 
-#[cfg(target_os = "windows")]
 fn configure_background_command(command: &mut Command) {
-    // Reuse the same CREATE_NO_WINDOW flag (0x08000000) as the rg sidecar so
-    // spawning cloudflared never flashes a console window on Windows. tokio's
-    // `Command` exposes `creation_flags` as an inherent method on Windows.
-    command.creation_flags(0x0800_0000);
+    // Never flash a console window on Windows (CREATE_NO_WINDOW) and, inside a
+    // Linux AppImage, scrub the AppImage-only env so cloudflared resolves host
+    // libraries. See [`crate::process_util::background_command_hygiene`].
+    crate::process_util::background_command_hygiene(command);
 }
-#[cfg(not(target_os = "windows"))]
-fn configure_background_command(_command: &mut Command) {}
 
 /// A started quick tunnel: the public URL to expose (e.g. as a QR) and the live
 /// child handle to kill on server stop / app exit.

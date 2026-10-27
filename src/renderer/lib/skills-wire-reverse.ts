@@ -17,6 +17,7 @@
  * prose, were this ever misapplied) is never partially rewritten.
  */
 import { fileUrlToPath } from '@/components/chat/chat-attachments'
+import { selectionContextsToDisplay } from '@/lib/composer/selection-context'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 
 /** Literal header emitted by `formatPromptWithSkills`. */
@@ -64,6 +65,12 @@ function parseHeaderLine(line: string): { name: string; path: string } | null {
  * input verbatim.
  */
 export function wireTextToDisplay(wire: string): string {
+  // Selection-context quote blocks sit inside the user text (after any skill
+  // framing), so they reverse last. Exact-parse-else-passthrough as well.
+  return selectionContextsToDisplay(skillsWireTextToDisplay(wire))
+}
+
+function skillsWireTextToDisplay(wire: string): string {
   if (!wire.includes(SKILLS_HEADER)) return wire
   const text = wire.replaceAll('\r\n', '\n')
   const command = framedCommandPrefix(text)

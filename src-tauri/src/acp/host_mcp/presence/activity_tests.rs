@@ -158,6 +158,19 @@ fn table() -> Vec<Row> {
             EXECUTE,
             exec(
                 "command.batch",
+                json!({ "label": "Card", "commands": [
+                    { "command": "node.create", "as": "card", "params": { "type": "frame" } },
+                    { "command": "node.create", "params": { "type": "text", "parent": { "$name": "card" } } },
+                ] }),
+            ),
+            json!({ "results": [{ "id": 7 }, { "id": 8 }], "names": { "card": 7 } }),
+            write(ids(&[7, 8])),
+        ),
+        row(
+            "batch",
+            EXECUTE,
+            exec(
+                "command.batch",
                 json!({ "label": "Batch", "commands": [{ "command": "fill.add", "params": {} }] }),
             ),
             json!([{}]),

@@ -6,7 +6,7 @@
 //! `..`, and enforces the project-root boundary (`OUTSIDE_PROJECT_ROOT`) with
 //! no loopback / remote-write gate, like the other `/git/*` read routes.
 //!
-//! Reply is `IpcBody<GitDiffStat>`: `{ success: true, data: { added, removed } }`
+//! Reply is `IpcBody<GitDiffStat>`: `{ success: true, data: { added, removed, files } }`
 //! or `{ success: false, error, code }` with the shared `DiffStatError::code()`.
 //! Boundary events are logged via `tracing`; file contents are never logged.
 

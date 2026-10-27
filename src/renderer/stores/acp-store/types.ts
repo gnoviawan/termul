@@ -139,6 +139,15 @@ export interface AgentReloadMark {
 }
 
 export interface OpenHistoryOptions {
+  /**
+   * MCP servers to attach on the reopen. Reload this chat passes an explicit
+   * list. When omitted (idle-stop auto-resume, manual Resume chat, a
+   * history-row open) it defaults to
+   * `selectMcpServersForAgent(state.mcpServers, capabilities).servers` so the
+   * host `termul` server and the user's configured MCP servers survive the
+   * reopen (#1420). An explicit `[]` still asks the host to attach only the
+   * plan server.
+   */
   mcpServers?: McpServer[]
   /** Skip adopting the process that already owns this session. */
   forceNewAgent?: boolean

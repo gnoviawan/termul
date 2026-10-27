@@ -74,7 +74,7 @@ pub(super) fn claude_cli_command(
             .ok_or_else(|| "Claude CLI path is not valid Unicode".to_string())?,
     )?;
     let mut command = tokio::process::Command::new(cli.program);
-    crate::process_util::hide_console(&mut command);
+    crate::process_util::background_command_hygiene(&mut command);
     command
         .args(cli.prepend_args)
         .args(args)

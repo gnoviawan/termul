@@ -1134,9 +1134,12 @@ impl AcpManager {
         let caps = self.capabilities(agent_id)?;
         gate_load_session(&caps)?;
         let directories = filter_additional_directories(&caps, &cwd, &additional_directories);
+        let session_key = session_id.0.clone();
+        // Resolve the command channel BEFORE a new plan token exists, so an
+        // unknown agent returns without leaving a registered token behind.
+        let tx = self.command_tx(agent_id)?;
         let (mcp_servers, plan_token) =
             self.prepare_reopen_mcp(agent_id, &session_id.0, &caps, mcp_servers).await?;
-        let tx = self.command_tx(agent_id)?;
         let outcome = send_command(&tx, |reply| AcpCommand::LoadSession {
             session_id,
             cwd,
@@ -1145,11 +1148,7 @@ impl AcpManager {
             reply,
         })
         .await;
-        if outcome.is_err() {
-            if let Some(token) = plan_token {
-                self.host_plan_server.unregister_by_token(&token);
-            }
-        }
+        self.settle_reopen_plan_token(&session_key, plan_token.as_deref(), outcome.is_ok());
         outcome
     }
 
@@ -1176,9 +1175,12 @@ impl AcpManager {
         let caps = self.capabilities(agent_id)?;
         gate_resume_session(&caps)?;
         let directories = filter_additional_directories(&caps, &cwd, &additional_directories);
+        let session_key = session_id.0.clone();
+        // Resolve the command channel BEFORE a new plan token exists, so an
+        // unknown agent returns without leaving a registered token behind.
+        let tx = self.command_tx(agent_id)?;
         let (mcp_servers, plan_token) =
             self.prepare_reopen_mcp(agent_id, &session_id.0, &caps, mcp_servers).await?;
-        let tx = self.command_tx(agent_id)?;
         let outcome = send_command(&tx, |reply| AcpCommand::ResumeSession {
             session_id,
             cwd,
@@ -1187,20 +1189,20 @@ impl AcpManager {
             reply,
         })
         .await;
-        if outcome.is_err() {
-            if let Some(token) = plan_token {
-                self.host_plan_server.unregister_by_token(&token);
-            }
-        }
+        self.settle_reopen_plan_token(&session_key, plan_token.as_deref(), outcome.is_ok());
         outcome
     }
 
-    /// Build the MCP list for a reload-style reopen.
+    /// Build the MCP list for a reopen.
     ///
-    /// `None` leaves the request unchanged (history open, resume chat).
-    /// `Some` prepends the host plan server, injects OAuth headers, and
-    /// gates transports. The plan token is bound to the known session id.
-    /// The caller drops the token when the reopen fails.
+    /// `None` leaves the request with no client MCP list and no host plan
+    /// server. `Some` prepends the host plan server, injects OAuth headers, and
+    /// gates transports. The renderer sends `Some` on every history reopen, not
+    /// only Reload this chat, so the agent keeps the `termul` server and the
+    /// user's MCP servers (#1420). The new plan token is bound to the known
+    /// session id right away. The session's earlier token is NOT removed here;
+    /// the caller settles both through `settle_reopen_plan_token` once the
+    /// reopen's outcome is known.
     async fn prepare_reopen_mcp(
         &self,
         agent_id: &AgentId,
@@ -1211,8 +1213,9 @@ impl AcpManager {
         let Some(mcp_servers) = mcp_servers else {
             return Ok((None, None));
         };
-        // Drop a token from an earlier create or reload of this session.
-        self.host_plan_server.unregister_session(session_id);
+        // The token from an earlier create or reload of this session stays
+        // valid here: a live agent child still holds it, and the reopen can
+        // fail. `settle_reopen_plan_token` drops it once the reopen succeeds.
         let (port, token, provisional_sid) = self.host_plan_server.register_session(&agent_id.0);
         self.host_plan_server.bind_session(&token, session_id);
         let mut combined = build_internal_plan_stdio(&agent_id.0, port, &token, &provisional_sid);
@@ -1223,7 +1226,10 @@ impl AcpManager {
         let server_count = combined.len();
         let combined = inject_oauth_tokens(combined).await;
         if let Err(error) = gate_mcp_servers(caps, &combined) {
-            self.host_plan_server.unregister_by_token(&token);
+            // The failure path of the settle: evict only the new token, so the
+            // session's earlier token, plan cache and title flags stay.
+            self.host_plan_server
+                .settle_reopen_token(session_id, &token, false);
             return Err(error);
         }
         log::info!(
@@ -1232,6 +1238,17 @@ impl AcpManager {
             server_count
         );
         Ok((Some(combined), Some(token)))
+    }
+
+    /// Finish the plan-token bookkeeping of a reopen started by
+    /// `prepare_reopen_mcp`. On success the session's earlier token(s) are
+    /// dropped and the new one kept; on failure the new token is evicted and
+    /// the earlier one stays valid for a still-live agent child.
+    fn settle_reopen_plan_token(&self, session_id: &str, plan_token: Option<&str>, reopened: bool) {
+        if let Some(token) = plan_token {
+            self.host_plan_server
+                .settle_reopen_token(session_id, token, reopened);
+        }
     }
 
     /// Delete an agent session. Gated on `sessionCapabilities.delete`.

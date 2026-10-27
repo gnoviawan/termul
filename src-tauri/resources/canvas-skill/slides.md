@@ -39,10 +39,10 @@ This batch makes a title slide:
 {
   "label": "Title slide",
   "commands": [
-    { "command": "frame.create", "params": { "preset": "Slide 16:9", "x": 0, "y": 0, "name": "01 Judul", "props": { "layout": "vertical", "mainAlign": "center", "padding": 160, "gap": 32, "fill": "#070B18" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Wordmark", "parent": { "$step": 0 }, "text": "Antrikopi", "props": { "fontSize": 32, "fontStyle": "Bold", "fill": "#22D3EE" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Title", "parent": { "$step": 0 }, "text": "Pesan kopi sebelum sampai, ambil tanpa antre", "props": { "fontSize": 104, "fontStyle": "Semi Bold", "lineHeight": 108, "letterSpacing": "-4%", "fill": "#E6E9F5", "sizingH": "fill", "maxWidth": 1400, "textAutoResize": "height" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Presenter", "parent": { "$step": 0 }, "text": "Pitch seed round · Oktober 2026", "props": { "fontSize": 28, "fill": "#9097B3" } } }
+    { "command": "frame.create", "as": "slide", "params": { "preset": "Slide 16:9", "x": 0, "y": 0, "name": "01 Judul", "props": { "layout": "vertical", "mainAlign": "center", "padding": 160, "gap": 32, "fill": "#070B18" } } },
+    { "command": "node.create", "params": { "type": "text", "name": "Wordmark", "parent": { "$name": "slide" }, "text": "Antrikopi", "props": { "fontSize": 32, "fontStyle": "Bold", "fill": "#22D3EE" } } },
+    { "command": "node.create", "params": { "type": "text", "name": "Title", "parent": { "$name": "slide" }, "text": "Pesan kopi sebelum sampai, ambil tanpa antre", "props": { "fontSize": 104, "fontStyle": "Semi Bold", "lineHeight": 108, "letterSpacing": "-4%", "fill": "#E6E9F5", "sizingH": "fill", "maxWidth": 1400, "textAutoResize": "height" } } },
+    { "command": "node.create", "params": { "type": "text", "name": "Presenter", "parent": { "$name": "slide" }, "text": "Pitch seed round · Oktober 2026", "props": { "fontSize": 28, "fill": "#9097B3" } } }
   ]
 }
 ```

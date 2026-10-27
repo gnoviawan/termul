@@ -393,6 +393,9 @@ async fn probe_stdio(server: &McpServerConfig) -> ProbeResult {
     let mut cmd = Command::new(&program);
     cmd.args(&prepend_args);
     cmd.args(&server.args);
+    // Scrub AppImage-only vars before the probe's own env, so an explicit entry
+    // still wins and the probed stdio server resolves host libraries (#1435).
+    crate::process_util::clean_appimage_env(&mut cmd);
     for pair in &server.env {
         // Expand `$VAR`/`${VAR}` before spawn; unset → empty string.
         cmd.env(&pair.name, expand_env(&pair.value));

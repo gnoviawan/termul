@@ -1954,6 +1954,71 @@ describe('Shared chat read marker parity (cross-surface unread)', () => {
   })
 })
 
+describe('Window ACL parity (issue #1443)', () => {
+  // The renderer's close handler prevents the WM close and calls
+  // window.hide() on macOS/Linux. When default.json lacks
+  // core:window:allow-hide the ACL denies the call and the window can
+  // neither close nor hide — this regression pinned that dead-end state.
+  const CAPABILITIES = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'capabilities', 'default.json')
+  /** Static window-method → ACL permission map (core:window commands). */
+  const PERMISSION_BY_METHOD: Record<string, string> = {
+    hide: 'core:window:allow-hide',
+    show: 'core:window:allow-show',
+    unminimize: 'core:window:allow-unminimize',
+    setFocus: 'core:window:allow-set-focus',
+    minimize: 'core:window:allow-minimize',
+    maximize: 'core:window:allow-maximize',
+    unmaximize: 'core:window:allow-unmaximize',
+    toggleMaximize: 'core:window:allow-toggle-maximize',
+    close: 'core:window:allow-close',
+    destroy: 'core:window:allow-destroy',
+    startDragging: 'core:window:allow-start-dragging',
+    startResizeDragging: 'core:window:allow-start-resize-dragging',
+    setPosition: 'core:window:allow-set-position',
+    setSize: 'core:window:allow-set-size'
+  }
+
+  const grantedPermissions = (): Set<string> => {
+    const capabilities = JSON.parse(readFileSync(CAPABILITIES, 'utf-8')) as {
+      permissions: Array<string | { identifier: string }>
+    }
+    return new Set(
+      capabilities.permissions.map((entry) =>
+        typeof entry === 'string' ? entry : entry.identifier
+      )
+    )
+  }
+
+  it('every JS-invoked core:window command in the renderer is ACL-granted', () => {
+    const granted = grantedPermissions()
+    // Calls read off the thin tauri-window facade (the Story 1.6 Biome ban
+    // keeps every import of @tauri-apps/api/window routed through it) plus
+    // the one direct call in TauriApp.tsx.
+    const rendererSources = [
+      ...readdirSync(LIB_DIR)
+        .filter((f) => f.endsWith('.ts'))
+        .map((f) => readFileSync(join(LIB_DIR, f), 'utf-8')),
+      ...readdirSync(join(LIB_DIR, '..'))
+        .filter((f) => f.endsWith('.tsx'))
+        .map((f) => readFileSync(join(LIB_DIR, '..', f), 'utf-8'))
+    ]
+    const sources = rendererSources.join('\n')
+    for (const [method, permission] of Object.entries(PERMISSION_BY_METHOD)) {
+      if (!new RegExp(`\\.\\s*${method}\\s*\\(`).test(sources)) continue
+      expect(
+        granted.has(permission),
+        `renderer calls .${method}() but capability is missing: ${permission}`
+      ).toBe(true)
+    }
+  })
+
+  it('the close-to-tray path is explicitly granted (preventDefault already fired)', () => {
+    const granted = grantedPermissions()
+    expect(granted.has('core:window:allow-hide')).toBe(true)
+    expect(granted.has('core:window:allow-show')).toBe(true)
+  })
+})
+
 describe('Watch hub parity (projects, chat history, agent roster)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const hubSource = readFileSync(join(SRC_TAURI, 'web', 'watch', 'hub.rs'), 'utf-8')

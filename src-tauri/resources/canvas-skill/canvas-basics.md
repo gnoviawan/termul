@@ -80,7 +80,9 @@ The canvas renders one family today: **Inter**, in the faces `Regular`, `Italic`
 
 ## Batches
 
-`batch` runs several commands as one undo step. If one step fails, nothing is changed and the error names the failing step. Anywhere in a step's params, `{"$step": n}` stands for the `id` that step `n` returned (counting from 0), so one call can build a frame and its children.
+`batch` runs several commands as one undo step. If one step fails, nothing is changed, and the error starts with the failing step: its index, its name and its command, as in `step 4 "cta-button" (node.create "CTA button"): ...`.
+
+Name the steps that later steps build on. Give a step `"as": "<name>"`, and anywhere in a later step's params `{"$name": "<name>"}` stands for the `id` that step returned. Names are yours to choose, such as `hero` or `cta-button`. They are not layer names, and each one may name only one step of the batch. A step can refer only to a name an earlier step defined. When any step has a name, the result is `{"results": [...], "names": {"hero": 12, ...}}`, so you can use those ids in your next call without searching the tree.
 
 This batch builds a page frame with a hero section, a wrapping headline, a paragraph and a button:
 
@@ -88,17 +90,17 @@ This batch builds a page frame with a hero section, a wrapping headline, a parag
 {
   "label": "Hero",
   "commands": [
-    { "command": "node.create", "params": { "type": "frame", "name": "Landing / Toko Roti Sari", "width": 1440, "height": 900, "props": { "layout": "vertical", "sizingV": "hug", "fill": "#FBF6EE" } } },
-    { "command": "node.create", "params": { "type": "frame", "name": "Hero", "parent": { "$step": 0 }, "props": { "layout": "vertical", "sizingH": "fill", "sizingV": "hug", "padding": [120, 160, 120, 160], "gap": 24, "crossAlign": "center", "fills": [] } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Headline", "parent": { "$step": 1 }, "text": "Roti hangat, dipanggang setiap subuh", "props": { "fontSize": 72, "fontStyle": "Bold", "lineHeight": 76, "letterSpacing": "-3%", "fill": "#2B1D14", "textAlign": "center", "sizingH": "fill", "maxWidth": 960, "textAutoResize": "height" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Subhead", "parent": { "$step": 1 }, "text": "Sourdough, croissant mentega dan roti manis dari dapur kecil kami di Kemang. Pesan sebelum jam 10, ambil sore harinya.", "props": { "fontSize": 20, "lineHeight": 30, "fill": "#6B5446", "textAlign": "center", "sizingH": "fill", "maxWidth": 680, "textAutoResize": "height" } } },
-    { "command": "node.create", "params": { "type": "frame", "name": "CTA button", "parent": { "$step": 1 }, "props": { "layout": "horizontal", "sizingH": "hug", "sizingV": "hug", "padding": [16, 28, 16, 28], "cornerRadius": 8, "fill": "#A8432A" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "CTA label", "parent": { "$step": 4 }, "text": "Pesan lewat WhatsApp", "props": { "fontSize": 17, "fontStyle": "Semi Bold", "fill": "#FFFFFF" } } }
+    { "command": "node.create", "as": "page", "params": { "type": "frame", "name": "Landing / Toko Roti Sari", "width": 1440, "height": 900, "props": { "layout": "vertical", "sizingV": "hug", "fill": "#FBF6EE" } } },
+    { "command": "node.create", "as": "hero", "params": { "type": "frame", "name": "Hero", "parent": { "$name": "page" }, "props": { "layout": "vertical", "sizingH": "fill", "sizingV": "hug", "padding": [120, 160, 120, 160], "gap": 24, "crossAlign": "center", "fills": [] } } },
+    { "command": "node.create", "params": { "type": "text", "name": "Headline", "parent": { "$name": "hero" }, "text": "Roti hangat, dipanggang setiap subuh", "props": { "fontSize": 72, "fontStyle": "Bold", "lineHeight": 76, "letterSpacing": "-3%", "fill": "#2B1D14", "textAlign": "center", "sizingH": "fill", "maxWidth": 960, "textAutoResize": "height" } } },
+    { "command": "node.create", "params": { "type": "text", "name": "Subhead", "parent": { "$name": "hero" }, "text": "Sourdough, croissant mentega dan roti manis dari dapur kecil kami di Kemang. Pesan sebelum jam 10, ambil sore harinya.", "props": { "fontSize": 20, "lineHeight": 30, "fill": "#6B5446", "textAlign": "center", "sizingH": "fill", "maxWidth": 680, "textAutoResize": "height" } } },
+    { "command": "node.create", "as": "cta-button", "params": { "type": "frame", "name": "CTA button", "parent": { "$name": "hero" }, "props": { "layout": "horizontal", "sizingH": "hug", "sizingV": "hug", "padding": [16, 28, 16, 28], "cornerRadius": 8, "fill": "#A8432A" } } },
+    { "command": "node.create", "params": { "type": "text", "name": "CTA label", "parent": { "$name": "cta-button" }, "text": "Pesan lewat WhatsApp", "props": { "fontSize": 17, "fontStyle": "Semi Bold", "fill": "#FFFFFF" } } }
   ]
 }
 ```
 
-Pass that object as the `batch` tool's arguments. `{"$step": n, "field": "<name>"}` picks another field of step `n`'s result when you need one.
+Pass that object as the `batch` tool's arguments. `{"$name": "<name>", "field": "<field>"}` picks another field of that step's result when you need one. `{"$step": n}`, the step's index counting from 0, still works, but a name stays right when you add or move a step.
 
 ## Components
 
@@ -113,15 +115,15 @@ Make a component when the same element repeats three or more times and should st
 {
   "label": "Plan cards",
   "commands": [
-    { "command": "node.create", "params": { "type": "frame", "name": "Plans", "width": 1120, "height": 400, "props": { "layout": "horizontal", "gap": 24, "sizingV": "hug", "fills": [] } } },
-    { "command": "node.create", "params": { "type": "component", "name": "Plan card", "x": 0, "y": 600, "width": 340, "height": 200, "props": { "layout": "vertical", "gap": 12, "padding": 32, "sizingV": "hug", "cornerRadius": 16, "fill": "#F5F7FA" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Plan name", "parent": { "$step": 1 }, "text": "Starter", "props": { "fontSize": 20, "fontStyle": "Semi Bold", "fill": "#0F172A" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Plan price", "parent": { "$step": 1 }, "text": "Rp 49.000 / bulan", "props": { "fontSize": 32, "fontStyle": "Bold", "fill": "#0F172A" } } },
-    { "command": "component.addProperty", "params": { "id": { "$step": 1 }, "name": "Name", "type": "text", "layer": { "$step": 2 } } },
-    { "command": "component.addProperty", "params": { "id": { "$step": 1 }, "name": "Price", "type": "text", "layer": { "$step": 3 } } },
-    { "command": "instance.create", "params": { "component": { "$step": 1 }, "parent": { "$step": 0 } } },
-    { "command": "instance.create", "params": { "component": { "$step": 1 }, "parent": { "$step": 0 } } },
-    { "command": "instance.setProperties", "params": { "ids": [{ "$step": 7 }], "properties": { "Name": "Pro", "Price": "Rp 99.000 / bulan" } } }
+    { "command": "node.create", "as": "plans", "params": { "type": "frame", "name": "Plans", "width": 1120, "height": 400, "props": { "layout": "horizontal", "gap": 24, "sizingV": "hug", "fills": [] } } },
+    { "command": "node.create", "as": "plan-card", "params": { "type": "component", "name": "Plan card", "x": 0, "y": 600, "width": 340, "height": 200, "props": { "layout": "vertical", "gap": 12, "padding": 32, "sizingV": "hug", "cornerRadius": 16, "fill": "#F5F7FA" } } },
+    { "command": "node.create", "as": "plan-name", "params": { "type": "text", "name": "Plan name", "parent": { "$name": "plan-card" }, "text": "Starter", "props": { "fontSize": 20, "fontStyle": "Semi Bold", "fill": "#0F172A" } } },
+    { "command": "node.create", "as": "plan-price", "params": { "type": "text", "name": "Plan price", "parent": { "$name": "plan-card" }, "text": "Rp 49.000 / bulan", "props": { "fontSize": 32, "fontStyle": "Bold", "fill": "#0F172A" } } },
+    { "command": "component.addProperty", "params": { "id": { "$name": "plan-card" }, "name": "Name", "type": "text", "layer": { "$name": "plan-name" } } },
+    { "command": "component.addProperty", "params": { "id": { "$name": "plan-card" }, "name": "Price", "type": "text", "layer": { "$name": "plan-price" } } },
+    { "command": "instance.create", "params": { "component": { "$name": "plan-card" }, "parent": { "$name": "plans" } } },
+    { "command": "instance.create", "as": "pro-card", "params": { "component": { "$name": "plan-card" }, "parent": { "$name": "plans" } } },
+    { "command": "instance.setProperties", "params": { "ids": [{ "$name": "pro-card" }], "properties": { "Name": "Pro", "Price": "Rp 99.000 / bulan" } } }
   ]
 }
 ```

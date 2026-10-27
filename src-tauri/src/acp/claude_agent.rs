@@ -54,7 +54,7 @@ fn probe_node_major_uncached() -> Option<u64> {
     let path = super::config::runtime_resolution_path();
     let node = resolve_runtime_executable("node", &path)?;
     let mut command = std::process::Command::new(node);
-    crate::process_util::hide_console(&mut command);
+    crate::process_util::background_command_hygiene(&mut command);
     let mut child = command
         .arg("--version")
         .env("PATH", path)

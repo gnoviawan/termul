@@ -1,5 +1,6 @@
 use super::*;
 use crate::acp::AcpManager;
+use crate::trackers::git_tracker::GitFileDiffStat;
 use crate::trackers::GitTracker;
 use crate::web::sink::WsRelaySink;
 use crate::web::test_pty_manager;
@@ -13,6 +14,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
+
+fn file(path: &str, added: u64, removed: u64) -> GitFileDiffStat {
+    GitFileDiffStat {
+        path: path.to_string(),
+        added,
+        removed,
+    }
+}
+
+/// `root` is the canonical temp path; route tests check the counts.
+fn without_root(stat: GitDiffStat) -> GitDiffStat {
+    assert!(!stat.root.is_empty(), "root must be reported");
+    GitDiffStat {
+        root: String::new(),
+        ..stat
+    }
+}
 
 /// Temp dir removed on drop (panic-safe).
 struct TempDir {
@@ -137,23 +155,35 @@ async fn diff_stat_returns_tracked_and_untracked_totals() {
     let body = post_diff_stat(test_state(root.path()), root.path(), loopback()).await;
     assert!(body.success, "diff stat should succeed: {:?}", body.error);
     assert_eq!(
-        body.data,
+        body.data.map(without_root),
         Some(GitDiffStat {
             added: 5,
-            removed: 0
+            removed: 0,
+            files: vec![file("a.txt", 2, 0), file("new.txt", 3, 0)],
+            root: String::new()
         })
     );
 }
 
 #[tokio::test]
-async fn diff_stat_serializes_added_and_removed_keys() {
+async fn diff_stat_serializes_added_removed_and_files_keys() {
     let body = IpcBody::ok(GitDiffStat {
         added: 2,
         removed: 1,
+        files: vec![file("a.txt", 2, 1)],
+        root: "/repo".to_string(),
     });
     assert_eq!(
         serde_json::to_value(body).expect("serialize"),
-        serde_json::json!({ "success": true, "data": { "added": 2, "removed": 1 } })
+        serde_json::json!({
+            "success": true,
+            "data": {
+                "added": 2,
+                "removed": 1,
+                "files": [{ "path": "a.txt", "added": 2, "removed": 1 }],
+                "root": "/repo"
+            }
+        })
     );
 }
 
@@ -196,10 +226,12 @@ async fn diff_stat_admits_non_loopback_peer_without_remote_writes() {
     let body = post_diff_stat(state, root.path(), lan).await;
     assert!(body.success, "LAN peer may read the stat: {:?}", body.error);
     assert_eq!(
-        body.data,
+        body.data.map(without_root),
         Some(GitDiffStat {
             added: 2,
-            removed: 0
+            removed: 0,
+            files: vec![file("new.txt", 2, 0)],
+            root: String::new()
         })
     );
 }

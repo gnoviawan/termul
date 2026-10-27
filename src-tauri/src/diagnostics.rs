@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::acp::manager::stderr_ring::redact_line;
-use crate::process_util::hide_console;
+use crate::process_util::background_command_hygiene;
 
 /// Most bytes of log tail attached to a report.
 const LOG_TAIL_BYTES: usize = 64 * 1024;
@@ -248,7 +248,7 @@ fn gh_output(args: &[&OsStr], timeout: Duration) -> io::Result<Output> {
 /// to `Unavailable` like any other `Err`.
 fn run_with_timeout(program: &str, args: &[&OsStr], timeout: Duration) -> io::Result<Output> {
     let mut command = Command::new(program);
-    hide_console(&mut command);
+    background_command_hygiene(&mut command);
     let mut child = command
         .args(args)
         .stdin(Stdio::null())

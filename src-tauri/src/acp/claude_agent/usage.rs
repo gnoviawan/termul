@@ -80,7 +80,7 @@ impl ClaudeUsageProbe for SystemClaudeUsageProbe {
         let node = resolve_runtime_executable("node", &path)
             .ok_or_else(|| "Node.js is not installed".to_string())?;
         let mut command = tokio::process::Command::new(node);
-        crate::process_util::hide_console(&mut command);
+        crate::process_util::background_command_hygiene(&mut command);
         command
             .args(["--input-type=module", "-e", PROBE_SCRIPT])
             .current_dir(std::env::temp_dir())

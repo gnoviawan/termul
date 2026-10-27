@@ -357,6 +357,8 @@ describe('acp-store', () => {
       agentId: 'spawned-1',
       sessionId: 's-spawn',
       cwd: '/w',
+      // #1420: a reopen onto a fresh agent attaches the (empty) MCP list.
+      mcpServers: [],
       commandId: expect.any(String)
     })
     expect(useAcpStore.getState().sessions['s-spawn'].agentId).toBe('spawned-1')

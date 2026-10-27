@@ -326,7 +326,7 @@ impl NpmPackageInstaller for SystemNpmPackageInstaller {
                 .ok_or_else(|| "npm executable path is not valid Unicode".to_string())?,
         )?;
         let mut command = tokio::process::Command::new(npm.program);
-        crate::process_util::hide_console(&mut command);
+        crate::process_util::background_command_hygiene(&mut command);
         command
             .args(npm.prepend_args)
             .args([

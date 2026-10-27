@@ -206,7 +206,7 @@
     "@biomejs/biome": "2.4.16",
     "@tailwindcss/postcss": "^4",
     "@tailwindcss/typography": "^0.5.16",
-    "@tauri-apps/cli": "^2.12.3",
+    "@tauri-apps/cli": "2.12.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
     "@types/bun": "^1.4.2",

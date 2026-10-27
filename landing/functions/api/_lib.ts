@@ -21,6 +21,15 @@ export type Env = {
   DB: D1Database;
   TESTIMONIAL_AVATARS: R2Bucket;
   TESTIMONIALS_ADMIN_TOKEN?: string;
+  /**
+   * Optional pepper for the rate-limit IP hash (#1531). An unsalted SHA-256
+   * of an IP is trivially dictionary-attacked (IPv4 space is only 2^32).
+   * Set via `wrangler pages secret put TESTIMONIAL_RATE_LIMIT_SALT --project-name termul-landing` — never a
+   * committed value. Rotating the salt simply orphans in-flight rate-limit
+   * rows for the short window duration, which is acceptable.
+   * Unset keeps the legacy unsalted hash so existing rows stay consistent.
+   */
+  TESTIMONIAL_RATE_LIMIT_SALT?: string;
 };
 
 // Kept for internal use by the existing handler functions below.
@@ -78,7 +87,7 @@ export async function createTestimonial({ request, env }: PagesContext) {
 
   const payload = parseSubmission(formData);
   const ip = getClientIp(request);
-  const rateLimit = await checkRateLimit(env.DB, ip);
+  const rateLimit = await checkRateLimit(env.DB, ip, env.TESTIMONIAL_RATE_LIMIT_SALT);
   if (!rateLimit.allowed) {
     throw new ApiError('Too many submissions. Please try later.', 429);
   }
@@ -320,9 +329,9 @@ export async function insertTestimonial(
     .run();
 }
 
-export async function checkRateLimit(db: D1Database, ip: string) {
+export async function checkRateLimit(db: D1Database, ip: string, salt?: string) {
   const windowStart = new Date(Date.now() - SUBMISSION_WINDOW_MS).toISOString();
-  const ipHash = await sha256(ip);
+  const ipHash = await sha256(salt ? `${salt}:${ip}` : ip);
   const now = new Date().toISOString();
 
   await db

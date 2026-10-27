@@ -244,10 +244,23 @@ export interface GitStatusDetail {
   staged: boolean
 }
 
+/** Line stat of one changed file; `path` is repository-root relative, like
+ * `GitStatusDetail.path`. */
+export interface GitFileDiffStat {
+  path: string
+  added: number
+  removed: number
+}
+
 /** Working-tree line stat (tracked vs HEAD plus untracked files). */
 export interface GitDiffStat {
   added: number
   removed: number
+  /** Per-file rows of the totals. Absent from hosts older than this field. */
+  files?: GitFileDiffStat[]
+  /** Repository root (host path) that `files[].path` and status paths are
+   * relative to. Absent from hosts older than this field. */
+  root?: string
 }
 
 // A single commit row for the history/graph view.

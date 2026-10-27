@@ -51,6 +51,8 @@ pub use commit_detail::{
     GitCommitFileDiff,
 };
 pub use diff_stat::{git_get_diff_stat, DiffStatError, GitDiffStat};
+#[cfg(test)]
+pub(crate) use diff_stat::GitFileDiffStat;
 pub use resolve::{resolve_executable, resolve_git_binary};
 pub use types::{GitCommit, GitCommitContext, GitStatus, GitStatusDetail};
 
