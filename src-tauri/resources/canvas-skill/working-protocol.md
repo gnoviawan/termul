@@ -39,7 +39,7 @@ For a thin prompt, read `vague-prompts` first.
 
 ## 6. Check the section, then fix it
 
-Read the result first. Every `create_node`, `set_properties`, `run_command` and `batch` result lists `issues`: the layout problems on the layers that call touched. Each issue has the layer's `id`, a `kind` and a `message` that says what to change:
+Read the result first. When a `create_node`, `set_properties`, `run_command` or `batch` call leaves a layout problem on a layer it touched, its result lists it under `issues`. Each issue has the layer's `id`, a `kind` and a `message` that says what to change:
 
 - `invisible_text`: the text has no visible fill.
 - `low_contrast`: the text colour is too close to what is behind it.
@@ -47,7 +47,7 @@ Read the result first. Every `create_node`, `set_properties`, `run_command` and 
 - `collapsed`: a frame or a text layer is 0 wide or 0 high.
 - `missing_glyph`: no font draws some of the characters, so they show as boxes.
 
-Fix every issue in your next call, before you build more. A `batch` with issues returns `{"results": [...], "issues": [...]}` instead of the plain array. The `warnings` in a result say how the canvas read your input. For example, an `x` or `y` on a child of an auto-layout frame is ignored, so leave them out there.
+Fix every issue in your next call, before you build more. A `batch` with issues returns `{"results": [...], "names": {...}, "issues": [...]}`, with `names` only when a step is named. The `warnings` in a result say how the canvas read your input. For example, an `x` or `y` on a child of an auto-layout frame is ignored, so leave them out there.
 
 Then call `screenshot` with the section's id and compare it with this checklist. Call `get_node` on anything that looks wrong to find the cause.
 
