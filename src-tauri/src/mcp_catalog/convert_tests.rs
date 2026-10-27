@@ -111,7 +111,7 @@ fn package_arguments_are_not_in_the_converted_argv() {
 fn versions_must_be_pinned_per_runner() {
     for (registry_type, version) in [
         ("npm", Some("latest")),
-        ("npm", Some("^1.2.0")),
+        ("npm", Some("1.x")),
         ("npm", Some("1.2")),
         ("npm", None),
         ("pypi", Some("latest")),
