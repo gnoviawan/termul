@@ -30,6 +30,22 @@ export function snapshotFailure(saved: Rpc, tree: Rpc): string | undefined {
   return undefined
 }
 
+/** One `calls.jsonl` record. `attempted`: the router tried a snapshot after the call. */
+export interface CallRecord {
+  isError: boolean
+  attempted?: boolean
+  snapshotError?: string
+}
+
+/**
+ * Whether the last snapshot the router tried failed. `document.json` then
+ * still holds an earlier tree, and so do the integrity issues read from it.
+ */
+export function lastSnapshotFailed(calls: CallRecord[]): boolean {
+  const last = [...calls].reverse().find((call) => call.attempted)
+  return last?.snapshotError !== undefined
+}
+
 /** The JSON text of an `inspect_document` reply. */
 export function documentText(tree: Rpc): string | undefined {
   const content = tree.result?.content as { text?: string }[] | undefined

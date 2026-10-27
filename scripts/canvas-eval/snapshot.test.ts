@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { snapshotFailure } from './snapshot.ts'
+import { lastSnapshotFailed, snapshotFailure } from './snapshot.ts'
 import type { Rpc } from './upstream.ts'
 
 const saved: Rpc = { jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: '{}' }] } }
@@ -45,5 +45,21 @@ describe('snapshotFailure', () => {
       result: { content: [{ type: 'text', text: 'not json' }] }
     }
     expect(snapshotFailure(saved, garbled)).toBeDefined()
+  })
+})
+
+describe('lastSnapshotFailed', () => {
+  const changed = { isError: false, attempted: true }
+  const failed = { isError: false, attempted: true, snapshotError: 'truncated' }
+  const read = { isError: false }
+
+  test('a failed snapshot leaves the document stale until one succeeds', () => {
+    expect(lastSnapshotFailed([changed, failed, read])).toBe(true)
+    expect(lastSnapshotFailed([failed, changed, read])).toBe(false)
+  })
+
+  test('a run with no snapshot attempt has nothing stale', () => {
+    expect(lastSnapshotFailed([read])).toBe(false)
+    expect(lastSnapshotFailed([])).toBe(false)
   })
 })

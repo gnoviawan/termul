@@ -132,11 +132,11 @@ async function callTool(params: Json): Promise<Json> {
   const ms = Date.now() - at
   // A failed snapshot is the eval's problem, not the agent's. Its change did apply, so the agent
   // still gets its result and the failure is recorded for the run report instead.
-  const snapshotError =
-    !READ_ONLY.has(name) && result.isError !== true ? await snapshot() : undefined
+  const attempted = !READ_ONLY.has(name) && result.isError !== true
+  const snapshotError = attempted ? await snapshot() : undefined
   appendFileSync(
     join(out, 'calls.jsonl'),
-    `${JSON.stringify({ at: at - started, ms, tool: name, isError: result.isError === true, snapshotError })}\n`
+    `${JSON.stringify({ at: at - started, ms, tool: name, isError: result.isError === true, attempted, snapshotError })}\n`
   )
   return result
 }
