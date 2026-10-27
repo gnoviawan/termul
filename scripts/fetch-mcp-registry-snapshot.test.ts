@@ -4,13 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import {
-  buildSnapshot,
-  crawl,
-  META_FILE,
-  SNAPSHOT_FILE,
-  verifySnapshot
-} from './fetch-mcp-registry-snapshot.mjs'
+// @ts-expect-error The script is plain ESM so the release workflow runs it directly.
+import * as snapshotScript from './fetch-mcp-registry-snapshot.mjs'
+
+const { buildSnapshot, crawl, META_FILE, SNAPSHOT_FILE, verifySnapshot } = snapshotScript
 
 const OFFICIAL = 'io.modelcontextprotocol.registry/official'
 
