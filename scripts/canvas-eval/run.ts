@@ -264,7 +264,7 @@ function report(out: string) {
   const summary = [...new Set(rows.map((row) => row.run.mode))].map((mode) => {
     const of = rows.filter((row) => row.run.mode === mode)
     const judged = of.flatMap((row) => (row.score === undefined ? [] : [row.score]))
-    const failing = of.filter((row) => row.run.issues.length > 0).length
+    const failing = of.filter((row) => row.run.issues.length > 0 && !row.run.staleIssues).length
     const stale = of.filter((row) => row.run.staleIssues).length
     return `- ${mode}: ${of.length} runs, ${judged.length} judged${stale ? ` (${stale} with a stale snapshot left out)` : ''}, median score ${judged.length ? median(judged) : 'n/a'}, ${failing} with integrity issues, median ${median(of.map((row) => row.run.calls))} calls`
   })

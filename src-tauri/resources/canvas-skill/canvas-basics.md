@@ -80,7 +80,7 @@ The canvas renders one family today: **Inter**, in the faces `Regular`, `Italic`
 
 ## Batches
 
-`batch` runs several commands as one undo step. If one step fails, nothing is changed, and the error names the failing step by its index, its name and its command, as in `step 4 "cta-button" (node.create "CTA button")`.
+`batch` runs several commands as one undo step. If one step fails, nothing is changed, and the error names the failing step by its index, its name if it has one, and its command, as in `step 4 "cta-button" (node.create "CTA button")`.
 
 Name the steps that later steps build on. Give a step `"as": "<name>"`, and anywhere in a later step's params `{"$ref": "<name>"}` stands for the `id` that step returned. `{"$name": "<name>"}` still works and means the same. Names are yours to choose, such as `hero` or `cta-button`. They are not layer names, and each one may name only one step of the batch. A step can refer only to a name an earlier step defined. When any step has a name, the result is `{"results": [...], "names": {"hero": 12, ...}}`, so you can use those ids in your next call without searching the tree. A layout problem on a layer the batch touched adds `issues` to the result (see `working-protocol`).
 
