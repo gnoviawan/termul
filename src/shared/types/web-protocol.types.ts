@@ -187,6 +187,17 @@ export const WS_REQUEST_TYPES = [
   // MCP catalog (spine AD-1): `{ query?, cursor?, limit? }` → one
   // `McpCatalogPage` of the host's converted registry snapshot. A read.
   'search_mcp_catalog',
+  // MCP install (spine AD-5): `describe_mcp_install { source, choice? }` is
+  // the generated form (a read); `plan_mcp_install { source, choice?, inputs }`
+  // builds the immutable plan bound to this connection; `commit_mcp_install
+  // { planId, launchDigest, secretValues }` resolves it once; and
+  // `cancel_mcp_install { planId }` drops it. The three mutations need the
+  // connection's write capability (AD-12). Payloads and replies are the
+  // `McpInstall*` shapes of `mcp-catalog.types.ts`.
+  'describe_mcp_install',
+  'plan_mcp_install',
+  'commit_mcp_install',
+  'cancel_mcp_install',
   // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web client
   // installs a catalog agent through `install_acp_agent` (the host downloads +
   // verifies sha256 + extracts + atomically activates). The request is
@@ -341,6 +352,10 @@ export const WS_COMMAND_CLASSES: Readonly<
   set_catalog_opt_in: ['idempotent', null],
   fetch_acp_registry_snapshot: ['read', null],
   search_mcp_catalog: ['read', null],
+  describe_mcp_install: ['read', null],
+  plan_mcp_install: ['idempotent', null],
+  commit_mcp_install: ['idempotent', null],
+  cancel_mcp_install: ['idempotent', null],
   install_acp_agent: ['command', 'payload'],
   acp_deliver_auth_redirect: ['command', 'receipt-only'],
   store_read: ['read', null],

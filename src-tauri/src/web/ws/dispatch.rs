@@ -186,6 +186,21 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "search_mcp_catalog" => {
             mcp_catalog::handle_search_mcp_catalog(id, &req.payload).await
         }
+        // MCP install (spine AD-5): form, plan, commit and cancel on the same
+        // service as `POST /mcp-catalog/install/{form,plan,commit,cancel}`.
+        // The plan is bound to this connection.
+        "describe_mcp_install" => {
+            mcp_catalog::handle_describe_mcp_install(id, &req.payload).await
+        }
+        "plan_mcp_install" => {
+            mcp_catalog::handle_plan_mcp_install(id, &req.payload, env).await
+        }
+        "commit_mcp_install" => {
+            mcp_catalog::handle_commit_mcp_install(id, &req.payload, env).await
+        }
+        "cancel_mcp_install" => {
+            mcp_catalog::handle_cancel_mcp_install(id, &req.payload, env).await
+        }
         // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web
         // client installs a catalog agent through `install_acp_agent`; the
         // host resolves the agent by id from the catalog, downloads the HTTPS
