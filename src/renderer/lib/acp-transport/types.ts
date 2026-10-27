@@ -10,6 +10,7 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
+import type { McpCatalogPage, McpCatalogSearchRequest } from '@shared/types/mcp-catalog.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AddProjectPayload,
@@ -198,6 +199,11 @@ export interface AcpTransport {
    * CDN registry augmentation. Failures throw {@link AcpTransportError}.
    */
   setCatalogOptIn(enabled: boolean): Promise<void>
+  /**
+   * One page of the host-owned MCP catalog (`search_mcp_catalog`). Failures
+   * throw {@link AcpTransportError} carrying the host's code (`VALIDATION_ERROR`).
+   */
+  searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage>
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
   setTurnIdleTimeout(secs: number | null): Promise<void>

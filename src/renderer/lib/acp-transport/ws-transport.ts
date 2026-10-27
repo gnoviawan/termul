@@ -13,6 +13,7 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
+import type { McpCatalogPage, McpCatalogSearchRequest } from '@shared/types/mcp-catalog.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AcpAuthenticateReply,
@@ -800,6 +801,11 @@ export class WsAcpTransport implements AcpTransport {
   /** `list_acp_catalog`: the host-resolved catalog (see {@link AcpTransport.listCatalog}). */
   async listCatalog(refresh = false): Promise<AcpCatalog> {
     return this.request<AcpCatalog>('list_acp_catalog', { refresh })
+  }
+
+  /** `search_mcp_catalog`: one page of the host's MCP catalog (see {@link AcpTransport.searchMcpCatalog}). */
+  async searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage> {
+    return this.request<McpCatalogPage>('search_mcp_catalog', request)
   }
 
   /** `set_catalog_opt_in`: persist the host catalog opt-in. */

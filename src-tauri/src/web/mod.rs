@@ -40,6 +40,7 @@ pub mod git_hunk_api;
 pub mod host_allow;
 pub mod install_api;
 pub mod log_api;
+pub mod mcp_catalog_api;
 #[cfg(test)]
 pub(crate) mod log_capture;
 pub mod mcp_oauth_api;

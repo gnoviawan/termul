@@ -23,6 +23,7 @@ use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager};
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::catalog_api;
+use crate::web::mcp_catalog_api;
 use crate::web::connection_runtime::ConnectionRuntime;
 use crate::web::diagnostics_api;
 use crate::web::fs_api;
@@ -304,6 +305,9 @@ pub fn router(
             get(acp_api::factory_key_status).post(acp_api::factory_key_save),
         )
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
+        // MCP catalog search (spine AD-1), a read open to every connected
+        // client; see `web/mcp_catalog_api.rs`.
+        .route("/mcp-catalog/search", get(mcp_catalog_api::search))
         // ACP install web route (CAP-6 / Story 9: verified-atomic install).
         // Mirrors the desktop `#[tauri::command] acp_install_agent` handler;
         // see `web/install_api.rs`. Registered AHEAD of the static fallback so
@@ -509,6 +513,7 @@ pub fn router_with_static(
         .route("/shells", get(fs_api::shells))
         .route("/acp/catalog", get(catalog_api::list))
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
+        .route("/mcp-catalog/search", get(mcp_catalog_api::search))
         .route("/acp/install", post(install_api::install))
         .route("/worktree/list", post(worktree_api::list))
         .route("/worktree/create", post(worktree_api::create))
