@@ -93,6 +93,9 @@ const QUIET_NAMESPACES: &[&str] = &[
     "window",
 ];
 
+/// Commands in other namespaces that change no layer.
+const QUIET_COMMANDS: &[&str] = &["proto.linkNotice"];
+
 /// The activity behind one control frame `method(params) -> result` that the
 /// agent tool `tool` sent, or `None` when the frame shows nothing (a helper
 /// frame of the tool, a UI-only or file call). `result` is parsed only by
@@ -150,7 +153,7 @@ fn command_activity(
                     ids.extend(ids_in(inner));
                 }
             }
-            // A batch with named steps answers {results, names} instead of the array.
+            // termul-v0.4.0's editor answers a named batch with {results, names}.
             let result = result();
             let steps = result.get("results").unwrap_or(&result);
             for step in steps.as_array().into_iter().flatten() {
@@ -166,8 +169,17 @@ fn command_activity(
         "edit.undo" | "edit.redo" => write(Targets::Selection),
         "file.export" => read(named_or_selection(params)),
         "select.none" => None,
+        // A font load changes only the auto-sizing text it refits.
+        "text.loadFont" | "text.rescanFonts" => {
+            let refitted = result()
+                .get("refitted")
+                .and_then(Value::as_array)
+                .map(|ids| ids.iter().filter_map(Value::as_u64).collect())
+                .unwrap_or_default();
+            write(nodes(refitted, None))
+        }
         _ if namespace == "select" => read(named_or_selection(params)),
-        _ if QUIET_NAMESPACES.contains(&namespace) => None,
+        _ if QUIET_NAMESPACES.contains(&namespace) || QUIET_COMMANDS.contains(&command) => None,
         _ => {
             let mut ids = ids_in(params);
             ids.extend(ids_in(&result()));
@@ -252,7 +264,7 @@ fn named_or_selection(params: &Value) -> Targets {
 }
 
 /// `ids` (an array or one id) and `id` of an object. Ids are u64 numbers;
-/// a `$step` or `$name` reference or any other shape is skipped.
+/// a `$step`, `$ref` or `$name` reference or any other shape is skipped.
 fn ids_in(value: &Value) -> Vec<u64> {
     let mut ids = Vec::new();
     match value.get("ids") {
