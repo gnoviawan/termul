@@ -443,9 +443,23 @@ fn convert_package(package: &RegistryPackage) -> Result<Launch, McpCatalogReason
 }
 
 /// A name the runner reads from its own environment can redirect what it
-/// runs (`NODE_OPTIONS=--require`, `npm_config_registry`, `UV_INDEX_URL`), so
-/// a package declaring one is unsupported. Matched case-insensitively.
-const DENIED_ENV_NAMES: &[&str] = &["NODE_OPTIONS", "NODE_PATH", "PATH", "PATHEXT", "COMSPEC"];
+/// runs (`NODE_OPTIONS=--require`, `npm_config_registry`, `UV_INDEX_URL`) or
+/// where and how it downloads the package (`HTTPS_PROXY`,
+/// `NODE_TLS_REJECT_UNAUTHORIZED`), so a package declaring one is
+/// unsupported. Matched case-insensitively.
+const DENIED_ENV_NAMES: &[&str] = &[
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "PATH",
+    "PATHEXT",
+    "COMSPEC",
+    "NODE_TLS_REJECT_UNAUTHORIZED",
+    "NODE_EXTRA_CA_CERTS",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+];
 const DENIED_ENV_PREFIXES: &[&str] = &[
     "NPM_CONFIG_",
     "UV_",
@@ -457,6 +471,8 @@ const DENIED_ENV_PREFIXES: &[&str] = &[
     "DOTNET_",
     "NUGET_",
 ];
+/// `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` and kin.
+const DENIED_ENV_SUFFIXES: &[&str] = &["_PROXY"];
 
 #[must_use]
 pub(crate) fn is_denied_env_name(name: &str) -> bool {
@@ -465,6 +481,9 @@ pub(crate) fn is_denied_env_name(name: &str) -> bool {
         || DENIED_ENV_PREFIXES
             .iter()
             .any(|prefix| upper.starts_with(prefix))
+        || DENIED_ENV_SUFFIXES
+            .iter()
+            .any(|suffix| upper.ends_with(suffix))
 }
 
 /// An env name becomes a docker `-e` argv element, so it must be a plain

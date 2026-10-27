@@ -439,6 +439,24 @@ fn oci_images_must_come_from_an_allowed_registry() {
 }
 
 #[test]
+fn download_redirect_env_names_are_denied() {
+    for name in [
+        "HTTPS_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "Ssl_Cert_Dir",
+        "REQUESTS_CA_BUNDLE",
+        "curl_ca_bundle",
+    ] {
+        assert!(is_denied_env_name(name), "{name}");
+    }
+}
+
+#[test]
 fn unknown_registry_types_and_non_stdio_transports_are_unsupported() {
     for registry_type in ["mcpb", "cargo", "gem"] {
         assert_eq!(
