@@ -369,6 +369,7 @@ fn a_timeout_advises_by_tool_and_only_reads_are_retried_as_is() {
         ("run_command", "read the current state"),
         ("get_node", "retry once"),
         ("inspect_document", "retry once"),
+        ("list_issues", "retry once"),
     ];
     for (tool, hint) in advice {
         let encoded = late.to_backend_string_for(Some(tool));
