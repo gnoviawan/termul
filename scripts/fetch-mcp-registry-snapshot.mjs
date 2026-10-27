@@ -68,6 +68,18 @@ function readNameList(path) {
   )
 }
 
+/** Stops reading once the body passes `maxBytes`, so an oversized page is never buffered whole. */
+export async function readBody(response, maxBytes) {
+  const chunks = []
+  let total = 0
+  for await (const chunk of response.body ?? []) {
+    total += chunk.length
+    if (total > maxBytes) throw new Error(`registry page exceeds ${maxBytes} bytes`)
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
 async function fetchPage(cursor) {
   const url = new URL(REGISTRY)
   url.searchParams.set('limit', String(PAGE_LIMIT))
@@ -79,9 +91,7 @@ async function fetchPage(cursor) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) })
       if (!response.ok) throw new Error(`registry returned HTTP ${response.status}`)
-      const body = Buffer.from(await response.arrayBuffer())
-      if (body.length > MAX_PAGE_BYTES)
-        throw new Error(`registry page exceeds ${MAX_PAGE_BYTES} bytes`)
+      const body = await readBody(response, MAX_PAGE_BYTES)
       return JSON.parse(body.toString('utf8'))
     } catch (error) {
       lastError = error
