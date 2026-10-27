@@ -7,7 +7,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use super::frame::SessionRpcResult;
 use super::gate::{CompletionProvider, CompletionStart, SessionGate};
 
-pub(super) use crate::test_support::test_nonce;
+pub(super) use crate::test_support::{invalid_test_nonce, test_nonce};
 
 pub(super) struct SharedWriter(Arc<Mutex<Vec<u8>>>);
 

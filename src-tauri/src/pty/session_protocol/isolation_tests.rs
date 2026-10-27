@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use super::deliver::process_reader_chunk;
 use super::filter::SessionFilter;
 use super::frame::SessionRpcResult;
-use super::gate_test_support::{capture_gate, start_completion, test_nonce};
+use super::gate_test_support::{capture_gate, invalid_test_nonce, start_completion, test_nonce};
 
 fn completion_frame() -> Vec<u8> {
     let payload = serde_json::json!({
@@ -133,10 +133,15 @@ async fn prompt_frame_is_a_lifecycle_event() {
     let hub = TerminalEventHub::standalone();
     let pending = Mutex::new(Vec::new());
     let mut filter = SessionFilter::new();
-    let init = b"\x1b]9477;{\"type\":\"InitShell\",\"session_id\":\"s1\",\"nonce\":\"n1\"}\x07";
+    let init_payload = serde_json::json!({
+        "type": "InitShell",
+        "session_id": "s1",
+        "nonce": test_nonce()
+    });
+    let init = format!("\x1b]9477;{init_payload}\x07");
     assert!(process_reader_chunk(
         &mut filter,
-        init,
+        init.as_bytes(),
         &pending,
         &gate,
         "test",
@@ -381,9 +386,12 @@ async fn hub_publishes_initshell_before_the_prompt() {
         "prompt_generation": 7, "line_empty": true,
         "prompt_suppressed": true, "cwd": "/repo"
     });
-    let chunk = format!(
-        "\x1b]9477;{{\"type\":\"InitShell\",\"session_id\":\"s1\",\"nonce\":\"n1\"}}\x07\x1b]9477;{prompt}\x07"
-    );
+    let init_shell = serde_json::json!({
+        "type": "InitShell",
+        "session_id": "s1",
+        "nonce": test_nonce()
+    });
+    let chunk = format!("\x1b]9477;{init_shell}\x07\x1b]9477;{prompt}\x07");
 
     assert!(process_reader_chunk(
         &mut filter,
@@ -422,10 +430,14 @@ async fn hub_command_started_leaves_the_editor() {
     let pending = Mutex::new(Vec::new());
     let mut filter = SessionFilter::new();
 
-    let unauthenticated = b"\x1b]9477;{\"type\":\"CommandStarted\",\"nonce\":\"wrong\"}\x07";
+    let unauthenticated_payload = serde_json::json!({
+        "type": "CommandStarted",
+        "nonce": invalid_test_nonce()
+    });
+    let unauthenticated = format!("\x1b]9477;{unauthenticated_payload}\x07");
     assert!(process_reader_chunk(
         &mut filter,
-        unauthenticated,
+        unauthenticated.as_bytes(),
         &pending,
         &gate,
         "test",
@@ -433,10 +445,14 @@ async fn hub_command_started_leaves_the_editor() {
     ));
     assert!(events.try_recv().is_err());
 
-    let started = b"\x1b]9477;{\"type\":\"CommandStarted\",\"nonce\":\"n1\"}\x07";
+    let started_payload = serde_json::json!({
+        "type": "CommandStarted",
+        "nonce": test_nonce()
+    });
+    let started = format!("\x1b]9477;{started_payload}\x07");
     assert!(process_reader_chunk(
         &mut filter,
-        started,
+        started.as_bytes(),
         &pending,
         &gate,
         "test",
@@ -464,11 +480,15 @@ async fn hub_records_the_finished_exit_code() {
     let pending = Mutex::new(Vec::new());
     let mut filter = SessionFilter::new();
 
-    let unauthenticated =
-        b"\x1b]9477;{\"type\":\"CommandFinished\",\"nonce\":\"wrong\",\"exit_code\":2}\x07";
+    let unauthenticated_payload = serde_json::json!({
+        "type": "CommandFinished",
+        "nonce": invalid_test_nonce(),
+        "exit_code": 2
+    });
+    let unauthenticated = format!("\x1b]9477;{unauthenticated_payload}\x07");
     assert!(process_reader_chunk(
         &mut filter,
-        unauthenticated,
+        unauthenticated.as_bytes(),
         &pending,
         &gate,
         "test",
@@ -476,10 +496,15 @@ async fn hub_records_the_finished_exit_code() {
     ));
     assert!(events.try_recv().is_err());
 
-    let finished = b"\x1b]9477;{\"type\":\"CommandFinished\",\"nonce\":\"n1\",\"exit_code\":2}\x07";
+    let finished_payload = serde_json::json!({
+        "type": "CommandFinished",
+        "nonce": test_nonce(),
+        "exit_code": 2
+    });
+    let finished = format!("\x1b]9477;{finished_payload}\x07");
     assert!(process_reader_chunk(
         &mut filter,
-        finished,
+        finished.as_bytes(),
         &pending,
         &gate,
         "test",
@@ -497,7 +522,8 @@ async fn hub_records_the_finished_exit_code() {
 
 fn lifecycle_frame(kind: &str, nonce: &str) -> Vec<u8> {
     let payload = serde_json::json!({
-        "type": kind, "session_id": if nonce == "n2" { "evil" } else { "s1" },
+        "type": kind,
+        "session_id": if nonce == invalid_test_nonce() { "evil" } else { "s1" },
         "nonce": nonce, "prompt_generation": 7, "line_empty": true,
         "prompt_suppressed": true, "cwd": "/repo"
     });
@@ -509,7 +535,7 @@ async fn forged_initshell_is_ignored() {
     let mut reader = TrustReader::new();
     let mut events = reader.hub.subscribe();
     for kind in ["InitShell", "PromptReady"] {
-        reader.receive(&lifecycle_frame(kind, "n2"));
+        reader.receive(&lifecycle_frame(kind, invalid_test_nonce()));
     }
     assert!(
         events.try_recv().is_err(),
@@ -574,7 +600,7 @@ async fn host_trusts_only_an_authenticated_prompt() {
     reader.receive(&lifecycle_frame("PromptReady", test_nonce()));
     assert!(!reader.gate.trusted_at_prompt(), "prompt before InitShell");
     reader.receive(&lifecycle_frame("InitShell", test_nonce()));
-    reader.receive(&lifecycle_frame("PromptReady", "other"));
+    reader.receive(&lifecycle_frame("PromptReady", invalid_test_nonce()));
     assert!(!reader.gate.trusted_at_prompt(), "wrong nonce");
     for (line_empty, suppressed) in [(false, true), (true, false), (false, false)] {
         let payload = serde_json::json!({
@@ -591,7 +617,7 @@ async fn host_trusts_only_an_authenticated_prompt() {
     );
     let mut combined = TrustReader::new();
     let mut chunk = lifecycle_frame("InitShell", test_nonce());
-    chunk.extend(lifecycle_frame("PromptReady", "other"));
+    chunk.extend(lifecycle_frame("PromptReady", invalid_test_nonce()));
     combined.receive(&chunk);
     assert!(
         !combined.gate.trusted_at_prompt(),
@@ -608,7 +634,7 @@ async fn raw_command_ends_host_trust() {
     chunk.extend(lifecycle_frame("PromptReady", test_nonce()));
     reader.receive(&chunk);
     assert!(reader.gate.trusted_at_prompt());
-    reader.receive(&lifecycle_frame("CommandStarted", "other"));
+    reader.receive(&lifecycle_frame("CommandStarted", invalid_test_nonce()));
     assert!(
         reader.gate.trusted_at_prompt(),
         "forged command changed trust"
@@ -781,7 +807,7 @@ async fn host_checks_the_completion_frame() {
         let call = super::rpc::request_completion(&pty, &id, &request, true);
         tokio::pin!(call);
         tokio::select! { reply = &mut call => panic!("reply before frame: {reply:?}"), _ = tokio::task::yield_now() => {} }
-        reader.receive(&rpc_frame(3, "/repo", "wrong"));
+        reader.receive(&rpc_frame(3, "/repo", invalid_test_nonce()));
         tokio::select! { reply = &mut call => panic!("wrong nonce completed: {reply:?}"), _ = tokio::task::yield_now() => {} }
         reader.receive(&rpc_frame(generation, cwd, test_nonce()));
         let reply = serde_json::to_value(call.await).unwrap();
@@ -1532,7 +1558,7 @@ async fn forged_command_finished_does_not_record_exit_code() {
     let mut events = hub.subscribe();
     assert!(process_reader_chunk(
         &mut filter,
-        &command_finished_frame("forged", Some(3)),
+        &command_finished_frame(invalid_test_nonce(), Some(3)),
         &pending,
         &gate,
         "test",
