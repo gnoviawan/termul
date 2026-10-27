@@ -246,7 +246,9 @@ function report(out: string) {
     const items = JUDGED.map((item) => judged[item]).filter(
       (v): v is number => typeof v === 'number'
     )
-    const score = items.length === JUDGED.length ? median([integrity, ...items]) : undefined
+    // Integrity read from an earlier snapshot would score a design the agent moved past.
+    const score =
+      items.length === JUDGED.length && !run.staleIssues ? median([integrity, ...items]) : undefined
     return { run, integrity, score }
   })
   const table = [
@@ -256,14 +258,15 @@ function report(out: string) {
       .sort((a, b) => a.run.id.localeCompare(b.run.id) || a.run.mode.localeCompare(b.run.mode))
       .map(
         ({ run, score }) =>
-          `| ${run.id} | ${run.mode} | ${score ?? 'not judged'} | ${run.issues.length} | ${run.calls} | ${run.turns ?? '?'} | ${run.failedSnapshots ?? '?'}${run.staleIssues ? ', last one stale' : ''} |`
+          `| ${run.id} | ${run.mode} | ${score ?? (run.staleIssues ? 'stale snapshot' : 'not judged')} | ${run.issues.length} | ${run.calls} | ${run.turns ?? '?'} | ${run.failedSnapshots ?? '?'}${run.staleIssues ? ', last one stale' : ''} |`
       )
   ]
   const summary = [...new Set(rows.map((row) => row.run.mode))].map((mode) => {
     const of = rows.filter((row) => row.run.mode === mode)
     const judged = of.flatMap((row) => (row.score === undefined ? [] : [row.score]))
     const failing = of.filter((row) => row.run.issues.length > 0).length
-    return `- ${mode}: ${of.length} runs, ${judged.length} judged, median score ${judged.length ? median(judged) : 'n/a'}, ${failing} with integrity issues, median ${median(of.map((row) => row.run.calls))} calls`
+    const stale = of.filter((row) => row.run.staleIssues).length
+    return `- ${mode}: ${of.length} runs, ${judged.length} judged${stale ? ` (${stale} with a stale snapshot left out)` : ''}, median score ${judged.length ? median(judged) : 'n/a'}, ${failing} with integrity issues, median ${median(of.map((row) => row.run.calls))} calls`
   })
   const text = ['# Canvas eval report', '', ...summary, '', ...table, ''].join('\n')
   writeFileSync(join(out, 'report.md'), text)
