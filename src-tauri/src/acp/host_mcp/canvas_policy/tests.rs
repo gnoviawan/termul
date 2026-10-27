@@ -108,6 +108,7 @@ fn an_export_without_a_format_takes_it_from_the_paths_extension() {
         ("thumb.webp", "webp"),
         ("shot.png", "png"),
         ("design.fig", "fig"),
+        ("res/drawable/ic_logo.XML", "xml"),
     ] {
         let (_, stripped) = export_to("file.export", json!({"path": requested}));
         assert_eq!(stripped["params"], json!({"format": format}), "{requested}");
@@ -200,6 +201,177 @@ fn commands_and_methods_that_name_files_are_unsupported_in_kiosk() {
     ];
     for (method, params) in cases {
         assert!(refused(&route(method, &params)), "{method} {params}");
+    }
+}
+
+fn refusal(method: &str, params: &Value) -> CanvasError {
+    match route(method, params) {
+        CanvasRoute::Refuse(error) if error.code == CanvasErrorCode::UnsupportedInKiosk => error,
+        other => panic!("{method} {params} is refused, not {other:?}"),
+    }
+}
+
+#[test]
+fn a_command_that_names_a_file_is_refused_and_its_inline_form_goes_to_the_editor() {
+    for (command, with_file, inline, instead) in [
+        (
+            "text.loadFont",
+            json!({"path": "fonts/Brand.ttf"}),
+            json!({"data": "AAAA"}),
+            "`data`",
+        ),
+        (
+            "data.fill",
+            json!({"id": 4, "rows": [], "dir": "out"}),
+            json!({"id": 4, "rows": []}),
+            "`dir`",
+        ),
+        (
+            "component.playground",
+            json!({"id": 4, "path": "preview.png"}),
+            json!({"id": 4}),
+            "`path`",
+        ),
+        (
+            "codeConnect.export",
+            json!({"path": "figcraft.connect.json"}),
+            json!({}),
+            "`path`",
+        ),
+        (
+            "codeConnect.import",
+            json!({"path": "figcraft.connect.json"}),
+            json!({"json": {"version": 1, "links": []}}),
+            "`json`",
+        ),
+        (
+            "plugin.import",
+            json!({"path": "plugins/hello"}),
+            json!({"manifest": {}, "wasm": "AAAA"}),
+            "`manifest`",
+        ),
+    ] {
+        let error = refusal("engine.execute", &execute(command, with_file));
+        assert!(
+            error.message.contains("reads or writes files") && error.message.contains(instead),
+            "{command}: {}",
+            error.message
+        );
+        assert_eq!(
+            route("engine.execute", &execute(command, inline.clone())),
+            CanvasRoute::Forward,
+            "{command} {inline}"
+        );
+    }
+}
+
+#[test]
+fn a_command_that_opens_closes_or_switches_documents_is_refused() {
+    for command in [
+        "file.new",
+        "file.newBoard",
+        "file.newFromTemplate",
+        "file.duplicate",
+        "file.close",
+        "version.duplicate",
+        "branch.create",
+        "branch.open",
+        "doc.switch",
+        "doc.nextTab",
+        "doc.previousTab",
+        "collab.join",
+        "collab.openFile",
+        "collab.recoverFile",
+    ] {
+        let error = refusal("engine.execute", &execute(command, json!({"index": 0})));
+        assert!(
+            error.message.contains("project's document"),
+            "{command}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn marking_the_document_saved_without_saving_is_refused() {
+    let error = refusal("engine.execute", &execute("file.markSaved", json!({})));
+    assert!(
+        error.message.contains("without saving") && error.message.contains("save_file"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn sending_the_document_outside_termul_is_refused() {
+    for command in [
+        "library.publishToServer",
+        "collab.host",
+        "collab.publish",
+        "collab.share",
+    ] {
+        let error = refusal("engine.execute", &execute(command, json!({})));
+        assert!(
+            error.message.contains("outside Termul"),
+            "{command}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn an_android_vector_drawable_export_is_written_by_termul_with_its_options() {
+    let (path, stripped) = export_to(
+        "file.export",
+        json!({"path": "res/drawable/ic_logo.xml", "vdCompat": "exact"}),
+    );
+    assert_eq!(path, "res/drawable/ic_logo.xml");
+    assert_eq!(
+        stripped["params"],
+        json!({"format": "xml", "vdCompat": "exact"})
+    );
+}
+
+#[test]
+fn layers_exported_as_one_zip_come_back_inline_and_a_folder_is_refused() {
+    assert_eq!(
+        route(
+            "engine.execute",
+            &execute(
+                "file.exportLayers",
+                json!({"zip": true, "vdCompat": "exact"})
+            )
+        ),
+        CanvasRoute::Forward
+    );
+    refusal(
+        "engine.execute",
+        &execute("file.exportLayers", json!({"zip": true, "dir": "out"})),
+    );
+}
+
+#[test]
+fn a_batch_step_refused_on_its_own_refuses_the_batch_for_the_same_reason() {
+    let batch = |step: Value| {
+        execute(
+            "command.batch",
+            json!({"commands": [{"command": "node.create", "params": {}}, step]}),
+        )
+    };
+    for (step, cause) in [
+        (json!({"command": "file.markSaved"}), "without saving"),
+        (json!({"command": "file.newBoard"}), "project's document"),
+        (
+            json!({"command": "text.loadFont", "params": {"path": "a.ttf"}}),
+            "reads or writes files",
+        ),
+    ] {
+        let error = refusal("engine.execute", &batch(step.clone()));
+        assert!(
+            error.message.contains("step 1") && error.message.contains(cause),
+            "{step}: {}",
+            error.message
+        );
     }
 }
 
