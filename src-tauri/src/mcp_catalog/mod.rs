@@ -42,15 +42,11 @@ const MIN_DOTNET_SDK_MAJOR: u64 = 10;
 
 static SHARED: OnceCell<Arc<McpCatalogService>> = OnceCell::const_new();
 
-enum RunnerSource {
-    Probe(Mutex<Option<(Instant, RunnerAvailability)>>),
-    #[cfg(test)]
-    Fixed(RunnerAvailability),
-}
-
 pub struct McpCatalogService {
     catalog: LoadedCatalog,
-    runners: RunnerSource,
+    /// Set by tests in place of probing the host's PATH.
+    fixed_runners: Option<RunnerAvailability>,
+    runner_probe: Mutex<Option<(Instant, RunnerAvailability)>>,
 }
 
 /// A failure every transport returns with the same code and message.
@@ -83,7 +79,8 @@ impl McpCatalogService {
                     });
                 Arc::new(Self {
                     catalog,
-                    runners: RunnerSource::Probe(Mutex::new(None)),
+                    fixed_runners: None,
+                    runner_probe: Mutex::new(None),
                 })
             })
             .await
@@ -94,7 +91,8 @@ impl McpCatalogService {
     pub(crate) fn with_runners(catalog: LoadedCatalog, runners: RunnerAvailability) -> Self {
         Self {
             catalog,
-            runners: RunnerSource::Fixed(runners),
+            fixed_runners: Some(runners),
+            runner_probe: Mutex::new(None),
         }
     }
 
@@ -107,12 +105,10 @@ impl McpCatalogService {
     }
 
     async fn runners(&self) -> RunnerAvailability {
-        let cache = match &self.runners {
-            #[cfg(test)]
-            RunnerSource::Fixed(runners) => return *runners,
-            RunnerSource::Probe(cache) => cache,
-        };
-        if let Some((probed_at, runners)) = *cache.lock() {
+        if let Some(runners) = self.fixed_runners {
+            return runners;
+        }
+        if let Some((probed_at, runners)) = *self.runner_probe.lock() {
             if probed_at.elapsed() < RUNNER_PROBE_TTL {
                 return runners;
             }
@@ -121,7 +117,7 @@ impl McpCatalogService {
             .await
             .unwrap_or_default();
         log::debug!("[mcp-catalog] runner probe {runners:?}");
-        *cache.lock() = Some((Instant::now(), runners));
+        *self.runner_probe.lock() = Some((Instant::now(), runners));
         runners
     }
 }

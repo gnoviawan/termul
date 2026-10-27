@@ -212,7 +212,7 @@ pub(crate) fn search(
         .collect();
     // Items are sorted by name, and the sort is stable, so ties stay in name
     // order and every page of one query is deterministic.
-    matches.sort_by(|a, b| b.0.cmp(&a.0));
+    matches.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     let total = matches.len();
     let offset = match request.cursor.as_deref() {
         None => 0,
