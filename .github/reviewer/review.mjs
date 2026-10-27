@@ -24,6 +24,7 @@ import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Agent } from '@cursor/sdk'
+import { hasBotReview, REVIEWS_PER_PAGE } from './reviews.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const MAX_DIFF_CHARS = 300_000
@@ -78,9 +79,11 @@ async function gh(path, init = {}) {
 
 async function alreadyReviewed() {
   if (githubToken === '') return false
-  const response = await gh(`/repos/${repo}/pulls/${prNumber}/reviews?per_page=100`)
-  const reviews = await response.json()
-  return reviews.some((r) => typeof r.body === 'string' && r.body.includes(marker))
+  const fetchPage = async (page) => {
+    const path = `/repos/${repo}/pulls/${prNumber}/reviews?per_page=${REVIEWS_PER_PAGE}&page=${page}`
+    return (await gh(path)).json()
+  }
+  return hasBotReview(fetchPage, marker)
 }
 
 async function loadDiff() {
