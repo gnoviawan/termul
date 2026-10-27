@@ -271,12 +271,15 @@ export function AgentProse({
   text: rawText,
   streaming,
   reduced,
-  filePathContext
+  filePathContext,
+  linkScope = ''
 }: {
   text: string
   streaming: boolean
   reduced: boolean
   filePathContext?: FilePathResolutionContext
+  /** Stable key (the message id) so a link can be re-found after a remount. */
+  linkScope?: string
 }): React.JSX.Element {
   // While streaming, the store re-renders this component on every flush (up
   // to once per frame) and Streamdown re-parses the full tail markdown on
@@ -350,7 +353,7 @@ export function AgentProse({
     <div
       ref={rootRef}
       className="chat-streamdown min-w-0 text-sm leading-normal text-foreground"
-      data-external-link-scope=""
+      data-external-link-scope={linkScope}
     >
       <Streamdown
         mode={streaming ? 'streaming' : 'static'}

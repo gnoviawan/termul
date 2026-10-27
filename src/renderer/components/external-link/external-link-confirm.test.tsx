@@ -14,7 +14,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentProse } from '@/components/chat/chat-agent-prose'
 import { ThoughtGroup } from '@/components/chat/ThoughtGroup'
 import { MarkdownEditor } from '@/components/editor/MarkdownEditor'
-import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
+import {
+  ExternalLinkConfirmHost,
+  handleExternalLinkClick
+} from '@/components/external-link/ExternalLinkConfirm'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useBlockNote } from '@/hooks/use-blocknote'
 import { type ExternalOpenSpy, spyOnExternalOpens } from '@/lib/test-utils/external-link-opens'
@@ -366,13 +369,17 @@ describe('focus after the link re-rendered or remounted while the dialog was ope
 
   it('focuses the remounted copy of the link after Cancel', async () => {
     const view = renderWithHost(
-      withTooltips(<AgentProse key="a" text={streamed('')} streaming={false} reduced />)
+      withTooltips(
+        <AgentProse key="a" linkScope="m1" text={streamed('')} streaming={false} reduced />
+      )
     )
     const original = screen.getByText('docs').closest('a') as HTMLElement
     original.focus()
     await click(original)
     view.rerender(
-      withTooltips(<AgentProse key="b" text={streamed('')} streaming={false} reduced />)
+      withTooltips(
+        <AgentProse key="b" linkScope="m1" text={streamed('')} streaming={false} reduced />
+      )
     )
     await flush()
     expect(original.isConnected).toBe(false)
@@ -385,13 +392,17 @@ describe('focus after the link re-rendered or remounted while the dialog was ope
   it('focuses the remounted copy after Escape and after Open, too', async () => {
     for (const answer of ['escape', 'open'] as const) {
       const view = renderWithHost(
-        withTooltips(<AgentProse key="a" text={streamed('')} streaming={false} reduced />)
+        withTooltips(
+          <AgentProse key="a" linkScope="m1" text={streamed('')} streaming={false} reduced />
+        )
       )
       const original = screen.getByText('docs').closest('a') as HTMLElement
       original.focus()
       await click(original)
       view.rerender(
-        withTooltips(<AgentProse key="b" text={streamed('')} streaming={false} reduced />)
+        withTooltips(
+          <AgentProse key="b" linkScope="m1" text={streamed('')} streaming={false} reduced />
+        )
       )
       await flush()
       if (answer === 'escape') {
@@ -408,16 +419,73 @@ describe('focus after the link re-rendered or remounted while the dialog was ope
   it('picks the same one of two links to the same URL', async () => {
     const text = `[one](${URL_}) and [two](${URL_})`
     const view = renderWithHost(
-      withTooltips(<AgentProse key="a" text={text} streaming={false} reduced />)
+      withTooltips(<AgentProse key="a" linkScope="m1" text={text} streaming={false} reduced />)
     )
     const second = screen.getByText('two').closest('a') as HTMLElement
     second.focus()
     await click(second)
-    view.rerender(withTooltips(<AgentProse key="b" text={text} streaming={false} reduced />))
+    view.rerender(
+      withTooltips(<AgentProse key="b" linkScope="m1" text={text} streaming={false} reduced />)
+    )
     await flush()
 
     await click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expectFocusOnLink(URL_, 'two'))
+  })
+
+  it('finds the remounted message by its scope key, not another message with the same URL', async () => {
+    const two = (key: string) =>
+      withTooltips(
+        <>
+          <AgentProse
+            key="other"
+            linkScope="m0"
+            text={`[other](${URL_})`}
+            streaming={false}
+            reduced
+          />
+          <AgentProse key={key} linkScope="m1" text={`[mine](${URL_})`} streaming={false} reduced />
+        </>
+      )
+    const view = renderWithHost(two('a'))
+    const mine = screen.getByText('mine').closest('a') as HTMLElement
+    mine.focus()
+    await click(mine)
+    view.rerender(two('b'))
+    await flush()
+
+    await click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expectFocusOnLink(URL_, 'mine'))
+  })
+
+  it('does not move focus into another message that links to the same URL', async () => {
+    const pane = (rows: ReactNode) => withTooltips(<section aria-label="chat pane">{rows}</section>)
+    const other = (
+      <div key="other" data-testid="other-row">
+        <AgentProse text={`[other](${URL_})`} streaming={false} reduced />
+      </div>
+    )
+    const view = renderWithHost(
+      pane([
+        other,
+        <div key="mine">
+          <AgentProse text={`[mine](${URL_})`} streaming={false} reduced />
+        </div>
+      ])
+    )
+    const mine = screen.getByText('mine').closest('a') as HTMLElement
+    mine.focus()
+    await click(mine)
+    // The clicked row leaves the (virtualized) list while the dialog is open.
+    view.rerender(pane([other]))
+    await flush()
+
+    await click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body))
+    expect(screen.getByTestId('other-row').contains(document.activeElement)).toBe(false)
+    expect(screen.getByRole('region', { name: 'chat pane' }).contains(document.activeElement)).toBe(
+      true
+    )
   })
 
   it('focuses the nearest surviving container when the link is gone for good', async () => {
@@ -475,6 +543,43 @@ describe('fragment links in a thinking block', () => {
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(browserOpens()).toEqual([])
     expect(scrolled).toEqual([])
+  })
+})
+
+describe('fragment links in delegated HTML containers', () => {
+  const scrolled: Element[] = []
+  const original = Element.prototype.scrollIntoView
+  beforeEach(() => {
+    scrolled.length = 0
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this)
+    }
+  })
+  afterEach(() => {
+    Element.prototype.scrollIntoView = original
+  })
+
+  it('scrolls to the target inside the container and asks nothing', async () => {
+    renderWithHost(
+      <>
+        <h2 id="setup">Elsewhere</h2>
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: delegated link clicks, as in the app */}
+        {/* biome-ignore lint/a11y/useKeyWithClickEvents: links inside handle the keyboard */}
+        <div
+          data-external-link-scope=""
+          onClick={handleExternalLinkClick}
+          onAuxClick={handleExternalLinkClick}
+        >
+          <a href="#setup">jump</a>
+          <h2 id="setup">Setup</h2>
+        </div>
+      </>
+    )
+    await click(screen.getByText('jump'))
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(browserOpens()).toEqual([])
+    expect(scrolled.map((el) => el.textContent)).toEqual(['Setup'])
   })
 })
 

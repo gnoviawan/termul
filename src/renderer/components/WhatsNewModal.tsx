@@ -136,6 +136,7 @@ export function WhatsNewModal({
                       className="chat-prose text-xs leading-relaxed text-foreground"
                       // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via renderChatMarkdown (DOMPurify)
                       dangerouslySetInnerHTML={{ __html: notesHtml }}
+                      data-external-link-scope=""
                       onClick={handleExternalLinkClick}
                       onAuxClick={handleExternalLinkClick}
                     />

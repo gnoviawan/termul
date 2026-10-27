@@ -46,7 +46,9 @@ interface FocusLocator {
   href: string | null
   /** The closest `[data-external-link-scope]` (a message, a thought, a panel). */
   scope: Element | null
-  /** Position among same-href links inside `scope`, or the document. */
+  /** The scope's attribute value: a stable key (a message id) that survives a remount, or ''. */
+  scopeKey: string
+  /** Position among same-href links inside `scope`, or the document when there is no scope. */
   index: number
   /** The trigger's ancestors, nearest first, for when no equivalent link is left. */
   ancestors: HTMLElement[]
@@ -133,7 +135,8 @@ function locate(target: HTMLElement): FocusLocator {
     if (node === document.body || node === document.documentElement) break
     ancestors.push(node)
   }
-  return { href, scope, index, ancestors }
+  const scopeKey = scope?.getAttribute(EXTERNAL_LINK_SCOPE_ATTR) ?? ''
+  return { href, scope, scopeKey, index, ancestors }
 }
 
 /** Focus `element`; true if it (or, for an editor link, its editor) took focus. */
@@ -147,10 +150,29 @@ function tryFocus(element: HTMLElement | null | undefined): boolean {
   return editable !== null && document.activeElement === editable
 }
 
-/** The link that now stands where the trigger stood: same href, same scope, same position. */
+/** The connected scope standing in for the saved one: itself, or a remount with the same key. */
+function currentScope(locator: FocusLocator): Element | null {
+  if (locator.scope?.isConnected) return locator.scope
+  if (!locator.scopeKey) return null
+  return (
+    Array.from(document.querySelectorAll(SCOPE_SELECTOR)).find(
+      (scope) => scope.getAttribute(EXTERNAL_LINK_SCOPE_ATTR) === locator.scopeKey
+    ) ?? null
+  )
+}
+
+/**
+ * The link that now stands where the trigger stood: same href at the same
+ * position in the same scope, or in its remount with the same key. A scope
+ * that is gone and has no key cannot be told apart from another message that
+ * links to the same URL, so nothing is guessed: the caller falls back to the
+ * nearest surviving container.
+ */
 function equivalentLink(locator: FocusLocator): HTMLElement | undefined {
   if (locator.href === null) return undefined
-  const scope = locator.scope?.isConnected ? locator.scope : document
+  if (locator.scope === null) return linksTo(document, locator.href)[locator.index]
+  const scope = currentScope(locator)
+  if (scope === null) return undefined
   const links = linksTo(scope, locator.href)
   return links[locator.index] ?? links[0]
 }
@@ -273,7 +295,8 @@ const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i
  * Click / auxclick handler for a container of rendered (sanitized) HTML. Any
  * link click inside is stopped before it can navigate the webview or reach the
  * Tauri opener plugin, and absolute URLs go through the confirmation instead.
- * Relative and `#` links are only stopped: there is nothing external to open.
+ * A `#` link scrolls to its target inside the container's scope. Relative
+ * links are only stopped: there is nothing external to open.
  */
 export function handleExternalLinkClick(event: React.MouseEvent<HTMLElement>): void {
   if (!(event.target instanceof Element)) return
@@ -282,7 +305,8 @@ export function handleExternalLinkClick(event: React.MouseEvent<HTMLElement>): v
   event.preventDefault()
   if (event.type !== 'click' || event.button !== 0) return
   const href = anchor.getAttribute('href') ?? ''
-  if (HAS_SCHEME.test(href)) requestExternalLinkOpen(href, { returnFocusTo: anchor })
+  if (href.startsWith('#')) scrollToFragment(anchor, href)
+  else if (HAS_SCHEME.test(href)) requestExternalLinkOpen(href, { returnFocusTo: anchor })
 }
 
 /**

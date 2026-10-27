@@ -275,7 +275,10 @@ function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps): Rea
                   !expanded && 'max-h-[200px]'
                 )}
               >
-                <div className="thought-markdown min-w-0" data-external-link-scope="">
+                <div
+                  className="thought-markdown min-w-0"
+                  data-external-link-scope={messages[0] ? `thought:${messages[0].id}` : ''}
+                >
                   <Streamdown
                     mode={isStreaming ? 'streaming' : 'static'}
                     isAnimating={isStreaming}

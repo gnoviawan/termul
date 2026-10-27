@@ -118,6 +118,7 @@ export function TerminalAssistPanel({
             // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized via renderChatMarkdown
             dangerouslySetInnerHTML={{ __html: html ?? '' }}
             // Links ask before opening, like chat links (no direct open).
+            data-external-link-scope=""
             onClick={handleExternalLinkClick}
             onAuxClick={handleExternalLinkClick}
           />
