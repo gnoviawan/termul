@@ -21,8 +21,14 @@ import { normalizeRootIconSvg } from '@/lib/agents/sanitize-agent-icon'
 import { jsx } from '../../src/compat/jsx-runtime'
 import DOMPurify from '../../src/compat/shims/dompurify'
 import { innerHtmlSvg } from '../../src/compat/svg'
+import {
+  bundledIcons,
+  GRID_HEIGHT,
+  GRID_WIDTH,
+  legacyInnerHtmlSvg,
+  TILE
+} from './svg-attack-shared'
 import { SVG_ATTACKS } from './svg-attacks'
-import { bundledIcons, GRID_HEIGHT, GRID_WIDTH, legacyInnerHtmlSvg, TILE } from './svg-attack-shared'
 
 const [resultFile, mode = 'grid', indexArg = '0'] = process.argv.slice(2)
 const SETTLE_MS = 1500
@@ -69,7 +75,9 @@ function nativeBytes(html: string): Buffer | null {
   // The `<svg>` element rasterises its alpha mask at its layout box, not the intrinsic size.
   return Buffer.from(
     source.replace(/^<svg\b[^>]*>/, (tag) =>
-      tag.replace(/\s(?:width|height)="[^"]*"/g, '').replace('<svg', `<svg width="${TILE}" height="${TILE}"`)
+      tag
+        .replace(/\s(?:width|height)="[^"]*"/g, '')
+        .replace('<svg', `<svg width="${TILE}" height="${TILE}"`)
     )
   )
 }
@@ -104,7 +112,15 @@ function Timed({ children, measure }: { children: ReactElement[]; measure: Buffe
       const stats = renderer.getDebugFrameOverlayStats?.() ?? null
       writeFileSync(
         `${resultFile}.tmp`,
-        JSON.stringify({ alive: true, setImageMs, setImageMaxMs, setImageError, bytes: measure?.length ?? 0, elapsedMs: performance.now() - startedAt, stats })
+        JSON.stringify({
+          alive: true,
+          setImageMs,
+          setImageMaxMs,
+          setImageError,
+          bytes: measure?.length ?? 0,
+          elapsedMs: performance.now() - startedAt,
+          stats
+        })
       )
       renameSync(`${resultFile}.tmp`, resultFile as string)
       process.exit(0)
@@ -115,9 +131,19 @@ function Timed({ children, measure }: { children: ReactElement[]; measure: Buffe
     }
   }, [renderer, measure])
   return (
-    <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: '#08090a', flexDirection: 'row', gap: 8, padding: 8 }}>
+    <div
+      style={{
+        display: 'flex',
+        width: '100%',
+        height: '100%',
+        backgroundColor: '#08090a',
+        flexDirection: 'row',
+        gap: 8,
+        padding: 8
+      }}
+    >
       {children}
-      <img ref={probe} src="" style={{ width: 1, height: 1 }} />
+      <img alt="" ref={probe} src="" style={{ width: 1, height: 1 }} />
       <text style={{ color: '#ffffff', fontSize: 12 }}>{`frame ${tick}`}</text>
     </div>
   )
@@ -125,8 +151,16 @@ function Timed({ children, measure }: { children: ReactElement[]; measure: Buffe
 
 function rawTiles(markup: string): ReactElement[] {
   return [
-    nativeJsx('img', { key: 'img', src: `data:image/svg+xml;utf8,${encodeURIComponent(markup)}`, style: { width: TILE, height: TILE } }),
-    nativeJsx('svg', { key: 'svg', source: markup, style: { width: TILE, height: TILE, color: '#ffffff' } })
+    nativeJsx('img', {
+      key: 'img',
+      src: `data:image/svg+xml;utf8,${encodeURIComponent(markup)}`,
+      style: { width: TILE, height: TILE }
+    }),
+    nativeJsx('svg', {
+      key: 'svg',
+      source: markup,
+      style: { width: TILE, height: TILE, color: '#ffffff' }
+    })
   ]
 }
 
@@ -137,7 +171,10 @@ function Grid() {
   useEffect(() => {
     const timer = setTimeout(() => {
       const bounds = Object.fromEntries(
-        [...refs.current].map(([key, node]) => [key, node ? renderer.getElementBounds(node.id) : null])
+        [...refs.current].map(([key, node]) => [
+          key,
+          node ? renderer.getElementBounds(node.id) : null
+        ])
       )
       writeFileSync(`${resultFile}.tmp`, JSON.stringify({ alive: true, pid: process.pid, bounds }))
       renameSync(`${resultFile}.tmp`, resultFile as string)
@@ -156,17 +193,35 @@ function Grid() {
     </div>
   )
   const row = (cells: ReactElement[]) => (
-    <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 8, width: GRID_WIDTH - 16 }}>{cells}</div>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+        width: GRID_WIDTH - 16
+      }}
+    >
+      {cells}
+    </div>
   )
   return (
-    <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: '#08090a', flexDirection: 'column', gap: 16, padding: 8 }}>
+    <div
+      style={{
+        display: 'flex',
+        width: '100%',
+        height: '100%',
+        backgroundColor: '#08090a',
+        flexDirection: 'column',
+        gap: 16,
+        padding: 8
+      }}
+    >
       {row(icons.map((icon) => cell(`app:${icon.name}`, tile(appHtml(icon.svg), icon.name))))}
+      {row(icons.map((icon) => cell(`legacy:${icon.name}`, legacyInnerHtmlSvg(icon.legacyHtml))))}
       {row(
-        icons.map((icon) =>
-          cell(`legacy:${icon.name}`, legacyInnerHtmlSvg(icon.legacyHtml))
-        )
+        SVG_ATTACKS.map((attack) => cell(`attack:${attack.id}`, tile(attack.markup, attack.id)))
       )}
-      {row(SVG_ATTACKS.map((attack) => cell(`attack:${attack.id}`, tile(attack.markup, attack.id))))}
     </div>
   )
 }
@@ -175,7 +230,8 @@ function scene(): ReactElement {
   if (mode === 'grid') return <Grid />
   const attack = SVG_ATTACKS[Number(indexArg)]
   if (!attack) throw new Error(`no attack ${indexArg}`)
-  if (mode === 'raw') return <Timed measure={Buffer.from(attack.markup)}>{rawTiles(attack.markup)}</Timed>
+  if (mode === 'raw')
+    return <Timed measure={Buffer.from(attack.markup)}>{rawTiles(attack.markup)}</Timed>
   const html = appHtml(attack.markup)
   return (
     <Timed measure={nativeBytes(html) ?? nativeBytes(attack.markup)}>

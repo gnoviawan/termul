@@ -34,11 +34,33 @@ export interface SvgNode {
 }
 
 const PRESENTATION = [
-  'id', 'fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-width', 'stroke-linecap',
-  'stroke-linejoin', 'stroke-miterlimit', 'stroke-opacity', 'opacity', 'color', 'transform',
-  'clip-path', 'clip-rule', 'mask', 'display', 'visibility'
+  'id',
+  'fill',
+  'fill-opacity',
+  'fill-rule',
+  'stroke',
+  'stroke-width',
+  'stroke-linecap',
+  'stroke-linejoin',
+  'stroke-miterlimit',
+  'stroke-opacity',
+  'opacity',
+  'color',
+  'transform',
+  'clip-path',
+  'clip-rule',
+  'mask',
+  'display',
+  'visibility'
 ]
-const FONT = ['font-size', 'font-family', 'font-weight', 'font-style', 'text-anchor', 'letter-spacing']
+const FONT = [
+  'font-size',
+  'font-family',
+  'font-weight',
+  'font-style',
+  'text-anchor',
+  'letter-spacing'
+]
 const GRADIENT = ['gradientUnits', 'gradientTransform', 'spreadMethod', 'href']
 
 const ELEMENTS: Record<string, ReadonlySet<string>> = Object.fromEntries(
@@ -87,7 +109,8 @@ function decode(raw: string): string {
   return raw.replace(ENTITY, (match, named?: string, dec?: string, hex?: string) => {
     if (named) return NAMED[named] as string
     const code = dec ? Number(dec) : hex ? Number.parseInt(hex, 16) : 0
-    if (code <= 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) throw new Rejected(`entity ${match}`)
+    if (code <= 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff))
+      throw new Rejected(`entity ${match}`)
     return String.fromCodePoint(code)
   })
 }
@@ -134,8 +157,13 @@ function parse(src: string): SvgNode {
     const end = sticky(TAG_END)
     if (!end) throw new Rejected(`malformed <${name}>`)
     const ns = raw.get('xmlns')
-    if (depth === 0 && (name !== 'svg' || (ns !== undefined && ns !== SVG_NS))) throw new Rejected('root')
-    const kept = keep && name in ELEMENTS && (depth === 0) === (name === 'svg') && (ns === undefined || ns === SVG_NS)
+    if (depth === 0 && (name !== 'svg' || (ns !== undefined && ns !== SVG_NS)))
+      throw new Rejected('root')
+    const kept =
+      keep &&
+      name in ELEMENTS &&
+      (depth === 0) === (name === 'svg') &&
+      (ns === undefined || ns === SVG_NS)
     let node: SvgNode | null = null
     if (kept) {
       node = { name, attrs: [], children: [], text: '' }
@@ -164,7 +192,8 @@ function parse(src: string): SvgNode {
         at = close + 3
         continue
       }
-      if (src.startsWith('<!', at) || src.startsWith('<?', at)) throw new Rejected('markup declaration')
+      if (src.startsWith('<!', at) || src.startsWith('<?', at))
+        throw new Rejected('markup declaration')
       if (src[at] === '<') {
         const child = element(depth + 1, kept, childClip)
         if (child && node) node.children.push(child)
@@ -218,7 +247,7 @@ export function parseSvgIcon(markup: string): SvgNode | null {
   return tree
 }
 
-function escape(value: string, quote: boolean): string {
+function escapeXml(value: string, quote: boolean): string {
   const out = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   return quote ? out.replace(/"/g, '&quot;') : out
 }
@@ -231,8 +260,9 @@ export function serializeSvg(node: SvgNode, rootAttrs?: Record<string, string>):
     attrs = attrs.filter(([name]) => !(name in rootAttrs)).concat(Object.entries(rootAttrs))
   }
   if (node.name === 'svg') head = ` xmlns="${SVG_NS}"`
-  for (const [name, value] of attrs) head += ` ${name}="${escape(value, true)}"`
-  const body = escape(node.text, false) + node.children.map((child) => serializeSvg(child)).join('')
+  for (const [name, value] of attrs) head += ` ${name}="${escapeXml(value, true)}"`
+  const body =
+    escapeXml(node.text, false) + node.children.map((child) => serializeSvg(child)).join('')
   return body ? `<${node.name}${head}>${body}</${node.name}>` : `<${node.name}${head}/>`
 }
 

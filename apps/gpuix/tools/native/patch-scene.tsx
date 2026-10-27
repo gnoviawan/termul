@@ -8,6 +8,7 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { type GpuixTheme, type PublicInstance, render, useGpuixRequired } from '@gpuix/react'
+import { PNG } from 'pngjs'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { FONT_FILES } from '../../src/style/fonts'
 import { registerTerminalFonts } from '../../src/terminal/fonts'
@@ -17,6 +18,7 @@ import {
   CODE_PAD,
   GRID,
   GRID_TRACKS,
+  IMAGE_HREF,
   LONG_VALUE,
   SAMPLES,
   type Sample,
@@ -27,6 +29,14 @@ import {
 } from './samples'
 
 const [readyFile] = process.argv.slice(2)
+
+const redPng = new PNG({ width: 1, height: 1 })
+redPng.data.set([255, 0, 0, 255])
+const IMAGE_HREF_SRC = `data:image/svg+xml;utf8,${encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="${IMAGE_HREF.size}" height="${IMAGE_HREF.size}">` +
+    `<image href="data:image/png;base64,${PNG.sync.write(redPng).toString('base64')}" width="${IMAGE_HREF.size}" height="${IMAGE_HREF.size}"/>` +
+    `<rect width="${IMAGE_HREF.size}" height="${IMAGE_HREF.bar}" fill="#00ff00"/></svg>`
+)}`
 
 /** 0001's family: an upright and an italic face, as the app's italic text has. Paper Mono has no italic. */
 const STYLE_FACES = ['Inter-Regular.ttf', 'Inter-Italic.ttf']
@@ -226,19 +236,29 @@ function App() {
           </div>
         )}
       </div>
-      {box(
-        'input',
-        <input
-          value={url}
-          style={{
-            width: 240,
-            height: 40,
-            fontFamily: 'Paper Mono',
-            fontSize: 28,
-            color: '#ffffff'
-          }}
-        />
-      )}
+      <div style={{ display: 'flex', flexDirection: 'row' }}>
+        {box(
+          'input',
+          <input
+            value={url}
+            style={{
+              width: 240,
+              height: 40,
+              fontFamily: 'Paper Mono',
+              fontSize: 28,
+              color: '#ffffff'
+            }}
+          />
+        )}
+        {box(
+          'imageHref',
+          <img
+            alt=""
+            src={IMAGE_HREF_SRC}
+            style={{ width: IMAGE_HREF.size, height: IMAGE_HREF.size }}
+          />
+        )}
+      </div>
       {box(
         'blur',
         <div

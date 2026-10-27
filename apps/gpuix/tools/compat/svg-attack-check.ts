@@ -17,9 +17,15 @@ import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync } from 'node:fs
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { PNG } from 'pngjs'
-import { grabFrame, LAVAPIPE_ICD, SCREEN_MARGIN, startXvfb, windowOrigin } from '../parity/shoot-gpuix'
-import { SVG_ATTACKS } from './svg-attacks'
+import {
+  grabFrame,
+  LAVAPIPE_ICD,
+  SCREEN_MARGIN,
+  startXvfb,
+  windowOrigin
+} from '../parity/shoot-gpuix'
 import { bundledIcons, GRID_HEIGHT, GRID_WIDTH } from './svg-attack-shared'
+import { SVG_ATTACKS } from './svg-attacks'
 
 const BUDGET_MS = 50
 /** A frame this long is the UI thread held by a render, not lavapipe jitter on a shared host. */
@@ -66,33 +72,45 @@ try {
     const file = path.join(out, `${mode}-${attack.id}.json`)
     if (existsSync(file)) unlinkSync(file)
     const started = performance.now()
-    const scene = Bun.spawn(['bun', sceneFile, file, mode === 'raw' ? 'raw' : 'one', String(index)], {
-      env,
-      stdout: 'ignore',
-      stderr: 'pipe'
-    })
+    const scene = Bun.spawn(
+      ['bun', sceneFile, file, mode === 'raw' ? 'raw' : 'one', String(index)],
+      {
+        env,
+        stdout: 'ignore',
+        stderr: 'pipe'
+      }
+    )
     const timer = setTimeout(() => scene.kill('SIGKILL'), SCENE_TIMEOUT_MS)
     const code = await scene.exited
     clearTimeout(timer)
     const wallMs = performance.now() - started
     const stderr = await new Response(scene.stderr).text()
     const result = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Result) : null
-    const abort = stderr.match(/thread .* has overflowed its stack|fatal runtime error[^\n]*|panicked at[^\n]*/)?.[0]
+    const abort = stderr.match(
+      /thread .* has overflowed its stack|fatal runtime error[^\n]*|panicked at[^\n]*/
+    )?.[0]
     const line = [
       attack.id.padEnd(26),
       `exit ${code}${scene.signalCode ? ` ${scene.signalCode}` : ''}`.padEnd(16),
-      result ? `decode min ${result.setImageMs?.toFixed(1) ?? '-'} max ${result.setImageMaxMs?.toFixed(1) ?? '-'} ms` : 'no result',
-      result?.stats ? `frame max ${result.stats.maxMs?.toFixed(1) ?? '-'} ms over ${result.stats.frames}` : '',
+      result
+        ? `decode min ${result.setImageMs?.toFixed(1) ?? '-'} max ${result.setImageMaxMs?.toFixed(1) ?? '-'} ms`
+        : 'no result',
+      result?.stats
+        ? `frame max ${result.stats.maxMs?.toFixed(1) ?? '-'} ms over ${result.stats.frames}`
+        : '',
       result?.setImageError ? `(${result.setImageError.slice(0, 60)})` : '',
       abort ? `ABORT: ${abort}` : '',
       `wall ${Math.round(wallMs)} ms`
     ].join('  ')
     console.log(line)
     if (mode === 'raw') continue
-    if (code !== 0 || !result?.alive) failures.push(`${attack.id}: process died (exit ${code}) ${abort ?? ''}`)
+    if (code !== 0 || !result?.alive)
+      failures.push(`${attack.id}: process died (exit ${code}) ${abort ?? ''}`)
     else {
-      if ((result.setImageMs ?? 0) > BUDGET_MS) failures.push(`${attack.id}: native decode ${result.setImageMs?.toFixed(1)} ms`)
-      if ((result.stats?.maxMs ?? 0) > HANG_MS) failures.push(`${attack.id}: frame ${result.stats?.maxMs?.toFixed(1)} ms`)
+      if ((result.setImageMs ?? 0) > BUDGET_MS)
+        failures.push(`${attack.id}: native decode ${result.setImageMs?.toFixed(1)} ms`)
+      if ((result.stats?.maxMs ?? 0) > HANG_MS)
+        failures.push(`${attack.id}: frame ${result.stats?.maxMs?.toFixed(1)} ms`)
     }
   }
 
@@ -106,12 +124,18 @@ async function grid(): Promise<void> {
   const file = path.join(out, 'grid.json')
   const shot = path.join(out, 'grid.png')
   if (existsSync(file)) unlinkSync(file)
-  const scene = Bun.spawn(['bun', sceneFile, file, 'grid'], { env, stdout: 'ignore', stderr: 'pipe' })
+  const scene = Bun.spawn(['bun', sceneFile, file, 'grid'], {
+    env,
+    stdout: 'ignore',
+    stderr: 'pipe'
+  })
   try {
     const deadline = Date.now() + SCENE_TIMEOUT_MS
     while (!existsSync(file)) {
       if (scene.exitCode !== null)
-        throw new Error(`grid scene exited ${scene.exitCode}: ${(await new Response(scene.stderr).text()).slice(-400)}`)
+        throw new Error(
+          `grid scene exited ${scene.exitCode}: ${(await new Response(scene.stderr).text()).slice(-400)}`
+        )
       if (Date.now() > deadline) throw new Error('grid scene never wrote its ready file')
       await Bun.sleep(50)
     }
@@ -119,7 +143,8 @@ async function grid(): Promise<void> {
     const origin = await windowOrigin(xvfb.display, GRID_WIDTH, GRID_HEIGHT)
     await grabFrame(xvfb.display, GRID_WIDTH, GRID_HEIGHT, shot, origin)
     await Bun.sleep(1500)
-    if (scene.exitCode !== null) failures.push(`grid scene died after painting (exit ${scene.exitCode})`)
+    if (scene.exitCode !== null)
+      failures.push(`grid scene died after painting (exit ${scene.exitCode})`)
   } finally {
     scene.kill()
     await scene.exited
@@ -152,7 +177,9 @@ async function grid(): Promise<void> {
     worst = Math.max(worst, differ)
     if (ink === 0) failures.push(`${icon.name}: paints nothing`)
     if (differ > 0) failures.push(`${icon.name}: ${differ} px differ from G16`)
-    console.log(`icon ${icon.name.padEnd(34)} ink ${String(ink).padStart(4)} px  differs from G16 ${differ} px`)
+    console.log(
+      `icon ${icon.name.padEnd(34)} ink ${String(ink).padStart(4)} px  differs from G16 ${differ} px`
+    )
   }
   console.log(`grid: ${shot} (${bundledIcons().length} icons, worst diff ${worst} px)`)
 }

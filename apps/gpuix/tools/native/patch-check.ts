@@ -50,6 +50,9 @@
  *   zed/0008 + gpuix/0019  a track list and a column start place a cell in
  *   grid-tracks-placement  the last track of 100px 1fr 50px, and a cell in a
  *                          fixed track sizes its row by its content
+ *   zed/0009-svg-refuse-image-href
+ *                          an <img> SVG paints its shapes but not the data-URL
+ *                          PNG its `<image href>` names
  *   0008-prompt-for-new-path
  *                          `dialog-check.ts`: the portal's save dialog returns
  *                          the path typed into it
@@ -77,6 +80,7 @@ import {
   CODE_PAD,
   GRID,
   GRID_TRACKS,
+  IMAGE_HREF,
   type Sample,
   SCENE,
   type SceneReady,
@@ -251,6 +255,8 @@ const cornerStripe = (() => {
   return pixel(x0 + 8 + half + 1, y0 + 8 + 1)[0]
 })()
 const red = ([r, g, b]: readonly [number, number, number]) => r > 200 && g < 60 && b < 60
+const imageHrefRed = count('imageHref', red)
+const imageHrefGreen = count('imageHref', ([r, g, b]) => g > 200 && r < 60 && b < 60)
 /** Rows of the table sample holding the header fill, and the table's height inside the 8 px box padding. */
 const tableFillRows = (() => {
   const { x0, y0, x1, y1 } = region('table')
@@ -422,6 +428,18 @@ const checks = [
     what: 'the rounded corner leaves its outside pixel sharp (0 or 255)',
     value: cornerStripe,
     ok: cornerStripe === 0 || cornerStripe === 255
+  },
+  {
+    patch: 'zed/0009-svg-refuse-image-href',
+    what: `an <img> SVG paints its own ${IMAGE_HREF.size}x${IMAGE_HREF.bar} green bar (pixels)`,
+    value: imageHrefGreen,
+    ok: imageHrefGreen >= IMAGE_HREF.size * IMAGE_HREF.bar * 0.9
+  },
+  {
+    patch: 'zed/0009-svg-refuse-image-href',
+    what: 'the red PNG its <image href> embeds never paints (red pixels)',
+    value: imageHrefRed,
+    ok: imageHrefRed === 0
   },
   {
     patch: '0006-focus-events',

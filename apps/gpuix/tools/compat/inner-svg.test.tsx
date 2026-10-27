@@ -53,6 +53,25 @@ describe('an <svg> set through dangerouslySetInnerHTML', () => {
     expect(ops).toContain('data:image/svg+xml;utf8,%3Csvg%20xmlns')
   })
 
+  test("an <svg>'s inner markup is re-checked: a depth bomb paints an empty svg, an <image> is dropped", () => {
+    const bomb = jsx('svg', {
+      viewBox: '0 0 24 24',
+      dangerouslySetInnerHTML: {
+        __html: `${'<g>'.repeat(3500)}<path d="M0 0h1v1z"/>${'</g>'.repeat(3500)}`
+      }
+    })
+    expect(rendered(bomb)).toContain(
+      '"source","<svg xmlns=\\"http://www.w3.org/2000/svg\\" viewBox=\\"0 0 24 24\\"></svg>"'
+    )
+    const image = jsx('svg', {
+      viewBox: '0 0 24 24',
+      dangerouslySetInnerHTML: { __html: '<image href="/dev/zero"/><rect width="4" height="4"/>' }
+    })
+    expect(rendered(image)).toContain(
+      'viewBox=\\"0 0 24 24\\"><rect width=\\"4\\" height=\\"4\\"/></svg>'
+    )
+  })
+
   test('other markup renders nothing', () => {
     const ops = rendered(jsx('div', { dangerouslySetInnerHTML: { __html: '<b>x</b>' } }))
     expect(ops).not.toContain('source')

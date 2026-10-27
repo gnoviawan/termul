@@ -16,7 +16,8 @@ export const SAMPLES = [
   'gridPlaced',
   'untracked',
   'tracked',
-  'bullet'
+  'bullet',
+  'imageHref'
 ] as const
 /** Set on the unfocused input after mount, like a URL bar after a navigation: ink at the start, dots at the end. */
 export const LONG_VALUE = `${'M'.repeat(10)}${'.'.repeat(120)}`
@@ -50,6 +51,12 @@ export const GRID_TRACKS = {
 export const TRACKING = { em: 0.25, size: 32, glyphs: 4 } as const
 /** The `bullet` sample's list: a red "•" centred in a `width` column, the item text `gap` after it. */
 export const BULLET = { width: 40, gap: 20, color: '#ff0000' } as const
+/**
+ * The `imageHref` sample: an `<img>` of an SVG that paints a green bar and
+ * embeds a red PNG through `<image href>`. GPUI's SVG renderer must paint the
+ * bar and never resolve the href. As tall as the `input` sample beside it.
+ */
+export const IMAGE_HREF = { size: 40, bar: 8 } as const
 export type Sample = (typeof SAMPLES)[number]
 export interface SceneReady {
   bounds: Record<Sample, { x: number; y: number; width: number; height: number } | null>
