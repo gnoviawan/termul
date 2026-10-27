@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex};
 use super::deliver::process_reader_chunk;
 use super::filter::SessionFilter;
 use super::frame::SessionRpcResult;
-use super::gate_test_support::{capture_gate, start_completion};
+use super::gate_test_support::{capture_gate, start_completion, test_nonce};
 
 fn completion_frame() -> Vec<u8> {
     let payload = serde_json::json!({
-        "type": "Completion", "session_id": "s1", "nonce": "n1",
+        "type": "Completion", "session_id": "s1", "nonce": test_nonce(),
         "request_id": "r1", "buffer_revision": 3, "cursor": 4,
         "prompt_generation": 7, "cwd": "/repo", "output": "status\nbranch"
     });
@@ -129,7 +129,7 @@ async fn prompt_frame_is_a_lifecycle_event() {
 
     let (_writer, gate) = capture_gate();
     let gate = Arc::new(gate);
-    gate.expect_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
     let hub = TerminalEventHub::standalone();
     let pending = Mutex::new(Vec::new());
     let mut filter = SessionFilter::new();
@@ -144,7 +144,7 @@ async fn prompt_frame_is_a_lifecycle_event() {
     ));
     let mut events = hub.subscribe();
     let payload = serde_json::json!({
-        "type": "PromptReady", "session_id": "s1", "nonce": "n1",
+        "type": "PromptReady", "session_id": "s1", "nonce": test_nonce(),
         "prompt_generation": 7, "line_empty": true,
         "prompt_suppressed": true, "cwd": "/repo"
     });
@@ -174,8 +174,8 @@ async fn completion_frame_is_not_a_lifecycle_event() {
 
     let (_writer, gate) = capture_gate();
     let gate = Arc::new(gate);
-    gate.expect_session("s1".into(), "n1".into());
-    gate.register_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
+    gate.register_session("s1".into(), test_nonce().into());
     let hub = TerminalEventHub::standalone();
     let mut events = hub.subscribe();
     let start = start_completion(&gate, "r1", b"GEN").await;
@@ -212,8 +212,8 @@ async fn desync_restores_the_prompt() {
 
     let (writer, gate) = capture_gate();
     let gate = Arc::new(gate);
-    gate.expect_session("s1".into(), "n1".into());
-    gate.register_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
+    gate.register_session("s1".into(), test_nonce().into());
     let hub = TerminalEventHub::standalone();
     let mut events = hub.subscribe();
     let pending = Mutex::new(Vec::new());
@@ -257,8 +257,8 @@ async fn generator_bytes_do_not_reach_the_client() {
 
     let (writer, gate) = capture_gate();
     let gate = Arc::new(gate);
-    gate.expect_session("s1".into(), "n1".into());
-    gate.register_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
+    gate.register_session("s1".into(), test_nonce().into());
     let trigger = b"__termul_complete r1 7 7 67697420737461";
     let start = start_completion(&gate, "r1", trigger).await;
     assert_eq!(start.result, SessionRpcResult::Accepted);
@@ -309,8 +309,8 @@ async fn user_output_returns_after_the_generator() {
 
     let (_writer, gate) = capture_gate();
     let gate = Arc::new(gate);
-    gate.expect_session("s1".into(), "n1".into());
-    gate.register_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
+    gate.register_session("s1".into(), test_nonce().into());
     let start = start_completion(&gate, "r1", b"GEN").await;
     assert_eq!(start.result, SessionRpcResult::Accepted);
     let pending = Mutex::new(Vec::new());
@@ -337,8 +337,8 @@ async fn user_output_returns_after_the_generator() {
 
     let (_writer, watchdog_gate) = capture_gate();
     let watchdog_gate = Arc::new(watchdog_gate);
-    watchdog_gate.expect_session("s1".into(), "n1".into());
-    watchdog_gate.register_session("s1".into(), "n1".into());
+    watchdog_gate.expect_session("s1".into(), test_nonce().into());
+    watchdog_gate.register_session("s1".into(), test_nonce().into());
     let start = start_completion(&watchdog_gate, "r1", b"GEN").await;
     assert_eq!(start.result, SessionRpcResult::Accepted);
     let watchdog_pending = Mutex::new(Vec::new());
@@ -371,13 +371,13 @@ async fn hub_publishes_initshell_before_the_prompt() {
 
     let (_writer, gate) = capture_gate();
     let gate = Arc::new(gate);
-    gate.expect_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
     let hub = TerminalEventHub::standalone();
     let mut events = hub.subscribe();
     let pending = Mutex::new(Vec::new());
     let mut filter = SessionFilter::new();
     let prompt = serde_json::json!({
-        "type": "PromptReady", "session_id": "s1", "nonce": "n1",
+        "type": "PromptReady", "session_id": "s1", "nonce": test_nonce(),
         "prompt_generation": 7, "line_empty": true,
         "prompt_suppressed": true, "cwd": "/repo"
     });
@@ -398,12 +398,12 @@ async fn hub_publishes_initshell_before_the_prompt() {
     let second = serde_json::to_value(events.try_recv().expect("prompt ready event")).unwrap();
     assert_eq!(first["kind"], "InitShell");
     assert_eq!(first["session_id"], "s1");
-    assert_eq!(first["nonce"], "n1");
+    assert_eq!(first["nonce"], test_nonce());
     assert!(first.get("completion").is_none());
     assert!(first.get("output").is_none());
     assert_eq!(second["kind"], "PromptReady");
     assert_eq!(second["session_id"], "s1");
-    assert_eq!(second["nonce"], "n1");
+    assert_eq!(second["nonce"], test_nonce());
     assert!(second.get("completion").is_none());
     assert!(second.get("output").is_none());
     assert!(events.try_recv().is_err());
@@ -415,8 +415,8 @@ async fn hub_command_started_leaves_the_editor() {
 
     let (_writer, gate) = capture_gate();
     let gate = Arc::new(gate);
-    gate.expect_session("s1".into(), "n1".into());
-    gate.register_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
+    gate.register_session("s1".into(), test_nonce().into());
     let hub = TerminalEventHub::standalone();
     let mut events = hub.subscribe();
     let pending = Mutex::new(Vec::new());
@@ -447,7 +447,7 @@ async fn hub_command_started_leaves_the_editor() {
     assert_eq!(event["type"], "session_lifecycle");
     assert_eq!(event["kind"], "CommandStarted");
     assert_eq!(event["session_id"], "s1");
-    assert_eq!(event["nonce"], "n1");
+    assert_eq!(event["nonce"], test_nonce());
     assert!(events.try_recv().is_err());
 }
 
@@ -457,8 +457,8 @@ async fn hub_records_the_finished_exit_code() {
 
     let (_writer, gate) = capture_gate();
     let gate = Arc::new(gate);
-    gate.expect_session("s1".into(), "n1".into());
-    gate.register_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
+    gate.register_session("s1".into(), test_nonce().into());
     let hub = TerminalEventHub::standalone();
     let mut events = hub.subscribe();
     let pending = Mutex::new(Vec::new());
@@ -490,7 +490,7 @@ async fn hub_records_the_finished_exit_code() {
     assert_eq!(event["type"], "session_lifecycle");
     assert_eq!(event["kind"], "CommandFinished");
     assert_eq!(event["session_id"], "s1");
-    assert_eq!(event["nonce"], "n1");
+    assert_eq!(event["nonce"], test_nonce());
     assert_eq!(event["exit_code"], 2);
     assert!(events.try_recv().is_err());
 }
@@ -518,20 +518,20 @@ async fn forged_initshell_is_ignored() {
     assert_eq!(reader.gate.session_identity(), None);
     assert!(!reader.gate.trusted_at_prompt());
     for kind in ["InitShell", "PromptReady"] {
-        reader.receive(&lifecycle_frame(kind, "n1"));
+        reader.receive(&lifecycle_frame(kind, test_nonce()));
         let event =
             serde_json::to_value(events.try_recv().expect("issued lifecycle event")).unwrap();
         assert_eq!(event["kind"], kind);
     }
-    let identity = Some(("s1".into(), "n1".into()));
+    let identity = Some(("s1".into(), test_nonce().into()));
     assert_eq!(reader.gate.session_identity(), identity);
-    reader.receive(&lifecycle_frame("InitShell", "n1"));
+    reader.receive(&lifecycle_frame("InitShell", test_nonce()));
     assert!(events.try_recv().is_err(), "second InitShell published");
     assert_eq!(reader.gate.session_identity(), identity);
     let raw = super::gate::SessionGate::new(super::gate_test_support::capture().1);
     raw.mark_raw();
     reader.gate = Arc::new(raw);
-    reader.receive(&lifecycle_frame("InitShell", "n1"));
+    reader.receive(&lifecycle_frame("InitShell", test_nonce()));
     assert_eq!(reader.gate.session_identity(), None);
     assert!(events.try_recv().is_err(), "unissued InitShell published");
 }
@@ -547,7 +547,7 @@ impl TrustReader {
     fn new() -> Self {
         let (_, gate) = capture_gate();
         gate.mark_raw();
-        gate.expect_session("s1".into(), "n1".into());
+        gate.expect_session("s1".into(), test_nonce().into());
         Self {
             gate: Arc::new(gate),
             filter: SessionFilter::new(),
@@ -571,41 +571,41 @@ impl TrustReader {
 #[tokio::test]
 async fn host_trusts_only_an_authenticated_prompt() {
     let mut reader = TrustReader::new();
-    reader.receive(&lifecycle_frame("PromptReady", "n1"));
+    reader.receive(&lifecycle_frame("PromptReady", test_nonce()));
     assert!(!reader.gate.trusted_at_prompt(), "prompt before InitShell");
-    reader.receive(&lifecycle_frame("InitShell", "n1"));
+    reader.receive(&lifecycle_frame("InitShell", test_nonce()));
     reader.receive(&lifecycle_frame("PromptReady", "other"));
     assert!(!reader.gate.trusted_at_prompt(), "wrong nonce");
     for (line_empty, suppressed) in [(false, true), (true, false), (false, false)] {
         let payload = serde_json::json!({
-            "type": "PromptReady", "nonce": "n1", "prompt_generation": 7,
+            "type": "PromptReady", "nonce": test_nonce(), "prompt_generation": 7,
             "cwd": "/repo", "line_empty": line_empty, "prompt_suppressed": suppressed
         });
         reader.receive(format!("\x1b]9477;{payload}\x07").as_bytes());
         assert!(!reader.gate.trusted_at_prompt(), "unsafe prompt flags");
     }
-    reader.receive(&lifecycle_frame("PromptReady", "n1"));
+    reader.receive(&lifecycle_frame("PromptReady", test_nonce()));
     assert!(
         reader.gate.trusted_at_prompt(),
         "authenticated empty suppressed prompt"
     );
     let mut combined = TrustReader::new();
-    let mut chunk = lifecycle_frame("InitShell", "n1");
+    let mut chunk = lifecycle_frame("InitShell", test_nonce());
     chunk.extend(lifecycle_frame("PromptReady", "other"));
     combined.receive(&chunk);
     assert!(
         !combined.gate.trusted_at_prompt(),
         "wrong nonce in InitShell chunk"
     );
-    combined.receive(&lifecycle_frame("PromptReady", "n1"));
+    combined.receive(&lifecycle_frame("PromptReady", test_nonce()));
     assert!(combined.gate.trusted_at_prompt());
 }
 
 #[tokio::test]
 async fn raw_command_ends_host_trust() {
     let mut reader = TrustReader::new();
-    let mut chunk = lifecycle_frame("InitShell", "n1");
-    chunk.extend(lifecycle_frame("PromptReady", "n1"));
+    let mut chunk = lifecycle_frame("InitShell", test_nonce());
+    chunk.extend(lifecycle_frame("PromptReady", test_nonce()));
     reader.receive(&chunk);
     assert!(reader.gate.trusted_at_prompt());
     reader.receive(&lifecycle_frame("CommandStarted", "other"));
@@ -613,7 +613,7 @@ async fn raw_command_ends_host_trust() {
         reader.gate.trusted_at_prompt(),
         "forged command changed trust"
     );
-    reader.receive(&lifecycle_frame("CommandStarted", "n1"));
+    reader.receive(&lifecycle_frame("CommandStarted", test_nonce()));
     assert!(
         !reader.gate.trusted_at_prompt(),
         "raw command retained trust"
@@ -633,12 +633,12 @@ async fn completion_reply_carries_the_completer_output() {
     };
     let (pty, id, _keep_alive) = rpc_terminal().await;
     let gate = pty.get(&id).unwrap().session_gate.clone();
-    gate.expect_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
     gate.set_completion_providers(vec![provider("gen", b"__termul_complete", true)]);
     let mut reader = TrustReader::new();
     reader.gate = gate.clone();
-    reader.receive(&lifecycle_frame("InitShell", "n1"));
-    let prompt = serde_json::json!({"type":"PromptReady", "nonce":"n1",
+    reader.receive(&lifecycle_frame("InitShell", test_nonce()));
+    let prompt = serde_json::json!({"type":"PromptReady", "nonce":test_nonce(),
         "prompt_generation":3, "cwd":"/repo", "line_empty":true, "prompt_suppressed":true});
     reader.receive(format!("\x1b]9477;{prompt}\x07").as_bytes());
     for cancelled in [false, true] {
@@ -657,7 +657,7 @@ async fn completion_reply_carries_the_completer_output() {
         if cancelled {
             assert!(gate.cancel_completion("r1"));
         }
-        let frame = serde_json::json!({"type":"Completion", "session_id":"s1", "nonce":"n1",
+        let frame = serde_json::json!({"type":"Completion", "session_id":"s1", "nonce":test_nonce(),
             "request_id":"r1", "buffer_revision":7, "cursor":7, "prompt_generation":3,
             "cwd":"/repo", "output":"737461747573"});
         reader.receive(format!("\x1b]9477;{frame}\x07").as_bytes());
@@ -701,9 +701,9 @@ async fn request_from_another_prompt_is_not_started() {
     let mut reader = TrustReader::new();
     reader.gate = Arc::new(gate);
     reader.gate.mark_raw();
-    reader.gate.expect_session("s1".into(), "n1".into());
-    reader.receive(&lifecycle_frame("InitShell", "n1"));
-    let prompt = serde_json::json!({"type":"PromptReady", "nonce":"n1", "prompt_generation":3,
+    reader.gate.expect_session("s1".into(), test_nonce().into());
+    reader.receive(&lifecycle_frame("InitShell", test_nonce()));
+    let prompt = serde_json::json!({"type":"PromptReady", "nonce":test_nonce(), "prompt_generation":3,
         "cwd":"/repo", "line_empty":true, "prompt_suppressed":true});
     reader.receive(format!("\x1b]9477;{prompt}\x07").as_bytes());
     for (generation, cwd) in [(2, "/repo"), (3, "/other")] {
@@ -742,7 +742,7 @@ async fn completion_reader() -> (
     let (pty, id, keep_alive) = super::gate_test_support::rpc_terminal().await;
     let mut reader = TrustReader::new();
     reader.gate = pty.get(&id).unwrap().session_gate.clone();
-    reader.gate.expect_session("s1".into(), "n1".into());
+    reader.gate.expect_session("s1".into(), test_nonce().into());
     reader
         .gate
         .set_completion_providers(vec![super::gate_test_support::provider(
@@ -750,8 +750,8 @@ async fn completion_reader() -> (
             b"__termul_complete",
             true,
         )]);
-    reader.receive(&lifecycle_frame("InitShell", "n1"));
-    let prompt = serde_json::json!({"type":"PromptReady", "nonce":"n1", "prompt_generation":3,
+    reader.receive(&lifecycle_frame("InitShell", test_nonce()));
+    let prompt = serde_json::json!({"type":"PromptReady", "nonce":test_nonce(), "prompt_generation":3,
         "cwd":"/repo", "line_empty":true, "prompt_suppressed":true});
     reader.receive(format!("\x1b]9477;{prompt}\x07").as_bytes());
     (pty, id, keep_alive, reader)
@@ -783,7 +783,7 @@ async fn host_checks_the_completion_frame() {
         tokio::select! { reply = &mut call => panic!("reply before frame: {reply:?}"), _ = tokio::task::yield_now() => {} }
         reader.receive(&rpc_frame(3, "/repo", "wrong"));
         tokio::select! { reply = &mut call => panic!("wrong nonce completed: {reply:?}"), _ = tokio::task::yield_now() => {} }
-        reader.receive(&rpc_frame(generation, cwd, "n1"));
+        reader.receive(&rpc_frame(generation, cwd, test_nonce()));
         let reply = serde_json::to_value(call.await).unwrap();
         assert_eq!(
             reply["outcome"], "Dropped",
@@ -820,7 +820,7 @@ async fn timed_out_completion_frees_the_shell_before_its_reply() {
             "timeout must retain shell occupancy"
         );
         if late_frame {
-            reader.receive(&rpc_frame(3, "/repo", "n1"));
+            reader.receive(&rpc_frame(3, "/repo", test_nonce()));
         } else {
             tokio::time::advance(super::gate::GENERATOR_DRAIN_TIMEOUT).await;
         }
@@ -854,7 +854,7 @@ async fn timed_out_completion_frees_the_shell_before_its_reply() {
     tokio::select! { reply = &mut call => panic!("early reply: {reply:?}"), _ = tokio::task::yield_now() => {} }
     tokio::time::advance(Duration::from_millis(1500)).await;
     // All competing terminal events run at the same paused timestamp.
-    reader.receive(&rpc_frame(3, "/repo", "n1"));
+    reader.receive(&rpc_frame(3, "/repo", test_nonce()));
     reader.gate.cancel_completion("r1");
     let reply = serde_json::to_value(call.await).unwrap();
     assert!(["TimedOut", "Completed", "Cancelled"].contains(&reply["outcome"].as_str().unwrap()));
@@ -890,7 +890,7 @@ async fn suppression_ends_when_trust_is_lost() {
                 chunk.push(7);
                 reader.receive(&chunk);
             }
-            "command" => reader.receive(&lifecycle_frame("CommandStarted", "n1")),
+            "command" => reader.receive(&lifecycle_frame("CommandStarted", test_nonce())),
             "exit" => reader.gate.process_exited(),
             "submit" => {
                 let gate = reader.gate.clone();
@@ -911,7 +911,7 @@ async fn suppression_ends_when_trust_is_lost() {
                     assert!(reader.pending.lock().unwrap().is_empty());
                 }
                 if reason == "cancel_frame" {
-                    reader.receive(&rpc_frame(3, "/repo", "n1"));
+                    reader.receive(&rpc_frame(3, "/repo", test_nonce()));
                 } else {
                     tokio::time::advance(super::rpc::COMPLETION_TIMEOUT).await;
                     tokio::task::yield_now().await;
@@ -944,12 +944,12 @@ async fn prompt_with_command_separator_is_forwarded_after_completion_and_cancell
         assert!(reader.gate.suppressing_output());
 
         if mode == "completed" {
-            reader.receive(&rpc_frame(3, "/repo", "n1"));
+            reader.receive(&rpc_frame(3, "/repo", test_nonce()));
             let reply = serde_json::to_value(call.await).unwrap();
             assert_eq!(reply["outcome"], "Completed");
         } else {
             assert!(reader.gate.cancel_completion("r1"));
-            reader.receive(&rpc_frame(3, "/repo", "n1"));
+            reader.receive(&rpc_frame(3, "/repo", test_nonce()));
             let reply = serde_json::to_value(call.await).unwrap();
             assert_eq!(reply["outcome"], "Cancelled");
         }
@@ -959,7 +959,7 @@ async fn prompt_with_command_separator_is_forwarded_after_completion_and_cancell
         let mut prompt_chunk = b"\x1b]133;A;termul\x07".to_vec();
         let prompt_payload = serde_json::json!({
             "type": "PromptReady",
-            "nonce": "n1",
+            "nonce": test_nonce(),
             "prompt_generation": 4,
             "cwd": "/repo",
             "line_empty": true,
@@ -1023,7 +1023,7 @@ struct TrustLossReader {
 fn bind_trust_loss_reader() -> TrustLossReader {
     let (writer, gate) = capture_gate();
     let gate = std::sync::Arc::new(gate);
-    assert!(gate.register_session("s1".into(), "n1".into()));
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
     let hub = crate::trackers::terminal_events::TerminalEventHub::standalone();
     let pending = Mutex::new(Vec::new());
     let mut filter = SessionFilter::new();
@@ -1046,7 +1046,7 @@ fn bind_trust_loss_reader() -> TrustLossReader {
 
 fn mismatched_completion_frame() -> Vec<u8> {
     let payload = serde_json::json!({
-        "type": "Completion", "session_id": "s1", "nonce": "n1",
+        "type": "Completion", "session_id": "s1", "nonce": test_nonce(),
         "request_id": "r1", "buffer_revision": 3, "cursor": 4,
         "prompt_generation": 4, "cwd": "/elsewhere", "output": "737461747573"
     });
@@ -1081,7 +1081,7 @@ fn take_one_desync(
     assert_eq!(value["type"], "session_lifecycle");
     assert_eq!(value["kind"], "Desync");
     assert_eq!(value["session_id"], "s1");
-    assert_eq!(value["nonce"], "n1");
+    assert_eq!(value["nonce"], test_nonce());
     assert!(value.get("draft").is_none());
     assert!(value.get("completion").is_none());
     assert!(
@@ -1274,7 +1274,7 @@ async fn drain_timeout_does_not_cancel_next_request() {
     // A late authenticated frame cannot grant trust or disturb a new epoch.
     gate.finish_completion(super::frame::CompletionResult {
         session_id: "s1".into(),
-        nonce: "n1".into(),
+        nonce: test_nonce().into(),
         request_id: "r1".into(),
         buffer_revision: 3,
         cursor: 4,
@@ -1305,7 +1305,7 @@ async fn drain_timeout_does_not_cancel_next_request() {
 fn lifecycle_publication_snapshot_matches_its_sequence_boundary() {
     let (_, gate) = capture_gate();
     let gate = Arc::new(gate);
-    assert!(gate.register_session("s1".into(), "n1".into()));
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
     gate.mark_raw();
     let hub = crate::trackers::terminal_events::TerminalEventHub::standalone();
     let mut events = hub.subscribe();
@@ -1323,7 +1323,7 @@ fn lifecycle_publication_snapshot_matches_its_sequence_boundary() {
                 for generation in 1..=32 {
                     let frame = serde_json::json!({
                         "type":if prompt {"PromptReady"} else {"CommandStarted"},
-                        "nonce":"n1","prompt_generation":generation,
+                        "nonce":test_nonce(),"prompt_generation":generation,
                         "cwd":"/repo","line_empty":true,"prompt_suppressed":true,
                     });
                     let bytes = format!("\x1b]9477;{frame}\x07");
@@ -1422,8 +1422,8 @@ fn finished_exit_harness() -> (
     SessionFilter,
 ) {
     let (_writer, gate) = capture_gate();
-    gate.expect_session("s1".into(), "n1".into());
-    assert!(gate.register_session("s1".into(), "n1".into()));
+    gate.expect_session("s1".into(), test_nonce().into());
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
     let hub = crate::trackers::terminal_events::TerminalEventHub::standalone();
     let tracker = crate::trackers::ExitCodeTracker::new(hub.clone());
     tracker.initialize_terminal("test");
@@ -1459,7 +1459,7 @@ async fn authenticated_command_finished_records_exit_code_once() {
     let mut events = hub.subscribe();
     assert!(process_reader_chunk(
         &mut filter,
-        &command_finished_frame("n1", Some(3)),
+        &command_finished_frame(test_nonce(), Some(3)),
         &pending,
         &gate,
         "test",
@@ -1469,7 +1469,7 @@ async fn authenticated_command_finished_records_exit_code_once() {
     assert_eq!(tracker.get_exit_code("test"), Some(3));
     assert!(process_reader_chunk(
         &mut filter,
-        &command_finished_frame("n1", Some(3)),
+        &command_finished_frame(test_nonce(), Some(3)),
         &pending,
         &gate,
         "test",
@@ -1490,7 +1490,7 @@ async fn command_finished_without_code_keeps_previous_exit_code() {
     let _ = exit_code_changed_events(&mut events);
     assert!(process_reader_chunk(
         &mut filter,
-        &command_finished_frame("n1", None),
+        &command_finished_frame(test_nonce(), None),
         &pending,
         &gate,
         "test",
@@ -1512,7 +1512,7 @@ async fn command_finished_out_of_i32_range_keeps_previous_exit_code() {
     for overflow in [i64::from(i32::MAX) + 1, i64::from(i32::MIN) - 1] {
         assert!(process_reader_chunk(
             &mut filter,
-            &command_finished_frame_code("n1", Some(overflow)),
+            &command_finished_frame_code(test_nonce(), Some(overflow)),
             &pending,
             &gate,
             "test",
@@ -1553,8 +1553,8 @@ async fn one_desync_plus_two_restore_rpcs_writes_the_sequence_once() {
 
     let (writer, gate) = capture_gate();
     let gate = Arc::new(gate);
-    gate.expect_session("s1".into(), "n1".into());
-    gate.register_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
+    gate.register_session("s1".into(), test_nonce().into());
     let hub = TerminalEventHub::standalone();
     let pending = Mutex::new(Vec::new());
     let mut filter = SessionFilter::new();
@@ -1608,7 +1608,7 @@ fn raw_session_desync_never_writes_to_an_unregistered_pty() {
             tokio::sync::Mutex::new(Some(Box::new(writer))),
         )));
         if issue_identity {
-            gate.expect_session("s1".into(), "n1".into());
+            gate.expect_session("s1".into(), test_nonce().into());
         }
         let hub = crate::trackers::terminal_events::TerminalEventHub::standalone();
         let mut events = hub.subscribe();
@@ -1635,11 +1635,11 @@ fn raw_session_desync_never_writes_to_an_unregistered_pty() {
 async fn raw_session_unsafe_prompt_revokes_previous_submit_and_completion_trust() {
     for (line_empty, prompt_suppressed) in [(false, true), (true, false), (false, false)] {
         let mut reader = TrustReader::new();
-        reader.receive(&lifecycle_frame("InitShell", "n1"));
-        reader.receive(&lifecycle_frame("PromptReady", "n1"));
+        reader.receive(&lifecycle_frame("InitShell", test_nonce()));
+        reader.receive(&lifecycle_frame("PromptReady", test_nonce()));
         assert!(reader.gate.trusted_at_prompt());
         let payload = serde_json::json!({
-            "type": "PromptReady", "nonce": "n1", "prompt_generation": 8,
+            "type": "PromptReady", "nonce": test_nonce(), "prompt_generation": 8,
             "cwd": "/other", "line_empty": line_empty,
             "prompt_suppressed": prompt_suppressed,
         });

@@ -10,6 +10,7 @@ use super::{json, mpsc, ConnectionContext, Message, Request};
 use crate::pty::session_protocol::frame::SessionRpcResult;
 use crate::pty::session_protocol::gate::{AuthenticSession, CompletionRequest, SessionPhase};
 use crate::pty::session_protocol::gate::{CompletionProvider, SessionGate};
+use crate::test_support::test_nonce;
 use crate::web::capabilities::terminal_request_is_view;
 
 struct SharedWriter(Arc<Mutex<Vec<u8>>>);
@@ -163,8 +164,8 @@ async fn adopt_session(state: &super::AppState) -> AdoptedSession {
         .await
         .unwrap();
     let gate = &state.pty.get(&spawned.info.id).unwrap().session_gate;
-    gate.expect_session("s1".into(), "n1".into());
-    gate.register_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
+    gate.register_session("s1".into(), test_nonce().into());
     gate.mark_trusted_prompt(1, "/tmp".into());
     gate.observe_output(b"\x1b[?2004h");
     gate.set_completion_providers(vec![CompletionProvider {
@@ -378,7 +379,7 @@ fn completion_from_trigger(
         .unwrap();
     crate::pty::session_protocol::frame::CompletionResult {
         session_id: "s1".into(),
-        nonce: "n1".into(),
+        nonce: test_nonce().into(),
         request_id: request_id.into(),
         buffer_revision: 1,
         cursor: 7,
@@ -679,7 +680,7 @@ fn assert_lifecycle_kind(event: &serde_json::Value, kind: &str) {
     assert_eq!(payload["type"], "session_lifecycle");
     assert_eq!(payload["kind"], kind);
     assert_eq!(payload["session_id"], "s1");
-    assert_eq!(payload["nonce"], "n1");
+    assert_eq!(payload["nonce"], test_nonce());
     assert!(payload.get("draft").is_none());
     assert!(payload.get("completion").is_none());
 }
@@ -764,7 +765,7 @@ fn lifecycle_event(
         terminal_id: terminal_id.to_owned(),
         session_id: "s1".to_owned(),
         kind: kind.to_owned(),
-        nonce: Some("n1".to_owned()),
+        nonce: Some(test_nonce().to_owned()),
         prompt_suppressed: false,
         line_empty: false,
         exit_code: None,
@@ -879,7 +880,7 @@ async fn buffered_snapshot_case(executing: bool) -> Vec<serde_json::Value> {
     let mut ctx = super::tests::gate_test_ctx(true);
     let hub = crate::trackers::terminal_events::TerminalEventHub::standalone();
     let gate = Arc::new(SessionGate::new(Arc::new(AsyncMutex::new(None))));
-    gate.expect_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
     let task = super::command_editor::spawn_event_forwarder(
         tx.clone(),
@@ -892,12 +893,12 @@ async fn buffered_snapshot_case(executing: bool) -> Vec<serde_json::Value> {
     let pending = Mutex::new(Vec::new());
     let mut filter = crate::pty::session_protocol::filter::SessionFilter::new();
     let mut frames = vec![
-        serde_json::json!({"type":"InitShell","session_id":"s1","nonce":"n1"}),
-        serde_json::json!({"type":"PromptReady","nonce":"n1","prompt_generation":1,"cwd":"/tmp","line_empty":true,"prompt_suppressed":true}),
+        serde_json::json!({"type":"InitShell","session_id":"s1","nonce":test_nonce()}),
+        serde_json::json!({"type":"PromptReady","nonce":test_nonce(),"prompt_generation":1,"cwd":"/tmp","line_empty":true,"prompt_suppressed":true}),
     ];
-    frames.push(serde_json::json!({"type":"PromptReady","nonce":"n1","prompt_generation":2,"cwd":"/tmp","line_empty":true,"prompt_suppressed":true}));
+    frames.push(serde_json::json!({"type":"PromptReady","nonce":test_nonce(),"prompt_generation":2,"cwd":"/tmp","line_empty":true,"prompt_suppressed":true}));
     if executing {
-        frames.push(serde_json::json!({"type":"CommandStarted","nonce":"n1"}));
+        frames.push(serde_json::json!({"type":"CommandStarted","nonce":test_nonce()}));
     }
     for frame in frames {
         let bytes = format!("\x1b]9477;{frame}\x07");
@@ -957,8 +958,8 @@ async fn stale_prompt_before_executing_snapshot_is_dropped() {
 async fn exit_during_attach_is_not_revived() {
     for exit_before_snapshot in [false, true] {
         let gate = SessionGate::new(Arc::new(AsyncMutex::new(None)));
-        gate.expect_session("s1".into(), "n1".into());
-        assert!(gate.register_session("s1".into(), "n1".into()));
+        gate.expect_session("s1".into(), test_nonce().into());
+        assert!(gate.register_session("s1".into(), test_nonce().into()));
         let hub = crate::trackers::terminal_events::TerminalEventHub::standalone();
         let mut ctx = super::tests::gate_test_ctx(true);
         let (tx, mut rx) = tokio::sync::mpsc::channel(8);
@@ -1106,8 +1107,8 @@ async fn forwarder_stops_when_outbound_closed() {
 #[tokio::test]
 async fn desync_after_snapshot_is_delivered_after_replay() {
     let gate = Arc::new(SessionGate::new(Arc::new(AsyncMutex::new(None))));
-    gate.expect_session("s1".into(), "n1".into());
-    assert!(gate.register_session("s1".into(), "n1".into()));
+    gate.expect_session("s1".into(), test_nonce().into());
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
     gate.mark_trusted_prompt(2, "/tmp".into());
     let hub = crate::trackers::terminal_events::TerminalEventHub::standalone();
     let mut ctx = super::tests::gate_test_ctx(true);
@@ -1166,7 +1167,7 @@ fn lifecycle_sequence_is_not_serialized() {
         value,
         serde_json::json!({
             "type":"session_lifecycle","terminal_id":"test","session_id":"s1",
-            "kind":"Desync","nonce":"n1","prompt_suppressed":false,"line_empty":false,
+            "kind":"Desync","nonce":test_nonce(),"prompt_suppressed":false,"line_empty":false,
             "exit_code":null,"prompt_generation":null,"cwd":null,
         })
     );
@@ -1293,8 +1294,8 @@ fn registered_replay_gate() -> (Arc<Mutex<Vec<u8>>>, Arc<SessionGate>) {
     let bytes = Arc::new(Mutex::new(Vec::new()));
     let writer: Box<dyn Write + Send> = Box::new(SharedWriter(bytes.clone()));
     let gate = SessionGate::new(Arc::new(AsyncMutex::new(Some(writer))));
-    gate.expect_session("s1".into(), "n1".into());
-    assert!(gate.register_session("s1".into(), "n1".into()));
+    gate.expect_session("s1".into(), test_nonce().into());
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
     (bytes, Arc::new(gate))
 }
 
@@ -1332,7 +1333,7 @@ async fn replay_after_command_started_is_init_then_started() {
     gate.mark_trusted_prompt(1, "/tmp".into());
     deliver_lifecycle(
         &gate,
-        serde_json::json!({"type":"CommandStarted","nonce":"n1"}),
+        serde_json::json!({"type":"CommandStarted","nonce":test_nonce()}),
     );
     assert_eq!(replay_kinds(&gate).await, ["InitShell", "CommandStarted"]);
     assert!(
@@ -1360,7 +1361,7 @@ async fn replay_after_mark_raw_is_init_then_desync() {
         frames[1]["payload"],
         serde_json::json!({
             "type":"session_lifecycle","terminal_id":"test","session_id":"s1",
-            "kind":"Desync","nonce":"n1","prompt_suppressed":false,"line_empty":false,
+            "kind":"Desync","nonce":test_nonce(),"prompt_suppressed":false,"line_empty":false,
             "exit_code":null,"prompt_generation":null,"cwd":null,
         })
     );
@@ -1923,8 +1924,8 @@ async fn partial_completion_replay(fail_on_flush: bool) {
     };
     let writer: Box<dyn std::io::Write + Send> = Box::new(CompletionFailWriter(fail_on_flush));
     let gate = SessionGate::new(Arc::new(tokio::sync::Mutex::new(Some(writer))));
-    gate.expect_session("s1".into(), "n1".into());
-    assert!(gate.register_session("s1".into(), "n1".into()));
+    gate.expect_session("s1".into(), test_nonce().into());
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
     gate.mark_trusted_prompt(1, "/tmp".into());
     let provider = CompletionProvider {
         id: "gen".into(),
@@ -1962,7 +1963,7 @@ async fn completion_failures_replay_desync() {
         } else {
             gate.finish_completion(CompletionResult {
                 session_id: "s1".into(),
-                nonce: "n1".into(),
+                nonce: test_nonce().into(),
                 request_id: "r1".into(),
                 buffer_revision: 1,
                 cursor: 7,

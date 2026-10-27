@@ -7,6 +7,8 @@ use tokio::sync::Mutex as AsyncMutex;
 use super::frame::SessionRpcResult;
 use super::gate::{CompletionProvider, CompletionStart, SessionGate};
 
+pub(super) use crate::test_support::test_nonce;
+
 pub(super) struct SharedWriter(Arc<Mutex<Vec<u8>>>);
 
 impl Write for SharedWriter {
@@ -30,7 +32,7 @@ pub(super) fn capture() -> (Arc<Mutex<Vec<u8>>>, PtyWriter) {
 
 pub(super) fn trusted_gate(writer: PtyWriter) -> SessionGate {
     let gate = SessionGate::new(writer);
-    gate.expect_session("s1".into(), "n1".into());
+    gate.expect_session("s1".into(), test_nonce().into());
     gate.mark_trusted_prompt(7, "/repo".into());
     gate
 }
@@ -285,7 +287,7 @@ pub(super) async fn rpc_terminal() -> (Arc<crate::pty::PtyManager>, String, std:
 pub(super) fn finish(gate: &SessionGate, request_id: &str, output: String) {
     gate.finish_completion(super::frame::CompletionResult {
         session_id: "s1".into(),
-        nonce: "n1".into(),
+        nonce: test_nonce().into(),
         request_id: request_id.into(),
         buffer_revision: 3,
         cursor: 4,

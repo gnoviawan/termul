@@ -2262,4 +2262,7 @@ pub fn run() {
 mod tests;
 
 #[cfg(test)]
+pub(crate) mod test_support;
+
+#[cfg(test)]
 mod fs_watch_wire_tests;

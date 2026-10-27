@@ -4,7 +4,7 @@ use super::deliver::process_reader_chunk;
 use super::filter::SessionFilter;
 use super::frame::SessionRpcResult;
 use super::gate::SessionGate;
-use super::gate_test_support::{capture_gate, start_completion};
+use super::gate_test_support::{capture_gate, start_completion, test_nonce};
 use super::prompt_spacer::PromptSpacer;
 use crate::trackers::terminal_events::TerminalEventHub;
 
@@ -430,7 +430,7 @@ fn prompt_ready_chunk(prefix: &[u8], cwd: &str) -> Vec<u8> {
         prefix,
         serde_json::json!({
             "type": "PromptReady",
-            "nonce": "n1",
+            "nonce": test_nonce(),
             "prompt_generation": 8,
             "cwd": cwd,
             "line_empty": true,
@@ -443,7 +443,7 @@ fn completion_chunk(prefix: &[u8], cwd: &str) -> Vec<u8> {
     session_frame(
         prefix,
         serde_json::json!({
-            "type": "Completion", "session_id": "s1", "nonce": "n1",
+            "type": "Completion", "session_id": "s1", "nonce": test_nonce(),
             "request_id": "r1", "buffer_revision": 3, "cursor": 4,
             "prompt_generation": 7, "cwd": cwd, "output": "branch-output\n"
         }),
@@ -453,7 +453,7 @@ fn completion_chunk(prefix: &[u8], cwd: &str) -> Vec<u8> {
 // Deliver-level tests via process_reader_chunk
 #[tokio::test]
 async fn deliver_process_reader_chunk_with_prompt_ready_frame() {
-    let mut fix = DeliverFixture::new("s1", "n1");
+    let mut fix = DeliverFixture::new("s1", test_nonce());
     fix.send(b"ls-out\r\n");
 
     let chunk = prompt_ready_chunk(MARK_BEL, "/repo/next");
@@ -472,7 +472,7 @@ async fn deliver_process_reader_chunk_with_prompt_ready_frame() {
 
 #[tokio::test]
 async fn deliver_suppression_content_does_not_space_subsequent_prompt() {
-    let mut fix = DeliverFixture::new("s1", "n1");
+    let mut fix = DeliverFixture::new("s1", test_nonce());
 
     // Start completion (suppression becomes active)
     let start = start_completion(&fix.gate, "r1", b"GEN").await;
@@ -500,7 +500,7 @@ async fn deliver_suppression_content_does_not_space_subsequent_prompt() {
 
 #[tokio::test]
 async fn deliver_cancellation_suppression_content_does_not_space_subsequent_prompt() {
-    let mut fix = DeliverFixture::new("s1", "n1");
+    let mut fix = DeliverFixture::new("s1", test_nonce());
 
     // Start completion (suppression becomes active)
     let start = start_completion(&fix.gate, "r1", b"GEN").await;

@@ -10,8 +10,8 @@ use crate::web::log_capture::capture_tracing;
 use super::frame::SessionRpcResult;
 use super::gate_test_support::{
     blocking_gate, capture, capture_gate, count, expected_write, outcome_cases, provider,
-    restore_during_write, spawn_gate_write, spawn_submit, start_completion, trusted_gate,
-    FailingWriter, PtyWriter,
+    restore_during_write, spawn_gate_write, spawn_submit, start_completion, test_nonce,
+    trusted_gate, FailingWriter, PtyWriter,
 };
 use super::CLEAR_LINE_SEQUENCE;
 use super::RESTORE_PROMPT_SEQUENCE;
@@ -594,7 +594,7 @@ async fn partial_generator_write_drops_trust() {
     for fail_on_flush in [true, false] {
         let failing: Box<dyn Write + Send> = Box::new(FailingWriter { fail_on_flush });
         let gate = trusted_gate(Arc::new(AsyncMutex::new(Some(failing))));
-        assert!(gate.register_session("s1".into(), "n1".into()));
+        assert!(gate.register_session("s1".into(), test_nonce().into()));
         let start = start_completion(&gate, "r1", b"GEN-ONE").await;
         assert_eq!(start.result, SessionRpcResult::Partial);
         assert_eq!(
@@ -752,7 +752,7 @@ fn observe_completion_trust_loss(gate: &Arc<super::gate::SessionGate>) {
 async fn finish_completion_loses_trust_before_notification() {
     let (_, gate) = capture_gate();
     let gate = Arc::new(gate);
-    assert!(gate.register_session("s1".into(), "n1".into()));
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
     observe_completion_trust_loss(&gate);
     assert_eq!(
         start_completion(&gate, "r1", b"GEN-ONE").await.result,
@@ -761,7 +761,7 @@ async fn finish_completion_loses_trust_before_notification() {
     let request = super::gate_test_support::request("r1");
     gate.finish_completion(super::frame::CompletionResult {
         session_id: "s1".into(),
-        nonce: "n1".into(),
+        nonce: test_nonce().into(),
         request_id: request.request_id,
         buffer_revision: request.buffer_revision,
         cursor: request.cursor,
@@ -784,7 +784,7 @@ async fn finish_matching_frame_after_prompt(
 ) {
     let (_bytes, gate) = capture_gate();
     let gate = std::sync::Arc::new(gate);
-    assert!(gate.register_session("s1".into(), "n1".into()));
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
     let start = start_completion(&gate, "r1", b"GEN-ONE").await;
     assert_eq!(start.result, SessionRpcResult::Accepted);
     let waiter = start.waiter.expect("waiter");
@@ -856,7 +856,7 @@ async fn finish_completion_keeps_cancel_after_newer_prompt() {
 async fn completion_watchdog_loses_trust_before_notification() {
     let (_, gate) = capture_gate();
     let gate = Arc::new(gate);
-    assert!(gate.register_session("s1".into(), "n1".into()));
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
     observe_completion_trust_loss(&gate);
     let start = start_completion(&gate, "r1", b"GEN-ONE").await;
     gate.start_completion_watchdog(start.epoch.unwrap());
@@ -874,7 +874,7 @@ async fn completion_watchdog_loses_trust_before_notification() {
 #[test]
 fn process_exit_clears_prompt_and_phase_together() {
     let (_, gate) = capture_gate();
-    assert!(gate.register_session("s1".into(), "n1".into()));
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
     gate.process_exited();
     let snapshot = gate.authentic_session();
     assert!(snapshot.exited);
