@@ -35,7 +35,7 @@ mod canvas;
 pub use ask::IdleSignal;
 use ask::PendingAsk;
 
-use crate::acp::host_mcp::canvas::CanvasRouter;
+use crate::acp::host_mcp::canvas::{CanvasErrorCode, CanvasRouter};
 use crate::acp::host_mcp::presence::Presence;
 
 /// Per-session auth + routing context, keyed by the random token.
@@ -522,7 +522,10 @@ impl HostPlanServer {
                         crate::logging::redact_session_id(&bound_session_id),
                         sessions.len()
                     );
-                    return FrameReply::err("ambiguous active session");
+                    return FrameReply::err_code(
+                        CanvasErrorCode::AmbiguousSession.as_str(),
+                        "ambiguous active session",
+                    );
                 }
                 _ => {
                     log::warn!(
@@ -530,7 +533,10 @@ impl HostPlanServer {
                         auth.agent_id,
                         crate::logging::redact_session_id(&bound_session_id)
                     );
-                    return FrameReply::err("no active turn");
+                    return FrameReply::err_code(
+                        CanvasErrorCode::NoActiveTurn.as_str(),
+                        "no active turn",
+                    );
                 }
             }
         };
