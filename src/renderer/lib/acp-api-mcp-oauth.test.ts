@@ -54,17 +54,45 @@ describe('startMcpOAuth refusal of an unsafe sign-in link', () => {
   })
 
   describe('web', () => {
-    const popup = { close: vi.fn(), location: { href: 'about:blank' } }
+    const popup = { close: vi.fn(), location: { href: 'about:blank' }, opener: {} as unknown }
     let openSpy: ReturnType<typeof vi.spyOn>
 
     beforeEach(() => {
       vi.mocked(isTauriContext).mockReturnValue(false)
       popup.location.href = 'about:blank'
-      openSpy = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+      popup.opener = {}
+      // Per the HTML spec, window.open returns null when `noopener` is set,
+      // even though the window opened (#1541).
+      openSpy = vi.spyOn(window, 'open').mockImplementation((_url, _target, features) => {
+        if (features?.includes('noopener')) return null
+        return popup as unknown as Window
+      })
     })
 
     afterEach(() => {
       openSpy.mockRestore()
+      vi.useRealTimers()
+    })
+
+    it('navigates the popup to the auth URL with its opener cut', async () => {
+      vi.useFakeTimers()
+      vi.mocked(webServerMcpOAuth.start).mockResolvedValue({
+        success: true,
+        data: { authUrl: 'https://auth.example.test/authorize?client_id=x' }
+      })
+      vi.mocked(webServerMcpOAuth.status).mockResolvedValue({
+        success: true,
+        data: { hasToken: true }
+      })
+
+      const settled = expect(
+        startMcpOAuth('proj-1', 'https://mcp.example.com')
+      ).resolves.toBeUndefined()
+      await vi.advanceTimersByTimeAsync(1000)
+
+      await settled
+      expect(popup.location.href).toBe('https://auth.example.test/authorize?client_id=x')
+      expect(popup.opener).toBeNull()
     })
 
     it('surfaces the host refusal as MCP_UNSAFE_URL and never navigates the popup', async () => {
