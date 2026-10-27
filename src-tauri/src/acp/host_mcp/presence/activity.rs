@@ -153,10 +153,8 @@ fn command_activity(
                     ids.extend(ids_in(inner));
                 }
             }
-            // termul-v0.4.0's editor answers a named batch with {results, names}.
             let result = result();
-            let steps = result.get("results").unwrap_or(&result);
-            for step in steps.as_array().into_iter().flatten() {
+            for step in result.as_array().into_iter().flatten() {
                 ids.extend(ids_in(step));
             }
             write(if ids.is_empty() {

@@ -351,6 +351,58 @@ fn layers_exported_as_one_zip_come_back_inline_and_a_folder_is_refused() {
     );
 }
 
+/// A command the policy names but the engine renamed would pass unchecked.
+#[test]
+fn every_command_the_policy_names_is_one_the_pinned_engine_runs() {
+    use figcraft_mcp::Backend as _;
+    let listed = figcraft_mcp::Headless::new()
+        .call("engine.commands", json!({}))
+        .unwrap();
+    let engine: std::collections::HashSet<&str> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|command| command["id"].as_str())
+        .collect();
+    let unknown: Vec<&str> = COMMANDS
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| !engine.contains(name))
+        .collect();
+    assert_eq!(unknown, Vec::<&str>::new());
+}
+
+/// An export path the policy gives a format to must be one the engine can
+/// write, or the agent gets an engine error for a path Termul accepted.
+#[test]
+fn every_format_an_export_path_names_is_one_the_pinned_engine_exports() {
+    use figcraft_mcp::Backend as _;
+    for path in [
+        "a.png", "a.jpg", "a.svg", "a.webp", "a.pdf", "a.xml", "a.fig",
+    ] {
+        let format = export_format(path).unwrap();
+        let mut engine = figcraft_mcp::Headless::new();
+        let rectangle = engine
+            .call(
+                "engine.execute",
+                json!({"command": "node.create", "params": {
+                    "type": "rectangle", "width": 10, "height": 10, "props": {"fill": "#336699"}
+                }}),
+            )
+            .unwrap();
+        let exported = engine.call(
+            "engine.execute",
+            json!({"command": "file.export", "params": {"ids": [rectangle["id"]], "format": format}}),
+        );
+        assert!(
+            exported
+                .as_ref()
+                .is_ok_and(|reply| reply["data"].is_string()),
+            "{format}: {exported:?}"
+        );
+    }
+}
+
 #[test]
 fn a_batch_step_refused_on_its_own_refuses_the_batch_for_the_same_reason() {
     let batch = |step: Value| {

@@ -205,21 +205,6 @@ fn table() -> Vec<Row> {
             json!([{ "id": 7 }, { "id": 8 }]),
             write(ids(&[7, 8])),
         ),
-        // termul-v0.4.0's editor answers a named batch with `{results, names}`;
-        // from termul-v0.5.0 only figcraft-mcp's `batch` tool adds `names`.
-        row(
-            "batch",
-            EXECUTE,
-            exec(
-                "command.batch",
-                json!({ "label": "Card", "commands": [
-                    { "command": "node.create", "as": "card", "params": { "type": "frame" } },
-                    { "command": "node.create", "params": { "type": "text", "parent": { "$name": "card" } } },
-                ] }),
-            ),
-            json!({ "results": [{ "id": 7 }, { "id": 8 }], "names": { "card": 7 } }),
-            write(ids(&[7, 8])),
-        ),
         row(
             "batch",
             EXECUTE,
