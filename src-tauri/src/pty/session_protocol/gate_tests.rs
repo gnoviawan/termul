@@ -450,12 +450,29 @@ async fn outcome_logs_omit_the_draft() {
 #[tokio::test]
 async fn restore_prompt_writes_the_sequence() {
     let (bytes, gate) = capture_gate();
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
 
     assert_eq!(gate.restore_prompt(true).await, SessionRpcResult::Accepted);
 
     let written = bytes.lock().expect("bytes").clone();
     assert_eq!(written, RESTORE_PROMPT_SEQUENCE.as_bytes());
     assert_eq!(count(&written, b"git status"), 0, "no draft restored");
+}
+
+#[tokio::test]
+async fn restore_prompt_refuses_an_unregistered_shell() {
+    let (bytes, writer) = capture();
+    let gate = super::gate::SessionGate::new(writer);
+    gate.expect_session("s1".into(), test_nonce().into());
+
+    assert_eq!(
+        gate.restore_prompt(true).await,
+        SessionRpcResult::NotStarted
+    );
+    assert!(
+        bytes.lock().expect("bytes").is_empty(),
+        "an unregistered shell must not receive the restore sequence"
+    );
 }
 
 #[tokio::test]

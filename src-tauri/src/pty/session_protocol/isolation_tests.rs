@@ -1,9 +1,30 @@
+use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
 use super::deliver::process_reader_chunk;
 use super::filter::SessionFilter;
 use super::frame::SessionRpcResult;
 use super::gate_test_support::{capture_gate, invalid_test_nonce, start_completion, test_nonce};
+
+struct PartialThenRestoreWriter {
+    bytes: Arc<Mutex<Vec<u8>>>,
+    fail_next_write: bool,
+}
+
+impl Write for PartialThenRestoreWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.fail_next_write {
+            self.fail_next_write = false;
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "partial write"));
+        }
+        self.bytes.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 fn completion_frame() -> Vec<u8> {
     let payload = serde_json::json!({
@@ -1141,6 +1162,66 @@ async fn wrong_context_frame_publishes_desync() {
     assert!(!reader.gate.trusted_at_prompt());
     take_one_desync(&mut events);
     await_restore_sequence(&reader.writer).await;
+}
+
+#[tokio::test]
+async fn partial_completion_write_publishes_live_desync_and_restores_prompt() {
+    use super::gate::SessionGate;
+    use super::RESTORE_PROMPT_SEQUENCE;
+    use crate::trackers::terminal_events::TerminalEventHub;
+
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let writer: Box<dyn Write + Send> = Box::new(PartialThenRestoreWriter {
+        bytes: bytes.clone(),
+        fail_next_write: true,
+    });
+    let gate = Arc::new(SessionGate::new(Arc::new(tokio::sync::Mutex::new(Some(
+        writer,
+    )))));
+    gate.expect_session("s1".into(), test_nonce().into());
+    assert!(gate.register_session("s1".into(), test_nonce().into()));
+    gate.mark_trusted_prompt(7, "/repo".into());
+
+    let hub = TerminalEventHub::standalone();
+    let mut events = hub.subscribe();
+    assert!(process_reader_chunk(
+        &mut SessionFilter::new(),
+        b"",
+        &Mutex::new(Vec::new()),
+        &gate,
+        "test",
+        &hub,
+    ));
+
+    let start = start_completion(&gate, "r1", b"GEN").await;
+    assert_eq!(start.result, SessionRpcResult::Partial);
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .expect("partial completion did not publish live Desync without reconnect")
+        .expect("Desync subscriber closed");
+    let event = serde_json::to_value(event).unwrap();
+    assert_eq!(event["kind"], "Desync");
+    assert_eq!(event["session_id"], "s1");
+    assert_eq!(
+        gate.authentic_session().phase,
+        super::gate::SessionPhase::Raw
+    );
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if bytes
+                .lock()
+                .unwrap()
+                .windows(RESTORE_PROMPT_SEQUENCE.len())
+                .any(|part| part == RESTORE_PROMPT_SEQUENCE.as_bytes())
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("authenticated auto-restore did not write the prompt sequence");
 }
 
 #[tokio::test(start_paused = true)]

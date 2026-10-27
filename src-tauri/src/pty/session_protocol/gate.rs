@@ -406,7 +406,7 @@ impl SessionGate {
         let request_id = request.request_id.as_str();
         self.notify_about_to_lock_writer();
         let mut guard = self.writer.lock().await;
-        authorized_write(authorization, || {
+        let start = authorized_write(authorization, || {
             // Lock order: writer -> claims -> publication -> prompt -> completion; no await below.
             let _publication = self.publication.lock();
             // Keep trust locked through the write and state update so restore failure cannot overtake them.
@@ -436,7 +436,14 @@ impl SessionGate {
                 waiter: Some(waiter),
                 epoch: Some(epoch),
             }
-        })
+        })?;
+        drop(guard);
+        if start.result == SessionRpcResult::Partial {
+            // The sink takes publication and may schedule a restore write.
+            // Invoke it only after the writer and every gate state lock are released.
+            self.notify_trust_loss(SuppressionEndReason::TrustLost);
+        }
+        Ok(start)
     }
 
     /// Returns true while completion output suppression is active.
@@ -585,6 +592,9 @@ impl SessionGate {
         let result = authorized_write(authorization, || {
             let publication = self.publication.lock();
             let mut state = publication.get();
+            if self.session_identity().is_none() {
+                return SessionRpcResult::NotStarted;
+            }
             if state.restored_epoch == Some(state.restore_epoch) {
                 return SessionRpcResult::Accepted;
             }
