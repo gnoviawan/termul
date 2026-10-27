@@ -111,7 +111,10 @@ impl CanvasErrorCode {
         match (self, tool) {
             (
                 Self::CanvasTimeout,
-                Some("get_node" | "inspect_document" | "list_commands" | "inspect_ui"),
+                Some(
+                    "get_node" | "inspect_document" | "list_commands" | "list_issues"
+                    | "inspect_ui",
+                ),
             ) => Some(
                 "The canvas did not answer in time: retry once, and if it times out again ask \
                  the user to check that the Canvas tab is open and responsive.",
