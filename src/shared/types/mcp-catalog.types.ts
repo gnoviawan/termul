@@ -35,6 +35,7 @@ export type McpCatalogReason =
   | { code: 'non-stdio-transport'; transport: string }
   | { code: 'unpinned-version' }
   | { code: 'invalid-package' }
+  | { code: 'unsupported-registry'; registry: string }
 
 /** The option an install would use: an index into the row's `remotes` or `packages`. */
 export interface McpCatalogDefaultOption {
