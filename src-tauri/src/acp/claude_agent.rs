@@ -51,12 +51,19 @@ pub(crate) fn probe_node_major() -> Option<u64> {
 }
 
 fn probe_node_major_uncached() -> Option<u64> {
+    parse_node_major(&probe_runtime_stdout("node", &["--version"])?)
+}
+
+/// Run a PATH-resolved runtime with `args` and return its stdout (first 1 KiB)
+/// when it exits successfully within 5 seconds. Blocking: async callers run it
+/// on the blocking pool.
+pub(crate) fn probe_runtime_stdout(runtime: &str, args: &[&str]) -> Option<String> {
     let path = super::config::runtime_resolution_path();
-    let node = resolve_runtime_executable("node", &path)?;
-    let mut command = std::process::Command::new(node);
+    let executable = resolve_runtime_executable(runtime, &path)?;
+    let mut command = std::process::Command::new(executable);
     crate::process_util::background_command_hygiene(&mut command);
     let mut child = command
-        .arg("--version")
+        .args(args)
         .env("PATH", path)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -89,7 +96,7 @@ fn probe_node_major_uncached() -> Option<u64> {
         return None;
     }
     let output = output_reader.join().ok()??;
-    parse_node_major(std::str::from_utf8(&output).ok()?)
+    String::from_utf8(output).ok()
 }
 
 /// Async wrapper around the (cached) blocking Node probe: runs on the tokio

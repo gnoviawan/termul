@@ -1,0 +1,46 @@
+# Registry names in the committed dev/test snapshot fixture, one per AD-4 class.
+# Rebuild: bun scripts/fetch-mcp-registry-snapshot.mjs --only scripts/mcp-registry-fixture-names.txt
+# remote streamable-http, installable
+io.github.workmagicio/workmagic-mcp
+# remote with a secret header, installable
+com.tre-app/tre
+# remote sse
+ai.anzenna/anzenna
+# remote with a secret URL variable, unsupported
+io.github.jghiglia2380/0latency
+# remotes (http + sse) plus packages
+space.r3plica/catalog
+# npm, pinned
+to.hooka/mcp
+# pypi, pinned
+io.github.tmonk/mcp-stata
+# oci pinned by tag
+io.github.luckyjupiter/occultron
+# oci pinned by digest
+io.github.BargLabs/cejel
+# oci :latest, unsupported
+io.github.yotamfreund-eng/greeting
+# nuget
+io.github.domdomegg/time-mcp-nuget
+# mcpb, unsupported
+io.github.JacobBruce/CAIT
+# cargo, unsupported
+io.github.craftbag/craftbag-mcp
+# runtimeArguments, unsupported
+io.github.mickymultani/crypto-bytes
+# secret in packageArguments, unsupported
+ai.kaiv/postgres
+# NODE_OPTIONS env, unsupported
+io.github.SamuelMoraesF/mcp-nfse-nacional
+# npm version "latest", unsupported
+io.github.ycjcl868/mcp-server-fear-greed
+# runtimeHint "node" on npm, unsupported
+io.github.jugbeep/lustre
+# non-stdio package transport, unsupported
+icu.steeped.registry/nodejsmcp
+# no packages and no remotes
+io.github.mbtest870-ctrl/agenza
+# latest version deleted, never browses
+ai.fluxink/mcp-server
+# latest version deprecated
+io.github.sharan01x/usetested
