@@ -91,10 +91,10 @@ impl Parser {
                 None
             }
             ParserState::Esc => {
-                self.state = if byte == b'[' {
-                    ParserState::Csi
-                } else {
-                    ParserState::Ground
+                self.state = match byte {
+                    b'[' => ParserState::Csi,
+                    0x1b => ParserState::Esc,
+                    _ => ParserState::Ground,
                 };
                 None
             }

@@ -125,10 +125,16 @@ impl SessionGate {
             else {
                 return;
             };
-            let lost_trust = !active.matches_context(&frame);
-            let outcome = if lost_trust {
-                *prompt = None;
-                self.set_host_phase(SessionPhase::Raw);
+            let frame_mismatch = !active.matches_context(&frame);
+            let prompt_mismatch = !prompt
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.matches(&active.request));
+            let lost_trust = frame_mismatch;
+            let outcome = if frame_mismatch || prompt_mismatch {
+                if frame_mismatch {
+                    *prompt = None;
+                    self.set_host_phase(SessionPhase::Raw);
+                }
                 CompletionOutcome::Dropped
             } else {
                 CompletionOutcome::Completed

@@ -117,6 +117,44 @@ fn command_finished_may_omit_its_exit_code() {
     assert_eq!(exit_code, None);
 }
 
+fn parsed_exit_code(code: serde_json::Value) -> Option<i32> {
+    let payload = serde_json::json!({
+        "type": "CommandFinished",
+        "exit_code": code
+    });
+    let parsed = frame::parse(&payload, None).expect("command finished");
+    let Frame::CommandFinished { exit_code, .. } = parsed else {
+        panic!("expected CommandFinished, got {parsed:?}");
+    };
+    exit_code
+}
+
+#[test]
+fn command_finished_keeps_i32_exit_code_boundaries() {
+    assert_eq!(
+        parsed_exit_code(serde_json::json!(i32::MAX)),
+        Some(i32::MAX)
+    );
+    assert_eq!(
+        parsed_exit_code(serde_json::json!(i32::MIN)),
+        Some(i32::MIN)
+    );
+    assert_eq!(parsed_exit_code(serde_json::json!(0)), Some(0));
+    assert_eq!(parsed_exit_code(serde_json::json!(-1)), Some(-1));
+}
+
+#[test]
+fn command_finished_treats_out_of_i32_range_as_absent() {
+    assert_eq!(
+        parsed_exit_code(serde_json::json!(i64::from(i32::MAX) + 1)),
+        None
+    );
+    assert_eq!(
+        parsed_exit_code(serde_json::json!(i64::from(i32::MIN) - 1)),
+        None
+    );
+}
+
 #[test]
 fn init_shell_keeps_its_registration() {
     let payload = serde_json::json!({

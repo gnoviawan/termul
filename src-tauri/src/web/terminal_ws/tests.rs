@@ -27,7 +27,7 @@ fn string_field_rejects_empty_and_missing() {
 #[test]
 fn context_authorize_and_detach_roundtrip() {
     let mut ctx = ConnectionContext {
-        authorized: Arc::new(RwLock::new(HashSet::new())),
+        authorized: Arc::new(RwLock::new(HashMap::new())),
         attaching: Default::default(),
         attachments: HashMap::new(),
         // Tests exercise post-gate behavior on an already-authed connection.
@@ -175,7 +175,7 @@ fn capability_policy(
 
 pub(super) fn gate_test_ctx(authed: bool) -> ConnectionContext {
     ConnectionContext {
-        authorized: Arc::new(RwLock::new(HashSet::new())),
+        authorized: Arc::new(RwLock::new(HashMap::new())),
         attaching: Default::default(),
         attachments: HashMap::new(),
         authed,
@@ -412,7 +412,7 @@ async fn connection_detach_aborts_attachment_and_clears_authorization() {
     // generation teardown inside attachment tasks) requires a live
     // PtyManager seam and is covered in CI integration, not here.
     let mut ctx = ConnectionContext {
-        authorized: Arc::new(RwLock::new(HashSet::new())),
+        authorized: Arc::new(RwLock::new(HashMap::new())),
         attaching: Default::default(),
         attachments: HashMap::new(),
         // Tests exercise post-gate behavior on an already-authed connection.
@@ -773,7 +773,10 @@ async fn list_preserved_scoped_to_one_terminal_keeps_sibling_claims() {
         .filter_map(|t| t["id"].as_str())
         .collect();
     assert_eq!(ids, [id_a.as_str()]);
-    assert!(attach_b.is_ok(), "the sibling's claim still attaches: {attach_b:?}");
+    assert!(
+        attach_b.is_ok(),
+        "the sibling's claim still attaches: {attach_b:?}"
+    );
 
     for (terminal_id, _) in &spawned {
         let _ = handle(

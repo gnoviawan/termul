@@ -775,6 +775,83 @@ async fn finish_completion_loses_trust_before_notification() {
     );
 }
 
+async fn finish_matching_frame_after_prompt(
+    generation: u64,
+    cwd: &str,
+) -> (
+    std::sync::Arc<super::gate::SessionGate>,
+    Result<super::completion::CompletionDelivery, tokio::sync::oneshot::error::RecvError>,
+) {
+    let (_bytes, gate) = capture_gate();
+    let gate = std::sync::Arc::new(gate);
+    assert!(gate.register_session("s1".into(), "n1".into()));
+    let start = start_completion(&gate, "r1", b"GEN-ONE").await;
+    assert_eq!(start.result, SessionRpcResult::Accepted);
+    let waiter = start.waiter.expect("waiter");
+    assert!(gate.generator_active());
+    assert!(gate.suppressing_output());
+    gate.mark_trusted_prompt(generation, cwd.into());
+    super::gate_test_support::finish(&gate, "r1", "stale".into());
+    (gate, waiter.await)
+}
+
+#[tokio::test]
+async fn finish_completion_drops_old_frame_after_newer_generation() {
+    let (gate, delivery) = finish_matching_frame_after_prompt(8, "/repo").await;
+    assert!(
+        matches!(delivery, Ok(Err(super::rpc::CompletionOutcome::Dropped))),
+        "an old-context frame after a newer PromptReady must not complete: {delivery:?}"
+    );
+    assert_eq!(gate.trusted_prompt_snapshot(), Some((8, "/repo".into())));
+    assert_eq!(
+        gate.authentic_session().phase,
+        super::gate::SessionPhase::AtPrompt
+    );
+    assert!(!gate.generator_active());
+    assert!(!gate.suppressing_output());
+    let mut next = super::gate_test_support::request("r2");
+    next.prompt_generation = 8;
+    assert_eq!(
+        gate.request_completion(&next, &provider("gen", b"GEN-TWO", true), true)
+            .await
+            .result,
+        SessionRpcResult::Accepted,
+        "dropping the stale frame must free occupancy"
+    );
+}
+
+#[tokio::test]
+async fn finish_completion_drops_old_frame_after_cwd_change() {
+    let (gate, delivery) = finish_matching_frame_after_prompt(7, "/other").await;
+    assert!(
+        matches!(delivery, Ok(Err(super::rpc::CompletionOutcome::Dropped))),
+        "an old-context frame after a cwd change must not complete: {delivery:?}"
+    );
+    assert_eq!(gate.trusted_prompt_snapshot(), Some((7, "/other".into())));
+    assert!(!gate.generator_active());
+    assert!(!gate.suppressing_output());
+}
+
+#[tokio::test]
+async fn finish_completion_keeps_cancel_after_newer_prompt() {
+    let (_bytes, gate) = capture_gate();
+    let start = start_completion(&gate, "r1", b"GEN-ONE").await;
+    assert_eq!(start.result, SessionRpcResult::Accepted);
+    let waiter = start.waiter.expect("waiter");
+    assert!(gate.cancel_completion("r1"));
+    gate.mark_trusted_prompt(8, "/repo".into());
+    super::gate_test_support::finish(&gate, "r1", "late".into());
+    assert!(
+        matches!(
+            waiter.await,
+            Ok(Err(super::rpc::CompletionOutcome::Cancelled))
+        ),
+        "cancel must stay exactly-once after a later PromptReady"
+    );
+    assert_eq!(gate.trusted_prompt_snapshot(), Some((8, "/repo".into())));
+    assert!(!gate.generator_active());
+}
+
 #[tokio::test(start_paused = true)]
 async fn completion_watchdog_loses_trust_before_notification() {
     let (_, gate) = capture_gate();
