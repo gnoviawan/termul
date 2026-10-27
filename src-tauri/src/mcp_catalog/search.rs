@@ -9,6 +9,8 @@ use super::snapshot::{CatalogItem, LoadedCatalog, RegistryStatus};
 pub const DEFAULT_PAGE_SIZE: usize = 50;
 pub const MAX_PAGE_SIZE: usize = 100;
 pub const MAX_QUERY_CHARS: usize = 200;
+/// Each term rescans every item, so the term count bounds a request's cost.
+pub const MAX_QUERY_TERMS: usize = 8;
 
 /// Which runner executables the host can start (AD-4 `needs-runtime`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -82,6 +84,7 @@ pub struct McpCatalogSearchRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchError {
     QueryTooLong,
+    TooManyTerms,
     InvalidLimit,
     InvalidCursor,
 }
@@ -90,6 +93,7 @@ impl std::fmt::Display for SearchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::QueryTooLong => write!(f, "query exceeds {MAX_QUERY_CHARS} characters"),
+            Self::TooManyTerms => write!(f, "query has more than {MAX_QUERY_TERMS} terms"),
             Self::InvalidLimit => write!(f, "limit must be between 1 and {MAX_PAGE_SIZE}"),
             Self::InvalidCursor => f.write_str("cursor is not a cursor this search returned"),
         }
@@ -165,9 +169,10 @@ fn starts_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
-/// Every term must match the name, title or description. Name matches rank
-/// above title matches, which rank above description matches.
-fn score(item: &CatalogItem, terms: &[&str]) -> Option<u32> {
+/// Every term must match the name, title or description. Per term, an exact
+/// name scores highest, then a name or title prefix, then a substring of the
+/// name, the title and the description, in that order.
+fn score(item: &CatalogItem, terms: &[String]) -> Option<u32> {
     let short_name = item.name.rsplit('/').next().unwrap_or(&item.name);
     let title = item.title.as_deref().unwrap_or("");
     terms.iter().try_fold(0, |total, term| {
@@ -191,38 +196,60 @@ fn score(item: &CatalogItem, terms: &[&str]) -> Option<u32> {
     })
 }
 
-pub(crate) fn search(
-    catalog: &LoadedCatalog,
-    runners: RunnerAvailability,
-    request: &McpCatalogSearchRequest,
-) -> Result<McpCatalogPage, SearchError> {
+/// A request that passed every check that needs no catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SearchQuery {
+    terms: Vec<String>,
+    limit: usize,
+    offset: usize,
+}
+
+pub(crate) fn validate(request: &McpCatalogSearchRequest) -> Result<SearchQuery, SearchError> {
     let query = request.query.as_deref().unwrap_or("").trim();
     if query.chars().count() > MAX_QUERY_CHARS {
         return Err(SearchError::QueryTooLong);
+    }
+    let terms: Vec<String> = query.split_whitespace().map(str::to_string).collect();
+    if terms.len() > MAX_QUERY_TERMS {
+        return Err(SearchError::TooManyTerms);
     }
     let limit = request.limit.unwrap_or(DEFAULT_PAGE_SIZE);
     if !(1..=MAX_PAGE_SIZE).contains(&limit) {
         return Err(SearchError::InvalidLimit);
     }
-    let terms: Vec<&str> = query.split_whitespace().collect();
+    let offset = match request.cursor.as_deref() {
+        None => 0,
+        Some(cursor) => cursor
+            .parse::<usize>()
+            .map_err(|_| SearchError::InvalidCursor)?,
+    };
+    Ok(SearchQuery {
+        terms,
+        limit,
+        offset,
+    })
+}
+
+/// The scan is linear in the catalog and the term count. Blocking.
+pub(crate) fn search(
+    catalog: &LoadedCatalog,
+    runners: RunnerAvailability,
+    query: &SearchQuery,
+) -> Result<McpCatalogPage, SearchError> {
     let mut matches: Vec<(u32, &CatalogItem)> = catalog
         .items
         .iter()
-        .filter_map(|item| score(item, &terms).map(|score| (score, item)))
+        .filter_map(|item| score(item, &query.terms).map(|score| (score, item)))
         .collect();
     // Items are sorted by name, and the sort is stable, so ties stay in name
     // order and every page of one query is deterministic.
     matches.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     let total = matches.len();
-    let offset = match request.cursor.as_deref() {
-        None => 0,
-        Some(cursor) => cursor
-            .parse::<usize>()
-            .ok()
-            .filter(|offset| *offset <= total)
-            .ok_or(SearchError::InvalidCursor)?,
-    };
-    let end = (offset + limit).min(total);
+    let offset = query.offset;
+    if offset > total {
+        return Err(SearchError::InvalidCursor);
+    }
+    let end = (offset + query.limit).min(total);
     let items = matches[offset..end]
         .iter()
         .map(|(_, item)| {

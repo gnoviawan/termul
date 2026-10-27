@@ -1,10 +1,21 @@
+use std::time::Instant;
+
 use serde_json::{json, Value};
 
 use super::search::{
-    search, McpCatalogSearchRequest, McpCatalogState, RunnerAvailability, SearchError,
+    search as scan, validate, McpCatalogPage, McpCatalogSearchRequest, McpCatalogState,
+    RunnerAvailability, SearchError, MAX_QUERY_CHARS, MAX_QUERY_TERMS,
 };
 use super::snapshot::{item_from_row, LoadedCatalog};
-use super::McpCatalogService;
+use super::{McpCatalogError, McpCatalogService};
+
+fn search(
+    catalog: &LoadedCatalog,
+    runners: RunnerAvailability,
+    request: &McpCatalogSearchRequest,
+) -> Result<McpCatalogPage, SearchError> {
+    validate(request).and_then(|query| scan(catalog, runners, &query))
+}
 
 fn row(name: &str, title: Option<&str>, description: &str, status: &str) -> Value {
     json!({
@@ -91,7 +102,7 @@ fn paging_walks_every_match_once_in_a_stable_order() {
 }
 
 #[test]
-fn the_query_matches_name_title_and_description_ranked_in_that_order() {
+fn exact_names_rank_first_then_prefixes_then_name_title_and_description_substrings() {
     let catalog = catalog(vec![
         row(
             "io.example/alpha",
@@ -159,6 +170,66 @@ fn bad_requests_are_validation_errors() {
         search(&catalog, runners, &request(&"x".repeat(201), None, None)),
         Err(SearchError::QueryTooLong)
     );
+    assert_eq!(
+        search(&catalog, runners, &request("a b c d e f g h i", None, None)),
+        Err(SearchError::TooManyTerms)
+    );
+    assert_eq!(
+        search(&catalog, runners, &request("a a a a a a a a", None, None))
+            .unwrap()
+            .total,
+        1
+    );
+}
+
+#[tokio::test]
+async fn the_service_rejects_a_bad_request_as_a_validation_error() {
+    let service = McpCatalogService::with_runners(
+        catalog(vec![row("io.example/a", None, "a", "active")]),
+        RunnerAvailability::default(),
+    );
+    assert_eq!(
+        service
+            .search(&request("a b c d e f g h i", None, None))
+            .await,
+        Err(McpCatalogError {
+            code: "VALIDATION_ERROR",
+            message: format!("query has more than {MAX_QUERY_TERMS} terms"),
+        })
+    );
+}
+
+/// Worst case for the scan: the most terms the cap allows, each as long as
+/// the length cap allows, each matching every item only at the end of its
+/// description, so no term short-circuits. Run with
+/// `cargo test --lib worst_case_search_latency -- --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "measurement, not a check"]
+async fn worst_case_search_latency() {
+    const ITEMS: usize = 52_000;
+    let term_len = (MAX_QUERY_CHARS - (MAX_QUERY_TERMS - 1)) / MAX_QUERY_TERMS;
+    let term = format!("{}b", "a".repeat(term_len - 1));
+    let description = format!("{}b", "a".repeat(189));
+    let service = McpCatalogService::with_runners(
+        catalog(
+            (0..ITEMS)
+                .map(|i| row(&format!("io.example/server-{i}"), None, &description, "active"))
+                .collect(),
+        ),
+        RunnerAvailability::default(),
+    );
+    let query = vec![term.as_str(); MAX_QUERY_TERMS].join(" ");
+    let started = Instant::now();
+    let page = service
+        .search(&request(&query, None, Some(1)))
+        .await
+        .unwrap();
+    eprintln!(
+        "worst-case search: {ITEMS} items, {MAX_QUERY_TERMS} terms of {term_len} chars, {} matched, {:?}",
+        page.total,
+        started.elapsed()
+    );
+    assert_eq!(page.total, ITEMS);
 }
 
 #[test]
