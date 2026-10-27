@@ -347,7 +347,11 @@ export function AgentProse({
   }, [filePathContext])
 
   return (
-    <div ref={rootRef} className="chat-streamdown min-w-0 text-sm leading-normal text-foreground">
+    <div
+      ref={rootRef}
+      className="chat-streamdown min-w-0 text-sm leading-normal text-foreground"
+      data-external-link-scope=""
+    >
       <Streamdown
         mode={streaming ? 'streaming' : 'static'}
         isAnimating={streaming}

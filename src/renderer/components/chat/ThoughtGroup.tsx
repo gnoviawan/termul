@@ -19,6 +19,7 @@ const BOTTOM_THRESHOLD_PX = 48
 
 // Thinking links go through the same confirm-then-open path as replies, not
 // Streamdown's built-in link safety (its modal opens with `window.open`).
+// `#` links (footnotes) scroll within the thought: see `ConfirmedExternalLink`.
 const THOUGHT_COMPONENTS: Components = {
   a: ({ href, children, node: _node, target: _target, rel: _rel, ...props }) => (
     <ConfirmedExternalLink href={href} {...props}>
@@ -274,7 +275,7 @@ function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps): Rea
                   !expanded && 'max-h-[200px]'
                 )}
               >
-                <div className="thought-markdown min-w-0">
+                <div className="thought-markdown min-w-0" data-external-link-scope="">
                   <Streamdown
                     mode={isStreaming ? 'streaming' : 'static'}
                     isAnimating={isStreaming}

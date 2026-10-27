@@ -333,6 +333,151 @@ describe('pending confirmation outlives the message that asked for it', () => {
   })
 })
 
+describe('focus after the link re-rendered or remounted while the dialog was open', () => {
+  const streamed = (more: string) => `Visit [docs](${URL_}).${more}`
+
+  /** The focused element is a live link to `href` with this text, not `<body>`. */
+  function expectFocusOnLink(href: string, text: string): void {
+    const active = document.activeElement
+    expect(active).not.toBe(document.body)
+    expect(active?.isConnected).toBe(true)
+    expect(active?.tagName).toBe('A')
+    expect(active?.getAttribute('href')).toBe(href)
+    expect(active?.textContent).toBe(text)
+  }
+
+  async function pause(ms: number): Promise<void> {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms))
+    })
+  }
+
+  it('focuses the same link after more streamed text, then Cancel', async () => {
+    const view = renderWithHost(withTooltips(<AgentProse text={streamed('')} streaming reduced />))
+    const link = screen.getByText('docs').closest('a') as HTMLElement
+    link.focus()
+    await click(link)
+    view.rerender(withTooltips(<AgentProse text={streamed(' And more')} streaming reduced />))
+    await pause(120)
+
+    await click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expectFocusOnLink(URL_, 'docs'))
+  })
+
+  it('focuses the remounted copy of the link after Cancel', async () => {
+    const view = renderWithHost(
+      withTooltips(<AgentProse key="a" text={streamed('')} streaming={false} reduced />)
+    )
+    const original = screen.getByText('docs').closest('a') as HTMLElement
+    original.focus()
+    await click(original)
+    view.rerender(
+      withTooltips(<AgentProse key="b" text={streamed('')} streaming={false} reduced />)
+    )
+    await flush()
+    expect(original.isConnected).toBe(false)
+
+    await click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expectFocusOnLink(URL_, 'docs'))
+    expect(document.activeElement).not.toBe(original)
+  })
+
+  it('focuses the remounted copy after Escape and after Open, too', async () => {
+    for (const answer of ['escape', 'open'] as const) {
+      const view = renderWithHost(
+        withTooltips(<AgentProse key="a" text={streamed('')} streaming={false} reduced />)
+      )
+      const original = screen.getByText('docs').closest('a') as HTMLElement
+      original.focus()
+      await click(original)
+      view.rerender(
+        withTooltips(<AgentProse key="b" text={streamed('')} streaming={false} reduced />)
+      )
+      await flush()
+      if (answer === 'escape') {
+        fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' })
+        await flush()
+      } else {
+        await click(screen.getByRole('button', { name: 'Open' }))
+      }
+      await waitFor(() => expectFocusOnLink(URL_, 'docs'))
+      view.unmount()
+    }
+  })
+
+  it('picks the same one of two links to the same URL', async () => {
+    const text = `[one](${URL_}) and [two](${URL_})`
+    const view = renderWithHost(
+      withTooltips(<AgentProse key="a" text={text} streaming={false} reduced />)
+    )
+    const second = screen.getByText('two').closest('a') as HTMLElement
+    second.focus()
+    await click(second)
+    view.rerender(withTooltips(<AgentProse key="b" text={text} streaming={false} reduced />))
+    await flush()
+
+    await click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expectFocusOnLink(URL_, 'two'))
+  })
+
+  it('focuses the nearest surviving container when the link is gone for good', async () => {
+    const pane = (body: ReactNode) =>
+      withTooltips(
+        <section aria-label="chat pane">
+          <div>{body}</div>
+        </section>
+      )
+    const view = renderWithHost(pane(<AgentProse text={streamed('')} streaming={false} reduced />))
+    const link = screen.getByText('docs').closest('a') as HTMLElement
+    link.focus()
+    await click(link)
+    view.rerender(pane(<p>The message was removed.</p>))
+    await flush()
+
+    await click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body))
+    const pane_ = screen.getByRole('region', { name: 'chat pane' })
+    expect(pane_.contains(document.activeElement)).toBe(true)
+  })
+})
+
+describe('fragment links in a thinking block', () => {
+  const scrolled: Element[] = []
+  const original = Element.prototype.scrollIntoView
+  beforeEach(() => {
+    scrolled.length = 0
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this)
+    }
+  })
+  afterEach(() => {
+    Element.prototype.scrollIntoView = original
+  })
+
+  async function renderThought(text: string): Promise<void> {
+    renderWithHost(<ThoughtGroup messages={[thought(text)]} isLiveTail={false} />)
+    await click(screen.getByRole('button', { expanded: false }))
+  }
+
+  it('scrolls within the thought and asks nothing', async () => {
+    await renderThought('Read the note[^1].\n\n[^1]: The footnote body.\n')
+    await click(screen.getByText('1'))
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(browserOpens()).toEqual([])
+    expect(scrolled.map((el) => el.id)).toEqual(['user-content-fn-1'])
+  })
+
+  it('does nothing for a fragment with no target, and opens nothing', async () => {
+    await renderThought('See [jump](#nowhere).')
+    await click(screen.getByText('jump'))
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(browserOpens()).toEqual([])
+    expect(scrolled).toEqual([])
+  })
+})
+
 describe('a very long URL', () => {
   const LONG_URL = `https://example.com/${'a'.repeat(4000)}`
 

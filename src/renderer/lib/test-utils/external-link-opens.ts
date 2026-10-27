@@ -16,6 +16,7 @@ export interface ExternalOpenSpy {
   restore: () => void
 }
 
+/** Start counting opens through `openerMock` and the channels above; `restore()` stops. */
 export function spyOnExternalOpens(openerMock: { mock: { calls: unknown[][] } }): ExternalOpenSpy {
   const pluginOpens: string[] = []
   const onClick = (event: MouseEvent): void => {

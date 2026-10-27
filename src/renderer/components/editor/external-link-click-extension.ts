@@ -2,6 +2,7 @@ import { Extension } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 
+/** The link anchor under a click inside the editor, or null. */
 function linkAnchor(view: EditorView, event: Event): HTMLAnchorElement | null {
   const target = event.target
   if (!(target instanceof Element)) return null

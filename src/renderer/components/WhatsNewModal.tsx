@@ -54,6 +54,7 @@ export function WhatsNewModal({
     [onClose]
   )
 
+  // "View on GitHub" goes through the app-wide confirm, like the notes links.
   const handleViewOnGitHub = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
       // Only hand http(s) URLs to the system opener; htmlUrl originates from a

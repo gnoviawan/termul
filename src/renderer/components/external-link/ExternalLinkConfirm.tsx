@@ -32,6 +32,24 @@ interface ExternalLinkRequest {
   url: string
   /** Where focus goes back to when the dialog closes, if still in the page. */
   returnFocusTo: HTMLElement | null
+  /** How to find an equivalent element if `returnFocusTo` was re-rendered away. */
+  focusLocator: FocusLocator | null
+}
+
+/**
+ * Enough about the trigger to find its stand-in after a remount. A link in a
+ * streaming message can be replaced by an identical new node while the dialog
+ * is open; focus should land on that node, not fall back to `<body>`.
+ */
+interface FocusLocator {
+  /** The trigger's `href` attribute, when it is a link. */
+  href: string | null
+  /** The closest `[data-external-link-scope]` (a message, a thought, a panel). */
+  scope: Element | null
+  /** Position among same-href links inside `scope`, or the document. */
+  index: number
+  /** The trigger's ancestors, nearest first, for when no equivalent link is left. */
+  ancestors: HTMLElement[]
 }
 
 interface ExternalLinkConfirmState {
@@ -48,11 +66,13 @@ let nextId = 1
 const hosts: string[] = []
 const listeners = new Set<() => void>()
 
+/** Merge `next` into the store and notify every subscribed host. */
 function setState(next: Partial<ExternalLinkConfirmState>): void {
   state = { ...state, ...next }
   for (const listener of listeners) listener()
 }
 
+/** `useSyncExternalStore` subscription to the confirmation store. */
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
@@ -77,7 +97,8 @@ export function requestExternalLinkOpen(
   const request: ExternalLinkRequest = {
     id: nextId++,
     url,
-    returnFocusTo: options.returnFocusTo ?? null
+    returnFocusTo: options.returnFocusTo ?? null,
+    focusLocator: options.returnFocusTo ? locate(options.returnFocusTo) : null
   }
   setState({ pending: request, last: request })
   return true
@@ -91,14 +112,71 @@ function settle(id: number, open: boolean): void {
   if (open) void openerApi.openUrlWithSystemBrowser(pending.url)
 }
 
-function returnFocus(target: HTMLElement | null): boolean {
-  if (!target?.isConnected) return false
-  target.focus()
-  if (document.activeElement === target) return true
+/** Marks a container (message, thought, panel) that scopes link lookups. */
+const EXTERNAL_LINK_SCOPE_ATTR = 'data-external-link-scope'
+const SCOPE_SELECTOR = `[${EXTERNAL_LINK_SCOPE_ATTR}]`
+
+/** Links under `root` whose `href` attribute is exactly `href`, in document order. */
+function linksTo(root: ParentNode, href: string): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('a[href]')).filter(
+    (anchor) => anchor.getAttribute('href') === href
+  )
+}
+
+/** Snapshot of where the trigger sits, taken when the confirmation is requested. */
+function locate(target: HTMLElement): FocusLocator {
+  const href = target.tagName === 'A' ? target.getAttribute('href') : null
+  const scope = target.closest(SCOPE_SELECTOR)
+  const index = href === null ? -1 : linksTo(scope ?? document, href).indexOf(target)
+  const ancestors: HTMLElement[] = []
+  for (let node = target.parentElement; node; node = node.parentElement) {
+    if (node === document.body || node === document.documentElement) break
+    ancestors.push(node)
+  }
+  return { href, scope, index, ancestors }
+}
+
+/** Focus `element`; true if it (or, for an editor link, its editor) took focus. */
+function tryFocus(element: HTMLElement | null | undefined): boolean {
+  if (!element?.isConnected) return false
+  element.focus({ preventScroll: true })
+  if (document.activeElement === element) return true
   // A link inside an editor is not focusable on its own; focus the editor.
-  const editable = target.closest<HTMLElement>('[contenteditable="true"]')
-  editable?.focus()
+  const editable = element.closest<HTMLElement>('[contenteditable="true"]')
+  editable?.focus({ preventScroll: true })
   return editable !== null && document.activeElement === editable
+}
+
+/** The link that now stands where the trigger stood: same href, same scope, same position. */
+function equivalentLink(locator: FocusLocator): HTMLElement | undefined {
+  if (locator.href === null) return undefined
+  const scope = locator.scope?.isConnected ? locator.scope : document
+  const links = linksTo(scope, locator.href)
+  return links[locator.index] ?? links[0]
+}
+
+/** Focus a container that may not be focusable itself, without adding a tab stop. */
+function focusContainer(container: HTMLElement): boolean {
+  if (!container.isConnected) return false
+  if (tryFocus(container)) return true
+  if (container.hasAttribute('tabindex')) return false
+  container.setAttribute('tabindex', '-1')
+  container.addEventListener('blur', () => container.removeAttribute('tabindex'), { once: true })
+  return tryFocus(container)
+}
+
+/**
+ * Put focus back where the user was. In order: the trigger itself, an
+ * equivalent link (the trigger re-rendered or remounted while the dialog was
+ * open), then the nearest container of the trigger still in the page. Returns
+ * false only when none of these is left, so the dialog's default applies.
+ */
+function returnFocus(request: ExternalLinkRequest): boolean {
+  if (tryFocus(request.returnFocusTo)) return true
+  const locator = request.focusLocator
+  if (locator === null) return false
+  if (tryFocus(equivalentLink(locator))) return true
+  return locator.ancestors.some(focusContainer)
 }
 
 /**
@@ -129,12 +207,16 @@ export function ExternalLinkConfirmHost(): React.JSX.Element | null {
       onCancel={() => settle(request.id, false)}
       onConfirm={() => settle(request.id, true)}
       onCloseAutoFocus={(event) => {
-        if (returnFocus(request.returnFocusTo)) event.preventDefault()
+        if (returnFocus(request)) event.preventDefault()
       }}
     />
   )
 }
 
+/**
+ * The confirmation dialog itself, controlled by its host. "Open" calls
+ * `onConfirm`; Cancel, Escape and an outside click call `onCancel`.
+ */
 export function ExternalLinkConfirmDialog({
   open,
   url,
@@ -203,6 +285,25 @@ export function handleExternalLinkClick(event: React.MouseEvent<HTMLElement>): v
   if (HAS_SCHEME.test(href)) requestExternalLinkOpen(href, { returnFocusTo: anchor })
 }
 
+/**
+ * Scroll to the element a `#fragment` link points at, looked up inside the
+ * link's `[data-external-link-scope]` (its message or thought), so ids repeated
+ * across messages, such as footnotes, resolve locally. A fragment link is
+ * in-page: it never asks for confirmation and never opens a browser.
+ */
+function scrollToFragment(link: HTMLElement, href: string): void {
+  let id = href.slice(1)
+  try {
+    id = decodeURIComponent(id)
+  } catch {
+    // Keep the raw fragment.
+  }
+  if (!id) return
+  const root = link.closest(SCOPE_SELECTOR) ?? document
+  const target = Array.from(root.querySelectorAll('[id]')).find((element) => element.id === id)
+  target?.scrollIntoView({ block: 'start' })
+}
+
 type AnchorProps = React.AnchorHTMLAttributes<HTMLAnchorElement>
 
 /**
@@ -229,6 +330,10 @@ export function ConfirmedExternalLink({
       className={cn(className)}
       onClick={(event) => {
         event.preventDefault()
+        if (href?.startsWith('#')) {
+          scrollToFragment(event.currentTarget, href)
+          return
+        }
         requestExternalLinkOpen(href, { returnFocusTo: event.currentTarget })
       }}
       onAuxClick={(event) => {
