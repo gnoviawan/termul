@@ -149,6 +149,13 @@ export const SVG_ATTACKS: SvgAttack[] = [
     markup: svg(
       `<defs><mask id="m">${repeat(990, () => '<path d="M0 0h24v24z" fill="#fff"/>')}</mask></defs>${repeat(31, () => '<rect width="24" height="24" fill="#f00" mask="url(#m)"/>')}`
     ),
+    expect: 'reject'
+  },
+  {
+    id: 'mask-wide-64',
+    markup: svg(
+      `<defs><mask id="m">${repeat(64, () => '<path d="M0 0h24v24z" fill="#fff"/>')}</mask></defs>${repeat(31, () => '<rect width="24" height="24" fill="#f00" mask="url(#m)"/>')}`
+    ),
     expect: 'render'
   },
   {

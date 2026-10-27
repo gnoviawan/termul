@@ -21,6 +21,8 @@ export const MAX_SVG_DEPTH = 64
 export const MAX_SVG_ELEMENTS = 1024
 /** Elements with `mask`, `clip-path` or `opacity`: each one renders into its own layer. */
 export const MAX_SVG_LAYERS = 32
+/** Elements inside clip paths and masks, which render again for every reference. */
+export const MAX_SVG_CLIP_CONTENT = 64
 /** Characters of `<text>`; usvg shapes every glyph on the UI thread. */
 export const MAX_SVG_TEXT = 64
 
@@ -101,6 +103,7 @@ function parse(src: string): SvgNode {
   let at = 0
   let elements = 0
   let layers = 0
+  let clipContent = 0
 
   const sticky = (re: RegExp): RegExpExecArray | null => {
     re.lastIndex = at
@@ -119,6 +122,7 @@ function parse(src: string): SvgNode {
   function element(depth: number, keep: boolean, inClip: boolean): SvgNode | null {
     if (depth >= MAX_SVG_DEPTH) throw new Rejected('nesting')
     if (++elements > MAX_SVG_ELEMENTS) throw new Rejected('elements')
+    if (inClip && ++clipContent > MAX_SVG_CLIP_CONTENT) throw new Rejected('clip content')
     at++
     const name = sticky(NAME)?.[0]
     if (!name) throw new Rejected('tag name')

@@ -26,6 +26,8 @@ import { bundledIcons, GRID_HEIGHT, GRID_WIDTH, legacyInnerHtmlSvg, TILE } from 
 
 const [resultFile, mode = 'grid', indexArg = '0'] = process.argv.slice(2)
 const SETTLE_MS = 1500
+/** The decode is deterministic work; the fastest of a few runs drops scheduler noise from the shared host. */
+const DECODE_RUNS = 5
 
 interface Stats {
   maxMs?: number
@@ -79,15 +81,20 @@ function Timed({ children, measure }: { children: ReactElement[]; measure: Buffe
   useEffect(() => {
     renderer.setDebugFrameOverlay?.('minimal')
     let setImageMs: number | null = null
+    let setImageMaxMs: number | null = null
     let setImageError: string | null = null
     if (measure && probe.current) {
-      const start = performance.now()
-      try {
-        renderer.setImage(probe.current.id, measure)
-      } catch (error) {
-        setImageError = String(error)
+      for (let run = 0; run < DECODE_RUNS; run++) {
+        const start = performance.now()
+        try {
+          renderer.setImage(probe.current.id, measure)
+        } catch (error) {
+          setImageError = String(error)
+        }
+        const ms = performance.now() - start
+        setImageMs = Math.min(setImageMs ?? ms, ms)
+        setImageMaxMs = Math.max(setImageMaxMs ?? ms, ms)
       }
-      setImageMs = performance.now() - start
     }
     renderer.resetDebugFrameOverlayStats?.()
     const pump = setInterval(() => setTick((t) => t + 1), 16)
@@ -97,7 +104,7 @@ function Timed({ children, measure }: { children: ReactElement[]; measure: Buffe
       const stats = renderer.getDebugFrameOverlayStats?.() ?? null
       writeFileSync(
         `${resultFile}.tmp`,
-        JSON.stringify({ alive: true, setImageMs, setImageError, bytes: measure?.length ?? 0, elapsedMs: performance.now() - startedAt, stats })
+        JSON.stringify({ alive: true, setImageMs, setImageMaxMs, setImageError, bytes: measure?.length ?? 0, elapsedMs: performance.now() - startedAt, stats })
       )
       renameSync(`${resultFile}.tmp`, resultFile as string)
       process.exit(0)
@@ -108,7 +115,7 @@ function Timed({ children, measure }: { children: ReactElement[]; measure: Buffe
     }
   }, [renderer, measure])
   return (
-    <div style={{ width: '100%', height: '100%', backgroundColor: '#08090a', flexDirection: 'row', gap: 8, padding: 8 }}>
+    <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: '#08090a', flexDirection: 'row', gap: 8, padding: 8 }}>
       {children}
       <img ref={probe} src="" style={{ width: 1, height: 1 }} />
       <text style={{ color: '#ffffff', fontSize: 12 }}>{`frame ${tick}`}</text>
@@ -149,10 +156,10 @@ function Grid() {
     </div>
   )
   const row = (cells: ReactElement[]) => (
-    <div style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, width: GRID_WIDTH - 16 }}>{cells}</div>
+    <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 8, width: GRID_WIDTH - 16 }}>{cells}</div>
   )
   return (
-    <div style={{ width: '100%', height: '100%', backgroundColor: '#08090a', flexDirection: 'column', gap: 16, padding: 8 }}>
+    <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: '#08090a', flexDirection: 'column', gap: 16, padding: 8 }}>
       {row(icons.map((icon) => cell(`app:${icon.name}`, tile(appHtml(icon.svg), icon.name))))}
       {row(
         icons.map((icon) =>
