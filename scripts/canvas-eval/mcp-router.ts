@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process'
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
+import { documentText, SNAPSHOT_MAX_BYTES, snapshotFailure } from './snapshot.ts'
 import { type Json, type Rpc, Upstream } from './upstream.ts'
 
 interface ToolDefinition {
@@ -107,12 +108,11 @@ async function snapshot(): Promise<string | undefined> {
   })
   const tree = await figcraft.request('tools/call', {
     name: 'inspect_document',
-    arguments: { depth: 64 }
+    arguments: { depth: 64, maxBytes: SNAPSHOT_MAX_BYTES }
   })
-  const failed = [saved, tree].find((reply) => reply.error || reply.result?.isError === true)
-  if (failed) return JSON.stringify(failed.error ?? failed.result?.content)
-  const content = tree.result?.content as { text?: string }[] | undefined
-  if (content?.[0]?.text) writeFileSync(join(out, 'document.json'), content[0].text)
+  const failure = snapshotFailure(saved, tree)
+  if (failure) return failure
+  writeFileSync(join(out, 'document.json'), documentText(tree) ?? '')
 }
 
 async function callTool(params: Json): Promise<Json> {
