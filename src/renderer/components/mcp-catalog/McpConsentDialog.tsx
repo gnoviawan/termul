@@ -144,7 +144,6 @@ function LaunchSpec({ view }: { view: McpConsentView }): React.JSX.Element {
       <Section heading="Arguments">
         <ol className="grid gap-0.5 rounded-lg border border-border/60 bg-muted/40 px-3 py-2">
           {view.argv.map((arg, index) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: argv is positional and may repeat
             <li key={index} className={VERBATIM_CLASS}>
               <Verbatim text={arg} />
             </li>
