@@ -130,7 +130,9 @@ jobs:
   # The MCP catalog snapshot (spine AD-3) is fetched in its own job, with no
   # secrets and read-only contents, never in build.rs. The build jobs swap it in
   # for the committed dev fixture in src-tauri/resources/mcp-registry/ before
-  # cargo embeds it; the job summary records its sha256 and fetch time.
+  # cargo embeds it; the job summary records its sha256 and fetch time. If the
+  # registry is unreachable at tag time this job fails the release rather than
+  # ship the dev fixture. Rerun the failed jobs once the registry is back.
   mcp-snapshot:
     name: Fetch MCP registry snapshot
     needs: changelog
