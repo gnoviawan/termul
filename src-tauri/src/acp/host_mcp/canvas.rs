@@ -112,7 +112,7 @@ impl CanvasErrorCode {
             ),
             Self::AmbiguousSession => Some(
                 "This agent has more than one chat with an active turn, so Termul cannot tell \
-                 which one this call belongs to. Retry once the other chat's turn has ended.",
+                 which one this call belongs to. Retry once every other chat's turn has ended.",
             ),
             Self::UnknownMethod | Self::EngineError => None,
         }
