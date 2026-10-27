@@ -10,7 +10,17 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
-import type { McpCatalogPage, McpCatalogSearchRequest } from '@shared/types/mcp-catalog.types'
+import type {
+  McpCatalogPage,
+  McpCatalogSearchRequest,
+  McpInstallCancelRequest,
+  McpInstallCommitRequest,
+  McpInstallCommitResult,
+  McpInstallFormReply,
+  McpInstallFormRequest,
+  McpInstallPlanReply,
+  McpInstallPlanRequest
+} from '@shared/types/mcp-catalog.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AddProjectPayload,
@@ -204,6 +214,18 @@ export interface AcpTransport {
    * throw {@link AcpTransportError} carrying the host's code (`VALIDATION_ERROR`).
    */
   searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage>
+  /**
+   * The MCP install flow (spine AD-5) over the `/ws` requests
+   * `describe_mcp_install`, `plan_mcp_install`, `commit_mcp_install` and
+   * `cancel_mcp_install`. The host binds a plan to this connection. Failures
+   * throw {@link AcpTransportError} carrying the host's code
+   * (`VALIDATION_ERROR`, `MCP_PLAN_*`, `MCP_CATALOG_NOT_FOUND`,
+   * `MCP_IMPORT_INVALID`).
+   */
+  describeMcpInstall(request: McpInstallFormRequest): Promise<McpInstallFormReply>
+  planMcpInstall(request: McpInstallPlanRequest): Promise<McpInstallPlanReply>
+  commitMcpInstall(request: McpInstallCommitRequest): Promise<McpInstallCommitResult>
+  cancelMcpInstall(request: McpInstallCancelRequest): Promise<Record<string, never>>
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
   setTurnIdleTimeout(secs: number | null): Promise<void>

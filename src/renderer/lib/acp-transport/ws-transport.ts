@@ -13,7 +13,17 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
-import type { McpCatalogPage, McpCatalogSearchRequest } from '@shared/types/mcp-catalog.types'
+import type {
+  McpCatalogPage,
+  McpCatalogSearchRequest,
+  McpInstallCancelRequest,
+  McpInstallCommitRequest,
+  McpInstallCommitResult,
+  McpInstallFormReply,
+  McpInstallFormRequest,
+  McpInstallPlanReply,
+  McpInstallPlanRequest
+} from '@shared/types/mcp-catalog.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AcpAuthenticateReply,
@@ -806,6 +816,26 @@ export class WsAcpTransport implements AcpTransport {
   /** `search_mcp_catalog`: one page of the host's MCP catalog (see {@link AcpTransport.searchMcpCatalog}). */
   async searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage> {
     return this.request<McpCatalogPage>('search_mcp_catalog', request)
+  }
+
+  /** `describe_mcp_install`: the generated install form (see {@link AcpTransport.describeMcpInstall}). */
+  async describeMcpInstall(request: McpInstallFormRequest): Promise<McpInstallFormReply> {
+    return this.request<McpInstallFormReply>('describe_mcp_install', request)
+  }
+
+  /** `plan_mcp_install`: the immutable plan, bound to this connection. */
+  async planMcpInstall(request: McpInstallPlanRequest): Promise<McpInstallPlanReply> {
+    return this.request<McpInstallPlanReply>('plan_mcp_install', request)
+  }
+
+  /** `commit_mcp_install`: the resolved entry, once per plan. */
+  async commitMcpInstall(request: McpInstallCommitRequest): Promise<McpInstallCommitResult> {
+    return this.request<McpInstallCommitResult>('commit_mcp_install', request)
+  }
+
+  /** `cancel_mcp_install`: drop the plan. */
+  async cancelMcpInstall(request: McpInstallCancelRequest): Promise<Record<string, never>> {
+    return this.request<Record<string, never>>('cancel_mcp_install', request)
   }
 
   /** `set_catalog_opt_in`: persist the host catalog opt-in. */

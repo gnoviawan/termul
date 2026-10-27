@@ -1,7 +1,7 @@
 /**
- * The MCP catalog facade (spine AD-1): the desktop impl inside a Tauri
- * webview, the HTTP impl in a browser. Both return the same
- * `IpcResult<McpCatalogPage>` for the same request.
+ * The MCP catalog facade (spine AD-1, AD-5): the desktop impl inside a Tauri
+ * webview, the HTTP impl in a browser. Both return the same `IpcResult` for
+ * the same search, form, plan, commit or cancel request.
  */
 
 import type { McpCatalogApi } from '@shared/types/mcp-catalog.types'
