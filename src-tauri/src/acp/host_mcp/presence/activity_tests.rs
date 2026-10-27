@@ -158,6 +158,27 @@ fn table() -> Vec<Row> {
             None,
         ),
         row(
+            "run_command",
+            EXECUTE,
+            exec("proto.linkNotice", json!({ "show": false })),
+            json!({ "shown": false }),
+            None,
+        ),
+        row(
+            "run_command",
+            EXECUTE,
+            exec("text.loadFont", json!({ "data": "AAAA" })),
+            json!({ "families": ["Brand Sans"], "refitted": [5, 6] }),
+            write(ids(&[5, 6])),
+        ),
+        row(
+            "run_command",
+            EXECUTE,
+            exec("text.rescanFonts", json!({})),
+            json!({ "added": [], "refitted": [] }),
+            None,
+        ),
+        row(
             "batch",
             EXECUTE,
             exec(
@@ -178,10 +199,10 @@ fn table() -> Vec<Row> {
                 "command.batch",
                 json!({ "label": "Card", "commands": [
                     { "command": "node.create", "as": "card", "params": { "type": "frame" } },
-                    { "command": "node.create", "params": { "type": "text", "parent": { "$name": "card" } } },
+                    { "command": "node.create", "params": { "type": "text", "parent": { "$ref": "card" } } },
                 ] }),
             ),
-            json!({ "results": [{ "id": 7 }, { "id": 8 }], "names": { "card": 7 } }),
+            json!([{ "id": 7 }, { "id": 8 }]),
             write(ids(&[7, 8])),
         ),
         row(
@@ -458,11 +479,11 @@ fn a_named_batch_with_layout_issues_still_names_its_layers() {
         "command.batch",
         json!({ "label": "Hero", "commands": [
             { "command": "node.create", "as": "hero", "params": { "type": "frame" } },
-            { "command": "node.create", "params": { "type": "text", "parent": { "$name": "hero" } } },
+            { "command": "node.create", "params": { "type": "text", "parent": { "$ref": "hero" } } },
         ] }),
     );
     let built = json!({
-        "result": { "results": [{ "id": 7 }, { "id": 8 }], "names": { "hero": 7 } },
+        "result": [{ "id": 7 }, { "id": 8 }],
         "issues": [{ "id": 8, "name": "Title", "kind": "low_contrast", "message": "Raise the contrast." }],
     });
     assert_eq!(

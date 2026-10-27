@@ -13,6 +13,7 @@
     "scripts/acp-reference.ts",
     "scripts/validate-pr-body.ts",
     "scripts/canvas-eval/checks.ts",
+    "scripts/canvas-eval/snapshot.ts",
     "scripts/canvas-eval/upstream.ts"
   ]
 }
