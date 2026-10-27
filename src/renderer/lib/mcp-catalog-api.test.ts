@@ -70,6 +70,17 @@ describe('MCP catalog facades', () => {
     )
   })
 
+  it('web search forwards an empty cursor for the host to reject, as the desktop path does', async () => {
+    hostAnswers({ success: true, data: page })
+
+    await webMcpCatalogApi.search({ cursor: '' })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8080/mcp-catalog/search?cursor=',
+      expect.objectContaining({ method: 'GET' })
+    )
+  })
+
   it('web search maps a failed fetch to NETWORK_ERROR', async () => {
     fetchMock.mockRejectedValueOnce(new Error('offline'))
 

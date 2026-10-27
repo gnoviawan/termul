@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 // @ts-expect-error The script is plain ESM so the release workflow runs it directly.
 import * as snapshotScript from './fetch-mcp-registry-snapshot.mjs'
 
-const { buildSnapshot, crawl, META_FILE, SNAPSHOT_FILE, verifySnapshot } = snapshotScript
+const { buildSnapshot, crawl, META_FILE, readBody, SNAPSHOT_FILE, verifySnapshot } = snapshotScript
 
 const OFFICIAL = 'io.modelcontextprotocol.registry/official'
 
@@ -94,6 +94,33 @@ describe('crawl', () => {
     })
     expect(rows).toEqual([1, 2, 3])
     expect(cursors).toEqual([null, 'c2'])
+  })
+})
+
+describe('readBody', () => {
+  function streamOf(chunks: string[]) {
+    let pulled = 0
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (pulled === chunks.length) return controller.close()
+          controller.enqueue(new TextEncoder().encode(chunks[pulled++]))
+        }
+      },
+      { highWaterMark: 0 }
+    )
+    return { response: new Response(stream), pulled: () => pulled }
+  }
+
+  it('returns a body within the cap', async () => {
+    const { response } = streamOf(['{"a":', '1}'])
+    expect((await readBody(response, 7)).toString('utf8')).toBe('{"a":1}')
+  })
+
+  it('stops reading at the chunk that passes the cap', async () => {
+    const { response, pulled } = streamOf(['1234', '5678', '9999', '0000'])
+    await expect(readBody(response, 6)).rejects.toThrow('registry page exceeds 6 bytes')
+    expect(pulled()).toBe(2)
   })
 })
 
