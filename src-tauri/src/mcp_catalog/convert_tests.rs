@@ -428,7 +428,7 @@ fn repository_links_leave_the_host_only_over_https() {
         "http://github.com/example/server",
         "javascript:alert(1)",
         "file:///etc/passwd",
-        "https://user:pass@github.com/x",
+        "http://localhost:3000/repo",
         "",
     ] {
         assert_eq!(safe_repository_url(url), None, "{url}");

@@ -7,9 +7,11 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::LazyLock;
 
 use regex::Regex;
-use reqwest::Url;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Deserializer, Serialize};
+use url::Url;
+
+use crate::acp::safe_url::{check_safe_url, Opener};
 
 // ---------------------------------------------------------------------------
 // Registry input. Lenient: unknown fields are ignored and `null` reads as the
@@ -508,14 +510,9 @@ fn pinned_oci_image(identifier: &str, version: Option<&str>) -> Result<String, M
     }
 }
 
-/// A repository link leaves the host only when it is `https` with a host and
-/// no credentials (AD-15).
+/// Catalog rows can reach a remote browser, so a repository link passes the
+/// AD-15 guard as remote-opened (`https` only) or is dropped.
 #[must_use]
 pub(crate) fn safe_repository_url(raw: &str) -> Option<String> {
-    let url = Url::parse(raw).ok()?;
-    (url.scheme() == "https"
-        && url.host().is_some()
-        && url.username().is_empty()
-        && url.password().is_none())
-    .then(|| url.to_string())
+    check_safe_url(raw, Opener::Remote).ok().map(String::from)
 }
