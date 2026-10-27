@@ -1,12 +1,14 @@
 use super::{
     claude_status, node_major_is_supported, parse_claude_package_entrypoint, parse_node_major,
-    parse_pinned_claude_package, ClaudeAgentService, ClaudeAuthMode, ClaudeCredentialStore,
-    ClaudeRuntimeProbe, InMemoryClaudeCredentialStore, API_KEY_ACCOUNT, AUTH_MODE_ACCOUNT,
+    parse_pinned_claude_package, probe_command_stdout, ClaudeAgentService, ClaudeAuthMode,
+    ClaudeCredentialStore, ClaudeRuntimeProbe, InMemoryClaudeCredentialStore, API_KEY_ACCOUNT,
+    AUTH_MODE_ACCOUNT,
 };
 use crate::acp::config::AgentConfig;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 struct SupportedRuntime;
 
@@ -142,6 +144,94 @@ fn parses_supported_node_version_output() {
     assert_eq!(parse_node_major("v22.23.1"), Some(22));
     assert_eq!(parse_node_major("v24.1.0\n"), Some(24));
     assert_eq!(parse_node_major("v20.19.0"), Some(20));
+}
+
+fn shell(script: &str) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new("cmd");
+        command
+            .args(["/d", "/s", "/c"])
+            .raw_arg(format!("\"{script}\""));
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", script]);
+        command
+    }
+}
+
+#[test]
+fn a_probe_returns_the_runtimes_stdout() {
+    let output = probe_command_stdout(shell("echo 10.0.100"), Duration::from_secs(5));
+    assert_eq!(output.as_deref().map(str::trim), Some("10.0.100"));
+}
+
+#[test]
+fn a_probe_returns_by_its_deadline_and_kills_a_descendant_holding_stdout_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("descendant.pid");
+    #[cfg(windows)]
+    let script = format!(
+        "echo 10.0.100& start /b powershell -NoProfile -Command \
+         Set-Content -LiteralPath '{}' -Value $PID; Start-Sleep -Seconds 20",
+        pid_file.display()
+    );
+    #[cfg(not(windows))]
+    let script = format!(
+        "echo 10.0.100; sleep 20 & echo $! > '{}'",
+        pid_file.display()
+    );
+    let started = Instant::now();
+    assert_eq!(
+        probe_command_stdout(shell(&script), Duration::from_secs(5)),
+        None
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "probe waited {:?}",
+        started.elapsed()
+    );
+    let descendant = descendant_pid(&pid_file);
+    assert!(
+        descendant_exits(descendant),
+        "descendant {descendant} outlived the probe"
+    );
+}
+
+fn descendant_pid(pid_file: &Path) -> u32 {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(pid) = std::fs::read_to_string(pid_file)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            return pid;
+        }
+        assert!(Instant::now() < deadline, "descendant never wrote its pid");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(windows)]
+fn descendant_exits(pid: u32) -> bool {
+    crate::process_util::test_support::wait_for_exit(pid, Duration::from_secs(10))
+}
+
+#[cfg(unix)]
+fn descendant_exits(pid: u32) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    // SAFETY: signal 0 only checks that the pid exists.
+    while unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
 }
 
 fn policy_runtimes(

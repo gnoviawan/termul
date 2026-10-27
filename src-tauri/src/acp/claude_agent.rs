@@ -61,42 +61,95 @@ pub(crate) fn probe_runtime_stdout(runtime: &str, args: &[&str]) -> Option<Strin
     let path = super::config::runtime_resolution_path();
     let executable = resolve_runtime_executable(runtime, &path)?;
     let mut command = std::process::Command::new(executable);
+    command.args(args).env("PATH", path);
+    probe_command_stdout(command, std::time::Duration::from_secs(5))
+}
+
+/// The deadline covers the stdout read too: a process that exits but leaves a
+/// descendant holding the pipe open returns `None` on time, and the
+/// descendant is killed on return so the reader thread sees the pipe close.
+fn probe_command_stdout(
+    mut command: std::process::Command,
+    deadline: std::time::Duration,
+) -> Option<String> {
     crate::process_util::background_command_hygiene(&mut command);
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
     let mut child = command
-        .args(args)
-        .env("PATH", path)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .ok()?;
+    let _tree = ProbeTree::new(&child);
     let stdout = child.stdout.take()?;
-    let output_reader = std::thread::spawn(move || {
+    let (output_sender, output_receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         use std::io::Read;
         let mut output = Vec::with_capacity(64);
-        stdout.take(1024).read_to_end(&mut output).ok()?;
-        Some(output)
+        let read = stdout.take(1024).read_to_end(&mut output).map(|_| output);
+        let _ = output_sender.send(read.ok());
     });
     let started = std::time::Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < std::time::Duration::from_secs(5) => {
+            Ok(None) if started.elapsed() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             Ok(None) | Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = output_reader.join();
                 return None;
             }
         }
     };
     if !status.success() {
-        let _ = output_reader.join();
         return None;
     }
-    let output = output_reader.join().ok()??;
+    let output = output_receiver
+        .recv_timeout(deadline.saturating_sub(started.elapsed()))
+        .ok()??;
     String::from_utf8(output).ok()
+}
+
+/// Kills whatever a probed runtime left running once the probe returns. A
+/// version probe has no business outliving its answer.
+struct ProbeTree {
+    #[cfg(windows)]
+    _job: Option<crate::process_util::KillOnCloseJob>,
+    #[cfg(unix)]
+    group: libc::pid_t,
+}
+
+impl ProbeTree {
+    fn new(child: &std::process::Child) -> Self {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle as _;
+            Self {
+                _job: crate::process_util::KillOnCloseJob::new_assigned(
+                    child.as_raw_handle(),
+                    "runtime probe",
+                    false,
+                ),
+            }
+        }
+        #[cfg(unix)]
+        {
+            Self {
+                group: child.id() as libc::pid_t,
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProbeTree {
+    fn drop(&mut self) {
+        // The child leads its own group; `ESRCH` means the group is gone.
+        // SAFETY: `killpg` has no memory-safety preconditions.
+        unsafe { libc::killpg(self.group, libc::SIGKILL) };
+    }
 }
 
 /// Async wrapper around the (cached) blocking Node probe: runs on the tokio
