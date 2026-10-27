@@ -34,6 +34,7 @@ pub mod mcp_probe;
 pub mod opencode_version;
 pub mod project_registry;
 pub mod provider_errors;
+pub mod safe_url;
 pub mod session;
 pub mod session_payload;
 pub mod session_persistence;
