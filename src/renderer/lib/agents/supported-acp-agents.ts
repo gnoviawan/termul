@@ -453,11 +453,23 @@ function customAgentEntriesFromPersisted(
 export async function resolveSupportedAcpAgents(
   persistedConfigs: readonly StoredAgentConfig[]
 ): Promise<SupportedAcpAgentEntry[]> {
+  return (await resolveAcpAgentCatalog(persistedConfigs)).entries
+}
+
+export interface ResolvedAcpAgentCatalog {
+  entries: SupportedAcpAgentEntry[]
+  /** False when the host catalog fetch failed and `entries` holds only persisted custom agents. */
+  catalogAvailable: boolean
+}
+
+export async function resolveAcpAgentCatalog(
+  persistedConfigs: readonly StoredAgentConfig[]
+): Promise<ResolvedAcpAgentCatalog> {
   const result = await acpCatalogApi.listCatalog()
   if (!result.success) {
     // Catalog unavailable — still surface persisted custom agents so users can
     // manage/export them without a live catalog fetch (CAP-5).
-    return customAgentEntriesFromPersisted(persistedConfigs)
+    return { entries: customAgentEntriesFromPersisted(persistedConfigs), catalogAvailable: false }
   }
   const catalog = result.data
   // CAP-5 / persisted-wins: look up persisted configs by `configId` (not `id`)
@@ -638,5 +650,5 @@ export async function resolveSupportedAcpAgents(
   // double-appended here.
   entries.push(...customAgentEntriesFromPersisted(persistedConfigs, seenConfigIds))
 
-  return entries
+  return { entries, catalogAvailable: true }
 }

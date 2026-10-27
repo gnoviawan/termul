@@ -24,21 +24,24 @@ import {
   wait
 } from './dsl'
 
-const SETTINGS_SECTIONS: Array<[id: string, nav: string, expect: string]> = [
+const SETTINGS_SECTIONS: Array<[id: string, nav: string, expect: string | Check[]]> = [
   ['interface', 'Interface', 'Interface zoom'],
   ['notifications', 'Notifications', 'Notify when a terminal agent finishes'],
   ['editor', 'Editor', 'Auto save delay'],
   ['appearance', 'Appearance', 'Font size'],
   ['shell', 'Shell', 'Default shell'],
   ['terminal-profiles', 'Profiles', 'No terminal profiles'],
-  // The section paints before its catalog request returns; until then the list reads `No agents match ""`.
+  // Sections that load their own data wait for text only the loaded data paints;
+  // a static label (or the nav item just clicked) passes before the frame settles.
+  // The agent list reads `Loading agents…` until its catalog request returns.
   ['ai-agents', 'Agent chats', 'Agoragentic'],
-  ['skills', 'Skills', 'Skills'],
-  // The nav label alone would pass before the Account list loads.
+  // `Loading skills…` until the skill scan answers.
+  ['skills', 'Skills', 'Global ·'],
   ['provider', 'Accounts', '1 account'],
-  ['mcp-servers', 'MCP servers', 'MCP servers'],
+  ['mcp-servers', 'MCP servers', 'No MCP servers configured'],
   ['shortcuts', 'Keyboard shortcuts', 'Command Palette'],
-  ['diagnostics', 'Logs', 'Application log'],
+  // GPUIX reads `termul-server version unknown` until the server reports its version.
+  ['diagnostics', 'Logs', [...see('Application log'), gone('version unknown')]],
   ['reset', 'Reset', 'Reset all settings']
 ]
 
@@ -50,7 +53,7 @@ const SETTINGS: Surface[] = SETTINGS_SECTIONS.map(([sectionId, nav, expect]) => 
   steps: [
     DASHBOARD,
     step('b-open', [click(label('Settings'))], see('Interface zoom')),
-    step('c-section', [click(txt(nav))], see(expect))
+    step('c-section', [click(txt(nav))], typeof expect === 'string' ? see(expect) : expect)
   ]
 }))
 

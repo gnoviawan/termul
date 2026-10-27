@@ -222,7 +222,7 @@ export const TAIL_REVIEWS: Record<string, Review> = {
       ...SETTINGS_BASE,
       SELECT,
       'The agents list shows the registry as on the web, Agoragentic first with its icon, version, Latest and Available. The icon tile draws the catalog SVG: AcpAgentsSettings sets it through `dangerouslySetInnerHTML`, compat paints one `<svg>` of markup as a GPUIX svg, and the DOMPurify stand-in passes an icon of shapes (G16 SVG-HTML).',
-      'The list fills in when the section\'s own catalog request returns, 0.42 s after the section mounted in GPUIX on an idle host (D2 run); until then both clients read `No agents match ""`. The G16 and N3 runs that showed an empty GPUIX list grabbed the frame inside that window. The step now waits for Agoragentic (D2).',
+      'The list fills in when the section\'s own catalog request returns, 0.42 s after the section mounted in GPUIX on an idle host (D2 run). Until then both clients show the Loading agents… spinner card (L2); before L2 they read `No agents match ""` with a Clear filter button, which the G16 and N3 runs grabbed. A failed catalog request retries after 1, 2, 4, 8 and 16 s, then shows Couldn\'t load agents with Retry (L2). The step waits for Agoragentic (D2).',
       DIVIDERS,
       LABEL_LINE
     ]
