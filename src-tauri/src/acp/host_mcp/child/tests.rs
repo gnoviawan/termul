@@ -691,7 +691,7 @@ async fn tools_list_carries_figcraft_tools_by_name_with_the_canvas_tag() {
         let mut upstream = figcraft_mcp::TOOL_NAMES.to_vec();
         upstream.sort_unstable();
         assert_eq!(canvas, upstream);
-        assert_eq!(upstream.len(), 18);
+        assert_eq!(upstream.len(), 19);
         for definition in figcraft_mcp::tool_definitions() {
             let tool = tools
                 .iter()
