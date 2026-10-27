@@ -74,6 +74,20 @@ describe('buildCanvasEmbedUrl', () => {
       )
     ).toBe('/canvas/cv1/ff/?embed=kiosk&ho=https%3A%2F%2Ftermul.example&ms=1')
   })
+
+  // figcraft installs `window.figcraft` for a query entry named `control`
+  // (`?control` or `control=…`, figcraft-web `query.rs`): an editor channel
+  // that canvas_policy never sees.
+  it('never opens the editor control channel, whatever the ids hold', () => {
+    const url = buildCanvasEmbedUrl(
+      { baseUrl: '', canvasId: 'control&control=1', canvasToken: '?control' },
+      'https://termul.example/?control&control=1',
+      2
+    )
+    const search = url.slice(url.indexOf('?') + 1)
+    const keys = search.split('&').map((entry) => entry.split('=')[0])
+    expect(keys).toEqual(['embed', 'ho', 'ms'])
+  })
 })
 
 describe('canvasOriginOf', () => {
