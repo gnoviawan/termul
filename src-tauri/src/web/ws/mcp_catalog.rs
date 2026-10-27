@@ -10,7 +10,7 @@ pub(super) async fn handle_search_mcp_catalog(id: String, payload: &Value) -> Ws
     let request: McpCatalogSearchRequest = match serde_json::from_value(payload.clone()) {
         Ok(request) => request,
         Err(error) => {
-            tracing::warn!(target: "termul::web::ws", error = %error, "search_mcp_catalog: invalid request");
+            tracing::warn!(target: "termul::web::ws", category = ?error.classify(), "search_mcp_catalog: invalid request");
             return WsReply::err_with_code(
                 id,
                 "VALIDATION_ERROR",
