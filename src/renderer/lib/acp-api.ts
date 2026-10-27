@@ -31,6 +31,7 @@ import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { type CommandRun, runCommand } from '@/lib/command-engine'
 import { keyDigest } from '@/lib/command-journal'
 import { waitUntilVisible } from '@/lib/command-visibility'
+import { invokeIpc } from '@/lib/ipc/tauri'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpOAuth } from '@/lib/web-server-api'
@@ -872,6 +873,18 @@ export async function listMcpTools(server: McpServerConfig): Promise<McpToolInfo
 }
 // --- MCP OAuth (desktop: Tauri command, web: HTTP route) -------------------
 
+export const MCP_UNSAFE_URL = 'MCP_UNSAFE_URL'
+
+export class McpOAuthError extends Error {
+  readonly code: string
+
+  constructor(message: string, code: string) {
+    super(message)
+    this.name = 'McpOAuthError'
+    this.code = code
+  }
+}
+
 /** Start the OAuth flow for an MCP server URL on behalf of `projectId` (the
  * web host authorizes the URL against that project's MCP list; the desktop
  * Tauri command authorizes nothing and takes the URL only). On desktop, opens the system
@@ -879,10 +892,12 @@ export async function listMcpTools(server: McpServerConfig): Promise<McpToolInfo
  * token is stored). On web, opens a blank window first (preserves transient
  * user activation for the popup), navigates it to the auth URL once returned,
  * then polls the status endpoint until the token is stored. Throws on
- * failure (discovery, registration, timeout). */
+ * failure (discovery, registration, timeout), as an {@link McpOAuthError}
+ * with code {@link MCP_UNSAFE_URL} when the host refused the sign-in link. */
 export async function startMcpOAuth(projectId: string, serverUrl: string): Promise<void> {
   if (isTauriContext()) {
-    await invoke('acp_mcp_oauth_start', { serverUrl })
+    const result = await invokeIpc<void>('acp_mcp_oauth_start', { serverUrl })
+    if (!result.success) throw new McpOAuthError(result.error, result.code)
     return
   }
   // Web path: open a blank window BEFORE the async request so the browser
@@ -896,7 +911,7 @@ export async function startMcpOAuth(projectId: string, serverUrl: string): Promi
   try {
     const result = await webServerMcpOAuth.start(projectId, serverUrl)
     if (!result.success) {
-      throw new Error(result.error ?? 'OAuth start failed')
+      throw new McpOAuthError(result.error ?? 'OAuth start failed', result.code)
     }
     authUrl = result.data.authUrl
   } catch (err) {

@@ -30,6 +30,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { isMcpServerAutoProbed } from '@/hooks/use-acp-mcp'
+import { MCP_UNSAFE_URL, McpOAuthError } from '@/lib/acp-api'
 import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
 import { logFrontendError } from '@/lib/log-api'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
@@ -42,6 +43,13 @@ type McpDialogState = { mode: 'add' } | { mode: 'edit'; server: StoredMcpServer 
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function oauthFailureMessage(error: unknown): string {
+  if (error instanceof McpOAuthError && error.code === MCP_UNSAFE_URL) {
+    return "This server's sign-in link isn't a secure https link, so Termul didn't open it."
+  }
+  return 'OAuth flow failed. Check your browser for the authorization page.'
 }
 /**
  * Durable failure log for a rejected MCP JSON import (AGENTS.md renderer
@@ -425,11 +433,7 @@ export function McpServersSettings(): React.JSX.Element {
                             } else {
                               void connectMcpOAuth(activeProjectId, server.id)
                                 .then(() => toast.success(`Connected to ${server.name}`))
-                                .catch(() =>
-                                  toast.error(
-                                    'OAuth flow failed. Check your browser for the authorization page.'
-                                  )
-                                )
+                                .catch((error: unknown) => toast.error(oauthFailureMessage(error)))
                             }
                           }}
                         >
