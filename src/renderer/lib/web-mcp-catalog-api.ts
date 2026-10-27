@@ -11,7 +11,7 @@ export const webMcpCatalogApi: McpCatalogApi = {
   search(request) {
     const params = new URLSearchParams()
     if (request.query) params.set('query', request.query)
-    if (request.cursor) params.set('cursor', request.cursor)
+    if (request.cursor !== undefined) params.set('cursor', request.cursor)
     if (request.limit !== undefined) params.set('limit', String(request.limit))
     const query = params.toString()
     return getJson<McpCatalogPage>(`/mcp-catalog/search${query ? `?${query}` : ''}`)
