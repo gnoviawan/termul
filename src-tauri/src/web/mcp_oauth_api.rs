@@ -21,6 +21,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::acp::mcp_oauth;
+use crate::acp::safe_url::{check_safe_url, Opener, MCP_UNSAFE_URL};
 use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::mcp_servers_api::project_root_or_not_found;
 use crate::web::ws::AppState;
@@ -102,9 +103,16 @@ pub async fn oauth_start(
             log::warn!("[mcp-oauth] web flow start failed (url redacted): {e}");
             Json(IpcBody::err(
                 e.to_string(),
-                "OAUTH_START_FAILED".to_string(),
+                start_error_code(&e).to_string(),
             ))
         }
+    }
+}
+
+fn start_error_code(error: &mcp_oauth::McpOAuthError) -> &'static str {
+    match error {
+        mcp_oauth::McpOAuthError::UnsafeUrl(_) => MCP_UNSAFE_URL,
+        _ => "OAUTH_START_FAILED",
     }
 }
 
@@ -299,34 +307,24 @@ async fn build_web_auth_url(
     let session = AuthorizationSession::new(manager, request)
         .await
         .map_err(|(_manager, e)| mcp_oauth::McpOAuthError::RegistrationFailed(e.to_string()))?;
-    let auth_url = session.get_authorization_url().to_string();
-    let registered_uri = session.redirect_uri.clone();
-    // Extract the CSRF state from the authorization URL query so the pending
-    // flow can be keyed by it. The `state` parameter is the CSRF token the
-    // authorization server echoes back on the callback. Parse manually to
-    // avoid adding a direct `url` crate dependency.
-    let csrf_token = extract_query_param(&auth_url, "state").ok_or_else(|| {
-        mcp_oauth::McpOAuthError::AuthUrlFailed(
-            "authorization URL missing state parameter".to_string(),
-        )
-    })?;
-    Ok((auth_url, registered_uri, csrf_token))
+    let (auth_url, csrf_token) = remote_auth_url(session.get_authorization_url())?;
+    Ok((auth_url, session.redirect_uri.clone(), csrf_token))
 }
 
-/// Extract a query parameter value from a URL string. Returns `None` when the
-/// parameter is absent. Minimal parser — avoids adding a direct `url` crate
-/// dependency for this one extraction. The CSRF state token is a random
-/// alphanumeric string, so no percent-decoding is needed (the rmcp library
-/// generates it from `CsrfToken::secret()`, which is URL-safe).
-fn extract_query_param(url: &str, key: &str) -> Option<String> {
-    let query = url.split('?').nth(1)?;
-    for pair in query.split('&') {
-        let mut parts = pair.splitn(2, '=');
-        let k = parts.next()?;
-        let v = parts.next().unwrap_or("");
-        if k == key {
-            return Some(v.to_string());
-        }
-    }
-    None
+fn remote_auth_url(raw: &str) -> Result<(String, String), mcp_oauth::McpOAuthError> {
+    let auth_url =
+        check_safe_url(raw, Opener::Remote).map_err(mcp_oauth::McpOAuthError::UnsafeUrl)?;
+    let csrf_token = auth_url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "state").then(|| value.into_owned()))
+        .ok_or_else(|| {
+            mcp_oauth::McpOAuthError::AuthUrlFailed(
+                "authorization URL missing state parameter".to_string(),
+            )
+        })?;
+    Ok((String::from(auth_url), csrf_token))
 }
+
+#[cfg(test)]
+#[path = "mcp_oauth_api_tests.rs"]
+mod tests;

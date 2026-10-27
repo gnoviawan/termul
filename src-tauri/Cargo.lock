@@ -7698,6 +7698,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "webkit2gtk",
  "webview2-com",
