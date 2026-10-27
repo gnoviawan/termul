@@ -95,7 +95,6 @@ const COMMANDS: &[(&str, CommandPolicy)] = &[
     ("file.recover", FILES),
     ("file.revert", FILES),
     ("library.add", FILES),
-    ("window.new", FILES),
     (
         "file.exportLayers",
         files_unless(DIR, "leave out `dir` to get the files back as `data`"),
@@ -152,6 +151,7 @@ const COMMANDS: &[(&str, CommandPolicy)] = &[
     ("collab.join", OTHER_DOCUMENT),
     ("collab.openFile", OTHER_DOCUMENT),
     ("collab.recoverFile", OTHER_DOCUMENT),
+    ("window.new", OTHER_DOCUMENT),
     (
         "file.markSaved",
         CommandPolicy::Refuse(ALWAYS, Why::SkipsSave),

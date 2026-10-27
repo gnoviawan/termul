@@ -282,10 +282,11 @@ fn a_command_that_opens_closes_or_switches_documents_is_refused() {
         "collab.join",
         "collab.openFile",
         "collab.recoverFile",
+        "window.new",
     ] {
         let error = refusal("engine.execute", &execute(command, json!({"index": 0})));
         assert!(
-            error.message.contains("project's document"),
+            error.message.contains("switches documents"),
             "{command}: {}",
             error.message
         );
@@ -360,7 +361,7 @@ fn a_batch_step_refused_on_its_own_refuses_the_batch_for_the_same_reason() {
     };
     for (step, cause) in [
         (json!({"command": "file.markSaved"}), "without saving"),
-        (json!({"command": "file.newBoard"}), "project's document"),
+        (json!({"command": "file.newBoard"}), "switches documents"),
         (
             json!({"command": "text.loadFont", "params": {"path": "a.ttf"}}),
             "reads or writes files",
