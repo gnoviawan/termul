@@ -261,7 +261,7 @@ async fn worst_case_search_latency() {
         ),
         RunnerAvailability::default(),
     );
-    let query = vec![term.as_str(); MAX_QUERY_TERMS].join(" ");
+    let query = [term.as_str(); MAX_QUERY_TERMS].join(" ");
     let started = Instant::now();
     let page = service
         .search(&request(&query, None, Some(1)))

@@ -224,14 +224,30 @@ fn descendant_exits(pid: u32) -> bool {
 #[cfg(unix)]
 fn descendant_exits(pid: u32) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
-    // SAFETY: signal 0 only checks that the pid exists.
-    while unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+    while is_running(pid) {
         if Instant::now() >= deadline {
             return false;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     true
+}
+
+/// The killed descendant was reparented when `sh` exited, and it stays a
+/// zombie until its new parent reaps it, so a zombie counts as exited.
+#[cfg(unix)]
+fn is_running(pid: u32) -> bool {
+    // SAFETY: signal 0 only checks that the pid exists.
+    let exists = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+    exists
+        && !std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .is_ok_and(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .trim_start()
+                    .starts_with('Z')
+            })
 }
 
 fn policy_runtimes(
