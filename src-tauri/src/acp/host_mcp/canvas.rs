@@ -47,6 +47,12 @@ pub enum CanvasErrorCode {
     UnsupportedInKiosk,
     UnknownMethod,
     EngineError,
+    /// The host refused the call because no prompt turn is active for the
+    /// agent (for example a background-task wake-up). The canvas may be open.
+    NoActiveTurn,
+    /// The agent has several active turns and the call's stale binding
+    /// cannot be routed to exactly one of them.
+    AmbiguousSession,
 }
 
 impl CanvasErrorCode {
@@ -61,6 +67,8 @@ impl CanvasErrorCode {
             Self::UnsupportedInKiosk => "UNSUPPORTED_IN_KIOSK",
             Self::UnknownMethod => "UNKNOWN_METHOD",
             Self::EngineError => "ENGINE_ERROR",
+            Self::NoActiveTurn => "NO_ACTIVE_TURN",
+            Self::AmbiguousSession => "AMBIGUOUS_SESSION",
         }
     }
 
@@ -96,6 +104,15 @@ impl CanvasErrorCode {
             Self::UnsupportedInKiosk => Some(
                 "Termul owns the canvas file: save with save_file, export only to a relative \
                  path inside the project, and never open or write design files on disk.",
+            ),
+            Self::NoActiveTurn => Some(
+                "Termul's host tools run only during a prompt turn, and this call came outside \
+                 one (for example after a background task woke you). The canvas may still be \
+                 open, so do not ask the user to open it: continue after the user's next message.",
+            ),
+            Self::AmbiguousSession => Some(
+                "This agent has more than one chat with an active turn, so Termul cannot tell \
+                 which one this call belongs to. Retry once the other chat's turn has ended.",
             ),
             Self::UnknownMethod | Self::EngineError => None,
         }

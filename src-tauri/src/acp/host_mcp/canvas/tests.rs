@@ -338,6 +338,8 @@ fn errors_an_agent_can_recover_from_tell_it_the_next_step() {
         ),
         (CanvasErrorCode::CanvasTimeout, "do not retry it blindly"),
         (CanvasErrorCode::UnsupportedInKiosk, "save_file"),
+        (CanvasErrorCode::NoActiveTurn, "do not ask the user to open it"),
+        (CanvasErrorCode::AmbiguousSession, "more than one chat"),
     ];
     for (code, step) in actionable {
         let encoded = CanvasError::new(code, "no canvas is mounted").to_backend_string();

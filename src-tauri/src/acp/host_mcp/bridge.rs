@@ -81,8 +81,11 @@ impl Bridge {
         })?;
         if !reply.ok {
             let message = reply.error.unwrap_or_else(|| "unknown error".to_string());
-            // A refusal without a code (auth, no active turn) means the
-            // gateway cannot reach any canvas for this session.
+            // A refusal without a code (auth, session not ready) means the
+            // gateway cannot reach any canvas for this session. Turn routing
+            // refusals carry their own codes (NO_ACTIVE_TURN,
+            // AMBIGUOUS_SESSION) so the agent is not told to open a canvas
+            // that is already open.
             let code = reply
                 .code
                 .as_deref()
