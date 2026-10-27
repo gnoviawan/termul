@@ -91,6 +91,13 @@ fn table() -> Vec<Row> {
             None,
         ),
         row(
+            "list_issues",
+            EXECUTE,
+            exec("doc.issues", json!({ "ids": [2] })),
+            json!({ "issues": [] }),
+            None,
+        ),
+        row(
             "run_command",
             EXECUTE,
             exec("align.left", json!({ "ids": [1, 2] })),
