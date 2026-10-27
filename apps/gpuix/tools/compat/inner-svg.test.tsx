@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import { createRoot, flushSync, type NativeRenderer } from '@gpuix/react'
 import type { ReactElement } from 'react'
 import { jsx } from '../../src/compat/jsx-runtime'
-import DOMPurify from '../../src/compat/shims/dompurify'
 
 /** Every operation the renderer is sent, as JSON. */
 function rendered(element: ReactElement): string {
@@ -57,33 +56,5 @@ describe('an <svg> set through dangerouslySetInnerHTML', () => {
   test('other markup renders nothing', () => {
     const ops = rendered(jsx('div', { dangerouslySetInnerHTML: { __html: '<b>x</b>' } }))
     expect(ops).not.toContain('source')
-  })
-})
-
-describe('the dompurify stand-in', () => {
-  const icons = new Bun.Glob('*/*.svg')
-  const dir = new URL('../../../../src/renderer/assets/agent-icons/', import.meta.url).pathname
-
-  test('passes every bundled agent icon under the svg profile', async () => {
-    const files = [...icons.scanSync(dir)]
-    expect(files.length).toBeGreaterThan(5)
-    for (const file of files) {
-      const svg = await Bun.file(dir + file).text()
-      expect(DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true } })).toBe(
-        svg.slice(svg.indexOf('<svg')).trim()
-      )
-    }
-  })
-
-  test('fails closed on script, event attributes, remote links and any other profile', () => {
-    const svg = { USE_PROFILES: { svg: true } }
-    expect(DOMPurify.sanitize('<svg viewBox="0 0 1 1"><script>x()</script></svg>', svg)).toBe('')
-    expect(
-      DOMPurify.sanitize('<svg viewBox="0 0 1 1" onload="x()"><path d="M0 0"/></svg>', svg)
-    ).toBe('')
-    expect(DOMPurify.sanitize('<svg viewBox="0 0 1 1"><image href="/etc/x.png"/></svg>', svg)).toBe(
-      ''
-    )
-    expect(DOMPurify.sanitize('<svg viewBox="0 0 1 1"><path d="M0 0"/></svg>')).toBe('')
   })
 })

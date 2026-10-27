@@ -10,6 +10,7 @@ import { jsx } from 'react/jsx-runtime'
 import { ColorContext, RotateContext, SvgClassContext } from './color'
 import { translation } from './translate'
 import { compatWarn } from './log'
+import { parseSvgIcon, SVG_NS, type SvgNode, serializeSvg } from './shims/dompurify'
 
 export const SVG_CHILD_TAGS = new Set([
   'path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'ellipse', 'g', 'defs', 'clipPath',
@@ -69,7 +70,9 @@ const sources = new WeakMap<object, string>()
 function sourceOf(props: Record<string, unknown>): string {
   const inner = (props.dangerouslySetInnerHTML as { __html?: unknown } | undefined)?.__html
   if (typeof inner === 'string') {
-    return `<svg xmlns="http://www.w3.org/2000/svg"${attrs(props)}>${inner.replace(/currentColor/g, '#000')}</svg>`
+    const head = `<svg xmlns="${SVG_NS}"${attrs(props)}>`
+    const tree = parseSvgIcon(`${head}${inner}</svg>`)
+    return (tree ? serializeSvg(tree) : `${head}</svg>`).replace(/currentColor/g, '#000')
   }
   const children = props.children as object | undefined
   const cached = children && typeof children === 'object' ? sources.get(children) : undefined
@@ -130,26 +133,42 @@ export function svgElement(
   return jsx(CompatSvg, { native, rotate }, key)
 }
 
-const INNER_SVG = /^<svg[\s>][\s\S]*<\/svg>$/
-const PAINT = /\b(?:fill|stroke|stop-color)\s*[=:]\s*["']?\s*(?!currentColor|none|transparent|url\()[#a-z]/i
+/** Largest side, in px, an `<img>` icon rasterises at; gpui doubles it for smoothness. */
+const MAX_RASTER = 256
+
+function rootSize(tree: SvgNode, name: string): number | undefined {
+  const value = tree.attrs.find(([attr]) => attr === name)?.[1]
+  return value && /^\s*[\d.]+(px)?\s*$/.test(value) ? Number.parseFloat(value) : undefined
+}
+
+function paintsOwnColours(node: SvgNode): boolean {
+  for (const [name, value] of node.attrs) {
+    if ((name === 'fill' || name === 'stroke' || name === 'stop-color') && /^\s*[#a-z]/i.test(value) && !/^\s*(?:currentColor|none|transparent)\b/i.test(value) && !/^\s*url\(/i.test(value)) return true
+  }
+  return node.children.some(paintsOwnColours)
+}
 
 /**
  * Markup set through `dangerouslySetInnerHTML` that is one `<svg>` (the
  * sanitized agent icons): the GPUIX `<svg source>` the same tree would make,
  * tinted by the inherited colour and sized by the parent's `[&_svg]` classes.
  * GPUIX's svg is one colour, so markup that paints its own colours becomes a
- * full-colour `<img>` of the SVG instead. Null for any other markup.
+ * full-colour `<img>` of the SVG instead, rasterised at its box rather than
+ * its intrinsic size. The markup is re-parsed here whoever sanitized it, so
+ * only the allowlisted tree reaches the native renderer. Null for any other
+ * markup.
  */
 export function innerHtmlSvg(html: unknown): ReactElement | null {
   if (typeof html !== 'string') return null
-  const markup = html.trim()
-  if (!INNER_SVG.test(markup)) return null
-  const namespaced = /^<svg[^>]*\sxmlns=/.test(markup) ? markup : markup.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"')
-  const width = Number(namespaced.match(SIZE_ATTR('width'))?.[1] ?? 16)
-  const height = Number(namespaced.match(SIZE_ATTR('height'))?.[1] ?? 16)
-  if (PAINT.test(namespaced)) {
-    return jsx('img', { src: `data:image/svg+xml;utf8,${encodeURIComponent(namespaced)}`, style: { width, height } })
+  const tree = parseSvgIcon(html.trim())
+  if (!tree) return null
+  const width = rootSize(tree, 'width') ?? 16
+  const height = rootSize(tree, 'height') ?? 16
+  if (paintsOwnColours(tree)) {
+    const raster = Math.min(1, MAX_RASTER / Math.max(width, height, 1))
+    const markup = serializeSvg(tree, { width: String(Math.max(1, Math.round(width * raster))), height: String(Math.max(1, Math.round(height * raster))) })
+    return jsx('img', { src: `data:image/svg+xml;utf8,${encodeURIComponent(markup)}`, style: { width, height } })
   }
-  const source = namespaced.replace(/currentColor/g, '#000')
+  const source = serializeSvg(tree).replace(/currentColor/g, '#000')
   return jsx(CompatSvg, { native: { source, style: { width, height } }, rotate: null })
 }
