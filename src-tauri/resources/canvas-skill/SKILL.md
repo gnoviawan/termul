@@ -41,7 +41,7 @@ When the user gives no brand, call `get_canvas_style()` to list the curated styl
 3. Give every text layer that can be longer than a few words a width it can wrap in: `sizingH: "fill"` with `textAutoResize: "height"` inside auto layout, or a fixed `width` outside it.
 4. Use only the Inter family, in the faces `Regular`, `Italic`, `Semi Bold` and `Bold`. Other families and faces do not render on this canvas today. They fall back to one of these, and the result's `warnings` say so.
 5. Take colours from the style's tokens or the document's variables. Do not invent a new colour for each layer.
-6. Build one section per `batch` call, with named steps (`"as"` and `{"$name": ...}`, see `canvas-basics`), then look at it with `screenshot` before you build the next one. Read the `issues` and `warnings` in every result that changes the canvas and fix what they name. If a `batch` fails, nothing changes and the error names the failing step.
+6. Build one section per `batch` call, with named steps (`"as"` and `{"$ref": ...}`, see `canvas-basics`), then look at it with `screenshot` before you build the next one. Read the `issues` and `warnings` in every result that changes the canvas and fix what they name. If a `batch` fails, nothing changes and the error names the failing step.
 7. Fix a problem by changing the layers you have (`set_properties`, `node.reparent`), not by deleting them and drawing them again.
 8. Name the layers you make. "Hero", "Pricing / Pro plan" and "CTA button" help the user; "Frame 12" does not.
 9. Write real copy in the user's language. Never use lorem ipsum or "Your headline here".
