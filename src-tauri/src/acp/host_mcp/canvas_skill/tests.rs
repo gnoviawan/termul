@@ -99,6 +99,23 @@ fn every_guide_example_batch_runs_on_the_pinned_engine() {
     }
 }
 
+/// The check above can see issues: text the colour of its slide is one.
+#[test]
+fn the_pinned_engine_reports_layout_issues_on_a_batch() {
+    let args = json!({"label": "Unreadable", "commands": [
+        {"command": "frame.create", "as": "slide", "params": {"preset": "Slide 16:9", "x": 0, "y": 0, "props": {"layout": "vertical", "padding": 160, "fill": "#070B18"}}},
+        {"command": "node.create", "params": {"type": "text", "name": "Wordmark", "parent": {"$name": "slide"}, "text": "Antrikopi", "props": {"fontSize": 32, "fill": "#070B18"}}},
+    ]});
+    let reply = run(&mut Headless::new(), "batch", &args);
+    let kinds: Vec<&str> = reply["issues"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{reply}"))
+        .iter()
+        .filter_map(|issue| issue["kind"].as_str())
+        .collect();
+    assert_eq!(kinds, ["low_contrast"], "{reply}");
+}
+
 #[test]
 fn the_curated_styles_parse_and_number_eight_to_twelve() {
     assert!(
