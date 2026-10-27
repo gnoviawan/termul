@@ -5,7 +5,11 @@
  * Search is read-only on every transport, so shared-live viewers browse too.
  */
 
-import type { McpCatalogPage, McpCatalogRow } from '@shared/types/mcp-catalog.types'
+import {
+  MCP_CATALOG_MAX_QUERY_TERMS,
+  type McpCatalogPage,
+  type McpCatalogRow
+} from '@shared/types/mcp-catalog.types'
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { logFrontendError } from '@/lib/log-api'
 import { mcpCatalogApi } from '@/lib/mcp-catalog-api'
@@ -26,11 +30,14 @@ export type McpCatalogSearchState =
   /** `previous` keeps the last results on screen while a new query loads. */
   | { status: 'loading'; previous: McpCatalogResults | null }
   | { status: 'failed' }
+  /** The host rejects the query, so it is never sent. */
+  | { status: 'too-many-terms' }
   | { status: 'ready'; results: McpCatalogResults; more: 'idle' | 'loading' | 'failed' }
 
 type Action =
   | { type: 'search' }
   | { type: 'searchFailed' }
+  | { type: 'tooManyTerms' }
   | { type: 'loadMore' }
   | { type: 'loadMoreFailed' }
   | { type: 'page'; page: McpCatalogPage; append: boolean }
@@ -49,6 +56,8 @@ function reduce(state: McpCatalogSearchState, action: Action): McpCatalogSearchS
       }
     case 'searchFailed':
       return { status: 'failed' }
+    case 'tooManyTerms':
+      return { status: 'too-many-terms' }
     case 'loadMore':
     case 'loadMoreFailed':
       if (state.status !== 'ready') return state
@@ -112,6 +121,10 @@ export function useMcpCatalogSearch(query: string, active: boolean): McpCatalogS
     if (!activated) return
     const searchId = ++generation.current
     pageInFlight.current = false
+    if (settledQuery.split(/\s+/).filter(Boolean).length > MCP_CATALOG_MAX_QUERY_TERMS) {
+      dispatch({ type: 'tooManyTerms' })
+      return
+    }
     dispatch({ type: 'search' })
     void mcpCatalogApi
       .search({ query: settledQuery || undefined, limit: MCP_CATALOG_PAGE_SIZE })

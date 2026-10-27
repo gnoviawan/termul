@@ -10,6 +10,10 @@
 
 import type { IpcResult } from './ipc.types'
 
+/** The host's caps on a search query (`search.rs` `MAX_QUERY_CHARS`, `MAX_QUERY_TERMS`). */
+export const MCP_CATALOG_MAX_QUERY_CHARS = 200
+export const MCP_CATALOG_MAX_QUERY_TERMS = 8
+
 /** Ranked best first; an item takes its best option's state. */
 export type McpCatalogState = 'installable' | 'needs-runtime' | 'unsupported' | 'source-only'
 

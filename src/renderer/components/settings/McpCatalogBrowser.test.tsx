@@ -178,6 +178,19 @@ describe('McpCatalogBrowser', () => {
     expect(screen.queryByText('io.example/pyserver')).toBeNull()
   })
 
+  it('asks for fewer words instead of sending a query the host would reject', async () => {
+    search.mockResolvedValue(page([installable]))
+    render(<McpCatalogBrowser />)
+    await screen.findByText('1 server · catalog from Oct 20, 2026')
+
+    fireEvent.change(screen.getByLabelText('Search the MCP catalog'), {
+      target: { value: 'one two three four five six seven eight nine' }
+    })
+
+    expect(await screen.findByText('Search with 8 words or fewer.')).toBeInTheDocument()
+    expect(search.mock.calls).toEqual([[{ query: undefined, limit: 50 }]])
+  })
+
   it('opens the repository link in the system browser', async () => {
     search.mockResolvedValue(page([installable]))
     render(<McpCatalogBrowser />)

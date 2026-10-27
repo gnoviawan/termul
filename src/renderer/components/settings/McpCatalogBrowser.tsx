@@ -1,4 +1,9 @@
-import type { McpCatalogRow, McpCatalogState } from '@shared/types/mcp-catalog.types'
+import {
+  MCP_CATALOG_MAX_QUERY_CHARS,
+  MCP_CATALOG_MAX_QUERY_TERMS,
+  type McpCatalogRow,
+  type McpCatalogState
+} from '@shared/types/mcp-catalog.types'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -194,6 +199,7 @@ export function McpCatalogBrowser(): React.JSX.Element {
           type="text"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
+          maxLength={MCP_CATALOG_MAX_QUERY_CHARS}
           placeholder="Search the MCP catalog"
           aria-label="Search the MCP catalog"
           className={cn(PANEL_FIELD_CLASS, 'h-8 w-full bg-background pl-7 pr-8')}
@@ -207,7 +213,11 @@ export function McpCatalogBrowser(): React.JSX.Element {
         )}
       </div>
 
-      {state.status === 'failed' ? (
+      {state.status === 'too-many-terms' ? (
+        <SettingsNotice tone="warning">
+          Search with {MCP_CATALOG_MAX_QUERY_TERMS} words or fewer.
+        </SettingsNotice>
+      ) : state.status === 'failed' ? (
         <SettingsNotice
           tone="danger"
           action={
