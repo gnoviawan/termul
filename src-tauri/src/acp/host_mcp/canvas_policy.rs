@@ -57,6 +57,9 @@ enum Why {
     SkipsSave,
     /// It hands the document to a server or a live session.
     LeavesTermul,
+    /// It installs, updates or publishes plugin code. An installed plugin's
+    /// code runs on this machine, so an agent may not bring new code in.
+    PluginCode,
 }
 
 #[derive(Clone, Copy)]
@@ -73,6 +76,7 @@ const FILES: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::Files { instead:
 const FILE_AT_PATH: CommandPolicy = CommandPolicy::Refuse(PATH, Why::Files { instead: None });
 const OTHER_DOCUMENT: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::OtherDocument);
 const LEAVES_TERMUL: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::LeavesTermul);
+const PLUGIN_CODE: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::PluginCode);
 
 const fn files_unless(when: &'static [When], instead: &'static str) -> CommandPolicy {
     CommandPolicy::Refuse(
@@ -133,10 +137,6 @@ const COMMANDS: &[(&str, CommandPolicy)] = &[
         "codeConnect.import",
         files_unless(PATH, "pass the JSON itself as `json`"),
     ),
-    (
-        "plugin.import",
-        files_unless(PATH, "pass the `manifest` and the base64 `wasm`"),
-    ),
     ("file.new", OTHER_DOCUMENT),
     ("file.newBoard", OTHER_DOCUMENT),
     ("file.newFromTemplate", OTHER_DOCUMENT),
@@ -160,6 +160,12 @@ const COMMANDS: &[(&str, CommandPolicy)] = &[
     ("collab.host", LEAVES_TERMUL),
     ("collab.publish", LEAVES_TERMUL),
     ("collab.share", LEAVES_TERMUL),
+    // Listing plugins and running, using or closing an installed one stay
+    // allowed: they bring in no code.
+    ("plugin.directory.install", PLUGIN_CODE),
+    ("plugin.import", PLUGIN_CODE),
+    ("plugin.directory.publish", PLUGIN_CODE),
+    ("plugin.directory.unpublish", PLUGIN_CODE),
 ];
 
 /// Control methods other than `engine.execute` that can name a file.
@@ -316,6 +322,11 @@ fn refusal(name: &str, why: Why) -> CanvasError {
         Why::LeavesTermul => format!(
             "`{name}` shares the document outside Termul, with a server or a live session, \
              which the Termul canvas does not allow"
+        ),
+        Why::PluginCode => format!(
+            "`{name}` installs, updates or publishes plugin code, which isn't available from \
+             the agent canvas tools. A plugin that is already installed can still run with \
+             plugin.run"
         ),
     };
     CanvasError::new(CanvasErrorCode::UnsupportedInKiosk, message)

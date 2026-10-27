@@ -244,12 +244,6 @@ fn a_command_that_names_a_file_is_refused_and_its_inline_form_goes_to_the_editor
             json!({"json": {"version": 1, "links": []}}),
             "`json`",
         ),
-        (
-            "plugin.import",
-            json!({"path": "plugins/hello"}),
-            json!({"manifest": {}, "wasm": "AAAA"}),
-            "`manifest`",
-        ),
     ] {
         let error = refusal("engine.execute", &execute(command, with_file));
         assert!(
@@ -318,6 +312,88 @@ fn sending_the_document_outside_termul_is_refused() {
             error.message
         );
     }
+}
+
+/// Commands that install, update or publish plugin code. A plugin's code
+/// runs on this machine, so an agent may not bring new code in, whether from
+/// a plugin directory or as bytes it passes itself.
+const PLUGIN_CODE: &[(&str, &str)] = &[
+    (
+        "plugin.directory.install",
+        r#"{"id": "x.y", "confirm": true, "server": "ws://host:47900/"}"#,
+    ),
+    ("plugin.import", r#"{"manifest": {}, "wasm": "AAAA"}"#),
+    ("plugin.import", r#"{"path": "plugins/hello"}"#),
+    (
+        "plugin.directory.publish",
+        r#"{"plugin": "x.y", "server": "ws://host:47900/?key=k"}"#,
+    ),
+    (
+        "plugin.directory.unpublish",
+        r#"{"id": "x.y", "server": "ws://host:47900/?key=k"}"#,
+    ),
+];
+
+/// `plugin.*` and `plugins.*` commands that bring in no code: listing, and
+/// running, using or closing a plugin that is already installed.
+const PLUGIN_KEPT: &[(&str, &str)] = &[
+    ("plugin.list", "{}"),
+    ("plugin.directory.list", r#"{"server": "ws://host:47900/"}"#),
+    ("plugin.run", r#"{"id": "x.y"}"#),
+    ("plugin.ui", "{}"),
+    ("plugin.event", r#"{"id": "x.y", "control": "go"}"#),
+    ("plugin.close", r#"{"id": "x.y"}"#),
+    ("plugin.remove", r#"{"id": "x.y"}"#),
+    ("plugins.runLast", "{}"),
+    ("plugins.manage", "{}"),
+];
+
+#[test]
+fn installing_or_publishing_plugin_code_is_refused_and_installed_plugins_still_run() {
+    for (command, params) in PLUGIN_CODE {
+        let params: Value = serde_json::from_str(params).unwrap();
+        let error = refusal("engine.execute", &execute(command, params));
+        assert!(
+            error.message.contains("plugin code") && error.message.contains("agent canvas tools"),
+            "{command}: {}",
+            error.message
+        );
+    }
+    for (command, params) in PLUGIN_KEPT {
+        let params: Value = serde_json::from_str(params).unwrap();
+        assert_eq!(
+            route("engine.execute", &execute(command, params.clone())),
+            CanvasRoute::Forward,
+            "{command} {params}"
+        );
+    }
+}
+
+/// A plugin command the engine adds must be sorted into one of the lists
+/// above before it reaches the editor unchecked.
+#[test]
+fn every_plugin_command_the_pinned_engine_runs_is_refused_or_known_to_bring_in_no_code() {
+    use figcraft_mcp::Backend as _;
+    let listed = figcraft_mcp::Headless::new()
+        .call("engine.commands", json!({}))
+        .unwrap();
+    let mut engine: Vec<&str> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|command| command["id"].as_str())
+        .filter(|id| id.starts_with("plugin.") || id.starts_with("plugins."))
+        .collect();
+    engine.sort_unstable();
+    engine.dedup();
+    let mut sorted: Vec<&str> = PLUGIN_CODE
+        .iter()
+        .chain(PLUGIN_KEPT)
+        .map(|(command, _)| *command)
+        .collect();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(engine, sorted);
 }
 
 #[test]
@@ -417,6 +493,10 @@ fn a_batch_step_refused_on_its_own_refuses_the_batch_for_the_same_reason() {
         (
             json!({"command": "text.loadFont", "params": {"path": "a.ttf"}}),
             "reads or writes files",
+        ),
+        (
+            json!({"command": "plugin.directory.install", "params": {"id": "x.y", "confirm": true}}),
+            "plugin code",
         ),
     ] {
         let error = refusal("engine.execute", &batch(step.clone()));
