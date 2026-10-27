@@ -1,9 +1,12 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { type KeyboardEvent, useCallback, useEffect, useId, useMemo } from 'react'
+import { type KeyboardEvent, type MouseEvent, useCallback, useEffect, useId, useMemo } from 'react'
+import {
+  handleExternalLinkClick,
+  requestExternalLinkOpen
+} from '@/components/external-link/ExternalLinkConfirm'
 import { ExternalLink, Sparkles, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
-import { openerApi } from '@/lib/tauri-opener-api'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 
 interface WhatsNewModalProps {
@@ -29,6 +32,8 @@ export function WhatsNewModal({
     if (!isOpen) return
 
     const handleEscape = (e: globalThis.KeyboardEvent): void => {
+      // Already handled by a dialog on top (e.g. the external-link confirm).
+      if (e.defaultPrevented) return
       if (e.key === 'Escape') {
         e.preventDefault()
         onClose()
@@ -49,13 +54,16 @@ export function WhatsNewModal({
     [onClose]
   )
 
-  const handleViewOnGitHub = useCallback(() => {
-    // Only hand http(s) URLs to the system opener; htmlUrl originates from a
-    // network response, so guard against unexpected schemes.
-    if (htmlUrl && /^https?:\/\//i.test(htmlUrl)) {
-      void openerApi.openUrlWithSystemBrowser(htmlUrl)
-    }
-  }, [htmlUrl])
+  const handleViewOnGitHub = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      // Only hand http(s) URLs to the system opener; htmlUrl originates from a
+      // network response, so guard against unexpected schemes.
+      if (htmlUrl && /^https?:\/\//i.test(htmlUrl)) {
+        requestExternalLinkOpen(htmlUrl, { returnFocusTo: event.currentTarget })
+      }
+    },
+    [htmlUrl]
+  )
 
   // Release notes are GitHub-flavored markdown; render to sanitized HTML
   // (DOMPurify via the shared chat-markdown renderer) so headings, lists, and
@@ -125,6 +133,8 @@ export function WhatsNewModal({
                       className="chat-prose text-xs leading-relaxed text-foreground"
                       // biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via renderChatMarkdown (DOMPurify)
                       dangerouslySetInnerHTML={{ __html: notesHtml }}
+                      onClick={handleExternalLinkClick}
+                      onAuxClick={handleExternalLinkClick}
                     />
                   ) : (
                     <p className="text-xs text-muted-foreground leading-relaxed">

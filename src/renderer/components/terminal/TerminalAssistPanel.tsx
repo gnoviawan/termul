@@ -1,5 +1,6 @@
 import type React from 'react'
 import { useEffect, useMemo } from 'react'
+import { handleExternalLinkClick } from '@/components/external-link/ExternalLinkConfirm'
 import { Sparkles, X } from '@/components/icons'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { cn } from '@/lib/utils'
@@ -74,6 +75,8 @@ export function TerminalAssistPanel({
   // Esc closes the panel (keyboard parity with the close button).
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
+      // Already handled by a dialog on top (e.g. the external-link confirm).
+      if (event.defaultPrevented) return
       if (event.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -112,6 +115,9 @@ export function TerminalAssistPanel({
             // Sanitized with DOMPurify inside renderChatMarkdown (chat parity).
             // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized via renderChatMarkdown
             dangerouslySetInnerHTML={{ __html: html ?? '' }}
+            // Links ask before opening, like chat links (no direct open).
+            onClick={handleExternalLinkClick}
+            onAuxClick={handleExternalLinkClick}
           />
         )}
       </div>

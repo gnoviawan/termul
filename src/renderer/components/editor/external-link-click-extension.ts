@@ -2,12 +2,12 @@ import { Extension } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 
-function linkHref(view: EditorView, event: Event): string | null {
+function linkAnchor(view: EditorView, event: Event): HTMLAnchorElement | null {
   const target = event.target
   if (!(target instanceof Element)) return null
-  const anchor = target.closest('a[href]')
+  const anchor = target.closest<HTMLAnchorElement>('a[href]')
   if (!anchor || !view.dom.contains(anchor)) return null
-  return anchor.getAttribute('href')
+  return anchor
 }
 
 /**
@@ -19,7 +19,9 @@ function linkHref(view: EditorView, event: Event): string | null {
  * on click. Running before Link (higher priority) and claiming the click
  * stops both; `onLinkClick` decides what happens next.
  */
-export function createExternalLinkClickExtension(onLinkClick: (href: string) => void) {
+export function createExternalLinkClickExtension(
+  onLinkClick: (href: string, anchor: HTMLAnchorElement) => void
+) {
   return Extension.create({
     name: 'termulExternalLinkClick',
     priority: 1000,
@@ -29,17 +31,18 @@ export function createExternalLinkClickExtension(onLinkClick: (href: string) => 
           key: new PluginKey('termulExternalLinkClick'),
           props: {
             // Claim the click so Link's `handleClick` never reaches `window.open`.
-            handleClick: (view, _pos, event) => linkHref(view, event) !== null,
+            handleClick: (view, _pos, event) => linkAnchor(view, event) !== null,
             handleDOMEvents: {
               click: (view, event) => {
-                const href = linkHref(view, event)
-                if (href === null) return false
+                const anchor = linkAnchor(view, event)
+                if (anchor === null) return false
                 event.preventDefault()
-                if (!href.startsWith('#')) onLinkClick(href)
+                const href = anchor.getAttribute('href') ?? ''
+                if (!href.startsWith('#')) onLinkClick(href, anchor)
                 return true
               },
               auxclick: (view, event) => {
-                if (linkHref(view, event) === null) return false
+                if (linkAnchor(view, event) === null) return false
                 event.preventDefault()
                 return true
               }

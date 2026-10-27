@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import type { AnimateOptions } from 'streamdown'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { selectionContextToken } from '@/lib/composer/selection-context'
 import {
@@ -409,7 +410,12 @@ describe('ChatMessage', () => {
   })
 
   it('opens confirmed links via the system browser and closes the safety dialog', async () => {
-    render(<ChatMessage message={agentMessage(false)} isLast />)
+    render(
+      <>
+        <ChatMessage message={agentMessage(false)} isLast />
+        <ExternalLinkConfirmHost />
+      </>
+    )
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('streamdown-link'))

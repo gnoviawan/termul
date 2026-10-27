@@ -51,7 +51,7 @@ interface UseBlockNoteOptions {
   initialMarkdown: string
   onChange: (markdown: string) => void
   /** A link in the document was clicked. Nothing is opened unless this does it. */
-  onLinkClick?: (href: string) => void
+  onLinkClick?: (href: string, anchor: HTMLAnchorElement) => void
 }
 
 interface UseBlockNoteResult {
@@ -105,7 +105,7 @@ export function useBlockNote(options: UseBlockNoteOptions): UseBlockNoteResult {
           }
         },
         tiptapExtensions: [
-          createExternalLinkClickExtension((href) => onLinkClickRef.current?.(href))
+          createExternalLinkClickExtension((href, anchor) => onLinkClickRef.current?.(href, anchor))
         ]
       }))(),
     []

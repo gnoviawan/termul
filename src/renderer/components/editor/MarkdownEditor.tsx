@@ -1,7 +1,7 @@
 import { BlockNoteViewRaw } from '@blocknote/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FrontmatterProperties } from '@/components/editor/FrontmatterProperties'
-import { useExternalLinkConfirm } from '@/components/external-link/ExternalLinkConfirm'
+import { requestExternalLinkOpen } from '@/components/external-link/ExternalLinkConfirm'
 import { useBlockNote } from '@/hooks/use-blocknote'
 import {
   registerEditorContentFlusher,
@@ -44,6 +44,11 @@ function useIsDark(): boolean {
   return isDark
 }
 
+/** Editor links go through the app-wide confirm; focus returns to the editor. */
+function openLinkWithConfirm(href: string, anchor: HTMLAnchorElement): void {
+  requestExternalLinkOpen(href, { returnFocusTo: anchor })
+}
+
 export function MarkdownEditor({
   filePath,
   content,
@@ -84,8 +89,6 @@ export function MarkdownEditor({
     [onChange]
   )
 
-  const externalLink = useExternalLinkConfirm()
-
   const {
     editor,
     replaceContent,
@@ -97,7 +100,7 @@ export function MarkdownEditor({
     filePath,
     initialMarkdown: initialParsedRef.current.body,
     onChange: emitFullContent,
-    onLinkClick: externalLink.requestOpen
+    onLinkClick: openLinkWithConfirm
   })
 
   const flushFullContent = useCallback(async (): Promise<void> => {
@@ -225,7 +228,6 @@ export function MarkdownEditor({
               filePanel={false}
               tableHandles={false}
             />
-            {externalLink.dialog}
           </div>
         </div>
       </div>

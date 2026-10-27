@@ -1,13 +1,23 @@
 import { BlockNoteViewRaw } from '@blocknote/react'
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  type RenderResult,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react'
 import type { EditorView } from '@tiptap/pm/view'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentProse } from '@/components/chat/chat-agent-prose'
 import { ThoughtGroup } from '@/components/chat/ThoughtGroup'
 import { MarkdownEditor } from '@/components/editor/MarkdownEditor'
+import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useBlockNote } from '@/hooks/use-blocknote'
+import { type ExternalOpenSpy, spyOnExternalOpens } from '@/lib/test-utils/external-link-opens'
 import type { ChatMessage } from '@/stores/acp-store'
 
 // QA matrix for issue #1432: a link must not reach the system browser until the
@@ -31,47 +41,40 @@ vi.mock('framer-motion', async () => {
 
 const URL_ = 'https://example.com/docs'
 
-// Mirrors tauri-plugin-opener 2.5.4 `init-iife.js`: the desktop app injects a
-// window click listener that sends any unprevented left click on an
-// `<a target="_blank">` (or a ctrl/shift click on any `<a>`) straight to the OS
-// browser. jsdom has no such listener, so a test that only spies on openerApi
-// would miss that channel.
-const pluginOpens: string[] = []
-function openerPluginClick(event: MouseEvent): void {
-  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.altKey) return
-  const a = event
-    .composedPath()
-    .find((el) => el instanceof Node && el.nodeName.toUpperCase() === 'A') as
-    | HTMLAnchorElement
-    | undefined
-  if (!a?.href || !(a.target === '_blank' || event.ctrlKey || event.shiftKey)) return
-  const url = new URL(a.href)
-  if (['http:', 'https:', 'mailto:', 'tel:'].every((p) => url.protocol !== p)) return
-  event.preventDefault()
-  pluginOpens.push(url.href)
-}
-
-let windowOpen: ReturnType<typeof vi.spyOn>
+let spy: ExternalOpenSpy
 
 beforeEach(() => {
   openUrlWithSystemBrowser.mockClear()
-  pluginOpens.length = 0
-  window.addEventListener('click', openerPluginClick)
-  windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null)
+  spy = spyOnExternalOpens(openUrlWithSystemBrowser)
 })
 
 afterEach(() => {
-  window.removeEventListener('click', openerPluginClick)
-  windowOpen.mockRestore()
+  spy.restore()
 })
 
 /** Every way a URL can leave the app: openerApi, the opener plugin, window.open. */
 function browserOpens(): string[] {
-  return [
-    ...openUrlWithSystemBrowser.mock.calls.map((call) => String((call as unknown[])[0])),
-    ...pluginOpens,
-    ...windowOpen.mock.calls.map((call) => String(call[0] ?? ''))
-  ]
+  return spy.opens()
+}
+
+/** Render next to the app-wide confirm host, as `App`/`TauriApp` do. */
+function renderWithHost(node: ReactNode): RenderResult {
+  const result = render(
+    <>
+      {node}
+      <ExternalLinkConfirmHost />
+    </>
+  )
+  return {
+    ...result,
+    rerender: (next: ReactNode) =>
+      result.rerender(
+        <>
+          {next}
+          <ExternalLinkConfirmHost />
+        </>
+      )
+  }
 }
 
 async function flush(): Promise<void> {
@@ -101,14 +104,16 @@ const SURFACES: [string, () => Promise<HTMLElement>][] = [
   [
     'agent chat reply',
     async () => {
-      render(withTooltips(<AgentProse text={`Visit [docs](${URL_}).`} streaming={false} reduced />))
+      renderWithHost(
+        withTooltips(<AgentProse text={`Visit [docs](${URL_}).`} streaming={false} reduced />)
+      )
       return screen.getByText('docs')
     }
   ],
   [
     'agent chat reply with a workspace (file links on)',
     async () => {
-      render(
+      renderWithHost(
         withTooltips(
           <AgentProse
             text={`Visit [docs](${URL_}).`}
@@ -124,7 +129,7 @@ const SURFACES: [string, () => Promise<HTMLElement>][] = [
   [
     'agent chat bare URL',
     async () => {
-      render(
+      renderWithHost(
         withTooltips(
           <AgentProse
             text={`See ${URL_} now.`}
@@ -140,7 +145,9 @@ const SURFACES: [string, () => Promise<HTMLElement>][] = [
   [
     'thinking block',
     async () => {
-      render(<ThoughtGroup messages={[thought(`Check [docs](${URL_}).`)]} isLiveTail={false} />)
+      renderWithHost(
+        <ThoughtGroup messages={[thought(`Check [docs](${URL_}).`)]} isLiveTail={false} />
+      )
       await click(screen.getByRole('button', { expanded: false }))
       return screen.getByText('docs')
     }
@@ -148,7 +155,7 @@ const SURFACES: [string, () => Promise<HTMLElement>][] = [
   [
     'markdown file in the editor',
     async () => {
-      const { container } = render(
+      const { container } = renderWithHost(
         <MarkdownEditor
           filePath="/project/README.md"
           content={`Read [docs](${URL_}).\n`}
@@ -251,6 +258,105 @@ describe.each(SURFACES)('external link on %s', (_name, mount) => {
   })
 })
 
+describe.each(SURFACES)('focus after the dialog on %s', (_name, mount) => {
+  // A real mouse click focuses the link; a keyboard user lands on it with Tab.
+  async function openFromFocusedLink(): Promise<HTMLElement> {
+    const link = await mount()
+    const anchor = link.closest('a') ?? link
+    anchor.focus()
+    await click(link)
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    return anchor
+  }
+
+  it('returns focus to the link after Cancel', async () => {
+    const anchor = await openFromFocusedLink()
+    await click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(document.activeElement).toBe(anchor))
+  })
+
+  it('returns focus to the link after Escape', async () => {
+    const anchor = await openFromFocusedLink()
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' })
+    await flush()
+    await waitFor(() => expect(document.activeElement).toBe(anchor))
+  })
+
+  it('returns focus to the link after Open', async () => {
+    const anchor = await openFromFocusedLink()
+    await click(screen.getByRole('button', { name: 'Open' }))
+    await waitFor(() => expect(document.activeElement).toBe(anchor))
+  })
+})
+
+describe('pending confirmation outlives the message that asked for it', () => {
+  const streamed = (more: string) => `Visit [docs](${URL_}).${more}`
+
+  it('keeps the dialog while the agent keeps streaming, and Open still opens once', async () => {
+    const view = renderWithHost(withTooltips(<AgentProse text={streamed('')} streaming reduced />))
+    await click(screen.getByText('docs'))
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+
+    for (const more of [' More', ' More text', ' More text\n\nA new paragraph', ' done.']) {
+      view.rerender(withTooltips(<AgentProse text={streamed(more)} streaming reduced />))
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 120))
+      })
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    }
+    view.rerender(withTooltips(<AgentProse text={streamed(' done.')} streaming={false} reduced />))
+    await flush()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    expect(browserOpens()).toEqual([])
+
+    await click(screen.getByRole('button', { name: 'Open' }))
+    expect(browserOpens()).toEqual([URL_])
+  })
+
+  it('keeps the dialog when the message remounts (or scrolls out of a virtual list)', async () => {
+    const view = renderWithHost(
+      withTooltips(<AgentProse key="a" text={streamed('')} streaming={false} reduced />)
+    )
+    await click(screen.getByText('docs'))
+    view.rerender(
+      withTooltips(<AgentProse key="b" text={streamed('')} streaming={false} reduced />)
+    )
+    await flush()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+
+    view.rerender(withTooltips(null))
+    await flush()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+
+    await click(screen.getByRole('button', { name: 'Open' }))
+    expect(browserOpens()).toEqual([URL_])
+  })
+})
+
+describe('a very long URL', () => {
+  const LONG_URL = `https://example.com/${'a'.repeat(4000)}`
+
+  it('scrolls inside a capped, word-breaking area so Cancel and Open stay on screen', async () => {
+    renderWithHost(
+      withTooltips(<AgentProse text={`[long](${LONG_URL})`} streaming={false} reduced />)
+    )
+    await click(screen.getByText('long'))
+
+    const dialog = screen.getByRole('alertdialog')
+    const urlText = within(dialog).getByText(LONG_URL)
+    const scroller = urlText.closest('[data-external-link-url]')
+    expect(scroller).not.toBeNull()
+    expect(scroller).toHaveClass('overflow-y-auto', 'break-all')
+    expect(scroller?.className).toMatch(/\bmax-h-/)
+    // The buttons are outside the scrolling area, so they never scroll away.
+    for (const name of ['Cancel', 'Open']) {
+      expect(scroller?.contains(within(dialog).getByRole('button', { name }))).toBe(false)
+    }
+    // The dialog itself is capped to the viewport, too.
+    expect(dialog.className).toMatch(/max-h-/)
+  })
+})
+
 describe('markdown editor link click (ProseMirror handleClick)', () => {
   // jsdom has no layout, so ProseMirror never maps a real mouseup to a
   // document position and tiptap Link's `handleClick` (which calls
@@ -269,7 +375,7 @@ describe('markdown editor link click (ProseMirror handleClick)', () => {
       view = editor.prosemirrorView
       return <BlockNoteViewRaw editor={editor} />
     }
-    const { container } = render(<Harness />)
+    const { container } = renderWithHost(<Harness />)
     await flush()
     const anchor = container.querySelector(`a[href="${URL_}"]`)
     if (!anchor || !view) throw new Error('editor rendered no link')

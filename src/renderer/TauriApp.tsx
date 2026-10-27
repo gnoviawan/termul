@@ -6,6 +6,7 @@ import { BrowserConsentCardHost } from '@/components/agents/BrowserConsentCardHo
 import { CodexCliAuthSync } from '@/components/agents/CodexCliAuthSync'
 import { ChatRoute } from '@/components/ChatRoute'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -198,6 +199,7 @@ export default function TauriApp(): React.JSX.Element {
           <ErrorBoundary context="App Root">
             <AppEffects />
             <Toaster />
+            <ExternalLinkConfirmHost />
             {/* Headless ACP auth: global host for the browser-open paste-back
                 dialog (spec-acp-terminal-auth) — auth can be triggered from a
                 chat panel or warm pool, not just the launcher. */}
