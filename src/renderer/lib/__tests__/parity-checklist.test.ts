@@ -414,6 +414,37 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  describe('MCP OAuth unsafe-link parity (CAP-11)', () => {
+    const RustRoot = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+    const readRust = (...parts: string[]): string => readFileSync(join(RustRoot, ...parts), 'utf-8')
+
+    it('the Rust guard and the renderer facade agree on the code', () => {
+      const rustCode = readRust('acp', 'safe_url.rs').match(
+        /pub const MCP_UNSAFE_URL: &str = "([A-Z_]+)";/
+      )?.[1]
+      const tsCode = readFileSync(join(LIB_DIR, 'acp-api.ts'), 'utf-8').match(
+        /export const MCP_UNSAFE_URL = '([A-Z_]+)'/
+      )?.[1]
+      expect(rustCode).toBe('MCP_UNSAFE_URL')
+      expect(tsCode).toBe(rustCode)
+    })
+
+    it('both host transports check the sign-in link before it leaves the host', () => {
+      const desktop = readRust('acp', 'commands.rs')
+      const web = readRust('web', 'mcp_oauth_api.rs')
+      expect(desktop).toMatch(/check_safe_url\(raw, Opener::Host\)/)
+      expect(desktop).toMatch(/IpcResult::error\(refused\.to_string\(\), MCP_UNSAFE_URL\)/)
+      expect(web).toMatch(/check_safe_url\(raw, Opener::Remote\)/)
+      expect(web).toMatch(/McpOAuthError::UnsafeUrl\(_\) => MCP_UNSAFE_URL/)
+    })
+
+    it('a dedicated facade test covers both transports', () => {
+      const content = readFileSync(join(LIB_DIR, 'acp-api-mcp-oauth.test.ts'), 'utf-8')
+      expect(content).toMatch(/desktop: surfaces the host refusal as MCP_UNSAFE_URL/)
+      expect(content).toMatch(/surfaces the host refusal as MCP_UNSAFE_URL and never navigates/)
+    })
+  })
+
   // CAP-6 / Story 8: ACP Catalog parity. The host-resolved catalog ships on
   // two carriers: HTTP `GET /acp/catalog` / `POST /acp/catalog/opt-in` (web)
   // and the `/ws` requests `list_acp_catalog` / `set_catalog_opt_in` (desktop
