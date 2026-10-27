@@ -89,6 +89,13 @@ fn every_guide_example_batch_runs_on_the_pinned_engine() {
             args["label"],
             result.first_text()
         );
+        let reply: Value = serde_json::from_str(result.first_text()).expect("JSON");
+        assert_eq!(
+            reply.get("issues"),
+            None,
+            "{topic} example `{}` leaves layout issues",
+            args["label"]
+        );
     }
 }
 

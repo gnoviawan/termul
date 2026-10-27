@@ -106,7 +106,7 @@ pub fn derive_activity(tool: &str, method: &str, params: &Value, result: &str) -
         }
         ("set_properties", _, Some(("node.set", inner))) => write(named_or_selection(inner)),
         ("run_command" | "batch" | "undo" | "redo", _, Some((command, inner))) => {
-            command_activity(command, inner, &|| command_result(params, result))
+            command_activity(command, inner, || command_result(params, result))
         }
         ("type_text", _, Some(("text.edit.begin", inner))) => write(nodes(ids_in(inner), None)),
         ("select", _, Some(("select.set", inner))) => read(nodes(ids_in(inner), None)),
@@ -129,7 +129,11 @@ pub fn derive_activity(tool: &str, method: &str, params: &Value, result: &str) -
 }
 
 /// A command the agent ran by name (`run_command`, `batch`, `undo`, `redo`).
-fn command_activity(command: &str, params: &Value, result: &dyn Fn() -> Value) -> Option<Activity> {
+fn command_activity(
+    command: &str,
+    params: &Value,
+    result: impl FnOnce() -> Value,
+) -> Option<Activity> {
     let namespace = command
         .split_once('.')
         .map_or(command, |(namespace, _)| namespace);
@@ -203,15 +207,23 @@ fn parse(text: &str) -> Value {
 }
 
 /// The command's own result in the reply to the `engine.execute` frame
-/// `params`. figcraft-mcp asks for the layout issues of a mutating call
-/// (`issues: true`), and the editor then wraps the result as
-/// `{result, issues}`.
-fn command_result(params: &Value, result: &str) -> Value {
-    let reply = parse(result);
-    if params.get("issues") != Some(&Value::Bool(true)) {
+/// `execute`. figcraft-mcp asks a mutating call for its layout issues
+/// (`issues: true`); an editor that lists them replies `{result, issues}`,
+/// one that does not replies with the bare result.
+fn command_result(execute: &Value, reply: &str) -> Value {
+    let reply = parse(reply);
+    if execute.get("issues") != Some(&Value::Bool(true)) {
         return reply;
     }
-    reply.get("result").cloned().unwrap_or(Value::Null)
+    match reply {
+        Value::Object(mut envelope)
+            if envelope.contains_key("result")
+                && envelope.get("issues").is_some_and(Value::is_array) =>
+        {
+            envelope.remove("result").unwrap_or(Value::Null)
+        }
+        bare => bare,
+    }
 }
 
 /// The ids, deduplicated in order of last mention, at most the last
