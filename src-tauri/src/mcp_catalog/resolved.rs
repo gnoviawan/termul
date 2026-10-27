@@ -32,15 +32,6 @@ pub enum ResolvedConfig {
     },
 }
 
-impl ResolvedConfig {
-    pub(crate) fn slots(&self) -> &[ValueSlot] {
-        match self {
-            Self::Stdio { env, .. } => env,
-            Self::Http { headers, .. } | Self::Sse { headers, .. } => headers,
-        }
-    }
-}
-
 /// Which catalog row and option an entry came from (CAP-8 drift checks).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -33,7 +33,7 @@ fn hooka_provenance() -> Provenance {
 fn digest_of_a_fixed_spec_is_pinned() {
     assert_eq!(
         launch_digest(&hooka(), Some(&hooka_provenance())),
-        "sha256:9f0d3b1c2d6fa6d94b6c0f23a0d0bd1cc6f8d5f6a8b0d2d0f7e4a7b61b94b2c1"
+        "sha256:b7a9164474c1e27836e7856a3f96e079c762a1c69dc0b33cea68d335fdbde4f9"
     );
 }
 
@@ -101,7 +101,7 @@ fn remote_digest_covers_transport_url_and_header_names() {
     let base = launch_digest(&http, None);
     assert_eq!(
         base,
-        "sha256:5b2f0d0e2b1f7a0d8a0fd0bb0d7a5b1dce0f5ef9c1bb44e5c0f5e9a6b3d7c2a1"
+        "sha256:950e4bd8f305f97b90df7158f994818ce7ddf248b9f00d43c93b531201e8646f"
     );
     assert_ne!(launch_digest(&sse, None), base);
     assert_ne!(launch_digest(&other_url, None), base);

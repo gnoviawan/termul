@@ -5,7 +5,7 @@ use super::convert::{
     OptionKind, RegistryServer, RemoteTransport, Runner,
 };
 use super::search::{item_status, McpCatalogDefaultOption, McpCatalogState, RunnerAvailability};
-use super::snapshot::{CatalogItem, RegistryStatus};
+use super::snapshot::{CatalogItem, ParsedItem, RegistryStatus};
 
 fn options(server: Value) -> Vec<CatalogOption> {
     let parsed: RegistryServer = serde_json::from_value(server).expect("server parses");
@@ -438,13 +438,16 @@ fn repository_links_leave_the_host_only_over_https() {
 fn item(server: Value) -> CatalogItem {
     let parsed: RegistryServer = serde_json::from_value(server).expect("server parses");
     CatalogItem {
-        options: Some(convert(&parsed)),
-        name: parsed.name,
-        title: parsed.title,
-        description: parsed.description,
-        version: parsed.version,
+        name: parsed.name.clone(),
+        title: parsed.title.clone(),
+        description: parsed.description.clone(),
+        version: parsed.version.clone(),
         status: RegistryStatus::Active,
         repository_url: None,
+        parsed: Some(ParsedItem {
+            options: convert(&parsed),
+            server: parsed,
+        }),
     }
 }
 
