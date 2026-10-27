@@ -1,0 +1,18 @@
+diff --git a/crates/gpui/src/svg_renderer.rs b/crates/gpui/src/svg_renderer.rs
+index d06a4b0..ab946c9 100644
+--- a/crates/gpui/src/svg_renderer.rs
++++ b/crates/gpui/src/svg_renderer.rs
+@@ -178,6 +178,13 @@ impl SvgRenderer {
+                 select_font: font_resolver,
+                 select_fallback: fallback_selection,
+             },
++            // usvg's default resolver reads any local path an `<image href>` names
++            // (`/dev/zero` exhausts memory, a FIFO blocks the thread) and decodes
++            // nested data-URL images, SVGs included. Nothing GPUI renders needs them.
++            image_href_resolver: usvg::ImageHrefResolver {
++                resolve_data: Box::new(|_, _, _| None),
++                resolve_string: Box::new(|_, _| None),
++            },
+             ..Default::default()
+         };
+         Self {
