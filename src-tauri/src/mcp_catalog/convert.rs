@@ -26,7 +26,7 @@ where
     Option::<T>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct RegistryServer {
     pub name: String,
@@ -41,13 +41,14 @@ pub(crate) struct RegistryServer {
     pub packages: Vec<RegistryPackage>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct RegistryRepository {
     pub url: Option<String>,
+    pub id: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct RegistryRemote {
     #[serde(rename = "type")]
@@ -59,7 +60,7 @@ pub(crate) struct RegistryRemote {
     pub variables: BTreeMap<String, RegistryInput>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct RegistryPackage {
     pub registry_type: String,
@@ -75,22 +76,38 @@ pub(crate) struct RegistryPackage {
     pub environment_variables: Vec<RegistryInput>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct RegistryPackageTransport {
     #[serde(rename = "type")]
     pub kind: String,
 }
 
-/// An argument, header, env var or template variable. Only what conversion
-/// needs: the name and whether it, or any variable inside it, is secret.
-#[derive(Debug, Default, Deserialize)]
+/// An argument, header, env var or template variable (registry `Input`,
+/// `KeyValueInput` and `Argument`). Conversion reads the name and the secret
+/// flags; the install form (`form.rs`) reads the rest.
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct RegistryInput {
     #[serde(deserialize_with = "null_as_default")]
     pub name: String,
     #[serde(deserialize_with = "null_as_default")]
     pub is_secret: bool,
+    #[serde(deserialize_with = "null_as_default")]
+    pub is_required: bool,
+    pub description: Option<String>,
+    pub format: Option<String>,
+    /// A fixed value, or a template whose `{var}` names are keys of `variables`.
+    pub value: Option<String>,
+    pub default: Option<String>,
+    pub placeholder: Option<String>,
+    #[serde(deserialize_with = "null_as_default")]
+    pub choices: Vec<String>,
+    /// `Argument` only: `positional` or `named`.
+    #[serde(rename = "type")]
+    pub argument_type: Option<String>,
+    /// `Argument` only: the label of a positional argument.
+    pub value_hint: Option<String>,
     #[serde(deserialize_with = "null_as_default")]
     pub variables: BTreeMap<String, RegistryInput>,
 }
@@ -166,7 +183,7 @@ pub enum Launch {
     Stdio { runner: Runner, argv: Vec<String> },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OptionKind {
     Remote,
@@ -218,6 +235,14 @@ pub enum McpCatalogReason {
     },
     UnpinnedVersion,
     InvalidPackage,
+    // Import plans only (AD-5 applies the AD-4 rules to a pasted file).
+    InvalidCommand,
+    InvalidHeaderName {
+        name: String,
+    },
+    ControlCharacter {
+        field: String,
+    },
 }
 
 /// Options in default-preference order: remotes first (streamable-http before
@@ -274,7 +299,7 @@ fn convert_remote(remote: &RegistryRemote) -> Result<Launch, McpCatalogReason> {
 /// `https` only, and never a loopback or private-network host. Template
 /// variables are stood in for, so a templated path still validates; the plan
 /// re-checks the resolved URL.
-fn check_remote_url(raw: &str) -> Result<(), McpCatalogReason> {
+pub(crate) fn check_remote_url(raw: &str) -> Result<(), McpCatalogReason> {
     let url =
         Url::parse(&fill_template_variables(raw)).map_err(|_| McpCatalogReason::InvalidUrl)?;
     if url.scheme() != "https" {
@@ -434,7 +459,7 @@ pub(crate) fn is_denied_env_name(name: &str) -> bool {
 
 /// An env name becomes a docker `-e` argv element, so it must be a plain
 /// identifier (`-e NAME=value` would smuggle a value in from registry text).
-fn check_env_name(name: &str) -> Result<(), McpCatalogReason> {
+pub(crate) fn check_env_name(name: &str) -> Result<(), McpCatalogReason> {
     static ENV_NAME: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$").expect("env name regex"));
     if !ENV_NAME.is_match(name) {
@@ -450,6 +475,20 @@ fn check_env_name(name: &str) -> Result<(), McpCatalogReason> {
     Ok(())
 }
 
+/// An HTTP header field name (RFC 9110 token). A name with `:` or a control
+/// character could end the header or start another one.
+pub(crate) fn check_header_name(name: &str) -> Result<(), McpCatalogReason> {
+    static HEADER_NAME: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$").expect("header regex"));
+    if HEADER_NAME.is_match(name) {
+        Ok(())
+    } else {
+        Err(McpCatalogReason::InvalidHeaderName {
+            name: name.to_string(),
+        })
+    }
+}
+
 /// The package grammar: no leading `-` (no flag injection into the runner) and
 /// none of cmd's metacharacters (`& | < > ^ % ! " ( )`, whitespace), on every
 /// host, so a catalog state never differs by OS.
@@ -459,6 +498,21 @@ pub(crate) fn is_valid_identifier(identifier: &str) -> bool {
         Regex::new(r"^[A-Za-z0-9@_][A-Za-z0-9@/._~+:-]{0,255}$").expect("identifier regex")
     });
     IDENTIFIER.is_match(identifier)
+}
+
+/// Import plans hand a runner an `id` or `id@version` spec from a file. It
+/// must obey the same grammar the catalog templates do (AD-5 applies AD-4 to
+/// imports), so a spec a registry row could not carry is refused here too.
+pub(crate) fn check_package_spec(_runner: Runner, spec: &str) -> Result<(), McpCatalogReason> {
+    let (identifier, version) = match spec.rsplit_once('@') {
+        Some((identifier, version)) if !identifier.is_empty() => (identifier, Some(version)),
+        _ => (spec, None),
+    };
+    if is_valid_identifier(identifier) && version.is_none_or(is_valid_version) {
+        Ok(())
+    } else {
+        Err(McpCatalogReason::InvalidPackage)
+    }
 }
 
 #[must_use]

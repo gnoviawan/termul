@@ -46,7 +46,15 @@ pub(crate) struct CatalogItem {
     pub status: RegistryStatus,
     pub repository_url: Option<String>,
     /// `None` when the row did not parse: the item shows as unsupported.
-    pub options: Option<Vec<CatalogOption>>,
+    pub parsed: Option<ParsedItem>,
+}
+
+/// The parsed row and its conversion. Both are needed again when a plan is
+/// built from the row (`plan.rs` reads the inputs behind each option).
+#[derive(Debug, Clone)]
+pub(crate) struct ParsedItem {
+    pub server: RegistryServer,
+    pub options: Vec<CatalogOption>,
 }
 
 #[derive(Debug, Default)]
@@ -106,7 +114,7 @@ pub(crate) fn load_or_empty(gz: &[u8], meta: &str) -> LoadedCatalog {
             let unparseable = catalog
                 .items
                 .iter()
-                .filter(|item| item.options.is_none())
+                .filter(|item| item.parsed.is_none())
                 .count();
             log::info!(
                 "[mcp-catalog] snapshot loaded items={} unparseable={} fetched_at={}",
@@ -194,16 +202,20 @@ pub(crate) fn item_from_row(mut row: Value) -> Option<CatalogItem> {
     let (title, description, version) = (text("title"), text("description"), text("version"));
     Some(match RegistryServer::deserialize(server) {
         Ok(parsed) => CatalogItem {
-            options: Some(convert(&parsed)),
             repository_url: parsed
                 .repository
-                .and_then(|repository| repository.url)
-                .and_then(|url| safe_repository_url(&url)),
+                .as_ref()
+                .and_then(|repository| repository.url.as_deref())
+                .and_then(safe_repository_url),
             name,
-            title: parsed.title,
-            description: parsed.description,
-            version: parsed.version,
+            title: parsed.title.clone(),
+            description: parsed.description.clone(),
+            version: parsed.version.clone(),
             status,
+            parsed: Some(ParsedItem {
+                options: convert(&parsed),
+                server: parsed,
+            }),
         },
         Err(_) => CatalogItem {
             name,
@@ -212,7 +224,7 @@ pub(crate) fn item_from_row(mut row: Value) -> Option<CatalogItem> {
             version: version.unwrap_or_default(),
             status,
             repository_url: None,
-            options: None,
+            parsed: None,
         },
     })
 }
