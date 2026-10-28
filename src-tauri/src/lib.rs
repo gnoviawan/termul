@@ -2098,6 +2098,7 @@ pub fn run() {
             // Desktop updater: channel manifest fetch (CSP/CORS-free server-side
             // reqwest for the insider/nightly paths).
             updater_api::updater_fetch_channel_manifest,
+            updater_api::updater_check_channel,
             // Agent Skills (Zed-compatible SKILL.md packages)
             skills::commands::list_agent_skills_cmd,
             skills::commands::read_agent_skill_cmd,

@@ -62,7 +62,9 @@ function setReminderForTomorrow(): void {
  */
 export function showUpdateToast(version: string, releaseNotes?: string): void {
   const isAur = isAurUpdateMode()
-  const channel = updaterStore.getState().updateChannel
+  // Copy follows the update mode, not the channel: a signed nightly installs
+  // in the app, while a fallback (any channel) opens the release page.
+  const { updateChannel: channel, isManualUpdateMode: isManual } = updaterStore.getState()
   const title =
     channel === 'insider'
       ? 'Insider update available'
@@ -77,11 +79,11 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
       ? `Version ${version}. What's new: ${releaseNotes.slice(0, 100)}${releaseNotes.length > 100 ? '…' : ''}`
       : isAur
         ? `Version ${version} is available. Update with yay.`
-        : channel !== 'stable'
+        : isManual
           ? `Version ${version}. Open the download page to install it manually.`
           : `Version ${version} is ready to download.`,
     action: {
-      label: isAur ? 'Use yay' : channel !== 'stable' ? 'Open download page' : 'Download',
+      label: isAur ? 'Use yay' : isManual ? 'Open download page' : 'Download',
       onClick: async () => {
         if (isAur) {
           toast.info('Run in terminal', {
@@ -162,7 +164,8 @@ function dismissDownloadProgressToast(version: string): void {
  */
 export function useUpdateToast(): void {
   const isDesktop = isTauriContext()
-  const { updateAvailable, downloaded, isDownloading, skippedVersion } = useUpdaterState()
+  const { updateAvailable, downloaded, isDownloading, skippedVersion, isManualUpdateMode } =
+    useUpdaterState()
   const version = useUpdateVersion()
   const _updateDownloaded = useUpdateDownloaded()
   const downloading = useIsDownloading()
@@ -197,9 +200,11 @@ export function useUpdateToast(): void {
     }
   }, [isDesktop, downloaded, version])
 
-  // Show download progress
+  // Show download progress. A manual update only opens the release page:
+  // nothing reports progress, and the open finishes so fast that sonner can
+  // apply the dismiss before its deferred create, leaving a stuck 0% toast.
   useEffect(() => {
-    if (isDesktop && isDownloading && version) {
+    if (isDesktop && isDownloading && version && !isManualUpdateMode) {
       showDownloadProgressToast(version, downloadProgress)
 
       // Clean up progress toast when download completes or effect re-runs
@@ -207,7 +212,7 @@ export function useUpdateToast(): void {
         dismissDownloadProgressToast(version)
       }
     }
-  }, [isDesktop, isDownloading, downloadProgress, version])
+  }, [isDesktop, isDownloading, downloadProgress, version, isManualUpdateMode])
 
   // Reset flags when update state changes
   useEffect(() => {
