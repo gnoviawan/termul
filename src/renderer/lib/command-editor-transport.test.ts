@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createWebCommandEditorTransport } from './command-editor-transport'
+import { CompletionScheduler } from './command-lifecycle/completion'
 import { createTauriTerminalApi } from './tauri-terminal-api'
 import { WebTerminalClient } from './web-terminal-api'
 
@@ -739,4 +740,41 @@ it('refuses a non-u64 completion request before send', async () => {
     await createTauriTerminalApi().requestCompletion('terminal-1', { ...completion, cursor: 1.5 })
   ).toEqual({ result: 'PreWrite' })
   expect(fakeInvoke).not.toHaveBeenCalled()
+})
+
+it.each([
+  'web',
+  'tauri'
+] as const)('%s scheduler forwards the full draft unchanged', async (surface) => {
+  vi.useFakeTimers()
+  const { client, internals, transport } = setup()
+  await client.connect()
+  readyForSession(internals)
+  const socket = FakeWebSocket.instances[0]
+  socket.sent.length = 0
+  const fakeInvoke = vi.mocked(invoke).mockReset().mockResolvedValue('NotStarted')
+  const scheduler = new CompletionScheduler({
+    host: surface === 'web' ? transport : createTauriTerminalApi(),
+    createRequestId: () => completion.requestId,
+    settings: { automaticCompletionRefresh: false }
+  })
+
+  scheduler.requestCompletion({
+    ...completion,
+    terminalId: 'terminal-1',
+    sessionId: 'session-1',
+    mode: 'Editor',
+    phase: 'AtPrompt'
+  })
+
+  if (surface === 'web') {
+    expect(socket.sent).toHaveLength(1)
+    const frame = JSON.parse(socket.sent[0]) as { id: string; payload: unknown }
+    expect(frame.payload).toEqual({ terminalId: 'terminal-1', ...completion })
+    socket.reply(frame.id, 'NotStarted')
+  } else {
+    expect(fakeInvoke.mock.calls).toEqual([
+      ['command_editor_request_completion', { terminalId: 'terminal-1', request: completion }]
+    ])
+  }
 })

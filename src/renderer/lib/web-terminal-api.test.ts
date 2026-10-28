@@ -2839,3 +2839,70 @@ describe('ledgered terminal commands (AD-5)', () => {
     })
   })
 })
+
+it('late attach replay mounts the editor from lifecycle events', async () => {
+  const { WebTerminalClient: ReplayClient } = await import('./web-terminal-api')
+  const { sessionStore } = await import('./command-lifecycle/session-store')
+  const { useTerminalStore } = await import('@/stores/terminal-store')
+  const { mockTerminal } = await import('@/lib/test-utils/terminal')
+  const client = new ReplayClient(
+    'ws://test/terminal/ws',
+    FakeWebSocket as unknown as typeof WebSocket
+  )
+  useTerminalStore.getState().setTerminals([mockTerminal({ id: 'late-editor', ptyId: 'pty-late' })])
+  try {
+    await client.connect()
+    const socket = (client as unknown as ClientInternals).socket
+    socket.emit({
+      type: 'replay',
+      terminalId: 'pty-late',
+      chunks: [],
+      gap: false,
+      latestSeq: 5,
+      snapshot: mockTerminalStateSnapshot({ cwd: '/repo' })
+    })
+    const payload = {
+      type: 'session_lifecycle',
+      terminal_id: 'pty-late',
+      session_id: 's-late',
+      nonce: 'n-late',
+      exit_code: null
+    }
+    socket.emit({
+      type: 'event',
+      payload: {
+        ...payload,
+        kind: 'InitShell',
+        prompt_generation: null,
+        cwd: null,
+        line_empty: false,
+        prompt_suppressed: false
+      }
+    })
+    socket.emit({
+      type: 'event',
+      payload: {
+        ...payload,
+        kind: 'PromptReady',
+        prompt_generation: 4,
+        cwd: '/repo',
+        line_empty: true,
+        prompt_suppressed: true
+      }
+    })
+    await import('@/stores/terminal-store')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(sessionStore.read('late-editor')).toMatchObject({
+      mode: 'Editor',
+      sessionId: 's-late',
+      nonce: 'n-late',
+      promptGeneration: 4,
+      cwd: '/repo'
+    })
+  } finally {
+    client.dispose()
+    sessionStore.reset()
+    useTerminalStore.getState().setTerminals([])
+  }
+})

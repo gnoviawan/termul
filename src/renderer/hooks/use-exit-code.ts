@@ -1,20 +1,22 @@
 import { useEffect } from 'react'
 import { terminalApi } from '@/lib/api'
 import { useTerminalStore } from '@/stores/terminal-store'
+import { disposeExitCodeBuffer, exitCodeBuffer } from './exit-code-buffer'
 
 export function useExitCode(): void {
-  const updateTerminalExitCode = useTerminalStore((state) => state.updateTerminalExitCode)
-  const findTerminalByPtyId = useTerminalStore((state) => state.findTerminalByPtyId)
-
   useEffect(() => {
-    const cleanup = terminalApi.onExitCodeChanged((ptyId: string, exitCode: number) => {
-      // Look up terminal by ptyId and update using store id
-      const terminal = findTerminalByPtyId(ptyId)
-      if (terminal) {
-        updateTerminalExitCode(terminal.id, exitCode)
-      }
+    const store = useTerminalStore
+    exitCodeBuffer.connect(
+      (ptyId) => store.getState().findTerminalByPtyId(ptyId),
+      (id, exitCode) => store.getState().updateTerminalExitCode(id, exitCode),
+      (listener) => store.subscribe(listener)
+    )
+    const stop = terminalApi.onExitCodeChanged((ptyId: string, exitCode: number) => {
+      exitCodeBuffer.handle(ptyId, exitCode)
     })
-
-    return cleanup
-  }, [updateTerminalExitCode, findTerminalByPtyId])
+    return () => {
+      stop()
+      disposeExitCodeBuffer()
+    }
+  }, [])
 }

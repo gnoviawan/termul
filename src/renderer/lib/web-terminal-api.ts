@@ -35,6 +35,7 @@ import {
   createWebCommandEditorTransport,
   type WebSessionRequestContext
 } from './command-editor-transport'
+import { forwardSessionLifecycle } from './command-lifecycle/session-adapter'
 import { entityKeyOf, runIpcCommand } from './ipc/http'
 import { logFrontendError } from './log-api'
 import { recoverLostRotation } from './terminal-claim-recovery'
@@ -1224,6 +1225,10 @@ export class WebTerminalClient {
 
   private handleEvent(event: WebTerminalEventPayload): void {
     switch (event.type) {
+      case 'session_lifecycle': {
+        forwardSessionLifecycle(event)
+        break
+      }
       case 'exit':
         this.markExited(event.terminal_id)
         for (const callback of this.exitCallbacks)

@@ -14,10 +14,12 @@ import type {
   TerminalGitStatusChangedCallback,
   TerminalSpawnOptions
 } from '@shared/types/ipc.types'
+import type { SessionLifecyclePayload } from '@shared/types/web-terminal-protocol.types'
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invokeIpcCommand } from './acp-transport/tauri-verdicts'
 import { createTauriCommandEditorTransport } from './command-editor-transport'
+import { forwardSessionLifecycle } from './command-lifecycle/session-adapter'
 import { entityKeyOf } from './ipc/http'
 import { invokeIpc } from './ipc/tauri'
 import { logFrontendError } from './log-api'
@@ -34,12 +36,14 @@ const IPC_EVENTS = {
   TERMINAL_DATA: 'terminal-data',
   TERMINAL_EXIT: 'terminal-exit',
   TERMINAL_CWD_CHANGED: 'terminal-cwd-changed',
+  TERMINAL_SESSION_LIFECYCLE: 'terminal-session-lifecycle',
   TERMINAL_GIT_BRANCH_CHANGED: 'terminal-git-branch-changed',
   TERMINAL_GIT_STATUS_CHANGED: 'terminal-git-status-changed',
   TERMINAL_EXIT_CODE_CHANGED: 'terminal-exit-code-changed'
 } as const
 
 type EventPayloadMap = {
+  [IPC_EVENTS.TERMINAL_SESSION_LIFECYCLE]: SessionLifecyclePayload
   [IPC_EVENTS.TERMINAL_DATA]: { id: string; data: string }
   [IPC_EVENTS.TERMINAL_EXIT]: { id: string; exitCode: number | null; signal: number | null }
   [IPC_EVENTS.TERMINAL_CWD_CHANGED]: { terminalId: string; cwd: string }
@@ -592,13 +596,24 @@ export function createTauriTerminalApi(): TerminalApi {
      * Returns cleanup function (UnlistenFn)
      */
     onCwdChanged(callback: TerminalCwdChangedCallback): () => void {
-      return subscribeSharedEvent(
+      const stopLifecycle = subscribeSharedEvent(
+        IPC_EVENTS.TERMINAL_SESSION_LIFECYCLE,
+        (event) => {
+          forwardSessionLifecycle(event)
+        },
+        'terminal-session-lifecycle'
+      )
+      const stopCwd = subscribeSharedEvent(
         IPC_EVENTS.TERMINAL_CWD_CHANGED,
         (payload) => {
           callback(payload.terminalId, payload.cwd)
         },
         'terminal-cwd-changed'
       )
+      return () => {
+        stopLifecycle()
+        stopCwd()
+      }
     },
 
     /**
