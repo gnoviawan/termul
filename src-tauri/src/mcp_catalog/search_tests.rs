@@ -125,12 +125,55 @@ fn exact_names_rank_first_then_prefixes_then_name_title_and_description_substrin
         [
             "io.example/github",
             "io.example/beta",
-            "io.github.someone/gamma",
-            "io.example/alpha"
+            "io.example/alpha",
+            "io.github.someone/gamma"
         ]
     );
     assert_eq!(names(&catalog, "github bridge"), ["io.example/beta"]);
+    assert_eq!(names(&catalog, "io.example/alpha"), ["io.example/alpha"]);
     assert_eq!(names(&catalog, "").len(), 5);
+}
+
+#[test]
+fn title_and_description_hits_outrank_namespace_only_hits() {
+    let catalog = catalog(vec![
+        row("io.github.aaa/one", None, "a server", "active"),
+        row("io.github.bbb/two", None, "a server", "active"),
+        row("io.example/zulu", Some("GitHub Issues"), "a server", "active"),
+        row("io.example/yankee", None, "reads github issues", "active"),
+    ]);
+    assert_eq!(
+        names(&catalog, "github"),
+        [
+            "io.example/zulu",
+            "io.example/yankee",
+            "io.github.aaa/one",
+            "io.github.bbb/two"
+        ]
+    );
+}
+
+#[test]
+fn whole_word_hits_outrank_substring_hits_in_each_field() {
+    let catalog = catalog(vec![
+        row("io.git.example/umber", None, "a server", "active"),
+        row("io.example/violet", None, "legitimate tools", "active"),
+        row("io.example/whale", None, "works with git", "active"),
+        row("io.example/xray", Some("Digital Toolkit"), "a server", "active"),
+        row("io.example/yak", Some("Tools for git"), "a server", "active"),
+        row("io.example/zeta", Some("Git Tools"), "a server", "active"),
+    ]);
+    assert_eq!(
+        names(&catalog, "git"),
+        [
+            "io.example/zeta",
+            "io.example/yak",
+            "io.example/xray",
+            "io.example/whale",
+            "io.example/violet",
+            "io.git.example/umber"
+        ]
+    );
 }
 
 #[test]

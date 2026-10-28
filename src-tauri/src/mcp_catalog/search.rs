@@ -155,44 +155,76 @@ pub(crate) fn item_status(
     }
 }
 
-fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+/// How well a term matched one field, worst first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Hit {
+    Substring,
+    WholeWord,
+    Prefix,
+    Exact,
 }
 
-fn starts_with_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
-    haystack
-        .as_bytes()
-        .get(..needle.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(needle.as_bytes()))
+/// Points per [`Hit`], indexed by its rank. A term in a server's own name or
+/// title outranks one in its description, and both outrank a hit only in the
+/// registry namespace (`io.github.*` alone matches most of the catalog).
+const NAME_OR_TITLE_POINTS: [u32; 4] = [40, 70, 80, 100];
+const DESCRIPTION_POINTS: [u32; 4] = [10, 30, 30, 30];
+const NAMESPACE_POINTS: u32 = 5;
+const FULL_NAME_POINTS: u32 = 100;
+
+fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
 }
 
-/// Every term must match the name, title or description. Per term, an exact
-/// name scores highest, then a name or title prefix, then a substring of the
-/// name, the title and the description, in that order.
+/// The best place `term` occurs in `field`, ignoring ASCII case.
+fn hit(field: &str, term: &str) -> Option<Hit> {
+    let (field, term) = (field.as_bytes(), term.as_bytes());
+    if term.is_empty() || term.len() > field.len() {
+        return None;
+    }
+    if field.eq_ignore_ascii_case(term) {
+        return Some(Hit::Exact);
+    }
+    (0..=field.len() - term.len())
+        .filter(|&start| field[start..start + term.len()].eq_ignore_ascii_case(term))
+        .map(|start| {
+            let end = start + term.len();
+            if start == 0 {
+                Hit::Prefix
+            } else if !is_word_byte(field[start - 1])
+                && field.get(end).is_none_or(|byte| !is_word_byte(*byte))
+            {
+                Hit::WholeWord
+            } else {
+                Hit::Substring
+            }
+        })
+        .max()
+}
+
+fn term_points(item: &CatalogItem, short_name: &str, title: &str, term: &str) -> Option<u32> {
+    let points = |field: &str, table: &[u32; 4]| hit(field, term).map(|hit| table[hit as usize]);
+    [
+        item.name
+            .eq_ignore_ascii_case(term)
+            .then_some(FULL_NAME_POINTS),
+        points(short_name, &NAME_OR_TITLE_POINTS),
+        points(title, &NAME_OR_TITLE_POINTS),
+        points(&item.description, &DESCRIPTION_POINTS),
+        hit(&item.name, term).map(|_| NAMESPACE_POINTS),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+/// Every term must match the name, title or description; the item scores the
+/// sum of each term's best hit.
 fn score(item: &CatalogItem, terms: &[String]) -> Option<u32> {
     let short_name = item.name.rsplit('/').next().unwrap_or(&item.name);
     let title = item.title.as_deref().unwrap_or("");
     terms.iter().try_fold(0, |total, term| {
-        let term_score =
-            if item.name.eq_ignore_ascii_case(term) || short_name.eq_ignore_ascii_case(term) {
-                100
-            } else if starts_with_ignore_ascii_case(short_name, term)
-                || starts_with_ignore_ascii_case(title, term)
-            {
-                60
-            } else if contains_ignore_ascii_case(&item.name, term) {
-                40
-            } else if contains_ignore_ascii_case(title, term) {
-                30
-            } else if contains_ignore_ascii_case(&item.description, term) {
-                10
-            } else {
-                return None;
-            };
-        Some(total + term_score)
+        Some(total + term_points(item, short_name, title, term)?)
     })
 }
 

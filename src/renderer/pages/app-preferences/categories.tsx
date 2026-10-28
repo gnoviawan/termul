@@ -310,8 +310,19 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     categoryId: 'mcp-servers',
     label: 'MCP servers',
-    description: 'Manage global stdio, HTTP, and SSE servers for new agent sessions.',
-    keywords: ['mcp', 'model context protocol', 'stdio', 'http', 'sse']
+    description: 'Manage global stdio, HTTP, and SSE servers, or browse the MCP catalog.',
+    keywords: [
+      'mcp',
+      'model context protocol',
+      'stdio',
+      'http',
+      'sse',
+      'catalog',
+      'registry',
+      'browse',
+      'discover',
+      'marketplace'
+    ]
   },
   {
     categoryId: 'browser',
