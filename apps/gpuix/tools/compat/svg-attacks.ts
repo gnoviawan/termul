@@ -46,6 +46,20 @@ export const SVG_ATTACKS: SvgAttack[] = [
   { id: 'depth-65', markup: svg(nest(63, '<path d="M0 0h1v1z"/>')), expect: 'reject' },
   { id: 'depth-64', markup: svg(nest(62, '<path d="M0 0h24v24z"/>')), expect: 'render' },
   {
+    // The deepest document zed/0010 lets reach roxmltree and usvg: must decode on a 2 MiB stack.
+    id: 'depth-native-255',
+    markup: svg(nest(254, '<path fill="#f00" opacity="0.5" d="M0 0h24v24z"/>')),
+    expect: 'reject'
+  },
+  {
+    // Flat XML whose `<use>` hops recurse in usvg after roxmltree: 2 levels per hop up to usvg's 1024.
+    id: 'use-chain',
+    markup: svg(
+      `<defs><path id="u0" fill="#f00" d="M0 0h24v24z"/>${repeat(1000, (i) => `<use id="u${i + 1}" href="#u${i}"/>`)}</defs><use href="#u1000"/>`
+    ),
+    expect: 'render'
+  },
+  {
     id: 'fe-turbulence',
     markup: svg(
       '<filter id="f"><feTurbulence baseFrequency="0.5" numOctaves="100000"/></filter><rect width="24" height="24" filter="url(#f)"/>'
