@@ -1,5 +1,6 @@
 // IPC Result pattern from architecture.md
 import type { AcpCatalog } from './acp-catalog.types'
+import type { CompletionResult, SessionRpcResult } from './command-session'
 
 // ============================================================================
 // Domain-command carriers (AD-5): `X-Command-Id` header of the ledgered HTTP
@@ -403,6 +404,14 @@ export interface GitApi {
 }
 
 // Terminal API exposed via preload
+export type CompletionReplyFields = Omit<CompletionResult, 'session_id' | 'nonce'>
+export type CompletionOutcome = 'Completed' | 'TimedOut' | 'Cancelled' | 'Dropped'
+export type CompletionRpcReply = {
+  result: SessionRpcResult
+  outcome?: CompletionOutcome
+  completion?: CompletionReplyFields
+}
+
 export interface TerminalApi {
   spawn: (options?: TerminalSpawnOptions) => Promise<IpcResult<SpawnedTerminal>>
   /**
@@ -424,6 +433,24 @@ export interface TerminalApi {
   /** CAP-3: revoke the credential; the PTY keeps running. */
   revokeClaim: (terminalId: string, claim: string) => Promise<IpcResult<void>>
   write: (terminalId: string, data: string) => Promise<IpcResult<void>>
+  /** Session RPC. Not the keystroke `write` path. */
+  submitCommand: (terminalId: string, draft: string) => Promise<SessionRpcResult>
+  /** Session RPC. Not the keystroke `write` path. */
+  requestCompletion: (
+    terminalId: string,
+    request: {
+      requestId: string
+      draft: string
+      bufferRevision: number
+      cursor: number
+      promptGeneration: number
+      cwd: string
+    }
+  ) => Promise<CompletionRpcReply>
+  /** Session RPC. Not the keystroke `write` path. */
+  cancelCompletion: (terminalId: string, requestId: string) => Promise<SessionRpcResult>
+  /** Session RPC. Restores the shell prompt without the draft. Not `write`. */
+  restorePrompt: (terminalId: string) => Promise<SessionRpcResult>
   resize: (terminalId: string, cols: number, rows: number) => Promise<IpcResult<void>>
   kill: (terminalId: string) => Promise<IpcResult<void>>
   onData: (callback: TerminalDataCallback) => () => void

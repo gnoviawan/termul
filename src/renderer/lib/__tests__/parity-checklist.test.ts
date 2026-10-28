@@ -1710,6 +1710,42 @@ describe('Parity Checklist Automation', () => {
       expect(readFileSync(index, 'utf-8')).toMatch(/canvasTabId/)
     })
   })
+
+  describe('session RPC parity', () => {
+    it('parity checklist names both adapters', () => {
+      for (const adapter of ['tauri-terminal-api.ts', 'web-terminal-api.ts']) {
+        const content = readFileSync(join(LIB_DIR, adapter), 'utf-8')
+        for (const method of ['submitCommand', 'requestCompletion', 'cancelCompletion']) {
+          expect(content, `${adapter} should expose ${method}`).toMatch(
+            new RegExp(`\\b${method}\\s*(?::|\\()`)
+          )
+        }
+      }
+
+      const transport = readFileSync(join(LIB_DIR, 'command-editor-transport.ts'), 'utf-8')
+      for (const rpc of [
+        'command_editor_submit',
+        'command_editor_request_completion',
+        'command_editor_cancel_completion',
+        'command_editor_restore_prompt'
+      ]) {
+        expect(transport).toContain(`'${rpc}'`)
+      }
+      expect(transport).not.toContain('terminal_write')
+    })
+
+    it('restorePrompt parity', () => {
+      for (const adapter of ['tauri-terminal-api.ts', 'web-terminal-api.ts']) {
+        expect(
+          fileContains(adapter, /\brestorePrompt\s*(?::|\()/),
+          `${adapter} should expose restorePrompt`
+        ).toBe(true)
+      }
+
+      const transport = readFileSync(join(LIB_DIR, 'command-editor-transport.ts'), 'utf-8')
+      expect(transport).toContain("'command_editor_restore_prompt'")
+    })
+  })
 })
 
 // #856 (web explorer live refresh): the FS-change push must land on BOTH

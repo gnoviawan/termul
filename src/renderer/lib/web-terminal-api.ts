@@ -31,6 +31,10 @@ import {
   jitteredBackoffMs,
   RECONNECT_STABLE_MS
 } from './acp-transport/ws-transport-timing'
+import {
+  createWebCommandEditorTransport,
+  type WebSessionRequestContext
+} from './command-editor-transport'
 import { entityKeyOf, runIpcCommand } from './ipc/http'
 import { logFrontendError } from './log-api'
 import { recoverLostRotation } from './terminal-claim-recovery'
@@ -330,6 +334,18 @@ export class WebTerminalClient {
       })
       socket.send(JSON.stringify({ id, type, payload, ...(commandId ? { commandId } : {}) }))
     })
+  }
+
+  /** Expose the live connection and shared correlation state for session RPCs. */
+  getSessionRequest(): WebSessionRequestContext | null {
+    const socket = this.socket
+    if (this.disposed || !socket || socket.readyState !== this.WebSocketImpl.OPEN) return null
+    return {
+      socket,
+      id: `terminal-${++this.nextId}`,
+      pending: this.pending,
+      timeoutMs: REQUEST_TIMEOUT_MS
+    }
   }
 
   connect(): Promise<void> {
@@ -1403,6 +1419,7 @@ function killTerminal(terminalId: string): Promise<IpcResult<void>> {
 }
 
 export function createWebTerminalApi(): TerminalApi {
+  const commandEditor = createWebCommandEditorTransport(client)
   return {
     async spawn(options: TerminalSpawnOptions = {}): Promise<IpcResult<SpawnedTerminal>> {
       // One id per spawn intent, minted + journaled here (every call site goes
@@ -1483,6 +1500,12 @@ export function createWebTerminalApi(): TerminalApi {
     // `/terminal/ws` is down, input for live claim-held terminals is buffered
     // (bounded) and replayed after re-attach instead of failing.
     write: (terminalId, data) => client.write(terminalId, data),
+    submitCommand: (terminalId, draft) => commandEditor.submitCommand(terminalId, draft),
+    requestCompletion: (terminalId, request) =>
+      commandEditor.requestCompletion(terminalId, request),
+    cancelCompletion: (terminalId, requestId) =>
+      commandEditor.cancelCompletion(terminalId, requestId),
+    restorePrompt: (terminalId) => commandEditor.restorePrompt(terminalId),
     resize: (terminalId, cols, rows) => client.request('resize', { terminalId, cols, rows }),
     async kill(terminalId): Promise<IpcResult<void>> {
       const result = await trackTerminalKill(terminalId, () => killTerminal(terminalId))
