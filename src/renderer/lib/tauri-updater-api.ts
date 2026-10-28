@@ -9,7 +9,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { relaunch } from '@tauri-apps/plugin-process'
-import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
+import { check, type DownloadEvent, Update } from '@tauri-apps/plugin-updater'
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
@@ -25,9 +25,11 @@ const AUR_UPDATE_CHECK_TIMEOUT_MS = 8000
  * Release channel selection for the desktop updater. The persisted preference
  * selects which per-channel manifest the facade consults. Stable reuses the
  * signed `@tauri-apps/plugin-updater` `check()` flow (the plugin's endpoint
- * resolves to the stable manifest alias); Insider/Nightly fetch their manifest
- * JSON directly and offer the update via manual download, because the Tauri
- * updater plugin cannot take a runtime endpoint URL from the renderer.
+ * resolves to the stable manifest alias). Nightly runs the same signed
+ * download/install flow against its own manifest through the
+ * `updater_check_channel` command, because the plugin's JS `check()` cannot
+ * take a runtime endpoint (the Rust `updater_builder().endpoints()` can).
+ * Insider fetches its manifest JSON directly and offers a manual download.
  */
 export type UpdateChannel = 'stable' | 'insider' | 'nightly'
 
@@ -54,6 +56,15 @@ export function getChannelManifestUrl(channel: UpdateChannel): string {
 
 export function getChannelReleasePageUrl(channel: UpdateChannel): string {
   return CHANNEL_RELEASE_PAGE_URLS[channel]
+}
+
+// Channels whose manifest is checked and installed in-app through the signed
+// updater flow. Must match `signed_channel_endpoint` in
+// src-tauri/src/updater_api.rs.
+const SIGNED_CHANNELS: ReadonlySet<UpdateChannel> = new Set<UpdateChannel>(['nightly'])
+
+export function supportsSignedChannelUpdate(channel: UpdateChannel): boolean {
+  return SIGNED_CHANNELS.has(channel)
 }
 
 export function normalizeUpdateChannel(value: string | null | undefined): UpdateChannel {
@@ -436,6 +447,50 @@ async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | 
   return updateInfo
 }
 
+/**
+ * Store a signed plugin `Update` (or its absence) as the pending update. The
+ * already-downloaded instance (and its in-memory bytes) survives a periodic
+ * re-check that returns the same version; otherwise it is dropped so a newer
+ * version is re-downloaded before install.
+ */
+function adoptSignedUpdate(update: Update | null): UpdateInfo | null {
+  pendingTauriUpdate = update
+  isManualUpdateMode = false
+  manualUpdateInfo = null
+  downloadedVersion = update && downloadedVersion === update.version ? downloadedVersion : null
+  downloadedUpdate =
+    update && downloadedUpdate && downloadedUpdate.version === update.version
+      ? downloadedUpdate
+      : null
+  preparedUpdateVersion =
+    update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
+  lastCheckedAt = new Date().toISOString()
+  return update ? mapTauriUpdateToInfo(update) : null
+}
+
+type SignedUpdateMetadata = ConstructorParameters<typeof Update>[0]
+
+/**
+ * Signed in-app check for a non-stable channel. The Rust command runs the
+ * updater plugin against the channel's own manifest (same pubkey) and
+ * registers the plugin `Update` resource, so download/install/relaunch reuse
+ * the exact stable path. Any check failure (missing or invalid manifest, no
+ * entry for this platform) falls back to the manual release-page flow.
+ */
+async function checkSignedChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | null> {
+  let metadata: SignedUpdateMetadata | null
+  try {
+    metadata = await invoke<SignedUpdateMetadata | null>('updater_check_channel', { channel })
+  } catch (error) {
+    console.warn(
+      `[updater] signed ${channel} check failed, falling back to manual download:`,
+      getErrorMessage(error, 'Unknown updater error')
+    )
+    return checkChannelUpdate(channel)
+  }
+  return adoptSignedUpdate(metadata ? new Update(metadata) : null)
+}
+
 export async function checkForUpdates(
   channel: UpdateChannel = DEFAULT_UPDATE_CHANNEL
 ): Promise<UpdateInfo | null> {
@@ -453,32 +508,18 @@ export async function checkForUpdates(
     }
   }
 
-  // Insider / Nightly consult their per-channel manifest and offer manual
-  // download (the signed `check()` flow is stable-only by plugin limitation).
+  // Nightly: signed in-app check against its own manifest; Insider: manual.
   if (channel !== DEFAULT_UPDATE_CHANNEL) {
-    return checkChannelUpdate(channel)
+    return supportsSignedChannelUpdate(channel)
+      ? checkSignedChannelUpdate(channel)
+      : checkChannelUpdate(channel)
   }
 
   // Stable: reuse the signed `@tauri-apps/plugin-updater` `check()` flow so the
   // existing signed download/install path and its backward compatibility are
   // preserved (the plugin endpoint resolves to the stable manifest alias).
   try {
-    const update = await check()
-    pendingTauriUpdate = update
-    isManualUpdateMode = false
-    manualUpdateInfo = null
-    downloadedVersion = update && downloadedVersion === update.version ? downloadedVersion : null
-    // Preserve the already-downloaded Update instance (and its in-memory bytes)
-    // when a periodic re-check returns the same version; otherwise drop it so a
-    // newer version is re-downloaded before install.
-    downloadedUpdate =
-      update && downloadedUpdate && downloadedUpdate.version === update.version
-        ? downloadedUpdate
-        : null
-    preparedUpdateVersion =
-      update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
-    lastCheckedAt = new Date().toISOString()
-    return update ? mapTauriUpdateToInfo(update) : null
+    return adoptSignedUpdate(await check())
   } catch (error) {
     lastCheckedAt = new Date().toISOString()
 

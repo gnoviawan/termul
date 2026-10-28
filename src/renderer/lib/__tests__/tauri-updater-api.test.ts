@@ -5,9 +5,41 @@ vi.mock('@tauri-apps/api/app', () => ({
   getVersion: vi.fn()
 }))
 
+const { mockInvoke, constructedUpdates } = vi.hoisted(() => ({
+  mockInvoke: vi.fn(),
+  constructedUpdates: [] as Array<{
+    rid: number
+    version: string
+    body?: string
+    date?: string
+    download: ReturnType<typeof vi.fn>
+    install: ReturnType<typeof vi.fn>
+  }>
+}))
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: mockInvoke
+}))
+
 vi.mock('@tauri-apps/plugin-updater', () => ({
   check: vi.fn(),
-  Update: class {}
+  // Mirrors the plugin's `new Update(metadata)` constructor so the signed
+  // channel path can be asserted without a Tauri runtime.
+  Update: class {
+    rid: number
+    version: string
+    body?: string
+    date?: string
+    download = vi.fn()
+    install = vi.fn()
+    constructor(metadata: { rid: number; version: string; body?: string; date?: string }) {
+      this.rid = metadata.rid
+      this.version = metadata.version
+      this.body = metadata.body
+      this.date = metadata.date
+      constructedUpdates.push(this)
+    }
+  }
 }))
 
 vi.mock('@tauri-apps/plugin-process', () => ({
@@ -47,7 +79,8 @@ import {
   isUpdateAvailable,
   mapTauriUpdateToInfo,
   registerUpdateEventHandlers,
-  setAutoUpdateEnabled
+  setAutoUpdateEnabled,
+  supportsSignedChannelUpdate
 } from '../tauri-updater-api'
 
 function createMockUpdate(version: string, body?: string, date?: string) {
@@ -100,6 +133,128 @@ describe('tauri-updater-api', () => {
     } as never)
     mockFetch.mockReset()
     vi.stubGlobal('fetch', mockFetch)
+    mockInvoke.mockReset()
+    constructedUpdates.length = 0
+  })
+
+  describe('signed channel updates (nightly)', () => {
+    const NIGHTLY_METADATA = {
+      rid: 42,
+      currentVersion: '0.5.0-nightly.20261027.aaaaaaa',
+      version: '0.5.0-nightly.20261028.bbbbbbb',
+      date: '2026-10-27T17:46:13Z',
+      body: 'nightly notes',
+      rawJson: {}
+    }
+
+    function routeInvoke(handlers: Record<string, () => unknown>): void {
+      mockInvoke.mockImplementation(async (command: string) => {
+        const handler = handlers[command]
+        if (!handler) throw new Error(`unexpected invoke: ${command}`)
+        return handler()
+      })
+    }
+
+    it('only nightly uses the signed in-app channel flow', () => {
+      expect(supportsSignedChannelUpdate('nightly')).toBe(true)
+      expect(supportsSignedChannelUpdate('insider')).toBe(false)
+      expect(supportsSignedChannelUpdate('stable')).toBe(false)
+    })
+
+    it('checks nightly through the signed channel command, not the stable endpoint', async () => {
+      routeInvoke({ updater_check_channel: () => NIGHTLY_METADATA })
+
+      const result = await checkForUpdates('nightly')
+
+      expect(mockInvoke).toHaveBeenCalledWith('updater_check_channel', { channel: 'nightly' })
+      expect(mockInvoke).not.toHaveBeenCalledWith(
+        'updater_fetch_channel_manifest',
+        expect.anything()
+      )
+      expect(check).not.toHaveBeenCalled()
+      expect(result).toEqual({
+        version: '0.5.0-nightly.20261028.bbbbbbb',
+        releaseDate: '2026-10-27T17:46:13Z',
+        releaseNotes: 'nightly notes',
+        isSecurityUpdate: false
+      })
+      expect(constructedUpdates).toHaveLength(1)
+      expect(constructedUpdates[0]?.rid).toBe(42)
+
+      const state = await getUpdaterState()
+      expect(state.success && state.data.isManualUpdateMode).toBe(false)
+      expect(state.success && state.data.updateAvailable).toBe(true)
+    })
+
+    it('downloads, installs and relaunches a nightly update in-app', async () => {
+      routeInvoke({ updater_check_channel: () => NIGHTLY_METADATA })
+      vi.mocked(getVersion).mockResolvedValue('0.5.0-nightly.20261027.aaaaaaa')
+
+      await checkForUpdates('nightly')
+      const download = await downloadUpdate()
+      expect(download.success).toBe(true)
+      expect(constructedUpdates[0]?.download).toHaveBeenCalledTimes(1)
+
+      const install = await installAndRestart()
+      expect(install.success).toBe(true)
+      expect(constructedUpdates[0]?.install).toHaveBeenCalledTimes(1)
+      expect(relaunch).toHaveBeenCalledTimes(1)
+    })
+
+    it('reports up to date when the signed nightly check finds nothing newer', async () => {
+      routeInvoke({ updater_check_channel: () => null })
+
+      await expect(checkForUpdates('nightly')).resolves.toBeNull()
+      expect(mockInvoke).not.toHaveBeenCalledWith(
+        'updater_fetch_channel_manifest',
+        expect.anything()
+      )
+      const state = await getUpdaterState()
+      expect(state.success && state.data.updateAvailable).toBe(false)
+      expect(state.success && state.data.isManualUpdateMode).toBe(false)
+    })
+
+    it('falls back to the manual nightly release page when the signed check fails', async () => {
+      routeInvoke({
+        updater_check_channel: () => {
+          throw new Error('the platform `darwin-aarch64` was not found on the response')
+        },
+        updater_fetch_channel_manifest: () => ({
+          success: true,
+          data: { version: '0.5.0-nightly.20261028.bbbbbbb', notes: 'n', platforms: {} }
+        })
+      })
+      vi.mocked(getVersion).mockResolvedValue('0.5.0-nightly.20261027.aaaaaaa')
+
+      const result = await checkForUpdates('nightly')
+
+      expect(result?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/nightly')
+      const state = await getUpdaterState()
+      expect(state.success && state.data.isManualUpdateMode).toBe(true)
+    })
+
+    it('keeps insider on the manual manifest path', async () => {
+      routeInvoke({
+        updater_fetch_channel_manifest: () => ({
+          success: true,
+          data: { version: '0.6.0-rc.1', platforms: {} }
+        })
+      })
+
+      const result = await checkForUpdates('insider')
+
+      expect(mockInvoke).not.toHaveBeenCalledWith('updater_check_channel', expect.anything())
+      expect(result?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/insider')
+    })
+
+    it('keeps stable on the built-in signed endpoint and never asks for the nightly channel', async () => {
+      vi.mocked(check).mockResolvedValue(null)
+
+      await checkForUpdates('stable')
+
+      expect(check).toHaveBeenCalledTimes(1)
+      expect(mockInvoke).not.toHaveBeenCalledWith('updater_check_channel', expect.anything())
+    })
   })
 
   describe('checkForUpdates', () => {

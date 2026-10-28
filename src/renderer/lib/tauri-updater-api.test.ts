@@ -128,33 +128,35 @@ describe('channel URL selection', () => {
 })
 
 describe('fetchChannelManifest via invoke (CSP/CORS-free server-side fetch)', () => {
+  // Insider is the manual-download channel; nightly's signed path and its
+  // manual fallback are covered in __tests__/tauri-updater-api.test.ts.
   beforeEach(() => {
     mockInvoke.mockReset()
     mockGetVersion.mockReset()
     _resetUpdaterStateForTesting()
   })
 
-  it('routes the nightly manifest fetch through updater_fetch_channel_manifest', async () => {
+  it('routes the insider manifest fetch through updater_fetch_channel_manifest', async () => {
     mockInvoke.mockResolvedValue({
       success: true,
       data: {
         version: '0.9.0',
-        notes: 'nightly build',
+        notes: 'insider build',
         pub_date: '2026-08-09T00:00:00Z',
         platforms: {}
       }
     })
     mockGetVersion.mockResolvedValue('0.4.8')
 
-    const update = await checkForUpdates('nightly')
+    const update = await checkForUpdates('insider')
 
     expect(mockInvoke).toHaveBeenCalledWith('updater_fetch_channel_manifest', {
-      channel: 'nightly'
+      channel: 'insider'
     })
     expect(update).not.toBeNull()
     expect(update?.version).toBe('0.9.0')
-    expect(update?.releaseNotes).toBe('nightly build')
-    expect(update?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/nightly')
+    expect(update?.releaseNotes).toBe('insider build')
+    expect(update?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/insider')
   })
 
   it('surfaces an IpcResult error as createUpdaterCheckError naming the manifest URL', async () => {
@@ -164,16 +166,16 @@ describe('fetchChannelManifest via invoke (CSP/CORS-free server-side fetch)', ()
       code: 'UPDATE_CHECK_FAILED'
     })
 
-    await expect(checkForUpdates('nightly')).rejects.toThrow(
-      'Failed to check for updates from https://github.com/gnoviawan/termul/releases/download/nightly/latest-nightly.json: channel manifest returned HTTP 404'
+    await expect(checkForUpdates('insider')).rejects.toThrow(
+      'Failed to check for updates from https://github.com/gnoviawan/termul/releases/download/insider/latest-insider.json: channel manifest returned HTTP 404'
     )
   })
 
   it('surfaces an invoke rejection as createUpdaterCheckError naming the manifest URL', async () => {
     mockInvoke.mockRejectedValue(new Error('network down'))
 
-    await expect(checkForUpdates('nightly')).rejects.toThrow(
-      'Failed to check for updates from https://github.com/gnoviawan/termul/releases/download/nightly/latest-nightly.json: network down'
+    await expect(checkForUpdates('insider')).rejects.toThrow(
+      'Failed to check for updates from https://github.com/gnoviawan/termul/releases/download/insider/latest-insider.json: network down'
     )
   })
 })

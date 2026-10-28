@@ -33,3 +33,81 @@ fn channel_manifest_urls_match_server_update() {
         "https://github.com/gnoviawan/termul/releases/download/nightly/latest-nightly.json"
     );
 }
+
+/// Only Nightly is served by the signed in-app channel check; Stable keeps the
+/// build-time `plugins.updater.endpoints` and Insider stays manual.
+#[test]
+fn signed_channel_endpoint_is_nightly_only() {
+    assert_eq!(
+        signed_channel_endpoint(UpdateChannel::Nightly),
+        Some(UpdateChannel::Nightly.manifest_url())
+    );
+    assert_eq!(signed_channel_endpoint(UpdateChannel::Stable), None);
+    assert_eq!(signed_channel_endpoint(UpdateChannel::Insider), None);
+}
+
+#[test]
+fn resolve_signed_channel_rejects_unsupported_channels_without_network() {
+    assert_eq!(
+        resolve_signed_channel("nightly"),
+        Ok(UpdateChannel::Nightly)
+    );
+    let insider = resolve_signed_channel("insider").expect_err("insider is manual");
+    assert!(
+        insider.contains("does not support in-app updates"),
+        "{insider}"
+    );
+    let stable = resolve_signed_channel("stable").expect_err("stable uses check()");
+    assert!(
+        stable.contains("does not support in-app updates"),
+        "{stable}"
+    );
+    let bogus = resolve_signed_channel("bogus").expect_err("bogus channel");
+    assert!(bogus.contains("unknown update channel"), "{bogus}");
+}
+
+fn v(s: &str) -> semver::Version {
+    semver::Version::parse(s).expect("valid semver")
+}
+
+#[test]
+fn nightly_channel_accepts_only_newer_nightly_builds() {
+    let current = v("0.5.0-nightly.20261027.aaaaaaa");
+    let accepts =
+        |remote: &str| accepts_channel_update(UpdateChannel::Nightly, &current, &v(remote));
+
+    assert!(accepts("0.5.0-nightly.20261028.bbbbbbb"));
+    assert!(accepts("0.6.0-nightly.20261101.ccccccc"));
+    assert!(!accepts("0.5.0-nightly.20261027.aaaaaaa"), "same build");
+    assert!(!accepts("0.5.0-nightly.20261020.ddddddd"), "older nightly");
+    assert!(!accepts("0.5.0"), "stable build in the nightly manifest");
+    assert!(
+        !accepts("0.6.0-rc.1"),
+        "insider build in the nightly manifest"
+    );
+}
+
+#[test]
+fn stable_user_switching_to_nightly_gets_the_nightly() {
+    assert!(accepts_channel_update(
+        UpdateChannel::Nightly,
+        &v("0.4.52"),
+        &v("0.5.0-nightly.20261028.bbbbbbb")
+    ));
+}
+
+#[test]
+fn non_nightly_channels_never_accept_signed_channel_updates() {
+    let current = v("0.4.52");
+    let remote = v("0.5.0-nightly.20261028.bbbbbbb");
+    assert!(!accepts_channel_update(
+        UpdateChannel::Stable,
+        &current,
+        &remote
+    ));
+    assert!(!accepts_channel_update(
+        UpdateChannel::Insider,
+        &current,
+        &remote
+    ));
+}
