@@ -18,7 +18,8 @@ vi.mock('@/lib/tauri-updater-api', async () => {
     setAutoUpdateEnabled: vi.fn(),
     getAutoUpdateEnabled: vi.fn(),
     registerUpdateEventHandlers: vi.fn(() => () => {}),
-    clearPendingUpdate: vi.fn()
+    clearPendingUpdate: vi.fn(),
+    isUpdateDownloaded: vi.fn(() => false)
   }
 })
 
@@ -273,6 +274,56 @@ describe('updater-store', () => {
 
       expect(useUpdaterStore.getState().updateAvailable).toBe(true)
       expect(useUpdaterStore.getState().isManualUpdateMode).toBe(true)
+    })
+
+    // N2: a periodic re-check after the download must not orphan the
+    // "ready to install" toast. The facade keeps the downloaded package for the
+    // same version, so the store keeps reporting it as downloaded.
+    it('keeps a downloaded update ready when a re-check finds the same version', async () => {
+      const version = '0.5.0-nightly.20261028.101.bbbbbbb'
+      useUpdaterStore.setState({
+        updateChannel: 'nightly',
+        updateAvailable: true,
+        version,
+        downloaded: true,
+        downloadProgress: 100
+      })
+      vi.mocked(tauriUpdaterApi.isUpdateDownloaded).mockReturnValue(true)
+      vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue({
+        version,
+        isSecurityUpdate: false,
+        installMode: 'in-app'
+      })
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      const state = useUpdaterStore.getState()
+      expect(tauriUpdaterApi.isUpdateDownloaded).toHaveBeenCalledWith(version)
+      expect(state.downloaded).toBe(true)
+      expect(state.downloadProgress).toBe(100)
+    })
+
+    it('drops the downloaded state when a re-check finds a newer version', async () => {
+      useUpdaterStore.setState({
+        updateChannel: 'nightly',
+        updateAvailable: true,
+        version: '0.5.0-nightly.20261028.101.bbbbbbb',
+        downloaded: true,
+        downloadProgress: 100
+      })
+      vi.mocked(tauriUpdaterApi.isUpdateDownloaded).mockReturnValue(false)
+      vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue({
+        version: '0.5.0-nightly.20261029.102.ccccccc',
+        isSecurityUpdate: false,
+        installMode: 'in-app'
+      })
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      const state = useUpdaterStore.getState()
+      expect(state.version).toBe('0.5.0-nightly.20261029.102.ccccccc')
+      expect(state.downloaded).toBe(false)
+      expect(state.downloadProgress).toBe(0)
     })
 
     it('leaves the manual mode once no update is available', async () => {
@@ -540,6 +591,28 @@ describe('updater-store', () => {
       expect(state.updateAvailable).toBe(false)
       expect(state.version).toBeNull()
       // No re-check when auto-update is off (the preference still persisted).
+      expect(tauriUpdaterApi.checkForUpdates).not.toHaveBeenCalled()
+    })
+  })
+
+  // N3a / CodeRabbit r4397481512: the manual flag belongs to the previous
+  // channel's check. Nightly defaults to signed in-app updates; a check that
+  // falls back sets manual again.
+  describe('channel switch resets the update mode', () => {
+    it('clears the manual flag when switching channel with auto-update off', async () => {
+      useUpdaterStore.setState({
+        autoUpdateEnabled: false,
+        updateChannel: 'insider',
+        updateAvailable: true,
+        version: '0.5.0-rc.1',
+        isManualUpdateMode: true
+      })
+
+      await useUpdaterStore.getState().setUpdateChannel('nightly')
+
+      const state = useUpdaterStore.getState()
+      expect(state.updateChannel).toBe('nightly')
+      expect(state.isManualUpdateMode).toBe(false)
       expect(tauriUpdaterApi.checkForUpdates).not.toHaveBeenCalled()
     })
   })

@@ -738,6 +738,22 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
   }
 }
 
+/**
+ * Whether `version` is the pending signed update and its package is already
+ * downloaded, so it can be installed without downloading again. A re-check that
+ * returns the same version keeps the downloaded package (see adoptSignedUpdate).
+ */
+export function isUpdateDownloaded(version: string): boolean {
+  return (
+    !isAurUpdateMode() &&
+    !isManualUpdateMode &&
+    pendingTauriUpdate !== null &&
+    pendingTauriUpdate.version === version &&
+    downloadedUpdate !== null &&
+    downloadedVersion === version
+  )
+}
+
 export async function getUpdaterState(): Promise<IpcResult<UpdateState>> {
   const updateAvailable = isAurUpdateMode()
     ? pendingAurUpdate !== null

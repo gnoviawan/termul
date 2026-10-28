@@ -77,6 +77,7 @@ import {
   getUpdaterState,
   installAndRestart,
   isUpdateAvailable,
+  isUpdateDownloaded,
   mapTauriUpdateToInfo,
   registerUpdateEventHandlers,
   setAutoUpdateEnabled,
@@ -608,6 +609,56 @@ describe('tauri-updater-api', () => {
         vi.mocked(relaunch).mock.invocationCallOrder[0]
       )
       expect(result).toEqual({ success: true, data: undefined })
+    })
+  })
+
+  // N2: the store asks this after a re-check so a same-version re-check keeps
+  // the update ready to install instead of resetting it.
+  describe('isUpdateDownloaded', () => {
+    it('is false before anything is downloaded', async () => {
+      vi.mocked(check).mockResolvedValue(createMockUpdate('2.1.0') as never)
+      await checkForUpdates()
+
+      expect(isUpdateDownloaded('2.1.0')).toBe(false)
+    })
+
+    it('stays true across a re-check of the same version', async () => {
+      const update = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+      vi.mocked(update.download).mockImplementation(async () => {})
+      await downloadUpdate()
+
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+
+      expect(isUpdateDownloaded('2.1.0')).toBe(true)
+    })
+
+    it('is false for a newer version that replaced the downloaded one', async () => {
+      const update = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+      vi.mocked(update.download).mockImplementation(async () => {})
+      await downloadUpdate()
+
+      vi.mocked(check).mockResolvedValue(createMockUpdate('2.2.0') as never)
+      await checkForUpdates()
+
+      expect(isUpdateDownloaded('2.2.0')).toBe(false)
+      expect(isUpdateDownloaded('2.1.0')).toBe(false)
+    })
+
+    it('is false once the pending update is cleared', async () => {
+      const update = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+      vi.mocked(update.download).mockImplementation(async () => {})
+      await downloadUpdate()
+
+      await clearPendingUpdate()
+
+      expect(isUpdateDownloaded('2.1.0')).toBe(false)
     })
   })
 
