@@ -861,7 +861,11 @@ export class WebTerminalClient {
     ) {
       return this.request('write', { terminalId, data }, randomUUID())
     }
-    if ((tracker && !tracker.exited && !tracker.disconnected && tracker.claim) || replayHeld) {
+    // Buffer ONLY a live, claim-held tracker — `replayHeld` alone must never
+    // select this branch, or a write to a terminal that died mid-flush
+    // (killed / exited / claim severed while a replay hold was still held)
+    // would report fake success and strand input that can never flush.
+    if (tracker && !tracker.exited && !tracker.disconnected && tracker.claim) {
       const buffered = this.inputBuffers.get(terminalId) ?? ''
       if (buffered.length + data.length > INPUT_BUFFER_MAX_CHARS) {
         // Story 10: durable failure log — refused input is user-visible data
