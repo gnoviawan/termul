@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import type { AnimateOptions } from 'streamdown'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { selectionContextToken } from '@/lib/composer/selection-context'
 import {
@@ -81,6 +82,7 @@ vi.mock('streamdown', async () => {
     const CustomTable = components?.table as React.ElementType | undefined
     const CustomFilePath = components?.['termul-file-path'] as React.ElementType | undefined
     const CustomImage = components?.['termul-image'] as React.ElementType | undefined
+    const CustomLink = components?.a as React.ElementType | undefined
     const semanticFixture = markdown.startsWith('# Compact heading')
     const animatedConfig = animated === false || animated === true ? undefined : animated
     const animatedName =
@@ -109,18 +111,24 @@ vi.mock('streamdown', async () => {
         data-has-image-component={Boolean(CustomImage)}
         data-remark-plugins={remarkPlugins ? String(remarkPlugins.length) : ''}
       >
-        <button
-          type="button"
-          data-testid="streamdown-link"
-          onClick={async () => {
-            if (!linkSafety?.enabled) return
-            const ok = linkSafety.onLinkCheck ? await linkSafety.onLinkCheck(url) : false
-            if (ok) return
-            setOpen(true)
-          }}
-        >
-          docs
-        </button>
+        {CustomLink ? (
+          <CustomLink href={url} data-testid="streamdown-link">
+            docs
+          </CustomLink>
+        ) : (
+          <button
+            type="button"
+            data-testid="streamdown-link"
+            onClick={async () => {
+              if (!linkSafety?.enabled) return
+              const ok = linkSafety.onLinkCheck ? await linkSafety.onLinkCheck(url) : false
+              if (ok) return
+              setOpen(true)
+            }}
+          >
+            docs
+          </button>
+        )}
         {markdown.startsWith('FILE_PATH:') && CustomFilePath ? (
           <CustomFilePath data-path="src/renderer/App.tsx:42" data-testid="file-path-link">
             src/renderer/App.tsx:42
@@ -402,7 +410,12 @@ describe('ChatMessage', () => {
   })
 
   it('opens confirmed links via the system browser and closes the safety dialog', async () => {
-    render(<ChatMessage message={agentMessage(false)} isLast />)
+    render(
+      <>
+        <ChatMessage message={agentMessage(false)} isLast />
+        <ExternalLinkConfirmHost />
+      </>
+    )
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('streamdown-link'))

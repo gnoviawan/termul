@@ -563,6 +563,7 @@ function ChatMessageComponent({
                     streaming={streaming}
                     reduced={reduced}
                     filePathContext={filePathContext}
+                    linkScope={message.id}
                   />
                 )}
                 {streaming && proseText.length === 0 && (

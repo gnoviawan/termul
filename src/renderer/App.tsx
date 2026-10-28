@@ -6,6 +6,7 @@ import { BrowserConsentCardHost } from '@/components/agents/BrowserConsentCardHo
 import { ChatRoute } from '@/components/ChatRoute'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Toaster } from '@/components/ui/sonner'
@@ -263,6 +264,7 @@ const App = () => {
           <ErrorBoundary context="App Root">
             <AppEffects />
             <Toaster />
+            <ExternalLinkConfirmHost />
             {/* Web/remote mode only: in-app directory picker registered with
                 dialogApi so NewProjectModal's Browse button works without a native
                 dialog.open (Story: Web/remote project creation). Desktop never
