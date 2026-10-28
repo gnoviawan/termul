@@ -54,15 +54,86 @@ TERMUL_GPUIX_DATA_DIR=/tmp/termul-gpuix-try bun run dev
 [README.md](../README.md) has every variable, and
 [packaging.md](./packaging.md) has the package layout and requirements.
 
-PACKAGE_RESULT
+The current package, built and checked on 2026-10-28: `termul-gpuix_0.4.52_amd64.deb`, 59.5 MiB
+(62,394,868 bytes), sha256
+`2dd9dd878d352abfc3cbfae21d93bd9685af2dedb99d6bf6ef166012298719ca`, a copy at
+`/root/gpuix-research/artifacts/`. `bun run package:verify` passed 11 of 11
+checks (it installs nothing; it extracts the package and drives it under
+Xvfb: dashboard, a terminal command, a browser tab, a clean quit, and 5
+timed launches at a median of 2.3 s to a painted project rail).
+`native:patch-check` passed 55 of 55 on the addon inside the package, so the
+package ships the patched addon.
 
 ## Design and behavior parity
 
-PARITY_RESULT
+**99.6 % usage-weighted (99.1 % unweighted), from one run on one head.**
+`bun run parity:matrix` drives the GPUIX app and the web client in
+Chromium through the same steps on 117 user-facing surfaces (chat,
+composer, terminal, project rail, git, explorer, editor, settings, palette,
+21 themes and more), against one seeded `termul-server`, and grabs a frame
+per step from each. Every last-step pair of frames was looked at. A surface
+counts 1 when it is ported (every action and check passes and the frames
+show no difference a user would notice beyond font rasterization), 0.5
+when partial, 0 otherwise. The usage-weighted score weights areas by how
+much a user uses them (chat 17, composer 14, terminal 14, and so on;
+[parity-matrix.md](./parity-matrix.md) has the table).
+
+The M5 run: 115 ported, 2 partial, none broken or blocked. The mean
+full-frame perceptual pixel difference of the last frames is 0.97 %. The
+two partial surfaces:
+
+- **Remote access popover.** The switch is disabled in GPUIX (see the
+  limits below).
+- **Settings, Agent chats.** In 2 of 3 runs the agent list loaded and then
+  went back to its Loading agents… card; the web client did not.
+
+Three surfaces failed once in the full run under load (two key presses
+that timed out after 2 s, one toast that came after its check) and passed
+both reruns; they count as ported, and the matrix page lists them as
+flakes. The run was made at a load average of about 10 on 8 cores, partly
+from another agent's QA job. The 99.8 % that the matrix page showed before
+came from rows made on different heads; this run supersedes it.
 
 ## Performance
 
-PERF_RESULT
+Measured with `bun run perf` on this machine, which has no GPU, so every
+client draws in software. Five interleaved runs per client per scenario;
+medians below, with ranges and rank-sum tests in
+[tools/perf/m5-final.md](../tools/perf/m5-final.md).
+
+| | GPUIX | Web client in Chromium | Shipped app (WebKitGTK) |
+|---|---|---|---|
+| Time to first project list | 3.0 s | 3.7 s (no measurable difference) | 7.8 s |
+| Time until the launcher accepts input | 5.4 s | 4.0 s (p = 0.056) | not measured |
+| Memory at idle (PSS) | 241 MB | 538 MB | 553 MB |
+| CPU at idle | 14.5 % of a core | 11.7 % (no measurable difference) | 121 % |
+| Memory, 8 chats streaming | 587 MB | 1416 MB | |
+| Start click to open chat while 7 stream | 1.0 s | 2.6 s | |
+| Terminal reply under a 3-terminal flood (p50) | 58 ms | 154 ms | |
+| Frames on screen, 8 chats streaming | 4.5 fps | 3.9 fps (no measurable difference) | |
+| Frames on screen, terminal flood | 5.9 fps | 12.3 fps | |
+| CPU, 8 chats streaming | 282 % of a core | 228 % | |
+
+What a user would notice today: the app lists projects more than twice as
+fast as the shipped Linux app (measured from pixels for WebKitGTK and from
+the element tree for GPUIX), uses less than half the memory of either
+web-view client, idles at a fraction of the shipped app's CPU, answers the
+terminal faster, shows a new chat sooner after Start while others stream,
+and no longer crashes with many chats streaming (F2 crashed in 4 of 5 runs; M5 finished 10 of 10).
+
+What still needs work:
+
+- **Startup to an interactive launcher regressed.** On the same host, the
+  current code takes 5.3 s where F2's code took 3.8 s (5 runs each,
+  p = 0.032). The cause is not found yet.
+- **Under load GPUIX uses more CPU and draws fewer frames than Chromium** in
+  the terminal flood and while switching chats. Its limit is software
+  rasterization (lavapipe threads at 1.5 to 1.9 cores). On a real GPU that
+  work leaves the CPU; that is an inference, not a measurement, because no
+  GPU machine was available.
+
+The host was shared with another agent's QA job (about one core busy
+throughout). The clients ran interleaved, so both saw the same noise.
 
 ## Not done or limited by the platform
 

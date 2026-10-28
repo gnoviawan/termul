@@ -1,5 +1,7 @@
 # GPUIX client against today's clients under the same load
 
+**Superseded by [`m5-final.md`](m5-final.md)** (2026-10-28, one head, patched addon). The numbers below are F2's, from 2026-10-23.
+
 This page compares the GPUIX desktop client with the web client in Chromium, and with the shipped Linux app (Tauri on WebKitGTK), under the `tools/perf` scenarios on the GPUIX development machine. [`baseline-linux.md`](baseline-linux.md) has the earlier Chromium-only baseline, and [`README.md`](README.md) describes the runner and every metric key.
 
 ## Verdict

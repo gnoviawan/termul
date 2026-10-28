@@ -136,7 +136,7 @@ bun run perf:report gpuix=<dir>/gpuix chromium=<dir>/chromium
 bun run perf:runs <dir> measure sustained-stream flood burst
 ```
 
-With more than one client, each client gets its own directory under `<dir>`, and even runs reverse the client order. `perf:runs` (`runs-report.ts`) prints the load and errors of every run, per-thread CPU per phase, and a rank-sum p for the headline keys. [`gpuix-vs-baseline.md`](gpuix-vs-baseline.md) has the measured comparison.
+With more than one client, each client gets its own directory under `<dir>`, and even runs reverse the client order. `perf:runs` (`runs-report.ts`) prints the load and errors of every run, per-thread CPU per phase, and a rank-sum p for the headline keys. [`m5-final.md`](m5-final.md) has the current measured comparison (M5), and [`gpuix-vs-baseline.md`](gpuix-vs-baseline.md) the first one (F2).
 
 The runner adds three things for this comparison:
 
