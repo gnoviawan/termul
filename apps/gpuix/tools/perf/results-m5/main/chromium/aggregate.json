@@ -1,0 +1,4715 @@
+{
+ "machine": {
+  "cpu": "AMD EPYC Processor (with IBPB)",
+  "cores": 8,
+  "memGB": 23,
+  "kernel": "6.8.0-147-generic",
+  "bun": "1.4.0"
+ },
+ "client": "chromium",
+ "gl": "lavapipe",
+ "runs": 5,
+ "scenarios": {
+  "idle": {
+   "okRuns": 5,
+   "metrics": {
+    "measure.bytesDownKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.bytesUpKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.durationS": {
+     "median": 20,
+     "min": 20,
+     "max": 20.1,
+     "n": 5
+    },
+    "measure.machine.cpuBusyPct": {
+     "median": 144,
+     "min": 135,
+     "max": 153,
+     "n": 5
+    },
+    "measure.machine.foreignCpuPct": {
+     "median": 132,
+     "min": 117,
+     "max": 141,
+     "n": 5
+    },
+    "measure.proc.browser.cpuMeanPct": {
+     "median": 0.9,
+     "min": 0.9,
+     "max": 1.6,
+     "n": 5
+    },
+    "measure.proc.browser.pssMaxMB": {
+     "median": 132.8,
+     "min": 129.6,
+     "max": 133.3,
+     "n": 5
+    },
+    "measure.proc.browser.pssMedianMB": {
+     "median": 132.6,
+     "min": 129.3,
+     "max": 133.2,
+     "n": 5
+    },
+    "measure.proc.browser.rssMaxMB": {
+     "median": 257.6,
+     "min": 256.5,
+     "max": 259.7,
+     "n": 5
+    },
+    "measure.proc.browser.rssMedianMB": {
+     "median": 257.6,
+     "min": 256.4,
+     "max": 259.7,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.cpuMeanPct": {
+     "median": 1.5,
+     "min": 0.9,
+     "max": 3.7,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.pssMaxMB": {
+     "median": 57.5,
+     "min": 57.4,
+     "max": 58.2,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.pssMedianMB": {
+     "median": 52.9,
+     "min": 52,
+     "max": 53.5,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.rssMaxMB": {
+     "median": 138.7,
+     "min": 137.7,
+     "max": 139.2,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.rssMedianMB": {
+     "median": 135.6,
+     "min": 134.8,
+     "max": 137.4,
+     "n": 5
+    },
+    "measure.proc.gpu-process.cpuMeanPct": {
+     "median": 3.4,
+     "min": 3.2,
+     "max": 5.3,
+     "n": 5
+    },
+    "measure.proc.gpu-process.pssMaxMB": {
+     "median": 150.6,
+     "min": 150.5,
+     "max": 152,
+     "n": 5
+    },
+    "measure.proc.gpu-process.pssMedianMB": {
+     "median": 150.5,
+     "min": 150.3,
+     "max": 151.5,
+     "n": 5
+    },
+    "measure.proc.gpu-process.rssMaxMB": {
+     "median": 237,
+     "min": 236.8,
+     "max": 237.8,
+     "n": 5
+    },
+    "measure.proc.gpu-process.rssMedianMB": {
+     "median": 236.9,
+     "min": 236.6,
+     "max": 237.6,
+     "n": 5
+    },
+    "measure.proc.network.cpuMeanPct": {
+     "median": 0.5,
+     "min": 0.3,
+     "max": 0.8,
+     "n": 5
+    },
+    "measure.proc.network.pssMaxMB": {
+     "median": 43.2,
+     "min": 42.6,
+     "max": 43.5,
+     "n": 5
+    },
+    "measure.proc.network.pssMedianMB": {
+     "median": 43,
+     "min": 42.5,
+     "max": 43.5,
+     "n": 5
+    },
+    "measure.proc.network.rssMaxMB": {
+     "median": 121.7,
+     "min": 121.1,
+     "max": 121.8,
+     "n": 5
+    },
+    "measure.proc.network.rssMedianMB": {
+     "median": 121.6,
+     "min": 121.1,
+     "max": 121.8,
+     "n": 5
+    },
+    "measure.proc.page-renderer.cpuMeanPct": {
+     "median": 5.2,
+     "min": 2.7,
+     "max": 7.9,
+     "n": 5
+    },
+    "measure.proc.page-renderer.pssMaxMB": {
+     "median": 109.8,
+     "min": 109.3,
+     "max": 113.4,
+     "n": 5
+    },
+    "measure.proc.page-renderer.pssMedianMB": {
+     "median": 99.9,
+     "min": 99.6,
+     "max": 103.8,
+     "n": 5
+    },
+    "measure.proc.page-renderer.rssMaxMB": {
+     "median": 197.1,
+     "min": 196.3,
+     "max": 199.8,
+     "n": 5
+    },
+    "measure.proc.page-renderer.rssMedianMB": {
+     "median": 189.2,
+     "min": 188.3,
+     "max": 192.1,
+     "n": 5
+    },
+    "measure.proc.renderer.cpuMeanPct": {
+     "median": 5.2,
+     "min": 2.7,
+     "max": 7.9,
+     "n": 5
+    },
+    "measure.proc.renderer.pssMaxMB": {
+     "median": 127.1,
+     "min": 126.8,
+     "max": 130.6,
+     "n": 5
+    },
+    "measure.proc.renderer.pssMedianMB": {
+     "median": 117.1,
+     "min": 116.9,
+     "max": 121.1,
+     "n": 5
+    },
+    "measure.proc.renderer.rssMaxMB": {
+     "median": 267.9,
+     "min": 266.8,
+     "max": 270.1,
+     "n": 5
+    },
+    "measure.proc.renderer.rssMedianMB": {
+     "median": 260.3,
+     "min": 258.9,
+     "max": 262.5,
+     "n": 5
+    },
+    "measure.proc.total.cpuMeanPct": {
+     "median": 11.7,
+     "min": 10.4,
+     "max": 16.7,
+     "n": 5
+    },
+    "measure.proc.total.pssMaxMB": {
+     "median": 552,
+     "min": 551.2,
+     "max": 559.2,
+     "n": 5
+    },
+    "measure.proc.total.pssMedianMB": {
+     "median": 537.6,
+     "min": 535.9,
+     "max": 542.7,
+     "n": 5
+    },
+    "measure.proc.total.rssMaxMB": {
+     "median": 1211.5,
+     "min": 1200.3,
+     "max": 1217.1,
+     "n": 5
+    },
+    "measure.proc.total.rssMedianMB": {
+     "median": 1199.9,
+     "min": 1191,
+     "max": 1208.2,
+     "n": 5
+    },
+    "measure.proc.utility.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0.1,
+     "n": 5
+    },
+    "measure.proc.utility.pssMaxMB": {
+     "median": 10,
+     "min": 9.9,
+     "max": 10.3,
+     "n": 5
+    },
+    "measure.proc.utility.pssMedianMB": {
+     "median": 10,
+     "min": 9.8,
+     "max": 10.2,
+     "n": 5
+    },
+    "measure.proc.utility.rssMaxMB": {
+     "median": 51,
+     "min": 50.9,
+     "max": 51.5,
+     "n": 5
+    },
+    "measure.proc.utility.rssMedianMB": {
+     "median": 51,
+     "min": 50.9,
+     "max": 51.5,
+     "n": 5
+    },
+    "measure.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.proc.zygote.pssMaxMB": {
+     "median": 32.3,
+     "min": 31.1,
+     "max": 32.5,
+     "n": 5
+    },
+    "measure.proc.zygote.pssMedianMB": {
+     "median": 32.3,
+     "min": 31.1,
+     "max": 32.5,
+     "n": 5
+    },
+    "measure.proc.zygote.rssMaxMB": {
+     "median": 138.5,
+     "min": 128.7,
+     "max": 140.5,
+     "n": 5
+    },
+    "measure.proc.zygote.rssMedianMB": {
+     "median": 138.5,
+     "min": 128.7,
+     "max": 140.5,
+     "n": 5
+    },
+    "measure.screen.fps": {
+     "median": 1.6,
+     "min": 1.6,
+     "max": 1.7,
+     "n": 5
+    },
+    "measure.screen.frames": {
+     "median": 33,
+     "min": 33,
+     "max": 34,
+     "n": 5
+    },
+    "measure.screen.gapMaxMs": {
+     "median": 813.1,
+     "min": 684.3,
+     "max": 954.6,
+     "n": 5
+    },
+    "measure.screen.gapP50Ms": {
+     "median": 600,
+     "min": 595.4,
+     "max": 606.1,
+     "n": 5
+    },
+    "measure.screen.gapP95Ms": {
+     "median": 672.1,
+     "min": 631.4,
+     "max": 835.5,
+     "n": 5
+    },
+    "measure.screen.gapP99Ms": {
+     "median": 813.1,
+     "min": 684.3,
+     "max": 954.6,
+     "n": 5
+    },
+    "measure.screen.gapsOver50Ms": {
+     "median": 32,
+     "min": 32,
+     "max": 33,
+     "n": 5
+    },
+    "measure.server.cpuMeanPct": {
+     "median": 0.8,
+     "min": 0.6,
+     "max": 1,
+     "n": 5
+    },
+    "settle.bytesDownKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "settle.bytesUpKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "settle.durationS": {
+     "median": 20,
+     "min": 20,
+     "max": 20.1,
+     "n": 5
+    },
+    "settle.machine.cpuBusyPct": {
+     "median": 157,
+     "min": 153,
+     "max": 164,
+     "n": 5
+    },
+    "settle.machine.foreignCpuPct": {
+     "median": 125,
+     "min": 118,
+     "max": 133,
+     "n": 5
+    },
+    "settle.proc.browser.cpuMeanPct": {
+     "median": 2.4,
+     "min": 2.1,
+     "max": 2.9,
+     "n": 5
+    },
+    "settle.proc.browser.pssMaxMB": {
+     "median": 132.2,
+     "min": 129.4,
+     "max": 133.3,
+     "n": 5
+    },
+    "settle.proc.browser.pssMedianMB": {
+     "median": 132.2,
+     "min": 128.9,
+     "max": 132.6,
+     "n": 5
+    },
+    "settle.proc.browser.rssMaxMB": {
+     "median": 257.3,
+     "min": 255.5,
+     "max": 258.8,
+     "n": 5
+    },
+    "settle.proc.browser.rssMedianMB": {
+     "median": 257,
+     "min": 255.5,
+     "max": 258.6,
+     "n": 5
+    },
+    "settle.proc.chrome-ui.cpuMeanPct": {
+     "median": 0.1,
+     "min": 0.1,
+     "max": 0.4,
+     "n": 5
+    },
+    "settle.proc.chrome-ui.pssMaxMB": {
+     "median": 58.9,
+     "min": 58.7,
+     "max": 59.5,
+     "n": 5
+    },
+    "settle.proc.chrome-ui.pssMedianMB": {
+     "median": 57.5,
+     "min": 57.4,
+     "max": 58.2,
+     "n": 5
+    },
+    "settle.proc.chrome-ui.rssMaxMB": {
+     "median": 139.8,
+     "min": 138.9,
+     "max": 140.3,
+     "n": 5
+    },
+    "settle.proc.chrome-ui.rssMedianMB": {
+     "median": 138.7,
+     "min": 137.7,
+     "max": 139.2,
+     "n": 5
+    },
+    "settle.proc.gpu-process.cpuMeanPct": {
+     "median": 15.7,
+     "min": 13.6,
+     "max": 17.3,
+     "n": 5
+    },
+    "settle.proc.gpu-process.pssMaxMB": {
+     "median": 177.6,
+     "min": 177.2,
+     "max": 181.4,
+     "n": 5
+    },
+    "settle.proc.gpu-process.pssMedianMB": {
+     "median": 150.7,
+     "min": 150.5,
+     "max": 152,
+     "n": 5
+    },
+    "settle.proc.gpu-process.rssMaxMB": {
+     "median": 263.7,
+     "min": 263.5,
+     "max": 267.2,
+     "n": 5
+    },
+    "settle.proc.gpu-process.rssMedianMB": {
+     "median": 237,
+     "min": 236.6,
+     "max": 237.8,
+     "n": 5
+    },
+    "settle.proc.network.cpuMeanPct": {
+     "median": 0.7,
+     "min": 0.4,
+     "max": 1,
+     "n": 5
+    },
+    "settle.proc.network.pssMaxMB": {
+     "median": 43,
+     "min": 42.5,
+     "max": 43.5,
+     "n": 5
+    },
+    "settle.proc.network.pssMedianMB": {
+     "median": 43,
+     "min": 42.4,
+     "max": 43.4,
+     "n": 5
+    },
+    "settle.proc.network.rssMaxMB": {
+     "median": 121.1,
+     "min": 120.5,
+     "max": 121.3,
+     "n": 5
+    },
+    "settle.proc.network.rssMedianMB": {
+     "median": 121,
+     "min": 120.5,
+     "max": 121.2,
+     "n": 5
+    },
+    "settle.proc.page-renderer.cpuMeanPct": {
+     "median": 5,
+     "min": 4.1,
+     "max": 5.2,
+     "n": 5
+    },
+    "settle.proc.page-renderer.pssMaxMB": {
+     "median": 109.6,
+     "min": 109.2,
+     "max": 113.4,
+     "n": 5
+    },
+    "settle.proc.page-renderer.pssMedianMB": {
+     "median": 109.5,
+     "min": 109.2,
+     "max": 113.3,
+     "n": 5
+    },
+    "settle.proc.page-renderer.rssMaxMB": {
+     "median": 196.3,
+     "min": 196.1,
+     "max": 199.8,
+     "n": 5
+    },
+    "settle.proc.page-renderer.rssMedianMB": {
+     "median": 196.3,
+     "min": 196,
+     "max": 199.7,
+     "n": 5
+    },
+    "settle.proc.renderer.cpuMeanPct": {
+     "median": 5,
+     "min": 4.2,
+     "max": 5.2,
+     "n": 5
+    },
+    "settle.proc.renderer.pssMaxMB": {
+     "median": 127.2,
+     "min": 126.8,
+     "max": 131.1,
+     "n": 5
+    },
+    "settle.proc.renderer.pssMedianMB": {
+     "median": 126.8,
+     "min": 126.4,
+     "max": 130.6,
+     "n": 5
+    },
+    "settle.proc.renderer.rssMaxMB": {
+     "median": 267.6,
+     "min": 267,
+     "max": 270.5,
+     "n": 5
+    },
+    "settle.proc.renderer.rssMedianMB": {
+     "median": 267.4,
+     "min": 266.6,
+     "max": 270.1,
+     "n": 5
+    },
+    "settle.proc.total.cpuMeanPct": {
+     "median": 23.9,
+     "min": 20.5,
+     "max": 26.1,
+     "n": 5
+    },
+    "settle.proc.total.pssMaxMB": {
+     "median": 579.8,
+     "min": 578.2,
+     "max": 587,
+     "n": 5
+    },
+    "settle.proc.total.pssMedianMB": {
+     "median": 551.7,
+     "min": 549.9,
+     "max": 558.4,
+     "n": 5
+    },
+    "settle.proc.total.rssMaxMB": {
+     "median": 1237.2,
+     "min": 1225.5,
+     "max": 1241.5,
+     "n": 5
+    },
+    "settle.proc.total.rssMedianMB": {
+     "median": 1210.5,
+     "min": 1199.6,
+     "max": 1215.9,
+     "n": 5
+    },
+    "settle.proc.utility.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0.1,
+     "n": 5
+    },
+    "settle.proc.utility.pssMaxMB": {
+     "median": 10,
+     "min": 9.9,
+     "max": 10.3,
+     "n": 5
+    },
+    "settle.proc.utility.pssMedianMB": {
+     "median": 10,
+     "min": 9.9,
+     "max": 10.3,
+     "n": 5
+    },
+    "settle.proc.utility.rssMaxMB": {
+     "median": 51,
+     "min": 50.9,
+     "max": 51.5,
+     "n": 5
+    },
+    "settle.proc.utility.rssMedianMB": {
+     "median": 51,
+     "min": 50.9,
+     "max": 51.5,
+     "n": 5
+    },
+    "settle.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "settle.proc.zygote.pssMaxMB": {
+     "median": 32.3,
+     "min": 31.1,
+     "max": 32.5,
+     "n": 5
+    },
+    "settle.proc.zygote.pssMedianMB": {
+     "median": 32.3,
+     "min": 31.1,
+     "max": 32.5,
+     "n": 5
+    },
+    "settle.proc.zygote.rssMaxMB": {
+     "median": 138.5,
+     "min": 128.7,
+     "max": 140.5,
+     "n": 5
+    },
+    "settle.proc.zygote.rssMedianMB": {
+     "median": 138.5,
+     "min": 128.7,
+     "max": 140.5,
+     "n": 5
+    },
+    "settle.screen.fps": {
+     "median": 2.6,
+     "min": 1.9,
+     "max": 2.8,
+     "n": 5
+    },
+    "settle.screen.frames": {
+     "median": 52,
+     "min": 39,
+     "max": 56,
+     "n": 5
+    },
+    "settle.screen.gapMaxMs": {
+     "median": 730.6,
+     "min": 689.2,
+     "max": 873.1,
+     "n": 5
+    },
+    "settle.screen.gapP50Ms": {
+     "median": 558.2,
+     "min": 440.9,
+     "max": 581.2,
+     "n": 5
+    },
+    "settle.screen.gapP95Ms": {
+     "median": 653.5,
+     "min": 642,
+     "max": 702.6,
+     "n": 5
+    },
+    "settle.screen.gapP99Ms": {
+     "median": 730.6,
+     "min": 658.5,
+     "max": 873.1,
+     "n": 5
+    },
+    "settle.screen.gapsOver50Ms": {
+     "median": 38,
+     "min": 35,
+     "max": 38,
+     "n": 5
+    },
+    "settle.server.cpuMeanPct": {
+     "median": 8.2,
+     "min": 6.5,
+     "max": 12,
+     "n": 5
+    },
+    "startup.bytesDownKBps": {
+     "median": 16,
+     "min": 5,
+     "max": 16,
+     "n": 5
+    },
+    "startup.bytesUpKBps": {
+     "median": 7,
+     "min": 2,
+     "max": 7,
+     "n": 5
+    },
+    "startup.durationS": {
+     "median": 2.8,
+     "min": 2.8,
+     "max": 9,
+     "n": 5
+    },
+    "startup.launcherReadyMs": {
+     "median": 2815,
+     "min": 2615,
+     "max": 8977,
+     "n": 5
+    },
+    "startup.machine.cpuBusyPct": {
+     "median": 333,
+     "min": 213,
+     "max": 344,
+     "n": 5
+    },
+    "startup.machine.foreignCpuPct": {
+     "median": 105,
+     "min": 0,
+     "max": 125,
+     "n": 5
+    },
+    "startup.proc.browser.cpuMeanPct": {
+     "median": 45.5,
+     "min": 37.9,
+     "max": 52.2,
+     "n": 5
+    },
+    "startup.proc.browser.pssMaxMB": {
+     "median": 132.5,
+     "min": 129.4,
+     "max": 133.3,
+     "n": 5
+    },
+    "startup.proc.browser.pssMedianMB": {
+     "median": 131,
+     "min": 129.4,
+     "max": 132.9,
+     "n": 5
+    },
+    "startup.proc.browser.rssMaxMB": {
+     "median": 257.5,
+     "min": 255.5,
+     "max": 257.6,
+     "n": 5
+    },
+    "startup.proc.browser.rssMedianMB": {
+     "median": 255.5,
+     "min": 254.6,
+     "max": 257.5,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.pssMaxMB": {
+     "median": 58.9,
+     "min": 58.7,
+     "max": 60,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.pssMedianMB": {
+     "median": 58.9,
+     "min": 58.7,
+     "max": 59.5,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.rssMaxMB": {
+     "median": 139.8,
+     "min": 138.9,
+     "max": 140.3,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.rssMedianMB": {
+     "median": 139.8,
+     "min": 138.9,
+     "max": 140.3,
+     "n": 5
+    },
+    "startup.proc.gpu-process.cpuMeanPct": {
+     "median": 35.9,
+     "min": 29.6,
+     "max": 50,
+     "n": 5
+    },
+    "startup.proc.gpu-process.pssMaxMB": {
+     "median": 138.4,
+     "min": 119.5,
+     "max": 146.4,
+     "n": 5
+    },
+    "startup.proc.gpu-process.pssMedianMB": {
+     "median": 123.1,
+     "min": 118.4,
+     "max": 146.4,
+     "n": 5
+    },
+    "startup.proc.gpu-process.rssMaxMB": {
+     "median": 224.1,
+     "min": 205.1,
+     "max": 230.5,
+     "n": 5
+    },
+    "startup.proc.gpu-process.rssMedianMB": {
+     "median": 209.2,
+     "min": 202.6,
+     "max": 226.3,
+     "n": 5
+    },
+    "startup.proc.network.cpuMeanPct": {
+     "median": 13.6,
+     "min": 9.9,
+     "max": 22.9,
+     "n": 5
+    },
+    "startup.proc.network.pssMaxMB": {
+     "median": 43,
+     "min": 42.5,
+     "max": 43.6,
+     "n": 5
+    },
+    "startup.proc.network.pssMedianMB": {
+     "median": 43,
+     "min": 42.5,
+     "max": 43.6,
+     "n": 5
+    },
+    "startup.proc.network.rssMaxMB": {
+     "median": 120.7,
+     "min": 120.1,
+     "max": 121.1,
+     "n": 5
+    },
+    "startup.proc.network.rssMedianMB": {
+     "median": 120.7,
+     "min": 119.8,
+     "max": 121.1,
+     "n": 5
+    },
+    "startup.proc.page-renderer.cpuMeanPct": {
+     "median": 116.8,
+     "min": 107.5,
+     "max": 161.6,
+     "n": 5
+    },
+    "startup.proc.page-renderer.pssMaxMB": {
+     "median": 100.4,
+     "min": 95.3,
+     "max": 108.9,
+     "n": 5
+    },
+    "startup.proc.page-renderer.pssMedianMB": {
+     "median": 99,
+     "min": 90.1,
+     "max": 105.7,
+     "n": 5
+    },
+    "startup.proc.page-renderer.rssMaxMB": {
+     "median": 187,
+     "min": 182.2,
+     "max": 195,
+     "n": 5
+    },
+    "startup.proc.page-renderer.rssMedianMB": {
+     "median": 185.2,
+     "min": 175.4,
+     "max": 192.2,
+     "n": 5
+    },
+    "startup.proc.renderer.cpuMeanPct": {
+     "median": 116.8,
+     "min": 107.5,
+     "max": 161.6,
+     "n": 5
+    },
+    "startup.proc.renderer.pssMaxMB": {
+     "median": 118.2,
+     "min": 112.9,
+     "max": 126.6,
+     "n": 5
+    },
+    "startup.proc.renderer.pssMedianMB": {
+     "median": 116.6,
+     "min": 107.8,
+     "max": 123.2,
+     "n": 5
+    },
+    "startup.proc.renderer.rssMaxMB": {
+     "median": 258.3,
+     "min": 253.5,
+     "max": 265.8,
+     "n": 5
+    },
+    "startup.proc.renderer.rssMedianMB": {
+     "median": 256,
+     "min": 246.1,
+     "max": 263.2,
+     "n": 5
+    },
+    "startup.proc.total.cpuMeanPct": {
+     "median": 216.7,
+     "min": 202.3,
+     "max": 262.6,
+     "n": 5
+    },
+    "startup.proc.total.pssMaxMB": {
+     "median": 530.1,
+     "min": 508.7,
+     "max": 549.9,
+     "n": 5
+    },
+    "startup.proc.total.pssMedianMB": {
+     "median": 515.5,
+     "min": 501.2,
+     "max": 542.7,
+     "n": 5
+    },
+    "startup.proc.total.rssMaxMB": {
+     "median": 1188.1,
+     "min": 1161.3,
+     "max": 1199.7,
+     "n": 5
+    },
+    "startup.proc.total.rssMedianMB": {
+     "median": 1167.7,
+     "min": 1148.7,
+     "max": 1193.4,
+     "n": 5
+    },
+    "startup.proc.utility.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "startup.proc.utility.pssMaxMB": {
+     "median": 9.6,
+     "min": 9.5,
+     "max": 9.7,
+     "n": 5
+    },
+    "startup.proc.utility.pssMedianMB": {
+     "median": 9.6,
+     "min": 9.5,
+     "max": 9.7,
+     "n": 5
+    },
+    "startup.proc.utility.rssMaxMB": {
+     "median": 49.9,
+     "min": 49.7,
+     "max": 50.4,
+     "n": 5
+    },
+    "startup.proc.utility.rssMedianMB": {
+     "median": 49.9,
+     "min": 49.7,
+     "max": 50.4,
+     "n": 5
+    },
+    "startup.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "startup.proc.zygote.pssMaxMB": {
+     "median": 32.3,
+     "min": 31.1,
+     "max": 32.5,
+     "n": 5
+    },
+    "startup.proc.zygote.pssMedianMB": {
+     "median": 32.3,
+     "min": 31.1,
+     "max": 32.5,
+     "n": 5
+    },
+    "startup.proc.zygote.rssMaxMB": {
+     "median": 138.5,
+     "min": 128.7,
+     "max": 140.5,
+     "n": 5
+    },
+    "startup.proc.zygote.rssMedianMB": {
+     "median": 138.5,
+     "min": 128.7,
+     "max": 140.5,
+     "n": 5
+    },
+    "startup.processUpMs": {
+     "median": 998,
+     "min": 935,
+     "max": 4240,
+     "n": 5
+    },
+    "startup.projectListMs": {
+     "median": 2615,
+     "min": 2518,
+     "max": 8509,
+     "n": 5
+    },
+    "startup.screen.fps": {
+     "median": 3.5,
+     "min": 2.2,
+     "max": 7.9,
+     "n": 5
+    },
+    "startup.screen.frames": {
+     "median": 15,
+     "min": 10,
+     "max": 22,
+     "n": 5
+    },
+    "startup.screen.gapMaxMs": {
+     "median": 565.8,
+     "min": 389.4,
+     "max": 2203.6,
+     "n": 5
+    },
+    "startup.screen.gapP50Ms": {
+     "median": 59.2,
+     "min": 31.2,
+     "max": 120,
+     "n": 5
+    },
+    "startup.screen.gapP95Ms": {
+     "median": 565.8,
+     "min": 184.2,
+     "max": 791.8,
+     "n": 5
+    },
+    "startup.screen.gapP99Ms": {
+     "median": 565.8,
+     "min": 389.4,
+     "max": 2203.6,
+     "n": 5
+    },
+    "startup.screen.gapsOver50Ms": {
+     "median": 7,
+     "min": 5,
+     "max": 12,
+     "n": 5
+    },
+    "startup.server.cpuMeanPct": {
+     "median": 8.2,
+     "min": 6,
+     "max": 17.2,
+     "n": 5
+    }
+   }
+  },
+  "stream-storm": {
+   "okRuns": 5,
+   "metrics": {
+    "chat.firstStartMs": {
+     "median": 5119,
+     "min": 3655,
+     "max": 6063,
+     "n": 5
+    },
+    "chat.openUnderLoadP50Ms": {
+     "median": 2612,
+     "min": 2139,
+     "max": 5063,
+     "n": 5
+    },
+    "chat.startUnderLoadMaxMs": {
+     "median": 21653,
+     "min": 14175,
+     "max": 31207,
+     "n": 5
+    },
+    "chat.startUnderLoadP50Ms": {
+     "median": 14560,
+     "min": 5569,
+     "max": 20259,
+     "n": 5
+    },
+    "chat.switches": {
+     "median": 3,
+     "min": 2,
+     "max": 3,
+     "n": 5
+    },
+    "chat.typeUnderLoadP50Ms": {
+     "median": 7927,
+     "min": 2294,
+     "max": 10379,
+     "n": 5
+    },
+    "chatsOpen": {
+     "median": 8,
+     "min": 8,
+     "max": 8,
+     "n": 5
+    },
+    "measure.bytesDownKBps": {
+     "median": 92,
+     "min": 79,
+     "max": 121,
+     "n": 5
+    },
+    "measure.bytesUpKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.durationS": {
+     "median": 20.1,
+     "min": 20,
+     "max": 20.1,
+     "n": 5
+    },
+    "measure.machine.cpuBusyPct": {
+     "median": 306,
+     "min": 275,
+     "max": 347,
+     "n": 5
+    },
+    "measure.machine.foreignCpuPct": {
+     "median": 22,
+     "min": 11,
+     "max": 55,
+     "n": 5
+    },
+    "measure.proc.browser.cpuMeanPct": {
+     "median": 3.6,
+     "min": 3.1,
+     "max": 5.9,
+     "n": 5
+    },
+    "measure.proc.browser.pssMaxMB": {
+     "median": 133,
+     "min": 132.7,
+     "max": 139.2,
+     "n": 5
+    },
+    "measure.proc.browser.pssMedianMB": {
+     "median": 131.2,
+     "min": 130.8,
+     "max": 136.5,
+     "n": 5
+    },
+    "measure.proc.browser.rssMaxMB": {
+     "median": 261.8,
+     "min": 261.1,
+     "max": 267.1,
+     "n": 5
+    },
+    "measure.proc.browser.rssMedianMB": {
+     "median": 260,
+     "min": 259.3,
+     "max": 264.3,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0.1,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.pssMaxMB": {
+     "median": 49.9,
+     "min": 49.8,
+     "max": 50.5,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.pssMedianMB": {
+     "median": 49.9,
+     "min": 49.8,
+     "max": 50.5,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.rssMaxMB": {
+     "median": 135.3,
+     "min": 133.6,
+     "max": 136.1,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.rssMedianMB": {
+     "median": 135.3,
+     "min": 133.6,
+     "max": 136.1,
+     "n": 5
+    },
+    "measure.proc.gpu-process.cpuMeanPct": {
+     "median": 115.6,
+     "min": 99.5,
+     "max": 127.9,
+     "n": 5
+    },
+    "measure.proc.gpu-process.pssMaxMB": {
+     "median": 299.3,
+     "min": 294.8,
+     "max": 305.4,
+     "n": 5
+    },
+    "measure.proc.gpu-process.pssMedianMB": {
+     "median": 291.1,
+     "min": 287.4,
+     "max": 294.7,
+     "n": 5
+    },
+    "measure.proc.gpu-process.rssMaxMB": {
+     "median": 387.4,
+     "min": 383.6,
+     "max": 396.3,
+     "n": 5
+    },
+    "measure.proc.gpu-process.rssMedianMB": {
+     "median": 379.6,
+     "min": 377.6,
+     "max": 383.6,
+     "n": 5
+    },
+    "measure.proc.network.cpuMeanPct": {
+     "median": 3.6,
+     "min": 3,
+     "max": 3.9,
+     "n": 5
+    },
+    "measure.proc.network.pssMaxMB": {
+     "median": 42.8,
+     "min": 42.3,
+     "max": 43.4,
+     "n": 5
+    },
+    "measure.proc.network.pssMedianMB": {
+     "median": 42.5,
+     "min": 42.2,
+     "max": 43.3,
+     "n": 5
+    },
+    "measure.proc.network.rssMaxMB": {
+     "median": 122.5,
+     "min": 122,
+     "max": 123.4,
+     "n": 5
+    },
+    "measure.proc.network.rssMedianMB": {
+     "median": 122.4,
+     "min": 121.6,
+     "max": 123.2,
+     "n": 5
+    },
+    "measure.proc.page-renderer.cpuMeanPct": {
+     "median": 109.9,
+     "min": 103.4,
+     "max": 118,
+     "n": 5
+    },
+    "measure.proc.page-renderer.pssMaxMB": {
+     "median": 949.8,
+     "min": 823.8,
+     "max": 1134.6,
+     "n": 5
+    },
+    "measure.proc.page-renderer.pssMedianMB": {
+     "median": 844.6,
+     "min": 765.3,
+     "max": 981,
+     "n": 5
+    },
+    "measure.proc.page-renderer.rssMaxMB": {
+     "median": 1041.9,
+     "min": 917.9,
+     "max": 1228.7,
+     "n": 5
+    },
+    "measure.proc.page-renderer.rssMedianMB": {
+     "median": 936.4,
+     "min": 859.5,
+     "max": 1073.8,
+     "n": 5
+    },
+    "measure.proc.renderer.cpuMeanPct": {
+     "median": 109.9,
+     "min": 103.4,
+     "max": 118,
+     "n": 5
+    },
+    "measure.proc.renderer.pssMaxMB": {
+     "median": 967.6,
+     "min": 841.7,
+     "max": 1152.5,
+     "n": 5
+    },
+    "measure.proc.renderer.pssMedianMB": {
+     "median": 862.4,
+     "min": 783.2,
+     "max": 998.9,
+     "n": 5
+    },
+    "measure.proc.renderer.rssMaxMB": {
+     "median": 1113.9,
+     "min": 990.3,
+     "max": 1301.1,
+     "n": 5
+    },
+    "measure.proc.renderer.rssMedianMB": {
+     "median": 1008.4,
+     "min": 931.9,
+     "max": 1146.2,
+     "n": 5
+    },
+    "measure.proc.total.cpuMeanPct": {
+     "median": 228.4,
+     "min": 213.9,
+     "max": 253,
+     "n": 5
+    },
+    "measure.proc.total.pssMaxMB": {
+     "median": 1524.2,
+     "min": 1410.2,
+     "max": 1702.3,
+     "n": 5
+    },
+    "measure.proc.total.pssMedianMB": {
+     "median": 1416.3,
+     "min": 1349.9,
+     "max": 1554.8,
+     "n": 5
+    },
+    "measure.proc.total.rssMaxMB": {
+     "median": 2202.3,
+     "min": 2092,
+     "max": 2382,
+     "n": 5
+    },
+    "measure.proc.total.rssMedianMB": {
+     "median": 2092.6,
+     "min": 2028.4,
+     "max": 2232.9,
+     "n": 5
+    },
+    "measure.proc.utility.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.proc.utility.pssMaxMB": {
+     "median": 9.7,
+     "min": 9.7,
+     "max": 10,
+     "n": 5
+    },
+    "measure.proc.utility.pssMedianMB": {
+     "median": 9.7,
+     "min": 9.7,
+     "max": 10,
+     "n": 5
+    },
+    "measure.proc.utility.rssMaxMB": {
+     "median": 51.8,
+     "min": 51.2,
+     "max": 52.5,
+     "n": 5
+    },
+    "measure.proc.utility.rssMedianMB": {
+     "median": 51.8,
+     "min": 51.2,
+     "max": 52.5,
+     "n": 5
+    },
+    "measure.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.proc.zygote.pssMaxMB": {
+     "median": 32.6,
+     "min": 32.2,
+     "max": 32.8,
+     "n": 5
+    },
+    "measure.proc.zygote.pssMedianMB": {
+     "median": 32.6,
+     "min": 32.2,
+     "max": 32.8,
+     "n": 5
+    },
+    "measure.proc.zygote.rssMaxMB": {
+     "median": 139.6,
+     "min": 139.1,
+     "max": 140.2,
+     "n": 5
+    },
+    "measure.proc.zygote.rssMedianMB": {
+     "median": 139.6,
+     "min": 139.1,
+     "max": 140.2,
+     "n": 5
+    },
+    "measure.screen.fps": {
+     "median": 3.9,
+     "min": 2.2,
+     "max": 8.4,
+     "n": 5
+    },
+    "measure.screen.frames": {
+     "median": 78,
+     "min": 44,
+     "max": 169,
+     "n": 5
+    },
+    "measure.screen.gapMaxMs": {
+     "median": 1050.4,
+     "min": 848.6,
+     "max": 2002.2,
+     "n": 5
+    },
+    "measure.screen.gapP50Ms": {
+     "median": 127,
+     "min": 39.2,
+     "max": 402.3,
+     "n": 5
+    },
+    "measure.screen.gapP95Ms": {
+     "median": 740.6,
+     "min": 428.5,
+     "max": 818.3,
+     "n": 5
+    },
+    "measure.screen.gapP99Ms": {
+     "median": 999.1,
+     "min": 689.5,
+     "max": 1177.8,
+     "n": 5
+    },
+    "measure.screen.gapsOver50Ms": {
+     "median": 55,
+     "min": 43,
+     "max": 101,
+     "n": 5
+    },
+    "measure.server.cpuMeanPct": {
+     "median": 47.8,
+     "min": 38.8,
+     "max": 50.1,
+     "n": 5
+    },
+    "open-chats.bytesDownKBps": {
+     "median": 28,
+     "min": 25,
+     "max": 29,
+     "n": 5
+    },
+    "open-chats.bytesUpKBps": {
+     "median": 1,
+     "min": 1,
+     "max": 1,
+     "n": 5
+    },
+    "open-chats.durationS": {
+     "median": 101.9,
+     "min": 81.2,
+     "max": 138.1,
+     "n": 5
+    },
+    "open-chats.machine.cpuBusyPct": {
+     "median": 270,
+     "min": 242,
+     "max": 287,
+     "n": 5
+    },
+    "open-chats.machine.foreignCpuPct": {
+     "median": 46,
+     "min": 11,
+     "max": 55,
+     "n": 5
+    },
+    "open-chats.proc.browser.cpuMeanPct": {
+     "median": 8.2,
+     "min": 7.1,
+     "max": 8.9,
+     "n": 5
+    },
+    "open-chats.proc.browser.pssMaxMB": {
+     "median": 133.1,
+     "min": 131.9,
+     "max": 138,
+     "n": 5
+    },
+    "open-chats.proc.browser.pssMedianMB": {
+     "median": 130.9,
+     "min": 130.5,
+     "max": 136.2,
+     "n": 5
+    },
+    "open-chats.proc.browser.rssMaxMB": {
+     "median": 261.7,
+     "min": 259.7,
+     "max": 265.7,
+     "n": 5
+    },
+    "open-chats.proc.browser.rssMedianMB": {
+     "median": 259.4,
+     "min": 259.1,
+     "max": 263.8,
+     "n": 5
+    },
+    "open-chats.proc.chrome-ui.cpuMeanPct": {
+     "median": 0.4,
+     "min": 0.2,
+     "max": 2.2,
+     "n": 5
+    },
+    "open-chats.proc.chrome-ui.pssMaxMB": {
+     "median": 59.1,
+     "min": 57.9,
+     "max": 60.2,
+     "n": 5
+    },
+    "open-chats.proc.chrome-ui.pssMedianMB": {
+     "median": 51.9,
+     "min": 50.5,
+     "max": 52.5,
+     "n": 5
+    },
+    "open-chats.proc.chrome-ui.rssMaxMB": {
+     "median": 141.7,
+     "min": 139,
+     "max": 143.7,
+     "n": 5
+    },
+    "open-chats.proc.chrome-ui.rssMedianMB": {
+     "median": 136,
+     "min": 134.8,
+     "max": 137.4,
+     "n": 5
+    },
+    "open-chats.proc.gpu-process.cpuMeanPct": {
+     "median": 132.8,
+     "min": 127.8,
+     "max": 152.2,
+     "n": 5
+    },
+    "open-chats.proc.gpu-process.pssMaxMB": {
+     "median": 315.6,
+     "min": 309.6,
+     "max": 322.2,
+     "n": 5
+    },
+    "open-chats.proc.gpu-process.pssMedianMB": {
+     "median": 294.6,
+     "min": 284,
+     "max": 299.3,
+     "n": 5
+    },
+    "open-chats.proc.gpu-process.rssMaxMB": {
+     "median": 405.4,
+     "min": 397.9,
+     "max": 412.1,
+     "n": 5
+    },
+    "open-chats.proc.gpu-process.rssMedianMB": {
+     "median": 384,
+     "min": 372.2,
+     "max": 389.3,
+     "n": 5
+    },
+    "open-chats.proc.network.cpuMeanPct": {
+     "median": 3.9,
+     "min": 3,
+     "max": 4.6,
+     "n": 5
+    },
+    "open-chats.proc.network.pssMaxMB": {
+     "median": 43,
+     "min": 42.3,
+     "max": 43.7,
+     "n": 5
+    },
+    "open-chats.proc.network.pssMedianMB": {
+     "median": 42.6,
+     "min": 42.2,
+     "max": 43.3,
+     "n": 5
+    },
+    "open-chats.proc.network.rssMaxMB": {
+     "median": 122.6,
+     "min": 122,
+     "max": 123.6,
+     "n": 5
+    },
+    "open-chats.proc.network.rssMedianMB": {
+     "median": 122.2,
+     "min": 121.6,
+     "max": 123.1,
+     "n": 5
+    },
+    "open-chats.proc.page-renderer.cpuMeanPct": {
+     "median": 47.1,
+     "min": 45,
+     "max": 51.9,
+     "n": 5
+    },
+    "open-chats.proc.page-renderer.pssMaxMB": {
+     "median": 523.3,
+     "min": 443.1,
+     "max": 534.9,
+     "n": 5
+    },
+    "open-chats.proc.page-renderer.pssMedianMB": {
+     "median": 367.4,
+     "min": 306.5,
+     "max": 392.1,
+     "n": 5
+    },
+    "open-chats.proc.page-renderer.rssMaxMB": {
+     "median": 617.3,
+     "min": 535,
+     "max": 628.9,
+     "n": 5
+    },
+    "open-chats.proc.page-renderer.rssMedianMB": {
+     "median": 461.3,
+     "min": 398.8,
+     "max": 484.2,
+     "n": 5
+    },
+    "open-chats.proc.renderer.cpuMeanPct": {
+     "median": 47.1,
+     "min": 45,
+     "max": 51.9,
+     "n": 5
+    },
+    "open-chats.proc.renderer.pssMaxMB": {
+     "median": 541.2,
+     "min": 461.1,
+     "max": 552.8,
+     "n": 5
+    },
+    "open-chats.proc.renderer.pssMedianMB": {
+     "median": 385.4,
+     "min": 324.4,
+     "max": 410,
+     "n": 5
+    },
+    "open-chats.proc.renderer.rssMaxMB": {
+     "median": 689.7,
+     "min": 607.6,
+     "max": 701.2,
+     "n": 5
+    },
+    "open-chats.proc.renderer.rssMedianMB": {
+     "median": 533.6,
+     "min": 471.2,
+     "max": 556.8,
+     "n": 5
+    },
+    "open-chats.proc.total.cpuMeanPct": {
+     "median": 195,
+     "min": 187.8,
+     "max": 209.2,
+     "n": 5
+    },
+    "open-chats.proc.total.pssMaxMB": {
+     "median": 1105.7,
+     "min": 1011.8,
+     "max": 1132.9,
+     "n": 5
+    },
+    "open-chats.proc.total.pssMedianMB": {
+     "median": 950.7,
+     "min": 881.4,
+     "max": 957.1,
+     "n": 5
+    },
+    "open-chats.proc.total.rssMaxMB": {
+     "median": 1786.5,
+     "min": 1690.2,
+     "max": 1812.1,
+     "n": 5
+    },
+    "open-chats.proc.total.rssMedianMB": {
+     "median": 1629.7,
+     "min": 1558.6,
+     "max": 1635.4,
+     "n": 5
+    },
+    "open-chats.proc.utility.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0.1,
+     "n": 5
+    },
+    "open-chats.proc.utility.pssMaxMB": {
+     "median": 10,
+     "min": 9.8,
+     "max": 10.3,
+     "n": 5
+    },
+    "open-chats.proc.utility.pssMedianMB": {
+     "median": 9.8,
+     "min": 9.8,
+     "max": 10.2,
+     "n": 5
+    },
+    "open-chats.proc.utility.rssMaxMB": {
+     "median": 51.8,
+     "min": 51.2,
+     "max": 52.5,
+     "n": 5
+    },
+    "open-chats.proc.utility.rssMedianMB": {
+     "median": 51.8,
+     "min": 51.1,
+     "max": 52.4,
+     "n": 5
+    },
+    "open-chats.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "open-chats.proc.zygote.pssMaxMB": {
+     "median": 32.6,
+     "min": 32.2,
+     "max": 32.7,
+     "n": 5
+    },
+    "open-chats.proc.zygote.pssMedianMB": {
+     "median": 32.6,
+     "min": 32.2,
+     "max": 32.7,
+     "n": 5
+    },
+    "open-chats.proc.zygote.rssMaxMB": {
+     "median": 139.6,
+     "min": 139.1,
+     "max": 140.2,
+     "n": 5
+    },
+    "open-chats.proc.zygote.rssMedianMB": {
+     "median": 139.6,
+     "min": 139.1,
+     "max": 140.2,
+     "n": 5
+    },
+    "open-chats.screen.fps": {
+     "median": 2.6,
+     "min": 2.3,
+     "max": 3.3,
+     "n": 5
+    },
+    "open-chats.screen.frames": {
+     "median": 269,
+     "min": 215,
+     "max": 318,
+     "n": 5
+    },
+    "open-chats.screen.gapMaxMs": {
+     "median": 2975.2,
+     "min": 1917,
+     "max": 4234.5,
+     "n": 5
+    },
+    "open-chats.screen.gapP50Ms": {
+     "median": 288.5,
+     "min": 270.5,
+     "max": 359.6,
+     "n": 5
+    },
+    "open-chats.screen.gapP95Ms": {
+     "median": 1030.3,
+     "min": 768.9,
+     "max": 1131.3,
+     "n": 5
+    },
+    "open-chats.screen.gapP99Ms": {
+     "median": 1543.6,
+     "min": 1038.7,
+     "max": 1996.9,
+     "n": 5
+    },
+    "open-chats.screen.gapsOver50Ms": {
+     "median": 227,
+     "min": 182,
+     "max": 262,
+     "n": 5
+    },
+    "open-chats.server.cpuMeanPct": {
+     "median": 29.8,
+     "min": 26.7,
+     "max": 39.9,
+     "n": 5
+    },
+    "startup.bytesDownKBps": {
+     "median": 11,
+     "min": 7,
+     "max": 16,
+     "n": 5
+    },
+    "startup.bytesUpKBps": {
+     "median": 5,
+     "min": 3,
+     "max": 7,
+     "n": 5
+    },
+    "startup.durationS": {
+     "median": 4,
+     "min": 2.8,
+     "max": 6.2,
+     "n": 5
+    },
+    "startup.launcherReadyMs": {
+     "median": 4030,
+     "min": 2767,
+     "max": 5827,
+     "n": 5
+    },
+    "startup.machine.cpuBusyPct": {
+     "median": 293,
+     "min": 257,
+     "max": 336,
+     "n": 5
+    },
+    "startup.machine.foreignCpuPct": {
+     "median": 56,
+     "min": 20,
+     "max": 99,
+     "n": 5
+    },
+    "startup.proc.browser.cpuMeanPct": {
+     "median": 31.9,
+     "min": 22.3,
+     "max": 51.3,
+     "n": 5
+    },
+    "startup.proc.browser.pssMaxMB": {
+     "median": 130.3,
+     "min": 129.9,
+     "max": 134.3,
+     "n": 5
+    },
+    "startup.proc.browser.pssMedianMB": {
+     "median": 130.3,
+     "min": 129.5,
+     "max": 134,
+     "n": 5
+    },
+    "startup.proc.browser.rssMaxMB": {
+     "median": 256.6,
+     "min": 255.9,
+     "max": 259.2,
+     "n": 5
+    },
+    "startup.proc.browser.rssMedianMB": {
+     "median": 256.4,
+     "min": 255.2,
+     "max": 258.9,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0.8,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.pssMaxMB": {
+     "median": 60.1,
+     "min": 59,
+     "max": 61,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.pssMedianMB": {
+     "median": 60,
+     "min": 59,
+     "max": 60.5,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.rssMaxMB": {
+     "median": 141.1,
+     "min": 139.4,
+     "max": 142.3,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.rssMedianMB": {
+     "median": 141.1,
+     "min": 139.4,
+     "max": 142.3,
+     "n": 5
+    },
+    "startup.proc.gpu-process.cpuMeanPct": {
+     "median": 48.9,
+     "min": 31.3,
+     "max": 100.2,
+     "n": 5
+    },
+    "startup.proc.gpu-process.pssMaxMB": {
+     "median": 145.4,
+     "min": 137.8,
+     "max": 174.2,
+     "n": 5
+    },
+    "startup.proc.gpu-process.pssMedianMB": {
+     "median": 137.8,
+     "min": 122.7,
+     "max": 174.2,
+     "n": 5
+    },
+    "startup.proc.gpu-process.rssMaxMB": {
+     "median": 231.6,
+     "min": 222.9,
+     "max": 260.6,
+     "n": 5
+    },
+    "startup.proc.gpu-process.rssMedianMB": {
+     "median": 224.1,
+     "min": 208.6,
+     "max": 260.6,
+     "n": 5
+    },
+    "startup.proc.network.cpuMeanPct": {
+     "median": 14.1,
+     "min": 7.2,
+     "max": 19.8,
+     "n": 5
+    },
+    "startup.proc.network.pssMaxMB": {
+     "median": 42.8,
+     "min": 42.5,
+     "max": 43.5,
+     "n": 5
+    },
+    "startup.proc.network.pssMedianMB": {
+     "median": 42.7,
+     "min": 42.5,
+     "max": 43.5,
+     "n": 5
+    },
+    "startup.proc.network.rssMaxMB": {
+     "median": 121.1,
+     "min": 120.5,
+     "max": 122,
+     "n": 5
+    },
+    "startup.proc.network.rssMedianMB": {
+     "median": 121.1,
+     "min": 120.5,
+     "max": 122,
+     "n": 5
+    },
+    "startup.proc.page-renderer.cpuMeanPct": {
+     "median": 124.7,
+     "min": 100.5,
+     "max": 138,
+     "n": 5
+    },
+    "startup.proc.page-renderer.pssMaxMB": {
+     "median": 105.1,
+     "min": 102.5,
+     "max": 106,
+     "n": 5
+    },
+    "startup.proc.page-renderer.pssMedianMB": {
+     "median": 102.5,
+     "min": 95.2,
+     "max": 105.1,
+     "n": 5
+    },
+    "startup.proc.page-renderer.rssMaxMB": {
+     "median": 191.8,
+     "min": 189.7,
+     "max": 192.9,
+     "n": 5
+    },
+    "startup.proc.page-renderer.rssMedianMB": {
+     "median": 189.7,
+     "min": 181.5,
+     "max": 191.8,
+     "n": 5
+    },
+    "startup.proc.renderer.cpuMeanPct": {
+     "median": 124.7,
+     "min": 100.5,
+     "max": 138,
+     "n": 5
+    },
+    "startup.proc.renderer.pssMaxMB": {
+     "median": 122.7,
+     "min": 120.2,
+     "max": 123.5,
+     "n": 5
+    },
+    "startup.proc.renderer.pssMedianMB": {
+     "median": 120.2,
+     "min": 112.8,
+     "max": 122.6,
+     "n": 5
+    },
+    "startup.proc.renderer.rssMaxMB": {
+     "median": 262.8,
+     "min": 260.9,
+     "max": 264.2,
+     "n": 5
+    },
+    "startup.proc.renderer.rssMedianMB": {
+     "median": 260.9,
+     "min": 252.3,
+     "max": 262.8,
+     "n": 5
+    },
+    "startup.proc.total.cpuMeanPct": {
+     "median": 228.1,
+     "min": 200.7,
+     "max": 242.8,
+     "n": 5
+    },
+    "startup.proc.total.pssMaxMB": {
+     "median": 543.7,
+     "min": 532.8,
+     "max": 574,
+     "n": 5
+    },
+    "startup.proc.total.pssMedianMB": {
+     "median": 536.7,
+     "min": 510.2,
+     "max": 573.2,
+     "n": 5
+    },
+    "startup.proc.total.rssMaxMB": {
+     "median": 1203.3,
+     "min": 1193.6,
+     "max": 1231.9,
+     "n": 5
+    },
+    "startup.proc.total.rssMedianMB": {
+     "median": 1197.5,
+     "min": 1168.4,
+     "max": 1231.3,
+     "n": 5
+    },
+    "startup.proc.utility.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "startup.proc.utility.pssMaxMB": {
+     "median": 9.6,
+     "min": 9.5,
+     "max": 9.7,
+     "n": 5
+    },
+    "startup.proc.utility.pssMedianMB": {
+     "median": 9.6,
+     "min": 9.5,
+     "max": 9.7,
+     "n": 5
+    },
+    "startup.proc.utility.rssMaxMB": {
+     "median": 50.6,
+     "min": 49.9,
+     "max": 51.1,
+     "n": 5
+    },
+    "startup.proc.utility.rssMedianMB": {
+     "median": 50.6,
+     "min": 49.9,
+     "max": 51.1,
+     "n": 5
+    },
+    "startup.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "startup.proc.zygote.pssMaxMB": {
+     "median": 32.4,
+     "min": 32.2,
+     "max": 32.7,
+     "n": 5
+    },
+    "startup.proc.zygote.pssMedianMB": {
+     "median": 32.4,
+     "min": 32.2,
+     "max": 32.7,
+     "n": 5
+    },
+    "startup.proc.zygote.rssMaxMB": {
+     "median": 139.6,
+     "min": 139.1,
+     "max": 140.2,
+     "n": 5
+    },
+    "startup.proc.zygote.rssMedianMB": {
+     "median": 139.6,
+     "min": 139.1,
+     "max": 140.2,
+     "n": 5
+    },
+    "startup.processUpMs": {
+     "median": 1600,
+     "min": 977,
+     "max": 2416,
+     "n": 5
+    },
+    "startup.projectListMs": {
+     "median": 3960,
+     "min": 2652,
+     "max": 5267,
+     "n": 5
+    },
+    "startup.screen.fps": {
+     "median": 4.2,
+     "min": 1.7,
+     "max": 7.2,
+     "n": 5
+    },
+    "startup.screen.frames": {
+     "median": 17,
+     "min": 10,
+     "max": 29,
+     "n": 5
+    },
+    "startup.screen.gapMaxMs": {
+     "median": 1177.8,
+     "min": 461,
+     "max": 1837.4,
+     "n": 5
+    },
+    "startup.screen.gapP50Ms": {
+     "median": 37,
+     "min": 36.5,
+     "max": 56.2,
+     "n": 5
+    },
+    "startup.screen.gapP95Ms": {
+     "median": 487.9,
+     "min": 358.2,
+     "max": 1837.4,
+     "n": 5
+    },
+    "startup.screen.gapP99Ms": {
+     "median": 1177.8,
+     "min": 461,
+     "max": 1837.4,
+     "n": 5
+    },
+    "startup.screen.gapsOver50Ms": {
+     "median": 7,
+     "min": 5,
+     "max": 8,
+     "n": 5
+    },
+    "startup.server.cpuMeanPct": {
+     "median": 11.2,
+     "min": 8.2,
+     "max": 13.9,
+     "n": 5
+    },
+    "sustained-stream.bytesDownKBps": {
+     "median": 85,
+     "min": 55,
+     "max": 90,
+     "n": 5
+    },
+    "sustained-stream.bytesUpKBps": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "sustained-stream.durationS": {
+     "median": 39.8,
+     "min": 30.3,
+     "max": 45,
+     "n": 5
+    },
+    "sustained-stream.machine.cpuBusyPct": {
+     "median": 319,
+     "min": 298,
+     "max": 339,
+     "n": 5
+    },
+    "sustained-stream.machine.foreignCpuPct": {
+     "median": 28,
+     "min": 15,
+     "max": 51,
+     "n": 5
+    },
+    "sustained-stream.proc.browser.cpuMeanPct": {
+     "median": 4.8,
+     "min": 3.8,
+     "max": 6.3,
+     "n": 5
+    },
+    "sustained-stream.proc.browser.pssMaxMB": {
+     "median": 133.3,
+     "min": 132.8,
+     "max": 138.5,
+     "n": 5
+    },
+    "sustained-stream.proc.browser.pssMedianMB": {
+     "median": 131.2,
+     "min": 130.7,
+     "max": 136.4,
+     "n": 5
+    },
+    "sustained-stream.proc.browser.rssMaxMB": {
+     "median": 262.1,
+     "min": 261.1,
+     "max": 266.3,
+     "n": 5
+    },
+    "sustained-stream.proc.browser.rssMedianMB": {
+     "median": 260,
+     "min": 259.1,
+     "max": 264.2,
+     "n": 5
+    },
+    "sustained-stream.proc.chrome-ui.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0.6,
+     "n": 5
+    },
+    "sustained-stream.proc.chrome-ui.pssMaxMB": {
+     "median": 50.4,
+     "min": 49.9,
+     "max": 50.6,
+     "n": 5
+    },
+    "sustained-stream.proc.chrome-ui.pssMedianMB": {
+     "median": 50.4,
+     "min": 49.9,
+     "max": 50.6,
+     "n": 5
+    },
+    "sustained-stream.proc.chrome-ui.rssMaxMB": {
+     "median": 135.3,
+     "min": 133.6,
+     "max": 136.1,
+     "n": 5
+    },
+    "sustained-stream.proc.chrome-ui.rssMedianMB": {
+     "median": 135.3,
+     "min": 133.6,
+     "max": 136.1,
+     "n": 5
+    },
+    "sustained-stream.proc.gpu-process.cpuMeanPct": {
+     "median": 115.6,
+     "min": 113.8,
+     "max": 125.9,
+     "n": 5
+    },
+    "sustained-stream.proc.gpu-process.pssMaxMB": {
+     "median": 308.6,
+     "min": 295.5,
+     "max": 316.3,
+     "n": 5
+    },
+    "sustained-stream.proc.gpu-process.pssMedianMB": {
+     "median": 292.9,
+     "min": 280.4,
+     "max": 294.9,
+     "n": 5
+    },
+    "sustained-stream.proc.gpu-process.rssMaxMB": {
+     "median": 395.5,
+     "min": 383.9,
+     "max": 408.6,
+     "n": 5
+    },
+    "sustained-stream.proc.gpu-process.rssMedianMB": {
+     "median": 383.4,
+     "min": 368.9,
+     "max": 385.8,
+     "n": 5
+    },
+    "sustained-stream.proc.network.cpuMeanPct": {
+     "median": 3.4,
+     "min": 3,
+     "max": 3.9,
+     "n": 5
+    },
+    "sustained-stream.proc.network.pssMaxMB": {
+     "median": 42.9,
+     "min": 42.4,
+     "max": 43.6,
+     "n": 5
+    },
+    "sustained-stream.proc.network.pssMedianMB": {
+     "median": 42.5,
+     "min": 42.2,
+     "max": 43.3,
+     "n": 5
+    },
+    "sustained-stream.proc.network.rssMaxMB": {
+     "median": 122.6,
+     "min": 122,
+     "max": 123.6,
+     "n": 5
+    },
+    "sustained-stream.proc.network.rssMedianMB": {
+     "median": 122.4,
+     "min": 121.6,
+     "max": 123.3,
+     "n": 5
+    },
+    "sustained-stream.proc.page-renderer.cpuMeanPct": {
+     "median": 112.8,
+     "min": 111.6,
+     "max": 116.2,
+     "n": 5
+    },
+    "sustained-stream.proc.page-renderer.pssMaxMB": {
+     "median": 831.9,
+     "min": 720,
+     "max": 852.8,
+     "n": 5
+    },
+    "sustained-stream.proc.page-renderer.pssMedianMB": {
+     "median": 647.1,
+     "min": 593.7,
+     "max": 686.5,
+     "n": 5
+    },
+    "sustained-stream.proc.page-renderer.rssMaxMB": {
+     "median": 925.9,
+     "min": 815.2,
+     "max": 944.5,
+     "n": 5
+    },
+    "sustained-stream.proc.page-renderer.rssMedianMB": {
+     "median": 741.2,
+     "min": 685.7,
+     "max": 781,
+     "n": 5
+    },
+    "sustained-stream.proc.renderer.cpuMeanPct": {
+     "median": 112.8,
+     "min": 111.6,
+     "max": 116.2,
+     "n": 5
+    },
+    "sustained-stream.proc.renderer.pssMaxMB": {
+     "median": 849.8,
+     "min": 738,
+     "max": 870.6,
+     "n": 5
+    },
+    "sustained-stream.proc.renderer.pssMedianMB": {
+     "median": 665,
+     "min": 611.6,
+     "max": 704.4,
+     "n": 5
+    },
+    "sustained-stream.proc.renderer.rssMaxMB": {
+     "median": 998.3,
+     "min": 887.5,
+     "max": 1016.5,
+     "n": 5
+    },
+    "sustained-stream.proc.renderer.rssMedianMB": {
+     "median": 813.5,
+     "min": 758.3,
+     "max": 853.4,
+     "n": 5
+    },
+    "sustained-stream.proc.total.cpuMeanPct": {
+     "median": 239.8,
+     "min": 234.9,
+     "max": 246.2,
+     "n": 5
+    },
+    "sustained-stream.proc.total.pssMaxMB": {
+     "median": 1396.4,
+     "min": 1304.7,
+     "max": 1415.8,
+     "n": 5
+    },
+    "sustained-stream.proc.total.pssMedianMB": {
+     "median": 1221.6,
+     "min": 1159.8,
+     "max": 1262.4,
+     "n": 5
+    },
+    "sustained-stream.proc.total.rssMaxMB": {
+     "median": 2075.4,
+     "min": 1986.8,
+     "max": 2093.5,
+     "n": 5
+    },
+    "sustained-stream.proc.total.rssMedianMB": {
+     "median": 1901.4,
+     "min": 1838.6,
+     "max": 1943.6,
+     "n": 5
+    },
+    "sustained-stream.proc.utility.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "sustained-stream.proc.utility.pssMaxMB": {
+     "median": 9.8,
+     "min": 9.7,
+     "max": 10.1,
+     "n": 5
+    },
+    "sustained-stream.proc.utility.pssMedianMB": {
+     "median": 9.8,
+     "min": 9.7,
+     "max": 10.1,
+     "n": 5
+    },
+    "sustained-stream.proc.utility.rssMaxMB": {
+     "median": 51.8,
+     "min": 51.2,
+     "max": 52.5,
+     "n": 5
+    },
+    "sustained-stream.proc.utility.rssMedianMB": {
+     "median": 51.8,
+     "min": 51.2,
+     "max": 52.5,
+     "n": 5
+    },
+    "sustained-stream.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "sustained-stream.proc.zygote.pssMaxMB": {
+     "median": 32.6,
+     "min": 32.2,
+     "max": 32.8,
+     "n": 5
+    },
+    "sustained-stream.proc.zygote.pssMedianMB": {
+     "median": 32.6,
+     "min": 32.2,
+     "max": 32.8,
+     "n": 5
+    },
+    "sustained-stream.proc.zygote.rssMaxMB": {
+     "median": 139.6,
+     "min": 139.1,
+     "max": 140.2,
+     "n": 5
+    },
+    "sustained-stream.proc.zygote.rssMedianMB": {
+     "median": 139.6,
+     "min": 139.1,
+     "max": 140.2,
+     "n": 5
+    },
+    "sustained-stream.screen.fps": {
+     "median": 10.1,
+     "min": 6.5,
+     "max": 11.5,
+     "n": 5
+    },
+    "sustained-stream.screen.frames": {
+     "median": 441,
+     "min": 197,
+     "max": 482,
+     "n": 5
+    },
+    "sustained-stream.screen.gapMaxMs": {
+     "median": 1709.6,
+     "min": 1123.8,
+     "max": 1993.3,
+     "n": 5
+    },
+    "sustained-stream.screen.gapP50Ms": {
+     "median": 33.2,
+     "min": 26.7,
+     "max": 39.4,
+     "n": 5
+    },
+    "sustained-stream.screen.gapP95Ms": {
+     "median": 427.3,
+     "min": 368.8,
+     "max": 616.4,
+     "n": 5
+    },
+    "sustained-stream.screen.gapP99Ms": {
+     "median": 823.7,
+     "min": 732.2,
+     "max": 1093.3,
+     "n": 5
+    },
+    "sustained-stream.screen.gapsOver50Ms": {
+     "median": 143,
+     "min": 91,
+     "max": 180,
+     "n": 5
+    },
+    "sustained-stream.server.cpuMeanPct": {
+     "median": 45.2,
+     "min": 42,
+     "max": 48.7,
+     "n": 5
+    },
+    "warmup.bytesDownKBps": {
+     "median": 5,
+     "min": 5,
+     "max": 6,
+     "n": 5
+    },
+    "warmup.bytesUpKBps": {
+     "median": 1,
+     "min": 1,
+     "max": 1,
+     "n": 5
+    },
+    "warmup.durationS": {
+     "median": 15.2,
+     "min": 13.7,
+     "max": 16.1,
+     "n": 5
+    },
+    "warmup.machine.cpuBusyPct": {
+     "median": 273,
+     "min": 266,
+     "max": 292,
+     "n": 5
+    },
+    "warmup.machine.foreignCpuPct": {
+     "median": 73,
+     "min": 50,
+     "max": 78,
+     "n": 5
+    },
+    "warmup.proc.browser.cpuMeanPct": {
+     "median": 8.9,
+     "min": 7.4,
+     "max": 9.1,
+     "n": 5
+    },
+    "warmup.proc.browser.pssMaxMB": {
+     "median": 132.6,
+     "min": 131.6,
+     "max": 137.4,
+     "n": 5
+    },
+    "warmup.proc.browser.pssMedianMB": {
+     "median": 131.9,
+     "min": 131.4,
+     "max": 137.2,
+     "n": 5
+    },
+    "warmup.proc.browser.rssMaxMB": {
+     "median": 260.3,
+     "min": 259.1,
+     "max": 264,
+     "n": 5
+    },
+    "warmup.proc.browser.rssMedianMB": {
+     "median": 259.7,
+     "min": 259,
+     "max": 263.9,
+     "n": 5
+    },
+    "warmup.proc.chrome-ui.cpuMeanPct": {
+     "median": 0.3,
+     "min": 0.1,
+     "max": 0.4,
+     "n": 5
+    },
+    "warmup.proc.chrome-ui.pssMaxMB": {
+     "median": 60,
+     "min": 59,
+     "max": 60.4,
+     "n": 5
+    },
+    "warmup.proc.chrome-ui.pssMedianMB": {
+     "median": 58.8,
+     "min": 57.9,
+     "max": 60.1,
+     "n": 5
+    },
+    "warmup.proc.chrome-ui.rssMaxMB": {
+     "median": 141.9,
+     "min": 139.9,
+     "max": 142.9,
+     "n": 5
+    },
+    "warmup.proc.chrome-ui.rssMedianMB": {
+     "median": 140.7,
+     "min": 139,
+     "max": 142,
+     "n": 5
+    },
+    "warmup.proc.gpu-process.cpuMeanPct": {
+     "median": 118.7,
+     "min": 100.6,
+     "max": 122.3,
+     "n": 5
+    },
+    "warmup.proc.gpu-process.pssMaxMB": {
+     "median": 266.4,
+     "min": 254,
+     "max": 272.2,
+     "n": 5
+    },
+    "warmup.proc.gpu-process.pssMedianMB": {
+     "median": 237.7,
+     "min": 228.1,
+     "max": 250.6,
+     "n": 5
+    },
+    "warmup.proc.gpu-process.rssMaxMB": {
+     "median": 354.1,
+     "min": 341.2,
+     "max": 358.8,
+     "n": 5
+    },
+    "warmup.proc.gpu-process.rssMedianMB": {
+     "median": 324.9,
+     "min": 316.2,
+     "max": 337.2,
+     "n": 5
+    },
+    "warmup.proc.network.cpuMeanPct": {
+     "median": 2.4,
+     "min": 1.8,
+     "max": 5.1,
+     "n": 5
+    },
+    "warmup.proc.network.pssMaxMB": {
+     "median": 43,
+     "min": 42.4,
+     "max": 43.5,
+     "n": 5
+    },
+    "warmup.proc.network.pssMedianMB": {
+     "median": 42.7,
+     "min": 42.3,
+     "max": 43.3,
+     "n": 5
+    },
+    "warmup.proc.network.rssMaxMB": {
+     "median": 121.8,
+     "min": 121.3,
+     "max": 122.3,
+     "n": 5
+    },
+    "warmup.proc.network.rssMedianMB": {
+     "median": 121.8,
+     "min": 121.2,
+     "max": 122.2,
+     "n": 5
+    },
+    "warmup.proc.page-renderer.cpuMeanPct": {
+     "median": 65.3,
+     "min": 61.6,
+     "max": 72.4,
+     "n": 5
+    },
+    "warmup.proc.page-renderer.pssMaxMB": {
+     "median": 201.8,
+     "min": 197,
+     "max": 211.8,
+     "n": 5
+    },
+    "warmup.proc.page-renderer.pssMedianMB": {
+     "median": 168.3,
+     "min": 165.2,
+     "max": 176.3,
+     "n": 5
+    },
+    "warmup.proc.page-renderer.rssMaxMB": {
+     "median": 291.7,
+     "min": 286.7,
+     "max": 302,
+     "n": 5
+    },
+    "warmup.proc.page-renderer.rssMedianMB": {
+     "median": 258,
+     "min": 254.9,
+     "max": 266.3,
+     "n": 5
+    },
+    "warmup.proc.renderer.cpuMeanPct": {
+     "median": 65.3,
+     "min": 61.6,
+     "max": 72.6,
+     "n": 5
+    },
+    "warmup.proc.renderer.pssMaxMB": {
+     "median": 219.8,
+     "min": 214.9,
+     "max": 229.7,
+     "n": 5
+    },
+    "warmup.proc.renderer.pssMedianMB": {
+     "median": 186.2,
+     "min": 183.2,
+     "max": 194.7,
+     "n": 5
+    },
+    "warmup.proc.renderer.rssMaxMB": {
+     "median": 364.4,
+     "min": 359.4,
+     "max": 374.3,
+     "n": 5
+    },
+    "warmup.proc.renderer.rssMedianMB": {
+     "median": 330.7,
+     "min": 327,
+     "max": 339.1,
+     "n": 5
+    },
+    "warmup.proc.total.cpuMeanPct": {
+     "median": 196.5,
+     "min": 173.6,
+     "max": 198,
+     "n": 5
+    },
+    "warmup.proc.total.pssMaxMB": {
+     "median": 751.4,
+     "min": 742.9,
+     "max": 779.1,
+     "n": 5
+    },
+    "warmup.proc.total.pssMedianMB": {
+     "median": 696.1,
+     "min": 689.5,
+     "max": 728,
+     "n": 5
+    },
+    "warmup.proc.total.rssMaxMB": {
+     "median": 1421.4,
+     "min": 1413.7,
+     "max": 1448.7,
+     "n": 5
+    },
+    "warmup.proc.total.rssMedianMB": {
+     "median": 1366.6,
+     "min": 1360.3,
+     "max": 1397.4,
+     "n": 5
+    },
+    "warmup.proc.utility.cpuMeanPct": {
+     "median": 0.1,
+     "min": 0,
+     "max": 0.1,
+     "n": 5
+    },
+    "warmup.proc.utility.pssMaxMB": {
+     "median": 10,
+     "min": 9.9,
+     "max": 10.2,
+     "n": 5
+    },
+    "warmup.proc.utility.pssMedianMB": {
+     "median": 10,
+     "min": 9.8,
+     "max": 10.2,
+     "n": 5
+    },
+    "warmup.proc.utility.rssMaxMB": {
+     "median": 51.6,
+     "min": 50.9,
+     "max": 52.3,
+     "n": 5
+    },
+    "warmup.proc.utility.rssMedianMB": {
+     "median": 51.6,
+     "min": 50.9,
+     "max": 52.3,
+     "n": 5
+    },
+    "warmup.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "warmup.proc.zygote.pssMaxMB": {
+     "median": 32.4,
+     "min": 32.2,
+     "max": 32.7,
+     "n": 5
+    },
+    "warmup.proc.zygote.pssMedianMB": {
+     "median": 32.4,
+     "min": 32.1,
+     "max": 32.6,
+     "n": 5
+    },
+    "warmup.proc.zygote.rssMaxMB": {
+     "median": 139.6,
+     "min": 139.1,
+     "max": 140.2,
+     "n": 5
+    },
+    "warmup.proc.zygote.rssMedianMB": {
+     "median": 139.6,
+     "min": 139.1,
+     "max": 140.2,
+     "n": 5
+    },
+    "warmup.screen.fps": {
+     "median": 4.6,
+     "min": 3.8,
+     "max": 5.3,
+     "n": 5
+    },
+    "warmup.screen.frames": {
+     "median": 72,
+     "min": 58,
+     "max": 73,
+     "n": 5
+    },
+    "warmup.screen.gapMaxMs": {
+     "median": 1264,
+     "min": 681,
+     "max": 1334.5,
+     "n": 5
+    },
+    "warmup.screen.gapP50Ms": {
+     "median": 123.8,
+     "min": 76.4,
+     "max": 153.2,
+     "n": 5
+    },
+    "warmup.screen.gapP95Ms": {
+     "median": 729.9,
+     "min": 485.9,
+     "max": 775.9,
+     "n": 5
+    },
+    "warmup.screen.gapP99Ms": {
+     "median": 732.6,
+     "min": 579.4,
+     "max": 936.6,
+     "n": 5
+    },
+    "warmup.screen.gapsOver50Ms": {
+     "median": 44,
+     "min": 37,
+     "max": 51,
+     "n": 5
+    },
+    "warmup.server.cpuMeanPct": {
+     "median": 15,
+     "min": 12.4,
+     "max": 19.7,
+     "n": 5
+    }
+   }
+  },
+  "pty-flood": {
+   "okRuns": 5,
+   "metrics": {
+    "burst.bytesDownKBps": {
+     "median": 2109,
+     "min": 1386,
+     "max": 4512,
+     "n": 5
+    },
+    "burst.bytesUpKBps": {
+     "median": 2,
+     "min": 1,
+     "max": 4,
+     "n": 5
+    },
+    "burst.durationS": {
+     "median": 4.3,
+     "min": 2,
+     "max": 6.6,
+     "n": 5
+    },
+    "burst.machine.cpuBusyPct": {
+     "median": 301,
+     "min": 232,
+     "max": 404,
+     "n": 5
+    },
+    "burst.machine.foreignCpuPct": {
+     "median": 18,
+     "min": 0,
+     "max": 66,
+     "n": 5
+    },
+    "burst.proc.browser.cpuMeanPct": {
+     "median": 24.1,
+     "min": 16.3,
+     "max": 26.3,
+     "n": 5
+    },
+    "burst.proc.browser.pssMaxMB": {
+     "median": 134.6,
+     "min": 133.6,
+     "max": 139.7,
+     "n": 5
+    },
+    "burst.proc.browser.pssMedianMB": {
+     "median": 132.3,
+     "min": 130.5,
+     "max": 134.8,
+     "n": 5
+    },
+    "burst.proc.browser.rssMaxMB": {
+     "median": 263.3,
+     "min": 261.8,
+     "max": 268.1,
+     "n": 5
+    },
+    "burst.proc.browser.rssMedianMB": {
+     "median": 260.5,
+     "min": 258.7,
+     "max": 262.2,
+     "n": 5
+    },
+    "burst.proc.chrome-ui.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 5,
+     "n": 5
+    },
+    "burst.proc.chrome-ui.pssMaxMB": {
+     "median": 49.7,
+     "min": 49.4,
+     "max": 50.8,
+     "n": 5
+    },
+    "burst.proc.chrome-ui.pssMedianMB": {
+     "median": 49.7,
+     "min": 49.4,
+     "max": 50.2,
+     "n": 5
+    },
+    "burst.proc.chrome-ui.rssMaxMB": {
+     "median": 133.9,
+     "min": 132.8,
+     "max": 135.9,
+     "n": 5
+    },
+    "burst.proc.chrome-ui.rssMedianMB": {
+     "median": 133.9,
+     "min": 132.8,
+     "max": 135.6,
+     "n": 5
+    },
+    "burst.proc.gpu-process.cpuMeanPct": {
+     "median": 162.5,
+     "min": 142.2,
+     "max": 214,
+     "n": 5
+    },
+    "burst.proc.gpu-process.pssMaxMB": {
+     "median": 229.3,
+     "min": 227.6,
+     "max": 233,
+     "n": 5
+    },
+    "burst.proc.gpu-process.pssMedianMB": {
+     "median": 228.8,
+     "min": 225.8,
+     "max": 232.1,
+     "n": 5
+    },
+    "burst.proc.gpu-process.rssMaxMB": {
+     "median": 319.8,
+     "min": 318.4,
+     "max": 324.7,
+     "n": 5
+    },
+    "burst.proc.gpu-process.rssMedianMB": {
+     "median": 318.7,
+     "min": 316,
+     "max": 323.8,
+     "n": 5
+    },
+    "burst.proc.network.cpuMeanPct": {
+     "median": 5,
+     "min": 3.4,
+     "max": 10,
+     "n": 5
+    },
+    "burst.proc.network.pssMaxMB": {
+     "median": 42.6,
+     "min": 41.9,
+     "max": 43,
+     "n": 5
+    },
+    "burst.proc.network.pssMedianMB": {
+     "median": 42.6,
+     "min": 41.7,
+     "max": 42.9,
+     "n": 5
+    },
+    "burst.proc.network.rssMaxMB": {
+     "median": 122,
+     "min": 121.4,
+     "max": 122.9,
+     "n": 5
+    },
+    "burst.proc.network.rssMedianMB": {
+     "median": 121.8,
+     "min": 121.4,
+     "max": 122.7,
+     "n": 5
+    },
+    "burst.proc.page-renderer.cpuMeanPct": {
+     "median": 60.4,
+     "min": 50.9,
+     "max": 65.5,
+     "n": 5
+    },
+    "burst.proc.page-renderer.pssMaxMB": {
+     "median": 274.8,
+     "min": 266.6,
+     "max": 290.6,
+     "n": 5
+    },
+    "burst.proc.page-renderer.pssMedianMB": {
+     "median": 256,
+     "min": 249.3,
+     "max": 265.5,
+     "n": 5
+    },
+    "burst.proc.page-renderer.rssMaxMB": {
+     "median": 369.1,
+     "min": 360.6,
+     "max": 385.1,
+     "n": 5
+    },
+    "burst.proc.page-renderer.rssMedianMB": {
+     "median": 350.2,
+     "min": 343.3,
+     "max": 359.4,
+     "n": 5
+    },
+    "burst.proc.renderer.cpuMeanPct": {
+     "median": 60.4,
+     "min": 50.9,
+     "max": 65.5,
+     "n": 5
+    },
+    "burst.proc.renderer.pssMaxMB": {
+     "median": 292.2,
+     "min": 283.7,
+     "max": 307.9,
+     "n": 5
+    },
+    "burst.proc.renderer.pssMedianMB": {
+     "median": 273.2,
+     "min": 266.4,
+     "max": 282.8,
+     "n": 5
+    },
+    "burst.proc.renderer.rssMaxMB": {
+     "median": 440.2,
+     "min": 431.3,
+     "max": 456.1,
+     "n": 5
+    },
+    "burst.proc.renderer.rssMedianMB": {
+     "median": 421,
+     "min": 414,
+     "max": 430.5,
+     "n": 5
+    },
+    "burst.proc.total.cpuMeanPct": {
+     "median": 254.7,
+     "min": 223.9,
+     "max": 308.8,
+     "n": 5
+    },
+    "burst.proc.total.pssMaxMB": {
+     "median": 788.5,
+     "min": 784.1,
+     "max": 801.2,
+     "n": 5
+    },
+    "burst.proc.total.pssMedianMB": {
+     "median": 769.5,
+     "min": 762.7,
+     "max": 780.4,
+     "n": 5
+    },
+    "burst.proc.total.rssMaxMB": {
+     "median": 1469.5,
+     "min": 1463.3,
+     "max": 1483.3,
+     "n": 5
+    },
+    "burst.proc.total.rssMedianMB": {
+     "median": 1449.6,
+     "min": 1441.7,
+     "max": 1460.9,
+     "n": 5
+    },
+    "burst.proc.utility.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "burst.proc.utility.pssMaxMB": {
+     "median": 9.9,
+     "min": 9.8,
+     "max": 10,
+     "n": 5
+    },
+    "burst.proc.utility.pssMedianMB": {
+     "median": 9.9,
+     "min": 9.8,
+     "max": 10,
+     "n": 5
+    },
+    "burst.proc.utility.rssMaxMB": {
+     "median": 51.9,
+     "min": 51.5,
+     "max": 52.5,
+     "n": 5
+    },
+    "burst.proc.utility.rssMedianMB": {
+     "median": 51.9,
+     "min": 51.5,
+     "max": 52.5,
+     "n": 5
+    },
+    "burst.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "burst.proc.zygote.pssMaxMB": {
+     "median": 32.6,
+     "min": 32.4,
+     "max": 32.8,
+     "n": 5
+    },
+    "burst.proc.zygote.pssMedianMB": {
+     "median": 32.6,
+     "min": 32.4,
+     "max": 32.8,
+     "n": 5
+    },
+    "burst.proc.zygote.rssMaxMB": {
+     "median": 140.2,
+     "min": 139.7,
+     "max": 140.3,
+     "n": 5
+    },
+    "burst.proc.zygote.rssMedianMB": {
+     "median": 140.2,
+     "min": 139.7,
+     "max": 140.3,
+     "n": 5
+    },
+    "burst.screen.fps": {
+     "median": 21.3,
+     "min": 12.2,
+     "max": 45.7,
+     "n": 5
+    },
+    "burst.screen.frames": {
+     "median": 92,
+     "min": 80,
+     "max": 120,
+     "n": 5
+    },
+    "burst.screen.gapMaxMs": {
+     "median": 250,
+     "min": 117.8,
+     "max": 651.2,
+     "n": 5
+    },
+    "burst.screen.gapP50Ms": {
+     "median": 28.3,
+     "min": 16.8,
+     "max": 44.1,
+     "n": 5
+    },
+    "burst.screen.gapP95Ms": {
+     "median": 142.9,
+     "min": 54.1,
+     "max": 282.2,
+     "n": 5
+    },
+    "burst.screen.gapP99Ms": {
+     "median": 176.4,
+     "min": 64.3,
+     "max": 574.1,
+     "n": 5
+    },
+    "burst.screen.gapsOver50Ms": {
+     "median": 25,
+     "min": 5,
+     "max": 43,
+     "n": 5
+    },
+    "burst.server.cpuMeanPct": {
+     "median": 28.5,
+     "min": 24,
+     "max": 36,
+     "n": 5
+    },
+    "flood.bytesDownKBps": {
+     "median": 261,
+     "min": 223,
+     "max": 272,
+     "n": 5
+    },
+    "flood.bytesUpKBps": {
+     "median": 1,
+     "min": 1,
+     "max": 1,
+     "n": 5
+    },
+    "flood.durationS": {
+     "median": 38,
+     "min": 35.6,
+     "max": 53.9,
+     "n": 5
+    },
+    "flood.machine.cpuBusyPct": {
+     "median": 305,
+     "min": 253,
+     "max": 310,
+     "n": 5
+    },
+    "flood.machine.foreignCpuPct": {
+     "median": 19,
+     "min": 0,
+     "max": 44,
+     "n": 5
+    },
+    "flood.proc.browser.cpuMeanPct": {
+     "median": 14.2,
+     "min": 11.9,
+     "max": 16.9,
+     "n": 5
+    },
+    "flood.proc.browser.pssMaxMB": {
+     "median": 131.9,
+     "min": 130.8,
+     "max": 135.7,
+     "n": 5
+    },
+    "flood.proc.browser.pssMedianMB": {
+     "median": 130.7,
+     "min": 130.2,
+     "max": 135.3,
+     "n": 5
+    },
+    "flood.proc.browser.rssMaxMB": {
+     "median": 259.9,
+     "min": 259,
+     "max": 262.8,
+     "n": 5
+    },
+    "flood.proc.browser.rssMedianMB": {
+     "median": 258.7,
+     "min": 258.5,
+     "max": 262.4,
+     "n": 5
+    },
+    "flood.proc.chrome-ui.cpuMeanPct": {
+     "median": 0.6,
+     "min": 0.4,
+     "max": 1.9,
+     "n": 5
+    },
+    "flood.proc.chrome-ui.pssMaxMB": {
+     "median": 58.1,
+     "min": 57.2,
+     "max": 58.8,
+     "n": 5
+    },
+    "flood.proc.chrome-ui.pssMedianMB": {
+     "median": 57.3,
+     "min": 51.2,
+     "max": 58.6,
+     "n": 5
+    },
+    "flood.proc.chrome-ui.rssMaxMB": {
+     "median": 140,
+     "min": 138.4,
+     "max": 142.5,
+     "n": 5
+    },
+    "flood.proc.chrome-ui.rssMedianMB": {
+     "median": 138.4,
+     "min": 135.2,
+     "max": 141.3,
+     "n": 5
+    },
+    "flood.proc.gpu-process.cpuMeanPct": {
+     "median": 144.9,
+     "min": 132.3,
+     "max": 163.9,
+     "n": 5
+    },
+    "flood.proc.gpu-process.pssMaxMB": {
+     "median": 246.3,
+     "min": 241.8,
+     "max": 254.5,
+     "n": 5
+    },
+    "flood.proc.gpu-process.pssMedianMB": {
+     "median": 225.1,
+     "min": 223.8,
+     "max": 228.9,
+     "n": 5
+    },
+    "flood.proc.gpu-process.rssMaxMB": {
+     "median": 336.3,
+     "min": 332.2,
+     "max": 343,
+     "n": 5
+    },
+    "flood.proc.gpu-process.rssMedianMB": {
+     "median": 315.8,
+     "min": 314.5,
+     "max": 319.8,
+     "n": 5
+    },
+    "flood.proc.network.cpuMeanPct": {
+     "median": 6.7,
+     "min": 5.9,
+     "max": 8.1,
+     "n": 5
+    },
+    "flood.proc.network.pssMaxMB": {
+     "median": 42.9,
+     "min": 42.3,
+     "max": 43.3,
+     "n": 5
+    },
+    "flood.proc.network.pssMedianMB": {
+     "median": 42.8,
+     "min": 42.2,
+     "max": 43.2,
+     "n": 5
+    },
+    "flood.proc.network.rssMaxMB": {
+     "median": 122.2,
+     "min": 121.5,
+     "max": 122.9,
+     "n": 5
+    },
+    "flood.proc.network.rssMedianMB": {
+     "median": 122,
+     "min": 121.5,
+     "max": 122.8,
+     "n": 5
+    },
+    "flood.proc.page-renderer.cpuMeanPct": {
+     "median": 52.7,
+     "min": 51.7,
+     "max": 56.2,
+     "n": 5
+    },
+    "flood.proc.page-renderer.pssMaxMB": {
+     "median": 250.4,
+     "min": 242.3,
+     "max": 250.9,
+     "n": 5
+    },
+    "flood.proc.page-renderer.pssMedianMB": {
+     "median": 206,
+     "min": 196.7,
+     "max": 208.3,
+     "n": 5
+    },
+    "flood.proc.page-renderer.rssMaxMB": {
+     "median": 344.2,
+     "min": 335.7,
+     "max": 344.3,
+     "n": 5
+    },
+    "flood.proc.page-renderer.rssMedianMB": {
+     "median": 298.9,
+     "min": 289.4,
+     "max": 300.3,
+     "n": 5
+    },
+    "flood.proc.renderer.cpuMeanPct": {
+     "median": 52.7,
+     "min": 51.7,
+     "max": 56.2,
+     "n": 5
+    },
+    "flood.proc.renderer.pssMaxMB": {
+     "median": 267.7,
+     "min": 259.5,
+     "max": 268.2,
+     "n": 5
+    },
+    "flood.proc.renderer.pssMedianMB": {
+     "median": 223.2,
+     "min": 214,
+     "max": 225.5,
+     "n": 5
+    },
+    "flood.proc.renderer.rssMaxMB": {
+     "median": 415,
+     "min": 406.6,
+     "max": 415.4,
+     "n": 5
+    },
+    "flood.proc.renderer.rssMedianMB": {
+     "median": 369.8,
+     "min": 360.5,
+     "max": 371.1,
+     "n": 5
+    },
+    "flood.proc.total.cpuMeanPct": {
+     "median": 217.6,
+     "min": 210.3,
+     "max": 242.5,
+     "n": 5
+    },
+    "flood.proc.total.pssMaxMB": {
+     "median": 763.2,
+     "min": 760.5,
+     "max": 772.2,
+     "n": 5
+    },
+    "flood.proc.total.pssMedianMB": {
+     "median": 719.3,
+     "min": 713.7,
+     "max": 728.3,
+     "n": 5
+    },
+    "flood.proc.total.rssMaxMB": {
+     "median": 1443.5,
+     "min": 1436.9,
+     "max": 1450.4,
+     "n": 5
+    },
+    "flood.proc.total.rssMedianMB": {
+     "median": 1395.9,
+     "min": 1392.7,
+     "max": 1404.6,
+     "n": 5
+    },
+    "flood.proc.utility.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "flood.proc.utility.pssMaxMB": {
+     "median": 10.1,
+     "min": 9.9,
+     "max": 10.2,
+     "n": 5
+    },
+    "flood.proc.utility.pssMedianMB": {
+     "median": 10,
+     "min": 9.9,
+     "max": 10.2,
+     "n": 5
+    },
+    "flood.proc.utility.rssMaxMB": {
+     "median": 51.7,
+     "min": 51.3,
+     "max": 52.3,
+     "n": 5
+    },
+    "flood.proc.utility.rssMedianMB": {
+     "median": 51.7,
+     "min": 51.3,
+     "max": 52.3,
+     "n": 5
+    },
+    "flood.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "flood.proc.zygote.pssMaxMB": {
+     "median": 32.6,
+     "min": 32.4,
+     "max": 32.8,
+     "n": 5
+    },
+    "flood.proc.zygote.pssMedianMB": {
+     "median": 32.5,
+     "min": 32.4,
+     "max": 32.7,
+     "n": 5
+    },
+    "flood.proc.zygote.rssMaxMB": {
+     "median": 140.2,
+     "min": 139.7,
+     "max": 140.3,
+     "n": 5
+    },
+    "flood.proc.zygote.rssMedianMB": {
+     "median": 140.2,
+     "min": 139.7,
+     "max": 140.3,
+     "n": 5
+    },
+    "flood.screen.fps": {
+     "median": 14,
+     "min": 11.4,
+     "max": 17.4,
+     "n": 5
+    },
+    "flood.screen.frames": {
+     "median": 566,
+     "min": 433,
+     "max": 705,
+     "n": 5
+    },
+    "flood.screen.gapMaxMs": {
+     "median": 1022.5,
+     "min": 579.1,
+     "max": 1457.6,
+     "n": 5
+    },
+    "flood.screen.gapP50Ms": {
+     "median": 37.8,
+     "min": 30.9,
+     "max": 44.3,
+     "n": 5
+    },
+    "flood.screen.gapP95Ms": {
+     "median": 232.1,
+     "min": 181.2,
+     "max": 311.5,
+     "n": 5
+    },
+    "flood.screen.gapP99Ms": {
+     "median": 532.2,
+     "min": 361.9,
+     "max": 598,
+     "n": 5
+    },
+    "flood.screen.gapsOver50Ms": {
+     "median": 215,
+     "min": 189,
+     "max": 281,
+     "n": 5
+    },
+    "flood.server.cpuMeanPct": {
+     "median": 48.4,
+     "min": 45.8,
+     "max": 58.9,
+     "n": 5
+    },
+    "measure.bytesDownKBps": {
+     "median": 287,
+     "min": 189,
+     "max": 291,
+     "n": 5
+    },
+    "measure.bytesUpKBps": {
+     "median": 1,
+     "min": 0,
+     "max": 1,
+     "n": 5
+    },
+    "measure.durationS": {
+     "median": 15,
+     "min": 15,
+     "max": 15.4,
+     "n": 5
+    },
+    "measure.machine.cpuBusyPct": {
+     "median": 271,
+     "min": 224,
+     "max": 345,
+     "n": 5
+    },
+    "measure.machine.foreignCpuPct": {
+     "median": 0,
+     "min": 0,
+     "max": 47,
+     "n": 5
+    },
+    "measure.proc.browser.cpuMeanPct": {
+     "median": 11.4,
+     "min": 10.1,
+     "max": 14.4,
+     "n": 5
+    },
+    "measure.proc.browser.pssMaxMB": {
+     "median": 131.1,
+     "min": 130.7,
+     "max": 135.7,
+     "n": 5
+    },
+    "measure.proc.browser.pssMedianMB": {
+     "median": 131.1,
+     "min": 130.4,
+     "max": 135.3,
+     "n": 5
+    },
+    "measure.proc.browser.rssMaxMB": {
+     "median": 259.7,
+     "min": 258.7,
+     "max": 262.9,
+     "n": 5
+    },
+    "measure.proc.browser.rssMedianMB": {
+     "median": 259.1,
+     "min": 258.5,
+     "max": 262.5,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0.1,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.pssMaxMB": {
+     "median": 51.3,
+     "min": 49.7,
+     "max": 52.3,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.pssMedianMB": {
+     "median": 51.3,
+     "min": 49.7,
+     "max": 52.3,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.rssMaxMB": {
+     "median": 135.3,
+     "min": 133.9,
+     "max": 137.2,
+     "n": 5
+    },
+    "measure.proc.chrome-ui.rssMedianMB": {
+     "median": 135.2,
+     "min": 133.9,
+     "max": 137.2,
+     "n": 5
+    },
+    "measure.proc.gpu-process.cpuMeanPct": {
+     "median": 152.3,
+     "min": 130.2,
+     "max": 192.9,
+     "n": 5
+    },
+    "measure.proc.gpu-process.pssMaxMB": {
+     "median": 236.2,
+     "min": 234.1,
+     "max": 239.2,
+     "n": 5
+    },
+    "measure.proc.gpu-process.pssMedianMB": {
+     "median": 227.4,
+     "min": 226.2,
+     "max": 229.7,
+     "n": 5
+    },
+    "measure.proc.gpu-process.rssMaxMB": {
+     "median": 327.9,
+     "min": 324,
+     "max": 330.6,
+     "n": 5
+    },
+    "measure.proc.gpu-process.rssMedianMB": {
+     "median": 317.9,
+     "min": 317,
+     "max": 321,
+     "n": 5
+    },
+    "measure.proc.network.cpuMeanPct": {
+     "median": 7.9,
+     "min": 6.4,
+     "max": 8.5,
+     "n": 5
+    },
+    "measure.proc.network.pssMaxMB": {
+     "median": 42.8,
+     "min": 42.3,
+     "max": 43.3,
+     "n": 5
+    },
+    "measure.proc.network.pssMedianMB": {
+     "median": 42.5,
+     "min": 42.2,
+     "max": 43.3,
+     "n": 5
+    },
+    "measure.proc.network.rssMaxMB": {
+     "median": 122.1,
+     "min": 121.5,
+     "max": 122.9,
+     "n": 5
+    },
+    "measure.proc.network.rssMedianMB": {
+     "median": 122.1,
+     "min": 121.2,
+     "max": 122.8,
+     "n": 5
+    },
+    "measure.proc.page-renderer.cpuMeanPct": {
+     "median": 46.6,
+     "min": 41.6,
+     "max": 57,
+     "n": 5
+    },
+    "measure.proc.page-renderer.pssMaxMB": {
+     "median": 260.5,
+     "min": 250.6,
+     "max": 261.1,
+     "n": 5
+    },
+    "measure.proc.page-renderer.pssMedianMB": {
+     "median": 253.5,
+     "min": 249,
+     "max": 255.1,
+     "n": 5
+    },
+    "measure.proc.page-renderer.rssMaxMB": {
+     "median": 354,
+     "min": 344.4,
+     "max": 354.8,
+     "n": 5
+    },
+    "measure.proc.page-renderer.rssMedianMB": {
+     "median": 347.2,
+     "min": 342.8,
+     "max": 348.8,
+     "n": 5
+    },
+    "measure.proc.renderer.cpuMeanPct": {
+     "median": 46.6,
+     "min": 41.6,
+     "max": 57,
+     "n": 5
+    },
+    "measure.proc.renderer.pssMaxMB": {
+     "median": 277.7,
+     "min": 267.7,
+     "max": 278.2,
+     "n": 5
+    },
+    "measure.proc.renderer.pssMedianMB": {
+     "median": 270.7,
+     "min": 266.2,
+     "max": 272.5,
+     "n": 5
+    },
+    "measure.proc.renderer.rssMaxMB": {
+     "median": 424.9,
+     "min": 415.2,
+     "max": 425.5,
+     "n": 5
+    },
+    "measure.proc.renderer.rssMedianMB": {
+     "median": 417.9,
+     "min": 413.5,
+     "max": 419.8,
+     "n": 5
+    },
+    "measure.proc.total.cpuMeanPct": {
+     "median": 212.7,
+     "min": 205.3,
+     "max": 254.2,
+     "n": 5
+    },
+    "measure.proc.total.pssMaxMB": {
+     "median": 775.3,
+     "min": 772.8,
+     "max": 783.2,
+     "n": 5
+    },
+    "measure.proc.total.pssMedianMB": {
+     "median": 768.1,
+     "min": 761.4,
+     "max": 768.8,
+     "n": 5
+    },
+    "measure.proc.total.rssMaxMB": {
+     "median": 1456.6,
+     "min": 1452,
+     "max": 1461.6,
+     "n": 5
+    },
+    "measure.proc.total.rssMedianMB": {
+     "median": 1446.3,
+     "min": 1440.8,
+     "max": 1447.8,
+     "n": 5
+    },
+    "measure.proc.utility.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.proc.utility.pssMaxMB": {
+     "median": 10,
+     "min": 9.8,
+     "max": 10.2,
+     "n": 5
+    },
+    "measure.proc.utility.pssMedianMB": {
+     "median": 10,
+     "min": 9.8,
+     "max": 10.1,
+     "n": 5
+    },
+    "measure.proc.utility.rssMaxMB": {
+     "median": 51.9,
+     "min": 51.5,
+     "max": 52.5,
+     "n": 5
+    },
+    "measure.proc.utility.rssMedianMB": {
+     "median": 51.7,
+     "min": 51.3,
+     "max": 52.5,
+     "n": 5
+    },
+    "measure.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "measure.proc.zygote.pssMaxMB": {
+     "median": 32.6,
+     "min": 32.4,
+     "max": 32.8,
+     "n": 5
+    },
+    "measure.proc.zygote.pssMedianMB": {
+     "median": 32.6,
+     "min": 32.4,
+     "max": 32.8,
+     "n": 5
+    },
+    "measure.proc.zygote.rssMaxMB": {
+     "median": 140.2,
+     "min": 139.7,
+     "max": 140.3,
+     "n": 5
+    },
+    "measure.proc.zygote.rssMedianMB": {
+     "median": 140.2,
+     "min": 139.7,
+     "max": 140.3,
+     "n": 5
+    },
+    "measure.screen.fps": {
+     "median": 12.3,
+     "min": 8.4,
+     "max": 22.4,
+     "n": 5
+    },
+    "measure.screen.frames": {
+     "median": 189,
+     "min": 129,
+     "max": 336,
+     "n": 5
+    },
+    "measure.screen.gapMaxMs": {
+     "median": 1091.5,
+     "min": 570.6,
+     "max": 1186.7,
+     "n": 5
+    },
+    "measure.screen.gapP50Ms": {
+     "median": 43.8,
+     "min": 26.1,
+     "max": 73.1,
+     "n": 5
+    },
+    "measure.screen.gapP95Ms": {
+     "median": 307.2,
+     "min": 130.2,
+     "max": 347.8,
+     "n": 5
+    },
+    "measure.screen.gapP99Ms": {
+     "median": 516.7,
+     "min": 247.4,
+     "max": 1068.3,
+     "n": 5
+    },
+    "measure.screen.gapsOver50Ms": {
+     "median": 84,
+     "min": 75,
+     "max": 94,
+     "n": 5
+    },
+    "measure.server.cpuMeanPct": {
+     "median": 46.6,
+     "min": 40.5,
+     "max": 55.3,
+     "n": 5
+    },
+    "probe.burstLines": {
+     "median": 20000,
+     "min": 20000,
+     "max": 20000,
+     "n": 5
+    },
+    "probe.burstMB": {
+     "median": 2.66,
+     "min": 2.66,
+     "max": 2.66,
+     "n": 5
+    },
+    "probe.burstMBps": {
+     "median": 1.59,
+     "min": 1.21,
+     "max": 3.77,
+     "n": 5
+    },
+    "probe.burstTotalMs": {
+     "median": 1672,
+     "min": 705,
+     "max": 2192,
+     "n": 5
+    },
+    "probe.burstWriteMs": {
+     "median": 632,
+     "min": 360,
+     "max": 1438,
+     "n": 5
+    },
+    "probe.pacedLinesPerSecPerTerminal": {
+     "median": 200,
+     "min": 200,
+     "max": 200,
+     "n": 5
+    },
+    "probe.pacedProbes": {
+     "median": 170,
+     "min": 162,
+     "max": 174,
+     "n": 5
+    },
+    "probe.pacedRttMaxMs": {
+     "median": 1739.6,
+     "min": 946.3,
+     "max": 2485.5,
+     "n": 5
+    },
+    "probe.pacedRttP50Ms": {
+     "median": 154.4,
+     "min": 88.8,
+     "max": 177.9,
+     "n": 5
+    },
+    "probe.pacedRttP95Ms": {
+     "median": 751.2,
+     "min": 386.2,
+     "max": 1728.8,
+     "n": 5
+    },
+    "probe.pacedTimeouts": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "startup.bytesDownKBps": {
+     "median": 9,
+     "min": 5,
+     "max": 13,
+     "n": 5
+    },
+    "startup.bytesUpKBps": {
+     "median": 4,
+     "min": 3,
+     "max": 6,
+     "n": 5
+    },
+    "startup.durationS": {
+     "median": 4.7,
+     "min": 3.5,
+     "max": 8.3,
+     "n": 5
+    },
+    "startup.launcherReadyMs": {
+     "median": 4698,
+     "min": 3495,
+     "max": 8246,
+     "n": 5
+    },
+    "startup.machine.cpuBusyPct": {
+     "median": 267,
+     "min": 242,
+     "max": 301,
+     "n": 5
+    },
+    "startup.machine.foreignCpuPct": {
+     "median": 23,
+     "min": 0,
+     "max": 67,
+     "n": 5
+    },
+    "startup.proc.browser.cpuMeanPct": {
+     "median": 40.6,
+     "min": 20.7,
+     "max": 61.3,
+     "n": 5
+    },
+    "startup.proc.browser.pssMaxMB": {
+     "median": 131,
+     "min": 130.1,
+     "max": 137.2,
+     "n": 5
+    },
+    "startup.proc.browser.pssMedianMB": {
+     "median": 131,
+     "min": 130.1,
+     "max": 134.1,
+     "n": 5
+    },
+    "startup.proc.browser.rssMaxMB": {
+     "median": 256.9,
+     "min": 255.9,
+     "max": 262.7,
+     "n": 5
+    },
+    "startup.proc.browser.rssMedianMB": {
+     "median": 256.9,
+     "min": 255.9,
+     "max": 259.4,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0.4,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.pssMaxMB": {
+     "median": 59.4,
+     "min": 59.1,
+     "max": 60.5,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.pssMedianMB": {
+     "median": 59.3,
+     "min": 59,
+     "max": 60.5,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.rssMaxMB": {
+     "median": 140.3,
+     "min": 139.8,
+     "max": 142.7,
+     "n": 5
+    },
+    "startup.proc.chrome-ui.rssMedianMB": {
+     "median": 140.3,
+     "min": 139.8,
+     "max": 142.7,
+     "n": 5
+    },
+    "startup.proc.gpu-process.cpuMeanPct": {
+     "median": 30.2,
+     "min": 13.2,
+     "max": 79.7,
+     "n": 5
+    },
+    "startup.proc.gpu-process.pssMaxMB": {
+     "median": 136.8,
+     "min": 119.3,
+     "max": 158.6,
+     "n": 5
+    },
+    "startup.proc.gpu-process.pssMedianMB": {
+     "median": 136.8,
+     "min": 119.3,
+     "max": 146.8,
+     "n": 5
+    },
+    "startup.proc.gpu-process.rssMaxMB": {
+     "median": 222.2,
+     "min": 205.2,
+     "max": 242.2,
+     "n": 5
+    },
+    "startup.proc.gpu-process.rssMedianMB": {
+     "median": 222.2,
+     "min": 205.2,
+     "max": 233.2,
+     "n": 5
+    },
+    "startup.proc.network.cpuMeanPct": {
+     "median": 16.6,
+     "min": 12.7,
+     "max": 19.4,
+     "n": 5
+    },
+    "startup.proc.network.pssMaxMB": {
+     "median": 43,
+     "min": 42.1,
+     "max": 43.5,
+     "n": 5
+    },
+    "startup.proc.network.pssMedianMB": {
+     "median": 43,
+     "min": 42.1,
+     "max": 43.5,
+     "n": 5
+    },
+    "startup.proc.network.rssMaxMB": {
+     "median": 120.8,
+     "min": 120.3,
+     "max": 122,
+     "n": 5
+    },
+    "startup.proc.network.rssMedianMB": {
+     "median": 120.8,
+     "min": 120.3,
+     "max": 122,
+     "n": 5
+    },
+    "startup.proc.page-renderer.cpuMeanPct": {
+     "median": 161.1,
+     "min": 111,
+     "max": 164.2,
+     "n": 5
+    },
+    "startup.proc.page-renderer.pssMaxMB": {
+     "median": 104.7,
+     "min": 99.4,
+     "max": 106.4,
+     "n": 5
+    },
+    "startup.proc.page-renderer.pssMedianMB": {
+     "median": 104.7,
+     "min": 99.4,
+     "max": 106.4,
+     "n": 5
+    },
+    "startup.proc.page-renderer.rssMaxMB": {
+     "median": 192.1,
+     "min": 186.5,
+     "max": 193.6,
+     "n": 5
+    },
+    "startup.proc.page-renderer.rssMedianMB": {
+     "median": 192.1,
+     "min": 186.5,
+     "max": 193.6,
+     "n": 5
+    },
+    "startup.proc.renderer.cpuMeanPct": {
+     "median": 161.1,
+     "min": 111,
+     "max": 164.2,
+     "n": 5
+    },
+    "startup.proc.renderer.pssMaxMB": {
+     "median": 122.4,
+     "min": 117,
+     "max": 124.1,
+     "n": 5
+    },
+    "startup.proc.renderer.pssMedianMB": {
+     "median": 122.4,
+     "min": 117,
+     "max": 124.1,
+     "n": 5
+    },
+    "startup.proc.renderer.rssMaxMB": {
+     "median": 263.5,
+     "min": 257.6,
+     "max": 265,
+     "n": 5
+    },
+    "startup.proc.renderer.rssMedianMB": {
+     "median": 263.5,
+     "min": 257.6,
+     "max": 265,
+     "n": 5
+    },
+    "startup.proc.total.cpuMeanPct": {
+     "median": 236.6,
+     "min": 227.3,
+     "max": 255,
+     "n": 5
+    },
+    "startup.proc.total.pssMaxMB": {
+     "median": 534.1,
+     "min": 512,
+     "max": 556.2,
+     "n": 5
+    },
+    "startup.proc.total.pssMedianMB": {
+     "median": 534.1,
+     "min": 512,
+     "max": 547.5,
+     "n": 5
+    },
+    "startup.proc.total.rssMaxMB": {
+     "median": 1194.6,
+     "min": 1171.8,
+     "max": 1213.3,
+     "n": 5
+    },
+    "startup.proc.total.rssMedianMB": {
+     "median": 1194.6,
+     "min": 1171.8,
+     "max": 1207,
+     "n": 5
+    },
+    "startup.proc.utility.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 2.5,
+     "n": 5
+    },
+    "startup.proc.utility.pssMaxMB": {
+     "median": 9.7,
+     "min": 9.6,
+     "max": 9.8,
+     "n": 5
+    },
+    "startup.proc.utility.pssMedianMB": {
+     "median": 9.6,
+     "min": 9.6,
+     "max": 9.8,
+     "n": 5
+    },
+    "startup.proc.utility.rssMaxMB": {
+     "median": 50.9,
+     "min": 50.1,
+     "max": 51.2,
+     "n": 5
+    },
+    "startup.proc.utility.rssMedianMB": {
+     "median": 50.5,
+     "min": 50.1,
+     "max": 51.2,
+     "n": 5
+    },
+    "startup.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "startup.proc.zygote.pssMaxMB": {
+     "median": 32.6,
+     "min": 32.4,
+     "max": 32.7,
+     "n": 5
+    },
+    "startup.proc.zygote.pssMedianMB": {
+     "median": 32.5,
+     "min": 32.4,
+     "max": 32.7,
+     "n": 5
+    },
+    "startup.proc.zygote.rssMaxMB": {
+     "median": 140.2,
+     "min": 139.7,
+     "max": 140.3,
+     "n": 5
+    },
+    "startup.proc.zygote.rssMedianMB": {
+     "median": 140.2,
+     "min": 139.7,
+     "max": 140.3,
+     "n": 5
+    },
+    "startup.processUpMs": {
+     "median": 1926,
+     "min": 1220,
+     "max": 2581,
+     "n": 5
+    },
+    "startup.projectListMs": {
+     "median": 4283,
+     "min": 3298,
+     "max": 6609,
+     "n": 5
+    },
+    "startup.screen.fps": {
+     "median": 3.9,
+     "min": 2.4,
+     "max": 5.5,
+     "n": 5
+    },
+    "startup.screen.frames": {
+     "median": 19,
+     "min": 14,
+     "max": 26,
+     "n": 5
+    },
+    "startup.screen.gapMaxMs": {
+     "median": 1386.9,
+     "min": 387.7,
+     "max": 2289.2,
+     "n": 5
+    },
+    "startup.screen.gapP50Ms": {
+     "median": 56.3,
+     "min": 36.2,
+     "max": 134.6,
+     "n": 5
+    },
+    "startup.screen.gapP95Ms": {
+     "median": 384.1,
+     "min": 346.1,
+     "max": 946.5,
+     "n": 5
+    },
+    "startup.screen.gapP99Ms": {
+     "median": 1386.9,
+     "min": 387.7,
+     "max": 2289.2,
+     "n": 5
+    },
+    "startup.screen.gapsOver50Ms": {
+     "median": 7,
+     "min": 5,
+     "max": 17,
+     "n": 5
+    },
+    "startup.server.cpuMeanPct": {
+     "median": 6.3,
+     "min": 1.9,
+     "max": 12.1,
+     "n": 5
+    },
+    "warmup.bytesDownKBps": {
+     "median": 46,
+     "min": 43,
+     "max": 56,
+     "n": 5
+    },
+    "warmup.bytesUpKBps": {
+     "median": 1,
+     "min": 1,
+     "max": 2,
+     "n": 5
+    },
+    "warmup.durationS": {
+     "median": 10.8,
+     "min": 9,
+     "max": 11.5,
+     "n": 5
+    },
+    "warmup.machine.cpuBusyPct": {
+     "median": 285,
+     "min": 245,
+     "max": 335,
+     "n": 5
+    },
+    "warmup.machine.foreignCpuPct": {
+     "median": 43,
+     "min": 7,
+     "max": 71,
+     "n": 5
+    },
+    "warmup.proc.browser.cpuMeanPct": {
+     "median": 13.1,
+     "min": 11.2,
+     "max": 14.1,
+     "n": 5
+    },
+    "warmup.proc.browser.pssMaxMB": {
+     "median": 131.8,
+     "min": 130.2,
+     "max": 135.9,
+     "n": 5
+    },
+    "warmup.proc.browser.pssMedianMB": {
+     "median": 131.3,
+     "min": 129.8,
+     "max": 134.7,
+     "n": 5
+    },
+    "warmup.proc.browser.rssMaxMB": {
+     "median": 259.3,
+     "min": 257.8,
+     "max": 261.9,
+     "n": 5
+    },
+    "warmup.proc.browser.rssMedianMB": {
+     "median": 258.3,
+     "min": 257,
+     "max": 260.9,
+     "n": 5
+    },
+    "warmup.proc.chrome-ui.cpuMeanPct": {
+     "median": 0.2,
+     "min": 0.1,
+     "max": 0.2,
+     "n": 5
+    },
+    "warmup.proc.chrome-ui.pssMaxMB": {
+     "median": 59.3,
+     "min": 58.9,
+     "max": 60.4,
+     "n": 5
+    },
+    "warmup.proc.chrome-ui.pssMedianMB": {
+     "median": 58.8,
+     "min": 57.2,
+     "max": 60.1,
+     "n": 5
+    },
+    "warmup.proc.chrome-ui.rssMaxMB": {
+     "median": 140.3,
+     "min": 139.8,
+     "max": 142.8,
+     "n": 5
+    },
+    "warmup.proc.chrome-ui.rssMedianMB": {
+     "median": 140.3,
+     "min": 138.7,
+     "max": 142.7,
+     "n": 5
+    },
+    "warmup.proc.gpu-process.cpuMeanPct": {
+     "median": 131.1,
+     "min": 122.3,
+     "max": 171.7,
+     "n": 5
+    },
+    "warmup.proc.gpu-process.pssMaxMB": {
+     "median": 221.7,
+     "min": 215.2,
+     "max": 232.9,
+     "n": 5
+    },
+    "warmup.proc.gpu-process.pssMedianMB": {
+     "median": 208.1,
+     "min": 198.7,
+     "max": 218.9,
+     "n": 5
+    },
+    "warmup.proc.gpu-process.rssMaxMB": {
+     "median": 310,
+     "min": 304.5,
+     "max": 321.9,
+     "n": 5
+    },
+    "warmup.proc.gpu-process.rssMedianMB": {
+     "median": 296.7,
+     "min": 287.5,
+     "max": 307.5,
+     "n": 5
+    },
+    "warmup.proc.network.cpuMeanPct": {
+     "median": 4.3,
+     "min": 3.3,
+     "max": 4.4,
+     "n": 5
+    },
+    "warmup.proc.network.pssMaxMB": {
+     "median": 42.9,
+     "min": 42.1,
+     "max": 43.5,
+     "n": 5
+    },
+    "warmup.proc.network.pssMedianMB": {
+     "median": 42.7,
+     "min": 41.9,
+     "max": 43.2,
+     "n": 5
+    },
+    "warmup.proc.network.rssMaxMB": {
+     "median": 121.2,
+     "min": 120.9,
+     "max": 122.6,
+     "n": 5
+    },
+    "warmup.proc.network.rssMedianMB": {
+     "median": 121.1,
+     "min": 120.7,
+     "max": 122.5,
+     "n": 5
+    },
+    "warmup.proc.page-renderer.cpuMeanPct": {
+     "median": 49.6,
+     "min": 38.3,
+     "max": 57.8,
+     "n": 5
+    },
+    "warmup.proc.page-renderer.pssMaxMB": {
+     "median": 141.3,
+     "min": 138.9,
+     "max": 142.7,
+     "n": 5
+    },
+    "warmup.proc.page-renderer.pssMedianMB": {
+     "median": 136.3,
+     "min": 135,
+     "max": 137.8,
+     "n": 5
+    },
+    "warmup.proc.page-renderer.rssMaxMB": {
+     "median": 231.3,
+     "min": 228.4,
+     "max": 233.3,
+     "n": 5
+    },
+    "warmup.proc.page-renderer.rssMedianMB": {
+     "median": 226.1,
+     "min": 224.5,
+     "max": 227.5,
+     "n": 5
+    },
+    "warmup.proc.renderer.cpuMeanPct": {
+     "median": 49.6,
+     "min": 38.3,
+     "max": 57.8,
+     "n": 5
+    },
+    "warmup.proc.renderer.pssMaxMB": {
+     "median": 158.4,
+     "min": 156,
+     "max": 160,
+     "n": 5
+    },
+    "warmup.proc.renderer.pssMedianMB": {
+     "median": 154,
+     "min": 152.1,
+     "max": 155.3,
+     "n": 5
+    },
+    "warmup.proc.renderer.rssMaxMB": {
+     "median": 302.2,
+     "min": 299.1,
+     "max": 304.3,
+     "n": 5
+    },
+    "warmup.proc.renderer.rssMedianMB": {
+     "median": 297.5,
+     "min": 295.2,
+     "max": 298.7,
+     "n": 5
+    },
+    "warmup.proc.total.cpuMeanPct": {
+     "median": 199.4,
+     "min": 192.6,
+     "max": 239.1,
+     "n": 5
+    },
+    "warmup.proc.total.pssMaxMB": {
+     "median": 653.3,
+     "min": 644.1,
+     "max": 660.1,
+     "n": 5
+    },
+    "warmup.proc.total.pssMedianMB": {
+     "median": 637.3,
+     "min": 628.4,
+     "max": 650.4,
+     "n": 5
+    },
+    "warmup.proc.total.rssMaxMB": {
+     "median": 1324.3,
+     "min": 1311.5,
+     "max": 1329.1,
+     "n": 5
+    },
+    "warmup.proc.total.rssMedianMB": {
+     "median": 1307.1,
+     "min": 1296.3,
+     "max": 1319.8,
+     "n": 5
+    },
+    "warmup.proc.utility.cpuMeanPct": {
+     "median": 0.1,
+     "min": 0,
+     "max": 0.3,
+     "n": 5
+    },
+    "warmup.proc.utility.pssMaxMB": {
+     "median": 10.1,
+     "min": 10,
+     "max": 10.2,
+     "n": 5
+    },
+    "warmup.proc.utility.pssMedianMB": {
+     "median": 10,
+     "min": 9.9,
+     "max": 10.2,
+     "n": 5
+    },
+    "warmup.proc.utility.rssMaxMB": {
+     "median": 51.7,
+     "min": 51.3,
+     "max": 52.3,
+     "n": 5
+    },
+    "warmup.proc.utility.rssMedianMB": {
+     "median": 51.7,
+     "min": 51.3,
+     "max": 52.3,
+     "n": 5
+    },
+    "warmup.proc.zygote.cpuMeanPct": {
+     "median": 0,
+     "min": 0,
+     "max": 0,
+     "n": 5
+    },
+    "warmup.proc.zygote.pssMaxMB": {
+     "median": 32.5,
+     "min": 32.4,
+     "max": 32.7,
+     "n": 5
+    },
+    "warmup.proc.zygote.pssMedianMB": {
+     "median": 32.5,
+     "min": 32.4,
+     "max": 32.7,
+     "n": 5
+    },
+    "warmup.proc.zygote.rssMaxMB": {
+     "median": 140.2,
+     "min": 139.7,
+     "max": 140.3,
+     "n": 5
+    },
+    "warmup.proc.zygote.rssMedianMB": {
+     "median": 140.2,
+     "min": 139.7,
+     "max": 140.3,
+     "n": 5
+    },
+    "warmup.screen.fps": {
+     "median": 9.8,
+     "min": 8.3,
+     "max": 21.3,
+     "n": 5
+    },
+    "warmup.screen.frames": {
+     "median": 100,
+     "min": 90,
+     "max": 197,
+     "n": 5
+    },
+    "warmup.screen.gapMaxMs": {
+     "median": 875.2,
+     "min": 318.4,
+     "max": 1227.5,
+     "n": 5
+    },
+    "warmup.screen.gapP50Ms": {
+     "median": 41.7,
+     "min": 23.3,
+     "max": 51.1,
+     "n": 5
+    },
+    "warmup.screen.gapP95Ms": {
+     "median": 344.3,
+     "min": 177.2,
+     "max": 448.9,
+     "n": 5
+    },
+    "warmup.screen.gapP99Ms": {
+     "median": 499.5,
+     "min": 292.4,
+     "max": 774.2,
+     "n": 5
+    },
+    "warmup.screen.gapsOver50Ms": {
+     "median": 45,
+     "min": 39,
+     "max": 51,
+     "n": 5
+    },
+    "warmup.server.cpuMeanPct": {
+     "median": 38.5,
+     "min": 19.6,
+     "max": 41.9,
+     "n": 5
+    }
+   }
+  }
+ }
+}
