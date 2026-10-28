@@ -1938,6 +1938,10 @@ pub fn run() {
             commands::terminal_rotate_claim,
             commands::terminal_revoke_claim,
             commands::terminal_write,
+            commands::command_editor_submit,
+            commands::command_editor_restore_prompt,
+            commands::command_editor_request_completion,
+            commands::command_editor_cancel_completion,
             commands::terminal_resize,
             commands::terminal_kill,
             commands::terminal_get_cwd,
@@ -2257,6 +2261,9 @@ pub fn run() {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod fs_watch_wire_tests;
