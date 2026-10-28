@@ -83,6 +83,26 @@ const UPDATE_MODE: UpdateMode = import.meta.env.VITE_TERMUL_UPDATE_MODE === 'aur
 
 let pendingTauriUpdate: Update | null = null
 let downloadedUpdate: Update | null = null
+// The handle a download is running on, so a re-check can't close it mid-flight.
+let downloadingUpdate: Update | null = null
+
+/**
+ * Close a signed-update handle once nothing refers to it. Each signed check
+ * registers a Rust resource that stays in the webview until it is closed.
+ */
+function closeIfUnused(handle: Update | null): void {
+  if (
+    !handle ||
+    handle === pendingTauriUpdate ||
+    handle === downloadedUpdate ||
+    handle === downloadingUpdate
+  ) {
+    return
+  }
+  Promise.resolve()
+    .then(() => handle.close())
+    .catch(() => {})
+}
 let pendingAurUpdate: UpdateInfo | null = null
 let manualUpdateInfo: UpdateInfo | null = null
 let autoUpdateEnabled = true
@@ -463,6 +483,8 @@ async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | 
  * version is re-downloaded before install.
  */
 function adoptSignedUpdate(update: Update | null): UpdateInfo | null {
+  const previousPending = pendingTauriUpdate
+  const previousDownloaded = downloadedUpdate
   pendingTauriUpdate = update
   isManualUpdateMode = false
   manualUpdateInfo = null
@@ -474,6 +496,8 @@ function adoptSignedUpdate(update: Update | null): UpdateInfo | null {
   preparedUpdateVersion =
     update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
   lastCheckedAt = new Date().toISOString()
+  closeIfUnused(previousPending)
+  if (previousDownloaded !== previousPending) closeIfUnused(previousDownloaded)
   return update ? mapTauriUpdateToInfo(update) : null
 }
 
@@ -622,6 +646,7 @@ export async function downloadUpdate(
   // can reassign the module-scoped pendingTauriUpdate mid-download, which would
   // otherwise make the post-await assignments point at the wrong Update.
   const updateHandle = pendingTauriUpdate
+  downloadingUpdate = updateHandle
 
   try {
     const updateVersion = updateHandle.version
@@ -665,6 +690,10 @@ export async function downloadUpdate(
       error: getErrorMessage(error, 'Failed to download update'),
       code: UpdaterErrorCodes.DOWNLOAD_FAILED
     }
+  } finally {
+    if (downloadingUpdate === updateHandle) downloadingUpdate = null
+    // A re-check may have superseded this handle while it downloaded.
+    closeIfUnused(updateHandle)
   }
 }
 
@@ -770,6 +799,7 @@ export async function clearPendingUpdate(): Promise<void> {
 }
 
 export function _resetUpdaterStateForTesting(): void {
+  downloadingUpdate = null
   pendingTauriUpdate = null
   downloadedUpdate = null
   pendingAurUpdate = null

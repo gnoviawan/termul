@@ -90,7 +90,8 @@ function createMockUpdate(version: string, body?: string, date?: string) {
     date,
     download: vi.fn(),
     install: vi.fn(),
-    downloadAndInstall: vi.fn()
+    downloadAndInstall: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined)
   }
 }
 
@@ -356,6 +357,69 @@ describe('tauri-updater-api', () => {
         'Failed to check for updates from https://github.com/gnoviawan/termul/releases/latest/download/latest.json: {"status":500,"url":"latest.json"}'
       )
       expect(mockFetch).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('superseded update handles', () => {
+    it('closes the previous handle when a re-check replaces it', async () => {
+      const first = createMockUpdate('2.1.0')
+      const second = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValueOnce(first as never)
+      await checkForUpdates()
+      vi.mocked(check).mockResolvedValueOnce(second as never)
+      await checkForUpdates()
+      await flushPromises()
+
+      expect(first.close).toHaveBeenCalledTimes(1)
+      expect(second.close).not.toHaveBeenCalled()
+    })
+
+    it('keeps the downloaded handle open when a re-check returns the same version', async () => {
+      const first = createMockUpdate('2.1.1')
+      vi.mocked(check).mockResolvedValueOnce(first as never)
+      await checkForUpdates()
+      await downloadUpdate()
+      vi.mocked(check).mockResolvedValueOnce(createMockUpdate('2.1.1') as never)
+      await checkForUpdates()
+      await flushPromises()
+
+      expect(first.close).not.toHaveBeenCalled()
+      const state = await getUpdaterState()
+      expect(state.success && state.data.downloaded).toBe(true)
+    })
+
+    it('closes the downloaded handle once a newer version replaces it', async () => {
+      const first = createMockUpdate('2.1.2')
+      vi.mocked(check).mockResolvedValueOnce(first as never)
+      await checkForUpdates()
+      await downloadUpdate()
+      vi.mocked(check).mockResolvedValueOnce(createMockUpdate('2.1.3') as never)
+      await checkForUpdates()
+      await flushPromises()
+
+      expect(first.close).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not close a handle mid-download, and closes it after if it was superseded and failed', async () => {
+      const first = createMockUpdate('2.1.4')
+      let rejectDownload: (error: Error) => void = () => {}
+      vi.mocked(first.download).mockImplementation(
+        () => new Promise<void>((_resolve, reject) => (rejectDownload = reject))
+      )
+      vi.mocked(check).mockResolvedValueOnce(first as never)
+      await checkForUpdates()
+      const download = downloadUpdate()
+      await vi.waitFor(() => expect(first.download).toHaveBeenCalled())
+
+      vi.mocked(check).mockResolvedValueOnce(createMockUpdate('2.1.5') as never)
+      await checkForUpdates()
+      await flushPromises()
+      expect(first.close).not.toHaveBeenCalled()
+
+      rejectDownload(new Error('network'))
+      await download
+      await flushPromises()
+      expect(first.close).toHaveBeenCalledTimes(1)
     })
   })
 
