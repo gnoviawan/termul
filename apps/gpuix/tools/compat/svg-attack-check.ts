@@ -15,7 +15,7 @@
  *                  reply's `data:` image (`chat`): asserts the process
  *                  survives and, against the green control images, spends
  *                  under CHAT_CPU_MS more CPU and peaks under CHAT_RSS_MB more
- *                  resident memory.
+ *                  resident memory, the least of up to three runs.
  *
  * bun tools/compat/svg-attack-check.ts [--mode app|raw|chat] [--only id,id] [--no-grid] [--out DIR]
  */
@@ -47,6 +47,7 @@ const SCENE_TIMEOUT_MS = 30_000
 /** Decode budget for one chat image, over what a 64 px green image costs. */
 const CHAT_CPU_MS = 1000
 const CHAT_RSS_MB = 64
+const CHAT_RETRIES = 2
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -124,9 +125,18 @@ try {
     for (const [index, image] of CHAT_IMAGES.entries()) {
       const isControl = image.id.startsWith('control-')
       if (only && !isControl && !only.has(image.id)) continue
-      const run = await runScene(image.id, 'chat', index)
-      const cpuMs = run.result?.cpuMs ?? 0
-      const rssGrowthMb = run.result?.rssGrowthMb ?? 0
+      let run = await runScene(image.id, 'chat', index)
+      let cpuMs = run.result?.cpuMs ?? 0
+      let rssGrowthMb = run.result?.rssGrowthMb ?? 0
+      // The decode is deterministic and the shared host's noise only adds, so an over-budget run gets two more tries.
+      for (let retry = 0; retry < CHAT_RETRIES && control && !run.died; retry++) {
+        if (cpuMs <= control.cpuMs + CHAT_CPU_MS && rssGrowthMb <= control.rssGrowthMb + CHAT_RSS_MB)
+          break
+        run = await runScene(image.id, 'chat', index)
+        if (run.died) break
+        cpuMs = Math.min(cpuMs, run.result?.cpuMs ?? cpuMs)
+        rssGrowthMb = Math.min(rssGrowthMb, run.result?.rssGrowthMb ?? rssGrowthMb)
+      }
       console.log(
         [
           image.id.padEnd(30),

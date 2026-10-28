@@ -159,7 +159,7 @@ index ce7fc7b..ca03e58 100644
      const TEST_IMG_ID: &str = "test-img";
  
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 6aedda3..3fbd282 100644
+index 6aedda3..e3e566b 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -53,7 +53,7 @@ use futures::channel::oneshot;
@@ -183,8 +183,8 @@ index 6aedda3..3fbd282 100644
 +/// Longest side of a decoded raster image, past which no texture holds it.
 +const MAX_IMAGE_SIDE: u32 = 16_384;
 +
-+/// Decoded bytes one animation may hold, the decoder's own two canvases
-+/// included; the frames past it are dropped.
++/// Decoded bytes one animation may hold, counting the decoder's two working
++/// canvases and the frame being uploaded; the frames past it are dropped.
 +const MAX_ANIMATION_BYTES: u64 = 64 << 20;
 +
 +fn decode_limits() -> image::Limits {
@@ -233,7 +233,7 @@ index 6aedda3..3fbd282 100644
 +    decoder.set_limits(decode_limits())?;
 +    let (width, height) = decoder.dimensions();
 +    let canvas = (u64::from(width) * u64::from(height) * 4).max(1);
-+    let keep = (MAX_ANIMATION_BYTES / canvas).saturating_sub(2).max(1) as usize;
++    let keep = (MAX_ANIMATION_BYTES / canvas).saturating_sub(3).max(1) as usize;
 +    let mut frames = SmallVec::new();
 +    for frame in decoder.into_frames().take(keep) {
 +        match frame {
