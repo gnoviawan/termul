@@ -111,3 +111,30 @@ fn non_nightly_channels_never_accept_signed_channel_updates() {
         &remote
     ));
 }
+
+/// Same-day nightlies differ only in the short SHA, which has no order
+/// (`f123abc` > `a456def` lexically even if `a456def` is newer). The nightly
+/// manifest always points at the latest build, so a different same-day build
+/// in it is the newer one.
+#[test]
+fn same_day_nightly_with_a_different_sha_is_accepted_regardless_of_sha_order() {
+    let current = v("0.5.0-nightly.20261027.f123abc");
+    assert!(accepts_channel_update(
+        UpdateChannel::Nightly,
+        &current,
+        &v("0.5.0-nightly.20261027.a456def")
+    ));
+    assert!(!accepts_channel_update(
+        UpdateChannel::Nightly,
+        &current,
+        &v("0.5.0-nightly.20261027.f123abc")
+    ));
+    assert!(
+        !accepts_channel_update(
+            UpdateChannel::Nightly,
+            &current,
+            &v("0.5.0-nightly.20261026.fffffff")
+        ),
+        "an earlier date stays older whatever the SHA"
+    );
+}

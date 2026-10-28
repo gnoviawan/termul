@@ -168,11 +168,25 @@ pub fn resolve_signed_channel(channel: &str) -> Result<UpdateChannel, String> {
     Ok(parsed)
 }
 
+/// `(date, build)` from a nightly prerelease `nightly.<YYYYMMDD>.<sha>`.
+fn nightly_build(version: &semver::Version) -> Option<(&str, &str)> {
+    let mut parts = version.pre.as_str().splitn(3, '.');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("nightly"), Some(date), Some(build)) => Some((date, build)),
+        _ => None,
+    }
+}
+
 /// Version gate for the signed channel check (replaces the plugin's default
-/// `remote > current`). Nightly only accepts a strictly newer build whose
-/// prerelease tag is `nightly.*`, so a stable or insider build that ever lands
-/// in the nightly manifest is not installed from it. A stable build switching
-/// to Nightly (e.g. 0.4.52 -> 0.5.0-nightly.*) is accepted because it is newer.
+/// `remote > current`). Nightly only accepts a newer build whose prerelease
+/// is `nightly.<date>.<sha>`, so a stable or insider build that ever lands in
+/// the nightly manifest is not installed from it. A stable build switching to
+/// Nightly (e.g. 0.4.52 -> 0.5.0-nightly.*) is accepted because it is newer.
+///
+/// Same-day nightlies differ only in the short SHA, which SemVer compares
+/// lexically and which carries no order. The nightly manifest is a moving
+/// pointer to the latest build, so a different same-day build in it is
+/// treated as newer instead of being skipped until the next date.
 pub fn accepts_channel_update(
     channel: UpdateChannel,
     current: &semver::Version,
@@ -180,13 +194,17 @@ pub fn accepts_channel_update(
 ) -> bool {
     match channel {
         UpdateChannel::Nightly => {
-            remote > current
-                && remote
-                    .pre
-                    .as_str()
-                    .split('.')
-                    .next()
-                    .is_some_and(|tag| tag == "nightly")
+            let Some((remote_date, remote_build)) = nightly_build(remote) else {
+                return false;
+            };
+            let same_core = (remote.major, remote.minor, remote.patch)
+                == (current.major, current.minor, current.patch);
+            match nightly_build(current) {
+                Some((current_date, current_build)) if same_core && current_date == remote_date => {
+                    current_build != remote_build
+                }
+                _ => remote > current,
+            }
         }
         UpdateChannel::Stable | UpdateChannel::Insider => false,
     }
@@ -218,10 +236,23 @@ pub async fn updater_check_channel<R: tauri::Runtime>(
     webview: tauri::Webview<R>,
     channel: String,
 ) -> Result<Option<SignedUpdateMetadata>, String> {
+    let result = check_signed_channel(&webview, &channel).await;
+    if let Err(message) = &result {
+        log::warn!(
+            "[updater] signed channel check failed channel={channel}, renderer falls back to manual download: {message}"
+        );
+    }
+    result
+}
+
+async fn check_signed_channel<R: tauri::Runtime>(
+    webview: &tauri::Webview<R>,
+    channel: &str,
+) -> Result<Option<SignedUpdateMetadata>, String> {
     use tauri::Manager;
     use tauri_plugin_updater::UpdaterExt;
 
-    let parsed = resolve_signed_channel(&channel)?;
+    let parsed = resolve_signed_channel(channel)?;
     let url = signed_channel_endpoint(parsed)
         .ok_or_else(|| format!("no signed endpoint for update channel {channel}"))?;
     let endpoint = url::Url::parse(url).map_err(|e| format!("invalid manifest url {url}: {e}"))?;
