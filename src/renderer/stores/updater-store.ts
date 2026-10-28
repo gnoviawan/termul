@@ -198,6 +198,9 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   downloadUpdate: async (): Promise<void> => {
     const { isDownloading, updateAvailable } = get()
     if (isDownloading || !updateAvailable) return
+    // Capture the mode before awaiting: a check that finishes mid-download
+    // must not turn an opened release page into a staged update.
+    const isManualAction = get().isManualUpdateMode
 
     set({ isDownloading: true, error: null, errorSource: null, downloadProgress: 0 })
 
@@ -206,7 +209,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         get()._setDownloadProgress(progress)
       })
 
-      if (result.success && get().isManualUpdateMode) {
+      if (result.success && isManualAction) {
         // A manual update only opened the release page: nothing is staged, so
         // it must not look like a downloaded, ready-to-install update.
         set({ downloaded: false, downloadProgress: 0, error: null })

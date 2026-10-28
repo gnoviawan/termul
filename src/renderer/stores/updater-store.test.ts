@@ -332,6 +332,23 @@ describe('updater-store', () => {
       expect(state.isManualUpdateMode).toBe(true)
     })
 
+    it('keeps the mode captured when a manual download started, even if a check changes it mid-download', async () => {
+      useUpdaterStore.setState({
+        updateAvailable: true,
+        downloaded: false,
+        isManualUpdateMode: true
+      })
+      vi.mocked(tauriUpdaterApi.downloadUpdate).mockImplementationOnce(async () => {
+        // A signed check finishes while the release page is still opening.
+        useUpdaterStore.setState({ isManualUpdateMode: false })
+        return { success: true }
+      })
+
+      await useUpdaterStore.getState().downloadUpdate()
+
+      expect(useUpdaterStore.getState().downloaded).toBe(false)
+    })
+
     it('opens the download page for a manual update even though nothing was downloaded', async () => {
       useUpdaterStore.setState({
         updateAvailable: true,

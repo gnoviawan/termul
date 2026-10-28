@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { UpdatesSection } from './updates-section'
@@ -9,7 +9,7 @@ vi.mock('@/lib/tauri-runtime', () => ({
 
 type Props = ComponentProps<typeof UpdatesSection>
 
-function renderSection(overrides: Partial<Props> = {}): void {
+function renderSection(overrides: Partial<Props> = {}): Props {
   const props: Props = {
     isAurUpdater: false,
     isChecking: false,
@@ -23,12 +23,14 @@ function renderSection(overrides: Partial<Props> = {}): void {
     isManualUpdateMode: false,
     updateChannel: 'stable',
     checkForUpdates: vi.fn(),
+    downloadUpdate: vi.fn(),
     installAndRestart: vi.fn(),
     handleAutoUpdateToggle: vi.fn(),
     setUpdateChannel: vi.fn(),
     ...overrides
   }
   render(<UpdatesSection {...props} />)
+  return props
 }
 
 describe('UpdatesSection update mode copy', () => {
@@ -92,5 +94,42 @@ describe('UpdatesSection error copy', () => {
 
     expect(screen.getByText(/Termul could not install the update\./)).toBeTruthy()
     expect(screen.queryByText(/could not check for updates/)).toBeNull()
+  })
+})
+
+describe('UpdatesSection error retry', () => {
+  function clickTryAgain(): void {
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }))
+  }
+
+  it('retries the check after a failed check', () => {
+    const props = renderSection({ updateError: 'network down', updateErrorSource: 'check' })
+
+    clickTryAgain()
+
+    expect(props.checkForUpdates).toHaveBeenCalledTimes(1)
+    expect(props.downloadUpdate).not.toHaveBeenCalled()
+    expect(props.installAndRestart).not.toHaveBeenCalled()
+  })
+
+  it('retries the download after a failed download', () => {
+    const props = renderSection({
+      updateError: 'signature mismatch',
+      updateErrorSource: 'download'
+    })
+
+    clickTryAgain()
+
+    expect(props.downloadUpdate).toHaveBeenCalledTimes(1)
+    expect(props.checkForUpdates).not.toHaveBeenCalled()
+  })
+
+  it('retries the install after a failed install', () => {
+    const props = renderSection({ updateError: 'install failed', updateErrorSource: 'install' })
+
+    clickTryAgain()
+
+    expect(props.installAndRestart).toHaveBeenCalledTimes(1)
+    expect(props.checkForUpdates).not.toHaveBeenCalled()
   })
 })

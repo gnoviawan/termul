@@ -25,6 +25,7 @@ interface UpdatesSectionProps {
   isManualUpdateMode: boolean
   updateChannel: UpdateChannel
   checkForUpdates: () => void
+  downloadUpdate: () => void
   installAndRestart: () => void
   handleAutoUpdateToggle: (enabled: boolean) => void
   setUpdateChannel: (channel: UpdateChannel) => void
@@ -64,11 +65,20 @@ export function UpdatesSection({
   isManualUpdateMode,
   updateChannel,
   checkForUpdates,
+  downloadUpdate,
   installAndRestart,
   handleAutoUpdateToggle,
   setUpdateChannel
 }: UpdatesSectionProps): React.JSX.Element | null {
   if (!isTauriContext()) return null
+
+  // "Try again" retries the step that failed, matching the error copy.
+  const retryFailedStep =
+    updateErrorSource === 'download'
+      ? downloadUpdate
+      : updateErrorSource === 'install'
+        ? installAndRestart
+        : checkForUpdates
 
   const channel = CHANNELS.find((option) => option.value === updateChannel) ?? CHANNELS[0]
   const versionDescription = [
@@ -112,7 +122,7 @@ export function UpdatesSection({
                 size="xs"
                 variant="outline"
                 disabled={isChecking}
-                onClick={checkForUpdates}
+                onClick={retryFailedStep}
               >
                 <RotateCcw size={13} />
                 Try again
