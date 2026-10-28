@@ -14,42 +14,52 @@ The browser version has no update settings. It updates together with the server,
 1. Open app settings with `Ctrl+,` (`Cmd+,` on macOS).
 2. Select **Updates**.
 
-The tab shows the version you have under **Current Version**.
+The tab shows the version you have as **Termul** and the number, with the channel and when Termul last checked below it.
 
 ## Pick a release channel
 
-Under **Release Channel**, select one of these:
+Under **Channel**, open **Release channel** and select one of these:
 
 - **Stable** gets production releases. It is the default and the most reliable channel.
 - **Insider** gets release candidates, the versions that come before a stable release. They can be unfinished.
 - **Nightly** gets builds made automatically from the newest code. They can be unstable.
 
-On **Insider** and **Nightly**, Termul does not install updates for you. It tells you about a new version and opens the release page, where you download and install it yourself.
+On **Stable** and **Nightly**, Termul downloads and installs signed updates in the app. On Nightly the tab says **Updates are signed and install in the app.**
+
+On **Insider**, Termul does not install updates for you. It tells you about a new version and opens the release page, where you download and install it yourself.
+
+If Termul cannot get a signed update on any channel, for example because there is no network or no build for your system yet, it falls back to the release page. The tab then says **Automatic update is not available. Download and install it from the release page.**
+
+When you switch channels, Termul clears an update it found on the old channel. Select **Check for updates** to look on the new one.
 
 If you installed Termul from the AUR on Arch Linux, there is no channel choice. Update with `yay -S termul-manager`.
 
 ## Check for updates
 
-Select **Check for Updates**. If a new version is out, the tab shows **Version** and the number, followed by **is available!**. **Last checked** shows when Termul last looked.
+Select **Check for updates**. If a new version is out, the tab shows **Version** and the number, followed by **is available.**
 
 On macOS you can also use **Help** > **Check for Updates...** in the menu bar, or press `Cmd+Shift+U`.
 
+If a check, download, or install fails, the tab says which step failed. Select **Try again** to repeat that step.
+
 ## Turn automatic checks on or off
 
-**Automatically check for updates** is on by default. Termul then checks when it starts and again about every 12 hours. Turn it off to check only when you select **Check for Updates**.
+**Check for updates automatically** is on by default. Termul then checks when it starts and again about every 12 hours. Turn it off to check only when you select **Check for updates**.
+
+An automatic check does not undo a download. If Termul already downloaded a version and the check finds the same one, it stays ready to install.
 
 ## Install an update
 
-When Termul finds a new version, a message appears in the corner of the window: **Update available: version** and the number. On Insider and Nightly, the message starts with the channel name.
+When Termul finds a new version, a message appears in the corner of the window: **Update available**, with the version number below it. On Insider and Nightly, the message starts with the channel name.
 
-1. Select **Download**. On Insider and Nightly the button is **Open Download Page**, and you install the new version yourself.
-2. Wait for the download. A message shows its progress.
-3. When **Update ready to install** appears, select **Install & Restart**.
-4. Termul asks you to confirm. Select **Install & Restart** again, or **Not now** to install later.
+1. Select **Download**. If the message offers **Open download page** instead, Termul opens the release page and you install the new version yourself.
+2. Wait for the download. A message shows its progress and goes away when the download ends.
+3. When **Update ready to install** appears, select **Install and restart**.
+4. Termul asks you to confirm. Select **Install & Restart**, or **Not now** to install later.
 
 Termul closes, installs the update, and opens again. Terminals that are running when you install are closed.
 
-To hide the update message for a day, select **Remind Me**.
+To hide the update message for a day, select **Remind me tomorrow**.
 
 ## See what's new
 
