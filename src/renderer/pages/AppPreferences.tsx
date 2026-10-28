@@ -110,6 +110,7 @@ export function AppPreferencesModal(): React.JSX.Element {
     autoUpdateEnabled,
     skippedVersion,
     error: updateError,
+    errorSource: updateErrorSource,
     isManualUpdateMode,
     updateChannel
   } = useUpdaterState()
@@ -348,6 +349,7 @@ export function AppPreferencesModal(): React.JSX.Element {
             autoUpdateEnabled={autoUpdateEnabled}
             skippedVersion={skippedVersion}
             updateError={updateError}
+            updateErrorSource={updateErrorSource}
             isManualUpdateMode={isManualUpdateMode}
             updateChannel={updateChannel}
             checkForUpdates={checkForUpdates}

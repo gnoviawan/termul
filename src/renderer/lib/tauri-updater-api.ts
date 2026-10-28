@@ -184,7 +184,8 @@ export function mapTauriUpdateToInfo(update: Update): UpdateInfo {
     version: update.version,
     releaseDate: update.date ?? new Date().toISOString(),
     releaseNotes: update.body ?? undefined,
-    isSecurityUpdate: false
+    isSecurityUpdate: false,
+    installMode: 'in-app'
   }
 }
 
@@ -401,15 +402,22 @@ async function fetchChannelManifest(channel: UpdateChannel): Promise<ChannelMani
 }
 
 /**
- * Insider/Nightly check: fetch the per-channel manifest, compare against the
- * current app version with SemVer prerelease precedence, and offer the update
- * via manual download. The Tauri updater plugin cannot take a runtime endpoint
- * URL from the renderer, so non-stable channels offer a manual download of the
- * channel's GitHub release page instead of the signed in-app install.
+ * Manual channel check: Insider always, and Nightly when its signed check
+ * fails. Fetch the per-channel manifest, compare against the current app
+ * version with SemVer prerelease precedence, and offer the channel's GitHub
+ * release page (`installMode: 'manual'`) instead of a signed in-app install.
  *
  * On manifest fetch failure (404 / network) the call throws so the store
  * surfaces the error and the periodic retry re-attempts next cycle.
  */
+/**
+ * A nightly manifest only ever offers nightly builds: a stable or rc version
+ * that lands there is ignored, matching the signed Rust check.
+ */
+function isVersionForChannel(version: string, channel: UpdateChannel): boolean {
+  return channel !== 'nightly' || /-nightly\./.test(version)
+}
+
 async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | null> {
   let manifest: ChannelManifest
   try {
@@ -422,7 +430,7 @@ async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | 
   const latestVersion = normalizeVersion(manifest.version ?? '')
   let updateInfo: UpdateInfo | null = null
 
-  if (latestVersion) {
+  if (latestVersion && isVersionForChannel(latestVersion, channel)) {
     const currentVersion = await getVersion()
     if (compareVersions(latestVersion, currentVersion) > 0) {
       updateInfo = {
@@ -433,7 +441,8 @@ async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | 
         releaseDate: manifest.pub_date,
         releaseNotes: manifest.notes ?? undefined,
         isSecurityUpdate: false,
-        downloadUrl: getChannelReleasePageUrl(channel)
+        downloadUrl: getChannelReleasePageUrl(channel),
+        installMode: 'manual'
       }
     }
   }
@@ -529,10 +538,11 @@ export async function checkForUpdates(
       try {
         const fallback = await checkGitHubFallback()
         if (fallback) {
+          const manualFallback: UpdateInfo = { ...fallback, installMode: 'manual' }
           isManualUpdateMode = true
-          manualUpdateInfo = fallback
+          manualUpdateInfo = manualFallback
           pendingTauriUpdate = null
-          return fallback
+          return manualFallback
         }
         return null
       } catch (fallbackError) {

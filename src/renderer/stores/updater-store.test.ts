@@ -131,10 +131,12 @@ beforeEach(() => {
     isChecking: false,
     isDownloading: false,
     error: null,
+    errorSource: null,
     lastChecked: null,
     autoUpdateEnabled: true,
     releaseNotes: null,
     hasActiveTerminals: false,
+    isManualUpdateMode: false,
     // Reset the channel so tests that mutate it (channel-preference suite)
     // stay isolated — the store's create() default is 'stable'.
     updateChannel: 'stable'
@@ -241,6 +243,44 @@ describe('updater-store', () => {
 
       expect(useUpdaterStore.getState().error).toBe('Network error')
       expect(useUpdaterStore.getState().isChecking).toBe(false)
+      expect(useUpdaterStore.getState().errorSource).toBe('check')
+    })
+
+    it('uses the in-app mode for a signed nightly update', async () => {
+      useUpdaterStore.setState({ updateChannel: 'nightly', isManualUpdateMode: true })
+      vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue({
+        version: '0.5.0-nightly.20261028.101.bbbbbbb',
+        isSecurityUpdate: false,
+        installMode: 'in-app'
+      })
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      expect(useUpdaterStore.getState().updateAvailable).toBe(true)
+      expect(useUpdaterStore.getState().isManualUpdateMode).toBe(false)
+    })
+
+    it('uses the manual mode when the nightly check falls back to the release page', async () => {
+      useUpdaterStore.setState({ updateChannel: 'nightly' })
+      vi.mocked(tauriUpdaterApi.checkForUpdates).mockResolvedValue({
+        version: '0.5.0-nightly.20261028.101.bbbbbbb',
+        isSecurityUpdate: false,
+        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/nightly',
+        installMode: 'manual'
+      })
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      expect(useUpdaterStore.getState().updateAvailable).toBe(true)
+      expect(useUpdaterStore.getState().isManualUpdateMode).toBe(true)
+    })
+
+    it('leaves the manual mode once no update is available', async () => {
+      useUpdaterStore.setState({ updateAvailable: true, isManualUpdateMode: true })
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      expect(useUpdaterStore.getState().isManualUpdateMode).toBe(false)
     })
   })
 
@@ -258,6 +298,7 @@ describe('updater-store', () => {
       const state = useUpdaterStore.getState()
       expect(state.downloaded).toBe(false)
       expect(state.error).toBe('tauri download failed')
+      expect(state.errorSource).toBe('download')
       expect(state.isDownloading).toBe(false)
     })
 
@@ -272,6 +313,35 @@ describe('updater-store', () => {
       await useUpdaterStore.getState().installAndRestart()
 
       expect(useUpdaterStore.getState().error).toBe('tauri install failed')
+      expect(useUpdaterStore.getState().errorSource).toBe('install')
+    })
+
+    it('does not mark a manual update as downloaded after opening the download page', async () => {
+      useUpdaterStore.setState({
+        updateAvailable: true,
+        downloaded: false,
+        isManualUpdateMode: true
+      })
+
+      await useUpdaterStore.getState().downloadUpdate()
+
+      const state = useUpdaterStore.getState()
+      expect(tauriUpdaterApi.downloadUpdate).toHaveBeenCalledTimes(1)
+      expect(state.downloaded).toBe(false)
+      expect(state.downloadProgress).toBe(0)
+      expect(state.isManualUpdateMode).toBe(true)
+    })
+
+    it('opens the download page for a manual update even though nothing was downloaded', async () => {
+      useUpdaterStore.setState({
+        updateAvailable: true,
+        downloaded: false,
+        isManualUpdateMode: true
+      })
+
+      await useUpdaterStore.getState().installAndRestart()
+
+      expect(tauriUpdaterApi.installAndRestart).toHaveBeenCalledTimes(1)
     })
 
     it('should set skippedVersion and clear updateAvailable', async () => {

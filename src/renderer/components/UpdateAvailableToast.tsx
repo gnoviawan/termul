@@ -62,7 +62,9 @@ function setReminderForTomorrow(): void {
  */
 export function showUpdateToast(version: string, releaseNotes?: string): void {
   const isAur = isAurUpdateMode()
-  const channel = updaterStore.getState().updateChannel
+  // Copy follows the update mode, not the channel: a signed nightly installs
+  // in the app, while a fallback (any channel) opens the release page.
+  const { updateChannel: channel, isManualUpdateMode: isManual } = updaterStore.getState()
   const title =
     channel === 'insider'
       ? 'Insider update available'
@@ -77,11 +79,11 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
       ? `Version ${version}. What's new: ${releaseNotes.slice(0, 100)}${releaseNotes.length > 100 ? '…' : ''}`
       : isAur
         ? `Version ${version} is available. Update with yay.`
-        : channel !== 'stable'
+        : isManual
           ? `Version ${version}. Open the download page to install it manually.`
           : `Version ${version} is ready to download.`,
     action: {
-      label: isAur ? 'Use yay' : channel !== 'stable' ? 'Open download page' : 'Download',
+      label: isAur ? 'Use yay' : isManual ? 'Open download page' : 'Download',
       onClick: async () => {
         if (isAur) {
           toast.info('Run in terminal', {

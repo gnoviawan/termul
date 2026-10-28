@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import type { UpdateChannel } from '@/lib/tauri-updater-api'
+import { supportsSignedChannelUpdate, type UpdateChannel } from '@/lib/tauri-updater-api'
+import type { UpdaterErrorSource } from '@/stores/updater-store'
 import { rowId } from './categories'
 
 interface UpdatesSectionProps {
@@ -20,6 +21,7 @@ interface UpdatesSectionProps {
   autoUpdateEnabled: boolean
   skippedVersion: string | null
   updateError: string | null
+  updateErrorSource: UpdaterErrorSource | null
   isManualUpdateMode: boolean
   updateChannel: UpdateChannel
   checkForUpdates: () => void
@@ -33,6 +35,12 @@ const CHANNELS: Array<{ value: UpdateChannel; label: string; description: string
   { value: 'insider', label: 'Insider', description: 'Release candidates (rc) before stable.' },
   { value: 'nightly', label: 'Nightly', description: 'Automated main-branch builds.' }
 ]
+
+const UPDATE_ERROR_COPY: Record<UpdaterErrorSource, string> = {
+  check: 'Termul could not check for updates. Check your connection, then try again.',
+  download: 'Termul could not download the update. Check your connection, then try again.',
+  install: 'Termul could not install the update. Try again, or download it from the release page.'
+}
 
 const formatLastChecked = (date: Date): string =>
   new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
@@ -52,6 +60,7 @@ export function UpdatesSection({
   autoUpdateEnabled,
   skippedVersion,
   updateError,
+  updateErrorSource,
   isManualUpdateMode,
   updateChannel,
   checkForUpdates,
@@ -110,7 +119,7 @@ export function UpdatesSection({
               </Button>
             }
           >
-            Termul could not check for updates. Check your connection, then try again.
+            {UPDATE_ERROR_COPY[updateErrorSource ?? 'check']}
             <span className="mt-1 block break-words font-mono text-muted-foreground">
               {updateError}
             </span>
@@ -165,7 +174,11 @@ export function UpdatesSection({
           {updateChannel !== 'stable' && (
             <SettingsNotice tone="warning">
               {updateChannel === 'nightly'
-                ? 'Nightly builds are automated from the latest commit and may be unstable. Updates are offered as a manual download from the nightly release page.'
+                ? `Nightly builds are automated from the latest commit and may be unstable. ${
+                    supportsSignedChannelUpdate(updateChannel) && !isManualUpdateMode
+                      ? 'Updates are signed and install in the app.'
+                      : 'Updates are offered as a manual download from the nightly release page.'
+                  }`
                 : 'Insider release candidates may be unfinished. Updates are offered as a manual download from the insider release page.'}
             </SettingsNotice>
           )}

@@ -176,7 +176,8 @@ describe('tauri-updater-api', () => {
         version: '0.5.0-nightly.20261028.bbbbbbb',
         releaseDate: '2026-10-27T17:46:13Z',
         releaseNotes: 'nightly notes',
-        isSecurityUpdate: false
+        isSecurityUpdate: false,
+        installMode: 'in-app'
       })
       expect(constructedUpdates).toHaveLength(1)
       expect(constructedUpdates[0]?.rid).toBe(42)
@@ -229,8 +230,30 @@ describe('tauri-updater-api', () => {
       const result = await checkForUpdates('nightly')
 
       expect(result?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/nightly')
+      expect(result?.installMode).toBe('manual')
       const state = await getUpdaterState()
       expect(state.success && state.data.isManualUpdateMode).toBe(true)
+    })
+
+    it.each([
+      ['a stable release', '0.6.0'],
+      ['an insider release candidate', '0.6.0-rc.1']
+    ])('never offers %s from the nightly manifest in the manual fallback', async (_label, version) => {
+      routeInvoke({
+        updater_check_channel: () => {
+          throw new Error('signature verification failed')
+        },
+        updater_fetch_channel_manifest: () => ({
+          success: true,
+          data: { version, platforms: {} }
+        })
+      })
+      vi.mocked(getVersion).mockResolvedValue('0.5.0-nightly.20261027.100.aaaaaaa')
+
+      await expect(checkForUpdates('nightly')).resolves.toBeNull()
+      const state = await getUpdaterState()
+      expect(state.success && state.data.updateAvailable).toBe(false)
+      expect(state.success && state.data.isManualUpdateMode).toBe(false)
     })
 
     it('keeps insider on the manual manifest path', async () => {
@@ -245,6 +268,7 @@ describe('tauri-updater-api', () => {
 
       expect(mockInvoke).not.toHaveBeenCalledWith('updater_check_channel', expect.anything())
       expect(result?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/insider')
+      expect(result?.installMode).toBe('manual')
     })
 
     it('keeps stable on the built-in signed endpoint and never asks for the nightly channel', async () => {
@@ -282,7 +306,8 @@ describe('tauri-updater-api', () => {
         version: '2.0.0',
         releaseDate: '2026-03-01T00:00:00.000Z',
         releaseNotes: 'release notes',
-        isSecurityUpdate: false
+        isSecurityUpdate: false,
+        installMode: 'in-app'
       })
     })
 
@@ -311,7 +336,8 @@ describe('tauri-updater-api', () => {
         releaseDate: '2026-05-01T15:13:12Z',
         releaseNotes: 'release notes',
         isSecurityUpdate: false,
-        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4'
+        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4',
+        installMode: 'manual'
       })
 
       const state = await getUpdaterState()
@@ -557,7 +583,8 @@ describe('tauri-updater-api', () => {
         version: '3.0.0',
         releaseDate: '2026-03-01T12:00:00.000Z',
         releaseNotes: 'notes',
-        isSecurityUpdate: false
+        isSecurityUpdate: false,
+        installMode: 'in-app'
       })
     })
 
