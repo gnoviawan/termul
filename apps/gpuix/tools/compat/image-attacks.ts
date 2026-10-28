@@ -149,7 +149,9 @@ export const IMAGE_ATTACKS: ImageAttack[] = [
     id: 'png-huge-dimensions',
     mime: 'image/png',
     expect: 'refuse',
-    bytes: cached('png-huge-dimensions', () => png(100_000, 100_000, deflateSync(Buffer.alloc(4096))))
+    bytes: cached('png-huge-dimensions', () =>
+      png(100_000, 100_000, deflateSync(Buffer.alloc(4096)))
+    )
   },
   {
     id: 'png-wide-strip',

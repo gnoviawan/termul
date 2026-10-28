@@ -78,6 +78,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { PNG } from 'pngjs'
+import type { ChatRow } from '../compat/svg-attack-check'
 import {
   grabFrame,
   LAVAPIPE_ICD,
@@ -100,7 +101,6 @@ import {
   TABLE,
   TRACKING
 } from './samples'
-import type { ChatRow } from '../compat/svg-attack-check'
 import type { TypoRow } from './typo-samples'
 
 const { values } = parseArgs({

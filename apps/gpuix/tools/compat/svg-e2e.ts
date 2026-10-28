@@ -262,7 +262,7 @@ try {
 
       await app.getByText(PROMPT).waitFor({ timeoutMs: READY_TIMEOUT_MS })
       const pid = pidWithEnv(`TERMUL_GPUIX_DATA_DIR=${path.join(state, 'data')}`)
-      if (!pid) throw new Error('no client process carries this run\'s data dir')
+      if (!pid) throw new Error("no client process carries this run's data dir")
       const cpuBefore = cpuMsOf(pid)
       const rssBefore = rssMbOf(pid)
       let rssPeak = rssBefore

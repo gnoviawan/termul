@@ -25,6 +25,7 @@ import { normalizeRootIconSvg } from '@/lib/agents/sanitize-agent-icon'
 import { jsx } from '../../src/compat/jsx-runtime'
 import DOMPurify from '../../src/compat/shims/dompurify'
 import { innerHtmlSvg } from '../../src/compat/svg'
+import { CHAT_IMAGES } from './image-attacks'
 import {
   bundledIcons,
   GRID_HEIGHT,
@@ -32,7 +33,6 @@ import {
   legacyInnerHtmlSvg,
   TILE
 } from './svg-attack-shared'
-import { CHAT_IMAGES } from './image-attacks'
 import { SVG_ATTACKS } from './svg-attacks'
 
 const [resultFile, mode = 'grid', indexArg = '0'] = process.argv.slice(2)
@@ -280,7 +280,7 @@ function ChatImage({ src }: { src: string }) {
       clearInterval(sample)
       clearTimeout(done)
     }
-  }, [shown])
+  }, [shown, src.length])
   return (
     <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: '#08090a' }}>
       {shown ? (

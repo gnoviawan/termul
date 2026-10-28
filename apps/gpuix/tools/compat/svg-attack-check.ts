@@ -30,6 +30,7 @@ import {
   startXvfb,
   windowOrigin
 } from '../parity/shoot-gpuix'
+import { CHAT_IMAGES, IMAGE_ATTACKS } from './image-attacks'
 import {
   ATTACK_FIFO,
   ATTACK_STATE,
@@ -37,7 +38,6 @@ import {
   GRID_HEIGHT,
   GRID_WIDTH
 } from './svg-attack-shared'
-import { CHAT_IMAGES, IMAGE_ATTACKS } from './image-attacks'
 import { SVG_ATTACKS } from './svg-attacks'
 
 const BUDGET_MS = 50
@@ -130,7 +130,10 @@ try {
       let rssGrowthMb = run.result?.rssGrowthMb ?? 0
       // The decode is deterministic and the shared host's noise only adds, so an over-budget run gets two more tries.
       for (let retry = 0; retry < CHAT_RETRIES && control && !run.died; retry++) {
-        if (cpuMs <= control.cpuMs + CHAT_CPU_MS && rssGrowthMb <= control.rssGrowthMb + CHAT_RSS_MB)
+        if (
+          cpuMs <= control.cpuMs + CHAT_CPU_MS &&
+          rssGrowthMb <= control.rssGrowthMb + CHAT_RSS_MB
+        )
           break
         run = await runScene(image.id, 'chat', index)
         if (run.died) break
@@ -141,7 +144,9 @@ try {
         [
           image.id.padEnd(30),
           run.exit.padEnd(16),
-          run.result ? `cpu ${cpuMs.toFixed(0)} ms  rss peak +${rssGrowthMb.toFixed(0)} MB` : 'no result',
+          run.result
+            ? `cpu ${cpuMs.toFixed(0)} ms  rss peak +${rssGrowthMb.toFixed(0)} MB`
+            : 'no result',
           run.abort ? `ABORT: ${run.abort}` : '',
           `wall ${Math.round(run.wallMs)} ms`
         ].join('  ')
@@ -169,7 +174,9 @@ try {
       else if (!control) failures.push(`${image.id}: no control measurement`)
       else {
         if (cpuMs > control.cpuMs + CHAT_CPU_MS)
-          failures.push(`${image.id}: ${(cpuMs - control.cpuMs).toFixed(0)} ms CPU over the control`)
+          failures.push(
+            `${image.id}: ${(cpuMs - control.cpuMs).toFixed(0)} ms CPU over the control`
+          )
         if (rssGrowthMb > control.rssGrowthMb + CHAT_RSS_MB)
           failures.push(
             `${image.id}: resident memory peaked ${(rssGrowthMb - control.rssGrowthMb).toFixed(0)} MB over the control`
