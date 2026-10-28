@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 
-// Nightly builds synthesize a `<upcoming>-nightly.<YYYYMMDD>.<shortsha>` version
+// Nightly builds synthesize a `<upcoming>-nightly.<YYYYMMDD>.<run_number>.<shortsha>` version
 // (detected from a release/v* branch, or patch-bumped from current) and may
 // write it to only a subset of the three version sources (or pass it via
 // Tauri config overrides), so the strict 3-source equality guard is bypassed

@@ -1,7 +1,7 @@
 name: Nightly
 
 # Builds dev HEAD every night at 00:00 GMT+7 (17:00 UTC) and on manual
-# dispatch, synthesizes a `<upcoming>-nightly.<YYYYMMDD>.<shortsha>` version
+# dispatch, synthesizes a `<upcoming>-nightly.<YYYYMMDD>.<run_number>.<shortsha>` version
 # (detected from a release/v* branch, or patch-bumped from current), and
 # publishes a prerelease under the moving `nightly` tag with a per-channel
 # `latest-nightly.json` manifest covering both the desktop targets and the
@@ -53,6 +53,10 @@ jobs:
       - name: Synthesize version
         id: version
         shell: bash
+        env:
+          # Monotonic per-workflow counter: orders same-day nightlies strictly
+          # for the in-app updater (the short SHA carries no order).
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           # 00:00 GMT+7 = 17:00 UTC; use the GMT+7 (Asia/Jakarta) date so the
           # nightly version reflects the local calendar day the build ships.
@@ -62,7 +66,7 @@ jobs:
 
           # Detect the upcoming release version from a release/v* branch on the
           # remote. If release/v0.5.0 exists, the nightly version is
-          # 0.5.0-nightly.<date>.<sha> — more readable than 0.0.0-nightly.* and
+          # 0.5.0-nightly.<date>.<run>.<sha> — more readable than 0.0.0-nightly.* and
           # correctly offers the nightly to stable users (0.5.0-nightly > 0.4.8).
           # If no release branch exists, bump the patch from the current
           # package.json version as a best guess (0.4.8 -> 0.4.9-nightly.*).
@@ -78,7 +82,11 @@ jobs:
             echo "Detected release/v${RELEASE_VERSION} branch; using as nightly base."
           fi
 
-          NIGHTLY_VERSION="${RELEASE_VERSION}-nightly.${NIGHTLY_DATE}.${SHORT_SHA}"
+          # <run> (github.run_number) sits before the SHA so SemVer orders
+          # same-day builds by run, not by the unordered SHA; the in-app
+          # updater (src-tauri/src/updater_api.rs accepts_channel_update)
+          # relies on this to never re-offer or downgrade a nightly.
+          NIGHTLY_VERSION="${RELEASE_VERSION}-nightly.${NIGHTLY_DATE}.${RUN_NUMBER}.${SHORT_SHA}"
           echo "nightly_version=$NIGHTLY_VERSION" >> "$GITHUB_OUTPUT"
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "nightly_date=$NIGHTLY_DATE" >> "$GITHUB_OUTPUT"

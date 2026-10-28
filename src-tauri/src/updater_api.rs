@@ -168,25 +168,37 @@ pub fn resolve_signed_channel(channel: &str) -> Result<UpdateChannel, String> {
     Ok(parsed)
 }
 
-/// `(date, build)` from a nightly prerelease `nightly.<YYYYMMDD>.<sha>`.
-fn nightly_build(version: &semver::Version) -> Option<(&str, &str)> {
-    let mut parts = version.pre.as_str().splitn(3, '.');
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some("nightly"), Some(date), Some(build)) => Some((date, build)),
+/// Ordering key of a nightly prerelease.
+///
+/// `nightly.<YYYYMMDD>.<run_number>.<sha>` (current) yields
+/// `(date, Some(run))`; the legacy `nightly.<YYYYMMDD>.<sha>` yields
+/// `(date, None)` because a SHA carries no order. Anything else is not a
+/// nightly.
+fn nightly_key(version: &semver::Version) -> Option<(u64, Option<u64>)> {
+    let parts: Vec<&str> = version.pre.as_str().split('.').collect();
+    match parts.as_slice() {
+        ["nightly", date, run, _sha] => Some((date.parse().ok()?, Some(run.parse().ok()?))),
+        ["nightly", date, _sha] => Some((date.parse().ok()?, None)),
         _ => None,
     }
 }
 
 /// Version gate for the signed channel check (replaces the plugin's default
-/// `remote > current`). Nightly only accepts a newer build whose prerelease
-/// is `nightly.<date>.<sha>`, so a stable or insider build that ever lands in
-/// the nightly manifest is not installed from it. A stable build switching to
-/// Nightly (e.g. 0.4.52 -> 0.5.0-nightly.*) is accepted because it is newer.
+/// `remote > current`).
 ///
-/// Same-day nightlies differ only in the short SHA, which SemVer compares
-/// lexically and which carries no order. The nightly manifest is a moving
-/// pointer to the latest build, so a different same-day build in it is
-/// treated as newer instead of being skipped until the next date.
+/// Nightly accepts a build only when it is a nightly and strictly newer than
+/// the installed version under SemVer precedence. With the
+/// `X.Y.Z-nightly.<date>.<run_number>.<sha>` scheme that order is strict and
+/// total: the workflow run number separates same-day builds, so the SHA never
+/// decides it. Consequences:
+/// - the installed build is never offered again (not strictly newer);
+/// - an older build is never offered, so there is no A -> B -> A loop;
+/// - two same-day builds of the same core where either lacks a run number
+///   (legacy `nightly.<date>.<sha>`) are never ordered by SHA: not offered,
+///   the next dated build is;
+/// - a stable or insider build in the nightly manifest is ignored, while a
+///   stable install switching to Nightly (0.4.52 -> 0.5.0-nightly.*) is
+///   offered because it is newer.
 pub fn accepts_channel_update(
     channel: UpdateChannel,
     current: &semver::Version,
@@ -194,16 +206,19 @@ pub fn accepts_channel_update(
 ) -> bool {
     match channel {
         UpdateChannel::Nightly => {
-            let Some((remote_date, remote_build)) = nightly_build(remote) else {
+            let Some((remote_date, remote_run)) = nightly_key(remote) else {
                 return false;
             };
+            if remote <= current {
+                return false;
+            }
             let same_core = (remote.major, remote.minor, remote.patch)
                 == (current.major, current.minor, current.patch);
-            match nightly_build(current) {
-                Some((current_date, current_build)) if same_core && current_date == remote_date => {
-                    current_build != remote_build
+            match nightly_key(current) {
+                Some((current_date, current_run)) if same_core && current_date == remote_date => {
+                    matches!((current_run, remote_run), (Some(c), Some(r)) if r > c)
                 }
-                _ => remote > current,
+                _ => true,
             }
         }
         UpdateChannel::Stable | UpdateChannel::Insider => false,
