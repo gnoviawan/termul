@@ -1,0 +1,516 @@
+{
+ "machine": {
+  "cpu": "AMD EPYC Processor (with IBPB)",
+  "cores": 8,
+  "kernel": "6.8.0-147-generic"
+ },
+ "client": "Tauri desktop (termul-manager) on WebKitGTK 2.52.6-0ubuntu0.24.04.1",
+ "viewport": "1440x900",
+ "runs": [
+  {
+   "run": 1,
+   "metrics": {
+    "firstPaintMs": 1184,
+    "projectListMs": 9006,
+    "idle.proc.total.rssMedianMB": 738.2,
+    "idle.proc.total.rssMaxMB": 1126,
+    "idle.proc.total.pssMedianMB": 553.6,
+    "idle.proc.total.pssMaxMB": 915.5,
+    "idle.proc.total.cpuMeanPct": 133.2,
+    "idle.proc.app.rssMedianMB": 220.8,
+    "idle.proc.app.rssMaxMB": 220.9,
+    "idle.proc.app.pssMedianMB": 141.1,
+    "idle.proc.app.pssMaxMB": 141.2,
+    "idle.proc.app.cpuMeanPct": 16.3,
+    "idle.proc.network.rssMedianMB": 47.9,
+    "idle.proc.network.rssMaxMB": 47.9,
+    "idle.proc.network.pssMedianMB": 19,
+    "idle.proc.network.pssMaxMB": 19,
+    "idle.proc.network.cpuMeanPct": 0.1,
+    "idle.proc.web-process.rssMedianMB": 462.3,
+    "idle.proc.web-process.rssMaxMB": 469.9,
+    "idle.proc.web-process.pssMedianMB": 386.4,
+    "idle.proc.web-process.pssMaxMB": 393.9,
+    "idle.proc.web-process.cpuMeanPct": 83.7,
+    "idle.proc.other.rssMedianMB": 0,
+    "idle.proc.other.rssMaxMB": 387.9,
+    "idle.proc.other.pssMedianMB": 0,
+    "idle.proc.other.pssMaxMB": 362.1,
+    "idle.proc.other.cpuMeanPct": 33.1,
+    "idle.machine.cpuBusyPct": 195
+   },
+   "errors": [],
+   "processes": [
+    {
+     "pid": 1575466,
+     "role": "app",
+     "cmd": "/root/termul-wt/gpuix/src-tauri/target/release/termul-manager"
+    },
+    {
+     "pid": 1575597,
+     "role": "network",
+     "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess 1 26"
+    },
+    {
+     "pid": 1575669,
+     "role": "web-process",
+     "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess 4 34"
+    },
+    {
+     "pid": 1576041,
+     "role": "other",
+     "cmd": "/usr/bin/opencode --version"
+    },
+    {
+     "pid": 1576221,
+     "role": "other",
+     "cmd": "node /usr/bin/npx -y @agentclientprotocol/codex-acp@1.12.0"
+    }
+   ],
+   "shot": "tools/perf/results-m5/webkitgtk/webkit-run1.png",
+   "quiet": {
+    "waitedS": 5,
+    "busyPct": 97,
+    "load1Before": 8.9
+   }
+  },
+  {
+   "run": 2,
+   "metrics": {
+    "firstPaintMs": 407,
+    "projectListMs": 7654,
+    "idle.proc.total.rssMedianMB": 732,
+    "idle.proc.total.rssMaxMB": 1158.4,
+    "idle.proc.total.pssMedianMB": 546.5,
+    "idle.proc.total.pssMaxMB": 947,
+    "idle.proc.total.cpuMeanPct": 112.8,
+    "idle.proc.app.rssMedianMB": 220.7,
+    "idle.proc.app.rssMaxMB": 220.7,
+    "idle.proc.app.pssMedianMB": 140.8,
+    "idle.proc.app.pssMaxMB": 140.8,
+    "idle.proc.app.cpuMeanPct": 9.6,
+    "idle.proc.network.rssMedianMB": 48.5,
+    "idle.proc.network.rssMaxMB": 48.5,
+    "idle.proc.network.pssMedianMB": 19.2,
+    "idle.proc.network.pssMaxMB": 19.2,
+    "idle.proc.network.cpuMeanPct": 0.2,
+    "idle.proc.web-process.rssMedianMB": 458,
+    "idle.proc.web-process.rssMaxMB": 463.6,
+    "idle.proc.web-process.pssMedianMB": 381.7,
+    "idle.proc.web-process.pssMaxMB": 387.3,
+    "idle.proc.web-process.cpuMeanPct": 70.8,
+    "idle.proc.other.rssMedianMB": 0,
+    "idle.proc.other.rssMaxMB": 429.5,
+    "idle.proc.other.pssMedianMB": 0,
+    "idle.proc.other.pssMaxMB": 403.6,
+    "idle.proc.other.cpuMeanPct": 32.2,
+    "idle.machine.cpuBusyPct": 210
+   },
+   "errors": [],
+   "processes": [
+    {
+     "pid": 1577007,
+     "role": "app",
+     "cmd": "/root/termul-wt/gpuix/src-tauri/target/release/termul-manager"
+    },
+    {
+     "pid": 1577148,
+     "role": "network",
+     "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess 1 27"
+    },
+    {
+     "pid": 1577224,
+     "role": "web-process",
+     "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess 4 34"
+    },
+    {
+     "pid": 1577549,
+     "role": "other",
+     "cmd": "/usr/bin/opencode --version"
+    },
+    {
+     "pid": 1577774,
+     "role": "other",
+     "cmd": "npm exec @agentclientprotocol/codex-acp@1.12.0"
+    }
+   ],
+   "shot": "tools/perf/results-m5/webkitgtk/webkit-run2.png",
+   "quiet": {
+    "waitedS": 5,
+    "busyPct": 106,
+    "load1Before": 7.87
+   }
+  },
+  {
+   "run": 3,
+   "metrics": {
+    "firstPaintMs": 451,
+    "projectListMs": 7765,
+    "idle.proc.total.rssMedianMB": 733.5,
+    "idle.proc.total.rssMaxMB": 1119.1,
+    "idle.proc.total.pssMedianMB": 547.7,
+    "idle.proc.total.pssMaxMB": 907.3,
+    "idle.proc.total.cpuMeanPct": 122.3,
+    "idle.proc.app.rssMedianMB": 220.6,
+    "idle.proc.app.rssMaxMB": 220.7,
+    "idle.proc.app.pssMedianMB": 140.5,
+    "idle.proc.app.pssMaxMB": 140.5,
+    "idle.proc.app.cpuMeanPct": 9.5,
+    "idle.proc.network.rssMedianMB": 48.4,
+    "idle.proc.network.rssMaxMB": 48.4,
+    "idle.proc.network.pssMedianMB": 19.1,
+    "idle.proc.network.pssMaxMB": 19.1,
+    "idle.proc.network.cpuMeanPct": 0.1,
+    "idle.proc.web-process.rssMedianMB": 459.9,
+    "idle.proc.web-process.rssMaxMB": 465.7,
+    "idle.proc.web-process.pssMedianMB": 383.8,
+    "idle.proc.web-process.pssMaxMB": 389.4,
+    "idle.proc.web-process.cpuMeanPct": 84.3,
+    "idle.proc.other.rssMedianMB": 0,
+    "idle.proc.other.rssMaxMB": 389,
+    "idle.proc.other.pssMedianMB": 0,
+    "idle.proc.other.pssMaxMB": 363.1,
+    "idle.proc.other.cpuMeanPct": 28.4,
+    "idle.machine.cpuBusyPct": 201
+   },
+   "errors": [],
+   "processes": [
+    {
+     "pid": 1578522,
+     "role": "app",
+     "cmd": "/root/termul-wt/gpuix/src-tauri/target/release/termul-manager"
+    },
+    {
+     "pid": 1578690,
+     "role": "network",
+     "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess 1 28"
+    },
+    {
+     "pid": 1578734,
+     "role": "web-process",
+     "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess 4 34"
+    },
+    {
+     "pid": 1579093,
+     "role": "other",
+     "cmd": "/usr/bin/opencode --version"
+    },
+    {
+     "pid": 1579266,
+     "role": "other",
+     "cmd": "npm exec @agentclientprotocol/codex-acp@1.12.0"
+    }
+   ],
+   "shot": "tools/perf/results-m5/webkitgtk/webkit-run3.png",
+   "quiet": {
+    "waitedS": 5,
+    "busyPct": 115,
+    "load1Before": 5.44
+   }
+  },
+  {
+   "run": 4,
+   "metrics": {
+    "firstPaintMs": 696,
+    "projectListMs": 7904,
+    "idle.proc.total.rssMedianMB": 739,
+    "idle.proc.total.rssMaxMB": 1125,
+    "idle.proc.total.pssMedianMB": 553.4,
+    "idle.proc.total.pssMaxMB": 913.4,
+    "idle.proc.total.cpuMeanPct": 121.2,
+    "idle.proc.app.rssMedianMB": 221.2,
+    "idle.proc.app.rssMaxMB": 221.2,
+    "idle.proc.app.pssMedianMB": 141.2,
+    "idle.proc.app.pssMaxMB": 141.2,
+    "idle.proc.app.cpuMeanPct": 10.9,
+    "idle.proc.network.rssMedianMB": 48.4,
+    "idle.proc.network.rssMaxMB": 48.4,
+    "idle.proc.network.pssMedianMB": 19.1,
+    "idle.proc.network.pssMaxMB": 19.1,
+    "idle.proc.network.cpuMeanPct": 0,
+    "idle.proc.web-process.rssMedianMB": 465.9,
+    "idle.proc.web-process.rssMaxMB": 470.7,
+    "idle.proc.web-process.pssMedianMB": 389.6,
+    "idle.proc.web-process.pssMaxMB": 394.4,
+    "idle.proc.web-process.cpuMeanPct": 76.8,
+    "idle.proc.other.rssMedianMB": 0,
+    "idle.proc.other.rssMaxMB": 387.8,
+    "idle.proc.other.pssMedianMB": 0,
+    "idle.proc.other.pssMaxMB": 361.9,
+    "idle.proc.other.cpuMeanPct": 33.5,
+    "idle.machine.cpuBusyPct": 212
+   },
+   "errors": [],
+   "processes": [
+    {
+     "pid": 1579977,
+     "role": "app",
+     "cmd": "/root/termul-wt/gpuix/src-tauri/target/release/termul-manager"
+    },
+    {
+     "pid": 1580159,
+     "role": "network",
+     "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess 1 26"
+    },
+    {
+     "pid": 1580208,
+     "role": "web-process",
+     "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess 4 34"
+    },
+    {
+     "pid": 1580504,
+     "role": "other",
+     "cmd": "/usr/bin/opencode --version"
+    },
+    {
+     "pid": 1580712,
+     "role": "other",
+     "cmd": "npm"
+    }
+   ],
+   "shot": "tools/perf/results-m5/webkitgtk/webkit-run4.png",
+   "quiet": {
+    "waitedS": 5,
+    "busyPct": 112,
+    "load1Before": 6.61
+   }
+  },
+  {
+   "run": 5,
+   "metrics": {
+    "firstPaintMs": 196,
+    "projectListMs": 6812,
+    "idle.proc.total.rssMedianMB": 739.7,
+    "idle.proc.total.rssMaxMB": 1130.9,
+    "idle.proc.total.pssMedianMB": 554,
+    "idle.proc.total.pssMaxMB": 919.3,
+    "idle.proc.total.cpuMeanPct": 102.2,
+    "idle.proc.app.rssMedianMB": 221.3,
+    "idle.proc.app.rssMaxMB": 221.3,
+    "idle.proc.app.pssMedianMB": 141.2,
+    "idle.proc.app.pssMaxMB": 141.2,
+    "idle.proc.app.cpuMeanPct": 6.6,
+    "idle.proc.network.rssMedianMB": 48.4,
+    "idle.proc.network.rssMaxMB": 48.4,
+    "idle.proc.network.pssMedianMB": 19.1,
+    "idle.proc.network.pssMaxMB": 19.1,
+    "idle.proc.network.cpuMeanPct": 0,
+    "idle.proc.web-process.rssMedianMB": 465.9,
+    "idle.proc.web-process.rssMaxMB": 471.7,
+    "idle.proc.web-process.pssMedianMB": 389.5,
+    "idle.proc.web-process.pssMaxMB": 395.4,
+    "idle.proc.web-process.cpuMeanPct": 63.7,
+    "idle.proc.other.rssMedianMB": 0,
+    "idle.proc.other.rssMaxMB": 393.4,
+    "idle.proc.other.pssMedianMB": 0,
+    "idle.proc.other.pssMaxMB": 367.5,
+    "idle.proc.other.cpuMeanPct": 31.9,
+    "idle.machine.cpuBusyPct": 204
+   },
+   "errors": [],
+   "processes": [
+    {
+     "pid": 1581590,
+     "role": "app",
+     "cmd": "/root/termul-wt/gpuix/src-tauri/target/release/termul-manager"
+    },
+    {
+     "pid": 1581761,
+     "role": "network",
+     "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess 1 27"
+    },
+    {
+     "pid": 1581804,
+     "role": "web-process",
+     "cmd": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess 4 34"
+    },
+    {
+     "pid": 1582133,
+     "role": "other",
+     "cmd": "/usr/bin/opencode --version"
+    },
+    {
+     "pid": 1582329,
+     "role": "other",
+     "cmd": "npm"
+    }
+   ],
+   "shot": "tools/perf/results-m5/webkitgtk/webkit-run5.png",
+   "quiet": {
+    "waitedS": 5,
+    "busyPct": 109,
+    "load1Before": 7.44
+   }
+  }
+ ],
+ "metrics": {
+  "firstPaintMs": {
+   "median": 451,
+   "min": 196,
+   "max": 1184,
+   "n": 5
+  },
+  "idle.machine.cpuBusyPct": {
+   "median": 204,
+   "min": 195,
+   "max": 212,
+   "n": 5
+  },
+  "idle.proc.app.cpuMeanPct": {
+   "median": 9.6,
+   "min": 6.6,
+   "max": 16.3,
+   "n": 5
+  },
+  "idle.proc.app.pssMaxMB": {
+   "median": 141.2,
+   "min": 140.5,
+   "max": 141.2,
+   "n": 5
+  },
+  "idle.proc.app.pssMedianMB": {
+   "median": 141.1,
+   "min": 140.5,
+   "max": 141.2,
+   "n": 5
+  },
+  "idle.proc.app.rssMaxMB": {
+   "median": 220.9,
+   "min": 220.7,
+   "max": 221.3,
+   "n": 5
+  },
+  "idle.proc.app.rssMedianMB": {
+   "median": 220.8,
+   "min": 220.6,
+   "max": 221.3,
+   "n": 5
+  },
+  "idle.proc.network.cpuMeanPct": {
+   "median": 0.1,
+   "min": 0,
+   "max": 0.2,
+   "n": 5
+  },
+  "idle.proc.network.pssMaxMB": {
+   "median": 19.1,
+   "min": 19,
+   "max": 19.2,
+   "n": 5
+  },
+  "idle.proc.network.pssMedianMB": {
+   "median": 19.1,
+   "min": 19,
+   "max": 19.2,
+   "n": 5
+  },
+  "idle.proc.network.rssMaxMB": {
+   "median": 48.4,
+   "min": 47.9,
+   "max": 48.5,
+   "n": 5
+  },
+  "idle.proc.network.rssMedianMB": {
+   "median": 48.4,
+   "min": 47.9,
+   "max": 48.5,
+   "n": 5
+  },
+  "idle.proc.other.cpuMeanPct": {
+   "median": 32.2,
+   "min": 28.4,
+   "max": 33.5,
+   "n": 5
+  },
+  "idle.proc.other.pssMaxMB": {
+   "median": 363.1,
+   "min": 361.9,
+   "max": 403.6,
+   "n": 5
+  },
+  "idle.proc.other.pssMedianMB": {
+   "median": 0,
+   "min": 0,
+   "max": 0,
+   "n": 5
+  },
+  "idle.proc.other.rssMaxMB": {
+   "median": 389,
+   "min": 387.8,
+   "max": 429.5,
+   "n": 5
+  },
+  "idle.proc.other.rssMedianMB": {
+   "median": 0,
+   "min": 0,
+   "max": 0,
+   "n": 5
+  },
+  "idle.proc.total.cpuMeanPct": {
+   "median": 121.2,
+   "min": 102.2,
+   "max": 133.2,
+   "n": 5
+  },
+  "idle.proc.total.pssMaxMB": {
+   "median": 915.5,
+   "min": 907.3,
+   "max": 947,
+   "n": 5
+  },
+  "idle.proc.total.pssMedianMB": {
+   "median": 553.4,
+   "min": 546.5,
+   "max": 554,
+   "n": 5
+  },
+  "idle.proc.total.rssMaxMB": {
+   "median": 1126,
+   "min": 1119.1,
+   "max": 1158.4,
+   "n": 5
+  },
+  "idle.proc.total.rssMedianMB": {
+   "median": 738.2,
+   "min": 732,
+   "max": 739.7,
+   "n": 5
+  },
+  "idle.proc.web-process.cpuMeanPct": {
+   "median": 76.8,
+   "min": 63.7,
+   "max": 84.3,
+   "n": 5
+  },
+  "idle.proc.web-process.pssMaxMB": {
+   "median": 393.9,
+   "min": 387.3,
+   "max": 395.4,
+   "n": 5
+  },
+  "idle.proc.web-process.pssMedianMB": {
+   "median": 386.4,
+   "min": 381.7,
+   "max": 389.6,
+   "n": 5
+  },
+  "idle.proc.web-process.rssMaxMB": {
+   "median": 469.9,
+   "min": 463.6,
+   "max": 471.7,
+   "n": 5
+  },
+  "idle.proc.web-process.rssMedianMB": {
+   "median": 462.3,
+   "min": 458,
+   "max": 465.9,
+   "n": 5
+  },
+  "projectListMs": {
+   "median": 7765,
+   "min": 6812,
+   "max": 9006,
+   "n": 5
+  }
+ }
+}
