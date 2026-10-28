@@ -1,0 +1,272 @@
+diff --git a/crates/gpui/src/elements/img.rs b/crates/gpui/src/elements/img.rs
+index ce7fc7b..4c4c9c3 100644
+--- a/crates/gpui/src/elements/img.rs
++++ b/crates/gpui/src/elements/img.rs
+@@ -3,7 +3,7 @@ use crate::{
+     Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId, InteractiveElement,
+     Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels, RenderImage, Resource,
+     SharedString, SharedUri, StyleRefinement, Styled, Task, Window, decode_static_image,
+-    decode_static_image_from_decoder, px,
++    decode_animation, decode_static_image_from_decoder, px,
+ };
+ use anyhow::Result;
+ 
+@@ -622,6 +622,19 @@ impl Asset for ImageDecoder {
+     }
+ }
+ 
++/// Most bytes read for one image file or response; reading stops past it.
++const MAX_ENCODED_IMAGE_BYTES: u64 = 32 << 20;
++
++fn check_encoded_size(bytes: Vec<u8>, source: &Resource) -> Result<Vec<u8>, ImageCacheError> {
++    if bytes.len() as u64 > MAX_ENCODED_IMAGE_BYTES {
++        log::warn!("refusing an image over {MAX_ENCODED_IMAGE_BYTES} bytes: {source:?}");
++        return Err(ImageCacheError::Other(Arc::new(anyhow::anyhow!(
++            "image over {MAX_ENCODED_IMAGE_BYTES} bytes ({source:?})"
++        ))));
++    }
++    Ok(bytes)
++}
++
+ /// An image loader for the GPUI asset system
+ #[derive(Clone)]
+ pub enum ImageAssetLoader {}
+@@ -641,7 +654,14 @@ impl Asset for ImageAssetLoader {
+         let asset_source = cx.asset_source().clone();
+         async move {
+             let bytes = match source.clone() {
+-                Resource::Path(uri) => fs::read(uri.as_ref())?,
++                Resource::Path(uri) => {
++                    use std::io::Read as _;
++                    let mut bytes = Vec::new();
++                    fs::File::open(uri.as_ref())?
++                        .take(MAX_ENCODED_IMAGE_BYTES + 1)
++                        .read_to_end(&mut bytes)?;
++                    check_encoded_size(bytes, &source)?
++                }
+                 Resource::Uri(uri) => {
+                     use anyhow::Context as _;
+                     use futures::AsyncReadExt as _;
+@@ -651,7 +671,11 @@ impl Asset for ImageAssetLoader {
+                         .await
+                         .with_context(|| format!("loading image asset from {uri:?}"))?;
+                     let mut body = Vec::new();
+-                    response.body_mut().read_to_end(&mut body).await?;
++                    response
++                        .body_mut()
++                        .take(MAX_ENCODED_IMAGE_BYTES + 1)
++                        .read_to_end(&mut body)
++                        .await?;
+                     if !response.status().is_success() {
+                         let mut body = String::from_utf8_lossy(&body).into_owned();
+                         let first_line = body.lines().next().unwrap_or("").trim_end();
+@@ -662,7 +686,7 @@ impl Asset for ImageAssetLoader {
+                             body,
+                         });
+                     }
+-                    body
++                    check_encoded_size(body, &source)?
+                 }
+                 Resource::Embedded(path) => {
+                     let data = asset_source.load(&path).ok().flatten();
+@@ -678,66 +702,12 @@ impl Asset for ImageAssetLoader {
+ 
+             if let Ok(format) = image::guess_format(&bytes) {
+                 let data = match format {
+-                    ImageFormat::Gif => {
+-                        let decoder = GifDecoder::new(Cursor::new(&bytes))?;
+-                        let mut frames = SmallVec::new();
+-
+-                        for frame in decoder.into_frames() {
+-                            match frame {
+-                                Ok(mut frame) => {
+-                                    // Convert from RGBA to BGRA.
+-                                    for pixel in frame.buffer_mut().chunks_exact_mut(4) {
+-                                        pixel.swap(0, 2);
+-                                    }
+-                                    frames.push(frame);
+-                                }
+-                                Err(err) => {
+-                                    log::debug!(
+-                                        "Skipping GIF frame in {source:?} due to decode error: {err}"
+-                                    );
+-                                }
+-                            }
+-                        }
+-
+-                        if frames.is_empty() {
+-                            return Err(ImageCacheError::Other(Arc::new(anyhow::anyhow!(
+-                                "GIF could not be decoded: all frames failed ({source:?})"
+-                            ))));
+-                        }
+-
+-                        frames
+-                    }
++                    ImageFormat::Gif => decode_animation(GifDecoder::new(Cursor::new(&bytes))?)?,
+                     ImageFormat::WebP => {
+                         let mut decoder = WebPDecoder::new(Cursor::new(&bytes))?;
+-
+                         if decoder.has_animation() {
+                             let _ = decoder.set_background_color(Rgba([0, 0, 0, 0]));
+-                            let mut frames = SmallVec::new();
+-
+-                            for frame in decoder.into_frames() {
+-                                match frame {
+-                                    Ok(mut frame) => {
+-                                        // Convert from RGBA to BGRA.
+-                                        for pixel in frame.buffer_mut().chunks_exact_mut(4) {
+-                                            pixel.swap(0, 2);
+-                                        }
+-                                        frames.push(frame);
+-                                    }
+-                                    Err(err) => {
+-                                        log::debug!(
+-                                            "Skipping WebP frame in {source:?} due to decode error: {err}"
+-                                        );
+-                                    }
+-                                }
+-                            }
+-
+-                            if frames.is_empty() {
+-                                return Err(ImageCacheError::Other(Arc::new(anyhow::anyhow!(
+-                                    "WebP could not be decoded: all frames failed ({source:?})"
+-                                ))));
+-                            }
+-
+-                            frames
++                            decode_animation(decoder)?
+                         } else {
+                             decode_static_image_from_decoder(decoder)?
+                         }
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 6aedda3..7695279 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -2615,19 +2615,91 @@ pub struct Image {
+     pub id: u64,
+ }
+ 
++/// Most pixels one decoded raster image may have: 64 MiB as BGRA. Encoded
++/// images come from agents and web pages, and a few kilobytes of PNG can
++/// declare a canvas of gigabytes.
++const MAX_IMAGE_PIXELS: u64 = 1 << 24;
++
++/// Longest side of a decoded raster image, past which no texture holds it.
++const MAX_IMAGE_SIDE: u32 = 16_384;
++
++/// Decoded bytes one animation keeps; the frames after them are dropped.
++const MAX_ANIMATION_BYTES: usize = 256 << 20;
++
++fn decode_limits() -> image::Limits {
++    let mut limits = image::Limits::default();
++    limits.max_image_width = Some(MAX_IMAGE_SIDE);
++    limits.max_image_height = Some(MAX_IMAGE_SIDE);
++    limits.max_alloc = Some(MAX_IMAGE_PIXELS * 16);
++    limits
++}
++
++/// Refuses an image larger than [`MAX_IMAGE_PIXELS`] or [`MAX_IMAGE_SIDE`]
++/// from its header, before anything is allocated for its pixels.
++fn check_image_size(decoder: &impl image::ImageDecoder) -> Result<()> {
++    let (width, height) = decoder.dimensions();
++    if width > MAX_IMAGE_SIDE
++        || height > MAX_IMAGE_SIDE
++        || u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS
++    {
++        log::warn!("refusing to decode a {width}x{height} image");
++        anyhow::bail!(
++            "a {width}x{height} image is over the decode limit of {MAX_IMAGE_PIXELS} pixels"
++        );
++    }
++    Ok(())
++}
++
+ pub(crate) fn decode_static_image(
+     bytes: &[u8],
+     format: image::ImageFormat,
+ ) -> Result<SmallVec<[Frame; 1]>> {
+-    let decoder = image::ImageReader::with_format(Cursor::new(bytes), format)
+-        .into_decoder()
+-        .context("creating image decoder")?;
++    let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
++    reader.limits(decode_limits());
++    let decoder = reader.into_decoder().context("creating image decoder")?;
+     decode_static_image_from_decoder(decoder)
+ }
+ 
++/// Every frame of an animated GIF or WebP as BGRA, within [`MAX_ANIMATION_BYTES`].
++pub(crate) fn decode_animation<'a>(
++    mut decoder: impl image::ImageDecoder + image::AnimationDecoder<'a>,
++) -> Result<SmallVec<[Frame; 1]>> {
++    check_image_size(&decoder)?;
++    decoder.set_limits(decode_limits())?;
++    let mut frames = SmallVec::new();
++    let mut kept = 0;
++    for frame in decoder.into_frames() {
++        match frame {
++            Ok(mut frame) => {
++                kept += frame.buffer().len();
++                if kept > MAX_ANIMATION_BYTES && !frames.is_empty() {
++                    log::warn!(
++                        "dropping animation frames after {} decoded ({MAX_ANIMATION_BYTES} bytes)",
++                        frames.len()
++                    );
++                    break;
++                }
++                // Convert from RGBA to BGRA.
++                for pixel in frame.buffer_mut().chunks_exact_mut(4) {
++                    pixel.swap(0, 2);
++                }
++                frames.push(frame);
++            }
++            Err(err) => log::debug!("Skipping animation frame due to decode error: {err}"),
++        }
++    }
++    anyhow::ensure!(
++        !frames.is_empty(),
++        "animation could not be decoded: all frames failed"
++    );
++    Ok(frames)
++}
++
+ pub(crate) fn decode_static_image_from_decoder(
+     mut decoder: impl image::ImageDecoder,
+ ) -> Result<SmallVec<[Frame; 1]>> {
++    check_image_size(&decoder)?;
++    decoder.set_limits(decode_limits())?;
+     let orientation = decoder
+         .orientation()
+         .context("reading decoder's orientation")?;
+@@ -2705,31 +2777,7 @@ impl Image {
+     /// Convert the clipboard image to an `ImageData` object.
+     pub fn to_image_data(&self, svg_renderer: SvgRenderer) -> Result<Arc<RenderImage>> {
+         let frames = match self.format {
+-            ImageFormat::Gif => {
+-                let decoder = GifDecoder::new(Cursor::new(&self.bytes))?;
+-                let mut frames = SmallVec::new();
+-
+-                for frame in decoder.into_frames() {
+-                    match frame {
+-                        Ok(mut frame) => {
+-                            // Convert from RGBA to BGRA.
+-                            for pixel in frame.buffer_mut().chunks_exact_mut(4) {
+-                                pixel.swap(0, 2);
+-                            }
+-                            frames.push(frame);
+-                        }
+-                        Err(err) => {
+-                            log::debug!("Skipping GIF frame due to decode error: {err}");
+-                        }
+-                    }
+-                }
+-
+-                if frames.is_empty() {
+-                    anyhow::bail!("GIF could not be decoded: all frames failed");
+-                }
+-
+-                frames
+-            }
++            ImageFormat::Gif => decode_animation(GifDecoder::new(Cursor::new(&self.bytes))?)?,
+             ImageFormat::Png => decode_static_image(&self.bytes, image::ImageFormat::Png)?,
+             ImageFormat::Jpeg => decode_static_image(&self.bytes, image::ImageFormat::Jpeg)?,
+             ImageFormat::Webp => decode_static_image(&self.bytes, image::ImageFormat::WebP)?,

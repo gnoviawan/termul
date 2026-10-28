@@ -1,0 +1,670 @@
+diff --git a/crates/gpui/src/svg_renderer.rs b/crates/gpui/src/svg_renderer.rs
+index e831f97..ff8a3ac 100644
+--- a/crates/gpui/src/svg_renderer.rs
++++ b/crates/gpui/src/svg_renderer.rs
+@@ -10,6 +10,16 @@ use std::{
+     sync::{Arc, LazyLock, OnceLock},
+ };
+ 
++mod budget;
++
++/// Longest side of an SVG rasterized as an image. GPUI decodes an `img` before
++/// layout, so this cap stands in for the box it will paint in; a larger
++/// document renders at a lower density and keeps its logical size.
++const MAX_IMAGE_SIDE: f32 = 2048.;
++
++/// Longest side of an SVG rasterized as an alpha mask, sized by its element.
++const MAX_MASK_SIDE: f32 = 8192.;
++
+ #[cfg(target_os = "macos")]
+ const EMOJI_FONT_FAMILIES: &[&str] = &["Apple Color Emoji", ".AppleColorEmojiUI"];
+ 
+@@ -214,7 +224,7 @@ impl SvgRenderer {
+                 SMOOTH_SVG_SCALE_FACTOR,
+             ),
+         };
+-        let pixmap = rasterize_tree(&svg.0, size)?;
++        let (pixmap, density) = rasterize_tree(&svg.0, size, MAX_IMAGE_SIDE)?;
+         let mut buffer =
+             image::ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take()).unwrap();
+ 
+@@ -223,7 +233,7 @@ impl SvgRenderer {
+         }
+ 
+         let mut image = RenderImage::new(SmallVec::from_const([Frame::new(buffer)]));
+-        image.scale_factor = image_scale_factor;
++        image.scale_factor = image_scale_factor * density;
+         Ok(Arc::new(image))
+     }
+ 
+@@ -272,7 +282,7 @@ impl SvgRenderer {
+ 
+     fn render_pixmap(&self, bytes: &[u8], size: SvgSize) -> Result<Pixmap, usvg::Error> {
+         let tree = parse_tree(bytes, &self.usvg_options)?;
+-        rasterize_tree(&tree, size)
++        rasterize_tree(&tree, size, MAX_MASK_SIDE).map(|(pixmap, _)| pixmap)
+     }
+ }
+ 
+@@ -282,16 +292,16 @@ impl SvgRenderer {
+ /// `img` sources) and abort the process before usvg's 1024-level limit runs.
+ const MAX_SVG_NESTING: usize = 256;
+ 
+-/// `usvg::Tree::from_data`, refusing documents nested deeper than [`MAX_SVG_NESTING`].
++/// `usvg::Tree::from_data` for plain SVG text, refusing documents nested
++/// deeper than [`MAX_SVG_NESTING`] or expanding past
++/// [`budget::MAX_SVG_INSTANCES`]. Gzipped SVG is refused: usvg inflates it
++/// without a bound, and a browser does not inflate an `img` source either.
+ fn parse_tree(bytes: &[u8], options: &usvg::Options) -> Result<usvg::Tree, usvg::Error> {
+-    let svgz;
+-    let data = if bytes.starts_with(&[0x1f, 0x8b]) {
+-        svgz = usvg::decompress_svgz(bytes)?;
+-        &svgz[..]
+-    } else {
+-        bytes
+-    };
+-    let text = std::str::from_utf8(data).map_err(|_| usvg::Error::NotAnUtf8Str)?;
++    if bytes.starts_with(&[0x1f, 0x8b]) {
++        log::warn!("refusing a gzip-compressed SVG ({} bytes)", bytes.len());
++        return Err(usvg::Error::NotAnUtf8Str);
++    }
++    let text = std::str::from_utf8(bytes).map_err(|_| usvg::Error::NotAnUtf8Str)?;
+     if nests_deeper_than(text, MAX_SVG_NESTING) {
+         return Err(usvg::Error::ElementsLimitReached);
+     }
+@@ -303,6 +313,13 @@ fn parse_tree(bytes: &[u8], options: &usvg::Options) -> Result<usvg::Tree, usvg:
+         },
+     )
+     .map_err(usvg::Error::ParsingFailed)?;
++    if budget::expanded_instances(&xml, budget::MAX_SVG_INSTANCES).is_none() {
++        log::warn!(
++            "refusing an SVG whose references expand past {} elements",
++            budget::MAX_SVG_INSTANCES
++        );
++        return Err(usvg::Error::ElementsLimitReached);
++    }
+     usvg::Tree::from_xmltree(&xml, options)
+ }
+ 
+@@ -403,11 +420,14 @@ fn doctype_end(bytes: &[u8], from: usize) -> Doctype {
+     Doctype::Unclosed
+ }
+ 
+-fn rasterize_tree(tree: &usvg::Tree, size: SvgSize) -> Result<Pixmap, usvg::Error> {
+-    // Cap the size of the rendered pixmap to avoid texture allocation panics
+-    // Related issue: #56466
+-    const MAX_SIZE: f32 = 8192.0;
+-
++/// Rasterizes `tree` at `size`, scaled down to fit `max_side`, and returns the
++/// pixmap with that density (1 when nothing was scaled). Refuses a tree whose
++/// estimated work at that size exceeds [`budget::MAX_SVG_RENDER_WORK`].
++fn rasterize_tree(
++    tree: &usvg::Tree,
++    size: SvgSize,
++    max_side: f32,
++) -> Result<(Pixmap, f32), usvg::Error> {
+     let svg_size = tree.size();
+     let (mut width, mut height) = match size {
+         SvgSize::Size(size) => {
+@@ -418,28 +438,28 @@ fn rasterize_tree(tree: &usvg::Tree, size: SvgSize) -> Result<Pixmap, usvg::Erro
+         SvgSize::ScaleFactor(scale) => (svg_size.width() * scale, svg_size.height() * scale),
+     };
+ 
+-    if width > MAX_SIZE {
+-        log::warn!("Attempted to render pixmap where width ({width}) > MAX_SIZE ({MAX_SIZE})");
++    // Also keeps the pixmap inside a texture: #56466.
++    let density = (max_side / width).min(max_side / height).min(1.0);
++    if density < 1.0 {
++        log::debug!("rasterizing a {width}x{height} SVG at {density} density");
+     }
+-    if height > MAX_SIZE {
+-        log::warn!("Attempted to render pixmap where height ({height}) > MAX_SIZE ({MAX_SIZE})");
+-    }
+-    let scale = (MAX_SIZE / width).min(MAX_SIZE / height).min(1.0);
+-    width *= scale;
+-    height *= scale;
+-
+-    // Render the SVG to a pixmap with the specified width and height.
+-    let mut pixmap = resvg::tiny_skia::Pixmap::new(width as u32, height as u32)
+-        .ok_or(usvg::Error::InvalidSize)?;
++    width *= density;
++    height *= density;
+ 
+     let transform = resvg::tiny_skia::Transform::from_scale(
+         width / svg_size.width(),
+         height / svg_size.height(),
+     );
++    let limit = budget::MAX_SVG_RENDER_WORK;
++    if budget::render_work(tree, transform, width, height, limit).is_none() {
++        log::warn!("refusing an SVG whose {width}x{height} raster costs over {limit} pixel operations");
++        return Err(usvg::Error::ElementsLimitReached);
++    }
+ 
++    let mut pixmap = resvg::tiny_skia::Pixmap::new(width as u32, height as u32)
++        .ok_or(usvg::Error::InvalidSize)?;
+     resvg::render(tree, transform, &mut pixmap.as_mut());
+-
+-    Ok(pixmap)
++    Ok((pixmap, density))
+ }
+ 
+ fn load_bundled_fonts(asset_source: &dyn AssetSource, db: &mut usvg::fontdb::Database) {
+diff --git a/crates/gpui/src/svg_renderer/budget.rs b/crates/gpui/src/svg_renderer/budget.rs
+new file mode 100644
+index 0000000..cd7b2cd
+--- /dev/null
++++ b/crates/gpui/src/svg_renderer/budget.rs
+@@ -0,0 +1,331 @@
++//! Work bounds for SVGs GPUI did not author, such as images in a chat reply.
++//! usvg and resvg have no budget of their own: a few hundred bytes of masks
++//! that reference each other expand to millions of conversions, and one filter
++//! primitive can cost the square of the canvas. Both checks below run before
++//! the expensive step and refuse the document instead.
++
++use std::collections::HashMap;
++use usvg::roxmltree::{Document, Node, NodeId};
++use usvg::tiny_skia_path::{Rect, Transform};
++
++/// Element instances (and text glyphs) usvg may create from one document once
++/// every reference instantiates its target. usvg converts one in roughly
++/// 15 µs, so this bounds a parse to a few hundred milliseconds.
++pub(super) const MAX_SVG_INSTANCES: u64 = 20_000;
++
++/// Pixel operations resvg may spend rasterizing one document: every shape's
++/// box, every offscreen layer, mask and clip, and each filter primitive's
++/// region weighted by its per-pixel cost. 64 full 2048 px canvases.
++pub(super) const MAX_SVG_RENDER_WORK: u64 = 64 * 2048 * 2048;
++
++/// Distinct stylesheet `url(#…)` targets a document may have. A selector can
++/// apply each of them to any element, so each counts against every element.
++const MAX_STYLESHEET_TARGETS: usize = 64;
++
++/// How many element instances usvg would create from `doc`, or `None` when it
++/// is more than `limit`. Children count once, except inside `<defs>` and the
++/// other templates usvg only draws by reference; an `href="#id"` or a `url(#id)`
++/// in an attribute instantiates its target again (a marker once per vertex);
++/// a `url(#id)` in a `<style>` counts against every element; each character of
++/// text counts as a glyph. A reference back into its own chain counts nothing,
++/// as usvg drops it.
++pub(super) fn expanded_instances<'a, 'input>(doc: &'a Document<'input>, limit: u64) -> Option<u64> {
++    let ids: HashMap<&str, NodeId> = doc
++        .descendants()
++        .filter_map(|node| Some((node.attribute("id")?, node.id())))
++        .collect();
++    let target = |reference: &str| {
++        ids.get(reference)
++            .and_then(|id| doc.get_node(*id))
++            .filter(|node| !is_gradient(node))
++    };
++    let mut stylesheet: Vec<Node<'a, 'input>> = Vec::new();
++    for style in doc.descendants().filter(|n| n.has_tag_name_local("style")) {
++        for text in style.children().filter_map(|n| n.text()) {
++            for node in url_refs(text).filter_map(target) {
++                if !stylesheet.iter().any(|s| s.id() == node.id()) {
++                    stylesheet.push(node);
++                }
++            }
++        }
++    }
++    if stylesheet.len() > MAX_STYLESHEET_TARGETS {
++        return None;
++    }
++
++    enum State {
++        Open,
++        Done(u64),
++    }
++    struct Frame<'a, 'input> {
++        node: Node<'a, 'input>,
++        edges: Vec<(Node<'a, 'input>, u64)>,
++        next: usize,
++        sum: u64,
++    }
++    let edges = |node: Node<'a, 'input>| -> Vec<(Node<'a, 'input>, u64)> {
++        let mut edges = Vec::new();
++        let vertices = vertex_bound(&node);
++        let defs = node.has_tag_name_local("defs");
++        for child in node.children().filter(|child| child.is_element()) {
++            edges.push((child, u64::from(!defs && !is_template(&child))));
++        }
++        for attribute in node.attributes() {
++            let value = attribute.value();
++            if attribute.name() == "href"
++                && let Some(found) = value.strip_prefix('#').and_then(target)
++            {
++                edges.push((found, 1));
++            }
++            for found in url_refs(value).filter_map(target) {
++                edges.push((found, if is_marker(&found) { vertices } else { 1 }));
++            }
++        }
++        for found in &stylesheet {
++            edges.push((*found, if is_marker(found) { vertices } else { 1 }));
++        }
++        edges
++    };
++    let own = |node: &Node| -> u64 {
++        let glyphs: usize = if node.has_tag_name_local("text")
++            || node.has_tag_name_local("tspan")
++            || node.has_tag_name_local("textPath")
++        {
++            node.children().filter_map(|n| n.text()).map(|t| t.chars().count()).sum()
++        } else {
++            0
++        };
++        1 + glyphs as u64
++    };
++
++    let root = doc.root_element();
++    let mut state: HashMap<NodeId, State> = HashMap::new();
++    state.insert(root.id(), State::Open);
++    let mut stack = vec![Frame {
++        node: root,
++        edges: edges(root),
++        next: 0,
++        sum: own(&root),
++    }];
++    while let Some(frame) = stack.last_mut() {
++        if frame.sum > limit {
++            return None;
++        }
++        let Some(&(node, times)) = frame.edges.get(frame.next) else {
++            let done = stack.pop()?;
++            state.insert(done.node.id(), State::Done(done.sum));
++            match stack.last_mut() {
++                Some(parent) => {
++                    let times = parent.edges[parent.next].1;
++                    parent.sum = parent.sum.saturating_add(done.sum.saturating_mul(times));
++                    parent.next += 1;
++                }
++                None => return Some(done.sum),
++            }
++            continue;
++        };
++        match state.get(&node.id()) {
++            Some(State::Open) => frame.next += 1,
++            Some(State::Done(cost)) => {
++                frame.sum = frame.sum.saturating_add(cost.saturating_mul(times));
++                frame.next += 1;
++            }
++            None => {
++                state.insert(node.id(), State::Open);
++                stack.push(Frame {
++                    node,
++                    edges: edges(node),
++                    next: 0,
++                    sum: own(&node),
++                });
++            }
++        }
++    }
++    None
++}
++
++trait LocalName {
++    fn has_tag_name_local(&self, name: &str) -> bool;
++}
++
++impl LocalName for Node<'_, '_> {
++    fn has_tag_name_local(&self, name: &str) -> bool {
++        self.is_element() && self.tag_name().name() == name
++    }
++}
++
++fn is_gradient(node: &Node) -> bool {
++    node.has_tag_name_local("linearGradient") || node.has_tag_name_local("radialGradient")
++}
++
++/// An element usvg draws only where something references it, never in place.
++fn is_template(node: &Node) -> bool {
++    node.is_element()
++        && matches!(
++            node.tag_name().name(),
++            "defs" | "mask" | "clipPath" | "pattern" | "marker" | "symbol" | "filter"
++        )
++        || is_gradient(node)
++}
++
++fn is_marker(node: &Node) -> bool {
++    node.has_tag_name_local("marker")
++}
++
++/// At least the number of vertices a marker can be placed on.
++fn vertex_bound(node: &Node) -> u64 {
++    let data = node.attribute("d").or_else(|| node.attribute("points"));
++    data.map_or(2, |d| d.len() as u64 / 2 + 2)
++}
++
++/// The ids every `url(#id)` in `text` names, quoted or not.
++fn url_refs(text: &str) -> impl Iterator<Item = &str> {
++    text.match_indices("url(").filter_map(move |(at, _)| {
++        let rest = text[at + 4..].trim_start().trim_start_matches(['"', '\'']);
++        let id = rest.strip_prefix('#')?;
++        let end = id.find(|c: char| matches!(c, ')' | '"' | '\'') || c.is_whitespace())?;
++        Some(&id[..end])
++    })
++}
++
++/// Pixel operations resvg spends drawing `tree` with `transform` onto a
++/// `width` x `height` pixmap, or `None` when it is more than `limit`. Shapes
++/// and layers count the canvas pixels their boxes cover; a pattern also counts
++/// its tile, which is not clipped to the canvas; a filter primitive counts its
++/// layer times its per-pixel work.
++pub(super) fn render_work(
++    tree: &usvg::Tree,
++    transform: Transform,
++    width: f32,
++    height: f32,
++    limit: u64,
++) -> Option<u64> {
++    let mut walk = Walk {
++        transform,
++        canvas: Rect::from_xywh(0.0, 0.0, width, height)?,
++        work: 0,
++        limit,
++    };
++    walk.group(tree.root()).then_some(walk.work)
++}
++
++struct Walk {
++    transform: Transform,
++    canvas: Rect,
++    work: u64,
++    limit: u64,
++}
++
++impl Walk {
++    /// Adds `pixels` plus one for the node itself; false once over the limit.
++    fn add(&mut self, pixels: u64) -> bool {
++        self.work = self.work.saturating_add(pixels).saturating_add(1);
++        self.work <= self.limit
++    }
++
++    fn covered(&self, rect: Option<Rect>) -> (f32, f32) {
++        rect.and_then(|r| r.transform(self.transform))
++            .and_then(|r| r.intersect(&self.canvas))
++            .map_or((0.0, 0.0), |r| (r.width().ceil() + 1.0, r.height().ceil() + 1.0))
++    }
++
++    fn area(&self, rect: Option<Rect>) -> u64 {
++        let (w, h) = self.covered(rect);
++        (w * h) as u64
++    }
++
++    fn group(&mut self, group: &usvg::Group) -> bool {
++        if group.should_isolate() {
++            let layer = Some(group.abs_layer_bounding_box().to_rect());
++            let (w, h) = self.covered(layer);
++            let pixels = (w * h) as u64;
++            if !self.add(pixels.saturating_mul(2)) {
++                return false;
++            }
++            let mut clip = group.clip_path();
++            while let Some(c) = clip {
++                if !self.add(pixels) || !self.group(c.root()) {
++                    return false;
++                }
++                clip = c.clip_path();
++            }
++            let mut mask = group.mask();
++            while let Some(m) = mask {
++                if !self.add(pixels) || !self.group(m.root()) {
++                    return false;
++                }
++                mask = m.mask();
++            }
++            let (sx, sy) = self.transform.pre_concat(group.abs_transform()).get_scale();
++            for filter in group.filters() {
++                for primitive in filter.primitives() {
++                    let per_pixel = match primitive.kind() {
++                        usvg::filter::Kind::Morphology(m) => {
++                            let columns = (m.radius_x().get() * sx * 2.0).ceil().clamp(1.0, w);
++                            let rows = (m.radius_y().get() * sy * 2.0).ceil().clamp(1.0, h);
++                            (columns * rows) as u64
++                        }
++                        usvg::filter::Kind::Turbulence(t) => 4 * u64::from(t.num_octaves()).max(1),
++                        usvg::filter::Kind::ConvolveMatrix(c) => {
++                            u64::from(c.matrix().columns()) * u64::from(c.matrix().rows())
++                        }
++                        usvg::filter::Kind::GaussianBlur(_) | usvg::filter::Kind::DropShadow(_) => 8,
++                        usvg::filter::Kind::DiffuseLighting(_)
++                        | usvg::filter::Kind::SpecularLighting(_) => 16,
++                        usvg::filter::Kind::Image(image) => {
++                            if !self.group(image.root()) {
++                                return false;
++                            }
++                            1
++                        }
++                        _ => 2,
++                    };
++                    if !self.add(pixels.saturating_mul(per_pixel)) {
++                        return false;
++                    }
++                }
++            }
++        }
++        group.children().iter().all(|node| self.node(node))
++    }
++
++    fn node(&mut self, node: &usvg::Node) -> bool {
++        match node {
++            usvg::Node::Group(group) => self.group(group),
++            usvg::Node::Path(path) => {
++                if !self.add(self.area(Some(path.abs_stroke_bounding_box()))) {
++                    return false;
++                }
++                let paints = [
++                    path.fill().map(|f| f.paint()),
++                    path.stroke().map(|s| s.paint()),
++                ];
++                paints.into_iter().flatten().all(|paint| match paint {
++                    usvg::Paint::Pattern(pattern) => {
++                        let (sx, sy) = self
++                            .transform
++                            .pre_concat(path.abs_transform())
++                            .pre_concat(pattern.transform())
++                            .get_scale();
++                        let tile = pattern.rect();
++                        let pixels = (tile.width() * sx).ceil() * (tile.height() * sy).ceil();
++                        self.add(pixels as u64) && self.group(pattern.root())
++                    }
++                    _ => true,
++                })
++            }
++            usvg::Node::Image(image) => {
++                self.add(self.area(Some(image.abs_bounding_box())))
++                    && match image.kind() {
++                        usvg::ImageKind::SVG(tree) => self.group(tree.root()),
++                        _ => true,
++                    }
++            }
++            usvg::Node::Text(text) => self.group(text.flattened()),
++        }
++    }
++}
++
++#[cfg(test)]
++#[path = "budget_tests.rs"]
++mod tests;
+diff --git a/crates/gpui/src/svg_renderer/budget_tests.rs b/crates/gpui/src/svg_renderer/budget_tests.rs
+new file mode 100644
+index 0000000..41c8e9a
+--- /dev/null
++++ b/crates/gpui/src/svg_renderer/budget_tests.rs
+@@ -0,0 +1,176 @@
++use super::*;
++use usvg::roxmltree::{Document, ParsingOptions};
++
++const NS: &str = r#"xmlns="http://www.w3.org/2000/svg""#;
++
++fn instances(svg: &str) -> Option<u64> {
++    let options = ParsingOptions {
++        allow_dtd: true,
++        ..Default::default()
++    };
++    let doc = Document::parse_with_options(svg, options).unwrap();
++    expanded_instances(&doc, MAX_SVG_INSTANCES)
++}
++
++fn work(svg: &str, side: f32) -> Option<u64> {
++    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).unwrap();
++    let size = tree.size();
++    let scale = side / size.width().max(size.height());
++    let transform = Transform::from_scale(scale, scale);
++    render_work(
++        &tree,
++        transform,
++        size.width() * scale,
++        size.height() * scale,
++        MAX_SVG_RENDER_WORK,
++    )
++}
++
++fn mask_fan(levels: usize, via_css: bool) -> String {
++    let mut defs = String::new();
++    let mut css = String::new();
++    for i in 0..levels {
++        let next = if i + 1 < levels && !via_css {
++            format!(r#" mask="url(#m{})""#, i + 1)
++        } else {
++            String::new()
++        };
++        if via_css && i + 1 < levels {
++            css += &format!("#m{i} rect{{mask:url(#m{})}}", i + 1);
++        }
++        defs += &format!(
++            r##"<mask id="m{i}"><rect width="24" height="24" fill="#fff"{next}/><rect width="12" height="12" fill="#fff"{next}/></mask>"##
++        );
++    }
++    format!(
++        r##"<svg {NS} viewBox="0 0 24 24"><style>{css}</style><defs>{defs}</defs><rect width="24" height="24" fill="#f00" mask="url(#m0)"/></svg>"##
++    )
++}
++
++#[test]
++fn counts_children_once() {
++    let svg = format!(r#"<svg {NS}><g><path d="M0 0h1v1z"/><path d="M0 0h1v1z"/></g></svg>"#);
++    assert_eq!(instances(&svg), Some(4));
++}
++
++#[test]
++fn counts_each_use_of_a_target() {
++    let svg = format!(
++        r##"<svg {NS}><defs><path id="p" d="M0 0h1v1z"/></defs><use href="#p"/><use href="#p"/><use href="#p"/></svg>"##
++    );
++    // svg, 3 uses and the path under each; defs and its path draw nowhere.
++    assert_eq!(instances(&svg), Some(7));
++}
++
++#[test]
++fn refuses_mask_fan_out() {
++    assert_eq!(instances(&mask_fan(24, false)), None);
++}
++
++#[test]
++fn refuses_mask_fan_out_through_a_stylesheet() {
++    assert_eq!(instances(&mask_fan(24, true)), None);
++}
++
++#[test]
++fn accepts_a_shallow_mask_chain() {
++    let count = instances(&mask_fan(6, false)).unwrap();
++    assert!(count < 500, "{count}");
++}
++
++#[test]
++fn refuses_use_fan_out_past_the_limit_and_accepts_it_below() {
++    let fan = |levels: usize| {
++        let groups: String = (0..levels)
++            .map(|i| format!(r##"<g id="a{}"><use href="#a{i}"/><use href="#a{i}"/></g>"##, i + 1))
++            .collect();
++        format!(
++            r##"<svg {NS}><defs><path id="a0" d="M0 0h1v1z"/>{groups}</defs><use href="#a{levels}"/></svg>"##
++        )
++    };
++    assert!(instances(&fan(12)).is_some());
++    assert_eq!(instances(&fan(16)), None);
++}
++
++#[test]
++fn a_reference_cycle_terminates() {
++    let svg = format!(
++        r##"<svg {NS}><defs><mask id="m" mask="url(#m)"><rect width="1" height="1"/></mask></defs><rect width="1" height="1" mask="url(#m)"/></svg>"##
++    );
++    assert!(instances(&svg).unwrap() < 10);
++}
++
++#[test]
++fn markers_count_per_vertex() {
++    let d: String = (0..10_000).map(|i| format!("L{i} {i}")).collect();
++    let svg = format!(
++        r##"<svg {NS}><defs><marker id="k"><g><g><path d="M0 0h1"/></g></g></marker></defs><path marker-mid="url(#k)" d="M0 0{d}"/></svg>"##
++    );
++    assert_eq!(instances(&svg), None);
++}
++
++#[test]
++fn text_counts_its_glyphs() {
++    let flood = format!(r#"<svg {NS}><text>{}</text></svg>"#, "W".repeat(60_000));
++    assert_eq!(instances(&flood), None);
++    let label = format!(r#"<svg {NS}><text>{}</text></svg>"#, "W".repeat(200));
++    assert_eq!(instances(&label), Some(202));
++}
++
++#[test]
++fn gradients_in_a_stylesheet_do_not_count_per_element() {
++    let gradients: String = (0..200)
++        .map(|i| format!(r##"<linearGradient id="g{i}"><stop offset="0"/></linearGradient>"##))
++        .collect();
++    let css: String = (0..200).map(|i| format!(".c{i}{{fill:url(#g{i})}}")).collect();
++    let svg = format!(r#"<svg {NS}><style>{css}</style><defs>{gradients}</defs><rect class="c1"/></svg>"#);
++    assert!(instances(&svg).is_some());
++}
++
++#[test]
++fn url_refs_reads_quoted_and_bare_ids() {
++    let ids: Vec<&str> = url_refs(r##"url(#a) url( "#b" ) url('#c') url(http://x/#d)"##).collect();
++    assert_eq!(ids, ["a", "b", "c"]);
++}
++
++#[test]
++fn a_plain_drawing_costs_about_its_area() {
++    let svg = format!(r##"<svg {NS} viewBox="0 0 24 24"><rect width="24" height="24" fill="#f00"/></svg>"##);
++    let pixels = work(&svg, 2048.0).unwrap();
++    assert!(pixels < 2 * 2050 * 2050, "{pixels}");
++}
++
++#[test]
++fn refuses_a_canvas_wide_morphology_radius() {
++    let svg = format!(
++        r##"<svg {NS} viewBox="0 0 24 24"><filter id="f"><feMorphology radius="2000"/></filter><rect width="24" height="24" filter="url(#f)"/></svg>"##
++    );
++    assert_eq!(work(&svg, 48.0).map(|_| ()), Some(()));
++    assert_eq!(work(&svg, 2048.0), None);
++}
++
++#[test]
++fn refuses_turbulence_with_many_octaves() {
++    let svg = format!(
++        r##"<svg {NS} viewBox="0 0 24 24"><filter id="f"><feTurbulence baseFrequency="0.5" numOctaves="100000"/></filter><rect width="24" height="24" filter="url(#f)"/></svg>"##
++    );
++    assert_eq!(work(&svg, 48.0), None);
++}
++
++#[test]
++fn refuses_a_huge_pattern_tile() {
++    let svg = format!(
++        r##"<svg {NS} viewBox="0 0 24 24"><pattern id="p" width="100000" height="100000" patternUnits="userSpaceOnUse"><rect width="1" height="1"/></pattern><rect width="24" height="24" fill="url(#p)"/></svg>"##
++    );
++    assert_eq!(work(&svg, 48.0), None);
++}
++
++#[test]
++fn counts_each_opacity_layer() {
++    let layers = |n: usize| {
++        let groups = r#"<g opacity=".5"><path d="M0 0h24v24z"/></g>"#.repeat(n);
++        format!(r#"<svg {NS} viewBox="0 0 24 24">{groups}</svg>"#)
++    };
++    assert!(work(&layers(8), 2048.0).is_some());
++    assert_eq!(work(&layers(64), 2048.0), None);
++}

@@ -18,8 +18,9 @@
 # ~/gpuix-native-target. The build stops itself when the work dir passes
 # $TERMUL_GPUIX_NATIVE_MAX_GB (14) or / drops under $TERMUL_GPUIX_NATIVE_MIN_FREE_GB (8).
 #
-# Output: build/gpuix-native.linux-x64-gnu.node next to this script. The app
-# loads it when TERMUL_GPUIX_NATIVE=local (see apps/gpuix/src/native-addon.ts).
+# Output: build/gpuix-native.linux-x64-gnu.node next to this script.
+# @gpuix/native loads it in place of the npm addon when NAPI_RS_NATIVE_LIBRARY_PATH
+# names it, and `bun run package:linux` ships it (docs/native-patches.md).
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 

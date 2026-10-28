@@ -24,7 +24,13 @@ import {
   startXvfb,
   windowOrigin
 } from '../parity/shoot-gpuix'
-import { bundledIcons, GRID_HEIGHT, GRID_WIDTH } from './svg-attack-shared'
+import {
+  ATTACK_FIFO,
+  ATTACK_STATE,
+  bundledIcons,
+  GRID_HEIGHT,
+  GRID_WIDTH
+} from './svg-attack-shared'
 import { SVG_ATTACKS } from './svg-attacks'
 
 const BUDGET_MS = 50
@@ -38,14 +44,14 @@ const { values } = parseArgs({
     mode: { type: 'string', default: 'app' },
     only: { type: 'string' },
     'no-grid': { type: 'boolean', default: false },
-    out: { type: 'string', default: '/tmp/gpuix-s2/svg-attack' }
+    out: { type: 'string', default: path.join(ATTACK_STATE, 'svg-attack') }
   }
 })
 const mode = values.mode as 'app' | 'raw'
 const out = path.resolve(values.out as string)
 mkdirSync(out, { recursive: true })
-const fifo = '/tmp/gpuix-s2/fifo'
-if (!existsSync(fifo)) Bun.spawnSync(['mkfifo', fifo])
+mkdirSync(ATTACK_STATE, { recursive: true })
+if (!existsSync(ATTACK_FIFO)) Bun.spawnSync(['mkfifo', ATTACK_FIFO])
 const only = values.only ? new Set((values.only as string).split(',')) : null
 const sceneFile = path.join(import.meta.dir, 'svg-attack-scene.tsx')
 
@@ -117,7 +123,7 @@ try {
   if (mode === 'app' && !values['no-grid']) await grid()
 } finally {
   xvfb.stop()
-  rmSync(fifo, { force: true })
+  rmSync(ATTACK_FIFO, { force: true })
 }
 
 async function grid(): Promise<void> {

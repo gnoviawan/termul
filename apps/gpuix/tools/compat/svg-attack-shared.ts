@@ -3,6 +3,9 @@ import path from 'node:path'
 import type { ReactElement } from 'react'
 import { jsx } from 'react/jsx-runtime'
 
+/** Scratch for the attack tools (results, the FIFO an `<image>` names); one per unit run. */
+export const ATTACK_STATE = process.env.GPUIX_SVG_ATTACK_STATE ?? '/tmp/gpuix-svg-attack'
+export const ATTACK_FIFO = path.join(ATTACK_STATE, 'fifo')
 export const TILE = 32
 export const GRID_WIDTH = 1200
 export const GRID_HEIGHT = 760

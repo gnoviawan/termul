@@ -5,6 +5,8 @@
  * markup the native renderer paints in bounded time.
  */
 
+import { ATTACK_FIFO } from './svg-attack-shared'
+
 export interface SvgAttack {
   id: string
   markup: string
@@ -104,7 +106,7 @@ export const SVG_ATTACKS: SvgAttack[] = [
   },
   {
     id: 'image-xlink-fifo',
-    markup: `<svg ${NS} xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24"><image xlink:href="/tmp/gpuix-s2/fifo" width="24" height="24"/><path d="M0 0h24v24z"/></svg>`,
+    markup: `<svg ${NS} xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24"><image xlink:href="${ATTACK_FIFO}" width="24" height="24"/><path d="M0 0h24v24z"/></svg>`,
     expect: 'render'
   },
   {
