@@ -708,9 +708,9 @@ it('does not let a keystroke overtake an unsent replay chunk', async () => {
     ).toEqual(['ls', ' -la\r', 'x'])
   })
 
-  const held = client as unknown as { replayHeld: Set<string> }
+  const held = client as unknown as { replayHolds: Map<string, number> }
   await vi.waitFor(() => {
-    expect(held.replayHeld.has('terminal-1')).toBe(false)
+    expect(held.replayHolds.get('terminal-1') ?? 0).toBe(0)
   })
   socket.sent.length = 0
   const pending = createWebCommandEditorTransport(client).submitCommand('terminal-1', 'echo hello')

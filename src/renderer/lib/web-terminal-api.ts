@@ -179,12 +179,17 @@ export class WebTerminalClient {
    */
   private readonly unconfirmedChunks = new Map<string, { commandId: string; data: string }>()
   /**
-   * Set while a replay write has left the buffer but its bytes, and any
-   * keystrokes that arrived during the replay, are not yet queued. Both
-   * `write()` and session RPCs must wait. Cleared after those bytes are
-   * queued, rebuffered, or dropped.
+   * Per-terminal hold COUNT while a replay write has left the buffer but its
+   * bytes, and any keystrokes that arrived during the replay, are not yet
+   * queued. Both `write()` and session RPCs must wait. A count, not a flag:
+   * attach-driven flushes can overlap (the reconnect re-attach loop, an
+   * explicit attach, and the delayed IN_PROGRESS retry can each start a flush
+   * for the same terminal), and a Set would let the FIRST flush to finish
+   * release the hold while another flush's bytes are still unqueued — letting
+   * a direct write or session RPC overtake them. Each flush acquires one
+   * hold; the terminal unblocks only when the last one releases.
    */
-  private readonly replayHeld = new Set<string>()
+  private readonly replayHolds = new Map<string, number>()
   /** Project each live terminal was spawned for (recovers a rotated claim via `list_preserved`). */
   private readonly terminalProjects = new Map<string, string>()
   /**
@@ -353,7 +358,7 @@ export class WebTerminalClient {
     const socket = this.socket
     if (this.disposed || !socket || socket.readyState !== this.WebSocketImpl.OPEN) return null
     if (this.connecting) return null
-    if (this.inputBuffers.has(terminalId) || this.replayHeld.has(terminalId)) return null
+    if (this.inputBuffers.has(terminalId) || this.isReplayHeld(terminalId)) return null
     const tracker = this.trackers.get(terminalId)
     if (tracker && !tracker.exited && tracker.attachedSocket !== socket) return null
     return {
@@ -365,7 +370,18 @@ export class WebTerminalClient {
   }
 
   private releaseReplayHold(terminalId: string): void {
-    this.replayHeld.delete(terminalId)
+    const held = (this.replayHolds.get(terminalId) ?? 0) - 1
+    if (held > 0) this.replayHolds.set(terminalId, held)
+    else this.replayHolds.delete(terminalId)
+  }
+
+  /** One hold per in-flight flush; released by `releaseReplayHold`. */
+  private acquireReplayHold(terminalId: string): void {
+    this.replayHolds.set(terminalId, (this.replayHolds.get(terminalId) ?? 0) + 1)
+  }
+
+  private isReplayHeld(terminalId: string): boolean {
+    return (this.replayHolds.get(terminalId) ?? 0) > 0
   }
 
   connect(): Promise<void> {
@@ -837,7 +853,7 @@ export class WebTerminalClient {
     const socketOpen = this.socket?.readyState === this.WebSocketImpl.OPEN
     // Input already waiting in the buffer goes first: a direct write now would
     // overtake it. The delayed flush after a failed replay sends it in order.
-    const replayHeld = this.replayHeld.has(terminalId)
+    const replayHeld = this.isReplayHeld(terminalId)
     const waiting = this.inputBuffers.has(terminalId) || replayHeld
     if (
       socketOpen &&
@@ -904,7 +920,7 @@ export class WebTerminalClient {
   private flushInputBuffer(terminalId: string): void {
     const buffered = this.inputBuffers.get(terminalId)
     if (!buffered) return
-    this.replayHeld.add(terminalId)
+    this.acquireReplayHold(terminalId)
     this.inputBuffers.delete(terminalId)
     // Chunk 1: the unconfirmed one (same id) if its text still leads the
     // buffer; chunk 2: whatever was buffered after it (a new id).
@@ -913,7 +929,9 @@ export class WebTerminalClient {
       prior && buffered.startsWith(prior.data) ? prior : { commandId: randomUUID(), data: buffered }
     const rest = buffered.slice(first.data.length)
     void this.sendBufferedChunks(terminalId, first, rest).catch(() => {
-      this.releaseReplayHold(terminalId)
+      // No hold release here: `sendBufferedChunks` releases in its `finally`,
+      // and with per-terminal hold counts a second release here would
+      // double-decrement and drop another flush's hold.
       void logFrontendError({
         level: 'warn',
         source: 'WebTerminalClient.flushInputBuffer',
@@ -927,8 +945,11 @@ export class WebTerminalClient {
     first: { commandId: string; data: string },
     rest: string
   ): Promise<void> {
-    const pending = rest ? [first, { commandId: randomUUID(), data: rest }] : [first]
     try {
+      // Inside the `try` so the `finally` release covers everything after the
+      // acquire in `flushInputBuffer` — with hold counts there is no catch-path
+      // backstop, so nothing between acquire and `finally` may be able to throw.
+      const pending = rest ? [first, { commandId: randomUUID(), data: rest }] : [first]
       while (pending.length > 0 || this.inputBuffers.has(terminalId)) {
         const extra = this.inputBuffers.get(terminalId)
         if (extra) {
@@ -1050,7 +1071,9 @@ export class WebTerminalClient {
     // Story 10: dispose drops every buffered input (in-memory only).
     this.inputBuffers.clear()
     this.unconfirmedChunks.clear()
-    this.replayHeld.clear()
+    // In-flight flushes may release into this cleared map afterwards;
+    // `releaseReplayHold` tolerates absent keys, so that is a safe no-op.
+    this.replayHolds.clear()
     this.socket?.close()
   }
 
