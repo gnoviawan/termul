@@ -10,6 +10,7 @@ import {
 import {
   clearPendingUpdate,
   DEFAULT_UPDATE_CHANNEL,
+  isUpdateDownloaded,
   registerUpdateEventHandlers,
   type TauriUpdaterEventHandlers,
   checkForUpdates as tauriCheckForUpdates,
@@ -172,12 +173,15 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         set({ skippedVersion: null })
       }
 
+      // A re-check that finds the version already downloaded keeps it ready to
+      // install; the facade keeps the downloaded package for the same version.
+      const alreadyDownloaded = isUpdateDownloaded(updateInfo.version)
       set({
         updateAvailable: true,
-        downloaded: false,
+        downloaded: alreadyDownloaded,
         version: updateInfo.version,
         releaseNotes: updateInfo.releaseNotes ?? null,
-        downloadProgress: 0,
+        downloadProgress: alreadyDownloaded ? 100 : 0,
         error: null,
         lastChecked: checkedAt,
         // The update mode, not the channel, decides the UI: a nightly whose
@@ -349,7 +353,11 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
         downloaded: false,
         version: null,
         downloadProgress: 0,
-        releaseNotes: null
+        releaseNotes: null,
+        // The manual flag described the previous channel's check, and
+        // clearPendingUpdate already reset it in the facade. The next check of
+        // this channel sets it again if that check falls back to manual.
+        isManualUpdateMode: false
       })
 
       // Re-check only when auto-update is enabled — switching channel while

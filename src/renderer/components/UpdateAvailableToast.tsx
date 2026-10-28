@@ -35,6 +35,33 @@ const UPDATE_TOAST_TWO_BUTTON_CLASS_NAMES = {
   actionButton: 'ml-2!'
 }
 
+/** Stable ids, so a toast can be replaced in place and dismissed by version. */
+function availableToastId(version: string): string {
+  return `update-available-${version}`
+}
+
+function readyToastId(version: string): string {
+  return `update-ready-${version}`
+}
+
+function progressToastId(version: string): string {
+  return `download-progress-${version}`
+}
+
+/**
+ * Dismiss a toast that may still have a create or update pending. sonner
+ * applies a dismiss right away but defers each create/update to a
+ * setTimeout(0), so a dismiss that runs first is lost and the late create
+ * brings the toast back. The second dismiss is queued after any pending
+ * create, so it lands last.
+ */
+function dismissUpdateToast(id: string): void {
+  toast.dismiss(id)
+  setTimeout(() => {
+    toast.dismiss(id)
+  }, 0)
+}
+
 /**
  * Check if the user has asked to be reminded tomorrow
  */
@@ -73,6 +100,7 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
         : 'Update available'
 
   toast.success(title, {
+    id: availableToastId(version),
     duration: 30000,
     classNames: UPDATE_TOAST_TWO_BUTTON_CLASS_NAMES,
     description: releaseNotes
@@ -122,6 +150,7 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
  */
 export function showUpdateDownloadedToast(version: string): void {
   toast.success('Update ready to install', {
+    id: readyToastId(version),
     duration: 30000,
     classNames: UPDATE_TOAST_CLASS_NAMES,
     description: `Version ${version} is downloaded. Termul restarts to install it, and running terminal sessions close.`,
@@ -136,21 +165,11 @@ export function showUpdateDownloadedToast(version: string): void {
  * Show a toast notification with download progress
  */
 function showDownloadProgressToast(version: string, progress: number): void {
-  const progressId = `download-progress-${version}`
-
   toast.loading(`Downloading update ${version}...`, {
-    id: progressId,
+    id: progressToastId(version),
     description: `${progress.toFixed(0)}% complete`,
     duration: Infinity
   })
-}
-
-/**
- * Dismiss download progress toast
- */
-function dismissDownloadProgressToast(version: string): void {
-  const progressId = `download-progress-${version}`
-  toast.dismiss(progressId)
 }
 
 /**
@@ -171,9 +190,10 @@ export function useUpdateToast(): void {
   const downloading = useIsDownloading()
   const downloadProgress = useDownloadProgress()
 
-  // Track if we've already shown a toast for the current update
-  const hasShownAvailableToast = useRef(false)
-  const hasShownDownloadedToast = useRef(false)
+  // The version each toast was last shown for, so a toast shows once per
+  // version and comes down once its state is gone.
+  const shownAvailableFor = useRef<string | null>(null)
+  const shownReadyFor = useRef<string | null>(null)
 
   // Show toast when update becomes available
   useEffect(() => {
@@ -182,45 +202,68 @@ export function useUpdateToast(): void {
       updateAvailable &&
       version &&
       !downloaded &&
-      !hasShownAvailableToast.current &&
+      shownAvailableFor.current !== version &&
       !downloading &&
       shouldShowReminder() &&
       skippedVersion !== version
     ) {
       showUpdateToast(version)
-      hasShownAvailableToast.current = true
+      shownAvailableFor.current = version
     }
   }, [isDesktop, updateAvailable, version, downloaded, downloading, skippedVersion])
 
+  // Take the "update available" toast down once it no longer matches the
+  // state: a channel switch cleared the update, or a re-check replaced it.
+  useEffect(() => {
+    const shown = shownAvailableFor.current
+    if (!shown) return
+    if (!updateAvailable || version !== shown) {
+      dismissUpdateToast(availableToastId(shown))
+      shownAvailableFor.current = null
+    } else if (downloaded) {
+      // The "ready to install" toast takes over for this version.
+      dismissUpdateToast(availableToastId(shown))
+    }
+  }, [updateAvailable, version, downloaded])
+
   // Show toast when update is downloaded and ready to install
   useEffect(() => {
-    if (isDesktop && downloaded && version && !hasShownDownloadedToast.current) {
+    if (isDesktop && downloaded && version && shownReadyFor.current !== version) {
       showUpdateDownloadedToast(version)
-      hasShownDownloadedToast.current = true
+      shownReadyFor.current = version
     }
   }, [isDesktop, downloaded, version])
 
-  // Show download progress. A manual update only opens the release page:
-  // nothing reports progress, and the open finishes so fast that sonner can
-  // apply the dismiss before its deferred create, leaving a stuck 0% toast.
+  // Take the "ready to install" toast down once that version is no longer the
+  // downloaded one, so its button never installs an update that is gone.
   useEffect(() => {
-    if (isDesktop && isDownloading && version && !isManualUpdateMode) {
-      showDownloadProgressToast(version, downloadProgress)
-
-      // Clean up progress toast when download completes or effect re-runs
-      return () => {
-        dismissDownloadProgressToast(version)
-      }
+    const shown = shownReadyFor.current
+    if (shown && !(downloaded && version === shown)) {
+      dismissUpdateToast(readyToastId(shown))
+      shownReadyFor.current = null
     }
-  }, [isDesktop, isDownloading, downloadProgress, version, isManualUpdateMode])
+  }, [downloaded, version])
 
-  // Reset flags when update state changes
+  // Download progress shows only while a signed package downloads. A manual
+  // update only opens the release page and reports no progress.
+  const progressVersion =
+    isDesktop && isDownloading && !downloaded && !isManualUpdateMode ? version : null
+
+  // Update the progress toast in place. No cleanup here: dismissing and
+  // re-creating it on every tick made it flicker and could leave it stuck.
   useEffect(() => {
-    if (!updateAvailable) {
-      hasShownAvailableToast.current = false
-      hasShownDownloadedToast.current = false
+    if (progressVersion) {
+      showDownloadProgressToast(progressVersion, downloadProgress)
     }
-  }, [updateAvailable])
+  }, [progressVersion, downloadProgress])
+
+  // Dismiss the progress toast once, when the download ends (or on unmount).
+  useEffect(() => {
+    if (!progressVersion) return
+    return () => {
+      dismissUpdateToast(progressToastId(progressVersion))
+    }
+  }, [progressVersion])
 }
 
 /**
