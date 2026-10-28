@@ -23,6 +23,7 @@ import {
   SAMPLES,
   type Sample,
   SCENE,
+  SVG_NESTING,
   TABLE,
   TABLE_HEADER_FILL,
   TRACKING
@@ -37,6 +38,12 @@ const IMAGE_HREF_SRC = `data:image/svg+xml;utf8,${encodeURIComponent(
     `<image href="data:image/png;base64,${PNG.sync.write(redPng).toString('base64')}" width="${IMAGE_HREF.size}" height="${IMAGE_HREF.size}"/>` +
     `<rect width="${IMAGE_HREF.size}" height="${IMAGE_HREF.bar}" fill="#00ff00"/></svg>`
 )}`
+
+const nestedSvg = (depth: number, fill: string) =>
+  `data:image/svg+xml;utf8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${SVG_NESTING.size}" height="${SVG_NESTING.size}">` +
+      `${'<g>'.repeat(depth - 1)}<rect width="${SVG_NESTING.size}" height="${SVG_NESTING.size}" fill="${fill}"/>${'</g>'.repeat(depth - 1)}</svg>`
+  )}`
 
 /** 0001's family: an upright and an italic face, as the app's italic text has. Paper Mono has no italic. */
 const STYLE_FACES = ['Inter-Regular.ttf', 'Inter-Italic.ttf']
@@ -257,6 +264,24 @@ function App() {
             src={IMAGE_HREF_SRC}
             style={{ width: IMAGE_HREF.size, height: IMAGE_HREF.size }}
           />
+        )}
+        {box(
+          'svgNesting',
+          <div style={{ display: 'flex', flexDirection: 'row' }}>
+            <img
+              alt=""
+              src={nestedSvg(SVG_NESTING.allowed, '#00ff00')}
+              style={{ width: SVG_NESTING.size, height: SVG_NESTING.size }}
+            />
+            {/* A refused image paints a wide "load failed" label; keep it off the green tile. */}
+            <div style={{ width: SVG_NESTING.size, height: SVG_NESTING.size, overflow: 'hidden' }}>
+              <img
+                alt=""
+                src={nestedSvg(SVG_NESTING.refused, '#ff0000')}
+                style={{ width: SVG_NESTING.size, height: SVG_NESTING.size }}
+              />
+            </div>
+          </div>
         )}
       </div>
       {box(

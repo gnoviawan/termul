@@ -17,7 +17,8 @@ export const SAMPLES = [
   'untracked',
   'tracked',
   'bullet',
-  'imageHref'
+  'imageHref',
+  'svgNesting'
 ] as const
 /** Set on the unfocused input after mount, like a URL bar after a navigation: ink at the start, dots at the end. */
 export const LONG_VALUE = `${'M'.repeat(10)}${'.'.repeat(120)}`
@@ -57,6 +58,14 @@ export const BULLET = { width: 40, gap: 20, color: '#ff0000' } as const
  * bar and never resolve the href. As tall as the `input` sample beside it.
  */
 export const IMAGE_HREF = { size: 40, bar: 8 } as const
+/**
+ * The `svgNesting` sample: two `<img>` SVGs of one rect inside nested groups,
+ * a green one `allowed` levels deep and a red one `refused` levels deep, either
+ * side of the 256 levels zed/0010 lets through. Both decode without
+ * overflowing a stack on the published addon, so the row fails there by
+ * painting red rather than by crashing the scene.
+ */
+export const SVG_NESTING = { size: 40, allowed: 250, refused: 300 } as const
 export type Sample = (typeof SAMPLES)[number]
 export interface SceneReady {
   bounds: Record<Sample, { x: number; y: number; width: number; height: number } | null>

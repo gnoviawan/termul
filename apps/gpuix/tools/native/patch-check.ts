@@ -53,6 +53,9 @@
  *   zed/0009-svg-refuse-image-href
  *                          an <img> SVG paints its shapes but not the data-URL
  *                          PNG its `<image href>` names
+ *   zed/0010-svg-bounded-nesting
+ *                          an <img> SVG 250 levels deep paints; one 300
+ *                          levels deep is refused before roxmltree recurses
  *   0008-prompt-for-new-path
  *                          `dialog-check.ts`: the portal's save dialog returns
  *                          the path typed into it
@@ -84,6 +87,7 @@ import {
   type Sample,
   SCENE,
   type SceneReady,
+  SVG_NESTING,
   TABLE,
   TRACKING
 } from './samples'
@@ -257,6 +261,8 @@ const cornerStripe = (() => {
 const red = ([r, g, b]: readonly [number, number, number]) => r > 200 && g < 60 && b < 60
 const imageHrefRed = count('imageHref', red)
 const imageHrefGreen = count('imageHref', ([r, g, b]) => g > 200 && r < 60 && b < 60)
+const nestingRed = count('svgNesting', red)
+const nestingGreen = count('svgNesting', ([r, g, b]) => g > 200 && r < 60 && b < 60)
 /** Rows of the table sample holding the header fill, and the table's height inside the 8 px box padding. */
 const tableFillRows = (() => {
   const { x0, y0, x1, y1 } = region('table')
@@ -440,6 +446,18 @@ const checks = [
     what: 'the red PNG its <image href> embeds never paints (red pixels)',
     value: imageHrefRed,
     ok: imageHrefRed === 0
+  },
+  {
+    patch: 'zed/0010-svg-bounded-nesting',
+    what: `an <img> SVG ${SVG_NESTING.allowed} levels deep paints its green rect (pixels)`,
+    value: nestingGreen,
+    ok: nestingGreen >= SVG_NESTING.size * SVG_NESTING.size * 0.9
+  },
+  {
+    patch: 'zed/0010-svg-bounded-nesting',
+    what: `an <img> SVG ${SVG_NESTING.refused} levels deep is refused (red pixels)`,
+    value: nestingRed,
+    ok: nestingRed === 0
   },
   {
     patch: '0006-focus-events',
