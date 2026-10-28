@@ -27,6 +27,7 @@
   },
   "include": ["src/renderer/**/*", "src/shared/**/*"],
   "exclude": [
+    "src/shared/**/*.test.ts",
     "src/renderer/**/*.test.ts",
     "src/renderer/**/*.test.tsx",
     "src/renderer/**/__tests__/**/*"
