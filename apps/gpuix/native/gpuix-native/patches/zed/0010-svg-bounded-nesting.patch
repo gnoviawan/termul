@@ -1,0 +1,153 @@
+diff --git a/crates/gpui/src/svg_renderer.rs b/crates/gpui/src/svg_renderer.rs
+index ab946c9..e831f97 100644
+--- a/crates/gpui/src/svg_renderer.rs
++++ b/crates/gpui/src/svg_renderer.rs
+@@ -196,7 +196,7 @@ impl SvgRenderer {
+     /// Parses SVG data into a [`ParsedSvg`] that can be rasterized at any scale.
+     #[ztracing::instrument(skip_all)]
+     pub fn parse_svg(&self, bytes: &[u8]) -> Result<ParsedSvg, usvg::Error> {
+-        usvg::Tree::from_data(bytes, &self.usvg_options).map(ParsedSvg)
++        parse_tree(bytes, &self.usvg_options).map(ParsedSvg)
+     }
+ 
+     /// Rasterizes a previously parsed SVG into an image buffer.
+@@ -271,11 +271,138 @@ impl SvgRenderer {
+     }
+ 
+     fn render_pixmap(&self, bytes: &[u8], size: SvgSize) -> Result<Pixmap, usvg::Error> {
+-        let tree = usvg::Tree::from_data(bytes, &self.usvg_options)?;
++        let tree = parse_tree(bytes, &self.usvg_options)?;
+         rasterize_tree(&tree, size)
+     }
+ }
+ 
++/// Deepest element nesting an SVG may have. roxmltree parses every level with
++/// a recursive call and has no limit of its own, so nested `<g>`s overflow the
++/// decoding thread's stack (2 MiB on the background executor that decodes
++/// `img` sources) and abort the process before usvg's 1024-level limit runs.
++const MAX_SVG_NESTING: usize = 256;
++
++/// `usvg::Tree::from_data`, refusing documents nested deeper than [`MAX_SVG_NESTING`].
++fn parse_tree(bytes: &[u8], options: &usvg::Options) -> Result<usvg::Tree, usvg::Error> {
++    let svgz;
++    let data = if bytes.starts_with(&[0x1f, 0x8b]) {
++        svgz = usvg::decompress_svgz(bytes)?;
++        &svgz[..]
++    } else {
++        bytes
++    };
++    let text = std::str::from_utf8(data).map_err(|_| usvg::Error::NotAnUtf8Str)?;
++    if nests_deeper_than(text, MAX_SVG_NESTING) {
++        return Err(usvg::Error::ElementsLimitReached);
++    }
++    let xml = usvg::roxmltree::Document::parse_with_options(
++        text,
++        usvg::roxmltree::ParsingOptions {
++            allow_dtd: true,
++            ..Default::default()
++        },
++    )
++    .map_err(usvg::Error::ParsingFailed)?;
++    usvg::Tree::from_xmltree(&xml, options)
++}
++
++/// Whether elements in `text` nest deeper than `limit`, counted in one pass
++/// without recursion. Comments, CDATA and processing instructions hold no
++/// elements, and a quoted attribute value may hold `>` but never `<`. An
++/// internal DTD subset whose literals could expand to markup (`<`, `&` or `%`
++/// in one) counts as too deep: an entity reference nests its replacement
++/// wherever it appears. Malformed input returns false and fails in roxmltree
++/// at the same point, after every level before it was counted.
++fn nests_deeper_than(text: &str, limit: usize) -> bool {
++    let bytes = text.as_bytes();
++    let find = |from: usize, pattern: &str| text[from..].find(pattern).map(|i| from + i);
++    let mut depth = 0usize;
++    let mut at = 0;
++    while let Some(open) = find(at, "<") {
++        let rest = &text[open..];
++        let skip = |start: usize, end: &str| find(open + start, end).map(|i| i + end.len());
++        let next = if rest.starts_with("<!--") {
++            skip(4, "-->")
++        } else if rest.starts_with("<![CDATA[") {
++            skip(9, "]]>")
++        } else if rest.starts_with("<?") {
++            skip(2, "?>")
++        } else if rest.starts_with("<!") {
++            match doctype_end(bytes, open + 2) {
++                Doctype::End(end) => Some(end),
++                Doctype::Markup => return true,
++                Doctype::Unclosed => None,
++            }
++        } else if rest.starts_with("</") {
++            depth = depth.saturating_sub(1);
++            Some(open + 2)
++        } else {
++            let mut quote = None;
++            let close = (open + 1..bytes.len()).find(|&i| match (quote, bytes[i]) {
++                (Some(q), b) if b == q => {
++                    quote = None;
++                    false
++                }
++                (Some(_), _) => false,
++                (None, b @ (b'"' | b'\'')) => {
++                    quote = Some(b);
++                    false
++                }
++                (None, b) => b == b'>',
++            });
++            if let Some(close) = close
++                && bytes[close - 1] != b'/'
++            {
++                depth += 1;
++                if depth > limit {
++                    return true;
++                }
++            }
++            close.map(|close| close + 1)
++        };
++        match next {
++            Some(next) => at = next,
++            None => return false,
++        }
++    }
++    false
++}
++
++enum Doctype {
++    End(usize),
++    Markup,
++    Unclosed,
++}
++
++/// Where the `<!DOCTYPE …>` whose body starts at `from` ends.
++fn doctype_end(bytes: &[u8], from: usize) -> Doctype {
++    let mut quote = None;
++    let mut subset = false;
++    let mut i = from;
++    while let Some(&b) = bytes.get(i) {
++        match quote {
++            Some(q) if b == q => quote = None,
++            Some(_) if subset && matches!(b, b'<' | b'&' | b'%') => return Doctype::Markup,
++            Some(_) => {}
++            None if subset && bytes[i..].starts_with(b"<!--") => {
++                match bytes[i + 4..].windows(3).position(|w| w == b"-->") {
++                    Some(end) => i += 4 + end + 2,
++                    None => return Doctype::Unclosed,
++                }
++            }
++            None => match b {
++                b'"' | b'\'' => quote = Some(b),
++                b'[' if !subset => subset = true,
++                b']' if subset => subset = false,
++                b'>' if !subset => return Doctype::End(i + 1),
++                _ => {}
++            },
++        }
++        i += 1;
++    }
++    Doctype::Unclosed
++}
++
+ fn rasterize_tree(tree: &usvg::Tree, size: SvgSize) -> Result<Pixmap, usvg::Error> {
+     // Cap the size of the rendered pixmap to avoid texture allocation panics
+     // Related issue: #56466
