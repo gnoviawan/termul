@@ -69,7 +69,7 @@ export async function launchGpuix(
     kind: 'gpuix',
     rootPid,
     launchedMs,
-    version: `GPUIX ${gpuixVersion()} on Bun ${Bun.version}`,
+    version: `GPUIX ${gpuixVersion()} (addon ${nativeAddon(rootPid)}) on Bun ${Bun.version}`,
     backend: vulkanDriver(rootPid),
     app,
     windowHeight: opts.height,
@@ -107,6 +107,12 @@ function appPid(entry: string): number {
 function gpuixVersion(): string {
   const pkg = path.join(APP_DIR, 'node_modules', '@gpuix', 'native', 'package.json')
   return (JSON.parse(readFileSync(pkg, 'utf8')) as { version: string }).version
+}
+
+/** Which @gpuix/native addon the app loaded: the npm build or a self-built patched one. */
+function nativeAddon(pid: number): string {
+  const maps = readFileSync(`/proc/${pid}/maps`, 'utf8')
+  return /\S*gpuix-native\.[\w-]+\.node/.exec(maps)?.[0] ?? 'not mapped'
 }
 
 /** Which Vulkan driver the app actually loaded, from its memory maps. */
