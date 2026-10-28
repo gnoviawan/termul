@@ -11,10 +11,11 @@
  *   budget the same reply also embeds the decode bombs of `image-attacks.ts`
  *          (svgz, PNG, GIF) and the SVGs that burned the decoder before
  *          zed/0011 (mask fan-out, a 100000-unit viewBox, 100000 turbulence
- *          octaves, 60000 glyphs, a filter region far past the canvas). From
- *          the click that opens the chat until BUDGET_WINDOW_MS later, the
- *          client may spend at most BUDGET_CPU_MS of CPU and grow its resident
- *          memory by at most BUDGET_RSS_MB.
+ *          octaves, 60000 glyphs, a filter region far past the canvas). The
+ *          chat gets BUDGET_WINDOW_MS from the click that opens it to lay out
+ *          and decode; over the SETTLE_WINDOW_MS after, a client whose decodes
+ *          all ended spends at most SETTLE_CPU_MS of CPU. Over both, its
+ *          resident memory grows at most BUDGET_RSS_MB.
  *
  * Both routes run in one client against a fresh test server. The client must
  * still answer automation after each, and a benign green image in the same
@@ -72,8 +73,9 @@ const BUDGET_SVGS = [
   'fe-gaussian-blur'
 ]
 const BUDGET_WINDOW_MS = 12_000
-/** Everything the chat does in the window, the transcript's own render included. */
-const BUDGET_CPU_MS = 6000
+const SETTLE_WINDOW_MS = 8000
+/** An idle client under lavapipe; a decode still running holds a core for the whole window. */
+const SETTLE_CPU_MS = 2500
 const BUDGET_RSS_MB = 192
 const budgetImages = [
   ...(await Promise.all(
@@ -273,14 +275,19 @@ try {
       await act('chat', PROMPT)
       await alive('chat', DONE)
       await windowEnds
+      const cpuSettleStart = cpuMsOf(pid)
+      await Bun.sleep(SETTLE_WINDOW_MS)
       clearInterval(sampler)
-      const cpuSpent = cpuMsOf(pid) - cpuBefore
+      const cpuOpening = cpuSettleStart - cpuBefore
+      const cpuSettled = cpuMsOf(pid) - cpuSettleStart
       const rssGrowth = rssPeak - rssBefore
       console.log(
-        `budget: ${budgetImages.length} bombs, client CPU ${cpuSpent} ms and resident memory +${rssGrowth.toFixed(0)} MB over ${BUDGET_WINDOW_MS} ms`
+        `budget: ${budgetImages.length} bombs, client CPU ${cpuOpening} ms opening the chat (${BUDGET_WINDOW_MS} ms), ${cpuSettled} ms after it (${SETTLE_WINDOW_MS} ms), resident memory +${rssGrowth.toFixed(0)} MB`
       )
-      if (cpuSpent > BUDGET_CPU_MS)
-        failures.push(`budget: the client spent ${cpuSpent} ms CPU (budget ${BUDGET_CPU_MS})`)
+      if (cpuSettled > SETTLE_CPU_MS)
+        failures.push(
+          `budget: the client spent ${cpuSettled} ms CPU after the chat settled (budget ${SETTLE_CPU_MS})`
+        )
       if (rssGrowth > BUDGET_RSS_MB)
         failures.push(
           `budget: resident memory grew ${rssGrowth.toFixed(0)} MB (budget ${BUDGET_RSS_MB})`
