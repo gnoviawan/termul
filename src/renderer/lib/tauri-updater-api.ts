@@ -481,11 +481,8 @@ async function checkSignedChannelUpdate(channel: UpdateChannel): Promise<UpdateI
   let metadata: SignedUpdateMetadata | null
   try {
     metadata = await invoke<SignedUpdateMetadata | null>('updater_check_channel', { channel })
-  } catch (error) {
-    console.warn(
-      `[updater] signed ${channel} check failed, falling back to manual download:`,
-      getErrorMessage(error, 'Unknown updater error')
-    )
+  } catch {
+    // Logged durably by the Rust command (`[updater] signed channel check failed`).
     return checkChannelUpdate(channel)
   }
   return adoptSignedUpdate(metadata ? new Update(metadata) : null)
