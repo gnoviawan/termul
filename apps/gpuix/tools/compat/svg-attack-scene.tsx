@@ -10,10 +10,14 @@
  *             compat in between: what the native renderer does on its own.
  *   grid      every bundled agent icon through the app path, the same icons
  *             through G16's pipeline (`legacyInnerHtmlSvg`), and every attack.
+ *   chat <i>  `CHAT_IMAGES[i]` as an agent reply's markdown image: a `data:`
+ *             URL in a 384 px `<img>`, decoded off the UI thread. Reports the
+ *             CPU time the process spends while it settles and how far its
+ *             resident memory peaks over where it started.
  *
  * bun tools/compat/svg-attack-scene.tsx <result.json> <mode> [i]
  */
-import { renameSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { type ImgInstance, type PublicInstance, render, useGpuixRequired } from '@gpuix/react'
 import { type ReactElement, useEffect, useRef, useState } from 'react'
 import { jsx as nativeJsx } from 'react/jsx-runtime'
@@ -28,6 +32,7 @@ import {
   legacyInnerHtmlSvg,
   TILE
 } from './svg-attack-shared'
+import { CHAT_IMAGES } from './image-attacks'
 import { SVG_ATTACKS } from './svg-attacks'
 
 const [resultFile, mode = 'grid', indexArg = '0'] = process.argv.slice(2)
@@ -226,8 +231,61 @@ function Grid() {
   )
 }
 
-function scene(): ReactElement {
+/** Long enough for a budgeted decode to finish; an unbudgeted one is still burning. */
+const CHAT_SETTLE_MS = 4000
+const CHAT_BOX = 384
+
+/** Resident bytes now, from the kernel: decodes run on native threads the JS heap never sees. */
+function residentBytes(): number {
+  const pages = Number(readFileSync('/proc/self/statm', 'utf8').split(' ')[1])
+  return pages * 4096
+}
+
+function ChatImage({ src }: { src: string }) {
+  useEffect(() => {
+    const before = process.resourceUsage()
+    const baseRss = residentBytes()
+    let peakRss = baseRss
+    const sample = setInterval(() => {
+      peakRss = Math.max(peakRss, residentBytes())
+    }, 20)
+    const done = setTimeout(() => {
+      clearInterval(sample)
+      const after = process.resourceUsage()
+      writeFileSync(
+        `${resultFile}.tmp`,
+        JSON.stringify({
+          alive: true,
+          cpuMs:
+            (after.userCPUTime + after.systemCPUTime - before.userCPUTime - before.systemCPUTime) /
+            1000,
+          rssGrowthMb: (peakRss - baseRss) / 2 ** 20,
+          bytes: src.length,
+          stats: null
+        })
+      )
+      renameSync(`${resultFile}.tmp`, resultFile as string)
+      process.exit(0)
+    }, CHAT_SETTLE_MS)
+    return () => {
+      clearInterval(sample)
+      clearTimeout(done)
+    }
+  }, [])
+  return (
+    <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: '#08090a' }}>
+      <img alt="" src={src} objectFit="contain" style={{ width: CHAT_BOX, height: CHAT_BOX }} />
+    </div>
+  )
+}
+
+async function scene(): Promise<ReactElement> {
   if (mode === 'grid') return <Grid />
+  if (mode === 'chat') {
+    const image = CHAT_IMAGES[Number(indexArg)]
+    if (!image) throw new Error(`no chat image ${indexArg}`)
+    return <ChatImage src={await image.dataUrl()} />
+  }
   const attack = SVG_ATTACKS[Number(indexArg)]
   if (!attack) throw new Error(`no attack ${indexArg}`)
   if (mode === 'raw')
@@ -241,10 +299,10 @@ function scene(): ReactElement {
 }
 
 if (resultFile) {
-  render(scene(), {
+  render(await scene(), {
     title: 'termul-svg-attack',
-    width: mode === 'grid' ? GRID_WIDTH : 320,
-    height: mode === 'grid' ? GRID_HEIGHT : 80,
+    width: mode === 'grid' ? GRID_WIDTH : mode === 'chat' ? 480 : 320,
+    height: mode === 'grid' ? GRID_HEIGHT : mode === 'chat' ? 400 : 80,
     focus: false
   })
 }

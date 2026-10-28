@@ -1,5 +1,5 @@
 diff --git a/crates/gpui/src/svg_renderer.rs b/crates/gpui/src/svg_renderer.rs
-index e831f97..ff8a3ac 100644
+index e831f97..e79157d 100644
 --- a/crates/gpui/src/svg_renderer.rs
 +++ b/crates/gpui/src/svg_renderer.rs
 @@ -10,6 +10,16 @@ use std::{
@@ -97,7 +97,7 @@ index e831f97..ff8a3ac 100644
 -
 +/// Rasterizes `tree` at `size`, scaled down to fit `max_side`, and returns the
 +/// pixmap with that density (1 when nothing was scaled). Refuses a tree whose
-+/// estimated work at that size exceeds [`budget::MAX_SVG_RENDER_WORK`].
++/// estimated cost at that size is over budget ([`budget::render_cost`]).
 +fn rasterize_tree(
 +    tree: &usvg::Tree,
 +    size: SvgSize,
@@ -106,20 +106,20 @@ index e831f97..ff8a3ac 100644
      let svg_size = tree.size();
      let (mut width, mut height) = match size {
          SvgSize::Size(size) => {
-@@ -418,28 +438,28 @@ fn rasterize_tree(tree: &usvg::Tree, size: SvgSize) -> Result<Pixmap, usvg::Erro
+@@ -418,28 +438,31 @@ fn rasterize_tree(tree: &usvg::Tree, size: SvgSize) -> Result<Pixmap, usvg::Erro
          SvgSize::ScaleFactor(scale) => (svg_size.width() * scale, svg_size.height() * scale),
      };
  
 -    if width > MAX_SIZE {
 -        log::warn!("Attempted to render pixmap where width ({width}) > MAX_SIZE ({MAX_SIZE})");
+-    }
+-    if height > MAX_SIZE {
+-        log::warn!("Attempted to render pixmap where height ({height}) > MAX_SIZE ({MAX_SIZE})");
 +    // Also keeps the pixmap inside a texture: #56466.
 +    let density = (max_side / width).min(max_side / height).min(1.0);
 +    if density < 1.0 {
 +        log::debug!("rasterizing a {width}x{height} SVG at {density} density");
      }
--    if height > MAX_SIZE {
--        log::warn!("Attempted to render pixmap where height ({height}) > MAX_SIZE ({MAX_SIZE})");
--    }
 -    let scale = (MAX_SIZE / width).min(MAX_SIZE / height).min(1.0);
 -    width *= scale;
 -    height *= scale;
@@ -134,9 +134,12 @@ index e831f97..ff8a3ac 100644
          width / svg_size.width(),
          height / svg_size.height(),
      );
-+    let limit = budget::MAX_SVG_RENDER_WORK;
-+    if budget::render_work(tree, transform, width, height, limit).is_none() {
-+        log::warn!("refusing an SVG whose {width}x{height} raster costs over {limit} pixel operations");
++    if budget::render_cost(tree, transform, width, height).is_none() {
++        log::warn!(
++            "refusing an SVG whose {width}x{height} raster costs over {} pixel operations or {} layer pixels",
++            budget::MAX_SVG_RENDER_WORK,
++            budget::MAX_SVG_LAYER_PIXELS
++        );
 +        return Err(usvg::Error::ElementsLimitReached);
 +    }
  
@@ -151,10 +154,10 @@ index e831f97..ff8a3ac 100644
  fn load_bundled_fonts(asset_source: &dyn AssetSource, db: &mut usvg::fontdb::Database) {
 diff --git a/crates/gpui/src/svg_renderer/budget.rs b/crates/gpui/src/svg_renderer/budget.rs
 new file mode 100644
-index 0000000..cd7b2cd
+index 0000000..2aceab9
 --- /dev/null
 +++ b/crates/gpui/src/svg_renderer/budget.rs
-@@ -0,0 +1,331 @@
+@@ -0,0 +1,370 @@
 +//! Work bounds for SVGs GPUI did not author, such as images in a chat reply.
 +//! usvg and resvg have no budget of their own: a few hundred bytes of masks
 +//! that reference each other expand to millions of conversions, and one filter
@@ -174,6 +177,10 @@ index 0000000..cd7b2cd
 +/// box, every offscreen layer, mask and clip, and each filter primitive's
 +/// region weighted by its per-pixel cost. 64 full 2048 px canvases.
 +pub(super) const MAX_SVG_RENDER_WORK: u64 = 64 * 2048 * 2048;
++
++/// Pixels of offscreen buffers resvg may hold at once besides the pixmap:
++/// 48 MiB, so a 2048 px image stays under 64 MiB.
++pub(super) const MAX_SVG_LAYER_PIXELS: u64 = 12 << 20;
 +
 +/// Distinct stylesheet `url(#…)` targets a document may have. A selector can
 +/// apply each of them to any element, so each counts against every element.
@@ -345,45 +352,64 @@ index 0000000..cd7b2cd
 +    })
 +}
 +
-+/// Pixel operations resvg spends drawing `tree` with `transform` onto a
-+/// `width` x `height` pixmap, or `None` when it is more than `limit`. Shapes
-+/// and layers count the canvas pixels their boxes cover; a pattern also counts
-+/// its tile, which is not clipped to the canvas; a filter primitive counts its
-+/// layer times its per-pixel work.
-+pub(super) fn render_work(
++/// What rasterizing a tree costs, as [`render_cost`] estimates it.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub(super) struct RenderCost {
++    /// Pixel operations: shape boxes, layers, masks and clips, and each filter
++    /// primitive's region times its per-pixel work.
++    pub work: u64,
++    /// Most pixels of offscreen layers, mask and clip buffers, filter results
++    /// and pattern tiles alive at once, the pixmap itself not included.
++    pub peak_layer_pixels: u64,
++}
++
++/// What resvg spends drawing `tree` with `transform` onto a `width` x
++/// `height` pixmap, or `None` once the work passes [`MAX_SVG_RENDER_WORK`] or
++/// the live layers pass [`MAX_SVG_LAYER_PIXELS`]. Boxes are clipped where
++/// resvg clips its layers, to twice the pixmap's size on every side; a pattern
++/// tile is not clipped at all.
++pub(super) fn render_cost(
 +    tree: &usvg::Tree,
 +    transform: Transform,
 +    width: f32,
 +    height: f32,
-+    limit: u64,
-+) -> Option<u64> {
++) -> Option<RenderCost> {
 +    let mut walk = Walk {
 +        transform,
-+        canvas: Rect::from_xywh(0.0, 0.0, width, height)?,
-+        work: 0,
-+        limit,
++        clip: Rect::from_xywh(-2.0 * width, -2.0 * height, 5.0 * width, 5.0 * height)?,
++        cost: RenderCost { work: 0, peak_layer_pixels: 0 },
++        live: 0,
 +    };
-+    walk.group(tree.root()).then_some(walk.work)
++    walk.group(tree.root()).then_some(walk.cost)
 +}
 +
 +struct Walk {
 +    transform: Transform,
-+    canvas: Rect,
-+    work: u64,
-+    limit: u64,
++    clip: Rect,
++    cost: RenderCost,
++    live: u64,
 +}
 +
 +impl Walk {
-+    /// Adds `pixels` plus one for the node itself; false once over the limit.
-+    fn add(&mut self, pixels: u64) -> bool {
-+        self.work = self.work.saturating_add(pixels).saturating_add(1);
-+        self.work <= self.limit
++    /// Adds `pixels` of work plus one for the node itself; false once over budget.
++    fn work(&mut self, pixels: u64) -> bool {
++        self.cost.work = self.cost.work.saturating_add(pixels).saturating_add(1);
++        self.cost.work <= MAX_SVG_RENDER_WORK
++    }
++
++    /// Allocates `pixels` of layer for the duration of `draw`.
++    fn with_layer(&mut self, pixels: u64, draw: impl FnOnce(&mut Self) -> bool) -> bool {
++        self.live = self.live.saturating_add(pixels);
++        self.cost.peak_layer_pixels = self.cost.peak_layer_pixels.max(self.live);
++        let ok = self.live <= MAX_SVG_LAYER_PIXELS && draw(self);
++        self.live -= pixels;
++        ok
 +    }
 +
 +    fn covered(&self, rect: Option<Rect>) -> (f32, f32) {
 +        rect.and_then(|r| r.transform(self.transform))
-+            .and_then(|r| r.intersect(&self.canvas))
-+            .map_or((0.0, 0.0), |r| (r.width().ceil() + 1.0, r.height().ceil() + 1.0))
++            .and_then(|r| r.intersect(&self.clip))
++            .map_or((0.0, 0.0), |r| (r.width().ceil() + 4.0, r.height().ceil() + 4.0))
 +    }
 +
 +    fn area(&self, rect: Option<Rect>) -> u64 {
@@ -392,30 +418,47 @@ index 0000000..cd7b2cd
 +    }
 +
 +    fn group(&mut self, group: &usvg::Group) -> bool {
-+        if group.should_isolate() {
-+            let layer = Some(group.abs_layer_bounding_box().to_rect());
-+            let (w, h) = self.covered(layer);
-+            let pixels = (w * h) as u64;
-+            if !self.add(pixels.saturating_mul(2)) {
++        if !group.should_isolate() {
++            return group.children().iter().all(|node| self.node(node));
++        }
++        let (w, h) = self.covered(Some(group.abs_layer_bounding_box().to_rect()));
++        let pixels = (w * h) as u64;
++        self.with_layer(pixels, |walk| {
++            walk.work(pixels.saturating_mul(2))
++                && group.children().iter().all(|node| walk.node(node))
++                && walk.filters(group, pixels, w, h)
++                && walk.clips(group.clip_path(), pixels)
++                && walk.masks(group.mask(), pixels)
++        })
++    }
++
++    fn clips(&mut self, mut clip: Option<&usvg::ClipPath>, pixels: u64) -> bool {
++        while let Some(c) = clip {
++            if !self.with_layer(pixels, |walk| walk.work(pixels) && walk.group(c.root())) {
 +                return false;
 +            }
-+            let mut clip = group.clip_path();
-+            while let Some(c) = clip {
-+                if !self.add(pixels) || !self.group(c.root()) {
-+                    return false;
-+                }
-+                clip = c.clip_path();
++            clip = c.clip_path();
++        }
++        true
++    }
++
++    fn masks(&mut self, mut mask: Option<&usvg::Mask>, pixels: u64) -> bool {
++        while let Some(m) = mask {
++            if !self.with_layer(pixels, |walk| walk.work(pixels) && walk.group(m.root())) {
++                return false;
 +            }
-+            let mut mask = group.mask();
-+            while let Some(m) = mask {
-+                if !self.add(pixels) || !self.group(m.root()) {
-+                    return false;
-+                }
-+                mask = m.mask();
-+            }
-+            let (sx, sy) = self.transform.pre_concat(group.abs_transform()).get_scale();
-+            for filter in group.filters() {
-+                for primitive in filter.primitives() {
++            mask = m.mask();
++        }
++        true
++    }
++
++    /// Each primitive keeps a result the size of the layer until the filter ends.
++    fn filters(&mut self, group: &usvg::Group, pixels: u64, w: f32, h: f32) -> bool {
++        let (sx, sy) = self.transform.pre_concat(group.abs_transform()).get_scale();
++        group.filters().iter().all(|filter| {
++            let results = pixels.saturating_mul(filter.primitives().len() as u64 + 1);
++            self.with_layer(results, |walk| {
++                filter.primitives().iter().all(|primitive| {
 +                    let per_pixel = match primitive.kind() {
 +                        usvg::filter::Kind::Morphology(m) => {
 +                            let columns = (m.radius_x().get() * sx * 2.0).ceil().clamp(1.0, w);
@@ -430,27 +473,24 @@ index 0000000..cd7b2cd
 +                        usvg::filter::Kind::DiffuseLighting(_)
 +                        | usvg::filter::Kind::SpecularLighting(_) => 16,
 +                        usvg::filter::Kind::Image(image) => {
-+                            if !self.group(image.root()) {
++                            if !walk.group(image.root()) {
 +                                return false;
 +                            }
 +                            1
 +                        }
 +                        _ => 2,
 +                    };
-+                    if !self.add(pixels.saturating_mul(per_pixel)) {
-+                        return false;
-+                    }
-+                }
-+            }
-+        }
-+        group.children().iter().all(|node| self.node(node))
++                    walk.work(pixels.saturating_mul(per_pixel))
++                })
++            })
++        })
 +    }
 +
 +    fn node(&mut self, node: &usvg::Node) -> bool {
 +        match node {
 +            usvg::Node::Group(group) => self.group(group),
 +            usvg::Node::Path(path) => {
-+                if !self.add(self.area(Some(path.abs_stroke_bounding_box()))) {
++                if !self.work(self.area(Some(path.abs_stroke_bounding_box()))) {
 +                    return false;
 +                }
 +                let paints = [
@@ -465,14 +505,16 @@ index 0000000..cd7b2cd
 +                            .pre_concat(pattern.transform())
 +                            .get_scale();
 +                        let tile = pattern.rect();
-+                        let pixels = (tile.width() * sx).ceil() * (tile.height() * sy).ceil();
-+                        self.add(pixels as u64) && self.group(pattern.root())
++                        let pixels = ((tile.width() * sx).ceil() * (tile.height() * sy).ceil()) as u64;
++                        self.with_layer(pixels, |walk| {
++                            walk.work(pixels) && walk.group(pattern.root())
++                        })
 +                    }
 +                    _ => true,
 +                })
 +            }
 +            usvg::Node::Image(image) => {
-+                self.add(self.area(Some(image.abs_bounding_box())))
++                self.work(self.area(Some(image.abs_bounding_box())))
 +                    && match image.kind() {
 +                        usvg::ImageKind::SVG(tree) => self.group(tree.root()),
 +                        _ => true,
@@ -488,10 +530,10 @@ index 0000000..cd7b2cd
 +mod tests;
 diff --git a/crates/gpui/src/svg_renderer/budget_tests.rs b/crates/gpui/src/svg_renderer/budget_tests.rs
 new file mode 100644
-index 0000000..41c8e9a
+index 0000000..63e0d91
 --- /dev/null
 +++ b/crates/gpui/src/svg_renderer/budget_tests.rs
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,189 @@
 +use super::*;
 +use usvg::roxmltree::{Document, ParsingOptions};
 +
@@ -506,18 +548,12 @@ index 0000000..41c8e9a
 +    expanded_instances(&doc, MAX_SVG_INSTANCES)
 +}
 +
-+fn work(svg: &str, side: f32) -> Option<u64> {
++fn work(svg: &str, side: f32) -> Option<RenderCost> {
 +    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).unwrap();
 +    let size = tree.size();
 +    let scale = side / size.width().max(size.height());
 +    let transform = Transform::from_scale(scale, scale);
-+    render_work(
-+        &tree,
-+        transform,
-+        size.width() * scale,
-+        size.height() * scale,
-+        MAX_SVG_RENDER_WORK,
-+    )
++    render_cost(&tree, transform, size.width() * scale, size.height() * scale)
 +}
 +
 +fn mask_fan(levels: usize, via_css: bool) -> String {
@@ -630,8 +666,9 @@ index 0000000..41c8e9a
 +#[test]
 +fn a_plain_drawing_costs_about_its_area() {
 +    let svg = format!(r##"<svg {NS} viewBox="0 0 24 24"><rect width="24" height="24" fill="#f00"/></svg>"##);
-+    let pixels = work(&svg, 2048.0).unwrap();
-+    assert!(pixels < 2 * 2050 * 2050, "{pixels}");
++    let cost = work(&svg, 2048.0).unwrap();
++    assert!(cost.work < 2 * 2052 * 2052, "{cost:?}");
++    assert_eq!(cost.peak_layer_pixels, 0);
 +}
 +
 +#[test]
@@ -667,4 +704,22 @@ index 0000000..41c8e9a
 +    };
 +    assert!(work(&layers(8), 2048.0).is_some());
 +    assert_eq!(work(&layers(64), 2048.0), None);
++}
++
++#[test]
++fn refuses_a_filter_region_far_past_the_canvas() {
++    let svg = format!(
++        r##"<svg {NS} viewBox="0 0 24 24" width="8000" height="8000"><filter id="f" x="-1000" y="-1000" width="3000" height="3000"><feGaussianBlur stdDeviation="1000"/></filter><rect width="24" height="24" filter="url(#f)"/></svg>"##
++    );
++    assert_eq!(work(&svg, 2048.0), None);
++    assert!(work(&svg, 256.0).is_some());
++}
++
++#[test]
++fn nested_layers_add_up() {
++    let svg = format!(
++        r##"<svg {NS} viewBox="0 0 24 24"><g opacity=".5"><g opacity=".5"><g opacity=".5"><path d="M0 0h24v24z"/></g></g></g></svg>"##
++    );
++    let cost = work(&svg, 1024.0).unwrap();
++    assert!(cost.peak_layer_pixels >= 3 * 1024 * 1024, "{cost:?}");
 +}

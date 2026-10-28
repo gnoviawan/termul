@@ -1,8 +1,8 @@
 diff --git a/crates/gpui/src/elements/img.rs b/crates/gpui/src/elements/img.rs
-index ce7fc7b..4c4c9c3 100644
+index ce7fc7b..ca03e58 100644
 --- a/crates/gpui/src/elements/img.rs
 +++ b/crates/gpui/src/elements/img.rs
-@@ -3,7 +3,7 @@ use crate::{
+@@ -3,18 +3,17 @@ use crate::{
      Entity, GlobalElementId, Hitbox, Image, ImageCache, InspectorElementId, InteractiveElement,
      Interactivity, IntoElement, LayoutId, Length, ObjectFit, Pixels, RenderImage, Resource,
      SharedString, SharedUri, StyleRefinement, Styled, Task, Window, decode_static_image,
@@ -11,7 +11,19 @@ index ce7fc7b..4c4c9c3 100644
  };
  use anyhow::Result;
  
-@@ -622,6 +622,19 @@ impl Asset for ImageDecoder {
+ use futures::Future;
+ use gpui_util::ResultExt;
+ use image::{
+-    AnimationDecoder, ImageError, ImageFormat, Rgba,
++    ImageError, ImageFormat, Rgba,
+     codecs::{gif::GifDecoder, webp::WebPDecoder},
+ };
+ use scheduler::Instant;
+-use smallvec::SmallVec;
+ use std::{
+     fs,
+     io::{self, Cursor},
+@@ -622,6 +621,19 @@ impl Asset for ImageDecoder {
      }
  }
  
@@ -31,7 +43,7 @@ index ce7fc7b..4c4c9c3 100644
  /// An image loader for the GPUI asset system
  #[derive(Clone)]
  pub enum ImageAssetLoader {}
-@@ -641,7 +654,14 @@ impl Asset for ImageAssetLoader {
+@@ -641,7 +653,14 @@ impl Asset for ImageAssetLoader {
          let asset_source = cx.asset_source().clone();
          async move {
              let bytes = match source.clone() {
@@ -47,7 +59,7 @@ index ce7fc7b..4c4c9c3 100644
                  Resource::Uri(uri) => {
                      use anyhow::Context as _;
                      use futures::AsyncReadExt as _;
-@@ -651,7 +671,11 @@ impl Asset for ImageAssetLoader {
+@@ -651,7 +670,11 @@ impl Asset for ImageAssetLoader {
                          .await
                          .with_context(|| format!("loading image asset from {uri:?}"))?;
                      let mut body = Vec::new();
@@ -60,7 +72,7 @@ index ce7fc7b..4c4c9c3 100644
                      if !response.status().is_success() {
                          let mut body = String::from_utf8_lossy(&body).into_owned();
                          let first_line = body.lines().next().unwrap_or("").trim_end();
-@@ -662,7 +686,7 @@ impl Asset for ImageAssetLoader {
+@@ -662,7 +685,7 @@ impl Asset for ImageAssetLoader {
                              body,
                          });
                      }
@@ -69,7 +81,7 @@ index ce7fc7b..4c4c9c3 100644
                  }
                  Resource::Embedded(path) => {
                      let data = asset_source.load(&path).ok().flatten();
-@@ -678,66 +702,12 @@ impl Asset for ImageAssetLoader {
+@@ -678,66 +701,12 @@ impl Asset for ImageAssetLoader {
  
              if let Ok(format) = image::guess_format(&bytes) {
                  let data = match format {
@@ -138,10 +150,27 @@ index ce7fc7b..4c4c9c3 100644
                          } else {
                              decode_static_image_from_decoder(decoder)?
                          }
+@@ -814,6 +783,7 @@ mod tests {
+     use super::*;
+     use crate::{ParentElement as _, TestAppContext, canvas, div, point, px, size};
+     use image::{Frame, ImageBuffer, Rgba};
++    use smallvec::SmallVec;
+ 
+     const TEST_IMG_ID: &str = "test-img";
+ 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 6aedda3..7695279 100644
+index 6aedda3..b4a29ea 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
+@@ -53,7 +53,7 @@ use futures::channel::oneshot;
+ #[cfg(any(test, feature = "test-support"))]
+ use image::RgbaImage;
+ use image::codecs::gif::GifDecoder;
+-use image::{AnimationDecoder as _, DynamicImage, Frame};
++use image::{DynamicImage, Frame};
+ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+ use scheduler::Instant;
+ pub use scheduler::RunnableMeta;
 @@ -2615,19 +2615,91 @@ pub struct Image {
      pub id: u64,
  }
@@ -155,7 +184,7 @@ index 6aedda3..7695279 100644
 +const MAX_IMAGE_SIDE: u32 = 16_384;
 +
 +/// Decoded bytes one animation keeps; the frames after them are dropped.
-+const MAX_ANIMATION_BYTES: usize = 256 << 20;
++const MAX_ANIMATION_BYTES: usize = 64 << 20;
 +
 +fn decode_limits() -> image::Limits {
 +    let mut limits = image::Limits::default();

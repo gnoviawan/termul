@@ -10,10 +10,16 @@
  *                  paints and matches G16's pixels.
  *   raw            the markup straight to GPUIX (`raw`): reports what the
  *                  native renderer does on its own, asserts nothing.
+ *   chat           every `CHAT_IMAGES` entry (the raster and svgz bombs of
+ *                  `image-attacks.ts`, then each SVG attack) as an agent
+ *                  reply's `data:` image (`chat`): asserts the process
+ *                  survives and, against the green control images, spends
+ *                  under CHAT_CPU_MS more CPU and peaks under CHAT_RSS_MB more
+ *                  resident memory.
  *
- * bun tools/compat/svg-attack-check.ts [--mode app|raw] [--only id,id] [--no-grid] [--out DIR]
+ * bun tools/compat/svg-attack-check.ts [--mode app|raw|chat] [--only id,id] [--no-grid] [--out DIR]
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { PNG } from 'pngjs'
@@ -31,12 +37,16 @@ import {
   GRID_HEIGHT,
   GRID_WIDTH
 } from './svg-attack-shared'
+import { CHAT_IMAGES, IMAGE_ATTACKS } from './image-attacks'
 import { SVG_ATTACKS } from './svg-attacks'
 
 const BUDGET_MS = 50
 /** A frame this long is the UI thread held by a render, not lavapipe jitter on a shared host. */
 const HANG_MS = 250
 const SCENE_TIMEOUT_MS = 30_000
+/** Decode budget for one chat image, over what a 64 px green image costs. */
+const CHAT_CPU_MS = 1000
+const CHAT_RSS_MB = 64
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -47,7 +57,7 @@ const { values } = parseArgs({
     out: { type: 'string', default: path.join(ATTACK_STATE, 'svg-attack') }
   }
 })
-const mode = values.mode as 'app' | 'raw'
+const mode = values.mode as 'app' | 'raw' | 'chat'
 const out = path.resolve(values.out as string)
 mkdirSync(out, { recursive: true })
 mkdirSync(ATTACK_STATE, { recursive: true })
@@ -57,6 +67,8 @@ const sceneFile = path.join(import.meta.dir, 'svg-attack-scene.tsx')
 
 interface Result {
   alive: boolean
+  cpuMs?: number
+  rssGrowthMb?: number
   setImageMs: number | null
   setImageMaxMs: number | null
   setImageError: string | null
@@ -72,32 +84,98 @@ const env = {
   GPUIX_BACKGROUND: '1'
 }
 const failures: string[] = []
+
+/** One chat image's cost over the control, as `chat.json` in the out dir records it. */
+export interface ChatRow {
+  id: string
+  cpuOverMs: number | null
+  rssOverMb: number | null
+  ok: boolean
+}
+const chatRows: ChatRow[] = []
+
+async function runScene(id: string, sceneMode: string, index: number) {
+  const file = path.join(out, `${mode}-${id.replace(/[^\w.-]/g, '_')}.json`)
+  if (existsSync(file)) unlinkSync(file)
+  const started = performance.now()
+  const scene = Bun.spawn(['bun', sceneFile, file, sceneMode, String(index)], {
+    env,
+    stdout: 'ignore',
+    stderr: 'pipe'
+  })
+  const timer = setTimeout(() => scene.kill('SIGKILL'), SCENE_TIMEOUT_MS)
+  const code = await scene.exited
+  clearTimeout(timer)
+  const wallMs = performance.now() - started
+  const stderr = await new Response(scene.stderr).text()
+  const result = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Result) : null
+  const abort = stderr.match(
+    /thread .* has overflowed its stack|fatal runtime error[^\n]*|panicked at[^\n]*|memory allocation[^\n]*/
+  )?.[0]
+  const exit = `exit ${code}${scene.signalCode ? ` ${scene.signalCode}` : ''}`
+  const died = code !== 0 || !result?.alive ? `${id}: process died (${exit}) ${abort ?? ''}` : null
+  return { result, abort, exit, wallMs, died }
+}
+
 try {
-  for (const [index, attack] of SVG_ATTACKS.entries()) {
-    if (only && !only.has(attack.id)) continue
-    const file = path.join(out, `${mode}-${attack.id}.json`)
-    if (existsSync(file)) unlinkSync(file)
-    const started = performance.now()
-    const scene = Bun.spawn(
-      ['bun', sceneFile, file, mode === 'raw' ? 'raw' : 'one', String(index)],
-      {
-        env,
-        stdout: 'ignore',
-        stderr: 'pipe'
+  if (mode === 'chat') {
+    for (const attack of IMAGE_ATTACKS) await attack.bytes()
+    let control = null as { cpuMs: number; rssGrowthMb: number } | null
+    for (const [index, image] of CHAT_IMAGES.entries()) {
+      const isControl = image.id.startsWith('control-')
+      if (only && !isControl && !only.has(image.id)) continue
+      const run = await runScene(image.id, 'chat', index)
+      const cpuMs = run.result?.cpuMs ?? 0
+      const rssGrowthMb = run.result?.rssGrowthMb ?? 0
+      console.log(
+        [
+          image.id.padEnd(30),
+          run.exit.padEnd(16),
+          run.result ? `cpu ${cpuMs.toFixed(0)} ms  rss peak +${rssGrowthMb.toFixed(0)} MB` : 'no result',
+          run.abort ? `ABORT: ${run.abort}` : '',
+          `wall ${Math.round(run.wallMs)} ms`
+        ].join('  ')
+      )
+      const cpuOverMs = control && run.result ? cpuMs - control.cpuMs : null
+      const rssOverMb = control && run.result ? rssGrowthMb - control.rssGrowthMb : null
+      if (!isControl)
+        chatRows.push({
+          id: image.id,
+          cpuOverMs,
+          rssOverMb,
+          ok:
+            !run.died &&
+            cpuOverMs !== null &&
+            rssOverMb !== null &&
+            cpuOverMs <= CHAT_CPU_MS &&
+            rssOverMb <= CHAT_RSS_MB
+        })
+      if (run.died) failures.push(run.died)
+      else if (isControl)
+        control = {
+          cpuMs: Math.max(control?.cpuMs ?? 0, cpuMs),
+          rssGrowthMb: Math.max(control?.rssGrowthMb ?? 0, rssGrowthMb)
+        }
+      else if (!control) failures.push(`${image.id}: no control measurement`)
+      else {
+        if (cpuMs > control.cpuMs + CHAT_CPU_MS)
+          failures.push(`${image.id}: ${(cpuMs - control.cpuMs).toFixed(0)} ms CPU over the control`)
+        if (rssGrowthMb > control.rssGrowthMb + CHAT_RSS_MB)
+          failures.push(
+            `${image.id}: resident memory peaked ${(rssGrowthMb - control.rssGrowthMb).toFixed(0)} MB over the control`
+          )
       }
-    )
-    const timer = setTimeout(() => scene.kill('SIGKILL'), SCENE_TIMEOUT_MS)
-    const code = await scene.exited
-    clearTimeout(timer)
-    const wallMs = performance.now() - started
-    const stderr = await new Response(scene.stderr).text()
-    const result = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Result) : null
-    const abort = stderr.match(
-      /thread .* has overflowed its stack|fatal runtime error[^\n]*|panicked at[^\n]*/
-    )?.[0]
+    }
+  }
+  if (mode === 'chat') writeFileSync(path.join(out, 'chat.json'), JSON.stringify(chatRows, null, 2))
+  for (const [index, attack] of SVG_ATTACKS.entries()) {
+    if (mode === 'chat') break
+    if (only && !only.has(attack.id)) continue
+    const run = await runScene(attack.id, mode === 'raw' ? 'raw' : 'one', index)
+    const { result } = run
     const line = [
       attack.id.padEnd(26),
-      `exit ${code}${scene.signalCode ? ` ${scene.signalCode}` : ''}`.padEnd(16),
+      run.exit.padEnd(16),
       result
         ? `decode min ${result.setImageMs?.toFixed(1) ?? '-'} max ${result.setImageMaxMs?.toFixed(1) ?? '-'} ms`
         : 'no result',
@@ -105,13 +183,12 @@ try {
         ? `frame max ${result.stats.maxMs?.toFixed(1) ?? '-'} ms over ${result.stats.frames}`
         : '',
       result?.setImageError ? `(${result.setImageError.slice(0, 60)})` : '',
-      abort ? `ABORT: ${abort}` : '',
-      `wall ${Math.round(wallMs)} ms`
+      run.abort ? `ABORT: ${run.abort}` : '',
+      `wall ${Math.round(run.wallMs)} ms`
     ].join('  ')
     console.log(line)
     if (mode === 'raw') continue
-    if (code !== 0 || !result?.alive)
-      failures.push(`${attack.id}: process died (exit ${code}) ${abort ?? ''}`)
+    if (run.died || !result) failures.push(run.died ?? `${attack.id}: no result`)
     else {
       if ((result.setImageMs ?? 0) > BUDGET_MS)
         failures.push(`${attack.id}: native decode ${result.setImageMs?.toFixed(1)} ms`)

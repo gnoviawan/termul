@@ -56,6 +56,14 @@
  *   zed/0010-svg-bounded-nesting
  *                          an <img> SVG 250 levels deep paints; one 300
  *                          levels deep is refused before roxmltree recurses
+ *   zed/0011-svg-decode-budget
+ *                          `svg-attack-check.ts --mode chat`: a chat `<img>`
+ *                          of mask fan-out, a 100000-unit viewBox, 100000
+ *                          turbulence octaves, 60000 glyphs or an svgz bomb
+ *                          costs under 1 s CPU and 64 MB over a green image
+ *   zed/0012-image-decode-limits
+ *                          the same for an 11000 px PNG bomb, a 12000 px GIF
+ *                          canvas and a 64-frame 2048 px GIF
  *   0008-prompt-for-new-path
  *                          `dialog-check.ts`: the portal's save dialog returns
  *                          the path typed into it
@@ -91,6 +99,7 @@ import {
   TABLE,
   TRACKING
 } from './samples'
+import type { ChatRow } from '../compat/svg-attack-check'
 import type { TypoRow } from './typo-samples'
 
 const { values } = parseArgs({
@@ -312,6 +321,43 @@ const typoRows: TypoRow[] = existsSync(path.join(typoOut, 'rows.json'))
   ? JSON.parse(readFileSync(path.join(typoOut, 'rows.json'), 'utf8'))
   : [{ patch: 'typo-check', what: 'typo-check.ts wrote its rows', value: null, ok: false }]
 
+const DECODE_BUDGET: Record<string, string> = {
+  'svg:mask-fan-out': 'zed/0011-svg-decode-budget',
+  'svg:huge-viewbox-colour': 'zed/0011-svg-decode-budget',
+  'svg:fe-turbulence': 'zed/0011-svg-decode-budget',
+  'svg:text-flood': 'zed/0011-svg-decode-budget',
+  'svgz-bomb': 'zed/0011-svg-decode-budget',
+  'png-decompression-bomb': 'zed/0012-image-decode-limits',
+  'gif-canvas-bomb': 'zed/0012-image-decode-limits',
+  'gif-frame-flood': 'zed/0012-image-decode-limits'
+}
+const chatOut = path.join(out, 'chat')
+Bun.spawnSync(
+  [
+    'bun',
+    path.join(import.meta.dir, '../compat/svg-attack-check.ts'),
+    '--mode',
+    'chat',
+    '--only',
+    Object.keys(DECODE_BUDGET).join(','),
+    '--out',
+    chatOut
+  ],
+  { env: { ...process.env, GPUIX_SVG_ATTACK_STATE: path.join(out, 'attack') } }
+)
+const chatRows: ChatRow[] = existsSync(path.join(chatOut, 'chat.json'))
+  ? JSON.parse(readFileSync(path.join(chatOut, 'chat.json'), 'utf8'))
+  : []
+const decodeRows = Object.entries(DECODE_BUDGET).map(([id, patch]) => {
+  const row = chatRows.find((r) => r.id === id)
+  return {
+    patch,
+    what: `a chat <img> of ${id} decodes within 1000 ms CPU and 64 MB over a green image (ms, MB)`,
+    value: row ? { cpu: row.cpuOverMs, rss: row.rssOverMb } : null,
+    ok: row?.ok ?? false
+  }
+})
+
 const checks = [
   {
     patch: '0001-font-style',
@@ -471,6 +517,7 @@ const checks = [
     value: dialogLines.filter((line) => line.startsWith('FAIL')),
     ok: dialogRun.exitCode === 0
   },
+  ...decodeRows,
   ...typoRows
 ]
 for (const check of checks)
