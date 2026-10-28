@@ -62,8 +62,9 @@
  *                          turbulence octaves, 60000 glyphs or an svgz bomb
  *                          costs under 1 s CPU and 64 MB over a green image
  *   zed/0012-image-decode-limits
- *                          the same for an 11000 px PNG bomb, a 12000 px GIF
- *                          canvas and a 64-frame 2048 px GIF
+ *                          the same for an 11000 px PNG bomb, a PNG header of
+ *                          100000 px a side, a 12000 px GIF canvas and a
+ *                          64-frame 2048 px GIF
  *   0008-prompt-for-new-path
  *                          `dialog-check.ts`: the portal's save dialog returns
  *                          the path typed into it
@@ -328,6 +329,7 @@ const DECODE_BUDGET: Record<string, string> = {
   'svg:text-flood': 'zed/0011-svg-decode-budget',
   'svgz-bomb': 'zed/0011-svg-decode-budget',
   'png-decompression-bomb': 'zed/0012-image-decode-limits',
+  'png-huge-dimensions': 'zed/0012-image-decode-limits',
   'gif-canvas-bomb': 'zed/0012-image-decode-limits',
   'gif-frame-flood': 'zed/0012-image-decode-limits'
 }
