@@ -149,7 +149,80 @@ dominate; weighting by area avoids that.
 
 ## Findings
 
-**How this run was made (I6, 2026-10-26).** Every row on this page comes
+**How this run was made (M5, 2026-10-28).** Every row on this page comes
+from one head and one full `bun run parity:matrix` run of all 117
+surfaces: `gpuix/m5`, which is `exp/gpuix-client` at c037d87e plus M5's
+tool and doc commits (no product code). GPUIX ran on the self-built patched
+addon, the build the `.deb` ships: `bun run native:build` with the full
+series (zed 0001 to 0012, gpuix 0001 to 0019, series hash e24c33d4), then
+`NAPI_RS_NATIVE_LIBRARY_PATH=native/gpuix-native/build/gpuix-native.linux-x64-gnu.node`.
+The running GPUIX process mapped that file (read from `/proc/<pid>/maps`
+during the run). `bun run native:patch-check` passed 55 of 55 checks on it
+in 3 of 4 runs; the first run failed `0006-focus-events` once (no focus
+events at the focus-check steps) and the next three passed. Both clients
+attached host-local on every surface. The server was a `termul-server`
+release build of this head (`cargo build --release --bin termul-server
+--features standalone-server` on the shared `CARGO_TARGET_DIR`) behind
+`tools/canvas/server-with-bundle.ts`, with the FigCraft bundle that
+`canvas/figcraft.pin` names (termul-v0.2.0, sha256 verified on fetch). The
+web client was the worktree's own `bun run build:web`. The webview helper
+came from `bun tools/webview-host.ts --release`, and the desktop app for
+the three `tauri` references was built from this checkout (`bun x tauri
+build --config src-tauri/tauri.conf.dev.json --no-bundle`), because its
+previous build predated R4, U1 and DESKTOP-TITLES. The full run took 41
+minutes. No other GPUIX unit ran, but the host was not idle: another
+agent's QA job (its own Xvfb and two test servers) kept the 1-minute load
+average near 4.5 before the run started. During the run the load average,
+sampled every minute, had a median of 10.6 and a peak of 16.0 on 8 cores.
+
+Every surface's last-step PNG pair was looked at, as contact sheets of
+four pairs at 0.4 scale, and the pairs that looked different at full
+size. Eight surfaces failed a GPUIX action or check in the full run and
+ran twice more. The five known ones (explorer.drag, editor.code,
+editor.code-edit, editor.tabs and terminal.file-link) failed their text
+check in all three runs for the known reason (natively painted editor text
+is not in the automation tree), and their pairs match, so they stay
+ported. palette.save-snapshot, palette.shortcut-menu and
+notifications.toast failed only in the full run and passed both reruns;
+their rows come from the first rerun (see Flakes). settings.ai-agents and
+rail.project-reorder ran twice more because their pairs needed a second
+look (see Where it stands and Flakes); their rows are the full run's.
+
+**Where it stands (M5, one head).** 117 surfaces: 115 ported, 2 partial,
+0 broken, 0 blocked, 0 pending-unit. The usage-weighted score is 99.6 %,
+over all surfaces and over the measured ones alike, and the unweighted
+score is 99.1 %. The mean last-step full-frame perceptual diff over the
+117 surfaces is 0.97 % (median 0.98 %, highest 2.98 % for
+remote.access-popover). By area, every area is at 100 % except settings
+(96.4 %, 13 of 14) and remote access (50 %, its one surface partial).
+
+Against the 99.8 % the page showed before M5, one review moved.
+settings.ai-agents is partial: in 2 of 3 GPUIX runs the agent list loaded
+and then the section went back to its Loading agents… card, which the web
+never did in this run (the row's differences say what is known). The other
+partial is remote.access-popover, unchanged: the switch is disabled until
+termul-server has a tunnel write guard. Every other surface kept its
+reviewed status. The full-frame perceptual diffs moved by less than 0.3
+points on 109 surfaces. The largest rises were the two zoom surfaces
+(shortcuts.zoom-in and shortcuts.desktop-keymap, 1.70 to 2.65 %),
+composer.mention (1.62 to 2.23 %), browser.pane (0.97 to 1.46 %) and the
+two desktop-reference surfaces, whose desktop frames carry a Codex
+"Session setup timed out" banner and an Update chip that the desktop
+app's own agent check put there (update.toast 1.88 to 2.35 %,
+remote.access-popover 2.50 to 2.98 %). The pairs show the same UI in both
+clients. In composer.mention the web frame caught the held `matrix hold`
+turn still running (a spinner on its chat card), as G13 recorded. What
+raised the two zoom surfaces is not traced; their pairs differ only in
+chat-card ages at 0.4 scale.
+
+**Earlier numbers are superseded.** The I6, G13, G15, N4, R5, G14 and I5
+paragraphs below, and the 99.8 % that later units reached by updating
+rows one at a time, describe what each unit changed and found. Their
+scores and per-surface numbers came from different heads, addons and
+references. The M5 run replaces all of them; read them for the diagnoses,
+not the numbers.
+
+**How the I6 run was made (2026-10-26, superseded by M5).** Every row on this page comes
 from one head and one full `bun run parity:matrix` run of all 117
 surfaces: `gpuix/i6` at bef8a85d, which is `exp/gpuix-client` after I5
 (da9e6001) with `gpuix/g15` merged (f691845d) and a wait in
@@ -181,12 +254,6 @@ and their pairs match, so they stay ported. composer.slash and
 rail.project-reorder read higher in the full run than on both reruns; their
 rows come from the first rerun (see Flakes). terminal.split ran twice more
 because its pair needed a second look; it was ported in all three.
-
-**Earlier numbers are superseded.** The G13, G15, N4, R5, G14 and I5
-paragraphs below describe what each unit changed and found. Their scores
-and per-surface numbers came from different heads, addons and references,
-mixed row by row. The I6 run replaces all of them; read them for the
-diagnoses, not the numbers.
 
 **How the G13 run was made (superseded by I6).** Every row comes from one head,
 949b8c16 on `gpuix/g13` (`exp/gpuix-client` at 911f2baf plus G13's
@@ -369,8 +436,8 @@ full-frame perceptual diff is within 0.02 points of G14's except
 rail.project-list (1.02 to 0.86 %) and rail.project-reorder (1.35 to
 1.00 %). The totals did not move.
 
-**Where it stands (I6, one head).** 117 surfaces: 102 ported, 13
-partial, 0 broken, 0 blocked, 2 pending-unit. The usage-weighted score is
+**Where it stood after I6 (one head, superseded by M5).** 117 surfaces: 102 ported, 13
+partial, 0 broken, 0 blocked, 2 pending-unit. The usage-weighted score was
 94.0 % over all surfaces and 95.0 % over the 115 measured ones.
 Unweighted, it is 92.7 % and 94.3 %. The mean last-step full-frame
 perceptual diff over the 115 measured surfaces is 1.12 %. By area, the
@@ -506,7 +573,7 @@ registry list in settings, and the unpainted snapshots empty state. Diagnose
 them first.
 
 **Flakes.** A surface that differed in the full run and matched on a rerun
-is recorded here and scored from its matching run. A surface that differed
+is recorded here and scored from its matching run. M5's rows come first. A surface that differed
 in every run is a gap above, not a flake. I6 reran two surfaces that read
 higher than their earlier rows; both matched on both reruns (first two
 rows below). Outside the matrix, `tools/dnd/check.ts` failed 1 of 5 runs:
@@ -518,6 +585,11 @@ their full-run rows). All five matched on both reruns.
 
 | Surface | Runs that differed | What happened |
 | --- | --- | --- |
+| `palette.save-snapshot` | 1 of 3 (M5) | In the full run, typing the command name into the palette failed with `Timed out after 2 seconds waiting for the GPUI key command` (the automation's 2 s UI-thread wait, at load average 10 to 16). Both reruns typed it and opened Create Snapshot (0.06 % full-frame perceptual, as in the full run's last frame). |
+| `palette.shortcut-menu` | 1 of 3 (M5) | The same key-command timeout as palette.save-snapshot, in the same minute of the full run. Both reruns opened the Shortcut Menu (0.13 %). |
+| `notifications.toast` | 1 of 3 (M5) | In the full run the GPUIX check for "Created and checked out toast-branch" failed; the frame shows the toast painted, so the toast came after the check gave up (1.76 % full-frame perceptual). Both reruns passed (0.98 %). |
+| `rail.project-reorder` | 1 of 3 GPUIX runs (M5) | One isolated rerun failed GPUIX's order check (alpha < gamma < beta) and the other passed; the full run passed. In the full run the web reference also ended on gamma-renamed's dashboard after the drop while GPUIX stayed on alpha, so the frames differ in the main pane. Not traced. |
+| `settings.ai-agents` | 2 of 3 GPUIX runs (M5) | Not a flake: scored partial (see Where it stands). The run that matched showed the list in both clients. |
 | `composer.slash` | 1 of 3 (I6) | Full run 2.43 % full-frame perceptual, both reruns 1.34 %, with the same menu in both clients. Not traced; G14 saw the same surface read high when the web frame caught chat.queue's held turn still running (a guess for this run). |
 | `rail.project-reorder` | 1 of 3 (I6) | Full run 1.42 % full frame and 1.11 % region, both reruns 1.08 % and 1.14 %; the drag reordered the list to alpha, gamma, beta in every run. |
 | `editor.markdown` | 1 of 3 (G13) | In the full run the GPUIX click on the docs folder did not expand it: the frame shows the row's name hint and no guide.md, so the next click missed and 3 of 7 GPUIX checks failed. The reruns opened guide.md (1.21 % and 1.44 % full-frame perceptual). Not traced; the click went to the web point. |
@@ -619,12 +691,12 @@ status is the one that counts.
 
 <!-- matrix:begin (generated by `bun run parity:matrix`; edit tools/matrix/review.ts, not this block) -->
 
-Surfaces: 117 (ported 116, partial 1, broken 0, blocked 0, unverified 0, pending-unit 0).
+Surfaces: 117 (ported 115, partial 2, broken 0, blocked 0, unverified 0, pending-unit 0).
 
 | Score | All surfaces (pending, blocked and unverified count 0) | Measured surfaces only |
 | --- | ---: | ---: |
-| Unweighted | 99.6% | 99.6% |
-| Usage-weighted | 99.8% | 99.8% |
+| Unweighted | 99.1% | 99.1% |
+| Usage-weighted | 99.6% | 99.6% |
 
 ### By area
 
@@ -638,7 +710,7 @@ Surfaces: 117 (ported 116, partial 1, broken 0, blocked 0, unverified 0, pending
 | explorer | 7 | 4 | 4 | 0 | 0 | 0 | 100.0% |
 | editor | 7 | 4 | 4 | 0 | 0 | 0 | 100.0% |
 | side-panel | 5 | 5 | 5 | 0 | 0 | 0 | 100.0% |
-| settings | 4 | 14 | 14 | 0 | 0 | 0 | 100.0% |
+| settings | 4 | 14 | 13 | 1 | 0 | 0 | 96.4% |
 | statusbar | 3 | 3 | 3 | 0 | 0 | 0 | 100.0% |
 | palette | 3 | 11 | 11 | 0 | 0 | 0 | 100.0% |
 | theme | 2 | 21 | 21 | 0 | 0 | 0 | 100.0% |
@@ -657,7 +729,8 @@ Rank is the reviewed impact (1 to 3) times the area weight.
 
 | # | Surface | Status | Root cause class | Proposed unit | Rank | What differs |
 | ---: | --- | --- | --- | --- | ---: | --- |
-| 1 | `remote.access-popover` | partial | server route needed | tunnel write guard in termul-server (unassigned) | 0.5 | Reference: the desktop app (`tools/reference/tauri.ts`). The status bar shows the Remote terminal access button at the same place in both (GPUIX draws its connection lamp to the left of it). StatusBar now renders the popover in a desktop host as well as in Tauri (R4, `isDesktopApp()`). GPUIX opens the popover with the desktop's title, text and Enable remote access row, but the switch is off and disabled, under a note: Not available in this build yet. The desktop's shared-live host serves the tunnel from its own server, which refuses every write the tunnel forwards from loopback (`remote/host.rs`); termul-server has no such mode, so a GPUIX tunnel would let a shared link write as a local client. R4 gates the control (`isTauriContext()` in RemoteAccessPopover, tested) instead of starting one. The XTEST click on the desktop trigger hovers it but does not open the popover in the matrix run (3 of 3 runs); a direct probe opened it once in two tries, with the same title, text and switch row as GPUIX (`parity-out/matrix/remote-access-popover/desktop-probe-open.png`). The last desktop frame therefore shows the closed popover. |
+| 1 | `settings.ai-agents` | partial | needs diagnosis | catalog re-resolve failure in GPUIX (unassigned) | 4 | The section content and navigation match. The scrim dims and blurs the page behind it as on the web (N2). Each select is one closed dropdown like the web (G2), and its trigger is 240px wide beside the label as on the web (G5: the GPUIX ui primitives resolve `@[35rem]:w-60` against the settings card container). The web truncates a long value (`[&>span]:line-clamp-1`); GPUIX shows it in full inside the 240px. The agents list shows the registry as on the web, Agoragentic first with its icon, version, Latest and Available. The icon tile draws the catalog SVG: AcpAgentsSettings sets it through `dangerouslySetInnerHTML`, compat paints one `<svg>` of markup as a GPUIX svg, and the DOMPurify stand-in passes an icon of shapes (G16 SVG-HTML). The list fills in when the section's own catalog request returns, 0.42 s after the section mounted in GPUIX on an idle host (D2 run). Until then both clients show the Loading agents… spinner card (L2); before L2 they read `No agents match ""` with a Clear filter button, which the G16 and N3 runs grabbed. A failed catalog request retries after 1, 2, 4, 8 and 16 s, then shows Couldn't load agents with Retry (L2). The step waits for Agoragentic (D2). M5: in 2 of 3 GPUIX runs on the same head (the full run and one of two reruns, load average 8 to 11) the list loaded, the Agoragentic check passed after 1.6 s, and the frame grabbed after it shows the Loading agents… card again. The web frame shows the list in every run. Loading with entries already shown is the retry state of `useResolvedSupportedAcpAgentsState` (86901fef, after L2): a later catalog resolve in GPUIX returned `catalogAvailable: false` and the card waits for the 1 s retry. Why that resolve fails in GPUIX and not on the web is not measured. Rows inside a settings group are separated by the divider line as on the web (G6: `divide-y divide-border` in the style layer). A row's label sits on the web's 24 px line (G12: the inline `<label>` alone on a line of its block parent gets the parent's strut, so the text column is 45 px against the web's 45.5 and the row 69 against 70; it was 41 and 65, with the label 3 px high). |
+| 2 | `remote.access-popover` | partial | server route needed | tunnel write guard in termul-server (unassigned) | 0.5 | Reference: the desktop app (`tools/reference/tauri.ts`). The status bar shows the Remote terminal access button at the same place in both (GPUIX draws its connection lamp to the left of it). StatusBar now renders the popover in a desktop host as well as in Tauri (R4, `isDesktopApp()`). GPUIX opens the popover with the desktop's title, text and Enable remote access row, but the switch is off and disabled, under a note: Not available in this build yet. The desktop's shared-live host serves the tunnel from its own server, which refuses every write the tunnel forwards from loopback (`remote/host.rs`); termul-server has no such mode, so a GPUIX tunnel would let a shared link write as a local client. R4 gates the control (`isTauriContext()` in RemoteAccessPopover, tested) instead of starting one. The XTEST click on the desktop trigger hovers it but does not open the popover in the matrix run (3 of 3 runs); a direct probe opened it once in two tries, with the same title, text and switch row as GPUIX (`parity-out/matrix/remote-access-popover/desktop-probe-open.png`). The last desktop frame therefore shows the closed popover. |
 
 ### Proposed units
 
@@ -665,7 +738,8 @@ Each unit with the surfaces its gaps name. Gain is the usage-weighted score (all
 
 | # | Unit | Root cause class | Surfaces | Summed rank | Gain |
 | ---: | --- | --- | ---: | ---: | ---: |
-| 1 | tunnel write guard in termul-server (unassigned) | server route needed | 1 | 0.5 | +0.3 |
+| 1 | catalog re-resolve failure in GPUIX (unassigned) | needs diagnosis | 1 | 4 | +0.1 |
+| 2 | tunnel write guard in termul-server (unassigned) | server route needed | 1 | 0.5 | +0.3 |
 
 If every listed unit landed and fixed its surfaces, the usage-weighted score would be 100.0%.
 
@@ -746,7 +820,7 @@ The Reference and GPUIX columns count passed actions plus checks over the total.
 | `settings.appearance` Settings: Appearance | settings | ported | ported | 5/5 | 5/5 | 33.0% / 0.82% | 5.5% / 1.21% | Each select is one closed dropdown like the web (G2), and its trigger is 240px wide beside the label as on the web (G5: the GPUIX ui primitives resolve `@[35rem]:w-60` against the settings card container). The web truncates a long value (`[&>span]:line-clamp-1`); GPUIX shows it in full inside the 240px. The scrim dims and blurs the page behind it as on the web (N2). Rows inside a settings group are separated by the divider line as on the web (G6: `divide-y divide-border` in the style layer). A row's label sits on the web's 24 px line (G12: the inline `<label>` alone on a line of its block parent gets the parent's strut, so the text column is 45 px against the web's 45.5 and the row 69 against 70; it was 41 and 65, with the label 3 px high). |
 | `settings.shell` Settings: Shell | settings | ported | ported | 5/5 | 5/5 | 30.7% / 0.20% | 2.0% / 0.30% | Each select is one closed dropdown like the web (G2), and its trigger is 240px wide beside the label as on the web (G5: the GPUIX ui primitives resolve `@[35rem]:w-60` against the settings card container). The web truncates a long value (`[&>span]:line-clamp-1`); GPUIX shows it in full inside the 240px. The scrim dims and blurs the page behind it as on the web (N2). |
 | `settings.terminal-profiles` Settings: Profiles | settings | ported | ported | 5/5 | 5/5 | 31.2% / 0.29% | 2.8% / 0.43% | The section content and navigation match. The scrim dims and blurs the page behind it as on the web (N2). |
-| `settings.ai-agents` Settings: Agent chats | settings | ported | ported | 5/5 | 5/5 | 32.9% / 0.69% | 5.3% / 1.01% | The section content and navigation match. The scrim dims and blurs the page behind it as on the web (N2). Each select is one closed dropdown like the web (G2), and its trigger is 240px wide beside the label as on the web (G5: the GPUIX ui primitives resolve `@[35rem]:w-60` against the settings card container). The web truncates a long value (`[&>span]:line-clamp-1`); GPUIX shows it in full inside the 240px. The agents list shows the registry as on the web, Agoragentic first with its icon, version, Latest and Available. The icon tile draws the catalog SVG: AcpAgentsSettings sets it through `dangerouslySetInnerHTML`, compat paints one `<svg>` of markup as a GPUIX svg, and the DOMPurify stand-in passes an icon of shapes (G16 SVG-HTML). The list fills in when the section's own catalog request returns, 0.42 s after the section mounted in GPUIX on an idle host (D2 run). Until then both clients show the Loading agents… spinner card (L2); before L2 they read `No agents match ""` with a Clear filter button, which the G16 and N3 runs grabbed. A failed catalog request retries after 1, 2, 4, 8 and 16 s, then shows Couldn't load agents with Retry (L2). The step waits for Agoragentic (D2). Rows inside a settings group are separated by the divider line as on the web (G6: `divide-y divide-border` in the style layer). A row's label sits on the web's 24 px line (G12: the inline `<label>` alone on a line of its block parent gets the parent's strut, so the text column is 45 px against the web's 45.5 and the row 69 against 70; it was 41 and 65, with the label 3 px high). |
+| `settings.ai-agents` Settings: Agent chats | settings | partial | ported | 5/5 | 5/5 | 32.9% / 0.69% | 5.3% / 1.01% | The section content and navigation match. The scrim dims and blurs the page behind it as on the web (N2). Each select is one closed dropdown like the web (G2), and its trigger is 240px wide beside the label as on the web (G5: the GPUIX ui primitives resolve `@[35rem]:w-60` against the settings card container). The web truncates a long value (`[&>span]:line-clamp-1`); GPUIX shows it in full inside the 240px. The agents list shows the registry as on the web, Agoragentic first with its icon, version, Latest and Available. The icon tile draws the catalog SVG: AcpAgentsSettings sets it through `dangerouslySetInnerHTML`, compat paints one `<svg>` of markup as a GPUIX svg, and the DOMPurify stand-in passes an icon of shapes (G16 SVG-HTML). The list fills in when the section's own catalog request returns, 0.42 s after the section mounted in GPUIX on an idle host (D2 run). Until then both clients show the Loading agents… spinner card (L2); before L2 they read `No agents match ""` with a Clear filter button, which the G16 and N3 runs grabbed. A failed catalog request retries after 1, 2, 4, 8 and 16 s, then shows Couldn't load agents with Retry (L2). The step waits for Agoragentic (D2). M5: in 2 of 3 GPUIX runs on the same head (the full run and one of two reruns, load average 8 to 11) the list loaded, the Agoragentic check passed after 1.6 s, and the frame grabbed after it shows the Loading agents… card again. The web frame shows the list in every run. Loading with entries already shown is the retry state of `useResolvedSupportedAcpAgentsState` (86901fef, after L2): a later catalog resolve in GPUIX returned `catalogAvailable: false` and the card waits for the 1 s retry. Why that resolve fails in GPUIX and not on the web is not measured. Rows inside a settings group are separated by the divider line as on the web (G6: `divide-y divide-border` in the style layer). A row's label sits on the web's 24 px line (G12: the inline `<label>` alone on a line of its block parent gets the parent's strut, so the text column is 45 px against the web's 45.5 and the row 69 against 70; it was 41 and 65, with the label 3 px high). |
 | `settings.skills` Settings: Skills | settings | ported | ported | 5/5 | 5/5 | 33.1% / 0.65% | 5.5% / 0.96% | The section content and navigation match. The scrim dims and blurs the page behind it as on the web (N2). Rows inside a settings group are separated by the divider line as on the web (G6: `divide-y divide-border` in the style layer). Each `text-xs leading-relaxed` line sits 19.5 px below the last, as on the web, so later rows no longer drift (N3: native patch zed/0005 keeps the line height fractional; on settings.skills the lines start at 254, 274, 293, 313 and 333 against the web's 254, 274, 293, 313 and 332, and the last row at 658 against 659, where G12 measured 19 px steps and a 5 px drift). |
 | `settings.provider` Settings: Accounts | settings | ported | ported | 5/5 | 5/5 | 37.1% / 0.44% | 11.5% / 0.65% | Accounts lists the Default account, Signed in, with "Usage is not available right now", Try again and the `termul-server claude account` hint in both. The skeleton M2 saw was the frame grab racing the list: the step checked for the nav label it had just clicked. It now waits for "1 account", which GPUIX painted 1871 ms after the click and the web 158 ms after (G6 run). The Claude Code header shows its brand mark as on the web (G16 SVG-HTML: ProviderGroupHeader sets the bundled SVG through `dangerouslySetInnerHTML`). The account row lays out as on the web (G16 ACCOUNT-ROW): its grid places its cells (`col-start-*`, `row-start-*`), and the patched addon now draws its `13.75rem minmax(0,1fr) 8.25rem 1.75rem` track list and the placements natively (zed/0008, gpuix/0019). The usage note starts at 637 px and the row menu's dots at 1099 px, as on the web; they were at 584 px and 1029 px on four equal tracks. The row keeps its 70 px height. The scrim dims and blurs the page behind it as on the web (N2). |
 | `settings.mcp-servers` Settings: MCP servers | settings | ported | ported | 5/5 | 5/5 | 35.3% / 1.12% | 8.8% / 1.65% | The section content and navigation match. The scrim dims and blurs the page behind it as on the web (N2). The footnote reads on one line with its inline `mcpCapabilities.acp` as on the web (G16 CODE-WRAP: SettingsGroup gets the footnote as one fragment, which compat had laid out as a block of three lines; a lone fragment child is now its children, inline content of the paragraph). |

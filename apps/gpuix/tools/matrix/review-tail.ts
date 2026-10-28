@@ -217,15 +217,19 @@ export const TAIL_REVIEWS: Record<string, Review> = {
     differences: SETTINGS_BASE
   },
   'settings.ai-agents': {
-    status: 'ported',
+    status: 'partial',
     differences: [
       ...SETTINGS_BASE,
       SELECT,
       'The agents list shows the registry as on the web, Agoragentic first with its icon, version, Latest and Available. The icon tile draws the catalog SVG: AcpAgentsSettings sets it through `dangerouslySetInnerHTML`, compat paints one `<svg>` of markup as a GPUIX svg, and the DOMPurify stand-in passes an icon of shapes (G16 SVG-HTML).',
       'The list fills in when the section\'s own catalog request returns, 0.42 s after the section mounted in GPUIX on an idle host (D2 run). Until then both clients show the Loading agents… spinner card (L2); before L2 they read `No agents match ""` with a Clear filter button, which the G16 and N3 runs grabbed. A failed catalog request retries after 1, 2, 4, 8 and 16 s, then shows Couldn\'t load agents with Retry (L2). The step waits for Agoragentic (D2).',
+      'M5: in 2 of 3 GPUIX runs on the same head (the full run and one of two reruns, load average 8 to 11) the list loaded, the Agoragentic check passed after 1.6 s, and the frame grabbed after it shows the Loading agents… card again. The web frame shows the list in every run. Loading with entries already shown is the retry state of `useResolvedSupportedAcpAgentsState` (86901fef, after L2): a later catalog resolve in GPUIX returned `catalogAvailable: false` and the card waits for the 1 s retry. Why that resolve fails in GPUIX and not on the web is not measured.',
       DIVIDERS,
       LABEL_LINE
-    ]
+    ],
+    cause: 'needs diagnosis',
+    unit: 'catalog re-resolve failure in GPUIX (unassigned)',
+    impact: 1
   },
   'settings.skills': {
     status: 'ported',
