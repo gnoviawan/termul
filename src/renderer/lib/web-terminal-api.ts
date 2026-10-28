@@ -919,7 +919,14 @@ export class WebTerminalClient {
    */
   private flushInputBuffer(terminalId: string): void {
     const buffered = this.inputBuffers.get(terminalId)
-    if (!buffered) return
+    if (!buffered) {
+      // An empty-string entry (an empty `write()` accepted into the buffer)
+      // must not linger: `getSessionRequest` treats any `inputBuffers` entry
+      // as pending input and refuses session RPCs while it exists. Deleting
+      // a never-present key is a no-op, so this covers both cases.
+      this.inputBuffers.delete(terminalId)
+      return
+    }
     this.acquireReplayHold(terminalId)
     this.inputBuffers.delete(terminalId)
     // Chunk 1: the unconfirmed one (same id) if its text still leads the
