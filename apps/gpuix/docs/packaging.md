@@ -110,15 +110,18 @@ PNGs and `results.json` go to `parity-out/packaging/`.
 
 ## Measured
 
-Measured on 2026-10-25 on this host by `bun run package:verify`: 8 cores, Xvfb with lavapipe (software Vulkan), load average 11.9 while other units' benchmarks ran. The server is ready in about 160 ms, so most of the startup is Bun loading the bundle, GPUI starting on software Vulkan and the first render (inferred, not profiled). The numbers are for this contended host, not a desktop with a GPU.
+Measured on 2026-10-28 on this host by M5 at `gpuix/m5`: `bun run package:linux` with the self-built patched addon (series e24c33d4), `--server-bin` and `--webview-host` pointing at release builds of the same head, then `bun run package:verify -- --root /tmp/gpuix-m5/verify`, which passed 11 of 11 checks. `bun run native:patch-check` with `NAPI_RS_NATIVE_LIBRARY_PATH` set to the addon extracted from the `.deb` passed 55 of 55. The host had 8 cores, Xvfb with lavapipe (software Vulkan), and a load average of about 7 from another agent's QA job. The numbers are for this host, not a desktop with a GPU.
 
 | | |
 |---|---|
-| `.deb` size | 58.0 MiB (60,869,196 bytes) |
-| Installed size | 221.1 MiB: `termul-server` 70 MB stripped (it embeds `dist-web/`), Bun 78 MB, the GPUIX addon in `node_modules` 59 MB total, the bundle about 15 MB |
-| Startup, spawn to painted project rail | median 2363 ms over 5 warm launches (2254, 2904, 2363, 3491, 2121). The first launch after extracting took 7325 ms |
-| Server ready (spawn to authenticated `/ws`), from the launcher log | median 162 ms (162, 175, 158, 155, 222) |
-| Quit, `WM_DELETE_WINDOW` to no process left | 954 ms with a terminal and a browser tab open |
+| `.deb` size | 59.5 MiB (62,394,868 bytes) |
+| sha256 | `2dd9dd878d352abfc3cbfae21d93bd9685af2dedb99d6bf6ef166012298719ca` |
+| Installed size | 226.4 MiB |
+| Startup, spawn to painted project rail | median 2301 ms over 5 warm launches (2306, 1764, 2025, 2301, 2506) |
+| Server ready (spawn to authenticated `/ws`), from the launcher log | median 163 ms (156, 154, 369, 179, 163) |
+| Quit, `WM_DELETE_WINDOW` to no process left | 791 ms with a terminal and a browser tab open |
+
+The 2026-10-25 build measured 58.0 MiB, a 2363 ms startup median and a 954 ms quit.
 
 ## Not done
 
