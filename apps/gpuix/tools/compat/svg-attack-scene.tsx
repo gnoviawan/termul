@@ -241,8 +241,17 @@ function residentBytes(): number {
   return pages * 4096
 }
 
+/** The window's own first frames settle before the image mounts, so they stay out of its cost. */
+const CHAT_MOUNT_DELAY_MS = 1500
+
 function ChatImage({ src }: { src: string }) {
+  const [shown, setShown] = useState(false)
   useEffect(() => {
+    const timer = setTimeout(() => setShown(true), CHAT_MOUNT_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [])
+  useEffect(() => {
+    if (!shown) return
     const before = process.resourceUsage()
     const baseRss = residentBytes()
     let peakRss = baseRss
@@ -271,10 +280,12 @@ function ChatImage({ src }: { src: string }) {
       clearInterval(sample)
       clearTimeout(done)
     }
-  }, [])
+  }, [shown])
   return (
     <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: '#08090a' }}>
-      <img alt="" src={src} objectFit="contain" style={{ width: CHAT_BOX, height: CHAT_BOX }} />
+      {shown ? (
+        <img alt="" src={src} objectFit="contain" style={{ width: CHAT_BOX, height: CHAT_BOX }} />
+      ) : null}
     </div>
   )
 }
