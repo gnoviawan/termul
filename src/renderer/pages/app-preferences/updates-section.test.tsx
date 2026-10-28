@@ -1,10 +1,36 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ComponentProps } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { UpdatesSection } from './updates-section'
 
 vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: () => true
+}))
+
+// The install retry must go through the same confirm flow as the install
+// button, so these mocks sit below confirmInstallAndRestart, not on it.
+const confirmMock = vi.fn(async (_message: string, _options?: unknown) => false)
+vi.mock('@/lib/tauri-dialog', () => ({
+  confirm: (message: string, options?: unknown) => confirmMock(message, options)
+}))
+
+vi.mock('@/lib/tauri-safe-update', () => ({
+  hasActiveTerminalSessions: () => true
+}))
+
+const storeInstallAndRestart = vi.fn(async () => {})
+vi.mock('@/stores/updater-store', () => ({
+  updaterStore: {
+    getState: () => ({
+      installAndRestart: storeInstallAndRestart,
+      downloaded: true,
+      error: null
+    })
+  }
+}))
+
+vi.mock('sonner', () => ({
+  toast: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), info: vi.fn() })
 }))
 
 type Props = ComponentProps<typeof UpdatesSection>
@@ -98,6 +124,10 @@ describe('UpdatesSection error copy', () => {
 })
 
 describe('UpdatesSection error retry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   function clickTryAgain(): void {
     fireEvent.click(screen.getByRole('button', { name: /Try again/ }))
   }
@@ -124,12 +154,51 @@ describe('UpdatesSection error retry', () => {
     expect(props.checkForUpdates).not.toHaveBeenCalled()
   })
 
-  it('retries the install after a failed install', () => {
-    const props = renderSection({ updateError: 'install failed', updateErrorSource: 'install' })
+  it('asks to confirm before retrying a failed install, and does not install if declined', async () => {
+    confirmMock.mockResolvedValueOnce(false)
+    const props = renderSection({
+      updateError: 'install failed',
+      updateErrorSource: 'install',
+      updateAvailable: true,
+      version: '0.5.0-nightly.20261028.101.bbbbbbb'
+    })
+
+    clickTryAgain()
+
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledTimes(1))
+    expect(confirmMock.mock.calls[0][0]).toMatch(/Your running terminal sessions will be closed\./)
+    expect(storeInstallAndRestart).not.toHaveBeenCalled()
+    expect(props.installAndRestart).not.toHaveBeenCalled()
+    expect(props.checkForUpdates).not.toHaveBeenCalled()
+  })
+
+  it('retries a failed manual install by reopening the page, with no restart prompt', () => {
+    const props = renderSection({
+      updateError: 'could not open the page',
+      updateErrorSource: 'install',
+      updateAvailable: true,
+      isManualUpdateMode: true,
+      version: '0.5.0-nightly.20261028.101.bbbbbbb'
+    })
 
     clickTryAgain()
 
     expect(props.installAndRestart).toHaveBeenCalledTimes(1)
-    expect(props.checkForUpdates).not.toHaveBeenCalled()
+    expect(confirmMock).not.toHaveBeenCalled()
+  })
+
+  it('retries the failed install once the user confirms', async () => {
+    confirmMock.mockResolvedValueOnce(true)
+    renderSection({
+      updateError: 'install failed',
+      updateErrorSource: 'install',
+      updateAvailable: true,
+      version: '0.5.0-nightly.20261028.101.bbbbbbb'
+    })
+
+    clickTryAgain()
+
+    await waitFor(() => expect(storeInstallAndRestart).toHaveBeenCalledTimes(1))
+    expect(confirmMock).toHaveBeenCalledTimes(1)
   })
 })

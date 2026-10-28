@@ -164,7 +164,8 @@ function dismissDownloadProgressToast(version: string): void {
  */
 export function useUpdateToast(): void {
   const isDesktop = isTauriContext()
-  const { updateAvailable, downloaded, isDownloading, skippedVersion } = useUpdaterState()
+  const { updateAvailable, downloaded, isDownloading, skippedVersion, isManualUpdateMode } =
+    useUpdaterState()
   const version = useUpdateVersion()
   const _updateDownloaded = useUpdateDownloaded()
   const downloading = useIsDownloading()
@@ -199,9 +200,11 @@ export function useUpdateToast(): void {
     }
   }, [isDesktop, downloaded, version])
 
-  // Show download progress
+  // Show download progress. A manual update only opens the release page:
+  // nothing reports progress, and the open finishes so fast that sonner can
+  // apply the dismiss before its deferred create, leaving a stuck 0% toast.
   useEffect(() => {
-    if (isDesktop && isDownloading && version) {
+    if (isDesktop && isDownloading && version && !isManualUpdateMode) {
       showDownloadProgressToast(version, downloadProgress)
 
       // Clean up progress toast when download completes or effect re-runs
@@ -209,7 +212,7 @@ export function useUpdateToast(): void {
         dismissDownloadProgressToast(version)
       }
     }
-  }, [isDesktop, isDownloading, downloadProgress, version])
+  }, [isDesktop, isDownloading, downloadProgress, version, isManualUpdateMode])
 
   // Reset flags when update state changes
   useEffect(() => {

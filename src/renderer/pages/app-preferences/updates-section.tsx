@@ -7,6 +7,7 @@ import { SettingsSelect } from '@/components/settings/SettingsSelect'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
+import { confirmInstallAndRestart } from '@/lib/confirm-install-update'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { supportsSignedChannelUpdate, type UpdateChannel } from '@/lib/tauri-updater-api'
 import type { UpdaterErrorSource } from '@/stores/updater-store'
@@ -72,12 +73,17 @@ export function UpdatesSection({
 }: UpdatesSectionProps): React.JSX.Element | null {
   if (!isTauriContext()) return null
 
-  // "Try again" retries the step that failed, matching the error copy.
+  // "Try again" retries the step that failed, matching the error copy. A
+  // signed install restarts Termul, so it goes through the same confirm
+  // dialog as the install button; a manual install only opens the page.
+  const retryInstall = isManualUpdateMode
+    ? installAndRestart
+    : () => void confirmInstallAndRestart(version)
   const retryFailedStep =
     updateErrorSource === 'download'
       ? downloadUpdate
       : updateErrorSource === 'install'
-        ? installAndRestart
+        ? retryInstall
         : checkForUpdates
 
   const channel = CHANNELS.find((option) => option.value === updateChannel) ?? CHANNELS[0]
