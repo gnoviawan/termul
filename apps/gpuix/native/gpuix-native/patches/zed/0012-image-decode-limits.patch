@@ -159,7 +159,7 @@ index ce7fc7b..ca03e58 100644
      const TEST_IMG_ID: &str = "test-img";
  
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 6aedda3..b4a29ea 100644
+index 6aedda3..3fbd282 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -53,7 +53,7 @@ use futures::channel::oneshot;
@@ -171,7 +171,7 @@ index 6aedda3..b4a29ea 100644
  use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
  use scheduler::Instant;
  pub use scheduler::RunnableMeta;
-@@ -2615,19 +2615,91 @@ pub struct Image {
+@@ -2615,19 +2615,90 @@ pub struct Image {
      pub id: u64,
  }
  
@@ -183,8 +183,9 @@ index 6aedda3..b4a29ea 100644
 +/// Longest side of a decoded raster image, past which no texture holds it.
 +const MAX_IMAGE_SIDE: u32 = 16_384;
 +
-+/// Decoded bytes one animation keeps; the frames after them are dropped.
-+const MAX_ANIMATION_BYTES: usize = 64 << 20;
++/// Decoded bytes one animation may hold, the decoder's own two canvases
++/// included; the frames past it are dropped.
++const MAX_ANIMATION_BYTES: u64 = 64 << 20;
 +
 +fn decode_limits() -> image::Limits {
 +    let mut limits = image::Limits::default();
@@ -223,25 +224,20 @@ index 6aedda3..b4a29ea 100644
      decode_static_image_from_decoder(decoder)
  }
  
-+/// Every frame of an animated GIF or WebP as BGRA, within [`MAX_ANIMATION_BYTES`].
++/// The frames of an animated GIF or WebP as BGRA, as many as fit in
++/// [`MAX_ANIMATION_BYTES`]. Every frame is a full canvas.
 +pub(crate) fn decode_animation<'a>(
 +    mut decoder: impl image::ImageDecoder + image::AnimationDecoder<'a>,
 +) -> Result<SmallVec<[Frame; 1]>> {
 +    check_image_size(&decoder)?;
 +    decoder.set_limits(decode_limits())?;
++    let (width, height) = decoder.dimensions();
++    let canvas = (u64::from(width) * u64::from(height) * 4).max(1);
++    let keep = (MAX_ANIMATION_BYTES / canvas).saturating_sub(2).max(1) as usize;
 +    let mut frames = SmallVec::new();
-+    let mut kept = 0;
-+    for frame in decoder.into_frames() {
++    for frame in decoder.into_frames().take(keep) {
 +        match frame {
 +            Ok(mut frame) => {
-+                kept += frame.buffer().len();
-+                if kept > MAX_ANIMATION_BYTES && !frames.is_empty() {
-+                    log::warn!(
-+                        "dropping animation frames after {} decoded ({MAX_ANIMATION_BYTES} bytes)",
-+                        frames.len()
-+                    );
-+                    break;
-+                }
 +                // Convert from RGBA to BGRA.
 +                for pixel in frame.buffer_mut().chunks_exact_mut(4) {
 +                    pixel.swap(0, 2);
@@ -250,6 +246,9 @@ index 6aedda3..b4a29ea 100644
 +            }
 +            Err(err) => log::debug!("Skipping animation frame due to decode error: {err}"),
 +        }
++    }
++    if frames.len() == keep && keep > 1 {
++        log::debug!("keeping at most {keep} frames of a {width}x{height} animation");
 +    }
 +    anyhow::ensure!(
 +        !frames.is_empty(),
@@ -266,7 +265,7 @@ index 6aedda3..b4a29ea 100644
      let orientation = decoder
          .orientation()
          .context("reading decoder's orientation")?;
-@@ -2705,31 +2777,7 @@ impl Image {
+@@ -2705,31 +2776,7 @@ impl Image {
      /// Convert the clipboard image to an `ImageData` object.
      pub fn to_image_data(&self, svg_renderer: SvgRenderer) -> Result<Arc<RenderImage>> {
          let frames = match self.format {
