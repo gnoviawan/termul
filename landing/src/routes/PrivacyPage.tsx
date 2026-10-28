@@ -95,7 +95,10 @@ export function PrivacyPage() {
           and keeps the hash with a timestamp in a rate-limit table (limit: 5
           submissions per hour). Rows older than one hour are deleted when a
           new submission is checked. The raw IP address is not stored by this
-          code. The hash is not salted.
+          code. When a secret salt is configured on the server, it is
+          combined with the IP address before hashing; without it, the hash
+          is unsalted. We did not verify whether the production site has the
+          salt configured.
         </p>
       </LegalSection>
 
