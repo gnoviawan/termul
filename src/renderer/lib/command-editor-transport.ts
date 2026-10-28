@@ -20,7 +20,7 @@ export interface WebSessionRequestContext {
 }
 
 interface WebCommandEditorClient {
-  getSessionRequest: () => WebSessionRequestContext | null
+  getSessionRequest: (terminalId: string) => WebSessionRequestContext | null
 }
 
 type CommandEditorTransport = Pick<
@@ -44,6 +44,22 @@ function completionRpcFallback(result: SessionRpcResult): CompletionRpcReply {
   return { result }
 }
 
+function isSafeU64(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function completionRequestIsSendable(request: {
+  bufferRevision: number
+  cursor: number
+  promptGeneration: number
+}): boolean {
+  return (
+    isSafeU64(request.bufferRevision) &&
+    isSafeU64(request.cursor) &&
+    isSafeU64(request.promptGeneration)
+  )
+}
+
 function readCompletionRpcReply(value: unknown): CompletionRpcReply | undefined {
   if (isSessionRpcResult(value)) return { result: value }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
@@ -63,12 +79,9 @@ function readCompletionRpcReply(value: unknown): CompletionRpcReply | undefined 
       reply.completion as Record<string, unknown>
     if (
       typeof request_id !== 'string' ||
-      typeof buffer_revision !== 'number' ||
-      !Number.isFinite(buffer_revision) ||
-      typeof cursor !== 'number' ||
-      !Number.isFinite(cursor) ||
-      typeof prompt_generation !== 'number' ||
-      !Number.isFinite(prompt_generation) ||
+      !isSafeU64(buffer_revision) ||
+      !isSafeU64(cursor) ||
+      !isSafeU64(prompt_generation) ||
       typeof cwd !== 'string' ||
       typeof output !== 'string'
     )
@@ -94,7 +107,9 @@ function requestSession(
   type: WebCommandEditorRequestType,
   payload: Record<string, unknown>
 ): Promise<WebTerminalReply<unknown>> | null {
-  const context = client.getSessionRequest()
+  const terminalId = payload.terminalId
+  if (typeof terminalId !== 'string') return null
+  const context = client.getSessionRequest(terminalId)
   if (!context) return null
   const { socket, id, pending, timeoutMs } = context
   return new Promise((resolve, reject) => {
@@ -160,13 +175,15 @@ export function createWebCommandEditorTransport(
         readSessionRpcResult,
         sessionRpcFallback
       ),
-    requestCompletion: (terminalId, request) =>
-      send(
+    requestCompletion: (terminalId, request) => {
+      if (!completionRequestIsSendable(request)) return Promise.resolve({ result: 'PreWrite' })
+      return send(
         'command_editor_request_completion',
         { ...request, terminalId },
         readCompletionRpcReply,
         completionRpcFallback
-      ),
+      )
+    },
     cancelCompletion: (terminalId, requestId) =>
       send(
         'command_editor_cancel_completion',
@@ -198,12 +215,18 @@ function createTauriSend(
       const parsed = read(result)
       if (parsed !== undefined) return parsed
     } catch {
-      // Delivery is unknown; retrying could execute the command twice.
+      // The command rejected before the handler ran. Nothing was written.
+      void logFrontendError({
+        level: 'warn',
+        source: 'TauriCommandEditorTransport',
+        message: `session RPC rejected before execution: ${type}`
+      })
+      return fallback('PreWrite')
     }
     void logFrontendError({
       level: 'warn',
       source: 'TauriCommandEditorTransport',
-      message: `session RPC failed: ${type}`
+      message: `session RPC reply was unrecognized: ${type}`
     })
     return fallback('Partial')
   }
@@ -221,13 +244,15 @@ export function createTauriCommandEditorTransport(
         readSessionRpcResult,
         sessionRpcFallback
       ),
-    requestCompletion: (terminalId, request) =>
-      send(
+    requestCompletion: (terminalId, request) => {
+      if (!completionRequestIsSendable(request)) return Promise.resolve({ result: 'PreWrite' })
+      return send(
         'command_editor_request_completion',
         { terminalId, request },
         readCompletionRpcReply,
         completionRpcFallback
-      ),
+      )
+    },
     cancelCompletion: (terminalId, requestId) =>
       send(
         'command_editor_cancel_completion',

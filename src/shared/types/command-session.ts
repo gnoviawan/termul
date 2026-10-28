@@ -78,8 +78,15 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function readNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+function readU64(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+/** `undefined` when omitted. `null` when present but not a safe integer. */
+function readExitCode(value: Record<string, unknown>): number | null | undefined {
+  if (!('exit_code' in value)) return undefined
+  const code = value.exit_code
+  return typeof code === 'number' && Number.isSafeInteger(code) ? code : null
 }
 
 function readCompletion(value: Record<string, unknown>): CompletionResult | null {
@@ -89,9 +96,9 @@ function readCompletion(value: Record<string, unknown>): CompletionResult | null
   const sessionId = readString(value.session_id)
   const nonce = readString(value.nonce)
   const requestId = readString(value.request_id)
-  const bufferRevision = readNumber(value.buffer_revision)
-  const cursor = readNumber(value.cursor)
-  const promptGeneration = readNumber(value.prompt_generation)
+  const bufferRevision = readU64(value.buffer_revision)
+  const cursor = readU64(value.cursor)
+  const promptGeneration = readU64(value.prompt_generation)
   const cwd = readString(value.cwd)
   const output = readString(value.output)
   if (
@@ -128,7 +135,7 @@ function readPromptReady(
   value: Record<string, unknown>
 ): Extract<SessionFrame, { type: 'PromptReady' }> | null {
   const nonce = readString(value.nonce)
-  const promptGeneration = readNumber(value.prompt_generation)
+  const promptGeneration = readU64(value.prompt_generation)
   const lineEmpty = readBool(value.line_empty)
   const promptSuppressed = readBool(value.prompt_suppressed)
   const cwd = readString(value.cwd)
@@ -189,7 +196,8 @@ function parsePayload(payload: unknown): SessionParse {
   }
   const nonce = readString(value.nonce)
   if ('nonce' in value && nonce === undefined) return { ok: false, reason: 'invalid' }
-  const exitCode = readNumber(value.exit_code)
+  const exitCode = readExitCode(value)
+  if (exitCode === null) return { ok: false, reason: 'invalid' }
   return {
     ok: true,
     frame: {

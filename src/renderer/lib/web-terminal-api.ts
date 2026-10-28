@@ -178,6 +178,13 @@ export class WebTerminalClient {
    * newer input. In-memory like the buffer itself: a reload drops both.
    */
   private readonly unconfirmedChunks = new Map<string, { commandId: string; data: string }>()
+  /**
+   * Set while a replay write has left the buffer but its bytes, and any
+   * keystrokes that arrived during the replay, are not yet queued. Both
+   * `write()` and session RPCs must wait. Cleared after those bytes are
+   * queued, rebuffered, or dropped.
+   */
+  private readonly replayHeld = new Set<string>()
   /** Project each live terminal was spawned for (recovers a rotated claim via `list_preserved`). */
   private readonly terminalProjects = new Map<string, string>()
   /**
@@ -336,16 +343,29 @@ export class WebTerminalClient {
     })
   }
 
-  /** Expose the live connection and shared correlation state for session RPCs. */
-  getSessionRequest(): WebSessionRequestContext | null {
+  /**
+   * Expose the live connection for a session RPC. Returns null when the RPC
+   * would overtake buffered keystrokes, run before auth, or run before this
+   * terminal's attach on the current socket. A missing tracker is not a hold:
+   * `write()` still sends in that case.
+   */
+  getSessionRequest(terminalId: string): WebSessionRequestContext | null {
     const socket = this.socket
     if (this.disposed || !socket || socket.readyState !== this.WebSocketImpl.OPEN) return null
+    if (this.connecting) return null
+    if (this.inputBuffers.has(terminalId) || this.replayHeld.has(terminalId)) return null
+    const tracker = this.trackers.get(terminalId)
+    if (tracker && !tracker.exited && tracker.attachedSocket !== socket) return null
     return {
       socket,
       id: `terminal-${++this.nextId}`,
       pending: this.pending,
       timeoutMs: REQUEST_TIMEOUT_MS
     }
+  }
+
+  private releaseReplayHold(terminalId: string): void {
+    this.replayHeld.delete(terminalId)
   }
 
   connect(): Promise<void> {
@@ -817,14 +837,15 @@ export class WebTerminalClient {
     const socketOpen = this.socket?.readyState === this.WebSocketImpl.OPEN
     // Input already waiting in the buffer goes first: a direct write now would
     // overtake it. The delayed flush after a failed replay sends it in order.
-    const waiting = this.inputBuffers.has(terminalId)
+    const replayHeld = this.replayHeld.has(terminalId)
+    const waiting = this.inputBuffers.has(terminalId) || replayHeld
     if (
       socketOpen &&
       (!tracker || tracker.exited || (tracker.attachedSocket === this.socket && !waiting))
     ) {
       return this.request('write', { terminalId, data }, randomUUID())
     }
-    if (tracker && !tracker.exited && !tracker.disconnected && tracker.claim) {
+    if ((tracker && !tracker.exited && !tracker.disconnected && tracker.claim) || replayHeld) {
       const buffered = this.inputBuffers.get(terminalId) ?? ''
       if (buffered.length + data.length > INPUT_BUFFER_MAX_CHARS) {
         // Story 10: durable failure log — refused input is user-visible data
@@ -883,6 +904,7 @@ export class WebTerminalClient {
   private flushInputBuffer(terminalId: string): void {
     const buffered = this.inputBuffers.get(terminalId)
     if (!buffered) return
+    this.replayHeld.add(terminalId)
     this.inputBuffers.delete(terminalId)
     // Chunk 1: the unconfirmed one (same id) if its text still leads the
     // buffer; chunk 2: whatever was buffered after it (a new id).
@@ -890,7 +912,14 @@ export class WebTerminalClient {
     const first =
       prior && buffered.startsWith(prior.data) ? prior : { commandId: randomUUID(), data: buffered }
     const rest = buffered.slice(first.data.length)
-    void this.sendBufferedChunks(terminalId, first, rest)
+    void this.sendBufferedChunks(terminalId, first, rest).catch(() => {
+      this.releaseReplayHold(terminalId)
+      void logFrontendError({
+        level: 'warn',
+        source: 'WebTerminalClient.flushInputBuffer',
+        message: 'buffered-input replay failed (send threw) — buffered input dropped'
+      })
+    })
   }
 
   private async sendBufferedChunks(
@@ -898,59 +927,73 @@ export class WebTerminalClient {
     first: { commandId: string; data: string },
     rest: string
   ): Promise<void> {
-    const chunks = rest ? [first, { commandId: randomUUID(), data: rest }] : [first]
-    for (const chunk of chunks) {
-      const result = await this.request<void>(
-        'write',
-        { terminalId, data: chunk.data },
-        chunk.commandId
-      )
-      if (result.success) {
+    const pending = rest ? [first, { commandId: randomUUID(), data: rest }] : [first]
+    try {
+      while (pending.length > 0 || this.inputBuffers.has(terminalId)) {
+        const extra = this.inputBuffers.get(terminalId)
+        if (extra) {
+          this.inputBuffers.delete(terminalId)
+          pending.push({ commandId: randomUUID(), data: extra })
+        }
+        const chunk = pending.shift()
+        if (!chunk) break
+        const result = await this.request<void>(
+          'write',
+          { terminalId, data: chunk.data },
+          chunk.commandId
+        )
+        if (result.success) {
+          this.unconfirmedChunks.delete(terminalId)
+          continue
+        }
+        if (
+          result.code === 'NETWORK_ERROR' ||
+          result.code === COMMAND_RESULT_CODES.COMMAND_IN_PROGRESS
+        ) {
+          const tracker = this.trackers.get(terminalId)
+          if (!tracker || tracker.exited || tracker.disconnected || !tracker.claim) {
+            this.inputBuffers.delete(terminalId)
+            this.unconfirmedChunks.delete(terminalId)
+            return
+          }
+          // At-least-once becomes exactly-once: the chunk is resent under its
+          // own id, so a first run that did reach the PTY is not typed twice.
+          this.unconfirmedChunks.set(terminalId, chunk)
+          const unsent = [chunk, ...pending].map((entry) => entry.data).join('')
+          const arrived = this.inputBuffers.get(terminalId) ?? ''
+          this.inputBuffers.set(terminalId, unsent + arrived)
+          // Story 10: durable failure log — the replay write failed and the
+          // payload was re-buffered. Error code only; the replayed input is
+          // terminal keystrokes and is never logged.
+          void logFrontendError({
+            level: 'warn',
+            source: 'WebTerminalClient.flushInputBuffer',
+            message: `buffered-input replay failed (${result.code}) — input re-buffered for the next re-attach`
+          })
+          // While the socket stays attached no re-attach will flush this, and new
+          // keystrokes queue behind it (see `write`). Try again soon.
+          setTimeout(() => {
+            const current = this.trackers.get(terminalId)
+            if (!this.disposed && current?.attachedSocket === this.socket) {
+              this.flushInputBuffer(terminalId)
+            }
+          }, IN_PROGRESS_FLUSH_RETRY_MS)
+          return
+        }
+        // A non-network replay failure drops the buffered input — data loss, so
+        // log it. Code only. Arrivals buffered behind the hold are dropped too;
+        // the terminal can no longer accept this replay.
         this.unconfirmedChunks.delete(terminalId)
-        continue
-      }
-      if (
-        result.code === 'NETWORK_ERROR' ||
-        result.code === COMMAND_RESULT_CODES.COMMAND_IN_PROGRESS
-      ) {
-        const tracker = this.trackers.get(terminalId)
-        if (!tracker || tracker.exited || tracker.disconnected || !tracker.claim) return
-        // At-least-once becomes exactly-once: the chunk is resent under its
-        // own id, so a first run that did reach the PTY is not typed twice.
-        this.unconfirmedChunks.set(terminalId, chunk)
-        const unsent = chunks
-          .slice(chunks.indexOf(chunk))
-          .map((c) => c.data)
-          .join('')
-        const arrived = this.inputBuffers.get(terminalId) ?? ''
-        this.inputBuffers.set(terminalId, unsent + arrived)
-        // Story 10: durable failure log — the replay write failed and the
-        // payload was re-buffered. Error code only; the replayed input is
-        // terminal keystrokes and is never logged.
+        this.inputBuffers.delete(terminalId)
         void logFrontendError({
           level: 'warn',
           source: 'WebTerminalClient.flushInputBuffer',
-          message: `buffered-input replay failed (${result.code}) — input re-buffered for the next re-attach`
+          message: `buffered-input replay failed (${result.code ?? 'UNKNOWN_ERROR'}) — buffered input dropped`
         })
-        // While the socket stays attached no re-attach will flush this, and new
-        // keystrokes queue behind it (see `write`). Try again soon.
-        setTimeout(() => {
-          const current = this.trackers.get(terminalId)
-          if (!this.disposed && current?.attachedSocket === this.socket) {
-            this.flushInputBuffer(terminalId)
-          }
-        }, IN_PROGRESS_FLUSH_RETRY_MS)
         return
       }
-      // A non-network replay failure drops the buffered input (the buffer
-      // entry was already removed) — data loss, so log it. Code only.
-      this.unconfirmedChunks.delete(terminalId)
-      void logFrontendError({
-        level: 'warn',
-        source: 'WebTerminalClient.flushInputBuffer',
-        message: `buffered-input replay failed (${result.code ?? 'UNKNOWN_ERROR'}) — buffered input dropped`
-      })
-      return
+    } finally {
+      this.releaseReplayHold(terminalId)
     }
   }
 
@@ -1007,6 +1050,7 @@ export class WebTerminalClient {
     // Story 10: dispose drops every buffered input (in-memory only).
     this.inputBuffers.clear()
     this.unconfirmedChunks.clear()
+    this.replayHeld.clear()
     this.socket?.close()
   }
 

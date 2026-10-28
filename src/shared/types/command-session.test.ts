@@ -149,6 +149,27 @@ describe('command session protocol', () => {
     expect(parsed.frame.cwd).toBe('/repo')
   })
 
+  it('completion rejects a non-u64 field', () => {
+    for (const field of ['buffer_revision', 'cursor', 'prompt_generation'] as const) {
+      for (const value of [-1, 1.5, Number.NaN]) {
+        expect(parseSessionFrame({ ...COMPLETE_COMPLETION, [field]: value }).ok).toBe(false)
+      }
+    }
+  })
+
+  it('prompt frame rejects a non-u64 generation', () => {
+    expect(
+      parseSessionFrame({
+        type: 'PromptReady',
+        nonce: 'n1',
+        prompt_generation: 1.5,
+        line_empty: true,
+        prompt_suppressed: true,
+        cwd: '/repo'
+      }).ok
+    ).toBe(false)
+  })
+
   it('command finished keeps its exit code', () => {
     const parsed = parseSessionFrame({
       type: 'CommandFinished',
@@ -159,6 +180,26 @@ describe('command session protocol', () => {
       throw new Error('expected a CommandFinished frame')
     }
     expect(parsed.frame.exit_code).toBe(2)
+  })
+
+  it('command finished rejects a mistyped exit code', () => {
+    expect(parseSessionFrame({ type: 'CommandFinished', exit_code: '3' })).toEqual({
+      ok: false,
+      reason: 'invalid'
+    })
+    expect(
+      parseSessionFrame({ type: 'CommandFinished', nonce: 'n1', exit_code: 1.5 }, 'n1')
+    ).toEqual({
+      ok: false,
+      reason: 'invalid'
+    })
+  })
+
+  it('command finished keeps a negative exit code', () => {
+    expect(parseSessionFrame({ type: 'CommandFinished', exit_code: -1 })).toEqual({
+      ok: true,
+      frame: { type: 'CommandFinished', exit_code: -1 }
+    })
   })
 
   it('command finished may omit its exit code', () => {

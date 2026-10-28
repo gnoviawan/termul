@@ -63,10 +63,29 @@ function setup() {
   clients.push(client)
   const internals = client as unknown as {
     inputBuffers: Map<string, string>
+    unconfirmedChunks: Map<string, { commandId: string; data: string }>
+    trackers: Map<
+      string,
+      {
+        attachedSocket?: FakeWebSocket | null
+        exited: boolean
+        disconnected: boolean
+        claim?: string
+        lastSeq: number
+        refCount: number
+      }
+    >
+    connecting: Promise<void> | null
     pending: Map<string, unknown>
   }
   internals.inputBuffers.set('terminal-1', 'existing input')
   return { client, internals, transport: createWebCommandEditorTransport(client) }
+}
+
+/** Clear queued input so a session RPC is allowed to send. Does not require a tracker. */
+function readyForSession(internals: ReturnType<typeof setup>['internals']): void {
+  internals.inputBuffers.delete('terminal-1')
+  internals.unconfirmedChunks.delete('terminal-1')
 }
 
 const completion = {
@@ -83,8 +102,9 @@ it.each([
   'tauri'
 ] as const)('%s completion request carries the full draft unchanged', async (surface) => {
   vi.useFakeTimers()
-  const { client, transport } = setup()
+  const { client, internals, transport } = setup()
   await client.connect()
+  readyForSession(internals)
   const socket = FakeWebSocket.instances[0]
   socket.sent.length = 0
   const fakeInvoke = vi.mocked(invoke).mockReset().mockResolvedValue('NotStarted')
@@ -107,6 +127,7 @@ it.each([
 it('open socket sends restorePrompt', async () => {
   const { client, internals, transport } = setup()
   await client.connect()
+  readyForSession(internals)
   const socket = FakeWebSocket.instances[0]
   socket.sent.length = 0
   const before = new Map(internals.inputBuffers)
@@ -151,6 +172,7 @@ it('closed socket does not queue restorePrompt', async () => {
 it('lost reply is unknown delivery', async () => {
   const { client, internals, transport } = setup()
   await client.connect()
+  readyForSession(internals)
   const socket = FakeWebSocket.instances[0]
   socket.sent.length = 0
   const before = new Map(internals.inputBuffers)
@@ -178,6 +200,7 @@ it('session RPC timeout resolves Partial and clears pending', async () => {
   const { client, internals, transport } = setup()
   try {
     await client.connect()
+    readyForSession(internals)
     const socket = FakeWebSocket.instances[0]
     const before = new Map(internals.inputBuffers)
     const requests = [
@@ -212,6 +235,7 @@ it('session RPC send throw resolves PreWrite and clears pending and timer', asyn
   const { client, internals, transport } = setup()
   try {
     await client.connect()
+    readyForSession(internals)
     const socket = FakeWebSocket.instances[0]
     socket.sent.length = 0
     const before = new Map(internals.inputBuffers)
@@ -298,12 +322,12 @@ it.each([
   expect(await api.cancelCompletion('terminal-1', 'completion-1')).toBe('Partial')
 })
 
-it('desktop maps a thrown invoke to Partial without retrying', async () => {
-  const fakeInvoke = vi.mocked(invoke).mockReset().mockRejectedValue(new Error('delivery unknown'))
+it('desktop maps a thrown invoke to PreWrite without retrying', async () => {
+  const fakeInvoke = vi.mocked(invoke).mockReset().mockRejectedValue(new Error('invoke rejected'))
   const api = createTauriTerminalApi()
-  expect(await api.submitCommand('terminal-1', 'echo hello')).toBe('Partial')
-  expect(await api.requestCompletion('terminal-1', completion)).toEqual({ result: 'Partial' })
-  expect(await api.cancelCompletion('terminal-1', 'completion-1')).toBe('Partial')
+  expect(await api.submitCommand('terminal-1', 'echo hello')).toBe('PreWrite')
+  expect(await api.requestCompletion('terminal-1', completion)).toEqual({ result: 'PreWrite' })
+  expect(await api.cancelCompletion('terminal-1', 'completion-1')).toBe('PreWrite')
   expect(fakeInvoke.mock.calls.map(([command]) => command)).toEqual([
     'command_editor_submit',
     'command_editor_request_completion',
@@ -338,9 +362,10 @@ describe('closed socket does not queue submit', () => {
     }
   })
 
-  it('sends one fresh correlated non-ledgered frame per open-socket session request', async () => {
+  it('sends one fresh correlated non-ledgered frame per ready-socket session request', async () => {
     const { client, internals, transport } = setup()
     await client.connect()
+    readyForSession(internals)
     const socket = FakeWebSocket.instances[0]
     socket.sent.length = 0
     const before = new Map(internals.inputBuffers)
@@ -460,7 +485,7 @@ it('completion reply carries the completer output', async () => {
       ]
     }),
     ...['buffer_revision', 'cursor', 'prompt_generation'].flatMap((key): [unknown, unknown][] =>
-      [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY].map((value) => [
+      [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, 1.5].map((value) => [
         { ...completed, completion: { ...fields, [key]: value } },
         partial
       ])
@@ -468,6 +493,7 @@ it('completion reply carries the completer output', async () => {
   ]
   const { client, internals, transport } = setup()
   await client.connect()
+  readyForSession(internals)
   const socket = FakeWebSocket.instances[0]
   socket.sent.length = 0
   const before = new Map(internals.inputBuffers)
@@ -490,7 +516,10 @@ it('completion transport failures preserve delivery meaning', async () => {
   expect(await transport.requestCompletion('terminal-1', completion)).toEqual({
     result: 'PreWrite'
   })
+  expect(internals.inputBuffers).toEqual(before)
   await client.connect()
+  readyForSession(internals)
+  const ready = new Map(internals.inputBuffers)
   const socket = FakeWebSocket.instances[0]
   socket.sent.length = 0
   const pending = transport.requestCompletion('terminal-1', completion)
@@ -499,10 +528,215 @@ it('completion transport failures preserve delivery meaning', async () => {
   socket.onclose?.(new CloseEvent('close', { code: 1006 }))
   expect(await pending).toEqual({ result: 'Partial' })
   expect(internals.pending.size).toBe(0)
-  expect(internals.inputBuffers).toEqual(before)
-  const fakeInvoke = vi.mocked(invoke).mockReset().mockRejectedValue(new Error('delivery unknown'))
+  expect(internals.inputBuffers).toEqual(ready)
+  const fakeInvoke = vi.mocked(invoke).mockReset().mockRejectedValue(new Error('invoke rejected'))
   expect(await createTauriTerminalApi().requestCompletion('terminal-1', completion)).toEqual({
-    result: 'Partial'
+    result: 'PreWrite'
   })
   expect(fakeInvoke).toHaveBeenCalledTimes(1)
+})
+
+it('buffered input blocks a session RPC before any frame is sent', async () => {
+  const { client, internals, transport } = setup()
+  await client.connect()
+  const socket = FakeWebSocket.instances[0]
+  socket.sent.length = 0
+  const before = new Map(internals.inputBuffers)
+
+  const pending = transport.submitCommand('terminal-1', 'echo hello')
+  expect(socket.sent).toEqual([])
+  expect(await pending).toBe('PreWrite')
+  expect(await transport.requestCompletion('terminal-1', completion)).toEqual({
+    result: 'PreWrite'
+  })
+  expect(internals.pending.size).toBe(0)
+  expect(internals.inputBuffers).toEqual(before)
+})
+
+it('an in-flight handshake blocks a session RPC on an open socket', async () => {
+  const { client, internals, transport } = setup()
+  await client.connect()
+  readyForSession(internals)
+  internals.connecting = new Promise(() => {})
+  const socket = FakeWebSocket.instances[0]
+  socket.sent.length = 0
+
+  const pending = transport.restorePrompt('terminal-1')
+  expect(socket.sent).toEqual([])
+  expect(await pending).toBe('PreWrite')
+  expect(internals.pending.size).toBe(0)
+})
+
+it('an unattached live terminal blocks a session RPC', async () => {
+  const { client, internals, transport } = setup()
+  await client.connect()
+  readyForSession(internals)
+  internals.trackers.set('terminal-1', {
+    lastSeq: 0,
+    exited: false,
+    refCount: 0,
+    disconnected: false,
+    attachedSocket: null
+  })
+  const socket = FakeWebSocket.instances[0]
+  socket.sent.length = 0
+
+  const pending = transport.submitCommand('terminal-1', 'echo hello')
+  expect(socket.sent).toEqual([])
+  expect(await pending).toBe('PreWrite')
+})
+
+it('an already-sent unconfirmed chunk does not block a ready session RPC', async () => {
+  const { client, internals, transport } = setup()
+  await client.connect()
+  readyForSession(internals)
+  internals.unconfirmedChunks.set('terminal-1', { commandId: 'chunk-1', data: 'ls' })
+  const socket = FakeWebSocket.instances[0]
+  socket.sent.length = 0
+
+  const pending = transport.submitCommand('terminal-1', 'echo hello')
+  expect(socket.sent).toHaveLength(1)
+  const frame = JSON.parse(socket.sent[0]) as { id: string }
+  socket.reply(frame.id, 'Accepted')
+  expect(await pending).toBe('Accepted')
+})
+
+it('does not send a session RPC while buffered input is queued for replay', async () => {
+  const { client, internals, transport } = setup()
+  await client.connect()
+  const socket = FakeWebSocket.instances[0]
+  internals.trackers.set('terminal-1', {
+    lastSeq: 0,
+    exited: false,
+    refCount: 0,
+    disconnected: false,
+    claim: 'claim-1'
+  })
+  const connect = client.connect.bind(client)
+  let connectCalls = 0
+  let releaseConnect: (() => Promise<void>) | undefined
+  client.connect = () => {
+    connectCalls += 1
+    if (connectCalls === 1) return connect()
+    return new Promise<void>((resolve, reject) => {
+      releaseConnect = async () => {
+        try {
+          await connect()
+          resolve()
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)))
+        }
+      }
+    })
+  }
+  const attach = client.attach('terminal-1', 'claim-1')
+  await Promise.resolve()
+  const attachFrame = socket.sent
+    .map((raw) => JSON.parse(raw) as { id: string; type: string })
+    .find((frame) => frame.type === 'attach')
+  expect(attachFrame).toBeDefined()
+  socket.reply(attachFrame?.id ?? '', {})
+  await Promise.resolve()
+  socket.sent.length = 0
+
+  const pending = transport.submitCommand('terminal-1', 'echo hello')
+  expect(socket.sent.map((raw) => (JSON.parse(raw) as { type: string }).type)).not.toContain(
+    'command_editor_submit'
+  )
+  expect(await pending).toBe('PreWrite')
+  expect(internals.inputBuffers.has('terminal-1')).toBe(false)
+  await releaseConnect?.()
+  await attach
+})
+
+it('does not let a keystroke overtake an unsent replay chunk', async () => {
+  const { client, internals } = setup()
+  await client.connect()
+  const socket = FakeWebSocket.instances[0]
+  internals.trackers.set('terminal-1', {
+    lastSeq: 0,
+    exited: false,
+    refCount: 0,
+    disconnected: false,
+    claim: 'claim-1',
+    attachedSocket: null
+  })
+  internals.unconfirmedChunks.set('terminal-1', { commandId: 'chunk-1', data: 'ls' })
+  internals.inputBuffers.set('terminal-1', 'ls -la\r')
+  const attach = client.attach('terminal-1', 'claim-1')
+  await vi.waitFor(
+    () => {
+      const types = socket.sent.map((raw) => (JSON.parse(raw) as { type: string }).type)
+      expect(types, types.join(',')).toContain('attach')
+    },
+    { timeout: 1000, interval: 10 }
+  )
+  const attachFrame = socket.sent
+    .map((raw) => JSON.parse(raw) as { id: string; type: string })
+    .find((frame) => frame.type === 'attach')
+  socket.reply(attachFrame?.id ?? '', {})
+  await attach
+  await vi.waitFor(() => {
+    expect(socket.sent.some((raw) => (JSON.parse(raw) as { type: string }).type === 'write')).toBe(
+      true
+    )
+  })
+  const before = socket.sent.length
+  const written = client.write('terminal-1', 'x')
+  await Promise.resolve()
+  const added = socket.sent
+    .slice(before)
+    .map((raw) => JSON.parse(raw) as { type: string; payload?: { data?: string } })
+  expect(added.filter((frame) => frame.type === 'write')).toEqual([])
+  await expect(written).resolves.toMatchObject({ success: true })
+
+  const frames = () =>
+    socket.sent.map(
+      (raw) => JSON.parse(raw) as { id: string; type: string; payload?: { data?: string } }
+    )
+  const replied = new Set<string>()
+  await vi.waitFor(() => {
+    for (const frame of frames()) {
+      if (frame.type !== 'write' || replied.has(frame.id)) continue
+      replied.add(frame.id)
+      socket.reply(frame.id, null)
+    }
+    expect(
+      frames()
+        .filter((frame) => frame.type === 'write')
+        .map((frame) => frame.payload?.data)
+    ).toEqual(['ls', ' -la\r', 'x'])
+  })
+
+  const held = client as unknown as { replayHeld: Set<string> }
+  await vi.waitFor(() => {
+    expect(held.replayHeld.has('terminal-1')).toBe(false)
+  })
+  socket.sent.length = 0
+  const pending = createWebCommandEditorTransport(client).submitCommand('terminal-1', 'echo hello')
+  await Promise.resolve()
+  expect(socket.sent).toHaveLength(1)
+  const frame = JSON.parse(socket.sent[0]) as { id: string }
+  socket.reply(frame.id, 'Accepted')
+  expect(await pending).toBe('Accepted')
+})
+
+it('refuses a non-u64 completion request before send', async () => {
+  const { client, internals, transport } = setup()
+  await client.connect()
+  readyForSession(internals)
+  const socket = FakeWebSocket.instances[0]
+  socket.sent.length = 0
+  const fakeInvoke = vi.mocked(invoke).mockReset()
+  const pending = transport.requestCompletion('terminal-1', { ...completion, bufferRevision: -1 })
+  if (socket.sent.length > 0) {
+    const frame = JSON.parse(socket.sent[0]) as { id: string }
+    socket.reply(frame.id, 'PreWrite')
+  }
+  expect(socket.sent).toEqual([])
+  expect(await pending).toEqual({ result: 'PreWrite' })
+  expect(
+    await createTauriTerminalApi().requestCompletion('terminal-1', { ...completion, cursor: 1.5 })
+  ).toEqual({ result: 'PreWrite' })
+  expect(fakeInvoke).not.toHaveBeenCalled()
 })
