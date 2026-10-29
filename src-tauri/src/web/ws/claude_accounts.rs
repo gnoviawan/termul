@@ -1,5 +1,5 @@
-//! Claude Account WS handlers: list the Accounts and their usage, and choose
-//! the Default or a Project Account. Adding, signing in, renaming, and
+//! Claude Account WS handlers: list the Accounts and their usage, choose the
+//! Default or a Project Account, and turn automatic switching on or off. Adding, signing in, renaming, and
 //! removing an Account stay on the host (desktop UI or
 //! `termul-server claude account`), because they
 //! start a browser login or delete login state on the host.
@@ -20,6 +20,15 @@ pub(super) struct SetProjectClaudeAccountPayload {
     /// `null` returns the Project to the Default Account.
     #[serde(default)]
     account_id: Option<String>,
+    /// Apply only while the Project still uses this Account.
+    #[serde(default)]
+    expected_account_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SetClaudeAutoSwitchPayload {
+    enabled: bool,
 }
 
 /// `list_claude_accounts` → the secret-free Account snapshot.
@@ -86,7 +95,9 @@ pub(super) async fn handle_set_default_claude_account(
     }
 }
 
-/// `set_project_claude_account { projectId, accountId | null }`.
+/// `set_project_claude_account { projectId, accountId | null, expectedAccountId? }`
+/// → `{ applied }`; `applied` is `false` when the Project no longer uses
+/// `expectedAccountId`.
 pub(super) async fn handle_set_project_claude_account(
     id: String,
     payload: &Value,
@@ -109,19 +120,52 @@ pub(super) async fn handle_set_project_claude_account(
         .set_project_account(
             &parsed.project_id,
             parsed.account_id.as_deref(),
+            parsed.expected_account_id.as_deref(),
             SignInCheck::Required,
         )
         .await
     {
-        Ok(()) => {
+        Ok(applied) => {
             info!(
                 project = %parsed.project_id,
                 account = parsed.account_id.as_deref().unwrap_or("default"),
+                applied,
                 "project Claude account set over ws"
+            );
+            WsReply::ok(id, Some(json!({ "applied": applied })))
+        }
+        Err(error) => choice_refused(id, error),
+    }
+}
+
+/// `set_claude_auto_switch { enabled }` → `{}`.
+pub(super) async fn handle_set_claude_auto_switch(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: SetClaudeAutoSwitchPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed set_claude_auto_switch payload (want enabled): {error}"),
+            )
+        }
+    };
+    match acp.claude_agent().set_auto_switch(parsed.enabled) {
+        Ok(()) => {
+            info!(
+                enabled = parsed.enabled,
+                "Claude automatic switching set over ws"
             );
             WsReply::ok(id, Some(json!({})))
         }
-        Err(error) => choice_refused(id, error),
+        Err(error) => {
+            warn!(error = %error, "set_claude_auto_switch failed");
+            WsReply::err(id, WsErrorCode::Unsupported, error)
+        }
     }
 }
 

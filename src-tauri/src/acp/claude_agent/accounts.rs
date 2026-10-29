@@ -143,15 +143,37 @@ impl ClaudeAgentService {
         store.set_default(id)
     }
 
+    pub fn set_auto_switch(&self, enabled: bool) -> Result<(), String> {
+        self.account_store()?.set_auto_switch(enabled)
+    }
+
     /// `account_id: None` returns the Project to the Default Account, so the
-    /// check probes the Default Account.
+    /// check probes the Default Account. `expected` makes the choice a
+    /// compare-and-set on the Account the Project uses; returns whether the
+    /// choice applied.
     pub async fn set_project_account(
         &self,
         project_id: &str,
         account_id: Option<&str>,
+        expected: Option<&str>,
         check: SignInCheck,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let store = self.account_store()?;
+        if let Some(expected) = expected {
+            // A stale expectation loses before the sign-in probe, so the losing
+            // client is not asked to sign in to an Account it no longer needs.
+            let snapshot = store.snapshot()?;
+            let current = snapshot
+                .project_profiles
+                .get(project_id.trim())
+                .unwrap_or(&snapshot.default_account_id);
+            if current != expected {
+                log::info!(
+                    "[claude-accounts] project profile unchanged: the project no longer uses the expected profile"
+                );
+                return Ok(false);
+            }
+        }
         if check == SignInCheck::Required {
             match account_id {
                 Some(id) => self.ensure_signed_in(store, id, Choice::Account).await?,
@@ -162,7 +184,7 @@ impl ClaudeAgentService {
                 }
             }
         }
-        store.set_project_account(project_id, account_id)
+        store.set_project_account(project_id, account_id, expected)
     }
 
     /// The spawn gate's rule, applied before an Account is chosen: only a

@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { createContext, forwardRef, useContext } from 'react'
 import { Check, X as XIcon } from '@/components/icons'
+import { FOCUS_RING_OVERLAY_CLASS } from '@/components/ui/panel-styles'
 import { Spinner } from '@/components/ui/spinner'
 import { EASE_OUT } from '@/lib/motion'
 import { cn } from '@/lib/utils'
@@ -153,6 +154,7 @@ export const TabChrome = forwardRef<HTMLDivElement, TabChromeProps>(function Tab
       className={cn(
         'group/tab relative flex h-8 min-w-[100px] max-w-[200px] shrink-0 cursor-pointer select-none items-center rounded-lg px-2.5',
         'transition-colors duration-150 ease-out',
+        FOCUS_RING_OVERLAY_CLASS,
         isActive
           ? 'text-foreground'
           : 'text-muted-foreground hover:bg-secondary hover:text-foreground',

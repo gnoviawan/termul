@@ -6,24 +6,25 @@ import { cn } from '@/lib/utils'
 
 /**
  * Filled primary chrome for `default` and `composer`.
- * Layered emboss, hover mix that keeps the hue, muted disabled fill.
+ * Per-theme emboss and hover/pressed fills (component-tokens.ts), muted
+ * disabled fill.
  * Send, stop, and launch use `composer`. Other primary actions use `default`.
  * One filled primary per view. The glyph is the only difference at the call site.
  */
 const primaryEmboss =
-  'bg-primary-fill text-primary-foreground active:scale-[0.96] motion-reduce:active:scale-100 transition-[scale,background-color,box-shadow] duration-150 ease-out hover:bg-[color-mix(in_oklch,oklch(var(--primary-fill))_85%,black)] disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-[0_1px_2px_oklch(0_0_0/0.22),0_4px_8px_oklch(0_0_0/0.16),inset_0_1px_0_oklch(1_0_0/0.28),inset_0_-1px_1px_oklch(0_0_0/0.16)] hover:shadow-[0_1px_2px_oklch(0_0_0/0.26),0_5px_10px_oklch(0_0_0/0.2),inset_0_1px_0_oklch(1_0_0/0.34),inset_0_-1px_1px_oklch(0_0_0/0.2)]'
+  'bg-primary-fill text-primary-foreground active:scale-[0.96] motion-reduce:active:scale-100 transition-[scale,background-color,box-shadow] duration-150 ease-out hover:bg-primary-fill-hover active:bg-primary-fill-active disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-emboss hover:shadow-emboss-hover'
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
   {
     variants: {
       variant: {
         default: primaryEmboss,
         destructive: 'bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90',
         outline:
-          'border border-input bg-background hover:bg-secondary hover:text-accent-foreground',
+          'border border-input bg-background hover:bg-secondary hover:text-ghost-hover-foreground',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
-        ghost: 'hover:bg-secondary hover:text-accent-foreground',
+        ghost: 'hover:bg-secondary hover:text-ghost-hover-foreground',
         link: 'text-primary underline-offset-4 hover:underline',
         composer: primaryEmboss
       },
@@ -70,7 +71,6 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
         {...props}
-        data-keep-shadow=""
         data-press-feedback={pressFeedback ?? (ownsPressScale ? 'off' : undefined)}
       />
     )

@@ -1,6 +1,7 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { useId, useState } from 'react'
 import { Pencil, Plus, Terminal, TerminalSquare, Trash2 } from '@/components/icons'
+import { SettingsEmptyState } from '@/components/settings/SettingsEmptyState'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { showUndoToast } from '@/components/settings/undo-toast'
@@ -97,14 +98,12 @@ export function TerminalProfilesSection({
   return (
     <SettingsSection id="terminal-profiles">
       {profiles.length === 0 ? (
-        <div className="flex flex-col items-center gap-1.5 rounded-lg border border-border bg-card px-6 py-8 text-center">
-          <Terminal size={20} className="mb-1 text-muted-foreground" />
-          <p className="text-sm font-medium text-foreground">No terminal profiles</p>
-          <p className="max-w-sm text-xs text-muted-foreground">
-            A profile opens a terminal with your shell, folder and variables in one step.
-          </p>
-          <div className="pt-2">{addButton}</div>
-        </div>
+        <SettingsEmptyState
+          icon={<Terminal size={20} />}
+          title="No terminal profiles"
+          description="A profile opens a terminal with your shell, folder and variables in one step."
+          action={addButton}
+        />
       ) : (
         <SettingsGroup
           title={profiles.length === 1 ? '1 profile' : `${profiles.length} profiles`}

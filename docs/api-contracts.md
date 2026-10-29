@@ -423,7 +423,8 @@ These are the `acp_*`, `claude_accounts_*`, `ws_channel_*` and `codex_cli_auth_s
 | `claude_accounts_rename` | Renames an Account. Desktop only. |
 | `claude_accounts_remove` | Removes an Account and returns the ids of the Projects that moved to the Default Account. Desktop only. |
 | `claude_accounts_set_default` | Chooses the Default Account. `/ws` equivalent: `set_default_claude_account`. |
-| `claude_accounts_set_project` | Chooses a Project's Account, or clears it with `null`. `/ws` equivalent: `set_project_claude_account`. |
+| `claude_accounts_set_project` | Chooses a Project's Account, or clears it with `null`. With `expectedAccountId`, applies only while the Project still uses that Account; returns whether it applied. `/ws` equivalent: `set_project_claude_account`. |
+| `claude_accounts_set_auto_switch` | Turns automatic switching at a usage limit on or off (default on). `/ws` equivalent: `set_claude_auto_switch`. |
 | `acp_history_list` | Returns `{sessions, legacyImportComplete}`. The sessions come from the host's durable session index (`SessionPersistence`) and are empty when the host opened no persistence. |
 | `acp_history_get` | Returns one session's `{metadata, messages, toolCalls?}` payload from the host store, or `null` when absent. |
 | `acp_history_get_tail` | Same as `acp_history_get` for the last `limit` messages (default 50, clamped to 1-500) and their tool calls. |
@@ -487,7 +488,8 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `list_claude_accounts` | read | Returns the Claude Accounts snapshot. |
 | `list_claude_usage` | read | Returns Account usage windows. The host caches reads for 5 minutes. |
 | `set_default_claude_account` | idempotent | Chooses the Default Account. |
-| `set_project_claude_account` | idempotent | Chooses a Project's Account, or clears it with `null`. |
+| `set_project_claude_account` | idempotent | Chooses a Project's Account, or clears it with `null`. With `expectedAccountId`, applies only while the Project still uses that Account; replies `{ applied }`. |
+| `set_claude_auto_switch` | idempotent | Turns automatic switching at a usage limit on or off (default on). |
 | `add_project` | idempotent | Adds a project to the host registry. See "Project registry commands". |
 | `update_project` | idempotent | Changes a project's name, color, archive flag or root. See "Project registry commands". |
 | `remove_project` | idempotent | Removes a project. See "Project registry commands". |

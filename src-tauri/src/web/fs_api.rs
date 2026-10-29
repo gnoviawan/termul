@@ -26,7 +26,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+mod media_raw;
 mod precondition;
+pub use media_raw::raw;
 pub(crate) use precondition::Expected;
 pub(crate) use precondition::{sha256_hex, write_checked, write_unchecked, CheckedWrite};
 

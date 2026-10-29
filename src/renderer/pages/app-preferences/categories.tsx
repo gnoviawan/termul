@@ -16,15 +16,10 @@ import {
   TerminalSquare
 } from '@/components/icons'
 import { BROWSER_ANCHORS } from '@/components/settings/browser-policy-copy'
+import { rowId } from '@/components/settings/row-id'
 import type { SettingsCategory } from '@/components/settings/SettingsLayout'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
 import { isTauriContext } from '@/lib/tauri-runtime'
-
-/**
- * Row ids for search jumps. A row's DOM id is `setting-<key>`; its control's
- * id is `<key>` (the row label's `htmlFor`).
- */
-export const rowId = (key: string): string => `setting-${key}`
 
 // The whole "Updates" page is desktop-only (issue #843): the web client
 // updates with the server, so the updater entry points are hidden there.

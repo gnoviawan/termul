@@ -19,7 +19,8 @@ const { api, toast } = vi.hoisted(() => ({
     rename: vi.fn(),
     remove: vi.fn(),
     setDefault: vi.fn(),
-    setProjectAccount: vi.fn()
+    setProjectAccount: vi.fn(),
+    setAutoSwitch: vi.fn()
   },
   toast: { success: vi.fn(), error: vi.fn() }
 }))
@@ -38,7 +39,8 @@ const SNAPSHOT: ClaudeAccountsSnapshot = {
     { id: 'ab12', name: 'Work', builtin: false, signedIn: false }
   ],
   defaultAccountId: 'default',
-  projectAccounts: { office: 'ab12' }
+  projectAccounts: { office: 'ab12' },
+  autoSwitch: true
 }
 
 const window = (kind: string, percent: number, scope: string | null = null) => ({
@@ -88,6 +90,7 @@ beforeEach(() => {
   api.cancelLogin.mockResolvedValue(true)
   api.remove.mockResolvedValue(['office'])
   api.setDefault.mockResolvedValue(undefined)
+  api.setAutoSwitch.mockResolvedValue(undefined)
   api.add.mockResolvedValue({ id: 'cd34', name: 'Side', createdAt: 1 })
 })
 
@@ -226,6 +229,30 @@ describe('ProviderSettings', () => {
     expect(screen.getByText('1 account')).toBeInTheDocument()
   })
 
+  it('turns automatic switching off on the host and shows the saved state', async () => {
+    render(<ProviderSettings />)
+    const toggle = await screen.findByRole('switch', { name: 'Switch accounts automatically' })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+    expect(toggle).toHaveAccessibleDescription(
+      "When a chat reaches its account's limit, continue it on the signed-in account with the most room."
+    )
+    api.list.mockResolvedValue({ ...SNAPSHOT, autoSwitch: false })
+    fireEvent.click(toggle)
+    expect(api.setAutoSwitch).toHaveBeenCalledWith(false)
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+  })
+
+  it('says why automatic switching did not change and shows the host state', async () => {
+    api.setAutoSwitch.mockRejectedValue(new Error('disk full'))
+    render(<ProviderSettings />)
+    const toggle = await screen.findByRole('switch', { name: 'Switch accounts automatically' })
+    fireEvent.click(toggle)
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not change automatic switching: disk full')
+    )
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+  })
+
   it('on web shows the accounts and the host hint, but no add or sign-in', async () => {
     api.canManageAccounts.mockReturnValue(false)
     render(<ProviderSettings />)
@@ -233,6 +260,7 @@ describe('ProviderSettings', () => {
     expect(screen.queryByRole('button', { name: /add account/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
     expect(screen.getByText('termul-server claude account')).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Switch accounts automatically' })).toBeEnabled()
     openMenu('Work')
     expect(await screen.findByRole('menuitem', { name: /Make default/ })).toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: 'Remove' })).not.toBeInTheDocument()

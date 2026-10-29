@@ -167,6 +167,7 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "list_claude_usage" => handle_list_claude_usage(id, &req.payload, acp).await,
         "set_default_claude_account" => handle_set_default_claude_account(id, &req.payload, acp).await,
         "set_project_claude_account" => handle_set_project_claude_account(id, &req.payload, acp).await,
+        "set_claude_auto_switch" => handle_set_claude_auto_switch(id, &req.payload, acp).await,
         // CAP-6 / Story 8: host-owned ACP catalog resolution. The catalog
         // carries the host's OS/arch/runtime availability + per-agent
         // resolved `SupportedAcpAgentStatus`. The web client never probes

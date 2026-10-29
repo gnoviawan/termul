@@ -1,0 +1,23 @@
+/* Production stylesheet: tokens, theme variables, utilities and fonts. */
+@import "../../src/renderer/index.css";
+
+/* Scan the canvas sources for Tailwind classes too. */
+@source "./";
+
+/* index.css points Paper Mono at a path relative to itself. Inlined here, that
+   path no longer resolves, so declare the same face again from this file.
+   Identical descriptors: the later face wins and the broken URL is never fetched. */
+@font-face {
+  font-family: "Paper Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("../../src/renderer/assets/fonts/paper-mono/PaperMono[wght].woff2") format("woff2");
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}

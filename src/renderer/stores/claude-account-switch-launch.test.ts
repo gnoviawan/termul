@@ -112,6 +112,7 @@ beforeEach(async () => {
   })
   host.setProjectAccount.mockImplementation(async (_projectId: string, accountId: string) => {
     host.projectAccount = accountId
+    return true
   })
   useProjectStore.setState({ projects: [{ id: 'office', name: 'Office', path: '/work' } as never] })
   useAcpStore.setState({

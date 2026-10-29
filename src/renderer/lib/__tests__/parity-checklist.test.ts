@@ -1345,6 +1345,42 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  describe('Media bytes parity (issue #1535)', () => {
+    const Facade = join(LIB_DIR, 'media-bytes-api.ts')
+    const SrcTauri = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+    const RouterRust = join(SrcTauri, 'web', 'router', 'mod.rs')
+    const RawRouteRust = join(SrcTauri, 'web', 'fs_api', 'media_raw.rs')
+    const CommandsRust = join(SrcTauri, 'commands', 'misc.rs')
+    const LibRust = join(SrcTauri, 'lib.rs')
+
+    it('media-bytes-api.ts branches on isTauriContext() between the command and /fs/raw', () => {
+      const content = readFileSync(Facade, 'utf-8')
+      expect(content).toMatch(/isTauriContext\(\)/)
+      expect(content).toMatch(/invoke<ArrayBuffer>\('read_media_bytes'/)
+      expect(content).toMatch(/\/fs\/raw\?path=/)
+      expect(content).toMatch(/authHeader\(\)/)
+      expect(content).toMatch(/boundedFsRequest\(/)
+    })
+
+    it('router registers /fs/raw in BOTH router variants', () => {
+      const content = readFileSync(RouterRust, 'utf-8')
+      const occurrences = (content.match(/"\/fs\/raw"/g) ?? []).length
+      expect(occurrences, 'both router() and router_with_static() register the route').toBe(2)
+    })
+
+    it('both transports read through the shared media_bytes service', () => {
+      const route = readFileSync(RawRouteRust, 'utf-8')
+      expect(route).toMatch(/pub async fn raw\b/)
+      expect(route).toMatch(/resolve_request_path\(/)
+      expect(route).toMatch(/read_media\(/)
+      expect(route).toMatch(/tracing::warn!/)
+      const command = readFileSync(CommandsRust, 'utf-8')
+      expect(command).toMatch(/pub async fn read_media_bytes\b/)
+      expect(command).toMatch(/read_media\(/)
+      expect(readFileSync(LibRust, 'utf-8')).toMatch(/commands::read_media_bytes\b/)
+    })
+  })
+
   // Global right-click context menu + production devtools block. Pins that:
   //   - GlobalContextMenu wraps BOTH roots (TauriApp.tsx + App.tsx) for parity.
   //   - The devtools-shortcut blocker is desktop-only + PROD-gated (TauriApp, not App).
@@ -2154,11 +2190,27 @@ describe('Claude Accounts parity (ADR-0004)', () => {
       'list_claude_accounts',
       'list_claude_usage',
       'set_default_claude_account',
-      'set_project_claude_account'
+      'set_project_claude_account',
+      'set_claude_auto_switch'
     ]) {
       expect(wsTransport).toContain(`'${request}'`)
       expect(dispatch).toContain(`"${request}" => handle_${request}`)
     }
+  })
+
+  it('the automatic-switching setter and the project compare-and-set exist on both carriers', () => {
+    // The web client may turn automatic switching on or off, like it may
+    // choose the Default Account. The invoke carrier mirrors the /ws handlers.
+    const tauri = read('acp', 'commands', 'claude_accounts.rs')
+    const ws = read('web', 'ws', 'claude_accounts.rs')
+    expect(read('lib.rs')).toContain('acp::commands::claude_accounts_set_auto_switch')
+    expect(tauri).toMatch(/fn claude_accounts_set_auto_switch\([^)]*enabled: bool/s)
+    expect(ws).toMatch(/set_auto_switch\(parsed\.enabled\)/)
+    for (const source of [tauri, ws]) {
+      expect(source).toMatch(/expected_account_id/)
+    }
+    expect(facade).not.toMatch(/desktopOnly\('setAutoSwitch'/)
+    expect(wsTransport).toMatch(/\.\.\.\(expectedAccountId \? \{ expectedAccountId \} : \{\}\)/)
   })
 
   it('add, sign-in, rename and remove are desktop-only and gated in the facade', () => {

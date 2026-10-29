@@ -237,8 +237,17 @@ export interface AcpTransport {
   /** Usage of every Account; host-cached 5 min, `force` reuses reads under 60 s. */
   listClaudeUsage(force?: boolean): Promise<ClaudeAccountUsage[]>
   setDefaultClaudeAccount(accountId: string): Promise<void>
-  /** `null` returns the Project to the Default Account. */
-  setProjectClaudeAccount(projectId: string, accountId: string | null): Promise<void>
+  /**
+   * `null` returns the Project to the Default Account. With
+   * `expectedAccountId` the host applies the choice only while the Project
+   * still uses that Account. Resolves whether the choice applied.
+   */
+  setProjectClaudeAccount(
+    projectId: string,
+    accountId: string | null,
+    expectedAccountId?: string
+  ): Promise<boolean>
+  setClaudeAutoSwitch(enabled: boolean): Promise<void>
   /** `projectId` selects the Claude Account of a managed Claude agent. */
   spawnAgent(
     config: AgentConfig,

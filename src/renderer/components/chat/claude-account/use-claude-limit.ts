@@ -22,6 +22,9 @@ const WINDOW_NAMES: Record<string, string> = {
 export const windowName = (limit: ClaudeRateLimit): string =>
   (limit.kind && WINDOW_NAMES[limit.kind]) || 'usage'
 
+export const formatClock = (ms: number): string =>
+  new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+
 /** Near the limit: a calm warning from 80%. */
 export const isNearLimit = (limit: ClaudeRateLimit): boolean =>
   limit.status === 'allowed_warning' || (limit.status === 'allowed' && (limit.percent ?? 0) >= 80)
@@ -72,6 +75,19 @@ export const useClaudeResumeStore = create<ResumeState>((set, get) => ({
   }
 }))
 
+/**
+ * Name of the Account each chat is switching to, from the card or from
+ * automatic switching, so the card shows the switch wherever it started.
+ */
+export const useClaudeSwitchingStore = create<Record<string, string>>(() => ({}))
+
+export function setSwitchingTo(sessionId: string, accountName: string | null): void {
+  useClaudeSwitchingStore.setState((s) => {
+    const { [sessionId]: _done, ...rest } = s
+    return accountName ? { ...rest, [sessionId]: accountName } : rest
+  }, true)
+}
+
 /** Dismissed notices, by chat and reset time, so a new window shows again. */
 const dismissed = new Set<string>()
 
@@ -84,7 +100,7 @@ export interface ClaudeLimit {
   reset: string | null
   dismiss: () => void
   switchTo: (target: AccountChoice) => Promise<void>
-  /** Id of the Account a switch is in progress to. */
+  /** Name of the Account a switch is in progress to. */
   switchingTo: string | null
 }
 
@@ -95,7 +111,7 @@ export interface ClaudeLimit {
 export function useClaudeLimit(sessionId: string): ClaudeLimit | null {
   const ctx = useChatClaudeAccount(sessionId)
   const cancelResume = useClaudeResumeStore((s) => s.cancel)
-  const [switchingTo, setSwitchingTo] = useState<string | null>(null)
+  const switchingTo = useClaudeSwitchingStore((s) => s[sessionId] ?? null)
   const [, rerender] = useState(0)
   if (!ctx?.rateLimit) return null
 
@@ -106,11 +122,11 @@ export function useClaudeLimit(sessionId: string): ClaudeLimit | null {
   const projectId = ctx.projectId
   const reloadAccounts = ctx.accounts.reload
   async function switchTo(target: AccountChoice): Promise<void> {
-    setSwitchingTo(target.account.id)
+    setSwitchingTo(sessionId, target.account.name)
     cancelResume(sessionId)
     try {
       await switchProjectClaudeAccount(projectId, target.account.id, {
-        continueSessionId: limit.status === 'rejected' ? sessionId : undefined
+        continueSessionIds: limit.status === 'rejected' ? [sessionId] : undefined
       })
       await reloadAccounts()
       toast.success(`Switched to ${target.account.name}`)
@@ -118,7 +134,7 @@ export function useClaudeLimit(sessionId: string): ClaudeLimit | null {
       toastAccountChoiceError(err, 'Could not switch')
       void reloadAccounts()
     } finally {
-      setSwitchingTo(null)
+      setSwitchingTo(sessionId, null)
     }
   }
 

@@ -22,12 +22,20 @@ export function rowSize(touch: boolean): string {
   return touch ? 'min-h-11 py-2.5' : 'min-h-8 py-1.5'
 }
 
-export function TabGlyph({ tab }: { tab: AgentTab }): React.JSX.Element {
+export function TabGlyph({
+  tab,
+  colorClassName
+}: {
+  tab: AgentTab
+  /** Default: the glyph's own `text-foreground/80`. Tabs pass `text-current`. */
+  colorClassName?: string
+}): React.JSX.Element {
   return (
     <EntryGlyph
       config={tab.config}
       templateId={tab.entry?.agent.id ?? tab.config?.templateId}
       name={tab.name}
+      colorClassName={colorClassName}
     />
   )
 }

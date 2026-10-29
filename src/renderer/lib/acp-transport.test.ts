@@ -503,6 +503,20 @@ class FakeWebSocket {
       })
       return
     }
+    // Claude Account choice: an `expectedAccountId` of `stale` loses the
+    // compare-and-set, like a project another client already switched.
+    if (req.type === 'set_project_claude_account' || req.type === 'set_claude_auto_switch') {
+      const payload = req.payload as { expectedAccountId?: string }
+      this.emitReply({
+        id: req.id,
+        ok: true,
+        payload:
+          req.type === 'set_project_claude_account'
+            ? { applied: payload.expectedAccountId !== 'stale' }
+            : {}
+      })
+      return
+    }
     if (req.type === 'kill_agent') {
       const payload = req.payload as { agentId?: string }
       if (!payload.agentId) {
@@ -830,6 +844,33 @@ describe('WsAcpTransport', () => {
         { type: 'update_project', payload: { projectId: 'p2', isArchived: true } },
         { type: 'update_project', payload: { projectId: 'p2', isArchived: true, cascade: true } },
         { type: 'set_default_project', payload: { projectId: 'p3' } }
+      ])
+      transport.dispose()
+    })
+
+    it('sends the Claude account choice with its compare-and-set and reads whether it applied', async () => {
+      const { transport, socket } = await connected()
+
+      await expect(transport.setProjectClaudeAccount('p1', 'ab12')).resolves.toBe(true)
+      await expect(transport.setProjectClaudeAccount('p1', 'ab12', 'default')).resolves.toBe(true)
+      await expect(transport.setProjectClaudeAccount('p1', null, 'stale')).resolves.toBe(false)
+      await transport.setClaudeAutoSwitch(false)
+
+      const sent = socket()
+        .sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
+        .filter((r) => r.type.includes('claude'))
+        .map(({ type, payload }) => ({ type, payload }))
+      expect(sent).toEqual([
+        { type: 'set_project_claude_account', payload: { projectId: 'p1', accountId: 'ab12' } },
+        {
+          type: 'set_project_claude_account',
+          payload: { projectId: 'p1', accountId: 'ab12', expectedAccountId: 'default' }
+        },
+        {
+          type: 'set_project_claude_account',
+          payload: { projectId: 'p1', accountId: null, expectedAccountId: 'stale' }
+        },
+        { type: 'set_claude_auto_switch', payload: { enabled: false } }
       ])
       transport.dispose()
     })

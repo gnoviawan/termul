@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { remarkTermulImages, resolveLocalImagePath, termulImageTag } from './chat-markdown-images'
+import { remarkTermulMedia, resolveLocalImagePath, termulMediaTag } from './chat-markdown-images'
 
 describe('chat markdown images', () => {
-  it('rewrites non-https image nodes into termul-image raw HTML', () => {
+  it('rewrites non-https image nodes into termul-media raw HTML', () => {
     const tree = {
       type: 'root',
       children: [
@@ -17,44 +17,221 @@ describe('chat markdown images', () => {
       ]
     }
 
-    remarkTermulImages()(tree)
+    remarkTermulMedia()(tree)
 
     const children = tree.children[0].children as Array<{ type: string; value?: string }>
     expect(children).toHaveLength(3)
     expect(children[0]).toEqual({
       type: 'html',
-      value: '<termul-image data-url="data:image/png;base64,QUJD" data-alt="tiny"></termul-image>'
+      value: '<termul-media data-url="data:image/png;base64,QUJD" data-alt="tiny"></termul-media>'
     })
     expect(children[1]).toEqual({
       type: 'html',
-      value: '<termul-image data-url="file:///E:/proj/chart.png" data-alt="chart"></termul-image>'
+      value: '<termul-media data-url="file:///E:/proj/chart.png" data-alt="chart"></termul-media>'
     })
     expect(children[2]).toEqual({
       type: 'html',
-      value: '<termul-image data-url="output/chart.png" data-alt="rel"></termul-image>'
+      value: '<termul-media data-url="output/chart.png" data-alt="rel"></termul-media>'
     })
   })
 
-  it('leaves http and https images untouched', () => {
+  it('rewrites https images too, so every markdown image gets the lightbox', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [{ type: 'image', url: 'https://example.com/clip.mp4', alt: 'clip' }]
+        }
+      ]
+    }
+
+    remarkTermulMedia()(tree)
+
+    expect(tree.children[0].children).toEqual([
+      {
+        type: 'html',
+        value:
+          '<termul-media data-url="https://example.com/clip.mp4" data-alt="clip"></termul-media>'
+      }
+    ])
+  })
+
+  it('keeps media links inline and previews them after their paragraph', () => {
+    const link = (url: string, text: string) => ({
+      type: 'link',
+      url,
+      children: [{ type: 'text', value: text }]
+    })
     const tree = {
       type: 'root',
       children: [
         {
           type: 'paragraph',
           children: [
-            { type: 'image', url: 'https://example.com/logo.png', alt: 'logo' },
-            { type: 'image', url: 'http://example.com/logo.png', alt: 'logo' }
+            { type: 'text', value: 'Watch ' },
+            link('out/shot.png', 'the shot'),
+            { type: 'text', value: ' then ' },
+            link('file:///tmp/my%20clip.mp4', 'demo'),
+            link('out/shot.png', 'again'),
+            link('src/app.ts', 'code'),
+            link('https://example.com/clip.mp4', 'remote')
           ]
         }
       ]
     }
 
-    remarkTermulImages()(tree)
+    remarkTermulMedia()(tree)
 
-    const children = tree.children[0].children as Array<{ type: string; url?: string }>
-    expect(children).toHaveLength(2)
-    expect(children[0]).toEqual({ type: 'image', url: 'https://example.com/logo.png', alt: 'logo' })
-    expect(children[1]).toEqual({ type: 'image', url: 'http://example.com/logo.png', alt: 'logo' })
+    expect(tree.children).toEqual([
+      {
+        type: 'paragraph',
+        children: [
+          { type: 'text', value: 'Watch ' },
+          link('out/shot.png', 'the shot'),
+          { type: 'text', value: ' then ' },
+          link('file:///tmp/my%20clip.mp4', 'demo'),
+          link('out/shot.png', 'again'),
+          link('src/app.ts', 'code'),
+          link('https://example.com/clip.mp4', 'remote')
+        ]
+      },
+      {
+        type: 'html',
+        value:
+          '<termul-media data-url="out/shot.png" data-alt="the shot" data-link-preview="true"></termul-media>'
+      },
+      {
+        type: 'html',
+        value:
+          '<termul-media data-url="file:///tmp/my%20clip.mp4" data-alt="demo" data-link-preview="true"></termul-media>'
+      }
+    ])
+  })
+
+  it('previews a media link in a list item after its paragraph inside the item', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'list',
+          children: [
+            {
+              type: 'listItem',
+              children: [
+                {
+                  type: 'paragraph',
+                  children: [
+                    { type: 'link', url: 'clip.mp4', children: [{ type: 'text', value: 'clip' }] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    remarkTermulMedia()(tree)
+
+    expect(tree.children[0].children[0].children).toEqual([
+      {
+        type: 'paragraph',
+        children: [{ type: 'link', url: 'clip.mp4', children: [{ type: 'text', value: 'clip' }] }]
+      },
+      {
+        type: 'html',
+        value:
+          '<termul-media data-url="clip.mp4" data-alt="clip" data-link-preview="true"></termul-media>'
+      }
+    ])
+  })
+
+  it('previews a reference-style media link from its definition', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [
+            {
+              type: 'linkReference',
+              identifier: 'video',
+              children: [{ type: 'text', value: 'clip' }]
+            }
+          ]
+        },
+        { type: 'definition', identifier: 'video', url: 'out/clip.mp4' }
+      ]
+    }
+
+    remarkTermulMedia()(tree)
+
+    expect(tree.children[1]).toEqual({
+      type: 'html',
+      value:
+        '<termul-media data-url="out/clip.mp4" data-alt="clip" data-link-preview="true"></termul-media>'
+    })
+  })
+
+  it('previews a media link without its query or fragment', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [
+            { type: 'link', url: 'clip.mp4#details', children: [{ type: 'text', value: 'clip' }] }
+          ]
+        }
+      ]
+    }
+
+    remarkTermulMedia()(tree)
+
+    expect(tree.children[1]).toEqual({
+      type: 'html',
+      value:
+        '<termul-media data-url="clip.mp4" data-alt="clip" data-link-preview="true"></termul-media>'
+    })
+  })
+
+  it('leaves a link that wraps an image as a link around the image', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [
+            {
+              type: 'link',
+              url: 'out/big.png',
+              children: [{ type: 'image', url: 'out/thumb.png', alt: 'thumb' }]
+            }
+          ]
+        }
+      ]
+    }
+
+    remarkTermulMedia()(tree)
+
+    expect(tree.children).toEqual([
+      {
+        type: 'paragraph',
+        children: [
+          {
+            type: 'link',
+            url: 'out/big.png',
+            children: [
+              {
+                type: 'html',
+                value: '<termul-media data-url="out/thumb.png" data-alt="thumb"></termul-media>'
+              }
+            ]
+          }
+        ]
+      }
+    ])
   })
 
   it('rewrites empty-destination image nodes', () => {
@@ -71,23 +248,23 @@ describe('chat markdown images', () => {
       ]
     }
 
-    remarkTermulImages()(tree)
+    remarkTermulMedia()(tree)
 
     const children = tree.children[0].children as Array<{ type: string; value?: string }>
     expect(children).toHaveLength(2)
     expect(children[0]).toEqual({
       type: 'html',
-      value: '<termul-image data-url="" data-alt=""></termul-image>'
+      value: '<termul-media data-url="" data-alt=""></termul-media>'
     })
     expect(children[1]).toEqual({
       type: 'html',
-      value: '<termul-image data-url="   " data-alt="blankish"></termul-image>'
+      value: '<termul-media data-url="   " data-alt="blankish"></termul-media>'
     })
   })
 
   it('escapes url and alt in the emitted tag', () => {
-    expect(termulImageTag('a&b<c>.png', 'alt "&" text')).toBe(
-      '<termul-image data-url="a&amp;b&lt;c&gt;.png" data-alt="alt &quot;&amp;&quot; text"></termul-image>'
+    expect(termulMediaTag('a&b<c>.png', 'alt "&" text')).toBe(
+      '<termul-media data-url="a&amp;b&lt;c&gt;.png" data-alt="alt &quot;&amp;&quot; text"></termul-media>'
     )
   })
 
@@ -115,7 +292,7 @@ describe('chat markdown images', () => {
       ]
     }
 
-    remarkTermulImages()(tree)
+    remarkTermulMedia()(tree)
 
     const listItem = tree.children[0]
     const paragraph = listItem.children[0]
@@ -123,11 +300,11 @@ describe('chat markdown images', () => {
     expect(paragraph.children[0]).toEqual({ type: 'text', value: 'see ' })
     expect(link.children[0]).toEqual({
       type: 'html',
-      value: '<termul-image data-url="blob:https://x/1" data-alt="linked"></termul-image>'
+      value: '<termul-media data-url="blob:https://x/1" data-alt="linked"></termul-media>'
     })
     expect(listItem.children[1]).toEqual({
       type: 'html',
-      value: '<termul-image data-url="data:image/gif;base64,QQ" data-alt=""></termul-image>'
+      value: '<termul-media data-url="data:image/gif;base64,QQ" data-alt=""></termul-media>'
     })
   })
 

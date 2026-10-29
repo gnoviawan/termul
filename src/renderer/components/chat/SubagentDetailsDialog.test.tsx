@@ -11,15 +11,15 @@ import {
 import { readOverlaySentinelDepth, useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { SubagentDetailsDialog } from './SubagentDetailsDialog'
 
-const { readAttachmentBytesMock, isTauriContextMock } = vi.hoisted(() => ({
-  readAttachmentBytesMock: vi.fn(),
+const { readMediaBytesMock, isTauriContextMock } = vi.hoisted(() => ({
+  readMediaBytesMock: vi.fn(),
   isTauriContextMock: vi.fn(() => false)
 }))
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
-vi.mock('@/lib/attachment-api', () => ({
-  readAttachmentBytes: (...args: unknown[]) => readAttachmentBytesMock(...args)
+vi.mock('@/lib/media-bytes-api', () => ({
+  readMediaBytes: (...args: unknown[]) => readMediaBytesMock(...args)
 }))
 
 const { openFilePathMock } = vi.hoisted(() => ({
@@ -141,12 +141,17 @@ describe('SubagentDetailsDialog agent prose', () => {
 
   beforeEach(() => {
     isTauriContextMock.mockReturnValue(true)
-    readAttachmentBytesMock.mockReset()
-    readAttachmentBytesMock.mockResolvedValue(new Uint8Array([65, 66, 67]))
+    readMediaBytesMock.mockReset()
+    readMediaBytesMock.mockResolvedValue({ success: true, data: new Blob(['ABC']) })
+    ;(URL as unknown as { createObjectURL: () => string }).createObjectURL = () =>
+      'blob:termul/chart'
+    ;(URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = () => {}
   })
 
   afterEach(() => {
     isTauriContextMock.mockReturnValue(false)
+    delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL
+    delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL
   })
 
   it.each([
@@ -183,10 +188,10 @@ describe('SubagentDetailsDialog agent prose', () => {
     await waitFor(() => {
       expect(within(dialog).getByRole('img', { name: 'chart' })).toHaveAttribute(
         'src',
-        'data:image/png;base64,QUJD'
+        'blob:termul/chart'
       )
     })
-    expect(readAttachmentBytesMock).toHaveBeenCalledWith('/proj/out/chart.png')
+    expect(readMediaBytesMock).toHaveBeenCalledWith('/proj/out/chart.png')
   })
 })
 

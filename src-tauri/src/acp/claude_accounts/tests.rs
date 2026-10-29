@@ -87,7 +87,8 @@ fn a_project_uses_its_account_and_others_use_the_default() {
     let s = store(&f);
     let work = s.add("Work").unwrap();
     let personal = s.add("Personal").unwrap();
-    s.set_project_account("office", Some(&work.id)).unwrap();
+    s.set_project_account("office", Some(&work.id), None)
+        .unwrap();
     s.set_default(&personal.id).unwrap();
 
     let office = s.resolve(Some("office"));
@@ -99,8 +100,53 @@ fn a_project_uses_its_account_and_others_use_the_default() {
     assert_eq!(other.account_id, personal.id);
     assert_eq!(s.resolve(None).account_id, personal.id);
 
-    s.set_project_account("office", None).unwrap();
+    s.set_project_account("office", None, None).unwrap();
     assert_eq!(s.resolve(Some("office")).account_id, personal.id);
+}
+
+#[test]
+fn an_expected_account_applies_the_choice_only_while_the_project_uses_it() {
+    let f = fixture();
+    let s = store(&f);
+    let work = s.add("Work").unwrap();
+    let personal = s.add("Personal").unwrap();
+    // The project follows the default, so the default is the account it uses.
+    assert!(s
+        .set_project_account("office", Some(&work.id), Some(BUILTIN_ACCOUNT_ID))
+        .unwrap());
+    assert_eq!(s.resolve(Some("office")).account_id, work.id);
+    // A second client that saw the same limit loses and changes nothing.
+    assert!(!s
+        .set_project_account("office", Some(&personal.id), Some(BUILTIN_ACCOUNT_ID))
+        .unwrap());
+    assert_eq!(s.resolve(Some("office")).account_id, work.id);
+    assert!(s
+        .set_project_account("office", None, Some(&work.id))
+        .unwrap());
+    assert_eq!(s.resolve(Some("office")).account_id, BUILTIN_ACCOUNT_ID);
+    // Without an expected account the choice always applies.
+    assert!(s
+        .set_project_account("office", Some(&personal.id), None)
+        .unwrap());
+    assert_eq!(s.resolve(Some("office")).account_id, personal.id);
+}
+
+#[test]
+fn automatic_switching_defaults_on_and_persists_when_turned_off() {
+    let f = fixture();
+    assert!(store(&f).snapshot().unwrap().auto_switch);
+    fs::create_dir_all(&f.state).unwrap();
+    fs::write(
+        f.state.join("claude-accounts.json"),
+        br#"{"version":1,"accounts":[],"defaultAccountId":"default"}"#,
+    )
+    .unwrap();
+    assert!(store(&f).snapshot().unwrap().auto_switch);
+    store(&f).set_auto_switch(false).unwrap();
+    assert!(!store(&f).snapshot().unwrap().auto_switch);
+    let file: serde_json::Value =
+        serde_json::from_slice(&fs::read(f.state.join("claude-accounts.json")).unwrap()).unwrap();
+    assert_eq!(file["autoSwitch"], false);
 }
 
 #[test]
@@ -108,8 +154,8 @@ fn set_rejects_unknown_accounts_and_empty_projects() {
     let f = fixture();
     let s = store(&f);
     assert!(s.set_default("abc123").is_err());
-    assert!(s.set_project_account("p1", Some("abc123")).is_err());
-    assert!(s.set_project_account("  ", None).is_err());
+    assert!(s.set_project_account("p1", Some("abc123"), None).is_err());
+    assert!(s.set_project_account("  ", None, None).is_err());
 }
 
 #[test]
@@ -117,7 +163,8 @@ fn remove_moves_projects_back_and_keeps_shared_data() {
     let f = fixture();
     let s = store(&f);
     let work = s.add("Work").unwrap();
-    s.set_project_account("office", Some(&work.id)).unwrap();
+    s.set_project_account("office", Some(&work.id), None)
+        .unwrap();
     s.set_default(&work.id).unwrap();
     fs::write(f.shared.join("projects").join("keep.jsonl"), b"x").unwrap();
     let dir = s.config_dir(&work.id).unwrap();

@@ -128,6 +128,7 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("list_claude_usage", CommandClass::read()),
     ("set_default_claude_account", CommandClass::idempotent()),
     ("set_project_claude_account", CommandClass::idempotent()),
+    ("set_claude_auto_switch", CommandClass::idempotent()),
     ("kill_agent", CommandClass::idempotent()),
     ("list_agents", CommandClass::read()),
     ("authenticate", CommandClass::read()),

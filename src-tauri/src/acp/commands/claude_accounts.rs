@@ -84,14 +84,30 @@ pub async fn claude_accounts_set_default(
         .await
 }
 
+/// With `expected_account_id`, the choice applies only while the Project still
+/// uses that Account. Returns whether it applied.
 #[tauri::command]
 pub async fn claude_accounts_set_project(
     service: State<'_, Arc<ClaudeAgentService>>,
     project_id: String,
     account_id: Option<String>,
-) -> Result<(), String> {
+    expected_account_id: Option<String>,
+) -> Result<bool, String> {
     let service = Arc::clone(service.inner());
     service
-        .set_project_account(&project_id, account_id.as_deref(), SignInCheck::Required)
+        .set_project_account(
+            &project_id,
+            account_id.as_deref(),
+            expected_account_id.as_deref(),
+            SignInCheck::Required,
+        )
         .await
+}
+
+#[tauri::command]
+pub fn claude_accounts_set_auto_switch(
+    service: State<'_, Arc<ClaudeAgentService>>,
+    enabled: bool,
+) -> Result<(), String> {
+    service.set_auto_switch(enabled)
 }

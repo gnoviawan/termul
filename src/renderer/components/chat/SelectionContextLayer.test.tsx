@@ -72,6 +72,17 @@ describe('SelectionContextLayer', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Add to context' })).toBeNull())
   })
 
+  it('keeps the floating button opaque on hover (no translucent hover fill)', () => {
+    renderLayer()
+    select('prose')
+    const button = screen.getByRole('button', { name: 'Add to context' })
+    expect(button).toHaveClass('bg-popover')
+    expect(button).toHaveClass(
+      'hover:bg-[color-mix(in_oklab,oklch(var(--popover)),oklch(var(--foreground))_6%)]'
+    )
+    expect(button.className).not.toMatch(/hover:bg-[a-z-]+\/|hover:bg-transparent|hover:opacity-/)
+  })
+
   it('keeps the button mounted while it is being pressed, so the click lands', () => {
     const onAdd = renderLayer()
     select('prose')
