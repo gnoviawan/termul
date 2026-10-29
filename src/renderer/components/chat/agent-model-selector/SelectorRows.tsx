@@ -98,12 +98,15 @@ export function ModelRow({
 export function AgentRow({
   tab,
   badge,
+  highlighted = false,
   disabled,
   touch,
   onPick
 }: {
   tab: AgentTab
   badge: string | null
+  /** The first search result while typing (v2): Enter in search picks it. */
+  highlighted?: boolean
   disabled: boolean
   touch: boolean
   onPick: () => void
@@ -115,8 +118,9 @@ export function AgentRow({
       disabled={disabled}
       data-press-feedback="off"
       data-testid={`selector-agent-${tab.configId}`}
+      data-search-highlight={highlighted ? '' : undefined}
       onClick={onPick}
-      className={cn(ROW, rowSize(touch))}
+      className={cn(ROW, rowSize(touch), highlighted && 'bg-row-hover')}
     >
       <TabGlyph tab={tab} />
       <span className="min-w-0 flex-1 truncate">{tab.name}</span>
