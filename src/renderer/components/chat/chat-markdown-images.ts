@@ -10,9 +10,9 @@ type MarkdownNode = {
   children?: MarkdownNode[]
 }
 
-export function termulMediaTag(url: string, alt: string, openPath?: string): string {
-  const open = openPath === undefined ? '' : ` data-open-path="${escapeHtmlAttribute(openPath)}"`
-  return `<termul-media data-url="${escapeHtmlAttribute(url)}" data-alt="${escapeHtmlAttribute(alt)}"${open}></termul-media>`
+export function termulMediaTag(url: string, alt: string, linkPreview = false): string {
+  const preview = linkPreview ? ' data-link-preview="true"' : ''
+  return `<termul-media data-url="${escapeHtmlAttribute(url)}" data-alt="${escapeHtmlAttribute(alt)}"${preview}></termul-media>`
 }
 
 /** The first definition wins, per CommonMark. */
@@ -49,17 +49,26 @@ function nodeText(node: MarkdownNode): string {
   return (node.children ?? []).map(nodeText).join('')
 }
 
-function mediaLinkTag(node: MarkdownNode): string | null {
+interface LinkPreview {
+  path: string
+  tag: string
+}
+
+function mediaLinkPreview(node: MarkdownNode): LinkPreview | null {
   if (node.type !== 'link' || containsImage(node)) return null
   const url = node.url ?? ''
   const path = localLinkPath(url)
   const kind = path === null ? null : mediaKindForPath(path)
   if (path === null || (kind !== 'image' && kind !== 'video')) return null
-  return termulMediaTag(url, nodeText(node).trim() || path, path)
+  return { path, tag: termulMediaTag(url, nodeText(node).trim() || path, true) }
 }
 
-function transformChildren(node: MarkdownNode, definitions: Map<string, string>): void {
-  if (!node.children) return
+/** Previews of media links render after the paragraph or heading, so the sentence stays whole. */
+const PREVIEW_HOSTS: ReadonlySet<string> = new Set(['paragraph', 'heading'])
+
+function transformChildren(node: MarkdownNode, definitions: Map<string, string>): LinkPreview[] {
+  if (!node.children) return []
+  const bubbled: LinkPreview[] = []
   node.children = node.children.flatMap((child) => {
     // `url !== undefined` also rewrites empty destinations (`![]()`), which
     // would otherwise render `[Image blocked: ]` on the default pipeline.
@@ -67,11 +76,21 @@ function transformChildren(node: MarkdownNode, definitions: Map<string, string>)
     if (url !== undefined) {
       return [{ type: 'html', value: termulMediaTag(url, child.alt ?? '') }]
     }
-    const linkTag = mediaLinkTag(child)
-    if (linkTag !== null) return [{ type: 'html', value: linkTag }]
-    transformChildren(child, definitions)
-    return [child]
+    const preview = mediaLinkPreview(child)
+    if (preview !== null) {
+      bubbled.push(preview)
+      return [child]
+    }
+    const previews = transformChildren(child, definitions)
+    if (!PREVIEW_HOSTS.has(child.type)) {
+      bubbled.push(...previews)
+      return [child]
+    }
+    const seen = new Set<string>()
+    const unique = previews.filter(({ path }) => !seen.has(path) && seen.add(path))
+    return [child, ...unique.map(({ tag }) => ({ type: 'html', value: tag }))]
   })
+  return bubbled
 }
 
 /**

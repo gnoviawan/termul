@@ -122,7 +122,9 @@ describe('MediaBlocks inline media', () => {
     isTauriContextMock.mockReturnValue(true)
     invokeMock.mockRejectedValueOnce({
       code: 'FILE_TOO_LARGE',
-      message: 'file too large (134217728 bytes, max 104857600)'
+      message: 'file too large',
+      size: 134217728,
+      limit: 104857600
     })
     const { container } = renderBlocks({
       type: 'resource_link',

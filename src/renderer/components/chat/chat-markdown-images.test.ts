@@ -57,7 +57,7 @@ describe('chat markdown images', () => {
     ])
   })
 
-  it('rewrites links to local media and keeps every other link', () => {
+  it('keeps media links inline and previews them after their paragraph', () => {
     const link = (url: string, text: string) => ({
       type: 'link',
       url,
@@ -69,10 +69,91 @@ describe('chat markdown images', () => {
         {
           type: 'paragraph',
           children: [
+            { type: 'text', value: 'Watch ' },
             link('out/shot.png', 'the shot'),
+            { type: 'text', value: ' then ' },
             link('file:///tmp/my%20clip.mp4', 'demo'),
+            link('out/shot.png', 'again'),
             link('src/app.ts', 'code'),
-            link('https://example.com/clip.mp4', 'remote'),
+            link('https://example.com/clip.mp4', 'remote')
+          ]
+        }
+      ]
+    }
+
+    remarkTermulMedia()(tree)
+
+    expect(tree.children).toEqual([
+      {
+        type: 'paragraph',
+        children: [
+          { type: 'text', value: 'Watch ' },
+          link('out/shot.png', 'the shot'),
+          { type: 'text', value: ' then ' },
+          link('file:///tmp/my%20clip.mp4', 'demo'),
+          link('out/shot.png', 'again'),
+          link('src/app.ts', 'code'),
+          link('https://example.com/clip.mp4', 'remote')
+        ]
+      },
+      {
+        type: 'html',
+        value:
+          '<termul-media data-url="out/shot.png" data-alt="the shot" data-link-preview="true"></termul-media>'
+      },
+      {
+        type: 'html',
+        value:
+          '<termul-media data-url="file:///tmp/my%20clip.mp4" data-alt="demo" data-link-preview="true"></termul-media>'
+      }
+    ])
+  })
+
+  it('previews a media link in a list item after its paragraph inside the item', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'list',
+          children: [
+            {
+              type: 'listItem',
+              children: [
+                {
+                  type: 'paragraph',
+                  children: [
+                    { type: 'link', url: 'clip.mp4', children: [{ type: 'text', value: 'clip' }] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    remarkTermulMedia()(tree)
+
+    expect(tree.children[0].children[0].children).toEqual([
+      {
+        type: 'paragraph',
+        children: [{ type: 'link', url: 'clip.mp4', children: [{ type: 'text', value: 'clip' }] }]
+      },
+      {
+        type: 'html',
+        value:
+          '<termul-media data-url="clip.mp4" data-alt="clip" data-link-preview="true"></termul-media>'
+      }
+    ])
+  })
+
+  it('leaves a link that wraps an image as a link around the image', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [
             {
               type: 'link',
               url: 'out/big.png',
@@ -85,26 +166,19 @@ describe('chat markdown images', () => {
 
     remarkTermulMedia()(tree)
 
-    expect(tree.children[0].children).toEqual([
+    expect(tree.children).toEqual([
       {
-        type: 'html',
-        value:
-          '<termul-media data-url="out/shot.png" data-alt="the shot" data-open-path="out/shot.png"></termul-media>'
-      },
-      {
-        type: 'html',
-        value:
-          '<termul-media data-url="file:///tmp/my%20clip.mp4" data-alt="demo" data-open-path="/tmp/my clip.mp4"></termul-media>'
-      },
-      link('src/app.ts', 'code'),
-      link('https://example.com/clip.mp4', 'remote'),
-      {
-        type: 'link',
-        url: 'out/big.png',
+        type: 'paragraph',
         children: [
           {
-            type: 'html',
-            value: '<termul-media data-url="out/thumb.png" data-alt="thumb"></termul-media>'
+            type: 'link',
+            url: 'out/big.png',
+            children: [
+              {
+                type: 'html',
+                value: '<termul-media data-url="out/thumb.png" data-alt="thumb"></termul-media>'
+              }
+            ]
           }
         ]
       }

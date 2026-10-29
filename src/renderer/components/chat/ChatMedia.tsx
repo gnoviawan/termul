@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useState } from 'react'
 import { VideoIcon } from '@/components/icons'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
-import { useMediaObjectUrlState } from '@/hooks/use-media-object-url'
+import { type MediaObjectUrlState, useMediaObjectUrlState } from '@/hooks/use-media-object-url'
 import { logFrontendError } from '@/lib/log-api'
 import { formatSize } from '@/lib/sftp-format'
 import type { BytesSource, ChatMedia as ChatMediaModel } from './chat-media-source'
@@ -39,12 +39,9 @@ function useBytesObjectUrl(source: BytesSource | null): string | null {
   return base64 === null ? null : url
 }
 
-type ReadFailure = { code: string; message: string }
+type ReadFailure = Extract<MediaObjectUrlState, { status: 'error' }>
 
-type ChatMediaState =
-  | { status: 'loading' }
-  | { status: 'ready'; url: string }
-  | ({ status: 'error' } & ReadFailure)
+type ChatMediaState = { status: 'loading' } | { status: 'ready'; url: string } | ReadFailure
 
 function useChatMediaState(media: ChatMediaModel, loadPath: boolean): ChatMediaState {
   const { src } = media
@@ -60,15 +57,13 @@ function useChatMediaState(media: ChatMediaModel, loadPath: boolean): ChatMediaS
   }
 }
 
-const TOO_LARGE_MESSAGE = /\((\d+) bytes, max (\d+)\)/
-
 function readFailureText(name: string, verb: 'play' | 'show', failure: ReadFailure): string {
   switch (failure.code) {
     case 'FILE_TOO_LARGE': {
-      const sizes = TOO_LARGE_MESSAGE.exec(failure.message)
-      const detail = sizes
-        ? ` (${formatSize(Number(sizes[1]))}, limit ${formatSize(Number(sizes[2]))})`
-        : ''
+      const detail =
+        failure.size !== undefined && failure.limit !== undefined
+          ? ` (${formatSize(failure.size)}, limit ${formatSize(failure.limit)})`
+          : ''
       return `${name} is too large to ${verb} inline${detail}`
     }
     case 'NOT_FOUND':

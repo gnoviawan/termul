@@ -128,32 +128,22 @@ function scrollToFragment(messageRoot: HTMLElement | null, href: string): void {
 export function TermulMarkdownMedia({
   url,
   alt,
-  openPath,
+  linkPreview,
   filePathContext
 }: {
   url: string
   alt: string
-  openPath?: string
+  linkPreview: boolean
   filePathContext?: FilePathResolutionContext
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const cwd = filePathContext?.cwd
   const media = useMemo(() => chatMediaFromMarkdown(url, alt, cwd), [url, alt, cwd])
-  if (openPath === undefined) {
-    return media ? <ChatMedia media={media} /> : <MediaAltChip alt={alt} />
-  }
-  const open = filePathContext ? (
-    <TermulFilePathButton path={openPath} context={filePathContext}>
-      {alt}
-    </TermulFilePathButton>
-  ) : (
-    <span>{alt}</span>
-  )
-  if (!media) return open
+  if (!linkPreview) return media ? <ChatMedia media={media} /> : <MediaAltChip alt={alt} />
+  if (!media) return null
   return (
-    <span className="inline-flex max-w-full flex-col items-start gap-1 align-top">
+    <div className="my-2">
       <ChatMedia media={media} />
-      {open}
-    </span>
+    </div>
   )
 }
 
@@ -233,7 +223,7 @@ export function AgentProse({
         <TermulMarkdownMedia
           url={stringProp(props, 'data-url') ?? ''}
           alt={stringProp(props, 'data-alt') ?? ''}
-          openPath={stringProp(props, 'data-open-path')}
+          linkPreview={stringProp(props, 'data-link-preview') === 'true'}
           filePathContext={filePathContext}
         />
       ),
