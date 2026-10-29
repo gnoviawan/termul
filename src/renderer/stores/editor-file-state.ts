@@ -64,11 +64,11 @@ type UnsupportedFileState = FileStateBase & {
   isDirty: false
 } & UnsupportedReason
 
-export type MediaFileState = ViewerFileState | UnsupportedFileState
+type MediaFileState = ViewerFileState | UnsupportedFileState
 
 export type EditorFileState = TextFileState | MediaFileState
 
-export function textFileState(
+function textFileState(
   filePath: string,
   read: { content: string; modifiedAt: number; contentHash?: string }
 ): TextFileState {

@@ -1,6 +1,7 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTocSettings } from '@/hooks/use-toc-settings'
 import { textPreviewForPath } from '@/lib/editor-file-kind'
+import { basename } from '@/lib/path-basename'
 import type { TextFileState } from '@/stores/editor-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { CodeEditor } from './CodeEditor'
@@ -9,10 +10,9 @@ import { EditorToolbar } from './EditorToolbar'
 import { MarkdownEditor } from './MarkdownEditor'
 import { ImageViewer } from './media/ImageViewer'
 import { PdfViewer } from './media/PdfViewer'
-import { SvgPreview } from './media/SvgPreview'
 import { UnsupportedFileView } from './media/UnsupportedFileView'
 import { VideoViewer } from './media/VideoViewer'
-import { ViewerLoading } from './media/viewer-chrome'
+import { CHECKERBOARD_CLASS, ViewerLoading } from './media/viewer-chrome'
 
 interface EditorPanelProps {
   filePath: string
@@ -119,6 +119,39 @@ function TextFilePanel({
           />
         )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * The live SVG buffer rendered as an `<img>` from a `blob:` URL. An `<img>`
+ * never runs the SVG's scripts or loads its external resources, unlike
+ * inlining the markup.
+ */
+function SvgPreview({
+  filePath,
+  content
+}: {
+  filePath: string
+  content: string
+}): React.JSX.Element {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    const next = URL.createObjectURL(new Blob([content], { type: 'image/svg+xml' }))
+    setUrl(next)
+    return () => URL.revokeObjectURL(next)
+  }, [content])
+
+  return (
+    <div className="absolute inset-0 flex items-center justify-center overflow-auto bg-background p-4">
+      {url && (
+        <img
+          src={url}
+          alt={basename(filePath)}
+          draggable={false}
+          className={`max-h-full max-w-full ${CHECKERBOARD_CLASS}`}
+        />
+      )}
     </div>
   )
 }

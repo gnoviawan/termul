@@ -143,7 +143,7 @@ const UNCERTAIN_WRITE_CODES: ReadonlySet<string> = new Set([
 
 const EDITOR_TAB_LIMIT = 15
 
-export type { EditorFileState, MediaFileState, TextFileState } from './editor-file-state'
+export type { EditorFileState, TextFileState } from './editor-file-state'
 
 /**
  * Reconcile a persisted unsaved draft with a freshly opened file (pure).
