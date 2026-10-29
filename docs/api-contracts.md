@@ -417,9 +417,7 @@ These are the `acp_*`, `claude_accounts_*`, `ws_channel_*` and `codex_cli_auth_s
 | `acp_install_registry_binary` | Legacy desktop-only install of a registry release archive (`agentId`, `archiveUrl`, `cmd`, `args?`) into `<app data dir>/acp-registry-binaries/<agentId>`. The archive URL must be `https`. The verified install is `install_acp_agent`. |
 | `claude_accounts_list` | Returns the Claude Accounts snapshot. `/ws` equivalent: `list_claude_accounts`. |
 | `claude_accounts_usage` | Returns the usage windows of every Account. `force` refreshes reads older than 60 seconds. `/ws` equivalent: `list_claude_usage`. |
-| `claude_accounts_add` | Adds an Account with the given name. Desktop only. |
-| `claude_accounts_login` | Runs the Claude browser login for one Account and resolves when it finishes. Desktop only. |
-| `claude_accounts_login_cancel` | Stops a running login. Returns `false` when none was running. Desktop only. |
+| `claude_accounts_login` | Runs the Claude browser login for one Account and resolves when it finishes. Desktop only. `/ws` `cancel_claude_login` stops it. |
 | `claude_accounts_rename` | Renames an Account. Desktop only. |
 | `claude_accounts_remove` | Removes an Account and returns the ids of the Projects that moved to the Default Account. Desktop only. |
 | `claude_accounts_set_default` | Chooses the Default Account. `/ws` equivalent: `set_default_claude_account`. |

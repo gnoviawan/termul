@@ -14,7 +14,8 @@ interface ClaudeAccountActionsProps {
   isDefault: boolean
   signedOut: boolean
   ready: boolean
-  canManage: boolean
+  /** Whether this surface can rename and remove Accounts. */
+  canEdit: boolean
   busy: boolean
   onSignIn: () => void
   onMakeDefault: () => void
@@ -29,14 +30,13 @@ export function ClaudeAccountActions({
   isDefault,
   signedOut,
   ready,
-  canManage,
+  canEdit,
   busy,
   onSignIn,
   onMakeDefault,
   onRename,
   onRemove
 }: ClaudeAccountActionsProps): React.JSX.Element {
-  if (isDefault && !canManage) return <span aria-hidden="true" className="size-7" />
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -62,15 +62,11 @@ export function ClaudeAccountActions({
             </span>
           </DropdownMenuItem>
         )}
-        {canManage && (
-          <>
-            <DropdownMenuItem onSelect={onSignIn}>
-              {signedOut ? 'Sign in' : 'Sign in again'}
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={onRename}>Rename</DropdownMenuItem>
-          </>
-        )}
-        {canManage && !builtin && (
+        <DropdownMenuItem onSelect={onSignIn}>
+          {signedOut ? 'Sign in' : 'Sign in again'}
+        </DropdownMenuItem>
+        {canEdit && <DropdownMenuItem onSelect={onRename}>Rename</DropdownMenuItem>}
+        {canEdit && !builtin && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem

@@ -21,6 +21,7 @@ import {
   UsageBar
 } from './account-status'
 import { AccountAvatar, DefaultPill } from './ClaudeAccountRow'
+import { LinkSignInDialog } from './LinkSignInDialog'
 import { oldestCheck, ProviderGroupHeader } from './ProviderGroupHeader'
 
 /** Option id for "Follow default"; Account ids are hex, so it cannot collide. */
@@ -152,6 +153,7 @@ export function ProjectProviderSettings({
   const { snapshot, usage, loading, error, refreshingUsage, reload, refreshUsage } = claude.accounts
   const listRef = useRef<HTMLDivElement>(null)
   const [signingIn, setSigningIn] = useState(false)
+  const [linkSignIn, setLinkSignIn] = useState<ClaudeAccountView | null>(null)
 
   const readinessOf = (accountId: string | null) => {
     const account = snapshot?.accounts.find(
@@ -256,14 +258,22 @@ export function ProjectProviderSettings({
           .sort((x, y) => x.percent - y.percent)[0]
       : undefined
 
+  const signedIn = async (account: ClaudeAccountView): Promise<void> => {
+    toast.success(`${account.name} is signed in`)
+    await reload()
+    await refreshUsage(true)
+  }
+
   const signInEffective = async (): Promise<void> => {
     if (!effective) return
+    if (claudeAccountsApi.signInFlow() === 'link') {
+      setLinkSignIn(effective)
+      return
+    }
     setSigningIn(true)
     try {
       await claudeAccountsApi.login(effective.id)
-      toast.success(`${effective.name} is signed in`)
-      await reload()
-      await refreshUsage(true)
+      await signedIn(effective)
     } catch (err) {
       if (!isClaudeLoginCancelled(err)) {
         toast.error(`Sign-in did not finish: ${err instanceof Error ? err.message : String(err)}`)
@@ -373,21 +383,15 @@ export function ProjectProviderSettings({
               New Claude chats in this project cannot start until you sign in again.
             </span>
           </div>
-          {claudeAccountsApi.canManageAccounts() ? (
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() => void signInEffective()}
-              disabled={signingIn}
-            >
-              {signingIn ? 'Waiting…' : 'Sign in'}
-            </Button>
-          ) : (
-            <Button type="button" size="xs" variant="outline" onClick={onManageAccounts}>
-              Open settings
-            </Button>
-          )}
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() => void signInEffective()}
+            disabled={signingIn}
+          >
+            {signingIn ? 'Waiting…' : 'Sign in'}
+          </Button>
         </div>
       )}
 
@@ -430,6 +434,15 @@ export function ProjectProviderSettings({
       <p className="mt-1 border-t border-border/60 px-3 pt-3 text-2xs text-muted-foreground">
         Other providers get their own group here when they support accounts.
       </p>
+
+      <LinkSignInDialog
+        account={linkSignIn}
+        onClose={() => setLinkSignIn(null)}
+        onSignedIn={(account) => {
+          setLinkSignIn(null)
+          void signedIn(account)
+        }}
+      />
     </div>
   )
 }

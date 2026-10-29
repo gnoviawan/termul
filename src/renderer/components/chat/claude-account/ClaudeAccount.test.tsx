@@ -13,7 +13,7 @@ import { setSwitchingTo, useClaudeResumeStore } from './use-claude-limit'
 
 const { api, switcher, openApp } = vi.hoisted(() => ({
   openApp: vi.fn(),
-  api: { list: vi.fn(), usage: vi.fn(), canManageAccounts: vi.fn(() => true) },
+  api: { list: vi.fn(), usage: vi.fn() },
   switcher: { switchProjectClaudeAccount: vi.fn(), restartClaudeSession: vi.fn() }
 }))
 
@@ -95,7 +95,6 @@ const limit = (
 
 beforeEach(() => {
   vi.clearAllMocks()
-  api.canManageAccounts.mockReturnValue(true)
   api.list.mockResolvedValue({
     accounts: [
       { id: 'default', name: 'Personal', builtin: true, signedIn: true },

@@ -9,7 +9,9 @@ const { api } = vi.hoisted(() => ({
     usage: vi.fn(),
     setProjectAccount: vi.fn(),
     login: vi.fn(),
-    canManageAccounts: vi.fn()
+    signInFlow: vi.fn(),
+    startLinkLogin: vi.fn(),
+    cancelLogin: vi.fn()
   }
 }))
 
@@ -45,7 +47,9 @@ beforeEach(() => {
   api.usage.mockResolvedValue([read('default', 6), read('ab12', 0)])
   api.setProjectAccount.mockResolvedValue(undefined)
   api.login.mockResolvedValue(undefined)
-  api.canManageAccounts.mockReturnValue(true)
+  api.signInFlow.mockReturnValue('browser')
+  api.startLinkLogin.mockReturnValue(new Promise(() => {}))
+  api.cancelLogin.mockResolvedValue(true)
 })
 
 describe('useProjectClaudeAccountDraft', () => {
@@ -132,6 +136,17 @@ describe('ProjectProviderSettings', () => {
     expect(await screen.findByText('Work is signed out')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
     await waitFor(() => expect(api.login).toHaveBeenCalledWith('ab12'))
+  })
+
+  it('on web signs a signed-out chosen account in with a link', async () => {
+    api.signInFlow.mockReturnValue('link')
+    api.list.mockResolvedValue(snapshot({ office: 'ab12' }, false))
+    render(<Harness projectId="office" />)
+    expect(await screen.findByText('Work is signed out')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByRole('dialog', { name: 'Sign in to Work' })).toBeInTheDocument()
+    expect(api.startLinkLogin).toHaveBeenCalledWith('ab12')
+    expect(api.login).not.toHaveBeenCalled()
   })
 
   it('offers the account with the most room when the chosen one hit its limit', async () => {

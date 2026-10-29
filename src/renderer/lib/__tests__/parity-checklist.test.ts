@@ -2213,20 +2213,44 @@ describe('Claude Accounts parity (ADR-0004)', () => {
     expect(wsTransport).toMatch(/\.\.\.\(expectedAccountId \? \{ expectedAccountId \} : \{\}\)/)
   })
 
-  it('add, sign-in, rename and remove are desktop-only and gated in the facade', () => {
+  it('add, the link sign-in and cancel reach the same /ws handlers on every surface', () => {
+    // Desktop inherits these from WsAcpTransport; no Tauri command duplicates them.
+    const dispatch = read('web', 'ws', 'dispatch.rs')
+    const lib = read('lib.rs')
+    for (const request of [
+      'add_claude_account',
+      'start_claude_link_login',
+      'finish_claude_link_login',
+      'cancel_claude_login'
+    ]) {
+      expect(wsTransport).toContain(`'${request}'`)
+      expect(dispatch).toContain(`"${request}" => handle_${request}(id, &req.payload, acp).await`)
+    }
+    for (const retired of ['claude_accounts_add', 'claude_accounts_login_cancel']) {
+      expect(lib).not.toContain(`acp::commands::${retired}`)
+      expect(facade).not.toContain(`'${retired}'`)
+    }
+    expect(facade).not.toMatch(/desktopOnly\('(add|startLinkLogin|finishLinkLogin|cancelLogin)'/)
+    // The link sign-in shares the browser login's per-Account registry, so a
+    // cancel from either surface stops whichever sign-in is running.
+    expect(read('acp', 'claude_agent', 'accounts.rs')).toMatch(/self\.logins\.cancel\(id\)/)
+  })
+
+  it('the browser login, rename and remove stay desktop-only and gated in the facade', () => {
     const dispatch = read('web', 'ws', 'dispatch.rs')
     for (const command of [
-      'claude_accounts_add',
       'claude_accounts_login',
-      'claude_accounts_login_cancel',
       'claude_accounts_rename',
       'claude_accounts_remove'
     ]) {
       expect(facade).toContain(`'${command}'`)
       expect(read('lib.rs')).toContain(`acp::commands::${command}`)
     }
-    expect(dispatch).not.toMatch(/"(add|login|rename|remove)_claude_account"/)
+    expect(dispatch).not.toMatch(/"(login|rename|remove)_claude_account"/)
     expect(facade).toMatch(/if \(!isTauriContext\(\)\) return Promise\.reject/)
+    expect(facade).toMatch(
+      /signInFlow: \(\): ClaudeSignInFlow => \(isTauriContext\(\) \? 'browser' : 'link'\)/
+    )
   })
 
   it('the spawn sends the projectId that selects the account on every carrier', () => {

@@ -10,7 +10,10 @@ import { ProviderSettings } from './ProviderSettings'
 
 const { api, toast } = vi.hoisted(() => ({
   api: {
-    canManageAccounts: vi.fn(),
+    canRenameAndRemove: vi.fn(),
+    signInFlow: vi.fn(),
+    startLinkLogin: vi.fn(),
+    finishLinkLogin: vi.fn(),
     list: vi.fn(),
     usage: vi.fn(),
     add: vi.fn(),
@@ -83,7 +86,10 @@ beforeEach(() => {
   useProjectStore.setState({
     projects: [{ id: 'office', name: 'm-pos', color: 'blue', path: '/code/m-pos' } as Project]
   })
-  api.canManageAccounts.mockReturnValue(true)
+  api.canRenameAndRemove.mockReturnValue(true)
+  api.signInFlow.mockReturnValue('browser')
+  api.startLinkLogin.mockResolvedValue('https://claude.com/cai/oauth/authorize?state=s1')
+  api.finishLinkLogin.mockResolvedValue(undefined)
   api.list.mockResolvedValue(SNAPSHOT)
   api.usage.mockResolvedValue(USAGE)
   api.login.mockResolvedValue(undefined)
@@ -253,17 +259,72 @@ describe('ProviderSettings', () => {
     expect(toggle).toHaveAttribute('aria-checked', 'true')
   })
 
-  it('on web shows the accounts and the host hint, but no add or sign-in', async () => {
-    api.canManageAccounts.mockReturnValue(false)
-    render(<ProviderSettings />)
-    await screen.findByTestId('claude-account-ab12')
-    expect(screen.queryByRole('button', { name: /add account/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
-    expect(screen.getByText('termul-server claude account')).toBeInTheDocument()
-    expect(screen.getByRole('switch', { name: 'Switch accounts automatically' })).toBeEnabled()
-    openMenu('Work')
-    expect(await screen.findByRole('menuitem', { name: /Make default/ })).toBeInTheDocument()
-    expect(screen.queryByRole('menuitem', { name: 'Remove' })).not.toBeInTheDocument()
+  describe('on web', () => {
+    beforeEach(() => {
+      api.canRenameAndRemove.mockReturnValue(false)
+      api.signInFlow.mockReturnValue('link')
+    })
+
+    it('adds and signs in, and points rename and remove at the host', async () => {
+      render(<ProviderSettings />)
+      await screen.findByTestId('claude-account-ab12')
+      expect(screen.getByRole('button', { name: /add account/i })).toBeInTheDocument()
+      expect(screen.getByText(/To rename or remove an account/)).toBeInTheDocument()
+      expect(screen.getByText('termul-server claude account')).toBeInTheDocument()
+      expect(screen.getByRole('switch', { name: 'Switch accounts automatically' })).toBeEnabled()
+      openMenu('Work')
+      expect(await screen.findByRole('menuitem', { name: /Make default/ })).toBeInTheDocument()
+      expect(screen.getByRole('menuitem', { name: 'Sign in' })).toBeInTheDocument()
+      expect(screen.queryByRole('menuitem', { name: 'Rename' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('menuitem', { name: 'Remove' })).not.toBeInTheDocument()
+    })
+
+    it('signs a signed-out account in from its row with a link and the pasted code', async () => {
+      render(<ProviderSettings />)
+      const work = await screen.findByTestId('claude-account-ab12')
+      fireEvent.click(within(work).getByRole('button', { name: 'Sign in' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Sign in to Work' })
+      await within(dialog).findByRole('link', { name: 'Open sign-in page' })
+      expect(api.startLinkLogin).toHaveBeenCalledWith('ab12')
+      fireEvent.change(within(dialog).getByLabelText('Code from the Claude page'), {
+        target: { value: 'abc#def' }
+      })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Finish sign-in' }))
+      await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Work is signed in'))
+      expect(api.finishLinkLogin).toHaveBeenCalledWith('ab12', 'abc#def')
+      expect(api.login).not.toHaveBeenCalled()
+      await waitFor(() => expect(api.usage).toHaveBeenLastCalledWith(true))
+    })
+
+    it('adds an account in one dialog: name, link sign-in, done', async () => {
+      render(<ProviderSettings />)
+      await screen.findByTestId('claude-account-default')
+      fireEvent.click(screen.getByRole('button', { name: /add account/i }))
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Side' } })
+      fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+      await waitFor(() => expect(api.add).toHaveBeenCalledWith('Side'))
+      await screen.findByRole('link', { name: 'Open sign-in page' })
+      expect(api.startLinkLogin).toHaveBeenCalledWith('cd34')
+      fireEvent.change(screen.getByLabelText('Code from the Claude page'), {
+        target: { value: 'abc#def' }
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Finish sign-in' }))
+      expect(await screen.findByText('Side is ready')).toBeInTheDocument()
+      expect(api.finishLinkLogin).toHaveBeenCalledWith('cd34', 'abc#def')
+      expect(api.login).not.toHaveBeenCalled()
+    })
+
+    it('closing the add dialog during the link sign-in stops it once', async () => {
+      render(<ProviderSettings />)
+      await screen.findByTestId('claude-account-default')
+      fireEvent.click(screen.getByRole('button', { name: /add account/i }))
+      fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Side' } })
+      fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+      await screen.findByRole('link', { name: 'Open sign-in page' })
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      await waitFor(() => expect(api.cancelLogin).toHaveBeenCalledWith('cd34'))
+      expect(api.cancelLogin).toHaveBeenCalledOnce()
+    })
   })
 
   it('shows one retry when the account list cannot be read', async () => {

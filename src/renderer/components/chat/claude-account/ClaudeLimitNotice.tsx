@@ -7,7 +7,6 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Spinner } from '@/components/ui/spinner'
-import { claudeAccountsApi } from '@/lib/claude-accounts-api'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import {
   formatClock,
@@ -120,16 +119,14 @@ export function ClaudeLimitNotice({ sessionId }: { sessionId: string }): React.J
                 Continue when it resets
               </Button>
             )}
-            {claudeAccountsApi.canManageAccounts() && (
-              <Button
-                type="button"
-                size="xs"
-                variant="ghost"
-                onClick={() => openAppSettings('provider')}
-              >
-                Add account
-              </Button>
-            )}
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              onClick={() => openAppSettings('provider')}
+            >
+              Add account
+            </Button>
           </>
         )}
       </div>
