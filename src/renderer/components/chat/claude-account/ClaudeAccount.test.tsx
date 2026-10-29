@@ -245,6 +245,20 @@ describe('ClaudeAccountChip', () => {
     expect(screen.getByRole('menuitem', { name: /Side/ })).toHaveTextContent('Max · 5-hour 40%')
   })
 
+  it('announces no usage for a signed-out account', async () => {
+    api.list.mockResolvedValue({
+      accounts: [{ id: 'default', name: 'Personal', builtin: true, signedIn: false }],
+      defaultAccountId: 'default',
+      projectAccounts: {}
+    })
+    seed(limit('allowed', 31))
+    render(<ClaudeAccountChip sessionId="s1" />)
+    const chip = await screen.findByRole('button', {
+      name: 'Claude account: Personal. Change account'
+    })
+    expect(chip).toHaveTextContent(/^Personal$/)
+  })
+
   it('keeps only the 5-hour window below the warning level, and drops the name when compact', async () => {
     api.usage.mockResolvedValue([read('default', 42, 79), read('ab12', 4), read('cd34', 40)])
     seed()

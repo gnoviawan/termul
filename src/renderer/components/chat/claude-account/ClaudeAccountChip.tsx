@@ -83,12 +83,12 @@ function AccountChip({
   const [switching, setSwitching] = useState(false)
   if (!ctx) return null
 
-  const used = fiveHourUsage(ctx.current.usage, ctx.rateLimit ?? null)
+  const signedOut = accountReadiness(ctx.current.account, ctx.current.usage) !== 'ready'
+  const used = signedOut ? null : fiveHourUsage(ctx.current.usage, ctx.rateLimit ?? null)
   const segments = used
     ? [used.main, ...(used.other && used.other.tone !== 'normal' ? [used.other] : [])]
     : []
   const tone = usageTone(Math.max(0, ...segments.map((s) => s.percent)))
-  const signedOut = accountReadiness(ctx.current.account, ctx.current.usage) !== 'ready'
   const snapshot = ctx.accounts.snapshot
 
   const choose = async (accountId: string | null): Promise<void> => {
@@ -179,15 +179,14 @@ function AccountChip({
             <StatusDot tone={signedOut ? 'signed-out' : DOT_TONE[tone]} />
           )}
           {!compact && <span className="max-w-24 truncate">{name}</span>}
-          {!signedOut &&
-            segments.map((segment, i) => (
-              <span key={segment.short} className="flex items-center gap-1.5 tabular-nums">
-                {i > 0 && <span aria-hidden>·</span>}
-                <span className={TONE_TEXT[segment.tone]}>
-                  {segment.short} {segment.percent}%
-                </span>
+          {segments.map((segment, i) => (
+            <span key={segment.short} className="flex items-center gap-1.5 tabular-nums">
+              {i > 0 && <span aria-hidden>·</span>}
+              <span className={TONE_TEXT[segment.tone]}>
+                {segment.short} {segment.percent}%
               </span>
-            ))}
+            </span>
+          ))}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">

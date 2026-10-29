@@ -121,14 +121,17 @@ function reading(window: ClaudeUsageWindow): UsageReading {
 /**
  * The 5-hour window first, since that is the one a user runs into, with the
  * most used other window beside it. The live limit is the freshest read of
- * its window, so it replaces that window's polled value.
+ * its window, so it replaces that window's polled value until that window
+ * resets; the chat keeps its last live limit until the next turn sends one.
  */
 export function fiveHourUsage(
   usage: ClaudeAccountUsage | undefined,
-  live: ClaudeRateLimit | null
+  live: ClaudeRateLimit | null,
+  now = Date.now()
 ): FiveHourUsage | null {
   const windows = usage?.status === 'ok' ? [...usage.windows] : []
-  if (live?.percent != null) {
+  const reset = live?.resetsAt != null && live.resetsAt * 1000 <= now
+  if (live?.percent != null && !reset) {
     const fresh: ClaudeUsageWindow = {
       kind: live.kind ?? 'usage',
       group: null,

@@ -109,6 +109,14 @@ describe('claude usage format', () => {
       })
     })
 
+    it('drops a live reading once its window has reset', () => {
+      const usage = read(window('session', 3))
+      const past = { ...live('five_hour', 97), resetsAt: Math.floor(NOW / 1000) - 60 }
+      const future = { ...live('five_hour', 97), resetsAt: Math.floor(NOW / 1000) + 60 }
+      expect(fiveHourUsage(usage, past, NOW)?.main.percent).toBe(3)
+      expect(fiveHourUsage(usage, future, NOW)?.main.percent).toBe(97)
+    })
+
     it('takes a live weekly reading as the weekly window, not the 5-hour one', () => {
       const usage = read(window('session', 12), window('weekly_all', 40))
       expect(fiveHourUsage(usage, live('seven_day', 100))).toEqual({
