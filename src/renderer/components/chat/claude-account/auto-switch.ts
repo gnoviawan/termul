@@ -205,7 +205,10 @@ export function startClaudeAutoSwitch(): () => void {
             `Switching project ${projectId} failed: ${error instanceof Error ? error.message : String(error)}`,
             'warn'
           )
-          toastAccountChoiceError(error, 'Could not confirm the account switch or continue the chat')
+          toastAccountChoiceError(
+            error,
+            'Could not confirm the account switch or continue the chat'
+          )
         } finally {
           for (const id of sessionIds) setSwitchingTo(id, null)
         }
