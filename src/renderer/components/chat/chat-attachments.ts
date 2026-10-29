@@ -1,5 +1,6 @@
 import type { FileUIPart } from 'ai'
 import type { ContentBlock } from '@/lib/acp-api'
+import { mediaMimeForPath } from '@/lib/media-kind'
 import { basename } from '@/lib/path-basename'
 
 /**
@@ -45,6 +46,7 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 /** Max bytes for an embedded text file (keeps the context window sane). */
 export const MAX_EMBED_BYTES = 512 * 1024
 
+/** Non-media extensions; images, video, and PDF come from `media-kind.ts`. */
 const EXT_MIME: Record<string, string> = {
   // text / docs
   txt: 'text/plain',
@@ -73,7 +75,6 @@ const EXT_MIME: Record<string, string> = {
   scss: 'text/x-scss',
   sass: 'text/x-sass',
   less: 'text/x-less',
-  svg: 'image/svg+xml',
   // code
   js: 'text/javascript',
   cjs: 'text/javascript',
@@ -104,16 +105,7 @@ const EXT_MIME: Record<string, string> = {
   gql: 'application/graphql',
   vue: 'text/plain',
   svelte: 'text/plain',
-  astro: 'text/plain',
-  // images (picker -> resource_link)
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  bmp: 'image/bmp',
-  ico: 'image/x-icon',
-  avif: 'image/avif'
+  astro: 'text/plain'
 }
 
 /** Extension-less filenames that are still plain text. */
@@ -164,14 +156,13 @@ export function isTextLike(name: string, mimeType?: string): boolean {
   }
   const ext = fileExtension(name)
   if (!ext) return TEXT_BASENAMES.has(basename(name).toLowerCase())
-  const mapped = EXT_MIME[ext]
-  if (!mapped) return false
-  return !isImageMime(mapped) || ext === 'svg'
+  // SVG is an image the agent can also read as markup.
+  return ext === 'svg' || Object.hasOwn(EXT_MIME, ext)
 }
 
 /** Best-effort MIME type from a filename; defaults to text/plain. */
 export function guessMimeType(name: string): string {
-  return EXT_MIME[fileExtension(name)] ?? 'text/plain'
+  return mediaMimeForPath(name) ?? EXT_MIME[fileExtension(name)] ?? 'text/plain'
 }
 
 /**
@@ -325,13 +316,6 @@ export function fileUrlToPath(uri: string): string {
   return p
 }
 
-/** Whether a `file://` (or bare absolute) URI points at a file we can open. */
-export function isLocalFileUri(uri: string | undefined): uri is string {
-  return Boolean(
-    uri && (uri.startsWith('file://') || /^[A-Za-z]:[\\/]/.test(uri) || uri.startsWith('/'))
-  )
-}
-
 /** Best-effort MIME type for an incoming/own content block. */
 export function blockMimeType(block: ContentBlock): string | undefined {
   const direct = block.mimeType as string | undefined
@@ -392,7 +376,7 @@ export function pendingToAttachmentData(a: PendingAttachment): FileUIPart & { id
  * Map an incoming/own ACP content block to an AI Elements `AttachmentData` file
  * part. Inline `image` blocks (base64) and data/http URIs become a renderable
  * `url` immediately; `file://` URIs are left empty for the bubble to resolve
- * lazily via the brokered `readAttachmentBytes` command.
+ * lazily via `readMediaBytes`.
  */
 export function blockToAttachmentData(
   block: ContentBlock,

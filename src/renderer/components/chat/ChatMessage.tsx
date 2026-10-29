@@ -1,13 +1,13 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo } from 'react'
 
 import { Attachment, AttachmentPreview, Attachments } from '@/components/ai-elements/attachments'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
+import { useMediaObjectUrl } from '@/hooks/use-media-object-url'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ContentBlock } from '@/lib/acp-api'
-import { readAttachmentBytes } from '@/lib/attachment-api'
 import {
   parseSelectionContextSegments,
   type SelectionContext,
@@ -33,12 +33,9 @@ import {
   blockMimeType,
   blockResource,
   blockToAttachmentData,
-  blockUri,
-  fileUrlToPath,
-  guessMimeType,
-  isLocalFileUri,
-  uint8ToBase64
+  blockUri
 } from './chat-attachments'
+import { resolveLocalImagePath } from './chat-markdown-images'
 import { type BubbleAlign, staggerChild } from './chat-motion'
 import { FileChip } from './FileChip'
 import {
@@ -191,35 +188,17 @@ function blockIsImage(block: ContentBlock): boolean {
 /** A single media block rendered as an AI Elements grid attachment. */
 function MediaGridItem({ block, id }: { block: ContentBlock; id: string }): React.JSX.Element {
   const initial = useMemo(() => blockToAttachmentData(block, id), [block, id])
-  const [data, setData] = useState(initial)
   const name = blockDisplayName(block)
+  // Inline image blocks and data/http URIs are already renderable; only
+  // file:// images need a host read to become a `blob:` preview.
+  const uri = initial.url ? '' : (blockUri(block) ?? '')
+  const localPath = blockIsImage(block) ? resolveLocalImagePath(uri) : null
+  const objectUrl = useMediaObjectUrl(localPath)
+  const data = objectUrl ? { ...initial, url: objectUrl } : initial
   // Images preview in a lightbox; non-image file/embedded blocks render as a
   // static icon card. Nothing opens a backing path — temp/file paths can live
   // in sandboxed dirs the OS opener refuses, which would surface as an error.
   const inlineImage = blockIsImage(block) && Boolean(data.url)
-
-  useEffect(() => {
-    // Inline image blocks and data/http URIs are already renderable; only
-    // file:// images need a Tauri read to become a preview data URL.
-    if (initial.url) return
-    const uri = blockUri(block) ?? ''
-    if (!isLocalFileUri(uri) || !blockIsImage(block)) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const resolvedPath = fileUrlToPath(uri)
-        const bytes = await readAttachmentBytes(resolvedPath)
-        if (cancelled) return
-        const mime = guessMimeType(resolvedPath)
-        setData((prev) => ({ ...prev, url: `data:${mime};base64,${uint8ToBase64(bytes)}` }))
-      } catch {
-        // leave url empty — AttachmentPreview falls back to the image icon
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [initial.url, block])
 
   const attachment = (
     <Attachment data={data} title={name} className={inlineImage ? 'cursor-zoom-in' : undefined}>

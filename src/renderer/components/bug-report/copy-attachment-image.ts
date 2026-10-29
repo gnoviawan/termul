@@ -14,14 +14,14 @@
  *   `ClipboardItem` (the only image type every browser accepts).
  *
  * Source bytes come from the `PendingAttachment`: inline `base64` for
- * pasted/browser images, `readAttachmentBytes` for OS-picker `file-ref`
+ * pasted/browser images, `readMediaBytes` for OS-picker `file-ref`
  * paths. Non-PNG payloads round-trip through a canvas once so both
  * channels always receive `image/png`.
  */
 
-import { readAttachmentBytes } from '@/lib/attachment-api'
 import { writeClipboardImagePng } from '@/lib/composer-attachments-io'
 import { logFrontendError } from '@/lib/log-api'
+import { readMediaBytes } from '@/lib/media-bytes-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import type { PendingAttachment } from '../chat/chat-attachments'
 
@@ -38,7 +38,9 @@ async function attachmentImageBytes(att: PendingAttachment): Promise<Uint8Array>
     return base64ToBytes(att.base64)
   }
   if (att.kind === 'file-ref') {
-    return readAttachmentBytes(att.path)
+    const result = await readMediaBytes(att.path)
+    if (!result.success) throw new Error(result.error)
+    return new Uint8Array(await result.data.arrayBuffer())
   }
   throw new Error('Only image attachments can be copied')
 }

@@ -1,15 +1,17 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { type Components, defaultRemarkPlugins, Streamdown } from 'streamdown'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { readAttachmentBytesMock, logFrontendErrorMock, isTauriContextMock } = vi.hoisted(() => ({
-  readAttachmentBytesMock: vi.fn(),
+const { invokeMock, fetchMock, logFrontendErrorMock, isTauriContextMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  fetchMock: vi.fn(),
   logFrontendErrorMock: vi.fn(() => Promise.resolve()),
   isTauriContextMock: vi.fn(() => false)
 }))
 
-vi.mock('@/lib/attachment-api', () => ({
-  readAttachmentBytes: (...args: unknown[]) => readAttachmentBytesMock(...args)
+// The real readMediaBytes facade runs; only its two transports are faked.
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (...args: unknown[]) => invokeMock(...args)
 }))
 
 vi.mock('@/lib/log-api', () => ({
@@ -74,11 +76,35 @@ function renderChat(text: string, cwd?: string): ReturnType<typeof render> {
   return render(chatElement(text, cwd))
 }
 
+const ABC = new Uint8Array([65, 66, 67])
+const mutableURL = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown }
+
+/** The desktop command rejects with the serialized `MediaReadError`. */
+function desktopReadFails(code: string): void {
+  invokeMock.mockRejectedValueOnce({ code, message: code.toLowerCase() })
+}
+
 describe('chat inline termul tags with real Streamdown', () => {
+  const createObjectURL = vi.fn()
+  const revokeObjectURL = vi.fn()
+
   beforeEach(() => {
-    readAttachmentBytesMock.mockReset()
+    invokeMock.mockReset()
+    fetchMock.mockReset()
     logFrontendErrorMock.mockClear()
     isTauriContextMock.mockReturnValue(false)
+    let next = 0
+    createObjectURL.mockReset().mockImplementation(() => `blob:termul/${++next}`)
+    revokeObjectURL.mockReset()
+    mutableURL.createObjectURL = createObjectURL
+    mutableURL.revokeObjectURL = revokeObjectURL
+    vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    delete mutableURL.createObjectURL
+    delete mutableURL.revokeObjectURL
   })
 
   it('renders a prose file path as the open-in-editor button with no [blocked]', async () => {
@@ -183,81 +209,124 @@ describe('chat inline termul tags with real Streamdown', () => {
     })
   })
 
-  it('renders a muted alt-text chip for relative images on web (no Tauri)', async () => {
-    const { container } = renderChat('![chart](output/chart.png)', '/proj')
-
-    await waitFor(() => {
-      expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('chart')
-    })
-    expect(container.querySelector('img')).toBeNull()
-    expect(readAttachmentBytesMock).not.toHaveBeenCalled()
-  })
-
-  it('resolves relative images against the cwd via readAttachmentBytes on Tauri', async () => {
-    isTauriContextMock.mockReturnValue(true)
-    readAttachmentBytesMock.mockResolvedValueOnce(new Uint8Array([65, 66, 67]))
+  it('renders a relative image on web from /fs/raw as a blob: URL', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(ABC, { headers: { 'content-type': 'image/png' } }))
     renderChat('![chart](output/chart.png)', '/proj')
 
-    await waitFor(() => {
-      expect(readAttachmentBytesMock).toHaveBeenCalledWith('/proj/output/chart.png')
-    })
     const img = await waitFor(() => screen.getByAltText('chart'))
-    expect(img).toHaveAttribute('src', 'data:image/png;base64,QUJD')
+    expect(img).toHaveAttribute('src', 'blob:termul/1')
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `${window.location.origin}/fs/raw?path=%2Fproj%2Foutput%2Fchart.png`
+    )
+    expect(invokeMock).not.toHaveBeenCalled()
   })
 
-  it('falls back to the alt-text chip and warns when the local read fails', async () => {
-    isTauriContextMock.mockReturnValue(true)
-    readAttachmentBytesMock.mockRejectedValueOnce(new Error('not an image'))
-    const { container } = renderChat('![chart](output/chart.png)', '/proj')
+  it('renders a file:// image on web from /fs/raw', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(ABC, { headers: { 'content-type': 'image/png' } }))
+    renderChat('![shot](file:///tmp/shot%201.png)')
 
-    await waitFor(() => {
-      expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('chart')
-    })
-    expect(container.querySelector('img')).toBeNull()
-    expect(logFrontendErrorMock).toHaveBeenCalledWith(
-      expect.objectContaining({ level: 'warn', source: 'ChatMessage.termulImage' })
+    const img = await waitFor(() => screen.getByAltText('shot'))
+    expect(img).toHaveAttribute('src', 'blob:termul/1')
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `${window.location.origin}/fs/raw?path=%2Ftmp%2Fshot%201.png`
     )
   })
 
-  it('clears the resolved preview when the image URL changes', async () => {
+  it('resolves relative images against the cwd via read_media_bytes on Tauri', async () => {
     isTauriContextMock.mockReturnValue(true)
-    readAttachmentBytesMock.mockResolvedValueOnce(new Uint8Array([65, 66, 67]))
+    invokeMock.mockResolvedValueOnce(ABC.buffer)
+    renderChat('![chart](output/chart.png)', '/proj')
+
+    const img = await waitFor(() => screen.getByAltText('chart'))
+    expect(img).toHaveAttribute('src', 'blob:termul/1')
+    expect(invokeMock).toHaveBeenCalledWith('read_media_bytes', {
+      path: '/proj/output/chart.png'
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not read a markdown image that points at a video or text file', async () => {
+    const { container } = renderChat('![clip](out/clip.mp4) ![notes](out/notes.txt)', '/proj')
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('termul-image-alt').map((chip) => chip.textContent)).toEqual([
+        'clip',
+        'notes'
+      ])
+    })
+    expect(container.querySelector('img')).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the alt-text chip and logs when the local read fails', async () => {
+    isTauriContextMock.mockReturnValue(true)
+    desktopReadFails('UNSUPPORTED_MEDIA')
+    const { container } = renderChat('![chart](output/chart.png)', '/proj')
+
+    await waitFor(() => {
+      expect(logFrontendErrorMock).toHaveBeenCalledWith({
+        level: 'warn',
+        source: 'mediaBytes.read',
+        message: "Failed to read media 'chart.png' (UNSUPPORTED_MEDIA)"
+      })
+    })
+    expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('chart')
+    expect(container.querySelector('img')).toBeNull()
+  })
+
+  it('revokes the blob URL and shows the chip when the image URL changes', async () => {
+    isTauriContextMock.mockReturnValue(true)
+    invokeMock.mockResolvedValueOnce(ABC.buffer)
     const { rerender, container } = render(chatElement('![chart](output/chart.png)', '/proj'))
 
     await waitFor(() => {
-      expect(screen.getByAltText('chart')).toHaveAttribute('src', 'data:image/png;base64,QUJD')
+      expect(screen.getByAltText('chart')).toHaveAttribute('src', 'blob:termul/1')
     })
 
-    readAttachmentBytesMock.mockRejectedValueOnce(new Error('gone'))
+    desktopReadFails('NOT_FOUND')
     rerender(chatElement('![other](missing/other.png)', '/proj'))
 
     await waitFor(() => {
       expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('other')
     })
     expect(container.querySelector('img')).toBeNull()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:termul/1')
   })
 
   it('clears the resolved preview when the cwd changes and the re-read fails', async () => {
     isTauriContextMock.mockReturnValue(true)
-    readAttachmentBytesMock.mockResolvedValueOnce(new Uint8Array([65, 66, 67]))
+    invokeMock.mockResolvedValueOnce(ABC.buffer)
     const { rerender, container } = render(
       <TermulMarkdownImage url="output/chart.png" alt="chart" cwd="/proj" />
     )
 
     await waitFor(() => {
-      expect(screen.getByAltText('chart')).toHaveAttribute('src', 'data:image/png;base64,QUJD')
+      expect(screen.getByAltText('chart')).toHaveAttribute('src', 'blob:termul/1')
     })
 
-    readAttachmentBytesMock.mockRejectedValueOnce(new Error('not under new root'))
+    desktopReadFails('NOT_FOUND')
     rerender(<TermulMarkdownImage url="output/chart.png" alt="chart" cwd="/other" />)
 
     await waitFor(() => {
-      expect(readAttachmentBytesMock).toHaveBeenCalledWith('/other/output/chart.png')
+      expect(invokeMock).toHaveBeenLastCalledWith('read_media_bytes', {
+        path: '/other/output/chart.png'
+      })
     })
-    await waitFor(() => {
-      expect(screen.getByTestId('termul-image-alt')).toBeInTheDocument()
-    })
+    expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('chart')
     expect(container.querySelector('img')).toBeNull()
+  })
+
+  it('revokes the blob URL on unmount', async () => {
+    invokeMock.mockResolvedValueOnce(ABC.buffer)
+    isTauriContextMock.mockReturnValue(true)
+    const { unmount } = render(<TermulMarkdownImage url="/abs/chart.png" alt="chart" />)
+
+    await waitFor(() => {
+      expect(screen.getByAltText('chart')).toHaveAttribute('src', 'blob:termul/1')
+    })
+    unmount()
+
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:termul/1')
   })
 
   it('renders the alt chip for malformed file URLs without crashing', async () => {
@@ -268,7 +337,7 @@ describe('chat inline termul tags with real Streamdown', () => {
       expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('bad')
     })
     expect(container.querySelector('img')).toBeNull()
-    expect(readAttachmentBytesMock).not.toHaveBeenCalled()
+    expect(invokeMock).not.toHaveBeenCalled()
   })
 
   it('falls back to the alt chip when the image fails to decode (onError)', async () => {

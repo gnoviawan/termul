@@ -140,7 +140,7 @@ async function postNdjsonStream<T>(
  */
 const WEB_FS_REQUEST_TIMEOUT_MS = 30_000
 
-async function boundedFsRequest<T>(
+export async function boundedFsRequest<T>(
   operation: string,
   send: (signal: AbortSignal) => Promise<IpcResult<T>>
 ): Promise<IpcResult<T>> {

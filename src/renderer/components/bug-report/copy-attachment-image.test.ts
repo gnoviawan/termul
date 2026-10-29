@@ -2,7 +2,7 @@
  * Executable coverage for copyAttachmentImage (spec-bug-report-dialog).
  *
  * The ReportBugDialog suite mocks this module, so the real paths are tested
- * here: byte-source selection (inline base64 vs `readAttachmentBytes` for
+ * here: byte-source selection (inline base64 vs `readMediaBytes` for
  * file-refs), the PNG sniff/passthrough vs the canvas re-encode (jsdom has
  * no canvas or image decode — both are stubbed), the Tauri
  * `writeClipboardImagePng` channel vs the web `navigator.clipboard.write` +
@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  readAttachmentBytes: vi.fn(),
+  readMediaBytes: vi.fn(),
   writeClipboardImagePng: vi.fn(),
   isTauriContext: vi.fn(() => true),
   logFrontendError: vi.fn(async () => undefined),
@@ -27,8 +27,8 @@ const mocks = vi.hoisted(() => ({
   blobParts: [] as BlobPart[][]
 }))
 
-vi.mock('@/lib/attachment-api', () => ({
-  readAttachmentBytes: mocks.readAttachmentBytes
+vi.mock('@/lib/media-bytes-api', () => ({
+  readMediaBytes: mocks.readMediaBytes
 }))
 vi.mock('@/lib/composer-attachments-io', () => ({
   writeClipboardImagePng: mocks.writeClipboardImagePng
@@ -122,7 +122,11 @@ describe('copyAttachmentImage', () => {
     vi.clearAllMocks()
     mocks.isTauriContext.mockReturnValue(true)
     mocks.writeClipboardImagePng.mockResolvedValue(undefined)
-    mocks.readAttachmentBytes.mockResolvedValue(PNG_BYTES)
+    // A Blob stand-in: the stubbed global Blob has no arrayBuffer().
+    mocks.readMediaBytes.mockResolvedValue({
+      success: true,
+      data: { arrayBuffer: async () => PNG_BYTES.slice().buffer }
+    })
     mocks.clipboardWrite.mockResolvedValue(undefined)
     mocks.getContext.mockReturnValue({ drawImage: mocks.drawImage })
     mocks.toDataURL.mockReturnValue(`data:image/png;base64,${toBase64(REENCODED_PNG)}`)
@@ -148,7 +152,7 @@ describe('copyAttachmentImage', () => {
   it('passes inline base64 PNG bytes to the Tauri clipboard channel untouched', async () => {
     await copyAttachmentImage(imageAttachment())
 
-    expect(mocks.readAttachmentBytes).not.toHaveBeenCalled()
+    expect(mocks.readMediaBytes).not.toHaveBeenCalled()
     expect(mocks.writeClipboardImagePng).toHaveBeenCalledTimes(1)
     expect(mocks.writeClipboardImagePng).toHaveBeenCalledWith(PNG_BYTES)
     // PNG bytes skip the canvas re-encode entirely.
@@ -157,7 +161,7 @@ describe('copyAttachmentImage', () => {
     expect(mocks.clipboardWrite).not.toHaveBeenCalled()
   })
 
-  it('reads a file-ref attachment through readAttachmentBytes', async () => {
+  it('reads a file-ref attachment through readMediaBytes', async () => {
     const att: PendingAttachment = {
       kind: 'file-ref',
       id: 'att-2',
@@ -167,8 +171,26 @@ describe('copyAttachmentImage', () => {
     }
     await copyAttachmentImage(att)
 
-    expect(mocks.readAttachmentBytes).toHaveBeenCalledWith('/tmp/shots/one.png')
+    expect(mocks.readMediaBytes).toHaveBeenCalledWith('/tmp/shots/one.png')
     expect(mocks.writeClipboardImagePng).toHaveBeenCalledWith(PNG_BYTES)
+  })
+
+  it('rejects with the read error when the file-ref cannot be read', async () => {
+    mocks.readMediaBytes.mockResolvedValueOnce({
+      success: false,
+      error: 'file not found',
+      code: 'NOT_FOUND'
+    })
+    const att: PendingAttachment = {
+      kind: 'file-ref',
+      id: 'att-2',
+      name: 'shot.png',
+      mimeType: 'image/png',
+      path: '/tmp/shots/gone.png'
+    }
+
+    await expect(copyAttachmentImage(att)).rejects.toThrow('file not found')
+    expect(mocks.writeClipboardImagePng).not.toHaveBeenCalled()
   })
 
   it('rejects a non-image attachment kind', async () => {
