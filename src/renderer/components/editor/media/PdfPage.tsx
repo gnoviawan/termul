@@ -7,19 +7,12 @@ interface PdfPageProps {
   filePath: string
   doc: PdfDocument
   pageNumber: number
-  /** Size at scale 1, the placeholder until the page reports its own. */
   size: PdfPageSize
   scale: number
-  /** Within the render window around the viewport. */
   near: boolean
   onSize: (pageNumber: number, size: PdfPageSize) => void
 }
 
-/**
- * One page slot. Paints into a fresh canvas and swaps it in only when done, so
- * the previous bitmap (an older zoom or an older revision) stays visible,
- * CSS-scaled, until the replacement is ready.
- */
 export function PdfPage({
   filePath,
   doc,

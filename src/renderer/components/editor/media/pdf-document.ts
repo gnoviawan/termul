@@ -1,10 +1,3 @@
-/**
- * The only module that touches pdf.js. It loads `pdfjs-dist` on first use so the
- * library and its worker stay out of the main chunk, and narrows the API to
- * what the viewer draws with. Tests mock this module because jsdom cannot run
- * pdf.js.
- */
-
 import type { PDFDocumentLoadingTask, PDFPageProxy } from 'pdfjs-dist'
 
 export interface PdfPageSize {
@@ -12,21 +5,18 @@ export interface PdfPageSize {
   height: number
 }
 
-/** `promise` resolves `true` once painted, `false` if cancelled first. */
 export interface PdfRenderTask {
   readonly promise: Promise<boolean>
   cancel(): void
 }
 
 export interface PdfPage {
-  /** CSS pixels at scale 1. */
   readonly size: PdfPageSize
   render(canvas: HTMLCanvasElement, scale: number, pixelRatio: number): PdfRenderTask
 }
 
 export interface PdfDocument {
   readonly pageCount: number
-  /** Placeholder size for pages not fetched yet. */
   readonly firstPageSize: PdfPageSize
   getPage(pageNumber: number): Promise<PdfPage>
   destroy(): void
@@ -40,11 +30,9 @@ export type PdfOpenResult =
 
 export interface PdfLoad {
   readonly result: Promise<PdfOpenResult>
-  /** Stops the load, or tears down the document it produced. Safe to call twice. */
   destroy(): void
 }
 
-/** Chromium's practical canvas budget; pdf.js's own viewer uses the same cap. */
 const MAX_CANVAS_PIXELS = 2 ** 25
 
 let pdfjs: Promise<typeof import('pdfjs-dist')> | null = null

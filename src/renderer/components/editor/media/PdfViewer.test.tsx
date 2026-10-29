@@ -59,7 +59,6 @@ function opens(result: PdfOpenResult): void {
   }))
 }
 
-/** Pages reported as near the viewport by the IntersectionObserver double. */
 let nearPages: (page: number) => boolean = () => true
 
 class NearPagesObserver {
@@ -88,12 +87,7 @@ const pageIndicator = () => screen.getByTitle(/^Page \d+ of \d+$/).textContent
 const PADDING = 16
 const GAP = 12
 
-/**
- * jsdom has no layout. Stack page slots the way the viewer's column does:
- * `PADDING` above the first page, `GAP` between pages, height from the slot style.
- */
 const layout: Record<string, PropertyDescriptor> = {
-  // 632px pane minus the 32px gutter fits a 600px page at exactly 100%.
   clientWidth: { configurable: true, get: () => 632 },
   offsetHeight: {
     configurable: true,
@@ -177,14 +171,12 @@ describe('PdfViewer', () => {
     render(<PdfViewer filePath={FILE} revision={0} />)
     await settle()
 
-    // 100px into page 3 at 100%: 16 + 2 * (800 + 12) + 100.
     scrollViewTo(1740)
     expect(pageIndicator()).toBe('3 / 5')
 
     fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
     await settle()
     const scroller = screen.getByRole('img', { name: 'Page 1' }).parentElement?.parentElement
-    // Same eighth of page 3 at 110%: 16 + 2 * (880 + 12) + 880 / 8.
     expect(scroller?.scrollTop).toBe(1910)
     expect(pageIndicator()).toBe('3 / 5')
   })

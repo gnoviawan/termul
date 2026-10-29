@@ -21,7 +21,6 @@ type PdfZoom = { kind: 'fit-width' } | { kind: 'scale'; value: number }
 const ZOOM_STEPS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5]
 const MIN_SCALE = ZOOM_STEPS[0]
 const MAX_SCALE = ZOOM_STEPS[ZOOM_STEPS.length - 1]
-/** Horizontal padding around the page column (`px-4` on each side). */
 const PAGE_GUTTER = 32
 const EPSILON = 0.001
 
@@ -49,11 +48,6 @@ function failureMessage(name: string, failure: PdfFailure): string {
   }
 }
 
-/**
- * Read-only PDF viewer for an editor tab. Pages paint to canvas near the
- * viewport only. When `revision` changes the file is re-read and the new
- * document replaces the old one in place, keeping zoom and scroll position.
- */
 export function PdfViewer({
   filePath,
   revision
@@ -102,8 +96,6 @@ function PdfDocumentView({
   const [currentPage, setCurrentPage] = useState(1)
   const anchorRef = useRef<PdfScrollAnchor>({ page: 1, fraction: 0 })
 
-  // Real page sizes, learned as pages load. Tied to `doc` so a new revision
-  // starts from its own first-page placeholder.
   const [sizes, setSizes] = useState({ doc, byPage: NO_SIZES })
   const byPage = sizes.doc === doc ? sizes.byPage : NO_SIZES
   const handlePageSize = useCallback(
@@ -130,7 +122,6 @@ function PdfDocumentView({
     setCurrentPage(isScrolledToEnd(root) ? doc.pageCount : anchor.page)
   }, [doc.pageCount])
 
-  // Zooming keeps the page under the viewport top where it was.
   const previousScaleRef = useRef(scale)
   useLayoutEffect(() => {
     const root = scrollRef.current

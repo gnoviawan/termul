@@ -1,9 +1,7 @@
 import { type RefObject, useEffect, useState } from 'react'
 
-/** Pages within one viewport height above or below the visible area get painted. */
 const RENDER_MARGIN = '100% 0px'
 
-/** Client width of `ref`, ignoring the 0 a hidden (`display: none`) tab reports. */
 export function useElementWidth(ref: RefObject<HTMLElement | null>): number {
   const [width, setWidth] = useState(0)
   useEffect(() => {
@@ -20,11 +18,6 @@ export function useElementWidth(ref: RefObject<HTMLElement | null>): number {
   return width
 }
 
-/**
- * Page numbers whose `[data-pdf-page]` slot inside `rootRef` is near the
- * viewport. Re-observes when the page count changes, since that adds or drops
- * slots.
- */
 export function useNearPages(
   rootRef: RefObject<HTMLElement | null>,
   pageCount: number
@@ -56,7 +49,6 @@ export function useNearPages(
 
 export interface PdfScrollAnchor {
   page: number
-  /** How far the viewport top sits into `page`, as a fraction of its height. */
   fraction: number
 }
 
@@ -64,7 +56,6 @@ function slotAt(root: HTMLElement, page: number): HTMLElement | null {
   return root.querySelector<HTMLElement>(`[data-pdf-page="${page}"]`)
 }
 
-/** The page under the top edge of the viewport; `root` must be the slots' offsetParent. */
 export function locateScrollAnchor(root: HTMLElement, pageCount: number): PdfScrollAnchor {
   let low = 1
   let high = pageCount

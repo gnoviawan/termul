@@ -19,11 +19,6 @@ export type PdfDocumentState =
   | { status: 'ready'; doc: PdfDocument }
   | { status: 'error'; failure: PdfFailure }
 
-/**
- * Reads `filePath` and opens it as a PDF, again whenever `revision` changes.
- * The previous document stays in the state until its replacement is ready, so
- * a re-render on disk swaps pages in place instead of flashing a spinner.
- */
 export function usePdfDocument(filePath: string, revision: number): PdfDocumentState {
   const [state, setState] = useState<PdfDocumentState>({ status: 'loading' })
 
