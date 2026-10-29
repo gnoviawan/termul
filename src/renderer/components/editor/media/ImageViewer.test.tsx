@@ -94,8 +94,10 @@ describe('ImageViewer', () => {
   it('shows the too-large state with the cap when the read is refused', async () => {
     readMediaBytesMock.mockResolvedValue({
       success: false,
-      error: 'file too large (30000000 bytes, max 26214400)',
-      code: 'FILE_TOO_LARGE'
+      error: 'file too large',
+      code: 'FILE_TOO_LARGE',
+      size: 30000000,
+      limit: 26214400
     })
 
     render(<ImageViewer filePath="/project/out/huge.png" revision={0} />)

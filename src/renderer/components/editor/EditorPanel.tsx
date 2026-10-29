@@ -24,21 +24,32 @@ export function EditorPanel({ filePath, isVisible }: EditorPanelProps): React.JS
   useTocSettings()
 
   const fileState = useEditorStore((state) => state.openFiles.get(filePath))
+  const shownOnce = useShownOnce(isVisible)
 
   if (!fileState) return <ViewerLoading />
 
   switch (fileState.kind) {
     case 'text':
       return <TextFilePanel file={fileState} isVisible={isVisible} />
+    case 'unsupported':
+      return <UnsupportedFileView filePath={filePath} unavailable={fileState} />
+  }
+  if (!shownOnce) return <ViewerLoading />
+  switch (fileState.kind) {
     case 'image':
       return <ImageViewer filePath={filePath} revision={fileState.revision} />
     case 'video':
       return <VideoViewer filePath={filePath} revision={fileState.revision} />
     case 'pdf':
       return <PdfViewer filePath={filePath} revision={fileState.revision} />
-    case 'unsupported':
-      return <UnsupportedFileView filePath={filePath} unavailable={fileState} />
   }
+}
+
+/** Media viewers read whole files, so a restored background tab waits until it is first shown. */
+function useShownOnce(isVisible: boolean): boolean {
+  const [shown, setShown] = useState(isVisible)
+  if (isVisible && !shown) setShown(true)
+  return shown || isVisible
 }
 
 function TextFilePanel({

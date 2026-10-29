@@ -160,6 +160,23 @@ describe('EditorPanel viewer per file kind', () => {
     expect(screen.queryByTestId('code-editor')).toBeNull()
   })
 
+  it('does not read a hidden media tab until it is first shown, then reads it once', async () => {
+    seedFile({ ...base, kind: 'image', filePath: '/p/shot.png', revision: 0 })
+    const { rerender } = render(<EditorPanel filePath="/p/shot.png" isVisible={false} />)
+    await Promise.resolve()
+    expect(readMediaBytesMock).not.toHaveBeenCalled()
+
+    rerender(<EditorPanel filePath="/p/shot.png" isVisible />)
+    expect(await screen.findByRole('img', { name: 'shot.png' })).toHaveAttribute(
+      'src',
+      'blob:termul/1'
+    )
+    rerender(<EditorPanel filePath="/p/shot.png" isVisible={false} />)
+    rerender(<EditorPanel filePath="/p/shot.png" isVisible />)
+    expect(readMediaBytesMock).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('img', { name: 'shot.png' })).toHaveAttribute('src', 'blob:termul/1')
+  })
+
   it('renders a video tab as a video player with controls', async () => {
     seedFile({ ...base, kind: 'video', filePath: '/p/clip.mp4', revision: 0 })
     const { container } = render(<EditorPanel filePath="/p/clip.mp4" isVisible />)

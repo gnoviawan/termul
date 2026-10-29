@@ -69,7 +69,7 @@ function textFileState(
   }
 }
 
-export function parseTooLarge(message: string): { size?: number; limit?: number } {
+function parseTooLarge(message: string): { size?: number; limit?: number } {
   const match = /\((\d+) bytes, max (\d+)\)/.exec(message)
   return match ? { size: Number(match[1]), limit: Number(match[2]) } : {}
 }

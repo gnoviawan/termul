@@ -2,20 +2,27 @@ import { toast } from 'sonner'
 import { Copy, FileQuestion, FolderOpen } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { clipboardApi, openerApi } from '@/lib/api'
+import type { MediaReadCode } from '@/lib/media-bytes-api'
 import { basename } from '@/lib/path-basename'
 import { formatSize } from '@/lib/sftp-format'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { parseTooLarge, type UnsupportedReason } from '@/stores/editor-file-state'
+import type { UnsupportedReason } from '@/stores/editor-file-state'
 
 export type PreviewUnavailable =
   | UnsupportedReason
   | { reason: 'missing' }
   | { reason: 'unreadable'; message: string }
 
-export function previewUnavailableFromRead(code: string, message: string): PreviewUnavailable {
+export function previewUnavailableFromRead(failure: {
+  code: MediaReadCode
+  message: string
+  size?: number
+  limit?: number
+}): PreviewUnavailable {
+  const { code, message, size, limit } = failure
   switch (code) {
     case 'FILE_TOO_LARGE':
-      return { reason: 'too-large', ...parseTooLarge(message) }
+      return { reason: 'too-large', size, limit }
     case 'NOT_FOUND':
     case 'NOT_A_FILE':
       return { reason: 'missing' }

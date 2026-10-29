@@ -33,10 +33,7 @@ export function ImageViewer({
   if (media.status === 'loading') return <ViewerLoading />
   if (media.status === 'error') {
     return (
-      <UnsupportedFileView
-        filePath={filePath}
-        unavailable={previewUnavailableFromRead(media.code, media.message)}
-      />
+      <UnsupportedFileView filePath={filePath} unavailable={previewUnavailableFromRead(media)} />
     )
   }
 
