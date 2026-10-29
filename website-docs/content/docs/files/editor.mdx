@@ -1,6 +1,6 @@
 ---
 title: Edit and save code
-description: Open a file in the editor, save it by hand or automatically, and handle changes made outside Termul.
+description: Open a file in the editor, view images, videos, and PDFs, save by hand or automatically, and handle changes made outside Termul.
 ---
 
 The editor opens your project files in tabs next to your terminals and chats. It colors the code, numbers the lines, and warns you before you lose unsaved work.
@@ -11,10 +11,14 @@ Click a file in the explorer. The file opens as a tab in the active pane. If the
 
 You can also drag a file from the explorer onto a pane to open it there or to split the pane.
 
-The editor does not open these files:
+Images, videos, and PDFs open in a viewer tab instead of the text editor. See [View images, videos, and PDFs](#view-images-videos-and-pdfs).
 
-- Files larger than 1 MB.
-- Binary files, such as images and fonts.
+Other files open in a tab that says why Termul cannot show them:
+
+- A text file larger than 1 MB shows "This file is too large to preview".
+- A binary file, such as a font or a program, shows "This file can't be previewed".
+
+The tab has a **Copy Path** button. In the desktop app it also has **Show in File Manager**.
 
 You can keep up to 15 files open. When you open one more, Termul closes the oldest tab that has no unsaved changes. If every open file has unsaved changes, Termul shows "Too many open tabs" and does not open the file. Save or close a file first.
 
@@ -44,6 +48,26 @@ The editor also has:
 - Long lines that wrap to fit the pane.
 
 Markdown files open in a different view by default. See [Work with Markdown](/docs/files/markdown).
+
+SVG files open in **Preview**, which shows the drawing. Click **Source** in the toolbar to edit the SVG as text. Preview shows your unsaved changes.
+
+## View images, videos, and PDFs
+
+These files open in a viewer tab. You can look at them but not edit them.
+
+| Kind | File extensions | Largest file |
+| --- | --- | --- |
+| Image | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.avif`, `.ico` | 25 MB |
+| Video | `.mp4`, `.m4v`, `.webm`, `.mov`, `.ogv` | 100 MB |
+| PDF | `.pdf` | 50 MB |
+
+A larger file shows "This file is too large to preview" with its size and the limit.
+
+- **Images** fit the pane at first. Use the zoom out and zoom in buttons at the bottom, **1:1** for the actual size, and **Fit** to fit the pane again. The bar at the bottom shows the size in pixels and the file size.
+- **Videos** play with the usual video controls. The bar at the bottom shows the size in pixels, the length, and the file size.
+- **PDFs** show their pages one under the other. The bar at the top shows the current page and the page count, with the zoom out and zoom in buttons and **Fit width** to fit the page to the pane.
+
+When the file changes on disk, the viewer shows the new version by itself.
 
 ## Save a file
 
