@@ -149,3 +149,33 @@ describe('save → file watcher integration (GH-539)', () => {
     expect(useEditorStore.getState().openFiles.get(path)).toBeUndefined()
   })
 })
+
+describe('media tab refresh on external change', () => {
+  const imagePath = '/project/shot.png'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useEditorStore.setState({ openFiles: new Map(), activeFilePath: null })
+  })
+
+  afterEach(() => {
+    useEditorStore.setState({ openFiles: new Map(), activeFilePath: null })
+  })
+
+  it('bumps the revision of an image tab overwritten right after it opened', async () => {
+    render(createElement(WatcherHost))
+    await useEditorStore.getState().openFile(imagePath)
+    const revision = (): number | undefined => {
+      const file = useEditorStore.getState().openFiles.get(imagePath)
+      return file?.kind === 'image' ? file.revision : undefined
+    }
+    expect(revision()).toBe(0)
+
+    mocks.handlers.changed?.({ type: 'change', path: imagePath })
+
+    await vi.waitFor(() => {
+      expect(revision()).toBe(1)
+    })
+    expect(mocks.readFile).not.toHaveBeenCalled()
+  })
+})

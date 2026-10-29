@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useFileWatcher } from './use-file-watcher'
 
 type WatchHandler = (event: FileChangeEvent) => void
-type FileState = { isDirty: boolean; lastModified: number; operationStatus?: string }
+type FileState = {
+  kind: 'text'
+  isDirty: boolean
+  lastModified: number
+  operationStatus?: string
+}
 
 /**
  * Shared mocks hoisted above imports: the facades/stores mocked below capture
@@ -126,6 +131,7 @@ describe('useFileWatcher', () => {
 
   function setOpenedFile(path: string, overrides: Partial<FileState> = {}): void {
     mocks.editorOpenFiles.set(path, {
+      kind: 'text',
       isDirty: false,
       lastModified: Date.now() - 10_000,
       operationStatus: 'idle',

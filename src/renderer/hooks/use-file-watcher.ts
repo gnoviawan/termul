@@ -57,8 +57,9 @@ export function useFileWatcher(): void {
           return
         }
 
-        // Skip if we just saved this file (within 2 seconds)
-        if (Date.now() - fileState.lastModified < 2000) {
+        // Skip if we just saved this text file (within 2 seconds). Media tabs
+        // are never saved, and their lastModified is the time the tab opened.
+        if (fileState.kind === 'text' && Date.now() - fileState.lastModified < 2000) {
           return
         }
 
