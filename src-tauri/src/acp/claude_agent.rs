@@ -23,8 +23,10 @@ const CLAUDE_CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 
 mod accounts;
 mod cli;
+mod logins;
 mod usage;
 pub use accounts::SignInCheck;
+pub use logins::LinkCodeError;
 
 use cli::{claude_cli_command, SystemClaudeRuntimeProbe};
 use usage::{ClaudeUsageProbe, SystemClaudeUsageProbe, UsageCache};
@@ -442,8 +444,8 @@ pub struct ClaudeAgentService {
     profile_store: Option<Arc<ClaudeAccountStore>>,
     usage_probe: Arc<dyn ClaudeUsageProbe>,
     usage_cache: UsageCache,
-    /// Cancel handle of each running browser login, by Account id.
-    login_cancels: accounts::LoginCancels,
+    /// The running sign-in of each Account.
+    logins: Arc<logins::Logins>,
 }
 
 impl ClaudeAgentService {
@@ -500,7 +502,7 @@ impl ClaudeAgentService {
             runtime_probe,
             profile_store: None,
             usage_cache: UsageCache::default(),
-            login_cancels: parking_lot::Mutex::default(),
+            logins: Arc::default(),
         }
     }
 

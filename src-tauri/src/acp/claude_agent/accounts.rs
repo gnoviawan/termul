@@ -8,13 +8,10 @@ use std::time::Duration;
 use super::{claude_cli_command, AccountResolution, ClaudeAccountStore, ClaudeAgentService};
 use crate::acp::claude_accounts::{ClaudeAccount, ClaudeAccountsSnapshot, BUILTIN_ACCOUNT_ID};
 
-/// Upper bound for one browser login; `claude auth login` waits for the
-/// browser callback until then.
-const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// Upper bound for one sign-in; `claude auth login` waits for the browser
+/// callback or the pasted code until then.
+pub(super) const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const LOGOUT_TIMEOUT: Duration = Duration::from_secs(20);
-/// Cancel handle of each running browser login, by Account id.
-pub(super) type LoginCancels =
-    parking_lot::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>;
 
 /// Whether choosing an Account first checks that its login is confirmed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,14 +243,14 @@ impl ClaudeAgentService {
         store.remove(id)
     }
 
-    /// Stop a running [`login_account`](Self::login_account) for `id`.
-    /// Returns `false` when no login for that Account is running.
+    /// Stop the running browser or link sign-in of `id`. Returns `false`
+    /// when no sign-in for that Account is running.
     pub fn cancel_login(&self, id: &str) -> bool {
-        let Some(cancel) = self.login_cancels.lock().remove(id) else {
-            return false;
-        };
-        log::info!("[claude-accounts] login cancelled");
-        cancel.send(()).is_ok()
+        let cancelled = self.logins.cancel(id);
+        if cancelled {
+            log::info!("[claude-accounts] login cancelled");
+        }
+        cancelled
     }
 
     /// Run Anthropic's interactive `claude auth login` for one Account in the
@@ -272,21 +269,14 @@ impl ClaudeAgentService {
     /// CLI opens the browser and stores the login itself; Termul never sees
     /// the token. Resolves when the login finishes, fails, or times out.
     pub async fn login_account(&self, id: &str) -> Result<(), String> {
-        let store = self.account_store()?;
-        let dir = if id == BUILTIN_ACCOUNT_ID {
-            None
-        } else {
-            let known = store.snapshot()?.profiles.iter().any(|row| row.id == id);
-            if !known {
-                return Err("That Claude account does not exist".to_string());
-            }
-            store.config_dir(id)
-        };
+        let dir = self.sign_in_dir(id)?;
         log::info!("[claude-accounts] login started");
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-        self.login_cancels.lock().insert(id.to_string(), cancel_tx);
+        let generation = self
+            .logins
+            .begin(id, super::logins::LoginKind::Browser { _cancel: cancel_tx });
         let result = run_cli(&["auth", "login"], dir, LOGIN_TIMEOUT, Some(cancel_rx)).await;
-        self.login_cancels.lock().remove(id);
+        self.logins.end(id, generation);
         match result {
             Ok(true) => {
                 log::info!("[claude-accounts] login finished");
@@ -302,13 +292,26 @@ impl ClaudeAgentService {
             }
         }
     }
+
+    /// The Claude config dir a sign-in of `id` writes to (`None` = the
+    /// host's own, for the built-in Account).
+    pub(super) fn sign_in_dir(&self, id: &str) -> Result<Option<PathBuf>, String> {
+        let store = self.account_store()?;
+        if id == BUILTIN_ACCOUNT_ID {
+            return Ok(None);
+        }
+        if !store.snapshot()?.profiles.iter().any(|row| row.id == id) {
+            return Err("That Claude account does not exist".to_string());
+        }
+        Ok(store.config_dir(id))
+    }
 }
 
 /// Run `claude <args>` with no terminal and discarded output. `Ok(true)` on
 /// exit code 0. The CLI output can hold account details, so it is never read.
 /// Stdin is an open pipe that is never written: `auth login` exits at stdin
-/// EOF before the browser callback can finish the login. A message on
-/// `cancel` stops the CLI.
+/// EOF before the browser callback can finish the login. `cancel` resolving
+/// (a message, or its sender dropped) stops the CLI.
 async fn run_cli(
     args: &[&str],
     config_dir: Option<PathBuf>,
@@ -329,7 +332,7 @@ async fn run_cli(
     let waited = match cancel {
         Some(cancel) => tokio::select! {
             waited = tokio::time::timeout(timeout, child.wait()) => Some(waited),
-            Ok(()) = cancel => None,
+            _ = cancel => None,
         },
         None => Some(tokio::time::timeout(timeout, child.wait()).await),
     };
