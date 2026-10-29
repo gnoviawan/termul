@@ -79,7 +79,6 @@ fn directory_with_a_media_extension_is_not_a_file() {
 #[test]
 fn caps_each_kind_at_its_own_limit() {
     let dir = tempfile::tempdir().expect("tempdir");
-    // 30 MiB is over the image cap but under the video and PDF caps.
     let image = sparse(dir.path(), "big.png", 30 * MIB);
     let err = read_err(&image);
     assert_eq!(err.code, MediaErrorCode::FileTooLarge);

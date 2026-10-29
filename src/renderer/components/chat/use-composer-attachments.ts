@@ -70,7 +70,6 @@ function readTextAsAttachment(file: File): Promise<PendingAttachment> {
   })
 }
 
-/** The bytes of a media file by path; throws with the read's failure code. */
 async function readMediaFileBytes(path: string): Promise<Uint8Array> {
   const result = await readMediaBytes(path)
   if (!result.success) throw new Error(result.code)

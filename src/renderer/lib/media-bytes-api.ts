@@ -1,13 +1,3 @@
-/**
- * Read an image, video, or PDF by path as a `Blob`. Desktop invokes the
- * `read_media_bytes` command; web/remote fetches `GET /fs/raw` with the bearer
- * header. Both are backed by the same host service, so the readable extensions,
- * the per-kind size caps, and the failure codes (`UNSUPPORTED_MEDIA`,
- * `FILE_TOO_LARGE`, `NOT_FOUND`, `NOT_A_FILE`, `READ_ERROR`, plus
- * `INVALID_PATH` on desktop, `PATH_TRAVERSAL` on web, and `NETWORK_ERROR` for a
- * failed or timed-out fetch) match on every surface.
- */
-
 import type { IpcResult } from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
 import { networkError, parseBody, serverBase } from './ipc/http'
@@ -44,7 +34,6 @@ async function readDesktop(path: string): Promise<IpcResult<Blob>> {
   }
 }
 
-/** The command rejects with `{ code, message }`; anything else is an IPC fault. */
 function desktopFailure(error: unknown): MediaFailure {
   if (
     typeof error === 'object' &&

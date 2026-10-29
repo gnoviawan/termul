@@ -1,23 +1,15 @@
 import { basename } from './path-basename'
 
-/**
- * Media files the renderer can display, keyed by extension. This is the
- * renderer twin of `MEDIA_TYPES` in `src-tauri/src/media_bytes.rs`, the table
- * the host reads by; `media-kind.test.ts` fails when the two drift.
- */
-
 export type MediaKind = 'image' | 'video' | 'pdf'
 
 const MIB = 1024 * 1024
 
-/** Largest file of each kind the host will read (`MediaKind::max_bytes`). */
 export const MEDIA_MAX_BYTES: Readonly<Record<MediaKind, number>> = {
   image: 25 * MIB,
   video: 100 * MIB,
   pdf: 50 * MIB
 }
 
-/** Lower-case extension -> kind and the MIME type the bytes are served as. */
 export const MEDIA_TYPES: Readonly<Record<string, { kind: MediaKind; mime: string }>> = {
   png: { kind: 'image', mime: 'image/png' },
   jpg: { kind: 'image', mime: 'image/jpeg' },

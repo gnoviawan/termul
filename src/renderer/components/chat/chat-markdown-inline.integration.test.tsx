@@ -9,7 +9,6 @@ const { invokeMock, fetchMock, logFrontendErrorMock, isTauriContextMock } = vi.h
   isTauriContextMock: vi.fn(() => false)
 }))
 
-// The real readMediaBytes facade runs; only its two transports are faked.
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invokeMock(...args)
 }))
@@ -79,7 +78,6 @@ function renderChat(text: string, cwd?: string): ReturnType<typeof render> {
 const ABC = new Uint8Array([65, 66, 67])
 const mutableURL = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown }
 
-/** The desktop command rejects with the serialized `MediaReadError`. */
 function desktopReadFails(code: string): void {
   invokeMock.mockRejectedValueOnce({ code, message: code.toLowerCase() })
 }

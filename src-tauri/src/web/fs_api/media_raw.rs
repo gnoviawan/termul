@@ -1,14 +1,3 @@
-//! `GET /fs/raw?path=...`: the bytes of an image, video, or PDF (the web twin
-//! of the desktop `read_media_bytes` command), read through the shared
-//! [`crate::media_bytes`] service.
-//!
-//! The path guards are exactly those of `GET /fs/read`: `resolve_request_path`
-//! (`..` rejection + canonicalization) and no project-root jail (ADR-007). The
-//! extension allowlist and per-kind size caps come from the service. Unlike
-//! the JSON routes, failures use real HTTP statuses because a success body is
-//! raw bytes; the failure body is still the usual `{ success: false, error,
-//! code }`.
-
 use std::path::{Path, PathBuf};
 
 use axum::{
@@ -21,8 +10,8 @@ use axum::{
 use super::{resolve_request_path, IpcBody, PathQuery};
 use crate::media_bytes::{log_name, read_media, MediaBytes, MediaErrorCode, MediaReadError};
 
-/// Served with every success body. The sandbox CSP keeps an SVG opened as a
-/// top-level document from running script against the server origin.
+/// The sandbox CSP keeps an SVG opened as a top-level document from running
+/// script against the server origin.
 const RAW_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
 pub async fn raw(Query(q): Query<PathQuery>) -> Response {

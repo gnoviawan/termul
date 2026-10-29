@@ -1,10 +1,3 @@
-//! Binary reads of viewable media files, shared by the desktop
-//! `read_media_bytes` command and the web `GET /fs/raw` route.
-//!
-//! [`MEDIA_TYPES`] is the only list of readable extensions on the Rust side.
-//! `src/renderer/lib/media-kind.ts` mirrors it, and a renderer test parses this
-//! file to fail on drift between the two.
-
 use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
@@ -19,7 +12,6 @@ pub enum MediaKind {
 }
 
 impl MediaKind {
-    /// Largest file of this kind either transport will read into memory.
     pub const fn max_bytes(self) -> u64 {
         const MIB: u64 = 1024 * 1024;
         match self {
@@ -30,7 +22,6 @@ impl MediaKind {
     }
 }
 
-/// Lower-case extension, kind, and the `Content-Type` the bytes are served as.
 pub const MEDIA_TYPES: &[(&str, MediaKind, &str)] = &[
     ("png", MediaKind::Image, "image/png"),
     ("jpg", MediaKind::Image, "image/jpeg"),
@@ -49,7 +40,6 @@ pub const MEDIA_TYPES: &[(&str, MediaKind, &str)] = &[
     ("pdf", MediaKind::Pdf, "application/pdf"),
 ];
 
-/// The kind and MIME type of `path` by extension (case-insensitive).
 pub fn media_type_for_path(path: &Path) -> Option<(MediaKind, &'static str)> {
     let ext = path.extension()?.to_str()?;
     MEDIA_TYPES
@@ -58,8 +48,6 @@ pub fn media_type_for_path(path: &Path) -> Option<(MediaKind, &'static str)> {
         .map(|&(_, kind, mime)| (kind, mime))
 }
 
-/// The file name alone, for boundary logs: media logs never carry the
-/// directory or the contents.
 pub fn log_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -73,9 +61,7 @@ pub enum MediaErrorCode {
     NotFound,
     NotAFile,
     ReadError,
-    /// Desktop only: the command takes absolute paths.
     InvalidPath,
-    /// Web only: `resolve_request_path` refused a `..` component.
     PathTraversal,
 }
 
@@ -99,7 +85,6 @@ impl Serialize for MediaErrorCode {
     }
 }
 
-/// Serialized as `{ code, message }`; the desktop invoke rejects with it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MediaReadError {
     pub code: MediaErrorCode,
@@ -139,10 +124,6 @@ pub struct MediaBytes {
     pub mime: &'static str,
 }
 
-/// Read a media file whole. The extension is checked on the canonical path, so
-/// a symlink named `x.png` that points at a non-media file is refused. The size
-/// cap is checked on the metadata before reading and enforced again while
-/// reading, so a file that grows in between is still refused.
 pub fn read_media(path: &Path) -> Result<MediaBytes, MediaReadError> {
     let canonical = path.canonicalize().map_err(|e| MediaReadError::io(&e))?;
     let (kind, mime) = media_type_for_path(&canonical).ok_or_else(|| {

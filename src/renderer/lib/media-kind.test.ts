@@ -5,7 +5,6 @@ import { MEDIA_MAX_BYTES, MEDIA_TYPES, mediaKindForPath, mediaMimeForPath } from
 
 const RUST_SERVICE = join(__dirname, '..', '..', '..', 'src-tauri', 'src', 'media_bytes.rs')
 
-/** `ext kind mime` rows parsed from the Rust `MEDIA_TYPES` table, sorted. */
 function rustRows(source: string): string[] {
   const table = source.match(/pub const MEDIA_TYPES[^=]*=\s*&\[([\s\S]*?)\];/)
   if (!table) throw new Error('MEDIA_TYPES table not found in media_bytes.rs')

@@ -134,13 +134,7 @@ function TermulImageAltChip({ alt }: { alt: string }): React.JSX.Element {
   )
 }
 
-/**
- * Renders a `<termul-image>` element emitted by `remarkTermulImages`.
- * `data:`/`blob:` URLs render directly; `file://` and relative URLs to image
- * files are resolved against the chat cwd and read through `readMediaBytes`
- * on every surface. While loading, on a read failure, or when the image fails
- * to decode (`<img>` onError), the muted alt-text chip renders instead.
- */
+/** Renders a `<termul-image>` element emitted by `remarkTermulImages`. */
 export function TermulMarkdownImage({
   url,
   alt,

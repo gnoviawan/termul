@@ -6,13 +6,9 @@ use std::path::PathBuf;
 use tauri::ipc::Response;
 use tauri::AppHandle;
 
-// ==================== Media Commands ====================
-
-/// Read an image, video, or PDF by absolute path (the desktop twin of the web
-/// `GET /fs/raw`). The generic `fs:allow-read-file` permission is not granted
-/// to the renderer; this extension-allowlisted, size-capped read is its only
-/// binary-read path. The bytes arrive in JS as an `ArrayBuffer`; a failure
-/// rejects the invoke with the serialized [`MediaReadError`] `{ code, message }`.
+/// Read an image, video, or PDF by absolute path. The bytes arrive in JS as an
+/// `ArrayBuffer`; a failure rejects the invoke with the serialized
+/// [`MediaReadError`] `{ code, message }`.
 #[tauri::command]
 pub async fn read_media_bytes(path: String) -> Result<Response, MediaReadError> {
     let candidate = PathBuf::from(path_validation::strip_verbatim_prefix(&path).as_ref());

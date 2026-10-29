@@ -122,7 +122,6 @@ describe('copyAttachmentImage', () => {
     vi.clearAllMocks()
     mocks.isTauriContext.mockReturnValue(true)
     mocks.writeClipboardImagePng.mockResolvedValue(undefined)
-    // A Blob stand-in: the stubbed global Blob has no arrayBuffer().
     mocks.readMediaBytes.mockResolvedValue({
       success: true,
       data: { arrayBuffer: async () => PNG_BYTES.slice().buffer }

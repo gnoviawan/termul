@@ -1999,7 +1999,6 @@ pub fn run() {
             commands::search_content_cancel,
             commands::search_file_names_stream,
             commands::search_file_names_cancel,
-            // Media binary reads (brokered; fs:allow-read-file is not granted)
             commands::read_media_bytes,
             // SSH commands
             commands::ssh_list_profiles,

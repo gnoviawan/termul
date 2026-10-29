@@ -46,7 +46,6 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 /** Max bytes for an embedded text file (keeps the context window sane). */
 export const MAX_EMBED_BYTES = 512 * 1024
 
-/** Non-media extensions; images, video, and PDF come from `media-kind.ts`. */
 const EXT_MIME: Record<string, string> = {
   // text / docs
   txt: 'text/plain',
@@ -156,7 +155,6 @@ export function isTextLike(name: string, mimeType?: string): boolean {
   }
   const ext = fileExtension(name)
   if (!ext) return TEXT_BASENAMES.has(basename(name).toLowerCase())
-  // SVG is an image the agent can also read as markup.
   return ext === 'svg' || Object.hasOwn(EXT_MIME, ext)
 }
 

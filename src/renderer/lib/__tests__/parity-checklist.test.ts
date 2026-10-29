@@ -1345,10 +1345,6 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
-  // Media bytes transport parity (issue #1535): images, video, and PDFs are
-  // read through one host service (`media_bytes.rs`) exposed as the desktop
-  // `read_media_bytes` command and the web `GET /fs/raw` route. The renderer
-  // facade branches `isTauriContext()` between the two.
   describe('Media bytes parity (issue #1535)', () => {
     const Facade = join(LIB_DIR, 'media-bytes-api.ts')
     const SrcTauri = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')

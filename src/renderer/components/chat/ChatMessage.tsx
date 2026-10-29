@@ -189,8 +189,6 @@ function blockIsImage(block: ContentBlock): boolean {
 function MediaGridItem({ block, id }: { block: ContentBlock; id: string }): React.JSX.Element {
   const initial = useMemo(() => blockToAttachmentData(block, id), [block, id])
   const name = blockDisplayName(block)
-  // Inline image blocks and data/http URIs are already renderable; only
-  // file:// images need a host read to become a `blob:` preview.
   const uri = initial.url ? '' : (blockUri(block) ?? '')
   const localPath = blockIsImage(block) ? resolveLocalImagePath(uri) : null
   const objectUrl = useMediaObjectUrl(localPath)
