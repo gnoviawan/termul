@@ -347,7 +347,8 @@ describe('ProjectSettings layout', () => {
       ['Project', 'shell'],
       ['Project', 'env-vars'],
       ['Project', 'symlinks'],
-      ['Agents', 'provider']
+      ['Agents', 'provider'],
+      ['Agents', 'browser']
     ])
     expect(PROJECT_SETTINGS_SEARCH_INDEX.some((e) => e.categoryId === 'emergency')).toBe(false)
   })
@@ -355,7 +356,10 @@ describe('ProjectSettings layout', () => {
   it('points every search anchor at a rendered settings row', () => {
     renderSettings()
 
-    const anchors = PROJECT_SETTINGS_SEARCH_INDEX.flatMap((e) => (e.anchorId ? [e.anchorId] : []))
+    // Browser rows come from BrowserProjectPolicy, which is mocked out here.
+    const anchors = PROJECT_SETTINGS_SEARCH_INDEX.flatMap((e) =>
+      e.anchorId && e.categoryId !== 'browser' ? [e.anchorId] : []
+    )
     expect(anchors.length).toBeGreaterThan(0)
     for (const anchor of anchors) {
       const row = document.getElementById(anchor)
