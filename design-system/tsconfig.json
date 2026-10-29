@@ -9,6 +9,7 @@
   "exclude": [
     "../src/renderer/**/*.test.ts",
     "../src/renderer/**/*.test.tsx",
-    "../src/renderer/**/__tests__/**/*"
+    "../src/renderer/**/__tests__/**/*",
+    "../src/shared/**/*.test.ts"
   ]
 }
