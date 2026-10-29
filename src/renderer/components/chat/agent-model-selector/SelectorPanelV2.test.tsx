@@ -2542,3 +2542,111 @@ describe('SelectorPanelV2 opening scroll', () => {
     }
   })
 })
+
+describe('SelectorPanelV2 keyboard pick and search highlight', () => {
+  const THREE = select('model', 'Model', 'opus', [
+    ['opus', 'Claude Opus'],
+    ['sonnet', 'Claude Sonnet'],
+    ['gemini', 'Gemini Pro']
+  ])
+
+  function PickPanel(p: SelectorPanelV2Props): React.JSX.Element {
+    const [model, setModel] = useState(p.modelValue)
+    return (
+      <Panel
+        {...p}
+        modelValue={model}
+        onPickModel={(value) => {
+          p.onPickModel(value)
+          setModel(value)
+        }}
+      />
+    )
+  }
+
+  const search = (): HTMLElement =>
+    screen.getByRole('textbox', { name: 'Search models and agents' })
+  const row = (name: string): HTMLElement =>
+    screen
+      .getAllByRole('button', { name })
+      .find((el) => el.hasAttribute('data-selector-row')) as HTMLElement
+  /** A native button turns Enter into a click; jsdom needs the click itself. */
+  const pressEnter = (el: Element): void => {
+    fireEvent.keyDown(el, { key: 'Enter' })
+    fireEvent.click(el)
+  }
+  const highlighted = (): HTMLElement[] =>
+    Array.from(document.querySelectorAll<HTMLElement>('[data-search-highlight]'))
+
+  it('Enter on a row picks it and keeps focus on the newly selected row; arrows still work', () => {
+    const onPickModel = vi.fn()
+    render(<PickPanel {...props({ modelOption: THREE, onPickModel })} />)
+    fireEvent.keyDown(search(), { key: 'ArrowDown' })
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(row('Claude Sonnet'))
+    pressEnter(document.activeElement as Element)
+    expect(onPickModel).toHaveBeenCalledWith('sonnet')
+    const picked = screen.getByRole('button', { name: 'Claude Sonnet', pressed: true })
+    expect(document.activeElement).toBe(picked)
+    expect(screen.getByTestId('selector-edit')).not.toBe(document.activeElement)
+    fireEvent.keyDown(picked, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(row('Gemini Pro'))
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowUp' })
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(row('Claude Opus'))
+  })
+
+  it('typing highlights the first match, and Enter in search picks it', () => {
+    const onPickModel = vi.fn()
+    render(<PickPanel {...props({ modelOption: THREE, onPickModel })} />)
+    search().focus()
+    fireEvent.change(search(), { target: { value: 'gemini' } })
+    expect(highlighted()).toEqual([row('Gemini Pro')])
+    fireEvent.keyDown(search(), { key: 'Enter' })
+    expect(onPickModel).toHaveBeenCalledWith('gemini')
+  })
+
+  it('Enter in search with no results picks nothing', () => {
+    const onPickModel = vi.fn()
+    render(<PickPanel {...props({ modelOption: THREE, onPickModel })} />)
+    search().focus()
+    fireEvent.change(search(), { target: { value: 'zzzz' } })
+    expect(highlighted()).toEqual([])
+    fireEvent.keyDown(search(), { key: 'Enter' })
+    expect(onPickModel).not.toHaveBeenCalled()
+  })
+
+  it('the highlight resets to the first result each time the query changes', () => {
+    render(<PickPanel {...props({ modelOption: THREE })} />)
+    search().focus()
+    fireEvent.change(search(), { target: { value: 'claude' } })
+    expect(highlighted()).toEqual([row('Claude Opus')])
+    fireEvent.change(search(), { target: { value: 'claude s' } })
+    expect(highlighted()).toEqual([row('Claude Sonnet')])
+    fireEvent.change(search(), { target: { value: 'claude' } })
+    expect(highlighted()).toEqual([row('Claude Opus')])
+  })
+
+  it('no highlight without a query, or once focus leaves search', () => {
+    render(<PickPanel {...props({ modelOption: THREE })} />)
+    search().focus()
+    expect(highlighted()).toEqual([])
+    fireEvent.change(search(), { target: { value: 'claude' } })
+    fireEvent.keyDown(search(), { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(row('Claude Opus'))
+    expect(highlighted()).toEqual([])
+  })
+
+  it('hovering another row does not move the keyboard highlight', () => {
+    const onPickModel = vi.fn()
+    render(<PickPanel {...props({ modelOption: THREE, onPickModel })} />)
+    search().focus()
+    fireEvent.change(search(), { target: { value: 'claude' } })
+    fireEvent.pointerEnter(row('Claude Sonnet'))
+    fireEvent.pointerMove(row('Claude Sonnet'))
+    fireEvent.mouseEnter(row('Claude Sonnet'))
+    expect(highlighted()).toEqual([row('Claude Opus')])
+    fireEvent.keyDown(search(), { key: 'Enter' })
+    expect(onPickModel).toHaveBeenCalledWith('opus')
+  })
+})
