@@ -119,7 +119,7 @@ function canonicalizeAbsolutePath(p: string): string {
 
 /**
  * Resolve a `file://` or relative markdown image URL against the chat cwd into
- * an absolute OS path for the brokered `readAttachmentBytes` read. The URL is
+ * an absolute OS path for the `readMediaBytes` read. The URL is
  * percent-decoded first (markdown destinations keep %-encoding). Returns null
  * so the caller can fall back to the alt-text chip when the URL is not
  * locally readable: malformed percent escapes, protocol-relative `//host/…`,

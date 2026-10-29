@@ -1,5 +1,5 @@
 import { mermaid as mermaidPlugin } from '@streamdown/mermaid'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   type AllowedTags,
@@ -10,16 +10,15 @@ import {
 } from 'streamdown'
 
 import { ConfirmedExternalLink } from '@/components/external-link/ExternalLinkConfirm'
+import { useMediaObjectUrl } from '@/hooks/use-media-object-url'
 import { useThrottledStreamingText } from '@/hooks/use-throttled-streaming-text'
-import { readAttachmentBytes } from '@/lib/attachment-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
-import { isTauriContext } from '@/lib/tauri-runtime'
+import { mediaKindForPath } from '@/lib/media-kind'
 import { syntaxShikiPair } from '@/lib/themes/syntax-shiki'
 import { cn } from '@/lib/utils'
 import { useColorTheme } from '@/stores/app-settings-store'
 import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
-import { guessMimeType, uint8ToBase64 } from './chat-attachments'
 import { chatCodePlugin } from './chat-code-plugin'
 import { ChatMarkdownCode } from './chat-markdown-code'
 import { remarkFilePathLinks } from './chat-markdown-file-links'
@@ -135,21 +134,7 @@ function TermulImageAltChip({ alt }: { alt: string }): React.JSX.Element {
   )
 }
 
-/** What an async-resolved preview belongs to, so stale previews get dropped. */
-interface ResolvedImagePreview {
-  url: string
-  cwd?: string
-  src: string
-}
-
-/**
- * Renders a `<termul-image>` element emitted by `remarkTermulImages`.
- * `data:`/`blob:` URLs render directly; `file://` and relative URLs are
- * resolved against the chat cwd and read via the brokered
- * `readAttachmentBytes` command (Tauri only). On the web or any read failure
- * the muted alt-text chip renders instead. A preview that fails to decode
- * after render (`<img>` onError) also falls back to the chip.
- */
+/** Renders a `<termul-image>` element emitted by `remarkTermulImages`. */
 export function TermulMarkdownImage({
   url,
   alt,
@@ -160,46 +145,17 @@ export function TermulMarkdownImage({
   cwd?: string
 }): React.JSX.Element {
   const directUrl = url.startsWith('data:') || url.startsWith('blob:') ? url : null
-  const readablePath = directUrl ? null : resolveLocalImagePath(url, cwd)
-  const [resolved, setResolved] = useState<ResolvedImagePreview | null>(null)
+  const localPath = directUrl ? null : resolveLocalImagePath(url, cwd)
+  const objectUrl = useMediaObjectUrl(
+    localPath && mediaKindForPath(localPath) === 'image' ? localPath : null
+  )
   const [failed, setFailed] = useState<{ url: string; cwd?: string } | null>(null)
-  if (resolved !== null && (resolved.url !== url || resolved.cwd !== cwd)) {
-    // The markdown re-parsed with a different URL or the project switched cwd:
-    // drop the stale preview so the new combination resolves from a clean slate.
-    setResolved(null)
-  }
   if (failed !== null && (failed.url !== url || failed.cwd !== cwd)) {
     setFailed(null)
   }
 
-  useEffect(() => {
-    if (directUrl || !readablePath || !isTauriContext()) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const bytes = await readAttachmentBytes(readablePath)
-        if (cancelled) return
-        setResolved({
-          url,
-          cwd,
-          src: `data:${guessMimeType(readablePath)};base64,${uint8ToBase64(bytes)}`
-        })
-      } catch (error) {
-        if (cancelled) return
-        void logFrontendError({
-          level: 'warn',
-          source: 'ChatMessage.termulImage',
-          message: `Failed to read chat image '${url}': ${String(error)}`
-        })
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [directUrl, readablePath, url, cwd])
-
   const failedNow = failed !== null && failed.url === url && failed.cwd === cwd
-  const src = directUrl ?? resolved?.src
+  const src = directUrl ?? objectUrl
   if (src && !failedNow) {
     return (
       <img
@@ -208,7 +164,6 @@ export function TermulMarkdownImage({
         className="max-h-96 max-w-full rounded-md"
         onError={() => {
           setFailed({ url, cwd })
-          setResolved(null)
           void logFrontendError({
             level: 'warn',
             source: 'ChatMessage.termulImage',

@@ -1345,6 +1345,42 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  describe('Media bytes parity (issue #1535)', () => {
+    const Facade = join(LIB_DIR, 'media-bytes-api.ts')
+    const SrcTauri = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+    const RouterRust = join(SrcTauri, 'web', 'router', 'mod.rs')
+    const RawRouteRust = join(SrcTauri, 'web', 'fs_api', 'media_raw.rs')
+    const CommandsRust = join(SrcTauri, 'commands', 'misc.rs')
+    const LibRust = join(SrcTauri, 'lib.rs')
+
+    it('media-bytes-api.ts branches on isTauriContext() between the command and /fs/raw', () => {
+      const content = readFileSync(Facade, 'utf-8')
+      expect(content).toMatch(/isTauriContext\(\)/)
+      expect(content).toMatch(/invoke<ArrayBuffer>\('read_media_bytes'/)
+      expect(content).toMatch(/\/fs\/raw\?path=/)
+      expect(content).toMatch(/authHeader\(\)/)
+      expect(content).toMatch(/boundedFsRequest\(/)
+    })
+
+    it('router registers /fs/raw in BOTH router variants', () => {
+      const content = readFileSync(RouterRust, 'utf-8')
+      const occurrences = (content.match(/"\/fs\/raw"/g) ?? []).length
+      expect(occurrences, 'both router() and router_with_static() register the route').toBe(2)
+    })
+
+    it('both transports read through the shared media_bytes service', () => {
+      const route = readFileSync(RawRouteRust, 'utf-8')
+      expect(route).toMatch(/pub async fn raw\b/)
+      expect(route).toMatch(/resolve_request_path\(/)
+      expect(route).toMatch(/read_media\(/)
+      expect(route).toMatch(/tracing::warn!/)
+      const command = readFileSync(CommandsRust, 'utf-8')
+      expect(command).toMatch(/pub async fn read_media_bytes\b/)
+      expect(command).toMatch(/read_media\(/)
+      expect(readFileSync(LibRust, 'utf-8')).toMatch(/commands::read_media_bytes\b/)
+    })
+  })
+
   // Global right-click context menu + production devtools block. Pins that:
   //   - GlobalContextMenu wraps BOTH roots (TauriApp.tsx + App.tsx) for parity.
   //   - The devtools-shortcut blocker is desktop-only + PROD-gated (TauriApp, not App).
