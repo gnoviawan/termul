@@ -1,82 +1,47 @@
 use super::{validate_project_path, IpcResult};
+use crate::media_bytes::{log_name, read_media, MediaErrorCode, MediaReadError};
 use crate::path_validation;
 use serde::Serialize;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use tauri::ipc::Response;
 use tauri::AppHandle;
 
-// ==================== Attachment Commands ====================
+// ==================== Media Commands ====================
 
-/// Maximum attachment image size the renderer may read through this command.
-/// Mirrors the renderer's `MAX_IMAGE_BYTES` (10 MB) so the brokered read can
-/// reject oversized files before transferring them across IPC.
-const ATTACHMENT_MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
-
-/// Image extensions the attachment flow is allowed to read by path. The
-/// generic `fs:allow-read-file` permission was removed from the renderer
-/// capability; this command is the only binary-read path left, and it is
-/// intentionally restricted to images (the only content type the composer and
-/// chat preview need to read by path) to limit the confidentiality surface.
-const ATTACHMENT_IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "svg", "ico",
-];
-
-fn attachment_is_image_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| {
-            ATTACHMENT_IMAGE_EXTENSIONS
-                .iter()
-                .any(|allowed| allowed.eq_ignore_ascii_case(ext))
-        })
-        .unwrap_or(false)
-}
-
-/// Read attachment image bytes by path. Replaces direct renderer
-/// `fs:allow-read-file` access so binary reads go through one validated,
-/// size- and type-constrained command instead of the generic fs plugin.
-///
-/// Returns the raw bytes via `Response::new`, which arrives on the JS side as
-/// an `ArrayBuffer`. Rejects (throws on JS) when the path is not absolute,
-/// does not exist, is not a regular file, exceeds the size cap, or is not an
-/// image — callers fall back to a file-icon preview on rejection.
+/// Read an image, video, or PDF by absolute path (the desktop twin of the web
+/// `GET /fs/raw`). The generic `fs:allow-read-file` permission is not granted
+/// to the renderer; this extension-allowlisted, size-capped read is its only
+/// binary-read path. The bytes arrive in JS as an `ArrayBuffer`; a failure
+/// rejects the invoke with the serialized [`MediaReadError`] `{ code, message }`.
 #[tauri::command]
-pub fn read_attachment_bytes(path: String) -> Result<Response, String> {
-    let stripped = path_validation::strip_verbatim_prefix(&path);
-    let candidate = PathBuf::from(stripped.as_ref());
-
+pub async fn read_media_bytes(path: String) -> Result<Response, MediaReadError> {
+    let candidate = PathBuf::from(path_validation::strip_verbatim_prefix(&path).as_ref());
+    let name = log_name(&candidate);
     if !candidate.is_absolute() {
-        return Err("Attachment path must be absolute".to_string());
+        log::warn!("read_media_bytes refused {name}: INVALID_PATH");
+        return Err(MediaReadError::new(
+            MediaErrorCode::InvalidPath,
+            "media path must be absolute",
+        ));
     }
-
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|e| format!("Invalid or inaccessible attachment path: {}", e))?;
-
-    if !attachment_is_image_extension(&canonical) {
-        return Err("Attachment path is not an image".to_string());
+    let result = tauri::async_runtime::spawn_blocking(move || read_media(&candidate))
+        .await
+        .unwrap_or_else(|e| {
+            Err(MediaReadError::new(
+                MediaErrorCode::ReadError,
+                format!("read task failed: {e}"),
+            ))
+        });
+    match result {
+        Ok(media) => {
+            log::debug!("read_media_bytes {name}: {} bytes", media.bytes.len());
+            Ok(Response::new(media.bytes))
+        }
+        Err(err) => {
+            log::warn!("read_media_bytes failed for {name}: {}", err.code.as_str());
+            Err(err)
+        }
     }
-
-    let mut file =
-        std::fs::File::open(&canonical).map_err(|e| format!("Failed to open attachment: {}", e))?;
-    let metadata = file
-        .metadata()
-        .map_err(|e| format!("Failed to read attachment metadata: {}", e))?;
-    if !metadata.is_file() {
-        return Err("Attachment path is not a regular file".to_string());
-    }
-    if metadata.len() > ATTACHMENT_MAX_IMAGE_BYTES {
-        return Err("Attachment image exceeds the 10 MB limit".to_string());
-    }
-
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.read_to_end(&mut bytes)
-        .map_err(|e| format!("Failed to read attachment: {}", e))?;
-    if bytes.len() as u64 > ATTACHMENT_MAX_IMAGE_BYTES {
-        return Err("Attachment image exceeds the 10 MB limit".to_string());
-    }
-    Ok(Response::new(bytes))
 }
 
 // ==================== Agent Registry Commands ====================

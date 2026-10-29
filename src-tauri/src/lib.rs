@@ -22,6 +22,7 @@ mod exit_cleanup;
 mod host_perimeter;
 mod logging;
 pub mod mcp_catalog;
+mod media_bytes;
 mod migrations;
 mod path_validation;
 // Console-window hiding + Windows kill-on-close Job Objects for spawned processes.
@@ -1998,8 +1999,8 @@ pub fn run() {
             commands::search_content_cancel,
             commands::search_file_names_stream,
             commands::search_file_names_cancel,
-            // Attachment binary reads (brokered; fs:allow-read-file is not granted)
-            commands::read_attachment_bytes,
+            // Media binary reads (brokered; fs:allow-read-file is not granted)
+            commands::read_media_bytes,
             // SSH commands
             commands::ssh_list_profiles,
             commands::ssh_save_profile,
