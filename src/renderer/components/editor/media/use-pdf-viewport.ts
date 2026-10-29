@@ -2,7 +2,7 @@ import { type RefObject, useEffect, useState } from 'react'
 
 const RENDER_MARGIN = '100% 0px'
 
-export function useElementWidth(ref: RefObject<HTMLElement | null>): number {
+export function useLastVisibleWidth(ref: RefObject<HTMLElement | null>): number {
   const [width, setWidth] = useState(0)
   useEffect(() => {
     const el = ref.current
@@ -23,10 +23,9 @@ export function useNearPages(
   pageCount: number
 ): ReadonlySet<number> {
   const [near, setNear] = useState<ReadonlySet<number>>(() => new Set())
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new page count means new slots to observe
   useEffect(() => {
     const root = rootRef.current
-    if (!root) return
+    if (!root || pageCount === 0) return
     const observer = new IntersectionObserver(
       (entries) => {
         setNear((previous) => {

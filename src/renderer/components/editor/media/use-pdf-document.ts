@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { logFrontendError } from '@/lib/log-api'
 import { readMediaBytes } from '@/lib/media-bytes-api'
 import { basename } from '@/lib/path-basename'
@@ -25,8 +25,9 @@ export function usePdfDocument(filePath: string, revision: number): PdfDocumentS
   const shownDoc = state.status === 'ready' ? state.doc : null
   useEffect(() => () => shownDoc?.destroy(), [shownDoc])
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `revision` is the refetch signal
+  const request = useMemo(() => ({ filePath, revision }), [filePath, revision])
   useEffect(() => {
+    const { filePath } = request
     let stale = false
     let pending: PdfLoad | null = null
     let adopted = false
@@ -69,7 +70,7 @@ export function usePdfDocument(filePath: string, revision: number): PdfDocumentS
       stale = true
       if (!adopted) pending?.destroy()
     }
-  }, [filePath, revision])
+  }, [request])
 
   return state
 }

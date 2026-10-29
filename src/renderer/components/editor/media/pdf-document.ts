@@ -6,7 +6,7 @@ export interface PdfPageSize {
 }
 
 export interface PdfRenderTask {
-  readonly promise: Promise<boolean>
+  readonly promise: Promise<'painted' | 'cancelled'>
   cancel(): void
 }
 
@@ -85,9 +85,9 @@ function wrapPage(page: PDFPageProxy): PdfPage {
       const task = page.render({ canvas, viewport })
       return {
         promise: task.promise.then(
-          () => true,
+          () => 'painted' as const,
           (error: unknown) => {
-            if (errorName(error) === 'RenderingCancelledException') return false
+            if (errorName(error) === 'RenderingCancelledException') return 'cancelled' as const
             throw error
           }
         ),

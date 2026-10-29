@@ -12,7 +12,7 @@ import {
   locateScrollAnchor,
   type PdfScrollAnchor,
   scrollToAnchor,
-  useElementWidth,
+  useLastVisibleWidth,
   useNearPages
 } from './use-pdf-viewport'
 
@@ -109,7 +109,7 @@ function PdfDocumentView({
     [doc]
   )
 
-  const width = useElementWidth(scrollRef)
+  const width = useLastVisibleWidth(scrollRef)
   const fitScale = width > 0 ? clampScale((width - PAGE_GUTTER) / doc.firstPageSize.width) : 1
   const scale = zoom.kind === 'fit-width' ? fitScale : zoom.value
   const near = useNearPages(scrollRef, doc.pageCount)
@@ -200,7 +200,7 @@ function PdfDocumentView({
                 pageNumber={pageNumber}
                 size={byPage.get(pageNumber) ?? doc.firstPageSize}
                 scale={scale}
-                near={near.has(pageNumber)}
+                inRenderWindow={near.has(pageNumber)}
                 onSize={handlePageSize}
               />
             )

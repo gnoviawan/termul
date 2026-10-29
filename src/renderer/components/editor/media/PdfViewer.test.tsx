@@ -23,7 +23,10 @@ interface FakeDoc extends PdfDocument {
   cancels: number[]
 }
 
-function fakeDoc(pageCount: number, paint: () => Promise<boolean> = async () => true): FakeDoc {
+function fakeDoc(
+  pageCount: number,
+  paint: () => Promise<'painted' | 'cancelled'> = async () => 'painted'
+): FakeDoc {
   const doc: FakeDoc = {
     pageCount,
     firstPageSize: PAGE,

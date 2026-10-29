@@ -9,7 +9,7 @@ interface PdfPageProps {
   pageNumber: number
   size: PdfPageSize
   scale: number
-  near: boolean
+  inRenderWindow: boolean
   onSize: (pageNumber: number, size: PdfPageSize) => void
 }
 
@@ -19,7 +19,7 @@ export function PdfPage({
   pageNumber,
   size,
   scale,
-  near,
+  inRenderWindow,
   onSize
 }: PdfPageProps): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -27,7 +27,7 @@ export function PdfPage({
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
-    if (!near) {
+    if (!inRenderWindow) {
       host.replaceChildren()
       return
     }
@@ -44,7 +44,7 @@ export function PdfPage({
         canvas.className = 'block size-full'
         canvas.setAttribute('aria-hidden', 'true')
         task = page.render(canvas, scale, window.devicePixelRatio || 1)
-        if ((await task.promise) && !cancelled) host.replaceChildren(canvas)
+        if ((await task.promise) === 'painted' && !cancelled) host.replaceChildren(canvas)
       })
       .catch((error: unknown) => {
         if (cancelled) return
@@ -60,7 +60,7 @@ export function PdfPage({
       cancelled = true
       task?.cancel()
     }
-  }, [doc, pageNumber, scale, near, size, onSize, filePath])
+  }, [doc, pageNumber, scale, inRenderWindow, size, onSize, filePath])
 
   return (
     <div
