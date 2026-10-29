@@ -9,34 +9,22 @@ import {
 } from './chat-attachments'
 import { resolveLocalImagePath } from './chat-markdown-images'
 
-/**
- * One piece of media the chat can show inline, whichever shape the agent
- * emitted it in: a markdown image, a markdown link to a media file, or an ACP
- * `image` / `audio` / `resource` / `resource_link` block.
- */
 export type ChatMedia =
   | { kind: 'image' | 'video'; name: string; src: PathSource | UrlSource | BytesSource }
-  // Audio has no host read path (the media table has no audio extensions).
   | { kind: 'audio'; name: string; src: UrlSource | BytesSource }
 
 export type ChatMediaKind = ChatMedia['kind']
 
-/** A local file, read through `readMediaBytes`. */
 export interface PathSource {
   from: 'path'
   path: string
 }
 
-/** A URL the element loads itself: `https:`, `blob:`, or a `data:` image. */
 export interface UrlSource {
   from: 'url'
   url: string
 }
 
-/**
- * Inline base64 bytes, shown through a `blob:` URL: the desktop CSP allows
- * `blob:` but not `data:` in `media-src`.
- */
 export interface BytesSource {
   from: 'bytes'
   base64: string
@@ -45,7 +33,6 @@ export interface BytesSource {
 
 const MIB = 1024 * 1024
 
-/** Largest inline payload decoded into a blob, per kind. */
 const INLINE_MAX_BYTES: Readonly<Record<ChatMediaKind, number>> = {
   image: MEDIA_MAX_BYTES.image,
   video: MEDIA_MAX_BYTES.video,
@@ -67,7 +54,6 @@ function kindForPath(path: string): 'image' | 'video' | null {
   return kind === 'image' || kind === 'video' ? kind : null
 }
 
-/** The extension-bearing part of a URL: an https pathname, else the whole string. */
 function urlPathPart(url: string): string {
   if (!HTTPS_URL_RE.test(url)) return url
   try {
@@ -87,7 +73,6 @@ function fromBase64(
   return { kind, name, src: { from: 'bytes', base64, mime } }
 }
 
-/** A `data:` URL as media of `kind`; images stay URLs, video and audio become bytes. */
 function fromDataUrl(url: string, kind: ChatMediaKind, name: string): ChatMedia | null {
   const match = DATA_URL_RE.exec(url)
   if (!match) return null
@@ -97,10 +82,6 @@ function fromDataUrl(url: string, kind: ChatMediaKind, name: string): ChatMedia 
   return fromBase64(kind, name, payload, mime)
 }
 
-/**
- * A URI or markdown destination as media of `kind`. `cwd` resolves relative
- * paths. Remote audio is not loaded: it has no user gesture in front of it.
- */
 function fromUri(
   uri: string,
   kind: ChatMediaKind,
@@ -136,7 +117,6 @@ export function chatMediaFromMarkdown(
   return fromUri(trimmed, kind, alt, cwd)
 }
 
-/** An inline ACP payload: raw base64 (the ACP shape), a `data:` URL, or a `blob:` URL. */
 function fromInlineData(
   data: string,
   kind: ChatMediaKind,

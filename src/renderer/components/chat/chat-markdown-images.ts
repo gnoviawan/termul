@@ -10,11 +10,6 @@ type MarkdownNode = {
   children?: MarkdownNode[]
 }
 
-/**
- * Raw HTML for the custom media element the sanitizer keeps and harden
- * ignores. `openPath` is set for a markdown link, whose file stays openable
- * next to the media.
- */
 export function termulMediaTag(url: string, alt: string, openPath?: string): string {
   const open = openPath === undefined ? '' : ` data-open-path="${escapeHtmlAttribute(openPath)}"`
   return `<termul-media data-url="${escapeHtmlAttribute(url)}" data-alt="${escapeHtmlAttribute(alt)}"${open}></termul-media>`
@@ -54,11 +49,6 @@ function nodeText(node: MarkdownNode): string {
   return (node.children ?? []).map(nodeText).join('')
 }
 
-/**
- * A link to a local image or video file renders the media inline: agents
- * that never saw the `![]()` hint still write `[demo](out/clip.mp4)`.
- * Image links (badges) and remote links keep the link pipeline.
- */
 function mediaLinkTag(node: MarkdownNode): string | null {
   if (node.type !== 'link' || containsImage(node)) return null
   const url = node.url ?? ''
@@ -85,11 +75,8 @@ function transformChildren(node: MarkdownNode, definitions: Map<string, string>)
 }
 
 /**
- * Rewrites every markdown image, and every link to a local image or video
- * file, into `<termul-media>`, so one component renders them all (lightbox,
- * video player, local reads). The tag survives `rehype-sanitize` because it
- * is registered via the `allowedTags` prop, and `rehype-harden` never sees it.
- * Runs before `remarkFilePathLinks`, which keeps every other local link.
+ * `<termul-media>` survives `rehype-sanitize` only because it is registered
+ * via the `allowedTags` prop; `rehype-harden` ignores it.
  */
 export function remarkTermulMedia(): (tree: MarkdownNode) => void {
   return (tree) => {

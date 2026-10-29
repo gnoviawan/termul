@@ -653,8 +653,7 @@ export function AgentChatPanel({
   // Desktop + web parity: the open-in-editor chain is transport-agnostic —
   // where `/fs/info` is loopback-guarded on remote peers, resolution falls
   // back to the deliberately unguarded `/fs/read` open path (the same one
-  // ChatChangedFilesPanel uses). Local media reads go through
-  // `readMediaBytes`, which has its own desktop and web transports.
+  // ChatChangedFilesPanel uses).
   const projects = useProjectStore((state) => state.projects)
   const filePathContext = useMemo(
     () => ({

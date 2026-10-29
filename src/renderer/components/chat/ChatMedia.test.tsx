@@ -8,7 +8,6 @@ const { invokeMock, fetchMock, isTauriContextMock } = vi.hoisted(() => ({
   isTauriContextMock: vi.fn(() => false)
 }))
 
-// The real readMediaBytes facade runs; only its two transports are faked.
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invokeMock(...args)
 }))

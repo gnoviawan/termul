@@ -246,7 +246,6 @@ describe('ToolCallCard', () => {
     fireEvent.click(screen.getByRole('button'))
 
     try {
-      // The desktop CSP allows blob: but not data: in media-src.
       await waitFor(() => {
         expect(document.querySelector('audio')).toHaveAttribute('src', 'blob:termul/audio')
       })

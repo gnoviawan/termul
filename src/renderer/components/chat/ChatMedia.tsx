@@ -6,10 +6,8 @@ import { logFrontendError } from '@/lib/log-api'
 import { formatSize } from '@/lib/sftp-format'
 import type { BytesSource, ChatMedia as ChatMediaModel } from './chat-media-source'
 
-/** `inline` sizes media for prose; `tile` is the square attachment-grid thumbnail. */
 export type ChatMediaLayout = 'inline' | 'tile'
 
-/** A `blob:` URL for inline base64 bytes, revoked when the bytes change or on unmount. */
 function useBytesObjectUrl(source: BytesSource | null): string | null {
   const base64 = source?.base64 ?? null
   const mime = source?.mime ?? ''
@@ -48,10 +46,6 @@ type ChatMediaState =
   | { status: 'ready'; url: string }
   | ({ status: 'error' } & ReadFailure)
 
-/**
- * The URL an element can load for `media`, or why a local file could not be
- * read. A local file is read only once `loadPath` is true.
- */
 function useChatMediaState(media: ChatMediaModel, loadPath: boolean): ChatMediaState {
   const { src } = media
   const pathState = useMediaObjectUrlState(src.from === 'path' && loadPath ? src.path : null, 0)
@@ -66,10 +60,8 @@ function useChatMediaState(media: ChatMediaModel, loadPath: boolean): ChatMediaS
   }
 }
 
-/** The host's FILE_TOO_LARGE message, `file too large (<size> bytes, max <cap>)`. */
 const TOO_LARGE_MESSAGE = /\((\d+) bytes, max (\d+)\)/
 
-/** Why `name` could not be read, in words a user can act on. */
 function readFailureText(name: string, verb: 'play' | 'show', failure: ReadFailure): string {
   switch (failure.code) {
     case 'FILE_TOO_LARGE': {
@@ -86,7 +78,6 @@ function readFailureText(name: string, verb: 'play' | 'show', failure: ReadFailu
   }
 }
 
-/** Muted stand-in for media that is loading or cannot render. */
 export function MediaAltChip({ alt, title }: { alt: string; title?: string }): React.JSX.Element {
   return (
     <span
@@ -141,13 +132,6 @@ function ChatImage({
   )
 }
 
-/**
- * A local video is read whole (up to 100 MiB) before it can play, so it loads
- * on an explicit click rather than on mount or on scroll: a long transcript
- * never pulls videos the user only scrolls past, which matters most on the
- * web client over a phone connection. Remote and inline videos stream or are
- * already in memory, so they render the player directly.
- */
 function ChatVideo({ media }: { media: ChatMediaModel }): React.JSX.Element {
   const [requested, setRequested] = useState(false)
   const state = useChatMediaState(media, requested)
@@ -218,11 +202,6 @@ function ChatAudio({ media }: { media: ChatMediaModel }): React.JSX.Element | nu
   )
 }
 
-/**
- * Renders any chat media: an image that opens in the lightbox, a video
- * player, or an audio player. `fallback` shows while an image loads or when
- * it cannot render; without one, an alt chip whose tooltip says why.
- */
 export function ChatMedia({
   media,
   layout = 'inline',

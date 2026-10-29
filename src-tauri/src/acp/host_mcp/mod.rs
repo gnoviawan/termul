@@ -71,10 +71,7 @@ pub const ENV_AGENT_ID: &str = "TERMUL_PLAN_AGENT_ID";
 /// Server `instructions` returned in the child's MCP `initialize` result.
 /// Agents that connect the injected `termul` server surface this guidance in
 /// model context, so it doubles as the advertisement for the chat renderer's
-/// markdown affordances: inline images and videos (`![alt](path)`, and links
-/// to media files) and file references that open in Termul's built-in editor
-/// (`[label](path)` and bare paths). Not every agent receives MCP
-/// instructions, so the renderer accepts every one of these shapes regardless.
+/// markdown affordances.
 pub const TERMUL_CHAT_INSTRUCTIONS: &str = "Termul renders your markdown replies in a rich chat UI. \
 Embed images and videos inline with `![alt](path)`, for generated charts, screenshots, diagrams, \
 and screen recordings: paths relative to the session working directory, absolute paths, \

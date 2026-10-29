@@ -219,9 +219,6 @@ fn csp_directive(csp: &str, name: &str) -> String {
         .to_string()
 }
 
-/// Agent chat replies embed remote images and videos (`![](https://...)`);
-/// local and inline media render through `blob:` URLs. Only the display
-/// directives admit `https:`: script and fetch sources stay closed.
 #[test]
 fn csp_admits_https_and_blob_media_but_not_https_scripts_or_fetches() {
     let conf_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json");

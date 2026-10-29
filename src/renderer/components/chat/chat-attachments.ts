@@ -334,7 +334,6 @@ export function blockData(block: ContentBlock): string | undefined {
   return block.data as string | undefined
 }
 
-/** Nested `resource` object of a `resource` block: text or base64 `blob` contents. */
 export function blockResource(block: ContentBlock): EmbeddedResource | undefined {
   return block.resource as EmbeddedResource | undefined
 }

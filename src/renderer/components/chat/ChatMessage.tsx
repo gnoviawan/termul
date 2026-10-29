@@ -162,11 +162,8 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
   )
 }
 
-/** A non-media block (file, embedded binary) as a static icon card. */
 function FileCard({ block, id }: { block: ContentBlock; id: string }): React.JSX.Element {
   const data = useMemo(() => blockToAttachmentData(block, id), [block, id])
-  // Nothing opens a backing path: temp/file paths can live in sandboxed dirs
-  // the OS opener refuses, which would surface as an error.
   return (
     <Attachment data={data} title={blockDisplayName(block)}>
       <AttachmentPreview />
@@ -189,10 +186,6 @@ function ResourceText({ text, name }: { text: string; name: string }): React.JSX
   )
 }
 
-/**
- * Non-text content blocks: images as lightbox tiles in the attachment grid
- * beside file cards, then video and audio players, then embedded text.
- */
 export function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element | null {
   const items = blocks
     .filter((block) => block.type !== 'text')

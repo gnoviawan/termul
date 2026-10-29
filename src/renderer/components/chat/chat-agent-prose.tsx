@@ -26,7 +26,6 @@ import { ChatMarkdownTable } from './chat-markdown-table'
 import { ChatMarkdownSpan } from './chat-markdown-word'
 import { chatMediaFromMarkdown } from './chat-media-source'
 
-/** Always-on remark plugins: streamdown defaults plus the termul-media rewrite. */
 const MEDIA_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkTermulMedia]
 /** Adds prose file-path linkification when a `filePathContext` exists. */
 const FILE_PATH_REMARK_PLUGINS = [
@@ -126,13 +125,6 @@ function scrollToFragment(messageRoot: HTMLElement | null, href: string): void {
   target.scrollIntoView({ block: 'start' })
 }
 
-/**
- * Renders a `<termul-media>` element emitted by `remarkTermulMedia`: an image
- * or video from a markdown image or a local media link. Relative paths
- * resolve against the chat cwd. A link (`openPath`) keeps its open-in-editor
- * button under the media, and stays just that button when the media cannot
- * render.
- */
 export function TermulMarkdownMedia({
   url,
   alt,
