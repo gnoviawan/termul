@@ -1,21 +1,18 @@
-import { escapeHtmlAttribute } from './chat-markdown-file-links'
+import { mediaKindForPath } from '@/lib/media-kind'
+import { escapeHtmlAttribute, localLinkPath } from './chat-markdown-file-links'
 
 type MarkdownNode = {
   type: string
   url?: string
   alt?: string | null
+  value?: string
   identifier?: string
   children?: MarkdownNode[]
 }
 
-/** Whether a markdown image URL keeps streamdown's default https? pipeline. */
-function isHttpUrl(url: string): boolean {
-  return /^https?:/i.test(url)
-}
-
-/** Raw HTML for the custom image element the sanitizer keeps and harden ignores. */
-export function termulImageTag(url: string, alt: string): string {
-  return `<termul-image data-url="${escapeHtmlAttribute(url)}" data-alt="${escapeHtmlAttribute(alt)}"></termul-image>`
+export function termulMediaTag(url: string, alt: string, linkPreview = false): string {
+  const preview = linkPreview ? ' data-link-preview="true"' : ''
+  return `<termul-media data-url="${escapeHtmlAttribute(url)}" data-alt="${escapeHtmlAttribute(alt)}"${preview}></termul-media>`
 }
 
 /** The first definition wins, per CommonMark. */
@@ -39,26 +36,80 @@ function imageUrl(node: MarkdownNode, definitions: Map<string, string>): string 
   return undefined
 }
 
-function transformChildren(node: MarkdownNode, definitions: Map<string, string>): void {
-  if (!node.children) return
+function containsImage(node: MarkdownNode): boolean {
+  return (
+    node.type === 'image' ||
+    node.type === 'imageReference' ||
+    (node.children ?? []).some(containsImage)
+  )
+}
+
+function nodeText(node: MarkdownNode): string {
+  if (node.type === 'text' || node.type === 'inlineCode') return node.value ?? ''
+  return (node.children ?? []).map(nodeText).join('')
+}
+
+interface LinkPreview {
+  path: string
+  tag: string
+}
+
+function linkUrl(node: MarkdownNode, definitions: Map<string, string>): string | undefined {
+  if (node.type === 'link') return node.url
+  if (node.type === 'linkReference' && node.identifier !== undefined) {
+    return definitions.get(node.identifier)
+  }
+  return undefined
+}
+
+function mediaLinkPreview(
+  node: MarkdownNode,
+  definitions: Map<string, string>
+): LinkPreview | null {
+  const url = linkUrl(node, definitions)
+  if (url === undefined || containsImage(node)) return null
+  const path = localLinkPath(url)
+  const kind = path === null ? null : mediaKindForPath(path)
+  if (path === null || (kind !== 'image' && kind !== 'video')) return null
+  const target = url.trim().replace(/[?#][\s\S]*$/, '')
+  return { path, tag: termulMediaTag(target, nodeText(node).trim() || path, true) }
+}
+
+/** Previews of media links render after the paragraph or heading, so the sentence stays whole. */
+const PREVIEW_HOSTS: ReadonlySet<string> = new Set(['paragraph', 'heading'])
+
+function transformChildren(node: MarkdownNode, definitions: Map<string, string>): LinkPreview[] {
+  if (!node.children) return []
+  const bubbled: LinkPreview[] = []
   node.children = node.children.flatMap((child) => {
     // `url !== undefined` also rewrites empty destinations (`![]()`), which
     // would otherwise render `[Image blocked: ]` on the default pipeline.
     const url = imageUrl(child, definitions)
-    if (url !== undefined && !isHttpUrl(url)) {
-      return [{ type: 'html', value: termulImageTag(url, child.alt ?? '') }]
+    if (url !== undefined) {
+      return [{ type: 'html', value: termulMediaTag(url, child.alt ?? '') }]
     }
-    transformChildren(child, definitions)
-    return [child]
+    const preview = mediaLinkPreview(child, definitions)
+    if (preview !== null) {
+      bubbled.push(preview)
+      return [child]
+    }
+    const previews = transformChildren(child, definitions)
+    if (!PREVIEW_HOSTS.has(child.type)) {
+      bubbled.push(...previews)
+      return [child]
+    }
+    const seen = new Set<string>()
+    const unique = previews.filter(({ path }) => !seen.has(path) && seen.add(path))
+    return [child, ...unique.map(({ tag }) => ({ type: 'html', value: tag }))]
   })
+  return bubbled
 }
 
 /**
- * Streamdown's `rehype-harden` turns non-`https?` images into
- * `[Image blocked: …]`; `<termul-image>` survives `rehype-sanitize` because it
- * is registered via the `allowedTags` prop.
+ * `<termul-media>` survives `rehype-sanitize` only because it is registered
+ * via the `allowedTags` prop; `rehype-harden` ignores it.
  */
-export function remarkTermulImages(): (tree: MarkdownNode) => void {
+export function remarkTermulMedia(): (tree: MarkdownNode) => void {
   return (tree) => {
     const definitions = new Map<string, string>()
     collectDefinitions(tree, definitions)

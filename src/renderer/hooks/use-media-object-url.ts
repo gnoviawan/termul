@@ -42,8 +42,3 @@ function settle(result: MediaReadResult): Settled {
     ? { status: 'error', code, message, size, limit }
     : { status: 'error', code, message }
 }
-
-export function useMediaObjectUrl(path: string | null): string | null {
-  const state = useMediaObjectUrlState(path)
-  return state.status === 'ready' ? state.url : null
-}

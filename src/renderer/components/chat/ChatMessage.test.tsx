@@ -87,7 +87,7 @@ vi.mock('streamdown', async () => {
     const markdown = typeof children === 'string' ? children : ''
     const CustomTable = components?.table as React.ElementType | undefined
     const CustomFilePath = components?.['termul-file-path'] as React.ElementType | undefined
-    const CustomImage = components?.['termul-image'] as React.ElementType | undefined
+    const CustomImage = components?.['termul-media'] as React.ElementType | undefined
     const CustomLink = components?.a as React.ElementType | undefined
     const semanticFixture = markdown.startsWith('# Compact heading')
     const animatedConfig = animated === false || animated === true ? undefined : animated
@@ -358,7 +358,7 @@ describe('ChatMessage', () => {
       'data-allowed-tags',
       JSON.stringify({
         'termul-file-path': ['dataPath'],
-        'termul-image': ['dataUrl', 'dataAlt']
+        'termul-media': ['dataUrl', 'dataAlt', 'dataLinkPreview']
       })
     )
     // The image rewrite is always on; the file-path plugin waits for a context.
@@ -383,7 +383,7 @@ describe('ChatMessage', () => {
     }
     const { container } = render(<ChatMessage message={message} isLast />)
 
-    expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('chart')
+    expect(screen.getByTestId('chat-media-alt')).toHaveTextContent('chart')
     expect(container.querySelector('img')).toBeNull()
   })
 

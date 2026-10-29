@@ -1,5 +1,5 @@
 import { mermaid as mermaidPlugin } from '@streamdown/mermaid'
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef } from 'react'
 import { toast } from 'sonner'
 import {
   type AllowedTags,
@@ -10,28 +10,27 @@ import {
 } from 'streamdown'
 
 import { ConfirmedExternalLink } from '@/components/external-link/ExternalLinkConfirm'
-import { useMediaObjectUrl } from '@/hooks/use-media-object-url'
 import { useThrottledStreamingText } from '@/hooks/use-throttled-streaming-text'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
-import { mediaKindForPath } from '@/lib/media-kind'
 import { syntaxShikiPair } from '@/lib/themes/syntax-shiki'
 import { cn } from '@/lib/utils'
 import { useColorTheme } from '@/stores/app-settings-store'
 import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
+import { ChatMedia, MediaAltChip } from './ChatMedia'
 import { chatCodePlugin } from './chat-code-plugin'
 import { ChatMarkdownCode } from './chat-markdown-code'
 import { remarkFilePathLinks } from './chat-markdown-file-links'
-import { remarkTermulImages, resolveLocalImagePath } from './chat-markdown-images'
+import { remarkTermulMedia } from './chat-markdown-images'
 import { ChatMarkdownTable } from './chat-markdown-table'
 import { ChatMarkdownSpan } from './chat-markdown-word'
+import { chatMediaFromMarkdown } from './chat-media-source'
 
-/** Always-on remark plugins: streamdown defaults plus the termul-image rewrite. */
-const IMAGE_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkTermulImages]
+const MEDIA_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkTermulMedia]
 /** Adds prose file-path linkification when a `filePathContext` exists. */
 const FILE_PATH_REMARK_PLUGINS = [
   ...Object.values(defaultRemarkPlugins),
-  remarkTermulImages,
+  remarkTermulMedia,
   remarkFilePathLinks
 ]
 
@@ -40,9 +39,14 @@ const FILE_PATH_REMARK_PLUGINS = [
  * property names (`data-path` -> `dataPath`); the tags themselves carry no
  * `href`/`src`, so `rehype-harden` never blocks them.
  */
-const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
+export const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
   'termul-file-path': ['dataPath'],
-  'termul-image': ['dataUrl', 'dataAlt']
+  'termul-media': ['dataUrl', 'dataAlt', 'dataLinkPreview']
+}
+
+function stringProp(props: Record<string, unknown>, name: string): string | undefined {
+  const value = props[name]
+  return typeof value === 'string' ? value : undefined
 }
 
 /**
@@ -121,59 +125,26 @@ function scrollToFragment(messageRoot: HTMLElement | null, href: string): void {
   target.scrollIntoView({ block: 'start' })
 }
 
-/** Muted fallback for images we cannot render (web without Tauri, unreadable). */
-function TermulImageAltChip({ alt }: { alt: string }): React.JSX.Element {
-  return (
-    <span
-      data-testid="termul-image-alt"
-      title={alt}
-      className="inline-flex max-w-[16rem] items-center rounded border border-border/40 bg-muted/40 px-1.5 py-0.5 align-middle text-xs text-muted-foreground"
-    >
-      <span className="truncate">{alt || 'image'}</span>
-    </span>
-  )
-}
-
-/** Renders a `<termul-image>` element emitted by `remarkTermulImages`. */
-export function TermulMarkdownImage({
+export function TermulMarkdownMedia({
   url,
   alt,
-  cwd
+  linkPreview,
+  filePathContext
 }: {
   url: string
   alt: string
-  cwd?: string
-}): React.JSX.Element {
-  const directUrl = url.startsWith('data:') || url.startsWith('blob:') ? url : null
-  const localPath = directUrl ? null : resolveLocalImagePath(url, cwd)
-  const objectUrl = useMediaObjectUrl(
-    localPath && mediaKindForPath(localPath) === 'image' ? localPath : null
+  linkPreview: boolean
+  filePathContext?: FilePathResolutionContext
+}): React.JSX.Element | null {
+  const cwd = filePathContext?.cwd
+  const media = useMemo(() => chatMediaFromMarkdown(url, alt, cwd), [url, alt, cwd])
+  if (!linkPreview) return media ? <ChatMedia media={media} /> : <MediaAltChip alt={alt} />
+  if (!media) return null
+  return (
+    <div className="my-2">
+      <ChatMedia media={media} />
+    </div>
   )
-  const [failed, setFailed] = useState<{ url: string; cwd?: string } | null>(null)
-  if (failed !== null && (failed.url !== url || failed.cwd !== cwd)) {
-    setFailed(null)
-  }
-
-  const failedNow = failed !== null && failed.url === url && failed.cwd === cwd
-  const src = directUrl ?? objectUrl
-  if (src && !failedNow) {
-    return (
-      <img
-        src={src}
-        alt={alt}
-        className="max-h-96 max-w-full rounded-md"
-        onError={() => {
-          setFailed({ url, cwd })
-          void logFrontendError({
-            level: 'warn',
-            source: 'ChatMessage.termulImage',
-            message: `Failed to display chat image '${url}': image decode/load failed`
-          })
-        }}
-      />
-    )
-  }
-  return <TermulImageAltChip alt={alt} />
 }
 
 /**
@@ -248,11 +219,14 @@ export function AgentProse({
   const components = useMemo<Components>(() => {
     const merged: Components = {
       ...STREAMDOWN_COMPONENTS,
-      'termul-image': (props: Record<string, unknown>) => {
-        const url = typeof props['data-url'] === 'string' ? props['data-url'] : ''
-        const alt = typeof props['data-alt'] === 'string' ? props['data-alt'] : ''
-        return <TermulMarkdownImage url={url} alt={alt} cwd={filePathContext?.cwd} />
-      },
+      'termul-media': (props: Record<string, unknown>) => (
+        <TermulMarkdownMedia
+          url={stringProp(props, 'data-url') ?? ''}
+          alt={stringProp(props, 'data-alt') ?? ''}
+          linkPreview={stringProp(props, 'data-link-preview') === 'true'}
+          filePathContext={filePathContext}
+        />
+      ),
       a: ({ href, children, node: _node, className, ...props }) => {
         if (href?.startsWith('#')) {
           const { target: _target, rel: _rel, ...anchorProps } = props
@@ -321,7 +295,7 @@ export function AgentProse({
         // duplicate inline plan — the live sticky `PlanPanel` owns the
         // streaming turn.
         plugins={streaming ? STREAMDOWN_PLUGINS : STREAMDOWN_PLUGINS_WITH_PLAN}
-        remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : IMAGE_REMARK_PLUGINS}
+        remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : MEDIA_REMARK_PLUGINS}
         allowedTags={STREAMDOWN_ALLOWED_TAGS}
         controls={STREAMDOWN_CONTROLS}
         components={components}
