@@ -301,6 +301,13 @@ describe('chat inline termul tags with real Streamdown', () => {
     expect(open).toHaveTextContent('the shot')
   })
 
+  it('keeps an https badge image inside a link to a local file', async () => {
+    renderChat('[![badge](https://example.com/badge.svg)](shot.png)', '/proj')
+
+    await waitFor(() => expect(screen.getByAltText('badge')).toBeInTheDocument())
+    expect(screen.getByAltText('badge')).toHaveAttribute('src', 'https://example.com/badge.svg')
+  })
+
   it('renders nothing for a media link preview that cannot resolve', async () => {
     renderChat('See [clip](clip.mp4) here.')
 

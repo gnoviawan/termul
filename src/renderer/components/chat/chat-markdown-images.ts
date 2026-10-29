@@ -71,7 +71,8 @@ function mediaLinkPreview(
   const path = localLinkPath(url)
   const kind = path === null ? null : mediaKindForPath(path)
   if (path === null || (kind !== 'image' && kind !== 'video')) return null
-  return { path, tag: termulMediaTag(url, nodeText(node).trim() || path, true) }
+  const target = url.trim().replace(/[?#][\s\S]*$/, '')
+  return { path, tag: termulMediaTag(target, nodeText(node).trim() || path, true) }
 }
 
 /** Previews of media links render after the paragraph or heading, so the sentence stays whole. */

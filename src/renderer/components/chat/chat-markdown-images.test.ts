@@ -174,6 +174,28 @@ describe('chat markdown images', () => {
     })
   })
 
+  it('previews a media link without its query or fragment', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [
+            { type: 'link', url: 'clip.mp4#details', children: [{ type: 'text', value: 'clip' }] }
+          ]
+        }
+      ]
+    }
+
+    remarkTermulMedia()(tree)
+
+    expect(tree.children[1]).toEqual({
+      type: 'html',
+      value:
+        '<termul-media data-url="clip.mp4" data-alt="clip" data-link-preview="true"></termul-media>'
+    })
+  })
+
   it('leaves a link that wraps an image as a link around the image', () => {
     const tree = {
       type: 'root',

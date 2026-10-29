@@ -106,8 +106,13 @@ export function localLinkPath(url: string): string | null {
   return line && !LINE_SUFFIX_RE.test(path) ? `${path}:${line[1]}` : path
 }
 
+/** `remarkTermulMedia` has already turned images into `<termul-media>` html when it runs first. */
 function containsImage(node: MarkdownNode): boolean {
-  return node.type === 'image' || (node.children ?? []).some(containsImage)
+  return (
+    node.type === 'image' ||
+    (node.type === 'html' && (node.value ?? '').startsWith('<termul-media')) ||
+    (node.children ?? []).some(containsImage)
+  )
 }
 
 function nodeText(node: MarkdownNode): string {
