@@ -107,6 +107,14 @@ export function mcpServerDeletionCount(id: string): number {
   return deletionCounts.get(id) ?? 0
 }
 
+// Probes that have started and not yet settled. `mcpProbing` cannot answer
+// this: deleting a server clears its flag while the probe is still running.
+let probesInFlight = 0
+
+export function mcpProbesInFlight(): number {
+  return probesInFlight
+}
+
 function deletionGuard(id: string): () => boolean {
   const before = mcpServerDeletionCount(id)
   return () => mcpServerDeletionCount(id) !== before
@@ -299,6 +307,7 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
     if (!server) return
     const deleted = deletionGuard(id)
     set((s) => ({ mcpProbing: { ...s.mcpProbing, [id]: true } }))
+    probesInFlight += 1
     try {
       const result: ProbeResult = await acpApi.probeMcpServer(probeConfigOf(server))
       const stale = settleStaleProbe(set, get, server, deleted)
@@ -338,6 +347,8 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
         mcpProbing: { ...s.mcpProbing, [id]: false },
         mcpProbeError: { ...s.mcpProbeError, [id]: undefined }
       }))
+    } finally {
+      probesInFlight -= 1
     }
   },
 

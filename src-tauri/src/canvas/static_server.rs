@@ -442,10 +442,11 @@ async fn desktop_bundle_handler(method: Method, uri: Uri, headers: HeaderMap) ->
 
 /// The loopback listener's whole route set.
 pub fn bundle_router() -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/canvas/{id}", any(desktop_bundle_handler))
         .route("/canvas/{id}/", any(desktop_bundle_handler))
-        .route("/canvas/{id}/{*rest}", any(desktop_bundle_handler))
+        .route("/canvas/{id}/{*rest}", any(desktop_bundle_handler));
+    crate::web::host_allow::layer(router, crate::web::host_allow::HostAllowList::loopback())
 }
 
 /// Supervisor of the desktop loopback listener. Drive [`StaticServer::run`]
@@ -524,6 +525,7 @@ impl StaticServer {
             let Ok(addr) = listener.local_addr() else {
                 continue;
             };
+            let _owned_port = crate::host_perimeter::OwnedPort::claim(addr.port());
             let restart = self.binds.fetch_add(1, Ordering::Relaxed) > 0;
             log::info!(
                 "[canvas] bundle listener {} on {addr}",

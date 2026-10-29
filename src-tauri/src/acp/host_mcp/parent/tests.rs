@@ -136,6 +136,7 @@ fn bound_session_without_an_active_turn_is_rejected() {
         let reply = connect_and_send(port, &frame).await;
         assert_eq!(reply["ok"], false);
         assert_eq!(reply["error"], "no active turn");
+        assert_eq!(reply["code"], "NO_ACTIVE_TURN");
     });
 
     assert!(sink.events.lock().unwrap().is_empty());
@@ -210,6 +211,7 @@ fn ambiguous_stale_binding_is_rejected_instead_of_cross_routed() {
         let reply = connect_and_send(port, &frame).await;
         assert_eq!(reply["ok"], false);
         assert_eq!(reply["error"], "ambiguous active session");
+        assert_eq!(reply["code"], "AMBIGUOUS_SESSION");
     });
 
     assert!(sink.events.lock().unwrap().is_empty());
@@ -242,8 +244,7 @@ fn browser_frame_without_host_fails_closed_with_typed_code() {
             "token": token,
             "session_id": provisional,
             "kind": "browser",
-            "browser_action": "navigate",
-            "browser_args": {"url": "https://example.com"},
+            "browser_input": {"action": "navigate", "url": "https://example.com"},
         });
         let reply = connect_and_send(port, &frame).await;
         assert_eq!(reply["ok"], false);
@@ -252,50 +253,59 @@ fn browser_frame_without_host_fails_closed_with_typed_code() {
 }
 
 #[test]
-fn browser_frame_missing_action_is_rejected() {
+fn browser_frame_missing_action_is_invalid_with_a_host_and_fails_closed_without() {
+    let _guard = crate::browser_automation::TEST_HOST_LOCK.lock().unwrap();
     let server = HostPlanServer::start(vec![], None);
     let (port, token, provisional) = server.register_session("agent-1");
     server.bind_session(&token, "sess-real");
     server.begin_turn("agent-1", "sess-real");
-    let runtime = Runtime::new().unwrap();
-    runtime.block_on(async move {
-        let frame = serde_json::json!({
-            "token": token,
-            "session_id": provisional,
-            "kind": "browser",
-        });
-        let reply = connect_and_send(port, &frame).await;
-        assert_eq!(reply["ok"], false);
-        assert_eq!(reply["error"], "browser_action is required");
+    let frame = serde_json::json!({
+        "token": token,
+        "session_id": provisional,
+        "kind": "browser",
     });
+    let runtime = Runtime::new().unwrap();
+
+    crate::browser_automation::set_browser_host(std::sync::Arc::new(EchoHost));
+    let reply = runtime.block_on(connect_and_send(port, &frame));
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["code"], "invalid_params");
+    assert_eq!(reply["error"], "missing 'action'");
+
+    crate::browser_automation::clear_browser_host();
+    let reply = runtime.block_on(connect_and_send(port, &frame));
+    assert_eq!(reply["code"], "capability_unavailable");
+    assert_eq!(reply["result"]["reason"], "no_automation_host");
 }
 
 #[test]
-fn browser_frame_round_trip_serializes_payload_fields() {
-    // Wire shape the child emits — must survive serde unchanged so the
-    // parent can reconstruct BrowserCall.
-    let frame = FrameRequest {
-        token: "t".into(),
-        session_id: "p".into(),
-        kind: FrameKind::Browser,
-        todos: Vec::new(),
-        title: None,
-        branch: None,
-        browser_action: Some("click".into()),
-        browser_args: Some(serde_json::json!({"ref": "@e3"})),
-        browser_element: Some("the save button".into()),
-        ask: None,
-        canvas_method: None,
-        canvas_params: None,
-        canvas_tool: None,
-    };
-    let value = serde_json::to_value(&frame).unwrap();
-    assert_eq!(value["kind"], "browser");
-    assert_eq!(value["browser_action"], "click");
-    assert_eq!(value["browser_args"]["ref"], "@e3");
-    let decoded: FrameRequest = serde_json::from_value(value).unwrap();
-    assert_eq!(decoded.kind, FrameKind::Browser);
-    assert_eq!(decoded.browser_action.as_deref(), Some("click"));
+fn describe_frame_is_served_before_the_session_is_bound() {
+    // Children describe at startup, before `session/new` returns: the token
+    // alone authenticates. Without a host the schema fails closed.
+    let _guard = crate::browser_automation::TEST_HOST_LOCK.lock().unwrap();
+    crate::browser_automation::clear_browser_host();
+    let server = HostPlanServer::start(vec![], None);
+    let (port, token, provisional) = server.register_session("agent-1");
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let bad = connect_and_send(
+            port,
+            &serde_json::json!({ "token": "bogus", "session_id": provisional, "kind": "describe" }),
+        )
+        .await;
+        assert_eq!(bad["error"], "auth rejected");
+        let reply = connect_and_send(
+            port,
+            &serde_json::json!({ "token": token, "session_id": provisional, "kind": "describe" }),
+        )
+        .await;
+        assert_eq!(reply["ok"], true);
+        assert_eq!(
+            reply["result"]["description"],
+            crate::browser_automation::describe().description
+        );
+        assert!(reply["result"]["input_schema"].is_object());
+    });
 }
 
 // -- spec-acp-browser-automation-v2 CAP-6: boundary failure logs -----------
@@ -343,7 +353,7 @@ fn browser_failures_log_code_and_arg_key_names_never_values() {
             "token": token,
             "session_id": provisional,
             "kind": "browser",
-            "browser_action": action,
+            "browser_input": {"action": action},
         })
     };
 
@@ -367,7 +377,6 @@ fn browser_failures_log_code_and_arg_key_names_never_values() {
     //    argument-looking values (they must reach the reply, never the
     //    log).
     use crate::browser_automation::{BrowserCall, BrowserError, BrowserHost};
-    use serde_json::Value;
     struct FailingHost;
     impl BrowserHost for FailingHost {
         fn execute<'a>(
@@ -375,8 +384,9 @@ fn browser_failures_log_code_and_arg_key_names_never_values() {
             _session_id: &'a str,
             _agent_id: &'a str,
             call: BrowserCall,
+            _deadline: crate::browser_automation::budgets::Deadline,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<Value, BrowserError>> + Send + 'a>,
+            Box<dyn std::future::Future<Output = Result<crate::browser_automation::Success, BrowserError>> + Send + 'a>,
         > {
             // The action selects the failure shape; per-site arg_keys are
             // attached only where a real error site would ("navigate":
@@ -384,31 +394,37 @@ fn browser_failures_log_code_and_arg_key_names_never_values() {
             let err = match call.action.as_str() {
                 "navigate" => BrowserError {
                     code: crate::browser_automation::ERR_INVALID_PARAMS,
+                    reason: None,
                     message: format!("invalid url: {SECRET_URL}"),
                     arg_keys: vec!["url"],
                 },
                 "click" => BrowserError {
                     code: crate::browser_automation::ERR_TAB_NOT_FOUND,
+                    reason: None,
                     message: "tab 'agent-gone' not found".to_string(),
                     arg_keys: vec!["tabId"],
                 },
                 "fill" => BrowserError {
                     code: crate::browser_automation::ERR_STALE_REF,
+                    reason: None,
                     message: "stale_ref: @e42 detached".to_string(),
                     arg_keys: Vec::new(),
                 },
                 "snapshot" => BrowserError {
                     code: crate::browser_automation::ERR_TIMEOUT,
+                    reason: None,
                     message: "eval timed out".to_string(),
                     arg_keys: Vec::new(),
                 },
                 "screenshot" => BrowserError {
                     code: crate::browser_automation::ERR_INTERNAL,
+                    reason: None,
                     message: "eval failed after fill 'hunter2'".to_string(),
                     arg_keys: Vec::new(),
                 },
                 _ => BrowserError {
                     code: crate::browser_automation::ERR_CONFIRMATION,
+                    reason: None,
                     message: "user did not grant browser automation for this session"
                         .to_string(),
                     arg_keys: Vec::new(),
@@ -417,16 +433,8 @@ fn browser_failures_log_code_and_arg_key_names_never_values() {
             Box::pin(async move { Err(err) })
         }
         fn end_session(&self, _session_id: &str) {}
-        fn notify_tab_created(&self, _tab_id: &str) -> bool {
-            false
-        }
-        fn notify_tab_closed(&self, _tab_id: &str) {}
-        fn notify_tab_navigated(&self, _tab_id: &str) {}
-        fn resolve_consent(&self, _request_id: &str, _allowed: bool) -> bool {
-            false
-        }
-        fn resolve_eval(&self, _nonce: &str, _ok: bool, _value: Option<String>) -> bool {
-            false
+        fn engine_facts(&self) -> crate::browser_automation::engine::EngineFacts {
+            crate::browser_automation::engine::EngineFacts::all_trusted()
         }
     }
     crate::browser_automation::set_browser_host(std::sync::Arc::new(FailingHost));
@@ -506,6 +514,9 @@ fn browser_failures_log_code_and_arg_key_names_never_values() {
                 Some(message),
                 "{action} reply message must survive verbatim"
             );
+            assert_eq!(reply["result"]["ok"], false, "{action}");
+            assert_eq!(reply["result"]["code"], reply["code"], "{action}");
+            assert_eq!(reply["result"]["message"].as_str(), Some(message), "{action}");
         }
         assert_eq!(by_action("list_tabs")["code"], "capability_unavailable");
         assert_eq!(by_action("navigate")["code"], "invalid_params");
@@ -526,53 +537,12 @@ fn browser_frame_from_flat_call_carries_folded_args_to_dispatch() {
     // Serialize on the shared host lock — sibling tests touch the host.
     let _guard = crate::browser_automation::TEST_HOST_LOCK.lock().unwrap();
     crate::browser_automation::clear_browser_host();
-    use crate::browser_automation::{BrowserCall, BrowserError, BrowserHost};
-    use serde_json::Value;
-    struct EchoHost;
-    impl BrowserHost for EchoHost {
-        fn execute<'a>(
-            &'a self,
-            _session_id: &'a str,
-            _agent_id: &'a str,
-            call: BrowserCall,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<Value, BrowserError>> + Send + 'a>,
-        > {
-            Box::pin(async move { Ok(call.args) })
-        }
-        fn end_session(&self, _session_id: &str) {}
-        fn notify_tab_created(&self, _tab_id: &str) -> bool {
-            false
-        }
-        fn notify_tab_closed(&self, _tab_id: &str) {}
-        fn notify_tab_navigated(&self, _tab_id: &str) {}
-        fn resolve_consent(&self, _request_id: &str, _allowed: bool) -> bool {
-            false
-        }
-        fn resolve_eval(&self, _nonce: &str, _ok: bool, _value: Option<String>) -> bool {
-            false
-        }
-    }
     crate::browser_automation::set_browser_host(std::sync::Arc::new(EchoHost));
 
-    let input: crate::acp::host_mcp::TermulBrowserInput = serde_json::from_value(
-        serde_json::json!({ "action": "navigate", "url": "https://example.com" }),
-    )
-    .unwrap();
     let frame = FrameRequest {
-        token: "unused".into(),
-        session_id: "unused".into(),
         kind: FrameKind::Browser,
-        todos: Vec::new(),
-        title: None,
-        branch: None,
-        browser_action: Some(input.action),
-        browser_args: Some(input.args),
-        browser_element: input.element,
-        ask: None,
-        canvas_method: None,
-        canvas_params: None,
-        canvas_tool: None,
+        browser_input: Some(serde_json::json!({ "action": "navigate", "url": "https://example.com" })),
+        ..FrameRequest::default()
     };
 
     let server = HostPlanServer::start(vec![], None);
@@ -586,7 +556,8 @@ fn browser_frame_from_flat_call_carries_folded_args_to_dispatch() {
     runtime.block_on(async move {
         let reply = connect_and_send(port, &wire).await;
         assert_eq!(reply["ok"], true);
-        assert_eq!(reply["result"]["url"], "https://example.com");
+        assert_eq!(reply["result"]["ok"], true);
+        assert_eq!(reply["result"]["data"]["url"], "https://example.com");
     });
     crate::browser_automation::clear_browser_host();
 }
@@ -1393,4 +1364,128 @@ fn ask_idle_heartbeat_is_a_third_of_the_idle_timeout_within_bounds() {
         ask_idle_heartbeat(Some(Duration::from_secs(3600))),
         Duration::from_secs(30)
     );
+}
+
+/// Calls `plan` over the loopback bridge with `token` and returns the reply.
+async fn plan_call(port: u16, token: &str, provisional: &str) -> serde_json::Value {
+    let frame = serde_json::json!({
+        "token": token,
+        "session_id": provisional,
+        "kind": "plan",
+        "todos": [{"content": "x"}],
+    });
+    connect_and_send(port, &frame).await
+}
+
+/// A reopen registers and binds a NEW token while the session's earlier token
+/// is still held by a live agent child (#1420). Returns both tokens' details.
+struct ReopenFixture {
+    server: Arc<HostPlanServer>,
+    port: u16,
+    old: (String, String),
+    new: (String, String),
+}
+
+fn reopen_fixture() -> ReopenFixture {
+    let server = HostPlanServer::start(vec![Arc::new(CapturingSink::default())], None);
+    let (port, old_token, old_prov) = server.register_session("agent-1");
+    server.bind_session(&old_token, "sess-real");
+    server.begin_turn("agent-1", "sess-real");
+    // What `prepare_reopen_mcp` does: register + bind, drop nothing.
+    let (_, new_token, new_prov) = server.register_session("agent-1");
+    server.bind_session(&new_token, "sess-real");
+    ReopenFixture {
+        server,
+        port,
+        old: (old_token, old_prov),
+        new: (new_token, new_prov),
+    }
+}
+
+#[test]
+fn failed_reopen_keeps_the_old_token_valid_and_evicts_the_new_one() {
+    let fx = reopen_fixture();
+    fx.server.settle_reopen_token("sess-real", &fx.new.0, false);
+    assert!(fx.server.sessions.lock().contains_key(&fx.old.0));
+    assert!(!fx.server.sessions.lock().contains_key(&fx.new.0));
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async {
+        let old = plan_call(fx.port, &fx.old.0, &fx.old.1).await;
+        assert_eq!(old["ok"], true, "the live child's token must still work");
+        let new = plan_call(fx.port, &fx.new.0, &fx.new.1).await;
+        assert_eq!(new["ok"], false, "the evicted token must be rejected");
+    });
+}
+
+#[test]
+fn failed_reopen_does_not_clear_the_sessions_state() {
+    let fx = reopen_fixture();
+    fx.server.plan_store.set("sess-real", Vec::new());
+    fx.server
+        .title_set_for_session
+        .lock()
+        .insert("sess-real".to_string());
+    fx.server.settle_reopen_token("sess-real", &fx.new.0, false);
+    assert!(fx.server.title_set_for_session.lock().contains("sess-real"));
+    assert!(fx.server.plan_store.get("sess-real").is_some());
+}
+
+#[test]
+fn successful_reopen_drops_the_old_token_and_keeps_the_new_one() {
+    let fx = reopen_fixture();
+    fx.server.settle_reopen_token("sess-real", &fx.new.0, true);
+    assert!(!fx.server.sessions.lock().contains_key(&fx.old.0));
+    assert!(fx.server.sessions.lock().contains_key(&fx.new.0));
+    let runtime = Runtime::new().unwrap();
+    // A reopen clears the session's in-flight turns; the next prompt starts one.
+    fx.server.begin_turn("agent-1", "sess-real");
+    runtime.block_on(async {
+        let new = plan_call(fx.port, &fx.new.0, &fx.new.1).await;
+        assert_eq!(new["ok"], true, "the new token is bound to the session");
+        let old = plan_call(fx.port, &fx.old.0, &fx.old.1).await;
+        assert_eq!(old["ok"], false, "the old token must be dropped");
+    });
+}
+
+#[test]
+fn successful_reopen_leaves_other_sessions_tokens_alone() {
+    let fx = reopen_fixture();
+    let (_, other, _) = fx.server.register_session("agent-1");
+    fx.server.bind_session(&other, "sess-other");
+    fx.server.settle_reopen_token("sess-real", &fx.new.0, true);
+    assert!(fx.server.sessions.lock().contains_key(&other));
+}
+
+#[test]
+fn successful_reopen_with_no_earlier_token_keeps_the_new_one() {
+    let server = HostPlanServer::start(vec![], None);
+    let (_, token, _) = server.register_session("agent-1");
+    server.bind_session(&token, "sess-real");
+    server.settle_reopen_token("sess-real", &token, true);
+    assert!(server.sessions.lock().contains_key(&token));
+}
+
+/// Stub host that echoes the args it received as the reply data.
+struct EchoHost;
+impl crate::browser_automation::BrowserHost for EchoHost {
+    fn execute<'a>(
+        &'a self,
+        _session_id: &'a str,
+        _agent_id: &'a str,
+        call: crate::browser_automation::BrowserCall,
+        _deadline: crate::browser_automation::budgets::Deadline,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<crate::browser_automation::Success, crate::browser_automation::BrowserError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            Ok(crate::browser_automation::Success {
+                data: Some(call.args),
+                ..Default::default()
+            })
+        })
+    }
+    fn end_session(&self, _session_id: &str) {}
+    fn engine_facts(&self) -> crate::browser_automation::engine::EngineFacts {
+        crate::browser_automation::engine::EngineFacts::all_trusted()
+    }
 }

@@ -33,11 +33,23 @@ vi.mock('@/stores/claude-account-switch', async () => {
   return { ...actual, ...switcher }
 })
 
-const read = (accountId: string, percent: number) => ({
+const usageWindow = (kind: string, percent: number) => ({
+  kind,
+  group: null,
+  scope: null,
+  percent,
+  resetsAt: null,
+  severity: null
+})
+
+const read = (accountId: string, percent: number, weekly?: number) => ({
   accountId,
   status: 'ok' as const,
   subscriptionType: 'max',
-  windows: [{ kind: 'session', group: null, scope: null, percent, resetsAt: null, severity: null }],
+  windows: [
+    usageWindow('session', percent),
+    ...(weekly === undefined ? [] : [usageWindow('weekly_all', weekly)])
+  ],
   checkedAt: Date.now(),
   message: null
 })
@@ -204,11 +216,70 @@ describe('ClaudeAccountChip', () => {
   it('shows the project account and its usage, and switches from its menu', async () => {
     seed()
     render(<ClaudeAccountChip sessionId="s1" />)
-    const chip = await screen.findByRole('button', { name: /Claude account: Personal, 100%/ })
+    const chip = await screen.findByRole('button', {
+      name: 'Claude account: Personal, 5-hour 100% used. Change account'
+    })
+    expect(chip).toHaveTextContent(/^Personal5h 100%$/)
     fireEvent.pointerDown(chip, { button: 0, ctrlKey: false })
     fireEvent.click(await screen.findByRole('menuitem', { name: /Work/ }))
     await waitFor(() =>
       expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12')
+    )
+  })
+
+  it('adds a weekly window only once it nears its limit', async () => {
+    api.usage.mockResolvedValue([read('default', 42, 86), read('ab12', 4, 60), read('cd34', 40)])
+    seed()
+    render(<ClaudeAccountChip sessionId="s1" />)
+    const chip = await screen.findByRole('button', {
+      name: 'Claude account: Personal, 5-hour 42% used, weekly 86% used. Change account'
+    })
+    expect(chip).toHaveTextContent(/^Personal5h 42%·Wk 86%$/)
+    fireEvent.pointerDown(chip, { button: 0, ctrlKey: false })
+    expect(await screen.findByRole('menuitem', { name: /^Personal/ })).toHaveTextContent(
+      'Max · 5-hour 42% · Weekly 86%'
+    )
+    expect(screen.getByRole('menuitem', { name: /Work/ })).toHaveTextContent(
+      'Max · 5-hour 4% · Weekly 60%'
+    )
+    expect(screen.getByRole('menuitem', { name: /Side/ })).toHaveTextContent('Max · 5-hour 40%')
+  })
+
+  it('announces no usage for a signed-out account', async () => {
+    api.list.mockResolvedValue({
+      accounts: [{ id: 'default', name: 'Personal', builtin: true, signedIn: false }],
+      defaultAccountId: 'default',
+      projectAccounts: {}
+    })
+    seed(limit('allowed', 31))
+    render(<ClaudeAccountChip sessionId="s1" />)
+    const chip = await screen.findByRole('button', {
+      name: 'Claude account: Personal. Change account'
+    })
+    expect(chip).toHaveTextContent(/^Personal$/)
+  })
+
+  it('keeps only the 5-hour window below the warning level, and drops the name when compact', async () => {
+    api.usage.mockResolvedValue([read('default', 42, 79), read('ab12', 4), read('cd34', 40)])
+    seed()
+    render(<ClaudeAccountChip sessionId="s1" compact />)
+    const chip = await screen.findByRole('button', {
+      name: 'Claude account: Personal, 5-hour 42% used. Change account'
+    })
+    expect(chip).toHaveTextContent(/^5h 42%$/)
+  })
+
+  it('shows the live 5-hour reading and a live weekly one beside it', async () => {
+    seed(limit('allowed', 31))
+    const { unmount } = render(<ClaudeAccountChip sessionId="s1" />)
+    expect(await screen.findByRole('button', { name: /Claude account/ })).toHaveTextContent(
+      /^Personal5h 31%$/
+    )
+    unmount()
+    seed({ ...limit('allowed_warning', 91), kind: 'seven_day' })
+    render(<ClaudeAccountChip sessionId="s1" />)
+    expect(await screen.findByRole('button', { name: /Claude account/ })).toHaveTextContent(
+      /^Personal5h 100%·Wk 91%$/
     )
   })
 

@@ -49,16 +49,10 @@ impl Bridge {
             token: self.config.token.clone(),
             session_id: self.config.session_id.clone(),
             kind: FrameKind::Canvas,
-            todos: Vec::new(),
-            title: None,
-            branch: None,
-            browser_action: None,
-            browser_args: None,
-            browser_element: None,
-            ask: None,
             canvas_method: Some(method.to_string()),
             canvas_params: Some(params.to_string()),
             canvas_tool: self.tool.clone(),
+            ..FrameRequest::default()
         };
         let mut line = serde_json::to_vec(&frame).map_err(|error| {
             CanvasError::new(
@@ -87,8 +81,11 @@ impl Bridge {
         })?;
         if !reply.ok {
             let message = reply.error.unwrap_or_else(|| "unknown error".to_string());
-            // A refusal without a code (auth, no active turn) means the
-            // gateway cannot reach any canvas for this session.
+            // A refusal without a code (auth, session not ready) means the
+            // gateway cannot reach any canvas for this session. Turn routing
+            // refusals carry their own codes (NO_ACTIVE_TURN,
+            // AMBIGUOUS_SESSION) so the agent is not told to open a canvas
+            // that is already open.
             let code = reply
                 .code
                 .as_deref()

@@ -216,6 +216,9 @@ describe('failed session lifecycle (story 5)', () => {
     // can retry, with the launch config recorded for the retry.
     expect(session.status).toBe('error')
     expect(session.launchConfigId).toBe('cfg-1')
+    // The launch path now classifies setup failures (acp-spawn-errors):
+    // a plain non-definite spawn rejection surfaces under the transport
+    // label (constant upstream). The raw cause stays in the browser logs.
     expect(session.lastError).toContain(ACP_STREAM_INTERRUPT_MESSAGE)
     expect(state.launchingSessionIds[placeholderId]).toBeUndefined()
     // The sidebar projection gains a 'error'-status row instead of showing

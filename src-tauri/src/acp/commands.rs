@@ -13,6 +13,8 @@ use tauri::State;
 
 use crate::acp::config::AgentConfig;
 use crate::acp::manager::AcpManager;
+use crate::acp::safe_url::{check_safe_url, Opener, MCP_UNSAFE_URL};
+use crate::commands::IpcResult;
 
 mod claude_accounts;
 pub use claude_accounts::*;
@@ -67,7 +69,7 @@ async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
         .unwrap_or_else(|_| crate::pty::manager::ResolvedProgram::new("codex".to_string()));
     let mut command = tokio::process::Command::new(&resolved.program);
     // Polled every 4s by the renderer: never flash a console window.
-    crate::process_util::hide_console(&mut command);
+    crate::process_util::background_command_hygiene(&mut command);
     command
         .args(&resolved.prepend_args)
         .arg("login")
@@ -138,9 +140,13 @@ pub async fn acp_probe_mcp_server(
 /// registers a client (PKCE), opens the authorization URL in the system
 /// browser, and waits for the callback redirect on a local HTTP server.
 /// Returns the stored token on success. Desktop-only: the standalone server
-/// has no UI to drive the browser flow.
+/// has no UI to drive the browser flow. An unsafe authorization URL is
+/// refused with `MCP_UNSAFE_URL` and never opened (AD-15).
 #[tauri::command]
-pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> Result<(), String> {
+pub async fn acp_mcp_oauth_start(
+    app: tauri::AppHandle,
+    server_url: String,
+) -> Result<IpcResult<()>, String> {
     use rmcp::transport::auth::{
         AuthorizationManager, AuthorizationRequest, AuthorizationSession, OAuthState,
     };
@@ -154,6 +160,7 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
         .local_addr()
         .map_err(|e| format!("failed to get callback port: {e}"))?
         .port();
+    let _owned_port = crate::host_perimeter::OwnedPort::claim(port);
     let redirect_uri = format!(
         "http://127.0.0.1:{port}{}",
         crate::acp::mcp_oauth::OAUTH_REDIRECT_PATH
@@ -182,7 +189,10 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
         .await
         .map_err(|(_manager, e)| format!("OAuth registration failed: {e}"))?;
 
-    let auth_url = session.get_authorization_url().to_string();
+    let auth_url = match host_auth_url(session.get_authorization_url()) {
+        Ok(url) => url,
+        Err(refusal) => return Ok(refusal),
+    };
 
     log::info!(
         "[mcp-oauth] opening browser for server (url redacted), redirect_uri={redirect_uri}"
@@ -190,7 +200,7 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
 
     // 3. Open the authorization URL in the user's system browser.
     app.opener()
-        .open_url(&auth_url, None::<&str>)
+        .open_url(auth_url.as_str(), None::<&str>)
         .map_err(|e| format!("failed to open browser: {e}"))?;
 
     // 4. Wait for the callback on the local TCP listener.
@@ -205,9 +215,21 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
         match listener.accept() {
             Ok((mut stream, _addr)) => {
                 use std::io::{BufRead, BufReader, Write};
+                // Accepted sockets inherit the listener's non-blocking mode;
+                // the header block must be read whole for the Host check.
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
                 let reader = BufReader::new(&mut stream);
                 let mut lines = reader.lines();
                 if let Some(Ok(first_line)) = lines.next() {
+                    if !crate::web::host_allow::HostAllowList::loopback()
+                        .allows_header_block(&mut lines)
+                    {
+                        log::warn!("[mcp-oauth] rejected callback request: foreign or missing host");
+                        let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        let _ = stream.flush();
+                        continue;
+                    }
                     // Parse the request target. Stray browser requests
                     // (preconnect, favicon, malformed) must not break the
                     // loop — only the callback path with a `code` param
@@ -301,7 +323,14 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
         stored.refresh_token.is_some()
     );
 
-    Ok(())
+    Ok(IpcResult::success(()))
+}
+
+fn host_auth_url(raw: &str) -> Result<url::Url, IpcResult<()>> {
+    check_safe_url(raw, Opener::Host).map_err(|refused| {
+        log::warn!("[mcp-oauth] authorization URL refused (url redacted): {refused}");
+        IpcResult::error(refused.to_string(), MCP_UNSAFE_URL)
+    })
 }
 
 /// Check whether a stored OAuth token exists for a server URL. Returns `true`

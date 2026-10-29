@@ -124,6 +124,10 @@ export const WS_REQUEST_TYPES = [
   'set_model',
   'respond_permission',
   'answer_question',
+  // Stop agent browsing for a session (desktop parity with the
+  // `browser_stop` Tauri command); only an authenticated client of the
+  // session may send it.
+  'browser_stop',
   'create_session',
   'load_session',
   'resume_session',
@@ -180,6 +184,9 @@ export const WS_REQUEST_TYPES = [
   // 'background' }`, answered with the host's `AcpRegistrySnapshot`
   // (`source: 'cache'` when the registry was unreachable).
   'fetch_acp_registry_snapshot',
+  // MCP catalog (spine AD-1): `{ query?, cursor?, limit? }` → one
+  // `McpCatalogPage` of the host's converted registry snapshot. A read.
+  'search_mcp_catalog',
   // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web client
   // installs a catalog agent through `install_acp_agent` (the host downloads +
   // verifies sha256 + extracts + atomically activates). The request is
@@ -300,6 +307,7 @@ export const WS_COMMAND_CLASSES: Readonly<
   set_model: ['idempotent', null],
   respond_permission: ['command', 'payload'],
   answer_question: ['command', 'payload'],
+  browser_stop: ['idempotent', null],
   create_session: ['create', 'entity'],
   load_session: ['command', 'payload'],
   resume_session: ['command', 'payload'],
@@ -332,6 +340,7 @@ export const WS_COMMAND_CLASSES: Readonly<
   list_acp_catalog: ['read', null],
   set_catalog_opt_in: ['idempotent', null],
   fetch_acp_registry_snapshot: ['read', null],
+  search_mcp_catalog: ['read', null],
   install_acp_agent: ['command', 'payload'],
   acp_deliver_auth_redirect: ['command', 'receipt-only'],
   store_read: ['read', null],
@@ -1071,6 +1080,9 @@ export interface AgentsWatchDelta {
     // The host's browser-open shim captured an agent's auth URL; the payload is
     // `{ agentId, url }`. Not part of the roster state: a missed delta is lost.
     | 'browser_open_request'
+    // One browser policy scope changed; the payload is `{ scope, projectId?,
+    // revision }` and clients re-read that scope. Not roster state either.
+    | 'browser_policy_changed'
   payload: unknown
 }
 

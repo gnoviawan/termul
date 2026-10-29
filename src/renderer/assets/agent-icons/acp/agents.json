@@ -948,5 +948,20 @@
         }
       }
     }
+  },
+  {
+    "id": "oh-my-pi",
+    "name": "Oh My Pi",
+    "version": "18.12.6",
+    "description": "Oh My Pi (omp): a terminal coding agent built on Pi, with an ACP mode",
+    "distribution": {
+      "binary": {
+        "darwin-aarch64": { "cmd": "omp", "args": ["acp"] },
+        "darwin-x86_64": { "cmd": "omp", "args": ["acp"] },
+        "linux-x86_64": { "cmd": "omp", "args": ["acp"] },
+        "linux-aarch64": { "cmd": "omp", "args": ["acp"] },
+        "windows-x86_64": { "cmd": "omp", "args": ["acp"] }
+      }
+    }
   }
 ]

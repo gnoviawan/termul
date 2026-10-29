@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { requestExternalLinkOpen } from '@/components/external-link/ExternalLinkConfirm'
 import { FileQuestion } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -7,7 +8,6 @@ import { COMPOSER_FOCUS_CLASS, FIELD_FOCUS_CLASS } from '@/components/ui/panel-s
 import { Switch } from '@/components/ui/switch'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ElicitationField } from '@/lib/acp-api'
-import { openerApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import type { PendingElicitation } from '@/stores/acp-store'
 import { useAcpStore } from '@/stores/acp-store'
@@ -231,8 +231,9 @@ export function ElicitationPrompt({
                   type="button"
                   size={buttonSize}
                   variant="outline"
-                  onClick={() => {
-                    if (request.url) void openerApi.openUrlWithSystemBrowser(request.url)
+                  onClick={(event) => {
+                    // The URL comes from an MCP server (untrusted): confirm first.
+                    requestExternalLinkOpen(request.url, { returnFocusTo: event.currentTarget })
                   }}
                 >
                   Open link

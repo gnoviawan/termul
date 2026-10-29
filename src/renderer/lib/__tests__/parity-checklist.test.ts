@@ -407,10 +407,41 @@ describe('Parity Checklist Automation', () => {
     it('registers both host surfaces through the shared Rust service', () => {
       const root = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
       const tauri = readFileSync(join(root, 'lib.rs'), 'utf-8')
-      const router = readFileSync(join(root, 'web', 'router.rs'), 'utf-8')
+      const router = readFileSync(join(root, 'web', 'router', 'mod.rs'), 'utf-8')
       expect(tauri).toMatch(/acp_factory_key_status/)
       expect(tauri).toMatch(/acp_factory_key_save/)
       expect(router).toMatch(/\/acp\/factory-key/)
+    })
+  })
+
+  describe('MCP OAuth unsafe-link parity (CAP-11)', () => {
+    const RustRoot = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+    const readRust = (...parts: string[]): string => readFileSync(join(RustRoot, ...parts), 'utf-8')
+
+    it('the Rust guard and the renderer facade agree on the code', () => {
+      const rustCode = readRust('acp', 'safe_url.rs').match(
+        /pub const MCP_UNSAFE_URL: &str = "([A-Z_]+)";/
+      )?.[1]
+      const tsCode = readFileSync(join(LIB_DIR, 'acp-api.ts'), 'utf-8').match(
+        /export const MCP_UNSAFE_URL = '([A-Z_]+)'/
+      )?.[1]
+      expect(rustCode).toBe('MCP_UNSAFE_URL')
+      expect(tsCode).toBe(rustCode)
+    })
+
+    it('both host transports check the sign-in link before it leaves the host', () => {
+      const desktop = readRust('acp', 'commands.rs')
+      const web = readRust('web', 'mcp_oauth_api.rs')
+      expect(desktop).toMatch(/check_safe_url\(raw, Opener::Host\)/)
+      expect(desktop).toMatch(/IpcResult::error\(refused\.to_string\(\), MCP_UNSAFE_URL\)/)
+      expect(web).toMatch(/check_safe_url\(raw, Opener::Remote\)/)
+      expect(web).toMatch(/McpOAuthError::UnsafeUrl\(_\) => MCP_UNSAFE_URL/)
+    })
+
+    it('a dedicated facade test covers both transports', () => {
+      const content = readFileSync(join(LIB_DIR, 'acp-api-mcp-oauth.test.ts'), 'utf-8')
+      expect(content).toMatch(/desktop: surfaces the host refusal as MCP_UNSAFE_URL/)
+      expect(content).toMatch(/surfaces the host refusal as MCP_UNSAFE_URL and never navigates/)
     })
   })
 
@@ -1013,7 +1044,7 @@ describe('Parity Checklist Automation', () => {
     const Facade = join(LIB_DIR, 'worktree-api.ts')
     const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
     const WebRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web')
-    const RouterRust = join(WebRust, 'router.rs')
+    const RouterRust = join(WebRust, 'router', 'mod.rs')
     const WorktreeApiRust = join(WebRust, 'worktree_api.rs')
     const WorktreeSymlinksRust = join(WebRust, 'worktree_api', 'symlinks.rs')
     const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands')
@@ -1169,7 +1200,7 @@ describe('Parity Checklist Automation', () => {
     const SrcTauri = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
     const Facade = join(LIB_DIR, 'git-api.ts')
     const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-    const RouterRust = join(SrcTauri, 'web', 'router.rs')
+    const RouterRust = join(SrcTauri, 'web', 'router', 'mod.rs')
     const HunkApiRust = join(SrcTauri, 'web', 'git_hunk_api.rs')
     const CommandsGitRust = join(SrcTauri, 'commands', 'git.rs')
     const LibRust = join(SrcTauri, 'lib.rs')
@@ -1235,7 +1266,17 @@ describe('Parity Checklist Automation', () => {
     const FsFacade = join(LIB_DIR, 'tauri-filesystem-api.ts')
     const WebFileNameSearch = join(LIB_DIR, 'web-filename-search.ts')
     const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-    const RouterRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'router.rs')
+    const RouterRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'web',
+      'router',
+      'mod.rs'
+    )
     const SearchApiRust = join(
       LIB_DIR,
       '..',
@@ -1536,7 +1577,7 @@ describe('Parity Checklist Automation', () => {
         join(RustRoot, 'web', 'canvas_persistence_api.rs'),
         'utf-8'
       )
-      const router = readFileSync(join(RustRoot, 'web', 'router.rs'), 'utf-8')
+      const router = readFileSync(join(RustRoot, 'web', 'router', 'mod.rs'), 'utf-8')
       const bundlePath = readFileSync(join(RustRoot, 'canvas', 'bundle_path.rs'), 'utf-8')
       expect(router, 'the bearer gate exempts only bundle paths').toContain('is_bundle_path')
       const lib = readFileSync(join(RustRoot, 'lib.rs'), 'utf-8')
@@ -1669,6 +1710,42 @@ describe('Parity Checklist Automation', () => {
       expect(readFileSync(index, 'utf-8')).toMatch(/canvasTabId/)
     })
   })
+
+  describe('session RPC parity', () => {
+    it('parity checklist names both adapters', () => {
+      for (const adapter of ['tauri-terminal-api.ts', 'web-terminal-api.ts']) {
+        const content = readFileSync(join(LIB_DIR, adapter), 'utf-8')
+        for (const method of ['submitCommand', 'requestCompletion', 'cancelCompletion']) {
+          expect(content, `${adapter} should expose ${method}`).toMatch(
+            new RegExp(`\\b${method}\\s*(?::|\\()`)
+          )
+        }
+      }
+
+      const transport = readFileSync(join(LIB_DIR, 'command-editor-transport.ts'), 'utf-8')
+      for (const rpc of [
+        'command_editor_submit',
+        'command_editor_request_completion',
+        'command_editor_cancel_completion',
+        'command_editor_restore_prompt'
+      ]) {
+        expect(transport).toContain(`'${rpc}'`)
+      }
+      expect(transport).not.toContain('terminal_write')
+    })
+
+    it('restorePrompt parity', () => {
+      for (const adapter of ['tauri-terminal-api.ts', 'web-terminal-api.ts']) {
+        expect(
+          fileContains(adapter, /\brestorePrompt\s*(?::|\()/),
+          `${adapter} should expose restorePrompt`
+        ).toBe(true)
+      }
+
+      const transport = readFileSync(join(LIB_DIR, 'command-editor-transport.ts'), 'utf-8')
+      expect(transport).toContain("'command_editor_restore_prompt'")
+    })
+  })
 })
 
 // #856 (web explorer live refresh): the FS-change push must land on BOTH
@@ -1726,7 +1803,7 @@ describe('Git diff stat parity (shell revamp story 8)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const GitApiFacade = join(LIB_DIR, 'git-api.ts')
   const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-  const RouterRust = join(SRC_TAURI, 'web', 'router.rs')
+  const RouterRust = join(SRC_TAURI, 'web', 'router', 'mod.rs')
   const RouteRust = join(SRC_TAURI, 'web', 'git_diff_stat_api.rs')
   const ServiceRust = join(SRC_TAURI, 'trackers', 'git_tracker', 'diff_stat.rs')
   const CommandsGitRust = join(SRC_TAURI, 'commands', 'git.rs')
@@ -1781,7 +1858,7 @@ describe('Worktree branch rename parity (shell revamp story 16)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const WorktreeFacade = join(LIB_DIR, 'worktree-api.ts')
   const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-  const RouterRust = join(SRC_TAURI, 'web', 'router.rs')
+  const RouterRust = join(SRC_TAURI, 'web', 'router', 'mod.rs')
   const RouteRust = join(SRC_TAURI, 'web', 'worktree_rename_api.rs')
   const ManagerRust = join(SRC_TAURI, 'acp', 'manager', 'worktree_branch.rs')
   const CommandsWorktreeRust = join(SRC_TAURI, 'commands', 'worktree.rs')
@@ -1944,6 +2021,71 @@ describe('Shared chat read marker parity (cross-surface unread)', () => {
   })
 })
 
+describe('Window ACL parity (issue #1443)', () => {
+  // The renderer's close handler prevents the WM close and calls
+  // window.hide() on macOS/Linux. When default.json lacks
+  // core:window:allow-hide the ACL denies the call and the window can
+  // neither close nor hide — this regression pinned that dead-end state.
+  const CAPABILITIES = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'capabilities', 'default.json')
+  /** Static window-method → ACL permission map (core:window commands). */
+  const PERMISSION_BY_METHOD: Record<string, string> = {
+    hide: 'core:window:allow-hide',
+    show: 'core:window:allow-show',
+    unminimize: 'core:window:allow-unminimize',
+    setFocus: 'core:window:allow-set-focus',
+    minimize: 'core:window:allow-minimize',
+    maximize: 'core:window:allow-maximize',
+    unmaximize: 'core:window:allow-unmaximize',
+    toggleMaximize: 'core:window:allow-toggle-maximize',
+    close: 'core:window:allow-close',
+    destroy: 'core:window:allow-destroy',
+    startDragging: 'core:window:allow-start-dragging',
+    startResizeDragging: 'core:window:allow-start-resize-dragging',
+    setPosition: 'core:window:allow-set-position',
+    setSize: 'core:window:allow-set-size'
+  }
+
+  const grantedPermissions = (): Set<string> => {
+    const capabilities = JSON.parse(readFileSync(CAPABILITIES, 'utf-8')) as {
+      permissions: Array<string | { identifier: string }>
+    }
+    return new Set(
+      capabilities.permissions.map((entry) =>
+        typeof entry === 'string' ? entry : entry.identifier
+      )
+    )
+  }
+
+  it('every JS-invoked core:window command in the renderer is ACL-granted', () => {
+    const granted = grantedPermissions()
+    // Calls read off the thin tauri-window facade (the Story 1.6 Biome ban
+    // keeps every import of @tauri-apps/api/window routed through it) plus
+    // the one direct call in TauriApp.tsx.
+    const rendererSources = [
+      ...readdirSync(LIB_DIR)
+        .filter((f) => f.endsWith('.ts'))
+        .map((f) => readFileSync(join(LIB_DIR, f), 'utf-8')),
+      ...readdirSync(join(LIB_DIR, '..'))
+        .filter((f) => f.endsWith('.tsx'))
+        .map((f) => readFileSync(join(LIB_DIR, '..', f), 'utf-8'))
+    ]
+    const sources = rendererSources.join('\n')
+    for (const [method, permission] of Object.entries(PERMISSION_BY_METHOD)) {
+      if (!new RegExp(`\\.\\s*${method}\\s*\\(`).test(sources)) continue
+      expect(
+        granted.has(permission),
+        `renderer calls .${method}() but capability is missing: ${permission}`
+      ).toBe(true)
+    }
+  })
+
+  it('the close-to-tray path is explicitly granted (preventDefault already fired)', () => {
+    const granted = grantedPermissions()
+    expect(granted.has('core:window:allow-hide')).toBe(true)
+    expect(granted.has('core:window:allow-show')).toBe(true)
+  })
+})
+
 describe('Watch hub parity (projects, chat history, agent roster)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const hubSource = readFileSync(join(SRC_TAURI, 'web', 'watch', 'hub.rs'), 'utf-8')
@@ -2079,7 +2221,7 @@ describe('Git History commit detail parity', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const GitApiFacade = join(LIB_DIR, 'git-api.ts')
   const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
-  const RouterRust = join(SRC_TAURI, 'web', 'router.rs')
+  const RouterRust = join(SRC_TAURI, 'web', 'router', 'mod.rs')
   const RouteRust = join(SRC_TAURI, 'web', 'git_history_api.rs')
   const ServiceRust = join(SRC_TAURI, 'trackers', 'git_tracker', 'commit_detail.rs')
   const CommandsGitRust = join(SRC_TAURI, 'commands', 'git.rs')
@@ -2143,6 +2285,169 @@ describe('Git History commit detail parity', () => {
     expect(content).toMatch(/IpcBody/)
     expect(content).toMatch(/spawn_blocking/)
     expect(content).toMatch(/tracing::/)
+  })
+})
+
+describe('Browser policy parity', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const Facade = join(LIB_DIR, 'browser-policy-api.ts')
+  const RouterRust = join(SRC_TAURI, 'web', 'router', 'mod.rs')
+  const RouteRust = join(SRC_TAURI, 'web', 'browser_policy_api.rs')
+  const CommandsRust = join(SRC_TAURI, 'commands', 'browser_policy.rs')
+  const LibRust = join(SRC_TAURI, 'lib.rs')
+  const WireRust = join(SRC_TAURI, 'acp', 'browser_policy', 'wire.rs')
+  const ServiceRust = join(SRC_TAURI, 'acp', 'browser_policy', 'service.rs')
+  const SourcesRust = join(SRC_TAURI, 'web', 'watch', 'sources.rs')
+  const ContractTs = join(LIB_DIR, '..', '..', 'shared', 'types', 'browser-policy.types.ts')
+
+  const OPERATIONS = [
+    {
+      method: 'getProject',
+      command: 'browser_policy_get_project',
+      route: '/host/browser-policy/project',
+      service: 'project_view'
+    },
+    {
+      method: 'getApp',
+      command: 'browser_policy_get_app',
+      route: '/host/browser-policy/app',
+      service: 'app_view'
+    },
+    {
+      method: 'applyProject',
+      command: 'browser_policy_apply_project',
+      route: '/host/browser-policy/project',
+      service: 'apply_project'
+    },
+    {
+      method: 'applyApp',
+      command: 'browser_policy_apply_app',
+      route: '/host/browser-policy/app',
+      service: 'apply_app'
+    }
+  ] as const
+
+  for (const op of OPERATIONS) {
+    it(`${op.method} goes through ${op.command} on desktop and ${op.route} on web`, () => {
+      const facade = readFileSync(Facade, 'utf-8')
+      expect(facade).toContain(`${op.method}:`)
+      expect(facade).toContain(`'${op.command}'`)
+      expect(facade).toContain('POLICY_BASE')
+      expect(facade).toMatch(/isTauriContext\(\) \? desktopBrowserPolicyApi : webBrowserPolicyApi/)
+      expect(readFileSync(RouteRust, 'utf-8')).toContain(`"${op.route}"`)
+    })
+
+    it(`${op.command} is defined, registered in lib.rs and calls the shared service (${op.service})`, () => {
+      const commands = readFileSync(CommandsRust, 'utf-8')
+      expect(commands).toContain(`pub async fn ${op.command}(`)
+      expect(commands).toContain(`.${op.service}(`)
+      expect(readFileSync(LibRust, 'utf-8')).toContain(`commands::${op.command},`)
+    })
+
+    it(`the ${op.route} route calls the same shared service method (${op.service})`, () => {
+      expect(readFileSync(RouteRust, 'utf-8')).toContain(`.${op.service}(`)
+    })
+  }
+
+  it('router.rs merges the policy router in BOTH router variants', () => {
+    const content = readFileSync(RouterRust, 'utf-8')
+    const occurrences = content.split('browser_policy_router(').length - 1
+    expect(occurrences, 'both router() and router_with_static() merge it').toBe(2)
+  })
+
+  it('every policy route sits under a bearer-gated prefix', () => {
+    const gate = readFileSync(join(SRC_TAURI, 'web', 'router', 'gate.rs'), 'utf-8')
+    expect(gate).toMatch(/const GATED_PREFIXES[^;]*"\/host\/"/s)
+    for (const route of new Set(OPERATIONS.map((op) => op.route))) {
+      expect(route.startsWith('/host/')).toBe(true)
+    }
+  })
+
+  it('commands run only from the main webview', () => {
+    const commands = readFileSync(CommandsRust, 'utf-8')
+    expect(commands).toMatch(/webview\.label\(\) != "main"/)
+  })
+
+  it('the TypeScript operations and the Rust wire operations are the same set', () => {
+    const rust = readFileSync(WireRust, 'utf-8')
+    const ts = readFileSync(ContractTs, 'utf-8')
+    const variants: Record<string, string> = {
+      add_origin: 'AddOrigin',
+      remove_origin: 'RemoveOrigin',
+      add_preapproval: 'AddPreapproval',
+      remove_preapproval: 'RemovePreapproval',
+      set_ephemeral: 'SetEphemeral',
+      set_global_profile: 'SetGlobalProfile',
+      set_ask_before_password_submit: 'SetAskBeforePasswordSubmit',
+      clear_global_profile: 'ClearGlobalProfile'
+    }
+    for (const [name, variant] of Object.entries(variants)) {
+      expect(ts, name).toContain(`op: '${name}'`)
+      expect(rust, name).toContain(variant)
+    }
+    const tsOps = new Set([...ts.matchAll(/op: '([a-z_]+)'/g)].map((m) => m[1]))
+    expect(tsOps).toEqual(new Set(Object.keys(variants)))
+  })
+
+  it('change events reach every client: fanned out by the service, carried by the agents watch, routed by the roster watch', () => {
+    expect(readFileSync(ServiceRust, 'utf-8')).toContain('"acp:browser_policy_changed"')
+    expect(readFileSync(SourcesRust, 'utf-8')).toMatch(
+      /AGENT_TRANSIENT_EVENTS[^;]*"browser_policy_changed"/s
+    )
+    const roster = readFileSync(
+      join(LIB_DIR, '..', 'stores', 'acp-store', 'agent-roster-watch.ts'),
+      'utf-8'
+    )
+    expect(roster).toContain("'browser_policy_changed'")
+    expect(roster).toContain('publishBrowserPolicyChange')
+  })
+
+  it('the settings section is registered and the facade logs through log-api', () => {
+    const categories = readFileSync(
+      join(LIB_DIR, '..', 'pages', 'app-preferences', 'categories.tsx'),
+      'utf-8'
+    )
+    expect(categories).toContain("id: 'browser'")
+    expect(readFileSync(Facade, 'utf-8')).toContain("from './log-api'")
+  })
+})
+
+// Browser consent tickets and Stop: the desktop answers through its
+// `main`-webview commands, a remote client through `/ws`, and the facade
+// picks the carrier. Source-grep checks pin that every carrier exists.
+describe('Browser consent and Stop parity', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const read = (...parts: string[]): string => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
+  const facade = readFileSync(join(LIB_DIR, 'browser-consent-api.ts'), 'utf-8')
+
+  it('the facade branches on isTauriContext() between the commands and the transport', () => {
+    expect(facade).toMatch(/invokeIpc<null>\('browser_ticket_respond'/)
+    expect(facade).toMatch(/invokeIpc<null>\('browser_stop'/)
+    expect(facade).toMatch(/getAcpTransport\(\)\.respondPermission\(/)
+    expect(facade).toMatch(/getAcpTransport\(\)\.stopBrowserAgent\(/)
+    expect(readFileSync(join(LIB_DIR, 'acp-transport', 'ws-transport.ts'), 'utf-8')).toMatch(
+      /this\.request\('browser_stop', \{ sessionId \}\)/
+    )
+  })
+
+  it('registers both desktop commands and routes both /ws requests to the host paths', () => {
+    const lib = read('lib.rs')
+    expect(lib).toContain('commands::browser_ticket_respond,')
+    expect(lib).toContain('commands::browser_stop,')
+    const dispatch = read('web', 'ws', 'dispatch.rs')
+    expect(dispatch).toMatch(/handle_respond_host_ticket\(id, &req\.payload, env\)/)
+    expect(dispatch).toMatch(/"browser_stop" => handle_browser_stop\(id, &req\.payload, env\)/)
+  })
+
+  it('both carriers resolve through the same host ticket table and stop latch', () => {
+    expect(read('commands', 'browser.rs')).toMatch(/tickets\.answer\(Approver::Desktop/)
+    expect(read('web', 'permissions.rs')).toMatch(/\.answer\(approver, request_id, option_id\)/)
+    expect(read('commands', 'browser.rs')).toMatch(
+      /browser_automation::stop_session\(&session_id\)/
+    )
+    expect(read('web', 'ws', 'subscribe.rs')).toMatch(
+      /browser_automation::stop_session\(&parsed\.session_id\)/
+    )
   })
 })
 
@@ -2215,5 +2520,59 @@ describe('Bug report parity (spec-bug-report-dialog)', () => {
       existsSync(join(LIB_DIR, 'bug-report-api.test.ts')),
       'bug-report-api.test.ts should exist'
     ).toBe(true)
+  })
+})
+
+// MCP catalog search (spine AD-1): one host service, reached through
+// `GET /mcp-catalog/search` (web) and the `/ws` request `search_mcp_catalog`
+// (desktop channel and web socket). The Rust suite compares the two replies;
+// this block pins the wiring and the shared facade.
+describe('MCP catalog parity (spine AD-1)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const SHARED_TYPES = join(LIB_DIR, '..', '..', 'shared', 'types')
+
+  it('both carriers answer from the one host service', () => {
+    const dispatch = readFileSync(join(SRC_TAURI, 'web', 'ws', 'dispatch.rs'), 'utf-8')
+    expect(dispatch).toMatch(/"search_mcp_catalog" => \{\s*mcp_catalog::handle_search_mcp_catalog/)
+    const router = readFileSync(join(SRC_TAURI, 'web', 'router', 'mod.rs'), 'utf-8')
+    expect(router.match(/"\/mcp-catalog\/search", get\(mcp_catalog_api::search\)/g)).toHaveLength(2)
+    for (const adapter of [
+      join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'),
+      join(SRC_TAURI, 'web', 'ws', 'mcp_catalog.rs')
+    ]) {
+      expect(readFileSync(adapter, 'utf-8')).toMatch(
+        /McpCatalogService::shared\(\)\.await\.search\(&request\)/
+      )
+    }
+  })
+
+  it('search is a read every connection may make, behind the bearer gate on HTTP', () => {
+    const capabilities = readFileSync(join(SRC_TAURI, 'web', 'capabilities.rs'), 'utf-8')
+    expect(capabilities).toMatch(/\| "search_mcp_catalog"/)
+    const gate = readFileSync(join(SRC_TAURI, 'web', 'router', 'gate.rs'), 'utf-8')
+    expect(gate).toMatch(/"\/mcp-catalog\/",/)
+    const protocol = readFileSync(join(SHARED_TYPES, 'web-protocol.types.ts'), 'utf-8')
+    expect(protocol).toMatch(/'search_mcp_catalog',/)
+    expect(protocol).toMatch(/search_mcp_catalog: \['read', null\]/)
+  })
+
+  it('the facade switches carriers and both impls share the contract types', () => {
+    const facade = readFileSync(join(LIB_DIR, 'mcp-catalog-api.ts'), 'utf-8')
+    expect(facade).toMatch(
+      /isTauriContext\(\)\s*\?\s*createDesktopMcpCatalogApi\(\)\s*:\s*webMcpCatalogApi/
+    )
+    const desktop = readFileSync(join(LIB_DIR, 'desktop-mcp-catalog-api.ts'), 'utf-8')
+    expect(desktop).toMatch(/getAcpTransport\(\)\.searchMcpCatalog\(request\)/)
+    expect(desktop).toMatch(/ipcResultFromTransport/)
+    const web = readFileSync(join(LIB_DIR, 'web-mcp-catalog-api.ts'), 'utf-8')
+    expect(web).toMatch(/\/mcp-catalog\/search/)
+    const transport = readTsModule(join(LIB_DIR, 'acp-transport'))
+    expect(transport).toMatch(/'search_mcp_catalog'/)
+    for (const impl of [desktop, web, facade]) {
+      expect(impl).toMatch(/from '@shared\/types\/mcp-catalog\.types'/)
+    }
+    const types = readFileSync(join(SHARED_TYPES, 'mcp-catalog.types.ts'), 'utf-8')
+    expect(types).toMatch(/export interface McpCatalogApi\b/)
+    expect(existsSync(join(LIB_DIR, 'mcp-catalog-api.test.ts'))).toBe(true)
   })
 })

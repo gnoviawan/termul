@@ -10,7 +10,7 @@
 		"frontendDist": "../dist-tauri"
 	},
 	"app": {
-		"withGlobalTauri": true,
+		"withGlobalTauri": false,
 		"windows": [
 			{
 				"label": "main",
@@ -70,6 +70,9 @@
 		"category": "Productivity",
 		"shortDescription": "Termul Manager - Project-aware terminal manager",
 		"longDescription": "Termul Manager is a desktop application built with Tauri for enhanced productivity. Organize terminals by project with persistent sessions and snapshots.",
+		"macOS": {
+			"entitlements": "Entitlements.plist"
+		},
 		"windows": {
 			"nsis": {
 				"displayLanguageSelector": false

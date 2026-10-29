@@ -10,6 +10,7 @@ import { commandToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import type { AcpSession } from '@/stores/acp-store'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
+import { useBrowserControlStore } from '@/stores/browser-control-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 
 const {
@@ -371,6 +372,7 @@ vi.mock('./ChatChangedFilesPanel', () => ({
   ChatChangedFilesPanel: (props: {
     cwd: string
     toolCalls: unknown[]
+    turnActive?: boolean
     forceCollapsed?: boolean
     onOpenGitChanges?: (opener: HTMLElement) => void
   }) => {
@@ -1563,6 +1565,12 @@ describe('AgentChatPanel ChatChangedFilesPanel mounting', () => {
     expect(Array.isArray(changedFilesPanelPropsRef.current[0].toolCalls)).toBe(true)
   })
 
+  it('passes the agent turn state so a finished turn refreshes git changes', () => {
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w', activeTurn: true })
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(changedFilesPanelPropsRef.current.at(-1)).toMatchObject({ turnActive: true })
+  })
+
   it('mounts ChatChangedFilesPanel even for a closed session (renders null internally)', () => {
     sessionRef.current = mockAcpSession({ id: 's2', cwd: '/w', status: 'closed' })
     render(<AgentChatPanel sessionId="s2" isVisible />)
@@ -2210,14 +2218,30 @@ describe('AgentChatPanel browser consent card mounting (CAP-5)', () => {
     expect(browserConsentCardPropsRef.current).toBeNull()
   })
 
-  it('mounts no card outside Tauri (remote clients never see the prompt)', () => {
+  it('mounts the card on a remote client too, which has no browser pane', () => {
     runtimeState.tauri = false
     seedActiveSession('s1')
     pendingBrowserConsentsRef.current = {
       'req-1': { requestId: 'req-1', sessionId: 's1' }
     }
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(browserConsentCardPropsRef.current).toBeNull()
+    expect(browserConsentCardPropsRef.current?.consent).toMatchObject({ requestId: 'req-1' })
+  })
+
+  it('shows the agent-control indicator with Stop only while the session drives a tab', () => {
+    seedActiveSession('s1')
+    useBrowserControlStore.setState({ tabSessions: {}, stoppedSessions: {} })
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.queryByTestId('browser-agent-indicator')).not.toBeInTheDocument()
+
+    useBrowserControlStore.setState({ tabSessions: { 'agent-1': 's1' } })
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.getByTestId('browser-agent-indicator')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop agent browsing' })).toBeInTheDocument()
+
+    useBrowserControlStore.setState({ tabSessions: { 'agent-1': 's-other' } })
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.queryByTestId('browser-agent-indicator')).not.toBeInTheDocument()
   })
 
   it('registers a visible card host for the session and unregisters on unmount', () => {

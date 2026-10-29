@@ -1,28 +1,11 @@
 ---
 title: Edit a design on the canvas
-description: Open your project's OpenPencil design file in a tab, edit it, and save it.
+description: Open your project's design file in a tab, edit it, and let an agent design on it.
 ---
 
 <Callout type="info">The canvas works in the desktop app and in the browser version on a computer. It isn't available on phone-sized screens.</Callout>
 
-The canvas is a design editor inside Termul. It opens your project's `.op` file, which is the design file format of [OpenPencil](https://github.com/ZSeven-W/openpencil), an open-source design tool. A `.op` file holds frames, shapes, and text. You can keep the design in the same repository as the code and look at both in one window.
-
-## Before you start
-
-You need two things.
-
-**A `.op` file in the project's root folder.** Termul looks only in the root folder, not in subfolders. If there are several `.op` files, Termul opens the first one in alphabetical order. If there are none, Termul shows this message:
-
-![Message that says no .op document was found in the project root](/screenshots/browser-canvas-no-document.png)
-
-**The OpenPencil editor server.** The canvas runs OpenPencil's editor server, a program named `op-host-web-server`. Termul doesn't include it. Termul looks for it in this order:
-
-1. The file named in the `TERMUL_OP_HOST_SERVER` environment variable.
-2. An OpenPencil source folder named in the `TERMUL_OPENPENCIL_ROOT` environment variable. Build the server in that folder first with `cargo build -p op-host-web-server`.
-
-Set the variable for the program that runs Termul: the desktop app, or the server that hosts the browser version. If Termul can't find the editor server, opening the canvas shows this error:
-
-![Error that says the canvas could not open because the op-host-web-server binary was not found](/screenshots/browser-canvas-no-editor.png)
+The canvas is a design editor inside Termul. It opens your project's `.figcraft` file, a design file that holds frames, shapes, and text. You can keep the design in the same repository as the code and look at both in one window. The editor is built into Termul, so you don't need to install anything else.
 
 ## Open the canvas
 
@@ -31,34 +14,55 @@ Select a project first. Then use one of these ways:
 - Click **Canvas** in the left sidebar. When the sidebar is collapsed, click the pen icon (**Open canvas**).
 - Click **+** (**New tab**) at the right end of the tab bar, then click **Open canvas**.
 - Open the command palette with `Ctrl+K` (`Cmd+K` on macOS), type `canvas`, and run **Open Canvas**.
+- Open a `.figcraft` file from the file explorer.
 
 ![The New tab menu with New chat, the terminal shells, and Open canvas](/screenshots/browser-canvas-new-tab-menu.png)
 
 ![The command palette filtered to canvas, with Open Canvas at the top](/screenshots/browser-canvas-palette.png)
 
-Each project has one canvas tab. If it is already open, Termul switches to it.
+Termul opens the first `.figcraft` file in the project's root folder, in alphabetical order. It doesn't look in subfolders. If the project has no `.figcraft` file yet, you start with an empty design, and Termul saves it as `design.figcraft` in the root folder the first time it saves.
+
+Each project has one canvas tab. If it is already open, Termul switches to it. When you close the tab, the design stays loaded in the background, so an agent can keep working on it.
 
 ## Work in the canvas tab
 
 The bar at the top of the tab shows the file name and the editor's status:
 
-- **Starting canvas…** while the editor server starts.
-- **Connecting…** while the editor loads.
+- **Starting canvas…** while the canvas starts.
+- **Loading editor…** while the editor loads.
 - **Ready** when you can edit.
-- **Canvas failed to connect** if the editor didn't load.
+- **Canvas unavailable** if the editor couldn't open. The reason shows in the tab.
+- **Open in another window** if you opened the same design in another Termul window or browser tab. That window now has it. Click **Take back** to bring it back here.
+- **Unloaded** if Termul unloaded the design to save memory. Termul keeps two designs loaded at a time. Click **Reopen canvas** to load it again.
 
-Below the bar is the OpenPencil editor. Use its tools to add and change frames, shapes, and text. The editor uses the same light or dark appearance as Termul.
+Below the bar is the editor. Use its tools to add and change frames, shapes, and text. The editor uses the same light or dark appearance as Termul. Its header shows the design's file name and the project name.
+
+The editor includes one font, Inter. On Windows, the desktop app also lends the editor a few installed fonts (Segoe UI Symbol, Microsoft YaHei, Malgun Gothic, and Segoe UI Emoji), so symbols, Chinese, Japanese and Korean text, and emoji show up instead of empty boxes. On macOS and Linux, and in the browser version, those characters can still show as empty boxes.
 
 ## Save your changes
 
-A dot next to the file name means you have unsaved changes. Click **Save** at the right end of the bar to write them to the `.op` file.
+Termul saves your changes on its own a moment after you stop editing. A dot next to the file name means there are unsaved changes. To save right away, click **Save** at the right end of the bar. If a save fails, the bar shows **Save failed**.
 
-If the document changed while you were editing, Termul shows **Canvas conflict**. Choose one:
+When Termul unmounts the canvas, for example when you close a project or quit Termul, it saves first. If that save fails, Termul asks what to do: **Retry**, **Keep editing**, or **Discard changes**. Closing the canvas tab does not unmount the canvas, so it doesn't start this save or show these choices.
 
-- **Keep my changes** keeps your version.
-- **Use the saved version** drops your changes and loads the saved document.
-- **Dismiss** closes the message without choosing.
+## When the file changes outside Termul
 
-## Let an agent work on the design
+If the `.figcraft` file changes on disk while you have no unsaved changes, Termul loads the new version. If you do have unsaved changes, Termul pauses saving and asks you to choose:
 
-When you open the canvas, Termul adds an MCP server named **OpenPencil Canvas** to your MCP servers. An MCP server is a connection that gives an agent extra tools. Through this one, an agent can work with the design that is open on the canvas. See [Agent setup](/docs/agent-setup) for how agents use MCP servers.
+- **Keep mine** keeps your version.
+- **Take disk** drops your changes and loads the version on disk.
+- **Save a copy** writes your version to a new file next to the design, named like `design.conflict-20261025-091500.figcraft`, then loads the version on disk.
+
+If the file was deleted, choose **Keep mine** to create it again from your version.
+
+If the editor stops responding, Termul reloads it from the last save and tells you how many unsaved changes were lost.
+
+## Let an agent design on the canvas
+
+Agents you chat with in Termul get canvas tools on their own. You don't need to add an MCP server. An agent can read the design, change it, take screenshots of it, and save it. The design must be open on the canvas, or still loaded in the background, for those tools to work. While an agent works, you see its cursor on the canvas with the agent's name.
+
+Termul also gives agents a set of design guides. They explain how to build a design step by step, how to handle a short request such as "landing page for a bakery", and how to lay out landing pages, web app screens, phone screens, dashboards, slides, social posts, and design systems. The session tells agents to read the guides before their first edit, and the guides work even when no canvas is open.
+
+When you don't name a brand or a look, the agent can pick one of ten ready-made styles, such as **Warm Editorial**, **Clean SaaS**, or **Night Tech**. Each style sets colors for light and dark mode, text sizes, spacing, and corner rounding. The agent tells you which style it picked and why. Every style uses the Inter font, because that is the font the canvas includes.
+
+See [Agent setup](/docs/agent-setup) for how to start a chat with an agent.

@@ -1,7 +1,6 @@
 import { AgentBadge } from '@/components/chat/AgentBadge'
 import { CircleDot } from '@/components/icons'
 import { Spinner } from '@/components/ui/spinner'
-import { useReloadChat } from '@/hooks/use-reload-chat'
 import { cn } from '@/lib/utils'
 import { useAgentIdentity, useSessionIndexTitle } from '@/stores/acp-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
@@ -43,7 +42,6 @@ export function AgentChatTabInline({
   // spins; warm-pool sessions are not chats, so they never show the dot, while
   // a stopped chat keeps it) live in `useAgentChatStatusSignals`.
   const unread = useAgentChatUnreadStore((state) => Boolean(state.unread[tab.sessionId]))
-  const chatReload = useReloadChat(tab.sessionId)
 
   const isClosed = session?.status === 'closed'
   const tabLabel = session?.title ?? indexTitle ?? agentName ?? 'Agent Chat'
@@ -87,9 +85,7 @@ export function AgentChatTabInline({
     <TabContextMenu
       kind="agent-chat"
       onClose={onClose}
-      onReloadChat={chatReload.reload}
-      reloadChatDisabled={chatReload.disabled}
-      reloadChatReason={chatReload.reason}
+      reloadChatSessionId={tab.sessionId}
       {...bulkMenu}
     >
       <TabChrome

@@ -16,6 +16,7 @@ import { applyProjectClaudeAccount, CLAUDE_AGENT_CONFIG_ID } from '@/stores/clau
 import { useActiveProjectId, useProjectActions, useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import type { EnvVariable, Project, ProjectColor } from '@/types/project'
+import { ProjectBrowserSection } from './project-settings/browser-section'
 import {
   PROJECT_SETTINGS_CATEGORIES,
   PROJECT_SETTINGS_SEARCH_INDEX
@@ -466,6 +467,8 @@ export function ProjectSettingsModal() {
               }}
             />
           </SettingsSection>
+
+          <ProjectBrowserSection projectId={settingsProject?.id} />
         </SettingsLayout>
       </SettingsModal>
 

@@ -2921,3 +2921,123 @@ async fn new_session_injects_a_refreshed_oauth_token() {
         Some("stored-refresh")
     );
 }
+
+// ---- #1420: plan token handling on a history reopen ----------------------
+
+/// A session that already has a live plan token and a cached plan, the state a
+/// reopen starts from.
+fn manager_with_live_plan_token(session_id: &str) -> (AcpManager, String) {
+    let manager = AcpManager::new(vec![]);
+    let (_, old_token, _) = manager.host_plan_server.register_session("agent-live");
+    manager
+        .host_plan_server
+        .bind_session(&old_token, session_id);
+    manager.host_plan_server.seed_plan_for_test(session_id);
+    (manager, old_token)
+}
+
+#[tokio::test]
+async fn a_rejected_mcp_list_leaves_the_live_token_and_plan_cache_alone() {
+    let (manager, old_token) = manager_with_live_plan_token("sess-gate");
+    let agent = AgentId("agent-gate".to_string());
+    manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+    // The fixture agent has no HTTP MCP capability, so the gate rejects this.
+    let http = McpServer::Http(agent_client_protocol::schema::v1::McpServerHttp::new(
+        "remote",
+        "https://example.invalid/mcp",
+    ));
+
+    let error = manager
+        .resume_session(
+            &agent,
+            SessionId("sess-gate".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(vec![http]),
+        )
+        .await
+        .expect_err("the gate must reject an HTTP server");
+
+    assert!(error.contains("HTTP MCP"), "unexpected error: {error}");
+    assert_eq!(
+        manager.host_plan_server.tokens_bound_to("sess-gate"),
+        vec![old_token],
+        "only the new token is evicted"
+    );
+    assert!(manager.host_plan_server.plan_cached_for_test("sess-gate"));
+}
+
+#[tokio::test]
+async fn a_failed_resume_keeps_the_old_token_and_evicts_the_new_one() {
+    let (manager, old_token) = manager_with_live_plan_token("sess-own");
+    let owner = AgentId("agent-owner".to_string());
+    // This fixture answers `session/resume` with an error.
+    manager.install_test_agent_with_mid_turn_session(
+        owner.clone(),
+        ["sess-own".to_string()].into_iter().collect(),
+        true,
+    );
+
+    manager
+        .resume_session(
+            &owner,
+            SessionId("sess-own".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await
+        .expect_err("the fixture rejects session/resume");
+
+    assert_eq!(
+        manager.host_plan_server.tokens_bound_to("sess-own"),
+        vec![old_token],
+        "the live child's token survives and the new one is evicted"
+    );
+    assert!(manager.host_plan_server.plan_cached_for_test("sess-own"));
+}
+
+#[tokio::test]
+async fn a_successful_resume_replaces_the_old_token_with_the_new_one() {
+    let (manager, old_token) = manager_with_live_plan_token("sess-ok");
+    let agent = AgentId("agent-ok".to_string());
+    manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+
+    manager
+        .resume_session(
+            &agent,
+            SessionId("sess-ok".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await
+        .expect("the fixture accepts session/resume");
+
+    let bound = manager.host_plan_server.tokens_bound_to("sess-ok");
+    assert_eq!(bound.len(), 1, "exactly the new token remains: {bound:?}");
+    assert_ne!(bound[0], old_token, "the old token is dropped");
+}
+
+#[tokio::test]
+async fn a_reopen_without_an_mcp_list_touches_no_tokens() {
+    let (manager, old_token) = manager_with_live_plan_token("sess-none-list");
+    let agent = AgentId("agent-none-list".to_string());
+    manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+
+    manager
+        .resume_session(
+            &agent,
+            SessionId("sess-none-list".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            None,
+        )
+        .await
+        .expect("the fixture accepts session/resume");
+
+    assert_eq!(
+        manager.host_plan_server.tokens_bound_to("sess-none-list"),
+        vec![old_token]
+    );
+}

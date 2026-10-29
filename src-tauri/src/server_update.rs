@@ -368,6 +368,27 @@ pub async fn download_binary(url: &str) -> Result<Vec<u8>> {
 // Signature verification.
 // ---------------------------------------------------------------------------
 
+/// Parse a manifest `signature` value into a minisign `Signature`.
+///
+/// Release manifests carry the `tauri signer sign` output: the minisign `.sig`
+/// text wrapped in base64 (same wrapping as the pubkey, see
+/// `resolve_public_key`). Plain minisign text (starts with the
+/// `untrusted comment:` line) is accepted as-is. Either way the result still
+/// has to pass `PublicKey::verify`, so accepting both forms does not weaken
+/// verification.
+fn decode_signature(signature_text: &str) -> Result<Signature> {
+    let trimmed = signature_text.trim();
+    if trimmed.starts_with("untrusted comment:") {
+        return Signature::decode(trimmed).context("failed to decode minisign signature");
+    }
+    let decoded = BASE64_STANDARD
+        .decode(trimmed)
+        .context("failed to decode minisign signature: not plain minisign text or base64")?;
+    let text = std::str::from_utf8(&decoded)
+        .context("failed to decode minisign signature: decoded base64 is not UTF-8")?;
+    Signature::decode(text).context("failed to decode minisign signature")
+}
+
 /// Verify a minisign signature over `binary` using `public_key`.
 ///
 /// `allow_legacy = true` accepts both modern (prehashed `B2`) and legacy (`Ed`)
@@ -375,8 +396,7 @@ pub async fn download_binary(url: &str) -> Result<Vec<u8>> {
 /// variant the Tauri signer emits. Forging either still requires the private
 /// key, so accepting legacy does not weaken against forgery.
 pub fn verify_signature(binary: &[u8], signature_text: &str, public_key: &PublicKey) -> Result<()> {
-    let signature =
-        Signature::decode(signature_text).context("failed to decode minisign signature")?;
+    let signature = decode_signature(signature_text)?;
     public_key
         .verify(binary, &signature, true)
         .map_err(|e| anyhow!("signature verification failed: {e}"))

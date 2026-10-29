@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import type { AnimateOptions } from 'streamdown'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { selectionContextToken } from '@/lib/composer/selection-context'
 import {
   CMD_TOKEN_END,
   CMD_TOKEN_START,
@@ -80,6 +82,7 @@ vi.mock('streamdown', async () => {
     const CustomTable = components?.table as React.ElementType | undefined
     const CustomFilePath = components?.['termul-file-path'] as React.ElementType | undefined
     const CustomImage = components?.['termul-image'] as React.ElementType | undefined
+    const CustomLink = components?.a as React.ElementType | undefined
     const semanticFixture = markdown.startsWith('# Compact heading')
     const animatedConfig = animated === false || animated === true ? undefined : animated
     const animatedName =
@@ -108,18 +111,24 @@ vi.mock('streamdown', async () => {
         data-has-image-component={Boolean(CustomImage)}
         data-remark-plugins={remarkPlugins ? String(remarkPlugins.length) : ''}
       >
-        <button
-          type="button"
-          data-testid="streamdown-link"
-          onClick={async () => {
-            if (!linkSafety?.enabled) return
-            const ok = linkSafety.onLinkCheck ? await linkSafety.onLinkCheck(url) : false
-            if (ok) return
-            setOpen(true)
-          }}
-        >
-          docs
-        </button>
+        {CustomLink ? (
+          <CustomLink href={url} data-testid="streamdown-link">
+            docs
+          </CustomLink>
+        ) : (
+          <button
+            type="button"
+            data-testid="streamdown-link"
+            onClick={async () => {
+              if (!linkSafety?.enabled) return
+              const ok = linkSafety.onLinkCheck ? await linkSafety.onLinkCheck(url) : false
+              if (ok) return
+              setOpen(true)
+            }}
+          >
+            docs
+          </button>
+        )}
         {markdown.startsWith('FILE_PATH:') && CustomFilePath ? (
           <CustomFilePath data-path="src/renderer/App.tsx:42" data-testid="file-path-link">
             src/renderer/App.tsx:42
@@ -401,7 +410,12 @@ describe('ChatMessage', () => {
   })
 
   it('opens confirmed links via the system browser and closes the safety dialog', async () => {
-    render(<ChatMessage message={agentMessage(false)} isLast />)
+    render(
+      <>
+        <ChatMessage message={agentMessage(false)} isLast />
+        <ExternalLinkConfirmHost />
+      </>
+    )
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('streamdown-link'))
@@ -784,5 +798,71 @@ describe('ChatMessage', () => {
         vi.useRealTimers()
       }
     })
+  })
+})
+
+describe('ChatMessage selection contexts', () => {
+  function userMessage(text: string): ChatMessageType {
+    return {
+      id: 'user-ctx',
+      role: 'user',
+      blocks: [{ type: 'text', text }],
+      streaming: false,
+      timestamp: 0
+    }
+  }
+  const prose = selectionContextToken({ text: 'The parser drops the last line' })
+  const code = selectionContextToken({ text: 'const x = 1', language: 'ts' })
+
+  it('renders numbered context chips in the user bubble instead of raw tokens', () => {
+    render(
+      <TooltipProvider>
+        <ChatMessage message={userMessage(`Compare ${prose} with ${code}`)} />
+      </TooltipProvider>
+    )
+    const chips = screen.getAllByRole('note')
+    expect(chips.map((chip) => chip.getAttribute('aria-label'))).toEqual([
+      'Context 1: The parser drops the last line',
+      'Context 2: const x = 1'
+    ])
+    expect(chips[0]).toHaveAttribute('tabindex', '0')
+    expect(screen.queryByText(/%20/)).toBeNull()
+  })
+
+  it('shows the full selected text when a chip gets keyboard focus', async () => {
+    render(
+      <TooltipProvider>
+        <ChatMessage message={userMessage(`see ${prose}`)} />
+      </TooltipProvider>
+    )
+    fireEvent.focus(screen.getByRole('note'))
+    await waitFor(() =>
+      expect(screen.getAllByText('The parser drops the last line').length).toBeGreaterThan(0)
+    )
+    expect(screen.getByRole('tooltip')).toHaveTextContent('The parser drops the last line')
+  })
+
+  it('copies the message in prompt form, with the quote blocks and markers', async () => {
+    render(
+      <TooltipProvider>
+        <ChatMessage message={userMessage(`why ${prose}`)} />
+      </TooltipProvider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    await waitFor(() =>
+      expect(copyTextMock).toHaveBeenCalledWith(
+        'Context 1 (selected from the conversation):\n> The parser drops the last line\n\nwhy [Context 1]'
+      )
+    )
+  })
+
+  it('marks user and agent bubbles as selection-context sources', () => {
+    const { container } = render(
+      <TooltipProvider>
+        <ChatMessage message={userMessage('hello')} />
+        <ChatMessage message={agentMessage(false)} isTurnTail />
+      </TooltipProvider>
+    )
+    expect(container.querySelectorAll('[data-selection-context-source]')).toHaveLength(2)
   })
 })

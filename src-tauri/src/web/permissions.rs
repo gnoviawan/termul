@@ -38,6 +38,13 @@
 //! a ticket here. The `/ws` request handler calls
 //! [`PermissionRendezvous::try_respond`] for `respond_permission` frames.
 //!
+//! # Host tickets
+//!
+//! Ids namespaced `host:` are consent tickets the host itself raised
+//! ([`crate::acp::host_ticket`]). They never enter this table and never
+//! reach the agent: [`PermissionRendezvous::answer_host`] resolves them
+//! against the host ticket resolver, under its approver rules.
+//!
 //! # deny == Cancelled
 //!
 //! The ACP `RequestPermissionOutcome` enum has only `Selected` and `Cancelled`
@@ -56,7 +63,9 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use tracing::warn;
 
+use crate::acp::host_ticket::{is_host_ticket_id, AnswerError, Approver, HostTickets};
 use crate::acp::{AcpManager, AgentId};
+use crate::browser_automation::core::ports::ConsentOption;
 use crate::web::sink::ClientId;
 
 pub use questions::{QuestionRendezvous, QuestionRespondError, QuestionRespondOutcome};
@@ -233,6 +242,8 @@ pub struct PermissionRendezvous {
     /// Bounded memory of resolved request ids (`already_resolved` replies).
     /// Lock order: `state` before `resolved`.
     resolved: Mutex<Tombstones>,
+    /// Host-originated tickets (desktop only; `None` elsewhere).
+    host: Mutex<Option<Arc<HostTickets>>>,
 }
 
 impl PermissionRendezvous {
@@ -243,7 +254,38 @@ impl PermissionRendezvous {
             state: Mutex::new(State::default()),
             acp,
             resolved: Mutex::new(Tombstones::new()),
+            host: Mutex::new(None),
         }
+    }
+
+    /// Attach the host ticket resolver (the desktop's browser consent).
+    pub fn set_host_tickets(&self, host: Arc<HostTickets>) {
+        *self.host.lock() = Some(host);
+    }
+
+    /// Whether `request_id` names a host ticket rather than an agent's.
+    #[must_use]
+    pub fn is_host_ticket(request_id: &str) -> bool {
+        is_host_ticket_id(request_id)
+    }
+
+    /// The session a pending host ticket belongs to.
+    #[must_use]
+    pub fn host_ticket_session(&self, request_id: &str) -> Option<String> {
+        self.host.lock().as_ref()?.session_of(request_id)
+    }
+
+    /// Answer a host ticket. A process without a host resolver has no host
+    /// tickets, so every id reads `NotFound`.
+    pub fn answer_host(
+        &self,
+        approver: Approver,
+        request_id: &str,
+        option_id: Option<&str>,
+    ) -> Result<ConsentOption, AnswerError> {
+        let host = self.host.lock().clone();
+        host.ok_or(AnswerError::NotFound)?
+            .answer(approver, request_id, option_id)
     }
 
     /// The session id a pending `request_id` belongs to, or `None` if there is
@@ -302,6 +344,9 @@ impl PermissionRendezvous {
         session_id: String,
         options: Value,
     ) {
+        if is_host_ticket_id(&request_id) {
+            return;
+        }
         let mut state = self.state.lock();
         if let Some(queue) = state.sessions.get_mut(&session_id) {
             queue.queued.push_back(QueuedTicket {

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shadow DOM fixture</title>
+</head>
+<body>
+<h1>Shadow DOM fixture</h1>
+<x-card id="card"><button id="slotted" type="button">Slotted button</button></x-card>
+<x-secret id="secret"></x-secret>
+<p>Shadow fixture ready</p>
+<script>
+var open = document.getElementById('card').attachShadow({ mode: 'open' });
+open.innerHTML =
+  '<section><input id="field" type="text" aria-label="Shadow field">' +
+  '<button id="go" type="button">Shadow button</button><slot></slot>' +
+  '<p id="out">Shadow result: none</p></section>';
+open.getElementById('go').addEventListener('click', function () {
+  open.getElementById('out').textContent =
+    'Shadow result: clicked [' + open.getElementById('field').value + ']';
+});
+var closed = document.getElementById('secret').attachShadow({ mode: 'closed' });
+closed.innerHTML = '<button type="button">Closed button</button>';
+</script>
+</body>
+</html>

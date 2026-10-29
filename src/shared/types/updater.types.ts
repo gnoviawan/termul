@@ -10,7 +10,13 @@ export interface UpdateInfo {
   releaseNotes?: string
   isSecurityUpdate: boolean
   downloadUrl?: string
+  // How the update is applied: 'in-app' downloads and installs the signed
+  // package; 'manual' opens `downloadUrl` so the user installs it themselves.
+  // UI copy follows this, never the channel.
+  installMode?: UpdateInstallMode
 }
+
+export type UpdateInstallMode = 'in-app' | 'manual'
 
 // Current state of the updater
 export interface UpdateState {

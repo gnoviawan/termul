@@ -47,8 +47,9 @@ import {
   type AvailableCommand,
   acpApi,
   type BrowserAgentTabEvent,
-  type BrowserConsentRequestEvent,
   type BrowserOpenRequestEvent,
+  type BrowserStopChangedEvent,
+  type BrowserTicketClosedEvent,
   type CommandsUpdateEvent,
   type ConfigOptionsUpdateEvent,
   type ContentBlock,
@@ -146,7 +147,7 @@ export {
   renewAgentCredentials
 } from './shared-state'
 export { _resetAcpAuthForTesting } from './slices/agent'
-export { mcpServerDeletionCount } from './slices/mcp'
+export { mcpProbesInFlight, mcpServerDeletionCount } from './slices/mcp'
 export {
   _resetInFlightHistoryOpensForTesting,
   _resetSessionIndexLoadGenerationForTesting
@@ -659,8 +660,11 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<BrowserAgentTabEvent>(ACP_EVENTS.browserAgentTab, (e) =>
       useAcpStore.getState()._onBrowserAgentTab(e)
     ),
-    acpApi.onEvent<BrowserConsentRequestEvent>(ACP_EVENTS.browserConsentRequest, (e) =>
-      useAcpStore.getState()._onBrowserConsentRequest(e)
+    acpApi.onEvent<BrowserTicketClosedEvent>(ACP_EVENTS.browserTicketClosed, (e) =>
+      useAcpStore.getState()._onBrowserTicketClosed(e)
+    ),
+    acpApi.onEvent<BrowserStopChangedEvent>(ACP_EVENTS.browserStopChanged, (e) =>
+      useAcpStore.getState()._onBrowserStopChanged(e)
     )
   ]
   return () => {

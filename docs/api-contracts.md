@@ -113,7 +113,7 @@ Updates visibility state to influence tracker polling behavior.
 ## Browser Tab Commands
 
 ### `browser_tab_create`
-Creates a child browser webview with bounds and initial URL.
+Asks the host tab registry to build a tab webview with bounds and an initial URL. The label must be `tab-<uuid>` for a tab the user opens, or the `agent-<uuid>` label of an agent tab the host asked the renderer to mount. Any other label is refused (`BROWSER_TAB_LABEL_INVALID`, `BROWSER_TAB_UNKNOWN_AGENT_TAB`). The call resolves only after the engine confirmed the webview exists. A webview the engine failed to build is closed and refused (`BROWSER_TAB_CREATE_FAILED`).
 
 ### `browser_tab_navigate`
 Navigates an existing browser tab to a URL.
@@ -128,7 +128,7 @@ Shows a hidden browser child webview.
 Hides a browser child webview.
 
 ### `browser_tab_destroy`
-Destroys a browser child webview.
+Closes a tab through the registry and resolves after the engine destroyed the webview.
 
 ### `browser_tab_go_back`
 Navigates backward in history.
@@ -151,15 +151,13 @@ Pushes marker annotations into the browser overlay.
 ### `browser_tab_update_annotation_marker_selection`
 Updates which annotation marker is selected.
 
-### Browser Reporting Commands
-Used by injected page scripts to report browser state back to the app:
+### `browser_ticket_respond`
+Answers a browser consent ticket (`host:` request id) from the desktop `main` webview with `{requestId, optionId?}`; no `optionId` denies. Returns `IpcResult<()>`. Error codes: `TICKET_NOT_FOUND`, `TICKET_ALREADY_RESOLVED`, `TICKET_TOO_EARLY` (answered within 750 ms of the prompt), `TICKET_INVALID_OPTION`.
 
-- `browser_tab_report_url`
-- `browser_tab_report_loaded`
-- `browser_tab_report_region_captured`
-- `browser_tab_report_element_captured`
-- `browser_tab_report_title`
-- `browser_tab_report_annotation_marker_clicked`
+### `browser_stop`
+Stops agent browsing for `{sessionId}` from the desktop `main` webview: queued and in-flight browser calls end, pending tickets are withdrawn, session grants are revoked, and every later call returns `confirmation_required` with reason `stopped_by_user` until the user's next prompt. Returns `IpcResult<()>`.
+
+Pages in tab webviews report nothing through commands. Tab URL, title, loading state and document epoch come from engine navigation and title events (see Browser Event Flow).
 
 ## Data Migration Commands
 
@@ -218,14 +216,14 @@ The renderer expects event-style updates for:
 Shared callback types are defined in `src/shared/types/ipc.types.ts`.
 
 ### Browser Event Flow
-Renderer browser adapters subscribe to:
+The host tab registry owns every browser tab. It emits these Tauri events to the desktop renderer:
 
-- `browser-tab-navigated`
-- `browser-tab-loaded`
-- `browser-tab-region-captured`
-- `browser-tab-element-captured`
-- `browser-tab-title-changed`
-- `browser-tab-annotation-marker-clicked`
+- `browser_tab_updated`: `{ tabId, url, title, loading, agentControlled, epoch }` after every navigation start, commit, title change and load finish, whoever started it. `epoch` counts the new documents the tab committed.
+- `browser_tab_closed`: `{ tabId }` after the engine destroyed the webview.
+
+Each navigation hop of a tab, redirects included, is decided once in the navigation hook the tab webview is built with: the host perimeter for every tab, then the session's Stop state and origin authorization for an agent tab. A refused hop never commits, so the tab keeps its URL and title.
+
+For an agent tab, the same payloads also go down the owning session's stream as `browser_tab_updated` and `browser_tab_closed`.
 
 ### Updater/Menu Event Flow
 The app also emits menu/updater-related events such as the updater check trigger from the native menu.
@@ -467,7 +465,8 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `set_config_option` | idempotent | Sets one session config option. |
 | `set_mode` | idempotent | Sets the session mode. |
 | `set_model` | idempotent | Sets the session model. |
-| `respond_permission` | command | Answers a `permission_request`. The first answer wins and a later one is `already_resolved`. |
+| `respond_permission` | command | Answers a `permission_request`. The first answer wins and a later one is `already_resolved`. A `host:` request id is a browser consent ticket: only a connection that passed the host's web-token gate and is subscribed to the ticket's session may answer it (`permission_denied` otherwise), and an answer within 750 ms of the prompt is `rate_limited`. |
+| `browser_stop` | idempotent | Stops agent browsing for `{sessionId}` until the user's next prompt, with the same approver rule as browser consent tickets. Desktop parity with the `browser_stop` Tauri command. `unsupported` on a host without the browser. |
 | `answer_question` | command | Answers a `question_request`. The first answer wins. |
 | `respond_elicitation` | command | Answers an `elicitation_request`. Stores no reply. |
 | `subscribe` | read | Binds the connection to a session log. Takes an optional `lastSeq` and `logEpoch` cursor and replies `{sessionId, replayed, logEpoch, headSeq}`. |
@@ -484,6 +483,7 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `set_catalog_opt_in` | idempotent | Sets the host-persisted opt-in for registry augmentation of the catalog. |
 | `fetch_acp_registry_snapshot` | read | The registry check behind "Check for updates". Every check bypasses the cache TTL. |
 | `install_acp_agent` | command | Installs a catalog agent. The host downloads, verifies the sha256, extracts and activates it atomically. The request is `{agentId}` only. |
+| `search_mcp_catalog` | read | Searches the bundled MCP server catalog (`{query?, cursor?, limit?}`) and returns one ranked page, `{items, nextCursor, total, snapshotFetchedAt}`. The desktop sends it over its `ws_channel_*` relay, and `GET /mcp-catalog/search` gives a browser the same answer. |
 | `list_claude_accounts` | read | Returns the Claude Accounts snapshot. |
 | `list_claude_usage` | read | Returns Account usage windows. The host caches reads for 5 minutes. |
 | `set_default_claude_account` | idempotent | Chooses the Default Account. |
@@ -526,15 +526,18 @@ A session log event has one of three delivery tiers (`tier_of` in `src-tauri/src
 | `acp:mode_update` | session | Session log event (reliable). |
 | `acp:config_options_update` | session | Session log event (reliable). |
 | `acp:usage_update` | session | Session log event (reliable). Context-window use and optional cost. |
-| `acp:permission_request` | session | Session log event (reliable). Live only: never written to the durable log. |
+| `acp:permission_request` | session | Session log event (reliable). Live only: never written to the durable log. A `host:` request id with `_meta.termul.origin_kind = "browser"` is a host-originated browser consent ticket with the fixed options `allow_session`, `allow_project` and `deny`. |
 | `acp:question_request` | session | Session log event (reliable). A structured question from the agent, including one from the host `ask_user` tool. |
 | `acp:question_cancelled` | session | Session log event (reliable). A pending question can no longer be answered. |
 | `acp:elicitation_request` | session | Session log event (reliable). The agent asks for structured user input. |
 | `acp:prompt_complete` | session | Session log event (idempotent). Exactly one per accepted turn, with a `stopReason`. |
 | `acp:agent_switch` | session | Session log event (reliable). Durable agent-switch marker. |
 | `acp:local_title_generated` | session | Session log event (reliable). Durable record of a host-generated background title. Clients have no handler for it: the title reaches the UI through the `acp:session_info_update` that follows. |
-| `acp:browser_consent_request` | session | Session log event (reliable). The host asks the user to allow browser automation for the session. Only the desktop renders it. Answer with the Tauri command `browser_consent_respond`. The host denies on timeout. |
+| `acp:browser_ticket_closed` | session | Session log event (reliable). Live only. A browser consent ticket was answered, timed out or withdrawn, `{sessionId, requestId, outcome}`, so every surface drops it. |
+| `acp:browser_stop_changed` | session | Session log event (reliable). Live only. Stop latched or cleared for the session, `{sessionId, stopped}`. |
 | `acp:browser_agent_tab` | session | Session log event (reliable). The agent's browser tab opened or closed. |
+| `acp:browser_tab_updated` | session | Session log event (reliable). The tab registry's view of one of the session's agent tabs, `{tabId, url, title, loading, agentControlled, epoch}`, after an engine navigation, title or load event. |
+| `acp:browser_tab_closed` | session | Session log event (reliable). The engine destroyed one of the session's agent tabs, `{tabId}`. |
 | `acp:browser_open_request` | agent | `agents` watch delta. A POSIX host captured a URL the agent tried to open, `{agentId, url}`. A delta lost to a gap is lost. |
 | `acp:worktree_branch_renamed` | agent | `chat_history` watch delta. The host renamed a worktree's branch. |
 | `acp:worktree_progress` | none | Plain Tauri event on the desktop only, `{progressId, line}`. The `worktree_create` command emits it while `git worktree add` runs. It never travels the relay. |
@@ -550,7 +553,7 @@ The relay also sends three frames that are not `acp:*` events. They appear in `W
 
 ### HTTP routes
 
-Each route is behind the web token gate when the host has one (`GATED_PREFIXES` in `src-tauri/src/web/router.rs`).
+Each route is behind the web token gate when the host has one (`GATED_PREFIXES` in `src-tauri/src/web/router/gate.rs`).
 
 <!-- acp-reference:http-routes -->
 | Route | Methods | Mirrors |

@@ -4,6 +4,7 @@ import {
   Download,
   FileEdit,
   FileText,
+  Globe,
   Keyboard,
   KeyRound,
   Monitor,
@@ -14,6 +15,7 @@ import {
   Terminal,
   TerminalSquare
 } from '@/components/icons'
+import { BROWSER_ANCHORS } from '@/components/settings/browser-policy-copy'
 import { rowId } from '@/components/settings/row-id'
 import type { SettingsCategory } from '@/components/settings/SettingsLayout'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
@@ -94,6 +96,14 @@ const ALL_APP_PREF_CATEGORIES: SettingsCategory[] = [
     description:
       'Servers that new agent chats can use. Each enabled server is offered when a chat starts.',
     icon: <Network size={16} />
+  },
+  {
+    id: 'browser',
+    group: 'Agents',
+    label: 'Browser',
+    description:
+      'Which sites agents may browse without asking, and whether they keep logins between chats.',
+    icon: <Globe size={16} />
   },
   {
     id: 'shortcuts',
@@ -295,8 +305,47 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     categoryId: 'mcp-servers',
     label: 'MCP servers',
-    description: 'Manage global stdio, HTTP, and SSE servers for new agent sessions.',
-    keywords: ['mcp', 'model context protocol', 'stdio', 'http', 'sse']
+    description: 'Manage global stdio, HTTP, and SSE servers, or browse the MCP catalog.',
+    keywords: [
+      'mcp',
+      'model context protocol',
+      'stdio',
+      'http',
+      'sse',
+      'catalog',
+      'registry',
+      'browse',
+      'discover',
+      'marketplace'
+    ]
+  },
+  {
+    categoryId: 'browser',
+    label: 'Shared agent profile',
+    description: 'Keep agent logins between chats, in every project.',
+    keywords: ['browser', 'profile', 'cookies', 'login', 'sign in', 'incognito', 'logged out'],
+    anchorId: BROWSER_ANCHORS.appProfile
+  },
+  {
+    categoryId: 'browser',
+    label: 'Ask before an agent submits a password',
+    description: 'Have agents ask you before they sign in to a site.',
+    keywords: ['browser', 'password', 'sign in', 'login', 'prompt', 'ask', 'automation'],
+    anchorId: BROWSER_ANCHORS.appPasswordPrompt
+  },
+  {
+    categoryId: 'browser',
+    label: 'Clear agent profile',
+    description: 'Delete the shared agent profile logins and site data.',
+    keywords: ['browser', 'cookies', 'sign out', 'logins', 'wipe', 'reset'],
+    anchorId: BROWSER_ANCHORS.appClear
+  },
+  {
+    categoryId: 'browser',
+    label: 'Pre-approved actions in every project',
+    description: 'Actions agents may take on the shared agent profile without asking.',
+    keywords: ['browser', 'upload', 'download', 'approve', 'automation'],
+    anchorId: BROWSER_ANCHORS.appPreapprovals
   },
   {
     categoryId: 'shortcuts',

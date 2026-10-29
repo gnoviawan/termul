@@ -13,6 +13,7 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
+import type { McpCatalogPage, McpCatalogSearchRequest } from '@shared/types/mcp-catalog.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AcpAuthenticateReply,
@@ -802,6 +803,11 @@ export class WsAcpTransport implements AcpTransport {
     return this.request<AcpCatalog>('list_acp_catalog', { refresh })
   }
 
+  /** `search_mcp_catalog`: one page of the host's MCP catalog (see {@link AcpTransport.searchMcpCatalog}). */
+  async searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage> {
+    return this.request<McpCatalogPage>('search_mcp_catalog', request)
+  }
+
   /** `set_catalog_opt_in`: persist the host catalog opt-in. */
   async setCatalogOptIn(enabled: boolean): Promise<void> {
     await this.request<unknown>('set_catalog_opt_in', { enabled })
@@ -1329,6 +1335,10 @@ export class WsAcpTransport implements AcpTransport {
     options?: CommandCallOptions
   ): Promise<void> {
     await this.request('respond_permission', { agentId, requestId, optionId }, undefined, options)
+  }
+
+  async stopBrowserAgent(sessionId: string): Promise<void> {
+    await this.request('browser_stop', { sessionId })
   }
 
   async answerQuestion(

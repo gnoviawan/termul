@@ -1,5 +1,6 @@
 import type React from 'react'
 import { useEffect, useMemo } from 'react'
+import { handleExternalLinkClick } from '@/components/external-link/ExternalLinkConfirm'
 import { Sparkles, X } from '@/components/icons'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { cn } from '@/lib/utils'
@@ -74,6 +75,8 @@ export function TerminalAssistPanel({
   // Esc closes the panel (keyboard parity with the close button).
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
+      // Already handled by a dialog on top (e.g. the external-link confirm).
+      if (event.defaultPrevented) return
       if (event.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -107,11 +110,17 @@ export function TerminalAssistPanel({
             {state.error ?? 'Terminal assist failed'}
           </p>
         ) : (
+          // biome-ignore lint/a11y/noStaticElementInteractions: link clicks are delegated from sanitized HTML; Enter on a focused link fires click
+          // biome-ignore lint/a11y/useKeyWithClickEvents: link clicks are delegated from sanitized HTML; Enter on a focused link fires click
           <div
             className={cn('prose prose-xs max-w-none break-words text-xs')}
             // Sanitized with DOMPurify inside renderChatMarkdown (chat parity).
             // biome-ignore lint/security/noDangerouslySetInnerHtml: sanitized via renderChatMarkdown
             dangerouslySetInnerHTML={{ __html: html ?? '' }}
+            // Links ask before opening, like chat links (no direct open).
+            data-external-link-scope=""
+            onClick={handleExternalLinkClick}
+            onAuxClick={handleExternalLinkClick}
           />
         )}
       </div>

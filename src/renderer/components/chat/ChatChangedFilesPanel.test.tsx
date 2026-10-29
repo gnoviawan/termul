@@ -1,16 +1,55 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import type { GitDiffStat, GitStatusDetail } from '@shared/types/ipc.types'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolCall } from '@/lib/acp-api'
+import { normalizePath } from '@/lib/working-copy'
+import { resetGitStatusStoreControlForTests, useGitStatusStore } from '@/stores/git-status-store'
 
-const { openFileRef, addEditorTabRef, logFrontendErrorRef, toastErrorRef, mobileRef } = vi.hoisted(
-  () => ({
+const { openFileRef, addEditorTabRef, logFrontendErrorRef, toastErrorRef, mobileRef, gitApiMock } =
+  vi.hoisted(() => ({
     openFileRef: { current: vi.fn(async () => {}) },
     addEditorTabRef: { current: vi.fn() },
     logFrontendErrorRef: { current: vi.fn(async () => {}) },
     toastErrorRef: { current: vi.fn() },
-    mobileRef: { current: false }
-  })
-)
+    mobileRef: { current: false },
+    gitApiMock: {
+      getStatus: vi.fn(),
+      getDiffStat: vi.fn(),
+      getCommitContext: vi.fn(),
+      getLog: vi.fn(),
+      discard: vi.fn()
+    }
+  }))
+
+vi.mock('@/lib/git-api', () => ({ gitApi: gitApiMock }))
+
+vi.mock('@tauri-apps/plugin-os', () => ({ platform: vi.fn(() => 'linux') }))
+
+const NOT_A_REPO = 'fatal: not a git repository'
+
+/** The cwd is not a git repository: the panel falls back to agent tool calls. */
+function seedNotARepo(cwd: string) {
+  gitApiMock.getStatus.mockRejectedValue(new Error(NOT_A_REPO))
+  gitApiMock.getDiffStat.mockRejectedValue(new Error(NOT_A_REPO))
+  if (!cwd) return
+  useGitStatusStore.setState((state) => ({
+    errors: { ...state.errors, [normalizePath(cwd)]: { status: NOT_A_REPO } }
+  }))
+}
+
+beforeEach(() => {
+  resetGitStatusStoreControlForTests()
+  useGitStatusStore.setState({ paths: {}, statuses: {}, diffStats: {}, errors: {} })
+  gitApiMock.getStatus.mockReset()
+  gitApiMock.getDiffStat.mockReset()
+  gitApiMock.getCommitContext.mockReset()
+  gitApiMock.getLog.mockReset()
+  gitApiMock.discard.mockReset()
+  gitApiMock.getCommitContext.mockResolvedValue({ hasHead: false })
+  gitApiMock.getLog.mockResolvedValue([])
+  gitApiMock.discard.mockResolvedValue(undefined)
+  seedNotARepo('/work')
+})
 
 vi.mock('@/hooks/use-mobile-web-shell', () => ({
   useMobileWebShell: () => mobileRef.current
@@ -64,6 +103,7 @@ function makeToolCall(overrides: Partial<ToolCall> & { kind?: string; path?: str
 }
 
 function renderPanel(toolCalls: ToolCall[] = [], cwd: string = '/work') {
+  seedNotARepo(cwd)
   return render(<ChatChangedFilesPanel cwd={cwd} toolCalls={toolCalls} />)
 }
 
@@ -730,5 +770,207 @@ describe('ChatChangedFilesPanel on the mobile dock', () => {
     // Window over: the bar shows the user's last own state (collapsed).
     rerender(<ChatChangedFilesPanel cwd="/work" toolCalls={THREE_EDITS} forceCollapsed={false} />)
     expect(header()).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
+describe('ChatChangedFilesPanel with git as the source of truth', () => {
+  type Entry = [path: string, status: GitStatusDetail['status'], added: number, removed: number]
+
+  /** What git reports for `/work` on the next status and diff-stat reads. */
+  function setGit(entries: Entry[], staged: string[] = []) {
+    const status: GitStatusDetail[] = entries.map(([path, s]) => ({
+      path,
+      status: s,
+      staged: staged.includes(path)
+    }))
+    const stat: GitDiffStat = {
+      added: entries.reduce((sum, [, , a]) => sum + a, 0),
+      removed: entries.reduce((sum, [, , , r]) => sum + r, 0),
+      files: entries.map(([path, , added, removed]) => ({ path, added, removed })),
+      root: '/work'
+    }
+    gitApiMock.getStatus.mockResolvedValue(status)
+    gitApiMock.getDiffStat.mockResolvedValue(stat)
+  }
+
+  const edit = (id: string, path: string) => makeToolCall({ toolCallId: id, path })
+  const shell = (id: string, command: string) =>
+    makeToolCall({ toolCallId: id, kind: 'execute', content: [], rawInput: { command } })
+
+  function panel(toolCalls: ToolCall[], turnActive = false) {
+    return <ChatChangedFilesPanel cwd="/work" toolCalls={toolCalls} turnActive={turnActive} />
+  }
+
+  beforeEach(() => {
+    mobileRef.current = false
+    openFileRef.current = vi.fn(async () => {})
+    addEditorTabRef.current = vi.fn()
+    useGitStatusStore.setState({ errors: {} })
+  })
+
+  it('lists the uncommitted files of the checkout with their git line counts', async () => {
+    setGit([
+      ['src/a.ts', 'modified', 3, 1],
+      ['src/new.ts', 'untracked', 5, 0]
+    ])
+    // The agent edited only a.ts; git also reports an untracked file.
+    render(panel([edit('e1', 'src/a.ts')]))
+    expect(await screen.findByText('2')).toBeInTheDocument()
+    expect(screen.getByText('+8')).toBeInTheDocument()
+    expect(screen.getByText('−1')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand changed files' }))
+    const row = await screen.findByRole('button', { name: '/work/src/new.ts, Untracked' })
+    expect(row).toHaveTextContent('+5')
+  })
+
+  it('drops files that the agent committed', async () => {
+    setGit([
+      ['src/a.ts', 'modified', 3, 1],
+      ['src/b.ts', 'modified', 2, 0]
+    ])
+    const calls = [edit('e1', 'src/a.ts'), edit('e2', 'src/b.ts')]
+    const { container, rerender } = render(panel(calls))
+    expect(await screen.findByText('+5')).toBeInTheDocument()
+
+    setGit([])
+    rerender(panel([...calls, shell('x1', 'git commit -am "done" && git push')]))
+    await waitFor(() => expect(container.firstChild).toBeNull(), { timeout: 3000 })
+  })
+
+  it('drops a discarded file and updates the totals', async () => {
+    setGit([
+      ['src/a.ts', 'modified', 3, 1],
+      ['src/b.ts', 'modified', 2, 0]
+    ])
+    render(panel([edit('e1', 'src/a.ts'), edit('e2', 'src/b.ts')]))
+    expect(await screen.findByText('+5')).toBeInTheDocument()
+
+    setGit([['src/b.ts', 'modified', 2, 0]])
+    await act(() => useGitStatusStore.getState().discardFile('/work', 'src/a.ts'))
+    expect(await screen.findByText('+2')).toBeInTheDocument()
+    expect(screen.getByText('1')).toBeInTheDocument()
+    expect(screen.queryByText('−1')).not.toBeInTheDocument()
+  })
+
+  it('drops an untracked file after it is deleted', async () => {
+    setGit([['scratch.md', 'untracked', 4, 0]])
+    const calls = [edit('e1', 'scratch.md')]
+    const { container, rerender } = render(panel(calls))
+    expect(await screen.findByText('+4')).toBeInTheDocument()
+
+    setGit([])
+    rerender(
+      panel([...calls, makeToolCall({ toolCallId: 'd1', kind: 'delete', path: 'scratch.md' })])
+    )
+    await waitFor(() => expect(container.firstChild).toBeNull(), { timeout: 3000 })
+  })
+
+  it('refreshes when the agent turn ends', async () => {
+    setGit([['src/a.ts', 'modified', 1, 0]])
+    const calls = [edit('e1', 'src/a.ts')]
+    const { container, rerender } = render(panel(calls, true))
+    expect(await screen.findByText('+1')).toBeInTheDocument()
+
+    setGit([])
+    rerender(panel(calls, false))
+    await waitFor(() => expect(container.firstChild).toBeNull(), { timeout: 3000 })
+  })
+
+  it('hides on a clean tree even when the agent edited files earlier', async () => {
+    setGit([])
+    const { container } = render(panel(THREE_EDITS))
+    await waitFor(() => expect(gitApiMock.getStatus).toHaveBeenCalledWith('/work'))
+    await act(async () => {})
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('updates when a refresh from another source changes git state', async () => {
+    setGit([['src/a.ts', 'modified', 1, 0]])
+    const { container } = render(panel([edit('e1', 'src/a.ts')]))
+    expect(await screen.findByText('+1')).toBeInTheDocument()
+
+    setGit([])
+    await act(() => useGitStatusStore.getState().refreshTracked())
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('shows one row for a file with staged and unstaged changes', async () => {
+    gitApiMock.getStatus.mockResolvedValue([
+      { path: 'src/a.ts', status: 'added', staged: true },
+      { path: 'src/a.ts', status: 'modified', staged: false }
+    ])
+    gitApiMock.getDiffStat.mockResolvedValue({
+      added: 7,
+      removed: 0,
+      files: [{ path: 'src/a.ts', added: 7, removed: 0 }]
+    })
+    render(panel([]))
+    expect(await screen.findByText('1')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand changed files' }))
+    expect(await screen.findByRole('button', { name: '/work/src/a.ts, Added' })).toBeInTheDocument()
+  })
+
+  it('shows a file deleted in git as a deleted row that does not open', async () => {
+    setGit([['src/gone.ts', 'deleted', 0, 9]])
+    render(panel([]))
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand changed files' }))
+    expect(
+      await screen.findByRole('group', { name: 'Deleted: /work/src/gone.ts' })
+    ).toBeInTheDocument()
+  })
+
+  it('opens a git row in the editor', async () => {
+    setGit([['src/a.ts', 'modified', 1, 0]])
+    render(panel([]))
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand changed files' }))
+    fireEvent.click(await screen.findByRole('button', { name: '/work/src/a.ts, Modified' }))
+    await waitFor(() => expect(openFileRef.current).toHaveBeenCalledWith('/work/src/a.ts'))
+  })
+
+  it('resolves rows against the repository root when the cwd is a subfolder', async () => {
+    seedNotARepo('/work/sub')
+    useGitStatusStore.setState({ errors: {} })
+    gitApiMock.getStatus.mockResolvedValue([
+      { path: 'sub/file.ts', status: 'modified', staged: false },
+      { path: 'top.ts', status: 'modified', staged: false }
+    ])
+    gitApiMock.getDiffStat.mockResolvedValue({
+      added: 2,
+      removed: 0,
+      files: [
+        { path: 'sub/file.ts', added: 1, removed: 0 },
+        { path: 'top.ts', added: 1, removed: 0 }
+      ],
+      root: '/work'
+    })
+    render(<ChatChangedFilesPanel cwd="/work/sub" toolCalls={[]} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand changed files' }))
+    expect(
+      await screen.findByRole('button', { name: '/work/sub/file.ts, Modified' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '/work/top.ts, Modified' })).toBeInTheDocument()
+  })
+
+  it('still lists git rows against the cwd when the diff stat fails', async () => {
+    gitApiMock.getStatus.mockResolvedValue([
+      { path: 'src/a.ts', status: 'modified', staged: false }
+    ])
+    gitApiMock.getDiffStat.mockRejectedValue(new Error('diff stat timed out'))
+    render(panel([]))
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand changed files' }))
+    expect(
+      await screen.findByRole('button', { name: '/work/src/a.ts, Modified' })
+    ).toBeInTheDocument()
+  })
+
+  it('falls back to the agent tool calls when the cwd is not a git repository', async () => {
+    seedNotARepo('/work')
+    render(panel([edit('e1', 'src/a.ts')]))
+    expect(screen.getByText('1')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(logFrontendErrorRef.current).toHaveBeenCalledWith(
+        expect.objectContaining({ level: 'info', source: 'ChatChangedFilesPanel' })
+      )
+    )
   })
 })

@@ -34,6 +34,7 @@ use types::AnnotationStore;
 pub struct AgentationService {
     pub store: Arc<SqliteStore>,
     pub http_addr: std::net::SocketAddr,
+    endpoint: String,
     pub shutdown: CancellationToken,
 }
 
@@ -42,7 +43,11 @@ impl AgentationService {
     /// Returns the service handle. The MCP server runs separately on stdio.
     pub async fn start(db_path: &std::path::Path) -> Result<Self, String> {
         let store = Arc::new(SqliteStore::open(db_path)?);
-        let (http_addr, shutdown) = http_server::start_server(store.clone()).await?;
+        let http_server::Listening {
+            addr: http_addr,
+            endpoint,
+            shutdown,
+        } = http_server::start_server(store.clone()).await?;
 
         log::info!(
             "[Agentation] Service started — HTTP on {http_addr}, SQLite at {}",
@@ -52,13 +57,15 @@ impl AgentationService {
         Ok(Self {
             store,
             http_addr,
+            endpoint,
             shutdown,
         })
     }
 
-    /// The port the injected toolbar should connect to.
-    pub fn http_port(&self) -> u16 {
-        self.http_addr.port()
+    /// The endpoint the injected toolbar connects to. It carries the
+    /// server's secret path: never log it.
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
     }
 
     /// Graceful shutdown.

@@ -163,6 +163,7 @@ import {
   _resetLiveSwitchSourcesForTesting,
   _resetSessionIndexLoadGenerationForTesting,
   initAcpEventListeners,
+  mcpProbesInFlight,
   useAcpStore
 } from '@/stores/acp-store'
 import { deferred, FRESH, flushTurnEnd } from './testkit'
@@ -191,8 +192,10 @@ describe('acp-store', () => {
   })
 
   afterEach(async () => {
+    // Count probes rather than reading `mcpProbing`: deleting a server clears
+    // its flag while the probe is still waiting on the lazy probe-module import.
     await vi.waitFor(() => {
-      expect(Object.values(useAcpStore.getState().mcpProbing).some(Boolean)).toBe(false)
+      expect(mcpProbesInFlight()).toBe(0)
     })
   })
 
@@ -354,6 +357,8 @@ describe('acp-store', () => {
       agentId: 'spawned-1',
       sessionId: 's-spawn',
       cwd: '/w',
+      // #1420: a reopen onto a fresh agent attaches the (empty) MCP list.
+      mcpServers: [],
       commandId: expect.any(String)
     })
     expect(useAcpStore.getState().sessions['s-spawn'].agentId).toBe('spawned-1')
@@ -1302,7 +1307,7 @@ describe('acp-store', () => {
     await useAcpStore.getState().deleteMcpServer('m1')
     expect(useAcpStore.getState().mcpServers).toHaveLength(0)
     // The edit above re-probes m1; let that probe finish so it cannot consume the next test's invoke mock.
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await vi.waitFor(() => expect(mcpProbesInFlight()).toBe(0))
   })
 
   it('importMcpServers appends a batch in a single atomic persist', async () => {

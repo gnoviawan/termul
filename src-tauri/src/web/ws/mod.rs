@@ -68,6 +68,7 @@ mod claude_accounts;
 mod commands;
 mod dispatch;
 mod lifecycle;
+mod mcp_catalog;
 mod projects;
 mod prompts;
 mod relay;
@@ -801,6 +802,8 @@ mod canvas_tests;
 mod capability_tests;
 #[cfg(test)]
 mod project_binding_tests;
+#[cfg(test)]
+mod host_ticket_route_tests;
 #[cfg(test)]
 mod project_command_tests;
 #[cfg(test)]

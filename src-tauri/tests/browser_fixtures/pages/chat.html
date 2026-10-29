@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chat stand-in</title>
+</head>
+<body>
+<h1>Chat stand-in</h1>
+<textarea id="chat" aria-label="Message" autofocus></textarea>
+<script>
+var chat = document.getElementById('chat');
+function report(o) {
+  o.src = 'chat';
+  o.hasFocus = document.hasFocus();
+  o.active = document.activeElement ? document.activeElement.id : '';
+  o.value = chat.value;
+  try { fetch('/report', { method: 'POST', body: JSON.stringify(o), keepalive: true }); } catch (e) {}
+}
+['focus', 'blur', 'keydown', 'input'].forEach(function (type) {
+  chat.addEventListener(type, function () { report({ ev: type }); });
+});
+window.addEventListener('blur', function () { report({ ev: 'window_blur' }); });
+window.addEventListener('focus', function () { report({ ev: 'window_focus' }); });
+var focused = null;
+setInterval(function () {
+  if (focused !== document.hasFocus()) { focused = document.hasFocus(); report({ ev: 'state' }); }
+}, 100);
+chat.focus();
+</script>
+</body>
+</html>

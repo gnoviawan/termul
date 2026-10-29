@@ -33,6 +33,20 @@ describe('currentPlatformArch', () => {
 })
 
 describe('deriveAgentConfig', () => {
+  it('lists Oh My Pi as a bundled agent that runs `omp acp` from PATH', () => {
+    // Issue #1501: OMP ships an ACP mode, so the bundled entry launches it directly.
+    const omp = REGISTRY_AGENTS.find((entry) => entry.id === 'oh-my-pi')
+    expect(omp).toBeDefined()
+    const result = deriveAgentConfig(omp!, 'linux-x86_64')
+    expect(result.kind).toBe('needs-install')
+    if (result.kind === 'needs-install') {
+      expect(result.cmd).toBe('omp')
+      expect(result.args).toEqual(['acp'])
+      // No archive: a bare command is probed on PATH, never downloaded.
+      expect(result.archiveUrl).toBeUndefined()
+    }
+  })
+
   it('starts Factory Droid with documented ACP output instead of the legacy daemon mode', () => {
     const factory = REGISTRY_AGENTS.find((entry) => entry.id === 'factory-droid')
     expect(factory).toBeDefined()

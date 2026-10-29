@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/message-scroller'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
+import type { SelectionContext } from '@/lib/composer/selection-context'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
@@ -27,6 +28,7 @@ import {
 } from './chat-timeline'
 import { opencodeStatusLine } from './opencode-status'
 import { RowReveal } from './RowReveal'
+import { SelectionContextLayer } from './SelectionContextLayer'
 import { SubagentDetailsDialog } from './SubagentDetailsDialog'
 import { subagentChildCalls } from './subagent-strip'
 import { ThoughtGroup } from './ThoughtGroup'
@@ -54,6 +56,8 @@ interface ChatMessageListProps {
   showRunningIndicator: boolean
   /** Seed the composer with a user message's text (edit affordance). */
   onEditMessage?: (text: string) => void
+  /** Add selected message text to the composer as a selection context. */
+  onAddSelectionContext?: (context: SelectionContext) => void
   /** Re-run the latest user turn (regenerate affordance on agent replies). */
   onRetry?: () => void
   /** Filesystem roots used for safe file-path links in agent prose. */
@@ -314,6 +318,7 @@ export function ChatMessageList({
   sessionId,
   showRunningIndicator,
   onEditMessage,
+  onAddSelectionContext,
   onRetry,
   filePathContext
 }: ChatMessageListProps): React.JSX.Element {
@@ -366,7 +371,7 @@ export function ChatMessageList({
   }
 
   return (
-    <div className="relative min-h-0 flex-1">
+    <SelectionContextLayer className="relative min-h-0 flex-1" onAdd={onAddSelectionContext}>
       {/* Top edge fade: content dissolves into the header. No bottom fade: a
           strip above the composer reads as a drop shadow; the viewport clip
           ends the list cleanly at the dock. */}
@@ -404,6 +409,6 @@ export function ChatMessageList({
           }}
         />
       )}
-    </div>
+    </SelectionContextLayer>
   )
 }

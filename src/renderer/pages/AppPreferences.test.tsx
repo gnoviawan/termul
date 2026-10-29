@@ -80,6 +80,7 @@ vi.mock('@/stores/updater-store', () => ({
   }),
   useUpdaterActions: () => ({
     checkForUpdates: vi.fn(),
+    downloadUpdate: vi.fn(),
     installAndRestart: vi.fn(),
     setAutoUpdateEnabled: vi.fn(),
     setUpdateChannel: vi.fn()
@@ -134,6 +135,10 @@ vi.mock('@/components/settings/AcpAgentsSettings', () => ({
 
 vi.mock('@/components/settings/McpServersSettings', () => ({
   McpServersSettings: () => null
+}))
+
+vi.mock('@/components/settings/BrowserPolicySettings', () => ({
+  BrowserAppPolicy: () => null
 }))
 
 // Radix Select content does not render under jsdom. A native select keeps

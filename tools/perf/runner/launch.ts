@@ -7,6 +7,12 @@
  *  2. Pick a free TCP port for `--remote-debugging-port`.
  *  3. Spawn the exe with a per-run scratch `WEBVIEW2_USER_DATA_FOLDER`
  *     (isolates the single-instance plugin AND keeps user data out of runs).
+ *     The debug port only opens in a build with debug assertions and
+ *     `TERMUL_DEV_ALLOW_ENGINE_DEBUG=1`: the host scrubs engine debug
+ *     switches at startup and release builds never honor the opt-in, so
+ *     point --exe at a debug build. The host drops any
+ *     `--remote-debugging-address` switch, and the port listens on
+ *     127.0.0.1 only.
  *  4. Playwright `chromium.connectOverCDP` — retry once if WebView2 ignores
  *     the flag (spec CDP-attach edge), then fail with the actionable error.
  *  5. Expose helpers to invoke Tauri commands through the app's global
@@ -210,6 +216,7 @@ function spawnApp(
     env: {
       ...env,
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${debugPort}`,
+      TERMUL_DEV_ALLOW_ENGINE_DEBUG: '1',
       WEBVIEW2_USER_DATA_FOLDER: scratchDir
     },
     windowsHide: false,
@@ -286,7 +293,7 @@ export async function launchApp(opts: LaunchOptions): Promise<AppHandle> {
       throw new Error(
         `CDP attach failed twice. Original: ${String(err)}; retry: ${String(retryErr)}. ` +
           `Scratch dirs: ${scratchDir}, ${retryScratch}. Ports: ${debugPort}, ${retryPort}. ` +
-          `Check that WebView2 accepts WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS and no other instance holds the folder.`
+          `Check that the exe is a debug build (release builds scrub the debug port), WebView2 accepts WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS and no other instance holds the folder.`
       )
     } finally {
       if (!opts.keepState) rmSync(retryScratch, { recursive: true, force: true })

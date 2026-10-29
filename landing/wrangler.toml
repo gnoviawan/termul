@@ -11,3 +11,9 @@ preview_database_id = "DB"
 [[r2_buckets]]
 binding = "TESTIMONIAL_AVATARS"
 bucket_name = "termul"
+
+# #1531: pepper for the testimonial rate-limit IP hash. Set as a SECRET, not a
+# var — never commit the value: `wrangler pages secret put TESTIMONIAL_RATE_LIMIT_SALT --project-name termul-landing`
+# (legacy unsalted hashing is used when unset).
+# [vars]
+# TESTIMONIAL_RATE_LIMIT_SALT = ""

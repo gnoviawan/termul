@@ -1,5 +1,6 @@
 import type { MouseEvent, ReactNode } from 'react'
-import { Copy, CopyX, Edit2, RefreshCw, Skull, X, XCircle } from '@/components/icons'
+import { ReloadChatMenuItem } from '@/components/chat/ReloadChatMenuItem'
+import { Copy, CopyX, Edit2, Skull, X, XCircle } from '@/components/icons'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -89,10 +90,8 @@ interface TabContextMenuProps extends TabBulkMenuProps {
   onKill?: () => void
   /** Editor: copy the file path. */
   onCopyPath?: () => void
-  /** Agent chat: reload this chat onto a new agent process. */
-  onReloadChat?: () => void
-  reloadChatDisabled?: boolean
-  reloadChatReason?: string | null
+  /** Agent chat: the session that Reload this chat moves onto a new agent process. */
+  reloadChatSessionId?: string
   /** Disable close/kill while a close is already in flight (terminal). */
   isClosing?: boolean
   /** Disable close while the editor is saving/reloading (editor). */
@@ -111,9 +110,7 @@ export function TabContextMenu({
   onCloseOtherTabs,
   onCloseAllTabs,
   onCopyPath,
-  onReloadChat,
-  reloadChatDisabled = false,
-  reloadChatReason,
+  reloadChatSessionId,
   hasOtherTabsOfKind = false,
   hasOtherTabsInPane = false,
   isClosing = false,
@@ -138,16 +135,7 @@ export function TabContextMenu({
             <Edit2 className="mr-2 h-4 w-4" /> Rename
           </ContextMenuItem>
         )}
-        {onReloadChat && (
-          <ContextMenuItem onSelect={onReloadChat} disabled={reloadChatDisabled}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            {reloadChatDisabled && reloadChatReason ? (
-              <span title={reloadChatReason}>Reload this chat</span>
-            ) : (
-              'Reload this chat'
-            )}
-          </ContextMenuItem>
-        )}
+        {reloadChatSessionId && <ReloadChatMenuItem sessionId={reloadChatSessionId} />}
         <ContextMenuItem onSelect={onClose} disabled={closeDisabled}>
           <X className="mr-2 h-4 w-4" /> Close
         </ContextMenuItem>

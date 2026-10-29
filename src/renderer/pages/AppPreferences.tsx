@@ -45,6 +45,7 @@ import type { ProjectColor } from '@/types/project'
 import { TERMINAL_URL_OPEN_MODE_OPTIONS, type TerminalUrlOpenMode } from '@/types/settings'
 import { AiAgentsSection } from './app-preferences/ai-agents-section'
 import { AppearanceSection } from './app-preferences/appearance-section'
+import { BrowserSection } from './app-preferences/browser-section'
 import { appPrefCategories, appPrefSearchIndex } from './app-preferences/categories'
 import { DiagnosticsSection } from './app-preferences/diagnostics-section'
 import { EditorSection } from './app-preferences/editor-section'
@@ -109,11 +110,17 @@ export function AppPreferencesModal(): React.JSX.Element {
     autoUpdateEnabled,
     skippedVersion,
     error: updateError,
+    errorSource: updateErrorSource,
     isManualUpdateMode,
     updateChannel
   } = useUpdaterState()
-  const { checkForUpdates, installAndRestart, setAutoUpdateEnabled, setUpdateChannel } =
-    useUpdaterActions()
+  const {
+    checkForUpdates,
+    downloadUpdate,
+    installAndRestart,
+    setAutoUpdateEnabled,
+    setUpdateChannel
+  } = useUpdaterActions()
 
   // Load available shells
   useEffect(() => {
@@ -331,6 +338,7 @@ export function AppPreferencesModal(): React.JSX.Element {
           <SkillsSection />
           <ProviderSection />
           <McpServersSection />
+          <BrowserSection />
           <ShortcutsSection
             shortcuts={shortcuts}
             updateShortcut={updateShortcut}
@@ -346,9 +354,11 @@ export function AppPreferencesModal(): React.JSX.Element {
             autoUpdateEnabled={autoUpdateEnabled}
             skippedVersion={skippedVersion}
             updateError={updateError}
+            updateErrorSource={updateErrorSource}
             isManualUpdateMode={isManualUpdateMode}
             updateChannel={updateChannel}
             checkForUpdates={checkForUpdates}
+            downloadUpdate={downloadUpdate}
             installAndRestart={installAndRestart}
             handleAutoUpdateToggle={handleAutoUpdateToggle}
             setUpdateChannel={setUpdateChannel}

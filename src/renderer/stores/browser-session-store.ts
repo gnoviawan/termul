@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { BrowserTabView } from '@/lib/browser-api'
 
 export interface BrowserTab {
   id: string
@@ -7,9 +8,8 @@ export interface BrowserTab {
   loading: boolean
   canGoBack: boolean
   canGoForward: boolean
-  /** Mirrors the host's `browser_tab_create` result: true while an ACP
-   *  session drives this tab via the `browser` tool. Shows the Agent badge;
-   *  closing the tab revokes control host-side. */
+  /** True for a tab an ACP session drives via the `browser` tool. Shows
+   *  the Agent badge; closing the tab revokes control host-side. */
   agentControlled?: boolean
 }
 
@@ -18,12 +18,13 @@ export interface BrowserSessionState {
 
   createTab: (id: string, url?: string) => BrowserTab
   removeTab: (id: string) => void
+  /** The URL the user asked for; the tab's webview follows it. */
   updateUrl: (id: string, url: string) => void
-  updateTitle: (id: string, title: string) => void
+  /** Mirror the host registry's view of a tab. */
+  applyView: (view: BrowserTabView) => void
   setLoading: (id: string, loading: boolean) => void
   setNavCapabilities: (id: string, canGoBack: boolean, canGoForward: boolean) => void
   setAgentControlled: (id: string, controlled: boolean) => void
-  ensureTab: (id: string, url: string) => BrowserTab
   getTab: (id: string) => BrowserTab | undefined
 }
 
@@ -66,11 +67,18 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
     })
   },
 
-  updateTitle: (id: string, title: string) => {
+  applyView: (view: BrowserTabView) => {
     set((state) => {
+      const t = state.tabs.get(view.tabId)
+      if (!t) return state
       const next = new Map(state.tabs)
-      const t = next.get(id)
-      if (t) next.set(id, { ...t, title })
+      next.set(view.tabId, {
+        ...t,
+        url: view.url,
+        title: view.title,
+        loading: view.loading,
+        agentControlled: view.agentControlled
+      })
       return { tabs: next }
     })
   },
@@ -100,21 +108,6 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
       if (t) next.set(id, { ...t, agentControlled: controlled })
       return { tabs: next }
     })
-  },
-
-  ensureTab: (id: string, url: string) => {
-    const existing = get().tabs.get(id)
-    if (existing) {
-      if (existing.url !== url) {
-        set((state) => {
-          const next = new Map(state.tabs)
-          next.set(id, { ...existing, url })
-          return { tabs: next }
-        })
-      }
-      return { ...existing, url }
-    }
-    return get().createTab(id, url)
   },
 
   getTab: (id: string) => get().tabs.get(id)

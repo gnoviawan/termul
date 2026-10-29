@@ -54,6 +54,10 @@ import { ChatComposerEditor } from './composer/ChatComposerEditor'
 import { ComposerAddSheet } from './composer/ComposerAddSheet'
 import { ComposerSendButton } from './composer/ComposerSendButton'
 import { blurComposerEditor, insertComposerTrigger } from './composer/insert-composer-trigger'
+import {
+  type SelectionContextInsertRequest,
+  useSelectionContextInsertRequest
+} from './composer/insert-selection-context'
 import { FileMentionMenu, MENTION_EMPTY_LABEL, MENTION_SEARCHING_LABEL } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
 import { PermissionPrompt } from './PermissionPrompt'
@@ -112,6 +116,8 @@ interface ChatInputBarProps {
   seedText?: string
   /** Bump to re-apply `seedText` even if the text is unchanged. */
   seedNonce?: number
+  /** Add a selection context chip at the composer caret (from the message list). */
+  selectionContextInsert?: SelectionContextInsertRequest
   /** Pending prompts shown above the composer. */
   queue?: QueuedPrompt[]
   /** Approval request currently waiting for the user. */
@@ -157,6 +163,7 @@ export function ChatInputBar({
   onSetModel,
   seedText,
   seedNonce,
+  selectionContextInsert,
   queue = [],
   permission,
   onRemoveQueued,
@@ -343,6 +350,7 @@ export function ChatInputBar({
       const {
         hasSkills,
         hasCommand,
+        hasSelectionContexts,
         wireWithCommand,
         displayWithCommand,
         wireTrimmed,
@@ -364,7 +372,7 @@ export function ChatInputBar({
         // `\uE004<name>\uE005` token — all need the display to keep the raw
         // token text so the timeline renders inline chips. Without either,
         // display == wire.
-        if (hasSkills || hasFileRefs || hasCommand) {
+        if (hasSkills || hasFileRefs || hasCommand || hasSelectionContexts) {
           const displayBlocks: ContentBlock[] = []
           if (displayTrimmed) displayBlocks.push({ type: 'text', text: displayWithCommand })
           for (const a of attachments) displayBlocks.push(attachmentToBlock(a))
@@ -399,10 +407,10 @@ export function ChatInputBar({
           dedupeAttachmentBlocks(wireBlocks),
           displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
         )
-      } else if (hasCommand) {
-        // Command pill present (no skills, files, or attachments): the wire
-        // keeps `/<name>` where the user typed it. The display keeps the raw
-        // token in that same place so the timeline renders the command chip.
+      } else if (hasCommand || hasSelectionContexts) {
+        // Command or selection-context pill present (no skills, files, or
+        // attachments): the wire has `/<name>` / the context quote blocks, and
+        // the display keeps the raw tokens so the timeline renders the chips.
         onSendBlocks(
           wireTrimmed ? [{ type: 'text', text: wireTrimmed }] : [],
           displayTrimmed ? [{ type: 'text', text: displayTrimmed }] : []
@@ -490,6 +498,7 @@ export function ChatInputBar({
     // throws against a destroyed editor.
     scheduleRestoreCaret(next.length)
   }, [seedNonce, scheduleRestoreCaret, updateMentionsStable, setValue])
+  useSelectionContextInsertRequest(editorRef, selectionContextInsert, disabled)
 
   // Story 5.3 (T2.3): on mobile web, scroll the editor into view once per
   // OSK-open window so iOS Safari doesn't leave the input under the keyboard.

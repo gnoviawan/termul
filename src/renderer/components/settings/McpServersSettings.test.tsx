@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MCP_UNSAFE_URL, McpOAuthError } from '@/lib/acp-api'
 import { useAcpStore } from '@/stores/acp-store'
 import { McpServersSettings } from './McpServersSettings'
 
@@ -454,6 +455,45 @@ describe('McpServersSettings', () => {
     expect(screen.getByText(/could not reach this server/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
     expect(screen.getByText('initialize failed: connection refused')).toBeInTheDocument()
+  })
+
+  it('names a refused sign-in link instead of pointing at the browser', async () => {
+    const { connectMcpOAuth: realConnect, checkMcpOAuthStatus: realCheck } = useAcpStore.getState()
+    const connectMcpOAuth = vi.fn(async () => {
+      throw new McpOAuthError(
+        'refused an unsafe link: only https links are allowed',
+        MCP_UNSAFE_URL
+      )
+    })
+    useAcpStore.setState({
+      mcpServers: [
+        { id: 's6', type: 'http', name: 'Remote', url: 'https://x.test/m', enabled: true }
+      ],
+      mcpProbeStatus: { s6: 'authRequired' },
+      connectMcpOAuth,
+      checkMcpOAuthStatus: vi.fn(async () => {})
+    })
+    try {
+      render(<McpServersSettings />)
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+      await waitFor(() =>
+        expect(toastError).toHaveBeenCalledWith(
+          "This server's sign-in link isn't a secure https link, so Termul didn't open it."
+        )
+      )
+
+      connectMcpOAuth.mockRejectedValueOnce(
+        new McpOAuthError('Discovery failed', 'OAUTH_START_FAILED')
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
+      await waitFor(() =>
+        expect(toastError).toHaveBeenLastCalledWith(
+          'OAuth flow failed. Check your browser for the authorization page.'
+        )
+      )
+    } finally {
+      useAcpStore.setState({ connectMcpOAuth: realConnect, checkMcpOAuthStatus: realCheck })
+    }
   })
 
   it('renders the tool list (read-only) inside the collapsible on expand', () => {

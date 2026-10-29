@@ -20,6 +20,7 @@ import type {
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
 import type { IpcResult } from '@shared/types/ipc.types'
+import type { McpCatalogPage } from '@shared/types/mcp-catalog.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary, WsAgentSummary } from '@shared/types/web-protocol.types'
 import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
@@ -153,6 +154,11 @@ export function createInvokeAcpTransport(): AcpTransport {
     setCatalogOptIn: async (enabled) => {
       const result = await invoke<IpcResult<void>>('acp_set_catalog_opt_in', { enabled })
       if (!result.success) throw new AcpTransportError(result.code, result.error)
+    },
+    searchMcpCatalog: async (request) => {
+      const result = await invoke<IpcResult<McpCatalogPage>>('search_mcp_catalog', { request })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
     },
     probeRuntime: () => invoke<AcpRuntimeAvailability>('acp_probe_runtime'),
     setTurnTimeout: (secs) => invoke<void>('acp_set_turn_timeout', { secs }),
@@ -304,6 +310,9 @@ export function createInvokeAcpTransport(): AcpTransport {
     },
     answerQuestion: async (agentId, questionId, values) => {
       await invoke('acp_answer_question', { agentId, questionId, values })
+    },
+    stopBrowserAgent: async (sessionId) => {
+      await invoke('browser_stop', { sessionId })
     },
     authenticate: (agentId, methodId, gateway, options) =>
       invokeCommandVoid('acp_authenticate', { agentId, methodId, gateway }, options),

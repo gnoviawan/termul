@@ -338,6 +338,8 @@ fn errors_an_agent_can_recover_from_tell_it_the_next_step() {
         ),
         (CanvasErrorCode::CanvasTimeout, "do not retry it blindly"),
         (CanvasErrorCode::UnsupportedInKiosk, "save_file"),
+        (CanvasErrorCode::NoActiveTurn, "do not ask the user to open it"),
+        (CanvasErrorCode::AmbiguousSession, "more than one chat"),
     ];
     for (code, step) in actionable {
         let encoded = CanvasError::new(code, "no canvas is mounted").to_backend_string();
@@ -369,6 +371,7 @@ fn a_timeout_advises_by_tool_and_only_reads_are_retried_as_is() {
         ("run_command", "read the current state"),
         ("get_node", "retry once"),
         ("inspect_document", "retry once"),
+        ("list_issues", "retry once"),
     ];
     for (tool, hint) in advice {
         let encoded = late.to_backend_string_for(Some(tool));

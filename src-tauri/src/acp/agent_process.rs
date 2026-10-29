@@ -135,6 +135,10 @@ mod process {
         };
         let mut command = std::process::Command::new(&stdio.command);
         command.args(&stdio.args);
+        // Scrub AppImage-only vars before applying the agent's own env, so an
+        // explicit `env` entry still wins over the cleanup (node/npx agents must
+        // resolve host libraries, not the bundled ones — #1435).
+        crate::process_util::clean_appimage_env(&mut command);
         for env_var in &stdio.env {
             command.env(&env_var.name, &env_var.value);
         }

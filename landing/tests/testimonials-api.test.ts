@@ -165,3 +165,30 @@ describe('testimonial API helpers', () => {
     expect(getClientIp(request)).toBe('9.9.9.9');
   });
 });
+
+// #1531: the rate-limit IP hash is salted when the secret is present.
+describe('checkRateLimit salt', () => {
+  test('binds a different ip_hash when salted vs unsalted', async () => {
+    const { checkRateLimit } = await import('../functions/api/_lib')
+    const bound: string[] = []
+    const stmt = {
+      bind: (...args: unknown[]) => {
+        // The INSERT binds the ip_hash twice (row + count check) — capture all.
+        for (const a of args) {
+          if (typeof a === 'string' && a.length === 64) bound.push(a)
+        }
+        return { run: async () => ({ success: true }) }
+      },
+      run: async () => ({ success: true }),
+    }
+    const db = { prepare: () => stmt } as never
+
+    await checkRateLimit(db, '203.0.113.7')
+    await checkRateLimit(db, '203.0.113.7', 'pepper')
+
+    expect(bound).toHaveLength(4) // INSERT + COUNT per call
+    const unsalted = bound[0]
+    const salted = bound[2]
+    expect(salted).not.toBe(unsalted)
+  })
+})

@@ -14,9 +14,10 @@ import type {
   TerminalGitStatusChangedCallback,
   TerminalSpawnOptions
 } from '@shared/types/ipc.types'
-import { Channel } from '@tauri-apps/api/core'
+import { Channel, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invokeIpcCommand } from './acp-transport/tauri-verdicts'
+import { createTauriCommandEditorTransport } from './command-editor-transport'
 import { entityKeyOf } from './ipc/http'
 import { invokeIpc } from './ipc/tauri'
 import { logFrontendError } from './log-api'
@@ -212,6 +213,7 @@ function captureStackTrace(): string {
  * It maintains the same interface as the Electron preload script for easy migration.
  */
 export function createTauriTerminalApi(): TerminalApi {
+  const commandEditor = createTauriCommandEditorTransport(invoke)
   // Per-terminal data callback stored between onData registration and spawn
   const dataCallbacks = new Set<TerminalDataCallback>()
   /** Project each terminal was spawned or listed for (recovers a rotated claim via `list_preserved`). */
@@ -328,6 +330,10 @@ export function createTauriTerminalApi(): TerminalApi {
   }
 
   return {
+    submitCommand: commandEditor.submitCommand,
+    requestCompletion: commandEditor.requestCompletion,
+    cancelCompletion: commandEditor.cancelCompletion,
+    restorePrompt: commandEditor.restorePrompt,
     /**
      * Spawn a new terminal PTY
      *

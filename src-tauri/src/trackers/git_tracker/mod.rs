@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager};
 
 use super::cwd_tracker::CwdTracker;
 use super::{TerminalEvent, TerminalEventHub};
@@ -52,6 +51,8 @@ pub use commit_detail::{
     GitCommitFileDiff,
 };
 pub use diff_stat::{git_get_diff_stat, DiffStatError, GitDiffStat};
+#[cfg(test)]
+pub(crate) use diff_stat::GitFileDiffStat;
 pub use resolve::{resolve_executable, resolve_git_binary};
 pub use types::{GitCommit, GitCommitContext, GitStatus, GitStatusDetail};
 
@@ -135,7 +136,6 @@ impl GitState {
 /// On Windows, uses CWD deduplication and throttling to reduce git.exe spawns.
 pub struct GitTracker {
     terminal_states: Arc<RwLock<HashMap<String, GitState>>>,
-    app_handle: Option<AppHandle>,
     cwd_tracker: Option<Arc<CwdTracker>>,
     events: TerminalEventHub,
     poll_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
@@ -146,11 +146,11 @@ pub struct GitTracker {
 }
 
 impl GitTracker {
-    /// Create a new GitTracker with the given app handle
-    pub fn new(app_handle: Option<AppHandle>, events: TerminalEventHub) -> Self {
+    /// Create a new GitTracker without a CwdTracker; terminal cwds are only
+    /// synced once one is attached via [`Self::with_cwd_tracker`].
+    pub fn new(events: TerminalEventHub) -> Self {
         Self {
             terminal_states: Arc::new(RwLock::new(HashMap::new())),
-            app_handle,
             cwd_tracker: None,
             events,
             poll_handle: Arc::new(RwLock::new(None)),
@@ -161,10 +161,10 @@ impl GitTracker {
         }
     }
 
-    /// Create a GitTracker with a direct CwdTracker reference (standalone mode).
-    /// This avoids the Tauri AppHandle dependency for CWD synchronization.
+    /// Create a GitTracker with a direct CwdTracker reference. Holds no Tauri
+    /// `AppHandle`, so the standalone server links no Wry runtime code.
     pub fn with_cwd_tracker(cwd_tracker: Arc<CwdTracker>, events: TerminalEventHub) -> Self {
-        let mut tracker = Self::new(None, events);
+        let mut tracker = Self::new(events);
         tracker.cwd_tracker = Some(cwd_tracker);
         tracker
     }
@@ -284,12 +284,8 @@ impl GitTracker {
     }
 
     fn refresh_tracked_terminals(&self) {
-        // Transport-neutral: use the direct CwdTracker reference if available,
-        // otherwise fall back to the Tauri AppHandle state lookup.
         if let Some(cwd_tracker) = &self.cwd_tracker {
             Self::sync_terminal_cwds_from_tracker_direct(cwd_tracker, &self.terminal_states);
-        } else if let Some(app_handle) = &self.app_handle {
-            Self::sync_terminal_cwds_from_tracker(app_handle, &self.terminal_states);
         }
 
         #[cfg(target_os = "windows")]
@@ -370,38 +366,6 @@ impl GitTracker {
         }
     }
 
-    fn sync_terminal_cwds_from_tracker(
-        app_handle: &AppHandle,
-        states: &Arc<RwLock<HashMap<String, GitState>>>,
-    ) {
-        let Some(cwd_tracker) = app_handle.try_state::<Arc<CwdTracker>>() else {
-            return;
-        };
-
-        let terminal_ids: Vec<String> = states.read().keys().cloned().collect();
-        let updates: Vec<(String, String)> = terminal_ids
-            .into_iter()
-            .filter_map(|terminal_id| {
-                cwd_tracker
-                    .get_cwd(&terminal_id)
-                    .map(|cwd| (terminal_id, cwd))
-            })
-            .collect();
-
-        if updates.is_empty() {
-            return;
-        }
-
-        let mut states_guard = states.write();
-        for (terminal_id, new_cwd) in updates {
-            if let Some(state) = states_guard.get_mut(&terminal_id) {
-                state.update_terminal_cwd(new_cwd);
-            }
-        }
-    }
-
-    /// Transport-neutral CWD sync: uses a direct Arc<CwdTracker> reference
-    /// instead of the Tauri AppHandle state lookup. Used in standalone mode.
     fn sync_terminal_cwds_from_tracker_direct(
         cwd_tracker: &Arc<CwdTracker>,
         states: &Arc<RwLock<HashMap<String, GitState>>>,

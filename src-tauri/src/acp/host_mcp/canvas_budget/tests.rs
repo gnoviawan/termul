@@ -60,7 +60,7 @@ fn raster_exports_and_page_renders_are_renders() {
 
 #[test]
 fn vector_exports_and_other_calls_are_not_renders() {
-    for format in ["svg", "pdf", "fig"] {
+    for format in ["svg", "pdf", "xml", "fig"] {
         assert_eq!(
             render_call(
                 "engine.execute",

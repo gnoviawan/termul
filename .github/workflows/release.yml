@@ -127,9 +127,60 @@ jobs:
             }
             core.setOutput('releaseId', String(release.data.id))
 
+  # The MCP catalog snapshot (spine AD-3) is fetched in its own job, with no
+  # secrets and read-only contents, never in build.rs. The build jobs swap it in
+  # for the committed dev fixture in src-tauri/resources/mcp-registry/ before
+  # cargo embeds it; the job summary records its sha256 and fetch time. If the
+  # registry is unreachable at tag time this job fails the release rather than
+  # ship the dev fixture. Rerun the failed jobs once the registry is back.
+  mcp-snapshot:
+    name: Fetch MCP registry snapshot
+    needs: changelog
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.x
+
+      - name: Fetch the registry snapshot
+        run: bun scripts/fetch-mcp-registry-snapshot.mjs --out mcp-registry-snapshot
+
+      - name: Verify and record the snapshot sha256
+        shell: bash
+        run: |
+          bun scripts/fetch-mcp-registry-snapshot.mjs --verify mcp-registry-snapshot
+          {
+            echo '### MCP registry snapshot'
+            echo '```json'
+            cat mcp-registry-snapshot/mcp-registry-snapshot.meta.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the snapshot
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: mcp-registry-snapshot
+          path: mcp-registry-snapshot/
+          if-no-files-found: error
+          retention-days: 1
+
   build:
     name: Build (${{ matrix.platform }})
-    needs: changelog
+    needs: [changelog, mcp-snapshot]
     if: github.event_name == 'push'
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -287,6 +338,15 @@ jobs:
       - name: Assert canvas/bundle/index.html exists
         shell: bash
         run: test -f canvas/bundle/index.html && test -s canvas/bundle/index.html
+
+      - name: Swap in the release MCP registry snapshot
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: mcp-registry-snapshot
+          path: src-tauri/resources/mcp-registry
+
+      - name: Verify the embedded MCP registry snapshot
+        run: bun scripts/fetch-mcp-registry-snapshot.mjs --verify src-tauri/resources/mcp-registry
 
       # Tauri ignores the stapler's exit status, so a transient CloudKit failure
       # (macos-15-intel has dropped the connection with NSURLErrorDomain -1005)
@@ -496,7 +556,7 @@ jobs:
   # embed non-empty).
   standalone-server:
     name: Build termul-server (linux-${{ matrix.arch }})
-    needs: changelog
+    needs: [changelog, mcp-snapshot]
     if: github.event_name == 'push'
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -575,6 +635,15 @@ jobs:
 
       - name: Assert canvas/bundle/index.html exists
         run: test -f canvas/bundle/index.html && test -s canvas/bundle/index.html
+
+      - name: Swap in the release MCP registry snapshot
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: mcp-registry-snapshot
+          path: src-tauri/resources/mcp-registry
+
+      - name: Verify the embedded MCP registry snapshot
+        run: bun scripts/fetch-mcp-registry-snapshot.mjs --verify src-tauri/resources/mcp-registry
 
       - name: Build termul-server (linux-${{ matrix.arch }} release)
         working-directory: src-tauri

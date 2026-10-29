@@ -164,6 +164,7 @@ async fn remote_server_state_start_then_stop_lifecycle() {
             registry.clone(),
             RemoteBindMode::Localhost,
             false,
+            false,
             &data,
             None,
             None,
@@ -198,6 +199,7 @@ async fn remote_server_state_start_then_stop_lifecycle() {
             registry.clone(),
             RemoteBindMode::Localhost,
             false,
+            false,
             &data,
             None,
             None,
@@ -224,6 +226,7 @@ async fn remote_server_state_double_start_is_rejected() {
             registry.clone(),
             RemoteBindMode::Localhost,
             false,
+            false,
             &data,
             None,
             None,
@@ -238,6 +241,7 @@ async fn remote_server_state_double_start_is_rejected() {
             relay.clone(),
             registry.clone(),
             RemoteBindMode::Localhost,
+            false,
             false,
             &data,
             None,
@@ -272,6 +276,7 @@ async fn remote_server_state_start_stop_does_not_kill_agents() {
             relay.clone(),
             registry.clone(),
             RemoteBindMode::Localhost,
+            false,
             false,
             &data,
             None,
@@ -323,6 +328,7 @@ async fn the_durable_registry_survives_a_shared_live_stop_and_restart() {
                 registry.clone(),
                 RemoteBindMode::Localhost,
                 false,
+                false,
                 &data,
                 None,
                 None,
@@ -354,6 +360,7 @@ async fn status_clears_tunnel_url_when_cloudflared_child_exits() {
             relay.clone(),
             registry.clone(),
             RemoteBindMode::Localhost,
+            false,
             false,
             &data,
             None,
@@ -476,14 +483,116 @@ fn strip_line_comments(src: &str) -> String {
 
 #[test]
 fn shared_live_requires_token_when_exposed() {
-    // Ungated ONLY on loopback with no tunnel; a tunnel or a LAN bind gates.
+    // Ungated ONLY on loopback with no tunnel and no browser automation host.
     assert!(!shared_live_requires_token(
         RemoteBindMode::Localhost,
+        false,
         false
     ));
-    assert!(shared_live_requires_token(RemoteBindMode::Localhost, true));
-    assert!(shared_live_requires_token(RemoteBindMode::All, false));
-    assert!(shared_live_requires_token(RemoteBindMode::All, true));
+    assert!(shared_live_requires_token(RemoteBindMode::Localhost, true, false));
+    assert!(shared_live_requires_token(RemoteBindMode::All, false, false));
+    assert!(shared_live_requires_token(RemoteBindMode::All, true, false));
+    assert!(shared_live_requires_token(RemoteBindMode::Localhost, false, true));
+}
+
+async fn http_status_with_host(url: &str, host: &str, token: Option<&str>) -> reqwest::StatusCode {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("build reqwest client");
+    let mut request = client.get(url).header(reqwest::header::HOST, host);
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+    request.send().await.expect("request completes").status()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_live_requires_the_token_while_a_browser_host_is_registered() {
+    let (acp, pty, relay, registry) = lifecycle_fixtures();
+    let (data, data_dir) = shared_live_fixture();
+    let state = RemoteServerState::new();
+    let status = state
+        .start(
+            acp,
+            pty,
+            relay,
+            registry,
+            RemoteBindMode::Localhost,
+            false,
+            true,
+            &data,
+            None,
+            None,
+        )
+        .await
+        .expect("start on loopback without a tunnel");
+    let api = format!("{}/projects", status.url.expect("loopback url"));
+    let token = persisted_token(data_dir.path());
+
+    assert_eq!(http_status(&api, None).await, reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(http_status(&api, Some(&token)).await, reqwest::StatusCode::OK);
+    let _ = state.stop().await;
+}
+
+/// A gated host answers by any name a phone may use (tunnel, LAN, MagicDNS):
+/// the token, not the `Host`, is what a rebinding page cannot present.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_gated_shared_live_host_serves_any_host_name_and_still_needs_the_token() {
+    let (acp, pty, relay, registry) = lifecycle_fixtures();
+    let (data, data_dir) = shared_live_fixture();
+    let state = RemoteServerState::new();
+    let status = state
+        .start(
+            acp,
+            pty,
+            relay,
+            registry,
+            RemoteBindMode::Localhost,
+            true,
+            true,
+            &data,
+            None,
+            None,
+        )
+        .await
+        .expect("start with a planned tunnel");
+    let api = format!("{}/projects", status.url.expect("loopback url"));
+    let token = persisted_token(data_dir.path());
+
+    let mut seen = Vec::new();
+    for host in [
+        "rebind-check.trycloudflare.com",
+        "my-pc.local",
+        "desk.tailnet-1234.ts.net",
+    ] {
+        seen.push((
+            host,
+            http_status_with_host(&api, host, Some(&token)).await,
+            http_status_with_host(&api, host, None).await,
+        ));
+    }
+    let _ = state.stop().await;
+    assert_eq!(
+        seen,
+        [
+            (
+                "rebind-check.trycloudflare.com",
+                reqwest::StatusCode::OK,
+                reqwest::StatusCode::UNAUTHORIZED
+            ),
+            (
+                "my-pc.local",
+                reqwest::StatusCode::OK,
+                reqwest::StatusCode::UNAUTHORIZED
+            ),
+            (
+                "desk.tailnet-1234.ts.net",
+                reqwest::StatusCode::OK,
+                reqwest::StatusCode::UNAUTHORIZED
+            ),
+        ]
+    );
 }
 
 /// Read the persisted bearer token the host generated under `data_dir`.
@@ -519,6 +628,7 @@ async fn shared_live_with_a_tunnel_requires_the_token_and_shares_it_in_the_url()
             registry,
             RemoteBindMode::Localhost,
             true,
+            false,
             &data,
             None,
             None,
@@ -578,6 +688,7 @@ async fn shared_live_on_loopback_without_a_tunnel_is_ungated_and_writes_no_token
             registry,
             RemoteBindMode::Localhost,
             false,
+            false,
             &data,
             None,
             None,
@@ -586,6 +697,11 @@ async fn shared_live_on_loopback_without_a_tunnel_is_ungated_and_writes_no_token
         .expect("start");
     let api = format!("{}/projects", status.url.expect("loopback url"));
     assert_eq!(http_status(&api, None).await, reqwest::StatusCode::OK);
+    assert_eq!(
+        http_status_with_host(&api, "my-pc.local", None).await,
+        reqwest::StatusCode::FORBIDDEN,
+        "an ungated host serves loopback names only"
+    );
     assert!(
         !data_dir
             .path()
@@ -608,6 +724,7 @@ async fn shared_live_requested_beyond_loopback_requires_the_token_even_without_a
             relay,
             registry,
             RemoteBindMode::All,
+            false,
             false,
             &data,
             None,
@@ -667,6 +784,7 @@ async fn stop_then_start_reuses_the_one_desktop_store_without_taking_a_second_lo
                 registry.clone(),
                 RemoteBindMode::Localhost,
                 true,
+                false,
                 &data,
                 None,
                 None,
@@ -724,6 +842,7 @@ async fn shared_live_start_never_seeds_a_project() {
             relay.clone(),
             registry.clone(),
             RemoteBindMode::Localhost,
+            false,
             false,
             &data,
             None,
@@ -916,6 +1035,7 @@ async fn shared_live_boundary_is_any_registered_cross_drive_project() {
             relay.clone(),
             registry.clone(),
             RemoteBindMode::Localhost,
+            false,
             false,
             &data,
             None,

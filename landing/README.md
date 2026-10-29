@@ -56,7 +56,7 @@ The `deploy` script invokes `wrangler pages deploy dist` and uploads the build o
    - Click **Set up a custom domain** and enter `termul.dev`
    - Cloudflare auto-provisions SSL and routes traffic (DNS must be on Cloudflare)
 
-**SPA routing:** The `public/_redirects` file rewrites all paths to `/index.html` with a 200 status, replacing the nginx `try_files` rule used in the previous Docker setup.
+**Routing and 404:** Every route is prerendered to static HTML, so there is no SPA catch-all rewrite. The catch-all `*` route (`NotFoundPage`) is prerendered at `/404` and `scripts/write-404.ts` moves it to `dist/404.html`, which Cloudflare Pages serves with a real 404 status for unknown URLs. If you add a route, add it to `src/routes/index.tsx` (and `public/sitemap.xml` if it should be indexed) so it is prerendered.
 
 ## Testimonials Backend (D1 + R2)
 
