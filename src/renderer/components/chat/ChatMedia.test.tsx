@@ -20,6 +20,7 @@ vi.mock('@/lib/tauri-runtime', async (importOriginal) => {
   return { ...actual, isTauriContext: () => isTauriContextMock() }
 })
 
+import { ChatMedia } from './ChatMedia'
 import { MediaBlocks } from './ChatMessage'
 
 const ABC = new Uint8Array([65, 66, 67])
@@ -118,6 +119,39 @@ describe('MediaBlocks inline media', () => {
     expect(created.map((blob) => blob.type)).toEqual(['video/mp4'])
   })
 
+  it('says a local video is too large instead of loading forever', async () => {
+    isTauriContextMock.mockReturnValue(true)
+    invokeMock.mockRejectedValueOnce({
+      code: 'FILE_TOO_LARGE',
+      message: 'file too large (134217728 bytes, max 104857600)'
+    })
+    const { container } = renderBlocks({
+      type: 'resource_link',
+      uri: 'file:///tmp/clip.mp4',
+      name: 'clip.mp4'
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play video: clip.mp4' }))
+
+    expect(
+      await screen.findByText('clip.mp4 is too large to play inline (128.0 MB, limit 100.0 MB)')
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Loading video')).toBeNull()
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(container.querySelector('video')).toBeNull()
+  })
+
+  it('says a local video was not found instead of loading forever', async () => {
+    isTauriContextMock.mockReturnValue(true)
+    invokeMock.mockRejectedValueOnce({ code: 'NOT_FOUND', message: 'file not found' })
+    renderBlocks({ type: 'resource_link', uri: 'file:///tmp/clip.mp4', name: 'clip.mp4' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play video: clip.mp4' }))
+
+    expect(await screen.findByText('clip.mp4 was not found')).toBeInTheDocument()
+    expect(screen.queryByText('Loading video')).toBeNull()
+  })
+
   it('reads a local video resource_link on web from /fs/raw after the play click', async () => {
     fetchMock.mockResolvedValueOnce(new Response(ABC, { headers: { 'content-type': 'video/mp4' } }))
     const { container } = renderBlocks({
@@ -163,6 +197,25 @@ describe('MediaBlocks inline media', () => {
     })
     expect(screen.getByTitle('gone.png')).toBeInTheDocument()
     expect(container.querySelector('img')).toBeNull()
+  })
+
+  it('gives a local image alt chip the read failure as its tooltip', async () => {
+    isTauriContextMock.mockReturnValue(true)
+    invokeMock.mockRejectedValueOnce({ code: 'READ_ERROR', message: 'failed to read file' })
+    render(
+      <ChatMedia
+        media={{ kind: 'image', name: 'shot.png', src: { from: 'path', path: '/tmp/shot.png' } }}
+      />
+    )
+
+    expect(screen.getByTestId('chat-media-alt')).toHaveAttribute('title', 'shot.png')
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-media-alt')).toHaveAttribute(
+        'title',
+        "shot.png couldn't be read"
+      )
+    })
+    expect(screen.getByTestId('chat-media-alt')).toHaveTextContent('shot.png')
   })
 
   it('plays base64 audio from a blob: URL', async () => {

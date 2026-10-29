@@ -1,8 +1,9 @@
 import { type ReactNode, useEffect, useState } from 'react'
 import { VideoIcon } from '@/components/icons'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
-import { useMediaObjectUrl } from '@/hooks/use-media-object-url'
+import { useMediaObjectUrlState } from '@/hooks/use-media-object-url'
 import { logFrontendError } from '@/lib/log-api'
+import { formatSize } from '@/lib/sftp-format'
 import type { BytesSource, ChatMedia as ChatMediaModel } from './chat-media-source'
 
 /** `inline` sizes media for prose; `tile` is the square attachment-grid thumbnail. */
@@ -40,30 +41,57 @@ function useBytesObjectUrl(source: BytesSource | null): string | null {
   return base64 === null ? null : url
 }
 
+type ReadFailure = { code: string; message: string }
+
+type ChatMediaState =
+  | { status: 'loading' }
+  | { status: 'ready'; url: string }
+  | ({ status: 'error' } & ReadFailure)
+
 /**
- * The URL an element can load for `media`, or null while it is not ready.
- * A local file is read only once `loadPath` is true.
+ * The URL an element can load for `media`, or why a local file could not be
+ * read. A local file is read only once `loadPath` is true.
  */
-function useChatMediaUrl(media: ChatMediaModel, loadPath: boolean): string | null {
+function useChatMediaState(media: ChatMediaModel, loadPath: boolean): ChatMediaState {
   const { src } = media
-  const pathUrl = useMediaObjectUrl(src.from === 'path' && loadPath ? src.path : null)
+  const pathState = useMediaObjectUrlState(src.from === 'path' && loadPath ? src.path : null, 0)
   const bytesUrl = useBytesObjectUrl(src.from === 'bytes' ? src : null)
   switch (src.from) {
     case 'url':
-      return src.url
+      return { status: 'ready', url: src.url }
     case 'path':
-      return pathUrl
+      return pathState
     case 'bytes':
-      return bytesUrl
+      return bytesUrl ? { status: 'ready', url: bytesUrl } : { status: 'loading' }
+  }
+}
+
+/** The host's FILE_TOO_LARGE message, `file too large (<size> bytes, max <cap>)`. */
+const TOO_LARGE_MESSAGE = /\((\d+) bytes, max (\d+)\)/
+
+/** Why `name` could not be read, in words a user can act on. */
+function readFailureText(name: string, verb: 'play' | 'show', failure: ReadFailure): string {
+  switch (failure.code) {
+    case 'FILE_TOO_LARGE': {
+      const sizes = TOO_LARGE_MESSAGE.exec(failure.message)
+      const detail = sizes
+        ? ` (${formatSize(Number(sizes[1]))}, limit ${formatSize(Number(sizes[2]))})`
+        : ''
+      return `${name} is too large to ${verb} inline${detail}`
+    }
+    case 'NOT_FOUND':
+      return `${name} was not found`
+    default:
+      return `${name} couldn't be read`
   }
 }
 
 /** Muted stand-in for media that is loading or cannot render. */
-export function MediaAltChip({ alt }: { alt: string }): React.JSX.Element {
+export function MediaAltChip({ alt, title }: { alt: string; title?: string }): React.JSX.Element {
   return (
     <span
       data-testid="chat-media-alt"
-      title={alt}
+      title={title ?? alt}
       className="inline-flex max-w-[16rem] items-center rounded border border-border/40 bg-muted/40 px-1.5 py-0.5 align-middle text-xs text-muted-foreground"
     >
       <span className="truncate">{alt || 'image'}</span>
@@ -78,11 +106,15 @@ function ChatImage({
 }: {
   media: ChatMediaModel
   layout: ChatMediaLayout
-  fallback: ReactNode
+  fallback?: ReactNode
 }): React.JSX.Element {
-  const src = useChatMediaUrl(media, true)
+  const state = useChatMediaState(media, true)
+  const src = state.status === 'ready' ? state.url : null
   const [failedSrc, setFailedSrc] = useState<string | null>(null)
-  if (!src || failedSrc === src) return <>{fallback}</>
+  if (!src || failedSrc === src) {
+    const reason = state.status === 'error' ? readFailureText(media.name, 'show', state) : undefined
+    return <>{fallback ?? <MediaAltChip alt={media.name} title={reason} />}</>
+  }
   return (
     <ImageLightbox src={src} alt={media.name}>
       <img
@@ -118,10 +150,23 @@ function ChatImage({
  */
 function ChatVideo({ media }: { media: ChatMediaModel }): React.JSX.Element {
   const [requested, setRequested] = useState(false)
-  const src = useChatMediaUrl(media, requested)
+  const state = useChatMediaState(media, requested)
   const local = media.src.from === 'path'
 
-  if (src) {
+  if (state.status === 'error') {
+    const reason = readFailureText(media.name, 'play', state)
+    return (
+      <div
+        role="status"
+        title={reason}
+        className="inline-flex min-h-24 w-64 max-w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border/40 bg-muted/40 px-3 py-2 text-center text-xs text-muted-foreground"
+      >
+        <VideoIcon className="size-5" />
+        <span className="max-w-full break-words">{reason}</span>
+      </div>
+    )
+  }
+  if (state.status === 'ready') {
     return (
       // biome-ignore lint/a11y/useMediaCaption: agent-produced videos carry no caption tracks.
       <video
@@ -132,7 +177,7 @@ function ChatVideo({ media }: { media: ChatMediaModel }): React.JSX.Element {
         preload={
           media.src.from === 'url' && media.src.url.startsWith('https:') ? 'none' : 'metadata'
         }
-        src={src}
+        src={state.url}
         onError={() => {
           void logFrontendError({
             level: 'warn',
@@ -159,8 +204,8 @@ function ChatVideo({ media }: { media: ChatMediaModel }): React.JSX.Element {
 }
 
 function ChatAudio({ media }: { media: ChatMediaModel }): React.JSX.Element | null {
-  const src = useChatMediaUrl(media, true)
-  if (!src) return null
+  const state = useChatMediaState(media, true)
+  if (state.status !== 'ready') return null
   return (
     // biome-ignore lint/a11y/useMediaCaption: ACP audio blocks do not provide caption tracks.
     <audio
@@ -168,7 +213,7 @@ function ChatAudio({ media }: { media: ChatMediaModel }): React.JSX.Element | nu
       className="max-w-full"
       controls
       preload="metadata"
-      src={src}
+      src={state.url}
     />
   )
 }
@@ -176,7 +221,7 @@ function ChatAudio({ media }: { media: ChatMediaModel }): React.JSX.Element | nu
 /**
  * Renders any chat media: an image that opens in the lightbox, a video
  * player, or an audio player. `fallback` shows while an image loads or when
- * it cannot render.
+ * it cannot render; without one, an alt chip whose tooltip says why.
  */
 export function ChatMedia({
   media,
@@ -189,13 +234,7 @@ export function ChatMedia({
 }): React.JSX.Element | null {
   switch (media.kind) {
     case 'image':
-      return (
-        <ChatImage
-          media={media}
-          layout={layout}
-          fallback={fallback ?? <MediaAltChip alt={media.name} />}
-        />
-      )
+      return <ChatImage media={media} layout={layout} fallback={fallback} />
     case 'video':
       return <ChatVideo media={media} />
     case 'audio':
