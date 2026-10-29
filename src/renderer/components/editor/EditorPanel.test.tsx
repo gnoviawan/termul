@@ -1,11 +1,13 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { codeEditorProps, markdownEditorProps, readMediaBytesMock } = vi.hoisted(() => ({
-  codeEditorProps: vi.fn(),
-  markdownEditorProps: vi.fn(),
-  readMediaBytesMock: vi.fn()
-}))
+const { codeEditorProps, markdownEditorProps, readMediaBytesMock, openPdfDocumentMock } =
+  vi.hoisted(() => ({
+    codeEditorProps: vi.fn(),
+    markdownEditorProps: vi.fn(),
+    readMediaBytesMock: vi.fn(),
+    openPdfDocumentMock: vi.fn()
+  }))
 
 vi.mock('@/lib/api', () => ({
   filesystemApi: { readFile: vi.fn(), writeFile: vi.fn(), getFileInfo: vi.fn() },
@@ -15,6 +17,8 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/lib/media-bytes-api', () => ({
   readMediaBytes: (path: string) => readMediaBytesMock(path)
 }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
+vi.mock('./media/pdf-document', () => ({ openPdfDocument: openPdfDocumentMock }))
 vi.mock('@/hooks/use-toc-settings', () => ({ useTocSettings: vi.fn() }))
 vi.mock('./CodeEditor', () => ({
   CodeEditor: (props: { readOnly?: boolean; content: string }) => {
@@ -164,6 +168,23 @@ describe('EditorPanel viewer per file kind', () => {
     const video = container.querySelector('video')
     expect(video).toHaveAttribute('src', 'blob:termul/1')
     expect(video).toHaveAttribute('controls')
+  })
+
+  it('renders a pdf tab in the pdf viewer, which opens the bytes read through readMediaBytes', async () => {
+    const bytes = new Blob(['%PDF-1.7'], { type: 'application/pdf' })
+    readMediaBytesMock.mockResolvedValue({ success: true, data: bytes })
+    openPdfDocumentMock.mockReturnValue({
+      result: Promise.resolve({ ok: false, failure: 'password', errorName: 'PasswordException' }),
+      destroy: vi.fn()
+    })
+    seedFile({ ...base, kind: 'pdf', filePath: '/p/report.pdf', revision: 0 })
+    render(<EditorPanel filePath="/p/report.pdf" isVisible />)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "report.pdf is password-protected and can't be previewed."
+    )
+    expect(readMediaBytesMock).toHaveBeenCalledWith('/p/report.pdf')
+    expect(openPdfDocumentMock).toHaveBeenCalledWith(bytes)
   })
 
   it('renders an unsupported tab with its name, reason, and size', () => {
