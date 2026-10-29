@@ -28,7 +28,7 @@ vi.mock('@/stores/toc-settings-store', () => ({
 const FILE_PATH = '/docs/spec.md'
 
 const renderToolbar = (
-  viewMode: 'code' | 'markdown',
+  viewMode: 'code' | 'preview',
   onToggleViewMode = vi.fn()
 ): { container: HTMLElement; onToggleViewMode: ReturnType<typeof vi.fn> } => {
   const { container } = render(
@@ -51,7 +51,7 @@ describe('EditorToolbar mobile control sizing', () => {
   })
 
   it('meets the 44px floor on mobile: outline and view-mode controls use the touch size', () => {
-    renderToolbar('markdown')
+    renderToolbar('preview')
 
     const outlineButton = findOutlineButton()
     const sourceButton = screen.getByRole('radio', { name: 'Source' })
@@ -65,7 +65,7 @@ describe('EditorToolbar mobile control sizing', () => {
   })
 
   it('outline and view-mode controls still function on mobile', () => {
-    const { onToggleViewMode } = renderToolbar('markdown')
+    const { onToggleViewMode } = renderToolbar('preview')
 
     fireEvent.click(findOutlineButton())
     expect(mocks.toggleVisibility).toHaveBeenCalledTimes(1)
@@ -84,7 +84,7 @@ describe('EditorToolbar desktop chrome', () => {
   })
 
   it('keeps the compact h-10 toolbar on the document surface', () => {
-    const { container } = renderToolbar('markdown')
+    const { container } = renderToolbar('preview')
 
     const toolbarRow = container.firstElementChild as HTMLElement
     expect(toolbarRow).toHaveClass('h-10', 'pl-4', 'pr-1.5', 'bg-background', 'border-b')
@@ -97,14 +97,14 @@ describe('EditorToolbar desktop chrome', () => {
   })
 
   it('shows a breadcrumb of the parent folder and the file name', () => {
-    renderToolbar('markdown')
+    renderToolbar('preview')
 
     expect(screen.getByText('docs')).toBeInTheDocument()
     expect(screen.getByText('spec.md')).toHaveClass('font-medium', 'text-muted-foreground')
   })
 
   it('raises the current mode in the Preview | Source track', () => {
-    const { onToggleViewMode } = renderToolbar('markdown')
+    const { onToggleViewMode } = renderToolbar('preview')
 
     const preview = screen.getByRole('radio', { name: 'Preview' })
     const source = screen.getByRole('radio', { name: 'Source' })
@@ -121,7 +121,7 @@ describe('EditorToolbar desktop chrome', () => {
   })
 
   it('marks the outline toggle pressed without an accent fill', () => {
-    renderToolbar('markdown')
+    renderToolbar('preview')
 
     const outlineButton = findOutlineButton()
     expect(outlineButton).toHaveAttribute('aria-pressed', 'true')
@@ -133,10 +133,10 @@ describe('EditorToolbar desktop chrome', () => {
     const words = Array.from({ length: 450 }, () => 'word').join(' ')
     useEditorStore.setState({
       openFiles: new Map([
-        [FILE_PATH, { content: `# Title\n\n${words}`, language: 'markdown' } as never]
+        [FILE_PATH, { kind: 'text', content: `# Title\n\n${words}`, language: 'markdown' } as never]
       ])
     })
-    renderToolbar('markdown')
+    renderToolbar('preview')
 
     expect(screen.getByText('451 words · 3 min read')).toHaveClass('tabular-nums')
   })

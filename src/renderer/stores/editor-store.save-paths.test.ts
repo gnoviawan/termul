@@ -43,11 +43,12 @@ function seedOpenFile(content = 'original'): void {
         {
           filePath: path,
           content,
+          kind: 'text',
           originalContent: 'original',
           isDirty: content !== 'original',
           language: 'markdown',
           lastModified: 0,
-          viewMode: 'markdown',
+          viewMode: 'preview',
           cursorPosition: { line: 1, col: 1 },
           scrollTop: 0,
           operationStatus: 'idle'

@@ -6,8 +6,8 @@ import { IconSwap } from '@/components/ui/icon-swap'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { useCodeMirror } from '@/hooks/use-codemirror'
 import { sshApi } from '@/lib/api'
+import { detectLanguage } from '@/lib/editor-file-kind'
 import { cn } from '@/lib/utils'
-import { detectLanguage } from '@/stores/editor-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import {
   useSSHActions,

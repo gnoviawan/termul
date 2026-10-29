@@ -11,10 +11,12 @@ import {
 } from '@/lib/editor-auto-save'
 import { flushEditorContent } from '@/lib/editor-content-flush'
 import { fileNeedsAttention } from '@/lib/editor-file-attention'
+import { detectLanguage, type EditorViewMode, getDefaultViewMode } from '@/lib/editor-file-kind'
 import { markEditorSelfSave } from '@/lib/editor-self-save'
 import { logFrontendError } from '@/lib/log-api'
 import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
 import { sha256Hex } from '@/lib/sha256-hex'
+import { type EditorFileState, loadEditorFile, type TextFileState } from './editor-file-state'
 
 /** Saves currently in flight, by file path (in-flight guard, QA r2 story 4). */
 const savesInFlight = new Map<string, Promise<boolean>>()
@@ -141,77 +143,7 @@ const UNCERTAIN_WRITE_CODES: ReadonlySet<string> = new Set([
 
 const EDITOR_TAB_LIMIT = 15
 
-function getExtname(filePath: string): string {
-  const name = filePath.split(/[\\/]/).pop() || filePath
-  const dotIndex = name.lastIndexOf('.')
-  if (dotIndex <= 0) return ''
-  return name.slice(dotIndex)
-}
-
-function detectLanguage(filePath: string): string {
-  const ext = getExtname(filePath).slice(1).toLowerCase()
-  const map: Record<string, string> = {
-    ts: 'typescript',
-    tsx: 'typescript',
-    js: 'javascript',
-    jsx: 'javascript',
-    json: 'json',
-    css: 'css',
-    scss: 'css',
-    html: 'html',
-    htm: 'html',
-    astro: 'astro',
-    md: 'markdown',
-    yaml: 'yaml',
-    yml: 'yaml',
-    xml: 'xml',
-    svg: 'xml',
-    sh: 'shell',
-    bash: 'shell',
-    py: 'python',
-    rs: 'rust',
-    go: 'go',
-    toml: 'toml'
-  }
-  return map[ext] || ''
-}
-
-function getDefaultViewMode(filePath: string): 'code' | 'markdown' {
-  const ext = getExtname(filePath).slice(1).toLowerCase()
-  return ext === 'md' ? 'markdown' : 'code'
-}
-
-export interface EditorFileState {
-  filePath: string
-  content: string
-  originalContent: string
-  isDirty: boolean
-  language: string
-  lastModified: number
-  viewMode: 'code' | 'markdown'
-  cursorPosition: { line: number; col: number }
-  scrollTop: number
-  operationStatus: 'idle' | 'saving' | 'reloading' | 'saved'
-  /**
-   * sha256 of the bytes this buffer was last read from / saved to (web host
-   * only): sent as the `expected` precondition of the next save so a write over
-   * a file changed elsewhere is refused instead of overwriting it.
-   */
-  contentHash?: string
-  /**
-   * The host reports content hashes for this file (web): kept when `contentHash`
-   * is dropped (overwrite) so the next successful save re-establishes it.
-   */
-  tracksHash?: true
-  /** The host refused the last save (`PRECONDITION_FAILED`): the file changed on disk. */
-  externalConflict?: boolean
-  /**
-   * Set when a restored unsaved draft differs from a file that changed on disk
-   * after the draft was saved. `content` holds the disk version; the draft is
-   * kept here until the user resolves it (never silently dropped).
-   */
-  draftConflict?: { draftContent: string; draftSavedAt: number }
-}
+export type { EditorFileState, TextFileState } from './editor-file-state'
 
 /**
  * Reconcile a persisted unsaved draft with a freshly opened file (pure).
@@ -220,9 +152,9 @@ export interface EditorFileState {
  * - disk newer: keep disk content and record the draft as a conflict
  */
 export function reconcileDraft(
-  file: EditorFileState,
+  file: TextFileState,
   draft: { content: string; savedAt: number }
-): EditorFileState {
+): TextFileState {
   if (file.content === draft.content) return file
   if (file.lastModified <= draft.savedAt) {
     const { draftConflict: _cleared, ...rest } = file
@@ -246,7 +178,7 @@ export interface EditorState {
   updateContent: (path: string, content: string) => void
   saveFile: (path: string) => Promise<boolean>
   saveAllDirty: () => Promise<void>
-  setViewMode: (path: string, mode: 'code' | 'markdown') => void
+  setViewMode: (path: string, mode: EditorViewMode) => void
   updateCursorPosition: (path: string, line: number, col: number) => void
   updateScrollTop: (path: string, scrollTop: number) => void
   /**
@@ -282,13 +214,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return
     }
 
-    // Read file content. readFile() now performs size + binary checks in a
-    // single IPC round-trip pair (stat + readTextFile), avoiding the previous
-    // getFileInfo() pre-check that doubled the IPC cost (issue #378).
-    const result = await filesystemApi.readFile(path)
-    if (!result.success) {
-      throw new Error(result.error)
-    }
+    const fileState = await loadEditorFile(path)
 
     const newFiles = new Map(get().openFiles)
 
@@ -317,22 +243,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         })
         return
       }
-    }
-
-    const fileState: EditorFileState = {
-      filePath: path,
-      content: result.data.content,
-      originalContent: result.data.content,
-      isDirty: false,
-      language: detectLanguage(path),
-      lastModified: result.data.modifiedAt,
-      ...(result.data.contentHash
-        ? { contentHash: result.data.contentHash, tracksHash: true as const }
-        : {}),
-      viewMode: getDefaultViewMode(path),
-      cursorPosition: { line: 1, col: 1 },
-      scrollTop: 0,
-      operationStatus: 'idle'
     }
 
     newFiles.set(path, fileState)
@@ -384,14 +294,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!file || fromPath === toPath) return
 
     cancelAutoSave(fromPath)
-    const renamed: EditorFileState = {
-      ...file,
-      filePath: toPath,
-      language: detectLanguage(toPath),
-      // A finished save's status reset is keyed to the old path and cannot reach this entry.
-      operationStatus: 'idle',
-      viewMode: getDefaultViewMode(toPath) === 'markdown' ? file.viewMode : 'code'
-    }
+    const renamed: EditorFileState =
+      file.kind === 'text'
+        ? {
+            ...file,
+            filePath: toPath,
+            language: detectLanguage(toPath),
+            operationStatus: 'idle',
+            viewMode: getDefaultViewMode(toPath) === 'preview' ? file.viewMode : 'code'
+          }
+        : { ...file, filePath: toPath, operationStatus: 'idle' }
     const newFiles = new Map<string, EditorFileState>()
     for (const [path, state] of openFiles) {
       if (path === fromPath) newFiles.set(toPath, renamed)
@@ -407,7 +319,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   updateContent: (path: string, content: string): void => {
     const { openFiles } = get()
     const file = openFiles.get(path)
-    if (!file) return
+    if (file?.kind !== 'text') return
     // The editor is read-only while a draft conflict is unresolved: an edit
     // here would live outside the two stored buffers (disk + draft) and be
     // lost on switch. Drop it rather than let it diverge.
@@ -472,6 +384,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const { openFiles } = get()
       const file = openFiles.get(path)
       if (!file) return false
+      if (file.kind !== 'text') return true
 
       // An unresolved draft conflict means the buffer is the disk version
       // while a newer-than-disk draft is still pending a user decision;
@@ -543,7 +456,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
         const updatedFiles = new Map(get().openFiles)
         const current = updatedFiles.get(path)
-        if (!current) return false
+        if (current?.kind !== 'text') return false
 
         // Only mark clean if buffer hasn't changed since the snapshot
         const bufferUnchanged = current.content === snapshotContent
@@ -615,10 +528,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
   },
 
-  setViewMode: (path: string, mode: 'code' | 'markdown'): void => {
+  setViewMode: (path: string, mode: EditorViewMode): void => {
     const { openFiles } = get()
     const file = openFiles.get(path)
-    if (!file) return
+    if (file?.kind !== 'text') return
 
     const newFiles = new Map(openFiles)
     newFiles.set(path, { ...file, viewMode: mode })
@@ -628,7 +541,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   updateCursorPosition: (path: string, line: number, col: number): void => {
     const { openFiles } = get()
     const file = openFiles.get(path)
-    if (!file) return
+    if (file?.kind !== 'text') return
 
     const newFiles = new Map(openFiles)
     newFiles.set(path, { ...file, cursorPosition: { line, col } })
@@ -638,7 +551,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   updateScrollTop: (path: string, scrollTop: number): void => {
     const { openFiles } = get()
     const file = openFiles.get(path)
-    if (!file) return
+    if (file?.kind !== 'text') return
 
     const newFiles = new Map(openFiles)
     newFiles.set(path, { ...file, scrollTop })
@@ -647,7 +560,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   overwriteFile: async (path: string): Promise<boolean> => {
     const file = get().openFiles.get(path)
-    if (!file) return false
+    if (file?.kind !== 'text') return false
     const files = new Map(get().openFiles)
     files.set(path, { ...file, contentHash: undefined, externalConflict: false })
     set({ openFiles: files })
@@ -657,7 +570,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   reloadFile: async (path: string, options?: { force?: boolean }): Promise<void> => {
     const { openFiles } = get()
     const file = openFiles.get(path)
-    if (!file) return
+    if (!file || file.kind === 'unsupported') return
+    if (file.kind !== 'text') {
+      const files = new Map(openFiles)
+      files.set(path, { ...file, revision: file.revision + 1 })
+      set({ openFiles: files })
+      return
+    }
 
     // Don't reload dirty (or draft-conflicted) files silently
     if ((file.isDirty && !options?.force) || file.draftConflict) return
@@ -681,7 +600,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       const updatedFiles = new Map(get().openFiles)
       const current = updatedFiles.get(path)
-      if (!current) return
+      if (current?.kind !== 'text') return
 
       // Only replace buffer if it hasn't changed since the snapshot
       const bufferUnchanged = current.content === snapshotContent
@@ -725,7 +644,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   restoreDraft: (path, draft) => {
     const file = get().openFiles.get(path)
-    if (!file) return 'unchanged'
+    if (file?.kind !== 'text') return 'unchanged'
 
     const next = reconcileDraft(file, draft)
     if (next === file) return 'unchanged'
@@ -741,10 +660,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   resolveDraftConflict: (path, choice) => {
     const file = get().openFiles.get(path)
-    if (!file?.draftConflict) return
+    if (file?.kind !== 'text' || !file.draftConflict) return
 
     const { draftConflict, ...rest } = file
-    const next: EditorFileState =
+    const next: TextFileState =
       choice === 'draft'
         ? {
             ...rest,
@@ -846,5 +765,3 @@ export function useDirtyFiles(): string[] {
     })
   )
 }
-
-export { detectLanguage, getDefaultViewMode }
