@@ -18,11 +18,11 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Spinner } from '@/components/ui/spinner'
 import {
+  fiveHourUsage,
   planLabel,
-  primaryUsageWindow,
+  type UsageReading,
   type UsageTone,
-  usageTone,
-  usageWindowLabel
+  usageTone
 } from '@/lib/claude-usage-format'
 import { cn } from '@/lib/utils'
 import { switchProjectClaudeAccount } from '@/stores/claude-account-switch'
@@ -42,9 +42,8 @@ const TONE_TEXT: Record<UsageTone, string> = {
 
 const DOT_TONE = { normal: 'ok', warning: 'warning', critical: 'critical' } as const
 
-function percentOf(choice: AccountChoice): number | null {
-  return choice.window ? Math.round(choice.window.percent) : null
-}
+const spoken = (r: UsageReading): string =>
+  `${r.label.charAt(0).toLowerCase()}${r.label.slice(1)} ${r.percent}% used`
 
 /** Composer chip for a Claude chat. */
 export function ClaudeAccountChip({
@@ -69,9 +68,9 @@ export function ProjectClaudeAccountChip({
 }
 
 /**
- * Which Account the Project uses and how much of its tightest window is used.
- * The menu switches the Project's Account; open Claude chats of the Project
- * restart on it.
+ * Which Account the Project uses and how much of its 5-hour window is used,
+ * plus any other window near its limit. The menu switches the Project's
+ * Account; open Claude chats of the Project restart on it.
  */
 function AccountChip({
   ctx,
@@ -84,10 +83,12 @@ function AccountChip({
   const [switching, setSwitching] = useState(false)
   if (!ctx) return null
 
-  const live = ctx.rateLimit?.percent ?? null
-  const percent = live !== null ? Math.round(live) : percentOf(ctx.current)
-  const tone = percent === null ? 'normal' : usageTone(percent)
   const signedOut = accountReadiness(ctx.current.account, ctx.current.usage) !== 'ready'
+  const used = signedOut ? null : fiveHourUsage(ctx.current.usage, ctx.rateLimit ?? null)
+  const segments = used
+    ? [used.main, ...(used.other && used.other.tone !== 'normal' ? [used.other] : [])]
+    : []
+  const tone = usageTone(Math.max(0, ...segments.map((s) => s.percent)))
   const snapshot = ctx.accounts.snapshot
 
   const choose = async (accountId: string | null): Promise<void> => {
@@ -133,15 +134,19 @@ function AccountChip({
   const readinessOf = (account: AccountChoice['account']): AccountReadiness =>
     accountReadiness(account, ctx.accounts.usage[account.id])
 
-  const describe = (choice: AccountChoice): string => {
-    const readiness = readinessOf(choice.account)
+  const describe = (account: AccountChoice['account']): string => {
+    const readiness = readinessOf(account)
     if (readiness !== 'ready')
       return `${NOT_READY_REASON[readiness]} · sign in from Manage accounts`
-    const plan = planLabel(choice.usage?.subscriptionType ?? null)
-    const used = choice.window
-      ? `${usageWindowLabel(choice.window)} ${Math.round(choice.window.percent)}%`
-      : null
-    return [plan, used].filter(Boolean).join(' · ') || 'Signed in'
+    const usage = ctx.accounts.usage[account.id]
+    const windows = fiveHourUsage(usage, null)
+    const readings = [windows?.main, windows?.other].flatMap((r) =>
+      r ? [`${r.label} ${r.percent}%`] : []
+    )
+    return (
+      [planLabel(usage?.subscriptionType ?? null), ...readings].filter(Boolean).join(' · ') ||
+      'Signed in'
+    )
   }
 
   const name = ctx.current.account.name
@@ -166,7 +171,7 @@ function AccountChip({
             "after:absolute after:-inset-1 after:content-['']",
             'hover:text-foreground data-[state=open]:text-foreground disabled:opacity-60'
           )}
-          aria-label={`Claude account: ${name}${percent !== null ? `, ${percent}% of its limit used` : ''}. Change account`}
+          aria-label={`Claude account: ${[name, ...segments.map(spoken)].join(', ')}. Change account`}
         >
           {switching ? (
             <Spinner size={10} decorative />
@@ -174,9 +179,14 @@ function AccountChip({
             <StatusDot tone={signedOut ? 'signed-out' : DOT_TONE[tone]} />
           )}
           {!compact && <span className="max-w-24 truncate">{name}</span>}
-          {percent !== null && !signedOut && (
-            <span className={cn('tabular-nums', TONE_TEXT[tone])}>{percent}%</span>
-          )}
+          {segments.map((segment, i) => (
+            <span key={segment.short} className="flex items-center gap-1.5 tabular-nums">
+              {i > 0 && <span aria-hidden>·</span>}
+              <span className={TONE_TEXT[segment.tone]}>
+                {segment.short} {segment.percent}%
+              </span>
+            </span>
+          ))}
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
@@ -189,17 +199,15 @@ function AccountChip({
             !ctx.explicit,
             defaultReadiness
           )}
-        {(snapshot?.accounts ?? []).map((account) => {
-          const usage = ctx.accounts.usage[account.id]
-          const choice: AccountChoice = { account, usage, window: primaryUsageWindow(usage) }
-          return row(
+        {(snapshot?.accounts ?? []).map((account) =>
+          row(
             account.id,
             account.name,
-            describe(choice),
+            describe(account),
             ctx.explicit && account.id === ctx.current.account.id,
             readinessOf(account)
           )
-        })}
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={() => openAppSettings('provider')}
