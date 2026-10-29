@@ -180,6 +180,8 @@ async fn missing_path_query_is_400_invalid_path_with_the_failure_body() {
     );
 }
 
+#[cfg(unix)]
+#[cfg(unix)]
 #[tokio::test]
 async fn image_name_linked_to_a_video_is_415() {
     let dir = tempfile::tempdir().expect("tempdir");

@@ -131,6 +131,8 @@ fn error_serializes_as_code_and_message() {
     );
 }
 
+#[cfg(unix)]
+#[cfg(unix)]
 #[test]
 fn refuses_a_name_whose_kind_differs_from_its_target() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -142,6 +144,8 @@ fn refuses_a_name_whose_kind_differs_from_its_target() {
     assert_eq!(err.message, "the file's media type does not match its name");
 }
 
+#[cfg(unix)]
+#[cfg(unix)]
 #[test]
 fn reads_a_same_kind_symlink() {
     let dir = tempfile::tempdir().expect("tempdir");
