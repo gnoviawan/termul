@@ -138,12 +138,12 @@ pub struct MediaBytes {
     pub mime: &'static str,
 }
 
-/// Refuses a name whose media kind differs from the file it resolves to (a
+/// Refuses a name whose MIME type differs from the file it resolves to (a
 /// `photo.png` symlink to `clip.mp4`), so callers that type the bytes by the
 /// requested name never mislabel them.
-pub fn check_requested_kind(requested: &Path, canonical: &Path) -> Result<(), MediaReadError> {
-    let kind_of = |p: &Path| media_type_for_path(p).map(|(kind, _)| kind);
-    if kind_of(requested) == kind_of(canonical) {
+pub fn check_requested_type(requested: &Path, canonical: &Path) -> Result<(), MediaReadError> {
+    let mime_of = |p: &Path| media_type_for_path(p).map(|(_, mime)| mime);
+    if mime_of(requested) == mime_of(canonical) {
         return Ok(());
     }
     Err(MediaReadError::new(
@@ -160,7 +160,7 @@ pub fn read_media(path: &Path) -> Result<MediaBytes, MediaReadError> {
             "not a supported image, video, or PDF file",
         )
     })?;
-    check_requested_kind(path, &canonical)?;
+    check_requested_type(path, &canonical)?;
     let metadata = fs::metadata(&canonical).map_err(|e| MediaReadError::io(&e))?;
     if !metadata.is_file() {
         return Err(MediaReadError::new(

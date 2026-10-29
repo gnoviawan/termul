@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use axum::{
     body::{Body, Bytes},
@@ -13,7 +14,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::{resolve_request_path, PathQuery};
 use crate::media_bytes::{
-    check_requested_kind, log_name, read_media, MediaBytes, MediaErrorCode, MediaReadError,
+    check_requested_type, log_name, read_media, MediaBytes, MediaErrorCode, MediaReadError,
     MediaSizeLimit,
 };
 
@@ -21,6 +22,9 @@ use crate::media_bytes::{
 /// many are read or sent at once; further requests wait for a slot.
 const MAX_CONCURRENT_RAW: usize = 4;
 const CHUNK_BYTES: usize = 256 * 1024;
+/// A client that stops reading frees its slot after this, so stalled
+/// connections cannot block `/fs/raw` indefinitely.
+const SLOT_DEADLINE: Duration = Duration::from_secs(120);
 
 fn raw_permits() -> Arc<Semaphore> {
     static PERMITS: OnceLock<Arc<Semaphore>> = OnceLock::new();
@@ -34,7 +38,7 @@ fn raw_permits() -> Arc<Semaphore> {
 const RAW_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
 pub async fn raw(query: Result<Query<PathQuery>, QueryRejection>) -> Response {
-    let Ok(Query(q)) = query else {
+    let Some(q) = query.ok().map(|Query(q)| q).filter(|q| !q.path.is_empty()) else {
         return refuse(
             "",
             MediaReadError::new(
@@ -51,7 +55,7 @@ pub async fn raw(query: Result<Query<PathQuery>, QueryRejection>) -> Response {
         );
     };
     let result = match resolve_request_path(Path::new(&q.path)) {
-        Ok(path) => match check_requested_kind(Path::new(&q.path), &path) {
+        Ok(path) => match check_requested_type(Path::new(&q.path), &path) {
             Ok(()) => read_blocking(path).await,
             Err(err) => Err(err),
         },
@@ -86,7 +90,7 @@ pub async fn raw(query: Result<Query<PathQuery>, QueryRejection>) -> Response {
                     ),
                     (header::CONTENT_LENGTH, HeaderValue::from(media.bytes.len())),
                 ],
-                body_holding(permit, media.bytes),
+                body_holding(hold_slot(permit, SLOT_DEADLINE), media.bytes),
             )
                 .into_response()
         }
@@ -104,16 +108,44 @@ fn refuse(name: &str, err: MediaReadError) -> Response {
     (status_for(err.code), Json(RawFailure::from(err))).into_response()
 }
 
-/// Streams `bytes` in chunks and releases `permit` only after the last chunk.
-fn body_holding(permit: OwnedSemaphorePermit, bytes: Vec<u8>) -> Body {
+/// Holds a read slot until it is dropped or `deadline` passes, whichever is
+/// first. The deadline runs on its own task, so it fires even while the body
+/// is not being polled.
+struct SlotGuard(Arc<Mutex<Option<OwnedSemaphorePermit>>>);
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        release(&self.0);
+    }
+}
+
+fn release(slot: &Mutex<Option<OwnedSemaphorePermit>>) {
+    drop(slot.lock().unwrap_or_else(|e| e.into_inner()).take());
+}
+
+fn hold_slot(permit: OwnedSemaphorePermit, deadline: Duration) -> SlotGuard {
+    let slot = Arc::new(Mutex::new(Some(permit)));
+    let expiring = Arc::downgrade(&slot);
+    tokio::spawn(async move {
+        tokio::time::sleep(deadline).await;
+        if let Some(slot) = expiring.upgrade() {
+            release(&slot);
+        }
+    });
+    SlotGuard(slot)
+}
+
+/// Streams `bytes` in chunks and keeps `slot` until the last chunk is sent or
+/// the body is dropped.
+fn body_holding(slot: SlotGuard, bytes: Vec<u8>) -> Body {
     let bytes = Bytes::from(bytes);
-    let stream = futures::stream::unfold((bytes, permit), |(rest, permit)| async move {
+    let stream = futures::stream::unfold((bytes, slot), |(rest, slot)| async move {
         if rest.is_empty() {
             return None;
         }
         let mut rest = rest;
         let chunk = rest.split_to(rest.len().min(CHUNK_BYTES));
-        Some((Ok::<_, std::convert::Infallible>(chunk), (rest, permit)))
+        Some((Ok::<_, std::convert::Infallible>(chunk), (rest, slot)))
     });
     Body::from_stream(stream)
 }
