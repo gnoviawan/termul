@@ -215,7 +215,10 @@ export function SelectionContextLayer({
               className={cn(
                 'pointer-events-auto inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border',
                 'bg-popover px-2.5 text-xs font-medium text-popover-foreground shadow-md',
-                'transition-colors hover:bg-foreground/[0.06]',
+                // The 6% foreground hover wash, flattened over the popover: a bare
+                // `bg-foreground/[0.06]` replaces the solid fill and lets the
+                // selected text show through the floating button.
+                'transition-colors hover:bg-[color-mix(in_oklab,oklch(var(--popover)),oklch(var(--foreground))_6%)]',
                 'outline-none focus-visible:ring-2 focus-visible:ring-ring'
               )}
             >
