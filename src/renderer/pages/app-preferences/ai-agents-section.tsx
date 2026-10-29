@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
+import { rowId } from '@/components/settings/row-id'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsNotice } from '@/components/settings/SettingsNotice'
@@ -17,7 +18,6 @@ import {
   AGENT_IDLE_WINDOW_OPTIONS,
   formatAgentIdleWindow
 } from '@/types/settings'
-import { rowId } from './categories'
 
 interface AiAgentsSectionProps {
   acpTurnTimeoutSecs: number | null

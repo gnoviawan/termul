@@ -13,6 +13,7 @@ import {
   MENU_SEPARATOR_CLASS
 } from './menu-styles'
 import { FIELD_FOCUS_CLASS } from './panel-styles'
+import { usePortalContainer } from './portal-container'
 
 /**
  * Occlusion is tracked on the root, not with a `NativeWebviewOccluder` in the
@@ -98,7 +99,7 @@ const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
 >(({ className, children, position = 'popper', ...props }, ref) => (
-  <SelectPrimitive.Portal>
+  <SelectPrimitive.Portal container={usePortalContainer()}>
     <SelectPrimitive.Content
       ref={ref}
       className={cn(

@@ -88,7 +88,11 @@
     "docs:dev": "bun run --cwd website-docs dev",
     "docs:build": "bun run --cwd website-docs build",
     "docs:lint": "bun run --cwd website-docs lint",
-    "docs:typecheck": "bun run --cwd website-docs types:check"
+    "docs:typecheck": "bun run --cwd website-docs types:check",
+    "design:dev": "vite --config design-system/vite.config.ts",
+    "design:build": "vite build --config design-system/vite.config.ts",
+    "typecheck:design": "tsc -p design-system/tsconfig.json --noEmit && tsc -p design-system/smoke/tsconfig.json --noEmit",
+    "test:smoke:canvas": "playwright test -c design-system/smoke/playwright.config.ts"
   },
   "dependencies": {
     "@blocknote/code-block": "^0.46.2",

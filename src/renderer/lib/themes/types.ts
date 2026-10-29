@@ -1,3 +1,5 @@
+import type { ThemeComponentTokens } from './component-tokens'
+
 /** OpenCode-compatible desktop theme schema (subset used by Termul). */
 
 export interface ThemePalette {
@@ -12,7 +14,37 @@ export interface ThemePalette {
   diffAdd?: string
   diffDelete?: string
   interactive?: string
+  /**
+   * Pinned terminal colors. Keys set here win over the palette-derived
+   * defaults, so brand changes to `primary` or `accent` cannot shift
+   * terminal output.
+   */
+  terminal?: ThemeTerminalColors
 }
+
+/** ANSI and selection colors the terminal reads instead of the brand. */
+export type ThemeTerminalColors = Partial<
+  Record<
+    | 'selectionBackground'
+    | 'selectionInactiveBackground'
+    | 'black'
+    | 'red'
+    | 'green'
+    | 'yellow'
+    | 'blue'
+    | 'magenta'
+    | 'cyan'
+    | 'brightBlack'
+    | 'brightRed'
+    | 'brightGreen'
+    | 'brightYellow'
+    | 'brightBlue'
+    | 'brightMagenta'
+    | 'brightCyan'
+    | 'brightWhite',
+    string
+  >
+>
 
 export type ThemeSyntaxOverrides = Partial<{
   'syntax-comment': string
@@ -51,16 +83,23 @@ export interface ThemeChrome {
   sidebar?: string
   /** Recessed well. */
   muted: string
-  /** Hairline borders and inputs. */
+  /** Hairline borders. */
   border: string
+  /** Input outlines. Defaults to `border`. */
+  input?: string
   /** Primary copy. */
   foreground: string
   /** Secondary labels. */
   secondaryForeground: string
   /** Muted copy. The AA solver may lift this. */
   mutedForeground: string
-  /** Hairline borders carry elevation. Termul light only. */
-  flatElevation?: boolean
+  /**
+   * Exact solid brand fill (buttons, selected rows) with white text. Skips the
+   * palette clamp, so the value must pass 4.5:1 with white on its own.
+   */
+  brandFill?: string
+  /** Component tokens (switch, emboss, elevation...). Unset keys keep the defaults. */
+  tokens?: ThemeComponentTokens
 }
 
 export interface ThemeVariant {

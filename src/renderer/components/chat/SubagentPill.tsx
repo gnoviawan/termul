@@ -245,7 +245,7 @@ export function SubagentPill({
       type="button"
       aria-label={`Subagents: ${liveSummary}`}
       className={cn(
-        'pointer-events-auto relative flex h-7 items-center gap-1.5 rounded-full border border-border bg-popover/90 px-2.5 text-2xs font-medium shadow-[0_4px_16px_oklch(0_0_0/0.4)] backdrop-blur-md transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted',
+        'pointer-events-auto relative flex h-7 items-center gap-1.5 rounded-full border border-border bg-popover/90 px-2.5 text-2xs font-medium shadow-pill backdrop-blur-md transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted',
         "after:absolute after:-inset-2 after:content-[''] pointer-coarse:after:-inset-y-2.5"
       )}
     >
@@ -313,7 +313,7 @@ export function SubagentPill({
                   align="end"
                   sideOffset={6}
                   aria-label="Subagents"
-                  className="w-[min(22.5rem,calc(100vw-2rem))] rounded-[calc(var(--radius)+2px)] p-1 shadow-[0_12px_32px_oklch(0_0_0/0.6)]"
+                  className="w-[min(22.5rem,calc(100vw-2rem))] rounded-[calc(var(--radius)+2px)] p-1 shadow-menu"
                 >
                   <p className="flex items-center gap-1.5 px-2.5 pb-1.5 pt-2 text-2xs font-semibold text-muted-foreground">
                     <Bot size={12} className="shrink-0" aria-hidden="true" />

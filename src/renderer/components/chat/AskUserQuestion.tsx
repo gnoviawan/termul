@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { PROMPT_CARD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import { type PendingQuestion, useAcpStore } from '@/stores/acp-store'
-import { CHAT_GUTTER_X, QUESTION_PANEL_SHADOW } from './chat-layout'
+import { CHAT_GUTTER_X, PROMPT_PANEL_CLASS } from './chat-layout'
 import { QuestionStepper } from './QuestionStepper'
 
 interface AskUserQuestionProps {
@@ -110,11 +111,7 @@ export function AskUserQuestion({
       <section
         aria-labelledby={`ask-user-question-title-${question.questionId}`}
         aria-live="polite"
-        className={cn(
-          'mx-auto w-full max-w-3xl rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
-          'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
-          QUESTION_PANEL_SHADOW
-        )}
+        className={cn('mx-auto w-full max-w-3xl', PROMPT_PANEL_CLASS, PROMPT_CARD_FOCUS_CLASS)}
       >
         <QuestionStepper
           heading={question.question}

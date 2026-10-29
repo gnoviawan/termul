@@ -4,6 +4,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
+import { MODEL_PICKER_V2_KEY } from '@/lib/model-picker-flag'
 import {
   armMobileOverlayBackStack,
   pressSystemBack,
@@ -11,7 +12,9 @@ import {
 } from '@/lib/test-utils/overlay-back-stack'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { AgentModelSelector } from './AgentModelSelector'
+
 import { SelectorFooter } from './SelectorFooter'
+import { AUTO_LOAD_SETTLE_MS } from './use-model-catalog'
 
 // jsdom omits `document.elementFromPoint`; Radix/floating-ui call it while
 // positioning the popover. Same stub as ChatInputBar.test.tsx.
@@ -804,6 +807,34 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
         silent: true
       })
     })
+  })
+
+  it('v2: arrowing across agent tabs starts only the agent it stops on', async () => {
+    const others = ['gemini', 'codex', 'amp'].map((id) =>
+      readyEntry({ ...CLAUDE, id: `custom-${id}`, configId: `acp-registry:${id}`, name: id })
+    )
+    localStorage.setItem(MODEL_PICKER_V2_KEY, '1')
+    try {
+      seed(others)
+      renderSelector()
+      open()
+      // Let the saved-list reads settle, so an open tab may start its agent at once.
+      await act(async () => {})
+      const tabs = screen.getAllByRole('tab')
+      expect(tabs).toHaveLength(4)
+      tabs[0]?.focus()
+      for (const tab of tabs.slice(0, -1)) fireEvent.keyDown(tab, { key: 'ArrowRight' })
+      expect(tabs[3]).toHaveAttribute('aria-selected', 'true')
+
+      await waitFor(() => expect(mockPrepareChat).toHaveBeenCalled())
+      await new Promise((resolve) => setTimeout(resolve, AUTO_LOAD_SETTLE_MS))
+      // V2 tabs run A to Z, so the last tab is whichever name sorts last.
+      const last = others.find((e) => e.config?.name === tabs[3]?.getAttribute('aria-label'))
+      expect(last).toBeDefined()
+      expect(mockPrepareChat.mock.calls.map(([configId]) => configId)).toEqual([last?.config?.id])
+    } finally {
+      localStorage.removeItem(MODEL_PICKER_V2_KEY)
+    }
   })
 
   it('busy turn: Cancel turn and switch runs cancel → wait → arm with the model', async () => {

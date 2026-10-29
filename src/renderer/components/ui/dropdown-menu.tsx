@@ -14,6 +14,7 @@ import {
   MENU_SHORTCUT_CLASS,
   MENU_SUB_TRIGGER_OPEN_CLASS
 } from './menu-styles'
+import { usePortalContainer } from './portal-container'
 
 const DropdownMenu = DropdownMenuPrimitive.Root
 
@@ -60,7 +61,7 @@ const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
 >(({ className, sideOffset = 4, children, ...props }, ref) => (
-  <DropdownMenuPrimitive.Portal>
+  <DropdownMenuPrimitive.Portal container={usePortalContainer()}>
     <DropdownMenuPrimitive.Content
       ref={ref}
       sideOffset={sideOffset}

@@ -31,9 +31,7 @@ export interface ProjectContextMenuContentProps {
   project: Project
   groups: ProjectGroup[]
   availableShells: DetectedShells | null
-  selectProject: (id: string) => void
   onStartRename: (project: Project) => void
-  onOpenSettings: (projectId: string) => void
   onOpenColorPicker: (targetId: string, targetType: 'project' | 'group') => void
   onUpdateProject: (id: string, updates: ProjectUpdates) => void
   moveProjectToGroup: (projectId: string, targetGroupId: string | null) => void
@@ -48,9 +46,7 @@ export function ProjectContextMenuContent({
   project,
   groups,
   availableShells,
-  selectProject,
   onStartRename,
-  onOpenSettings,
   onOpenColorPicker,
   onUpdateProject,
   moveProjectToGroup,
@@ -74,18 +70,12 @@ export function ProjectContextMenuContent({
   return (
     <ContextMenuContent className="w-56">
       <ContextMenuItem
-        onSelect={() => {
-          selectProject(project.id)
-          useSettingsModalStore.getState().openProject()
-        }}
+        onSelect={() => useSettingsModalStore.getState().openProject(undefined, project.id)}
       >
         <Settings className="mr-2 h-4 w-4" /> Settings
       </ContextMenuItem>
       <ContextMenuItem onSelect={() => onStartRename(project)}>
         <Edit2 className="mr-2 h-4 w-4" /> Rename
-      </ContextMenuItem>
-      <ContextMenuItem onSelect={() => onOpenSettings(project.id)}>
-        <Settings className="mr-2 h-4 w-4" /> Project Settings
       </ContextMenuItem>
       <ContextMenuItem onSelect={() => onOpenColorPicker(project.id, 'project')}>
         <Palette className="mr-2 h-4 w-4" /> Change Color
