@@ -5,7 +5,7 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use tower::ServiceExt;
 
-use super::MAX_CONCURRENT_RAW;
+use super::{hold_slot, MAX_CONCURRENT_RAW};
 
 use crate::acp::AcpManager;
 use crate::web::auth::{WebAuth, WebAuthToken};
@@ -211,4 +211,36 @@ async fn multi_chunk_bodies_arrive_whole_and_release_their_read_slot() {
         let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("body");
         assert_eq!(&bytes[..], &payload[..]);
     }
+}
+
+#[tokio::test]
+async fn empty_path_query_is_400_invalid_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let resp = get(app(dir.path(), None), "", None).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(resp).await["code"], "INVALID_PATH");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_held_slot_frees_at_its_deadline_and_on_drop() {
+    let permits = Arc::new(tokio::sync::Semaphore::new(1));
+
+    let stalled = hold_slot(
+        permits.clone().acquire_owned().await.expect("permit"),
+        std::time::Duration::from_secs(120),
+    );
+    tokio::time::sleep(std::time::Duration::from_secs(119)).await;
+    assert_eq!(permits.available_permits(), 0);
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert_eq!(permits.available_permits(), 1);
+    drop(stalled);
+    assert_eq!(permits.available_permits(), 1);
+
+    let finished = hold_slot(
+        permits.clone().acquire_owned().await.expect("permit"),
+        std::time::Duration::from_secs(120),
+    );
+    assert_eq!(permits.available_permits(), 0);
+    drop(finished);
+    assert_eq!(permits.available_permits(), 1);
 }
