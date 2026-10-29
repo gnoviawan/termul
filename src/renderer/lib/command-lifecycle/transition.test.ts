@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { reduceSession, type SessionEvent, type SessionState } from './transition'
+import {
+  type LifecycleEvent,
+  reduceSession,
+  type SessionEvent,
+  type SessionState
+} from './transition'
 
 const SESSION_ID = 's1'
 const NONCE = 'n1'
@@ -249,6 +254,40 @@ describe('reduceSession', () => {
     }
   })
 
+  it('a newer authenticated prompt updates the editor generation without losing its draft', () => {
+    const result = reduceSession(
+      registeredSession({
+        mode: 'Editor',
+        phase: 'AtPrompt',
+        buffer: 'git status',
+        promptGeneration: 4,
+        completionPending: true
+      }),
+      {
+        type: 'PromptReady',
+        sessionId: SESSION_ID,
+        frame: {
+          type: 'PromptReady',
+          nonce: NONCE,
+          prompt_generation: 5,
+          line_empty: true,
+          prompt_suppressed: true,
+          cwd: '/repo/new'
+        }
+      }
+    )
+
+    expect(result.state).toMatchObject({
+      mode: 'Editor',
+      phase: 'AtPrompt',
+      buffer: 'git status',
+      promptGeneration: 5,
+      completionPending: false
+    })
+    expect(result.writeDraft).toBe(false)
+    expect(result.log).toBeNull()
+  })
+
   it('trusted prompt opens the editor', () => {
     const result = reduceSession(registeredSession(), {
       type: 'PromptReady',
@@ -484,7 +523,7 @@ describe('reduceSession', () => {
   })
 
   it("lifecycle events without this session's identity change nothing", () => {
-    const events: SessionEvent[] = [
+    const events: LifecycleEvent[] = [
       promptEvent(),
       { type: 'CommandStarted', sessionId: SESSION_ID, nonce: NONCE },
       { type: 'CommandFinished', sessionId: SESSION_ID, nonce: NONCE, exit_code: 9 }

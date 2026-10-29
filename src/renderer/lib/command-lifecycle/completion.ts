@@ -53,6 +53,7 @@ function contextMatches(left: CompletionContext, right: CompletionContext): bool
   return (
     left.sessionId === right.sessionId &&
     left.mode === right.mode &&
+    left.draft === right.draft &&
     left.bufferRevision === right.bufferRevision &&
     left.cursor === right.cursor &&
     left.promptGeneration === right.promptGeneration &&
@@ -114,7 +115,7 @@ const defaultClock: SchedulerClock = {
 export class CompletionScheduler {
   private readonly host: CompletionHost
   private readonly createRequestId: () => string
-  private readonly refresh: boolean
+  private readonly autoRefreshEnabled: () => boolean
   private readonly clock: SchedulerClock
   private readonly log?: (event: CompletionLogEvent) => void
   private readonly onResult?: (completion: CompletionReplyFields) => void
@@ -128,7 +129,8 @@ export class CompletionScheduler {
   constructor(deps: CompletionSchedulerDeps) {
     this.host = deps.host
     this.createRequestId = deps.createRequestId
-    this.refresh = deps.settings.automaticCompletionRefresh !== false
+    const settings = deps.settings
+    this.autoRefreshEnabled = () => settings.automaticCompletionRefresh !== false
     this.clock = deps.clock ?? defaultClock
     this.log = deps.log
     this.onResult = deps.onResult
@@ -200,11 +202,11 @@ export class CompletionScheduler {
       name: 'completion_invalidated',
       detail: `requestId=${this.inFlight.requestId}`
     })
-    if (this.refresh) this.replacement = context
+    if (this.autoRefreshEnabled()) this.replacement = context
   }
 
   private armIdle(): void {
-    if (!this.refresh) return
+    if (!this.autoRefreshEnabled()) return
     this.clearIdle()
     this.idleTimer = this.clock.setTimeout(() => {
       this.idleTimer = null
@@ -221,6 +223,7 @@ export class CompletionScheduler {
 
   private startRequest(context: CompletionContext, automatic = false): void {
     this.clearIdle()
+    if (automatic && !this.autoRefreshEnabled()) return
     if (!context.cwd) {
       this.log?.({
         name: 'completion_skipped',

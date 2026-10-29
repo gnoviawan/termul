@@ -285,7 +285,8 @@ it('a mismatched result is ignored', async () => {
     { completion: matchingFields({ prompt_generation: 1 }) },
     { completion: matchingFields({ cwd: '/other' }) },
     { completion: matchingFields(), latest: context({ sessionId: 's2' }) },
-    { completion: matchingFields(), latest: context({ mode: 'PTY' }) }
+    { completion: matchingFields(), latest: context({ mode: 'PTY' }) },
+    { completion: matchingFields(), latest: context({ draft: 'git ls' }) }
   ]
 
   for (const { completion, latest } of cases) {

@@ -14,7 +14,7 @@ import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { bindSessionClient, useBindSessionClient } from './bind-session'
-import { CompletionScheduler } from './completion'
+import { CompletionScheduler, type SchedulerClock } from './completion'
 import { commandDraftStore } from './draft-store'
 import { sessionStore } from './session-store'
 
@@ -468,6 +468,72 @@ it('rerender preserves binder and scheduler with current history metadata', asyn
   expect(useCommandHistoryStore.getState().entries).toEqual([
     expect.objectContaining({ command: 'git status', terminalName: 'new' })
   ])
+})
+
+it('binder reads completion refresh preference after construction', async () => {
+  const { socket, transport } = await createConnectedWebTransport()
+  vi.useFakeTimers()
+  useAppSettingsStore.getState().updateSetting('automaticCompletionRefresh', true)
+  try {
+    const binder = bindSessionClient({ host: transport, terminalId: 't1', ptyId: () => 'pty-9' })
+    const context = {
+      draft: 'git sta',
+      bufferRevision: 1,
+      cursor: 7
+    }
+    useAppSettingsStore.getState().updateSetting('automaticCompletionRefresh', false)
+    binder.updateContext(context)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(socket.sent).toHaveLength(0)
+
+    useAppSettingsStore.getState().updateSetting('automaticCompletionRefresh', true)
+    binder.updateContext(context)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(socket.sent.map((raw) => JSON.parse(raw).type)).toContain(
+      'command_editor_request_completion'
+    )
+  } finally {
+    useAppSettingsStore.getState().updateSetting('automaticCompletionRefresh', true)
+    vi.useRealTimers()
+  }
+})
+
+it('useBindSessionClient reads the latest clock and request id without replacing its scheduler', async () => {
+  const { socket, transport } = await createConnectedWebTransport()
+  const scheduled: Array<{ handler: () => void; ms: number }> = []
+  const latestClock: SchedulerClock = {
+    setTimeout(handler, ms) {
+      scheduled.push({ handler, ms })
+      return scheduled.length
+    },
+    clearTimeout() {}
+  }
+  let binder!: ReturnType<typeof useBindSessionClient>
+  function Probe({ requestId, clock }: { requestId: string; clock?: SchedulerClock }) {
+    binder = useBindSessionClient({
+      host: transport,
+      terminalId: 't1',
+      ptyId: () => 'pty-9',
+      createRequestId: () => requestId,
+      clock
+    })
+    return null
+  }
+  const view = render(createElement(Probe, { requestId: 'old' }))
+  const original = binder
+  view.rerender(createElement(Probe, { requestId: 'latest', clock: latestClock }))
+  expect(binder).toBe(original)
+  expect(binder.scheduler).toBe(original.scheduler)
+
+  binder.updateContext({ draft: 'git sta', bufferRevision: 1, cursor: 7 })
+  expect(scheduled[0]?.ms).toBe(100)
+  scheduled[0]?.handler()
+  await Promise.resolve()
+  await Promise.resolve()
+  const request = socket.sent
+    .map((raw) => JSON.parse(raw) as { type: string; payload?: { requestId: string } })
+    .find((frame) => frame.type === 'command_editor_request_completion')
+  expect(request?.payload?.requestId).toBe('latest')
 })
 
 it('binder refresh off waits for Tab', async () => {

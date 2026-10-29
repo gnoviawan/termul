@@ -273,6 +273,14 @@ function recordSubmit(
   return true
 }
 
+function forget(ctx: StoreContext, id: string): void {
+  ctx.submissions.delete(id)
+  ctx.sessions.delete(id)
+  commandDraftStore.processExited(id)
+  clearEditorRevision(id)
+  notify(ctx)
+}
+
 function processExited(ctx: StoreContext, id: string): SessionSnapshot {
   const current = read(ctx, id)
   const reduced = reduceSession(toReducerState(current), { type: 'ProcessExit' })
@@ -379,6 +387,7 @@ export function createSessionStore() {
     recordSubmit: (id: string, result: SessionRpcResult, token: SubmitToken) =>
       recordSubmit(ctx, id, result, token),
     processExited: (id: string) => processExited(ctx, id),
+    forget: (id: string) => forget(ctx, id),
     invalidate: (id: string, level: 'info' | 'warn' = 'warn') => invalidate(ctx, id, level),
     apply: (id: string, event: SessionLifecycleInput) => apply(ctx, id, event),
     applyScreen: (id: string, modes: TerminalModes | undefined) => applyScreen(ctx, id, modes),

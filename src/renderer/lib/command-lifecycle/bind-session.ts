@@ -109,8 +109,9 @@ function sessionScheduler(
       },
       createRequestId: args.createRequestId ?? (() => `completion-${++nextRequestId}`),
       settings: {
-        automaticCompletionRefresh:
-          useAppSettingsStore.getState().settings.automaticCompletionRefresh !== false
+        get automaticCompletionRefresh() {
+          return useAppSettingsStore.getState().settings.automaticCompletionRefresh !== false
+        }
       },
       clock: args.clock,
       onResult,
@@ -141,13 +142,15 @@ function resolveCompletionContext(
     !session.cwd
   )
     return null
+  const bufferRevision = input.bufferRevision ?? input.revision
+  if (bufferRevision === undefined) return null
   return {
     terminalId,
     sessionId: session.sessionId,
     mode: session.mode,
     phase: session.phase,
     draft: input.draft,
-    bufferRevision: input.bufferRevision ?? input.revision ?? 0,
+    bufferRevision,
     cursor: input.cursor,
     promptGeneration: session.promptGeneration,
     cwd: session.cwd
@@ -282,25 +285,45 @@ export function useBindSessionClient(
   const latest = useRef({ ...args, addCommand })
   latest.current = { ...args, addCommand }
   const terminalId = args.terminalId
-  const binder = useMemo(
-    () =>
-      bindSessionClient({
-        ...latest.current,
-        terminalId,
-        get host() {
-          return latest.current.host
-        },
-        ptyId: () => latest.current.ptyId(),
-        get terminalName() {
-          return latest.current.terminalName
-        },
-        get projectId() {
-          return latest.current.projectId
-        },
-        addCommand: (...params) => latest.current.addCommand(...params)
-      }),
-    [terminalId]
-  )
+  const binder = useMemo(() => {
+    const clock: SchedulerClock = {
+      setTimeout(handler, ms) {
+        const currentClock = latest.current.clock
+        return {
+          clock: currentClock ?? null,
+          id: currentClock ? currentClock.setTimeout(handler, ms) : setTimeout(handler, ms)
+        }
+      },
+      clearTimeout(handle) {
+        const timer = handle as { clock: SchedulerClock | null; id: unknown }
+        if (timer.clock) timer.clock.clearTimeout(timer.id)
+        else clearTimeout(timer.id as ReturnType<typeof setTimeout>)
+      }
+    }
+    return bindSessionClient({
+      ...latest.current,
+      terminalId,
+      get host() {
+        return latest.current.host
+      },
+      ptyId: () => latest.current.ptyId(),
+      get terminalName() {
+        return latest.current.terminalName
+      },
+      get projectId() {
+        return latest.current.projectId
+      },
+      get term() {
+        return latest.current.term
+      },
+      get log() {
+        return latest.current.log
+      },
+      clock,
+      createRequestId: () => latest.current.createRequestId?.() ?? `completion-${++nextRequestId}`,
+      addCommand: (...params) => latest.current.addCommand(...params)
+    })
+  }, [terminalId])
   useEffect(() => {
     binder.activate()
     return () => binder.dispose()

@@ -129,7 +129,10 @@ it('overflow leaves a bound live Editor and its draft untouched', async () => {
 it('keeps both tombstone sets bounded throughout repeated overflow', async () => {
   const forward = LifecycleBuffer.prototype.forward
   let observed = 0
-  vi.spyOn(LifecycleBuffer.prototype, 'forward').mockImplementation(function (event) {
+  vi.spyOn(LifecycleBuffer.prototype, 'forward').mockImplementation(function (
+    this: LifecycleBuffer,
+    event
+  ) {
     forward.call(this, event)
     // Inspect TypeScript-private sets only in tests; no production accessor is needed.
     const state = this as unknown as {
@@ -169,8 +172,8 @@ it.each([
     if (rebound || sessionStore.read('a').trusted) return
     rebound = true
     useTerminalStore.getState().setTerminalPtyId('t', 'p')
-    // This live terminal was excluded when the fallback began.
-    useTerminalStore.getState().clearTerminalPtyId('live-p')
+    // Exercise reentrant unbind invalidation only in the nested case.
+    if (nested) useTerminalStore.getState().clearTerminalPtyId('live-p')
     if (nested) forwardSessionLifecycle(event('InitShell', 'nested'))
   })
   try {
@@ -248,7 +251,10 @@ it('retains the obligation during fallback and bounds repeated nested overflow',
   let state:
     | { pending: Map<string, unknown>; discarded: Set<string>; invalidatePending: Set<string> }
     | undefined
-  vi.spyOn(LifecycleBuffer.prototype, 'forward').mockImplementation(function (event) {
+  vi.spyOn(LifecycleBuffer.prototype, 'forward').mockImplementation(function (
+    this: LifecycleBuffer,
+    event
+  ) {
     state = this as unknown as NonNullable<typeof state>
     forward.call(this, event)
     expect(state.pending.size).toBeLessThanOrEqual(MAX_PENDING_PTYS + 1)
@@ -377,19 +383,26 @@ function watchNestedFallbackMemory(): { assertMemory: () => void; restore: () =>
   }
   let queue: unknown[] | undefined
   const forward = LifecycleBuffer.prototype.forward
-  vi.spyOn(LifecycleBuffer.prototype, 'forward').mockImplementation(function (event) {
+  vi.spyOn(LifecycleBuffer.prototype, 'forward').mockImplementation(function (
+    this: LifecycleBuffer,
+    event
+  ) {
     if (!state) {
       state = this as unknown as typeof state
       for (const entries of [state.discarded, state.invalidatePending]) {
         const add = entries.add
-        vi.spyOn(entries, 'add').mockImplementation(function (value) {
+        vi.spyOn(entries, 'add').mockImplementation(function (this: Set<string>, value) {
           const result = add.call(this, value)
           expect(this.size).toBeLessThanOrEqual(MAX_DISCARDED_PTYS + 1)
           return result
         })
       }
       const set = state.pending.set
-      vi.spyOn(state.pending, 'set').mockImplementation(function (key, value) {
+      vi.spyOn(state.pending, 'set').mockImplementation(function (
+        this: Map<string, unknown>,
+        key,
+        value
+      ) {
         const result = set.call(this, key, value)
         expect(this.size).toBeLessThanOrEqual(MAX_PENDING_PTYS + 1)
         return result
@@ -398,7 +411,7 @@ function watchNestedFallbackMemory(): { assertMemory: () => void; restore: () =>
     forward.call(this, event)
   })
   const shift = Array.prototype.shift
-  Array.prototype.shift = function () {
+  Array.prototype.shift = function (this: unknown[]) {
     if (this[0] === 'a' && this.includes('t')) queue = this
     return shift.call(this)
   }

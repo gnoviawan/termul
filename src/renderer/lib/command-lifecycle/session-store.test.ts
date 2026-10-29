@@ -66,6 +66,37 @@ async function applyThroughTauriAdapter(event: SessionLifecyclePayload): Promise
   }
 }
 
+it('completion without an explicit editor revision is rejected instead of defaulting to zero', () => {
+  trustedPromptSnapshot()
+  const requestCompletion = vi.fn(async () => ({ result: 'Accepted' as const }))
+  const binder = bindSessionClient({
+    host: { submitCommand: async () => 'NotStarted', requestCompletion },
+    terminalId: 't1',
+    ptyId: () => 'pty-9'
+  })
+
+  binder.requestCompletion({ draft: 'git st', cursor: 6 })
+
+  expect(requestCompletion).not.toHaveBeenCalled()
+})
+
+it('an explicit zero editor revision remains valid', () => {
+  trustedPromptSnapshot()
+  const requestCompletion = vi.fn(async () => ({ result: 'Accepted' as const }))
+  const binder = bindSessionClient({
+    host: { submitCommand: async () => 'NotStarted', requestCompletion },
+    terminalId: 't1',
+    ptyId: () => 'pty-9'
+  })
+
+  binder.requestCompletion({ draft: 'git st', bufferRevision: 0, cursor: 6 })
+
+  expect(requestCompletion).toHaveBeenCalledWith(
+    'pty-9',
+    expect.objectContaining({ bufferRevision: 0 })
+  )
+})
+
 it('a prompt event opens the editor through the session store', () => {
   sessionStore.apply('t1', { type: 'InitShell', session_id: 's1', nonce: 'n1' })
   sessionStore.apply('t1', {
@@ -388,6 +419,53 @@ it('invalidate demotes a trusted editor without a host nonce and keeps the draft
   expect(commandDraftStore.read('t1')).toBe('unfinished draft')
 })
 
+it.each([
+  'web',
+  'tauri'
+] as const)('%s process exit marks the session exited and drops its draft', async (runtime) => {
+  useTerminalStore.getState().setTerminals([mockTerminal({ id: 't1', ptyId: 'pty-9' })])
+  const applyAdapter = runtime === 'web' ? applyThroughWebAdapter : applyThroughTauriAdapter
+  await applyAdapter(lifecyclePayload({ kind: 'InitShell' }))
+  await applyAdapter(
+    lifecyclePayload({
+      kind: 'PromptReady',
+      prompt_generation: 1,
+      cwd: '/repo',
+      line_empty: true,
+      prompt_suppressed: true
+    })
+  )
+  commandDraftStore.offer('t1', 'Editor', 'make test')
+
+  if (runtime === 'web') {
+    const client = new WebTerminalClient('ws://localhost/terminal/ws')
+    ;(
+      client as unknown as {
+        handleEvent(event: {
+          type: 'exit'
+          terminal_id: string
+          exit_code: number
+          signal: null
+        }): void
+      }
+    ).handleEvent({ type: 'exit', terminal_id: 'pty-9', exit_code: 0, signal: null })
+  } else {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    vi.mocked(listen).mockClear()
+    const stop = createTauriTerminalApi().onExit(() => {})
+    const call = vi.mocked(listen).mock.calls.find(([eventName]) => eventName === 'terminal-exit')
+    const handler = call?.[1] as
+      | ((event: { payload: { id: string; exitCode: number; signal: null } }) => void)
+      | undefined
+    expect(handler).toBeTypeOf('function')
+    handler?.({ payload: { id: 'pty-9', exitCode: 0, signal: null } })
+    stop()
+  }
+
+  expect(sessionStore.read('t1').mode).toBe('exited')
+  expect(commandDraftStore.read('t1')).toBe('')
+})
+
 it('process exit drops the stored draft', () => {
   sessionStore.apply('t1', { type: 'InitShell', session_id: 's1', nonce: 'n1' })
   sessionStore.apply('t1', {
@@ -441,6 +519,20 @@ it('prompt with a wrong nonce keeps the snapshot', () => {
   const { prompt, previous } = trustedPromptSnapshot()
   sessionStore.apply('t1', { ...prompt, nonce: 'forged', cwd: '/evil' })
   expect(sessionStore.read('t1')).toEqual(previous)
+})
+
+it('a newer authenticated prompt refreshes generation and cwd without replacing the draft', () => {
+  const { prompt } = trustedPromptSnapshot()
+  commandDraftStore.offer('t1', 'Editor', 'unfinished draft')
+
+  sessionStore.apply('t1', { ...prompt, prompt_generation: 5, cwd: '/repo/new' })
+
+  expect(sessionStore.read('t1')).toMatchObject({
+    mode: 'Editor',
+    promptGeneration: 5,
+    cwd: '/repo/new'
+  })
+  expect(commandDraftStore.read('t1')).toBe('unfinished draft')
 })
 
 it('duplicate prompt with another cwd keeps the snapshot', () => {

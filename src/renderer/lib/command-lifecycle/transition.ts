@@ -86,8 +86,7 @@ function canMountEditor(state: SessionState, frame: PromptReadyFrame, generation
     frame.line_empty === true &&
     !state.alternateScreen &&
     (state.promptGeneration === null || generation > state.promptGeneration) &&
-    !(state.committedSubmit && state.phase !== 'Executing') &&
-    !(state.mode === 'Editor' && !state.committedSubmit)
+    !(state.committedSubmit && state.phase !== 'Executing')
   )
 }
 

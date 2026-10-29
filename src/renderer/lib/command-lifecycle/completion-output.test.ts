@@ -31,11 +31,13 @@ it('drops completion candidates that contain ESC or CR', () => {
     hexLine('status\x1b[201~'),
     hexLine('stash\rinjected'),
     hexLine('stash'),
-    hexLine('status\tok')
+    hexLine('status\tok'),
+    hexLine('hidden\u200bname'),
+    hexLine('bidi\u202ename'),
+    hexLine('isolated\u2066name')
   ].join('\n')
 
   const rows = parseCompletionOutput(draft, 7, output)
 
-  expect(rows.map((row) => row.text)).toEqual(['stash', 'status\tok'])
-  expect(rows.some((row) => row.text.includes('\x1b') || row.text.includes('\r'))).toBe(false)
+  expect(rows.map((row) => row.text)).toEqual(['stash'])
 })

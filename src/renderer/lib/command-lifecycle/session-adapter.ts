@@ -46,10 +46,49 @@ const buffer = new LifecycleBuffer(
 )
 let unsubscribe: (() => void) | undefined
 let loading: Promise<void> | undefined
+let observedPtyIds = new Map<string, string | undefined>()
+
+function observeTerminalChanges(store: TerminalStore): void {
+  const terminals = store.getState().terminals
+  const nextPtyIds = new Map(terminals.map(({ id, ptyId }) => [id, ptyId]))
+  const previousPtyIds = observedPtyIds
+  observedPtyIds = nextPtyIds
+
+  for (const [id, previousPtyId] of previousPtyIds) {
+    if (!nextPtyIds.has(id)) {
+      sessionStore.forget(id)
+      continue
+    }
+    const nextPtyId = nextPtyIds.get(id)
+    if (previousPtyId !== nextPtyId && (previousPtyId !== undefined || nextPtyId === undefined)) {
+      sessionStore.invalidate(id, 'info')
+    }
+  }
+}
 
 function connectTerminalStore(store: TerminalStore): void {
-  unsubscribe = store.subscribe(() => buffer.flush())
+  observedPtyIds = new Map(store.getState().terminals.map(({ id, ptyId }) => [id, ptyId]))
+  unsubscribe = store.subscribe(() => {
+    observeTerminalChanges(store)
+    buffer.flush()
+  })
   buffer.connect((ptyId) => store.getState().findTerminalByPtyId(ptyId))
+}
+
+/** Marks the session mapped to an exiting PTY as exited and clears its draft. */
+export function forwardSessionExit(ptyId: string): void {
+  const applyExit = (store: TerminalStore): void => {
+    const terminal = store.getState().findTerminalByPtyId(ptyId)
+    if (terminal) sessionStore.processExited(terminal.id)
+  }
+  if (terminalStore) {
+    applyExit(terminalStore)
+    return
+  }
+  void import('@/stores/terminal-store').then(({ useTerminalStore }) => {
+    registerSessionTerminalStore(useTerminalStore)
+    applyExit(useTerminalStore)
+  })
 }
 
 export function forwardSessionLifecycle(event: SessionLifecyclePayload): void {
@@ -71,6 +110,7 @@ export function disposeSessionAdapter(): void {
   unsubscribe?.()
   unsubscribe = undefined
   buffer.dispose()
+  observedPtyIds.clear()
   loading = undefined
 }
 

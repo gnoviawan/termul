@@ -19,7 +19,7 @@ import { Channel, invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invokeIpcCommand } from './acp-transport/tauri-verdicts'
 import { createTauriCommandEditorTransport } from './command-editor-transport'
-import { forwardSessionLifecycle } from './command-lifecycle/session-adapter'
+import { forwardSessionExit, forwardSessionLifecycle } from './command-lifecycle/session-adapter'
 import { entityKeyOf } from './ipc/http'
 import { invokeIpc } from './ipc/tauri'
 import { logFrontendError } from './log-api'
@@ -585,6 +585,7 @@ export function createTauriTerminalApi(): TerminalApi {
           if (import.meta.env.DEV) {
             devLog(`[TauriTerminalAPI] Terminal ${payload.id} exited with code ${payload.exitCode}`)
           }
+          forwardSessionExit(payload.id)
           callback(payload.id, payload.exitCode ?? -1, payload.signal ?? undefined)
         },
         'terminal-exit'
