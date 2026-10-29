@@ -1,7 +1,8 @@
 import { toast } from 'sonner'
 import { Copy, FileQuestion, FolderOpen } from '@/components/icons'
 import { Button } from '@/components/ui/button'
-import { clipboardApi, openerApi } from '@/lib/api'
+import { openerApi } from '@/lib/api'
+import { copyText } from '@/lib/copy-text'
 import type { MediaReadCode } from '@/lib/media-bytes-api'
 import { basename } from '@/lib/path-basename'
 import { formatSize } from '@/lib/sftp-format'
@@ -24,7 +25,6 @@ export function previewUnavailableFromRead(failure: {
     case 'FILE_TOO_LARGE':
       return { reason: 'too-large', size, limit }
     case 'NOT_FOUND':
-    case 'NOT_A_FILE':
       return { reason: 'missing' }
     default:
       return { reason: 'unreadable', message }
@@ -68,8 +68,8 @@ async function revealInFileManager(filePath: string): Promise<void> {
 }
 
 async function copyPath(filePath: string): Promise<void> {
-  await clipboardApi.writeText(filePath)
-  toast.success('Path copied', { description: filePath })
+  if (await copyText(filePath)) toast.success('Path copied', { description: filePath })
+  else toast.error("Couldn't copy the path")
 }
 
 export function UnsupportedFileView({
