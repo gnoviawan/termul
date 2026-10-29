@@ -211,6 +211,51 @@ fn test_main_webview_rejects_external_urls() {
     ));
 }
 
+fn csp_directive(csp: &str, name: &str) -> String {
+    csp.split(';')
+        .map(str::trim)
+        .find(|directive| directive.split_whitespace().next() == Some(name))
+        .unwrap_or_else(|| panic!("{name} directive present in {csp}"))
+        .to_string()
+}
+
+/// Agent chat replies embed remote images and videos (`![](https://...)`);
+/// local and inline media render through `blob:` URLs. Only the display
+/// directives admit `https:`: script and fetch sources stay closed.
+#[test]
+fn csp_admits_https_and_blob_media_but_not_https_scripts_or_fetches() {
+    let conf_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json");
+    let conf = std::fs::read_to_string(conf_path).expect("tauri.conf.json readable");
+    let conf: serde_json::Value = serde_json::from_str(&conf).expect("tauri.conf.json is JSON");
+    let csp = conf["app"]["security"]["csp"]
+        .as_str()
+        .expect("app.security.csp is a string");
+
+    for name in ["img-src", "media-src"] {
+        let sources: Vec<String> = csp_directive(csp, name)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        assert!(
+            sources.contains(&"https:".to_string()),
+            "{name} allows https: {csp}"
+        );
+        assert!(
+            sources.contains(&"blob:".to_string()),
+            "{name} allows blob: {csp}"
+        );
+    }
+    for name in ["script-src", "connect-src"] {
+        let directive = csp_directive(csp, name);
+        assert!(
+            !directive
+                .split_whitespace()
+                .any(|source| source == "https:"),
+            "{name} must not admit every https origin: {directive}"
+        );
+    }
+}
+
 /// Config-drift fence for the canvas embed: the desktop main webview iframes
 /// the figcraft bundle listener at `http://127.0.0.1:<dynamic port>`, so the
 /// CSP MUST keep a loopback-scoped `frame-src` (iframe load) and
