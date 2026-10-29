@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { readMediaBytes } from '@/lib/media-bytes-api'
 
 export type MediaObjectUrlState =
@@ -10,14 +10,15 @@ type Settled = Exclude<MediaObjectUrlState, { status: 'loading' }>
 
 export function useMediaObjectUrlState(path: string | null, revision = 0): MediaObjectUrlState {
   const [loaded, setLoaded] = useState<{ path: string; state: Settled } | null>(null)
+  const request = useMemo(() => (path ? { path, revision } : null), [path, revision])
 
   useEffect(() => {
-    if (!path) return
+    if (!request) return
     let cancelled = false
-    void readMediaBytes(path).then((result) => {
+    void readMediaBytes(request.path).then((result) => {
       if (cancelled) return
       setLoaded({
-        path,
+        path: request.path,
         state: result.success
           ? { status: 'ready', url: URL.createObjectURL(result.data), size: result.data.size }
           : { status: 'error', code: result.code, message: result.error }
@@ -26,7 +27,7 @@ export function useMediaObjectUrlState(path: string | null, revision = 0): Media
     return () => {
       cancelled = true
     }
-  }, [path, revision])
+  }, [request])
 
   const url = loaded?.state.status === 'ready' ? loaded.state.url : null
   useEffect(() => {
