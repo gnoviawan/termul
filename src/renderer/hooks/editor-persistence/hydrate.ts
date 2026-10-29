@@ -35,10 +35,6 @@ import {
 
 export type { StagedProject } from '@/lib/project-switch/types'
 
-/**
- * Stage one file as `openFile` would: media tabs without a read, a binary or
- * too-large text file as `unsupported`. A deleted/unreadable text file yields null.
- */
 async function stageFile(filePath: string): Promise<EditorFileState | null> {
   try {
     return await loadEditorFile(filePath)
@@ -67,7 +63,6 @@ function applyPersistedViewState(
       ...file,
       cursorPosition: { line: persisted.cursorPosition.line, col: persisted.cursorPosition.col },
       scrollTop: persisted.scrollTop,
-      // `markdown` is the persisted spelling of `preview` from before SVG previews.
       viewMode: persisted.viewMode === 'code' ? file.viewMode : 'preview'
     },
     persisted

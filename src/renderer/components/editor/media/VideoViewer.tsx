@@ -11,7 +11,6 @@ interface VideoMetadata {
   duration: number
 }
 
-/** `m:ss`, or `h:mm:ss` from an hour up. */
 function formatDuration(seconds: number): string {
   const total = Math.round(seconds)
   const h = Math.floor(total / 3600)

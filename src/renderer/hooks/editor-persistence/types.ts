@@ -6,7 +6,6 @@ export interface PersistedEditorFile {
   filePath: string
   cursorPosition: { line: number; col: number }
   scrollTop: number
-  /** `markdown` is the legacy spelling of `preview`, still read from older state. */
   viewMode: 'code' | 'preview' | 'markdown'
   isDirty: boolean
   draftContent?: string

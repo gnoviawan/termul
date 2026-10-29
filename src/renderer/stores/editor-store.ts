@@ -294,7 +294,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!file || fromPath === toPath) return
 
     cancelAutoSave(fromPath)
-    // A finished save's status reset is keyed to the old path and cannot reach this entry.
     const renamed: EditorFileState =
       file.kind === 'text'
         ? {
@@ -385,7 +384,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const { openFiles } = get()
       const file = openFiles.get(path)
       if (!file) return false
-      // A media tab is never dirty: there is nothing to write.
       if (file.kind !== 'text') return true
 
       // An unresolved draft conflict means the buffer is the disk version
@@ -574,7 +572,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const file = openFiles.get(path)
     if (!file || file.kind === 'unsupported') return
     if (file.kind !== 'text') {
-      // The viewer re-reads the bytes when the revision moves.
       const files = new Map(openFiles)
       files.set(path, { ...file, revision: file.revision + 1 })
       set({ openFiles: files })

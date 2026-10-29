@@ -7,13 +7,11 @@ import { formatSize } from '@/lib/sftp-format'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { parseTooLarge, type UnsupportedReason } from '@/stores/editor-file-state'
 
-/** Why a file has no preview. */
 export type PreviewUnavailable =
   | UnsupportedReason
   | { reason: 'missing' }
   | { reason: 'unreadable'; message: string }
 
-/** A failed `readMediaBytes` result as the state to show instead of the viewer. */
 export function previewUnavailableFromRead(code: string, message: string): PreviewUnavailable {
   switch (code) {
     case 'FILE_TOO_LARGE':
@@ -86,7 +84,6 @@ export function UnsupportedFileView({
         {note && <p className="text-xs text-muted-foreground tabular-nums">{note}</p>}
       </div>
       <div className="flex items-center gap-2">
-        {/* The OS file manager is desktop-only; Copy Path works on every surface. */}
         {isTauriContext() && unavailable.reason !== 'missing' && (
           <Button variant="outline" size="sm" onClick={() => void revealInFileManager(filePath)}>
             <FolderOpen aria-hidden="true" /> Show in File Manager

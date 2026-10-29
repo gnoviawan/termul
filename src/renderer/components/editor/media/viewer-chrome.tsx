@@ -1,4 +1,3 @@
-/** Transparent pixels show as a checkerboard drawn from theme tokens. */
 export const CHECKERBOARD_CLASS =
   'bg-[conic-gradient(oklch(var(--muted))_25%,oklch(var(--background))_0_50%,oklch(var(--muted))_0_75%,oklch(var(--background))_0)] bg-[length:16px_16px]'
 
@@ -16,7 +15,6 @@ export function ViewerLoading(): React.JSX.Element {
   )
 }
 
-/** The info strip under a viewer: facts on the left, controls on the right. */
 export function ViewerFooter({
   facts,
   children

@@ -521,7 +521,6 @@ export async function openFilePathFromTerminal(
       }
     }
 
-    // A line position only means something in a text buffer.
     const line = opened.kind === 'text' ? position.line : undefined
     if (line) {
       useEditorStore.getState().updateCursorPosition(resolution.path, line, position.column ?? 1)

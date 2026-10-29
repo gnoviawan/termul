@@ -6,7 +6,6 @@ import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 import { serializePaneTree } from './pane-tree'
 import { editorStateKey, type PersistedEditorFile, type PersistedEditorState } from './types'
 
-/** A media tab persists by path alone; the view fields keep their defaults. */
 function persistedFile(file: EditorFileState): PersistedEditorFile {
   if (file.kind !== 'text') {
     return {
@@ -24,8 +23,6 @@ function persistedFile(file: EditorFileState): PersistedEditorFile {
     cursorPosition: file.cursorPosition,
     scrollTop: file.scrollTop,
     viewMode: file.viewMode,
-    // An unresolved conflict persists as a dirty draft stamped with the
-    // draft's own save time so the next restore re-evaluates it.
     isDirty: file.isDirty || conflict !== undefined,
     lastModified: conflict ? conflict.draftSavedAt : file.lastModified
   }

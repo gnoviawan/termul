@@ -12,7 +12,6 @@ const ZOOM_STEP = 1.25
 const MIN_SCALE = 0.05
 const MAX_SCALE = 16
 
-/** `fit` scales the image down to the pane; a number is pixels per image pixel. */
 type Zoom = 'fit' | number
 
 function clampScale(scale: number): number {
@@ -41,7 +40,6 @@ export function ImageViewer({
     )
   }
 
-  /** The scale on screen now; in fit mode, the one the layout chose. */
   const shownScale = (): number => {
     if (zoom !== 'fit') return zoom
     const image = imageRef.current

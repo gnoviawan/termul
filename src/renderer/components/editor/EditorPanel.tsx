@@ -123,11 +123,7 @@ function TextFilePanel({
   )
 }
 
-/**
- * The live SVG buffer rendered as an `<img>` from a `blob:` URL. An `<img>`
- * never runs the SVG's scripts or loads its external resources, unlike
- * inlining the markup.
- */
+/** An `<img>` never runs the SVG's scripts or loads its external resources, unlike inlined markup. */
 function SvgPreview({
   filePath,
   content

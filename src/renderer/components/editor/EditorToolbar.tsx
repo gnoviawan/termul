@@ -52,7 +52,6 @@ export function EditorToolbar({
   const isSaving = fileState?.operationStatus === 'saving'
   const [saveTapped, setSaveTapped] = useState(false)
 
-  // The outline and the document stats read markdown structure only.
   const isMarkdown = textPreviewForPath(filePath) === 'markdown'
   const content = isMarkdown && fileState?.kind === 'text' ? fileState.content : undefined
   const statsLabel = useMemo(
