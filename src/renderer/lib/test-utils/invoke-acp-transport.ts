@@ -179,8 +179,14 @@ export function createInvokeAcpTransport(): AcpTransport {
     setDefaultClaudeAccount: async (accountId) => {
       await invoke('claude_accounts_set_default', { accountId })
     },
-    setProjectClaudeAccount: async (projectId, accountId) => {
-      await invoke('claude_accounts_set_project', { projectId, accountId })
+    setProjectClaudeAccount: (projectId, accountId, expectedAccountId) =>
+      invoke<boolean>('claude_accounts_set_project', {
+        projectId,
+        accountId,
+        expectedAccountId: expectedAccountId ?? null
+      }),
+    setClaudeAutoSwitch: async (enabled) => {
+      await invoke('claude_accounts_set_auto_switch', { enabled })
     },
     spawnAgent: (config, options, projectId) =>
       invokeCommand<SpawnAgentResult>(

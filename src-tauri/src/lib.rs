@@ -2079,6 +2079,7 @@ pub fn run() {
             acp::commands::claude_accounts_remove,
             acp::commands::claude_accounts_set_default,
             acp::commands::claude_accounts_set_project,
+            acp::commands::claude_accounts_set_auto_switch,
             acp::commands::acp_factory_key_status,
             acp::commands::acp_factory_key_save,
             acp::commands::codex_cli_auth_status,

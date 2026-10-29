@@ -12,7 +12,8 @@ const { mockIsTauriContext, mockInvoke, transport } = vi.hoisted(() => ({
     listClaudeAccounts: vi.fn(),
     listClaudeUsage: vi.fn(),
     setDefaultClaudeAccount: vi.fn(),
-    setProjectClaudeAccount: vi.fn()
+    setProjectClaudeAccount: vi.fn(),
+    setClaudeAutoSwitch: vi.fn()
   }
 }))
 
@@ -26,7 +27,8 @@ import { ClaudeAccountsUnsupportedError, claudeAccountsApi } from '../claude-acc
 const SNAPSHOT = {
   accounts: [{ id: 'default', name: 'Default', builtin: true, signedIn: true }],
   defaultAccountId: 'default',
-  projectAccounts: {}
+  projectAccounts: {},
+  autoSwitch: true
 }
 
 beforeEach(() => {
@@ -34,7 +36,8 @@ beforeEach(() => {
   transport.listClaudeAccounts.mockResolvedValue(SNAPSHOT)
   transport.listClaudeUsage.mockResolvedValue([])
   transport.setDefaultClaudeAccount.mockResolvedValue(undefined)
-  transport.setProjectClaudeAccount.mockResolvedValue(undefined)
+  transport.setProjectClaudeAccount.mockResolvedValue(true)
+  transport.setClaudeAutoSwitch.mockResolvedValue(undefined)
 })
 
 describe.each([
@@ -60,7 +63,21 @@ describe.each([
     await claudeAccountsApi.setDefault('abc')
     await claudeAccountsApi.setProjectAccount('p1', null)
     expect(transport.setDefaultClaudeAccount).toHaveBeenCalledWith('abc')
-    expect(transport.setProjectClaudeAccount).toHaveBeenCalledWith('p1', null)
+    expect(transport.setProjectClaudeAccount).toHaveBeenCalledWith('p1', null, undefined)
+  })
+
+  it('passes the expected account and reports a lost compare-and-set', async () => {
+    transport.setProjectClaudeAccount.mockResolvedValueOnce(false)
+    await expect(
+      claudeAccountsApi.setProjectAccount('p1', 'ab12', { expectedAccountId: 'default' })
+    ).resolves.toBe(false)
+    expect(transport.setProjectClaudeAccount).toHaveBeenCalledWith('p1', 'ab12', 'default')
+  })
+
+  it('turns automatic switching on and off through the ACP transport', async () => {
+    await claudeAccountsApi.setAutoSwitch(false)
+    expect(transport.setClaudeAutoSwitch).toHaveBeenCalledWith(false)
+    expect(mockInvoke).not.toHaveBeenCalled()
   })
 })
 

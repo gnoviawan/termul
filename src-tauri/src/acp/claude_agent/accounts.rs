@@ -143,14 +143,21 @@ impl ClaudeAgentService {
         store.set_default(id)
     }
 
+    pub fn set_auto_switch(&self, enabled: bool) -> Result<(), String> {
+        self.account_store()?.set_auto_switch(enabled)
+    }
+
     /// `account_id: None` returns the Project to the Default Account, so the
-    /// check probes the Default Account.
+    /// check probes the Default Account. `expected` makes the choice a
+    /// compare-and-set on the Account the Project uses; returns whether the
+    /// choice applied.
     pub async fn set_project_account(
         &self,
         project_id: &str,
         account_id: Option<&str>,
+        expected: Option<&str>,
         check: SignInCheck,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let store = self.account_store()?;
         if check == SignInCheck::Required {
             match account_id {
@@ -162,7 +169,7 @@ impl ClaudeAgentService {
                 }
             }
         }
-        store.set_project_account(project_id, account_id)
+        store.set_project_account(project_id, account_id, expected)
     }
 
     /// The spawn gate's rule, applied before an Account is chosen: only a

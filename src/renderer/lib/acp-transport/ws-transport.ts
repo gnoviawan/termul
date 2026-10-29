@@ -960,8 +960,21 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('set_default_claude_account', { accountId })
   }
 
-  async setProjectClaudeAccount(projectId: string, accountId: string | null): Promise<void> {
-    await this.request('set_project_claude_account', { projectId, accountId })
+  async setProjectClaudeAccount(
+    projectId: string,
+    accountId: string | null,
+    expectedAccountId?: string
+  ): Promise<boolean> {
+    const reply = await this.request<{ applied?: boolean }>('set_project_claude_account', {
+      projectId,
+      accountId,
+      ...(expectedAccountId ? { expectedAccountId } : {})
+    })
+    return reply?.applied !== false
+  }
+
+  async setClaudeAutoSwitch(enabled: boolean): Promise<void> {
+    await this.request('set_claude_auto_switch', { enabled })
   }
 
   async spawnAgent(
