@@ -210,6 +210,11 @@ fn block_on(
 /// Prints account names and ids only — never login details.
 fn run_account(service: &ClaudeAgentService, args: &[String]) -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    // `add --help` would otherwise add an Account named "--help".
+    if args.iter().any(|arg| matches!(*arg, "-h" | "--help")) {
+        println!("{}", usage_text());
+        return ExitCode::SUCCESS;
+    }
     let result = match args.as_slice() {
         ["list"] => {
             let runtime = match tokio::runtime::Runtime::new() {
@@ -315,3 +320,7 @@ fn yes_no(value: bool) -> &'static str {
 fn usage() -> &'static str {
     "Usage: termul-server claude [--state-dir PATH] <auth status|auth login|auth mode claude-code|api-key|api-key set|api-key delete|install|account ...>"
 }
+
+#[cfg(test)]
+#[path = "claude_admin_tests.rs"]
+mod tests;
