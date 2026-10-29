@@ -6,9 +6,12 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use serde::Serialize;
 
-use super::{resolve_request_path, IpcBody, PathQuery};
-use crate::media_bytes::{log_name, read_media, MediaBytes, MediaErrorCode, MediaReadError};
+use super::{resolve_request_path, PathQuery};
+use crate::media_bytes::{
+    log_name, read_media, MediaBytes, MediaErrorCode, MediaReadError, MediaSizeLimit,
+};
 
 /// The sandbox CSP keeps an SVG opened as a top-level document from running
 /// script against the server origin.
@@ -59,11 +62,28 @@ pub async fn raw(Query(q): Query<PathQuery>) -> Response {
                 code = err.code.as_str(),
                 "fs/raw refused"
             );
-            (
-                status_for(err.code),
-                Json(IpcBody::<()>::err(err.message, err.code.as_str())),
-            )
-                .into_response()
+            (status_for(err.code), Json(RawFailure::from(err))).into_response()
+        }
+    }
+}
+
+/// The `IpcBody` failure shape plus the `FILE_TOO_LARGE` size and limit.
+#[derive(Serialize)]
+struct RawFailure {
+    success: bool,
+    error: String,
+    code: MediaErrorCode,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    too_large: Option<MediaSizeLimit>,
+}
+
+impl From<MediaReadError> for RawFailure {
+    fn from(err: MediaReadError) -> Self {
+        Self {
+            success: false,
+            error: err.message,
+            code: err.code,
+            too_large: err.too_large,
         }
     }
 }

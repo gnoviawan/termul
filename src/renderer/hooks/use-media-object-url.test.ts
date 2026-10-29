@@ -1,15 +1,15 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { IpcResult } from '@shared/types/ipc.types'
+import type { MediaReadResult } from '@/lib/media-bytes-api'
 import { useMediaObjectUrlState } from './use-media-object-url'
 
 const { mockReadMediaBytes } = vi.hoisted(() => ({ mockReadMediaBytes: vi.fn() }))
 
 vi.mock('@/lib/media-bytes-api', () => ({ readMediaBytes: mockReadMediaBytes }))
 
-function deferred(): { promise: Promise<IpcResult<Blob>>; resolve: (r: IpcResult<Blob>) => void } {
-  let resolve!: (r: IpcResult<Blob>) => void
-  const promise = new Promise<IpcResult<Blob>>((r) => {
+function deferred(): { promise: Promise<MediaReadResult>; resolve: (r: MediaReadResult) => void } {
+  let resolve!: (r: MediaReadResult) => void
+  const promise = new Promise<MediaReadResult>((r) => {
     resolve = r
   })
   return { promise, resolve }
@@ -32,6 +32,28 @@ describe('useMediaObjectUrlState', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('carries the size and limit of a FILE_TOO_LARGE failure', async () => {
+    mockReadMediaBytes.mockResolvedValueOnce({
+      success: false,
+      error: 'file too large (31457280 bytes, max 26214400)',
+      code: 'FILE_TOO_LARGE',
+      size: 31457280,
+      limit: 26214400
+    })
+
+    const { result } = renderHook(() => useMediaObjectUrlState('/proj/big.png'))
+
+    await waitFor(() =>
+      expect(result.current).toEqual({
+        status: 'error',
+        code: 'FILE_TOO_LARGE',
+        message: 'file too large (31457280 bytes, max 26214400)',
+        size: 31457280,
+        limit: 26214400
+      })
+    )
   })
 
   it('re-reads on a revision bump and keeps the old URL until the new read settles', async () => {

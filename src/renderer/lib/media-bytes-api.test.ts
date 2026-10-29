@@ -58,6 +58,33 @@ describe('readMediaBytes on desktop', () => {
     })
   })
 
+  it('surfaces the size and limit of a FILE_TOO_LARGE rejection', async () => {
+    mocks.invoke.mockRejectedValueOnce({
+      code: 'FILE_TOO_LARGE',
+      message: 'file too large (31457280 bytes, max 26214400)',
+      size: 31457280,
+      limit: 26214400
+    })
+
+    expect(await readMediaBytes('/proj/big.png')).toEqual({
+      success: false,
+      error: 'file too large (31457280 bytes, max 26214400)',
+      code: 'FILE_TOO_LARGE',
+      size: 31457280,
+      limit: 26214400
+    })
+  })
+
+  it('maps a code this client does not know to READ_ERROR and keeps the message', async () => {
+    mocks.invoke.mockRejectedValueOnce({ code: 'QUOTA_EXCEEDED', message: 'disk quota hit' })
+
+    expect(await readMediaBytes('/proj/a.png')).toEqual({
+      success: false,
+      error: 'disk quota hit',
+      code: 'READ_ERROR'
+    })
+  })
+
   it('maps an IPC fault without a code to INVOKE_ERROR', async () => {
     mocks.invoke.mockRejectedValueOnce(new Error('command read_media_bytes not found'))
 
@@ -120,6 +147,56 @@ describe('readMediaBytes on web', () => {
       level: 'warn',
       source: 'mediaBytes.read',
       message: "Failed to read media 'notes.txt' (UNSUPPORTED_MEDIA)"
+    })
+  })
+
+  it('surfaces the size and limit from a 413 body', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          success: false,
+          error: 'file too large (26214401 bytes, max 26214400)',
+          code: 'FILE_TOO_LARGE',
+          size: 26214401,
+          limit: 26214400
+        }),
+        { status: 413, headers: { 'content-type': 'application/json' } }
+      )
+    )
+
+    expect(await readMediaBytes('/proj/huge.png')).toEqual({
+      success: false,
+      error: 'file too large (26214401 bytes, max 26214400)',
+      code: 'FILE_TOO_LARGE',
+      size: 26214401,
+      limit: 26214400
+    })
+  })
+
+  it('maps an unknown wire code to READ_ERROR and keeps the message', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ success: false, error: 'teapot', code: 'I_AM_A_TEAPOT' }), {
+        status: 418,
+        headers: { 'content-type': 'application/json' }
+      })
+    )
+
+    expect(await readMediaBytes('/proj/a.png')).toEqual({
+      success: false,
+      error: 'teapot',
+      code: 'READ_ERROR'
+    })
+  })
+
+  it('maps a non-2xx response without a failure body to NETWORK_ERROR', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response('<html>bad gateway</html>', { status: 502, statusText: 'Bad Gateway' })
+    )
+
+    expect(await readMediaBytes('/proj/a.png')).toEqual({
+      success: false,
+      error: 'HTTP 502 Bad Gateway',
+      code: 'NETWORK_ERROR'
     })
   })
 

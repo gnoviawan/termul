@@ -85,10 +85,19 @@ impl Serialize for MediaErrorCode {
     }
 }
 
+/// Set only on `FILE_TOO_LARGE`, so callers never parse the numbers out of the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct MediaSizeLimit {
+    pub size: u64,
+    pub limit: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MediaReadError {
     pub code: MediaErrorCode,
     pub message: String,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub too_large: Option<MediaSizeLimit>,
 }
 
 impl MediaReadError {
@@ -96,6 +105,7 @@ impl MediaReadError {
         Self {
             code,
             message: message.into(),
+            too_large: None,
         }
     }
 
@@ -111,10 +121,14 @@ impl MediaReadError {
     }
 
     fn too_large(kind: MediaKind, size: u64) -> Self {
-        Self::new(
-            MediaErrorCode::FileTooLarge,
-            format!("file too large ({size} bytes, max {})", kind.max_bytes()),
-        )
+        let limit = kind.max_bytes();
+        Self {
+            too_large: Some(MediaSizeLimit { size, limit }),
+            ..Self::new(
+                MediaErrorCode::FileTooLarge,
+                format!("file too large ({size} bytes, max {limit})"),
+            )
+        }
     }
 }
 

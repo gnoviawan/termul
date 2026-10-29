@@ -108,6 +108,21 @@ fn a_file_exactly_at_the_cap_is_read() {
 }
 
 #[test]
+fn file_too_large_serializes_its_size_and_limit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let image = sparse(dir.path(), "big.png", 30 * MIB);
+    assert_eq!(
+        serde_json::to_value(read_err(&image)).expect("serialize"),
+        serde_json::json!({
+            "code": "FILE_TOO_LARGE",
+            "message": "file too large (31457280 bytes, max 26214400)",
+            "size": 31457280,
+            "limit": 26214400
+        })
+    );
+}
+
+#[test]
 fn error_serializes_as_code_and_message() {
     let err = MediaReadError::new(MediaErrorCode::NotAFile, "path is not a regular file");
     assert_eq!(

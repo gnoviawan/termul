@@ -112,7 +112,16 @@ async fn oversized_image_is_413() {
     let resp = get(app(dir.path(), None), file.to_str().expect("utf8"), None).await;
 
     assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(json_body(resp).await["code"], "FILE_TOO_LARGE");
+    assert_eq!(
+        json_body(resp).await,
+        serde_json::json!({
+            "success": false,
+            "error": "file too large (26214401 bytes, max 26214400)",
+            "code": "FILE_TOO_LARGE",
+            "size": 26214401,
+            "limit": 26214400
+        })
+    );
 }
 
 #[tokio::test]
