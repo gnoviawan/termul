@@ -53,6 +53,9 @@ function openChatIds(): Set<string> {
   return ids
 }
 
+/** Whether this client has the chat open: a tab, or kept for its off-screen Project. */
+export const isChatOpenHere = (sessionId: string): boolean => openChatIds().has(sessionId)
+
 async function stopOldAgent(agentId: string, reason: string): Promise<void> {
   void logFrontendError({
     level: 'info',
@@ -180,8 +183,8 @@ export async function restartClaudeSession(
 /**
  * Restart every open Claude chat of a Project after its Account changed: a
  * chat with a tab, or one kept for its Project while that Project is off
- * screen. `continueSessionId` is the chat that hit a limit: its held turn is
- * cancelled and its last prompt is sent again. Other busy chats restart in the
+ * screen. `continueSessionIds` are the chats that hit a limit: their held
+ * turns are cancelled and their last prompts are sent again. Other busy chats restart in the
  * background when their turn ends. An unopened chat (a warm-pool seed, or a
  * chat whose tab was closed) is not reopened; its agent stops, after the
  * running turn if there is one, unless an open chat shares it. The Project's
@@ -190,7 +193,7 @@ export async function restartClaudeSession(
  */
 export async function applyProjectClaudeAccount(
   projectId: string,
-  options: { continueSessionId?: string; credentialsRenewed?: boolean } = {}
+  options: { continueSessionIds?: readonly string[]; credentialsRenewed?: boolean } = {}
 ): Promise<void> {
   if (!options.credentialsRenewed) renewAgentCredentials(CLAUDE_AGENT_CONFIG_ID, projectId)
   const state = useAcpStore.getState()
@@ -232,7 +235,7 @@ export async function applyProjectClaudeAccount(
       .prepareChat(CLAUDE_AGENT_CONFIG_ID, cwd, undefined, projectId, { silent: true })
   }
   for (const { id } of open) {
-    if (id === options.continueSessionId) {
+    if (options.continueSessionIds?.includes(id)) {
       now.push(restartClaudeSession(id, { resend: true, cancelTurn: true }))
     } else if (switchBlockedReason(state, id) === null) {
       now.push(restartClaudeSession(id))
@@ -247,14 +250,23 @@ export async function applyProjectClaudeAccount(
  * Choose a Project's Account on the host, then restart its Claude chats on it.
  * Agents already spawned for the Project stop taking new chats before the
  * host write, so a chat started during the switch never lands on the old
- * Account.
+ * Account. With `expectedAccountId` the host applies the choice only while
+ * the Project still uses that Account; when another client switched first,
+ * nothing restarts and this resolves `false`.
  */
 export async function switchProjectClaudeAccount(
   projectId: string,
   accountId: string | null,
-  options: { continueSessionId?: string } = {}
-): Promise<void> {
+  options: { continueSessionIds?: readonly string[]; expectedAccountId?: string } = {}
+): Promise<boolean> {
   renewAgentCredentials(CLAUDE_AGENT_CONFIG_ID, projectId)
-  await claudeAccountsApi.setProjectAccount(projectId, accountId)
-  await applyProjectClaudeAccount(projectId, { ...options, credentialsRenewed: true })
+  const applied = await claudeAccountsApi.setProjectAccount(projectId, accountId, {
+    expectedAccountId: options.expectedAccountId
+  })
+  if (!applied) return false
+  await applyProjectClaudeAccount(projectId, {
+    continueSessionIds: options.continueSessionIds,
+    credentialsRenewed: true
+  })
+  return true
 }
