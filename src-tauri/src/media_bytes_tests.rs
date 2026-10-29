@@ -154,3 +154,13 @@ fn reads_a_same_kind_symlink() {
     std::os::unix::fs::symlink(&jpeg, &link).expect("symlink");
     assert_eq!(read_media(&link).expect("read").bytes, b"jpeg");
 }
+
+#[cfg(unix)]
+#[test]
+fn refuses_a_same_kind_name_whose_mime_differs_from_its_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let png = write(dir.path(), "drawing.png", b"png");
+    let link = dir.path().join("drawing.svg");
+    std::os::unix::fs::symlink(&png, &link).expect("symlink");
+    assert_eq!(read_err(&link).code, MediaErrorCode::UnsupportedMedia);
+}
