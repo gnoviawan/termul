@@ -7,6 +7,7 @@
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type {
+  ClaudeAccount,
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
@@ -248,6 +249,25 @@ export interface AcpTransport {
     expectedAccountId?: string
   ): Promise<boolean>
   setClaudeAutoSwitch(enabled: boolean): Promise<void>
+  /** Add a signed-out Account; a same-id resend answers with the first one. */
+  addClaudeAccount(name: string, options?: CommandCallOptions): Promise<ClaudeAccount>
+  /**
+   * Start a link sign-in for one Account and resolve the Claude sign-in link.
+   * A sign-in already running for the Account stops.
+   */
+  startClaudeLinkLogin(accountId: string): Promise<string>
+  /**
+   * Hand the code the Claude page showed to the link sign-in. Rejects with
+   * `claude_login_code_incomplete` while the sign-in still waits for the
+   * whole code; any other rejection ended the sign-in.
+   */
+  finishClaudeLinkLogin(
+    accountId: string,
+    code: string,
+    options?: CommandCallOptions
+  ): Promise<void>
+  /** Stop a browser or link sign-in; `false` when none was running. */
+  cancelClaudeLogin(accountId: string): Promise<boolean>
   /** `projectId` selects the Claude Account of a managed Claude agent. */
   spawnAgent(
     config: AgentConfig,

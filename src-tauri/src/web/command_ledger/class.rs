@@ -129,6 +129,18 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("set_default_claude_account", CommandClass::idempotent()),
     ("set_project_claude_account", CommandClass::idempotent()),
     ("set_claude_auto_switch", CommandClass::idempotent()),
+    // A resend of a lost reply answers with the Account the first run added,
+    // instead of adding a second one.
+    ("add_claude_account", CommandClass::command(Replay::Payload)),
+    // A new start replaces the running sign-in, and only the last link works.
+    ("start_claude_link_login", CommandClass::idempotent()),
+    // The code is one-shot (a second write finds the session gone), so a
+    // resend replays the verdict. The request carries a credential.
+    (
+        "finish_claude_link_login",
+        CommandClass::command(Replay::ReceiptOnly),
+    ),
+    ("cancel_claude_login", CommandClass::idempotent()),
     ("kill_agent", CommandClass::idempotent()),
     ("list_agents", CommandClass::read()),
     ("authenticate", CommandClass::read()),
@@ -216,6 +228,8 @@ fn identifying_fields(request_type: &str) -> &'static [&'static str] {
         "acp_deliver_auth_redirect" | "install_acp_agent" | "logout_agent" | "kill_agent" => {
             &["agentId"]
         }
+        "add_claude_account" => &["name"],
+        "finish_claude_link_login" => &["accountId"],
         _ => &[],
     }
 }

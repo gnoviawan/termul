@@ -10,6 +10,7 @@
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type {
+  ClaudeAccount,
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
@@ -975,6 +976,36 @@ export class WsAcpTransport implements AcpTransport {
 
   async setClaudeAutoSwitch(enabled: boolean): Promise<void> {
     await this.request('set_claude_auto_switch', { enabled })
+  }
+
+  async addClaudeAccount(name: string, options?: CommandCallOptions): Promise<ClaudeAccount> {
+    return this.request<ClaudeAccount>('add_claude_account', { name }, undefined, options)
+  }
+
+  async startClaudeLinkLogin(accountId: string): Promise<string> {
+    const reply = await this.request<{ url?: unknown }>('start_claude_link_login', { accountId })
+    if (typeof reply.url !== 'string') {
+      throw new AcpTransportError(
+        'protocol',
+        'malformed start_claude_link_login reply (missing url)'
+      )
+    }
+    return reply.url
+  }
+
+  async finishClaudeLinkLogin(
+    accountId: string,
+    code: string,
+    options?: CommandCallOptions
+  ): Promise<void> {
+    await this.request('finish_claude_link_login', { accountId, code }, undefined, options)
+  }
+
+  async cancelClaudeLogin(accountId: string): Promise<boolean> {
+    const reply = await this.request<{ cancelled?: boolean }>('cancel_claude_login', {
+      accountId
+    })
+    return reply.cancelled === true
   }
 
   async spawnAgent(

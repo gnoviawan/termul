@@ -257,8 +257,8 @@ export const WS_REQUEST_TYPES = [
   // Claude Accounts (ADR-0004): list `{}` → `ClaudeAccountsSnapshot`; choose
   // the Default `{ accountId }` → `{}` or a Project Account `{ projectId,
   // accountId | null, expectedAccountId? }` → `{ applied }`, where
-  // `expectedAccountId` makes the choice a compare-and-set. Add, sign-in,
-  // rename and remove stay host-local.
+  // `expectedAccountId` makes the choice a compare-and-set. Rename and remove
+  // stay host-local.
   'list_claude_accounts',
   // `{ force? }` → `{ usage: ClaudeAccountUsage[] }`; reads are cached 5 min
   // on the host (a forced read still reuses one younger than 60 s).
@@ -267,6 +267,16 @@ export const WS_REQUEST_TYPES = [
   'set_project_claude_account',
   // `{ enabled }` → `{}`: host-wide automatic switching at a usage limit.
   'set_claude_auto_switch',
+  // `{ name }` → the new signed-out `ClaudeAccount`.
+  'add_claude_account',
+  // Link sign-in: `start` `{ accountId }` → `{ url }` (the Claude sign-in
+  // link; replaces a running sign-in of the Account). `finish` `{ accountId,
+  // code }` → `{}` once the CLI stored the login; `claude_login_code_incomplete`
+  // keeps the sign-in waiting for another paste. `cancel` `{ accountId }` →
+  // `{ cancelled }` stops a browser or link sign-in.
+  'start_claude_link_login',
+  'finish_claude_link_login',
+  'cancel_claude_login',
   // The canvas gateway's renderer leg (spine AD-21, AD-29). `canvas_mount`
   // / `canvas_unmount` `{ projectId, mountSeq }` tell the host this connection
   // holds (or no longer holds) a project's canvas; the host then forwards
@@ -326,6 +336,10 @@ export const WS_COMMAND_CLASSES: Readonly<
   set_default_claude_account: ['idempotent', null],
   set_project_claude_account: ['idempotent', null],
   set_claude_auto_switch: ['idempotent', null],
+  add_claude_account: ['command', 'payload'],
+  start_claude_link_login: ['idempotent', null],
+  finish_claude_link_login: ['command', 'receipt-only'],
+  cancel_claude_login: ['idempotent', null],
   kill_agent: ['idempotent', null],
   list_agents: ['read', null],
   authenticate: ['read', null],
@@ -639,7 +653,10 @@ export const WS_ERROR_CODES = {
   // The Claude Account a request needs is not signed in: choosing it for a
   // Project or as the default (nothing changed), or starting a managed Claude
   // agent on it. The message names the Account and where to sign in.
-  CLAUDE_ACCOUNT_SIGNED_OUT: 'claude_account_signed_out'
+  CLAUDE_ACCOUNT_SIGNED_OUT: 'claude_account_signed_out',
+  // `finish_claude_link_login` got a code the Claude CLI calls incomplete.
+  // The sign-in still waits for the whole code.
+  CLAUDE_LOGIN_CODE_INCOMPLETE: 'claude_login_code_incomplete'
 } as const
 
 /** Union of all WS error code strings. */

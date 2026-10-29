@@ -472,6 +472,9 @@ pub enum WsErrorCode {
     /// a Project or as the default, or starting a managed Claude agent on it.
     /// The message names the Account and where to sign in.
     ClaudeAccountSignedOut,
+    /// `finish_claude_link_login` got a code the Claude CLI calls incomplete.
+    /// The sign-in still waits for the whole code.
+    ClaudeLoginCodeIncomplete,
 }
 
 impl WsErrorCode {
@@ -506,6 +509,7 @@ impl WsErrorCode {
             Self::CommandConflict => "command_conflict",
             Self::InvalidCommandId => "invalid_command_id",
             Self::ClaudeAccountSignedOut => "claude_account_signed_out",
+            Self::ClaudeLoginCodeIncomplete => "claude_login_code_incomplete",
         }
     }
 }

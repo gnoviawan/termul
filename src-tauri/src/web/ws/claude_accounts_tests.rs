@@ -156,3 +156,85 @@ async fn usage_in_api_key_mode_lists_every_account_without_a_probe() {
     assert_eq!(ids, vec!["default", "ab12"]);
     assert_eq!(usage[0]["status"], "unavailable");
 }
+
+#[tokio::test]
+async fn an_account_added_over_ws_is_stored_signed_out_on_the_host() {
+    let (root, acp) = manager_with_account(&[]);
+    let reply = handle_add_claude_account("1".into(), &json!({ "name": "Personal" }), &acp).await;
+    let account = reply.payload.unwrap();
+    assert_eq!(account["name"], "Personal");
+    let id = account["id"].as_str().unwrap();
+    let file = stored(&root);
+    let names: Vec<&str> = file["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["id"] == id)
+        .map(|row| row["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["Personal"]);
+
+    let duplicate =
+        handle_add_claude_account("2".into(), &json!({ "name": "Personal" }), &acp).await;
+    assert_eq!(duplicate.err.unwrap().code, "unsupported");
+    let malformed = handle_add_claude_account("3".into(), &json!({}), &acp).await;
+    assert_eq!(malformed.err.unwrap().code, "unsupported");
+}
+
+#[tokio::test]
+async fn a_code_with_no_sign_in_waiting_says_to_start_again() {
+    let (_root, acp) = manager_with_account(&[]);
+    let reply = handle_finish_claude_link_login(
+        "1".into(),
+        &json!({ "accountId": "ab12", "code": "abc#def" }),
+        &acp,
+    )
+    .await;
+    let err = reply.err.unwrap();
+    assert_eq!(err.code, "unsupported");
+    assert_eq!(
+        err.message,
+        "No sign-in is waiting for a code. Start the sign-in again."
+    );
+}
+
+#[tokio::test]
+async fn a_blank_code_is_incomplete_and_a_malformed_finish_never_echoes_the_code() {
+    let (_root, acp) = manager_with_account(&[]);
+    let reply = handle_finish_claude_link_login(
+        "1".into(),
+        &json!({ "accountId": "ab12", "code": " \n" }),
+        &acp,
+    )
+    .await;
+    assert_eq!(reply.err.unwrap().code, "claude_login_code_incomplete");
+
+    let reply = handle_finish_claude_link_login(
+        "2".into(),
+        &json!({ "accountId": 7, "code": "secret#code" }),
+        &acp,
+    )
+    .await;
+    let err = reply.err.unwrap();
+    assert_eq!(err.code, "unsupported");
+    assert!(!err.message.contains("secret"));
+}
+
+#[tokio::test]
+async fn cancel_reports_whether_a_sign_in_was_running() {
+    let (_root, acp) = manager_with_account(&[]);
+    let reply = handle_cancel_claude_login("1".into(), &json!({ "accountId": "ab12" }), &acp).await;
+    assert_eq!(reply.payload.unwrap(), json!({ "cancelled": false }));
+    let malformed = handle_cancel_claude_login("2".into(), &json!({}), &acp).await;
+    assert_eq!(malformed.err.unwrap().code, "unsupported");
+}
+
+#[tokio::test]
+async fn a_link_sign_in_for_an_unknown_account_is_refused_before_the_cli_starts() {
+    let (_root, acp) = manager_with_account(&[]);
+    let reply =
+        handle_start_claude_link_login("1".into(), &json!({ "accountId": "ffff" }), &acp).await;
+    let err = reply.err.unwrap();
+    assert_eq!(err.code, "unsupported");
+    assert_eq!(err.message, "That Claude account does not exist");
+}
