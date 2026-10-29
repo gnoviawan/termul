@@ -71,6 +71,9 @@ export function decideAutoSwitch({
 const log = (message: string, level: 'info' | 'warn' = 'info'): void =>
   void logFrontendError({ level, source: 'claudeAutoSwitch', message })
 
+/** Wait before a limit whose Account or usage read failed is tried again. */
+const READ_RETRY_MS = 30_000
+
 const limitEvent = (limit: ClaudeRateLimit): string => `${limit.kind ?? ''}:${limit.resetsAt ?? ''}`
 
 interface LimitedChat {
@@ -154,7 +157,10 @@ export function startClaudeAutoSwitch(): () => void {
         return
       case 'resume': {
         log(`No other account has room; chats ${idList} continue when the limit resets`)
-        for (const id of sessionIds) useClaudeResumeStore.getState().schedule(id, decision.at)
+        for (const { sessionId, limit } of fresh) {
+          const at = limit.resetsAt === null ? decision.at : limit.resetsAt * 1000
+          useClaudeResumeStore.getState().schedule(sessionId, at)
+        }
         toast.info(`${reached} No other account has room.`, {
           description: `The chat continues at ${formatClock(decision.at)}.`
         })
@@ -168,17 +174,31 @@ export function startClaudeAutoSwitch(): () => void {
           useClaudeResumeStore.getState().cancel(id)
         }
         try {
-          const applied = await switchProjectClaudeAccount(projectId, to.account.id, {
+          const continued = await switchProjectClaudeAccount(projectId, to.account.id, {
             continueSessionIds: sessionIds,
             expectedAccountId: currentId
           })
-          if (!applied) {
+          if (!continued) {
             log(
               `Another client switched project ${projectId} first; chats ${idList} continue there`
             )
             return
           }
-          log(`Project ${projectId} switched; chats ${idList} continued`)
+          const stalled = sessionIds.filter((id) => !continued.includes(id))
+          if (stalled.length > 0) {
+            log(
+              `Project ${projectId} switched to ${to.account.name}, but chats ${stalled.join(', ')} could not continue`,
+              'warn'
+            )
+            toast.warning(
+              `${reached} Switched to ${to.account.name}, but the chat did not continue.`,
+              {
+                description: 'Send the message again to continue.'
+              }
+            )
+            if (continued.length === 0) return
+          }
+          log(`Project ${projectId} switched; chats ${continued.join(', ')} continued`)
           toast.success(`${reached} Continued on ${to.account.name}.`)
         } catch (error) {
           log(
@@ -210,12 +230,24 @@ export function startClaudeAutoSwitch(): () => void {
     for (const [projectId, chats] of byProject) {
       busyProjects.add(projectId)
       void act(projectId, chats)
-        .catch((error) =>
+        .catch((error) => {
+          // The Account or usage read failed before anything changed: let these
+          // limits be tried again after a pause.
           log(
-            `Automatic switching of project ${projectId} failed: ${error instanceof Error ? error.message : String(error)}`,
+            `Automatic switching of project ${projectId} failed: ${error instanceof Error ? error.message : String(error)}; trying again in ${READ_RETRY_MS / 1000}s`,
             'warn'
           )
-        )
+          setTimeout(() => {
+            for (const { sessionId, limit } of chats) {
+              handled.delete(sessionId)
+              const prefix = `${sessionId}:${limit.resetsAt ?? ''}:`
+              for (const attempt of attempts)
+                if (attempt.startsWith(prefix)) attempts.delete(attempt)
+            }
+            lastUsage = null
+            check(useAcpStore.getState())
+          }, READ_RETRY_MS)
+        })
         .finally(() => {
           busyProjects.delete(projectId)
           // A chat that reached its limit during this run is checked now.

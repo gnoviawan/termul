@@ -341,6 +341,24 @@ async fn a_signed_out_account_is_refused_as_the_project_account_and_nothing_chan
 }
 
 #[tokio::test]
+async fn a_stale_expectation_loses_before_the_sign_in_probe() {
+    let (h, work) = host_with_signed_out_work();
+    let applied = h
+        .service
+        .set_project_account(
+            "office",
+            Some(&work),
+            Some("someone-else"),
+            SignInCheck::Required,
+        )
+        .await
+        .unwrap();
+    assert!(!applied);
+    assert!(h.accounts.snapshot().unwrap().project_profiles.is_empty());
+    assert!(h.runtime.probed.lock().is_empty());
+}
+
+#[tokio::test]
 async fn an_account_whose_login_cannot_be_read_is_refused_too() {
     let h = host(|_| None);
     let side = h.accounts.add("Side").unwrap();

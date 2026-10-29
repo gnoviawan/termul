@@ -159,6 +159,21 @@ impl ClaudeAgentService {
         check: SignInCheck,
     ) -> Result<bool, String> {
         let store = self.account_store()?;
+        if let Some(expected) = expected {
+            // A stale expectation loses before the sign-in probe, so the losing
+            // client is not asked to sign in to an Account it no longer needs.
+            let snapshot = store.snapshot()?;
+            let current = snapshot
+                .project_profiles
+                .get(project_id.trim())
+                .unwrap_or(&snapshot.default_account_id);
+            if current != expected {
+                log::info!(
+                    "[claude-accounts] project profile unchanged: the project no longer uses the expected profile"
+                );
+                return Ok(false);
+            }
+        }
         if check == SignInCheck::Required {
             match account_id {
                 Some(id) => self.ensure_signed_in(store, id, Choice::Account).await?,

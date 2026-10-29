@@ -176,7 +176,9 @@ describe('claude account switch', () => {
   })
 
   it('restarts only the Claude chats of the project, continuing the one that hit the limit', async () => {
-    await applyProjectClaudeAccount('office', { continueSessionIds: ['c2'] })
+    await expect(
+      applyProjectClaudeAccount('office', { continueSessionIds: ['c2'] })
+    ).resolves.toEqual(['c2'])
     const restarted = retryCrashedSession.mock.calls.map(([id, o]) => [id, o.resend])
     expect(restarted).toEqual(
       expect.arrayContaining([
@@ -198,7 +200,7 @@ describe('claude account switch', () => {
   })
 
   it('saves the project account on the host before restarting', async () => {
-    await expect(switchProjectClaudeAccount('office', 'ab12')).resolves.toBe(true)
+    await expect(switchProjectClaudeAccount('office', 'ab12')).resolves.toEqual([])
     expect(api.setProjectAccount).toHaveBeenCalledWith('office', 'ab12', {
       expectedAccountId: undefined
     })
@@ -410,7 +412,7 @@ describe('a switch the host refuses', () => {
         continueSessionIds: ['c1'],
         expectedAccountId: 'default'
       })
-    ).resolves.toBe(false)
+    ).resolves.toBeNull()
     expect(api.setProjectAccount).toHaveBeenCalledWith('office', 'ab12', {
       expectedAccountId: 'default'
     })

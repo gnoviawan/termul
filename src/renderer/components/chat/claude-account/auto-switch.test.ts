@@ -19,7 +19,9 @@ const { api, switcher } = vi.hoisted(() => ({
 
 vi.mock('@/lib/claude-accounts-api', () => ({ claudeAccountsApi: api }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }))
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }
+}))
 vi.mock('@/stores/claude-account-switch', async () => {
   const actual = await vi.importActual<typeof import('@/stores/claude-account-switch')>(
     '@/stores/claude-account-switch'
@@ -160,7 +162,7 @@ describe('startClaudeAutoSwitch', () => {
     seed()
     api.list.mockResolvedValue(snapshot())
     api.usage.mockResolvedValue([read('default', 100), read('ab12', 4), read('cd34', 40)])
-    switcher.switchProjectClaudeAccount.mockResolvedValue(true)
+    switcher.switchProjectClaudeAccount.mockResolvedValue(['s1'])
     switcher.isChatOpenHere.mockReturnValue(true)
     stop = startClaudeAutoSwitch()
   })
@@ -185,15 +187,15 @@ describe('startClaudeAutoSwitch', () => {
   })
 
   it('shows the switch on the card while it runs', async () => {
-    let finish: (applied: boolean) => void = () => undefined
+    let finish: (continued: string[] | null) => void = () => undefined
     switcher.switchProjectClaudeAccount.mockReturnValue(
-      new Promise<boolean>((resolve) => {
+      new Promise<string[] | null>((resolve) => {
         finish = resolve
       })
     )
     setLimit(limit(1_900_000_000))
     await vi.waitFor(() => expect(useClaudeSwitchingStore.getState()).toEqual({ s1: 'Work' }))
-    finish(true)
+    finish(['s1'])
     await vi.waitFor(() => expect(useClaudeSwitchingStore.getState()).toEqual({}))
   })
 
@@ -222,7 +224,7 @@ describe('startClaudeAutoSwitch', () => {
   })
 
   it('does nothing else when another client switched the project first', async () => {
-    switcher.switchProjectClaudeAccount.mockResolvedValue(false)
+    switcher.switchProjectClaudeAccount.mockResolvedValue(null)
     setLimit(limit(1_900_000_000))
     await vi.waitFor(() =>
       expect(logged()).toContain(
@@ -231,6 +233,38 @@ describe('startClaudeAutoSwitch', () => {
     )
     expect(toast.success).not.toHaveBeenCalled()
     expect(useClaudeResumeStore.getState().at).toEqual({})
+  })
+
+  it('says so when the account changed but the chat could not continue', async () => {
+    switcher.switchProjectClaudeAccount.mockResolvedValue([])
+    setLimit(limit(1_900_000_000))
+    await vi.waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        'Personal reached its 5-hour limit. Switched to Work, but the chat did not continue.',
+        { description: 'Send the message again to continue.' }
+      )
+    )
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it('tries a limit again after the usage read failed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      api.usage.mockRejectedValueOnce(new Error('host busy'))
+      setLimit(limit(1_900_000_000))
+      await vi.waitFor(() => expect(api.usage).toHaveBeenCalledTimes(1))
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(api.usage).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(30_000)
+      await vi.waitFor(() =>
+        expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12', {
+          continueSessionIds: ['s1'],
+          expectedAccountId: 'default'
+        })
+      )
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('continues at the reset when no other account has room', async () => {
