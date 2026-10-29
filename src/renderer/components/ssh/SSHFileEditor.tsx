@@ -7,7 +7,7 @@ import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { useCodeMirror } from '@/hooks/use-codemirror'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { detectLanguage } from '@/stores/editor-store'
+import { detectLanguage } from '@/lib/editor-file-kind'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import {
   useSSHActions,

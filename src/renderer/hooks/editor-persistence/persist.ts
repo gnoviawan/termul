@@ -6,6 +6,37 @@ import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 import { serializePaneTree } from './pane-tree'
 import { editorStateKey, type PersistedEditorFile, type PersistedEditorState } from './types'
 
+/** A media tab persists by path alone; the view fields keep their defaults. */
+function persistedFile(file: EditorFileState): PersistedEditorFile {
+  if (file.kind !== 'text') {
+    return {
+      filePath: file.filePath,
+      cursorPosition: { line: 1, col: 1 },
+      scrollTop: 0,
+      viewMode: 'code',
+      isDirty: false,
+      lastModified: file.lastModified
+    }
+  }
+  const conflict = file.draftConflict
+  const persisted: PersistedEditorFile = {
+    filePath: file.filePath,
+    cursorPosition: file.cursorPosition,
+    scrollTop: file.scrollTop,
+    viewMode: file.viewMode,
+    // An unresolved conflict persists as a dirty draft stamped with the
+    // draft's own save time so the next restore re-evaluates it.
+    isDirty: file.isDirty || conflict !== undefined,
+    lastModified: conflict ? conflict.draftSavedAt : file.lastModified
+  }
+  if (conflict) {
+    persisted.draftContent = conflict.draftContent
+  } else if (file.isDirty) {
+    persisted.draftContent = file.content
+  }
+  return persisted
+}
+
 /**
  * Persist the VISIBLE project's editor/explorer/pane state under
  * `workspace/<projectId>`. Refuses for any project whose tree is not the
@@ -22,23 +53,7 @@ export function persistState(projectId: string): void {
 
   const openFiles: PersistedEditorFile[] = []
   editorState.openFiles.forEach((file: EditorFileState) => {
-    const conflict = file.draftConflict
-    const persisted: PersistedEditorFile = {
-      filePath: file.filePath,
-      cursorPosition: file.cursorPosition,
-      scrollTop: file.scrollTop,
-      viewMode: file.viewMode,
-      // An unresolved conflict persists as a dirty draft stamped with the
-      // draft's own save time so the next restore re-evaluates it.
-      isDirty: file.isDirty || conflict !== undefined,
-      lastModified: conflict ? conflict.draftSavedAt : file.lastModified
-    }
-    if (conflict) {
-      persisted.draftContent = conflict.draftContent
-    } else if (file.isDirty) {
-      persisted.draftContent = file.content
-    }
-    openFiles.push(persisted)
+    openFiles.push(persistedFile(file))
   })
 
   const expandedDirs = Array.from(explorerState.expandedDirs)
