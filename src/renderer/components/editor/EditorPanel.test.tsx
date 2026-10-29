@@ -37,6 +37,7 @@ function seed(overrides: Partial<EditorFileState> = {}): void {
         {
           filePath: FILE,
           content: 'disk version',
+          kind: 'text',
           originalContent: 'disk version',
           isDirty: false,
           language: 'markdown',
@@ -78,7 +79,7 @@ describe('EditorPanel draft conflict lock', () => {
 
   it('makes the markdown editor read-only while a draft conflict is unresolved', () => {
     seed({
-      viewMode: 'markdown',
+      viewMode: 'preview',
       draftConflict: { draftContent: 'draft', draftSavedAt: 1_000 }
     })
     render(<EditorPanel filePath={FILE} isVisible />)

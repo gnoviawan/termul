@@ -23,6 +23,7 @@ function open(contentHash: string | undefined) {
         {
           filePath: path,
           content: 'edited',
+          kind: 'text',
           originalContent: 'original',
           isDirty: true,
           language: 'typescript',

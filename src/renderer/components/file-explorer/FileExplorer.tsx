@@ -200,8 +200,12 @@ export function FileExplorer(): React.JSX.Element {
       try {
         await useEditorStore.getState().openFile(path)
         useWorkspaceStore.getState().addEditorTab(path)
-      } catch {
-        // File couldn't be opened (binary, too large, etc.)
+      } catch (error) {
+        // Binary and too-large files open as an unsupported tab; this is a
+        // read that failed outright (permissions, a vanished file).
+        toast.error(
+          `Failed to open file: ${error instanceof Error ? error.message : String(error)}`
+        )
       }
     },
     [selectPath, isMobileWebShell]

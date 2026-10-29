@@ -16,11 +16,7 @@ import { markEditorSelfSave } from '@/lib/editor-self-save'
 import { logFrontendError } from '@/lib/log-api'
 import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
 import { sha256Hex } from '@/lib/sha256-hex'
-import {
-  type EditorFileState,
-  loadEditorFile,
-  type TextFileState
-} from './editor-file-state'
+import { type EditorFileState, loadEditorFile, type TextFileState } from './editor-file-state'
 
 /** Saves currently in flight, by file path (in-flight guard, QA r2 story 4). */
 const savesInFlight = new Map<string, Promise<boolean>>()

@@ -10,7 +10,11 @@
 import { loadPersistedTerminals } from '@/hooks/useTerminalAutoSave'
 import { persistenceApi } from '@/lib/api'
 import { emptyStagedProject, type StagedProject } from '@/lib/project-switch/types'
-import { type EditorFileState, loadEditorFile, type TextFileState } from '@/stores/editor-file-state'
+import {
+  type EditorFileState,
+  loadEditorFile,
+  type TextFileState
+} from '@/stores/editor-file-state'
 import { reconcileDraft } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'

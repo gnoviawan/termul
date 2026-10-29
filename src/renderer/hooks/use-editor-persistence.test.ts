@@ -37,17 +37,19 @@ vi.mock('@/lib/api', () => ({
 function createEditorFileState(filePath: string): {
   filePath: string
   content: string
+  kind: 'text',
   originalContent: string
   isDirty: boolean
   language: string
   lastModified: number
-  viewMode: 'code' | 'markdown'
+  viewMode: 'code' | 'preview'
   cursorPosition: { line: number; col: number }
   scrollTop: number
 } {
   return {
     filePath,
     content: '',
+    kind: 'text',
     originalContent: '',
     isDirty: false,
     language: 'typescript',

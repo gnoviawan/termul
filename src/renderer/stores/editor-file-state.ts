@@ -125,7 +125,13 @@ export async function loadEditorFile(filePath: string): Promise<EditorFileState>
     message: `opened '${basename(filePath)}' as unsupported (${result.code})`
   })
   return result.code === 'BINARY_FILE'
-    ? { ...base, kind: 'unsupported', isDirty: false, reason: 'binary', ...(await sizeOf(filePath)) }
+    ? {
+        ...base,
+        kind: 'unsupported',
+        isDirty: false,
+        reason: 'binary',
+        ...(await sizeOf(filePath))
+      }
     : {
         ...base,
         kind: 'unsupported',

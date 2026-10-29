@@ -86,6 +86,7 @@ function seedOpenFile(): void {
   const fileState: EditorFileState = {
     filePath: path,
     content: 'edited content',
+    kind: 'text',
     originalContent: 'original content',
     isDirty: true,
     language: 'markdown',

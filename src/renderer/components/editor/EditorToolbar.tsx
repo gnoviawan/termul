@@ -3,7 +3,7 @@ import { ChevronRight, Code2, Eye, PanelRight, Save } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { FOCUS_RING_CLASS, SEGMENTED_TRACK_CLASS, segmentClass } from '@/components/ui/panel-styles'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
-import type { EditorViewMode } from '@/lib/editor-file-kind'
+import { type EditorViewMode, textPreviewForPath } from '@/lib/editor-file-kind'
 import { requestSaveEditorFile } from '@/lib/editor-save'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
@@ -53,8 +53,8 @@ export function EditorToolbar({
   const [saveTapped, setSaveTapped] = useState(false)
 
   // The outline and the document stats read markdown structure only.
-  const isMarkdown = fileState?.kind === 'text' && fileState.language === 'markdown'
-  const content = isMarkdown ? fileState.content : undefined
+  const isMarkdown = textPreviewForPath(filePath) === 'markdown'
+  const content = isMarkdown && fileState?.kind === 'text' ? fileState.content : undefined
   const statsLabel = useMemo(
     () => (content === undefined ? null : formatDocumentStats(getDocumentStats(content))),
     [content]

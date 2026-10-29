@@ -704,6 +704,7 @@ describe('WorkspaceLayout aggregate bulk close', () => {
       [
         '/a.ts',
         {
+          kind: 'text',
           isDirty: false,
           draftConflict: { draftContent: 'd', draftSavedAt: 1 },
           operationStatus: 'idle'
