@@ -2,7 +2,7 @@ use super::{validate_project_path, IpcResult};
 use crate::media_bytes::{log_name, read_media, MediaErrorCode, MediaReadError};
 use crate::path_validation;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tauri::ipc::Response;
 use tauri::AppHandle;
 

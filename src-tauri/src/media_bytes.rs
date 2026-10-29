@@ -136,7 +136,6 @@ impl MediaReadError {
 #[derive(Debug)]
 pub struct MediaBytes {
     pub bytes: Vec<u8>,
-    pub kind: MediaKind,
     pub mime: &'static str,
 }
 
@@ -171,7 +170,7 @@ pub fn read_media(path: &Path) -> Result<MediaBytes, MediaReadError> {
     if bytes.len() as u64 > cap {
         return Err(MediaReadError::too_large(kind, bytes.len() as u64));
     }
-    Ok(MediaBytes { bytes, kind, mime })
+    Ok(MediaBytes { bytes, mime })
 }
 
 #[cfg(test)]

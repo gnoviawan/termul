@@ -35,8 +35,8 @@ fn reads_image_video_and_pdf_with_their_mime() {
         let path = write(dir.path(), name, b"ABC");
         let media = read_media(&path).expect(name);
         assert_eq!(media.bytes, b"ABC", "{name}");
-        assert_eq!(media.kind, kind, "{name}");
         assert_eq!(media.mime, mime, "{name}");
+        assert_eq!(media_type_for_path(&path), Some((kind, mime)), "{name}");
     }
 }
 
