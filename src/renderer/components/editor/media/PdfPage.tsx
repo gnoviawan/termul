@@ -48,6 +48,11 @@ export function PdfPage({
       })
       .catch((error: unknown) => {
         if (cancelled) return
+        const message = document.createElement('p')
+        message.className =
+          'flex size-full items-center justify-center p-4 text-center text-xs text-muted-foreground'
+        message.textContent = `Page ${pageNumber} couldn't be rendered.`
+        host.replaceChildren(message)
         void logFrontendError({
           level: 'warn',
           source: 'pdfViewer.render',

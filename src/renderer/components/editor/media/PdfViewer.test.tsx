@@ -157,6 +157,19 @@ describe('PdfViewer', () => {
     ])
   })
 
+  it('says which page failed when a page cannot render', async () => {
+    const doc = fakeDoc(2, async () => {
+      throw new Error('bad page')
+    })
+    opens({ ok: true, doc })
+    const { container } = render(<PdfViewer filePath={FILE} revision={0} />)
+    await settle()
+
+    expect(screen.getByText("Page 1 couldn't be rendered.")).toBeInTheDocument()
+    expect(screen.getByText("Page 2 couldn't be rendered.")).toBeInTheDocument()
+    expect(canvasCount(container)).toBe(0)
+  })
+
   it('leaves pages away from the viewport unpainted', async () => {
     nearPages = (page) => page <= 2
     const doc = fakeDoc(5)
