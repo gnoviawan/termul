@@ -39,9 +39,9 @@ const FILE_PATH_REMARK_PLUGINS = [
  * property names (`data-path` -> `dataPath`); the tags themselves carry no
  * `href`/`src`, so `rehype-harden` never blocks them.
  */
-const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
+export const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
   'termul-file-path': ['dataPath'],
-  'termul-media': ['dataUrl', 'dataAlt', 'dataOpenPath']
+  'termul-media': ['dataUrl', 'dataAlt', 'dataLinkPreview']
 }
 
 function stringProp(props: Record<string, unknown>, name: string): string | undefined {

@@ -54,9 +54,20 @@ interface LinkPreview {
   tag: string
 }
 
-function mediaLinkPreview(node: MarkdownNode): LinkPreview | null {
-  if (node.type !== 'link' || containsImage(node)) return null
-  const url = node.url ?? ''
+function linkUrl(node: MarkdownNode, definitions: Map<string, string>): string | undefined {
+  if (node.type === 'link') return node.url
+  if (node.type === 'linkReference' && node.identifier !== undefined) {
+    return definitions.get(node.identifier)
+  }
+  return undefined
+}
+
+function mediaLinkPreview(
+  node: MarkdownNode,
+  definitions: Map<string, string>
+): LinkPreview | null {
+  const url = linkUrl(node, definitions)
+  if (url === undefined || containsImage(node)) return null
   const path = localLinkPath(url)
   const kind = path === null ? null : mediaKindForPath(path)
   if (path === null || (kind !== 'image' && kind !== 'video')) return null
@@ -76,7 +87,7 @@ function transformChildren(node: MarkdownNode, definitions: Map<string, string>)
     if (url !== undefined) {
       return [{ type: 'html', value: termulMediaTag(url, child.alt ?? '') }]
     }
-    const preview = mediaLinkPreview(child)
+    const preview = mediaLinkPreview(child, definitions)
     if (preview !== null) {
       bubbled.push(preview)
       return [child]

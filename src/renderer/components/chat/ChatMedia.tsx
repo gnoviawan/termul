@@ -8,10 +8,14 @@ import type { BytesSource, ChatMedia as ChatMediaModel } from './chat-media-sour
 
 export type ChatMediaLayout = 'inline' | 'tile'
 
-function useBytesObjectUrl(source: BytesSource | null): string | null {
+type ReadFailure = Extract<MediaObjectUrlState, { status: 'error' }>
+
+type ChatMediaState = { status: 'loading' } | { status: 'ready'; url: string } | ReadFailure
+
+function useBytesObjectUrl(source: BytesSource | null): ChatMediaState {
   const base64 = source?.base64 ?? null
   const mime = source?.mime ?? ''
-  const [url, setUrl] = useState<string | null>(null)
+  const [state, setState] = useState<ChatMediaState>({ status: 'loading' })
 
   useEffect(() => {
     if (base64 === null) return
@@ -27,33 +31,30 @@ function useBytesObjectUrl(source: BytesSource | null): string | null {
         source: 'ChatMedia.bytes',
         message: `Failed to decode inline ${mime || 'media'} bytes: ${String(error)}`
       })
+      setState({ status: 'error', code: 'READ_ERROR', message: String(error) })
       return
     }
-    setUrl(created)
+    setState({ status: 'ready', url: created })
     return () => {
       URL.revokeObjectURL(created)
-      setUrl(null)
+      setState({ status: 'loading' })
     }
   }, [base64, mime])
 
-  return base64 === null ? null : url
+  return state
 }
-
-type ReadFailure = Extract<MediaObjectUrlState, { status: 'error' }>
-
-type ChatMediaState = { status: 'loading' } | { status: 'ready'; url: string } | ReadFailure
 
 function useChatMediaState(media: ChatMediaModel, loadPath: boolean): ChatMediaState {
   const { src } = media
   const pathState = useMediaObjectUrlState(src.from === 'path' && loadPath ? src.path : null, 0)
-  const bytesUrl = useBytesObjectUrl(src.from === 'bytes' ? src : null)
+  const bytesState = useBytesObjectUrl(src.from === 'bytes' ? src : null)
   switch (src.from) {
     case 'url':
       return { status: 'ready', url: src.url }
     case 'path':
       return pathState
     case 'bytes':
-      return bytesUrl ? { status: 'ready', url: bytesUrl } : { status: 'loading' }
+      return bytesState
   }
 }
 
@@ -184,6 +185,13 @@ function ChatVideo({ media }: { media: ChatMediaModel }): React.JSX.Element {
 
 function ChatAudio({ media }: { media: ChatMediaModel }): React.JSX.Element | null {
   const state = useChatMediaState(media, true)
+  if (state.status === 'error') {
+    return (
+      <span role="status" className="text-xs text-muted-foreground">
+        {readFailureText(media.name, 'play', state)}
+      </span>
+    )
+  }
   if (state.status !== 'ready') return null
   return (
     // biome-ignore lint/a11y/useMediaCaption: ACP audio blocks do not provide caption tracks.

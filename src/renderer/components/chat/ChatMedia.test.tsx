@@ -239,4 +239,28 @@ describe('MediaBlocks inline media', () => {
     expect(container.querySelector('img, video, audio')).toBeNull()
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('says inline audio and video that fail to decode could not be read', async () => {
+    render(
+      <>
+        <ChatMedia
+          media={{
+            kind: 'audio',
+            name: 'voice.wav',
+            src: { from: 'bytes', base64: '%%%', mime: 'audio/wav' }
+          }}
+        />
+        <ChatMedia
+          media={{
+            kind: 'video',
+            name: 'clip.webm',
+            src: { from: 'bytes', base64: '%%%', mime: 'video/webm' }
+          }}
+        />
+      </>
+    )
+    expect(await screen.findByText("voice.wav couldn't be read")).toBeInTheDocument()
+    expect(await screen.findByText("clip.webm couldn't be read")).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Play video: clip.webm' })).toBeNull()
+  })
 })

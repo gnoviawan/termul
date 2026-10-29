@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chatMediaFromBlock, chatMediaFromMarkdown } from './chat-media-source'
+import { chatMediaFromBlock, chatMediaFromMarkdown, decodedLength } from './chat-media-source'
 
 describe('chatMediaFromMarkdown', () => {
   it.each([
@@ -185,5 +185,13 @@ describe('chatMediaFromBlock', () => {
     ]
   ])('returns null for %s', (_label, block) => {
     expect(chatMediaFromBlock(block)).toBeNull()
+  })
+})
+
+describe('decodedLength', () => {
+  it('does not count base64 padding as bytes', () => {
+    expect(decodedLength('QUJD')).toBe(3)
+    expect(decodedLength('QUI=')).toBe(2)
+    expect(decodedLength('QQ==')).toBe(1)
   })
 })

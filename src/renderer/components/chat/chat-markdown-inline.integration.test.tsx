@@ -23,6 +23,7 @@ vi.mock('@/lib/tauri-runtime', async (importOriginal) => {
 })
 
 import { TermulFilePathButton, TermulMarkdownMedia } from './ChatMessage'
+import { STREAMDOWN_ALLOWED_TAGS } from './chat-agent-prose'
 import { remarkFilePathLinks } from './chat-markdown-file-links'
 import { remarkTermulMedia } from './chat-markdown-images'
 
@@ -32,11 +33,6 @@ const REMARK_PLUGINS = [
   remarkFilePathLinks
 ]
 
-const ALLOWED_TAGS = {
-  'termul-file-path': ['dataPath'],
-  'termul-media': ['dataUrl', 'dataAlt', 'dataOpenPath']
-}
-
 /** Mirrors the AgentProse wiring in ChatMessage.tsx with real Streamdown. */
 function chatElement(text: string, cwd?: string): React.JSX.Element {
   const components: Components = {
@@ -44,7 +40,7 @@ function chatElement(text: string, cwd?: string): React.JSX.Element {
       <TermulMarkdownMedia
         url={typeof props['data-url'] === 'string' ? props['data-url'] : ''}
         alt={typeof props['data-alt'] === 'string' ? props['data-alt'] : ''}
-        openPath={typeof props['data-open-path'] === 'string' ? props['data-open-path'] : undefined}
+        linkPreview={props['data-link-preview'] === 'true'}
         filePathContext={{ cwd }}
       />
     ),
@@ -61,7 +57,7 @@ function chatElement(text: string, cwd?: string): React.JSX.Element {
     <Streamdown
       mode="static"
       remarkPlugins={REMARK_PLUGINS}
-      allowedTags={ALLOWED_TAGS}
+      allowedTags={STREAMDOWN_ALLOWED_TAGS}
       components={components}
       controls={false}
       lineNumbers={false}
@@ -303,6 +299,14 @@ describe('chat inline termul tags with real Streamdown', () => {
     const open = screen.getByTestId('termul-file-path')
     expect(open).toHaveAttribute('data-path', 'out/shot.png')
     expect(open).toHaveTextContent('the shot')
+  })
+
+  it('renders nothing for a media link preview that cannot resolve', async () => {
+    renderChat('See [clip](clip.mp4) here.')
+
+    await waitFor(() => expect(screen.getByText(/See/)).toBeInTheDocument())
+    expect(screen.queryByTestId('chat-media-alt')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Play video: clip' })).toBeNull()
   })
 
   it('renders a link to a local video as a player with its open-in-editor button', async () => {

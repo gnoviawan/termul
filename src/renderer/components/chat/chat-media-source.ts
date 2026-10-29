@@ -63,13 +63,18 @@ function urlPathPart(url: string): string {
   }
 }
 
+export function decodedLength(base64: string): number {
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+  return Math.floor((base64.length * 3) / 4) - padding
+}
+
 function fromBase64(
   kind: ChatMediaKind,
   name: string,
   base64: string,
   mime: string
 ): ChatMedia | null {
-  if (base64.length * 0.75 > INLINE_MAX_BYTES[kind]) return null
+  if (decodedLength(base64) > INLINE_MAX_BYTES[kind]) return null
   return { kind, name, src: { from: 'bytes', base64, mime } }
 }
 

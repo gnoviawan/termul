@@ -358,7 +358,7 @@ describe('ChatMessage', () => {
       'data-allowed-tags',
       JSON.stringify({
         'termul-file-path': ['dataPath'],
-        'termul-media': ['dataUrl', 'dataAlt', 'dataOpenPath']
+        'termul-media': ['dataUrl', 'dataAlt', 'dataLinkPreview']
       })
     )
     // The image rewrite is always on; the file-path plugin waits for a context.
