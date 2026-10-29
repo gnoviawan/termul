@@ -37,7 +37,7 @@ vi.mock('@/lib/api', () => ({
 function createEditorFileState(filePath: string): {
   filePath: string
   content: string
-  kind: 'text',
+  kind: 'text'
   originalContent: string
   isDirty: boolean
   language: string
