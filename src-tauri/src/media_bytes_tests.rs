@@ -130,3 +130,23 @@ fn error_serializes_as_code_and_message() {
         serde_json::json!({ "code": "NOT_A_FILE", "message": "path is not a regular file" })
     );
 }
+
+#[test]
+fn refuses_a_name_whose_kind_differs_from_its_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let clip = write(dir.path(), "clip.mp4", b"video");
+    let link = dir.path().join("photo.png");
+    std::os::unix::fs::symlink(&clip, &link).expect("symlink");
+    let err = read_err(&link);
+    assert_eq!(err.code, MediaErrorCode::UnsupportedMedia);
+    assert_eq!(err.message, "the file's media type does not match its name");
+}
+
+#[test]
+fn reads_a_same_kind_symlink() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let jpeg = write(dir.path(), "shot.jpeg", b"jpeg");
+    let link = dir.path().join("shot.jpg");
+    std::os::unix::fs::symlink(&jpeg, &link).expect("symlink");
+    assert_eq!(read_media(&link).expect("read").bytes, b"jpeg");
+}

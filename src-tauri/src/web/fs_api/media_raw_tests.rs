@@ -5,6 +5,8 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use tower::ServiceExt;
 
+use super::MAX_CONCURRENT_RAW;
+
 use crate::acp::AcpManager;
 use crate::web::auth::{WebAuth, WebAuthToken};
 use crate::web::origin::OriginPolicy;
@@ -152,4 +154,59 @@ async fn gated_server_refuses_without_bearer_and_serves_with_it() {
     let served = get(app(dir.path(), Some("t0ken")), path, Some("t0ken")).await;
     assert_eq!(served.status(), StatusCode::OK);
     assert_eq!(served.headers()["content-type"], "image/png");
+}
+
+#[tokio::test]
+async fn missing_path_query_is_400_invalid_path_with_the_failure_body() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let resp = app(dir.path(), None)
+        .oneshot(
+            Request::builder()
+                .uri("/fs/raw")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(resp).await,
+        serde_json::json!({
+            "success": false,
+            "error": "missing or invalid `path` query parameter",
+            "code": "INVALID_PATH"
+        })
+    );
+}
+
+#[tokio::test]
+async fn image_name_linked_to_a_video_is_415() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let clip = dir.path().join("clip.mp4");
+    std::fs::write(&clip, b"video").expect("write");
+    let link = dir.path().join("photo.png");
+    std::os::unix::fs::symlink(&clip, &link).expect("symlink");
+
+    let resp = get(app(dir.path(), None), link.to_str().expect("utf8"), None).await;
+
+    assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(json_body(resp).await["code"], "UNSUPPORTED_MEDIA");
+}
+
+#[tokio::test]
+async fn multi_chunk_bodies_arrive_whole_and_release_their_read_slot() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("frame.png");
+    let payload: Vec<u8> = (0..700 * 1024).map(|i| (i % 251) as u8).collect();
+    std::fs::write(&file, &payload).expect("write");
+    let app = app(dir.path(), None);
+
+    for _ in 0..MAX_CONCURRENT_RAW + 2 {
+        let resp = get(app.clone(), file.to_str().expect("utf8"), None).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers()["content-length"], "716800");
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.expect("body");
+        assert_eq!(&bytes[..], &payload[..]);
+    }
 }
