@@ -99,7 +99,7 @@ beforeEach(() => {
       sessions: { ...s.sessions, [id]: { ...s.sessions[id], activeTurn: false, openTurnId: null } }
     }))
   })
-  api.setProjectAccount.mockResolvedValue(undefined)
+  api.setProjectAccount.mockResolvedValue(true)
   useAcpStore.setState({
     ...FRESH,
     killAgent,
@@ -176,7 +176,9 @@ describe('claude account switch', () => {
   })
 
   it('restarts only the Claude chats of the project, continuing the one that hit the limit', async () => {
-    await applyProjectClaudeAccount('office', { continueSessionId: 'c2' })
+    await expect(
+      applyProjectClaudeAccount('office', { continueSessionIds: ['c2'] })
+    ).resolves.toEqual(['c2'])
     const restarted = retryCrashedSession.mock.calls.map(([id, o]) => [id, o.resend])
     expect(restarted).toEqual(
       expect.arrayContaining([
@@ -198,8 +200,10 @@ describe('claude account switch', () => {
   })
 
   it('saves the project account on the host before restarting', async () => {
-    await switchProjectClaudeAccount('office', 'ab12')
-    expect(api.setProjectAccount).toHaveBeenCalledWith('office', 'ab12')
+    await expect(switchProjectClaudeAccount('office', 'ab12')).resolves.toEqual([])
+    expect(api.setProjectAccount).toHaveBeenCalledWith('office', 'ab12', {
+      expectedAccountId: undefined
+    })
     expect(api.setProjectAccount.mock.invocationCallOrder[0]).toBeLessThan(
       killAgent.mock.invocationCallOrder[0]
     )
@@ -398,5 +402,22 @@ describe('a switch the host refuses', () => {
     expect(retryCrashedSession).not.toHaveBeenCalled()
     expect(useAcpStore.getState().sessions).toBe(before)
     expect(useAcpStore.getState().sessions.c1.status).toBe('active')
+  })
+
+  it('restarts nothing when another client switched the project first', async () => {
+    const before = useAcpStore.getState().sessions
+    api.setProjectAccount.mockResolvedValue(false)
+    await expect(
+      switchProjectClaudeAccount('office', 'ab12', {
+        continueSessionIds: ['c1'],
+        expectedAccountId: 'default'
+      })
+    ).resolves.toBeNull()
+    expect(api.setProjectAccount).toHaveBeenCalledWith('office', 'ab12', {
+      expectedAccountId: 'default'
+    })
+    expect(killAgent).not.toHaveBeenCalled()
+    expect(retryCrashedSession).not.toHaveBeenCalled()
+    expect(useAcpStore.getState().sessions).toBe(before)
   })
 })

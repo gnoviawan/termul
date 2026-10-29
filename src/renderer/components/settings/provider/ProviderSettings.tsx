@@ -4,12 +4,15 @@ import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Info, KeyRound, Monitor, Plus, RotateCcw, WifiOff } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { useClaudeAccounts } from '@/hooks/use-claude-accounts'
 import { claudeAccountsApi, isClaudeLoginCancelled } from '@/lib/claude-accounts-api'
 import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
 import type { ProjectColor } from '@/types/project'
+import { SettingsCard } from '../SettingsGroup'
+import { SettingsRow, settingsDescriptionId } from '../SettingsRow'
 import { AccountNameDialog } from './AccountNameDialog'
 import { AddAccountDialog } from './AddAccountDialog'
 import { toastAccountChoiceError } from './account-choice-error'
@@ -56,6 +59,7 @@ export function ProviderSettings(): React.JSX.Element {
   const [removeBusy, setRemoveBusy] = useState(false)
   const [signingInId, setSigningInId] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [savingAutoSwitch, setSavingAutoSwitch] = useState(false)
 
   const projectsByAccount = useMemo(() => {
     const byAccount: Record<string, { id: string; name: string; color: ProjectColor }[]> = {}
@@ -90,6 +94,18 @@ export function ProviderSettings(): React.JSX.Element {
     } catch (err) {
       toastAccountChoiceError(err, 'Could not change the default account')
       await reload()
+    }
+  }
+
+  const setAutoSwitch = async (enabled: boolean): Promise<void> => {
+    setSavingAutoSwitch(true)
+    try {
+      await claudeAccountsApi.setAutoSwitch(enabled)
+    } catch (err) {
+      toast.error(`Could not change automatic switching: ${errorText(err)}`)
+    } finally {
+      await reload()
+      setSavingAutoSwitch(false)
     }
   }
 
@@ -199,6 +215,25 @@ export function ProviderSettings(): React.JSX.Element {
         </div>
       )}
 
+      {!loading && !failed && snapshot && (
+        <SettingsCard className="mt-3">
+          <SettingsRow
+            htmlFor="claude-auto-switch"
+            label="Switch accounts automatically"
+            description="When a chat reaches its account's limit, continue it on the signed-in account with the most room."
+            layout="inline"
+          >
+            <Switch
+              id="claude-auto-switch"
+              aria-describedby={settingsDescriptionId('claude-auto-switch')}
+              checked={snapshot.autoSwitch}
+              disabled={savingAutoSwitch}
+              onCheckedChange={(enabled) => void setAutoSwitch(enabled)}
+            />
+          </SettingsRow>
+        </SettingsCard>
+      )}
+
       {!loading && !failed && canManage && accounts.length === 1 && (
         <div className="mt-2 flex items-center gap-3 rounded-lg border border-border/60 bg-foreground/[0.02] p-3.5">
           <span
@@ -213,7 +248,7 @@ export function ProviderSettings(): React.JSX.Element {
             </span>
             <span className="text-2xs leading-relaxed text-muted-foreground">
               Add another Claude account and choose it per project. When one hits its limit, Termul
-              can offer to switch.
+              can continue on the other.
             </span>
           </div>
           <Button type="button" size="xs" variant="outline" onClick={() => setAddOpen(true)}>

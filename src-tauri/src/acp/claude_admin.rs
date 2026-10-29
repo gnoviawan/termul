@@ -255,12 +255,18 @@ fn run_account(service: &ClaudeAgentService, args: &[String]) -> ExitCode {
             Err(error) => Err(format!("could not start runtime: {error}")),
         },
         ["default", id] => block_on(service.set_default_account(id, SignInCheck::Skip)),
-        ["project", project, "default"] => {
-            block_on(service.set_project_account(project, None, SignInCheck::Skip))
-        }
-        ["project", project, id] => {
-            block_on(service.set_project_account(project, Some(id), SignInCheck::Skip))
-        }
+        ["project", project, "default"] => block_on(async {
+            service
+                .set_project_account(project, None, None, SignInCheck::Skip)
+                .await
+                .map(drop)
+        }),
+        ["project", project, id] => block_on(async {
+            service
+                .set_project_account(project, Some(id), None, SignInCheck::Skip)
+                .await
+                .map(drop)
+        }),
         _ => {
             eprintln!("{}", usage_text());
             return ExitCode::from(2);

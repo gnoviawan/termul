@@ -48,6 +48,41 @@ async fn set_default_and_project_account_persist_on_the_host() {
 }
 
 #[tokio::test]
+async fn an_expected_account_makes_the_project_choice_a_compare_and_set() {
+    let (root, acp) = manager_with_account(&[]);
+    let first = handle_set_project_claude_account(
+        "1".into(),
+        &json!({ "projectId": "office", "accountId": "ab12", "expectedAccountId": "default" }),
+        &acp,
+    )
+    .await;
+    assert_eq!(first.payload.unwrap(), json!({ "applied": true }));
+    // A second client reacting to the same limit loses: the project moved on.
+    let second = handle_set_project_claude_account(
+        "2".into(),
+        &json!({ "projectId": "office", "accountId": null, "expectedAccountId": "default" }),
+        &acp,
+    )
+    .await;
+    assert_eq!(second.payload.unwrap(), json!({ "applied": false }));
+    assert_eq!(stored(&root)["projectAccounts"]["office"], "ab12");
+}
+
+#[tokio::test]
+async fn automatic_switching_is_on_by_default_and_toggles_on_the_host() {
+    let (root, acp) = manager_with_account(&[]);
+    let listed = handle_list_claude_accounts("1".into(), &acp).await;
+    assert_eq!(listed.payload.unwrap()["autoSwitch"], true);
+    let reply = handle_set_claude_auto_switch("2".into(), &json!({ "enabled": false }), &acp).await;
+    assert_eq!(reply.payload.unwrap(), json!({}));
+    assert_eq!(stored(&root)["autoSwitch"], false);
+    let listed = handle_list_claude_accounts("3".into(), &acp).await;
+    assert_eq!(listed.payload.unwrap()["autoSwitch"], false);
+    let malformed = handle_set_claude_auto_switch("4".into(), &json!({}), &acp).await;
+    assert_eq!(malformed.err.unwrap().code, "unsupported");
+}
+
+#[tokio::test]
 async fn unknown_accounts_and_malformed_payloads_are_rejected() {
     let (_root, acp) = manager_with_account(&[]);
     let reply =

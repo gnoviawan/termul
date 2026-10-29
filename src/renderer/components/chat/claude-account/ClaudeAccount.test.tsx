@@ -9,7 +9,7 @@ import { ClaudeAccountChip } from './ClaudeAccountChip'
 import { ClaudeLimitNotice } from './ClaudeLimitNotice'
 import { ClaudeLimitWarning } from './ClaudeLimitWarning'
 import { ClaudeSignInAction } from './ClaudeSignInAction'
-import { useClaudeResumeStore } from './use-claude-limit'
+import { setSwitchingTo, useClaudeResumeStore } from './use-claude-limit'
 
 const { api, switcher, openApp } = vi.hoisted(() => ({
   openApp: vi.fn(),
@@ -142,9 +142,21 @@ describe('ClaudeLimitNotice', () => {
     fireEvent.click(screen.getByRole('button', { name: /switch to work and continue/i }))
     await waitFor(() =>
       expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12', {
-        continueSessionId: 's1'
+        continueSessionIds: ['s1']
       })
     )
+  })
+
+  it('shows a switch that automatic switching started, without the offer', async () => {
+    seed(limit('rejected', 100))
+    setSwitchingTo('s1', 'Work')
+    render(<ClaudeLimitNotice sessionId="s1" />)
+    expect(await screen.findByText('Switching to Work and continuing…')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /switch to work and continue/i })).toBeNull()
+    act(() => setSwitchingTo('s1', null))
+    expect(
+      await screen.findByRole('button', { name: /switch to work and continue/i })
+    ).toBeInTheDocument()
   })
 
   it('offers to continue when the window resets when no account has room', async () => {
@@ -180,7 +192,7 @@ describe('ClaudeLimitWarning', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Switch to Work' }))
     await waitFor(() =>
       expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12', {
-        continueSessionId: undefined
+        continueSessionIds: undefined
       })
     )
   })

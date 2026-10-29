@@ -255,14 +255,18 @@ export const WS_REQUEST_TYPES = [
   // `projects` watcher).
   'set_default_project',
   // Claude Accounts (ADR-0004): list `{}` → `ClaudeAccountsSnapshot`; choose
-  // the Default `{ accountId }` or a Project Account `{ projectId, accountId |
-  // null }` → `{}`. Add, sign-in, rename and remove stay host-local.
+  // the Default `{ accountId }` → `{}` or a Project Account `{ projectId,
+  // accountId | null, expectedAccountId? }` → `{ applied }`, where
+  // `expectedAccountId` makes the choice a compare-and-set. Add, sign-in,
+  // rename and remove stay host-local.
   'list_claude_accounts',
   // `{ force? }` → `{ usage: ClaudeAccountUsage[] }`; reads are cached 5 min
   // on the host (a forced read still reuses one younger than 60 s).
   'list_claude_usage',
   'set_default_claude_account',
   'set_project_claude_account',
+  // `{ enabled }` → `{}`: host-wide automatic switching at a usage limit.
+  'set_claude_auto_switch',
   // The canvas gateway's renderer leg (spine AD-21, AD-29). `canvas_mount`
   // / `canvas_unmount` `{ projectId, mountSeq }` tell the host this connection
   // holds (or no longer holds) a project's canvas; the host then forwards
@@ -321,6 +325,7 @@ export const WS_COMMAND_CLASSES: Readonly<
   list_claude_usage: ['read', null],
   set_default_claude_account: ['idempotent', null],
   set_project_claude_account: ['idempotent', null],
+  set_claude_auto_switch: ['idempotent', null],
   kill_agent: ['idempotent', null],
   list_agents: ['read', null],
   authenticate: ['read', null],

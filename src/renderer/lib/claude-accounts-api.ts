@@ -1,8 +1,8 @@
 /**
  * Claude Accounts facade (ADR-0004).
  *
- * Every surface can list the Accounts and choose the Default or a Project
- * Account, through the ACP transport (Tauri `invoke` on desktop, `/ws` on
+ * Every surface can list the Accounts, choose the Default or a Project
+ * Account, and turn automatic switching on or off, through the ACP transport (Tauri `invoke` on desktop, `/ws` on
  * web). Adding, signing in, renaming and removing an Account run a browser
  * login or delete login state on the host, so they are desktop-only; the web
  * client manages Accounts with `termul-server claude account` on the host.
@@ -65,11 +65,24 @@ export const claudeAccountsApi = {
   setDefault: (accountId: string): Promise<void> =>
     logged('setDefault', () => getAcpTransport().setDefaultClaudeAccount(accountId)),
 
-  /** `null` returns the Project to the Default Account. */
-  setProjectAccount: (projectId: string, accountId: string | null): Promise<void> =>
+  /**
+   * `null` returns the Project to the Default Account. `expectedAccountId`
+   * applies the choice only while the Project still uses that Account, so
+   * clients that react to the same limit converge on one switch. Resolves
+   * whether the choice applied.
+   */
+  setProjectAccount: (
+    projectId: string,
+    accountId: string | null,
+    options: { expectedAccountId?: string } = {}
+  ): Promise<boolean> =>
     logged('setProjectAccount', () =>
-      getAcpTransport().setProjectClaudeAccount(projectId, accountId)
+      getAcpTransport().setProjectClaudeAccount(projectId, accountId, options.expectedAccountId)
     ),
+
+  /** Host-wide: continue a chat at its Account's limit on the Account with the most room. */
+  setAutoSwitch: (enabled: boolean): Promise<void> =>
+    logged('setAutoSwitch', () => getAcpTransport().setClaudeAutoSwitch(enabled)),
 
   add: (name: string): Promise<ClaudeAccount> =>
     desktopOnly('add', 'Adding', () => invoke<ClaudeAccount>('claude_accounts_add', { name })),

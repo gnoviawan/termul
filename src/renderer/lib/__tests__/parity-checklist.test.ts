@@ -2154,11 +2154,27 @@ describe('Claude Accounts parity (ADR-0004)', () => {
       'list_claude_accounts',
       'list_claude_usage',
       'set_default_claude_account',
-      'set_project_claude_account'
+      'set_project_claude_account',
+      'set_claude_auto_switch'
     ]) {
       expect(wsTransport).toContain(`'${request}'`)
       expect(dispatch).toContain(`"${request}" => handle_${request}`)
     }
+  })
+
+  it('the automatic-switching setter and the project compare-and-set exist on both carriers', () => {
+    // The web client may turn automatic switching on or off, like it may
+    // choose the Default Account. The invoke carrier mirrors the /ws handlers.
+    const tauri = read('acp', 'commands', 'claude_accounts.rs')
+    const ws = read('web', 'ws', 'claude_accounts.rs')
+    expect(read('lib.rs')).toContain('acp::commands::claude_accounts_set_auto_switch')
+    expect(tauri).toMatch(/fn claude_accounts_set_auto_switch\([^)]*enabled: bool/s)
+    expect(ws).toMatch(/set_auto_switch\(parsed\.enabled\)/)
+    for (const source of [tauri, ws]) {
+      expect(source).toMatch(/expected_account_id/)
+    }
+    expect(facade).not.toMatch(/desktopOnly\('setAutoSwitch'/)
+    expect(wsTransport).toMatch(/\.\.\.\(expectedAccountId \? \{ expectedAccountId \} : \{\}\)/)
   })
 
   it('add, sign-in, rename and remove are desktop-only and gated in the facade', () => {
