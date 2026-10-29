@@ -22,29 +22,30 @@ vi.mock('@/lib/tauri-runtime', async (importOriginal) => {
   return { ...actual, isTauriContext: () => isTauriContextMock() }
 })
 
-import { TermulFilePathButton, TermulMarkdownImage } from './ChatMessage'
+import { TermulFilePathButton, TermulMarkdownMedia } from './ChatMessage'
 import { remarkFilePathLinks } from './chat-markdown-file-links'
-import { remarkTermulImages } from './chat-markdown-images'
+import { remarkTermulMedia } from './chat-markdown-images'
 
 const REMARK_PLUGINS = [
   ...Object.values(defaultRemarkPlugins),
-  remarkTermulImages,
+  remarkTermulMedia,
   remarkFilePathLinks
 ]
 
 const ALLOWED_TAGS = {
   'termul-file-path': ['dataPath'],
-  'termul-image': ['dataUrl', 'dataAlt']
+  'termul-media': ['dataUrl', 'dataAlt', 'dataOpenPath']
 }
 
 /** Mirrors the AgentProse wiring in ChatMessage.tsx with real Streamdown. */
 function chatElement(text: string, cwd?: string): React.JSX.Element {
   const components: Components = {
-    'termul-image': (props: Record<string, unknown>) => (
-      <TermulMarkdownImage
+    'termul-media': (props: Record<string, unknown>) => (
+      <TermulMarkdownMedia
         url={typeof props['data-url'] === 'string' ? props['data-url'] : ''}
         alt={typeof props['data-alt'] === 'string' ? props['data-alt'] : ''}
-        cwd={cwd}
+        openPath={typeof props['data-open-path'] === 'string' ? props['data-open-path'] : undefined}
+        filePathContext={{ cwd }}
       />
     ),
     'termul-file-path': (props: Record<string, unknown>) => {
@@ -176,27 +177,38 @@ describe('chat inline termul tags with real Streamdown', () => {
 
     await waitFor(() => {
       expect(screen.getByAltText('tiny')).toHaveAttribute('src', 'data:image/png;base64,QUJD')
-      expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('chart')
+      expect(screen.getByTestId('chat-media-alt')).toHaveTextContent('chart')
     })
     expect(container.textContent).not.toContain('[Image blocked')
   })
 
-  it('keeps reference-style https images on the streamdown default image wrapper', async () => {
-    const { container } = renderChat('![logo][l]\n\n[l]: https://example.com/logo.png')
+  it('renders reference-style https images through the lightbox', async () => {
+    renderChat('![logo][l]\n\n[l]: https://example.com/logo.png')
 
-    await waitFor(() => {
-      expect(container.querySelector('[data-streamdown="image"]')).not.toBeNull()
-    })
+    const img = await waitFor(() => screen.getByAltText('logo'))
+    expect(img).toHaveAttribute('src', 'https://example.com/logo.png')
+    expect(screen.getByRole('button', { name: 'Open image: logo' })).toContainElement(img)
   })
 
-  it('keeps https images on the streamdown default image wrapper', async () => {
-    const { container } = renderChat('![logo](https://example.com/logo.png)')
+  it('opens a markdown image in the lightbox on click', async () => {
+    renderChat('![logo](https://example.com/logo.png)')
+
+    fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Open image: logo' })))
+
+    const dialog = await waitFor(() => screen.getByRole('dialog'))
+    expect(dialog.querySelector('img')).toHaveAttribute('src', 'https://example.com/logo.png')
+  })
+
+  it('renders an https video with the remote src and no preload', async () => {
+    const { container } = renderChat('![demo](https://cdn.example.com/demo.mp4)')
 
     await waitFor(() => {
-      const wrapper = container.querySelector('[data-streamdown="image"]')
-      expect(wrapper).not.toBeNull()
-      expect(container.querySelector('img')).not.toBeNull()
+      expect(container.querySelector('video')).not.toBeNull()
     })
+    const video = container.querySelector('video')
+    expect(video).toHaveAttribute('src', 'https://cdn.example.com/demo.mp4')
+    expect(video).toHaveAttribute('preload', 'none')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('still blocks javascript: links', async () => {
@@ -243,14 +255,79 @@ describe('chat inline termul tags with real Streamdown', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('does not read a markdown image that points at a video or text file', async () => {
-    const { container } = renderChat('![clip](out/clip.mp4) ![notes](out/notes.txt)', '/proj')
+  it('does not read a markdown image that points at a text file', async () => {
+    const { container } = renderChat('![notes](out/notes.txt)', '/proj')
 
     await waitFor(() => {
-      expect(screen.getAllByTestId('termul-image-alt').map((chip) => chip.textContent)).toEqual([
-        'clip',
-        'notes'
-      ])
+      expect(screen.getByTestId('chat-media-alt')).toHaveTextContent('notes')
+    })
+    expect(container.querySelector('img')).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reads a local markdown video only after the play click, then plays its blob: URL', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(ABC, { headers: { 'content-type': 'video/mp4' } }))
+    const { container } = renderChat('![clip](out/clip.mp4)', '/proj')
+
+    const play = await waitFor(() => screen.getByRole('button', { name: 'Play video: clip' }))
+    expect(fetchMock).not.toHaveBeenCalled()
+    fireEvent.click(play)
+
+    await waitFor(() => {
+      expect(container.querySelector('video')).toHaveAttribute('src', 'blob:termul/1')
+    })
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `${window.location.origin}/fs/raw?path=%2Fproj%2Fout%2Fclip.mp4`
+    )
+  })
+
+  it('reads a local markdown video through read_media_bytes on Tauri', async () => {
+    isTauriContextMock.mockReturnValue(true)
+    invokeMock.mockResolvedValueOnce(ABC.buffer)
+    const { container } = renderChat('![rec](file:///tmp/rec.webm)')
+
+    fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Play video: rec' })))
+
+    await waitFor(() => {
+      expect(container.querySelector('video')).toHaveAttribute('src', 'blob:termul/1')
+    })
+    expect(invokeMock).toHaveBeenCalledWith('read_media_bytes', { path: '/tmp/rec.webm' })
+  })
+
+  it('renders a link to a local image inline with its open-in-editor button', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(ABC, { headers: { 'content-type': 'image/png' } }))
+    renderChat('See [the shot](out/shot.png).', '/proj')
+
+    const img = await waitFor(() => screen.getByAltText('the shot'))
+    expect(img).toHaveAttribute('src', 'blob:termul/1')
+    const open = screen.getByTestId('termul-file-path')
+    expect(open).toHaveAttribute('data-path', 'out/shot.png')
+    expect(open).toHaveTextContent('the shot')
+  })
+
+  it('renders a link to a local video as a player with its open-in-editor button', async () => {
+    renderChat('[demo](clip.mp4)', '/proj')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Play video: demo' })).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('termul-file-path')).toHaveAttribute('data-path', 'clip.mp4')
+  })
+
+  it('keeps a link to a non-media file as only the open-in-editor button', async () => {
+    const { container } = renderChat('[notes](out/notes.md)', '/proj')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('termul-file-path')).toHaveAttribute('data-path', 'out/notes.md')
+    })
+    expect(container.querySelector('img, video')).toBeNull()
+  })
+
+  it('keeps a bare media path in prose as a file button, not inline media', async () => {
+    const { container } = renderChat('Saved to out/shot.png today.', '/proj')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('termul-file-path')).toHaveAttribute('data-path', 'out/shot.png')
     })
     expect(container.querySelector('img')).toBeNull()
     expect(fetchMock).not.toHaveBeenCalled()
@@ -268,7 +345,7 @@ describe('chat inline termul tags with real Streamdown', () => {
         message: "Failed to read media 'chart.png' (UNSUPPORTED_MEDIA)"
       })
     })
-    expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('chart')
+    expect(screen.getByTestId('chat-media-alt')).toHaveTextContent('chart')
     expect(container.querySelector('img')).toBeNull()
   })
 
@@ -285,7 +362,7 @@ describe('chat inline termul tags with real Streamdown', () => {
     rerender(chatElement('![other](missing/other.png)', '/proj'))
 
     await waitFor(() => {
-      expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('other')
+      expect(screen.getByTestId('chat-media-alt')).toHaveTextContent('other')
     })
     expect(container.querySelector('img')).toBeNull()
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:termul/1')
@@ -295,7 +372,7 @@ describe('chat inline termul tags with real Streamdown', () => {
     isTauriContextMock.mockReturnValue(true)
     invokeMock.mockResolvedValueOnce(ABC.buffer)
     const { rerender, container } = render(
-      <TermulMarkdownImage url="output/chart.png" alt="chart" cwd="/proj" />
+      <TermulMarkdownMedia url="output/chart.png" alt="chart" filePathContext={{ cwd: '/proj' }} />
     )
 
     await waitFor(() => {
@@ -303,21 +380,23 @@ describe('chat inline termul tags with real Streamdown', () => {
     })
 
     desktopReadFails('NOT_FOUND')
-    rerender(<TermulMarkdownImage url="output/chart.png" alt="chart" cwd="/other" />)
+    rerender(
+      <TermulMarkdownMedia url="output/chart.png" alt="chart" filePathContext={{ cwd: '/other' }} />
+    )
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenLastCalledWith('read_media_bytes', {
         path: '/other/output/chart.png'
       })
     })
-    expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('chart')
+    expect(screen.getByTestId('chat-media-alt')).toHaveTextContent('chart')
     expect(container.querySelector('img')).toBeNull()
   })
 
   it('revokes the blob URL on unmount', async () => {
     invokeMock.mockResolvedValueOnce(ABC.buffer)
     isTauriContextMock.mockReturnValue(true)
-    const { unmount } = render(<TermulMarkdownImage url="/abs/chart.png" alt="chart" />)
+    const { unmount } = render(<TermulMarkdownMedia url="/abs/chart.png" alt="chart" />)
 
     await waitFor(() => {
       expect(screen.getByAltText('chart')).toHaveAttribute('src', 'blob:termul/1')
@@ -332,7 +411,7 @@ describe('chat inline termul tags with real Streamdown', () => {
     const { container } = render(chatElement('![bad](file:///%zz)', '/proj'))
 
     await waitFor(() => {
-      expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('bad')
+      expect(screen.getByTestId('chat-media-alt')).toHaveTextContent('bad')
     })
     expect(container.querySelector('img')).toBeNull()
     expect(invokeMock).not.toHaveBeenCalled()
@@ -345,11 +424,11 @@ describe('chat inline termul tags with real Streamdown', () => {
     fireEvent.error(img)
 
     await waitFor(() => {
-      expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('tiny')
+      expect(screen.getByTestId('chat-media-alt')).toHaveTextContent('tiny')
     })
     expect(container.querySelector('img')).toBeNull()
     expect(logFrontendErrorMock).toHaveBeenCalledWith(
-      expect.objectContaining({ level: 'warn', source: 'ChatMessage.termulImage' })
+      expect.objectContaining({ level: 'warn', source: 'ChatMedia.image' })
     )
   })
 })

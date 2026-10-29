@@ -1,21 +1,23 @@
-import { escapeHtmlAttribute } from './chat-markdown-file-links'
+import { mediaKindForPath } from '@/lib/media-kind'
+import { escapeHtmlAttribute, localLinkPath } from './chat-markdown-file-links'
 
 type MarkdownNode = {
   type: string
   url?: string
   alt?: string | null
+  value?: string
   identifier?: string
   children?: MarkdownNode[]
 }
 
-/** Whether a markdown image URL keeps streamdown's default https? pipeline. */
-function isHttpUrl(url: string): boolean {
-  return /^https?:/i.test(url)
-}
-
-/** Raw HTML for the custom image element the sanitizer keeps and harden ignores. */
-export function termulImageTag(url: string, alt: string): string {
-  return `<termul-image data-url="${escapeHtmlAttribute(url)}" data-alt="${escapeHtmlAttribute(alt)}"></termul-image>`
+/**
+ * Raw HTML for the custom media element the sanitizer keeps and harden
+ * ignores. `openPath` is set for a markdown link, whose file stays openable
+ * next to the media.
+ */
+export function termulMediaTag(url: string, alt: string, openPath?: string): string {
+  const open = openPath === undefined ? '' : ` data-open-path="${escapeHtmlAttribute(openPath)}"`
+  return `<termul-media data-url="${escapeHtmlAttribute(url)}" data-alt="${escapeHtmlAttribute(alt)}"${open}></termul-media>`
 }
 
 /** The first definition wins, per CommonMark. */
@@ -39,26 +41,57 @@ function imageUrl(node: MarkdownNode, definitions: Map<string, string>): string 
   return undefined
 }
 
+function containsImage(node: MarkdownNode): boolean {
+  return (
+    node.type === 'image' ||
+    node.type === 'imageReference' ||
+    (node.children ?? []).some(containsImage)
+  )
+}
+
+function nodeText(node: MarkdownNode): string {
+  if (node.type === 'text' || node.type === 'inlineCode') return node.value ?? ''
+  return (node.children ?? []).map(nodeText).join('')
+}
+
+/**
+ * A link to a local image or video file renders the media inline: agents
+ * that never saw the `![]()` hint still write `[demo](out/clip.mp4)`.
+ * Image links (badges) and remote links keep the link pipeline.
+ */
+function mediaLinkTag(node: MarkdownNode): string | null {
+  if (node.type !== 'link' || containsImage(node)) return null
+  const url = node.url ?? ''
+  const path = localLinkPath(url)
+  const kind = path === null ? null : mediaKindForPath(path)
+  if (path === null || (kind !== 'image' && kind !== 'video')) return null
+  return termulMediaTag(url, nodeText(node).trim() || path, path)
+}
+
 function transformChildren(node: MarkdownNode, definitions: Map<string, string>): void {
   if (!node.children) return
   node.children = node.children.flatMap((child) => {
     // `url !== undefined` also rewrites empty destinations (`![]()`), which
     // would otherwise render `[Image blocked: ]` on the default pipeline.
     const url = imageUrl(child, definitions)
-    if (url !== undefined && !isHttpUrl(url)) {
-      return [{ type: 'html', value: termulImageTag(url, child.alt ?? '') }]
+    if (url !== undefined) {
+      return [{ type: 'html', value: termulMediaTag(url, child.alt ?? '') }]
     }
+    const linkTag = mediaLinkTag(child)
+    if (linkTag !== null) return [{ type: 'html', value: linkTag }]
     transformChildren(child, definitions)
     return [child]
   })
 }
 
 /**
- * Streamdown's `rehype-harden` turns non-`https?` images into
- * `[Image blocked: …]`; `<termul-image>` survives `rehype-sanitize` because it
- * is registered via the `allowedTags` prop.
+ * Rewrites every markdown image, and every link to a local image or video
+ * file, into `<termul-media>`, so one component renders them all (lightbox,
+ * video player, local reads). The tag survives `rehype-sanitize` because it
+ * is registered via the `allowedTags` prop, and `rehype-harden` never sees it.
+ * Runs before `remarkFilePathLinks`, which keeps every other local link.
  */
-export function remarkTermulImages(): (tree: MarkdownNode) => void {
+export function remarkTermulMedia(): (tree: MarkdownNode) => void {
   return (tree) => {
     const definitions = new Map<string, string>()
     collectDefinitions(tree, definitions)

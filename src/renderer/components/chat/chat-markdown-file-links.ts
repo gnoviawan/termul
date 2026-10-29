@@ -2,7 +2,7 @@ import { findFilePathMatches } from '@/lib/file-path-links'
 
 /**
  * Escape `& < > "` so interpolated path/alt/url values cannot break out of
- * the raw HTML we emit for `termul-file-path` / `termul-image` elements.
+ * the raw HTML we emit for `termul-file-path` / `termul-media` elements.
  */
 export function escapeHtmlAttribute(value: string): string {
   return value
@@ -77,7 +77,7 @@ function fileUrlPath(decodableRest: string): string | null {
  * protocol-relative `//host`, remote `file://host/…`, malformed escapes).
  * A `#L<n>` fragment becomes a `:<n>` line suffix; other fragments are dropped.
  */
-function localLinkPath(url: string): string | null {
+export function localLinkPath(url: string): string | null {
   const trimmed = url.trim()
   if (!trimmed || trimmed.startsWith('#')) return null
 

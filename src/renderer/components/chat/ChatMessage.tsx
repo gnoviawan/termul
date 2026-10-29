@@ -3,9 +3,7 @@ import { memo, useEffect, useMemo } from 'react'
 
 import { Attachment, AttachmentPreview, Attachments } from '@/components/ai-elements/attachments'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
-import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
-import { useMediaObjectUrl } from '@/hooks/use-media-object-url'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ContentBlock } from '@/lib/acp-api'
 import {
@@ -26,16 +24,10 @@ import {
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
+import { ChatMedia } from './ChatMedia'
 import { AgentProse } from './chat-agent-prose'
-import {
-  blockData,
-  blockDisplayName,
-  blockMimeType,
-  blockResource,
-  blockToAttachmentData,
-  blockUri
-} from './chat-attachments'
-import { resolveLocalImagePath } from './chat-markdown-images'
+import { blockDisplayName, blockResource, blockToAttachmentData } from './chat-attachments'
+import { chatMediaFromBlock } from './chat-media-source'
 import { type BubbleAlign, staggerChild } from './chat-motion'
 import { FileChip } from './FileChip'
 import {
@@ -51,7 +43,7 @@ import { CommandChipLink, SkillChipLink } from './skill-file-links'
 
 // The markdown renderer moved to `chat-agent-prose.tsx` to keep this file under
 // the ~800-line limit. Re-exported so existing importers keep their paths.
-export { AgentProse, TermulFilePathButton, TermulMarkdownImage } from './chat-agent-prose'
+export { AgentProse, TermulFilePathButton, TermulMarkdownMedia } from './chat-agent-prose'
 
 /** Concatenate the text of all text blocks. */
 function blocksToText(blocks: ContentBlock[]): string {
@@ -170,76 +162,26 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
   )
 }
 
-/** Non-text content blocks (image / resource / etc). */
-function mediaBlocks(blocks: ContentBlock[]): ContentBlock[] {
-  return blocks.filter((b) => b.type !== 'text')
-}
-
-const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i
-
-/** Whether a content block represents an image. */
-function blockIsImage(block: ContentBlock): boolean {
-  if (block.type === 'image') return true
-  if (blockMimeType(block)?.startsWith('image/')) return true
-  const ref = (block.name as string | undefined) ?? blockUri(block) ?? ''
-  return IMAGE_EXT_RE.test(ref)
-}
-
-/** A single media block rendered as an AI Elements grid attachment. */
-function MediaGridItem({ block, id }: { block: ContentBlock; id: string }): React.JSX.Element {
-  const initial = useMemo(() => blockToAttachmentData(block, id), [block, id])
-  const name = blockDisplayName(block)
-  const uri = initial.url ? '' : (blockUri(block) ?? '')
-  const localPath = blockIsImage(block) ? resolveLocalImagePath(uri) : null
-  const objectUrl = useMediaObjectUrl(localPath)
-  const data = objectUrl ? { ...initial, url: objectUrl } : initial
-  // Images preview in a lightbox; non-image file/embedded blocks render as a
-  // static icon card. Nothing opens a backing path — temp/file paths can live
-  // in sandboxed dirs the OS opener refuses, which would surface as an error.
-  const inlineImage = blockIsImage(block) && Boolean(data.url)
-
-  const attachment = (
-    <Attachment data={data} title={name} className={inlineImage ? 'cursor-zoom-in' : undefined}>
+/** A non-media block (file, embedded binary) as a static icon card. */
+function FileCard({ block, id }: { block: ContentBlock; id: string }): React.JSX.Element {
+  const data = useMemo(() => blockToAttachmentData(block, id), [block, id])
+  // Nothing opens a backing path: temp/file paths can live in sandboxed dirs
+  // the OS opener refuses, which would surface as an error.
+  return (
+    <Attachment data={data} title={blockDisplayName(block)}>
       <AttachmentPreview />
     </Attachment>
   )
-
-  if (inlineImage) {
-    return (
-      <ImageLightbox src={data.url ?? ''} alt={name}>
-        {attachment}
-      </ImageLightbox>
-    )
-  }
-
-  return attachment
 }
 
 const MAX_INLINE_RESOURCE_TEXT = 32 * 1024
-const MAX_INLINE_AUDIO_BYTES = 20 * 1024 * 1024
 
-/** Return only bounded inline audio sources; remote URLs must not auto-load. */
-function inlineAudioUrl(block: ContentBlock): string | null {
-  if (block.type !== 'audio' || !blockMimeType(block)?.startsWith('audio/')) return null
-  const data = blockData(block)
-  if (!data) return null
-  if (data.startsWith('blob:')) return data
-  if (data.startsWith('data:audio/')) {
-    return data.length <= MAX_INLINE_AUDIO_BYTES * 1.4 ? data : null
-  }
-  if (data.startsWith('data:')) return null
-  if (data.length > MAX_INLINE_AUDIO_BYTES * 1.4) return null
-  return `data:${blockMimeType(block)};base64,${data}`
-}
-
-function ResourceText({ block }: { block: ContentBlock }): React.JSX.Element | null {
-  const text = blockResource(block)?.text
-  if (typeof text !== 'string') return null
+function ResourceText({ text, name }: { text: string; name: string }): React.JSX.Element {
   const boundedText =
     text.length > MAX_INLINE_RESOURCE_TEXT ? `${text.slice(0, MAX_INLINE_RESOURCE_TEXT)}\n…` : text
   return (
     <pre
-      data-embedded-resource={blockDisplayName(block)}
+      data-embedded-resource={name}
       className="scroller-thin max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-border/40 bg-background/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground/90"
     >
       {boundedText}
@@ -247,47 +189,49 @@ function ResourceText({ block }: { block: ContentBlock }): React.JSX.Element | n
   )
 }
 
-function InlineAudio({ block }: { block: ContentBlock }): React.JSX.Element | null {
-  const src = inlineAudioUrl(block)
-  if (!src) return null
-  return (
-    // biome-ignore lint/a11y/useMediaCaption: ACP audio blocks do not provide caption tracks.
-    <audio
-      aria-label={`Play ${blockDisplayName(block)}`}
-      className="max-w-full"
-      controls
-      preload="metadata"
-      src={src}
-    />
-  )
-}
-
-/** Render media blocks with safe inline previews and bounded embedded text. */
+/**
+ * Non-text content blocks: images as lightbox tiles in the attachment grid
+ * beside file cards, then video and audio players, then embedded text.
+ */
 export function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.Element | null {
-  const media = mediaBlocks(blocks)
-  if (media.length === 0) return null
-  const resources = media.filter((block) => block.type === 'resource')
-  const attachments = media.filter(
-    (block) =>
-      (block.type !== 'audio' || !inlineAudioUrl(block)) &&
-      !(block.type === 'resource' && typeof blockResource(block)?.text === 'string')
+  const items = blocks
+    .filter((block) => block.type !== 'text')
+    .map((block, i) => ({
+      block,
+      id: `${block.type}-${i}`,
+      media: chatMediaFromBlock(block),
+      text: blockResource(block)?.text
+    }))
+  if (items.length === 0) return null
+  const tiles = items.filter(
+    (item) => item.media?.kind === 'image' || (!item.media && typeof item.text !== 'string')
   )
-  const audio = media.filter((block) => block.type === 'audio')
   return (
     <>
-      {attachments.length > 0 && (
+      {tiles.length > 0 && (
         <Attachments variant="grid" className="ml-0 w-fit py-0.5">
-          {attachments.map((block, i) => (
-            <MediaGridItem key={`${block.type}-${i}`} block={block} id={`${block.type}-${i}`} />
-          ))}
+          {tiles.map(({ block, id, media }) =>
+            media ? (
+              <ChatMedia
+                key={id}
+                media={media}
+                layout="tile"
+                fallback={<FileCard block={block} id={id} />}
+              />
+            ) : (
+              <FileCard key={id} block={block} id={id} />
+            )
+          )}
         </Attachments>
       )}
-      {audio.map((block, i) => (
-        <InlineAudio key={`audio-${i}`} block={block} />
-      ))}
-      {resources.map((block, i) => (
-        <ResourceText key={`resource-${i}`} block={block} />
-      ))}
+      {items.flatMap(({ id, media }) =>
+        media && media.kind !== 'image' ? [<ChatMedia key={id} media={media} />] : []
+      )}
+      {items.map(({ block, id, text }) =>
+        typeof text === 'string' ? (
+          <ResourceText key={id} text={text} name={blockDisplayName(block)} />
+        ) : null
+      )}
     </>
   )
 }
@@ -397,7 +341,7 @@ function ChatMessageComponent({
 
   const isUser = message.role === 'user'
   const text = blocksToText(message.blocks)
-  const hasMedia = mediaBlocks(message.blocks).length > 0
+  const hasMedia = message.blocks.some((block) => block.type !== 'text')
   // Only messages that render `MessageActions` take part in the mobile actions
   // model: every user message, and an agent message only at its settled turn
   // tail. Messages inside `TurnActivity` never qualify.

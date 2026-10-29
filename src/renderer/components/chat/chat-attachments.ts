@@ -334,11 +334,16 @@ export function blockData(block: ContentBlock): string | undefined {
   return block.data as string | undefined
 }
 
-/** Nested `resource` object of a `resource` block (uri/mimeType/text). */
-export function blockResource(
-  block: ContentBlock
-): { uri?: string; mimeType?: string; text?: string } | undefined {
-  return block.resource as { uri?: string; mimeType?: string; text?: string } | undefined
+/** Nested `resource` object of a `resource` block: text or base64 `blob` contents. */
+export function blockResource(block: ContentBlock): EmbeddedResource | undefined {
+  return block.resource as EmbeddedResource | undefined
+}
+
+interface EmbeddedResource {
+  uri?: string
+  mimeType?: string
+  text?: string
+  blob?: string
 }
 
 /** True when a URI is directly renderable in an `<img>`/`<video>` src (no Tauri fetch). */
