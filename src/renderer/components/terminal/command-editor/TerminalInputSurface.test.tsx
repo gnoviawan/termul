@@ -70,6 +70,23 @@ describe('TerminalInputSurface', () => {
     expect(document.activeElement).toBe(terminalInput)
   })
 
+  it('prompt mounting does not steal focus from another pane or control', () => {
+    const otherInput = document.createElement('input')
+    document.body.appendChild(otherInput)
+    otherInput.focus()
+
+    render(
+      <div data-pane-content="pane-a">
+        <TerminalInputSurface mode="Editor" focused={true} terminalId="pane-a-terminal">
+          {null}
+        </TerminalInputSurface>
+      </div>
+    )
+
+    expect(document.activeElement).toBe(otherInput)
+    otherInput.remove()
+  })
+
   it('background prompt does not steal focus', () => {
     const { rerender, unmount } = render(
       <TerminalInputSurface mode="Editor" focused={false} terminalId="terminal-a">
@@ -413,7 +430,7 @@ it('the surface reads the session store', () => {
   expect(source).not.toMatch(/useState<InputMode>/)
 })
 
-it('submitting surface discards non-interrupt keys on capture and allows Ctrl+C', () => {
+it('submitting surface discards input but lets configured app shortcuts bubble', () => {
   const id = 'submitting-surface'
   sessionStore.apply(id, { type: 'InitShell', session_id: 's1', nonce: 'n1' })
   sessionStore.apply(id, {
@@ -433,6 +450,9 @@ it('submitting surface discards non-interrupt keys on capture and allows Ctrl+C'
         focused={true}
         terminalId={id}
         draftStore={createCommandDraftStore()}
+        keymapDeps={{
+          shortcuts: () => ({ commandPalette: { defaultKey: 'ctrl+k', customKey: null } }) as never
+        }}
       >
         <input aria-label="terminal input" />
       </TerminalInputSurface>
@@ -441,6 +461,15 @@ it('submitting surface discards non-interrupt keys on capture and allows Ctrl+C'
     const keyA = new KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true })
     terminalInput.dispatchEvent(keyA)
     expect(keyA.defaultPrevented).toBe(true)
+
+    const commandPalette = new KeyboardEvent('keydown', {
+      key: 'k',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true
+    })
+    terminalInput.dispatchEvent(commandPalette)
+    expect(commandPalette.defaultPrevented).toBe(false)
 
     const ctrlC = new KeyboardEvent('keydown', {
       key: 'c',

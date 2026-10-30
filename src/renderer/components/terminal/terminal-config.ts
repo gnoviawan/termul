@@ -20,7 +20,7 @@ export const DEFAULT_TERMINAL_OPTIONS: ITerminalOptions = {
   lineHeight: TERMINAL_LINE_HEIGHT,
   cursorBlink: true,
   cursorStyle: 'block',
-  cursorInactiveStyle: 'none',
+  cursorInactiveStyle: 'outline',
   allowTransparency: false,
   scrollback: 10000,
   tabStopWidth: 4,

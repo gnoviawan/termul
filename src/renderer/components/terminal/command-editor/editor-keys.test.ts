@@ -9,7 +9,8 @@ import {
   applyEditorPaste,
   editorKeymap,
   handleTerminalImagePaste,
-  handleTerminalPaste
+  handleTerminalPaste,
+  sanitizeEditorPaste
 } from './editor-keys'
 
 describe('applyEditorPaste', () => {
@@ -42,6 +43,24 @@ describe('applyEditorPaste', () => {
     expect(next.doc.toString()).toBe('before echo hi\n\tthere\nnext\nlast after')
     expect(next.selection.main.anchor).toBe(31)
     expect(next.selection.main.head).toBe(31)
+  })
+
+  it.each([
+    ['bidi format', '\u202e'],
+    ['zero-width format', '\u200b'],
+    ['C1 control', '\u009b']
+  ])('paste drops %s while preserving Unicode and whitespace', (_name, control) => {
+    const state = EditorState.create({ doc: '', selection: { anchor: 0 } })
+    const next = applyEditorPaste(state, {
+      type: 'text',
+      text: `echo safe${control} café\t\r\nnext`
+    })
+
+    expect(next.doc.toString()).toBe('echo safe café\t\nnext')
+  })
+
+  it('paste preserves intentional line breaks and tabs', () => {
+    expect(sanitizeEditorPaste('echo café\t\r\nnext')).toBe('echo café\t\nnext')
   })
 
   it('image paste does nothing', () => {
@@ -415,7 +434,25 @@ describe('editorKeymap', () => {
     expect(view.state.doc.toString()).toBe('git\nstatus')
     expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(2)
   })
-  it('Ctrl+C with a selection copies', () => {
+  it('Ctrl+C copies editor selection without clearing the draft', () => {
+    const copy = vi.fn()
+    const view = mountEditor(
+      'kubectl delete pod foo',
+      {
+        history: () => [],
+        submit: () => {},
+        copy
+      },
+      7
+    )
+    view.dispatch({ selection: { anchor: 0, head: 7 } })
+
+    expect(press(view, 'c', { ctrlKey: true })).toBe(true)
+    expect(view.state.doc.toString()).toBe('kubectl delete pod foo')
+    expect(copy).toHaveBeenCalledExactlyOnceWith('kubectl')
+  })
+
+  it('Ctrl+C with only a terminal selection copies terminal text', () => {
     const copy = vi.fn()
     const view = mountEditor('git status', {
       history: () => [],
@@ -456,7 +493,7 @@ describe('editorKeymap', () => {
 
     expect(press(view, 'd', { ctrlKey: true })).toBe(true)
     expect(sendEof).toHaveBeenCalledTimes(1)
-    expect(leaveRequests).toBe(1)
+    expect(leaveRequests).toBe(0)
     expect(view.state.doc.toString()).toBe('')
   })
 

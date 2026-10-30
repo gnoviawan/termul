@@ -1,7 +1,6 @@
 import { EditorState, type Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { fireEvent, render } from '@testing-library/react'
-import { createElement } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { commandDraftStore } from '@/lib/command-lifecycle/draft-store'
 import { sessionStore } from '@/lib/command-lifecycle/session-store'
@@ -50,6 +49,27 @@ function target(view: EditorView | null): EditorInputTarget {
     scrollPages: () => {}
   }
 }
+
+it.each([
+  ['bidi format', '\u202e'],
+  ['zero-width format', '\u200b'],
+  ['C1 control', '\u009b']
+])('refuses %s in assist/history inserts with and without a mounted view', (_name, control) => {
+  const write = vi.fn()
+  const view = mountEditor('safe draft', 10)
+  const onError = vi.fn()
+
+  for (const kind of ['assist', 'history'] as const) {
+    for (const destination of [target(view), target(null)]) {
+      routeForeignInsert(destination, kind, `echo safe${control}`, write, onError)
+      expect(view.state.doc.toString()).toBe('safe draft')
+      expect(commandDraftStore.read(terminalId)).toBe('safe draft')
+    }
+  }
+
+  expect(write).not.toHaveBeenCalled()
+  expect(onError).toHaveBeenCalledTimes(4)
+})
 
 it('assist text inserts into the editor', () => {
   const write = vi.fn()
@@ -211,17 +231,15 @@ it('view-only client does not complete or submit', () => {
     editorKeymap({ history: () => [], submit: write })
   ])
   const { container, unmount } = render(
-    createElement(
-      TerminalInputSurface,
-      {
-        mode: 'Editor',
-        allowWrite: false,
-        focused: true,
-        terminalId,
-        keymapDeps: { history: () => [], submit: write }
-      },
-      null
-    )
+    <TerminalInputSurface
+      mode="Editor"
+      allowWrite={false}
+      focused={true}
+      terminalId={terminalId}
+      keymapDeps={{ history: () => [], submit: write }}
+    >
+      {null}
+    </TerminalInputSurface>
   )
   const editor = container.querySelector('.cm-content') ?? container.firstElementChild!
   fireEvent.keyDown(editor, { key: 'Tab' })

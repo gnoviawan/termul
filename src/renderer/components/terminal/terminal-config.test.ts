@@ -64,8 +64,8 @@ describe('DEFAULT_TERMINAL_OPTIONS', () => {
     expect(DEFAULT_TERMINAL_OPTIONS.lineHeight).toBe(TERMINAL_LINE_HEIGHT)
   })
 
-  it('should hide inactive cursor (#fix9)', () => {
-    expect(DEFAULT_TERMINAL_OPTIONS.cursorInactiveStyle).toBe('none')
+  it('should keep inactive terminal cursors visible in background panes', () => {
+    expect(DEFAULT_TERMINAL_OPTIONS.cursorInactiveStyle).toBe('outline')
   })
 })
 

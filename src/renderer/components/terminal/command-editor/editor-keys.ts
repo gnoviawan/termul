@@ -10,6 +10,7 @@ import {
 } from '@codemirror/commands'
 import { Annotation, EditorState, type Extension, Prec, Transaction } from '@codemirror/state'
 import { EditorView, type KeyBinding, keymap } from '@codemirror/view'
+import { containsDisallowedControls } from '@/lib/command-lifecycle/completion-output'
 import { canTerminalWriteToPty } from '@/lib/command-lifecycle/input-guard'
 import type { InputMode } from '@/lib/command-lifecycle/transition'
 import type { KeyboardShortcutsConfig } from '@/types/settings'
@@ -21,7 +22,7 @@ export function sanitizeEditorPaste(text: string): string {
     .replaceAll('\x1b[201~', '')
     .replace(/\r\n?/g, '\n')
   return Array.from(normalized)
-    .filter((char) => char === '\n' || char === '\t' || (char >= ' ' && char !== '\x7f'))
+    .filter((char) => char === '\n' || char === '\t' || !containsDisallowedControls(char))
     .join('')
 }
 
@@ -124,6 +125,13 @@ function ctrlBindings({ deps, appOwnedEvents }: KeymapContext): KeyBinding[] {
       key: 'Ctrl-c',
       run: (view) => {
         if (appOwnedEvents.has(view)) return false
+        const editorSelection = view.state.selection.main
+        if (!editorSelection.empty) {
+          const selectedText = view.state.sliceDoc(editorSelection.from, editorSelection.to)
+          if (!deps.copy) return false
+          deps.copy(selectedText)
+          return true
+        }
         const selection = deps.selection?.() ?? ''
         if (selection) {
           deps.copy?.(selection)
@@ -139,7 +147,6 @@ function ctrlBindings({ deps, appOwnedEvents }: KeymapContext): KeyBinding[] {
         if (appOwnedEvents.has(view)) return false
         const end = view.state.doc.length
         if (!end) {
-          deps.leave?.()
           deps.sendEof?.()
         } else {
           const head = view.state.selection.main.head

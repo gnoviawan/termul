@@ -13,6 +13,8 @@ import type { IMarker, Terminal } from '@xterm/xterm'
  *   confirming spacing, and that non-blank content exists further up in the buffer.
  * - Plain `133;A` marks from user prompts or readline/ZLE redisplay are ignored to
  *   avoid duplicate or glued lines.
+ * - This OSC marker is not authenticated: terminal output can forge it. The resulting
+ *   separator is cosmetic only and must not be used as a security boundary.
  *
  * LIMITATIONS:
  * - Serialized restore has no lines: snapshot persistence (`restoreScrollback`)

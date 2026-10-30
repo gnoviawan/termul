@@ -4,6 +4,7 @@ import { commandDraftStore } from '@/lib/command-lifecycle/draft-store'
 import { canWriteToPty } from '@/lib/command-lifecycle/input-guard'
 import { sessionStore } from '@/lib/command-lifecycle/session-store'
 import type { InputMode } from '@/lib/command-lifecycle/transition'
+import { isAppOwnedTerminalShortcut } from '../keymap'
 import { CommandEditor } from './CommandEditor'
 import { CommandChips } from './chips'
 import type { EditorKeymapDeps } from './editor-keys'
@@ -61,7 +62,18 @@ function isCtrlCKeyDown(event: SyntheticEvent): boolean {
   )
 }
 
-function discardSubmittingInput(terminalId: string, event: SyntheticEvent): void {
+function discardSubmittingInput(
+  terminalId: string,
+  event: SyntheticEvent,
+  shortcuts?: EditorKeymapDeps['shortcuts']
+): void {
+  if (
+    event.type === 'keydown' &&
+    shortcuts &&
+    isAppOwnedTerminalShortcut(event.nativeEvent as KeyboardEvent, shortcuts())
+  ) {
+    return
+  }
   const session = sessionStore.read(terminalId)
   if (session.phase !== 'Submitting' || !session.trusted || !session.alive) return
   if (canWriteToPty(session, isCtrlCKeyDown(event) ? '\x03' : '')) return
@@ -106,7 +118,8 @@ export function TerminalInputSurface(props: TerminalInputSurfaceProps) {
   const keymapDeps = useTerminalEditorKeymap({ ...props, allowWrite, viewRef })
   const onFocusedUnmount = useFocusReturn(mode, allowWrite, focused, viewRef, focusTerminal)
   const editing = mode === 'Editor' && allowWrite
-  const discard = (event: SyntheticEvent) => discardSubmittingInput(terminalId, event)
+  const discard = (event: SyntheticEvent) =>
+    discardSubmittingInput(terminalId, event, keymapDeps.shortcuts)
   return (
     <div
       className="flex h-full min-h-0 w-full flex-col"

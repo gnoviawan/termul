@@ -194,7 +194,14 @@ function useEditorFocus(
 ) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: terminalId rebuilds the view in the preceding effect.
   useEffect(() => {
-    if (focused) viewRef.current?.focus()
+    if (!focused) return
+    const view = viewRef.current
+    if (!view) return
+    const activeElement = document.activeElement
+    const pane = view.dom.closest('[data-pane-content]')
+    if (activeElement === document.body || pane?.contains(activeElement)) {
+      view.focus()
+    }
   }, [focused, viewRef, terminalId])
 }
 

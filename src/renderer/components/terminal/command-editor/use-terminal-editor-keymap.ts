@@ -42,6 +42,27 @@ function writePty(options: TerminalEditorKeymapOptions, text: string) {
   )
 }
 
+function sendEditorEof(options: TerminalEditorKeymapOptions): void {
+  const ptyId = options.ptyId?.()
+  const session = sessionStore.read(options.terminalId)
+  if (
+    !options.allowWrite ||
+    !ptyId ||
+    !session.alive ||
+    !session.trusted ||
+    session.mode !== 'Editor' ||
+    session.phase !== 'AtPrompt'
+  ) {
+    return
+  }
+  void terminalApi.write(ptyId, '\x04').then(
+    (result) => {
+      if (!result.success) reportKeymap('PTY EOF write failed', 'warn')
+    },
+    () => reportKeymap('PTY EOF write failed', 'warn')
+  )
+}
+
 export function useTerminalEditorKeymap(
   options: TerminalEditorKeymapOptions
 ): Partial<EditorKeymapDeps> {
@@ -64,7 +85,7 @@ export function useTerminalEditorKeymap(
       if (!options.allowWrite) return
       sessionStore.leaveEditor(terminalId)
     },
-    sendEof: () => writePty(options, '\x04'),
+    sendEof: () => sendEditorEof(options),
     writePty: (text) => writePty(options, text),
     shortcuts: () => useKeyboardShortcutsStore.getState().shortcuts,
     // Like xterm, leave the original event bubbling to useWorkspaceKeyboard.

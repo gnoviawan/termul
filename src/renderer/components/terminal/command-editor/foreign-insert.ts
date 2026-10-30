@@ -1,5 +1,6 @@
 import { cursorCharLeft, cursorCharRight } from '@codemirror/commands'
 import { type EditorView, runScopeHandlers } from '@codemirror/view'
+import { containsDisallowedControls } from '@/lib/command-lifecycle/completion-output'
 import { commandDraftStore } from '@/lib/command-lifecycle/draft-store'
 import { canTerminalWriteToPty } from '@/lib/command-lifecycle/input-guard'
 import type { InputMode } from '@/lib/command-lifecycle/transition'
@@ -39,7 +40,7 @@ export function routeForeignInsert(
 ): void | Promise<void> {
   if (!target.allowWrite()) return
   const mode = target.mode()
-  if ((mode === 'Editor' || kind === 'assist') && containsControlCharacter(text)) {
+  if ((mode === 'Editor' || kind === 'assist') && containsDisallowedControls(text)) {
     const message = 'Refused to insert a command containing control characters'
     void logFrontendError({ level: 'warn', source: 'foreign-insert', message })
     onError?.(message)
@@ -123,8 +124,4 @@ export function routeMobileKey(
   if (runScopeHandlers(view, event, 'editor')) return
   if (event.key === 'ArrowLeft') cursorCharLeft(view)
   if (event.key === 'ArrowRight') cursorCharRight(view)
-}
-
-function containsControlCharacter(text: string): boolean {
-  return Array.from(text).some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f)
 }

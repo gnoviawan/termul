@@ -117,6 +117,7 @@ export interface ConnectedTerminalProps {
   onCommand?: (command: string) => void
   className?: string
   autoFocus?: boolean
+  isActivePane?: boolean
   initialScrollback?: string[]
   /**
    * R3: captured DEC private-mode snapshot to replay before `initialScrollback`
@@ -168,6 +169,7 @@ function ConnectedTerminalComponent({
   onBoundToStoreTerminal,
   className = '',
   autoFocus = true,
+  isActivePane = true,
   initialScrollback,
   initialModes,
   searchRef,
@@ -263,6 +265,8 @@ function ConnectedTerminalComponent({
   // Ref avoids stale closures in event listeners referencing isVisible directly.
   const isVisibleRef = useRef(isVisible)
   isVisibleRef.current = isVisible
+  const isActivePaneRef = useRef(isActivePane)
+  isActivePaneRef.current = isActivePane
   // Story 2: the ref tracks the EFFECTIVE preference (mobile 'auto'→'dom'
   // flip applied), so every guard — init, addon load, recovery, visibility
   // restore — honors the mobile stopgap without per-site changes.
@@ -948,7 +952,7 @@ function ConnectedTerminalComponent({
       performFit(true)
     })
 
-    if (autoFocus) {
+    if (autoFocus && isActivePaneRef.current && isVisibleRef.current) {
       terminal.focus()
     }
 
@@ -1747,7 +1751,7 @@ function ConnectedTerminalComponent({
       loadWebglAddon(terminal)
     loadWebglAddonRef.current = loadWebglAddon
     requestAnimationFrame(() => performFit(true))
-    if (autoFocus) terminal.focus()
+    if (autoFocus && isActivePaneRef.current && isVisibleRef.current) terminal.focus()
     const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => performFit()))
     resizeObserver.observe(containerRef.current)
     const dataDisposable = terminal.onData(handleTerminalData)
@@ -1937,7 +1941,7 @@ function ConnectedTerminalComponent({
             gitBranch={gitBranch ?? undefined}
             mode={inputMode}
             viewRef={commandEditorViewRef}
-            focused={autoFocus && isVisible}
+            focused={autoFocus && isActivePane && isVisible}
             terminalId={targetId ?? ''}
             ptyId={() => ptyIdRef.current}
             terminalName={terminalName}
