@@ -92,7 +92,7 @@ function rowKeyOf(configId: string | null, modelId: string, inFavorites = false)
 
 /** An agent row's highlight key (search results list agents after models). */
 function agentRowKey(tab: AgentTab | undefined): string | null {
-  return tab ? `agent/${encodeURIComponent(tab.configId)}` : null
+  return tab ? `agent\0${encodeURIComponent(tab.configId)}` : null
 }
 
 /** The Favorites section's rows, top to bottom. */
@@ -821,6 +821,17 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           : agentRowKey(view.agents.find((tab) => !state.notSetUp(tab)))
       : null
 
+  // Screen readers hear which result Enter picks while search has focus.
+  const [highlightName, setHighlightName] = useState('')
+  useEffect(() => {
+    if (highlightKey === null) {
+      setHighlightName('')
+      return
+    }
+    const row = listRef.current?.querySelector<HTMLElement>('[data-search-highlight]')
+    setHighlightName(row?.getAttribute('aria-label') ?? row?.textContent?.trim() ?? '')
+  }, [highlightKey])
+
   /** The row a keyboard pick came from: a pick can remount it, so focus goes back to it. */
   const pickedRow = useRef<string | null>(null)
   // Before paint, so focus never stays on body. Kept until focus moves on:
@@ -1193,6 +1204,14 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
         {view.kind === 'search' ? (
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{view.count}</span>
         ) : null}
+        <span
+          role="status"
+          aria-live="polite"
+          data-testid="selector-search-announce"
+          className="sr-only"
+        >
+          {highlightName ? `Enter picks ${highlightName}` : ''}
+        </span>
       </div>
       {showTabs && agentRail === 'top' ? tabStrip('horizontal') : null}
       <div className="flex min-h-0">

@@ -2606,6 +2606,17 @@ describe('SelectorPanelV2 keyboard pick and search highlight', () => {
     expect(onPickModel).toHaveBeenCalledWith('gemini')
   })
 
+  it('announces the result Enter in search would pick', () => {
+    render(<PickPanel {...props({ modelOption: THREE })} />)
+    search().focus()
+    fireEvent.change(search(), { target: { value: 'gemini' } })
+    expect(screen.getByTestId('selector-search-announce')).toHaveTextContent(
+      'Enter picks Gemini Pro'
+    )
+    fireEvent.change(search(), { target: { value: 'zzzz' } })
+    expect(screen.getByTestId('selector-search-announce')).toBeEmptyDOMElement()
+  })
+
   it('Enter in search with no results picks nothing', () => {
     const onPickModel = vi.fn()
     render(<PickPanel {...props({ modelOption: THREE, onPickModel })} />)
