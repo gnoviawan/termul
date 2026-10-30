@@ -1774,7 +1774,12 @@ async fn server_config_post_persists_the_file_and_replies() {
     assert_eq!(written.host, "127.0.0.1");
     assert_eq!(written.port, 9090);
     assert_eq!(written.sessions_dir, PathBuf::from("/srv/termul/sessions"));
-    assert_eq!(written.projects_file, PathBuf::from("/srv/termul/projects.json"));
+    // `projects_file` is normalized to an absolute path on apply (on Windows
+    // a root-relative input gains the cwd drive prefix, e.g. `D:/srv/…`).
+    assert_eq!(
+        written.projects_file,
+        crate::onboard::normalize_projects_file_path(PathBuf::from("/srv/termul/projects.json"))
+    );
     assert!(!written.allow_remote_writes);
     assert_eq!(written.update_interval_secs, 21600);
 }
