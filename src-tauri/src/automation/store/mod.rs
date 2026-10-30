@@ -6,6 +6,7 @@
 
 mod runs;
 mod secret_names;
+mod suggestions;
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -78,6 +79,19 @@ CREATE TABLE automation_secret_name (
     project_id TEXT NOT NULL,
     name TEXT NOT NULL,
     PRIMARY KEY (project_id, name)
+);
+"#, r#"
+CREATE TABLE automation_suggestion_dismissed (
+    project_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    dismissed_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, fingerprint)
+);
+CREATE TABLE automation_suggestion_accepted (
+    project_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, fingerprint)
 );
 "#];
 

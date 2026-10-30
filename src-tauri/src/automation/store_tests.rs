@@ -60,7 +60,7 @@ fn migrates_once_and_reopens_with_data() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
 }
 
 #[test]
@@ -434,4 +434,21 @@ fn prune_removes_only_old_finished_runs() {
         .collect();
     assert_eq!(left, vec!["live"]);
     assert_eq!(store.get_steps(&"old".to_string().into()).unwrap(), vec![]);
+}
+
+#[test]
+fn answered_suggestions_are_the_dismissed_and_accepted_ones_of_the_project() {
+    let store = AutomationStore::open_in_memory().unwrap();
+    store.dismiss_suggestion("p1", "aaaa", NOW).unwrap();
+    store.dismiss_suggestion("p1", "aaaa", NOW + 1).unwrap();
+    store.accept_suggestion("p1", "bbbb", NOW).unwrap();
+    store.dismiss_suggestion("p2", "cccc", NOW).unwrap();
+
+    let mut p1: Vec<String> = store.answered_suggestions("p1").unwrap().into_iter().collect();
+    p1.sort();
+    assert_eq!(p1, vec!["aaaa".to_string(), "bbbb".to_string()]);
+    assert_eq!(
+        store.answered_suggestions("p2").unwrap().into_iter().collect::<Vec<_>>(),
+        vec!["cccc".to_string()]
+    );
 }

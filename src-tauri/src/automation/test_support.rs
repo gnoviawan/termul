@@ -3,6 +3,35 @@ use serde_json::{json, Value};
 use super::graph::apply_ops;
 use super::model::{Automation, AutomationId, Graph, NodeId, Op, Trigger};
 
+/// Chat history with no prompts.
+pub fn no_history() -> std::sync::Arc<dyn super::suggest::PromptHistory> {
+    std::sync::Arc::new(|_: &str, _: i64| Vec::new())
+}
+
+/// Fri 2026-10-30 08:00 UTC, the day after [`weekday_asks`].
+pub const FRIDAY_MS: i64 = 1_793_347_200_000;
+
+/// `p1` asked "summarize the <n> open PRs in termul" at 09:05 UTC on Mon
+/// 2026-10-26 .. Thu 2026-10-29; other projects asked nothing.
+pub fn weekday_asks(project_id: &str) -> Vec<super::suggest::Prompt> {
+    if project_id != "p1" {
+        return Vec::new();
+    }
+    [
+        1_793_005_500_000,
+        1_793_091_900_000,
+        1_793_178_300_000,
+        1_793_264_700_000,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(n, at_ms)| super::suggest::Prompt {
+        at_ms,
+        text: format!("summarize the {n} open PRs in termul"),
+    })
+    .collect()
+}
+
 pub fn node_id(id: &str) -> NodeId {
     NodeId::parse(id).unwrap()
 }

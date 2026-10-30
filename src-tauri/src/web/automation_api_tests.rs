@@ -10,7 +10,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::automation::engine::HttpConfig;
-use crate::automation::test_support::{test_engine, MemoryVault};
+use crate::automation::test_support::{no_history, test_engine, MemoryVault};
 use crate::web::watch::WatchKind;
 use crate::web::ws::{outbound_channel, Outbound};
 
@@ -23,7 +23,7 @@ const OPEN: WriteFlags = WriteFlags {
 
 fn service_with(vault: MemoryVault) -> Arc<AutomationService> {
     let te = test_engine(std::env::temp_dir(), Arc::new(vault), HttpConfig::default());
-    Arc::new(AutomationService::new(te.engine))
+    Arc::new(AutomationService::new(te.engine, no_history()))
 }
 
 fn service() -> Arc<AutomationService> {

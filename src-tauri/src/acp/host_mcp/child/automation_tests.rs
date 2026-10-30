@@ -17,7 +17,7 @@ use crate::acp::session_persistence::UNASSIGNED_PROJECT_ID;
 use crate::automation::engine::HttpConfig;
 use crate::automation::model::{AutomationChanged, AutomationId};
 use crate::automation::service::AutomationService;
-use crate::automation::test_support::{test_engine, MemoryVault};
+use crate::automation::test_support::{no_history, test_engine, MemoryVault};
 
 fn service() -> Arc<AutomationService> {
     let engine = test_engine(
@@ -26,7 +26,7 @@ fn service() -> Arc<AutomationService> {
         HttpConfig::default(),
     )
     .engine;
-    Arc::new(AutomationService::new(engine))
+    Arc::new(AutomationService::new(engine, no_history()))
 }
 
 /// An agent's side of one MCP session.
