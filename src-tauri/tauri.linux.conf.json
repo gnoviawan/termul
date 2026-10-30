@@ -1,0 +1,26 @@
+{
+	"$schema": "https://schema.tauri.app/config/2",
+	"build": {
+		"beforeBundleCommand": "node scripts/stage-linux-rg.mjs"
+	},
+	"bundle": {
+		"externalBin": [],
+		"linux": {
+			"deb": {
+				"files": {
+					"/usr/lib/termul-manager/rg": "bin/linux-package/rg"
+				}
+			},
+			"rpm": {
+				"files": {
+					"/usr/lib/termul-manager/rg": "bin/linux-package/rg"
+				}
+			},
+			"appimage": {
+				"files": {
+					"/usr/lib/termul-manager/rg": "bin/linux-package/rg"
+				}
+			}
+		}
+	}
+}

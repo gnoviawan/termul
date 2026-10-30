@@ -16,6 +16,8 @@ out/
 # Rust/Tauri build artifacts
 src-tauri/target/
 src-tauri/gen/
+# Linux bundle staging for ripgrep (scripts/stage-linux-rg.mjs)
+src-tauri/bin/linux-package/
 
 # Logs
 logs/
