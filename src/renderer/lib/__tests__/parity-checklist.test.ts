@@ -2228,7 +2228,12 @@ describe('Claude Accounts parity (ADR-0004)', () => {
       expect(wsTransport).toContain(`'${request}'`)
       expect(dispatch).toContain(`"${request}" => handle_${request}(id, &req.payload, acp).await`)
     }
-    for (const retired of ['claude_accounts_add', 'claude_accounts_login_cancel']) {
+    for (const retired of [
+      'claude_accounts_add',
+      'claude_accounts_login_cancel',
+      'claude_accounts_rename',
+      'claude_accounts_remove'
+    ]) {
       expect(lib).not.toContain(`acp::commands::${retired}`)
       expect(facade).not.toContain(`'${retired}'`)
     }

@@ -418,8 +418,6 @@ These are the `acp_*`, `claude_accounts_*`, `ws_channel_*` and `codex_cli_auth_s
 | `claude_accounts_list` | Returns the Claude Accounts snapshot. `/ws` equivalent: `list_claude_accounts`. |
 | `claude_accounts_usage` | Returns the usage windows of every Account. `force` refreshes reads older than 60 seconds. `/ws` equivalent: `list_claude_usage`. |
 | `claude_accounts_login` | Runs the Claude browser login for one Account and resolves when it finishes. Desktop only. `/ws` `cancel_claude_login` stops it. |
-| `claude_accounts_rename` | Renames an Account. Desktop only. |
-| `claude_accounts_remove` | Removes an Account and returns the ids of the Projects that moved to the Default Account. Desktop only. |
 | `claude_accounts_set_default` | Chooses the Default Account. `/ws` equivalent: `set_default_claude_account`. |
 | `claude_accounts_set_project` | Chooses a Project's Account, or clears it with `null`. With `expectedAccountId`, applies only while the Project still uses that Account; returns whether it applied. `/ws` equivalent: `set_project_claude_account`. |
 | `claude_accounts_set_auto_switch` | Turns automatic switching at a usage limit on or off (default on). `/ws` equivalent: `set_claude_auto_switch`. |

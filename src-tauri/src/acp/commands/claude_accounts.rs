@@ -1,7 +1,8 @@
 //! Desktop `#[tauri::command]` wrappers over the Claude Account operations of
-//! [`ClaudeAgentService`]. Adding an Account, the link sign-in and stopping a
-//! sign-in are `/ws` requests only (`web::ws::claude_accounts`), which the
-//! desktop renderer reaches over its Tauri Channel carrier.
+//! [`ClaudeAgentService`]. Adding, renaming and removing an Account, the link
+//! sign-in and stopping a sign-in are `/ws` requests only
+//! (`web::ws::claude_accounts`), which the desktop renderer reaches over its
+//! Tauri Channel carrier.
 
 use std::sync::Arc;
 
@@ -36,25 +37,6 @@ pub async fn claude_accounts_login(
 ) -> Result<(), String> {
     let service = Arc::clone(service.inner());
     service.login_account(&account_id).await
-}
-
-#[tauri::command]
-pub fn claude_accounts_rename(
-    service: State<'_, Arc<ClaudeAgentService>>,
-    account_id: String,
-    name: String,
-) -> Result<(), String> {
-    service.rename_account(&account_id, &name)
-}
-
-/// Returns the ids of the Projects that moved to the Default Account.
-#[tauri::command]
-pub async fn claude_accounts_remove(
-    service: State<'_, Arc<ClaudeAgentService>>,
-    account_id: String,
-) -> Result<Vec<String>, String> {
-    let service = Arc::clone(service.inner());
-    service.remove_account(&account_id).await
 }
 
 #[tauri::command]
