@@ -107,8 +107,10 @@ export const CONTEXT_WARNING_ON = 80
 export const CONTEXT_WARNING_OFF = 78
 
 export function nextContextWarning(previous: boolean, percent: number): boolean {
-  if (percent >= CONTEXT_WARNING_ON) return true
-  if (percent < CONTEXT_WARNING_OFF) return false
+  // Compare the rounded percent the label shows, so "80%" always means warning.
+  const shown = Math.round(percent)
+  if (shown >= CONTEXT_WARNING_ON) return true
+  if (shown < CONTEXT_WARNING_OFF) return false
   return previous
 }
 

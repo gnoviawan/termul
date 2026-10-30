@@ -74,11 +74,11 @@ describe('context-usage-utils', () => {
 })
 
 describe('nextContextWarning', () => {
-  it('turns on at 80, holds between 78 and 80, and clears below 78', () => {
-    expect(nextContextWarning(false, 79)).toBe(false)
-    expect(nextContextWarning(false, 80)).toBe(true)
-    expect(nextContextWarning(true, 78)).toBe(true)
-    expect(nextContextWarning(true, 77.9)).toBe(false)
+  it('turns on at 80, holds between 78 and 80, and clears below 78, on the rounded percent', () => {
+    expect(nextContextWarning(false, 79.4)).toBe(false)
+    expect(nextContextWarning(false, 79.5)).toBe(true)
+    expect(nextContextWarning(true, 77.5)).toBe(true)
+    expect(nextContextWarning(true, 77.4)).toBe(false)
   })
 })
 

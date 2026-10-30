@@ -237,9 +237,16 @@ describe('ContextUsageIndicator warning and Compact', () => {
     view.rerender(<ContextUsageIndicator usage={usage({ used: 158_000 })} messages={MESSAGES} />)
     expect(ring()).toHaveAttribute('data-warning', 'true')
 
-    // 77.5%: below the off threshold.
-    view.rerender(<ContextUsageIndicator usage={usage({ used: 155_000 })} messages={MESSAGES} />)
+    // 77%: below the off threshold.
+    view.rerender(<ContextUsageIndicator usage={usage({ used: 154_000 })} messages={MESSAGES} />)
     expect(ring()).not.toHaveAttribute('data-warning')
+  })
+
+  it('warns as soon as the label rounds to 80%', () => {
+    // 159.8K of 200K is 79.9%, shown as "80%".
+    render(<ContextUsageIndicator usage={usage({ used: 159_800 })} messages={MESSAGES} />)
+    expect(ring()).toHaveAttribute('data-warning', 'true')
+    expect(ring()).toHaveAccessibleName(/^Context 80%.*nearing the limit$/)
   })
 
   it('shows "Nearing the limit" in the footer when the warning is on', () => {
