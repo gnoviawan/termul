@@ -83,12 +83,22 @@ the file in its built-in editor — absolute and cwd-relative paths inside the s
 roots work, a `:line` suffix (or `#L<line>` on the link target) positions the cursor, and \
 bare multi-segment file paths in prose become open-in-editor links too.";
 
+/// Offer to schedule repeatable work. Automation runs never see it: their
+/// sessions get no host MCP server.
+pub const AUTOMATION_SUGGESTION_INSTRUCTIONS: &str = "Repeatable work: when the user's request \
+names a cadence (every day, every morning, every week, daily, weekly, remind me, each time X \
+happens) or repeats a request made earlier in this chat, first finish the task, then ask once \
+per chat with the `ask_user` tool: \"This looks repeatable. Want me to turn it into a scheduled \
+background automation?\" with the options \"Yes, schedule it\" and \"Not now\". On yes, read \
+`automation_guide` and build it with the automation tools. After either answer, do not ask \
+again in this chat. Skip the question when the user is already asking for an automation.";
+
 /// The full `instructions` of the child's `initialize` result: the chat
-/// guidance, then the design canvas guide.
+/// guidance, the repeatable-work offer, then the design canvas guide.
 #[must_use]
 pub fn session_instructions() -> String {
     format!(
-        "{TERMUL_CHAT_INSTRUCTIONS}\n\n{}",
+        "{TERMUL_CHAT_INSTRUCTIONS}\n\n{AUTOMATION_SUGGESTION_INSTRUCTIONS}\n\n{}",
         canvas_tools::instructions()
     )
 }
