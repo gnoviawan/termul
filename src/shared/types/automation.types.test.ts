@@ -1,0 +1,460 @@
+import { describe, expect, it } from 'vitest'
+import wire from './__fixtures__/automation.json'
+import type {
+  ApplyOpsResult,
+  Automation,
+  AutomationOp,
+  AutomationRun,
+  AutomationStep,
+  RunPolicy,
+  Trigger
+} from './automation.types'
+
+type WireFixture = {
+  automation: Automation
+  triggers: Trigger[]
+  ops: AutomationOp[]
+  apply_ops_result: ApplyOpsResult
+  runs: AutomationRun[]
+  steps: AutomationStep[]
+  run_policy: RunPolicy
+}
+
+// Literal ids cannot carry a brand, so the literal is checked against the
+// same shape with brands erased; every other field and tag stays exact.
+type Unbranded<T> = T extends string & { readonly __brand: string }
+  ? string
+  : T extends (infer U)[]
+    ? Unbranded<U>[]
+    : T extends object
+      ? { [K in keyof T]: Unbranded<T[K]> }
+      : T
+
+const typed: Unbranded<WireFixture> = {
+  automation: {
+    id: 'auto-1',
+    project_id: 'project-1',
+    name: 'Morning digest',
+    revision: 1,
+    approved_revision: 1,
+    enabled: true,
+    trigger: {
+      kind: 'schedule',
+      schedule: {
+        kind: 'cron',
+        expr: '0 5 * * 1-5',
+        timezone: 'America/New_York'
+      }
+    },
+    graph: {
+      nodes: [
+        {
+          id: 'fetch',
+          label: 'Fetch items',
+          spec: {
+            kind: 'http',
+            method: 'GET',
+            url: 'https://api.example.com/items?since={{trigger.scheduled_for}}',
+            headers: [
+              {
+                name: 'Authorization',
+                value: 'Bearer {{secrets.API_KEY}}'
+              }
+            ],
+            body: null,
+            allowed_hosts: ['api.example.com']
+          }
+        },
+        {
+          id: 'extract',
+          label: 'Extract',
+          spec: {
+            kind: 'agent',
+            agent_id: 'claude',
+            model: 'sonnet',
+            prompt: 'Summarize {{nodes.fetch.output.items}}',
+            output_schema: {
+              type: 'object',
+              properties: {
+                summary: {
+                  type: 'string'
+                },
+                urgent: {
+                  type: 'boolean'
+                }
+              },
+              required: ['summary', 'urgent']
+            },
+            timeout_ms: 120000,
+            max_attempts: 2
+          }
+        },
+        {
+          id: 'check',
+          label: 'Urgent?',
+          spec: {
+            kind: 'condition',
+            left: '{{nodes.extract.output.urgent}}',
+            op: 'eq',
+            right: 'true'
+          }
+        },
+        {
+          id: 'shape',
+          label: 'Shape',
+          spec: {
+            kind: 'transform',
+            fields: [
+              {
+                name: 'text',
+                value: '{{nodes.extract.output.summary}}'
+              }
+            ]
+          }
+        },
+        {
+          id: 'post',
+          label: 'Notify',
+          spec: {
+            kind: 'http',
+            method: 'POST',
+            url: 'https://hooks.example.com/notify',
+            headers: [
+              {
+                name: 'X-Key',
+                value: '{{secrets.HOOK_KEY}}'
+              }
+            ],
+            body: '{{nodes.shape.output}}',
+            allowed_hosts: ['hooks.example.com']
+          }
+        },
+        {
+          id: 'alert',
+          label: 'Fetch failed',
+          spec: {
+            kind: 'fail',
+            message: 'fetch failed'
+          }
+        }
+      ],
+      edges: [
+        {
+          from: 'trigger',
+          port: 'out',
+          to: 'fetch'
+        },
+        {
+          from: 'fetch',
+          port: 'out',
+          to: 'extract'
+        },
+        {
+          from: 'fetch',
+          port: 'error',
+          to: 'alert'
+        },
+        {
+          from: 'extract',
+          port: 'out',
+          to: 'check'
+        },
+        {
+          from: 'check',
+          port: 'true',
+          to: 'shape'
+        },
+        {
+          from: 'shape',
+          port: 'out',
+          to: 'post'
+        }
+      ]
+    },
+    isolation: 'shared_in_root',
+    next_run_at: 1773046800000,
+    consecutive_errors: 1,
+    schedule_error_count: 0,
+    unseen_failures: 2,
+    last_run: {
+      run_id: 'run-1',
+      status: 'failed',
+      finished_at: 1773046860000
+    },
+    created_at: 1000,
+    updated_at: 1000,
+    deleted_at: null
+  },
+  triggers: [
+    {
+      kind: 'manual'
+    },
+    {
+      kind: 'schedule',
+      schedule: {
+        kind: 'cron',
+        expr: '0 5 * * 1-5',
+        timezone: 'America/New_York'
+      }
+    },
+    {
+      kind: 'schedule',
+      schedule: {
+        kind: 'every',
+        every_ms: 900000,
+        anchor_ms: 0
+      }
+    },
+    {
+      kind: 'schedule',
+      schedule: {
+        kind: 'at',
+        at: 1773046800000
+      }
+    }
+  ],
+  ops: [
+    {
+      op: 'add_node',
+      node: {
+        id: 'note',
+        label: 'Note',
+        spec: {
+          kind: 'transform',
+          fields: [
+            {
+              name: 'text',
+              value: 'hi'
+            }
+          ]
+        }
+      }
+    },
+    {
+      op: 'update_node',
+      id: 'note',
+      label: 'Renamed'
+    },
+    {
+      op: 'update_node',
+      id: 'check',
+      spec: {
+        kind: 'condition',
+        left: '{{nodes.extract.output.urgent}}',
+        op: 'exists',
+        right: null
+      }
+    },
+    {
+      op: 'remove_node',
+      id: 'note'
+    },
+    {
+      op: 'connect',
+      edge: {
+        from: 'check',
+        port: 'false',
+        to: 'alert'
+      }
+    },
+    {
+      op: 'disconnect',
+      edge: {
+        from: 'check',
+        port: 'false',
+        to: 'alert'
+      }
+    },
+    {
+      op: 'set_trigger',
+      trigger: {
+        kind: 'manual'
+      }
+    },
+    {
+      op: 'rename',
+      name: 'Digest'
+    },
+    {
+      op: 'set_isolation',
+      isolation: 'worktree_per_run'
+    }
+  ],
+  apply_ops_result: {
+    automation: {
+      id: 'auto-2',
+      project_id: 'project-1',
+      name: 'Draft',
+      revision: 1,
+      approved_revision: null,
+      enabled: true,
+      trigger: {
+        kind: 'manual'
+      },
+      graph: {
+        nodes: [],
+        edges: []
+      },
+      isolation: 'worktree_per_run',
+      next_run_at: null,
+      consecutive_errors: 0,
+      schedule_error_count: 0,
+      unseen_failures: 0,
+      last_run: null,
+      created_at: 1000,
+      updated_at: 1000,
+      deleted_at: null
+    },
+    issues: [
+      {
+        node_id: null,
+        code: 'trigger_edge_count',
+        message: 'expected exactly one edge from trigger, found 0'
+      }
+    ]
+  },
+  runs: [
+    {
+      id: 'run-1',
+      automation_id: 'auto-1',
+      revision: 1,
+      graph: {
+        nodes: [
+          {
+            id: 'stop',
+            label: 'Stop',
+            spec: {
+              kind: 'fail',
+              message: '{{trigger.kind}}'
+            }
+          }
+        ],
+        edges: [
+          {
+            from: 'trigger',
+            port: 'out',
+            to: 'stop'
+          }
+        ]
+      },
+      trigger: 'scheduled',
+      scheduled_for: 1773046800000,
+      status: 'failed',
+      started_at: 1773046800100,
+      finished_at: 1773046860000,
+      stop_reason: 'node post failed',
+      summary: null,
+      conversation_id: null,
+      worktree_id: 'wt-1'
+    },
+    {
+      id: 'run-2',
+      automation_id: 'auto-1',
+      revision: 1,
+      graph: {
+        nodes: [
+          {
+            id: 'stop',
+            label: 'Stop',
+            spec: {
+              kind: 'fail',
+              message: '{{trigger.kind}}'
+            }
+          }
+        ],
+        edges: [
+          {
+            from: 'trigger',
+            port: 'out',
+            to: 'stop'
+          }
+        ]
+      },
+      trigger: 'catch_up',
+      scheduled_for: 1773046800000,
+      status: 'running',
+      started_at: 1773046800100,
+      finished_at: null,
+      stop_reason: null,
+      summary: null,
+      conversation_id: null,
+      worktree_id: null
+    }
+  ],
+  steps: [
+    {
+      run_id: 'run-1',
+      node_id: 'fetch',
+      status: 'succeeded',
+      output: {
+        items: [
+          {
+            title: 'first'
+          }
+        ]
+      },
+      error: null,
+      started_at: 1773046800200,
+      finished_at: 1773046801000
+    },
+    {
+      run_id: 'run-1',
+      node_id: 'post',
+      status: 'failed',
+      output: null,
+      error: 'secret_missing:HOOK_KEY',
+      started_at: 1773046859000,
+      finished_at: 1773046860000
+    },
+    {
+      run_id: 'run-1',
+      node_id: 'alert',
+      status: 'skipped',
+      output: null,
+      error: null,
+      started_at: null,
+      finished_at: null
+    }
+  ],
+  run_policy: {
+    trigger_summary: 'cron "0 5 * * 1-5" in America/New_York',
+    next_runs: [1773046800000, 1773133200000, 1773219600000],
+    agents: [
+      {
+        node_id: 'extract',
+        agent_id: 'claude',
+        model: 'sonnet',
+        timeout_ms: 120000,
+        tools: 'none'
+      }
+    ],
+    secrets: [
+      {
+        node_id: 'fetch',
+        names: ['API_KEY']
+      },
+      {
+        node_id: 'post',
+        names: ['HOOK_KEY']
+      }
+    ],
+    outbound_hosts: [
+      {
+        node_id: 'fetch',
+        hosts: ['api.example.com']
+      },
+      {
+        node_id: 'post',
+        hosts: ['hooks.example.com']
+      }
+    ],
+    untrusted_flow: true,
+    failure_policy: 'backoff 30s/1m/5m/15m/60m'
+  }
+}
+
+describe('automation wire types', () => {
+  it('match the fixture the Rust model serializes', () => {
+    expect(typed).toEqual(wire)
+  })
+})
