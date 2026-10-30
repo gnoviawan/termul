@@ -11,6 +11,7 @@ import { claudeAccountsApi, isClaudeLoginCancelled } from '@/lib/claude-accounts
 import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
+import { applyProjectClaudeAccount } from '@/stores/claude-account-switch'
 import { useProjectStore } from '@/stores/project-store'
 import type { ProjectColor } from '@/types/project'
 import { SettingsCard } from '../SettingsGroup'
@@ -124,11 +125,20 @@ export function ProviderSettings(): React.JSX.Element {
   }
 
   const confirmRemove = async (): Promise<void> => {
-    if (!removing) return
+    if (!removing || !snapshot) return
     const account = removing
+    // Removing the default moves the Projects that follow it as well.
+    const followers =
+      account.id === snapshot.defaultAccountId
+        ? projects.filter((p) => !(p.id in snapshot.projectAccounts)).map((p) => p.id)
+        : []
     setRemoveBusy(true)
     try {
-      await claudeAccountsApi.remove(account.id)
+      const moved = await claudeAccountsApi.remove(account.id)
+      // Their open Claude chats still run on the removed Account.
+      for (const projectId of new Set([...moved, ...followers])) {
+        void applyProjectClaudeAccount(projectId)
+      }
       setRemoving(null)
       await reload()
       toast.success(`${account.name} was removed`)

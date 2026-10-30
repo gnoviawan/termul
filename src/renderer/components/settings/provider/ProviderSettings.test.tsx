@@ -8,8 +8,9 @@ import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
 import { ProviderSettings } from './ProviderSettings'
 
-const { api, toast, admits } = vi.hoisted(() => ({
+const { api, toast, admits, applyProjectClaudeAccount } = vi.hoisted(() => ({
   admits: { value: true },
+  applyProjectClaudeAccount: vi.fn(),
   api: {
     signInFlow: vi.fn(),
     startLinkLogin: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock('@/lib/claude-accounts-api', async () => {
   return { ...actual, claudeAccountsApi: api }
 })
 vi.mock('sonner', () => ({ toast }))
+vi.mock('@/stores/claude-account-switch', () => ({ applyProjectClaudeAccount }))
 vi.mock('@/hooks/use-server-admits-remote-writes', () => ({
   useServerAdmitsRemoteWrites: () => admits.value
 }))
@@ -102,6 +104,7 @@ beforeEach(() => {
   api.setDefault.mockResolvedValue(undefined)
   api.setAutoSwitch.mockResolvedValue(undefined)
   api.add.mockResolvedValue({ id: 'cd34', name: 'Side', createdAt: 1 })
+  applyProjectClaudeAccount.mockResolvedValue([])
 })
 
 describe('ProviderSettings', () => {
@@ -202,6 +205,34 @@ describe('ProviderSettings', () => {
     expect(screen.getByText('m-pos')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     await waitFor(() => expect(api.remove).toHaveBeenCalledWith('ab12'))
+    await waitFor(() => expect(applyProjectClaudeAccount).toHaveBeenCalledWith('office'))
+    expect(applyProjectClaudeAccount).toHaveBeenCalledOnce()
+  })
+
+  it('restarts the chats of the projects that followed a removed default account', async () => {
+    useProjectStore.setState({
+      projects: [
+        { id: 'office', name: 'm-pos', color: 'blue', path: '/code/m-pos' } as Project,
+        { id: 'side', name: 'blog', color: 'green', path: '/code/blog' } as Project
+      ]
+    })
+    api.list.mockResolvedValue({
+      ...SNAPSHOT,
+      accounts: [SNAPSHOT.accounts[0], { ...SNAPSHOT.accounts[1], signedIn: true }],
+      defaultAccountId: 'ab12',
+      projectAccounts: {}
+    })
+    api.remove.mockResolvedValue([])
+    render(<ProviderSettings />)
+    await screen.findByTestId('claude-account-ab12')
+    openMenu('Work')
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(applyProjectClaudeAccount).toHaveBeenCalledTimes(2))
+    expect(applyProjectClaudeAccount.mock.calls.map(([id]) => id).sort()).toEqual([
+      'office',
+      'side'
+    ])
   })
 
   it('makes a signed-in account the default from its menu', async () => {
