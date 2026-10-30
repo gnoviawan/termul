@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { AnimatedMenuContent } from '@/components/ui/animated-menu-content'
+import { Popover, PopoverTrigger } from '@/components/ui/popover'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { SessionUsage } from '@/lib/acp-api'
@@ -38,10 +39,6 @@ const IDLE_SIGNALS: Omit<CompactSignals, 'usageUpdatedAt'> = {
 /** Ring and bar share one curve so they move together. */
 const FILL_TRANSITION =
   'transition-[stroke-dashoffset,transform,color] duration-[400ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none'
-
-/** Card grows out of the ring: 350ms open, 250ms close, on the ring's corner. */
-const CARD_MOTION =
-  'origin-[var(--radix-popover-content-transform-origin)] ease-[cubic-bezier(0.32,0.72,0,1)] data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95 data-[state=open]:duration-[350ms] data-[state=closed]:duration-[250ms] motion-reduce:animate-none'
 
 /** Card blocks fade up one after another, 40ms apart. */
 const STAGGER_ITEM =
@@ -92,21 +89,29 @@ export function ContextUsageDetails({
   const leftLabel = `${formatTokenCount(left)} left`
   return (
     <>
-      <div className={cn('space-y-2 tabular-nums', STAGGER_ITEM)} style={stagger(0)}>
+      <div className="space-y-2 tabular-nums">
         {showHeading && (
-          <div className="flex items-baseline justify-between gap-2">
+          <div
+            className={cn('flex items-baseline justify-between gap-2', STAGGER_ITEM)}
+            style={stagger(0)}
+          >
             <p className="font-medium text-foreground">Context window</p>
             <RollingText className="text-muted-foreground" text={`${Math.round(percent)}% used`} />
           </div>
         )}
         {!showHeading && (
           <RollingText
-            className="block text-muted-foreground"
+            className={cn('block text-muted-foreground', STAGGER_ITEM)}
+            style={stagger(0)}
             text={`${Math.round(percent)}% used`}
           />
         )}
         <div
-          className="flex h-1.5 w-full gap-0.5 overflow-hidden rounded-full bg-muted"
+          className={cn(
+            'flex h-1.5 w-full gap-0.5 overflow-hidden rounded-full bg-muted',
+            STAGGER_ITEM
+          )}
+          style={stagger(1)}
           data-testid="context-usage-bar"
           aria-hidden="true"
         >
@@ -131,7 +136,7 @@ export function ContextUsageDetails({
             />
           </div>
         </div>
-        <dl className="space-y-1 text-muted-foreground">
+        <dl className={cn('space-y-1 text-muted-foreground', STAGGER_ITEM)} style={stagger(2)}>
           <div className="flex items-center justify-between gap-2">
             <dt className="flex items-center gap-1.5">
               <span className="size-1.5 rounded-full bg-foreground/35" aria-hidden="true" />
@@ -155,7 +160,7 @@ export function ContextUsageDetails({
         <button
           type="button"
           onClick={onCompact}
-          style={stagger(1)}
+          style={stagger(3)}
           disabled={pending || compactDisabled}
           aria-busy={pending || undefined}
           className={cn(
@@ -171,7 +176,7 @@ export function ContextUsageDetails({
       {isMeaningfulReportedCost(usage.cost) && usage.cost && (
         <div
           className={cn('space-y-0.5 border-t border-border/60 pt-2', STAGGER_ITEM)}
-          style={stagger(2)}
+          style={stagger(4)}
         >
           <p className="text-muted-foreground">Reported cost</p>
           <p className="font-medium tabular-nums text-foreground">
@@ -184,21 +189,21 @@ export function ContextUsageDetails({
           'flex items-center justify-between gap-2 border-t border-border/60 pt-2 text-2xs text-muted-foreground',
           STAGGER_ITEM
         )}
-        style={stagger(3)}
+        style={stagger(5)}
       >
         <p className={cn(isWarning && 'text-warning')} data-testid="context-left">
           <RollingText text={isWarning ? `Nearing the limit · ${leftLabel}` : leftLabel} />
         </p>
-        {compactPhase === 'failed' ? (
-          <p
-            role="status"
-            className="animate-in fade-in-0 duration-150 text-destructive motion-reduce:animate-none"
-          >
-            Compact didn't finish
-          </p>
-        ) : (
-          <p>Reported by agent</p>
-        )}
+        {/* Always mounted, so screen readers announce the failure when it appears. */}
+        <p role="status">
+          {compactPhase === 'failed' ? (
+            <span className="animate-in fade-in-0 duration-150 text-destructive motion-reduce:animate-none">
+              Compact didn't finish
+            </span>
+          ) : (
+            'Reported by agent'
+          )}
+        </p>
       </div>
     </>
   )
@@ -223,6 +228,7 @@ export function ContextUsageIndicator({
   // depends on whether the ring is currently visible.
   const isMobile = useMobileWebShell()
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [cardOpen, setCardOpen] = useState(false)
   const closeSheet = useCallback(() => setSheetOpen(false), [])
   const visible = shouldShowSessionUsage(usage, messages)
   const ringRendered = Boolean(visible && isDisplayableSessionUsage(visible))
@@ -244,7 +250,7 @@ export function ContextUsageIndicator({
 
   if (!visible || !isDisplayableSessionUsage(visible)) return null
 
-  const { percent, remaining } = conversationUsageMetrics(visible)
+  const { percent } = conversationUsageMetrics(visible)
   const offset = CIRCUMFERENCE * (1 - percent / 100)
   const details = (showHeading: boolean) => (
     <ContextUsageDetails
@@ -260,12 +266,12 @@ export function ContextUsageIndicator({
   const ring = (
     <button
       type="button"
-      aria-label={`Context ${Math.round(percent)} percent used, ${formatTokenCount(remaining)} left${
-        warning ? ', nearing the limit' : ''
-      }`}
+      aria-label={`Context ${Math.round(percent)}%, ${formatTokenCount(
+        Math.min(visible.used, visible.size)
+      )} of ${formatTokenCount(visible.size)} tokens${warning ? ', nearing the limit' : ''}`}
       data-warning={warning || undefined}
       className={cn(
-        'relative inline-flex size-8 shrink-0 items-center justify-center transition-[color,transform] ease-out',
+        'relative inline-flex size-8 shrink-0 items-center justify-center transition-[color,transform] ease-out motion-reduce:transition-none',
         warning ? 'text-warning' : 'text-muted-foreground hover:text-foreground',
         "after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1",
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
@@ -324,11 +330,12 @@ export function ContextUsageIndicator({
   }
 
   return (
-    <Popover>
+    <Popover open={cardOpen} onOpenChange={setCardOpen}>
       <PopoverTrigger asChild>{ring}</PopoverTrigger>
-      <PopoverContent align="start" className={cn('w-56 space-y-2.5 p-3 text-xs', CARD_MOTION)}>
+      {/* Transition, not keyframes: a close stopped halfway reverses smoothly. */}
+      <AnimatedMenuContent open={cardOpen} align="start" className="w-56 space-y-2.5 p-3 text-xs">
         {details(true)}
-      </PopoverContent>
+      </AnimatedMenuContent>
     </Popover>
   )
 }

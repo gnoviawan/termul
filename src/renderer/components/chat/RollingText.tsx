@@ -32,17 +32,20 @@ export function useThrottledValue<T>(value: T, intervalMs: number = ROLLING_THRO
  */
 export function RollingText({
   text,
-  className
+  className,
+  style
 }: {
   text: string
   className?: string
+  style?: React.CSSProperties
 }): React.JSX.Element {
   const shown = useThrottledValue(text)
   const chars = Array.from(shown)
   return (
-    <span className={cn('tabular-nums', className)}>
+    <span className={cn('tabular-nums', className)} style={style}>
       <span className="sr-only">{shown}</span>
-      <span aria-hidden="true" className="inline-flex">
+      {/* select-none: copying the text gives the plain string, not every digit column. */}
+      <span aria-hidden="true" className="inline-flex select-none">
         {chars.map((char, index) => {
           // Key from the right so a new leading digit does not reset the others.
           const key = chars.length - index

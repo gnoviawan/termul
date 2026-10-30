@@ -22,7 +22,7 @@ function usage(overrides: Partial<SessionUsage> = {}): SessionUsage {
 }
 
 const MESSAGES = [{ role: 'user' }, { role: 'assistant' }]
-const RING = /Context \d+ percent used/
+const RING = /^Context \d+%/
 
 function ring(): HTMLElement {
   return screen.getByRole('button', { name: RING })
@@ -52,10 +52,10 @@ describe('ContextUsageIndicator ring visibility', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('names the ring with the rounded conversation percent', () => {
+  it('names the ring with the rounded conversation percent and the tokens used', () => {
     render(<ContextUsageIndicator usage={usage()} messages={MESSAGES} />)
     expect(
-      screen.getByRole('button', { name: 'Context 21 percent used, 150K left' })
+      screen.getByRole('button', { name: 'Context 21%, 50K of 200K tokens' })
     ).toBeInTheDocument()
   })
 })
@@ -307,6 +307,53 @@ describe('ContextUsageIndicator warning and Compact', () => {
       })
       expect(screen.getByRole('button', { name: 'Compact' })).toBeEnabled()
       expect(screen.getByText("Compact didn't finish")).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends compact only once when two clicks land in the same tick', () => {
+    const onCompact = vi.fn()
+    render(
+      <ContextUsageIndicator
+        usage={usage()}
+        messages={MESSAGES}
+        onCompact={onCompact}
+        compactSignals={{ connected: true, activeTurn: false, compaction: null }}
+      />
+    )
+    fireEvent.click(ring())
+    const button = screen.getByRole('button', { name: 'Compact' })
+    act(() => {
+      button.click()
+      button.click()
+    })
+    expect(onCompact).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not time out while the agent reports compaction running', () => {
+    vi.useFakeTimers()
+    try {
+      const props = { usage: usage(), messages: MESSAGES, onCompact: vi.fn() }
+      const view = render(
+        <ContextUsageIndicator
+          {...props}
+          compactSignals={{ connected: true, activeTurn: false, compaction: null }}
+        />
+      )
+      fireEvent.click(ring())
+      fireEvent.click(screen.getByRole('button', { name: 'Compact' }))
+      view.rerender(
+        <ContextUsageIndicator
+          {...props}
+          compactSignals={{ connected: true, activeTurn: true, compaction: 'started' }}
+        />
+      )
+      act(() => {
+        vi.advanceTimersByTime(90_000)
+      })
+      expect(screen.getByRole('button', { name: 'Compacting…' })).toBeInTheDocument()
+      expect(screen.queryByText("Compact didn't finish")).not.toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }

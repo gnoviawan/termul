@@ -421,7 +421,7 @@ describe('mobile composer: one-row toolbar', () => {
       'Add to chat',
       PILL_NAME,
       'Agent',
-      'Context 21 percent used, 150K left',
+      'Context 21%, 50K of 200K tokens',
       'Send message'
     ])
     for (const stale of ['1', '2', 'single']) {
@@ -479,7 +479,7 @@ describe('mobile composer: one-row toolbar', () => {
     expect(CHAT_COMPACT_LABEL).toBe('@max-[361px]:sr-only')
 
     expect(plusButton()).toHaveClass('shrink-0')
-    expect(screen.getByRole('button', { name: /Context \d+ percent used/ })).toHaveClass('shrink-0')
+    expect(screen.getByRole('button', { name: /^Context \d+%/ })).toHaveClass('shrink-0')
     expect(screen.getByRole('button', { name: 'Send message' }).parentElement).toHaveClass(
       'shrink-0'
     )
@@ -524,7 +524,7 @@ describe('mobile composer: one-row toolbar', () => {
       mockMessages.current = [...messages]
       const { unmount } = renderBar()
 
-      expect(screen.queryByRole('button', { name: /Context \d+ percent used/ })).toBeNull()
+      expect(screen.queryByRole('button', { name: /^Context \d+%/ })).toBeNull()
       // Radix portals a sheet to `document.body`, outside the render container.
       expect(document.querySelector('[data-sheet]')).toBeNull()
       expect(overlayIds()).toEqual([])
@@ -535,7 +535,7 @@ describe('mobile composer: one-row toolbar', () => {
   it('opens the context details sheet from the ring', async () => {
     renderBar()
 
-    const ring = screen.getByRole('button', { name: 'Context 21 percent used, 150K left' })
+    const ring = screen.getByRole('button', { name: 'Context 21%, 50K of 200K tokens' })
     fireEvent.click(ring)
     const sheet = screen.getByRole('dialog', { name: 'Context window' })
     expect(within(sheet).getByText('21% used')).toBeInTheDocument()
@@ -556,7 +556,7 @@ describe('mobile composer: one-row toolbar', () => {
     expect(screen.getByRole('button', { name: 'Attach files' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Add to chat' })).not.toBeInTheDocument()
     // The desktop ring sits in the editor row, outside any toolbar row.
-    const ring = screen.getByRole('button', { name: /Context \d+ percent used/ })
+    const ring = screen.getByRole('button', { name: /^Context \d+%/ })
     expect(ring.closest('[data-composer-toolbar]')).toBeNull()
   })
 })

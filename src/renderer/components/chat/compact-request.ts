@@ -78,20 +78,26 @@ export function useCompactRequest(
     dispatch({ type: 'signals', signals: { connected, activeTurn, compaction, usageUpdatedAt } })
   }, [connected, activeTurn, compaction, usageUpdatedAt])
 
+  // The clock waits while the agent reports compaction running.
+  const compacting = compaction === 'started'
   useEffect(() => {
-    if (state.phase !== 'pending') return
+    if (state.phase !== 'pending' || compacting) return
     const timer = setTimeout(
       () => dispatch({ type: 'timeout', usageUpdatedAt: usageRef.current }),
       COMPACT_TIMEOUT_MS
     )
     return () => clearTimeout(timer)
-  }, [state.phase])
+  }, [state.phase, compacting])
 
+  // A ref, not `state.phase`: two clicks in the same tick both see a stale phase.
+  const pendingRef = useRef(false)
+  pendingRef.current = state.phase === 'pending'
   const request = useCallback(() => {
-    if (!send || state.phase === 'pending') return
+    if (!send || pendingRef.current) return
+    pendingRef.current = true
     dispatch({ type: 'request' })
     send()
-  }, [send, state.phase])
+  }, [send])
 
   return { phase: state.phase, request }
 }
