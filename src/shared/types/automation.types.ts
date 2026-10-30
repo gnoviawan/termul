@@ -179,8 +179,15 @@ export type RunPolicy = {
 /** An agent this host can launch for an agent node. */
 export type KnownAgent = { agent_id: string; name: string }
 
-/** Wire event `automation_changed`; `automation_id` is null for project-wide changes. */
-export type AutomationChanged = { project_id: string; automation_id: AutomationId | null }
+/**
+ * Wire event `automation_changed`; `automation_id` is null for project-wide changes.
+ * `proposed` is present and true only when a chat agent asks the user to review it.
+ */
+export type AutomationChanged = {
+  project_id: string
+  automation_id: AutomationId | null
+  proposed?: boolean
+}
 
 /** An automation with what its editor and approval card render. */
 export type AutomationDetail = { automation: Automation; issues: Issue[]; policy: RunPolicy }

@@ -292,6 +292,26 @@ impl AutomationService {
         Ok(approved)
     }
 
+    /// A chat agent asks the user to review `id`: one change marked
+    /// `proposed`. Never approves; refused while any issue is open.
+    pub fn propose(&self, id: &AutomationId) -> ServiceResult<Automation> {
+        let automation = self.load(id)?;
+        let issues = self.issues(&automation);
+        if !issues.is_empty() {
+            return Err(ServiceError::HasIssues(issues));
+        }
+        log::info!(
+            "[Automation] {id} proposed for review at revision {}",
+            automation.revision
+        );
+        self.engine.announce(AutomationChanged {
+            project_id: automation.project_id.clone(),
+            automation_id: Some(automation.id.clone()),
+            proposed: true,
+        });
+        Ok(automation)
+    }
+
     /// Starts a manual run of the approved revision. While a run is in flight
     /// the new one is recorded `skipped`.
     pub fn run_now(&self, id: &AutomationId) -> ServiceResult<Run> {
