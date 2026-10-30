@@ -14,19 +14,23 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
 vi.mock('../log-api', () => ({ logFrontendError: mockLog }))
 
 import {
+  acceptAutomationSuggestion,
   applyAutomationOps,
   approveAutomation,
   cancelAutomationRun,
   createAutomation,
   deleteAutomation,
   deleteAutomationSecret,
+  dismissAutomationSuggestion,
   getAutomation,
   getAutomationRunSteps,
   listAutomationAgents,
   listAutomationRuns,
   listAutomationSecrets,
+  listAutomationSuggestions,
   listAutomations,
   markAutomationSeen,
+  matchAutomationSuggestion,
   onAutomationChanged,
   previewSchedule,
   publishAutomationChange,
@@ -211,6 +215,45 @@ const CASES: Case[] = [
     args: { projectId: 'p1', name: 'API_KEY' },
     method: 'DELETE',
     path: '/api/automation-secrets?project_id=p1&name=API_KEY'
+  },
+  {
+    name: 'listAutomationSuggestions',
+    call: () => listAutomationSuggestions('p 1'),
+    reply: [wire.suggestion],
+    command: 'automation_list_suggestions',
+    args: { projectId: 'p 1', timezone: 'Europe/Berlin' },
+    method: 'GET',
+    path: '/api/automation-suggestions?project_id=p%201&timezone=Europe%2FBerlin'
+  },
+  {
+    name: 'matchAutomationSuggestion',
+    call: () => matchAutomationSuggestion('p1', 'summarize the open PRs'),
+    reply: wire.suggestion,
+    command: 'automation_match_suggestion',
+    args: { projectId: 'p1', text: 'summarize the open PRs', timezone: 'Europe/Berlin' },
+    method: 'POST',
+    path: '/api/automation-suggestions/match',
+    body: { project_id: 'p1', text: 'summarize the open PRs', timezone: 'Europe/Berlin' }
+  },
+  {
+    name: 'dismissAutomationSuggestion',
+    call: () => dismissAutomationSuggestion('p1', 'fp1'),
+    reply: null,
+    command: 'automation_dismiss_suggestion',
+    args: { projectId: 'p1', fingerprint: 'fp1' },
+    method: 'POST',
+    path: '/api/automation-suggestions/dismiss',
+    body: { project_id: 'p1', fingerprint: 'fp1' }
+  },
+  {
+    name: 'acceptAutomationSuggestion',
+    call: () => acceptAutomationSuggestion('p1', 'fp1'),
+    reply: null,
+    command: 'automation_accept_suggestion',
+    args: { projectId: 'p1', fingerprint: 'fp1' },
+    method: 'POST',
+    path: '/api/automation-suggestions/accept',
+    body: { project_id: 'p1', fingerprint: 'fp1' }
   }
 ]
 
@@ -223,9 +266,14 @@ describe('automation facade transports', () => {
     vi.clearAllMocks()
     vi.stubGlobal('fetch', mockFetch)
     vi.stubGlobal('window', { location: { origin: 'http://host' } })
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockReturnValue({
+      ...new Intl.DateTimeFormat('en-US', { timeZone: 'UTC' }).resolvedOptions(),
+      timeZone: 'Europe/Berlin'
+    })
   })
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
   })
 
   for (const c of CASES) {
@@ -276,6 +324,41 @@ describe('automation facade transports', () => {
       error: 'automations[0].revision: expected a number',
       code: 'INVALID_RESPONSE'
     })
+  })
+
+  it('parses a suggestion, and a match miss as null', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockInvoke.mockResolvedValueOnce(ok(wire.suggestion)).mockResolvedValueOnce(ok(null))
+
+    expect(await matchAutomationSuggestion('p1', 'summarize the open PRs')).toEqual({
+      success: true,
+      data: {
+        fingerprint: '3f1c9a0d5b7e2468',
+        representative: 'summarize the open PRs in termul',
+        occurrences: 4,
+        days: 4,
+        last_at: 1_793_264_700_000,
+        cadence: {
+          schedule: { kind: 'cron', expr: '0 9 * * 1-5', timezone: 'Europe/Berlin' },
+          label: 'weekdays at 09:00'
+        }
+      }
+    })
+    expect(await matchAutomationSuggestion('p1', 'fix the flaky test')).toEqual({
+      success: true,
+      data: null
+    })
+  })
+
+  it('never logs the prompt it matches', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockInvoke.mockResolvedValue({ success: false, error: 'boom', code: 'internal' })
+
+    await matchAutomationSuggestion('p1', 'my private standup notes')
+
+    const logged = JSON.stringify(mockLog.mock.calls)
+    expect(logged).toContain('match_suggestion failed: code=internal')
+    expect(logged).not.toContain('standup')
   })
 
   it('never logs a secret value', async () => {
