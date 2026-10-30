@@ -1943,6 +1943,8 @@ function ConnectedTerminalComponent({
             terminalName={terminalName}
             projectId={terminalProjectId ?? hostProjectId}
           >
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer clicks focus xterm; keyboard input is handled by xterm's textarea */}
+            {/* biome-ignore lint/a11y/useKeyWithClickEvents: this surface focuses xterm and is not an independent keyboard control */}
             <div
               className={`w-full h-full bg-terminal-bg py-0.5 pb-1 ${
                 isMobileWebShell ? 'px-1.5' : 'px-4'

@@ -574,9 +574,12 @@
 
   /* Thin separator line between commands (OSC 133;A + xterm decoration) */
   .xterm .termul-command-separator {
+    /* biome-ignore lint/complexity/noImportantStyles: override xterm inline decoration geometry */
     height: 0 !important;
     border-top: 1px solid oklch(var(--border));
+    /* biome-ignore lint/complexity/noImportantStyles: override xterm inline decoration geometry */
     width: 100% !important;
+    /* biome-ignore lint/complexity/noImportantStyles: override xterm inline decoration geometry */
     left: 0 !important;
     pointer-events: none;
   }
@@ -729,6 +732,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .animate-tooltip-in {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over tooltip transition styles */
       transition: none !important;
     }
 
@@ -1173,6 +1177,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .t-shimmer::before {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over shimmer animation styles */
       animation: none !important;
     }
   }
@@ -1313,16 +1318,21 @@
     color: inherit;
   }
   .t-think.is-settled .t-think-text::before {
+    /* biome-ignore lint/complexity/noImportantStyles: settled labels must suppress the live shimmer pseudo-element */
     display: none !important;
   }
 
   @media (prefers-reduced-motion: reduce) {
     .t-think-text {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over status text animations */
       transition: none !important;
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over status text animations */
       transform: none !important;
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over status text animations */
       filter: none !important;
     }
     .t-think-text::before {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over the status shimmer pseudo-element */
       display: none !important;
     }
   }
@@ -1392,6 +1402,35 @@
   .chat-streamdown [data-streamdown="code-block-body"] code {
     line-height: inherit;
   }
+  /* Fullscreen table toolbar is portaled to document.body, so it's outside
+     .chat-streamdown. Keep a 44px hit area. */
+  [data-streamdown="table-fullscreen"] button {
+    display: inline-flex;
+    width: 2.75rem;
+    height: 2.75rem;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: oklch(var(--muted-foreground));
+    transition-property: color;
+    transition-duration: 150ms;
+  }
+  [data-streamdown="table-fullscreen"] button:hover {
+    color: oklch(var(--foreground));
+  }
+  [data-streamdown="table-fullscreen"] button:disabled {
+    cursor: not-allowed;
+    color: oklch(var(--disabled-foreground));
+    opacity: 1;
+  }
+  [data-streamdown="table-fullscreen"] button svg {
+    display: block;
+    width: 0.875rem;
+    height: 0.875rem;
+    flex-shrink: 0;
+  }
+
   /* Code actions sit in a short header. 24px keeps the hit box inside that row. */
   .chat-streamdown [data-streamdown="code-block-actions"] button {
     width: 1.5rem;
@@ -1425,34 +1464,6 @@
     opacity: 1;
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button svg {
-    display: block;
-    width: 0.875rem;
-    height: 0.875rem;
-    flex-shrink: 0;
-  }
-  /* Fullscreen table toolbar is portaled to document.body, so it's outside
-     .chat-streamdown. Keep a 44px hit area. */
-  [data-streamdown="table-fullscreen"] button {
-    display: inline-flex;
-    width: 2.75rem;
-    height: 2.75rem;
-    padding: 0;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    color: oklch(var(--muted-foreground));
-    transition-property: color;
-    transition-duration: 150ms;
-  }
-  [data-streamdown="table-fullscreen"] button:hover {
-    color: oklch(var(--foreground));
-  }
-  [data-streamdown="table-fullscreen"] button:disabled {
-    cursor: not-allowed;
-    color: oklch(var(--disabled-foreground));
-    opacity: 1;
-  }
-  [data-streamdown="table-fullscreen"] button svg {
     display: block;
     width: 0.875rem;
     height: 0.875rem;
@@ -1662,6 +1673,7 @@
 }
 
 .markdown-editor .bn-editor .bn-block-content[data-content-type="table"] table {
+  /* biome-ignore lint/complexity/noImportantStyles: preserve intrinsic table width within the scrolling wrapper */
   width: max-content !important;
   min-width: 100%;
   border-collapse: collapse;

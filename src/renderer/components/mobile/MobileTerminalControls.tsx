@@ -107,6 +107,7 @@ export function MobileTerminalControls({
           wrap container (toggle, Paste and the nine keys). Pointer-down is
           prevented on every button so xterm keeps focus and the on-screen
           keyboard stays up; click still fires. */}
+      {/* biome-ignore lint/a11y/useSemanticElements: this is a labelled shortcut-key group, not a form fieldset */}
       <div
         id={keyGroupId}
         role="group"
