@@ -6,10 +6,13 @@ import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsNotice } from '@/components/settings/SettingsNotice'
 import { SettingsRow, settingsDescriptionId } from '@/components/settings/SettingsRow'
 import { SettingsSelect } from '@/components/settings/SettingsSelect'
+import { SettingsSwitchRow } from '@/components/settings/SettingsSwitchRow'
+import { useUpdateAppSetting } from '@/hooks/use-app-settings'
 import type { AgentIdleWindowStatus } from '@/lib/acp-api'
 import { acpApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { useSuggestAutomations } from '@/stores/app-settings-store'
 import {
   ACP_SESSION_NEW_TIMEOUT_OPTIONS,
   ACP_SESSION_REOPEN_TIMEOUT_OPTIONS,
@@ -134,6 +137,7 @@ export function AiAgentsSection({
             onChange={handleAgentIdleWindowChange}
             help="A chat closes after you leave it this long. A running answer or a waiting question keeps it open."
           />
+          <SuggestAutomationsRow />
         </SettingsCard>
         {(envLocksWindow || operatorLocksWindow) && liveWindow ? (
           <SettingsNotice>
@@ -199,5 +203,19 @@ export function AiAgentsSection({
       </SettingsGroup>
       <AcpAgentsSettings />
     </SettingsSection>
+  )
+}
+
+function SuggestAutomationsRow(): React.JSX.Element {
+  const enabled = useSuggestAutomations()
+  const updateSetting = useUpdateAppSetting()
+  return (
+    <SettingsSwitchRow
+      id="suggest-automations"
+      label="Suggest automations from repeated chats"
+      description="Offer to schedule something you ask on several days."
+      checked={enabled}
+      onToggle={(on) => void updateSetting('suggestAutomations', on)}
+    />
   )
 }

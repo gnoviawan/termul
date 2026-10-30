@@ -5,6 +5,7 @@ import {
   emptyPendingLauncherOptions,
   overlayPendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
+import { ChatAutomationSuggestion } from '@/components/automations/ChatAutomationSuggestion'
 import { BrowserAgentIndicator } from '@/components/browser/BrowserAgentStop'
 import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
 import { SkillFilesProvider } from '@/components/chat/skill-file-links'
@@ -983,6 +984,9 @@ export function AgentChatPanel({
             <BrowserConsentCard consent={pendingBrowserConsent} />
           </div>
         </div>
+      )}
+      {!isClosed && (
+        <ChatAutomationSuggestion sessionId={sessionId} projectId={session.projectId} />
       )}
       {/* Any pending agent prompt morphs the composer into the question
           dialog — the composer, changed-files strip, and queued prompts all

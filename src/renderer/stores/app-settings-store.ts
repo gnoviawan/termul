@@ -55,6 +55,8 @@ export const useTerminalScreenReaderMode = () =>
 // Missing or corrupt persisted values stay on (the spec default).
 export const useAutomaticCompletionRefresh = () =>
   useAppSettingsStore((state) => state.settings.automaticCompletionRefresh !== false)
+export const useSuggestAutomations = () =>
+  useAppSettingsStore((state) => state.settings.suggestAutomations !== false)
 export const useConfirmTerminalClose = () =>
   useAppSettingsStore((state) => state.settings.confirmTerminalClose)
 export const useTerminalUrlOpenMode = () =>
