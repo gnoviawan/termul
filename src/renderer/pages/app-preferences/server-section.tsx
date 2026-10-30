@@ -17,6 +17,7 @@
 
 import type { ServerSetupAnswers } from '@shared/types/server-setup.types'
 import { useEffect, useState } from 'react'
+import { rowId } from '@/components/settings/row-id'
 import { SettingsGroup } from '@/components/settings/SettingsGroup'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
 import { SettingsNotice } from '@/components/settings/SettingsNotice'
@@ -26,7 +27,6 @@ import { Spinner } from '@/components/ui/spinner'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webSetupApi } from '@/lib/web-setup-api'
-import { rowId } from './categories'
 
 export function ServerSection(): React.JSX.Element | null {
   // Web-only (AGENTS.md): the whole page is hidden on the desktop runtime.

@@ -410,6 +410,7 @@ fn host_router(shared_live_writes_denied: bool, dir: &std::path::Path) -> Router
         shared_live_writes_denied,
         Some(auth),
         crate::web::origin::OriginPolicy::default(),
+        None,
     )
 }
 
