@@ -11,7 +11,7 @@ Accounts apply to **Claude Agent** chats only. To set up Claude Agent itself, se
 
 Open Settings with `Ctrl+,` (`Cmd+,` on macOS) and click **Provider**. The **Claude Code** group lists every account, whether it is signed in, which projects use it, and how much of its limits it has used.
 
-![The Provider page in the browser version, with one account named Default that is signed out, and a note that you sign in from the desktop app or the server](/screenshots/agent-setup-provider.png)
+![The Provider page in the browser version, with one account named Default that is signed out, and a note to add or sign in to an account from the desktop app or with termul-server claude account on the host](/screenshots/agent-setup-provider.png)
 
 The first account is called **Default**. It is the Claude Code login you made with `claude auth login`. Termul shows a name you choose for each account, never its email address.
 
@@ -40,14 +40,16 @@ If Termul says the code is incomplete, copy the whole code from the Claude page 
 
 ### If the sign-in does not finish
 
-If you are already signed in to another account on claude.ai, sign out there first, or open the sign-in page in a private window. If the sign-in does not finish, the account stays in the list, signed out. Click **Try again**, or click **Sign in** on the account later.
+If you are already signed in to another account on claude.ai, sign out there first, or open the sign-in page in a private window. If the sign-in does not finish, the account stays in the list, signed out. Click **Try again** in the desktop app or **Start again** in the browser version, or click **Sign in** on the account later.
+
+If the server is read-only for remote clients, the browser version shows your accounts but cannot add, sign in, rename or remove them. Use the desktop app, or run `termul-server claude account` on the host.
 
 Each account has a **⋯** menu with these actions:
 
 - **Make default**: projects that follow the default use this account.
 - **Sign in** or **Sign in again**: repeat the sign-in, for example after the login expires.
 - **Rename**: change the name Termul shows.
-- **Remove**: sign Claude Code out of the account on this computer. Its chat history stays. Projects that used it move to the default account. You cannot remove **Default**.
+- **Remove**: sign Claude Code out of the account on this computer. Its chat history stays. Projects that used it move to the default account, and their open Claude Agent chats start again on it. You cannot remove **Default**.
 
 Every account shares the same Claude Code settings, skills, plugins and chat history. Only the login is separate.
 
