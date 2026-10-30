@@ -24,6 +24,11 @@ use super::{claude_cli_command, ClaudeAgentService};
 const CLI_STEP_TIMEOUT: Duration = Duration::from_secs(30);
 /// Longest code accepted. A real code is a few hundred characters.
 const MAX_CODE_CHARS: usize = 4096;
+/// Most CLI output a session keeps while it looks for the link or a verdict:
+/// the latest part, where both appear.
+const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+/// Output chunks waiting for the session; a full queue pauses the pipe reads.
+const OUTPUT_CHUNKS: usize = 64;
 
 const NO_LINK: &str = "The Claude CLI did not show a sign-in link. Try again.";
 const NO_LINK_LOGIN: &str = "No sign-in is waiting for a code. Start the sign-in again.";
@@ -170,6 +175,18 @@ pub(super) fn sign_in_link(output: &str) -> Option<&str> {
     Some(&link[..end])
 }
 
+/// Append `text` to `output`, keeping at most the last [`MAX_OUTPUT_BYTES`].
+pub(super) fn keep_tail(output: &mut String, text: &str) {
+    output.push_str(text);
+    let Some(mut cut) = output.len().checked_sub(MAX_OUTPUT_BYTES) else {
+        return;
+    };
+    while !output.is_char_boundary(cut) {
+        cut += 1;
+    }
+    output.drain(..cut);
+}
+
 /// Whether the CLI refused a code as cut short. It then waits for another.
 pub(super) fn reports_incomplete_code(output: &str) -> bool {
     output.contains("Invalid code")
@@ -239,7 +256,7 @@ fn step(phase: Phase, event: Event, now: Instant) -> Step {
             },
             Event::Output(text),
         ) => {
-            output.push_str(&text);
+            keep_tail(&mut output, &text);
             let Some(link) = sign_in_link(&output) else {
                 return Step::to(Phase::AwaitingLink {
                     output,
@@ -294,7 +311,7 @@ fn step(phase: Phase, event: Event, now: Instant) -> Step {
             },
             Event::Output(text),
         ) => {
-            output.push_str(&text);
+            keep_tail(&mut output, &text);
             if !reports_incomplete_code(&output) {
                 return Step::to(Phase::Checking {
                     output,
@@ -338,19 +355,17 @@ struct LinkCli {
     child: Child,
     stdin: ChildStdin,
     /// stdout and stderr chunks; closed once both pipes end.
-    output: mpsc::UnboundedReceiver<String>,
+    output: mpsc::Receiver<String>,
 }
 
 /// Forward each chunk `pipe` yields to `output` until it ends.
-fn forward(
-    mut pipe: impl AsyncRead + Unpin + Send + 'static,
-    output: mpsc::UnboundedSender<String>,
-) {
+fn forward(mut pipe: impl AsyncRead + Unpin + Send + 'static, output: mpsc::Sender<String>) {
     tokio::spawn(async move {
         let mut buffer = [0u8; 4096];
         while let Ok(read @ 1..) = pipe.read(&mut buffer).await {
             if output
                 .send(String::from_utf8_lossy(&buffer[..read]).into_owned())
+                .await
                 .is_err()
             {
                 break;
@@ -359,7 +374,7 @@ fn forward(
     });
 }
 
-async fn next_output(output: &mut mpsc::UnboundedReceiver<String>) -> String {
+async fn next_output(output: &mut mpsc::Receiver<String>) -> String {
     match output.recv().await {
         Some(text) => text,
         None => std::future::pending().await,
@@ -434,7 +449,7 @@ impl ClaudeAgentService {
         else {
             return Err("Could not start the Claude CLI".to_string());
         };
-        let (output_tx, output) = mpsc::unbounded_channel();
+        let (output_tx, output) = mpsc::channel(OUTPUT_CHUNKS);
         forward(stdout, output_tx.clone());
         forward(stderr, output_tx);
 

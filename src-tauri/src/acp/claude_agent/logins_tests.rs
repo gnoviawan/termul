@@ -37,6 +37,33 @@ fn only_the_cli_complaint_about_a_cut_code_counts_as_incomplete() {
 }
 
 #[test]
+fn the_kept_output_is_the_latest_64_kib_and_still_finds_the_link_and_verdict() {
+    let mut output = String::new();
+    keep_tail(&mut output, &"é".repeat(MAX_OUTPUT_BYTES));
+    assert!(output.len() <= MAX_OUTPUT_BYTES);
+    assert!(output.len() > MAX_OUTPUT_BYTES - 2, "{}", output.len());
+    assert!(
+        output.chars().all(|c| c == 'é'),
+        "cut on a character boundary"
+    );
+
+    keep_tail(&mut output, VISIT);
+    assert!(output.len() <= MAX_OUTPUT_BYTES);
+    assert_eq!(
+        sign_in_link(&output),
+        Some("https://claude.com/cai/oauth/authorize?code=true&state=abc")
+    );
+
+    keep_tail(&mut output, &"x".repeat(MAX_OUTPUT_BYTES * 3));
+    keep_tail(
+        &mut output,
+        "Invalid code. Please make sure the full code was copied.\n",
+    );
+    assert!(output.len() <= MAX_OUTPUT_BYTES);
+    assert!(reports_incomplete_code(&output));
+}
+
+#[test]
 fn a_pasted_code_loses_whitespace_and_must_be_printable() {
     assert_eq!(
         LoginCode::parse("  abc#def\n"),
