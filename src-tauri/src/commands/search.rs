@@ -216,15 +216,29 @@ pub(crate) fn rg_bundled_file_name() -> &'static str {
     }
 }
 
+/// Private lib dir the Linux deb/rpm/AppImage install the bundled rg into
+/// (`/usr/lib/termul-manager/rg`, `$APPDIR/usr/lib/termul-manager/rg`).
+/// Must match the `files` targets in `src-tauri/tauri.linux.conf.json`;
+/// `/usr/bin/rg` belongs to the distro `ripgrep` package (gh-1575).
+pub(crate) const LINUX_PACKAGE_RG_DIR: &str = "termul-manager";
+
 /// Sidecar locations, first match wins. The bundled name beside the running
 /// executable comes before the triple-named dev file so a packaged app does
-/// not fall through to `rg` on `PATH`.
+/// not fall through to `rg` on `PATH`. The Linux package lib dir comes first
+/// so an installed Termul keeps its own rg even when the distro one sits next
+/// to it in `/usr/bin`.
 fn rg_sidecar_candidates(cwd: Option<&Path>, exe_dir: Option<&Path>) -> Vec<PathBuf> {
     let bundled = rg_bundled_file_name();
     let triple = rg_sidecar_name();
     let mut candidates = Vec::new();
 
     if let Some(exe_dir) = exe_dir {
+        candidates.push(
+            exe_dir
+                .join("../lib")
+                .join(LINUX_PACKAGE_RG_DIR)
+                .join(bundled),
+        );
         candidates.push(exe_dir.join(bundled));
         candidates.push(exe_dir.join("../Resources").join(bundled));
         candidates.push(exe_dir.join("../lib").join(bundled));
@@ -300,7 +314,12 @@ pub(crate) fn detect_rg_path() -> String {
         return cached.clone();
     }
 
-    let (detected, _source) = resolve_rg_path();
+    let (detected, source) = resolve_rg_path();
+    if source == "path" {
+        log::warn!("[Search] bundled ripgrep not found; falling back to `rg` on PATH");
+    } else {
+        log::info!("[Search] ripgrep resolved (source: {source}): {detected}");
+    }
     let _ = RG_PATH_CACHE.set(detected.clone());
     detected
 }
