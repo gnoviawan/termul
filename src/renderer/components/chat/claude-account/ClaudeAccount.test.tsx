@@ -11,15 +11,19 @@ import { ClaudeLimitWarning } from './ClaudeLimitWarning'
 import { ClaudeSignInAction } from './ClaudeSignInAction'
 import { setSwitchingTo, useClaudeResumeStore } from './use-claude-limit'
 
-const { api, switcher, openApp } = vi.hoisted(() => ({
+const { api, switcher, openApp, admits } = vi.hoisted(() => ({
   openApp: vi.fn(),
-  api: { list: vi.fn(), usage: vi.fn(), canManageAccounts: vi.fn(() => true) },
+  admits: { value: true },
+  api: { list: vi.fn(), usage: vi.fn() },
   switcher: { switchProjectClaudeAccount: vi.fn(), restartClaudeSession: vi.fn() }
 }))
 
 vi.mock('@/lib/claude-accounts-api', () => ({ claudeAccountsApi: api }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
+vi.mock('@/hooks/use-server-admits-remote-writes', () => ({
+  useServerAdmitsRemoteWrites: () => admits.value
+}))
 vi.mock('@/stores/settings-modal-store', () => ({
   useSettingsModalStore: Object.assign(
     (select: (s: { openApp: typeof openApp }) => unknown) => select({ openApp }),
@@ -95,7 +99,7 @@ const limit = (
 
 beforeEach(() => {
   vi.clearAllMocks()
-  api.canManageAccounts.mockReturnValue(true)
+  admits.value = true
   api.list.mockResolvedValue({
     accounts: [
       { id: 'default', name: 'Personal', builtin: true, signedIn: true },
@@ -175,6 +179,21 @@ describe('ClaudeLimitNotice', () => {
       resend: true,
       cancelTurn: true
     })
+  })
+
+  it('offers to add an account when no account has room, except on a view-only connection', async () => {
+    api.usage.mockResolvedValue([read('default', 100), read('ab12', 100), read('cd34', 100)])
+    seed(limit('rejected', 100))
+    const { unmount } = render(<ClaudeLimitNotice sessionId="s1" />)
+    expect(await screen.findByText(/No other account has room left/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
+    expect(openApp).toHaveBeenCalledWith('provider')
+    unmount()
+
+    admits.value = false
+    render(<ClaudeLimitNotice sessionId="s1" />)
+    expect(await screen.findByText(/No other account has room left/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add account' })).not.toBeInTheDocument()
   })
 
   it('ignores a rejected window that paid overage still covers', () => {

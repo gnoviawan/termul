@@ -55,7 +55,9 @@ pub use chat_history_store::{
     ChatHistoryIndexEntry, ChatHistoryStatus, ChatHistoryStore, ChatHistoryStoreError,
 };
 #[allow(unused_imports)]
-pub use claude_agent::{ClaudeAgentService, ClaudeAuthMode, ClaudeAuthStatus, SignInCheck};
+pub use claude_agent::{
+    ClaudeAgentService, ClaudeAuthMode, ClaudeAuthStatus, LinkCodeError, SignInCheck,
+};
 #[allow(unused_imports)]
 pub use config::{AgentConfig, AgentId, SessionId};
 #[allow(unused_imports)]

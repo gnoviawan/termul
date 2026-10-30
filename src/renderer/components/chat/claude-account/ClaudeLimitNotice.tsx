@@ -7,7 +7,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Spinner } from '@/components/ui/spinner'
-import { claudeAccountsApi } from '@/lib/claude-accounts-api'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import {
   formatClock,
@@ -28,6 +28,7 @@ export function ClaudeLimitNotice({ sessionId }: { sessionId: string }): React.J
   const scheduledAt = useClaudeResumeStore((s) => s.at[sessionId] ?? null)
   const schedule = useClaudeResumeStore((s) => s.schedule)
   const cancelResume = useClaudeResumeStore((s) => s.cancel)
+  const canAddAccount = useServerAdmitsRemoteWrites()
   if (!state || !isAtLimit(state.limit)) return null
 
   const { ctx, limit, name, reset, switchTo, switchingTo: switching, dismiss } = state
@@ -120,7 +121,7 @@ export function ClaudeLimitNotice({ sessionId }: { sessionId: string }): React.J
                 Continue when it resets
               </Button>
             )}
-            {claudeAccountsApi.canManageAccounts() && (
+            {canAddAccount && (
               <Button
                 type="button"
                 size="xs"

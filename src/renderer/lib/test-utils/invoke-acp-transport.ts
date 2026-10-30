@@ -16,6 +16,7 @@
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type {
+  ClaudeAccount,
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
@@ -188,6 +189,19 @@ export function createInvokeAcpTransport(): AcpTransport {
     setClaudeAutoSwitch: async (enabled) => {
       await invoke('claude_accounts_set_auto_switch', { enabled })
     },
+    addClaudeAccount: (name, options) =>
+      invokeCommand<ClaudeAccount>('claude_accounts_add', { name }, options),
+    renameClaudeAccount: async (accountId, name) => {
+      await invoke('claude_accounts_rename', { accountId, name })
+    },
+    removeClaudeAccount: (accountId) => invoke<string[]>('claude_accounts_remove', { accountId }),
+    startClaudeLinkLogin: (accountId) =>
+      invoke<string>('claude_accounts_start_link_login', { accountId }),
+    finishClaudeLinkLogin: async (accountId, code, options) => {
+      await invokeCommand('claude_accounts_finish_link_login', { accountId, code }, options)
+    },
+    cancelClaudeLogin: (accountId) =>
+      invoke<boolean>('claude_accounts_login_cancel', { accountId }),
     spawnAgent: (config, options, projectId) =>
       invokeCommand<SpawnAgentResult>(
         'acp_spawn_agent',

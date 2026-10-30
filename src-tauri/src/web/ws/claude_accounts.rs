@@ -1,11 +1,11 @@
 //! Claude Account WS handlers: list the Accounts and their usage, choose the
-//! Default or a Project Account, and turn automatic switching on or off. Adding, signing in, renaming, and
-//! removing an Account stay on the host (desktop UI or
-//! `termul-server claude account`), because they
-//! start a browser login or delete login state on the host.
+//! Default or a Project Account, turn automatic switching on or off, add,
+//! rename and remove an Account, and sign it in with a link: the host hands
+//! out the Claude sign-in link and takes back the code the Claude page shows.
+//! The sign-in link and the code are never logged.
 
 use super::*;
-use crate::acp::SignInCheck;
+use crate::acp::{LinkCodeError, SignInCheck};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,6 +167,234 @@ pub(super) async fn handle_set_claude_auto_switch(
             WsReply::err(id, WsErrorCode::Unsupported, error)
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AddClaudeAccountPayload {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AccountIdPayload {
+    account_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RenameClaudeAccountPayload {
+    account_id: String,
+    name: String,
+}
+
+/// No `Debug`: the code must never reach a log line.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct FinishClaudeLinkLoginPayload {
+    account_id: String,
+    code: String,
+}
+
+/// `add_claude_account { name }` → the new `ClaudeAccount`, signed out.
+pub(super) async fn handle_add_claude_account(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: AddClaudeAccountPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed add_claude_account payload (want name): {error}"),
+            )
+        }
+    };
+    match acp.claude_agent().add_account(&parsed.name) {
+        Ok(account) => {
+            info!(account = %account.id, "Claude account added over ws");
+            ok_with_payload(id, &account)
+        }
+        Err(error) => {
+            warn!(error = %error, "add_claude_account failed");
+            WsReply::err(id, WsErrorCode::Unsupported, error)
+        }
+    }
+}
+
+/// `rename_claude_account { accountId, name }` → `{}`. Renaming to the
+/// current name succeeds, so a repeat answers like the first.
+pub(super) async fn handle_rename_claude_account(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: RenameClaudeAccountPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed rename_claude_account payload (want accountId, name): {error}"),
+            )
+        }
+    };
+    match acp
+        .claude_agent()
+        .rename_account(&parsed.account_id, &parsed.name)
+    {
+        Ok(()) => {
+            info!(account = %parsed.account_id, "Claude account renamed over ws");
+            WsReply::ok(id, Some(json!({})))
+        }
+        Err(error) => {
+            warn!(account = %parsed.account_id, error = %error, "rename_claude_account failed");
+            WsReply::err(id, WsErrorCode::Unsupported, error)
+        }
+    }
+}
+
+/// `remove_claude_account { accountId }` → `{ movedProjectIds }`, the Projects
+/// that moved to the Default Account. The built-in Account is refused. An
+/// Account that is already gone answers `{ movedProjectIds: [] }`, so a repeat
+/// (a second click, another client) converges instead of failing.
+pub(super) async fn handle_remove_claude_account(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: AccountIdPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed remove_claude_account payload (want accountId): {error}"),
+            )
+        }
+    };
+    let account = parsed.account_id;
+    let service = acp.claude_agent();
+    match service.remove_account(&account).await {
+        Ok(moved) => {
+            info!(account = %account, moved = moved.len(), "Claude account removed over ws");
+            WsReply::ok(id, Some(json!({ "movedProjectIds": moved })))
+        }
+        Err(_) if matches!(service.has_account(&account), Ok(false)) => {
+            info!(account = %account, "Claude account already removed");
+            WsReply::ok(id, Some(json!({ "movedProjectIds": [] })))
+        }
+        Err(error) => {
+            warn!(account = %account, error = %error, "remove_claude_account failed");
+            WsReply::err(id, WsErrorCode::Unsupported, error)
+        }
+    }
+}
+
+/// `start_claude_link_login { accountId }` → `{ url }`, the Claude sign-in
+/// link. Replaces a sign-in already running for the Account.
+pub(super) async fn handle_start_claude_link_login(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: AccountIdPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed start_claude_link_login payload (want accountId): {error}"),
+            )
+        }
+    };
+    match acp
+        .claude_agent()
+        .start_link_login(&parsed.account_id)
+        .await
+    {
+        Ok(url) => {
+            info!(account = %parsed.account_id, "Claude link sign-in started over ws");
+            WsReply::ok(id, Some(json!({ "url": url })))
+        }
+        Err(error) => {
+            warn!(account = %parsed.account_id, error = %error, "start_claude_link_login failed");
+            WsReply::err(id, WsErrorCode::Unsupported, error)
+        }
+    }
+}
+
+/// `finish_claude_link_login { accountId, code }` → `{}` once the Claude CLI
+/// stored the login. `claude_login_code_incomplete` and `claude_login_busy`
+/// leave the sign-in running; any other error ended it.
+pub(super) async fn handle_finish_claude_link_login(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let Ok(parsed) = serde_json::from_value::<FinishClaudeLinkLoginPayload>(payload.clone()) else {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "malformed finish_claude_link_login payload (want accountId, code)".to_string(),
+        );
+    };
+    let account = parsed.account_id;
+    match acp
+        .claude_agent()
+        .finish_link_login(&account, &parsed.code)
+        .await
+    {
+        Ok(()) => {
+            info!(account = %account, "Claude link sign-in finished over ws");
+            WsReply::ok(id, Some(json!({})))
+        }
+        Err(error) => code_refused(id, &account, &error),
+    }
+}
+
+/// A code that did not finish the link sign-in, as its wire error.
+fn code_refused(id: String, account: &str, error: &LinkCodeError) -> WsReply {
+    let code = match error {
+        LinkCodeError::Incomplete => {
+            info!(account = %account, "Claude sign-in code incomplete over ws");
+            WsErrorCode::ClaudeLoginCodeIncomplete
+        }
+        LinkCodeError::Busy => {
+            info!(account = %account, "Claude sign-in code arrived during a check over ws");
+            WsErrorCode::ClaudeLoginBusy
+        }
+        LinkCodeError::Ended(_) => {
+            warn!(account = %account, "Claude link sign-in ended without a login over ws");
+            WsErrorCode::Unsupported
+        }
+    };
+    WsReply::err(id, code, error.message().to_string())
+}
+
+/// `cancel_claude_login { accountId }` → `{ cancelled }`; stops a browser or
+/// link sign-in and answers once its CLI is gone. `cancelled` is `false` when
+/// none was running.
+pub(super) async fn handle_cancel_claude_login(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: AccountIdPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed cancel_claude_login payload (want accountId): {error}"),
+            )
+        }
+    };
+    let cancelled = acp.claude_agent().cancel_login(&parsed.account_id).await;
+    info!(account = %parsed.account_id, cancelled, "Claude sign-in cancel over ws");
+    WsReply::ok(id, Some(json!({ "cancelled": cancelled })))
 }
 
 /// A refused Account choice: `claude_account_signed_out` when the Account is
