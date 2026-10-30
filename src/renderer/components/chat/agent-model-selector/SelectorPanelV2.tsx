@@ -85,6 +85,16 @@ function favoriteEntryId(key: FavoriteKey): string {
   return `${encodeURIComponent(key.configId)}/${encodeURIComponent(key.modelId)}`
 }
 
+/** A row's `data-row-key`: the Favorites copy apart from the list row. */
+function rowKeyOf(configId: string | null, modelId: string, inFavorites = false): string {
+  return `${inFavorites ? 'favorite/' : ''}${encodeURIComponent(configId ?? '')}/${encodeURIComponent(modelId)}`
+}
+
+/** An agent row's highlight key (search results list agents after models). */
+function agentRowKey(tab: AgentTab | undefined): string | null {
+  return tab ? `agent\0${encodeURIComponent(tab.configId)}` : null
+}
+
 /** The Favorites section's rows, top to bottom. */
 function favoriteEntries(list: HTMLElement | null): HTMLElement[] {
   return Array.from(list?.querySelectorAll<HTMLElement>('[data-favorite-entry]') ?? [])
@@ -121,6 +131,8 @@ function DenseModelRow({
   edit,
   favorite,
   inFavorites = false,
+  rowKey,
+  highlighted = false,
   disabled,
   touch,
   reduced,
@@ -140,6 +152,10 @@ function DenseModelRow({
   favorite?: { on: boolean; entry?: string; onToggle: () => void }
   /** A row in Favorites: its Edit is named apart from the list row's. */
   inFavorites?: boolean
+  /** Stable across re-renders, so focus can find the row again after a pick remounts it. */
+  rowKey: string
+  /** The first search result while typing: Enter in search picks it. */
+  highlighted?: boolean
   disabled: boolean
   touch: boolean
   /** Prefers reduced motion: Edit neither enters nor leaves, and the star does not move. */
@@ -181,6 +197,8 @@ function DenseModelRow({
   const fillOn = (box: typeof outer): boolean => selected && outer === box
   const fill = (box: typeof outer): { 'data-row-selected'?: '' } =>
     fillOn(box) ? { 'data-row-selected': '' } : {}
+  // The search highlight looks like hover, on the same outer box.
+  const highlightOn = (box: typeof outer): boolean => highlighted && !selected && outer === box
   // Controlled, so a focus handed back by the closing flyout can skip it.
   const [tipOpen, setTipOpen] = useState(false)
   const renderRow = (handle?: EditRowHandle): React.JSX.Element => {
@@ -192,6 +210,8 @@ function DenseModelRow({
         ref={handle?.ref}
         type="button"
         data-selector-row=""
+        data-row-key={rowKey}
+        data-search-highlight={highlighted ? '' : undefined}
         aria-label={label}
         aria-pressed={selected}
         disabled={disabled}
@@ -212,7 +232,8 @@ function DenseModelRow({
           denseRowSize(touch),
           (editable || favorite || exiting) && 'min-w-0 flex-1 hover:bg-transparent',
           flush && 'pr-0',
-          fillOn('row') && PICKER_ROW_SELECTED_BOX
+          fillOn('row') && PICKER_ROW_SELECTED_BOX,
+          highlightOn('row') && 'bg-row-hover'
         )}
       >
         <span
@@ -279,7 +300,8 @@ function DenseModelRow({
           'group/fav relative flex min-w-0 flex-1 rounded-md',
           // An editable row's hover already belongs to the row around Edit.
           !editable && 'transition-colors duration-150 ease-out hover:bg-row-hover',
-          fillOn('favorite') && PICKER_ROW_SELECTED_BOX
+          fillOn('favorite') && PICKER_ROW_SELECTED_BOX,
+          highlightOn('favorite') && 'bg-row-hover'
         )}
       >
         {withTip}
@@ -302,7 +324,13 @@ function DenseModelRow({
         <div
           {...fill('exiting')}
           className={
-            exiting ? cn(EDIT_ROW_BOX, fillOn('exiting') && PICKER_ROW_SELECTED_BOX) : 'contents'
+            exiting
+              ? cn(
+                  EDIT_ROW_BOX,
+                  fillOn('exiting') && PICKER_ROW_SELECTED_BOX,
+                  highlightOn('exiting') && 'bg-row-hover'
+                )
+              : 'contents'
           }
         >
           {renderRow()}
@@ -781,6 +809,44 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       ? Boolean(view.catalog?.options.some((m) => m.value === modelValue))
       : view.kind === 'search' && view.own.some((m) => m.value === modelValue))
 
+  const [searchFocused, setSearchFocused] = useState(false)
+  // Command palette: while typing, the first result is highlighted and Enter
+  // in search picks it. Hover never moves it; ArrowDown moves real focus.
+  const highlightKey =
+    view.kind === 'search' && searchFocused && !disabled
+      ? view.own[0]
+        ? rowKeyOf(effectiveId, view.own[0].value)
+        : view.others[0]
+          ? rowKeyOf(view.others[0].configId, view.others[0].model.value)
+          : agentRowKey(view.agents.find((tab) => !state.notSetUp(tab)))
+      : null
+
+  // Screen readers hear which result Enter picks while search has focus.
+  const [highlightName, setHighlightName] = useState('')
+  useEffect(() => {
+    if (highlightKey === null) {
+      setHighlightName('')
+      return
+    }
+    const row = listRef.current?.querySelector<HTMLElement>('[data-search-highlight]')
+    setHighlightName(row?.getAttribute('aria-label') ?? row?.textContent?.trim() ?? '')
+  }, [highlightKey])
+
+  /** The row a keyboard pick came from: a pick can remount it, so focus goes back to it. */
+  const pickedRow = useRef<string | null>(null)
+  // Before paint, so focus never stays on body. Kept until focus moves on:
+  // the selected model can arrive after the pick.
+  useLayoutEffect(() => {
+    const key = pickedRow.current
+    if (key === null) return
+    const active = document.activeElement
+    if (active && active !== document.body) return
+    const row = Array.from(listRef.current?.querySelectorAll<HTMLElement>(LIST_ROW) ?? []).find(
+      (el) => el.dataset.rowKey === key
+    )
+    row?.focus()
+  })
+
   const starred = new Set(favorites.map(favoriteId))
   /** After unstarring from Favorites: the favorite row to focus next (null: none left). */
   const refocus = useRef<{ next: string | null } | null>(null)
@@ -831,6 +897,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
     const inFavorites = keyPrefix === FAVORITES_PREFIX
     return options.map((model) => {
       const key = configId ? { configId, modelId: model.value } : null
+      const rowKey = rowKeyOf(configId, model.value, inFavorites)
       return (
         <DenseModelRow
           key={`${keyPrefix}${configId}\0${model.value}`}
@@ -848,6 +915,8 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           // row, its Favorites copy) gets the same Edit over that one session state.
           edit={configId === effectiveId && model.value === selectedValue ? edit : undefined}
           inFavorites={inFavorites}
+          rowKey={rowKey}
+          highlighted={rowKey === highlightKey}
           favorite={
             key
               ? {
@@ -860,7 +929,11 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           disabled={disabled}
           touch={touch}
           reduced={reduced}
-          onPick={() => state.pick(configId, catalog, model.value)}
+          onPick={() => {
+            const active = document.activeElement as HTMLElement | null
+            if (active?.dataset.rowKey === rowKey) pickedRow.current = rowKey
+            state.pick(configId, catalog, model.value)
+          }}
         />
       )
     })
@@ -871,6 +944,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       key={key}
       tab={tab}
       badge={state.badgeOf(tab)}
+      highlighted={agentRowKey(tab) === highlightKey}
       disabled={disabled || state.notSetUp(tab)}
       touch={touch}
       onPick={onPick}
@@ -1052,6 +1126,13 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
   }, [])
 
   const onSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+      const target = listRef.current?.querySelector<HTMLElement>('[data-search-highlight]')
+      if (!target) return
+      event.preventDefault()
+      target.click()
+      return
+    }
     if (event.key !== 'ArrowDown') return
     const first = Array.from(listRef.current?.querySelectorAll<HTMLElement>(LIST_ROW) ?? []).find(
       (row) => !row.hasAttribute('disabled')
@@ -1108,6 +1189,11 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           value={query}
           onChange={(event) => state.setQuery(event.target.value)}
           onKeyDown={onSearchKeyDown}
+          onFocus={() => {
+            pickedRow.current = null
+            setSearchFocused(true)
+          }}
+          onBlur={() => setSearchFocused(false)}
           placeholder="Search models…"
           aria-label="Search models and agents"
           className={cn(
@@ -1118,6 +1204,14 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
         {view.kind === 'search' ? (
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{view.count}</span>
         ) : null}
+        <span
+          role="status"
+          aria-live="polite"
+          data-testid="selector-search-announce"
+          className="sr-only"
+        >
+          {highlightName ? `Enter picks ${highlightName}` : ''}
+        </span>
       </div>
       {showTabs && agentRail === 'top' ? tabStrip('horizontal') : null}
       <div className="flex min-h-0">
@@ -1132,6 +1226,12 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           animate={{ opacity: 1 }}
           transition={quick(reduced)}
           onKeyDown={onListKeyDown}
+          // Focus moved on to another row: no pick to return to.
+          onFocus={(event) => {
+            if ((event.target as HTMLElement).dataset.rowKey !== pickedRow.current) {
+              pickedRow.current = null
+            }
+          }}
           className={cn(
             AGENT_TRACK_CLASS.listMaxHeight,
             // Rows truncate inside it; overflow-x-hidden only backs that up.
