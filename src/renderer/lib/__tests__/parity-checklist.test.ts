@@ -2242,7 +2242,7 @@ describe('Claude Accounts parity (ADR-0004)', () => {
     )
     // The link sign-in shares the browser login's per-Account registry, so a
     // cancel from either surface stops whichever sign-in is running.
-    expect(read('acp', 'claude_agent', 'accounts.rs')).toMatch(/self\.logins\.cancel\(id\)/)
+    expect(read('acp', 'claude_agent', 'accounts.rs')).toMatch(/self\.logins\.stop\(id\)/)
   })
 
   it('the browser login stays desktop-only and gated in the facade', () => {
