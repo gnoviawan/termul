@@ -240,8 +240,10 @@ impl ClaudeAgentService {
     /// still removed. Returns the Projects that moved to the default.
     pub async fn remove_account(&self, id: &str) -> Result<Vec<String>, String> {
         let store = self.account_store()?;
-        // A folder that was never created holds no login to sign out of.
-        if let Some(dir) = store.config_dir(id).filter(|dir| dir.is_dir()) {
+        // Sign out even when the folder is gone: on macOS the login lives in
+        // the keychain. An id that is already removed has nothing to sign out.
+        let known = self.has_account(id)?;
+        if let Some(dir) = store.config_dir(id).filter(|_| known) {
             match run_cli(&["auth", "logout"], Some(dir), LOGOUT_TIMEOUT, None).await {
                 Ok(true) => log::info!("[claude-accounts] signed out before removal"),
                 Ok(false) => log::warn!("[claude-accounts] sign-out did not succeed"),
