@@ -172,6 +172,16 @@ export async function putJson<T>(path: string, body: unknown): Promise<IpcResult
   }
 }
 
+/** DELETE and return the typed `IpcResult` body (or NETWORK_ERROR). */
+export async function deleteJson<T>(path: string): Promise<IpcResult<T>> {
+  try {
+    const res = await fetch(`${serverBase()}${path}`, { method: 'DELETE', headers: authHeader() })
+    return await parseBody<T>(res)
+  } catch (err) {
+    return networkError(err instanceof Error ? err.message : String(err))
+  }
+}
+
 // --- Ledgered commands -------------------------------------------------------
 
 type IpcFailure = Extract<IpcResult<unknown>, { success: false }>
