@@ -21,6 +21,7 @@ mod agent_reaper_tests;
 pub mod acp_api;
 pub mod assets;
 pub mod auth;
+pub mod automation_api;
 pub mod browser_policy_api;
 pub mod canvas_api;
 pub mod canvas_persistence_api;
@@ -188,6 +189,11 @@ pub async fn serve(
                 let engine = service
                     .engine()
                     .start(&tokio::runtime::Handle::current());
+                tokio::spawn(crate::web::automation_api::forward_changes(
+                    service.subscribe(),
+                    ws_relay.clone(),
+                    |_| {},
+                ));
                 crate::automation::service::install(service);
                 Some(engine)
             }

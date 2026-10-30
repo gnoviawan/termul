@@ -76,6 +76,7 @@ impl<T> IpcResult<T> {
 }
 
 pub mod acp_history;
+pub mod automation;
 pub mod browser;
 pub mod browser_policy;
 pub mod canvas;
@@ -96,6 +97,7 @@ pub mod workspace;
 pub mod worktree;
 
 pub use acp_history::*;
+pub use automation::*;
 pub use browser::*;
 pub use browser_policy::*;
 pub use canvas::*;

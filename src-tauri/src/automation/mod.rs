@@ -36,4 +36,4 @@ mod store_tests;
 #[cfg(test)]
 mod template_tests;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;

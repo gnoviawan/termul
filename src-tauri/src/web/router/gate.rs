@@ -50,6 +50,8 @@ const GATED_PREFIXES: &[&str] = &[
     "/shells",
     "/acp/",
     "/worktree/",
+    // Automations and their runs, agents and secrets.
+    "/api/automation",
     // The /canvas/ API routes require the token. The /canvas/<id>/* bundle
     // paths are exempt — see [`is_bundle_path`] (canvas-token authed
     // in the sub-router).

@@ -159,6 +159,51 @@ Stops agent browsing for `{sessionId}` from the desktop `main` webview: queued a
 
 Pages in tab webviews report nothing through commands. Tab URL, title, loading state and document epoch come from engine navigation and title events (see Browser Event Flow).
 
+## Automation Commands and Routes
+
+Chat-authored automations live in the host's automation service (`src-tauri/src/automation/service.rs`). Every operation has a Tauri command (`src-tauri/src/commands/automation.rs`) and an HTTP route (`src-tauri/src/web/automation_api.rs`). The renderer facade `src/renderer/lib/automation-api.ts` picks the transport. Wire types are in `src/shared/types/automation.types.ts`.
+
+Tauri commands take camelCase arguments and run only from the `main` webview. Other webviews get `FORBIDDEN`. HTTP bodies and query keys are snake_case. Both transports return `IpcResult<T>`.
+
+| Command | HTTP route | Input | Returns |
+| --- | --- | --- | --- |
+| `automation_list` | `GET /api/automations?project_id=` | `projectId` | `Automation[]` |
+| `automation_get` | `GET /api/automations/{id}` | `id` | `AutomationDetail` (`{automation, issues, policy}`) |
+| `automation_create` | `POST /api/automations` | `projectId`, `name` | `Automation` |
+| `automation_apply_ops` | `POST /api/automations/{id}/ops` | `id`, `baseRevision`, `ops` | `ApplyOpsResult` (`{automation, issues}`) |
+| `automation_delete` | `DELETE /api/automations/{id}` | `id` | `null` |
+| `automation_set_enabled` | `POST /api/automations/{id}/enabled` | `id`, `enabled` | `Automation` |
+| `automation_approve` | `POST /api/automations/{id}/approve` | `id`, `revision` | `Automation` |
+| `automation_run_now` | `POST /api/automations/{id}/run` | `id` | `AutomationRun` (status `running`) |
+| `automation_cancel_run` | `POST /api/automation-runs/{run_id}/cancel` | `runId` | `boolean`. `false` when the run is not in flight. |
+| `automation_list_runs` | `GET /api/automations/{id}/runs?limit=` | `id`, `limit` | `AutomationRun[]`, newest first, at most 200. The route's default `limit` is 50. |
+| `automation_run_steps` | `GET /api/automation-runs/{run_id}/steps` | `runId` | `AutomationStep[]` |
+| `automation_mark_seen` | `POST /api/automations/{id}/seen` | `id` | `null` |
+| `automation_preview_schedule` | `POST /api/automations/preview-schedule` | `schedule` | `{next_runs, error}`. An invalid schedule is a success with `next_runs: []` and the reason in `error`. |
+| `automation_list_agents` | `GET /api/automation-agents` | none | `{agent_id, name}[]` |
+| `automation_list_secrets` | `GET /api/automation-secrets?project_id=` | `projectId` | secret names |
+| `automation_set_secret` | `PUT /api/automation-secrets` | `projectId`, `name`, `value` | `null` |
+| `automation_delete_secret` | `DELETE /api/automation-secrets?project_id=&name=` | `projectId`, `name` | `null` |
+
+Secret values go in and never come back out. The host stores them in the OS keychain.
+
+The `/api/automation` prefix is bearer-gated. A host without a token gate serves only loopback peers. Every `POST`, `PUT` and `DELETE` except `preview-schedule` passes the remote-write guard: the desktop shared-live host refuses them, and `termul-server` admits a non-loopback peer only with `--allow-remote-writes`.
+
+A failure carries the service's code. On HTTP it also sets the status:
+
+| Code | HTTP status |
+| --- | --- |
+| `not_found` | 404 |
+| `revision_conflict` | 409. The body adds `current_revision`. |
+| `not_approved` | 409 |
+| `has_issues`, `invalid_ops`, `invalid_input`, `secret_missing` | 422 |
+| `keychain_unavailable` | 503 |
+| `unavailable` | 503. The host's automation store did not open. |
+| `FORBIDDEN` | 403 |
+| `internal` | 500 |
+
+Every change emits `automation_changed` with the payload `{project_id, automation_id}`. `automation_id` is `null` for a project-wide change, such as a secret name. The desktop renderer receives it as a plain Tauri event. Every relay client receives it as an `agents` watch delta `{event: "automation_changed", payload}`: web, phone, shared-live peers and the desktop's own channel carrier.
+
 ## Data Migration Commands
 
 ### `data_migration_get_version`
