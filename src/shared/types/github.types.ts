@@ -86,6 +86,8 @@ export interface GithubListFilter {
 export interface GithubListRequest {
   cwd: string
   filter: GithubListFilter
+  /** Bypass the host's read cache (user-initiated refresh, or after a write). */
+  refresh?: boolean
 }
 
 export interface GithubListResult {
@@ -100,6 +102,7 @@ export interface GithubItemRequest {
   repo: GithubRepoSlot
   kind: GithubItemKind
   number: number
+  refresh?: boolean
 }
 
 export interface GithubComment {
@@ -170,6 +173,7 @@ export interface GithubChecksRequest {
   cwd: string
   repo: GithubRepoSlot
   number: number
+  refresh?: boolean
 }
 
 export interface GithubChecksResult {
