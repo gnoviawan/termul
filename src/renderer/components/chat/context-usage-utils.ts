@@ -83,8 +83,8 @@ export function contextUsagePercent(used: number, size: number): number {
 
 /**
  * The percent shown to the user (number, ring, aria-label): all used tokens,
- * setup included, of the full window, so it matches the bar. The warning keeps
- * using the conversation percent.
+ * setup included, of the full window, so it matches the bar. The 80/78
+ * warning uses it too.
  */
 export function displayedUsagePercent(usage: SessionUsage): number {
   return usage.size > 0 ? contextUsagePercent(Math.max(0, usage.used), usage.size) : 0

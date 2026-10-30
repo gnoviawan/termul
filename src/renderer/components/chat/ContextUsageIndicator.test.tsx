@@ -222,23 +222,24 @@ describe('ContextUsageDetails', () => {
 })
 
 describe('ContextUsageIndicator warning and Compact', () => {
-  /** 160K of a 190K conversation window: 84%. */
+  /** 170K of 200K: 85%. */
   const high = () => usage({ used: 170_000 })
 
-  it('turns on the warning at 80% and keeps it until usage drops below 78%', () => {
-    const view = render(<ContextUsageIndicator usage={high()} messages={MESSAGES} />)
+  it('turns on the warning at 80% of the shown percent and keeps it until below 78%', () => {
+    // 80% shown (setup included); the conversation alone would be 79%.
+    const view = render(
+      <ContextUsageIndicator usage={usage({ used: 160_000 })} messages={MESSAGES} />
+    )
     expect(ring()).toHaveAttribute('data-warning', 'true')
-    expect(ring()).toHaveAccessibleName(/nearing the limit/)
+    expect(ring()).toHaveAccessibleName('Context 80%, 160K of 200K tokens, nearing the limit')
 
     // 79%: inside the hysteresis band, so the warning stays.
-    view.rerender(<ContextUsageIndicator usage={usage({ used: 160_100 })} messages={MESSAGES} />)
+    view.rerender(<ContextUsageIndicator usage={usage({ used: 158_000 })} messages={MESSAGES} />)
     expect(ring()).toHaveAttribute('data-warning', 'true')
 
-    // 77%: below the off threshold.
-    view.rerender(<ContextUsageIndicator usage={usage({ used: 156_300 })} messages={MESSAGES} />)
+    // 77.5%: below the off threshold.
+    view.rerender(<ContextUsageIndicator usage={usage({ used: 155_000 })} messages={MESSAGES} />)
     expect(ring()).not.toHaveAttribute('data-warning')
-    // The shown percent counts setup (78%); the warning uses the conversation percent (77%).
-    expect(ring()).toHaveAccessibleName('Context 78%, 156.3K of 200K tokens')
   })
 
   it('shows "Nearing the limit" in the footer when the warning is on', () => {

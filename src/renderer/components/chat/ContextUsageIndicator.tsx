@@ -9,7 +9,6 @@ import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { type CompactPhase, type CompactSignals, useCompactRequest } from './compact-request'
 import {
   contextUsageBreakdown,
-  conversationUsageMetrics,
   displayedUsagePercent,
   formatReportedCost,
   formatTokenCount,
@@ -85,7 +84,7 @@ export function ContextUsageDetails({
   const percent = displayedUsagePercent(usage)
   const { setupTokens, conversationTokens, setupFraction, conversationFraction, left } =
     contextUsageBreakdown(usage)
-  const isWarning = warning ?? nextContextWarning(false, conversationUsageMetrics(usage).percent)
+  const isWarning = warning ?? nextContextWarning(false, percent)
   const pending = compactPhase === 'pending'
   const leftLabel = `${formatTokenCount(left)} left`
   return (
@@ -246,7 +245,7 @@ export function ContextUsageIndicator({
     onCompact
   )
   const warning = useContextWarning(
-    visible && isDisplayableSessionUsage(visible) ? conversationUsageMetrics(visible).percent : 0
+    visible && isDisplayableSessionUsage(visible) ? displayedUsagePercent(visible) : 0
   )
 
   if (!visible || !isDisplayableSessionUsage(visible)) return null
