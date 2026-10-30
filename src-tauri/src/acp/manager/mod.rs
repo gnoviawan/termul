@@ -96,11 +96,11 @@ mod test_driver;
 #[cfg(test)]
 pub(crate) use test_driver::{FakeAuth, FakeDriver, FakeTurn};
 #[cfg(test)]
-mod real_loop_tests;
-#[cfg(test)]
 mod native_subagents_loop_tests;
 #[cfg(test)]
 mod native_subagents_tests;
+#[cfg(test)]
+pub(crate) mod real_loop_tests;
 
 pub(crate) use history::*;
 pub use reopen::*;
@@ -649,13 +649,37 @@ impl AcpManager {
         command_id: Option<String>,
         project_id: Option<String>,
     ) -> Result<SpawnOutcome, String> {
-        crate::acp::factory_key::normalize_launch_args(&mut config);
-        crate::acp::factory_key::inject(&mut config)?;
         let host_auth_ready = self
-            .claude_agent
-            .prepare_managed_config_for_project(&mut config, project_id.as_deref())
+            .prepare_spawn_config(&mut config, project_id.as_deref())
             .await?;
         self.spawn_with_sinks(config, host_auth_ready, self.sinks.clone(), command_id)
+            .await
+    }
+
+    /// [`spawn`](Self::spawn) whose agent fans its events out to `sinks`
+    /// only, never to this manager's own sinks (the relay): a headless caller
+    /// owns the agent's whole event stream and nothing reaches a renderer.
+    pub(crate) async fn spawn_private(
+        &self,
+        mut config: AgentConfig,
+        project_id: Option<&str>,
+        sinks: Vec<Arc<dyn EventSink>>,
+    ) -> Result<SpawnOutcome, String> {
+        let host_auth_ready = self.prepare_spawn_config(&mut config, project_id).await?;
+        self.spawn_with_sinks(config, host_auth_ready, sinks, None).await
+    }
+
+    /// Launch-arg normalization, the persisted Factory key and the managed
+    /// Claude account of `project_id`. Returns host-auth readiness.
+    async fn prepare_spawn_config(
+        &self,
+        config: &mut AgentConfig,
+        project_id: Option<&str>,
+    ) -> Result<bool, String> {
+        crate::acp::factory_key::normalize_launch_args(config);
+        crate::acp::factory_key::inject(config)?;
+        self.claude_agent
+            .prepare_managed_config_for_project(config, project_id)
             .await
     }
 
@@ -1685,7 +1709,24 @@ impl AcpManager {
         self.stop_agent(agent_id, ExitIntent::Reaped).await
     }
 
+    /// [`Self::kill`] without the join, for callers that cannot await (a
+    /// `Drop`). The driver still winds down and kills the agent process; only
+    /// the wait for its thread is skipped. Idempotent.
+    pub(crate) fn kill_detached(&self, agent_id: &AgentId) {
+        drop(self.detach_agent(agent_id, ExitIntent::Killed));
+    }
+
     async fn stop_agent(&self, agent_id: &AgentId, intent: ExitIntent) -> Result<(), String> {
+        if let Some(handle) = self.detach_agent(agent_id, intent) {
+            // Bounded join: a wedged agent must never make `kill` hang.
+            join_thread_bounded(handle).await;
+        }
+        Ok(())
+    }
+
+    /// Deregister the agent and ask its driver to shut down. Returns the
+    /// driver thread to join, or `None` when the agent is already gone.
+    fn detach_agent(&self, agent_id: &AgentId, intent: ExitIntent) -> Option<JoinHandle<()>> {
         // The exit intent is recorded under the same `agents` lock the
         // driver's self-reap removes its entry under, so a teardown that races
         // this stop either removed the entry first (nothing to stop) or reads
@@ -1698,10 +1739,7 @@ impl AcpManager {
             }
             entry
         };
-        let Some(mut entry) = entry else {
-            // Already gone — idempotent success.
-            return Ok(());
-        };
+        let mut entry = entry?;
         log::info!("[acp] stopping agent {agent_id} ({intent:?})");
         // The driver teardown announces the stop to every sink (and so to the
         // roster watch) as `session_closed` + `agent_disconnected`. The agent's
@@ -1718,13 +1756,7 @@ impl AcpManager {
         // ends even if the Shutdown was not observed.
         let _ = entry.command_tx.send(AcpCommand::Shutdown);
         drop(entry.command_tx);
-
-        if let Some(handle) = entry.join_handle.take() {
-            // Bounded join: a wedged agent must never make `kill` hang.
-            join_thread_bounded(handle).await;
-        }
-
-        Ok(())
+        entry.join_handle.take()
     }
 
     /// Kill all agents and surface join/persistence durability failures.
