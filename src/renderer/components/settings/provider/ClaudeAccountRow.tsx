@@ -179,6 +179,7 @@ export interface ClaudeAccountRowProps {
   projectNames: string[]
   signingIn: boolean
   expanded: boolean
+  canManage: boolean
   onToggle: () => void
   onSignIn: () => void
   onCancelSignIn: () => void
@@ -199,6 +200,7 @@ export function ClaudeAccountRow({
   projectNames,
   signingIn,
   expanded,
+  canManage,
   onToggle,
   onSignIn,
   onCancelSignIn,
@@ -221,11 +223,11 @@ export function ClaudeAccountRow({
         Finish signing in to {account.name} in your browser…
       </span>
     )
-    side = (
+    side = canManage ? (
       <Button type="button" size="xs" variant="ghost" onClick={onCancelSignIn}>
         Cancel
       </Button>
-    )
+    ) : null
   } else if (signedOut) {
     body = (
       <span className="flex flex-col gap-0.5">
@@ -239,11 +241,11 @@ export function ClaudeAccountRow({
         )}
       </span>
     )
-    side = (
+    side = canManage ? (
       <Button type="button" size="xs" variant="outline" onClick={onSignIn}>
         Sign in
       </Button>
-    )
+    ) : null
   } else if (!usage) {
     body = (
       <span className="flex flex-col gap-2" aria-hidden="true">

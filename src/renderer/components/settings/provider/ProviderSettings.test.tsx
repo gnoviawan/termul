@@ -8,7 +8,8 @@ import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
 import { ProviderSettings } from './ProviderSettings'
 
-const { api, toast } = vi.hoisted(() => ({
+const { api, toast, admits } = vi.hoisted(() => ({
+  admits: { value: true },
   api: {
     signInFlow: vi.fn(),
     startLinkLogin: vi.fn(),
@@ -34,6 +35,9 @@ vi.mock('@/lib/claude-accounts-api', async () => {
   return { ...actual, claudeAccountsApi: api }
 })
 vi.mock('sonner', () => ({ toast }))
+vi.mock('@/hooks/use-server-admits-remote-writes', () => ({
+  useServerAdmitsRemoteWrites: () => admits.value
+}))
 
 const SNAPSHOT: ClaudeAccountsSnapshot = {
   accounts: [
@@ -82,6 +86,7 @@ const openMenu = (name: string): void => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  admits.value = true
   useProjectStore.setState({
     projects: [{ id: 'office', name: 'm-pos', color: 'blue', path: '/code/m-pos' } as Project]
   })
@@ -277,6 +282,24 @@ describe('ProviderSettings', () => {
         'Rename',
         'Remove'
       ])
+    })
+
+    it('on a view-only connection shows the accounts and the host hint, but no changes', async () => {
+      admits.value = false
+      render(<ProviderSettings />)
+      const work = await screen.findByTestId('claude-account-ab12')
+      expect(screen.queryByRole('button', { name: /add account/i })).not.toBeInTheDocument()
+      expect(within(work).queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
+      expect(screen.getByText(/This server is read-only for remote clients/)).toBeInTheDocument()
+      expect(screen.getByText('termul-server claude account')).toBeInTheDocument()
+      expect(
+        screen.queryByText('Choose an account per project in Project settings → Accounts.')
+      ).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Actions for Personal' })).not.toBeInTheDocument()
+      openMenu('Work')
+      const items = await screen.findAllByRole('menuitem')
+      expect(items.map((item) => item.textContent)).toEqual(['Make defaultSign in to it first'])
+      expect(api.startLinkLogin).not.toHaveBeenCalled()
     })
 
     it('never offers to remove the built-in account', async () => {

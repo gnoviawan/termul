@@ -2,13 +2,15 @@ import type { ClaudeAccountView } from '@shared/types/claude-accounts.types'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { Info, KeyRound, Plus, RotateCcw, WifiOff } from '@/components/icons'
+import { Info, KeyRound, Monitor, Plus, RotateCcw, WifiOff } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { useClaudeAccounts } from '@/hooks/use-claude-accounts'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { claudeAccountsApi, isClaudeLoginCancelled } from '@/lib/claude-accounts-api'
 import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
+import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
 import { useProjectStore } from '@/stores/project-store'
 import type { ProjectColor } from '@/types/project'
 import { SettingsCard } from '../SettingsGroup'
@@ -46,14 +48,15 @@ function SkeletonRow(): React.JSX.Element {
 
 /**
  * Settings → Provider: the Claude Accounts of this host as flat rows, with
- * each Account's main usage meter. Every surface can add, rename and remove an
- * Account, sign it in and choose the default. Desktop signs in through the
- * host's browser, the web client with a sign-in link.
+ * each Account's main usage meter. A connection that can make changes can
+ * add, rename and remove an Account and sign it in; desktop signs in through
+ * the host's browser, the web client with a sign-in link.
  */
 export function ProviderSettings(): React.JSX.Element {
   const { snapshot, usage, loading, error, refreshingUsage, reload, refreshUsage } =
     useClaudeAccounts()
   const flow = claudeAccountsApi.signInFlow()
+  const canManage = useServerAdmitsRemoteWrites()
   const projects = useProjectStore((s) => s.projects)
   const [addOpen, setAddOpen] = useState(false)
   const [renaming, setRenaming] = useState<ClaudeAccountView | null>(null)
@@ -139,7 +142,7 @@ export function ProviderSettings(): React.JSX.Element {
   const accounts = snapshot?.accounts ?? []
   const defaultAccount = accounts.find((a) => a.id === snapshot?.defaultAccountId) ?? null
   const failed = !loading && (error !== null || !snapshot)
-  const addButton = !failed && (
+  const addButton = canManage && !failed && (
     <Button type="button" size="xs" variant="outline" onClick={() => setAddOpen(true)}>
       <Plus />
       Add account
@@ -201,6 +204,7 @@ export function ProviderSettings(): React.JSX.Element {
               projectNames={(projectsByAccount[account.id] ?? []).map((p) => p.name)}
               signingIn={signingInId === account.id}
               expanded={Boolean(expanded[account.id])}
+              canManage={canManage}
               onToggle={() => setExpanded((s) => ({ ...s, [account.id]: !s[account.id] }))}
               onSignIn={() => void signIn(account)}
               onCancelSignIn={() => void claudeAccountsApi.cancelLogin(account.id)}
@@ -212,6 +216,7 @@ export function ProviderSettings(): React.JSX.Element {
                   isDefault={account.id === snapshot.defaultAccountId}
                   signedOut={isAccountSignedOut(account, usage[account.id])}
                   ready={accountReadiness(account, usage[account.id]) === 'ready'}
+                  canManage={canManage}
                   busy={signingInId === account.id}
                   onSignIn={() => void signIn(account)}
                   onMakeDefault={() => void makeDefault(account)}
@@ -243,7 +248,7 @@ export function ProviderSettings(): React.JSX.Element {
         </SettingsCard>
       )}
 
-      {!loading && !failed && accounts.length === 1 && (
+      {!loading && !failed && canManage && accounts.length === 1 && (
         <div className="mt-2 flex items-center gap-3 rounded-lg border border-border/60 bg-foreground/[0.02] p-3.5">
           <span
             aria-hidden="true"
@@ -268,39 +273,56 @@ export function ProviderSettings(): React.JSX.Element {
       )}
 
       {!loading && !failed && (
-        <p className="flex items-center gap-1.5 pt-2 text-2xs text-muted-foreground">
-          <Info size={12} className="shrink-0" />
-          Choose an account per project in Project settings → Accounts.
+        <p className="flex flex-wrap items-center gap-1.5 pt-2 text-2xs text-muted-foreground">
+          {canManage ? (
+            <>
+              <Info size={12} className="shrink-0" />
+              Choose an account per project in Project settings → Accounts.
+            </>
+          ) : (
+            <>
+              <Monitor size={12} className="shrink-0" />
+              {READ_ONLY_SERVER_REASON} To add or sign in to an account, use the desktop app, or run
+              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-3xs text-secondary-foreground">
+                termul-server claude account
+              </code>
+              on the host.
+            </>
+          )}
         </p>
       )}
 
-      <AddAccountDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        existingNames={accounts.map((a) => a.name)}
-        defaultAccountName={defaultAccount?.name ?? null}
-        usage={usage}
-        onChanged={reload}
-        onSignedIn={() => refreshUsage(true)}
-      />
-      <LinkSignInDialog
-        account={linkSignIn}
-        onClose={() => setLinkSignIn(null)}
-        onSignedIn={(account) => {
-          setLinkSignIn(null)
-          void signedIn(account)
-        }}
-      />
-      <AccountNameDialog
-        open={renaming !== null}
-        initialName={renaming?.name ?? ''}
-        onOpenChange={(open) => !open && setRenaming(null)}
-        onSubmit={async (name) => {
-          if (!renaming) return
-          await claudeAccountsApi.rename(renaming.id, name)
-          await reload()
-        }}
-      />
+      {canManage && (
+        <>
+          <AddAccountDialog
+            open={addOpen}
+            onOpenChange={setAddOpen}
+            existingNames={accounts.map((a) => a.name)}
+            defaultAccountName={defaultAccount?.name ?? null}
+            usage={usage}
+            onChanged={reload}
+            onSignedIn={() => refreshUsage(true)}
+          />
+          <LinkSignInDialog
+            account={linkSignIn}
+            onClose={() => setLinkSignIn(null)}
+            onSignedIn={(account) => {
+              setLinkSignIn(null)
+              void signedIn(account)
+            }}
+          />
+          <AccountNameDialog
+            open={renaming !== null}
+            initialName={renaming?.name ?? ''}
+            onOpenChange={(open) => !open && setRenaming(null)}
+            onSubmit={async (name) => {
+              if (!renaming) return
+              await claudeAccountsApi.rename(renaming.id, name)
+              await reload()
+            }}
+          />
+        </>
+      )}
 
       <ConfirmDialog
         isOpen={removing !== null}

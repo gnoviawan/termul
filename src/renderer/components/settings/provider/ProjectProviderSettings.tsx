@@ -9,6 +9,7 @@ import { AlertCircle, Check, ExternalLink, Info, Link2, Shuffle } from '@/compon
 import { Button } from '@/components/ui/button'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import type { ProjectClaudeAccountDraft } from '@/hooks/use-project-claude-account-draft'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { claudeAccountsApi, isClaudeLoginCancelled } from '@/lib/claude-accounts-api'
 import { formatUsageReset, usageTone, usageWindowLabel } from '@/lib/claude-usage-format'
 import { cn } from '@/lib/utils'
@@ -154,6 +155,7 @@ export function ProjectProviderSettings({
   const listRef = useRef<HTMLDivElement>(null)
   const [signingIn, setSigningIn] = useState(false)
   const [linkSignIn, setLinkSignIn] = useState<ClaudeAccountView | null>(null)
+  const canManage = useServerAdmitsRemoteWrites()
 
   const readinessOf = (accountId: string | null) => {
     const account = snapshot?.accounts.find(
@@ -383,15 +385,21 @@ export function ProjectProviderSettings({
               New Claude chats in this project cannot start until you sign in again.
             </span>
           </div>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            onClick={() => void signInEffective()}
-            disabled={signingIn}
-          >
-            {signingIn ? 'Waiting…' : 'Sign in'}
-          </Button>
+          {canManage ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={() => void signInEffective()}
+              disabled={signingIn}
+            >
+              {signingIn ? 'Waiting…' : 'Sign in'}
+            </Button>
+          ) : (
+            <Button type="button" size="xs" variant="outline" onClick={onManageAccounts}>
+              Open settings
+            </Button>
+          )}
         </div>
       )}
 
