@@ -1,15 +1,20 @@
 //! Chat-authored automations: a validated node graph run by the host on a
-//! schedule or on demand. This module holds the model, the pure rules and
-//! the SQLite store; the engine and transports build on it.
+//! schedule or on demand. This module holds the model, the pure rules,
+//! the SQLite store and the run engine.
 
+pub mod agents;
+pub mod engine;
 pub mod graph;
 pub mod model;
 pub mod policy;
 pub mod schedule;
 pub mod schema;
+pub mod secrets;
 pub mod store;
 pub mod template;
 
+#[cfg(test)]
+mod agents_tests;
 #[cfg(test)]
 mod graph_tests;
 #[cfg(test)]
@@ -20,6 +25,8 @@ mod policy_tests;
 mod schedule_tests;
 #[cfg(test)]
 mod schema_tests;
+#[cfg(test)]
+mod secrets_tests;
 #[cfg(test)]
 mod store_tests;
 #[cfg(test)]

@@ -8,9 +8,6 @@
 //! alike. The session is ephemeral, so the host injects no MCP server and the
 //! driver auto-cancels permission requests, questions and elicitations.
 
-// The automation runner is the first caller and lands in a follow-up PR.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::fmt;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};

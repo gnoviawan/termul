@@ -475,6 +475,8 @@ pub enum IssueCode {
     AgentMaxAttemptsOutOfRange,
     MissingConditionOperand,
     InvalidSchedule,
+    /// Added by the service, which owns the agent registry.
+    UnknownAgent,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -597,4 +599,15 @@ pub struct NodeSecrets {
 pub struct NodeHosts {
     pub node_id: NodeId,
     pub hosts: Vec<String>,
+}
+
+/// Wire event name of [`AutomationChanged`].
+pub const EVENT_AUTOMATION_CHANGED: &str = "automation_changed";
+
+/// Something about an automation changed: its definition, its approval, or a
+/// run. `automation_id` is `None` for project-wide changes (secret names).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationChanged {
+    pub project_id: String,
+    pub automation_id: Option<AutomationId>,
 }

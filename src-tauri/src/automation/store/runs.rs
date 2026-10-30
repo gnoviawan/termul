@@ -84,7 +84,7 @@ impl AutomationStore {
         now_ms: i64,
     ) -> StoreResult<SettleOutcome> {
         let db = self.conn()?;
-        settle_locked(&db, id, status, stop_reason, summary, now_ms)
+        settle_locked(&db, id, status, stop_reason, summary, now_ms, Cadence::Follow)
     }
 
     /// Records a step. A step that already finished is never overwritten, so
@@ -128,7 +128,9 @@ impl AutomationStore {
     }
 
     /// Boot recovery: runs left `running` by a dead process are settled
-    /// `failed` (never re-fired) and their running steps fail with them.
+    /// `failed` (never re-fired) and their running steps fail with them. The
+    /// host died, not the automation, so the cadence is left alone and the
+    /// boot catch-up still fires.
     pub fn reconcile_stranded(&self, now_ms: i64) -> StoreResult<usize> {
         let db = self.conn()?;
         let ids: Vec<RunId> = {
@@ -149,6 +151,7 @@ impl AutomationStore {
                 Some(STRANDED_REASON),
                 None,
                 now_ms,
+                Cadence::Keep,
             )?;
         }
         log::info!("[Automation] reconciled {} stranded run(s)", ids.len());
@@ -192,8 +195,16 @@ struct Counters {
     next_run_at: Option<i64>,
 }
 
-/// Manual runs never move the cadence: they leave `consecutive_errors` and
-/// `next_run_at` alone but still show in `last_run` and the failure badge.
+/// Whether a settle may move `consecutive_errors` and `next_run_at`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cadence {
+    /// Scheduled and catch-up runs do; manual runs never do.
+    Follow,
+    Keep,
+}
+
+/// Runs that leave the cadence alone still show in `last_run` and the
+/// failure badge.
 fn settle_locked(
     db: &Connection,
     id: &RunId,
@@ -201,6 +212,7 @@ fn settle_locked(
     stop_reason: Option<&str>,
     summary: Option<&str>,
     now_ms: i64,
+    cadence: Cadence,
 ) -> StoreResult<SettleOutcome> {
     let tx = db.unchecked_transaction()?;
     let changed = tx.execute(
@@ -233,7 +245,7 @@ fn settle_locked(
                 })
             },
         )?;
-        let cadence = run.trigger != RunTrigger::Manual;
+        let cadence = cadence == Cadence::Follow && run.trigger != RunTrigger::Manual;
         match status {
             SettledStatus::Succeeded if cadence => c.consecutive_errors = 0,
             SettledStatus::Failed => {
