@@ -6,7 +6,7 @@ use crate::web::origin::OriginPolicy;
 use axum::body::Body;
 use axum::http::Request;
 use std::fs;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tower::ServiceExt;
 
@@ -67,6 +67,7 @@ fn test_router(
         restart_hook: Arc::new(move |_| {
             restart_counter.fetch_add(1, Ordering::SeqCst);
         }),
+        apply_in_flight: Arc::new(AtomicBool::new(false)),
     };
     router_with_static(state, dir, OriginPolicy::default())
 }
@@ -445,6 +446,81 @@ async fn apply_rejects_invalid_answers_and_writes_nothing() {
     assert!(parsed["data"]["fieldErrors"]["port"].is_string(), "{parsed}");
     assert!(!server_config_file::server_config_path(state_dir.path()).exists());
     assert_eq!(restarts.load(Ordering::SeqCst), 0, "no restart on rejection");
+}
+
+/// A successful apply latches `apply_in_flight` for the rest of the boot —
+/// a second apply during the pending-restart window must be refused
+/// (it would write a config the caller is never redirected to).
+#[tokio::test]
+async fn apply_allows_one_apply_then_conflicts() {
+    let dir = fixture_dir("apply-once");
+    let state_dir = TempDir::new("apply-once-state");
+    let restarts = Arc::new(AtomicUsize::new(0));
+    let app = test_router(dir.path(), state_dir.path(), None, &restarts);
+
+    let first = app
+        .clone()
+        .oneshot(setup_post(
+            "/setup/apply",
+            Some(SETUP_TOKEN),
+            &answers_json("127.0.0.1", 8080),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(body_json(first).await["data"]["ok"], true);
+
+    let second = app
+        .oneshot(setup_post(
+            "/setup/apply",
+            Some(SETUP_TOKEN),
+            &answers_json("127.0.0.1", 9090),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::CONFLICT);
+    let parsed = body_json(second).await;
+    assert_eq!(parsed["code"], "SETUP_APPLY_IN_PROGRESS", "{parsed}");
+    assert_eq!(
+        restarts.load(Ordering::SeqCst),
+        1,
+        "only the first apply may schedule a restart"
+    );
+}
+
+/// A FAILED apply must release the latch — a validation or write failure
+/// leaves the server running, so retrying has to stay possible (the latch
+/// only stays set on the success path, where a restart is pending).
+#[tokio::test]
+async fn apply_releases_the_latch_after_a_failed_apply() {
+    let dir = fixture_dir("apply-retry");
+    let state_dir = TempDir::new("apply-retry-state");
+    let restarts = Arc::new(AtomicUsize::new(0));
+    let app = test_router(dir.path(), state_dir.path(), None, &restarts);
+
+    // Rejected by validation — writes nothing, must not lock the route.
+    let bad = answers_json("127.0.0.1", 0);
+    let resp = app
+        .clone()
+        .oneshot(setup_post("/setup/apply", Some(SETUP_TOKEN), &bad))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["data"]["ok"], false);
+
+    // A follow-up VALID apply still goes through — the failed one released
+    // the latch instead of wedging the server.
+    let resp = app
+        .oneshot(setup_post(
+            "/setup/apply",
+            Some(SETUP_TOKEN),
+            &answers_json("127.0.0.1", 8080),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(body_json(resp).await["data"]["ok"], true);
+    assert_eq!(restarts.load(Ordering::SeqCst), 1);
 }
 
 // --- origin layer + SPA fallback ---------------------------------------------

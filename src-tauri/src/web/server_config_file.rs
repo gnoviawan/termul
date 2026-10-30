@@ -125,11 +125,25 @@ pub fn validate_answers(
         errors.port = Some("invalid port '0': use 1-65535".into());
     }
 
-    if answers.sessions_dir.as_os_str().is_empty() {
+    // Trim before the empty check — the CLI wizard trims its prompt input;
+    // a whitespace-only value must not reach the persisted file (it would
+    // resolve to a directory literally named "   " under the server cwd).
+    if answers.sessions_dir.to_string_lossy().trim().is_empty() {
         errors.sessions_dir = Some("sessions directory cannot be empty".into());
+    } else if answers.sessions_dir.exists() && !answers.sessions_dir.is_dir() {
+        // A file at this path wedges every restart: `from_args` rejects it
+        // before setup mode can run, and the saved file keeps it failing.
+        // Reject here so the apply writes nothing.
+        errors.sessions_dir = Some(
+            format!(
+                "sessions directory '{}' exists and is not a directory",
+                answers.sessions_dir.display()
+            )
+            .into(),
+        );
     }
 
-    let projects_file = if answers.projects_file.as_os_str().is_empty() {
+    let projects_file = if answers.projects_file.to_string_lossy().trim().is_empty() {
         errors.projects_file = Some(
             "projects registry file cannot be empty (no platform default — enter a path)".into(),
         );
@@ -194,12 +208,48 @@ pub fn load(state_dir: &Path) -> std::io::Result<Option<ServerConfigFile>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
     };
-    serde_json::from_str(&text).map(Some).map_err(|e| {
+    let file: ServerConfigFile = serde_json::from_str(&text).map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("{}: {e}", path.display()),
         )
-    })
+    })?;
+    // Semantically invalid content counts as corrupt too — a hand-edited
+    // file carrying an unparseable host or port `0` would otherwise win the
+    // `from_args` merge and wedge the boot (or silently bind an OS-assigned
+    // port). Treating it as "not onboarded" lets setup mode recover.
+    if let Err(problems) = file_errors(&file) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{}: {}", path.display(), problems.join(", ")),
+        ));
+    }
+    Ok(Some(file))
+}
+
+/// Semantic field checks on a parsed [`ServerConfigFile`] — the same rules
+/// `validate_answers` applies to wizard answers, minus the filesystem probe
+/// (a sessions dir that becomes a file later is caught by `from_args`'s
+/// final not-a-directory guard, matching argv behavior).
+fn file_errors(file: &ServerConfigFile) -> Result<(), Vec<String>> {
+    let mut problems = Vec::new();
+    if BindMode::parse(&file.host).is_none() {
+        problems.push(format!("invalid host '{}'", file.host));
+    }
+    if file.port == 0 {
+        problems.push("port must not be 0".to_string());
+    }
+    if file.sessions_dir.to_string_lossy().trim().is_empty() {
+        problems.push("sessionsDir must not be empty".to_string());
+    }
+    if file.projects_file.to_string_lossy().trim().is_empty() {
+        problems.push("projectsFile must not be empty".to_string());
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
 }
 
 /// Whether a completed config exists (exists AND parses). The "are we in
@@ -213,7 +263,12 @@ pub fn is_onboarded(state_dir: &Path) -> bool {
 /// permissions on unix — the file can drive host security settings
 /// (`allow_remote_writes`), so it gets the same 0600 treatment as
 /// `web-auth-token`.
+/// Serializes every `save` — two overlapping applies would otherwise share
+/// the one `server-config.json.tmp` and could rename each other's write.
+static SAVE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
 pub fn save(state_dir: &Path, config: &ServerConfigFile) -> std::io::Result<()> {
+    let _guard = SAVE_LOCK.lock();
     std::fs::create_dir_all(state_dir)?;
     let path = server_config_path(state_dir);
     let tmp = state_dir.join(format!("{SERVER_CONFIG_FILE_NAME}.tmp"));
@@ -281,6 +336,11 @@ pub struct ServerAdminContext {
     /// Effective answers the running server was configured with (for the
     /// reconfigure form's current values).
     pub current: ServerSetupAnswers,
+    /// One apply at a time: set while a `POST /server/config` apply is in
+    /// flight and stays set once a restart is scheduled — a second apply
+    /// during the pending-restart window would save a config the client was
+    /// never redirected to (the re-exec loads the last file written).
+    pub apply_in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ServerAdminContext {
@@ -290,6 +350,7 @@ impl ServerAdminContext {
         let update = resolve_update_settings(&cfg.service_account_state_dir());
         Self {
             state_dir: cfg.service_account_state_dir(),
+            apply_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             current: ServerSetupAnswers {
                 host: cfg.host.clone(),
                 port: cfg.port,

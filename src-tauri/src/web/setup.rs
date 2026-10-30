@@ -32,6 +32,7 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use axum::{
@@ -86,6 +87,10 @@ pub struct SetupState {
     /// `restart_binary(current_exe())`). Tests substitute a recorder —
     /// the real hook re-execs the process binary.
     restart_hook: Arc<dyn Fn(&'static str) + Send + Sync>,
+    /// One apply at a time, latched once a restart is scheduled — a second
+    /// apply in the pending-restart window would write a config the caller
+    /// is never redirected to (the re-exec loads the last file written).
+    apply_in_flight: Arc<AtomicBool>,
 }
 
 impl SetupState {
@@ -116,6 +121,7 @@ impl SetupState {
             web_auth_token,
             web_auth_configured,
             restart_hook: Arc::new(server_config_file::schedule_self_restart),
+            apply_in_flight: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -289,6 +295,21 @@ async fn setup_apply(
     State(state): State<SetupState>,
     Json(answers): Json<ServerSetupAnswers>,
 ) -> Response {
+    // One apply at a time — and never a second one once the restart is
+    // scheduled: it would write a config the caller is never redirected to
+    // (the re-exec loads the last file written). `swap` keeps the flag set
+    // on the success path; failure paths reset it below.
+    if state.apply_in_flight.swap(true, Ordering::SeqCst) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "a setup apply is already in progress — the server is restarting",
+                "code": "SETUP_APPLY_IN_PROGRESS",
+            })),
+        )
+            .into_response();
+    }
     let validated = match server_config_file::validate_answers(&answers) {
         Ok(file) => file,
         Err(field_errors) => {
@@ -296,6 +317,7 @@ async fn setup_apply(
                 target: "termul::web::setup",
                 "setup apply rejected invalid answers: {field_errors:?}"
             );
+            state.apply_in_flight.store(false, Ordering::SeqCst);
             return Json(IpcBody::ok(ValidateReply {
                 ok: false,
                 field_errors,
@@ -330,6 +352,7 @@ async fn setup_apply(
                     "setup apply refused — cannot resolve the post-restart web \
                      auth token: {error}"
                 );
+                state.apply_in_flight.store(false, Ordering::SeqCst);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({
@@ -350,6 +373,7 @@ async fn setup_apply(
             path = %server_config_file::server_config_path(&state.state_dir).display(),
             "setup apply could not write the server config: {error}"
         );
+        state.apply_in_flight.store(false, Ordering::SeqCst);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({

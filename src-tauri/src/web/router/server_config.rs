@@ -17,6 +17,7 @@ use axum::{
     Json,
 };
 use serde::Serialize;
+use std::sync::atomic::Ordering;
 
 use crate::web::auth;
 use crate::web::config::BindMode;
@@ -74,6 +75,47 @@ fn presented_token(headers: &HeaderMap) -> Option<String> {
     None
 }
 
+/// Whether the `Origin` header names a loopback host (`127.0.0.1`, `::1`,
+/// `localhost`, `0.0.0.0`). On an ungated server this is the only signal
+/// separating a real same-machine browser from a remote visitor arriving
+/// through a same-host reverse proxy — the proxy makes every peer look
+/// loopback to `check_local_only`, and browsers always send `Origin` on
+/// POST. A missing or non-loopback origin is refused.
+fn origin_is_loopback(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    // `http://host[:port]` — strip the scheme, then the port.
+    let host_port = origin
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(origin)
+        .trim_end_matches('/');
+    let host = host_port
+        .strip_prefix('[')
+        .and_then(|s| s.split_once(']').map(|(h, _)| h))
+        .unwrap_or_else(|| host_port.split(':').next().unwrap_or(host_port));
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "127.0.0.1" | "::1" | "localhost" | "0.0.0.0"
+    )
+}
+
+/// RAII latch release for `POST /server/config`: drops the
+/// `ServerAdminContext::apply_in_flight` flag on scope exit. The success
+/// path `std::mem::forget`s it instead so the latch stays set across the
+/// pending-restart window (no second apply may run before the re-exec).
+struct ApplyInFlight(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for ApplyInFlight {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// `GET /server/config`: return the effective current settings
 /// (`ServerAdminContext.current` — argv/env/file merged) for the reconfigure
 /// form, wrapped in the same `{success, data}` IpcBody every other host read
@@ -105,6 +147,55 @@ pub(super) async fn server_config_post(
     let Some(admin) = &state.server_admin else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    // One apply at a time — and never a second one once a restart is
+    // scheduled: it would write a file the caller is never redirected to.
+    // The latch lives on the admin context so each server (and each test
+    // router) gets its own; the re-exec clears it naturally.
+    if admin
+        .apply_in_flight
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "a server config apply is already in progress — the server is restarting",
+                "code": "SERVER_CONFIG_APPLY_IN_PROGRESS",
+            })),
+        )
+            .into_response();
+    }
+    // Released on every exit path EXCEPT success — `std::mem::forget` on
+    // the success path keeps the latch set across the pending-restart
+    // window; a failed apply must not lock the route.
+    let apply_guard = ApplyInFlight(admin.apply_in_flight.clone());
+    // Ungated + no remote-write opt-in: this route can rebind the server and
+    // hand back a fresh web-auth token, so it must not trust the TCP peer
+    // alone — a same-host reverse proxy makes every remote visitor look
+    // loopback to `check_local_only`. Require a loopback `Origin` (browsers
+    // always send it on POST); `--allow-remote-writes` is the explicit
+    // opt-out for genuinely remote reconfiguration.
+    if state.web_auth.is_none()
+        && !state.allow_remote_writes
+        && !origin_is_loopback(&headers)
+    {
+        tracing::warn!(
+            target: "termul::web::router",
+            "server config apply refused — non-loopback or missing Origin \
+             on an ungated server (a same-host reverse proxy cannot \
+             reconfigure it; use --web-auth-token or --allow-remote-writes)"
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "reconfiguring an unauthenticated server requires a local browser",
+                "code": "SERVER_CONFIG_LOCAL_ORIGIN_REQUIRED",
+            })),
+        )
+            .into_response();
+    }
     // Write admission — the SAME `check_local_only` predicate every host-state
     // mutation uses (loopback or `--allow-remote-writes`; shared-live denies).
     // The bearer gate already ran (outer layer). Refuses in the IpcBody shape
@@ -210,6 +301,9 @@ pub(super) async fn server_config_post(
         "server reconfigure applied — scheduling self-restart",
     );
     server_config_file::schedule_self_restart("server-config-apply");
+    // Keep the latch set — the restart is pending; a second apply must not
+    // run. `forget` leaks one Arc alloc per boot; the re-exec resets it.
+    std::mem::forget(apply_guard);
     Json(IpcBody::ok(SetupApplyResponse {
         ok: true,
         host: validated.host,

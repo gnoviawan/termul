@@ -1385,6 +1385,7 @@ async fn websocket_endpoints_accept_an_allowlisted_origin() {
 fn admin_ctx(state_dir: &Path) -> ServerAdminContext {
     ServerAdminContext {
         state_dir: state_dir.to_path_buf(),
+        apply_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         current: ServerSetupAnswers {
             host: "127.0.0.1".to_string(),
             port: 8080,
@@ -1405,6 +1406,22 @@ fn standalone_router(
     web_auth: Option<Arc<WebAuth>>,
     allow_remote_writes: bool,
 ) -> Router {
+    standalone_router_with_origins(
+        dir,
+        state_dir,
+        web_auth,
+        allow_remote_writes,
+        OriginPolicy::default(),
+    )
+}
+
+fn standalone_router_with_origins(
+    dir: &Path,
+    state_dir: &Path,
+    web_auth: Option<Arc<WebAuth>>,
+    allow_remote_writes: bool,
+    origins: OriginPolicy,
+) -> Router {
     router_with_static(
         Arc::new(AcpManager::new(vec![])),
         crate::web::test_pty_manager(),
@@ -1414,7 +1431,7 @@ fn standalone_router(
         allow_remote_writes,
         false,
         web_auth,
-        OriginPolicy::default(),
+        origins,
         Some(admin_ctx(state_dir)),
     )
 }
@@ -1440,6 +1457,22 @@ fn answers_json(host: &str, port: u16) -> String {
 }
 
 fn config_post(peer: SocketAddr, bearer: Option<&str>, body: &str) -> Request<Body> {
+    config_post_with_origin(
+        peer,
+        bearer,
+        body,
+        Some("127.0.0.1:8080"),
+        Some("http://127.0.0.1:8080"),
+    )
+}
+
+fn config_post_with_origin(
+    peer: SocketAddr,
+    bearer: Option<&str>,
+    body: &str,
+    host: Option<&str>,
+    origin: Option<&str>,
+) -> Request<Body> {
     let builder = Request::builder()
         .method("POST")
         .uri("/server/config")
@@ -1449,14 +1482,24 @@ fn config_post(peer: SocketAddr, bearer: Option<&str>, body: &str) -> Request<Bo
         Some(token) => builder.header("authorization", format!("Bearer {token}")),
         None => builder,
     };
+    let builder = match host {
+        Some(host) => builder.header("host", host),
+        None => builder,
+    };
+    let builder = match origin {
+        Some(origin) => builder.header("origin", origin),
+        None => builder,
+    };
     builder.body(Body::from(body.to_string())).unwrap()
 }
 
 // --- /health setupRequired ---------------------------------------------------
 
-/// Fresh standalone install shape: `server_admin` present, state dir holds
-/// NO `server-config.json` → `/health` reports `setupRequired:true` so the
-/// web client can offer reconfiguration of the not-yet-persisted server.
+/// Standalone install shape: `server_admin` present but the state dir holds
+/// NO `server-config.json` → normal mode STILL reports `setupRequired:false`
+/// because this router has no `/setup/*` routes — advertising `true` would
+/// mount the wizard against 404s (CodeRabbit review on gh-1105). Only the
+/// setup-mode router's own `/health` reports `true`.
 #[tokio::test]
 async fn health_reports_setup_required_when_unonboarded() {
     let dir = TempDir::new("health-setup-static");
@@ -1475,14 +1518,13 @@ async fn health_reports_setup_required_when_unonboarded() {
     let parsed = body_json(resp).await;
     assert_eq!(parsed["status"], "ok");
     assert_eq!(
-        parsed["setupRequired"], true,
-        "standalone server without a persisted server-config.json must \
-         advertise setupRequired"
+        parsed["setupRequired"], false,
+        "normal mode must NOT advertise setupRequired — the wizard's /setup/* \
+         calls only exist on the setup-mode router"
     );
 }
 
-/// Once `server-config.json` exists the flag flips to `false` — the probe
-/// reads the file on every call so a write after boot is seen.
+/// A persisted `server-config.json` keeps the flag at `false` too.
 #[tokio::test]
 async fn health_reports_no_setup_required_when_onboarded() {
     let dir = TempDir::new("health-onboarded-static");
@@ -1766,4 +1808,225 @@ async fn server_config_post_rejects_invalid_answers() {
         !server_config_file::server_config_path(state_dir.path()).exists(),
         "a rejected apply writes nothing"
     );
+}
+
+/// Whitespace-only path values are rejected with per-field verdicts (the
+/// CLI wizard trims its prompts; `"   "` must not reach the file).
+#[tokio::test]
+async fn server_config_post_rejects_whitespace_paths() {
+    let dir = TempDir::new("cfg-ws-static");
+    let state_dir = TempDir::new("cfg-ws-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+
+    let body = serde_json::json!({
+        "host": "127.0.0.1",
+        "port": 9090,
+        "sessionsDir": "   ",
+        "projectsFile": "\t ",
+        "allowRemoteWrites": false,
+        "updateIntervalSecs": 21600,
+    })
+    .to_string();
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &body,
+        ))
+        .await
+        .expect("router response");
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], false, "{parsed}");
+    assert!(
+        parsed["data"]["fieldErrors"]["sessionsDir"].is_string(),
+        "{parsed}"
+    );
+    assert!(
+        parsed["data"]["fieldErrors"]["projectsFile"].is_string(),
+        "{parsed}"
+    );
+    assert!(
+        !server_config_file::server_config_path(state_dir.path()).exists(),
+        "a rejected apply writes nothing"
+    );
+}
+
+/// A sessions dir that exists as a regular FILE is rejected — saving it
+/// would wedge every restart (`from_args` refuses a non-directory sessions
+/// dir before setup mode could recover).
+#[tokio::test]
+async fn server_config_post_rejects_non_directory_sessions_dir() {
+    let dir = TempDir::new("cfg-notdir-static");
+    let state_dir = TempDir::new("cfg-notdir-state");
+    let bogus = state_dir.path().join("not-a-dir");
+    fs::write(&bogus, b"x").expect("seed regular file");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+
+    let body = serde_json::json!({
+        "host": "127.0.0.1",
+        "port": 9090,
+        "sessionsDir": bogus,
+        "projectsFile": "/srv/termul/projects.json",
+        "allowRemoteWrites": false,
+        "updateIntervalSecs": 21600,
+    })
+    .to_string();
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &body,
+        ))
+        .await
+        .expect("router response");
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], false, "{parsed}");
+    assert!(
+        parsed["data"]["fieldErrors"]["sessionsDir"].is_string(),
+        "{parsed}"
+    );
+    assert!(
+        !server_config_file::server_config_path(state_dir.path()).exists(),
+        "a rejected apply writes nothing"
+    );
+}
+
+/// A successful apply latches — a second apply in the pending-restart
+/// window conflicts instead of writing a config its caller never sees.
+/// A failed apply releases the latch so the client can retry.
+#[tokio::test]
+async fn server_config_post_allows_one_apply_then_conflicts() {
+    let dir = TempDir::new("cfg-latch-static");
+    let state_dir = TempDir::new("cfg-latch-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+    let peer = SocketAddr::from(([127, 0, 0, 1], 54321));
+
+    // Invalid apply releases the latch (the retry must not be refused).
+    let resp = app
+        .clone()
+        .oneshot(config_post(peer, None, &answers_json("127.0.0.1", 0)))
+        .await
+        .expect("router response");
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], false, "{parsed}");
+
+    // First successful apply latches.
+    let resp = app
+        .clone()
+        .oneshot(config_post(peer, None, &answers_json("127.0.0.1", 9090)))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], true, "{parsed}");
+
+    // Second apply is refused while the restart is pending — and does NOT
+    // overwrite the first apply's file.
+    let resp = app
+        .oneshot(config_post(peer, None, &answers_json("0.0.0.0", 9091)))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["code"], "SERVER_CONFIG_APPLY_IN_PROGRESS");
+    let written = server_config_file::load(state_dir.path())
+        .expect("load written config")
+        .expect("config file exists");
+    assert_eq!(written.port, 9090, "the first apply's config stands");
+}
+
+/// Ungated + no `--allow-remote-writes`: a same-host reverse proxy makes
+/// every visitor a loopback PEER, so a non-loopback Origin is the only
+/// signal the caller is remote — refused before anything is written.
+#[tokio::test]
+async fn server_config_post_refuses_non_loopback_origin_when_ungated() {
+    let dir = TempDir::new("cfg-proxy-static");
+    let state_dir = TempDir::new("cfg-proxy-state");
+    // The documented same-host reverse-proxy deployment: the public origin
+    // is in --allowed-origins, so the outer origin layer admits it — the
+    // request reaches the handler with a loopback PEER (the proxy).
+    let app = standalone_router_with_origins(
+        dir.path(),
+        state_dir.path(),
+        None,
+        false,
+        OriginPolicy::parse_list("https://termul.example.com").expect("valid origin"),
+    );
+    let peer = SocketAddr::from(([127, 0, 0, 1], 54321)); // the proxy itself
+
+    // Public-origin request through the proxy (Host forwarded too).
+    let resp = app
+        .clone()
+        .oneshot(config_post_with_origin(
+            peer,
+            None,
+            &answers_json("127.0.0.1", 9090),
+            Some("termul.example.com"),
+            Some("https://termul.example.com"),
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["code"], "SERVER_CONFIG_LOCAL_ORIGIN_REQUIRED");
+
+    // No Origin at all is refused the same way.
+    let resp = app
+        .clone()
+        .oneshot(config_post_with_origin(
+            peer,
+            None,
+            &answers_json("127.0.0.1", 9090),
+            Some("termul.example.com"),
+            None,
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["code"], "SERVER_CONFIG_LOCAL_ORIGIN_REQUIRED");
+
+    // A real loopback browser (loopback Host + Origin) reaches the handler.
+    let resp = app
+        .oneshot(config_post_with_origin(
+            peer,
+            None,
+            &answers_json("127.0.0.1", 9090),
+            Some("localhost:8080"),
+            Some("http://localhost:8080"),
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], true, "{parsed}");
+}
+
+/// `--allow-remote-writes` is the explicit opt-out: the origin guard steps
+/// aside for an operator who admitted remote callers.
+#[tokio::test]
+async fn server_config_post_allows_remote_origin_with_writes_opted_in() {
+    let dir = TempDir::new("cfg-remote-ok-static");
+    let state_dir = TempDir::new("cfg-remote-ok-state");
+    let app = standalone_router_with_origins(
+        dir.path(),
+        state_dir.path(),
+        None,
+        true,
+        OriginPolicy::parse_list("https://termul.example.com").expect("valid origin"),
+    );
+
+    let resp = app
+        .oneshot(config_post_with_origin(
+            SocketAddr::from(([10, 0, 0, 5], 50000)),
+            None,
+            &answers_json("127.0.0.1", 9090),
+            Some("termul.example.com"),
+            Some("https://termul.example.com"),
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], true, "{parsed}");
 }

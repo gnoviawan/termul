@@ -1839,3 +1839,57 @@ fn corrupt_config_file_recovers_into_setup_mode() {
         "explicit argv wins: normal mode runs even on a corrupt file"
     );
 }
+
+/// A file that PARSES but carries semantically invalid values (a hand-edit
+/// or a partial write) must be treated as corrupt too — it would otherwise
+/// win the argv/env merge and wedge the boot (port `0`, unparseable host)
+/// or silently misbind.
+#[test]
+fn semantically_invalid_config_file_is_ignored_and_recovers() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("invalid-config");
+    std::fs::write(
+        state.join(server_config_file::SERVER_CONFIG_FILE_NAME),
+        serde_json::json!({
+            "host": "not-a-bind-mode",
+            "port": 0,
+            "sessionsDir": "/srv/termul/sessions",
+            "projectsFile": "/srv/termul/projects.json",
+            "allowRemoteWrites": false,
+            "updateChannel": null,
+            "updateIntervalSecs": 21600,
+        })
+        .to_string(),
+    )
+    .expect("write invalid file");
+    let state_str = state.to_str().unwrap().to_string();
+
+    let flagged = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8088",
+    ])
+    .expect("argv still parses");
+    let bare = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    // `load` reports the semantic failure the same way as a parse failure.
+    assert!(
+        server_config_file::load(&state).is_err(),
+        "a parseable-but-invalid file must be treated as corrupt"
+    );
+    // And it does not count as onboarded → setup recovery (no explicit argv).
+    assert!(
+        bare.setup_required(),
+        "parseable-but-invalid file + no explicit config → setup mode"
+    );
+    restore_env(saved);
+    cleanup(&state);
+
+    // The invalid file must NOT win the merge — argv values stand.
+    assert_eq!(flagged.host, "127.0.0.1", "invalid file host must not win");
+    assert_eq!(flagged.port, 8088, "invalid file port must not win");
+}
