@@ -149,8 +149,15 @@ the server host's CLI. There are no HTTP or WS routes for reading or changing
 Claude credentials. A remote client can list the Accounts (names, ids, and
 signed-in state) and their usage, and choose the Default or a Project Account
 (`list_claude_accounts`, `list_claude_usage`, `set_default_claude_account`,
-`set_project_claude_account`); view-only connections can only list. Adding,
-signing in, renaming and removing an Account stay on the host.
+`set_project_claude_account`). A write-capable connection can also add,
+rename and remove an Account (`add_claude_account`, `rename_claude_account`,
+`remove_claude_account`) and sign it in with a link
+(`start_claude_link_login`, `finish_claude_link_login`,
+`cancel_claude_login`): the host runs `claude auth login` without a browser,
+returns the sign-in link, and writes the code the user pastes from the Claude
+page to the CLI, which stores the login. Termul never sees the token.
+View-only connections can only list; Settings hides the add, sign-in, rename
+and remove controls on them.
 
 ## Per-project Claude profiles
 

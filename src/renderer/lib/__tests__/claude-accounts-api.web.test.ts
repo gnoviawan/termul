@@ -1,7 +1,8 @@
 /**
- * Claude Accounts facade on both surfaces: list/default/project go through the
- * ACP transport everywhere; add/login/rename/remove invoke Tauri on desktop
- * and reject with `ClaudeAccountsUnsupportedError` on web without a request.
+ * Claude Accounts facade on both surfaces: list/default/project, add, rename,
+ * remove, the link sign-in and cancel go through the ACP transport everywhere;
+ * the browser login invokes Tauri on desktop and rejects with
+ * `ClaudeAccountsUnsupportedError` on web without a request.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -13,7 +14,13 @@ const { mockIsTauriContext, mockInvoke, transport } = vi.hoisted(() => ({
     listClaudeUsage: vi.fn(),
     setDefaultClaudeAccount: vi.fn(),
     setProjectClaudeAccount: vi.fn(),
-    setClaudeAutoSwitch: vi.fn()
+    setClaudeAutoSwitch: vi.fn(),
+    addClaudeAccount: vi.fn(),
+    renameClaudeAccount: vi.fn(),
+    removeClaudeAccount: vi.fn(),
+    startClaudeLinkLogin: vi.fn(),
+    finishClaudeLinkLogin: vi.fn(),
+    cancelClaudeLogin: vi.fn()
   }
 }))
 
@@ -22,7 +29,14 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
 vi.mock('../acp-transport', () => ({ getAcpTransport: () => transport }))
 vi.mock('../log-api', () => ({ logFrontendError: vi.fn() }))
 
-import { ClaudeAccountsUnsupportedError, claudeAccountsApi } from '../claude-accounts-api'
+import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
+import { AcpTransportError } from '../acp-transport/types'
+import {
+  ClaudeAccountsUnsupportedError,
+  claudeAccountsApi,
+  isClaudeLoginBusy,
+  isClaudeLoginCodeIncomplete
+} from '../claude-accounts-api'
 
 const SNAPSHOT = {
   accounts: [{ id: 'default', name: 'Default', builtin: true, signedIn: true }],
@@ -38,6 +52,12 @@ beforeEach(() => {
   transport.setDefaultClaudeAccount.mockResolvedValue(undefined)
   transport.setProjectClaudeAccount.mockResolvedValue(true)
   transport.setClaudeAutoSwitch.mockResolvedValue(undefined)
+  transport.addClaudeAccount.mockResolvedValue({ id: 'abc', name: 'Work', createdAt: 1 })
+  transport.renameClaudeAccount.mockResolvedValue(undefined)
+  transport.removeClaudeAccount.mockResolvedValue(['p1'])
+  transport.startClaudeLinkLogin.mockResolvedValue('https://claude.com/cai/oauth/authorize')
+  transport.finishClaudeLinkLogin.mockResolvedValue(undefined)
+  transport.cancelClaudeLogin.mockResolvedValue(true)
 })
 
 describe.each([
@@ -74,6 +94,70 @@ describe.each([
     expect(transport.setProjectClaudeAccount).toHaveBeenCalledWith('p1', 'ab12', 'default')
   })
 
+  it('adds an account through the ACP transport with a command id', async () => {
+    await expect(claudeAccountsApi.add('Work')).resolves.toMatchObject({ id: 'abc' })
+    const [name, call] = transport.addClaudeAccount.mock.calls[0]
+    expect(name).toBe('Work')
+    expect(call.commandId).toEqual(expect.any(String))
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('runs the link sign-in and its cancel through the ACP transport', async () => {
+    await expect(claudeAccountsApi.startLinkLogin('abc')).resolves.toBe(
+      'https://claude.com/cai/oauth/authorize'
+    )
+    await claudeAccountsApi.finishLinkLogin('abc', 'code#state')
+    await expect(claudeAccountsApi.cancelLogin('abc')).resolves.toBe(true)
+    expect(transport.startClaudeLinkLogin).toHaveBeenCalledWith('abc')
+    const [account, code, call] = transport.finishClaudeLinkLogin.mock.calls[0]
+    expect([account, code]).toEqual(['abc', 'code#state'])
+    expect(call.commandId).toEqual(expect.any(String))
+    expect(transport.cancelClaudeLogin).toHaveBeenCalledWith('abc')
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('passes an incomplete code through as a rejection the caller can recognize', async () => {
+    const incomplete = new AcpTransportError(
+      WS_ERROR_CODES.CLAUDE_LOGIN_CODE_INCOMPLETE,
+      'That code is incomplete.'
+    )
+    transport.finishClaudeLinkLogin.mockRejectedValueOnce(incomplete)
+    const error = await claudeAccountsApi.finishLinkLogin('abc', 'abc').catch((e: unknown) => e)
+    expect(error).toBe(incomplete)
+    expect(isClaudeLoginCodeIncomplete(error)).toBe(true)
+    expect(isClaudeLoginCodeIncomplete(new Error('That code is incomplete.'))).toBe(false)
+    expect(isClaudeLoginBusy(error)).toBe(false)
+  })
+
+  it('passes a code sent during a check through as a rejection the caller can recognize', async () => {
+    const busy = new AcpTransportError(
+      WS_ERROR_CODES.CLAUDE_LOGIN_BUSY,
+      'Claude is still checking the last code.'
+    )
+    transport.finishClaudeLinkLogin.mockRejectedValueOnce(busy)
+    const error = await claudeAccountsApi.finishLinkLogin('abc', 'abc#def').catch((e: unknown) => e)
+    expect(error).toBe(busy)
+    expect(isClaudeLoginBusy(error)).toBe(true)
+    expect(isClaudeLoginCodeIncomplete(error)).toBe(false)
+  })
+
+  it('renames and removes an account through the ACP transport', async () => {
+    await claudeAccountsApi.rename('abc', 'Office')
+    await expect(claudeAccountsApi.remove('abc')).resolves.toEqual(['p1'])
+    expect(transport.renameClaudeAccount).toHaveBeenCalledWith('abc', 'Office')
+    expect(transport.removeClaudeAccount).toHaveBeenCalledWith('abc')
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('passes a host error through', async () => {
+    transport.renameClaudeAccount.mockRejectedValueOnce(
+      new Error('That Claude account does not exist')
+    )
+    await expect(claudeAccountsApi.rename('abc', 'Office')).rejects.toThrow(
+      'That Claude account does not exist'
+    )
+  })
+
   it('turns automatic switching on and off through the ACP transport', async () => {
     await claudeAccountsApi.setAutoSwitch(false)
     expect(transport.setClaudeAutoSwitch).toHaveBeenCalledWith(false)
@@ -81,50 +165,25 @@ describe.each([
   })
 })
 
-describe('claudeAccountsApi management on desktop', () => {
+describe('claudeAccountsApi on desktop', () => {
   beforeEach(() => mockIsTauriContext.mockReturnValue(true))
 
-  it('invokes the desktop commands', async () => {
-    mockInvoke.mockResolvedValueOnce({ id: 'abc', name: 'Work', createdAt: 1 })
-    await expect(claudeAccountsApi.add('Work')).resolves.toMatchObject({ id: 'abc' })
+  it('signs in through the host browser', async () => {
     mockInvoke.mockResolvedValue(undefined)
     await claudeAccountsApi.login('abc')
-    await claudeAccountsApi.cancelLogin('abc')
-    await claudeAccountsApi.rename('abc', 'Office')
-    mockInvoke.mockResolvedValueOnce(['p1'])
-    await expect(claudeAccountsApi.remove('abc')).resolves.toEqual(['p1'])
-    expect(mockInvoke.mock.calls).toEqual([
-      ['claude_accounts_add', { name: 'Work' }],
-      ['claude_accounts_login', { accountId: 'abc' }],
-      ['claude_accounts_login_cancel', { accountId: 'abc' }],
-      ['claude_accounts_rename', { accountId: 'abc', name: 'Office' }],
-      ['claude_accounts_remove', { accountId: 'abc' }]
-    ])
-    expect(claudeAccountsApi.canManageAccounts()).toBe(true)
-  })
-
-  it('passes a host error through', async () => {
-    mockInvoke.mockRejectedValueOnce('An account named "Work" already exists')
-    await expect(claudeAccountsApi.add('Work')).rejects.toBe(
-      'An account named "Work" already exists'
-    )
+    expect(mockInvoke.mock.calls).toEqual([['claude_accounts_login', { accountId: 'abc' }]])
+    expect(claudeAccountsApi.signInFlow()).toBe('browser')
   })
 })
 
-describe('claudeAccountsApi management on web', () => {
+describe('claudeAccountsApi on web', () => {
   beforeEach(() => mockIsTauriContext.mockReturnValue(false))
 
-  it('rejects add, login, rename and remove without a request', async () => {
-    for (const call of [
-      () => claudeAccountsApi.add('Work'),
-      () => claudeAccountsApi.login('abc'),
-      () => claudeAccountsApi.cancelLogin('abc'),
-      () => claudeAccountsApi.rename('abc', 'Office'),
-      () => claudeAccountsApi.remove('abc')
-    ]) {
-      await expect(call()).rejects.toBeInstanceOf(ClaudeAccountsUnsupportedError)
-    }
+  it('signs in with a link and rejects the browser login without a request', async () => {
+    await expect(claudeAccountsApi.login('abc')).rejects.toBeInstanceOf(
+      ClaudeAccountsUnsupportedError
+    )
     expect(mockInvoke).not.toHaveBeenCalled()
-    expect(claudeAccountsApi.canManageAccounts()).toBe(false)
+    expect(claudeAccountsApi.signInFlow()).toBe('link')
   })
 })

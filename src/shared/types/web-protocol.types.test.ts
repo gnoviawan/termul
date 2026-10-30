@@ -88,8 +88,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 58 request types including warm-pool promotion, host-owned session delete and browser stop', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(58)
+  it('exports exactly 64 request types including warm-pool promotion, host-owned session delete and browser stop', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(64)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -155,12 +155,18 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'unwatch',
       // Explicit host-default project change.
       'set_default_project',
-      // Claude Accounts: view and choose.
+      // Claude Accounts: view, choose, add, rename, remove and link sign-in.
       'list_claude_accounts',
       'list_claude_usage',
       'set_default_claude_account',
       'set_project_claude_account',
       'set_claude_auto_switch',
+      'add_claude_account',
+      'rename_claude_account',
+      'remove_claude_account',
+      'start_claude_link_login',
+      'finish_claude_link_login',
+      'cancel_claude_login',
       // The canvas gateway's renderer leg.
       'canvas_mount',
       'canvas_unmount',
@@ -184,9 +190,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
 })
 
 describe('web-protocol.types — error codes (AC2)', () => {
-  it('exports exactly 27 stable error codes', () => {
+  it('exports exactly 29 stable error codes', () => {
     const codes = new Set(Object.values(WS_ERROR_CODES))
-    expect(codes.size).toBe(27)
+    expect(codes.size).toBe(29)
     const expected = [
       'not_found',
       'unauthorized',
@@ -220,7 +226,11 @@ describe('web-protocol.types — error codes (AC2)', () => {
       'command_conflict',
       'invalid_command_id',
       // A Claude Account that is not signed in.
-      'claude_account_signed_out'
+      'claude_account_signed_out',
+      // A pasted Claude sign-in code the CLI calls incomplete.
+      'claude_login_code_incomplete',
+      // A pasted Claude sign-in code while the CLI still checks the last one.
+      'claude_login_busy'
     ]
     for (const code of expected) {
       expect(codes).toContain(code)
