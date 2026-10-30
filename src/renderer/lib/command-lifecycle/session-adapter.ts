@@ -134,10 +134,15 @@ export function forwardSessionExit(ptyId: string): void {
     applyExit(terminalStore)
     return
   }
-  void import('@/stores/terminal-store').then(({ useTerminalStore }) => {
-    registerSessionTerminalStore(useTerminalStore)
-    applyExit(useTerminalStore)
-  })
+  void import('@/stores/terminal-store')
+    .then(({ useTerminalStore }) => {
+      // A partial test mock, or a module still initializing, has no store.
+      // Calling getState would reject this discarded promise.
+      if (typeof useTerminalStore?.getState !== 'function') return
+      registerSessionTerminalStore(useTerminalStore)
+      applyExit(useTerminalStore)
+    })
+    .catch(() => {})
 }
 
 export function forwardSessionLifecycle(event: SessionLifecyclePayload): void {
@@ -146,11 +151,15 @@ export function forwardSessionLifecycle(event: SessionLifecyclePayload): void {
   if (!unsubscribe && terminalStore) connectTerminalStore(terminalStore)
   buffer.forward(event)
   if (!unsubscribe && !loading) {
-    const pending = import('@/stores/terminal-store').then(({ useTerminalStore }) => {
-      if (loading !== pending) return
-      registerSessionTerminalStore(useTerminalStore)
-      if (!unsubscribe) connectTerminalStore(useTerminalStore)
-    })
+    const pending = import('@/stores/terminal-store')
+      .then(({ useTerminalStore }) => {
+        if (loading !== pending) return
+        // Same guard as exit forwarding: do not register a hook with no getState.
+        if (typeof useTerminalStore?.getState !== 'function') return
+        registerSessionTerminalStore(useTerminalStore)
+        if (!unsubscribe) connectTerminalStore(useTerminalStore)
+      })
+      .catch(() => {})
     loading = pending
   }
 }
