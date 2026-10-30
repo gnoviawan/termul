@@ -7,7 +7,10 @@
 
 import type {
   AgentPolicy,
+  ApplyOpsResult,
   Automation,
+  AutomationChanged,
+  AutomationDetail,
   AutomationId,
   AutomationNode,
   AutomationRun,
@@ -17,6 +20,7 @@ import type {
   Issue,
   IssueCode,
   JsonSchemaSubset,
+  KnownAgent,
   LastRun,
   NodeId,
   NodeSpec,
@@ -267,12 +271,6 @@ function runPolicy(v: unknown, p: string): RunPolicy {
   }
 }
 
-export interface AutomationDetail {
-  automation: Automation
-  issues: Issue[]
-  policy: RunPolicy
-}
-
 export function parseAutomationDetail(v: unknown): AutomationDetail {
   const o = obj(v, 'detail')
   return {
@@ -282,7 +280,7 @@ export function parseAutomationDetail(v: unknown): AutomationDetail {
   }
 }
 
-export function parseApplyOpsResult(v: unknown): { automation: Automation; issues: Issue[] } {
+export function parseApplyOpsResult(v: unknown): ApplyOpsResult {
   const o = obj(v, 'result')
   return {
     automation: parseAutomation(o.automation),
@@ -343,12 +341,7 @@ export function parseSchedulePreview(v: unknown): SchedulePreview {
   }
 }
 
-export interface AutomationAgent {
-  agent_id: string
-  name: string
-}
-
-export function parseAgentList(v: unknown): AutomationAgent[] {
+export function parseAgentList(v: unknown): KnownAgent[] {
   return arr(v, 'agents', (item, p) => {
     const o = obj(item, p)
     return { agent_id: str(o.agent_id, `${p}.agent_id`), name: str(o.name, `${p}.name`) }
@@ -359,15 +352,14 @@ export function parseSecretNames(v: unknown): string[] {
   return arr(v, 'secrets', str)
 }
 
-export interface AutomationChange {
-  project_id: string
-  automation_id: AutomationId
-}
-
-/** `null` when the payload is not an `automation_changed` event. */
-export function parseAutomationChange(v: unknown): AutomationChange | null {
+/**
+ * `null` when the payload is not an `automation_changed` event. A null
+ * `automation_id` is a project-wide change (secret names).
+ */
+export function parseAutomationChange(v: unknown): AutomationChanged | null {
   if (typeof v !== 'object' || v === null) return null
   const { project_id, automation_id } = v as Obj
-  if (typeof project_id !== 'string' || typeof automation_id !== 'string') return null
-  return { project_id, automation_id: automation_id as AutomationId }
+  if (typeof project_id !== 'string') return null
+  if (automation_id !== null && typeof automation_id !== 'string') return null
+  return { project_id, automation_id: automation_id as AutomationId | null }
 }
