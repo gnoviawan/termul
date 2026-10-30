@@ -11,6 +11,7 @@ import {
   Network,
   Palette,
   RotateCcw,
+  Server,
   Sparkles,
   Terminal,
   TerminalSquare
@@ -119,6 +120,16 @@ const ALL_APP_PREF_CATEGORIES: SettingsCategory[] = [
     description: 'Termul version, release channel and automatic checks.',
     icon: <Download size={16} />
   },
+  // Web-only page (gh-1105): reconfigure the termul-server this client is
+  // connected to. The desktop app has no server to configure, so the page is
+  // filtered out there — the mirror of the web-only Updates filter (#843).
+  {
+    id: 'server',
+    group: 'App',
+    label: 'Server',
+    description: 'Where this Termul server can be reached, and how it updates.',
+    icon: <Server size={16} />
+  },
   {
     id: 'diagnostics',
     group: 'App',
@@ -135,11 +146,13 @@ const ALL_APP_PREF_CATEGORIES: SettingsCategory[] = [
   }
 ]
 
-/** Pages for the current runtime: the web client has no Updates page. */
+/**
+ * Pages for the current runtime: the web client has no Updates page, and the
+ * desktop app has no Server page.
+ */
 export function appPrefCategories(): SettingsCategory[] {
-  return isTauriContext()
-    ? ALL_APP_PREF_CATEGORIES
-    : ALL_APP_PREF_CATEGORIES.filter((category) => category.id !== 'updates')
+  const hiddenId = isTauriContext() ? 'server' : 'updates'
+  return ALL_APP_PREF_CATEGORIES.filter((category) => category.id !== hiddenId)
 }
 
 // The updates search entries are desktop-only with the page itself; on web
@@ -382,6 +395,13 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
     anchorId: rowId('release-channel')
   },
   {
+    categoryId: 'server',
+    label: 'Server',
+    description: 'Address, port and update channel for this Termul server.',
+    keywords: ['server', 'address', 'port', 'host', 'bind', 'remote', 'restart'],
+    anchorId: rowId('server-config')
+  },
+  {
     categoryId: 'diagnostics',
     label: 'Logs',
     description: 'Export or copy application logs to troubleshoot issues.',
@@ -398,16 +418,19 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
 
 /** Search entries for the current runtime. */
 export function appPrefSearchIndex(): SettingsSearchEntry[] {
-  return isTauriContext()
-    ? ALL_APP_PREF_SEARCH_INDEX
-    : [
-        ...ALL_APP_PREF_SEARCH_INDEX.filter((entry) => entry.categoryId !== 'updates'),
-        {
-          categoryId: 'diagnostics',
-          label: 'Server version',
-          description: 'The web client updates together with the termul-server.',
-          keywords: ['version', 'upgrade', 'server'],
-          anchorId: rowId('server-version')
-        }
-      ]
+  if (isTauriContext()) {
+    // The Server page doesn't exist on desktop — its entries can't be in
+    // the search index either.
+    return ALL_APP_PREF_SEARCH_INDEX.filter((entry) => entry.categoryId !== 'server')
+  }
+  return [
+    ...ALL_APP_PREF_SEARCH_INDEX.filter((entry) => entry.categoryId !== 'updates'),
+    {
+      categoryId: 'diagnostics',
+      label: 'Server version',
+      description: 'The web client updates together with the termul-server.',
+      keywords: ['version', 'upgrade', 'server'],
+      anchorId: rowId('server-version')
+    }
+  ]
 }

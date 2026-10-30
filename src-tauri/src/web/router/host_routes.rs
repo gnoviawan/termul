@@ -24,6 +24,15 @@ use crate::web::ws::AppState;
 /// reports `true` for it — matching what its `/worktree/*` writes would face.
 /// Desktop shared-live sets `shared_live_writes_denied`, so it reports `false`
 /// for every peer (writes are genuinely denied there).
+///
+/// `setupRequired` (gh-1105) is `true` only when the standalone
+/// `termul-server` carries a [`crate::web::server_config_file::ServerAdminContext`]
+/// AND the resolved state dir has no completed `server-config.json` — i.e. a
+/// fresh standalone install serving normal mode on explicit argv config.
+/// `server_admin: None` (desktop shared-live, in-process channel state)
+/// reports `false` without touching the filesystem. The flag probes the file
+/// itself so a config written (or deleted) after boot is reflected on the
+/// next poll.
 pub(super) async fn health_check(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -34,6 +43,10 @@ pub(super) async fn health_check(
         crate::web::capabilities::WriteFlags::from_state(&state),
     )
     .is_allowed();
+    let setup_required = state
+        .server_admin
+        .as_ref()
+        .is_some_and(|a| !crate::web::server_config_file::is_onboarded(&a.state_dir));
     // Durable boundary log (AGENTS.md): record the capability-admission
     // decision. No peer address or credentials logged — only the decision
     // + whether the deployment-mode deny or opt-in governed it.
@@ -50,6 +63,7 @@ pub(super) async fn health_check(
             status: "ok",
             allow_remote_writes: allow,
             case_insensitive_paths: PATHS_CASE_INSENSITIVE_BY_TARGET,
+            setup_required,
         }),
     )
 }
@@ -65,6 +79,10 @@ struct HealthBody {
     status: &'static str,
     allow_remote_writes: bool,
     case_insensitive_paths: bool,
+    /// `true` when the standalone server is running normal mode without a
+    /// persisted `server-config.json` (gh-1105). Always `false` on desktop
+    /// shared-live hosts (`server_admin: None`).
+    setup_required: bool,
 }
 
 /// `GET /host/agent-idle-window` — the live idle-chat window. Same `IpcResult`

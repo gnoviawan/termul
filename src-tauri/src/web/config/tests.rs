@@ -110,6 +110,8 @@ fn server_config_bind_addr() {
         web_auth_token: None,
         allowed_origins: OriginPolicy::default(),
         state_dir: None,
+        explicit_config: false,
+        host_explicit: false,
     };
     assert_eq!(
         cfg.bind_addr(),
@@ -137,6 +139,8 @@ fn server_config_bind_addr() {
         web_auth_token: None,
         allowed_origins: OriginPolicy::default(),
         state_dir: None,
+        explicit_config: false,
+        host_explicit: false,
     };
     assert_eq!(bad.bind_addr(), None);
 }
@@ -601,6 +605,8 @@ fn service_account_state_dir_falls_through_empty_env_var() {
         web_auth_token: None,
         allowed_origins: OriginPolicy::default(),
         state_dir: None,
+        explicit_config: false,
+        host_explicit: false,
     };
     // We cannot safely mutate the real process env vars in a parallel
     // test runner, so we assert the contract indirectly: the resolved
@@ -1473,4 +1479,363 @@ fn max_terminals_per_project_env_fallback_flag_wins_and_invalid_env_warns() {
     assert_eq!(invalid.deprecation_warnings.len(), 1);
     assert!(invalid.deprecation_warnings[0].contains(MAX_TERMINALS_PER_PROJECT_ENV));
     assert_eq!(desktop_invalid, DEFAULT_MAX_TERMINALS_PER_PROJECT);
+}
+
+// --- gh-1105: explicit-config provenance + server-config.json merge ---
+//
+// These tests serialize on `ENV_LOCK` (same process-global env as the
+// allow-remote-writes/tunable tests) and pass `--state-dir <tempdir>` so
+// the `server-config.json` lookup is hermetic — an ambient config file
+// under the real HOME/XDG state dir can never leak in.
+
+/// The env vars that feed `explicit_config` / the resolution chains and
+/// must be neutral in every test below.
+const ONBOARD_ENV_KEYS: &[&str] = &[
+    "TERMUL_SESSIONS_DIR",
+    "TERMUL_PROJECTS_FILE",
+    "TERMUL_SERVER_ALLOW_REMOTE_WRITES",
+];
+
+fn clear_onboard_env() {
+    for key in ONBOARD_ENV_KEYS {
+        std::env::remove_var(key);
+    }
+}
+
+/// Write `<state>/server-config.json` through the shared save contract.
+fn write_config_file(state: &Path, file: &server_config_file::ServerConfigFile) {
+    server_config_file::save(state, file).expect("save server-config.json");
+}
+
+fn config_file_fixture() -> server_config_file::ServerConfigFile {
+    server_config_file::ServerConfigFile {
+        host: "0.0.0.0".into(),
+        port: 9090,
+        sessions_dir: PathBuf::from("/tmp/termul-file-sessions"),
+        projects_file: PathBuf::from("/tmp/termul-file-projects.json"),
+        allow_remote_writes: true,
+        update_channel: None,
+        update_interval_secs: 21600,
+    }
+}
+
+#[test]
+fn explicit_config_flags_detect_argv() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("explicit-flags");
+    let state_str = state.to_str().unwrap().to_string();
+
+    let bare = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    let host = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--host",
+        "0.0.0.0",
+    ])
+    .expect("parse");
+    let port = ServerConfig::from_args(["--state-dir", state_str.as_str(), "--port", "9001"])
+        .expect("parse");
+    let sessions =
+        ServerConfig::from_args(["--state-dir", state_str.as_str(), "--sessions-dir", "/tmp/x-s"])
+            .expect("parse");
+    let projects = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--projects-file",
+        "/tmp/x-p.json",
+    ])
+    .expect("parse");
+    let writes =
+        ServerConfig::from_args(["--state-dir", state_str.as_str(), "--allow-remote-writes"])
+            .expect("parse");
+    let unrelated = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--event-log-capacity",
+        "1024",
+    ])
+    .expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert!(
+        !bare.explicit_config && !bare.host_explicit,
+        "--state-dir alone is NOT explicit (it only names where the file lives)"
+    );
+    assert!(
+        host.explicit_config && host.host_explicit,
+        "--host sets both provenance flags"
+    );
+    assert!(
+        port.explicit_config && !port.host_explicit,
+        "--port is explicit config but not host_explicit"
+    );
+    assert!(sessions.explicit_config, "--sessions-dir is explicit config");
+    assert!(projects.explicit_config, "--projects-file is explicit config");
+    assert!(
+        writes.explicit_config,
+        "--allow-remote-writes is explicit config"
+    );
+    assert!(
+        !unrelated.explicit_config && !unrelated.host_explicit,
+        "unrelated flags (--event-log-capacity) must not count as explicit config"
+    );
+}
+
+#[test]
+fn explicit_config_flags_detect_env() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("explicit-env");
+    let state_str = state.to_str().unwrap().to_string();
+
+    std::env::set_var("TERMUL_SESSIONS_DIR", "/tmp/termul-env-explicit-s");
+    let sessions = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    std::env::remove_var("TERMUL_SESSIONS_DIR");
+    std::env::set_var("TERMUL_PROJECTS_FILE", "/tmp/termul-env-explicit.json");
+    let projects = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    std::env::remove_var("TERMUL_PROJECTS_FILE");
+    std::env::set_var("TERMUL_SERVER_ALLOW_REMOTE_WRITES", "true");
+    let writes = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert!(sessions.explicit_config, "$TERMUL_SESSIONS_DIR is explicit");
+    assert!(projects.explicit_config, "$TERMUL_PROJECTS_FILE is explicit");
+    assert!(
+        writes.explicit_config,
+        "$TERMUL_SERVER_ALLOW_REMOTE_WRITES is explicit"
+    );
+    assert!(
+        !sessions.host_explicit && !projects.host_explicit && !writes.host_explicit,
+        "no env var feeds host_explicit (there is none)"
+    );
+}
+
+#[test]
+fn config_file_wins_over_argv_and_env() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("file-wins");
+    write_config_file(&state, &config_file_fixture());
+    let state_str = state.to_str().unwrap().to_string();
+    // Even the env vars lose to the file — stale systemd `EnvironmentFile`
+    // entries must not beat the record the web wizard wrote.
+    std::env::set_var("TERMUL_SESSIONS_DIR", "/tmp/termul-env-sessions");
+    std::env::set_var("TERMUL_PROJECTS_FILE", "/tmp/termul-env-projects.json");
+
+    let cfg = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8080",
+        "--sessions-dir",
+        "/tmp/termul-argv-sessions",
+        "--projects-file",
+        "/tmp/termul-argv-projects.json",
+        "--event-log-capacity",
+        "1234",
+    ])
+    .expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert_eq!(cfg.host, "0.0.0.0", "file host beats --host");
+    assert_eq!(cfg.port, 9090, "file port beats --port");
+    assert_eq!(
+        cfg.sessions_dir.as_deref(),
+        Some(Path::new("/tmp/termul-file-sessions")),
+        "file sessions_dir beats --sessions-dir and $TERMUL_SESSIONS_DIR"
+    );
+    assert_eq!(
+        cfg.projects_file.as_deref(),
+        Some(Path::new("/tmp/termul-file-projects.json")),
+        "file projects_file beats --projects-file and $TERMUL_PROJECTS_FILE"
+    );
+    assert!(
+        cfg.allow_remote_writes,
+        "file allow_remote_writes applies (no flag/env set it)"
+    );
+    // A field the file does not model still comes from argv.
+    assert_eq!(
+        cfg.event_log_capacity, 1234,
+        "fields the file does not carry still resolve from argv"
+    );
+    // Provenance is argv/env — the file merge never flips it.
+    assert!(cfg.explicit_config, "argv presence stays explicit");
+    assert!(cfg.host_explicit, "--host still counts as carried by argv");
+    assert!(
+        !cfg.setup_required(),
+        "an onboarded install never enters setup mode"
+    );
+    // The file-vs-argv divergence is surfaced once as a startup warning.
+    let warnings: Vec<_> = cfg
+        .deprecation_warnings
+        .iter()
+        .filter(|w| w.contains("server-config.json"))
+        .collect();
+    assert_eq!(
+        warnings.len(),
+        1,
+        "an override note must be queued when the file changes argv values: {:?}",
+        cfg.deprecation_warnings
+    );
+}
+
+#[test]
+fn config_file_false_remote_writes_beats_flag() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("file-writes-off");
+    let mut file = config_file_fixture();
+    file.allow_remote_writes = false;
+    write_config_file(&state, &file);
+    let state_str = state.to_str().unwrap().to_string();
+
+    let cfg = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--allow-remote-writes",
+    ])
+    .expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert!(
+        !cfg.allow_remote_writes,
+        "the file's allowRemoteWrites=false must win over --allow-remote-writes"
+    );
+}
+
+#[test]
+fn config_file_merge_is_silent_when_values_agree() {
+    // The common onboarded case — the generated unit's argv repeats the
+    // file's values — must not emit the override warning every boot.
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("file-agrees");
+    let file = config_file_fixture();
+    write_config_file(&state, &file);
+    let state_str = state.to_str().unwrap().to_string();
+
+    let cfg = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9090",
+        "--sessions-dir",
+        "/tmp/termul-file-sessions",
+        "--projects-file",
+        "/tmp/termul-file-projects.json",
+        "--allow-remote-writes",
+    ])
+    .expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert!(
+        !cfg
+            .deprecation_warnings
+            .iter()
+            .any(|w| w.contains("server-config.json")),
+        "file agreeing with argv must not warn: {:?}",
+        cfg.deprecation_warnings
+    );
+}
+
+#[test]
+fn corrupt_config_file_is_ignored_by_from_args() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("corrupt-config");
+    std::fs::write(
+        state.join(server_config_file::SERVER_CONFIG_FILE_NAME),
+        "{not json",
+    )
+    .expect("write corrupt file");
+    let state_str = state.to_str().unwrap().to_string();
+
+    let cfg = ServerConfig::from_args(["--state-dir", state_str.as_str(), "--port", "8088"])
+        .expect("argv still parses");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert_eq!(cfg.port, 8088, "argv stands when the file is corrupt");
+    assert!(cfg.explicit_config);
+}
+
+#[test]
+fn setup_required_matrix() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("setup-required");
+    let state_str = state.to_str().unwrap().to_string();
+
+    let bare = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    assert!(
+        bare.setup_required(),
+        "no config file + no explicit argv/env → setup mode"
+    );
+
+    let flagged = ServerConfig::from_args(["--state-dir", state_str.as_str(), "--port", "9001"])
+        .expect("parse");
+    assert!(
+        !flagged.setup_required(),
+        "explicit argv → normal mode even without a file"
+    );
+
+    write_config_file(&state, &config_file_fixture());
+    let onboarded = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    assert!(
+        !onboarded.setup_required(),
+        "a completed config file → normal mode"
+    );
+    restore_env(saved);
+    cleanup(&state);
+}
+
+#[test]
+fn corrupt_config_file_recovers_into_setup_mode() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(ONBOARD_ENV_KEYS);
+    clear_onboard_env();
+    let state = tempdir_like("corrupt-setup");
+    std::fs::write(
+        state.join(server_config_file::SERVER_CONFIG_FILE_NAME),
+        "not json at all",
+    )
+    .expect("write corrupt file");
+    let state_str = state.to_str().unwrap().to_string();
+
+    let bare = ServerConfig::from_args(["--state-dir", state_str.as_str()]).expect("parse");
+    let flagged = ServerConfig::from_args([
+        "--state-dir",
+        state_str.as_str(),
+        "--host",
+        "127.0.0.1",
+    ])
+    .expect("parse");
+    restore_env(saved);
+    cleanup(&state);
+
+    assert!(
+        bare.setup_required(),
+        "corrupt file + no explicit config → setup mode (operator recovery)"
+    );
+    assert!(
+        !flagged.setup_required(),
+        "explicit argv wins: normal mode runs even on a corrupt file"
+    );
 }

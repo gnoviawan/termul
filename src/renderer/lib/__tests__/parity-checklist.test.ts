@@ -3018,3 +3018,125 @@ describe('GitHub parity (spec-github-integration)', () => {
     expect(rustCodes).toEqual(tsCodes)
   })
 })
+
+// gh-1105: web onboarding plumbing. A `termul-server` with no
+// `server-config.json` boots a minimal setup mode (`/health` +
+// token-gated `/setup/*` + SPA); the web client detects it on the public
+// `/health` `setupRequired` flag and swaps the app tree for the wizard via
+// `ServerSetupGate`. Web-only surface: the desktop root (`TauriApp.tsx`)
+// never mounts the gate and the desktop context answers an explicit
+// unsupported result (AGENTS.md: gate platform-only behavior with
+// `isTauriContext()`, never a throwing stub).
+describe('Web server setup plumbing parity (gh-1105)', () => {
+  const WebSetupApi = join(LIB_DIR, 'web-setup-api.ts')
+  const WebSetupGate = join(LIB_DIR, 'web-setup-gate.ts')
+  const SharedTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'server-setup.types.ts')
+  const WebApp = join(LIB_DIR, '..', 'App.tsx')
+  const TauriApp = join(LIB_DIR, '..', 'TauriApp.tsx')
+  const ApiBridge = join(LIB_DIR, 'api.ts')
+
+  it('server-setup.types.ts declares the settled wire contract', () => {
+    expect(existsSync(SharedTypes), 'server-setup.types.ts should exist').toBe(true)
+    const content = readFileSync(SharedTypes, 'utf-8')
+    expect(content).toMatch(/export const SETUP_TOKEN_PARAM\b/)
+    expect(content).toMatch(/export const SETUP_API_PATHS\b/)
+    expect(content).toMatch(/export interface ServerSetupAnswers\b/)
+    expect(content).toMatch(/export interface SetupStatusResponse\b/)
+    expect(content).toMatch(/export interface SetupValidateResponse\b/)
+    expect(content).toMatch(/export interface SetupApplyResponse\b/)
+    expect(content).toMatch(/export interface ServerConfigResponse\b/)
+  })
+
+  it('web-setup-api.ts exists and exports the webSetupApi singleton with the contract methods', () => {
+    expect(existsSync(WebSetupApi), 'web-setup-api.ts should exist').toBe(true)
+    const content = readFileSync(WebSetupApi, 'utf-8')
+    expect(content).toMatch(/export\s+const\s+\bwebSetupApi\b/)
+    for (const method of [
+      'getStatus',
+      'validate',
+      'apply',
+      'getServerConfig',
+      'applyServerConfig'
+    ]) {
+      expect(content, `webSetupApi should implement ${method}`).toMatch(
+        new RegExp(`\\b${method}\\s*\\(`)
+      )
+    }
+  })
+
+  it('web-setup-api hits the /setup/* and /server/config routes and maps failures to NETWORK_ERROR', () => {
+    const content = readFileSync(WebSetupApi, 'utf-8')
+    // Route paths come only from the shared SETUP_API_PATHS contract.
+    expect(content).toMatch(/SETUP_API_PATHS\.status/)
+    expect(content).toMatch(/SETUP_API_PATHS\.validate/)
+    expect(content).toMatch(/SETUP_API_PATHS\.apply\b/)
+    expect(content).toMatch(/SETUP_API_PATHS\.serverConfig/)
+    expect(content).toMatch(/NETWORK_ERROR/)
+  })
+
+  it('the ?setup= token is Bearer on /setup/* only — sessionStorage, never localStorage, never logged', () => {
+    const content = readFileSync(WebSetupApi, 'utf-8')
+    expect(content).toMatch(/SETUP_TOKEN_PARAM/)
+    expect(content).toMatch(/location\.search/)
+    expect(content).toMatch(/Authorization:\s*`Bearer /)
+    expect(content).toMatch(/sessionStorage/)
+    // Same "no `localStorage` API" assert the other blocks use — doc comments
+    // may name it, the code may never touch it.
+    expect(content).not.toMatch(/localStorage(?:\.|\[)/)
+  })
+
+  it('every webSetupApi method answers an explicit unsupported result under isTauriContext()', () => {
+    const content = readFileSync(WebSetupApi, 'utf-8')
+    expect(content).toMatch(/isTauriContext\(\)/)
+    expect(content).toMatch(/UNSUPPORTED/)
+  })
+
+  it('web-setup-gate.ts exports useWebSetupGate probing /health for setupRequired', () => {
+    expect(existsSync(WebSetupGate), 'web-setup-gate.ts should exist').toBe(true)
+    const content = readFileSync(WebSetupGate, 'utf-8')
+    expect(content).toMatch(/export\s+function\s+\buseWebSetupGate\b/)
+    expect(content).toMatch(/export\s+function\s+\bcheckWebSetupGate\b/)
+    expect(content).toMatch(/\/health/)
+    expect(content).toMatch(/setupRequired/)
+    for (const status of ['checking', 'setup', 'ok']) {
+      expect(content).toMatch(new RegExp(`'${status}'`))
+    }
+    expect(content).toMatch(/isTauriContext\(\)/)
+    expect(content).toMatch(/useSyncExternalStore/)
+  })
+
+  it('api.ts re-exports webSetupApi', () => {
+    const content = readFileSync(ApiBridge, 'utf-8')
+    expect(content).toMatch(
+      /export\s*\{[^}]*\bwebSetupApi\b[^}]*\}\s*from\s*['"]\.\/web-setup-api['"]/
+    )
+  })
+
+  it('App.tsx mounts ServerSetupGate + primes the probe; TauriApp.tsx stays untouched', () => {
+    const web = readFileSync(WebApp, 'utf-8')
+    expect(web).toMatch(/ServerSetupGate/)
+    expect(web).toMatch(/from\s+['"]@\/components\/setup\/ServerSetupGate['"]/)
+    expect(web).toMatch(/checkWebSetupGate/)
+    const desktop = readFileSync(TauriApp, 'utf-8')
+    expect(desktop).not.toMatch(/ServerSetupGate|web-setup/)
+  })
+
+  it('App.tsx strips the #token= fragment BEFORE createHashRouter claims it as a route', () => {
+    // The setup/reconfigure restart lands on `/#token=…` — if the hash router
+    // evaluates first it routes `/token=…` to the 404 page. The module-scope
+    // `getWebAuthToken()` call must precede `createHashRouter(` in App.tsx.
+    const web = readFileSync(WebApp, 'utf-8')
+    const strip = web.indexOf('getWebAuthToken()')
+    const router = web.indexOf('createHashRouter(')
+    expect(strip, 'App.tsx should resolve the #token= fragment at module scope').toBeGreaterThan(-1)
+    expect(router, 'App.tsx should create the hash router at module scope').toBeGreaterThan(-1)
+    expect(strip).toBeLessThan(router)
+  })
+
+  it('slice test files exist', () => {
+    expect(fileExists('web-setup-api.web.test.ts'), 'web-setup-api.web.test.ts should exist').toBe(
+      true
+    )
+    expect(fileExists('web-setup-gate.test.ts'), 'web-setup-gate.test.ts should exist').toBe(true)
+  })
+})

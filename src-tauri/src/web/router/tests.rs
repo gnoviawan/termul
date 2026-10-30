@@ -49,6 +49,7 @@ fn test_router_with_fixture(dir: &Path) -> Router {
         false,
         None,
         OriginPolicy::default(),
+        None, // server_admin — desktop-style state (no /server/config)
     )
 }
 
@@ -89,6 +90,7 @@ async fn factory_key_http_requires_correct_bearer_when_gated() {
         false,
         Some(auth),
         OriginPolicy::default(),
+        None,
     );
     for method in ["GET", "POST"] {
         let response = app
@@ -135,6 +137,7 @@ fn gated_router(dir: &Path, allow_remote_writes: bool, shared_live_denied: bool)
         shared_live_denied,
         Some(auth),
         OriginPolicy::default(),
+        None,
     )
 }
 
@@ -347,6 +350,7 @@ async fn health_reports_denied_for_non_loopback_without_opt_in() {
         false, // shared_live_writes_denied (standalone)
         None,  // web_auth (ungated)
         OriginPolicy::default(),
+        None,  // server_admin (desktop-style)
     );
     let resp = app
         .oneshot(
@@ -385,6 +389,7 @@ async fn health_reports_denied_for_all_peers_when_shared_live() {
         true, // shared_live_writes_denied (desktop shared-live overrides)
         None, // web_auth (ungated)
         OriginPolicy::default(),
+        None, // server_admin (desktop-style)
     );
     // Even a loopback peer is denied on shared-live.
     let resp = app
@@ -423,6 +428,7 @@ async fn health_reports_admitted_for_non_loopback_with_opt_in() {
         false, // shared_live_writes_denied (standalone, not shared-live)
         None,  // web_auth (ungated)
         OriginPolicy::default(),
+        None,  // server_admin (this test only probes the write flag)
     );
     let resp = app
         .oneshot(
@@ -681,6 +687,7 @@ fn gated_router_with_fixture(dir: &Path) -> Router {
             crate::web::auth::WebAuthToken::new("t0ken").expect("non-empty"),
         ))),
         OriginPolicy::default(),
+        None,
     )
 }
 
@@ -727,6 +734,7 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
         "/api/automation-runs/r-1/steps",
         "/api/automation-agents",
         "/api/automation-secrets",
+        "/server/config",
         // The renderer-facade API routes stay bearer-gated…
         "/canvas/open",
         "/canvas/close",
@@ -1088,6 +1096,7 @@ fn router_for_origins(dir: &Path, origins: OriginPolicy) -> Router {
         false,
         None,
         origins,
+        None,
     )
 }
 
@@ -1359,4 +1368,400 @@ async fn websocket_endpoints_accept_an_allowlisted_origin() {
         assert!(!cors);
     }
     server.abort();
+}
+
+// --- gh-1105: /health setupRequired + /server/config reconfigure routes ------
+//
+// The standalone `termul-server` carries a `ServerAdminContext`
+// (`server_admin: Some`); the desktop shared-live host and every desktop-style
+// test state carry `None`. `None` keeps `/server/config` unregistered and
+// reports `setupRequired:false` from `/health` without probing the disk.
+
+/// A `ServerAdminContext` over `state_dir` — the handle `web::serve` builds
+/// from the merged `ServerConfig` for the standalone server. `current` is
+/// what the reconfigure form should see.
+fn admin_ctx(state_dir: &Path) -> ServerAdminContext {
+    ServerAdminContext {
+        state_dir: state_dir.to_path_buf(),
+        current: ServerSetupAnswers {
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            sessions_dir: PathBuf::from("/srv/termul/sessions"),
+            projects_file: PathBuf::from("/srv/termul/projects.json"),
+            allow_remote_writes: false,
+            update_channel: None,
+            update_interval_secs: 21600,
+        },
+    }
+}
+
+/// Standalone-style router: `server_admin: Some` so `/server/config`
+/// registers and `/health` probes `state_dir` for `server-config.json`.
+fn standalone_router(
+    dir: &Path,
+    state_dir: &Path,
+    web_auth: Option<Arc<WebAuth>>,
+    allow_remote_writes: bool,
+) -> Router {
+    router_with_static(
+        Arc::new(AcpManager::new(vec![])),
+        crate::web::test_pty_manager(),
+        Arc::new(WsRelaySink::new()),
+        Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        dir,
+        allow_remote_writes,
+        false,
+        web_auth,
+        OriginPolicy::default(),
+        Some(admin_ctx(state_dir)),
+    )
+}
+
+async fn body_json(response: Response) -> serde_json::Value {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    serde_json::from_slice(&bytes).expect("JSON body")
+}
+
+fn answers_json(host: &str, port: u16) -> String {
+    serde_json::json!({
+        "host": host,
+        "port": port,
+        "sessionsDir": "/srv/termul/sessions",
+        "projectsFile": "/srv/termul/projects.json",
+        "allowRemoteWrites": false,
+        "updateChannel": null,
+        "updateIntervalSecs": 21600,
+    })
+    .to_string()
+}
+
+fn config_post(peer: SocketAddr, bearer: Option<&str>, body: &str) -> Request<Body> {
+    let builder = Request::builder()
+        .method("POST")
+        .uri("/server/config")
+        .header("content-type", "application/json")
+        .extension(ConnectInfo(peer));
+    let builder = match bearer {
+        Some(token) => builder.header("authorization", format!("Bearer {token}")),
+        None => builder,
+    };
+    builder.body(Body::from(body.to_string())).unwrap()
+}
+
+// --- /health setupRequired ---------------------------------------------------
+
+/// Fresh standalone install shape: `server_admin` present, state dir holds
+/// NO `server-config.json` → `/health` reports `setupRequired:true` so the
+/// web client can offer reconfiguration of the not-yet-persisted server.
+#[tokio::test]
+async fn health_reports_setup_required_when_unonboarded() {
+    let dir = TempDir::new("health-setup-static");
+    let state_dir = TempDir::new("health-setup-state");
+    let resp = standalone_router(dir.path(), state_dir.path(), None, false)
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["status"], "ok");
+    assert_eq!(
+        parsed["setupRequired"], true,
+        "standalone server without a persisted server-config.json must \
+         advertise setupRequired"
+    );
+}
+
+/// Once `server-config.json` exists the flag flips to `false` — the probe
+/// reads the file on every call so a write after boot is seen.
+#[tokio::test]
+async fn health_reports_no_setup_required_when_onboarded() {
+    let dir = TempDir::new("health-onboarded-static");
+    let state_dir = TempDir::new("health-onboarded-state");
+    server_config_file::save(state_dir.path(), &admin_ctx(state_dir.path()).current)
+        .expect("seed server-config.json");
+
+    let resp = standalone_router(dir.path(), state_dir.path(), None, false)
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(
+        parsed["setupRequired"], false,
+        "a completed server-config.json means the server is onboarded"
+    );
+}
+
+/// Desktop-style state (`server_admin: None`) never probes the file — it
+/// reports `setupRequired:false` unconditionally.
+#[tokio::test]
+async fn health_reports_no_setup_required_for_desktop_style_state() {
+    let dir = TempDir::new("health-desktop");
+    let resp = test_router_with_fixture(dir.path())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(
+        parsed["setupRequired"], false,
+        "desktop shared-live state has no server_admin — the flag stays false"
+    );
+}
+
+// --- /server/config presence -------------------------------------------------
+
+/// `server_admin: None` → the routes are never registered. On an empty
+/// fixture dir the static fallback 404s the GET and refuses the POST — the
+/// desktop shared-live host can never reach a server-admin handler.
+#[tokio::test]
+async fn server_config_routes_are_absent_for_desktop_style_state() {
+    let dir = TempDir::new("desktop-absent"); // no index.html — nothing to serve
+    let app = test_router_with_fixture(dir.path());
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/server/config")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "GET /server/config must not exist without server_admin"
+    );
+
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &answers_json("127.0.0.1", 8080),
+        ))
+        .await
+        .expect("router response");
+    assert!(
+        resp.status().is_client_error(),
+        "POST /server/config must not reach a handler without server_admin \
+         (got {})",
+        resp.status()
+    );
+}
+
+// --- GET /server/config --------------------------------------------------------
+
+#[tokio::test]
+async fn server_config_get_returns_the_effective_answers() {
+    let dir = TempDir::new("cfg-get-static");
+    let state_dir = TempDir::new("cfg-get-state");
+    let resp = standalone_router(dir.path(), state_dir.path(), None, false)
+        .oneshot(
+            Request::builder()
+                .uri("/server/config")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    // The read uses the same IpcBody envelope as every other host read.
+    assert_eq!(parsed["success"], true, "{parsed}");
+    let config = &parsed["data"]["config"];
+    assert_eq!(config["host"], "127.0.0.1");
+    assert_eq!(config["port"], 8080);
+    assert_eq!(config["sessionsDir"], "/srv/termul/sessions");
+    assert_eq!(config["projectsFile"], "/srv/termul/projects.json");
+    assert_eq!(config["allowRemoteWrites"], false);
+    assert_eq!(config["updateIntervalSecs"], 21600);
+}
+
+// --- gate + write guard --------------------------------------------------------
+
+/// `/server/` is a gated prefix: both verbs refuse a missing bearer with the
+/// shared 401 body, and admit a correct one.
+#[tokio::test]
+async fn server_config_routes_require_bearer_when_gated() {
+    let dir = TempDir::new("cfg-gate-static");
+    let state_dir = TempDir::new("cfg-gate-state");
+    let app = standalone_router(
+        dir.path(),
+        state_dir.path(),
+        Some(Arc::new(WebAuth::new(
+            crate::web::auth::WebAuthToken::new("t0ken").expect("non-empty"),
+        ))),
+        false,
+    );
+
+    for method in ["GET", "POST"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri("/server/config")
+                    .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                    .body(Body::from("{}"))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{method}");
+        let parsed = body_json(resp).await;
+        assert_eq!(parsed["code"], "UNAUTHORIZED");
+    }
+
+    // A wrong bearer is refused the same way.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/server/config")
+                .header("authorization", "Bearer wrong")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Correct bearer reaches the GET handler.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/server/config")
+                .header("authorization", "Bearer t0ken")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// The POST is a host-state mutation — a non-loopback peer without
+/// `--allow-remote-writes` is refused by `check_local_only` in the shared
+/// IpcBody refusal shape.
+#[tokio::test]
+async fn server_config_post_refuses_remote_peer_without_opt_in() {
+    let dir = TempDir::new("cfg-remote-static");
+    let state_dir = TempDir::new("cfg-remote-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([10, 0, 0, 5], 50000)),
+            None,
+            &answers_json("127.0.0.1", 8080),
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["success"], false);
+    assert_eq!(parsed["code"], "FORBIDDEN");
+    assert!(
+        !server_config_file::server_config_path(state_dir.path()).exists(),
+        "a refused apply writes nothing"
+    );
+}
+
+// --- POST /server/config -------------------------------------------------------
+
+/// A valid apply persists `<state_dir>/server-config.json`, replies with the
+/// `SetupApplyResponse` payload in the IpcBody envelope, and schedules the
+/// self-restart. (`schedule_self_restart` spawns a 400ms delayed task on the
+/// test runtime — the test's asserts are synchronous after `oneshot` so the
+/// timer never polls to expiry; the runtime is dropped before the re-exec
+/// could run.)
+#[tokio::test]
+async fn server_config_post_persists_the_file_and_replies() {
+    let dir = TempDir::new("cfg-apply-static");
+    let state_dir = TempDir::new("cfg-apply-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &answers_json("127.0.0.1", 9090),
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["success"], true, "{parsed}");
+    assert_eq!(parsed["data"]["ok"], true);
+    assert_eq!(parsed["data"]["host"], "127.0.0.1");
+    assert_eq!(parsed["data"]["port"], 9090);
+    // Loopback post-restart bind: no token gate — the reply omits it.
+    assert!(parsed["data"].get("webAuthToken").is_none(), "{parsed}");
+
+    // The file exists and parses through the shared loader.
+    let written = server_config_file::load(state_dir.path())
+        .expect("load written config")
+        .expect("config file exists");
+    assert_eq!(written.host, "127.0.0.1");
+    assert_eq!(written.port, 9090);
+    assert_eq!(written.sessions_dir, PathBuf::from("/srv/termul/sessions"));
+    assert_eq!(written.projects_file, PathBuf::from("/srv/termul/projects.json"));
+    assert!(!written.allow_remote_writes);
+    assert_eq!(written.update_interval_secs, 21600);
+}
+
+/// Invalid answers get the same 200 `{ok:false, fieldErrors}` verdict (in
+/// the IpcBody envelope) the setup routes return — and nothing is written.
+#[tokio::test]
+async fn server_config_post_rejects_invalid_answers() {
+    let dir = TempDir::new("cfg-invalid-static");
+    let state_dir = TempDir::new("cfg-invalid-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &answers_json("127.0.0.1", 0), // port 0 is invalid
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "a validation verdict rides the 200 IpcBody envelope"
+    );
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["success"], true, "{parsed}");
+    assert_eq!(parsed["data"]["ok"], false);
+    assert!(parsed["data"]["fieldErrors"]["port"].is_string(), "{parsed}");
+    assert!(
+        !server_config_file::server_config_path(state_dir.path()).exists(),
+        "a rejected apply writes nothing"
+    );
 }
