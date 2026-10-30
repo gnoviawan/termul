@@ -214,6 +214,7 @@ vi.mock('@/stores/keyboard-shortcuts-store', async () => {
 vi.mock('../../utils/terminal-registry', () => ({
   buildRehydrateSequences: vi.fn(() => ''),
   captureScrollPosition: vi.fn(),
+  onTerminalModesChanged: vi.fn(() => () => {}),
   registerTerminal: vi.fn(),
   restoreScrollback: vi.fn(),
   restoreScrollPosition: vi.fn(),

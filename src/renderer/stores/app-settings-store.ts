@@ -52,6 +52,9 @@ export const useTerminalRenderer = () =>
 // Strict `=== true` guards a corrupt or missing persisted value.
 export const useTerminalScreenReaderMode = () =>
   useAppSettingsStore((state) => state.settings.terminalScreenReaderMode === true)
+// Missing or corrupt persisted values stay on (the spec default).
+export const useAutomaticCompletionRefresh = () =>
+  useAppSettingsStore((state) => state.settings.automaticCompletionRefresh !== false)
 export const useConfirmTerminalClose = () =>
   useAppSettingsStore((state) => state.settings.confirmTerminalClose)
 export const useTerminalUrlOpenMode = () =>

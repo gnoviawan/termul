@@ -255,6 +255,7 @@ vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-m
 vi.mock('../../utils/terminal-registry', () => ({
   buildRehydrateSequences: vi.fn(() => ''),
   captureScrollPosition: vi.fn(),
+  onTerminalModesChanged: vi.fn(() => () => {}),
   registerTerminal: vi.fn(),
   restoreScrollback: vfnReturnsArray(),
   restoreScrollPosition: vfnReturnsArray(),
