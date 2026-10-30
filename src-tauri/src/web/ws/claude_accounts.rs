@@ -367,7 +367,8 @@ pub(super) async fn handle_finish_claude_link_login(
 }
 
 /// `cancel_claude_login { accountId }` → `{ cancelled }`; stops a browser or
-/// link sign-in. `cancelled` is `false` when none was running.
+/// link sign-in and answers once its CLI is gone. `cancelled` is `false` when
+/// none was running.
 pub(super) async fn handle_cancel_claude_login(
     id: String,
     payload: &Value,
@@ -383,7 +384,7 @@ pub(super) async fn handle_cancel_claude_login(
             )
         }
     };
-    let cancelled = acp.claude_agent().cancel_login(&parsed.account_id);
+    let cancelled = acp.claude_agent().cancel_login(&parsed.account_id).await;
     info!(account = %parsed.account_id, cancelled, "Claude sign-in cancel over ws");
     WsReply::ok(id, Some(json!({ "cancelled": cancelled })))
 }

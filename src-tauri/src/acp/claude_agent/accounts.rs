@@ -240,6 +240,10 @@ impl ClaudeAgentService {
     /// still removed. Returns the Projects that moved to the default.
     pub async fn remove_account(&self, id: &str) -> Result<Vec<String>, String> {
         let store = self.account_store()?;
+        // A sign-in still running would write a login into the removed folder.
+        if self.logins.stop(id).await {
+            log::info!("[claude-accounts] stopped the running sign-in before removal");
+        }
         // Sign out even when the folder is gone: on macOS the login lives in
         // the keychain. An id that is already removed has nothing to sign out.
         let known = self.has_account(id)?;
@@ -255,10 +259,11 @@ impl ClaudeAgentService {
         store.remove(id)
     }
 
-    /// Stop the running browser or link sign-in of `id`. Returns `false`
-    /// when no sign-in for that Account is running.
-    pub fn cancel_login(&self, id: &str) -> bool {
-        let cancelled = self.logins.cancel(id);
+    /// Stop the running browser or link sign-in of `id` and wait until its
+    /// CLI is gone. Returns `false` when no sign-in for that Account is
+    /// running.
+    pub async fn cancel_login(&self, id: &str) -> bool {
+        let cancelled = self.logins.stop(id).await;
         if cancelled {
             log::info!("[claude-accounts] login cancelled");
         }
@@ -283,11 +288,11 @@ impl ClaudeAgentService {
         let dir = self.sign_in_dir(id)?;
         log::info!("[claude-accounts] login started");
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-        let generation = self
+        let ticket = self
             .logins
             .begin(id, super::logins::LoginKind::Browser { _cancel: cancel_tx });
         let result = run_cli(&["auth", "login"], dir, LOGIN_TIMEOUT, Some(cancel_rx)).await;
-        self.logins.end(id, generation);
+        self.logins.end(id, ticket);
         match result {
             Ok(true) => {
                 log::info!("[claude-accounts] login finished");
@@ -322,7 +327,8 @@ impl ClaudeAgentService {
 /// exit code 0. The CLI output can hold account details, so it is never read.
 /// Stdin is an open pipe that is never written: `auth login` exits at stdin
 /// EOF before the browser callback can finish the login. `cancel` resolving
-/// (a message, or its sender dropped) stops the CLI.
+/// (a message, or its sender dropped) stops the CLI. Returns once the CLI is
+/// gone.
 async fn run_cli(
     args: &[&str],
     config_dir: Option<PathBuf>,
@@ -354,7 +360,10 @@ async fn run_cli(
     match waited {
         Ok(Ok(status)) => Ok(status.success()),
         Ok(Err(_)) => Err("The Claude CLI stopped unexpectedly".to_string()),
-        Err(_) => Err("Claude sign-in timed out".to_string()),
+        Err(_) => {
+            let _ = child.kill().await;
+            Err("Claude sign-in timed out".to_string())
+        }
     }
 }
 

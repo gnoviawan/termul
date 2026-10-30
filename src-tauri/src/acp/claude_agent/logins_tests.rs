@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicBool;
+
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
@@ -189,17 +191,70 @@ fn a_new_sign_in_replaces_the_running_one_and_its_end_keeps_the_new_one() {
         .is_err_and(|error| error == mpsc::error::TryRecvError::Disconnected));
 }
 
-#[test]
-fn cancel_stops_the_running_sign_in_and_reports_whether_there_was_one() {
-    let logins = Logins::default();
-    assert!(!logins.cancel("ab12"));
+#[tokio::test]
+async fn stop_waits_until_the_sign_in_has_let_go_of_its_cli() {
+    let logins = Arc::new(Logins::default());
+    assert!(!logins.stop("ab12").await);
     let (codes, mut link) = mpsc::channel(1);
-    logins.begin("ab12", LoginKind::Link(codes));
-    assert!(logins.cancel("ab12"));
-    assert!(link
-        .try_recv()
-        .is_err_and(|error| error == mpsc::error::TryRecvError::Disconnected));
-    assert!(!logins.cancel("ab12"));
+    let ticket = logins.begin("ab12", LoginKind::Link(codes));
+    let cli_gone = Arc::new(AtomicBool::new(false));
+    let session = {
+        let (logins, cli_gone) = (Arc::clone(&logins), Arc::clone(&cli_gone));
+        tokio::spawn(async move {
+            assert!(link.recv().await.is_none(), "stop closes the code channel");
+            // The CLI takes a moment to exit after the kill.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            cli_gone.store(true, Ordering::SeqCst);
+            logins.end("ab12", ticket);
+        })
+    };
+    assert!(logins.stop("ab12").await);
+    assert!(
+        cli_gone.load(Ordering::SeqCst),
+        "stop answered before the CLI was gone"
+    );
+    assert!(!logins.stop("ab12").await);
+    session.await.unwrap();
+}
+
+#[tokio::test]
+async fn removing_an_account_waits_until_its_sign_in_cli_is_gone() {
+    let root = tempfile::tempdir().unwrap();
+    let service = ClaudeAgentService::with_logins_for_test(root.path(), &[]);
+    let account = service.add_account("Work").unwrap();
+    let (codes, mut link) = mpsc::channel(1);
+    let ticket = service.logins.begin(&account.id, LoginKind::Link(codes));
+    let (stopped, saw_stop) = oneshot::channel();
+    let (exit, cli_exits) = oneshot::channel::<()>();
+    let session = {
+        let logins = Arc::clone(&service.logins);
+        let id = account.id.clone();
+        tokio::spawn(async move {
+            assert!(link.recv().await.is_none(), "the removal stops the sign-in");
+            stopped.send(()).unwrap();
+            let _ = cli_exits.await;
+            logins.end(&id, ticket);
+        })
+    };
+
+    let remove = service.remove_account(&account.id);
+    tokio::pin!(remove);
+    tokio::select! {
+        _ = &mut remove => panic!("the removal finished without stopping the sign-in"),
+        _ = saw_stop => {}
+    }
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), &mut remove)
+            .await
+            .is_err(),
+        "the removal went on while the sign-in's CLI still ran"
+    );
+    assert!(service.has_account(&account.id).unwrap());
+
+    exit.send(()).unwrap();
+    remove.await.unwrap();
+    session.await.unwrap();
+    assert!(!service.has_account(&account.id).unwrap());
 }
 
 #[tokio::test]
@@ -246,7 +301,7 @@ async fn the_real_cli_hands_out_a_link_and_judges_pasted_codes() {
     );
 
     service.start_link_login(&account.id).await.unwrap();
-    assert!(service.cancel_login(&account.id));
+    assert!(service.cancel_login(&account.id).await);
     assert_eq!(
         service.finish_link_login(&account.id, "x#y").await,
         Err(ended(NO_LINK_LOGIN))

@@ -44,6 +44,8 @@ pub(super) struct Logins {
 struct Login {
     generation: u64,
     kind: LoginKind,
+    /// Resolves once the task running the sign-in dropped its [`Ticket`].
+    ended: oneshot::Receiver<()>,
 }
 
 pub(super) enum LoginKind {
@@ -54,36 +56,57 @@ pub(super) enum LoginKind {
     Link(mpsc::Sender<CodeSubmission>),
 }
 
+/// Held by the task that runs a sign-in, and dropped only once its CLI is
+/// gone. [`Logins::stop`] waits for that.
+pub(super) struct Ticket {
+    generation: u64,
+    _ended: oneshot::Sender<()>,
+}
+
 impl Logins {
     /// Register `kind` as the sign-in of `id`, stopping the one it replaces.
-    /// Returns the generation that [`Self::end`] takes.
-    pub(super) fn begin(&self, id: &str, kind: LoginKind) -> u64 {
+    /// The caller hands the ticket to [`Self::end`] once its CLI is gone.
+    pub(super) fn begin(&self, id: &str, kind: LoginKind) -> Ticket {
         let generation = self.generations.fetch_add(1, Ordering::Relaxed);
-        let replaced = self
-            .running
-            .lock()
-            .insert(id.to_string(), Login { generation, kind });
+        let (ended_tx, ended) = oneshot::channel();
+        let replaced = self.running.lock().insert(
+            id.to_string(),
+            Login {
+                generation,
+                kind,
+                ended,
+            },
+        );
         if replaced.is_some() {
             log::info!("[claude-accounts] a new sign-in replaced the running one");
         }
-        generation
+        Ticket {
+            generation,
+            _ended: ended_tx,
+        }
     }
 
-    /// Forget the sign-in of `id` if it is still the one `generation` names.
-    pub(super) fn end(&self, id: &str, generation: u64) {
+    /// Forget the sign-in of `id` if it is still the one `ticket` names.
+    pub(super) fn end(&self, id: &str, ticket: Ticket) {
         let mut running = self.running.lock();
         if running
             .get(id)
-            .is_some_and(|login| login.generation == generation)
+            .is_some_and(|login| login.generation == ticket.generation)
         {
             running.remove(id);
         }
     }
 
-    /// Stop the sign-in of `id`. `false` when none was running.
-    pub(super) fn cancel(&self, id: &str) -> bool {
+    /// Stop the sign-in of `id` and wait until its CLI is gone. `false` when
+    /// none was running.
+    pub(super) async fn stop(&self, id: &str) -> bool {
         let stopped = self.running.lock().remove(id);
-        stopped.is_some()
+        let Some(Login { kind, ended, .. }) = stopped else {
+            return false;
+        };
+        drop(kind);
+        let _ = ended.await;
+        true
     }
 
     fn link(&self, id: &str) -> Option<mpsc::Sender<CodeSubmission>> {
@@ -343,7 +366,7 @@ async fn next_output(output: &mut mpsc::UnboundedReceiver<String>) -> String {
     }
 }
 
-/// Drive one link session until it ends. Dropping `cli` kills the CLI.
+/// Drive one link session until it ends and its CLI is gone.
 async fn run_link_session(
     mut cli: LinkCli,
     mut phase: Phase,
@@ -377,9 +400,11 @@ async fn run_link_session(
         }
         match next {
             Some(next) => phase = next,
-            None => return,
+            None => break,
         }
     }
+    // An exited CLI is already reaped; otherwise wait until it is gone.
+    let _ = cli.child.kill().await;
 }
 
 impl ClaudeAgentService {
@@ -415,7 +440,7 @@ impl ClaudeAgentService {
 
         let (codes_tx, codes) = mpsc::channel(1);
         let (link_tx, link) = oneshot::channel();
-        let generation = self.logins.begin(id, LoginKind::Link(codes_tx));
+        let ticket = self.logins.begin(id, LoginKind::Link(codes_tx));
         log::info!("[claude-accounts] link sign-in started");
         let now = Instant::now();
         let phase = Phase::AwaitingLink {
@@ -432,7 +457,7 @@ impl ClaudeAgentService {
         let id = id.to_string();
         tokio::spawn(async move {
             run_link_session(cli, phase, codes, now + LOGIN_TIMEOUT).await;
-            logins.end(&id, generation);
+            logins.end(&id, ticket);
         });
         link.await
             .unwrap_or_else(|_| Err(LOGIN_CANCELLED.to_string()))
