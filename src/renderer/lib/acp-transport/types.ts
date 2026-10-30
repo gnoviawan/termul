@@ -251,6 +251,12 @@ export interface AcpTransport {
   setClaudeAutoSwitch(enabled: boolean): Promise<void>
   /** Add a signed-out Account; a same-id resend answers with the first one. */
   addClaudeAccount(name: string, options?: CommandCallOptions): Promise<ClaudeAccount>
+  renameClaudeAccount(accountId: string, name: string): Promise<void>
+  /**
+   * Remove an Account and resolve the ids of the Projects that moved to the
+   * Default Account; `[]` when it was already gone.
+   */
+  removeClaudeAccount(accountId: string): Promise<string[]>
   /**
    * Start a link sign-in for one Account and resolve the Claude sign-in link.
    * A sign-in already running for the Account stops.

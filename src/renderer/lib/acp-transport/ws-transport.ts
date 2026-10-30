@@ -982,6 +982,23 @@ export class WsAcpTransport implements AcpTransport {
     return this.request<ClaudeAccount>('add_claude_account', { name }, undefined, options)
   }
 
+  async renameClaudeAccount(accountId: string, name: string): Promise<void> {
+    await this.request('rename_claude_account', { accountId, name })
+  }
+
+  async removeClaudeAccount(accountId: string): Promise<string[]> {
+    const reply = await this.request<{ movedProjectIds?: unknown }>('remove_claude_account', {
+      accountId
+    })
+    if (!Array.isArray(reply.movedProjectIds)) {
+      throw new AcpTransportError(
+        'protocol',
+        'malformed remove_claude_account reply (missing movedProjectIds)'
+      )
+    }
+    return reply.movedProjectIds.filter((id): id is string => typeof id === 'string')
+  }
+
   async startClaudeLinkLogin(accountId: string): Promise<string> {
     const reply = await this.request<{ url?: unknown }>('start_claude_link_login', { accountId })
     if (typeof reply.url !== 'string') {

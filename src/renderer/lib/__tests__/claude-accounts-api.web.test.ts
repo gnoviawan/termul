@@ -1,7 +1,7 @@
 /**
- * Claude Accounts facade on both surfaces: list/default/project, add, the link
- * sign-in and cancel go through the ACP transport everywhere; the browser
- * login, rename and remove invoke Tauri on desktop and reject with
+ * Claude Accounts facade on both surfaces: list/default/project, add, rename,
+ * remove, the link sign-in and cancel go through the ACP transport everywhere;
+ * the browser login invokes Tauri on desktop and rejects with
  * `ClaudeAccountsUnsupportedError` on web without a request.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -16,6 +16,8 @@ const { mockIsTauriContext, mockInvoke, transport } = vi.hoisted(() => ({
     setProjectClaudeAccount: vi.fn(),
     setClaudeAutoSwitch: vi.fn(),
     addClaudeAccount: vi.fn(),
+    renameClaudeAccount: vi.fn(),
+    removeClaudeAccount: vi.fn(),
     startClaudeLinkLogin: vi.fn(),
     finishClaudeLinkLogin: vi.fn(),
     cancelClaudeLogin: vi.fn()
@@ -50,6 +52,8 @@ beforeEach(() => {
   transport.setProjectClaudeAccount.mockResolvedValue(true)
   transport.setClaudeAutoSwitch.mockResolvedValue(undefined)
   transport.addClaudeAccount.mockResolvedValue({ id: 'abc', name: 'Work', createdAt: 1 })
+  transport.renameClaudeAccount.mockResolvedValue(undefined)
+  transport.removeClaudeAccount.mockResolvedValue(['p1'])
   transport.startClaudeLinkLogin.mockResolvedValue('https://claude.com/cai/oauth/authorize')
   transport.finishClaudeLinkLogin.mockResolvedValue(undefined)
   transport.cancelClaudeLogin.mockResolvedValue(true)
@@ -123,6 +127,23 @@ describe.each([
     expect(isClaudeLoginCodeIncomplete(new Error('That code is incomplete.'))).toBe(false)
   })
 
+  it('renames and removes an account through the ACP transport', async () => {
+    await claudeAccountsApi.rename('abc', 'Office')
+    await expect(claudeAccountsApi.remove('abc')).resolves.toEqual(['p1'])
+    expect(transport.renameClaudeAccount).toHaveBeenCalledWith('abc', 'Office')
+    expect(transport.removeClaudeAccount).toHaveBeenCalledWith('abc')
+    expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('passes a host error through', async () => {
+    transport.renameClaudeAccount.mockRejectedValueOnce(
+      new Error('That Claude account does not exist')
+    )
+    await expect(claudeAccountsApi.rename('abc', 'Office')).rejects.toThrow(
+      'That Claude account does not exist'
+    )
+  })
+
   it('turns automatic switching on and off through the ACP transport', async () => {
     await claudeAccountsApi.setAutoSwitch(false)
     expect(transport.setClaudeAutoSwitch).toHaveBeenCalledWith(false)
@@ -133,42 +154,22 @@ describe.each([
 describe('claudeAccountsApi on desktop', () => {
   beforeEach(() => mockIsTauriContext.mockReturnValue(true))
 
-  it('signs in through the host browser and may rename and remove', async () => {
+  it('signs in through the host browser', async () => {
     mockInvoke.mockResolvedValue(undefined)
     await claudeAccountsApi.login('abc')
-    await claudeAccountsApi.rename('abc', 'Office')
-    mockInvoke.mockResolvedValueOnce(['p1'])
-    await expect(claudeAccountsApi.remove('abc')).resolves.toEqual(['p1'])
-    expect(mockInvoke.mock.calls).toEqual([
-      ['claude_accounts_login', { accountId: 'abc' }],
-      ['claude_accounts_rename', { accountId: 'abc', name: 'Office' }],
-      ['claude_accounts_remove', { accountId: 'abc' }]
-    ])
+    expect(mockInvoke.mock.calls).toEqual([['claude_accounts_login', { accountId: 'abc' }]])
     expect(claudeAccountsApi.signInFlow()).toBe('browser')
-    expect(claudeAccountsApi.canRenameAndRemove()).toBe(true)
-  })
-
-  it('passes a host error through', async () => {
-    mockInvoke.mockRejectedValueOnce('That Claude account does not exist')
-    await expect(claudeAccountsApi.rename('abc', 'Office')).rejects.toBe(
-      'That Claude account does not exist'
-    )
   })
 })
 
 describe('claudeAccountsApi on web', () => {
   beforeEach(() => mockIsTauriContext.mockReturnValue(false))
 
-  it('signs in with a link and rejects the browser login, rename and remove without a request', async () => {
-    for (const call of [
-      () => claudeAccountsApi.login('abc'),
-      () => claudeAccountsApi.rename('abc', 'Office'),
-      () => claudeAccountsApi.remove('abc')
-    ]) {
-      await expect(call()).rejects.toBeInstanceOf(ClaudeAccountsUnsupportedError)
-    }
+  it('signs in with a link and rejects the browser login without a request', async () => {
+    await expect(claudeAccountsApi.login('abc')).rejects.toBeInstanceOf(
+      ClaudeAccountsUnsupportedError
+    )
     expect(mockInvoke).not.toHaveBeenCalled()
     expect(claudeAccountsApi.signInFlow()).toBe('link')
-    expect(claudeAccountsApi.canRenameAndRemove()).toBe(false)
   })
 })

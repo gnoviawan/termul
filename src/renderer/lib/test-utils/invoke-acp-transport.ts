@@ -191,6 +191,10 @@ export function createInvokeAcpTransport(): AcpTransport {
     },
     addClaudeAccount: (name, options) =>
       invokeCommand<ClaudeAccount>('claude_accounts_add', { name }, options),
+    renameClaudeAccount: async (accountId, name) => {
+      await invoke('claude_accounts_rename', { accountId, name })
+    },
+    removeClaudeAccount: (accountId) => invoke<string[]>('claude_accounts_remove', { accountId }),
     startClaudeLinkLogin: (accountId) =>
       invoke<string>('claude_accounts_start_link_login', { accountId }),
     finishClaudeLinkLogin: async (accountId, code, options) => {

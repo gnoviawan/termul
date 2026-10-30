@@ -2,14 +2,14 @@
  * Claude Accounts facade (ADR-0004).
  *
  * Every surface lists the Accounts, chooses the Default or a Project Account,
- * turns automatic switching on or off, adds an Account and stops a sign-in
- * through the ACP transport (`/ws`, over the Tauri Channel on desktop).
+ * turns automatic switching on or off, adds, renames and removes an Account and
+ * stops a sign-in through the ACP transport (`/ws`, over the Tauri Channel on
+ * desktop).
  *
  * Signing in differs by surface ({@link ClaudeSignInFlow}). The desktop app
  * runs on the host, so the Claude CLI opens the host's browser. A browser
  * client may be anywhere, so it gets the sign-in link and pastes back the code
- * the Claude page shows. Renaming and removing an Account stay desktop-only;
- * the web client uses `termul-server claude account` on the host for those.
+ * the Claude page shows.
  */
 
 import type {
@@ -73,9 +73,6 @@ function desktopOnly<T>(action: string, label: string, run: () => Promise<T>): P
 }
 
 export const claudeAccountsApi = {
-  /** Whether this surface can rename and remove Accounts. */
-  canRenameAndRemove: (): boolean => isTauriContext(),
-
   signInFlow: (): ClaudeSignInFlow => (isTauriContext() ? 'browser' : 'link'),
 
   list: (): Promise<ClaudeAccountsSnapshot> =>
@@ -149,13 +146,9 @@ export const claudeAccountsApi = {
     logged('cancelLogin', () => getAcpTransport().cancelClaudeLogin(accountId)),
 
   rename: (accountId: string, name: string): Promise<void> =>
-    desktopOnly('rename', 'Renaming', () =>
-      invoke<void>('claude_accounts_rename', { accountId, name })
-    ),
+    logged('rename', () => getAcpTransport().renameClaudeAccount(accountId, name)),
 
   /** Resolves to the ids of the Projects that moved to the Default Account. */
   remove: (accountId: string): Promise<string[]> =>
-    desktopOnly('remove', 'Removing', () =>
-      invoke<string[]>('claude_accounts_remove', { accountId })
-    )
+    logged('remove', () => getAcpTransport().removeClaudeAccount(accountId))
 }

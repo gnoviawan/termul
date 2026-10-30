@@ -14,8 +14,6 @@ interface ClaudeAccountActionsProps {
   isDefault: boolean
   signedOut: boolean
   ready: boolean
-  /** Whether this surface can rename and remove Accounts. */
-  canEdit: boolean
   busy: boolean
   onSignIn: () => void
   onMakeDefault: () => void
@@ -30,7 +28,6 @@ export function ClaudeAccountActions({
   isDefault,
   signedOut,
   ready,
-  canEdit,
   busy,
   onSignIn,
   onMakeDefault,
@@ -65,8 +62,8 @@ export function ClaudeAccountActions({
         <DropdownMenuItem onSelect={onSignIn}>
           {signedOut ? 'Sign in' : 'Sign in again'}
         </DropdownMenuItem>
-        {canEdit && <DropdownMenuItem onSelect={onRename}>Rename</DropdownMenuItem>}
-        {canEdit && !builtin && (
+        <DropdownMenuItem onSelect={onRename}>Rename</DropdownMenuItem>
+        {!builtin && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem

@@ -2,7 +2,7 @@ import type { ClaudeAccountView } from '@shared/types/claude-accounts.types'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { Info, KeyRound, Monitor, Plus, RotateCcw, WifiOff } from '@/components/icons'
+import { Info, KeyRound, Plus, RotateCcw, WifiOff } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { useClaudeAccounts } from '@/hooks/use-claude-accounts'
@@ -46,14 +46,13 @@ function SkeletonRow(): React.JSX.Element {
 
 /**
  * Settings → Provider: the Claude Accounts of this host as flat rows, with
- * each Account's main usage meter. Every surface can add an Account, sign it
- * in and choose the default. Desktop signs in through the host's browser, the
- * web client with a sign-in link. Renaming and removing are desktop-only.
+ * each Account's main usage meter. Every surface can add, rename and remove an
+ * Account, sign it in and choose the default. Desktop signs in through the
+ * host's browser, the web client with a sign-in link.
  */
 export function ProviderSettings(): React.JSX.Element {
   const { snapshot, usage, loading, error, refreshingUsage, reload, refreshUsage } =
     useClaudeAccounts()
-  const canEdit = claudeAccountsApi.canRenameAndRemove()
   const flow = claudeAccountsApi.signInFlow()
   const projects = useProjectStore((s) => s.projects)
   const [addOpen, setAddOpen] = useState(false)
@@ -213,7 +212,6 @@ export function ProviderSettings(): React.JSX.Element {
                   isDefault={account.id === snapshot.defaultAccountId}
                   signedOut={isAccountSignedOut(account, usage[account.id])}
                   ready={accountReadiness(account, usage[account.id]) === 'ready'}
-                  canEdit={canEdit}
                   busy={signingInId === account.id}
                   onSignIn={() => void signIn(account)}
                   onMakeDefault={() => void makeDefault(account)}
@@ -270,22 +268,10 @@ export function ProviderSettings(): React.JSX.Element {
       )}
 
       {!loading && !failed && (
-        <div className="flex flex-col gap-1.5 pt-2 text-2xs text-muted-foreground">
-          <p className="flex items-center gap-1.5">
-            <Info size={12} className="shrink-0" />
-            Choose an account per project in Project settings → Accounts.
-          </p>
-          {!canEdit && (
-            <p className="flex flex-wrap items-center gap-1.5">
-              <Monitor size={12} className="shrink-0" />
-              To rename or remove an account, use the desktop app, or run
-              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-3xs text-secondary-foreground">
-                termul-server claude account
-              </code>
-              on the host.
-            </p>
-          )}
-        </div>
+        <p className="flex items-center gap-1.5 pt-2 text-2xs text-muted-foreground">
+          <Info size={12} className="shrink-0" />
+          Choose an account per project in Project settings → Accounts.
+        </p>
       )}
 
       <AddAccountDialog
@@ -305,18 +291,16 @@ export function ProviderSettings(): React.JSX.Element {
           void signedIn(account)
         }}
       />
-      {canEdit && (
-        <AccountNameDialog
-          open={renaming !== null}
-          initialName={renaming?.name ?? ''}
-          onOpenChange={(open) => !open && setRenaming(null)}
-          onSubmit={async (name) => {
-            if (!renaming) return
-            await claudeAccountsApi.rename(renaming.id, name)
-            await reload()
-          }}
-        />
-      )}
+      <AccountNameDialog
+        open={renaming !== null}
+        initialName={renaming?.name ?? ''}
+        onOpenChange={(open) => !open && setRenaming(null)}
+        onSubmit={async (name) => {
+          if (!renaming) return
+          await claudeAccountsApi.rename(renaming.id, name)
+          await reload()
+        }}
+      />
 
       <ConfirmDialog
         isOpen={removing !== null}

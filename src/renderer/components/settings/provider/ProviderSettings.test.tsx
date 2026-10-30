@@ -10,7 +10,6 @@ import { ProviderSettings } from './ProviderSettings'
 
 const { api, toast } = vi.hoisted(() => ({
   api: {
-    canRenameAndRemove: vi.fn(),
     signInFlow: vi.fn(),
     startLinkLogin: vi.fn(),
     finishLinkLogin: vi.fn(),
@@ -86,7 +85,6 @@ beforeEach(() => {
   useProjectStore.setState({
     projects: [{ id: 'office', name: 'm-pos', color: 'blue', path: '/code/m-pos' } as Project]
   })
-  api.canRenameAndRemove.mockReturnValue(true)
   api.signInFlow.mockReturnValue('browser')
   api.startLinkLogin.mockResolvedValue('https://claude.com/cai/oauth/authorize?state=s1')
   api.finishLinkLogin.mockResolvedValue(undefined)
@@ -94,6 +92,7 @@ beforeEach(() => {
   api.usage.mockResolvedValue(USAGE)
   api.login.mockResolvedValue(undefined)
   api.cancelLogin.mockResolvedValue(true)
+  api.rename.mockResolvedValue(undefined)
   api.remove.mockResolvedValue(['office'])
   api.setDefault.mockResolvedValue(undefined)
   api.setAutoSwitch.mockResolvedValue(undefined)
@@ -261,22 +260,68 @@ describe('ProviderSettings', () => {
 
   describe('on web', () => {
     beforeEach(() => {
-      api.canRenameAndRemove.mockReturnValue(false)
       api.signInFlow.mockReturnValue('link')
     })
 
-    it('adds and signs in, and points rename and remove at the host', async () => {
+    it('offers the same row actions as the desktop app', async () => {
       render(<ProviderSettings />)
       await screen.findByTestId('claude-account-ab12')
       expect(screen.getByRole('button', { name: /add account/i })).toBeInTheDocument()
-      expect(screen.getByText(/To rename or remove an account/)).toBeInTheDocument()
-      expect(screen.getByText('termul-server claude account')).toBeInTheDocument()
+      expect(screen.queryByText(/termul-server claude account/)).not.toBeInTheDocument()
       expect(screen.getByRole('switch', { name: 'Switch accounts automatically' })).toBeEnabled()
       openMenu('Work')
-      expect(await screen.findByRole('menuitem', { name: /Make default/ })).toBeInTheDocument()
-      expect(screen.getByRole('menuitem', { name: 'Sign in' })).toBeInTheDocument()
-      expect(screen.queryByRole('menuitem', { name: 'Rename' })).not.toBeInTheDocument()
+      const items = await screen.findAllByRole('menuitem')
+      expect(items.map((item) => item.textContent)).toEqual([
+        'Make defaultSign in to it first',
+        'Sign in',
+        'Rename',
+        'Remove'
+      ])
+    })
+
+    it('never offers to remove the built-in account', async () => {
+      render(<ProviderSettings />)
+      await screen.findByTestId('claude-account-default')
+      openMenu('Personal')
+      expect(await screen.findByRole('menuitem', { name: 'Rename' })).toBeInTheDocument()
       expect(screen.queryByRole('menuitem', { name: 'Remove' })).not.toBeInTheDocument()
+    })
+
+    it('renames an account and shows the name the host stored', async () => {
+      render(<ProviderSettings />)
+      await screen.findByTestId('claude-account-ab12')
+      openMenu('Work')
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Rename account' })
+      fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Office' } })
+      api.list.mockResolvedValue({
+        ...SNAPSHOT,
+        accounts: [SNAPSHOT.accounts[0], { ...SNAPSHOT.accounts[1], name: 'Office' }]
+      })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+      await waitFor(() =>
+        expect(screen.getByTestId('claude-account-ab12')).toHaveTextContent('Office')
+      )
+      expect(api.rename).toHaveBeenCalledWith('ab12', 'Office')
+    })
+
+    it('removes an account and drops it from the list', async () => {
+      render(<ProviderSettings />)
+      await screen.findByTestId('claude-account-ab12')
+      openMenu('Work')
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }))
+      expect(await screen.findByText(/1 project moves to the default account/)).toBeInTheDocument()
+      api.list.mockResolvedValue({
+        ...SNAPSHOT,
+        accounts: [SNAPSHOT.accounts[0]],
+        projectAccounts: {}
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+      await waitFor(() =>
+        expect(screen.queryByTestId('claude-account-ab12')).not.toBeInTheDocument()
+      )
+      expect(api.remove).toHaveBeenCalledWith('ab12')
+      expect(toast.success).toHaveBeenCalledWith('Work was removed')
     })
 
     it('signs a signed-out account in from its row with a link and the pasted code', async () => {
