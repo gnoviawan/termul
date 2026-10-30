@@ -85,6 +85,9 @@ tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
+# Automation schedules: 5-field cron (seconds prefixed) evaluated in an IANA zone.
+cron = "0.17"
+chrono-tz = "0.10"
 url = "2"
 
 # ADR-004.6: opt-in, read-only fetch of the ACP Registry (identity/discovery

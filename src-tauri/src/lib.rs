@@ -4,6 +4,9 @@ mod acp_binary_install;
 mod acp_registry_snapshot;
 mod agent_registry;
 mod agentation;
+// Chat-authored automations: model, validation, schedules and store.
+// Tauri-free so the desktop and `termul-server` share it.
+pub mod automation;
 mod browser_automation;
 mod browser_tab_manager;
 mod browser_tab_permissions;
