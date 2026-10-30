@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mockTerminal } from '@/lib/test-utils/terminal'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -152,5 +153,24 @@ describe('canTerminalWriteToPty with sessionStore lifecycle', () => {
     sessionStore.beginSubmit('term-1')
     expect(canTerminalWriteToPty('pty-9', 'a')).toBe(false)
     expect(canTerminalWriteToPty('pty-9', '\x03')).toBe(true)
+  })
+
+  it('ConnectedTerminal wires handleTerminalData and pane focus to the guard and editor', () => {
+    const source = readFileSync('src/renderer/components/terminal/ConnectedTerminal.tsx', 'utf8')
+    const handleData = source.slice(
+      source.indexOf('const handleTerminalData = useCallback('),
+      source.indexOf('// Initialize terminal, set up IPC listeners')
+    )
+    expect(handleData).toContain('canTerminalWriteToPty(')
+    const mobileShell = readFileSync('src/renderer/components/mobile/MobileChatShell.tsx', 'utf8')
+    expect(mobileShell).toContain('terminalId={activeTerminal.id}')
+    expect(mobileShell).not.toContain('terminalId={activeTerminal.ptyId}')
+    const paneFocus = source.slice(
+      source.indexOf('const focusPaneInput = useCallback('),
+      source.indexOf('const handleSelectAll = useCallback(')
+    )
+    expect(paneFocus).toContain("inputModeRef.current === 'Editor'")
+    expect(paneFocus).toContain('hasSelection()')
+    expect(paneFocus).toContain('commandEditorViewRef.current.focus()')
   })
 })

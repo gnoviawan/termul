@@ -1,6 +1,7 @@
 import type { IDisposable, Terminal } from '@xterm/xterm'
 import type { TerminalModes } from '../../shared/types/ipc.types'
 import { DEFAULT_SCROLLBACK_LIMIT } from '../../shared/types/persistence.types'
+import { attachCommandSeparators } from '../components/terminal/command-separators'
 
 /**
  * Registry to track xterm Terminal instances by terminal ID
@@ -262,6 +263,7 @@ export function registerTerminal(terminalId: string, terminal: Terminal): void {
   // R3: begin DEC private-mode tracking via the public parser API. No-ops for
   // terminals without a parser surface (minimal test mocks).
   startTrackingModes(terminalId, terminal)
+  attachCommandSeparators(terminal)
 }
 
 /**

@@ -572,6 +572,15 @@
     background: oklch(var(--foreground) / var(--terminal-scrollbar-hover-alpha));
   }
 
+  /* Thin separator line between commands (OSC 133;A + xterm decoration) */
+  .xterm .termul-command-separator {
+    height: 0 !important;
+    border-top: 1px solid oklch(var(--border));
+    width: 100% !important;
+    left: 0 !important;
+    pointer-events: none;
+  }
+
   /* ------------------------------------------------------------
    * Radix popovers, tooltips, dropdowns, selects, menubars,
    * context menus, hover cards: origin-aware scale + custom

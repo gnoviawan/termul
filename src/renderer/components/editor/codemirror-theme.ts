@@ -45,6 +45,57 @@ function buildHighlightStyle(colors: ResolvedSyntaxColors): HighlightStyle {
   ])
 }
 
+export const termulTooltipThemeSpec = {
+  '.cm-tooltip': {
+    backgroundColor: 'oklch(var(--popover))',
+    color: 'oklch(var(--popover-foreground))',
+    border: '1px solid oklch(var(--border))'
+  },
+  '.cm-tooltip .cm-tooltip-arrow:before': {
+    borderTopColor: 'oklch(var(--border))',
+    borderBottomColor: 'oklch(var(--border))'
+  },
+  '.cm-tooltip .cm-tooltip-arrow:after': {
+    borderTopColor: 'oklch(var(--popover))',
+    borderBottomColor: 'oklch(var(--popover))'
+  },
+  '.cm-tooltip.cm-tooltip-autocomplete': {
+    borderRadius: '10px',
+    padding: '4px',
+    '& > ul > li': {
+      padding: '4px 8px',
+      borderRadius: '6px'
+    },
+    '& > ul > li[aria-selected]': {
+      backgroundColor: 'oklch(var(--foreground) / 0.06)',
+      color: 'oklch(var(--foreground))'
+    }
+  },
+  '.cm-tooltip.cm-tooltip-autocomplete > ul': {
+    fontFamily: MONO_STACK
+  },
+  '.cm-completionMatchedText': {
+    fontWeight: '700',
+    textDecoration: 'none'
+  }
+}
+
+export const termulCaretThemeSpec = {
+  '.cm-content': {
+    caretColor: 'oklch(var(--primary))'
+  },
+  '.cm-cursor, .cm-dropCursor': {
+    borderLeftColor: 'oklch(var(--primary))'
+  },
+  /* Selection and highlights are neutral foreground washes, not the accent hue:
+     see docs/design/colors.md. Search uses the warning hue. */
+  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
+    backgroundColor: 'oklch(var(--foreground) / 0.14)'
+  }
+}
+
+const { '.cm-content': _caretContent, ...termulSelectionThemeSpec } = termulCaretThemeSpec
+
 export function createTermulTheme(
   isDark: boolean,
   syntaxColors?: ResolvedSyntaxColors | null
@@ -61,7 +112,7 @@ export function createTermulTheme(
           height: '100%'
         },
         '.cm-content': {
-          caretColor: 'oklch(var(--primary))',
+          ...termulCaretThemeSpec['.cm-content'],
           /* Own feature set so Inter's cv/ss tags on body do not restyle this face. */
           fontFamily: MONO_STACK,
           fontFeatureSettings: 'normal',
@@ -71,14 +122,7 @@ export function createTermulTheme(
           fontSize: '0.8125rem',
           lineHeight: '1.6'
         },
-        '.cm-cursor, .cm-dropCursor': {
-          borderLeftColor: 'oklch(var(--primary))'
-        },
-        /* Selection and highlights are neutral foreground washes, not the accent hue:
-           see docs/design/colors.md. Search uses the warning hue. */
-        '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-          backgroundColor: 'oklch(var(--foreground) / 0.14)'
-        },
+        ...termulSelectionThemeSpec,
         '.cm-panels': {
           backgroundColor: 'oklch(var(--card))',
           color: 'oklch(var(--card-foreground))'
@@ -119,35 +163,7 @@ export function createTermulTheme(
           color: 'oklch(var(--muted-foreground))',
           border: 'none'
         },
-        '.cm-tooltip': {
-          backgroundColor: 'oklch(var(--popover))',
-          color: 'oklch(var(--popover-foreground))',
-          border: '1px solid oklch(var(--border))'
-        },
-        '.cm-tooltip .cm-tooltip-arrow:before': {
-          borderTopColor: 'oklch(var(--border))',
-          borderBottomColor: 'oklch(var(--border))'
-        },
-        '.cm-tooltip .cm-tooltip-arrow:after': {
-          borderTopColor: 'oklch(var(--popover))',
-          borderBottomColor: 'oklch(var(--popover))'
-        },
-        '.cm-tooltip.cm-tooltip-autocomplete': {
-          borderRadius: '10px',
-          padding: '4px',
-          '& > ul > li': {
-            padding: '4px 8px',
-            borderRadius: '6px'
-          },
-          '& > ul > li[aria-selected]': {
-            backgroundColor: 'oklch(var(--foreground) / 0.06)',
-            color: 'oklch(var(--foreground))'
-          }
-        },
-        '.cm-completionMatchedText': {
-          fontWeight: '700',
-          textDecoration: 'none'
-        },
+        ...termulTooltipThemeSpec,
         '.cm-scroller': {
           overflow: 'auto'
         }

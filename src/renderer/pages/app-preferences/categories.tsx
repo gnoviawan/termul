@@ -224,6 +224,13 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   },
   {
     categoryId: 'appearance',
+    label: 'Automatic completion refresh',
+    description: 'Updates command suggestions while you type.',
+    keywords: ['completion', 'suggestions', 'tab', 'autocomplete'],
+    anchorId: rowId('terminal-automatic-completion-refresh')
+  },
+  {
+    categoryId: 'appearance',
     label: 'Open links in',
     description: 'Choose where URLs from terminal output open.',
     keywords: ['url', 'links', 'browser'],

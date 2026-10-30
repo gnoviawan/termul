@@ -1,5 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { registerEditorInputTarget } from '@/components/terminal/command-editor/foreign-insert'
+import { sessionStore } from '@/lib/command-lifecycle/session-store'
+import { mockTerminal } from '@/lib/test-utils/terminal'
+import { useTerminalStore } from '@/stores/terminal-store'
 import { MobileTerminalControls } from './MobileTerminalControls'
 
 const { writeMock, readTextMock, toastErrorMock } = vi.hoisted(() => ({
@@ -44,6 +48,8 @@ beforeEach(() => {
   writeMock.mockReset().mockResolvedValue({ success: true })
   readTextMock.mockReset().mockResolvedValue({ success: true, data: '' })
   toastErrorMock.mockReset()
+  sessionStore.reset()
+  useTerminalStore.getState().setTerminals([])
 })
 
 // Issue #859: at 390px the key bar's horizontal scroll pushed the arrow keys
@@ -260,6 +266,56 @@ describe('MobileTerminalControls Paste', () => {
   })
 })
 
+function openSubmittingSession(id: string): void {
+  sessionStore.apply(id, { type: 'InitShell', session_id: 's1', nonce: 'n1' })
+  sessionStore.apply(id, {
+    type: 'PromptReady',
+    session_id: 's1',
+    nonce: 'n1',
+    prompt_generation: 1,
+    cwd: '/repo',
+    line_empty: true,
+    prompt_suppressed: true
+  })
+  sessionStore.beginSubmit(id)
+}
+
+describe('MobileTerminalControls lifecycle guard', () => {
+  it('does not write when no editor target is registered and the session is Editor or Submitting', () => {
+    useTerminalStore.getState().setTerminals([mockTerminal({ id: 'term-1', ptyId: 'pty-old' })])
+    openSubmittingSession('term-1')
+    render(<MobileTerminalControls terminalId="pty-old" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tab' }))
+    expect(writeMock).not.toHaveBeenCalled()
+  })
+
+  it('does not write a delayed clipboard result to the old PTY after a pane switch', async () => {
+    useTerminalStore.getState().setTerminals([mockTerminal({ id: 'term-1', ptyId: 'pty-old' })])
+    openSubmittingSession('term-1')
+    let releaseClipboard: (value: { success: true; data: string }) => void = () => {}
+    readTextMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseClipboard = resolve
+        })
+    )
+    const { rerender } = render(<MobileTerminalControls terminalId="pty-old" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Paste' }))
+    useTerminalStore
+      .getState()
+      .setTerminals([
+        mockTerminal({ id: 'term-1', ptyId: 'pty-old' }),
+        mockTerminal({ id: 'term-2', ptyId: 'pty-new' })
+      ])
+    rerender(<MobileTerminalControls terminalId="pty-new" />)
+    await act(async () => {
+      releaseClipboard({ success: true, data: 'echo leaked' })
+    })
+    expect(writeMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('MobileTerminalControls pointer-down focus guard', () => {
   it('prevents default on pointer-down for the toggle, Paste and every key', () => {
     render(<MobileTerminalControls terminalId="t1" />)
@@ -405,5 +461,58 @@ describe('MobileTerminalControls toast clearance', () => {
     unmount()
     expect(dockVar()).toBe('')
     expect(observers.flatMap((observer) => [...observer.targets])).toEqual([])
+  })
+})
+
+describe('MobileTerminalControls registered target PTY routing', () => {
+  let unregister: () => void
+
+  beforeEach(() => {
+    useTerminalStore.getState().setTerminals([mockTerminal({ id: 'term-1', ptyId: 'pty-9' })])
+    unregister = registerEditorInputTarget({
+      terminalId: 'term-1',
+      ptyId: () => 'pty-9',
+      mode: () => 'PTY',
+      view: () => null,
+      allowWrite: () => true,
+      scrollPages: () => {}
+    })
+  })
+
+  afterEach(() => unregister())
+
+  it('writes exactly one Ctrl+C to the PTY while Submitting', async () => {
+    openSubmittingSession('term-1')
+    render(<MobileTerminalControls terminalId="term-1" />)
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: 'Ctrl+C, interrupt' }))
+    )
+    expect(writeMock.mock.calls).toEqual([['pty-9', '\x03']])
+  })
+
+  it('writes key buttons and paste to the PTY in raw mode', async () => {
+    readTextMock.mockResolvedValueOnce({ success: true, data: 'echo raw' })
+    render(<MobileTerminalControls terminalId="term-1" />)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Tab' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Paste' }))
+    })
+    expect(writeMock.mock.calls).toEqual([
+      ['pty-9', '\t'],
+      ['pty-9', 'echo raw']
+    ])
+  })
+
+  it('blocks every other key and paste while Submitting', async () => {
+    openSubmittingSession('term-1')
+    readTextMock.mockResolvedValueOnce({ success: true, data: 'echo blocked' })
+    render(<MobileTerminalControls terminalId="term-1" />)
+    await act(async () => {
+      for (const [, name] of KEYS) {
+        if (name !== 'Ctrl+C, interrupt') fireEvent.click(screen.getByRole('button', { name }))
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'Paste' }))
+    })
+    expect(writeMock).not.toHaveBeenCalled()
   })
 })

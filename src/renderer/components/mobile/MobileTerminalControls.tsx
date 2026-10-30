@@ -1,11 +1,20 @@
 import { useId, useState } from 'react'
 import { toast } from 'sonner'
 import { ClipboardPaste, Keyboard } from '@/components/icons'
+import {
+  findEditorInputTarget,
+  routeMobileKey
+} from '@/components/terminal/command-editor/foreign-insert'
 import { Button } from '@/components/ui/button'
 import { useDockClearance } from '@/hooks/use-dock-clearance'
 import { clipboardApi } from '@/lib/clipboard-api'
+import {
+  canTerminalWriteToPty,
+  resolveLifecycleTerminalId
+} from '@/lib/command-lifecycle/input-guard'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
+import { useTerminalStore } from '@/stores/terminal-store'
 
 interface MobileTerminalControlsProps {
   terminalId: string
@@ -16,6 +25,15 @@ interface MobileTerminalControlsProps {
 // a spoken form. Text keys keep their visible label at the start of the name
 // (WCAG 2.5.3); the three arrow keys are symbols, not text, so they get plain
 // word names instead.
+function terminalWriteIds(terminalId: string): { lifecycleId: string; writeId: string } {
+  const store = useTerminalStore.getState()
+  const byId = store.terminals.find((terminal) => terminal.id === terminalId)
+  if (byId) return { lifecycleId: byId.id, writeId: byId.ptyId ?? byId.id }
+  const byPty = store.findTerminalByPtyId(terminalId)
+  if (byPty) return { lifecycleId: byPty.id, writeId: byPty.ptyId ?? terminalId }
+  return { lifecycleId: resolveLifecycleTerminalId(terminalId) ?? terminalId, writeId: terminalId }
+}
+
 const KEYS = [
   ['Esc', '\u001b', 'Esc, escape'],
   ['Tab', '\t', 'Tab'],
@@ -38,7 +56,17 @@ export function MobileTerminalControls({
   const barRef = useDockClearance(true)
 
   const write = async (data: string): Promise<void> => {
-    const result = await terminalApi.write(terminalId, data)
+    const { lifecycleId, writeId } = terminalWriteIds(terminalId)
+    const target = findEditorInputTarget(terminalId)
+    if (target) {
+      await routeMobileKey(target, 'key', data, async (text) => {
+        const result = await terminalApi.write(writeId, text)
+        if (!result.success) toast.error(`Terminal write failed: ${result.error}`)
+      })
+      return
+    }
+    if (!canTerminalWriteToPty(lifecycleId, data)) return
+    const result = await terminalApi.write(writeId, data)
     if (!result.success) {
       toast.error(`Terminal write failed: ${result.error}`)
     }
@@ -51,7 +79,17 @@ export function MobileTerminalControls({
       return
     }
     if (result.data) {
-      const writeResult = await terminalApi.write(terminalId, result.data)
+      const { lifecycleId, writeId } = terminalWriteIds(terminalId)
+      const target = findEditorInputTarget(terminalId)
+      if (target) {
+        await routeMobileKey(target, 'paste', result.data, async (text) => {
+          const writeResult = await terminalApi.write(writeId, text)
+          if (!writeResult.success) toast.error(`Paste failed: ${writeResult.error}`)
+        })
+        return
+      }
+      if (!canTerminalWriteToPty(lifecycleId, result.data)) return
+      const writeResult = await terminalApi.write(writeId, result.data)
       if (!writeResult.success) {
         toast.error(`Paste failed: ${writeResult.error}`)
       }
