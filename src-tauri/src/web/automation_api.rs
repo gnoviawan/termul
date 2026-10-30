@@ -466,21 +466,17 @@ async fn remove_secret(
 }
 
 /// Hands every [`AutomationChanged`] to `relay`'s `agents` watch, which
-/// reaches web clients, the desktop's own carrier and shared-live peers, and
-/// to `emit` (the desktop's Tauri event). The payload is the event as
-/// serialized, unedited. Returns when the service is gone.
+/// reaches web clients, the desktop's own carrier and shared-live peers. The
+/// payload is the event as serialized, unedited. Returns when the service is
+/// gone.
 pub async fn forward_changes(
     mut changes: broadcast::Receiver<AutomationChanged>,
     relay: Arc<WsRelaySink>,
-    emit: impl Fn(&Value),
 ) {
     loop {
         match changes.recv().await {
             Ok(change) => match serde_json::to_value(&change) {
-                Ok(payload) => {
-                    publish_agent_event(&relay, EVENT_AUTOMATION_CHANGED, &payload);
-                    emit(&payload);
-                }
+                Ok(payload) => publish_agent_event(&relay, EVENT_AUTOMATION_CHANGED, &payload),
                 Err(error) => {
                     tracing::error!(target: LOG_TARGET, "automation change not serializable: {error}");
                 }

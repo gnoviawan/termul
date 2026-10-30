@@ -23,7 +23,6 @@ import type {
   Schedule
 } from '@shared/types/automation.types'
 import type { IpcResult } from '@shared/types/ipc.types'
-import { listen } from '@tauri-apps/api/event'
 import {
   parseAgentList,
   parseApplyOpsResult,
@@ -259,22 +258,13 @@ export async function deleteAutomationSecret(
 export type AutomationChangeListener = (change: AutomationChanged | null) => void
 
 const changeListeners = new Set<AutomationChangeListener>()
-let desktopListening = false
 
-function listenOnDesktop(): void {
-  if (desktopListening || !isTauriContext()) return
-  desktopListening = true
-  listen<unknown>(AUTOMATION_CHANGED_EVENT, (event) =>
-    publishAutomationChange(event.payload)
-  ).catch((err: unknown) => {
-    desktopListening = false
-    log('warn', `listen(${AUTOMATION_CHANGED_EVENT}) failed: ${String(err)}`)
-  })
-}
-
-/** Subscribe to `automation_changed` on either transport; returns the unsubscribe. */
+/**
+ * Subscribe to `automation_changed`; returns the unsubscribe. Both surfaces
+ * receive it as an `agents` watch delta (the desktop over its channel
+ * carrier), which the roster watch hands to {@link publishAutomationChange}.
+ */
 export function onAutomationChanged(listener: AutomationChangeListener): () => void {
-  listenOnDesktop()
   changeListeners.add(listener)
   return () => {
     changeListeners.delete(listener)
@@ -282,9 +272,8 @@ export function onAutomationChanged(listener: AutomationChangeListener): () => v
 }
 
 /**
- * Hand an `automation_changed` payload to subscribers. The desktop listener
- * and the web roster watch both call this. A payload that does not match the
- * contract is logged and dropped.
+ * Hand an `automation_changed` payload to subscribers. The roster watch calls
+ * this. A payload that does not match the contract is logged and dropped.
  */
 export function publishAutomationChange(payload: unknown): void {
   const change = parseAutomationChange(payload)

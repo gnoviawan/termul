@@ -11,7 +11,6 @@ const { mockFetch, mockIsTauriContext, mockInvoke, mockLog } = vi.hoisted(() => 
 
 vi.mock('../tauri-runtime', () => ({ isTauriContext: mockIsTauriContext }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
-vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }))
 vi.mock('../log-api', () => ({ logFrontendError: mockLog }))
 
 import {

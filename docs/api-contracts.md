@@ -202,7 +202,7 @@ A failure carries the service's code. On HTTP it also sets the status:
 | `FORBIDDEN` | 403 |
 | `internal` | 500 |
 
-Every change emits `automation_changed` with the payload `{project_id, automation_id}`. `automation_id` is `null` for a project-wide change, such as a secret name. When a chat agent calls `automation_propose`, the payload also carries `proposed: true` and, when the host knows the agent, `proposed_by` with its display name. A client that has that project on screen opens the Automations tab on the automation and shows a toast. The desktop renderer receives it as a plain Tauri event. Every relay client receives it as an `agents` watch delta `{event: "automation_changed", payload}`: web, phone, shared-live peers and the desktop's own channel carrier.
+Every change emits `automation_changed` with the payload `{project_id, automation_id}`. `automation_id` is `null` for a project-wide change, such as a secret name. When a chat agent calls `automation_propose`, the payload also carries `proposed: true` and, when the host knows the agent, `proposed_by` with its display name. A client that has that project on screen opens the Automations tab on the automation and shows a toast. Every client receives it once, as an `agents` watch delta `{event: "automation_changed", payload}`: web, phone, shared-live peers and the desktop renderer over its own channel carrier. There is no separate Tauri event.
 
 ## Data Migration Commands
 
