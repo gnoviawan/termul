@@ -238,3 +238,84 @@ async fn a_link_sign_in_for_an_unknown_account_is_refused_before_the_cli_starts(
     assert_eq!(err.code, "unsupported");
     assert_eq!(err.message, "That Claude account does not exist");
 }
+
+#[tokio::test]
+async fn an_account_renamed_over_ws_keeps_its_id_and_a_repeat_succeeds() {
+    let (root, acp) = manager_with_account(&[]);
+    let rename = |n: &str| json!({ "accountId": "ab12", "name": n });
+    let reply = handle_rename_claude_account("1".into(), &rename("Office"), &acp).await;
+    assert_eq!(reply.payload.unwrap(), json!({}));
+    let reply = handle_rename_claude_account("2".into(), &rename("Office"), &acp).await;
+    assert!(
+        reply.ok,
+        "renaming to the current name answers like the first"
+    );
+    assert_eq!(
+        stored(&root)["accounts"][1],
+        json!({ "id": "ab12", "name": "Office", "createdAt": 1 })
+    );
+
+    let taken = handle_rename_claude_account(
+        "3".into(),
+        &json!({ "accountId": "ab12", "name": "default" }),
+        &acp,
+    )
+    .await;
+    assert_eq!(
+        taken.err.unwrap().message,
+        "An account named \"default\" already exists"
+    );
+    let unknown = handle_rename_claude_account(
+        "4".into(),
+        &json!({ "accountId": "ffff", "name": "Side" }),
+        &acp,
+    )
+    .await;
+    assert_eq!(
+        unknown.err.unwrap().message,
+        "That Claude account does not exist"
+    );
+    let malformed =
+        handle_rename_claude_account("5".into(), &json!({ "accountId": "ab12" }), &acp).await;
+    assert_eq!(malformed.err.unwrap().code, "unsupported");
+    assert_eq!(stored(&root)["accounts"][1]["name"], "Office");
+}
+
+#[tokio::test]
+async fn removing_an_account_moves_its_projects_and_a_repeat_converges() {
+    let (root, acp) = manager_with_account(&[]);
+    let reply = handle_set_project_claude_account(
+        "1".into(),
+        &json!({ "projectId": "office", "accountId": "ab12" }),
+        &acp,
+    )
+    .await;
+    assert!(reply.ok);
+    let remove = json!({ "accountId": "ab12" });
+    let reply = handle_remove_claude_account("2".into(), &remove, &acp).await;
+    assert_eq!(
+        reply.payload.unwrap(),
+        json!({ "movedProjectIds": ["office"] })
+    );
+    let file = stored(&root);
+    assert_eq!(file["accounts"].as_array().unwrap().len(), 1);
+    assert!(file
+        .get("projectAccounts")
+        .is_none_or(|p| p.get("office").is_none()));
+
+    let repeat = handle_remove_claude_account("3".into(), &remove, &acp).await;
+    assert_eq!(repeat.payload.unwrap(), json!({ "movedProjectIds": [] }));
+}
+
+#[tokio::test]
+async fn the_built_in_account_is_never_removed() {
+    let (root, acp) = manager_with_account(&[]);
+    let reply =
+        handle_remove_claude_account("1".into(), &json!({ "accountId": "default" }), &acp).await;
+    let err = reply.err.unwrap();
+    assert_eq!(err.code, "unsupported");
+    assert_eq!(err.message, "The built-in account cannot be removed");
+    assert_eq!(stored(&root)["accounts"].as_array().unwrap().len(), 2);
+    let malformed = handle_remove_claude_account("2".into(), &json!({}), &acp).await;
+    assert_eq!(malformed.err.unwrap().code, "unsupported");
+}

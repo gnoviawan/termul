@@ -128,6 +128,15 @@ impl ClaudeAgentService {
             .add(name)
     }
 
+    pub fn has_account(&self, id: &str) -> Result<bool, String> {
+        Ok(self
+            .account_store()?
+            .snapshot()?
+            .profiles
+            .iter()
+            .any(|row| row.id == id))
+    }
+
     pub fn rename_account(&self, id: &str, name: &str) -> Result<(), String> {
         self.account_store()?.rename(id, name)
     }
@@ -231,7 +240,8 @@ impl ClaudeAgentService {
     /// still removed. Returns the Projects that moved to the default.
     pub async fn remove_account(&self, id: &str) -> Result<Vec<String>, String> {
         let store = self.account_store()?;
-        if let Some(dir) = store.config_dir(id) {
+        // A folder that was never created holds no login to sign out of.
+        if let Some(dir) = store.config_dir(id).filter(|dir| dir.is_dir()) {
             match run_cli(&["auth", "logout"], Some(dir), LOGOUT_TIMEOUT, None).await {
                 Ok(true) => log::info!("[claude-accounts] signed out before removal"),
                 Ok(false) => log::warn!("[claude-accounts] sign-out did not succeed"),
@@ -256,11 +266,10 @@ impl ClaudeAgentService {
     /// Run Anthropic's interactive `claude auth login` for one Account in the
     /// caller's terminal (headless `termul-server claude account login`).
     pub fn run_account_cli_login(&self, id: &str) -> Result<(), String> {
-        let store = self.account_store()?;
-        if !store.snapshot()?.profiles.iter().any(|row| row.id == id) {
+        if !self.has_account(id)? {
             return Err("That Claude account does not exist".to_string());
         }
-        let dir = store.config_dir(id);
+        let dir = self.account_store()?.config_dir(id);
         log::info!("[claude-accounts] terminal login started");
         self.run_cli_login_in(dir.as_deref())
     }

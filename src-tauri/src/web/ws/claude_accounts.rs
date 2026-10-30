@@ -1,8 +1,7 @@
 //! Claude Account WS handlers: list the Accounts and their usage, choose the
-//! Default or a Project Account, turn automatic switching on or off, add an
-//! Account, and sign it in with a link: the host hands out the Claude sign-in
-//! link and takes back the code the Claude page shows. Renaming and removing
-//! an Account stay on the host (desktop UI or `termul-server claude account`).
+//! Default or a Project Account, turn automatic switching on or off, add,
+//! rename and remove an Account, and sign it in with a link: the host hands
+//! out the Claude sign-in link and takes back the code the Claude page shows.
 //! The sign-in link and the code are never logged.
 
 use super::*;
@@ -178,8 +177,15 @@ pub(super) struct AddClaudeAccountPayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ClaudeLoginPayload {
+pub(super) struct AccountIdPayload {
     account_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RenameClaudeAccountPayload {
+    account_id: String,
+    name: String,
 }
 
 /// No `Debug`: the code must never reach a log line.
@@ -218,6 +224,75 @@ pub(super) async fn handle_add_claude_account(
     }
 }
 
+/// `rename_claude_account { accountId, name }` → `{}`. Renaming to the
+/// current name succeeds, so a repeat answers like the first.
+pub(super) async fn handle_rename_claude_account(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: RenameClaudeAccountPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed rename_claude_account payload (want accountId, name): {error}"),
+            )
+        }
+    };
+    match acp
+        .claude_agent()
+        .rename_account(&parsed.account_id, &parsed.name)
+    {
+        Ok(()) => {
+            info!(account = %parsed.account_id, "Claude account renamed over ws");
+            WsReply::ok(id, Some(json!({})))
+        }
+        Err(error) => {
+            warn!(account = %parsed.account_id, error = %error, "rename_claude_account failed");
+            WsReply::err(id, WsErrorCode::Unsupported, error)
+        }
+    }
+}
+
+/// `remove_claude_account { accountId }` → `{ movedProjectIds }`, the Projects
+/// that moved to the Default Account. The built-in Account is refused. An
+/// Account that is already gone answers `{ movedProjectIds: [] }`, so a repeat
+/// (a second click, another client) converges instead of failing.
+pub(super) async fn handle_remove_claude_account(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: AccountIdPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed remove_claude_account payload (want accountId): {error}"),
+            )
+        }
+    };
+    let account = parsed.account_id;
+    let service = acp.claude_agent();
+    match service.remove_account(&account).await {
+        Ok(moved) => {
+            info!(account = %account, moved = moved.len(), "Claude account removed over ws");
+            WsReply::ok(id, Some(json!({ "movedProjectIds": moved })))
+        }
+        Err(_) if matches!(service.has_account(&account), Ok(false)) => {
+            info!(account = %account, "Claude account already removed");
+            WsReply::ok(id, Some(json!({ "movedProjectIds": [] })))
+        }
+        Err(error) => {
+            warn!(account = %account, error = %error, "remove_claude_account failed");
+            WsReply::err(id, WsErrorCode::Unsupported, error)
+        }
+    }
+}
+
 /// `start_claude_link_login { accountId }` → `{ url }`, the Claude sign-in
 /// link. Replaces a sign-in already running for the Account.
 pub(super) async fn handle_start_claude_link_login(
@@ -225,7 +300,7 @@ pub(super) async fn handle_start_claude_link_login(
     payload: &Value,
     acp: &Arc<AcpManager>,
 ) -> WsReply {
-    let parsed: ClaudeLoginPayload = match serde_json::from_value(payload.clone()) {
+    let parsed: AccountIdPayload = match serde_json::from_value(payload.clone()) {
         Ok(parsed) => parsed,
         Err(error) => {
             return WsReply::err(
@@ -298,7 +373,7 @@ pub(super) async fn handle_cancel_claude_login(
     payload: &Value,
     acp: &Arc<AcpManager>,
 ) -> WsReply {
-    let parsed: ClaudeLoginPayload = match serde_json::from_value(payload.clone()) {
+    let parsed: AccountIdPayload = match serde_json::from_value(payload.clone()) {
         Ok(parsed) => parsed,
         Err(error) => {
             return WsReply::err(

@@ -161,14 +161,15 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "update_project" => handle_update_project(id, &req.payload, env).await,
         "remove_project" => handle_remove_project(id, &req.payload, env).await,
         "spawn_agent" => handle_spawn_agent(id, &req.payload, acp, req.command_id.clone()).await,
-        // Claude Accounts: view, choose, add and link sign-in. Rename and
-        // remove stay on the host (desktop UI / `termul-server claude account`).
+        // Claude Accounts: view, choose, add, rename, remove and link sign-in.
         "list_claude_accounts" => handle_list_claude_accounts(id, acp).await,
         "list_claude_usage" => handle_list_claude_usage(id, &req.payload, acp).await,
         "set_default_claude_account" => handle_set_default_claude_account(id, &req.payload, acp).await,
         "set_project_claude_account" => handle_set_project_claude_account(id, &req.payload, acp).await,
         "set_claude_auto_switch" => handle_set_claude_auto_switch(id, &req.payload, acp).await,
         "add_claude_account" => handle_add_claude_account(id, &req.payload, acp).await,
+        "rename_claude_account" => handle_rename_claude_account(id, &req.payload, acp).await,
+        "remove_claude_account" => handle_remove_claude_account(id, &req.payload, acp).await,
         "start_claude_link_login" => handle_start_claude_link_login(id, &req.payload, acp).await,
         "finish_claude_link_login" => handle_finish_claude_link_login(id, &req.payload, acp).await,
         "cancel_claude_login" => handle_cancel_claude_login(id, &req.payload, acp).await,

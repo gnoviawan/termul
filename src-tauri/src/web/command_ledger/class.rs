@@ -132,6 +132,10 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     // A resend of a lost reply answers with the Account the first run added,
     // instead of adding a second one.
     ("add_claude_account", CommandClass::command(Replay::Payload)),
+    // Renaming sets a value; removing deletes by id and answers an Account
+    // that is already gone with no moved Projects.
+    ("rename_claude_account", CommandClass::idempotent()),
+    ("remove_claude_account", CommandClass::idempotent()),
     // A new start replaces the running sign-in, and only the last link works.
     ("start_claude_link_login", CommandClass::idempotent()),
     // The code is one-shot (a second write finds the session gone), so a

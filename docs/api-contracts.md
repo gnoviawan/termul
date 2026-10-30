@@ -489,6 +489,8 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `set_project_claude_account` | idempotent | Chooses a Project's Account, or clears it with `null`. With `expectedAccountId`, applies only while the Project still uses that Account; replies `{ applied }`. |
 | `set_claude_auto_switch` | idempotent | Turns automatic switching at a usage limit on or off (default on). |
 | `add_claude_account` | command | Adds a signed-out Account named `{name}` and replies with it. A resent command replays the first reply. |
+| `rename_claude_account` | idempotent | Renames `{accountId}` to `{name}` and replies `{}`. Renaming to the current name succeeds. |
+| `remove_claude_account` | idempotent | Signs the Claude CLI out of `{accountId}`, removes it and replies `{movedProjectIds}`, the Projects that moved to the Default Account. An Account that is already gone replies `{movedProjectIds: []}`. The built-in Account is refused. |
 | `start_claude_link_login` | idempotent | Starts a link sign-in for `{accountId}` and replies `{url}`, the Claude sign-in link. Stops a sign-in already running for the Account. |
 | `finish_claude_link_login` | command | Writes `{code}` from the Claude page to the link sign-in of `{accountId}`. Replies `{}` once the Claude CLI stored the login. `claude_login_code_incomplete` means the sign-in still waits for the whole code; any other error ended it. Receipt-only: the code is never stored or digested. |
 | `cancel_claude_login` | idempotent | Stops the browser or link sign-in of `{accountId}`. Replies `{cancelled}`, `false` when none was running. |
