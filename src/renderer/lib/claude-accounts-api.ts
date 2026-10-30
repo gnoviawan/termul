@@ -38,13 +38,17 @@ export function isClaudeLoginCancelled(error: unknown): boolean {
   return text.includes(CLAUDE_LOGIN_CANCELLED)
 }
 
+const hasCode = (error: unknown, code: string): boolean =>
+  typeof error === 'object' && error !== null && (error as { code?: unknown }).code === code
+
 /** The host still waits for the whole code: the pasted one was cut short. */
 export function isClaudeLoginCodeIncomplete(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { code?: unknown }).code === WS_ERROR_CODES.CLAUDE_LOGIN_CODE_INCOMPLETE
-  )
+  return hasCode(error, WS_ERROR_CODES.CLAUDE_LOGIN_CODE_INCOMPLETE)
+}
+
+/** The host still checks an earlier code; the sign-in goes on. */
+export function isClaudeLoginBusy(error: unknown): boolean {
+  return hasCode(error, WS_ERROR_CODES.CLAUDE_LOGIN_BUSY)
 }
 
 export class ClaudeAccountsUnsupportedError extends Error {
@@ -127,7 +131,8 @@ export const claudeAccountsApi = {
 
   /**
    * Hand the code from the Claude page to the link sign-in. Check a rejection
-   * with {@link isClaudeLoginCodeIncomplete}: the sign-in then still waits.
+   * with {@link isClaudeLoginCodeIncomplete} and {@link isClaudeLoginBusy}:
+   * the sign-in then still runs.
    */
   finishLinkLogin: (accountId: string, code: string): Promise<void> =>
     logged('finishLinkLogin', async () => {

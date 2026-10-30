@@ -220,6 +220,30 @@ async fn a_blank_code_is_incomplete_and_a_malformed_finish_never_echoes_the_code
     assert!(!err.message.contains("secret"));
 }
 
+#[test]
+fn a_refused_code_names_whether_the_sign_in_goes_on() {
+    for (error, wire, message) in [
+        (
+            LinkCodeError::Incomplete,
+            "claude_login_code_incomplete",
+            "That code is incomplete. Copy the whole code from the Claude page.",
+        ),
+        (
+            LinkCodeError::Busy,
+            "claude_login_busy",
+            "Claude is still checking the last code.",
+        ),
+        (
+            LinkCodeError::Ended("Claude did not accept that code.".into()),
+            "unsupported",
+            "Claude did not accept that code.",
+        ),
+    ] {
+        let err = code_refused("1".into(), "ab12", &error).err.unwrap();
+        assert_eq!((err.code.as_str(), err.message.as_str()), (wire, message));
+    }
+}
+
 #[tokio::test]
 async fn cancel_reports_whether_a_sign_in_was_running() {
     let (_root, acp) = manager_with_account(&[]);

@@ -327,8 +327,8 @@ pub(super) async fn handle_start_claude_link_login(
 }
 
 /// `finish_claude_link_login { accountId, code }` → `{}` once the Claude CLI
-/// stored the login. `claude_login_code_incomplete` keeps the sign-in waiting
-/// for another paste; any other error ended it.
+/// stored the login. `claude_login_code_incomplete` and `claude_login_busy`
+/// leave the sign-in running; any other error ended it.
 pub(super) async fn handle_finish_claude_link_login(
     id: String,
     payload: &Value,
@@ -351,19 +351,27 @@ pub(super) async fn handle_finish_claude_link_login(
             info!(account = %account, "Claude link sign-in finished over ws");
             WsReply::ok(id, Some(json!({})))
         }
-        Err(error @ LinkCodeError::Incomplete) => {
-            info!(account = %account, "Claude sign-in code incomplete over ws");
-            WsReply::err(
-                id,
-                WsErrorCode::ClaudeLoginCodeIncomplete,
-                error.message().to_string(),
-            )
-        }
-        Err(error @ LinkCodeError::Ended(_)) => {
-            warn!(account = %account, "Claude link sign-in ended without a login over ws");
-            WsReply::err(id, WsErrorCode::Unsupported, error.message().to_string())
-        }
+        Err(error) => code_refused(id, &account, &error),
     }
+}
+
+/// A code that did not finish the link sign-in, as its wire error.
+fn code_refused(id: String, account: &str, error: &LinkCodeError) -> WsReply {
+    let code = match error {
+        LinkCodeError::Incomplete => {
+            info!(account = %account, "Claude sign-in code incomplete over ws");
+            WsErrorCode::ClaudeLoginCodeIncomplete
+        }
+        LinkCodeError::Busy => {
+            info!(account = %account, "Claude sign-in code arrived during a check over ws");
+            WsErrorCode::ClaudeLoginBusy
+        }
+        LinkCodeError::Ended(_) => {
+            warn!(account = %account, "Claude link sign-in ended without a login over ws");
+            WsErrorCode::Unsupported
+        }
+    };
+    WsReply::err(id, code, error.message().to_string())
 }
 
 /// `cancel_claude_login { accountId }` → `{ cancelled }`; stops a browser or

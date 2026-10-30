@@ -188,7 +188,7 @@ fn a_code_before_the_link_or_during_a_check_is_turned_away() {
     let Step { next, write } = step(phase, Event::Code(second), Instant::now());
     assert!(matches!(next, Some(Phase::Checking { .. })));
     assert_eq!(write, None);
-    assert_eq!(turned_away.try_recv().unwrap(), Err(ended(CODE_BUSY)));
+    assert_eq!(turned_away.try_recv().unwrap(), Err(LinkCodeError::Busy));
     assert!(
         first.try_recv().is_err(),
         "the first code is still being checked"

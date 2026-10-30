@@ -34,6 +34,7 @@ import { AcpTransportError } from '../acp-transport/types'
 import {
   ClaudeAccountsUnsupportedError,
   claudeAccountsApi,
+  isClaudeLoginBusy,
   isClaudeLoginCodeIncomplete
 } from '../claude-accounts-api'
 
@@ -125,6 +126,19 @@ describe.each([
     expect(error).toBe(incomplete)
     expect(isClaudeLoginCodeIncomplete(error)).toBe(true)
     expect(isClaudeLoginCodeIncomplete(new Error('That code is incomplete.'))).toBe(false)
+    expect(isClaudeLoginBusy(error)).toBe(false)
+  })
+
+  it('passes a code sent during a check through as a rejection the caller can recognize', async () => {
+    const busy = new AcpTransportError(
+      WS_ERROR_CODES.CLAUDE_LOGIN_BUSY,
+      'Claude is still checking the last code.'
+    )
+    transport.finishClaudeLinkLogin.mockRejectedValueOnce(busy)
+    const error = await claudeAccountsApi.finishLinkLogin('abc', 'abc#def').catch((e: unknown) => e)
+    expect(error).toBe(busy)
+    expect(isClaudeLoginBusy(error)).toBe(true)
+    expect(isClaudeLoginCodeIncomplete(error)).toBe(false)
   })
 
   it('renames and removes an account through the ACP transport', async () => {

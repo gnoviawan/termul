@@ -34,8 +34,9 @@ const NO_LINK: &str = "The Claude CLI did not show a sign-in link. Try again.";
 const NO_LINK_LOGIN: &str = "No sign-in is waiting for a code. Start the sign-in again.";
 const CODE_REJECTED: &str = "Claude did not accept that code. Start the sign-in again.";
 const CODE_UNANSWERED: &str = "Claude did not answer in time. Start the sign-in again.";
-const CODE_EARLY: &str = "The sign-in link is not ready yet.";
-const CODE_BUSY: &str = "Claude is still checking the last code.";
+/// A code reached a sign-in that has no link out yet, so it was meant for the
+/// sign-in this one replaced.
+const CODE_EARLY: &str = "A newer sign-in to this account started. Start the sign-in again.";
 
 /// The running sign-in of each Account, at most one per Account. Dropping an
 /// entry stops its sign-in: the browser login's cancel receiver resolves, and
@@ -140,6 +141,8 @@ impl LoginCode {
 pub enum LinkCodeError {
     /// The CLI asked for the whole code. The sign-in still waits for one.
     Incomplete,
+    /// The CLI is still checking an earlier code. The sign-in goes on.
+    Busy,
     /// The sign-in is over; the user starts it again.
     Ended(String),
 }
@@ -151,6 +154,7 @@ impl LinkCodeError {
             Self::Incomplete => {
                 "That code is incomplete. Copy the whole code from the Claude page."
             }
+            Self::Busy => "Claude is still checking the last code.",
             Self::Ended(message) => message,
         }
     }
@@ -344,7 +348,7 @@ fn step(phase: Phase, event: Event, now: Instant) -> Step {
             Step::end()
         }
         (phase @ Phase::Checking { .. }, Event::Code(second)) => {
-            let _ = second.reply.send(Err(ended(CODE_BUSY)));
+            let _ = second.reply.send(Err(LinkCodeError::Busy));
             Step::to(phase)
         }
     }

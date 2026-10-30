@@ -265,7 +265,8 @@ export interface AcpTransport {
   /**
    * Hand the code the Claude page showed to the link sign-in. Rejects with
    * `claude_login_code_incomplete` while the sign-in still waits for the
-   * whole code; any other rejection ended the sign-in.
+   * whole code, and `claude_login_busy` while it still checks an earlier
+   * code; any other rejection ended the sign-in.
    */
   finishClaudeLinkLogin(
     accountId: string,

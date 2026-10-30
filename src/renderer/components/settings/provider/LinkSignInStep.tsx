@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Spinner } from '@/components/ui/spinner'
 import {
   claudeAccountsApi,
+  isClaudeLoginBusy,
   isClaudeLoginCancelled,
   isClaudeLoginCodeIncomplete
 } from '@/lib/claude-accounts-api'
@@ -118,6 +119,14 @@ export function LinkSignInStep({
     } catch (error) {
       if (isClaudeLoginCodeIncomplete(error)) {
         setState({ phase: 'awaitingCode', url, error: errorText(error) })
+        return
+      }
+      if (isClaudeLoginBusy(error)) {
+        setState({
+          phase: 'awaitingCode',
+          url,
+          error: 'Still checking the last code. Wait a moment, then finish sign-in again.'
+        })
         return
       }
       live.current = false

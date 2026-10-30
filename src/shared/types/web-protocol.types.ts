@@ -277,7 +277,8 @@ export const WS_REQUEST_TYPES = [
   // Link sign-in: `start` `{ accountId }` → `{ url }` (the Claude sign-in
   // link; replaces a running sign-in of the Account). `finish` `{ accountId,
   // code }` → `{}` once the CLI stored the login; `claude_login_code_incomplete`
-  // keeps the sign-in waiting for another paste. `cancel` `{ accountId }` →
+  // and `claude_login_busy` keep the sign-in running, any other error ended it.
+  // `cancel` `{ accountId }` →
   // `{ cancelled }` stops a browser or link sign-in.
   'start_claude_link_login',
   'finish_claude_link_login',
@@ -663,7 +664,10 @@ export const WS_ERROR_CODES = {
   CLAUDE_ACCOUNT_SIGNED_OUT: 'claude_account_signed_out',
   // `finish_claude_link_login` got a code the Claude CLI calls incomplete.
   // The sign-in still waits for the whole code.
-  CLAUDE_LOGIN_CODE_INCOMPLETE: 'claude_login_code_incomplete'
+  CLAUDE_LOGIN_CODE_INCOMPLETE: 'claude_login_code_incomplete',
+  // `finish_claude_link_login` got a code while the Claude CLI still checks an
+  // earlier one. The sign-in goes on; its first code gets the verdict.
+  CLAUDE_LOGIN_BUSY: 'claude_login_busy'
 } as const
 
 /** Union of all WS error code strings. */

@@ -123,6 +123,28 @@ describe('LinkSignInStep', () => {
     expect(api.startLinkLogin).toHaveBeenCalledOnce()
   })
 
+  it('keeps the sign-in open while the host still checks an earlier code', async () => {
+    api.finishLinkLogin.mockRejectedValueOnce(
+      new AcpTransportError(
+        WS_ERROR_CODES.CLAUDE_LOGIN_BUSY,
+        'Claude is still checking the last code.'
+      )
+    )
+    const onSignedIn = vi.fn()
+    render(<Harness onSignedIn={onSignedIn} />)
+    await screen.findByRole('link', { name: 'Open sign-in page' })
+    fireEvent.change(codeField(), { target: { value: 'abc#def' } })
+    finish()
+    expect(await screen.findByText(/Still checking the last code/)).toBeInTheDocument()
+    expect(screen.queryByText('Sign-in did not finish')).not.toBeInTheDocument()
+    expect(codeField()).toHaveValue('abc#def')
+
+    finish()
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledOnce())
+    expect(api.startLinkLogin).toHaveBeenCalledOnce()
+    expect(api.cancelLogin).not.toHaveBeenCalled()
+  })
+
   it('shows a rejected code as a failed sign-in that starts again', async () => {
     api.finishLinkLogin.mockRejectedValueOnce(
       new AcpTransportError(
