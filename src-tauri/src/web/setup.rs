@@ -254,10 +254,18 @@ async fn health_check() -> impl IntoResponse {
 /// `GET /setup/status` — `SetupStatusResponse` inside the shared `IpcBody`
 /// envelope (the renderer's `getJson`/`parseBody` only understands
 /// `{success, data}`): `setupRequired` plus the server-side defaults
-/// (`OnboardAnswers::defaults()`) the wizard pre-fills.
+/// (`OnboardAnswers::defaults()`) the wizard pre-fills. When setup mode is
+/// running because an EXISTING config file is corrupt (a hand-edit, a
+/// partial write, or a sessions dir that became a file), `configError`
+/// carries the load failure so the wizard can explain the recovery instead
+/// of re-showing the form with no context.
 async fn setup_status(State(state): State<SetupState>) -> impl IntoResponse {
+    let config_error = server_config_file::load(&state.state_dir)
+        .err()
+        .map(|e| e.to_string());
     Json(IpcBody::ok(StatusBody {
         setup_required: true,
+        config_error,
         defaults: state.defaults.clone(),
     }))
 }
@@ -546,6 +554,12 @@ struct HealthBody {
 #[serde(rename_all = "camelCase")]
 struct StatusBody {
     setup_required: bool,
+    /// Why the server is in setup mode despite a config file being present —
+    /// the `server_config_file::load` failure (`Ok(None)`/valid file →
+    /// absent). Lets the wizard say "your saved config was invalid" instead
+    /// of silently re-onboarding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_error: Option<String>,
     defaults: ServerSetupAnswers,
 }
 

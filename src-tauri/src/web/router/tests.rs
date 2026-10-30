@@ -1893,11 +1893,12 @@ async fn server_config_post_rejects_parent_dir_components() {
     );
 }
 
-/// A sessions dir that exists as a regular FILE is rejected — saving it
-/// would wedge every restart (`from_args` refuses a non-directory sessions
-/// dir before setup mode could recover).
+/// A sessions dir that exists as a regular FILE is accepted at apply time
+/// (request paths are never probed on disk) — but the written file is
+/// semantically invalid, so `load` marks it corrupt on the next boot and
+/// the server recovers into setup mode instead of `from_args` wedging.
 #[tokio::test]
-async fn server_config_post_rejects_non_directory_sessions_dir() {
+async fn server_config_post_non_directory_sessions_dir_recovers_at_load() {
     let dir = TempDir::new("cfg-notdir-static");
     let state_dir = TempDir::new("cfg-notdir-state");
     let bogus = state_dir.path().join("not-a-dir");
@@ -1922,14 +1923,16 @@ async fn server_config_post_rejects_non_directory_sessions_dir() {
         .await
         .expect("router response");
     let parsed = body_json(resp).await;
-    assert_eq!(parsed["data"]["ok"], false, "{parsed}");
+    assert_eq!(parsed["data"]["ok"], true, "{parsed}");
+    let path = server_config_file::server_config_path(state_dir.path());
+    assert!(path.exists(), "the apply persists the answers verbatim");
+    // The wedge guard: `load` rejects the file → the restarted server runs
+    // setup mode rather than `from_args` exiting on the non-dir sessions dir.
+    let err = server_config_file::load(state_dir.path())
+        .expect_err("file with a file-as-sessions-dir must be treated as corrupt");
     assert!(
-        parsed["data"]["fieldErrors"]["sessionsDir"].is_string(),
-        "{parsed}"
-    );
-    assert!(
-        !server_config_file::server_config_path(state_dir.path()).exists(),
-        "a rejected apply writes nothing"
+        err.to_string().contains("not a directory"),
+        "{err}"
     );
 }
 

@@ -35,7 +35,7 @@ import type {
   SetupFieldErrors
 } from '@shared/types/server-setup.types'
 import { type FormEvent, useEffect, useState } from 'react'
-import { ChevronDown } from '@/components/icons'
+import { AlertTriangle, ChevronDown } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
@@ -133,6 +133,9 @@ export function ServerSetupWizard({
   const [retry, setRetry] = useState(0)
   const [fieldErrors, setFieldErrors] = useState<SetupFieldErrors>({})
   const [formError, setFormError] = useState<string | null>(null)
+  // Why setup mode is running despite a config file being present — the
+  // load failure the server reports via `/setup/status` (`configError`).
+  const [configError, setConfigError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [applied, setApplied] = useState<SetupApplyResponse | null>(null)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -164,6 +167,9 @@ export function ServerSetupWizard({
         .then((res) => {
           if (cancelled) return
           if (res.success) {
+            if (res.data.configError) {
+              setConfigError(res.data.configError)
+            }
             seed(res.data.defaults)
           } else {
             fail(`getStatus code ${res.code}`)
@@ -549,6 +555,18 @@ export function ServerSetupWizard({
                 A few questions and you're in — the defaults work for most people.
               </p>
             </div>
+            {configError ? (
+              <div
+                role="status"
+                className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-left text-xs text-warning"
+              >
+                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                <p>
+                  A saved server configuration couldn't be used ({configError}). Answer the
+                  questions below and Termul will write a fresh one.
+                </p>
+              </div>
+            ) : null}
             {form}
           </form>
         )}

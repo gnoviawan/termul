@@ -117,8 +117,8 @@ const fail = (error: string, code = 'TEST_ERROR') => ({
   code
 })
 
-function statusResponse(defaults: ServerSetupAnswers = DEFAULT_ANSWERS) {
-  return ok({ setupRequired: true, defaults })
+function statusResponse(defaults: ServerSetupAnswers = DEFAULT_ANSWERS, configError?: string) {
+  return ok({ setupRequired: true, configError, defaults })
 }
 
 describe('ServerSetupWizard (setup mode)', () => {
@@ -144,6 +144,18 @@ describe('ServerSetupWizard (setup mode)', () => {
     expect(api.getStatus).toHaveBeenCalledTimes(1)
     expect(screen.getByLabelText('Port')).toHaveValue(8080)
     expect(screen.getByLabelText('Where can Termul be reached?')).toHaveValue('127.0.0.1')
+  })
+
+  it('explains when a saved config could not be used', async () => {
+    api.getStatus.mockResolvedValue(
+      statusResponse(DEFAULT_ANSWERS, "invalid host 'bogus', port must not be 0")
+    )
+    render(<ServerSetupWizard mode="setup" />)
+
+    const notice = await screen.findByText(/couldn't be used/)
+    expect(notice).toHaveTextContent("invalid host 'bogus'")
+    // The form still pre-fills so the operator can correct the values.
+    expect(screen.getByLabelText('Port')).toHaveValue(8080)
   })
 
   it('does not fetch when initial answers are provided', () => {

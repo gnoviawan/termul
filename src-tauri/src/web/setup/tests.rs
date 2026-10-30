@@ -230,6 +230,62 @@ async fn setup_status_accepts_query_and_bearer_token() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+/// When setup mode runs because an existing `server-config.json` is
+/// corrupt, status surfaces the load failure as `configError` so the
+/// wizard can explain the recovery; absent when no file exists.
+#[tokio::test]
+async fn setup_status_reports_config_error_for_a_corrupt_file() {
+    let dir = fixture_dir("status-err");
+    let state_dir = TempDir::new("status-err-state");
+    let restarts = Arc::new(AtomicUsize::new(0));
+    let app = test_router(dir.path(), state_dir.path(), None, &restarts);
+    let status = |app: Router| async move {
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/setup/status")
+                    .header("authorization", format!("Bearer {SETUP_TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        body_json(resp).await
+    };
+
+    // No file → no error.
+    let parsed = status(app.clone()).await;
+    assert!(parsed["data"].get("configError").is_none(), "{parsed}");
+
+    // A corrupt file → the load failure surfaces.
+    fs::write(
+        server_config_file::server_config_path(state_dir.path()),
+        "{not json",
+    )
+    .expect("write corrupt file");
+    let parsed = status(app.clone()).await;
+    assert!(
+        parsed["data"]["configError"].is_string(),
+        "{parsed}"
+    );
+
+    // A semantically invalid (parseable) file → also surfaces.
+    fs::write(
+        server_config_file::server_config_path(state_dir.path()),
+        serde_json::json!({
+            "host": "bogus", "port": 0,
+            "sessionsDir": "/srv/s", "projectsFile": "/srv/p.json",
+            "allowRemoteWrites": false, "updateIntervalSecs": 21600,
+        })
+        .to_string(),
+    )
+    .expect("write invalid file");
+    let parsed = status(app).await;
+    let err = parsed["data"]["configError"].as_str().unwrap_or("");
+    assert!(err.contains("invalid host"), "{err}");
+}
+
 // --- /setup/validate ---------------------------------------------------------
 
 #[tokio::test]

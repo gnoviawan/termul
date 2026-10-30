@@ -51,6 +51,13 @@ export interface ServerSetupAnswers {
 /** `GET /health` gains `setupRequired` (server HealthBody). */
 export interface SetupStatusResponse {
   setupRequired: boolean
+  /**
+   * Present when setup mode is running because an existing
+   * `server-config.json` failed to load (corrupt or semantically invalid) —
+   * the load error text, so the wizard can explain the recovery instead of
+   * silently re-onboarding.
+   */
+  configError?: string
   /** Server-side defaults (`OnboardAnswers::defaults()`) to pre-fill the form. */
   defaults: ServerSetupAnswers
 }

@@ -137,22 +137,14 @@ pub fn validate_answers(
     {
         // `..` makes the effective directory ambiguous — the server resolves
         // config paths verbatim at every boot, and every path it derives is
-        // canonical. Also the barrier guard for the filesystem probe below:
-        // a wizard-supplied path is never touched on disk until it is known
-        // to carry no parent traversal.
+        // canonical.
         errors.sessions_dir = Some("sessions directory must not contain '..'".into());
-    } else if answers.sessions_dir.exists() && !answers.sessions_dir.is_dir() {
-        // A file at this path wedges every restart: `from_args` rejects it
-        // before setup mode can run, and the saved file keeps it failing.
-        // Reject here so the apply writes nothing.
-        errors.sessions_dir = Some(
-            format!(
-                "sessions directory '{}' exists and is not a directory",
-                answers.sessions_dir.display()
-            )
-            .into(),
-        );
     }
+    // NOTE: no filesystem probe here (a file existing where the sessions dir
+    // should be is caught by `load`'s `file_errors` on the next boot, which
+    // treats the file as corrupt and recovers into setup mode — the apply
+    // can never wedge the server). Wizard-supplied paths are never touched
+    // on disk from the request path at all.
 
     let projects_file = if answers.projects_file.to_string_lossy().trim().is_empty() {
         errors.projects_file = Some(
@@ -246,9 +238,12 @@ pub fn load(state_dir: &Path) -> std::io::Result<Option<ServerConfigFile>> {
 }
 
 /// Semantic field checks on a parsed [`ServerConfigFile`] — the same rules
-/// `validate_answers` applies to wizard answers, minus the filesystem probe
-/// (a sessions dir that becomes a file later is caught by `from_args`'s
-/// final not-a-directory guard, matching argv behavior).
+/// `validate_answers` applies to wizard answers, PLUS the one filesystem
+/// probe that prevents a wedge: a sessions dir that exists as a non-dir
+/// fails `from_args`'s final guard BEFORE `setup_required` can run, which
+/// makes the process exit on every boot — worse than corrupt. Flagging it
+/// here recovers into setup mode instead. (File content is not request
+/// input, so probing here is not a request-driven filesystem touch.)
 fn file_errors(file: &ServerConfigFile) -> Result<(), Vec<String>> {
     let mut problems = Vec::new();
     if BindMode::parse(&file.host).is_none() {
@@ -259,10 +254,18 @@ fn file_errors(file: &ServerConfigFile) -> Result<(), Vec<String>> {
     }
     if file.sessions_dir.to_string_lossy().trim().is_empty() {
         problems.push("sessionsDir must not be empty".to_string());
+    } else if file.sessions_dir.exists() && !file.sessions_dir.is_dir() {
+        problems.push(format!(
+            "sessionsDir '{}' exists and is not a directory",
+            file.sessions_dir.display()
+        ));
     }
     if file.projects_file.to_string_lossy().trim().is_empty() {
         problems.push("projectsFile must not be empty".to_string());
     }
+    // Deliberately no kind-probe on projectsFile: a directory there degrades
+    // (the registry can't write) but the boot still succeeds — flagging the
+    // file corrupt would bounce a working server into setup for nothing.
     if problems.is_empty() {
         Ok(())
     } else {
