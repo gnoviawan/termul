@@ -99,7 +99,7 @@ impl AgentRegistry {
         };
         let written = serde_json::to_vec_pretty(&file)
             .map_err(std::io::Error::other)
-            .and_then(|bytes| atomic_file::replace(path, &bytes));
+            .and_then(|bytes| atomic_file::replace_private(path, &bytes));
         match written {
             Ok(()) => log::info!("[Automation] recorded known agent {key:?}"),
             Err(error) => log::warn!("[Automation] could not save known agent {key:?}: {error}"),

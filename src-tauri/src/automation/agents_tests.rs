@@ -79,3 +79,14 @@ fn a_corrupt_file_starts_empty_and_is_kept_aside() {
         .count();
     assert_eq!(backups, 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn the_registry_file_is_owner_only_because_env_can_hold_keys() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(FILE_NAME);
+    AgentRegistry::open(path.clone()).record(&config(Some("claude"), "Claude Code", "claude"));
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
