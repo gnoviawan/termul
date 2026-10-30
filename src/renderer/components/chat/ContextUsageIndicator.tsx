@@ -41,7 +41,7 @@ const FILL_TRANSITION =
 
 /** Card grows out of the ring: 350ms open, 250ms close, on the ring's corner. */
 const CARD_MOTION =
-  'origin-[var(--radix-popover-content-transform-origin)] ease-[cubic-bezier(0.32,0.72,0,1)] data-[state=open]:zoom-in-90 data-[state=closed]:zoom-out-95 data-[state=open]:duration-[350ms] data-[state=closed]:duration-[250ms] motion-reduce:animate-none'
+  'origin-[var(--radix-popover-content-transform-origin)] ease-[cubic-bezier(0.32,0.72,0,1)] data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95 data-[state=open]:duration-[350ms] data-[state=closed]:duration-[250ms] motion-reduce:animate-none'
 
 /** Card blocks fade up one after another, 40ms apart. */
 const STAGGER_ITEM =
