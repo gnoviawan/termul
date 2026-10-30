@@ -9,6 +9,7 @@ use super::model::{
     RunPolicy, RunStatus, RunTrigger, Step, StepStatus, Trigger,
 };
 use super::policy::run_policy;
+use super::suggest::{Cadence, Suggestion};
 use super::test_support::{node_id, ops, sample_automation};
 
 /// Every wire type in one document. The TypeScript mirror types the same
@@ -22,6 +23,7 @@ struct WireFixture {
     runs: Vec<Run>,
     steps: Vec<Step>,
     run_policy: RunPolicy,
+    suggestion: Suggestion,
 }
 
 fn fixture_path() -> PathBuf {
@@ -128,6 +130,20 @@ fn build_fixture() -> WireFixture {
         ])),
         runs: vec![run, running],
         steps,
+        suggestion: Suggestion {
+            fingerprint: "3f1c9a0d5b7e2468".to_string(),
+            representative: "summarize the open PRs in termul".to_string(),
+            occurrences: 4,
+            days: 4,
+            last_at: 1_793_264_700_000,
+            cadence: Cadence {
+                schedule: super::model::Schedule::Cron {
+                    expr: "0 9 * * 1-5".to_string(),
+                    timezone: "Europe/Berlin".to_string(),
+                },
+                label: "weekdays at 09:00".to_string(),
+            },
+        },
     }
 }
 
