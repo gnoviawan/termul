@@ -8,7 +8,11 @@ import { useTerminalStore } from '@/stores/terminal-store'
 import { clearRegistry, startTrackingModes } from '@/utils/terminal-registry'
 import { commandDraftStore } from './draft-store'
 import { bumpEditorRevision, readEditorRevision } from './editor-revision'
-import { disposeSessionAdapter, forwardSessionLifecycle } from './session-adapter'
+import {
+  disposeSessionAdapter,
+  forwardSessionExit,
+  forwardSessionLifecycle
+} from './session-adapter'
 import { sessionStore } from './session-store'
 
 const event = (
@@ -67,6 +71,7 @@ afterEach(() => {
   sessionStore.reset()
   useTerminalStore.getState().setTerminals([])
   clearRegistry()
+  vi.restoreAllMocks()
 })
 
 it('forwards events before bind through the real adapter', async () => {
@@ -83,6 +88,36 @@ it('forwards events before bind through the real adapter', async () => {
       mode: 'Editor'
     })
   )
+})
+
+it('replays lifecycle before a buffered exit and consumes the exit once', async () => {
+  const apply = vi.spyOn(sessionStore, 'apply')
+  const processExited = vi.spyOn(sessionStore, 'processExited')
+
+  forwardSessionLifecycle(event('InitShell'))
+  forwardSessionLifecycle(event('PromptReady'))
+  forwardSessionExit('pty')
+
+  useTerminalStore.getState().setTerminals([mockTerminal({ id: 't', ptyId: 'pty' })])
+  await vi.waitFor(() => expect(processExited).toHaveBeenCalledTimes(1))
+
+  expect(apply.mock.invocationCallOrder.at(-1)).toBeLessThan(
+    processExited.mock.invocationCallOrder[0] as number
+  )
+  expect(processExited).toHaveBeenCalledWith('t')
+
+  useTerminalStore.getState().setTerminals([mockTerminal({ id: 't', ptyId: 'pty' })])
+  expect(processExited).toHaveBeenCalledTimes(1)
+})
+
+it('processes an exit immediately when the PTY is already bound', () => {
+  useTerminalStore.getState().setTerminals([mockTerminal({ id: 't', ptyId: 'pty' })])
+  const processExited = vi.spyOn(sessionStore, 'processExited')
+
+  forwardSessionExit('pty')
+
+  expect(processExited).toHaveBeenCalledTimes(1)
+  expect(processExited).toHaveBeenCalledWith('t')
 })
 
 it('a PTY rebind invalidates session trust but keeps the draft', async () => {

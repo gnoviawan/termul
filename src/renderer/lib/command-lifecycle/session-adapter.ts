@@ -51,6 +51,7 @@ let unsubscribeModes: (() => void) | undefined
 let loading: Promise<void> | undefined
 let observedPtyIds = new Map<string, string | undefined>()
 const pendingScreenModes = new Map<string, TerminalModes>()
+const pendingExits = new Set<string>()
 
 function knownStoreId(id: string): string | undefined {
   const store = terminalStore?.getState()
@@ -117,30 +118,48 @@ function connectTerminalStore(store: TerminalStore): void {
   unsubscribe = store.subscribe(() => {
     observeTerminalChanges(store)
     buffer.flush()
+    flushPendingExits()
     flushPendingScreenModes()
   })
   buffer.connect((ptyId) => store.getState().findTerminalByPtyId(ptyId))
+  flushPendingExits()
   // Lifecycle replay can reset a snapshot. Apply queued screen state after it.
   flushPendingScreenModes()
 }
 
+/** Replays exits once their PTY is mapped to a terminal. */
+function flushPendingExits(): void {
+  const store = terminalStore?.getState()
+  if (!store) return
+  for (const ptyId of pendingExits) {
+    const terminal = store.findTerminalByPtyId(ptyId)
+    if (!terminal) continue
+    pendingExits.delete(ptyId)
+    sessionStore.processExited(terminal.id)
+  }
+}
+
 /** Marks the session mapped to an exiting PTY as exited and clears its draft. */
 export function forwardSessionExit(ptyId: string): void {
-  const applyExit = (store: TerminalStore): void => {
-    const terminal = store.getState().findTerminalByPtyId(ptyId)
-    if (terminal) sessionStore.processExited(terminal.id)
-  }
-  if (terminalStore) {
-    applyExit(terminalStore)
+  const terminal = terminalStore?.getState().findTerminalByPtyId(ptyId)
+  if (terminal) {
+    sessionStore.processExited(terminal.id)
     return
   }
+
+  pendingExits.add(ptyId)
+  if (terminalStore) {
+    if (!unsubscribe) connectTerminalStore(terminalStore)
+    return
+  }
+
   void import('@/stores/terminal-store')
     .then(({ useTerminalStore }) => {
       // A partial test mock, or a module still initializing, has no store.
       // Calling getState would reject this discarded promise.
       if (typeof useTerminalStore?.getState !== 'function') return
       registerSessionTerminalStore(useTerminalStore)
-      applyExit(useTerminalStore)
+      if (!unsubscribe) connectTerminalStore(useTerminalStore)
     })
     .catch(() => {})
 }
@@ -171,6 +190,7 @@ export function disposeSessionAdapter(): void {
   unsubscribeModes?.()
   unsubscribeModes = undefined
   pendingScreenModes.clear()
+  pendingExits.clear()
   buffer.dispose()
   observedPtyIds.clear()
   loading = undefined
