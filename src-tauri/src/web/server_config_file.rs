@@ -130,6 +130,17 @@ pub fn validate_answers(
     // resolve to a directory literally named "   " under the server cwd).
     if answers.sessions_dir.to_string_lossy().trim().is_empty() {
         errors.sessions_dir = Some("sessions directory cannot be empty".into());
+    } else if answers
+        .sessions_dir
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        // `..` makes the effective directory ambiguous — the server resolves
+        // config paths verbatim at every boot, and every path it derives is
+        // canonical. Also the barrier guard for the filesystem probe below:
+        // a wizard-supplied path is never touched on disk until it is known
+        // to carry no parent traversal.
+        errors.sessions_dir = Some("sessions directory must not contain '..'".into());
     } else if answers.sessions_dir.exists() && !answers.sessions_dir.is_dir() {
         // A file at this path wedges every restart: `from_args` rejects it
         // before setup mode can run, and the saved file keeps it failing.
@@ -147,6 +158,13 @@ pub fn validate_answers(
         errors.projects_file = Some(
             "projects registry file cannot be empty (no platform default — enter a path)".into(),
         );
+        answers.projects_file.clone()
+    } else if answers
+        .projects_file
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        errors.projects_file = Some("projects registry file must not contain '..'".into());
         answers.projects_file.clone()
     } else {
         crate::onboard::normalize_projects_file_path(answers.projects_file.clone())

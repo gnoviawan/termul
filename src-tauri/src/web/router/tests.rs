@@ -1851,6 +1851,48 @@ async fn server_config_post_rejects_whitespace_paths() {
     );
 }
 
+/// Path values containing `..` are rejected before any filesystem probe —
+/// persisted config paths are resolved verbatim on every boot, so a parent
+/// traversal makes the effective location ambiguous.
+#[tokio::test]
+async fn server_config_post_rejects_parent_dir_components() {
+    let dir = TempDir::new("cfg-dotdot-static");
+    let state_dir = TempDir::new("cfg-dotdot-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+
+    let body = serde_json::json!({
+        "host": "127.0.0.1",
+        "port": 9090,
+        "sessionsDir": "/srv/termul/../sessions",
+        "projectsFile": "../projects.json",
+        "allowRemoteWrites": false,
+        "updateIntervalSecs": 21600,
+    })
+    .to_string();
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &body,
+        ))
+        .await
+        .expect("router response");
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], false, "{parsed}");
+    assert!(
+        parsed["data"]["fieldErrors"]["sessionsDir"].is_string(),
+        "{parsed}"
+    );
+    assert!(
+        parsed["data"]["fieldErrors"]["projectsFile"].is_string(),
+        "{parsed}"
+    );
+    assert!(
+        !server_config_file::server_config_path(state_dir.path()).exists(),
+        "a rejected apply writes nothing"
+    );
+}
+
 /// A sessions dir that exists as a regular FILE is rejected — saving it
 /// would wedge every restart (`from_args` refuses a non-directory sessions
 /// dir before setup mode could recover).
