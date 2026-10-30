@@ -233,7 +233,7 @@ const CURSOR_CONFIG: StoredAgentConfig = {
   templateId: 'cursor'
 }
 
-/** 40K of a 190K conversation window: 21%, above the 1% display floor. */
+/** 50K of 200K shown (25%); the conversation fill (21%) is above the 1% display floor. */
 const USAGE: SessionUsage = {
   used: 50_000,
   size: 200_000,
@@ -421,7 +421,7 @@ describe('mobile composer: one-row toolbar', () => {
       'Add to chat',
       PILL_NAME,
       'Agent',
-      'Context 21%, 50K of 200K tokens',
+      'Context 25%, 50K of 200K tokens',
       'Send message'
     ])
     for (const stale of ['1', '2', 'single']) {
@@ -535,10 +535,10 @@ describe('mobile composer: one-row toolbar', () => {
   it('opens the context details sheet from the ring', async () => {
     renderBar()
 
-    const ring = screen.getByRole('button', { name: 'Context 21%, 50K of 200K tokens' })
+    const ring = screen.getByRole('button', { name: 'Context 25%, 50K of 200K tokens' })
     fireEvent.click(ring)
     const sheet = screen.getByRole('dialog', { name: 'Context window' })
-    expect(within(sheet).getByText('21% used')).toBeInTheDocument()
+    expect(within(sheet).getByText('25% used')).toBeInTheDocument()
     expect(overlayIds()).toEqual(['context-details-sheet'])
 
     fireEvent.keyDown(sheet, { key: 'Escape' })

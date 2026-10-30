@@ -3,6 +3,7 @@ import {
   contextUsageBreakdown,
   contextUsagePercent,
   conversationUsageMetrics,
+  displayedUsagePercent,
   formatTokenCount,
   isDisplayableSessionUsage,
   nextContextWarning,
@@ -110,5 +111,40 @@ describe('contextUsageBreakdown', () => {
     expect(result.setupTokens).toBe(200_000)
     expect(result.conversationTokens).toBe(0)
     expect(result.left).toBe(0)
+  })
+})
+
+describe('displayedUsagePercent', () => {
+  it('counts setup tokens, so it matches the bar', () => {
+    expect(
+      displayedUsagePercent({
+        used: 50_000,
+        size: 200_000,
+        baselineUsed: 10_000,
+        updatedAt: 1,
+        source: 'reported'
+      })
+    ).toBe(25)
+  })
+
+  it('is 0 for an empty window and caps at 100', () => {
+    expect(
+      displayedUsagePercent({
+        used: 10,
+        size: 0,
+        baselineUsed: 0,
+        updatedAt: 1,
+        source: 'reported'
+      })
+    ).toBe(0)
+    expect(
+      displayedUsagePercent({
+        used: 250_000,
+        size: 200_000,
+        baselineUsed: 0,
+        updatedAt: 1,
+        source: 'reported'
+      })
+    ).toBe(100)
   })
 })

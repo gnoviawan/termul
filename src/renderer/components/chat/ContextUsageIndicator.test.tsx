@@ -9,7 +9,7 @@ vi.mock('@/hooks/use-mobile-web-shell', () => ({
   useMobileWebShell: () => mobileShellRef.current
 }))
 
-/** 40K of a 190K conversation window (200K total minus the 10K bootstrap): 21%. */
+/** 50K of 200K shown (25%); 40K of the 190K conversation window (21%) drives the warning. */
 function usage(overrides: Partial<SessionUsage> = {}): SessionUsage {
   return {
     used: 50_000,
@@ -52,10 +52,10 @@ describe('ContextUsageIndicator ring visibility', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('names the ring with the rounded conversation percent and the tokens used', () => {
+  it('names the ring with the shown percent and the tokens used', () => {
     render(<ContextUsageIndicator usage={usage()} messages={MESSAGES} />)
     expect(
-      screen.getByRole('button', { name: 'Context 21%, 50K of 200K tokens' })
+      screen.getByRole('button', { name: 'Context 25%, 50K of 200K tokens' })
     ).toBeInTheDocument()
   })
 })
@@ -74,7 +74,7 @@ describe('ContextUsageIndicator on desktop', () => {
     expect(popover).not.toHaveAttribute('data-sheet')
     expect(document.querySelector('[data-sheet]')).toBeNull()
     expect(within(popover).getByText('Context window')).toBeInTheDocument()
-    expect(within(popover).getByText('21% used')).toBeInTheDocument()
+    expect(within(popover).getByText('25% used')).toBeInTheDocument()
     expect(within(popover).getByText('Setup')).toBeInTheDocument()
     expect(within(popover).getByText('Conversation')).toBeInTheDocument()
     expect(within(popover).getByTestId('context-left')).toHaveTextContent('150K left')
@@ -117,7 +117,7 @@ describe('ContextUsageIndicator on the mobile web shell', () => {
     expect(sheet.className).toContain('pb-[max(0.5rem,env(safe-area-inset-bottom))]')
     // The title carries the heading, so the details do not repeat it.
     expect(within(sheet).getAllByText('Context window')).toHaveLength(1)
-    expect(within(sheet).getByText('21% used')).toBeInTheDocument()
+    expect(within(sheet).getByText('25% used')).toBeInTheDocument()
     expect(within(sheet).getByText('Setup')).toBeInTheDocument()
     expect(within(sheet).getByText('Conversation')).toBeInTheDocument()
     expect(within(sheet).getByTestId('context-left')).toHaveTextContent('150K left')
@@ -237,6 +237,8 @@ describe('ContextUsageIndicator warning and Compact', () => {
     // 77%: below the off threshold.
     view.rerender(<ContextUsageIndicator usage={usage({ used: 156_300 })} messages={MESSAGES} />)
     expect(ring()).not.toHaveAttribute('data-warning')
+    // The shown percent counts setup (78%); the warning uses the conversation percent (77%).
+    expect(ring()).toHaveAccessibleName('Context 78%, 156.3K of 200K tokens')
   })
 
   it('shows "Nearing the limit" in the footer when the warning is on', () => {

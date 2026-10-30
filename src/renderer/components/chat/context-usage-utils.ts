@@ -81,6 +81,15 @@ export function contextUsagePercent(used: number, size: number): number {
   return Math.min(100, Math.max(0, (used / size) * 100))
 }
 
+/**
+ * The percent shown to the user (number, ring, aria-label): all used tokens,
+ * setup included, of the full window, so it matches the bar. The warning keeps
+ * using the conversation percent.
+ */
+export function displayedUsagePercent(usage: SessionUsage): number {
+  return usage.size > 0 ? contextUsagePercent(Math.max(0, usage.used), usage.size) : 0
+}
+
 export function formatReportedCost(amount: number, currency: string): string {
   try {
     return new Intl.NumberFormat(undefined, {

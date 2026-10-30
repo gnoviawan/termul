@@ -10,6 +10,7 @@ import { type CompactPhase, type CompactSignals, useCompactRequest } from './com
 import {
   contextUsageBreakdown,
   conversationUsageMetrics,
+  displayedUsagePercent,
   formatReportedCost,
   formatTokenCount,
   isDisplayableSessionUsage,
@@ -81,10 +82,10 @@ export function ContextUsageDetails({
   compactPhase?: CompactPhase
   compactDisabled?: boolean
 }): React.JSX.Element {
-  const { percent } = conversationUsageMetrics(usage)
+  const percent = displayedUsagePercent(usage)
   const { setupTokens, conversationTokens, setupFraction, conversationFraction, left } =
     contextUsageBreakdown(usage)
-  const isWarning = warning ?? nextContextWarning(false, percent)
+  const isWarning = warning ?? nextContextWarning(false, conversationUsageMetrics(usage).percent)
   const pending = compactPhase === 'pending'
   const leftLabel = `${formatTokenCount(left)} left`
   return (
@@ -250,7 +251,7 @@ export function ContextUsageIndicator({
 
   if (!visible || !isDisplayableSessionUsage(visible)) return null
 
-  const { percent } = conversationUsageMetrics(visible)
+  const percent = displayedUsagePercent(visible)
   const offset = CIRCUMFERENCE * (1 - percent / 100)
   const details = (showHeading: boolean) => (
     <ContextUsageDetails
