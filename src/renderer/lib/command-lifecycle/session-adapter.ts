@@ -1,4 +1,6 @@
+import type { TerminalModes } from '@shared/types/ipc.types'
 import type { SessionLifecyclePayload } from '@shared/types/web-terminal-protocol.types'
+import { onTerminalModesChanged } from '@/utils/terminal-registry'
 import { LifecycleBuffer } from './session-buffer'
 import { sessionStore } from './session-store'
 
@@ -45,8 +47,52 @@ const buffer = new LifecycleBuffer(
   invalidateUnboundEditors
 )
 let unsubscribe: (() => void) | undefined
+let unsubscribeModes: (() => void) | undefined
 let loading: Promise<void> | undefined
 let observedPtyIds = new Map<string, string | undefined>()
+const pendingScreenModes = new Map<string, TerminalModes>()
+
+function knownStoreId(id: string): string | undefined {
+  const store = terminalStore?.getState()
+  if (!store) return undefined
+  if (store.terminals.some((terminal) => terminal.id === id)) return id
+  return store.findTerminalByPtyId(id)?.id
+}
+
+function deliverScreenMode(registryId: string, modes: TerminalModes): void {
+  const storeId = knownStoreId(registryId)
+  if (!storeId) {
+    pendingScreenModes.set(registryId, modes)
+    return
+  }
+  pendingScreenModes.delete(registryId)
+  sessionStore.applyScreen(storeId, modes)
+}
+
+function flushPendingScreenModes(): void {
+  const store = terminalStore?.getState()
+  if (!store) return
+  for (const [id, modes] of pendingScreenModes) {
+    const storeId = knownStoreId(id)
+    if (!storeId) continue
+    pendingScreenModes.delete(id)
+    sessionStore.applyScreen(storeId, modes)
+  }
+}
+
+function ensureScreenFollower(): void {
+  if (unsubscribeModes) return
+  unsubscribeModes = onTerminalModesChanged(deliverScreenMode)
+}
+
+/** Applies a known restore/replay snapshot. Null modes leave the store unchanged. */
+export function publishScreenMode(
+  storeId: string | null | undefined,
+  modes: TerminalModes | null | undefined
+): void {
+  if (!storeId || modes == null) return
+  deliverScreenMode(storeId, modes)
+}
 
 function observeTerminalChanges(store: TerminalStore): void {
   const terminals = store.getState().terminals
@@ -71,8 +117,11 @@ function connectTerminalStore(store: TerminalStore): void {
   unsubscribe = store.subscribe(() => {
     observeTerminalChanges(store)
     buffer.flush()
+    flushPendingScreenModes()
   })
   buffer.connect((ptyId) => store.getState().findTerminalByPtyId(ptyId))
+  // Lifecycle replay can reset a snapshot. Apply queued screen state after it.
+  flushPendingScreenModes()
 }
 
 /** Marks the session mapped to an exiting PTY as exited and clears its draft. */
@@ -92,6 +141,7 @@ export function forwardSessionExit(ptyId: string): void {
 }
 
 export function forwardSessionLifecycle(event: SessionLifecyclePayload): void {
+  ensureScreenFollower()
   // Observe rebinds synchronously, including those before an async turn can settle.
   if (!unsubscribe && terminalStore) connectTerminalStore(terminalStore)
   buffer.forward(event)
@@ -109,10 +159,15 @@ export function forwardSessionLifecycle(event: SessionLifecyclePayload): void {
 export function disposeSessionAdapter(): void {
   unsubscribe?.()
   unsubscribe = undefined
+  unsubscribeModes?.()
+  unsubscribeModes = undefined
+  pendingScreenModes.clear()
   buffer.dispose()
   observedPtyIds.clear()
   loading = undefined
 }
+
+ensureScreenFollower()
 
 // Guarded so production builds and vitest skip it.
 if (import.meta.hot) import.meta.hot.dispose(disposeSessionAdapter)

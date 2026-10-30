@@ -27,6 +27,7 @@ import { useTerminalResizeV2 } from '@/hooks/use-terminal-resize-v2'
 import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 import { terminalApi } from '@/lib/api'
 import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
+import { publishScreenMode } from '@/lib/command-lifecycle/session-adapter'
 import { buildTerminalPathLinks, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { MONO_STACK } from '@/lib/font-stacks'
 import { logFrontendError } from '@/lib/log-api'
@@ -158,6 +159,9 @@ function ConnectedTerminalComponent({
 }: ConnectedTerminalProps): React.JSX.Element {
   // 1. STABLE ID DERIVATION
   const targetId = storeTerminalId || externalTerminalId
+  function publishReplayedModes(modes: TerminalModes | null | undefined): void {
+    publishScreenMode(targetId, modes)
+  }
 
   // 2. STORE HOOKS (Must be at the top)
   const { healthStatus, restartTerminal } = useTerminalStore(
@@ -1000,10 +1004,12 @@ function ConnectedTerminalComponent({
                   // R3: replay the full captured DEC mode set (alt-screen + bracketed-paste
                   // + cursor + mouse), not just alt-screen — a partial/trimmed transcript
                   // may miss the initial mode sequences. Idempotent with modes in the stream.
+                  publishReplayedModes(initialModesRef.current)
                   terminal.write(buildRehydrateSequences(initialModesRef.current))
                   terminal.write(transcript)
                   terminal.write(PARTIAL_RESTORE_NOTE)
                 } else {
+                  publishReplayedModes(initialModesRef.current)
                   terminal.write(buildRehydrateSequences(initialModesRef.current))
                   terminal.write(transcript)
                 }
@@ -1023,6 +1029,7 @@ function ConnectedTerminalComponent({
                   result.data.id
                 )
               } else if (initialScrollback && initialScrollback.length > 0) {
+                publishReplayedModes(initialModes)
                 restoreScrollback(terminal, initialScrollback, initialModes)
                 recordReplayEvent(
                   'restore-replay-succeeded',
@@ -1152,6 +1159,7 @@ function ConnectedTerminalComponent({
                 // injected bytes shift a live TUI's cursor math.
                 const modes = snapshotXtermModes(terminal)
                 terminal.reset()
+                publishReplayedModes(modes)
                 terminal.write(buildRehydrateSequences(modes))
               }
               terminal.write(transcript)
@@ -1220,10 +1228,12 @@ function ConnectedTerminalComponent({
             if (transcript) {
               if (transcriptLooksPartial) {
                 // R3: replay the full captured DEC mode set, not just alt-screen.
+                publishReplayedModes(initialModesRef.current)
                 terminal.write(buildRehydrateSequences(initialModesRef.current))
                 terminal.write(transcript)
                 terminal.write(PARTIAL_RESTORE_NOTE)
               } else {
+                publishReplayedModes(initialModesRef.current)
                 terminal.write(buildRehydrateSequences(initialModesRef.current))
                 terminal.write(transcript)
               }
@@ -1243,6 +1253,7 @@ function ConnectedTerminalComponent({
                 externalTerminalId
               )
             } else if (initialScrollback && initialScrollback.length > 0) {
+              publishReplayedModes(initialModes)
               restoreScrollback(terminal, initialScrollback, initialModes)
               recordReplayEvent(
                 'restore-replay-succeeded',
@@ -1669,11 +1680,14 @@ function ConnectedTerminalComponent({
             const transcript = useTerminalStore.getState().peekTranscript(result.data.id)
             if (transcript) {
               // R3: replay captured modes before the (possibly trimmed) transcript.
+              publishReplayedModes(initialModesRef.current)
               terminal.write(buildRehydrateSequences(initialModesRef.current))
               terminal.write(transcript)
               useTerminalStore.getState().consumeTranscript(result.data.id)
-            } else if (initialScrollbackRef.current?.length)
+            } else if (initialScrollbackRef.current?.length) {
+              publishReplayedModes(initialModesRef.current)
               restoreScrollback(terminal, initialScrollbackRef.current, initialModesRef.current)
+            }
             if (onSpawnedRef.current) onSpawnedRef.current(result.data.id)
             if (onBoundToStoreTerminalRef.current) onBoundToStoreTerminalRef.current(result.data.id)
             // CAP-3: capture the issued lease (in-memory only), after the
@@ -1695,11 +1709,14 @@ function ConnectedTerminalComponent({
         const transcript = useTerminalStore.getState().peekTranscript(externalTerminalId)
         if (transcript) {
           // R3: replay captured modes before the (possibly trimmed) transcript.
+          publishReplayedModes(initialModesRef.current)
           terminal.write(buildRehydrateSequences(initialModesRef.current))
           terminal.write(transcript)
           useTerminalStore.getState().consumeTranscript(externalTerminalId)
-        } else if (initialScrollbackRef.current?.length)
+        } else if (initialScrollbackRef.current?.length) {
+          publishReplayedModes(initialModesRef.current)
           restoreScrollback(terminal, initialScrollbackRef.current, initialModesRef.current)
+        }
         if (onBoundToStoreTerminalRef.current) onBoundToStoreTerminalRef.current(externalTerminalId)
       }
     }
