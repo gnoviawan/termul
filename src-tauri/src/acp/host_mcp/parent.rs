@@ -31,6 +31,7 @@ use crate::acp::session_persistence::SessionPersistence;
 use crate::web::EventSink;
 
 mod ask;
+mod automation;
 mod canvas;
 pub use ask::IdleSignal;
 use ask::PendingAsk;
@@ -102,6 +103,8 @@ pub struct HostPlanServer {
     presence: Arc<Presence>,
     /// The newest export to each project file.
     exports: Arc<canvas::ExportClaims>,
+    /// Answers `Automation` frames when set; otherwise the installed service.
+    automation: std::sync::OnceLock<Arc<crate::automation::service::AutomationService>>,
 }
 
 impl HostPlanServer {
@@ -133,6 +136,7 @@ impl HostPlanServer {
             presence: Presence::new(Arc::clone(canvas.mounts())),
             canvas,
             exports: Arc::default(),
+            automation: std::sync::OnceLock::new(),
         });
         let server_for_thread = Arc::clone(&server);
         let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();
@@ -605,6 +609,10 @@ impl HostPlanServer {
                     req.canvas_params,
                 )
                 .await
+            }
+            FrameKind::Automation => {
+                self.automation_call(&real_session_id, req.automation_tool, req.automation_input)
+                    .await
             }
             FrameKind::AskUser => {
                 let Some(input) = req.ask else {

@@ -95,7 +95,7 @@ fn parse_env_agent_id_is_optional() {
     clear_env();
 }
 
-fn handshake_config() -> ChildConfig {
+pub(super) fn handshake_config() -> ChildConfig {
     ChildConfig {
         port: 9,
         token: "tok".to_string(),
@@ -104,7 +104,7 @@ fn handshake_config() -> ChildConfig {
     }
 }
 
-async fn read_json_id(
+pub(super) async fn read_json_id(
     reader: &mut (impl tokio::io::AsyncBufRead + Unpin),
     id: i64,
 ) -> serde_json::Value {
@@ -456,7 +456,7 @@ async fn a_client_cancelled_ask_user_ends_the_parked_call_in_the_parent() {
     serve.await.expect("serve task").expect("serve ok");
 }
 
-async fn list_tools(config: ChildConfig) -> Vec<serde_json::Value> {
+pub(super) async fn list_tools(config: ChildConfig) -> Vec<serde_json::Value> {
     let (server_io, client_io) = tokio::io::duplex(256 * 1024);
     let (server_read, server_write) = tokio::io::split(server_io);
     let (client_read, mut client_write) = tokio::io::split(client_io);
@@ -603,8 +603,15 @@ fn without_a_host_the_browser_tool_is_advertised_fail_closed() {
     }
 }
 
-const HOST_TOOLS: [&str; 6] = [
+const HOST_TOOLS: [&str; 13] = [
     "ask_user",
+    "automation_apply_ops",
+    "automation_capabilities",
+    "automation_create",
+    "automation_get",
+    "automation_guide",
+    "automation_list",
+    "automation_propose",
     "browser",
     "get_canvas_style",
     "plan",
@@ -612,17 +619,17 @@ const HOST_TOOLS: [&str; 6] = [
     "set_session_title",
 ];
 
-type ClientWriter = tokio::io::WriteHalf<tokio::io::DuplexStream>;
-type ClientReader = BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>;
+pub(super) type ClientWriter = tokio::io::WriteHalf<tokio::io::DuplexStream>;
+pub(super) type ClientReader = BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>;
 
-async fn send_line(writer: &mut ClientWriter, line: &str) {
+pub(super) async fn send_line(writer: &mut ClientWriter, line: &str) {
     writer.write_all(line.as_bytes()).await.unwrap();
     writer.write_all(b"\n").await.unwrap();
 }
 
 /// Open an MCP session on `serve_mcp_transport` and run `body` with the
 /// client's writer and reader.
-async fn with_mcp_session<F, Fut>(config: ChildConfig, body: F)
+pub(super) async fn with_mcp_session<F, Fut>(config: ChildConfig, body: F)
 where
     F: FnOnce(ClientWriter, ClientReader) -> Fut,
     Fut: std::future::Future<Output = ()>,
