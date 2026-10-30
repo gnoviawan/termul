@@ -152,6 +152,7 @@ impl Engine {
             project_id: project_id.to_string(),
             automation_id: automation_id.cloned(),
             proposed: false,
+            proposed_by: None,
         });
     }
 

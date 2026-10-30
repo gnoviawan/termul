@@ -292,9 +292,10 @@ impl AutomationService {
         Ok(approved)
     }
 
-    /// A chat agent asks the user to review `id`: one change marked
-    /// `proposed`. Never approves; refused while any issue is open.
-    pub fn propose(&self, id: &AutomationId) -> ServiceResult<Automation> {
+    /// A chat agent (`by`, its display name when known) asks the user to
+    /// review `id`: one change marked `proposed`. Never approves; refused
+    /// while any issue is open.
+    pub fn propose(&self, id: &AutomationId, by: Option<String>) -> ServiceResult<Automation> {
         let automation = self.load(id)?;
         let issues = self.issues(&automation);
         if !issues.is_empty() {
@@ -308,6 +309,7 @@ impl AutomationService {
             project_id: automation.project_id.clone(),
             automation_id: Some(automation.id.clone()),
             proposed: true,
+            proposed_by: by,
         });
         Ok(automation)
     }

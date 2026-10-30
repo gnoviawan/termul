@@ -296,6 +296,14 @@ describe('automation facade transports', () => {
 
     publishAutomationChange({ project_id: 'p1', automation_id: 'auto-1' })
     publishAutomationChange({ project_id: 'p1', automation_id: null })
+    publishAutomationChange({
+      project_id: 'p1',
+      automation_id: 'auto-1',
+      proposed: true,
+      proposed_by: 'Claude'
+    })
+    publishAutomationChange({ project_id: 'p1', automation_id: 'auto-1', proposed: true })
+    publishAutomationChange({ project_id: 'p1', automation_id: 'auto-1', proposed: false })
     publishAutomationChange({ project_id: 'p1' })
     publishAutomationChange({ project_id: 'p1', automation_id: 7 })
     stop()
@@ -303,7 +311,10 @@ describe('automation facade transports', () => {
 
     expect(seen).toEqual([
       { project_id: 'p1', automation_id: 'auto-1' },
-      { project_id: 'p1', automation_id: null }
+      { project_id: 'p1', automation_id: null },
+      { project_id: 'p1', automation_id: 'auto-1', proposed: true, proposed_by: 'Claude' },
+      { project_id: 'p1', automation_id: 'auto-1', proposed: true },
+      { project_id: 'p1', automation_id: 'auto-1' }
     ])
   })
 })

@@ -1,11 +1,12 @@
 import type { AutomationId, RunId } from '@shared/types/automation.types'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeft, Workflow } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { AutomationDetail } from './AutomationDetail'
 import { AutomationList, AutomationListEmpty } from './AutomationList'
 import { AutomationRunDetail } from './AutomationRunDetail'
+import { useAutomationFocus } from './automation-focus'
 import { useAutomationDetail, useAutomationList, useAutomationRuns } from './use-automations'
 
 interface AutomationsPanelProps {
@@ -35,6 +36,13 @@ export function AutomationsPanel({
     setSelectedId(id)
     setRunId(null)
   }
+  const requested = useAutomationFocus((s) => s.requests[projectId])
+  useEffect(() => {
+    if (!requested) return
+    setSelectedId(requested)
+    setRunId(null)
+    useAutomationFocus.getState().clear(projectId)
+  }, [requested, projectId])
   const reloadAll = (): void => {
     list.reload()
     detail.reload()

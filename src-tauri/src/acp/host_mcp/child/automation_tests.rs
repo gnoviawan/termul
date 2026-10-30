@@ -108,6 +108,14 @@ fn an_agent_builds_fixes_and_proposes_an_automation_that_stays_unapproved() {
     let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
     let service = service();
     harness.server().use_automation_service(service.clone());
+    service.engine().agents().record(&AgentConfig {
+        config_id: Some("test".to_string()),
+        name: "Test agent".to_string(),
+        command: "/opt/agents/launch-test".to_string(),
+        args: Vec::new(),
+        env: HashMap::new(),
+        allow_terminal: false,
+    });
     let mut changes = service.subscribe();
     let svc = service.clone();
     harness
@@ -186,6 +194,7 @@ fn an_agent_builds_fixes_and_proposes_an_automation_that_stays_unapproved() {
             project_id: "proj-1".to_string(),
             automation_id: Some(id.clone()),
             proposed: true,
+            proposed_by: Some("Test agent".to_string()),
         }]
     );
     let stored = service.get(&id).unwrap().automation;
