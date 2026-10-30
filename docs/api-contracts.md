@@ -185,7 +185,7 @@ Tauri commands take camelCase arguments and run only from the `main` webview. Ot
 | `automation_set_secret` | `PUT /api/automation-secrets` | `projectId`, `name`, `value` | `null` |
 | `automation_delete_secret` | `DELETE /api/automation-secrets?project_id=&name=` | `projectId`, `name` | `null` |
 
-Secret values go in and never come back out. The host stores them in the OS keychain.
+Secret values go in and never come back out. The host stores them in the OS keychain. A host whose keychain does not answer at startup, such as `termul-server` on headless Linux, stores them instead in `automation-secrets.json` in its data directory: an owner-only (`0600`) JSON object keyed like the keychain entries, `automation:<project_id>:<NAME>`. A host that already has that file keeps using it. The log names the backend once at startup and never carries a value.
 
 The `/api/automation` prefix is bearer-gated. A host without a token gate serves only loopback peers. Every `POST`, `PUT` and `DELETE` except `preview-schedule` passes the remote-write guard: the desktop shared-live host refuses them, and `termul-server` admits a non-loopback peer only with `--allow-remote-writes`.
 

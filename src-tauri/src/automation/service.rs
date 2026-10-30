@@ -19,7 +19,7 @@ use super::model::{
 };
 use super::policy;
 use super::schedule;
-use super::secrets::{KeychainVault, SecretError, Secrets};
+use super::secrets::{self, SecretError, Secrets};
 use super::store::{AutomationStore, StoreError, DB_FILE_NAME};
 use crate::acp::config::AgentConfig;
 use crate::acp::AcpManager;
@@ -141,7 +141,8 @@ impl AutomationService {
     }
 
     /// The production wiring: `automations.sqlite` and the known-agents file
-    /// in `data_dir`, secrets in the OS keychain.
+    /// in `data_dir`, secrets in the OS keychain or, without one, the file
+    /// vault in `data_dir`.
     pub fn open(
         data_dir: &Path,
         acp: Arc<AcpManager>,
@@ -152,7 +153,7 @@ impl AutomationService {
                 .map_err(|e| format!("automation store: {e}"))?,
         );
         let engine = Engine::new(EngineDeps {
-            secrets: Arc::new(Secrets::new(Arc::new(KeychainVault), store.clone())),
+            secrets: Arc::new(Secrets::new(secrets::open_vault(data_dir), store.clone())),
             store,
             agents: Arc::new(AgentRegistry::open(data_dir.join(agents::FILE_NAME))),
             acp,

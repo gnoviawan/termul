@@ -56,8 +56,8 @@ export function AutomationSecretsDialog({
         <DialogHeader>
           <DialogTitle>Secrets</DialogTitle>
           <DialogDescription>
-            Kept in the keychain of the machine that runs this project. Only HTTP steps can use
-            them, and a saved value is never shown again.
+            Kept on the machine that runs this project, in its keychain or, without one, an
+            owner-only file. Only HTTP steps can use them, and a saved value is never shown again.
           </DialogDescription>
         </DialogHeader>
         {error && <p className="text-xs text-destructive">{error}</p>}
