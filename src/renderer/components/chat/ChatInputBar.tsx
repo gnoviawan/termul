@@ -188,6 +188,20 @@ export function ChatInputBar({
   )
   const { skills: availableSkills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
+  // Compact shows only when the agent lists `/compact`; it sends the command as a prompt.
+  const hasCompactCommand = commands.some((command) => command.name === 'compact')
+  const onCompact = useMemo(
+    () => (hasCompactCommand ? () => onSend('/compact') : undefined),
+    [hasCompactCommand, onSend]
+  )
+  const compactSignals = useMemo(
+    () => ({
+      connected: session.status === 'active',
+      activeTurn: session.activeTurn,
+      compaction: session.opencodeNotice?.compaction ?? null
+    }),
+    [session.status, session.activeTurn, session.opencodeNotice?.compaction]
+  )
   // Render gate (multi-project perf): the live subscription stays, but the
   // derived value freezes while the host panel is hidden (the composer only
   // reads `messages` for the context-usage ring's bootstrap filter).
@@ -727,6 +741,8 @@ export function ChatInputBar({
                   usage={sessionUsage}
                   messages={messages}
                   className="-mr-2 -my-[3px]"
+                  onCompact={onCompact}
+                  compactSignals={compactSignals}
                 />
               )}
             </div>
@@ -748,7 +764,12 @@ export function ChatInputBar({
                   {agentModeChip}
                   <div className="flex-1" />
                   <ClaudeAccountChip sessionId={session.id} compact />
-                  <ContextUsageIndicator usage={sessionUsage} messages={messages} />
+                  <ContextUsageIndicator
+                    usage={sessionUsage}
+                    messages={messages}
+                    onCompact={onCompact}
+                    compactSignals={compactSignals}
+                  />
                   {sendButton}
                 </div>
               ) : (

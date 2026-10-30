@@ -92,3 +92,38 @@ export function formatReportedCost(amount: number, currency: string): string {
     return `${amount} ${currency}`
   }
 }
+
+/** Warning turns on at 80% and clears below 78%, so it never flickers at the edge. */
+export const CONTEXT_WARNING_ON = 80
+export const CONTEXT_WARNING_OFF = 78
+
+export function nextContextWarning(previous: boolean, percent: number): boolean {
+  if (percent >= CONTEXT_WARNING_ON) return true
+  if (percent < CONTEXT_WARNING_OFF) return false
+  return previous
+}
+
+/**
+ * The two parts of the window the agent tells us about: the first report
+ * (system prompt, tools) and everything the conversation added after it.
+ * ACP has no finer breakdown, so the UI shows exactly these two.
+ */
+export function contextUsageBreakdown(usage: SessionUsage): {
+  setupTokens: number
+  conversationTokens: number
+  setupFraction: number
+  conversationFraction: number
+  left: number
+} {
+  const size = Math.max(0, usage.size)
+  const used = Math.min(Math.max(0, usage.used), size)
+  const setupTokens = Math.min(Math.max(0, usage.baselineUsed), used)
+  const conversationTokens = used - setupTokens
+  return {
+    setupTokens,
+    conversationTokens,
+    setupFraction: size > 0 ? setupTokens / size : 0,
+    conversationFraction: size > 0 ? conversationTokens / size : 0,
+    left: size - used
+  }
+}

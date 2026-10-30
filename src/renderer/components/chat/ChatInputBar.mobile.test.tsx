@@ -421,7 +421,7 @@ describe('mobile composer: one-row toolbar', () => {
       'Add to chat',
       PILL_NAME,
       'Agent',
-      'Context 21 percent used',
+      'Context 21 percent used, 150K left',
       'Send message'
     ])
     for (const stale of ['1', '2', 'single']) {
@@ -535,10 +535,10 @@ describe('mobile composer: one-row toolbar', () => {
   it('opens the context details sheet from the ring', async () => {
     renderBar()
 
-    const ring = screen.getByRole('button', { name: 'Context 21 percent used' })
+    const ring = screen.getByRole('button', { name: 'Context 21 percent used, 150K left' })
     fireEvent.click(ring)
     const sheet = screen.getByRole('dialog', { name: 'Context window' })
-    expect(within(sheet).getByText('21% conversation used')).toBeInTheDocument()
+    expect(within(sheet).getByText('21% used')).toBeInTheDocument()
     expect(overlayIds()).toEqual(['context-details-sheet'])
 
     fireEvent.keyDown(sheet, { key: 'Escape' })

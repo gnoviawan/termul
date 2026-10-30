@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  contextUsageBreakdown,
   contextUsagePercent,
   conversationUsageMetrics,
   formatTokenCount,
   isDisplayableSessionUsage,
+  nextContextWarning,
   shouldShowSessionUsage
 } from './context-usage-utils'
 
@@ -67,5 +69,46 @@ describe('context-usage-utils', () => {
         source: 'reported'
       })
     ).toBe(false)
+  })
+})
+
+describe('nextContextWarning', () => {
+  it('turns on at 80, holds between 78 and 80, and clears below 78', () => {
+    expect(nextContextWarning(false, 79)).toBe(false)
+    expect(nextContextWarning(false, 80)).toBe(true)
+    expect(nextContextWarning(true, 78)).toBe(true)
+    expect(nextContextWarning(true, 77.9)).toBe(false)
+  })
+})
+
+describe('contextUsageBreakdown', () => {
+  it('splits used tokens into setup and conversation and reports tokens left', () => {
+    const result = contextUsageBreakdown({
+      used: 50_000,
+      size: 200_000,
+      baselineUsed: 10_000,
+      updatedAt: 1,
+      source: 'reported'
+    })
+    expect(result).toEqual({
+      setupTokens: 10_000,
+      conversationTokens: 40_000,
+      setupFraction: 0.05,
+      conversationFraction: 0.2,
+      left: 150_000
+    })
+  })
+
+  it('clamps a baseline above used and used above size', () => {
+    const result = contextUsageBreakdown({
+      used: 250_000,
+      size: 200_000,
+      baselineUsed: 300_000,
+      updatedAt: 1,
+      source: 'reported'
+    })
+    expect(result.setupTokens).toBe(200_000)
+    expect(result.conversationTokens).toBe(0)
+    expect(result.left).toBe(0)
   })
 })
