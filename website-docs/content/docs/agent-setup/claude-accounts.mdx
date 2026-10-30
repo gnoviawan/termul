@@ -46,10 +46,8 @@ Each account has a **⋯** menu with these actions:
 
 - **Make default**: projects that follow the default use this account.
 - **Sign in** or **Sign in again**: repeat the sign-in, for example after the login expires.
-- **Rename**: change the name Termul shows. Desktop app only.
-- **Remove**: sign Claude Code out of the account on this computer. Its chat history stays. Projects that used it move to the default account. You cannot remove **Default**. Desktop app only.
-
-In the browser version, rename and remove accounts with the `termul-server claude account` commands on the server. See [Manage accounts on a server](#manage-accounts-on-a-server).
+- **Rename**: change the name Termul shows.
+- **Remove**: sign Claude Code out of the account on this computer. Its chat history stays. Projects that used it move to the default account. You cannot remove **Default**.
 
 Every account shares the same Claude Code settings, skills, plugins and chat history. Only the login is separate.
 
@@ -89,7 +87,7 @@ Project Settings shows the same warning when the project's account is at its lim
 
 ## Manage accounts on a server
 
-When Termul runs as a server for the browser version, the browser can list accounts, add one, sign in to it, make one the default, and pick one per project. To rename or remove an account, or to manage accounts without a browser, run these commands on the server. If the server uses `--state-dir`, add the same `--state-dir PATH` after `claude`.
+When Termul runs as a server for the browser version, the browser can list, add, sign in to, rename, and remove accounts, make one the default, and pick one per project. To manage accounts without a browser, run these commands on the server. If the server uses `--state-dir`, add the same `--state-dir PATH` after `claude`.
 
 ```bash
 termul-server claude account list
