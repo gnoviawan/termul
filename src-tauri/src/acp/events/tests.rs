@@ -127,6 +127,23 @@ fn permission_request_serializes_request_id() {
 }
 
 #[test]
+fn permission_request_serializes_turn_id_when_set() {
+    let event = PermissionRequestEvent {
+        agent_id: AgentId("a".to_string()),
+        session_id: SessionId::new("s"),
+        request_id: "req-8".to_string(),
+        tool_call: agent_client_protocol::schema::v1::ToolCallUpdate::new(
+            "tc-1",
+            agent_client_protocol::schema::v1::ToolCallUpdateFields::new(),
+        ),
+        options: vec![],
+        turn_id: Some("turn-1".to_string()),
+    };
+    let value = serde_json::to_value(&event).unwrap();
+    assert_eq!(value["turnId"], "turn-1");
+}
+
+#[test]
 fn prompt_complete_serializes_stop_reason_snake_case() {
     let event = PromptCompleteEvent {
         agent_id: AgentId("a".to_string()),

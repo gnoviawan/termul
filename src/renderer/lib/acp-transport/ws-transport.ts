@@ -643,6 +643,8 @@ export class WsAcpTransport implements AcpTransport {
       return
     }
     let reply: SessionSubscribeReply | undefined
+    // A close/delete/reopen during the round-trip makes the reply's approvals stale.
+    const reopenGeneration = this.recoveryGenerationProvider?.(sessionId)
     try {
       reply = await this.request<SessionSubscribeReply>('subscribe', payload, timeoutMs)
     } catch (err) {
@@ -652,7 +654,7 @@ export class WsAcpTransport implements AcpTransport {
       }
       throw err
     }
-    this.installPendingPermissions(sessionId, reply)
+    this.installRecoveredPendingPermissions(sessionId, reply, reopenGeneration)
     const replyEpoch = reply?.logEpoch
     if (!replyEpoch) return
     if (epoch && epoch !== replyEpoch && this.lastSeq.has(sessionId)) {

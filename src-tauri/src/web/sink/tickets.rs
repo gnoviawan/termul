@@ -39,7 +39,7 @@ impl WsRelaySink {
             .map_or(0, |rendezvous| rendezvous.release_session(session_id));
         if permissions + questions > 0 {
             tracing::info!(
-                session_id,
+                session_id = %crate::logging::redact_session_id(session_id),
                 permissions,
                 questions,
                 "released pending approvals after the turn ended"

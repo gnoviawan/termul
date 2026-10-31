@@ -70,6 +70,8 @@ class PendingHost {
   static headSeq = 5
   /** Cursors the host refuses `stale` (forces a snapshot). */
   static staleCursor = false
+  /** Runs when a `subscribe` arrives, before its reply. */
+  static onSubscribe: (() => void) | null = null
 
   readyState = PendingHost.CONNECTING
   onopen: ((ev: Event) => void) | null = null
@@ -95,6 +97,7 @@ class PendingHost {
     if (req.type === 'authenticate') {
       this.reply(req.id, { historyMode: 'server', runtimePolicy: {} })
     } else if (req.type === 'subscribe') {
+      PendingHost.onSubscribe?.()
       if (PendingHost.staleCursor && req.payload.lastSeq !== undefined) {
         queueMicrotask(() =>
           this.emit({ id: req.id, ok: false, err: { code: 'stale', message: 'stale' } })
@@ -166,6 +169,7 @@ describe('WsAcpTransport pending approvals (issue #1595)', () => {
     PendingHost.pending = undefined
     PendingHost.headSeq = 5
     PendingHost.staleCursor = false
+    PendingHost.onSubscribe = null
   })
 
   it('hands a reconnecting subscription the approvals the host still holds', async () => {
@@ -208,6 +212,26 @@ describe('WsAcpTransport pending approvals (issue #1595)', () => {
     // The same snapshot for an unchanged generation still restores them.
     transport.setRecoveryHandler(async () => {})
     transport.seedSessionCursor(SID, { lastSeq: 3, logEpoch: 'epoch-A' })
+    await transport.subscribeSession(SID, undefined, true)
+    expect(installed).toEqual([{ sessionId: SID, requests: [request('perm-1')] }])
+    transport.dispose()
+  })
+
+  it('does not restore approvals from a subscribe reply that a close/reopen made stale', async () => {
+    PendingHost.pending = [request('perm-1')]
+    const { transport, installed } = await connected()
+    let generation = 1
+    transport.setRecoveryGenerationProvider(() => generation)
+    // The session is closed and reopened while the subscribe is in flight.
+    PendingHost.onSubscribe = () => {
+      generation = 2
+    }
+    transport.seedSessionCursor(SID, { lastSeq: 5, logEpoch: 'epoch-A' })
+    await transport.subscribeSession(SID)
+    expect(installed).toEqual([])
+
+    // The same reply for an unchanged generation still restores them.
+    PendingHost.onSubscribe = null
     await transport.subscribeSession(SID, undefined, true)
     expect(installed).toEqual([{ sessionId: SID, requests: [request('perm-1')] }])
     transport.dispose()
