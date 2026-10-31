@@ -190,6 +190,14 @@ pub enum PlanCaller {
     Client(String),
 }
 
+impl PlanCaller {
+    fn id(&self) -> &str {
+        match self {
+            Self::Connection(id) | Self::Client(id) => id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BaseLaunch {
     Stdio {
@@ -621,6 +629,14 @@ impl PlanStore {
         Ok((plan_id, expires_at))
     }
 
+    /// Drops every plan `caller` holds, as when its connection closes.
+    pub(crate) fn forget_caller(&self, caller: &PlanCaller) -> usize {
+        let mut plans = self.plans.lock();
+        let before = plans.len();
+        plans.retain(|_, plan| plan.caller != *caller);
+        before - plans.len()
+    }
+
     #[cfg(test)]
     pub(crate) fn count(&self) -> usize {
         self.plans.lock().len()
@@ -663,7 +679,7 @@ pub(crate) fn plan_install(
         _ => 0,
     };
     let input_bytes: usize = request.inputs.iter().map(|(k, v)| k.len() + v.len()).sum();
-    if import_bytes + input_bytes > MAX_PLAN_REQUEST_BYTES {
+    if caller.id().len() + import_bytes + input_bytes > MAX_PLAN_REQUEST_BYTES {
         return Err(error(
             VALIDATION_ERROR,
             format!("the plan request exceeds {} KiB", MAX_PLAN_REQUEST_BYTES / 1024),

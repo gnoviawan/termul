@@ -159,3 +159,16 @@ async fn ws_and_http_refuse_a_malformed_install_request_alike() {
         json!({ "outcome": "unsupported", "reason": { "code": "denied-env", "name": "NODE_OPTIONS" } })
     );
 }
+
+#[tokio::test]
+async fn a_closed_connection_drops_its_install_plans() {
+    let env = env();
+    let planned = ws_request(&env, "plan_mcp_install", ws_plan_payload()).await;
+    let plan = &planned["data"]["plan"];
+    let cleanup = ConnectionCleanup::new(Arc::new(WsRelaySink::new()), Arc::new(Subscriptions::default()))
+        .with_install_plans(env.connection_id.to_string());
+    cleanup.run().await;
+    let commit = json!({ "planId": plan["planId"], "launchDigest": plan["launchDigest"], "secretValues": {} });
+    let gone = ws_request(&env, "commit_mcp_install", commit).await;
+    assert_eq!(gone["code"], "MCP_PLAN_NOT_FOUND");
+}

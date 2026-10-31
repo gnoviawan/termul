@@ -4,7 +4,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
-use axum::routing::{get, post};
+use axum::routing::get;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -62,10 +62,10 @@ fn install_app(allow_remote_writes: bool, shared_live_writes_denied: bool) -> ax
         connections: Default::default(),
     };
     axum::Router::new()
-        .route("/mcp-catalog/install/form", post(super::describe_install))
-        .route("/mcp-catalog/install/plan", post(super::plan_install))
-        .route("/mcp-catalog/install/commit", post(super::commit_install))
-        .route("/mcp-catalog/install/cancel", post(super::cancel_install))
+        .route("/mcp-catalog/install/form", super::install_route(super::describe_install))
+        .route("/mcp-catalog/install/plan", super::install_route(super::plan_install))
+        .route("/mcp-catalog/install/commit", super::install_route(super::commit_install))
+        .route("/mcp-catalog/install/cancel", super::install_route(super::cancel_install))
         .with_state(state)
 }
 
@@ -269,4 +269,46 @@ async fn install_mutations_carry_the_shared_write_guard() {
     )
     .await;
     assert_eq!(form["code"], "MCP_PLAN_NOT_AVAILABLE", "the form stays a read in shared-live");
+}
+
+#[tokio::test]
+async fn a_client_id_must_be_a_short_id_without_control_characters() {
+    let message = "clientInstanceId must be a non-empty id of at most 128 bytes without control characters";
+    for client in [String::new(), "t".repeat(129), "tab\u{0007}".to_string()] {
+        for route in ["plan", "commit", "cancel"] {
+            let body = json!({
+                "clientInstanceId": client,
+                "source": { "kind": "import", "json": "{}" },
+                "planId": "p",
+                "launchDigest": "sha256:00",
+            });
+            let reply = http_install_local(route, &body).await;
+            assert_eq!(
+                (reply["code"].as_str(), reply["error"].as_str()),
+                (Some("VALIDATION_ERROR"), Some(message)),
+                "{route} {client:?}"
+            );
+        }
+    }
+    let longest = http_install_local("plan", &import_plan_body(&"t".repeat(128))).await;
+    assert_eq!(longest["success"], true, "{longest}");
+}
+
+#[tokio::test]
+async fn an_install_body_over_the_route_limit_is_refused_unread() {
+    let padding = "a".repeat(super::MAX_INSTALL_BODY_BYTES);
+    let body = json!({ "clientInstanceId": "tab", "source": { "kind": "import", "json": padding } });
+    let response = install_app(false, false)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp-catalog/install/plan")
+                .header("content-type", "application/json")
+                .extension(ConnectInfo(SocketAddr::from(LOOPBACK)))
+                .body(Body::from(body.to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }

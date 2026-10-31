@@ -309,10 +309,10 @@ pub fn router(
         // MCP catalog search (spine AD-1), a read open to every connected
         // client; see `web/mcp_catalog_api.rs`.
         .route("/mcp-catalog/search", get(mcp_catalog_api::search))
-        .route("/mcp-catalog/install/form", post(mcp_catalog_api::describe_install))
-        .route("/mcp-catalog/install/plan", post(mcp_catalog_api::plan_install))
-        .route("/mcp-catalog/install/commit", post(mcp_catalog_api::commit_install))
-        .route("/mcp-catalog/install/cancel", post(mcp_catalog_api::cancel_install))
+        .route("/mcp-catalog/install/form", mcp_catalog_api::install_route(mcp_catalog_api::describe_install))
+        .route("/mcp-catalog/install/plan", mcp_catalog_api::install_route(mcp_catalog_api::plan_install))
+        .route("/mcp-catalog/install/commit", mcp_catalog_api::install_route(mcp_catalog_api::commit_install))
+        .route("/mcp-catalog/install/cancel", mcp_catalog_api::install_route(mcp_catalog_api::cancel_install))
         // ACP install web route (CAP-6 / Story 9: verified-atomic install).
         // Mirrors the desktop `#[tauri::command] acp_install_agent` handler;
         // see `web/install_api.rs`. Registered AHEAD of the static fallback so
@@ -530,10 +530,10 @@ pub fn router_with_static(
         .route("/acp/catalog", get(catalog_api::list))
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
         .route("/mcp-catalog/search", get(mcp_catalog_api::search))
-        .route("/mcp-catalog/install/form", post(mcp_catalog_api::describe_install))
-        .route("/mcp-catalog/install/plan", post(mcp_catalog_api::plan_install))
-        .route("/mcp-catalog/install/commit", post(mcp_catalog_api::commit_install))
-        .route("/mcp-catalog/install/cancel", post(mcp_catalog_api::cancel_install))
+        .route("/mcp-catalog/install/form", mcp_catalog_api::install_route(mcp_catalog_api::describe_install))
+        .route("/mcp-catalog/install/plan", mcp_catalog_api::install_route(mcp_catalog_api::plan_install))
+        .route("/mcp-catalog/install/commit", mcp_catalog_api::install_route(mcp_catalog_api::commit_install))
+        .route("/mcp-catalog/install/cancel", mcp_catalog_api::install_route(mcp_catalog_api::cancel_install))
         .route("/acp/install", post(install_api::install))
         .route("/worktree/list", post(worktree_api::list))
         .route("/worktree/create", post(worktree_api::create))

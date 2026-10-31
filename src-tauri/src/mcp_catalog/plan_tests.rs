@@ -1452,3 +1452,57 @@ async fn a_shell_or_interpreter_given_inline_code_carries_a_danger_warning() {
         assert_eq!(plan.consent_view.warnings, expected, "{command} {args:?}");
     }
 }
+
+#[tokio::test]
+async fn the_caller_id_counts_toward_the_plan_request_size() {
+    let service = service();
+    let wrapper = r#"{"command":"node","args":[""]}"#;
+    let fits = format!(
+        r#"{{"command":"node","args":["{}"]}}"#,
+        "a".repeat(super::plan::MAX_PLAN_REQUEST_BYTES - wrapper.len() - 4)
+    );
+    let request = PlanRequest {
+        source: import_source(&fits),
+        choice: None,
+        inputs: BTreeMap::new(),
+    };
+    let short = PlanCaller::Client("tab".to_string());
+    assert!(matches!(
+        service.plan_install(&request, short).await,
+        Ok(PlanReply::Plan { .. })
+    ));
+    let long = PlanCaller::Client("t".repeat(5));
+    let error = service.plan_install(&request, long).await.unwrap_err();
+    assert_eq!(
+        (error.code, error.message.as_str()),
+        ("VALIDATION_ERROR", "the plan request exceeds 64 KiB")
+    );
+}
+
+#[tokio::test]
+async fn a_callers_plans_are_forgotten_without_touching_anothers() {
+    let service = service();
+    let source = import_source(r#"{"command":"node","args":["srv.js"]}"#);
+    let gone = plan(&service, source.clone(), &[]).await;
+    let other = PlanCaller::Connection("conn-2".to_string());
+    let request = PlanRequest {
+        source,
+        choice: None,
+        inputs: BTreeMap::new(),
+    };
+    let kept = match service.plan_install(&request, other.clone()).await {
+        Ok(PlanReply::Plan { plan }) => plan,
+        reply => panic!("{reply:?}"),
+    };
+    assert_eq!(service.plans.forget_caller(&caller()), 1);
+    assert_eq!(commit(&service, &gone, &[]).unwrap_err().code, "MCP_PLAN_NOT_FOUND");
+    let committed = service.commit_install(
+        &CommitRequest {
+            plan_id: kept.plan_id.clone(),
+            launch_digest: kept.launch_digest.clone(),
+            secret_values: BTreeMap::new(),
+        },
+        &other,
+    );
+    assert!(committed.is_ok(), "{committed:?}");
+}

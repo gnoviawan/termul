@@ -41,7 +41,7 @@ pub use form::{Field, FieldFormat, FieldTarget, Origin};
 pub use plan::{
     CancelRequest, CommitRequest, CommitResult, FormReply, FormRequest, InstallForm, InstallPlan,
     PlanCaller, PlanChoice, PlanReply, PlanRequest, PlanSource, PlanStore, ResolvedSecret,
-    SecretSlot, PLAN_TTL,
+    SecretSlot, MAX_PLAN_REQUEST_BYTES, PLAN_TTL,
 };
 pub use resolved::{Provenance, ResolvedConfig, ValueSlot};
 pub use search::{
@@ -188,6 +188,20 @@ impl McpCatalogService {
         caller: &PlanCaller,
     ) -> Result<(), McpCatalogError> {
         plan::cancel_install(&self.plans, request, caller)
+    }
+
+    /// Drops the install plans a closed `/ws` connection held. A process
+    /// whose catalog never loaded holds no plans, so this does not load it.
+    pub fn forget_connection_plans(connection_id: &str) {
+        let Some(service) = SHARED.get() else {
+            return;
+        };
+        let dropped = service
+            .plans
+            .forget_caller(&PlanCaller::Connection(connection_id.to_string()));
+        if dropped > 0 {
+            log::info!("[mcp-catalog] dropped {dropped} plan(s) of a closed connection");
+        }
     }
 
     #[cfg(test)]

@@ -9,9 +9,11 @@ use std::net::SocketAddr;
 
 use axum::{
     body::Bytes,
-    extract::{rejection::QueryRejection, ConnectInfo, Query, State},
+    extract::{rejection::QueryRejection, ConnectInfo, DefaultBodyLimit, Query, State},
+    handler::Handler,
     http::StatusCode,
     response::IntoResponse,
+    routing::{post, MethodRouter},
     Json,
 };
 use serde::Deserialize;
@@ -19,12 +21,26 @@ use tracing::{info, warn};
 
 use crate::mcp_catalog::{
     CancelRequest, CommitRequest, FormRequest, McpCatalogError, McpCatalogPage,
-    McpCatalogSearchRequest, McpCatalogService, PlanCaller, PlanRequest,
+    McpCatalogSearchRequest, McpCatalogService, PlanCaller, PlanRequest, MAX_PLAN_REQUEST_BYTES,
 };
 use crate::web::fs_api::{check_local_only, IpcBody};
-use crate::web::ws::AppState;
+use crate::web::ws::{AppState, MAX_CLIENT_ID_LEN};
 
 const TARGET: &str = "termul::web::mcp_catalog_api";
+
+/// An install body is a plan request (bounded by [`MAX_PLAN_REQUEST_BYTES`]
+/// once parsed) wrapped in JSON, whose string escaping can grow it.
+pub const MAX_INSTALL_BODY_BYTES: usize = 4 * MAX_PLAN_REQUEST_BYTES;
+
+/// `POST` for an install route, refusing a body over
+/// [`MAX_INSTALL_BODY_BYTES`] before it is buffered.
+pub fn install_route<H, T>(handler: H) -> MethodRouter<AppState>
+where
+    H: Handler<T, AppState>,
+    T: 'static,
+{
+    post(handler).layer(DefaultBodyLimit::max(MAX_INSTALL_BODY_BYTES))
+}
 
 pub async fn search(
     query: Result<Query<McpCatalogSearchRequest>, QueryRejection>,
@@ -83,6 +99,28 @@ struct WithClient<T> {
     request: T,
 }
 
+/// Parses the body and holds its `clientInstanceId` to the rule `/ws`
+/// `authenticate` applies, since the id keys plans and reaches log lines.
+fn parse_client_body<T: serde::de::DeserializeOwned, R>(
+    route: &str,
+    body: &Bytes,
+) -> Result<(PlanCaller, T), IpcBody<R>> {
+    let WithClient {
+        client_instance_id: id,
+        request,
+    } = parse_body(route, body)?;
+    if id.is_empty() || id.len() > MAX_CLIENT_ID_LEN || id.chars().any(char::is_control) {
+        warn!(target: TARGET, route, "install request has an invalid client id");
+        return Err(IpcBody::err(
+            format!(
+                "clientInstanceId must be a non-empty id of at most {MAX_CLIENT_ID_LEN} bytes without control characters"
+            ),
+            "VALIDATION_ERROR",
+        ));
+    }
+    Ok((PlanCaller::Client(id), request))
+}
+
 /// `POST /mcp-catalog/install/form` body `McpInstallFormRequest` →
 /// `IpcBody<McpInstallFormReply>`. A read.
 pub async fn describe_install(body: Bytes) -> impl IntoResponse {
@@ -120,14 +158,13 @@ pub async fn plan_install(
     if let Some(forbidden) = write_guard(&state, peer, "/mcp-catalog/install/plan") {
         return Json(forbidden);
     }
-    let with_client: WithClient<PlanRequest> = match parse_body("install/plan", &body) {
-        Ok(request) => request,
+    let (caller, request): (PlanCaller, PlanRequest) = match parse_client_body("install/plan", &body) {
+        Ok(parsed) => parsed,
         Err(invalid) => return Json(invalid),
     };
-    let caller = PlanCaller::Client(with_client.client_instance_id);
     let reply = match McpCatalogService::shared()
         .await
-        .plan_install(&with_client.request, caller)
+        .plan_install(&request, caller)
         .await
     {
         Ok(reply) => IpcBody::ok(reply),
@@ -146,14 +183,13 @@ pub async fn commit_install(
     if let Some(forbidden) = write_guard(&state, peer, "/mcp-catalog/install/commit") {
         return Json(forbidden);
     }
-    let with_client: WithClient<CommitRequest> = match parse_body("install/commit", &body) {
-        Ok(request) => request,
+    let (caller, request): (PlanCaller, CommitRequest) = match parse_client_body("install/commit", &body) {
+        Ok(parsed) => parsed,
         Err(invalid) => return Json(invalid),
     };
-    let caller = PlanCaller::Client(with_client.client_instance_id);
     let reply = match McpCatalogService::shared()
         .await
-        .commit_install(&with_client.request, &caller)
+        .commit_install(&request, &caller)
     {
         Ok(result) => IpcBody::ok(result),
         Err(error) => rejected("install/commit", &error),
@@ -171,14 +207,13 @@ pub async fn cancel_install(
     if let Some(forbidden) = write_guard(&state, peer, "/mcp-catalog/install/cancel") {
         return Json(forbidden);
     }
-    let with_client: WithClient<CancelRequest> = match parse_body("install/cancel", &body) {
-        Ok(request) => request,
+    let (caller, request): (PlanCaller, CancelRequest) = match parse_client_body("install/cancel", &body) {
+        Ok(parsed) => parsed,
         Err(invalid) => return Json(invalid),
     };
-    let caller = PlanCaller::Client(with_client.client_instance_id);
     let reply = match McpCatalogService::shared()
         .await
-        .cancel_install(&with_client.request, &caller)
+        .cancel_install(&request, &caller)
     {
         Ok(()) => IpcBody::ok(serde_json::json!({})),
         Err(error) => rejected("install/cancel", &error),
