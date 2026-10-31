@@ -412,6 +412,10 @@ export function evictClosedSessionTranscript(
   set((s) => dropSessionTranscriptState(s, sessionId))
 }
 
+export function historyOpenInFlight(sessionId: SessionId): Promise<void> | undefined {
+  return inFlightHistoryOpens.get(sessionId)?.promise
+}
+
 export function _resetInFlightHistoryOpensForTesting(): void {
   for (const sessionId of new Set([
     ...inFlightHistoryOpens.keys(),

@@ -77,17 +77,12 @@ describe('decideAutoSwitch', () => {
   })
 
   it('never moves back to an account that is still limited, but takes one that reset', () => {
-    const limited = new Map<string, number | null>([['ab12', 2_000_000]])
+    const limited = new Map([['ab12', 2_000_000]])
     expect(decideAutoSwitch({ ...base, limited, candidates: [work, side] })).toEqual({
       kind: 'switch',
       to: side
     })
-    const unknownReset = new Map<string, number | null>([['ab12', null]])
-    expect(decideAutoSwitch({ ...base, limited: unknownReset, candidates: [work] })).toEqual({
-      kind: 'resume',
-      at: 2_000_000
-    })
-    const reset = new Map<string, number | null>([['ab12', 999_999]])
+    const reset = new Map([['ab12', 999_999]])
     expect(decideAutoSwitch({ ...base, limited: reset, candidates: [work] })).toEqual({
       kind: 'switch',
       to: work

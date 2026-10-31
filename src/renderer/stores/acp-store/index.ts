@@ -144,13 +144,15 @@ export {
   _resetPromptReconcileForTesting,
   isEphemeralAcpSession,
   persistComposerOptions,
-  renewAgentCredentials
+  renewAgentCredentials,
+  runsCurrentLaunch
 } from './shared-state'
 export { _resetAcpAuthForTesting } from './slices/agent'
 export { mcpProbesInFlight, mcpServerDeletionCount } from './slices/mcp'
 export {
   _resetInFlightHistoryOpensForTesting,
-  _resetSessionIndexLoadGenerationForTesting
+  _resetSessionIndexLoadGenerationForTesting,
+  historyOpenInFlight
 } from './slices/session'
 export {
   _clampedToolCallIdsSizeForTesting,
