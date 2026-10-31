@@ -23,6 +23,7 @@ import type { GithubItemRef } from '@/stores/github-store'
 import { useActiveProject } from '@/stores/project-store'
 import { type GithubHandoffRequest, runGithubHandoff } from './github-handoff'
 import { handoffActions } from './handoff-actions'
+import { plainPreview } from './plain-preview'
 
 const ICONS: Record<GithubHandoffAction, typeof Bot> = {
   start: Bot,
@@ -192,7 +193,7 @@ function ResolveCommentsDialog({
                     {first && (
                       <span className="line-clamp-2 text-xs text-muted-foreground">
                         <span className="font-medium text-foreground">{first.author}</span>:{' '}
-                        {first.body}
+                        {plainPreview(first.body)}
                       </span>
                     )}
                   </span>
