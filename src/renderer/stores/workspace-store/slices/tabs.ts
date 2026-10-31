@@ -415,6 +415,17 @@ export const createTabsSlice: StateCreator<WorkspaceState, [], [], TabsSliceStat
   },
 
   addAutomationsTab: (projectId: string, targetPaneId?: string): void => {
+    // Mid-switch the project store already names the next project while this
+    // tree is still the one being left; its tab must not land here.
+    const { activeProjectId } = get()
+    if (projectId !== activeProjectId) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'workspace-store.addAutomationsTab',
+        message: `ignored an Automations tab for ${projectId} while ${activeProjectId || 'no project'} is on screen`
+      })
+      return
+    }
     const id = automationsTabId(projectId)
     focusOrAddTab({ get, set }, id, () => ({ type: 'automations', id, projectId }), targetPaneId)
   },
