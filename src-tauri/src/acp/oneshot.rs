@@ -200,7 +200,14 @@ impl OneShotSession {
                 Err(OneShotError::Cancelled)
             }
             Ok(stop_reason) => {
-                let text = self.collector.take_reply();
+                let Some(text) = self.collector.take_reply() else {
+                    log::warn!(
+                        "[acp-oneshot] agent {agent_id} session {session} reply exceeded {MAX_REPLY_BYTES} bytes"
+                    );
+                    return Err(OneShotError::Agent(format!(
+                        "reply exceeded {MAX_REPLY_BYTES} bytes"
+                    )));
+                };
                 log::info!(
                     "[acp-oneshot] agent {agent_id} session {session} turn complete: stop_reason={stop_reason:?}, {} chars in {elapsed_ms} ms",
                     text.chars().count()
@@ -307,9 +314,15 @@ struct ReplyCollector {
     turn: Mutex<TurnCapture>,
 }
 
+/// Cap on one turn's collected reply, so a runaway agent cannot grow host
+/// memory until the prompt timeout.
+pub(crate) const MAX_REPLY_BYTES: usize = 1024 * 1024;
+
 #[derive(Default)]
 struct TurnCapture {
     text: String,
+    /// The current message outgrew [`MAX_REPLY_BYTES`]; its text is dropped.
+    overflowed: bool,
     message_id: Option<String>,
     /// A tool call ended the current message; the next chunk starts another.
     message_closed: bool,
@@ -321,8 +334,10 @@ impl ReplyCollector {
         *self.turn.lock() = TurnCapture::default();
     }
 
-    fn take_reply(&self) -> String {
-        std::mem::take(&mut self.turn.lock().text)
+    /// The turn's final message, or `None` when it outgrew [`MAX_REPLY_BYTES`].
+    fn take_reply(&self) -> Option<String> {
+        let mut turn = self.turn.lock();
+        (!turn.overflowed).then(|| std::mem::take(&mut turn.text))
     }
 
     fn turn_auth_required(&self) -> bool {
@@ -354,12 +369,18 @@ impl EventSink for ReplyCollector {
                 let message_id = payload["messageId"].as_str().map(str::to_owned);
                 if turn.message_closed || (message_id.is_some() && message_id != turn.message_id) {
                     turn.text.clear();
+                    turn.overflowed = false;
                     turn.message_closed = false;
                 }
                 if message_id.is_some() {
                     turn.message_id = message_id;
                 }
-                turn.text.push_str(text);
+                if turn.overflowed || turn.text.len() + text.len() > MAX_REPLY_BYTES {
+                    turn.overflowed = true;
+                    turn.text.clear();
+                } else {
+                    turn.text.push_str(text);
+                }
             }
             events::EVENT_TOOL_CALL => turn.message_closed = true,
             events::EVENT_AGENT_ERROR

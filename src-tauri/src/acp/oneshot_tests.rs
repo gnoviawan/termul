@@ -82,6 +82,10 @@ for line in sys.stdin:
                   "error": {"code": -32000, "message": "Authentication required"}})
         elif text == "fail":
             send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32603, "message": "boom"}})
+        elif text == "flood":
+            for _ in range(17):
+                chunk("x" * 65536)
+            send(done)
     elif method == "session/cancel":
         cancels += 1
         if hung is not None:
@@ -383,4 +387,22 @@ fn process_state(pid: u32) -> String {
 #[cfg(windows)]
 fn is_running(pid: u32) -> bool {
     crate::process_util::test_support::is_alive(pid)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_over_the_cap_fails_and_the_session_stays_usable() {
+    let Some(mock) = Mock::new().await else {
+        return;
+    };
+    let mut session = mock.start(None).await;
+
+    assert_eq!(
+        session.prompt("flood", TURN).await,
+        Err(OneShotError::Agent("reply exceeded 1048576 bytes".to_string()))
+    );
+    assert_eq!(
+        reply(&mut session, "state").await,
+        "model=fast prompts=2 cancels=0"
+    );
+    session.dispose().await;
 }
