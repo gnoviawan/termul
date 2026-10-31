@@ -6,12 +6,12 @@
 import wire from '@shared/types/__fixtures__/automation.json'
 import type {
   Automation,
+  AutomationDetail,
   AutomationRun,
   AutomationStep,
   Issue,
   RunPolicy
 } from '@shared/types/automation.types'
-import type { AutomationDetail } from '@/lib/automation-api'
 import {
   parseAutomation,
   parseAutomationDetail,

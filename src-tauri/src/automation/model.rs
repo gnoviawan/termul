@@ -606,8 +606,14 @@ pub const EVENT_AUTOMATION_CHANGED: &str = "automation_changed";
 
 /// Something about an automation changed: its definition, its approval, or a
 /// run. `automation_id` is `None` for project-wide changes (secret names).
+/// `proposed` marks a chat agent asking the user to review and approve it;
+/// `proposed_by` is that agent's display name, when the host knows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutomationChanged {
     pub project_id: String,
     pub automation_id: Option<AutomationId>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub proposed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed_by: Option<String>,
 }

@@ -12,6 +12,7 @@ import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAcpUpdateChecks } from '@/hooks/use-acp-update-checks'
+import { useAutomationProposals } from '@/hooks/use-automation-proposals'
 import { usePreventDevToolsShortcuts } from '@/hooks/use-prevent-devtools-shortcuts'
 import { usePreventNativeContextMenu } from '@/hooks/use-prevent-native-context-menu'
 import { useWindowState } from '@/hooks/use-window-state'
@@ -117,6 +118,8 @@ function AppEffects(): null {
   // A Claude chat at its account's limit continues on another account, even
   // off screen. Mounted on both renderer roots for parity.
   useClaudeAutoSwitch()
+  // A chat agent's proposed automation opens for review. Both roots.
+  useAutomationProposals()
   useAcpMcp()
   usePreventFileDropNavigation()
   // Suppress the native webview context menu app-wide (BUBBLE phase) so

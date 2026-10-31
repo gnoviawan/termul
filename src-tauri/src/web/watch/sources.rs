@@ -17,7 +17,10 @@
 //!   The transient `browser_open_request` (`{agentId, url}`) belongs to no
 //!   session log either and rides the same delta shape; it is not part of the
 //!   roster state. So does `browser_policy_changed` (`{scope, projectId?,
-//!   revision}`): a hint to re-read one browser policy scope.
+//!   revision}`): a hint to re-read one browser policy scope. And so does
+//!   `automation_changed` (`{project_id, automation_id}`, published by
+//!   `automation_api::forward_changes`): a hint to re-read one automation, or
+//!   a project's automations when `automation_id` is null.
 //! - `fs` (scope = project id): state = `{root}`; a delta is `{root, paths}`
 //!   for one debounced batch of changes, or `{ended, reason}` once the
 //!   project is no longer watchable (the host releases the subscription).

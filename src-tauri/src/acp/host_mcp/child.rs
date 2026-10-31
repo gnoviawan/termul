@@ -36,6 +36,8 @@ use crate::acp::host_mcp::{
     TermulPlanInput, TermulSetTitleInput, ENV_AGENT_ID, ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
 };
 
+mod automation;
+
 /// Env-derived configuration for the child. Extracted so the arg parser is
 /// unit-testable without touching `std::env`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,8 +114,9 @@ pub fn run() -> i32 {
 /// `tools/call` can open a fresh TCP connection to the parent.
 struct TermulPlanServer {
     config: ChildConfig,
-    /// The host tools plus figcraft's canvas tools, present from session start
-    /// whether or not a canvas is open, plus the described `browser` tool.
+    /// The host tools, the automation tools, figcraft's canvas tools (present
+    /// from session start whether or not a canvas is open) and the described
+    /// `browser` tool.
     tool_router: ToolRouter<Self>,
 }
 
@@ -129,7 +132,7 @@ struct DescribedTool {
 
 impl TermulPlanServer {
     fn new(config: ChildConfig, browser: Option<DescribedTool>) -> Self {
-        let mut tool_router = Self::tool_router();
+        let mut tool_router = Self::tool_router() + Self::automation_tool_router();
         for tool in canvas_tools::tools() {
             tool_router.add_route(canvas_route(tool));
         }
@@ -650,5 +653,7 @@ fn fill_discover_request_meta(line: &str) -> (String, bool) {
     )
 }
 
+#[cfg(test)]
+mod automation_tests;
 #[cfg(test)]
 mod tests;

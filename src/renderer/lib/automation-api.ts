@@ -12,19 +12,18 @@
 import type {
   ApplyOpsResult,
   Automation,
+  AutomationChanged,
+  AutomationDetail,
   AutomationId,
   AutomationOp,
   AutomationRun,
   AutomationStep,
+  KnownAgent,
   RunId,
   Schedule
 } from '@shared/types/automation.types'
 import type { IpcResult } from '@shared/types/ipc.types'
-import { listen } from '@tauri-apps/api/event'
 import {
-  type AutomationAgent,
-  type AutomationChange,
-  type AutomationDetail,
   parseAgentList,
   parseApplyOpsResult,
   parseAutomation,
@@ -44,7 +43,7 @@ import { invokeIpc } from './ipc/tauri'
 import { logFrontendError } from './log-api'
 import { isTauriContext } from './tauri-runtime'
 
-export type { AutomationAgent, AutomationChange, AutomationDetail, SchedulePreview }
+export type { SchedulePreview }
 
 const SOURCE = 'automation-api'
 /** Tauri event and watch delta name. */
@@ -225,7 +224,7 @@ export function previewSchedule(schedule: Schedule): Promise<IpcResult<ScheduleP
   return parsed('preview_schedule', transport().previewSchedule(schedule), parseSchedulePreview)
 }
 
-export function listAutomationAgents(): Promise<IpcResult<AutomationAgent[]>> {
+export function listAutomationAgents(): Promise<IpcResult<KnownAgent[]>> {
   return parsed('list_agents', transport().listAgents(), parseAgentList)
 }
 
@@ -256,25 +255,16 @@ export async function deleteAutomationSecret(
  * `null` means "a change may have been missed" (the host's watch resynced):
  * re-read everything shown.
  */
-export type AutomationChangeListener = (change: AutomationChange | null) => void
+export type AutomationChangeListener = (change: AutomationChanged | null) => void
 
 const changeListeners = new Set<AutomationChangeListener>()
-let desktopListening = false
 
-function listenOnDesktop(): void {
-  if (desktopListening || !isTauriContext()) return
-  desktopListening = true
-  listen<unknown>(AUTOMATION_CHANGED_EVENT, (event) =>
-    publishAutomationChange(event.payload)
-  ).catch((err: unknown) => {
-    desktopListening = false
-    log('warn', `listen(${AUTOMATION_CHANGED_EVENT}) failed: ${String(err)}`)
-  })
-}
-
-/** Subscribe to `automation_changed` on either transport; returns the unsubscribe. */
+/**
+ * Subscribe to `automation_changed`; returns the unsubscribe. Both surfaces
+ * receive it as an `agents` watch delta (the desktop over its channel
+ * carrier), which the roster watch hands to {@link publishAutomationChange}.
+ */
 export function onAutomationChanged(listener: AutomationChangeListener): () => void {
-  listenOnDesktop()
   changeListeners.add(listener)
   return () => {
     changeListeners.delete(listener)
@@ -282,9 +272,8 @@ export function onAutomationChanged(listener: AutomationChangeListener): () => v
 }
 
 /**
- * Hand an `automation_changed` payload to subscribers. The desktop listener
- * and the web roster watch both call this. A payload that does not match the
- * contract is logged and dropped.
+ * Hand an `automation_changed` payload to subscribers. The roster watch calls
+ * this. A payload that does not match the contract is logged and dropped.
  */
 export function publishAutomationChange(payload: unknown): void {
   const change = parseAutomationChange(payload)

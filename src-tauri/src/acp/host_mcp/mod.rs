@@ -20,6 +20,7 @@
 //! Desktop + standalone parity: no `tauri-plugin-mcp-bridge` / `AppHandle` —
 //! pure `rmcp` + tokio, works on both binaries.
 
+pub mod automation_tools;
 pub mod bridge;
 pub mod canvas;
 pub mod canvas_budget;
@@ -153,6 +154,9 @@ pub enum FrameKind {
     /// A figcraft control-protocol call from the canvas `Bridge` backend,
     /// routed to the renderer that holds the session's project canvas.
     Canvas,
+    /// An `automation_*` tool call, answered by the host automation service
+    /// for the session's project.
+    Automation,
 }
 
 /// One option the agent offers in an `ask_user` question.
@@ -348,6 +352,12 @@ pub struct FrameRequest {
     /// The agent tool a `Canvas` frame serves, for the gateway's logs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canvas_tool: Option<String>,
+    /// The tool an `Automation` frame serves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation_tool: Option<automation_tools::AutomationTool>,
+    /// An `Automation` frame's tool arguments, parsed by the parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation_input: Option<serde_json::Value>,
 }
 
 /// Parent reply frame (one per connection). `result` carries the browser
