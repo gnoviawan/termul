@@ -1,0 +1,85 @@
+---
+title: Automations
+description: Have an agent build a task that runs on a schedule, review its run policy, approve it, and check its runs.
+---
+
+An automation is a task that runs on its own, on a schedule or when you start it. For example, "every weekday at 9, summarize open PRs". You do not build automations by hand. You describe one to an AI agent in a chat, the agent builds it, and you review and approve it in the **Automations** tab. It does not run until you approve it.
+
+Automations belong to a project, and they run on the machine that runs that project: your desktop, or `termul-server` when you use [Termul on a server](/docs/remote/server).
+
+## Open the Automations tab
+
+Open a project first. Then click **Automations** in the rail on the left. On a phone, open the drawer and tap **Automations**.
+
+The tab lists the project's automations on the left and shows the selected one on the right. On a phone, tap an automation to open it, and tap **Automations** at the top to go back.
+
+Each row shows the automation's name, its state, how it is triggered, when it runs next and how the last run went. A red badge such as **2 new failures** counts failed runs you have not looked at yet. It clears when you open the automation.
+
+The state is one of:
+
+- **Needs approval**. The automation is new or changed, and it will not run until you approve it.
+- **Armed**. Approved and enabled. It runs on its schedule.
+- **Disabled**. Approved, but switched off.
+
+## Ask an agent to build one
+
+[Start a chat](/docs/agents/start-a-chat) in the project and describe what should happen and when. For example:
+
+```text
+Every weekday at 9, summarize the open pull requests in this repo.
+```
+
+Termul gives the agent tools to build the automation. The agent may ask you questions first, for example which repository to read or which agent should write the summary. When it is done, it sends the automation to you for review. Termul opens the **Automations** tab on that automation and shows a message such as "Claude proposed an automation — review and approve". On a phone, the automation opens directly.
+
+The agent cannot approve, enable or run an automation. Only you can.
+
+To change an automation later, ask an agent in a chat. Every change makes a new revision, and the automation needs your approval again. Until you approve the new revision, the automation does not run, not even with **Run now**.
+
+## Review and approve
+
+The **Run policy** card shows what the automation will do once it is approved:
+
+- **Trigger**. The schedule, for example a cron expression with its time zone, an interval such as every 30 min, or one date and time. **Run manually** means it only runs when you click **Run now**.
+- **Next runs**. Up to the next three times it will run.
+- **Agents**. Each step that runs an AI agent, with the agent, its model and its time limit. **no tools** means the agent can only answer, not run tools.
+- **Secrets**. The secrets each step uses. See [Secrets](#secrets).
+- **Outbound hosts**. The web addresses each step may send requests to. A step cannot reach any other host.
+- **On failure**. How long Termul waits before the next run after failures in a row. The wait grows from 30 seconds up to 1 hour.
+
+If an AI step reads content from the web and a later step sends data out, the card shows a warning. A fetched page can contain instructions for the agent, so check the outbound hosts before you approve.
+
+If the automation has problems, they are listed above the card under a heading such as **1 issue to fix before approval**, and you cannot approve it. Ask the agent that built it to fix them.
+
+When everything looks right, click **Approve and arm**. The automation turns **Armed** and runs on its schedule.
+
+Below the card, **Diagram** shows the automation's steps and how they connect. A step can make a web request (HTTP), run an AI agent (Agent), reshape data (Transform), choose a path (Condition) or stop the run with an error (Fail).
+
+## Run, pause or delete an automation
+
+- Click **Run now** to start a run right away. The run opens so you can follow it. **Run now** works only after you approve the current revision, and it also works while the automation is disabled. If a run is already in progress, the new run is recorded as **Skipped**.
+- Turn off **Enabled** to stop the automation from running on its schedule. Turn it on again to resume.
+- Click **Delete** and confirm to remove the automation. It stops running, and its run history is deleted. You cannot undo this.
+
+If the machine was off or Termul was closed when a run was due, Termul runs the automation once when it starts again. That run is labeled **Catch-up**.
+
+## Check a run
+
+The **Runs** list shows each run, newest first, with its status, start time and duration. A run is **Running**, **Succeeded**, **Failed**, **Cancelled** or **Skipped**. Click a run to open it.
+
+The run shows how it was started (**Scheduled**, **Catch-up** or **Manual**), when it started, how long it took and which revision ran. Below that is each step in order with its status. A step that did not run shows **Not reached**. If a step failed, its error is shown under it. Click **Output** to see what a step produced.
+
+While a run is in progress, click **Cancel run** to stop it. To go back, click **Back to automation**. On a phone, tap **Automation** at the top.
+
+## Secrets
+
+Some steps need a secret, such as an API token for a web request. You enter secret values yourself. The agent never sees them.
+
+1. Open the automation and click **Secrets**.
+2. Next to a secret marked **Missing**, click **Set**.
+3. Enter the value and click **Save**.
+
+A saved secret shows **Saved**. Click **Replace** to change it, or **Delete** to remove it. A secret the automation no longer uses is marked **Unused**.
+
+Secrets belong to the project, so every automation in the project can use them. Only web request (HTTP) steps can use a secret, and Termul never shows a saved value again.
+
+Secrets are kept on the machine that runs the project, in the system keychain. On a machine without a keychain, such as `termul-server` on a Linux server without a desktop, Termul keeps them in a file named `automation-secrets.json` in its data folder that only your user account can read.
