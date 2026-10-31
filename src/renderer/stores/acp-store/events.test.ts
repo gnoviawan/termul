@@ -1333,6 +1333,77 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessionUsage.s1?.rateLimit).toEqual(rejected)
   })
 
+  it('_onUsageUpdate records a rate limit that arrives without token counts', () => {
+    seedSession('s1', 'agent-1')
+    const rejected = {
+      status: 'rejected',
+      resetsAt: 1_760_360_399,
+      kind: 'five_hour',
+      percent: 100,
+      overageInUse: false
+    }
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      used: 0,
+      size: 0,
+      rateLimit: rejected
+    })
+    expect(useAcpStore.getState().sessionUsage.s1?.rateLimit).toEqual(rejected)
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      used: 40_000,
+      size: 200_000
+    })
+    useAcpStore.getState()._onUsageUpdate({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      used: 0,
+      size: 0,
+      rateLimit: { ...rejected, resetsAt: 1_760_370_000 }
+    })
+    const usage = useAcpStore.getState().sessionUsage.s1
+    expect([usage?.used, usage?.size, usage?.baselineUsed]).toEqual([40_000, 200_000, 40_000])
+    expect(usage?.rateLimit?.resetsAt).toBe(1_760_370_000)
+  })
+
+  it('agent_error at the usage limit records a rejected rate limit for the chat', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: "Internal error: You've hit your 5-hour limit · resets 4am (Europe/Berlin)",
+      code: -32603,
+      data: { errorKind: 'rate_limit' },
+      providerCode: 'provider_quota_exceeded'
+    })
+    expect(useAcpStore.getState().sessionUsage.s1?.rateLimit).toEqual({
+      status: 'rejected',
+      resetsAt: null,
+      kind: 'five_hour',
+      percent: null,
+      overageInUse: false
+    })
+  })
+
+  it('agent_error leaves the rate limit alone for another failure or an agent the chat left', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'Internal error: overloaded',
+      providerCode: 'provider_request_rejected'
+    })
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-old',
+      sessionId: 's1',
+      message: "You've hit your weekly limit",
+      providerCode: 'provider_quota_exceeded'
+    })
+    expect(useAcpStore.getState().sessionUsage.s1).toBeUndefined()
+  })
+
   it('_onUsageUpdate ignores zero cost placeholders', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onUsageUpdate({

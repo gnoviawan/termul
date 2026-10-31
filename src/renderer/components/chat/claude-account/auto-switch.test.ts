@@ -5,16 +5,23 @@ import type {
 } from '@shared/types/claude-accounts.types'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { acpApi } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
-import { useAcpStore } from '@/stores/acp-store'
+import { renewAgentCredentials, useAcpStore } from '@/stores/acp-store'
 import { FRESH } from '@/stores/acp-store/testkit'
+import { CLAUDE_AGENT_CONFIG_ID } from '@/stores/claude-account-switch'
+import { useProjectStore } from '@/stores/project-store'
 import { decideAutoSwitch, startClaudeAutoSwitch } from './auto-switch'
 import { useClaudeResumeStore, useClaudeSwitchingStore } from './use-claude-limit'
 import type { AccountChoice } from './use-project-claude-account'
 
 const { api, switcher } = vi.hoisted(() => ({
   api: { list: vi.fn(), usage: vi.fn() },
-  switcher: { switchProjectClaudeAccount: vi.fn(), isChatOpenHere: vi.fn() }
+  switcher: {
+    switchProjectClaudeAccount: vi.fn(),
+    isChatOpenHere: vi.fn(),
+    restartClaudeSession: vi.fn()
+  }
 }))
 
 vi.mock('@/lib/claude-accounts-api', () => ({ claudeAccountsApi: api }))
@@ -99,11 +106,11 @@ describe('decideAutoSwitch', () => {
   })
 })
 
-const read = (accountId: string, percent: number) => ({
+const read = (accountId: string, percent: number, resetsAt: string | null = null) => ({
   accountId,
   status: 'ok' as const,
   subscriptionType: 'max',
-  windows: [{ kind: 'session', group: null, scope: null, percent, resetsAt: null, severity: null }],
+  windows: [{ kind: 'session', group: null, scope: null, percent, resetsAt, severity: null }],
   checkedAt: 1,
   message: null
 })
@@ -164,6 +171,7 @@ describe('startClaudeAutoSwitch', () => {
     api.usage.mockResolvedValue([read('default', 100), read('ab12', 4), read('cd34', 40)])
     switcher.switchProjectClaudeAccount.mockResolvedValue(['s1'])
     switcher.isChatOpenHere.mockReturnValue(true)
+    switcher.restartClaudeSession.mockResolvedValue(true)
     stop = startClaudeAutoSwitch()
   })
 
@@ -299,5 +307,99 @@ describe('startClaudeAutoSwitch', () => {
     switcher.isChatOpenHere.mockReturnValue(true)
     setLimit({ ...limit(1_900_000_000) })
     await vi.waitFor(() => expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledTimes(1))
+  })
+
+  const rejectTurn = (sessionId: string, agentId: string): void =>
+    useAcpStore.getState()._onAgentError({
+      agentId,
+      sessionId,
+      message: "Internal error: You've hit your 5-hour limit · resets 4am (Europe/Berlin)",
+      code: -32603,
+      data: { errorKind: 'rate_limit' },
+      providerCode: 'provider_quota_exceeded'
+    })
+
+  it('switches the project when a turn is rejected at the limit', async () => {
+    rejectTurn('s1', 'a1')
+    await vi.waitFor(() => expect(toast.success).toHaveBeenCalled())
+    expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledWith('office', 'ab12', {
+      continueSessionIds: ['s1'],
+      expectedAccountId: 'default'
+    })
+    expect(toast.success).toHaveBeenCalledWith(
+      'Personal reached its 5-hour limit. Continued on Work.'
+    )
+  })
+
+  it('does not switch for a rejected turn of a chat that is not a Claude chat', async () => {
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, g1: { ...s.sessions.s1, id: 'g1', agentId: 'g-agent' } },
+      configToLiveAgent: { ...s.configToLiveAgent, 'acp-registry:gemini\0/work': 'g-agent' }
+    }))
+    rejectTurn('g1', 'g-agent')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(api.list).not.toHaveBeenCalled()
+    expect(switcher.switchProjectClaudeAccount).not.toHaveBeenCalled()
+  })
+
+  it('restarts a limited chat whose agent runs an outdated launch instead of switching', async () => {
+    useProjectStore.setState({
+      projects: [{ id: 'office', name: 'Office', path: '/work' } as never]
+    })
+    vi.spyOn(acpApi, 'spawnAgent').mockResolvedValue({
+      agentId: 'a-old',
+      capabilities: {}
+    } as never)
+    useAcpStore.setState({
+      agentConfigs: [
+        { id: CLAUDE_AGENT_CONFIG_ID, name: 'Claude Agent', command: 'claude', args: [], env: {} }
+      ]
+    })
+    await useAcpStore.getState().prewarmAgent(CLAUDE_AGENT_CONFIG_ID, '/work')
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, s1: { ...s.sessions.s1, agentId: 'a-old' } }
+    }))
+    renewAgentCredentials(CLAUDE_AGENT_CONFIG_ID, 'office')
+
+    setLimit(limit(1_900_000_000))
+
+    await vi.waitFor(() =>
+      expect(switcher.restartClaudeSession).toHaveBeenCalledWith('s1', {
+        resend: true,
+        cancelTurn: true
+      })
+    )
+    expect(logged()).toContain(
+      "Chat s1 reached a limit on an agent started before project office changed its account; restarting it on the project's account"
+    )
+    expect(switcher.switchProjectClaudeAccount).not.toHaveBeenCalled()
+  })
+
+  it('switches back to an account whose unknown-reset limit has since reset', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const resetsAt = new Date(Date.now() + 3_600_000).toISOString()
+      api.usage.mockResolvedValue([
+        read('default', 100, resetsAt),
+        read('ab12', 4),
+        read('cd34', 40)
+      ])
+      setLimit(limit(null))
+      await vi.waitFor(() => expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledTimes(1))
+      setLimit(null)
+
+      vi.setSystemTime(Date.now() + 2 * 3_600_000)
+      api.list.mockResolvedValue(snapshot({ office: 'ab12' }))
+      api.usage.mockResolvedValue([read('default', 2), read('ab12', 100), read('cd34', 40)])
+      setLimit(limit(null))
+
+      await vi.waitFor(() => expect(switcher.switchProjectClaudeAccount).toHaveBeenCalledTimes(2))
+      expect(switcher.switchProjectClaudeAccount).toHaveBeenLastCalledWith('office', 'default', {
+        continueSessionIds: ['s1'],
+        expectedAccountId: 'ab12'
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
