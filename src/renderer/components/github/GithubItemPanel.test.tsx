@@ -189,6 +189,20 @@ describe('GithubItemPanel', () => {
     await waitFor(() => expect(within(checks).getAllByRole('listitem').length).toBeGreaterThan(0))
   })
 
+  it("shows the error when the new head's checks fail to load", async () => {
+    api.getItem.mockResolvedValue(ok(detail({ pr: pull({ headSha: 'def456' }) })))
+    api.getChecks
+      .mockResolvedValueOnce(ok(CHECKS))
+      .mockResolvedValueOnce({ success: false, error: 'rate limited', code: 'GH_RATE_LIMITED' })
+    renderPanel()
+
+    const checks = await screen.findByRole('region', { name: /Checks/ })
+    expect(
+      await within(checks).findByText(/Couldn't load checks: rate limited/)
+    ).toBeInTheDocument()
+    expect(within(checks).queryAllByRole('listitem')).toHaveLength(0)
+  })
+
   it('keeps the merge controls disabled while the item is being re-read', async () => {
     api.getItem.mockResolvedValue(ok(detail({ pr: pull({ mergeStateStatus: 'CLEAN' }) })))
     renderPanel()

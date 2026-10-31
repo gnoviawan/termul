@@ -161,7 +161,15 @@ export function GithubItemPanel({
             <GithubChecksList
               cwd={cwd}
               repo={repo}
-              checks={checksStale ? { ...checks, data: null, status: 'loading' } : checks}
+              checks={
+                checksStale
+                  ? {
+                      ...checks,
+                      data: null,
+                      status: checks.status === 'error' ? 'error' : 'loading'
+                    }
+                  : checks
+              }
             />
             <GithubMergeControls
               itemRef={itemRef}
