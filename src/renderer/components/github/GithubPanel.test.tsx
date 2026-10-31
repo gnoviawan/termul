@@ -97,7 +97,7 @@ describe('GithubPanel status states', () => {
     renderPanel()
 
     expect(await screen.findByText('GitHub CLI not installed')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /cli\.github\.com/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Install it from cli.github.com' })).toHaveAttribute(
       'href',
       'https://cli.github.com'
     )
