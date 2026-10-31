@@ -81,6 +81,15 @@ export function contextUsagePercent(used: number, size: number): number {
   return Math.min(100, Math.max(0, (used / size) * 100))
 }
 
+/**
+ * The percent shown to the user (number, ring, aria-label): all used tokens,
+ * setup included, of the full window, so it matches the bar. The 80/78
+ * warning uses it too.
+ */
+export function displayedUsagePercent(usage: SessionUsage): number {
+  return usage.size > 0 ? contextUsagePercent(Math.max(0, usage.used), usage.size) : 0
+}
+
 export function formatReportedCost(amount: number, currency: string): string {
   try {
     return new Intl.NumberFormat(undefined, {
@@ -90,5 +99,42 @@ export function formatReportedCost(amount: number, currency: string): string {
     }).format(amount)
   } catch {
     return `${amount} ${currency}`
+  }
+}
+
+/** Warning turns on at 80% and clears below 78%, so it never flickers at the edge. */
+export const CONTEXT_WARNING_ON = 80
+export const CONTEXT_WARNING_OFF = 78
+
+export function nextContextWarning(previous: boolean, percent: number): boolean {
+  // Compare the rounded percent the label shows, so "80%" always means warning.
+  const shown = Math.round(percent)
+  if (shown >= CONTEXT_WARNING_ON) return true
+  if (shown < CONTEXT_WARNING_OFF) return false
+  return previous
+}
+
+/**
+ * The two parts of the window the agent tells us about: the first report
+ * (system prompt, tools) and everything the conversation added after it.
+ * ACP has no finer breakdown, so the UI shows exactly these two.
+ */
+export function contextUsageBreakdown(usage: SessionUsage): {
+  setupTokens: number
+  conversationTokens: number
+  setupFraction: number
+  conversationFraction: number
+  left: number
+} {
+  const size = Math.max(0, usage.size)
+  const used = Math.min(Math.max(0, usage.used), size)
+  const setupTokens = Math.min(Math.max(0, usage.baselineUsed), used)
+  const conversationTokens = used - setupTokens
+  return {
+    setupTokens,
+    conversationTokens,
+    setupFraction: size > 0 ? setupTokens / size : 0,
+    conversationFraction: size > 0 ? conversationTokens / size : 0,
+    left: size - used
   }
 }
