@@ -11,7 +11,11 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
-import type { McpCatalogPage, McpCatalogSearchRequest } from '@shared/types/mcp-catalog.types'
+import type {
+  McpCatalogPage,
+  McpCatalogSearchRequest,
+  McpCatalogStatus
+} from '@shared/types/mcp-catalog.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AddProjectPayload,
@@ -205,6 +209,13 @@ export interface AcpTransport {
    * throw {@link AcpTransportError} carrying the host's code (`VALIDATION_ERROR`).
    */
   searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage>
+  /** Where the MCP catalog comes from and its live sync (`get_mcp_catalog_status`). */
+  getMcpCatalogStatus(): Promise<McpCatalogStatus>
+  /**
+   * Turn live registry sync on or off (`set_mcp_catalog_sync`) and answer the
+   * new status. Shared-live and view-only peers get `FORBIDDEN`.
+   */
+  setMcpCatalogSync(enabled: boolean): Promise<McpCatalogStatus>
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
   setTurnIdleTimeout(secs: number | null): Promise<void>
