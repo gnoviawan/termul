@@ -260,3 +260,15 @@ describe('AutomationSecretsDialog', () => {
     expect(screen.getByRole('button', { name: 'Replace' })).toBeInTheDocument()
   })
 })
+
+describe('formatDateTime', () => {
+  it('names the year only for a time outside the current year', () => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 31, 12, 0), toFake: ['Date'] })
+    try {
+      expect(formatDateTime(new Date(2026, 10, 2, 9, 0).getTime())).toBe('Mon, Nov 2, 9:00 AM')
+      expect(formatDateTime(new Date(2027, 0, 4, 9, 0).getTime())).toBe('Mon, Jan 4, 2027, 9:00 AM')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
