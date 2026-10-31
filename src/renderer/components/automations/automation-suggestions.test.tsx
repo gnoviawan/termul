@@ -162,6 +162,26 @@ describe('the in-chat suggestion card', () => {
     expect(screen.getByText(COPY)).toBeTruthy()
   })
 
+  it('asks again for the real session id when the launch swaps it mid-match', async () => {
+    let answer: (value: { success: true; data: AutomationSuggestion }) => void = () => {}
+    api.matchAutomationSuggestion.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve
+        })
+    )
+    const { rerender } = render(<ChatAutomationSuggestion sessionId="placeholder" projectId="p1" />)
+    sendInChat('placeholder', 'summarize the open PRs in termul')
+    await waitFor(() => expect(api.matchAutomationSuggestion).toHaveBeenCalledTimes(1))
+
+    sendInChat('real', 'summarize the open PRs in termul')
+    rerender(<ChatAutomationSuggestion sessionId="real" projectId="p1" />)
+    await act(async () => answer({ success: true, data: SUGGESTION }))
+
+    expect(await screen.findByText(COPY)).toBeTruthy()
+    expect(api.matchAutomationSuggestion).toHaveBeenCalledTimes(2)
+  })
+
   it('with the setting off, never asks the host and shows nothing', async () => {
     setSuggest(false)
     render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
