@@ -49,6 +49,7 @@ import {
   withCommands
 } from '../helpers'
 import { useAcpStore } from '../index'
+import { withRateLimit } from '../rate-limit'
 import {
   activeWirePromptTurns,
   bugReportCollectors,
@@ -1703,14 +1704,20 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
   },
 
   _onUsageUpdate: (e) => {
-    if (!Number.isFinite(e.used) || !Number.isFinite(e.size) || e.size <= 0 || e.used <= 0) {
-      return
-    }
+    const reportsTokens =
+      Number.isFinite(e.used) && Number.isFinite(e.size) && e.size > 0 && e.used > 0
+    const reportedLimit = e.rateLimit
+    if (!reportsTokens && !reportedLimit) return
     set((s) => {
       // Closed shells remain in `sessions` after eviction — still reject usage.
       if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       const prev = s.sessionUsage[e.sessionId]
-      const baselineUsed = prev?.baselineUsed ?? e.used
+      if (!reportsTokens && reportedLimit) {
+        return {
+          sessionUsage: { ...s.sessionUsage, [e.sessionId]: withRateLimit(prev, reportedLimit) }
+        }
+      }
+      const baselineUsed = prev && prev.used > 0 ? prev.baselineUsed : e.used
       const next: SessionUsage = {
         used: e.used,
         size: e.size,
