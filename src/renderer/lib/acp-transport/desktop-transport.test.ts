@@ -21,6 +21,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: tauri.listen }))
 import { _resetDesktopLocalEventsForTests } from './desktop-local-events'
 import { DesktopAcpTransport } from './desktop-transport'
 import { AcpTransportError } from './types'
+import { WatchClient } from './watch-client'
 import { WsAcpTransport } from './ws-transport'
 
 beforeEach(() => {
@@ -71,6 +72,14 @@ describe('DesktopAcpTransport host-local domain commands', () => {
       ['acp_set_agent_idle_window', { secs: 7200 }],
       ['acp_get_agent_idle_window']
     ])
+    transport.dispose()
+  })
+})
+
+describe('DesktopAcpTransport watches', () => {
+  it('carries the watches, so the agents watch is the one path automation changes take', () => {
+    const transport = new DesktopAcpTransport()
+    expect(transport.watches).toBeInstanceOf(WatchClient)
     transport.dispose()
   })
 })

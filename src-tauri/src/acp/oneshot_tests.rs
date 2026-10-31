@@ -42,6 +42,9 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": 1, "agentCapabilities": {}, "authMethods": []}})
     elif method == "session/new":
+        if os.environ.get("MOCK_MCP_FILE"):
+            with open(os.environ["MOCK_MCP_FILE"], "w") as f:
+                f.write(json.dumps([s.get("name") for s in msg["params"].get("mcpServers", [])]))
         if os.environ.get("MOCK_NEW_SESSION") == "auth":
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32000, "message": "Authentication required"}})
@@ -301,6 +304,40 @@ async fn a_session_new_auth_failure_is_auth_required_and_stops_the_agent() {
         "{error:?}"
     );
     assert!(process_exits(mock.agent_pid()));
+}
+
+/// C10: an automation run's session gets no host MCP server, so its agent
+/// cannot author automations. A chat session on the same agent does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_one_shot_session_gets_no_termul_mcp_server_but_a_chat_session_does() {
+    let Some(mock) = Mock::new().await else {
+        return;
+    };
+    let mcp_file = mock.dir.join("mcp-servers");
+    let env = [("MOCK_MCP_FILE", mcp_file.to_str().unwrap())];
+    let one_shot = OneShotSession::start(&mock.manager, mock.request(None, &env))
+        .await
+        .expect("one-shot session starts");
+    assert_eq!(std::fs::read_to_string(&mcp_file).unwrap(), "[]");
+    one_shot.dispose().await;
+
+    let OneShotRequest { config, cwd, .. } = mock.request(None, &env);
+    let spawned = mock
+        .manager
+        .spawn_private(config, None, vec![])
+        .await
+        .expect("agent spawns");
+    mock.manager
+        .new_session_with_context(
+            &spawned.agent_id,
+            cwd,
+            vec![],
+            SessionCreationContext::default(),
+        )
+        .await
+        .expect("chat session starts");
+    assert_eq!(std::fs::read_to_string(&mcp_file).unwrap(), r#"["termul"]"#);
+    mock.manager.kill_detached(&spawned.agent_id);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

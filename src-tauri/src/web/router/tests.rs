@@ -724,6 +724,11 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
         "/acp/catalog",
         "/acp/install",
         "/worktree/list",
+        "/api/automations",
+        "/api/automations/a-1/ops",
+        "/api/automation-runs/r-1/steps",
+        "/api/automation-agents",
+        "/api/automation-secrets",
         // The renderer-facade API routes stay bearer-gated…
         "/canvas/open",
         "/canvas/close",

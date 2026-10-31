@@ -144,7 +144,7 @@ function StepRow({
             Output
           </button>
           {open && (
-            <pre className="max-h-80 overflow-auto px-3 pb-3 font-mono text-2xs text-secondary-foreground">
+            <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-3 pb-3 font-mono text-2xs text-secondary-foreground">
               {JSON.stringify(step.output, null, 2)}
             </pre>
           )}

@@ -19,7 +19,7 @@ use super::model::{
 };
 use super::policy;
 use super::schedule;
-use super::secrets::{KeychainVault, SecretError, Secrets};
+use super::secrets::{self, SecretError, Secrets};
 use super::store::{AutomationStore, StoreError, DB_FILE_NAME};
 use crate::acp::config::AgentConfig;
 use crate::acp::AcpManager;
@@ -141,7 +141,8 @@ impl AutomationService {
     }
 
     /// The production wiring: `automations.sqlite` and the known-agents file
-    /// in `data_dir`, secrets in the OS keychain.
+    /// in `data_dir`, secrets in the OS keychain or, without one, the file
+    /// vault in `data_dir`.
     pub fn open(
         data_dir: &Path,
         acp: Arc<AcpManager>,
@@ -152,7 +153,7 @@ impl AutomationService {
                 .map_err(|e| format!("automation store: {e}"))?,
         );
         let engine = Engine::new(EngineDeps {
-            secrets: Arc::new(Secrets::new(Arc::new(KeychainVault), store.clone())),
+            secrets: Arc::new(Secrets::new(secrets::open_vault(data_dir), store.clone())),
             store,
             agents: Arc::new(AgentRegistry::open(data_dir.join(agents::FILE_NAME))),
             acp,
@@ -290,6 +291,28 @@ impl AutomationService {
             .approve(id, revision, self.engine.now_ms())?;
         self.changed(&approved);
         Ok(approved)
+    }
+
+    /// A chat agent (`by`, its display name when known) asks the user to
+    /// review `id`: one change marked `proposed`. Never approves; refused
+    /// while any issue is open.
+    pub fn propose(&self, id: &AutomationId, by: Option<String>) -> ServiceResult<Automation> {
+        let automation = self.load(id)?;
+        let issues = self.issues(&automation);
+        if !issues.is_empty() {
+            return Err(ServiceError::HasIssues(issues));
+        }
+        log::info!(
+            "[Automation] {id} proposed for review at revision {}",
+            automation.revision
+        );
+        self.engine.announce(AutomationChanged {
+            project_id: automation.project_id.clone(),
+            automation_id: Some(automation.id.clone()),
+            proposed: true,
+            proposed_by: by,
+        });
+        Ok(automation)
     }
 
     /// Starts a manual run of the approved revision. While a run is in flight

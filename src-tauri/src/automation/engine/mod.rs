@@ -148,10 +148,16 @@ impl Engine {
     }
 
     pub fn notify(&self, project_id: &str, automation_id: Option<&AutomationId>) {
-        let _ = self.changes.send(AutomationChanged {
+        self.announce(AutomationChanged {
             project_id: project_id.to_string(),
             automation_id: automation_id.cloned(),
+            proposed: false,
+            proposed_by: None,
         });
+    }
+
+    pub fn announce(&self, change: AutomationChanged) {
+        let _ = self.changes.send(change);
     }
 
     /// Settles runs a dead process left `running`, prunes, and fires one

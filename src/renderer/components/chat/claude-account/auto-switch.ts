@@ -6,16 +6,19 @@
  * tab or Project continues too. The in-chat card shows the same states.
  */
 
-import type { ClaudeRateLimit } from '@shared/types/claude-accounts.types'
+import type { ClaudeAccountUsage, ClaudeRateLimit } from '@shared/types/claude-accounts.types'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import { toastAccountChoiceError } from '@/components/settings/provider/account-choice-error'
 import { claudeAccountsApi } from '@/lib/claude-accounts-api'
+import { primaryUsageWindow } from '@/lib/claude-usage-format'
 import { logFrontendError } from '@/lib/log-api'
 import { type AcpState, useAcpStore } from '@/stores/acp-store'
 import {
   isChatOpenHere,
   isClaudeSession,
+  restartClaudeSession,
+  runsProjectAccount,
   switchProjectClaudeAccount
 } from '@/stores/claude-account-switch'
 import {
@@ -43,8 +46,7 @@ export interface AutoSwitchInput {
   autoSwitch: boolean
   /** Other signed-in Accounts with room, least used first (`rankAlternatives`). */
   candidates: readonly AccountChoice[]
-  /** Accounts that reached a limit earlier, with their reset in epoch ms (`null`: unknown). */
-  limited: ReadonlyMap<string, number | null>
+  limited: ReadonlyMap<string, number>
   now: number
 }
 
@@ -58,11 +60,7 @@ export function decideAutoSwitch({
   if (!autoSwitch) return { kind: 'none', reason: 'off' }
   // The usage read is cached on the host, so an Account that just reached its
   // limit can still look like it has room.
-  const stillLimited = (id: string): boolean => {
-    const reset = limited.get(id)
-    return reset !== undefined && (reset === null || reset > now)
-  }
-  const to = candidates.find((c) => !stillLimited(c.account.id))
+  const to = candidates.find((c) => (limited.get(c.account.id) ?? 0) <= now)
   if (to) return { kind: 'switch', to }
   if (limit.resetsAt !== null) return { kind: 'resume', at: limit.resetsAt * 1000 }
   return { kind: 'none', reason: 'no-room' }
@@ -73,6 +71,13 @@ const log = (message: string, level: 'info' | 'warn' = 'info'): void =>
 
 /** Wait before a limit whose Account or usage read failed is tried again. */
 const READ_RETRY_MS = 30_000
+
+const CLAUDE_SHORTEST_WINDOW_MS = 5 * 60 * 60 * 1000
+
+function usageResetSeconds(read: ClaudeAccountUsage | undefined): number | null {
+  const at = Date.parse(primaryUsageWindow(read)?.resetsAt ?? '')
+  return Number.isNaN(at) ? null : Math.floor(at / 1000)
+}
 
 const limitEvent = (limit: ClaudeRateLimit): string => `${limit.kind ?? ''}:${limit.resetsAt ?? ''}`
 
@@ -105,21 +110,43 @@ export function startClaudeAutoSwitch(): () => void {
   /** `session:resetsAt:account` of every limit acted on. */
   const attempts = new Set<string>()
   /** Accounts that reached a limit, so no chat moves back to one before its reset. */
-  const limitedAccounts = new Map<string, number | null>()
+  const limitedAccounts = new Map<string, number>()
   const busyProjects = new Set<string>()
   let lastUsage: AcpState['sessionUsage'] | null = null
   let stopped = false
 
   /** Act on the chats of one Project that reached a limit; all share its Account. */
   async function act(projectId: string, chats: readonly LimitedChat[]): Promise<void> {
+    const state = useAcpStore.getState()
+    const outdated = chats.filter(({ sessionId }) => !runsProjectAccount(state, sessionId))
+    await Promise.all(
+      outdated.map(({ sessionId }) => {
+        log(
+          `Chat ${sessionId} reached a limit on an agent started before project ${projectId} changed its account; restarting it on the project's account`
+        )
+        return restartClaudeSession(sessionId, { resend: true, cancelTurn: true })
+      })
+    )
+    const current = chats.filter((chat) => !outdated.includes(chat))
+    if (current.length === 0) return
+
     const snapshot = await claudeAccountsApi.list()
     const currentId = projectAccountId(snapshot, projectId)
-    const fresh = chats.filter(({ sessionId, limit }) => {
-      const attempt = `${sessionId}:${limit.resetsAt ?? ''}:${currentId}`
-      if (attempts.has(attempt)) return false
-      attempts.add(attempt)
-      return true
-    })
+    const usage = snapshot.autoSwitch ? await claudeAccountsApi.usage(true) : []
+    const reads = Object.fromEntries(usage.map((read) => [read.accountId, read]))
+    const knownReset = usageResetSeconds(reads[currentId])
+    const fresh = current
+      .map((chat) =>
+        chat.limit.resetsAt === null
+          ? { ...chat, limit: { ...chat.limit, resetsAt: knownReset } }
+          : chat
+      )
+      .filter(({ sessionId, limit }) => {
+        const attempt = `${sessionId}:${limit.resetsAt ?? ''}:${currentId}`
+        if (attempts.has(attempt)) return false
+        attempts.add(attempt)
+        return true
+      })
     const [lead] = fresh
     if (!lead) {
       log(`Skipped project ${projectId}: these limits were already handled`)
@@ -127,20 +154,20 @@ export function startClaudeAutoSwitch(): () => void {
     }
     const sessionIds = fresh.map((c) => c.sessionId)
     const idList = sessionIds.join(', ')
-    limitedAccounts.set(currentId, lead.limit.resetsAt === null ? null : lead.limit.resetsAt * 1000)
+    limitedAccounts.set(
+      currentId,
+      lead.limit.resetsAt === null
+        ? Date.now() + CLAUDE_SHORTEST_WINDOW_MS
+        : lead.limit.resetsAt * 1000
+    )
     if (sessionIds.some((id) => useClaudeSwitchingStore.getState()[id])) {
       log(`Skipped chats ${idList}: a switch is already running`)
       return
     }
-    const usage = snapshot.autoSwitch ? await claudeAccountsApi.usage(true) : []
     const decision = decideAutoSwitch({
       limit: lead.limit,
       autoSwitch: snapshot.autoSwitch,
-      candidates: rankAlternatives(
-        snapshot,
-        Object.fromEntries(usage.map((read) => [read.accountId, read])),
-        currentId
-      ),
+      candidates: rankAlternatives(snapshot, reads, currentId),
       limited: limitedAccounts,
       now: Date.now()
     })
@@ -241,12 +268,7 @@ export function startClaudeAutoSwitch(): () => void {
             'warn'
           )
           setTimeout(() => {
-            for (const { sessionId, limit } of chats) {
-              handled.delete(sessionId)
-              const prefix = `${sessionId}:${limit.resetsAt ?? ''}:`
-              for (const attempt of attempts)
-                if (attempt.startsWith(prefix)) attempts.delete(attempt)
-            }
+            for (const { sessionId } of chats) handled.delete(sessionId)
             lastUsage = null
             check(useAcpStore.getState())
           }, READ_RETRY_MS)

@@ -1694,6 +1694,13 @@ pub fn run() {
                             .engine()
                             .start(tauri::async_runtime::handle().inner()),
                     ));
+                    // Changes reach the desktop renderer through its own
+                    // channel carrier and every other relay client
+                    // (shared-live peers) as an `agents` watch delta.
+                    tauri::async_runtime::spawn(web::automation_api::forward_changes(
+                        service.subscribe(),
+                        Arc::clone(&ws_relay),
+                    ));
                     automation::service::install(service);
                 }
                 Err(error) => log::error!("[Automation] unavailable: {error}"),
@@ -1988,6 +1995,24 @@ pub fn run() {
             commands::browser_policy_get_app,
             commands::browser_policy_apply_project,
             commands::browser_policy_apply_app,
+            // Automations (main webview only)
+            commands::automation_list,
+            commands::automation_get,
+            commands::automation_create,
+            commands::automation_apply_ops,
+            commands::automation_delete,
+            commands::automation_set_enabled,
+            commands::automation_approve,
+            commands::automation_run_now,
+            commands::automation_cancel_run,
+            commands::automation_list_runs,
+            commands::automation_run_steps,
+            commands::automation_mark_seen,
+            commands::automation_preview_schedule,
+            commands::automation_list_agents,
+            commands::automation_list_secrets,
+            commands::automation_set_secret,
+            commands::automation_delete_secret,
             commands::browser_tab_navigate,
             commands::browser_tab_resize,
             commands::browser_tab_show,

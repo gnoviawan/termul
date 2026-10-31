@@ -2749,107 +2749,132 @@ describe('MCP install plan parity (spine AD-5, AD-7, AD-12)', () => {
   })
 })
 
-// Facade side only: the Rust commands, routes and watch event land with the
-// automation transports, which extend this block with the Rust assertions.
+// Every Operations row of the automation contract: the facade method, the
+// Tauri command registered in lib.rs, and the HTTP route merged into both
+// router variants, all over the one host service.
 describe('Automation parity (facade)', () => {
   const Facade = join(LIB_DIR, 'automation-api.ts')
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const readTauri = (...parts: string[]): string => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
 
   const OPERATIONS = [
     {
       fn: 'listAutomations',
       method: 'list',
       command: 'automation_list',
+      http: '"/api/automations"',
       route: 'AUTOMATIONS}?project_id='
     },
     {
       fn: 'getAutomation',
       method: 'get',
       command: 'automation_get',
+      http: '"/api/automations/{id}"',
       route: 'AUTOMATIONS}/${seg(id)}`'
     },
     {
       fn: 'createAutomation',
       method: 'create',
       command: 'automation_create',
+      http: '"/api/automations"',
       route: 'postJsonOnce(AUTOMATIONS,'
     },
     {
       fn: 'applyAutomationOps',
       method: 'applyOps',
       command: 'automation_apply_ops',
+      http: '"/api/automations/{id}/ops"',
       route: '/ops`'
     },
     {
       fn: 'deleteAutomation',
       method: 'remove',
       command: 'automation_delete',
+      http: '"/api/automations/{id}"',
       route: 'deleteJson(`${AUTOMATIONS}/${seg(id)}`)'
     },
     {
       fn: 'setAutomationEnabled',
       method: 'setEnabled',
       command: 'automation_set_enabled',
+      http: '"/api/automations/{id}/enabled"',
       route: '/enabled`'
     },
     {
       fn: 'approveAutomation',
       method: 'approve',
       command: 'automation_approve',
+      http: '"/api/automations/{id}/approve"',
       route: '/approve`'
     },
-    { fn: 'runAutomationNow', method: 'runNow', command: 'automation_run_now', route: '/run`' },
+    {
+      fn: 'runAutomationNow',
+      method: 'runNow',
+      command: 'automation_run_now',
+      http: '"/api/automations/{id}/run"',
+      route: '/run`'
+    },
     {
       fn: 'cancelAutomationRun',
       method: 'cancelRun',
       command: 'automation_cancel_run',
+      http: '"/api/automation-runs/{run_id}/cancel"',
       route: 'RUNS}/${seg(runId)}/cancel`'
     },
     {
       fn: 'listAutomationRuns',
       method: 'listRuns',
       command: 'automation_list_runs',
+      http: '"/api/automations/{id}/runs"',
       route: '/runs?limit='
     },
     {
       fn: 'getAutomationRunSteps',
       method: 'runSteps',
       command: 'automation_run_steps',
+      http: '"/api/automation-runs/{run_id}/steps"',
       route: 'RUNS}/${seg(runId)}/steps`'
     },
     {
       fn: 'markAutomationSeen',
       method: 'markSeen',
       command: 'automation_mark_seen',
+      http: '"/api/automations/{id}/seen"',
       route: '/seen`'
     },
     {
       fn: 'previewSchedule',
       method: 'previewSchedule',
       command: 'automation_preview_schedule',
+      http: '"/api/automations/preview-schedule"',
       route: '/preview-schedule`'
     },
     {
       fn: 'listAutomationAgents',
       method: 'listAgents',
       command: 'automation_list_agents',
+      http: '"/api/automation-agents"',
       route: "'/api/automation-agents'"
     },
     {
       fn: 'listAutomationSecrets',
       method: 'listSecrets',
       command: 'automation_list_secrets',
+      http: '"/api/automation-secrets"',
       route: 'getJson(`${SECRETS}?project_id='
     },
     {
       fn: 'setAutomationSecret',
       method: 'setSecret',
       command: 'automation_set_secret',
+      http: '"/api/automation-secrets"',
       route: 'putJson(SECRETS,'
     },
     {
       fn: 'deleteAutomationSecret',
       method: 'deleteSecret',
       command: 'automation_delete_secret',
+      http: '"/api/automation-secrets"',
       route: 'deleteJson(`${SECRETS}?project_id='
     }
   ] as const
@@ -2862,14 +2887,46 @@ describe('Automation parity (facade)', () => {
       expect(facade).toContain(`'${op.command}'`)
       expect(facade).toContain(op.route)
     })
+
+    it(`${op.command} is defined, registered in lib.rs, and ${op.http} is served`, () => {
+      expect(readTauri('commands', 'automation.rs')).toContain(`pub async fn ${op.command}(`)
+      expect(readTauri('lib.rs')).toContain(`commands::${op.command},`)
+      expect(readTauri('web', 'automation_api.rs')).toContain(op.http)
+    })
   }
 
-  it('the facade switches carriers and routes change events from both transports', () => {
+  it('both router variants merge the automation routes behind the bearer gate', () => {
+    const router = readTauri('web', 'router', 'mod.rs')
+    expect(router.split('automation_api::automation_router(').length - 1).toBe(2)
+    expect(readTauri('web', 'router', 'gate.rs')).toMatch(
+      /const GATED_PREFIXES[^;]*"\/api\/automation"/s
+    )
+  })
+
+  it('commands run only from the main webview', () => {
+    expect(readTauri('commands', 'automation.rs')).toMatch(/webview\.label\(\) != "main"/)
+  })
+
+  it('both hosts forward service changes only to the agents watch', () => {
+    expect(readTauri('web', 'automation_api.rs')).toContain(
+      'publish_agent_event(&relay, EVENT_AUTOMATION_CHANGED'
+    )
+    const desktop = readTauri('lib.rs')
+    expect(desktop).toContain('web::automation_api::forward_changes(')
+    expect(desktop).not.toContain('EVENT_AUTOMATION_CHANGED')
+    expect(readTauri('web', 'mod.rs')).toContain('automation_api::forward_changes(')
+    expect(readTauri('automation', 'model.rs')).toContain(
+      'EVENT_AUTOMATION_CHANGED: &str = "automation_changed"'
+    )
+  })
+
+  it('the facade switches carriers and takes change events only from the roster watch', () => {
     const facade = readFileSync(Facade, 'utf-8')
     expect(facade).toMatch(
       /isTauriContext\(\) \? desktopAutomationTransport : webAutomationTransport/
     )
     expect(facade).toContain("AUTOMATION_CHANGED_EVENT = 'automation_changed'")
+    expect(facade).not.toContain('@tauri-apps/api/event')
     const roster = readFileSync(
       join(LIB_DIR, '..', 'stores', 'acp-store', 'agent-roster-watch.ts'),
       'utf-8'
