@@ -24,6 +24,7 @@ import { EditorTab } from './EditorTab'
 import { NewTabMenu } from './NewTabMenu'
 import type { TabBulkMenuProps } from './tab-context-menu'
 import { AgentChatTabInline } from './tabs/agent-chat-tab'
+import { AutomationsTabInline } from './tabs/automations-tab'
 import { BrowserTabInline } from './tabs/browser-tab'
 import { CanvasTabInline } from './tabs/canvas-tab'
 import { CommitDiffTabInline, DiffTabInline } from './tabs/diff-tab'
@@ -550,6 +551,23 @@ export function WorkspaceTabBar({
                               docPath: string
                             }
                           }
+                          isActive={tab.id === activeTabId}
+                          isDragging={dragging}
+                          isDropTarget={isTarget}
+                          dropPosition={position}
+                          bulkMenu={buildBulkMenuProps(tab)}
+                          onSelect={() => {
+                            setActiveTab(paneId, tab.id)
+                            setActivePane(paneId)
+                          }}
+                          onClose={() => closeTab(tab)}
+                          onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                          onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                          onDragLeave={handleTabDragLeave}
+                          onDrop={(e) => handleTabDrop(tab.id, e)}
+                        />
+                      ) : tab.type === 'automations' ? (
+                        <AutomationsTabInline
                           isActive={tab.id === activeTabId}
                           isDragging={dragging}
                           isDropTarget={isTarget}

@@ -2748,3 +2748,134 @@ describe('MCP install plan parity (spine AD-5, AD-7, AD-12)', () => {
     expect((digest.match(/Sha256::digest/g) ?? []).length).toBe(1)
   })
 })
+
+// Facade side only: the Rust commands, routes and watch event land with the
+// automation transports, which extend this block with the Rust assertions.
+describe('Automation parity (facade)', () => {
+  const Facade = join(LIB_DIR, 'automation-api.ts')
+
+  const OPERATIONS = [
+    {
+      fn: 'listAutomations',
+      method: 'list',
+      command: 'automation_list',
+      route: 'AUTOMATIONS}?project_id='
+    },
+    {
+      fn: 'getAutomation',
+      method: 'get',
+      command: 'automation_get',
+      route: 'AUTOMATIONS}/${seg(id)}`'
+    },
+    {
+      fn: 'createAutomation',
+      method: 'create',
+      command: 'automation_create',
+      route: 'postJsonOnce(AUTOMATIONS,'
+    },
+    {
+      fn: 'applyAutomationOps',
+      method: 'applyOps',
+      command: 'automation_apply_ops',
+      route: '/ops`'
+    },
+    {
+      fn: 'deleteAutomation',
+      method: 'remove',
+      command: 'automation_delete',
+      route: 'deleteJson(`${AUTOMATIONS}/${seg(id)}`)'
+    },
+    {
+      fn: 'setAutomationEnabled',
+      method: 'setEnabled',
+      command: 'automation_set_enabled',
+      route: '/enabled`'
+    },
+    {
+      fn: 'approveAutomation',
+      method: 'approve',
+      command: 'automation_approve',
+      route: '/approve`'
+    },
+    { fn: 'runAutomationNow', method: 'runNow', command: 'automation_run_now', route: '/run`' },
+    {
+      fn: 'cancelAutomationRun',
+      method: 'cancelRun',
+      command: 'automation_cancel_run',
+      route: 'RUNS}/${seg(runId)}/cancel`'
+    },
+    {
+      fn: 'listAutomationRuns',
+      method: 'listRuns',
+      command: 'automation_list_runs',
+      route: '/runs?limit='
+    },
+    {
+      fn: 'getAutomationRunSteps',
+      method: 'runSteps',
+      command: 'automation_run_steps',
+      route: 'RUNS}/${seg(runId)}/steps`'
+    },
+    {
+      fn: 'markAutomationSeen',
+      method: 'markSeen',
+      command: 'automation_mark_seen',
+      route: '/seen`'
+    },
+    {
+      fn: 'previewSchedule',
+      method: 'previewSchedule',
+      command: 'automation_preview_schedule',
+      route: '/preview-schedule`'
+    },
+    {
+      fn: 'listAutomationAgents',
+      method: 'listAgents',
+      command: 'automation_list_agents',
+      route: "'/api/automation-agents'"
+    },
+    {
+      fn: 'listAutomationSecrets',
+      method: 'listSecrets',
+      command: 'automation_list_secrets',
+      route: 'getJson(`${SECRETS}?project_id='
+    },
+    {
+      fn: 'setAutomationSecret',
+      method: 'setSecret',
+      command: 'automation_set_secret',
+      route: 'putJson(SECRETS,'
+    },
+    {
+      fn: 'deleteAutomationSecret',
+      method: 'deleteSecret',
+      command: 'automation_delete_secret',
+      route: 'deleteJson(`${SECRETS}?project_id='
+    }
+  ] as const
+
+  for (const op of OPERATIONS) {
+    it(`${op.fn} goes through ${op.command} on desktop and its route on web`, () => {
+      const facade = readFileSync(Facade, 'utf-8')
+      expect(facade).toMatch(new RegExp(`export (async )?function ${op.fn}\\(`))
+      expect(facade).toContain(`transport().${op.method}(`)
+      expect(facade).toContain(`'${op.command}'`)
+      expect(facade).toContain(op.route)
+    })
+  }
+
+  it('the facade switches carriers and routes change events from both transports', () => {
+    const facade = readFileSync(Facade, 'utf-8')
+    expect(facade).toMatch(
+      /isTauriContext\(\) \? desktopAutomationTransport : webAutomationTransport/
+    )
+    expect(facade).toContain("AUTOMATION_CHANGED_EVENT = 'automation_changed'")
+    const roster = readFileSync(
+      join(LIB_DIR, '..', 'stores', 'acp-store', 'agent-roster-watch.ts'),
+      'utf-8'
+    )
+    expect(roster).toContain("'automation_changed'")
+    expect(roster).toContain('publishAutomationChange')
+    expect(facade).toContain("from './log-api'")
+  })
+})

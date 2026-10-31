@@ -64,6 +64,12 @@ interface PersistedCommitDiffTabRef {
   oldPath?: string
 }
 
+interface PersistedAutomationsTabRef {
+  type: 'automations'
+  id: string
+  projectId: string
+}
+
 export type PersistedTabRef =
   | PersistedEditorTabRef
   | PersistedTerminalTabRef
@@ -73,6 +79,7 @@ export type PersistedTabRef =
   | PersistedGitHistoryTabRef
   | PersistedDiffTabRef
   | PersistedCommitDiffTabRef
+  | PersistedAutomationsTabRef
 
 // Compile-time check: the persisted ref union must cover exactly the kinds the
 // traits table declares as persisted (a mismatch makes this assignment error).

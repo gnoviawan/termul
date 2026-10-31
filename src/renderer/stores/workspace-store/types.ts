@@ -48,6 +48,13 @@ export type WorkspaceTab =
       projectId: string
       docPath: string
     }
+  | {
+      /** The project's automations (singleton per project): the id is
+       * `automationsTabId(projectId)`, so repeat opens focus the one tab. */
+      type: 'automations'
+      id: string
+      projectId: string
+    }
 
 /** Options for `splitPane`. */
 export interface SplitPaneOptions {
@@ -204,6 +211,8 @@ export interface WorkspaceState extends ProjectWorkspace {
    * canvas on the new doc).
    */
   addCanvasTab: (projectId: string, docPath: string, targetPaneId?: string) => void
+  /** Open (or focus) the project's Automations tab. */
+  addAutomationsTab: (projectId: string, targetPaneId?: string) => void
   /**
    * Swap a launch-placeholder chat tab to the real ACP session id without
    * leaving a duplicate tab behind.

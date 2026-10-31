@@ -4,6 +4,9 @@ mod acp_binary_install;
 mod acp_registry_snapshot;
 mod agent_registry;
 mod agentation;
+// Chat-authored automations: model, validation, schedules and store.
+// Tauri-free so the desktop and `termul-server` share it.
+pub mod automation;
 mod browser_automation;
 mod browser_tab_manager;
 mod browser_tab_permissions;
@@ -1671,6 +1674,31 @@ pub fn run() {
                 tauri::async_runtime::handle().inner(),
             )));
 
+            // The automation engine runs next to the reaper, never from
+            // `serve_router`. Every transport reaches the service through
+            // `automation::service::installed`; a store that cannot open
+            // leaves automations unavailable without blocking startup.
+            let project_roots: automation::engine::ProjectRoots = {
+                let registry = Arc::clone(&project_registry);
+                Arc::new(move |project_id| registry.canonical_root(project_id))
+            };
+            match automation::service::AutomationService::open(
+                &app_data_dir,
+                Arc::clone(&acp_manager),
+                project_roots,
+            ) {
+                Ok(service) => {
+                    let service = Arc::new(service);
+                    app.manage(Arc::new(
+                        service
+                            .engine()
+                            .start(tauri::async_runtime::handle().inner()),
+                    ));
+                    automation::service::install(service);
+                }
+                Err(error) => log::error!("[Automation] unavailable: {error}"),
+            }
+
             // Host-owned browser policy (allow-list, pre-approvals, global
             // profile switch). The relay sink carries `browser_policy_changed`
             // to the desktop renderer and every remote client; the web router
@@ -2192,6 +2220,9 @@ pub fn run() {
             let agent_reaper = app_handle
                 .try_state::<Arc<web::agent_reaper::AgentReaperHandle>>()
                 .map(|state| state.inner().clone());
+            let automation_engine = app_handle
+                .try_state::<Arc<automation::engine::EngineHandle>>()
+                .map(|state| state.inner().clone());
             // The desktop's Channel connections: drained (`channel_closed`
             // 1001) before PTYs and agents are killed.
             let ws_channel_host = app_handle
@@ -2224,6 +2255,9 @@ pub fn run() {
                     // does not take this path.
                     if let Some(agent_reaper) = &agent_reaper {
                         agent_reaper.stop().await;
+                    }
+                    if let Some(automation_engine) = &automation_engine {
+                        automation_engine.stop().await;
                     }
                     acp_manager.kill_all().await;
                     if let Err(error) = acp_manager.shutdown_persistence().await {

@@ -91,16 +91,16 @@ for line in sys.stdin:
 /// `TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS`. It covers all real-loop tests and
 /// the override and precedence tests in `manager/tests.rs`. A real-loop test
 /// therefore never inherits another test's timeout, and vice versa.
-pub(super) static TIMEOUT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static TIMEOUT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Opt-out for hosts without a Python interpreter. Without it a missing
 /// interpreter is a hard failure: these are the only tests that drive the
 /// production `SendPrompt` arm, `race_turn` and the crash teardown.
-const SKIP_ENV: &str = "TERMUL_SKIP_REAL_LOOP_TESTS";
+pub(crate) const SKIP_ENV: &str = "TERMUL_SKIP_REAL_LOOP_TESTS";
 
 /// First interpreter on PATH that runs (`python3`, then `python` for
 /// Windows runners).
-fn find_python() -> Option<&'static str> {
+pub(crate) fn find_python() -> Option<&'static str> {
     ["python3", "python"].into_iter().find(|candidate| {
         std::process::Command::new(candidate)
             .arg("--version")

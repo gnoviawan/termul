@@ -1,6 +1,7 @@
 import type { AgentsWatchDelta, WsAgentSummary } from '@shared/types/web-protocol.types'
 import { describe, expect, it, vi } from 'vitest'
 import type { WatchClient, WatchHandlers } from '@/lib/acp-transport/watch-client'
+import { onAutomationChanged } from '@/lib/automation-api'
 import { onBrowserPolicyChanged, onBrowserPolicyResync } from '@/lib/browser-policy-api'
 import { attachAgentRosterWatch } from './agent-roster-watch'
 import type { AcpState } from './types'
@@ -108,6 +109,22 @@ describe('attachAgentRosterWatch', () => {
     stop()
     handlers().onState([])
     expect(resync).toHaveBeenCalledTimes(2)
+  })
+
+  it('hands an automation_changed delta to automation subscribers and a resync as null', () => {
+    const { state, handlers } = setup()
+    const seen: unknown[] = []
+    const stop = onAutomationChanged((change) => seen.push(change))
+
+    handlers().onDelta?.({
+      event: 'automation_changed',
+      payload: { project_id: 'p1', automation_id: 'auto-1' }
+    })
+    handlers().onState([])
+    stop()
+
+    expect(seen).toEqual([{ project_id: 'p1', automation_id: 'auto-1' }, null])
+    expect(state._onAgentSpawned).not.toHaveBeenCalled()
   })
 
   it('reconciles the full state: spawns the unknown, disconnects the connected agent the host dropped', () => {

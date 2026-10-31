@@ -136,6 +136,7 @@ import {
   WholeWordIcon,
   Wifi01Icon,
   WifiOff01Icon,
+  WorkflowSquare03Icon,
   Wrench01Icon,
   XIcon as XIconData,
   ZapIcon,
@@ -329,6 +330,7 @@ export const WifiOff = hugeIcon('WifiOff', WifiOff01Icon)
 export const Wrench = hugeIcon('Wrench', Wrench01Icon)
 export const XCircle = hugeIcon('XCircle', CancelCircleIcon)
 export const Zap = hugeIcon('Zap', ZapIcon)
+export const Workflow = hugeIcon('Workflow', WorkflowSquare03Icon)
 
 // The stop button fills this square, so this glyph stays in the app.
 export const Square = forwardRef<SVGSVGElement, TermulIconProps>(function Square(

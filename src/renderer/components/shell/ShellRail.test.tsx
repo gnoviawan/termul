@@ -415,7 +415,7 @@ describe('ShellRail', () => {
       useShellLayoutStore.setState({ railExpanded: false })
     })
 
-    it('shows only the icons: project stack, Column tabs, Search, Canvas, SSH, Theme, Shortcuts, Settings, Report a bug', () => {
+    it('shows only the icons: project stack, Column tabs, Search, Canvas, Automations, SSH, Theme, Shortcuts, Settings, Report a bug', () => {
       renderRail()
 
       const nav = screen.getByRole('navigation', { name: 'Projects' })
@@ -433,6 +433,7 @@ describe('ShellRail', () => {
         'Changes',
         'Search',
         'Open canvas',
+        'Open automations',
         'SSH hosts',
         // Pinned at the bottom; Settings then Report a bug, the same
         // relative pair order as the expanded footer.
