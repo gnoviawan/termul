@@ -110,6 +110,8 @@ Each server shows a state, and a short reason when it can't be installed as is:
 
 Servers that the registry marks as deprecated have a **Deprecated** badge.
 
+Servers whose publisher lists a logo show it next to their name. A server with no logo, or whose logo can't load, shows the first letter of its name instead. Logos load whether or not sync is on. Only the Termul host downloads them from the publisher and keeps a copy for a few days, so a browser or phone connected to termul-server gets each logo from that server, never from the publisher's site.
+
 <Callout>The catalog is read-only for now. The **Install** button stays off until installing from the catalog is ready. Until then, copy the server's config from its repository, if it has one, and [add it by hand](#add-mcp-servers).</Callout>
 
 ## Global and per-project servers
