@@ -204,3 +204,28 @@ fn an_imported_npm_spec_naming_a_tarball_is_refused_as_in_the_catalog() {
     }
     assert_eq!(check("npx", &["-y", "ok@1.0.0-rc.1"]), Ok(()));
 }
+
+#[test]
+fn an_imported_dnx_option_before_the_double_dash_is_refused() {
+    for option in [
+        "--add-source",
+        "--configfile=evil.config",
+        "--source",
+        "--prerelease",
+        "--interactive",
+    ] {
+        let args = ["dnx", "Time.Mcp@1.0.0", "--yes", option, "https://evil.example/v3/index.json"];
+        assert_eq!(check("dotnet", &args), Err(argument("dotnet", option)), "{option}");
+        let args = ["dnx", "Time.Mcp@1.0.0", option, "--yes", "--"];
+        assert_eq!(check("dotnet", &args), Err(argument("dotnet", option)), "{option}");
+        let args = ["dnx", option, "Time.Mcp@1.0.0", "--yes", "--"];
+        assert_eq!(check("dotnet", &args), Err(argument("dotnet", option)), "{option}");
+    }
+    assert_eq!(
+        check(
+            "dotnet",
+            &["dnx", "Time.Mcp@1.0.0", "--yes", "--", "--add-source", "https://x.example", "--prerelease"]
+        ),
+        Ok(())
+    );
+}
