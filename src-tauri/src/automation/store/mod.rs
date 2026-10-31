@@ -5,6 +5,7 @@
 //! automation is armed and has a schedule with a future slot.
 
 mod runs;
+mod secret_names;
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -71,6 +72,12 @@ CREATE TABLE automation_step (
     started_at INTEGER,
     finished_at INTEGER,
     PRIMARY KEY (run_id, node_id)
+);
+"#, r#"
+CREATE TABLE automation_secret_name (
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    PRIMARY KEY (project_id, name)
 );
 "#];
 

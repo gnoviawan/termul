@@ -121,6 +121,7 @@ export type IssueCode =
   | 'agent_max_attempts_out_of_range'
   | 'missing_condition_operand'
   | 'invalid_schedule'
+  | 'unknown_agent'
 
 export type Issue = { node_id: NodeId | null; code: IssueCode; message: string }
 
@@ -174,3 +175,12 @@ export type RunPolicy = {
   untrusted_flow: boolean
   failure_policy: string
 }
+
+/** An agent this host can launch for an agent node. */
+export type KnownAgent = { agent_id: string; name: string }
+
+/** Wire event `automation_changed`; `automation_id` is null for project-wide changes. */
+export type AutomationChanged = { project_id: string; automation_id: AutomationId | null }
+
+/** An automation with what its editor and approval card render. */
+export type AutomationDetail = { automation: Automation; issues: Issue[]; policy: RunPolicy }

@@ -46,11 +46,15 @@ pub(super) async fn handle_spawn_agent(
     if let Err(e) = crate::acp::config::validate_spawn_config(&mut parsed.config) {
         return acp_err_to_reply(id, e);
     }
+    let config = parsed.config.clone();
     match acp
         .spawn_with_command_id(parsed.config, command_id, parsed.project_id)
         .await
     {
-        Ok(outcome) => ok_with_payload(id, &outcome),
+        Ok(outcome) => {
+            crate::automation::service::record_spawned_agent(&config);
+            ok_with_payload(id, &outcome)
+        }
         Err(e) => acp_err_to_reply(id, e),
     }
 }

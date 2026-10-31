@@ -172,6 +172,32 @@ pub async fn serve(
         }),
     );
 
+    // The automation engine, like the reaper, belongs to this process and
+    // not to `serve_router`. Its data lives in the locked state dir.
+    let automation_engine = {
+        let roots_registry = registry.clone();
+        let project_roots: crate::automation::engine::ProjectRoots =
+            Arc::new(move |project_id| roots_registry.canonical_root(project_id));
+        match crate::automation::service::AutomationService::open(
+            &cfg.service_account_state_dir(),
+            acp.clone(),
+            project_roots,
+        ) {
+            Ok(service) => {
+                let service = Arc::new(service);
+                let engine = service
+                    .engine()
+                    .start(&tokio::runtime::Handle::current());
+                crate::automation::service::install(service);
+                Some(engine)
+            }
+            Err(e) => {
+                error!("automations unavailable: {e}");
+                None
+            }
+        }
+    };
+
     let host_allow = if web_auth.is_some() {
         host_allow::HostAllowList::any()
     } else {
@@ -212,6 +238,9 @@ pub async fn serve(
     // task past serve's own cleanup path.
     let _ = reaper_stop_tx.send(());
     let _ = reaper_handle.await;
+    if let Some(engine) = &automation_engine {
+        engine.stop().await;
+    }
 
     // Cleanup: always attempt ALL resource cleanup even if one step fails.
     // PTY cleanup must not be skipped because ACP persistence errored.

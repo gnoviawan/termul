@@ -60,7 +60,7 @@ fn migrates_once_and_reopens_with_data() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
 }
 
 #[test]
@@ -396,7 +396,11 @@ fn reconcile_fails_stranded_runs_and_steps_once() {
         (steps[0].status, steps[0].error.as_deref()),
         (StepStatus::Failed, Some("stranded"))
     );
-    assert_eq!(store.get(&a.id).unwrap().unwrap().unseen_failures, 1);
+    let after = store.get(&a.id).unwrap().unwrap();
+    assert_eq!(
+        (after.unseen_failures, after.consecutive_errors, after.next_run_at),
+        (1, 0, a.next_run_at)
+    );
 }
 
 #[test]
