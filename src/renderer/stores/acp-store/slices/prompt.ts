@@ -26,6 +26,7 @@ import { parseBrowserConsentTicket } from '@/lib/browser-consent-api'
 import { settleCommand } from '@/lib/command-engine'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
+import { readOnlyGuardOfSession } from '@/stores/github-chat-links-store'
 import {
   appendQueuedPrompt,
   isAgentDeadError,
@@ -51,6 +52,7 @@ import {
   plainLastError,
   recoverPromptToQueue,
   SWITCH_SPLICE_ID_PREFIX,
+  sessionProjectId,
   writeAgentOptionsCache
 } from '../helpers'
 import { useAcpStore } from '../index'
@@ -213,6 +215,22 @@ function scheduleTurnEnd(
 }
 
 /**
+ * CAP-6 guard of a read-only GitHub chat (Ask / Review), or null. The chat's
+ * link names it on the device that started it; any other device finds it on
+ * the replayed turns, since every turn carried it.
+ */
+function readOnlyGuardOf(state: AcpState, sessionId: SessionId): string | null {
+  const linked = readOnlyGuardOfSession(sessionProjectId(state, sessionId), sessionId)
+  if (linked) return linked
+  const messages = state.messages[sessionId] ?? []
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const guard = messages[i].readOnlyGuard
+    if (guard) return guard
+  }
+  return null
+}
+
+/**
  * Shared orchestration for a user-initiated prompt turn: stage the optimistic
  * user message, mark the turn active, persist, then dispatch to the agent and
  * schedule turn-end. On failure, finalize any streaming markers and record the
@@ -240,6 +258,18 @@ export async function runPromptTurn(
   if (session.status === 'closed' && !get().openingHistoryIds[sessionId])
     throw new Error('session is closed')
   if (userBlocks.length === 0) throw new Error('prompt content must not be empty')
+  // Every dispatch (first send, queued flush, launch turn, resend) of a
+  // read-only GitHub chat leads with its guard; the display stays the user's.
+  const send: typeof dispatch = (live, turnId) => {
+    const guard = readOnlyGuardOf(get(), sessionId)
+    if (!guard) return dispatch(live, turnId)
+    return acpApi.sendPromptBlocks(
+      live.agentId,
+      sessionId,
+      [{ type: 'text', text: guard }, ...userBlocks],
+      turnId
+    )
+  }
 
   // The optimistic user message stores the display blocks (token text) so the
   // timeline renders inline chips; the agent receives the wire blocks via
@@ -519,7 +549,7 @@ export async function runPromptTurn(
       if (promoteSlowTimer) clearTimeout(promoteSlowTimer)
     }
     dispatchedAgentId = liveSession.agentId
-    settleDispatch(await dispatch(liveSession, turnId))
+    settleDispatch(await send(liveSession, turnId))
   } catch (err) {
     if (isPromptTurnInProgressError(err)) {
       settleCommand(turnId, 'rejected')
@@ -585,7 +615,7 @@ export async function runPromptTurn(
         resend: () => {
           const resendSession = get().sessions[sessionId]
           if (!resendSession) throw new Error(`unknown session ${sessionId}`)
-          return dispatch(resendSession, turnId)
+          return send(resendSession, turnId)
         },
         onResult: settleDispatch,
         onDefiniteFailure: (rejection) => failTurn(rejection),

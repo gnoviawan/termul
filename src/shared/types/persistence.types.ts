@@ -86,6 +86,8 @@ export const PersistenceKeys = {
   // The composer's unsent message per chat session (device scope).
   chatDraft: (projectId: string, sessionId: string): string =>
     `chat-draft/${projectId}/${sessionId}`,
+  // Chats started from a GitHub issue or PR, per project (device scope).
+  githubChatLinks: (projectId: string): string => `github/chat-links/${projectId}`,
   // ACP agent configuration (shared between devices, merged per field).
   acpAgents: 'acp/agents',
   acpAuthMethods: 'acp/auth-methods',
