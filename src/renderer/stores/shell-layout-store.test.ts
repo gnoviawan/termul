@@ -116,11 +116,11 @@ describe('shell-layout-store', () => {
 
     it('drops invalid map entries, SSH as a last tab, and unknown fields', () => {
       const record = sanitizeShellLayout({
-        lastColumnTabByProject: { a: 'chats', b: 'ssh', c: 7, d: 'changes' },
+        lastColumnTabByProject: { a: 'chats', b: 'ssh', c: 7, d: 'changes', e: 'github' },
         worktreePickByProject: { a: 'C:/repo/wt', b: 3, c: '' },
         somethingElse: true
       })
-      expect(record.lastColumnTabByProject).toEqual({ a: 'chats', d: 'changes' })
+      expect(record.lastColumnTabByProject).toEqual({ a: 'chats', d: 'changes', e: 'github' })
       expect(record.worktreePickByProject).toEqual({ a: 'C:/repo/wt' })
       expect(record).not.toHaveProperty('somethingElse')
     })

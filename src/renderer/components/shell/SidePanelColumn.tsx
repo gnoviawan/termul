@@ -27,6 +27,10 @@ const FileExplorer = lazy(() =>
   import('@/components/file-explorer/FileExplorer').then((m) => ({ default: m.FileExplorer }))
 )
 
+const GithubPanel = lazy(() =>
+  import('@/components/github/GithubPanel').then((m) => ({ default: m.GithubPanel }))
+)
+
 interface SidePanelColumnProps {
   activeProject: Project
 }
@@ -34,12 +38,13 @@ interface SidePanelColumnProps {
 const TAB_LABELS: Record<ShellLastColumnTab, string> = {
   chats: 'Chats',
   explorer: 'Explorer',
-  changes: 'Changes'
+  changes: 'Changes',
+  github: 'GitHub'
 }
 
 /**
  * Shell Side panel: a header with the New chat and Hide panel buttons,
- * the Chats / Explorer / Changes Column tabs and the selected tab's body. The
+ * the Chats / Explorer / Changes / GitHub Column tabs and the selected tab's body. The
  * last tab is remembered per project. The tabs render only while the Rail is
  * expanded; collapsed, the Rail's own icons select the tab. Mounted through
  * `ExplorerColumn`'s `sidePanel` slot, never in SSH mode.
@@ -133,6 +138,11 @@ export function SidePanelColumn({ activeProject }: SidePanelColumnProps): React.
             </Suspense>
           )}
           {selected === 'changes' && <ChangesPanel cwd={cwd} isVisible />}
+          {selected === 'github' && (
+            <Suspense fallback={<ShellSkeleton />}>
+              <GithubPanel projectId={projectId} cwd={cwd} />
+            </Suspense>
+          )}
         </div>
       </div>
       <button

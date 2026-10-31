@@ -58,6 +58,9 @@ const AutomationsPanel = lazy(() =>
 const GitHistoryPanel = lazy(() =>
   import('@/components/git/GitHistoryPanel').then((m) => ({ default: m.GitHistoryPanel }))
 )
+const GithubItemPanel = lazy(() =>
+  import('@/components/github/GithubItemPanel').then((m) => ({ default: m.GithubItemPanel }))
+)
 const GitPanel = lazy(() =>
   import('@/components/git/GitPanel').then((m) => ({ default: m.GitPanel }))
 )
@@ -520,6 +523,28 @@ export function PaneContent({
                   >
                     <Suspense fallback={<PaneSkeleton />}>
                       <AutomationsPanel projectId={tab.projectId} isVisible={isVisible} />
+                    </Suspense>
+                  </div>
+                )
+              })}
+
+            {pane.tabs
+              .filter((t): t is WorkspaceTab & { type: 'github-item' } => t.type === 'github-item')
+              .map((tab) => {
+                const isVisible = visibleTabId === tab.id
+                return (
+                  <div
+                    key={tab.id}
+                    className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
+                  >
+                    <Suspense fallback={<PaneSkeleton />}>
+                      <GithubItemPanel
+                        cwd={tab.cwd}
+                        repo={tab.repo}
+                        kind={tab.kind}
+                        number={tab.number}
+                        isVisible={isVisible}
+                      />
                     </Suspense>
                   </div>
                 )

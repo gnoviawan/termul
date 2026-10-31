@@ -35,6 +35,7 @@ const TAB_CLOSE: { [K in WorkspaceTabKind]: TabCloser<K> } = {
   },
   git: removeTab,
   'git-history': removeTab,
+  'github-item': removeTab,
   diff: removeTab,
   'commit-diff': removeTab,
   automations: removeTab,

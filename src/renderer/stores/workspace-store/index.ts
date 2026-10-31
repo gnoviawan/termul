@@ -44,11 +44,13 @@ export {
   flattenSameDirection,
   getAllLeafPanes,
   gitHistoryTabId,
+  githubItemTabId,
   gitTabId,
   normalizePaneTree
 } from './tree'
 export type {
   AddTabOptions,
+  GithubItemTabTarget,
   ProjectWorkspace,
   SplitPaneOptions,
   WorkspaceState,
