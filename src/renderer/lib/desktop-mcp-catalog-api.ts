@@ -8,6 +8,13 @@ export function createDesktopMcpCatalogApi(): McpCatalogApi {
   return {
     search: (request) => ipcResultFromTransport(() => getAcpTransport().searchMcpCatalog(request)),
     status: () => ipcResultFromTransport(() => getAcpTransport().getMcpCatalogStatus()),
-    setSync: (enabled) => ipcResultFromTransport(() => getAcpTransport().setMcpCatalogSync(enabled))
+    setSync: (enabled) =>
+      ipcResultFromTransport(() => getAcpTransport().setMcpCatalogSync(enabled)),
+    icon: (name) =>
+      ipcResultFromTransport(async () => {
+        const icon = await getAcpTransport().getMcpCatalogIcon(name)
+        const bytes = Uint8Array.from(atob(icon.data), (char) => char.charCodeAt(0))
+        return new Blob([bytes], { type: icon.contentType })
+      })
   }
 }

@@ -2924,3 +2924,68 @@ describe('Automation parity (facade)', () => {
     expect(facade).toContain("from './log-api'")
   })
 })
+
+// MCP catalog logos (spine AD-1, AD-15): the host fetches a publisher icon and
+// serves the bytes over `GET /mcp-catalog/icon/<name>` (web, shared-live) and
+// the `/ws` request `get_mcp_catalog_icon` (desktop channel). Rows carry only
+// `hasIcon`, and the UI draws a logo only through `<img>`.
+describe('MCP catalog icon parity (spine AD-1, AD-15)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const SHARED_TYPES = join(LIB_DIR, '..', '..', 'shared', 'types')
+
+  it('both carriers answer from the one host service', () => {
+    const dispatch = readFileSync(join(SRC_TAURI, 'web', 'ws', 'dispatch.rs'), 'utf-8')
+    expect(dispatch).toMatch(
+      /"get_mcp_catalog_icon" => \{\s*mcp_catalog::handle_get_mcp_catalog_icon/
+    )
+    const router = readFileSync(join(SRC_TAURI, 'web', 'router', 'mod.rs'), 'utf-8')
+    expect(
+      router.match(/"\/mcp-catalog\/icon\/\{\*name\}", get\(mcp_catalog_api::icon\)/g)
+    ).toHaveLength(2)
+    expect(readFileSync(join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'), 'utf-8')).toMatch(
+      /McpCatalogService::shared\(\)\.await\.icon\(&name\)/
+    )
+    expect(readFileSync(join(SRC_TAURI, 'web', 'ws', 'mcp_catalog.rs'), 'utf-8')).toMatch(
+      /McpCatalogService::shared\(\)\.await\.icon\(&request\.name\)/
+    )
+  })
+
+  it('the icon is a read every connection may make, behind the bearer gate on HTTP', () => {
+    const capabilities = readFileSync(join(SRC_TAURI, 'web', 'capabilities.rs'), 'utf-8')
+    expect(capabilities).toMatch(/\| "get_mcp_catalog_icon"/)
+    const ledger = readFileSync(join(SRC_TAURI, 'web', 'command_ledger', 'class.rs'), 'utf-8')
+    expect(ledger).toMatch(/\("get_mcp_catalog_icon", CommandClass::read\(\)\)/)
+    const gate = readFileSync(join(SRC_TAURI, 'web', 'router', 'gate.rs'), 'utf-8')
+    expect(gate).toMatch(/"\/mcp-catalog\/",/)
+    const protocol = readFileSync(join(SHARED_TYPES, 'web-protocol.types.ts'), 'utf-8')
+    expect(protocol).toMatch(/'get_mcp_catalog_icon',/)
+    expect(protocol).toMatch(/get_mcp_catalog_icon: \['read', null\]/)
+  })
+
+  it('HTTP serves the bytes as an inert image', () => {
+    const http = readFileSync(join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'), 'utf-8')
+    expect(http).toMatch(/header::X_CONTENT_TYPE_OPTIONS, "nosniff"/)
+    expect(http).toMatch(
+      /ICON_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox"/
+    )
+  })
+
+  it('both facade impls reach the host the same way and the UI uses only <img>', () => {
+    const desktop = readFileSync(join(LIB_DIR, 'desktop-mcp-catalog-api.ts'), 'utf-8')
+    expect(desktop).toMatch(/getAcpTransport\(\)\.getMcpCatalogIcon\(name\)/)
+    const web = readFileSync(join(LIB_DIR, 'web-mcp-catalog-api.ts'), 'utf-8')
+    expect(web).toMatch(/\/mcp-catalog\/icon\/\$\{encodeURIComponent\(name\)\}/)
+    expect(web).toMatch(/headers: authHeader\(\)/)
+    const transport = readTsModule(join(LIB_DIR, 'acp-transport'))
+    expect(transport).toMatch(/'get_mcp_catalog_icon'/)
+    const types = readFileSync(join(SHARED_TYPES, 'mcp-catalog.types.ts'), 'utf-8')
+    expect(types).toMatch(/hasIcon: boolean/)
+    expect(types).toMatch(/icon\(name: string\): Promise<IpcResult<Blob>>/)
+    const ui = readFileSync(
+      join(LIB_DIR, '..', 'components', 'settings', 'McpCatalogIcon.tsx'),
+      'utf-8'
+    )
+    expect(ui).toMatch(/<img\b/)
+    expect(ui).not.toMatch(/dangerouslySetInnerHTML|innerHTML|<svg\b/)
+  })
+})
