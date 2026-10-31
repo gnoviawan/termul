@@ -1,14 +1,3 @@
-//! Live registry sync (SPEC CAP-2, spine AD-3).
-//!
-//! On by default and a host setting can turn it off; off means no catalog
-//! request leaves the host. The loop polls at boot, then hourly, and an hour
-//! after a failure. Each run fetches what changed since the catalog's newest
-//! data (`updated_since`), or crawls the whole registry when the catalog is
-//! still the bundled sample. Every deleted or deprecated row re-fetches its
-//! server's latest version, because `isLatest` moves without bumping
-//! `updated_at`. A run commits its rows to `<state>/mcp-catalog/` in one
-//! atomic write, then swaps the service's catalog whole.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, BufReader, Read, Write};
@@ -32,7 +21,6 @@ pub(crate) const REGISTRY_BASE: &str = "https://registry.modelcontextprotocol.io
 const POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const RETRY_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const PAGE_LIMIT: usize = 100;
-/// The whole registry is about 550 pages of latest rows.
 const MAX_PAGES: usize = 5000;
 const MAX_PAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SERVER_BYTES: usize = 1024 * 1024;
@@ -43,11 +31,8 @@ const CACHE_FORMAT_VERSION: u32 = 1;
 const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CACHE_FILE: &str = "registry-cache.json.gz";
 const CONFIG_FILE: &str = "config.json";
-/// The snapshot script drops the same fields: icons are fetched by the host
-/// only, publisher `_meta` is enrichment, and parsing ignores `$schema`.
 const DROPPED_SERVER_FIELDS: [&str; 3] = ["$schema", "icons", "_meta"];
 
-/// What the sync loop is doing while sync is on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(
     tag = "state",
@@ -66,7 +51,6 @@ pub enum SyncPhase {
     },
 }
 
-/// The sync state every transport reports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum McpCatalogSync {
@@ -75,17 +59,13 @@ pub enum McpCatalogSync {
     Enabled(SyncPhase),
 }
 
-/// What one run asks the registry for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SyncPlan {
-    /// Every latest row: the catalog is the sample, or nothing loaded.
     Full,
     Since(DateTime<Utc>),
 }
 
 impl SyncPlan {
-    /// A catalog's `updated_at` is already `max(snapshot timestamp, cache
-    /// cursor)`: a cache older than the snapshot never loads.
     pub(crate) fn for_catalog(source: &McpCatalogSource) -> Self {
         match source
             .updated_at
@@ -104,7 +84,6 @@ impl SyncPlan {
 
 #[derive(Debug)]
 pub(crate) enum SyncError {
-    /// Sync was turned off mid-run.
     Cancelled,
     Request(String),
     Status(u16),
@@ -193,26 +172,22 @@ impl Registry {
                 query.append_pair("cursor", cursor);
             }
         }
-        let body = self
-            .get(url, MAX_PAGE_BYTES)
-            .await?
-            .ok_or(SyncError::Status(404))?;
+        let body = self.get(url, MAX_PAGE_BYTES).await?;
         serde_json::from_slice(&body).map_err(|error| SyncError::Malformed(error.to_string()))
     }
 
-    /// `None` when the server has no browsable latest version.
     async fn latest(&self, name: &str) -> Result<Option<Box<RawValue>>, SyncError> {
         let url = self.url(&["v0.1", "servers", name, "versions", "latest"])?;
-        match self.get(url, MAX_SERVER_BYTES).await? {
-            None => Ok(None),
-            Some(body) => serde_json::from_slice(&body)
+        match self.get(url, MAX_SERVER_BYTES).await {
+            Err(SyncError::Status(404)) => Ok(None),
+            Err(error) => Err(error),
+            Ok(body) => serde_json::from_slice(&body)
                 .map(Some)
                 .map_err(|error| SyncError::Malformed(error.to_string())),
         }
     }
 
-    /// `None` on 404. Transport failures, 429 and 5xx are retried.
-    async fn get(&self, url: reqwest::Url, cap: usize) -> Result<Option<Vec<u8>>, SyncError> {
+    async fn get(&self, url: reqwest::Url, cap: usize) -> Result<Vec<u8>, SyncError> {
         let mut attempt = 1;
         loop {
             match self.get_once(url.clone(), cap).await {
@@ -226,15 +201,11 @@ impl Registry {
         }
     }
 
-    async fn get_once(&self, url: reqwest::Url, cap: usize) -> Result<Option<Vec<u8>>, SyncError> {
+    async fn get_once(&self, url: reqwest::Url, cap: usize) -> Result<Vec<u8>, SyncError> {
         use futures_util::StreamExt;
-        // `without_url` keeps the query (cursor, timestamps) out of errors.
         let request_error =
             |error: reqwest::Error| SyncError::Request(error.without_url().to_string());
         let response = self.client.get(url).send().await.map_err(request_error)?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
         if !response.status().is_success() {
             return Err(SyncError::Status(response.status().as_u16()));
         }
@@ -247,7 +218,7 @@ impl Registry {
             }
             body.extend_from_slice(&chunk);
         }
-        Ok(Some(body))
+        Ok(body)
     }
 }
 
@@ -258,7 +229,6 @@ enum RowStatus {
     Deleted,
 }
 
-/// A registry row reduced to what the catalog keeps.
 struct Row {
     name: String,
     latest: bool,
@@ -304,7 +274,6 @@ impl Row {
     }
 }
 
-/// The latest row per name a run learned; `None` withdraws the name.
 #[derive(Debug, Default)]
 pub(crate) struct Delta {
     pub rows: BTreeMap<String, Option<Box<RawValue>>>,
@@ -312,8 +281,6 @@ pub(crate) struct Delta {
     pub refetched: usize,
 }
 
-/// Network only. Checks `keep_going` before every request, so turning sync
-/// off stops the run at the next request.
 pub(crate) async fn fetch(
     registry: &Registry,
     plan: SyncPlan,
@@ -330,6 +297,8 @@ pub(crate) async fn fetch(
         let page = registry.page(plan, cursor.as_deref()).await?;
         for row in page.servers.iter().filter_map(|raw| Row::parse(raw)) {
             delta.received += 1;
+            // The registry moves `isLatest` to another version without bumping its
+            // `updated_at`, so an `updated_since` page never shows the new latest row.
             if !plan.is_full() && row.status != RowStatus::Active {
                 refetch.insert(row.name);
                 continue;
@@ -360,14 +329,11 @@ pub(crate) async fn fetch(
     Err(SyncError::TooManyPages)
 }
 
-/// `<state>/mcp-catalog/registry-cache.json.gz`.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RegistryCache {
     format_version: u32,
-    /// Every registry change up to here is in `servers` or the snapshot.
     pub cursor: DateTime<Utc>,
-    /// `servers` is a whole-registry crawl rather than changes to the snapshot.
     pub full: bool,
     pub servers: BTreeMap<String, Option<Box<RawValue>>>,
 }
@@ -397,8 +363,6 @@ fn rfc3339(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-/// `None` when missing, unreadable, or older than the embedded snapshot.
-/// Blocking.
 pub(crate) fn read_cache(dir: &Path, snapshot: &McpCatalogSource) -> Option<RegistryCache> {
     let path = dir.join(CACHE_FILE);
     let file = match fs::File::open(&path) {
@@ -445,7 +409,6 @@ fn write_cache(dir: &Path, cache: &RegistryCache) -> io::Result<()> {
     crate::acp::atomic_file::replace(&dir.join(CACHE_FILE), &encoder.finish()?)
 }
 
-/// The catalog a cache yields over `base`. A full cache replaces it.
 pub(crate) fn merge(base: &LoadedCatalog, cache: &RegistryCache) -> LoadedCatalog {
     let source = McpCatalogSource {
         updated_at: Some(rfc3339(cache.cursor)),
@@ -461,8 +424,6 @@ pub(crate) fn merge(base: &LoadedCatalog, cache: &RegistryCache) -> LoadedCatalo
     }
 }
 
-/// Writes the run's rows into the cache, then builds the catalog to swap
-/// in. Blocking.
 pub(crate) fn commit(
     dir: &Path,
     current: &LoadedCatalog,
@@ -502,7 +463,6 @@ struct SyncConfig {
     sync_enabled: bool,
 }
 
-/// Sync is on unless the host setting says otherwise. Blocking.
 pub(crate) fn read_enabled(dir: &Path) -> bool {
     let path = dir.join(CONFIG_FILE);
     let bytes = match fs::read(&path) {
@@ -539,13 +499,11 @@ fn write_enabled(dir: &Path, enabled: bool) -> io::Result<()> {
     crate::acp::atomic_file::replace(&dir.join(CONFIG_FILE), &bytes)
 }
 
-/// The per-process sync wiring, set once at boot.
 pub(crate) struct SyncHost {
     dir: PathBuf,
     registry: Registry,
     enabled: AtomicBool,
     wake: tokio::sync::Notify,
-    /// Orders setting writes so the file and `enabled` never disagree.
     setting: tokio::sync::Mutex<()>,
 }
 
@@ -578,8 +536,6 @@ impl SyncHost {
 }
 
 impl McpCatalogService {
-    /// Loads the cache over the embedded snapshot, then runs the loop until
-    /// the process exits.
     pub(crate) async fn run_sync(self: Arc<Self>, host: Arc<SyncHost>) {
         let dir = host.dir.clone();
         let base = self.catalog();

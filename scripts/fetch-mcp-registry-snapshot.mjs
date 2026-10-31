@@ -116,7 +116,7 @@ export async function crawl(fetcher = fetchPage) {
 
 // The host never reads these: icons are never fetched (AD-15), publisher
 // `_meta` is enrichment (deferred), and parsing never depends on `$schema`.
-const DROPPED_SERVER_FIELDS = new Set(['$schema', 'icons', '_meta'])
+export const DROPPED_SERVER_FIELDS = new Set(['$schema', 'icons', '_meta'])
 
 function slimServer(server) {
   return Object.fromEntries(
@@ -192,7 +192,6 @@ async function main() {
     bytes: gz.length,
     servers: snapshot.servers.length,
     versions: snapshot.versions.length,
-    // The host crawls the whole registry on its first sync over a sample.
     ...(only && { sample: true })
   }
   mkdirSync(opts.out, { recursive: true })

@@ -242,12 +242,6 @@ function CatalogList({
   )
 }
 
-/**
- * Browse and search the host's MCP catalog (SPEC CAP-1, CAP-4) and say where
- * it comes from. Search and status are reads, so shared-live viewers browse
- * too; only the host can turn sync on or off. Install arrives with the
- * consent flow.
- */
 export function McpCatalogBrowser(): React.JSX.Element {
   const visible = useSettingsSectionVisible()
   const [query, setQuery] = useState('')

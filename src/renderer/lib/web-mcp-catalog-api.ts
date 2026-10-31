@@ -1,9 +1,4 @@
-/**
- * HTTP implementation of the MCP catalog facade (spine AD-1): `GET
- * /mcp-catalog/search`, `GET /mcp-catalog/status` and `POST /mcp-catalog/sync`
- * on the host serving this client. Network and parse failures map to
- * `NETWORK_ERROR`; the route's own `IpcBody` passes through.
- */
+/** HTTP implementation of the MCP catalog facade (spine AD-1). */
 
 import type {
   McpCatalogApi,

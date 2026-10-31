@@ -1,16 +1,9 @@
 /**
  * Wire shapes of the host-owned MCP server catalog (spine AD-1 to AD-4).
- *
- * The host converts the official MCP Registry snapshot, keeps it current with
- * live sync, and answers paged search. Every transport (the HTTP routes under
- * `/mcp-catalog/` and the matching `/ws` requests on the web socket and the
- * desktop channel) returns the same `IpcResult`. The renderer never holds the
- * full catalog and never parses `server.json`.
  */
 
 import type { IpcResult } from './ipc.types'
 
-/** The registry every catalog row comes from (spine AD-2). */
 export const MCP_REGISTRY_URL = 'https://registry.modelcontextprotocol.io'
 
 /** The host's caps on a search query (`search.rs` `MAX_QUERY_CHARS`, `MAX_QUERY_TERMS`). */
@@ -73,11 +66,8 @@ export interface McpCatalogSearchRequest {
   limit?: number
 }
 
-/** Which registry data a catalog holds. */
 export interface McpCatalogSource {
-  /** When its newest registry data was fetched; `null` if no catalog loaded. */
   updatedAt: string | null
-  /** The small sample bundled with development builds, not the full registry. */
   sample: boolean
 }
 
@@ -87,10 +77,6 @@ export interface McpCatalogPage extends McpCatalogSource {
   total: number
 }
 
-/**
- * The host's live sync (spine AD-3). Off means no catalog request leaves the
- * host. A full sync crawls the whole registry; the others fetch what changed.
- */
 export type McpCatalogSync =
   | { state: 'disabled' }
   | { state: 'idle' }
@@ -98,20 +84,12 @@ export type McpCatalogSync =
   | { state: 'failed'; error: string; retryAt: string }
 
 export interface McpCatalogStatus extends McpCatalogSource {
-  /** Browsable servers in the catalog search answers from. */
   servers: number
   sync: McpCatalogSync
 }
 
-/**
- * The renderer facade. The desktop impl sends the `/ws` requests
- * `search_mcp_catalog`, `get_mcp_catalog_status` and `set_mcp_catalog_sync`
- * over the Tauri channel; the web impl calls `GET /mcp-catalog/search`,
- * `GET /mcp-catalog/status` and `POST /mcp-catalog/sync`.
- */
 export interface McpCatalogApi {
   search(request: McpCatalogSearchRequest): Promise<IpcResult<McpCatalogPage>>
   status(): Promise<IpcResult<McpCatalogStatus>>
-  /** A write: shared-live and view-only peers get `FORBIDDEN`. */
   setSync(enabled: boolean): Promise<IpcResult<McpCatalogStatus>>
 }

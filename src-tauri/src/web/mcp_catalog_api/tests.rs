@@ -69,7 +69,6 @@ async fn invalid_requests_are_validation_errors() {
     }
 }
 
-/// `GET /mcp-catalog/status` against the embedded dev fixture.
 pub(crate) async fn http_status() -> Value {
     let response = axum::Router::new()
         .route("/mcp-catalog/status", get(super::status))

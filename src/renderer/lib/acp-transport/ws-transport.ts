@@ -813,12 +813,10 @@ export class WsAcpTransport implements AcpTransport {
     return this.request<McpCatalogPage>('search_mcp_catalog', request)
   }
 
-  /** `get_mcp_catalog_status`: see {@link AcpTransport.getMcpCatalogStatus}. */
   async getMcpCatalogStatus(): Promise<McpCatalogStatus> {
     return this.request<McpCatalogStatus>('get_mcp_catalog_status', {})
   }
 
-  /** `set_mcp_catalog_sync`: see {@link AcpTransport.setMcpCatalogSync}. */
   async setMcpCatalogSync(enabled: boolean): Promise<McpCatalogStatus> {
     return this.request<McpCatalogStatus>('set_mcp_catalog_sync', { enabled })
   }

@@ -1,10 +1,3 @@
-/**
- * Where the host's MCP catalog comes from and its live registry sync (spine
- * AD-3), for the browse screen. Polls while the settings page is shown: fast
- * while a sync runs so its progress moves, slowly otherwise so a finished
- * background sync still shows up.
- */
-
 import type { IpcResult } from '@shared/types/ipc.types'
 import type { McpCatalogStatus } from '@shared/types/mcp-catalog.types'
 import { useCallback, useEffect, useReducer, useRef } from 'react'
@@ -17,9 +10,7 @@ export const MCP_CATALOG_IDLE_POLL_MS = 60_000
 
 export type McpCatalogStatusState =
   | { status: 'loading' }
-  /** No status has loaded yet; the next poll tries again. */
   | { status: 'unavailable' }
-  /** `requested` is the sync setting a toggle in flight asked for. */
   | { status: 'ready'; catalog: McpCatalogStatus; requested: boolean | null }
 
 type Action =
@@ -52,14 +43,11 @@ function logStatusFailure(message: string): void {
 
 export interface McpCatalogStatusHandle {
   state: McpCatalogStatusState
-  /** Turn live sync on or off; resolves the host's answer, a failure included. */
   setSync: (enabled: boolean) => Promise<IpcResult<McpCatalogStatus>>
 }
 
 export function useMcpCatalogStatus(visible: boolean): McpCatalogStatusHandle {
   const [state, dispatch] = useReducer(reduce, { status: 'loading' })
-  // Requests are numbered so a poll sent before a toggle can't overwrite the
-  // status the toggle answered.
   const sent = useRef(0)
   const applied = useRef(0)
   const toggling = useRef(false)
@@ -111,11 +99,6 @@ export function useMcpCatalogStatus(visible: boolean): McpCatalogStatusHandle {
   return { state, setSync }
 }
 
-/**
- * Re-runs the search when the host's catalog no longer matches the one the
- * results came from (a sync replaced it), once per catalog change, so the list
- * and its count move without a reload.
- */
 export function useSearchFollowsCatalog(
   catalog: McpCatalogStatus | null,
   search: McpCatalogSearch

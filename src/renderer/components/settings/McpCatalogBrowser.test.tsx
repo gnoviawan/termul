@@ -49,7 +49,6 @@ vi.mock('@tanstack/react-virtual', async (importActual) => {
   }
 })
 
-// Built from local time so the rendered local date is the same in every time zone.
 const SNAPSHOT = new Date(2026, 9, 20, 12, 0).toISOString()
 const SYNCED = new Date(2026, 9, 21, 9, 30).toISOString()
 
@@ -129,7 +128,6 @@ beforeEach(() => {
   setSync.mockReset()
   openUrl.mockClear()
   vi.mocked(toast.error).mockClear()
-  // Status stays unanswered unless a test is about it.
   status.mockReturnValue(new Promise(() => {}))
 })
 

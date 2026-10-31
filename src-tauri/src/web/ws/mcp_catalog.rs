@@ -1,10 +1,3 @@
-//! `/ws` adapter for the host-owned MCP catalog (spine AD-1, AD-3). The
-//! desktop channel and the web socket both route `search_mcp_catalog`,
-//! `get_mcp_catalog_status` and `set_mcp_catalog_sync` here, answering through
-//! the same [`McpCatalogService`] calls as the `/mcp-catalog/` HTTP routes.
-//! `set_mcp_catalog_sync` is a write, so the capability check refuses it for
-//! view-only and shared-live connections before it gets here.
-
 use super::*;
 use crate::mcp_catalog::{McpCatalogSearchRequest, McpCatalogService};
 use crate::web::mcp_catalog_api::SetMcpCatalogSyncRequest;

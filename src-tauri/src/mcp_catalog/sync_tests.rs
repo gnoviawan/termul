@@ -52,8 +52,6 @@ enum Mode {
     Oversized,
 }
 
-/// A registry that pages `rows` two at a time and answers
-/// `/versions/latest` from `latest`, recording every request.
 struct MockRegistry {
     rows: Vec<Value>,
     latest: HashMap<String, Value>,

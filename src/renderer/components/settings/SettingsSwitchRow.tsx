@@ -8,7 +8,6 @@ interface SettingsSwitchRowProps {
   label: string
   description: string
   checked: boolean
-  /** Dims the row and locks the switch, e.g. while a change is saving. */
   disabled?: boolean
   onToggle: (enabled: boolean) => void
 }

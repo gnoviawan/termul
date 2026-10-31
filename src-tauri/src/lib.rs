@@ -1545,14 +1545,12 @@ pub fn run() {
                 acp_catalog_service.clone(),
             ));
 
-            // SPEC CAP-2: live MCP registry sync, cached under
-            // `<app_data_dir>/mcp-catalog`.
             let mcp_catalog_root = handle
                 .path()
                 .app_data_dir()
                 .map_err(|error| format!("failed to resolve app data directory: {error}"))?
                 .join("mcp-catalog");
-            tauri::async_runtime::spawn(crate::mcp_catalog::McpCatalogService::start(
+            tauri::async_runtime::spawn(crate::mcp_catalog::McpCatalogService::run(
                 mcp_catalog_root,
             ));
 

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -7,7 +7,15 @@ import { describe, expect, it } from 'vitest'
 // @ts-expect-error The script is plain ESM so the release workflow runs it directly.
 import * as snapshotScript from './fetch-mcp-registry-snapshot.mjs'
 
-const { buildSnapshot, crawl, META_FILE, readBody, SNAPSHOT_FILE, verifySnapshot } = snapshotScript
+const {
+  buildSnapshot,
+  crawl,
+  DROPPED_SERVER_FIELDS,
+  META_FILE,
+  readBody,
+  SNAPSHOT_FILE,
+  verifySnapshot
+} = snapshotScript
 
 const OFFICIAL = 'io.modelcontextprotocol.registry/official'
 
@@ -155,5 +163,18 @@ describe('verifySnapshot', () => {
 
   it('rejects the --only sample even when it is large enough', () => {
     expect(() => verifySnapshot(write(3, undefined, true), 3)).toThrow(/sample/)
+  })
+})
+
+describe('DROPPED_SERVER_FIELDS', () => {
+  it('matches the fields host sync drops, so cached rows look like snapshot rows', () => {
+    const sync = readFileSync(
+      join(import.meta.dirname, '..', 'src-tauri', 'src', 'mcp_catalog', 'sync.rs'),
+      'utf8'
+    )
+    const rust = sync.match(/const DROPPED_SERVER_FIELDS: \[&str; \d+\] = \[([^\]]*)\]/)?.[1]
+    expect(rust?.match(/"[^"]+"/g)?.map((field) => JSON.parse(field))).toEqual([
+      ...DROPPED_SERVER_FIELDS
+    ])
   })
 })

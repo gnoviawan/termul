@@ -70,14 +70,12 @@ const count = new Intl.NumberFormat('en-US')
 const dateTime = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' })
 const timeOfDay = new Intl.DateTimeFormat('en-US', { timeStyle: 'short' })
 
-/** When the catalog's registry data was fetched, in local time. */
 export function mcpCatalogUpdatedText(updatedAt: string | null): string {
   return updatedAt === null
     ? 'No catalog is loaded yet.'
     : `Updated ${dateTime.format(new Date(updatedAt))}.`
 }
 
-/** `null` for the full registry. */
 export function mcpCatalogSampleText(status: McpCatalogStatus): string | null {
   if (!status.sample) return null
   const next =
@@ -87,7 +85,6 @@ export function mcpCatalogSampleText(status: McpCatalogStatus): string | null {
   return `This is the small sample bundled with this build, not the full registry. ${next}`
 }
 
-/** `null` when there is nothing to add: an idle sync still on the sample. */
 export function mcpCatalogSyncText(status: McpCatalogStatus, now = new Date()): string | null {
   const { sync } = status
   switch (sync.state) {

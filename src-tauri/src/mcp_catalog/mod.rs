@@ -1,12 +1,3 @@
-//! Host-owned MCP server catalog (SPEC CAP-1, CAP-2, CAP-4; spine AD-1 to
-//! AD-4).
-//!
-//! The catalog is the bundled registry snapshot, converted through the AD-4
-//! contract and kept current by live sync (`sync.rs`). It answers paged
-//! search, sync status and the sync setting over every transport (HTTP under
-//! `/mcp-catalog/`, the matching `/ws` requests on the web socket and the
-//! desktop channel). Only the sync loop touches the network.
-//!
 //! The snapshot is embedded in the binary, so the service is one per process
 //! rather than per `AppState`: the desktop and `termul-server` each own their
 //! own copy, and every carrier in a process answers from the same one.
@@ -52,10 +43,8 @@ const MIN_DOTNET_SDK_MAJOR: u64 = 10;
 static SHARED: OnceCell<Arc<McpCatalogService>> = OnceCell::const_new();
 
 pub struct McpCatalogService {
-    /// Swapped whole after each sync; a search keeps the one it started on.
     catalog: RwLock<Arc<LoadedCatalog>>,
     phase: Mutex<SyncPhase>,
-    /// Set once at boot by [`Self::start`]; without it sync reads as off.
     sync: OnceLock<Arc<SyncHost>>,
     /// Set by tests in place of probing the host's PATH.
     fixed_runners: Option<RunnerAvailability>,
@@ -71,7 +60,6 @@ pub struct McpCatalogError {
     pub message: String,
 }
 
-/// Where the catalog comes from and what sync is doing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpCatalogStatus {
@@ -124,9 +112,7 @@ impl McpCatalogService {
         Self::new(catalog, Some(runners))
     }
 
-    /// Starts live sync for this process with its cache and setting under
-    /// `dir` (`<state>/mcp-catalog`). Runs until the process exits.
-    pub async fn start(dir: PathBuf) {
+    pub async fn run(dir: PathBuf) {
         match Registry::new(sync::REGISTRY_BASE) {
             Ok(registry) => Self::shared().await.attach(dir, registry).await,
             Err(error) => log::error!("[mcp-catalog] sync disabled, no HTTP client: {error}"),
@@ -170,7 +156,6 @@ impl McpCatalogService {
         }
     }
 
-    /// Persists the host setting, wakes the loop, and returns the new status.
     pub async fn set_sync(&self, enabled: bool) -> Result<McpCatalogStatus, McpCatalogError> {
         let Some(host) = self.sync.get() else {
             return Err(McpCatalogError {

@@ -1,9 +1,4 @@
-//! The bundled registry snapshot (AD-3). Dev and test builds embed the
-//! committed fixture in `resources/mcp-registry/`, whose metadata marks it as
-//! a sample; the release workflow overwrites those two files with the full
-//! fetch from its secret-less snapshot job before `cargo build`. Loading
-//! verifies the recorded sha256, and any failure leaves an empty catalog
-//! rather than a panic.
+//! The bundled registry snapshot (AD-3).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -51,13 +46,10 @@ pub(crate) struct CatalogItem {
     pub options: Option<Vec<CatalogOption>>,
 }
 
-/// Which registry data a catalog holds.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpCatalogSource {
-    /// When its newest registry data was fetched.
     pub updated_at: Option<String>,
-    /// The committed dev/test fixture rather than the full registry.
     pub sample: bool,
 }
 
@@ -69,7 +61,6 @@ pub(crate) struct LoadedCatalog {
 }
 
 impl LoadedCatalog {
-    /// A catalog of exactly `items`, in any order.
     pub(crate) fn from_items(items: Vec<CatalogItem>, source: McpCatalogSource) -> Self {
         Self::default().with_changes(
             items
@@ -79,7 +70,6 @@ impl LoadedCatalog {
         )
     }
 
-    /// This catalog with each named item replaced, added, or (`None`) removed.
     pub(crate) fn with_changes(
         &self,
         changes: impl IntoIterator<Item = (String, Option<CatalogItem>)>,

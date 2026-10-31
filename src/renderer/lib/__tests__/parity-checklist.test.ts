@@ -2656,10 +2656,6 @@ describe('MCP catalog parity (spine AD-1)', () => {
   })
 })
 
-// MCP catalog status and sync setting (spine AD-3, AD-12): the same host
-// service behind `GET /mcp-catalog/status` + `POST /mcp-catalog/sync` (web)
-// and the `/ws` requests `get_mcp_catalog_status` + `set_mcp_catalog_sync`.
-// Status is a read; the setting is a write, so shared-live denies it.
 describe('MCP catalog sync parity (spine AD-3, AD-12)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const SHARED_TYPES = join(LIB_DIR, '..', '..', 'shared', 'types')

@@ -20,7 +20,6 @@ export const MCP_CATALOG_PAGE_SIZE = 50
 export const MCP_CATALOG_MAX_ROWS = 500
 export const MCP_CATALOG_SEARCH_DEBOUNCE_MS = 250
 
-/** `updatedAt` and `sample` describe the catalog these rows came from. */
 export interface McpCatalogResults extends McpCatalogSource {
   /** The trimmed query these rows answer, which can trail the search box. */
   query: string

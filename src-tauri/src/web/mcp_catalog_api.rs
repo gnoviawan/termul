@@ -1,12 +1,3 @@
-//! HTTP adapter for the host-owned MCP catalog (spine AD-1, AD-3, AD-12).
-//!
-//! `GET /mcp-catalog/search?query=&cursor=&limit=` answers one page and
-//! `GET /mcp-catalog/status` the catalog's source and sync state, from the
-//! same [`McpCatalogService`] calls as the `/ws` `search_mcp_catalog` and
-//! `get_mcp_catalog_status` requests. Both are reads: view-only and
-//! shared-live clients may call them. `POST /mcp-catalog/sync` with
-//! `{ enabled }` is a write through `write_decision`, so shared-live denies it.
-
 use std::net::SocketAddr;
 
 use axum::{
@@ -25,7 +16,6 @@ use crate::mcp_catalog::{
 use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::ws::AppState;
 
-/// `POST /mcp-catalog/sync` and `/ws` `set_mcp_catalog_sync` body.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetMcpCatalogSyncRequest {
