@@ -2976,12 +2976,13 @@ describe('MCP catalog icon parity (spine AD-1, AD-15)', () => {
     expect(transport).toMatch(/'get_mcp_catalog_icon'/)
     const types = readFileSync(join(SHARED_TYPES, 'mcp-catalog.types.ts'), 'utf-8')
     expect(types).toMatch(/hasIcon: boolean/)
-    expect(types).toMatch(/icon\(name: string\): Promise<IpcResult<Blob>>/)
+    expect(types).toMatch(/icon\(name: string\): Promise<IpcResult<McpCatalogIconUrl>>/)
+    expect(types).toMatch(/type McpCatalogIconUrl = `data:\$\{string\}`/)
     const ui = readFileSync(
       join(LIB_DIR, '..', 'components', 'settings', 'McpCatalogIcon.tsx'),
       'utf-8'
     )
     expect(ui).toMatch(/<img\b/)
-    expect(ui).not.toMatch(/dangerouslySetInnerHTML|innerHTML|<svg\b/)
+    expect(ui).not.toMatch(/dangerouslySetInnerHTML|innerHTML|<svg\b|createObjectURL/)
   })
 })

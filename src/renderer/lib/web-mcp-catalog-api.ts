@@ -3,20 +3,30 @@
 import type { IpcResult } from '@shared/types/ipc.types'
 import type {
   McpCatalogApi,
+  McpCatalogIconUrl,
   McpCatalogPage,
   McpCatalogStatus
 } from '@shared/types/mcp-catalog.types'
 import { bodyToResult, getJson, postJson, serverBase } from './ipc/http'
 import { authHeader } from './web-auth-token'
 
+function readAsDataUrl(blob: Blob): Promise<McpCatalogIconUrl> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as McpCatalogIconUrl)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
+  })
+}
+
 /** `GET /mcp-catalog/icon/<name>` sends the bearer token, so it goes through `fetch`, not `<img src>`. */
-async function icon(name: string): Promise<IpcResult<Blob>> {
+async function icon(name: string): Promise<IpcResult<McpCatalogIconUrl>> {
   try {
     const response = await fetch(`${serverBase()}/mcp-catalog/icon/${encodeURIComponent(name)}`, {
       headers: authHeader()
     })
-    if (response.ok) return { success: true, data: await response.blob() }
-    const failure = bodyToResult<Blob>(await response.json().catch(() => null))
+    if (response.ok) return { success: true, data: await readAsDataUrl(await response.blob()) }
+    const failure = bodyToResult<McpCatalogIconUrl>(await response.json().catch(() => null))
     return failure && !failure.success
       ? failure
       : { success: false, error: `HTTP ${response.status}`, code: 'NETWORK_ERROR' }

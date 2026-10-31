@@ -1,27 +1,22 @@
+import type { McpCatalogIconUrl } from '@shared/types/mcp-catalog.types'
 import { useEffect, useState } from 'react'
 import { mcpCatalogApi } from '@/lib/mcp-catalog-api'
 
-function useMcpCatalogIconUrl(name: string, hasIcon: boolean): string | null {
-  const [loaded, setLoaded] = useState<{ name: string; url: string } | null>(null)
+function useMcpCatalogIconUrl(name: string, hasIcon: boolean): McpCatalogIconUrl | null {
+  const [loaded, setLoaded] = useState<{ name: string; url: McpCatalogIconUrl } | null>(null)
 
   useEffect(() => {
     if (!hasIcon) return
     let cancelled = false
     void mcpCatalogApi.icon(name).then((result) => {
       if (!cancelled && result.success) {
-        setLoaded({ name, url: URL.createObjectURL(result.data) })
+        setLoaded({ name, url: result.data })
       }
     })
     return () => {
       cancelled = true
     }
   }, [name, hasIcon])
-
-  const url = loaded?.url
-  useEffect(() => {
-    if (!url) return
-    return () => URL.revokeObjectURL(url)
-  }, [url])
 
   return hasIcon && loaded?.name === name ? loaded.url : null
 }

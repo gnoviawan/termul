@@ -57,15 +57,6 @@ const forbidden = {
 
 const fetchMock = vi.fn()
 
-/** jsdom's Blob has no `text()`. */
-function readText(blob: Blob): Promise<string> {
-  return new Promise((resolve) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.readAsText(blob)
-  })
-}
-
 function hostAnswers(body: unknown) {
   fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: async () => body })
 }
@@ -195,7 +186,7 @@ describe('MCP catalog facades', () => {
     expect(await createDesktopMcpCatalogApi().setSync(true)).toEqual(forbidden)
   })
 
-  it('both carriers turn the same host logo into the same image blob', async () => {
+  it('both carriers turn the same host logo into the same data: URL', async () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg"/>'
     transport.getMcpCatalogIcon.mockResolvedValueOnce({
       contentType: 'image/svg+xml',
@@ -215,11 +206,10 @@ describe('MCP catalog facades', () => {
       'http://localhost:8080/mcp-catalog/icon/io.example%2Fa%20b',
       expect.objectContaining({})
     )
-    for (const result of [desktop, web]) {
-      if (!result.success) throw new Error(result.error)
-      expect(result.data.type).toBe('image/svg+xml')
-      expect(await readText(result.data)).toBe(svg)
-    }
+    const dataUrl =
+      'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4='
+    expect(desktop).toEqual({ success: true, data: dataUrl })
+    expect(web).toEqual({ success: true, data: dataUrl })
   })
 
   it('both carriers report a missing logo with the host code', async () => {

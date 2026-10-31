@@ -1,5 +1,6 @@
 import type { IpcResult } from '@shared/types/ipc.types'
 import type {
+  McpCatalogIconUrl,
   McpCatalogPage,
   McpCatalogRow,
   McpCatalogSearchRequest,
@@ -15,7 +16,7 @@ const { search, status, setSync, icon, openUrl } = vi.hoisted(() => ({
   search: vi.fn<(request: McpCatalogSearchRequest) => Promise<IpcResult<McpCatalogPage>>>(),
   status: vi.fn<() => Promise<IpcResult<McpCatalogStatus>>>(),
   setSync: vi.fn<(enabled: boolean) => Promise<IpcResult<McpCatalogStatus>>>(),
-  icon: vi.fn<(name: string) => Promise<IpcResult<Blob>>>(),
+  icon: vi.fn<(name: string) => Promise<IpcResult<McpCatalogIconUrl>>>(),
   openUrl: vi.fn(async (_url: string) => ({ success: true as const, data: undefined }))
 }))
 
@@ -465,20 +466,7 @@ describe('McpCatalogBrowser catalog source', () => {
 })
 
 describe('McpCatalogBrowser logos', () => {
-  const objectUrls: string[] = []
-
-  beforeEach(() => {
-    objectUrls.length = 0
-    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
-      objectUrls.push(`blob:logo-${objectUrls.length}`)
-      return objectUrls[objectUrls.length - 1] as string
-    })
-    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
-  })
-
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
+  const logoUrl: McpCatalogIconUrl = 'data:image/png;base64,iVBORw0KGgo='
 
   async function findRow(name: string): Promise<HTMLElement> {
     await screen.findByText(name)
@@ -489,14 +477,14 @@ describe('McpCatalogBrowser logos', () => {
   const withoutLogo = row({ name: 'io.example/plain', title: 'plain tools' })
 
   it('shows the host logo through an img and a lettered tile when there is none', async () => {
-    icon.mockResolvedValue({ success: true, data: new Blob(['png'], { type: 'image/png' }) })
+    icon.mockResolvedValue({ success: true, data: logoUrl })
     search.mockResolvedValue(page([withLogo, withoutLogo]))
     render(<McpCatalogBrowser />)
 
     const logoRow = await findRow('io.example/logo')
     await waitFor(() => expect(logoRow.querySelector('img')).not.toBeNull())
     const img = logoRow.querySelector('img') as HTMLImageElement
-    expect(img.getAttribute('src')).toBe('blob:logo-0')
+    expect(img.getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=')
     expect(img.getAttribute('width')).toBe('32')
     expect(img.alt).toBe('')
     expect(within(logoRow).queryByTestId('mcp-catalog-icon-placeholder')).toBeNull()
@@ -520,11 +508,10 @@ describe('McpCatalogBrowser logos', () => {
     await waitFor(() => expect(icon).toHaveBeenCalledWith('io.example/logo'))
     expect(within(logoRow).getByTestId('mcp-catalog-icon-placeholder')).toHaveTextContent('L')
     expect(logoRow.querySelector('img')).toBeNull()
-    expect(URL.createObjectURL).not.toHaveBeenCalled()
   })
 
   it('falls back to the lettered tile when the bytes do not decode', async () => {
-    icon.mockResolvedValue({ success: true, data: new Blob(['junk'], { type: 'image/png' }) })
+    icon.mockResolvedValue({ success: true, data: 'data:image/png;base64,anVuaw==' })
     search.mockResolvedValue(page([withLogo]))
     render(<McpCatalogBrowser />)
 
