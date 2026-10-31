@@ -1268,3 +1268,43 @@ async fn consent_view_escapes_every_invisible_character_and_the_plan_name() {
     );
     assert_eq!(plan.name, "no\\u{202E}tes\\u{3164}");
 }
+
+#[tokio::test]
+async fn a_cmd_metacharacter_in_registry_argv_is_unsupported_and_in_a_typed_one_refused() {
+    let meta = row(json!({
+        "name": "io.example/meta",
+        "description": "Meta",
+        "version": "1.0.0",
+        "packages": [{
+            "registryType": "npm",
+            "identifier": "meta-mcp",
+            "version": "1.0.0",
+            "packageArguments": [
+                { "type": "named", "name": "--root", "default": "%USERPROFILE%" }
+            ]
+        }]
+    }));
+    let service =
+        McpCatalogService::with_runners(catalog(vec![meta, hooka()]), ALL_RUNNERS);
+    assert_eq!(
+        unsupported(&service, catalog_source("io.example/meta", "1.0.0")).await,
+        McpCatalogReason::CmdMetacharacter {
+            field: "packageArguments[0]".to_string()
+        }
+    );
+    for typed in ["acme&calc", "a|b", "x^y", "\"q\"", "(z)", "!v!", "<in", ">out"] {
+        let error = plan_with(
+            &service,
+            catalog_source("to.hooka/mcp", "0.1.2"),
+            None,
+            &[("arg/0", typed)],
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (error.code, error.message.as_str()),
+            ("VALIDATION_ERROR", "`arg/0` can't hold & | < > ^ % ! \" ( or )"),
+            "{typed}"
+        );
+    }
+}

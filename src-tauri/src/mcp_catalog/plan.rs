@@ -9,9 +9,11 @@ use uuid::Uuid;
 use super::consent::{
     escape_for_display, ConsentInput, ConsentProvenance, ConsentView, Namespace, ShownValue,
 };
-use super::convert::{check_remote_url, Launch, McpCatalogReason, OptionKind, RemoteTransport};
+use super::convert::{
+    check_remote_url, has_cmd_metacharacter, Launch, McpCatalogReason, OptionKind, RemoteTransport,
+};
 use super::form::{
-    resolve, validate_inputs, Field, FieldTarget, FormModel, Phase, Resolved, Values,
+    resolve, validate_inputs, Field, FieldTarget, FormModel, Origin, Phase, Resolved, Values,
 };
 use super::import::{check_import, import_form, parse_import, ImportedLaunch};
 use super::resolved::{Provenance, ResolvedConfig, ValueSlot};
@@ -432,7 +434,16 @@ fn assemble(
     for slot in &described.model.slots {
         let resolved = resolve(slot, values);
         match (&slot.target, resolved) {
-            (FieldTarget::Argument { name, .. }, Resolved::Value { value, .. }) => {
+            (FieldTarget::Argument { index, name }, Resolved::Value { value, origin }) => {
+                // Registry text was checked at conversion and an import's
+                // argv follows the import launch rules, so this catches what
+                // the user typed.
+                if origin == Origin::User && has_cmd_metacharacter(&value) {
+                    return Err(error(
+                        VALIDATION_ERROR,
+                        format!("`arg/{index}` can't hold & | < > ^ % ! \" ( or )"),
+                    ));
+                }
                 if let Some(name) = name {
                     args.push(name.clone());
                 }

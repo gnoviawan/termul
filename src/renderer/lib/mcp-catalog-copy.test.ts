@@ -20,4 +20,10 @@ describe('mcpCatalogReasonText', () => {
       mcpCatalogReasonText({ code: 'unsupported-registry', registry: 'ghcr.example.com' })
     ).toBe("Its package is hosted on ghcr.example.com, which Termul doesn't download from.")
   })
+
+  it('names the argument holding a cmd metacharacter', () => {
+    expect(mcpCatalogReasonText({ code: 'cmd-metacharacter', field: 'args[2]' })).toBe(
+      'Its args[2] holds a character Windows reads as a command operator (& | < > ^ % ! " ( or )).'
+    )
+  })
 })

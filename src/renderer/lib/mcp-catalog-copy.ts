@@ -70,5 +70,7 @@ export function mcpCatalogReasonText(reason: McpCatalogReason): string {
       return `Its ${reason.field} holds a control character.`
     case 'duplicate-name':
       return `It lists "${reason.name}" more than once.`
+    case 'cmd-metacharacter':
+      return `Its ${reason.field} holds a character Windows reads as a command operator (& | < > ^ % ! " ( or )).`
   }
 }

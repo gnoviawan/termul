@@ -258,6 +258,11 @@ pub enum McpCatalogReason {
     DuplicateName {
         name: String,
     },
+    /// A launch argument holds a character `cmd.exe` reads as an operator or
+    /// expansion. `field` names the registry or import field it came from.
+    CmdMetacharacter {
+        field: String,
+    },
 }
 
 /// Each env or header name may appear once (headers case-insensitively), so
@@ -436,6 +441,13 @@ fn convert_package(package: &RegistryPackage) -> Result<Launch, McpCatalogReason
     {
         return Err(McpCatalogReason::SecretInArguments);
     }
+    for (index, argument) in package.package_arguments.iter().enumerate() {
+        if argument_registry_text(argument).any(has_cmd_metacharacter) {
+            return Err(McpCatalogReason::CmdMetacharacter {
+                field: format!("packageArguments[{index}]"),
+            });
+        }
+    }
     for env in &package.environment_variables {
         check_env_name(&env.name)?;
     }
@@ -492,6 +504,32 @@ fn convert_package(package: &RegistryPackage) -> Result<Launch, McpCatalogReason
             .chain(argv)
             .collect(),
     })
+}
+
+/// Characters `cmd.exe` reads as operators, quoting or expansions. On
+/// Windows the `npx` and `uvx` shims are batch files, so an argv element
+/// holding one could start a second command. The rule holds on every OS so
+/// a plan means the same launch wherever it is made.
+const CMD_METACHARACTERS: &[char] = &['&', '|', '<', '>', '^', '%', '!', '"', '(', ')'];
+
+#[must_use]
+pub(crate) fn has_cmd_metacharacter(arg: &str) -> bool {
+    arg.contains(CMD_METACHARACTERS)
+}
+
+/// Every piece of registry text a package argument can put into argv: its
+/// flag name, fixed value or template, default and choices, and the same
+/// for each template variable.
+fn argument_registry_text(argument: &RegistryInput) -> Box<dyn Iterator<Item = &str> + '_> {
+    let own = [&argument.value, &argument.default]
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .chain(argument.choices.iter().map(String::as_str))
+        .chain(
+            (argument.argument_type.as_deref() == Some("named")).then_some(argument.name.as_str()),
+        );
+    Box::new(own.chain(argument.variables.values().flat_map(argument_registry_text)))
 }
 
 /// A name the runner reads from its own environment can redirect what it
