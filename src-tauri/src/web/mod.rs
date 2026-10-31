@@ -60,6 +60,8 @@ mod prompt_turn_tests;
 pub mod route_deadline;
 pub mod router;
 pub mod search_api;
+pub mod server_config_file;
+pub mod setup;
 pub mod sink;
 pub mod skills_api;
 pub mod store;
@@ -210,6 +212,12 @@ pub async fn serve(
         info!("No bearer token: answering only IP literals, localhost and --allowed-origins hosts");
         host_allow::HostAllowList::from_origins(&cfg.allowed_origins)
     };
+
+    // gh-1105: the standalone `termul-server` exposes the `/server/config`
+    // reconfigure routes + the `/health` `setupRequired` flag — build the
+    // admin context BEFORE `cfg` is moved into `serve_router`. The desktop
+    // shared-live host calls `serve_router` directly and passes `None`.
+    let server_admin = Some(server_config_file::ServerAdminContext::from_config(&cfg));
     let (_addr, handle) = serve_router(
         acp.clone(),
         pty.clone(),
@@ -234,6 +242,7 @@ pub async fn serve(
         // `--allow-remote-writes` opt-in, not a deployment-mode deny.
         false,
         web_auth,
+        server_admin,
     )
     .await?;
 
@@ -312,6 +321,12 @@ pub async fn serve(
 /// or binds beyond loopback (AD-3).
 ///
 /// `host_allow` is the `Host` allow-list the router enforces.
+///
+/// `server_admin` is the standalone server's host-administration context
+/// (gh-1105): `Some` enables the `/server/config` reconfigure routes and the
+/// `/health` `setupRequired` probe. `web::serve` builds it from the merged
+/// config; the desktop shared-live host (`remote/host.rs`) passes `None` so
+/// those routes are never registered.
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_router(
     acp: Arc<AcpManager>,
@@ -330,6 +345,7 @@ pub async fn serve_router(
     store: Arc<WebStore>,
     shared_live_writes_denied: bool,
     web_auth: Option<Arc<auth::WebAuth>>,
+    server_admin: Option<server_config_file::ServerAdminContext>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = cfg.bind_addr().ok_or_else(|| {
         format!(
@@ -413,6 +429,7 @@ pub async fn serve_router(
         cfg.allowed_origins.clone(),
         host_allow,
         connections,
+        server_admin,
     );
 
     // Stale device partitions are swept daily while this host serves; the

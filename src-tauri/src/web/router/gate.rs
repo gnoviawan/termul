@@ -53,6 +53,9 @@ const GATED_PREFIXES: &[&str] = &[
     "/worktree/",
     // Automations and their runs, agents and secrets.
     "/api/automation",
+    // gh-1105: `/server/config` host-administration reconfigure routes —
+    // registered only on the standalone `termul-server` (`server_admin`).
+    "/server/",
     // The /canvas/ API routes require the token. The /canvas/<id>/* bundle
     // paths are exempt — see [`is_bundle_path`] (canvas-token authed
     // in the sub-router).

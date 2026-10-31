@@ -1,7 +1,9 @@
 use super::gate::{requires_token, PUBLIC_PATHS};
 use super::*;
+use crate::web::server_config_file::{self, ServerSetupAnswers};
 use axum::extract::ConnectInfo;
 use axum::http::StatusCode;
+use axum::response::Response;
 use std::net::SocketAddr;
 use crate::web::origin::OriginPolicy;
 use axum::body::Body;
@@ -49,6 +51,7 @@ fn test_router_with_fixture(dir: &Path) -> Router {
         false,
         None,
         OriginPolicy::default(),
+        None, // server_admin — desktop-style state (no /server/config)
     )
 }
 
@@ -89,6 +92,7 @@ async fn factory_key_http_requires_correct_bearer_when_gated() {
         false,
         Some(auth),
         OriginPolicy::default(),
+        None,
     );
     for method in ["GET", "POST"] {
         let response = app
@@ -135,6 +139,7 @@ fn gated_router(dir: &Path, allow_remote_writes: bool, shared_live_denied: bool)
         shared_live_denied,
         Some(auth),
         OriginPolicy::default(),
+        None,
     )
 }
 
@@ -347,6 +352,7 @@ async fn health_reports_denied_for_non_loopback_without_opt_in() {
         false, // shared_live_writes_denied (standalone)
         None,  // web_auth (ungated)
         OriginPolicy::default(),
+        None,  // server_admin (desktop-style)
     );
     let resp = app
         .oneshot(
@@ -385,6 +391,7 @@ async fn health_reports_denied_for_all_peers_when_shared_live() {
         true, // shared_live_writes_denied (desktop shared-live overrides)
         None, // web_auth (ungated)
         OriginPolicy::default(),
+        None, // server_admin (desktop-style)
     );
     // Even a loopback peer is denied on shared-live.
     let resp = app
@@ -423,6 +430,7 @@ async fn health_reports_admitted_for_non_loopback_with_opt_in() {
         false, // shared_live_writes_denied (standalone, not shared-live)
         None,  // web_auth (ungated)
         OriginPolicy::default(),
+        None,  // server_admin (this test only probes the write flag)
     );
     let resp = app
         .oneshot(
@@ -681,6 +689,7 @@ fn gated_router_with_fixture(dir: &Path) -> Router {
             crate::web::auth::WebAuthToken::new("t0ken").expect("non-empty"),
         ))),
         OriginPolicy::default(),
+        None,
     )
 }
 
@@ -727,6 +736,7 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
         "/api/automation-runs/r-1/steps",
         "/api/automation-agents",
         "/api/automation-secrets",
+        "/server/config",
         // The renderer-facade API routes stay bearer-gated…
         "/canvas/open",
         "/canvas/close",
@@ -1088,6 +1098,7 @@ fn router_for_origins(dir: &Path, origins: OriginPolicy) -> Router {
         false,
         None,
         origins,
+        None,
     )
 }
 
@@ -1359,4 +1370,713 @@ async fn websocket_endpoints_accept_an_allowlisted_origin() {
         assert!(!cors);
     }
     server.abort();
+}
+
+// --- gh-1105: /health setupRequired + /server/config reconfigure routes ------
+//
+// The standalone `termul-server` carries a `ServerAdminContext`
+// (`server_admin: Some`); the desktop shared-live host and every desktop-style
+// test state carry `None`. `None` keeps `/server/config` unregistered and
+// reports `setupRequired:false` from `/health` without probing the disk.
+
+/// A `ServerAdminContext` over `state_dir` — the handle `web::serve` builds
+/// from the merged `ServerConfig` for the standalone server. `current` is
+/// what the reconfigure form should see.
+fn admin_ctx(state_dir: &Path) -> ServerAdminContext {
+    ServerAdminContext {
+        state_dir: state_dir.to_path_buf(),
+        apply_in_flight: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        current: ServerSetupAnswers {
+            host: "127.0.0.1".to_string(),
+            port: 8080,
+            sessions_dir: PathBuf::from("/srv/termul/sessions"),
+            projects_file: PathBuf::from("/srv/termul/projects.json"),
+            allow_remote_writes: false,
+            update_channel: None,
+            update_interval_secs: 21600,
+        },
+    }
+}
+
+/// Standalone-style router: `server_admin: Some` so `/server/config`
+/// registers and `/health` probes `state_dir` for `server-config.json`.
+fn standalone_router(
+    dir: &Path,
+    state_dir: &Path,
+    web_auth: Option<Arc<WebAuth>>,
+    allow_remote_writes: bool,
+) -> Router {
+    standalone_router_with_origins(
+        dir,
+        state_dir,
+        web_auth,
+        allow_remote_writes,
+        OriginPolicy::default(),
+    )
+}
+
+fn standalone_router_with_origins(
+    dir: &Path,
+    state_dir: &Path,
+    web_auth: Option<Arc<WebAuth>>,
+    allow_remote_writes: bool,
+    origins: OriginPolicy,
+) -> Router {
+    router_with_static(
+        Arc::new(AcpManager::new(vec![])),
+        crate::web::test_pty_manager(),
+        Arc::new(WsRelaySink::new()),
+        Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        dir,
+        allow_remote_writes,
+        false,
+        web_auth,
+        origins,
+        Some(admin_ctx(state_dir)),
+    )
+}
+
+async fn body_json(response: Response) -> serde_json::Value {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    serde_json::from_slice(&bytes).expect("JSON body")
+}
+
+fn answers_json(host: &str, port: u16) -> String {
+    serde_json::json!({
+        "host": host,
+        "port": port,
+        "sessionsDir": "/srv/termul/sessions",
+        "projectsFile": "/srv/termul/projects.json",
+        "allowRemoteWrites": false,
+        "updateChannel": null,
+        "updateIntervalSecs": 21600,
+    })
+    .to_string()
+}
+
+fn config_post(peer: SocketAddr, bearer: Option<&str>, body: &str) -> Request<Body> {
+    config_post_with_origin(
+        peer,
+        bearer,
+        body,
+        Some("127.0.0.1:8080"),
+        Some("http://127.0.0.1:8080"),
+    )
+}
+
+fn config_post_with_origin(
+    peer: SocketAddr,
+    bearer: Option<&str>,
+    body: &str,
+    host: Option<&str>,
+    origin: Option<&str>,
+) -> Request<Body> {
+    let builder = Request::builder()
+        .method("POST")
+        .uri("/server/config")
+        .header("content-type", "application/json")
+        .extension(ConnectInfo(peer));
+    let builder = match bearer {
+        Some(token) => builder.header("authorization", format!("Bearer {token}")),
+        None => builder,
+    };
+    let builder = match host {
+        Some(host) => builder.header("host", host),
+        None => builder,
+    };
+    let builder = match origin {
+        Some(origin) => builder.header("origin", origin),
+        None => builder,
+    };
+    builder.body(Body::from(body.to_string())).unwrap()
+}
+
+// --- /health setupRequired ---------------------------------------------------
+
+/// Standalone install shape: `server_admin` present but the state dir holds
+/// NO `server-config.json` → normal mode STILL reports `setupRequired:false`
+/// because this router has no `/setup/*` routes — advertising `true` would
+/// mount the wizard against 404s (CodeRabbit review on gh-1105). Only the
+/// setup-mode router's own `/health` reports `true`.
+#[tokio::test]
+async fn health_reports_setup_required_when_unonboarded() {
+    let dir = TempDir::new("health-setup-static");
+    let state_dir = TempDir::new("health-setup-state");
+    let resp = standalone_router(dir.path(), state_dir.path(), None, false)
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["status"], "ok");
+    assert_eq!(
+        parsed["setupRequired"], false,
+        "normal mode must NOT advertise setupRequired — the wizard's /setup/* \
+         calls only exist on the setup-mode router"
+    );
+}
+
+/// A persisted `server-config.json` keeps the flag at `false` too.
+#[tokio::test]
+async fn health_reports_no_setup_required_when_onboarded() {
+    let dir = TempDir::new("health-onboarded-static");
+    let state_dir = TempDir::new("health-onboarded-state");
+    server_config_file::save(state_dir.path(), &admin_ctx(state_dir.path()).current)
+        .expect("seed server-config.json");
+
+    let resp = standalone_router(dir.path(), state_dir.path(), None, false)
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(
+        parsed["setupRequired"], false,
+        "a completed server-config.json means the server is onboarded"
+    );
+}
+
+/// Desktop-style state (`server_admin: None`) never probes the file — it
+/// reports `setupRequired:false` unconditionally.
+#[tokio::test]
+async fn health_reports_no_setup_required_for_desktop_style_state() {
+    let dir = TempDir::new("health-desktop");
+    let resp = test_router_with_fixture(dir.path())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(
+        parsed["setupRequired"], false,
+        "desktop shared-live state has no server_admin — the flag stays false"
+    );
+}
+
+// --- /server/config presence -------------------------------------------------
+
+/// `server_admin: None` → the routes are never registered. On an empty
+/// fixture dir the static fallback 404s the GET and refuses the POST — the
+/// desktop shared-live host can never reach a server-admin handler.
+#[tokio::test]
+async fn server_config_routes_are_absent_for_desktop_style_state() {
+    let dir = TempDir::new("desktop-absent"); // no index.html — nothing to serve
+    let app = test_router_with_fixture(dir.path());
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/server/config")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "GET /server/config must not exist without server_admin"
+    );
+
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &answers_json("127.0.0.1", 8080),
+        ))
+        .await
+        .expect("router response");
+    assert!(
+        resp.status().is_client_error(),
+        "POST /server/config must not reach a handler without server_admin \
+         (got {})",
+        resp.status()
+    );
+}
+
+// --- GET /server/config --------------------------------------------------------
+
+#[tokio::test]
+async fn server_config_get_returns_the_effective_answers() {
+    let dir = TempDir::new("cfg-get-static");
+    let state_dir = TempDir::new("cfg-get-state");
+    let resp = standalone_router(dir.path(), state_dir.path(), None, false)
+        .oneshot(
+            Request::builder()
+                .uri("/server/config")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    // The read uses the same IpcBody envelope as every other host read.
+    assert_eq!(parsed["success"], true, "{parsed}");
+    let config = &parsed["data"]["config"];
+    assert_eq!(config["host"], "127.0.0.1");
+    assert_eq!(config["port"], 8080);
+    assert_eq!(config["sessionsDir"], "/srv/termul/sessions");
+    assert_eq!(config["projectsFile"], "/srv/termul/projects.json");
+    assert_eq!(config["allowRemoteWrites"], false);
+    assert_eq!(config["updateIntervalSecs"], 21600);
+}
+
+// --- gate + write guard --------------------------------------------------------
+
+/// `/server/` is a gated prefix: both verbs refuse a missing bearer with the
+/// shared 401 body, and admit a correct one.
+#[tokio::test]
+async fn server_config_routes_require_bearer_when_gated() {
+    let dir = TempDir::new("cfg-gate-static");
+    let state_dir = TempDir::new("cfg-gate-state");
+    let app = standalone_router(
+        dir.path(),
+        state_dir.path(),
+        Some(Arc::new(WebAuth::new(
+            crate::web::auth::WebAuthToken::new("t0ken").expect("non-empty"),
+        ))),
+        false,
+    );
+
+    for method in ["GET", "POST"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri("/server/config")
+                    .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                    .body(Body::from("{}"))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{method}");
+        let parsed = body_json(resp).await;
+        assert_eq!(parsed["code"], "UNAUTHORIZED");
+    }
+
+    // A wrong bearer is refused the same way.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/server/config")
+                .header("authorization", "Bearer wrong")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Correct bearer reaches the GET handler.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/server/config")
+                .header("authorization", "Bearer t0ken")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// The POST is a host-state mutation — a non-loopback peer without
+/// `--allow-remote-writes` is refused by `check_local_only` in the shared
+/// IpcBody refusal shape.
+#[tokio::test]
+async fn server_config_post_refuses_remote_peer_without_opt_in() {
+    let dir = TempDir::new("cfg-remote-static");
+    let state_dir = TempDir::new("cfg-remote-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([10, 0, 0, 5], 50000)),
+            None,
+            &answers_json("127.0.0.1", 8080),
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["success"], false);
+    assert_eq!(parsed["code"], "FORBIDDEN");
+    assert!(
+        !server_config_file::server_config_path(state_dir.path()).exists(),
+        "a refused apply writes nothing"
+    );
+}
+
+// --- POST /server/config -------------------------------------------------------
+
+/// A valid apply persists `<state_dir>/server-config.json`, replies with the
+/// `SetupApplyResponse` payload in the IpcBody envelope, and schedules the
+/// self-restart. (`schedule_self_restart` spawns a 400ms delayed task on the
+/// test runtime — the test's asserts are synchronous after `oneshot` so the
+/// timer never polls to expiry; the runtime is dropped before the re-exec
+/// could run.)
+#[tokio::test]
+async fn server_config_post_persists_the_file_and_replies() {
+    let dir = TempDir::new("cfg-apply-static");
+    let state_dir = TempDir::new("cfg-apply-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &answers_json("127.0.0.1", 9090),
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["success"], true, "{parsed}");
+    assert_eq!(parsed["data"]["ok"], true);
+    assert_eq!(parsed["data"]["host"], "127.0.0.1");
+    assert_eq!(parsed["data"]["port"], 9090);
+    // Loopback post-restart bind: no token gate — the reply omits it.
+    assert!(parsed["data"].get("webAuthToken").is_none(), "{parsed}");
+
+    // The file exists and parses through the shared loader.
+    let written = server_config_file::load(state_dir.path())
+        .expect("load written config")
+        .expect("config file exists");
+    assert_eq!(written.host, "127.0.0.1");
+    assert_eq!(written.port, 9090);
+    assert_eq!(written.sessions_dir, PathBuf::from("/srv/termul/sessions"));
+    // `projects_file` is normalized to an absolute path on apply (on Windows
+    // a root-relative input gains the cwd drive prefix, e.g. `D:/srv/…`).
+    assert_eq!(
+        written.projects_file,
+        crate::onboard::normalize_projects_file_path(PathBuf::from("/srv/termul/projects.json"))
+    );
+    assert!(!written.allow_remote_writes);
+    assert_eq!(written.update_interval_secs, 21600);
+}
+
+/// Invalid answers get the same 200 `{ok:false, fieldErrors}` verdict (in
+/// the IpcBody envelope) the setup routes return — and nothing is written.
+#[tokio::test]
+async fn server_config_post_rejects_invalid_answers() {
+    let dir = TempDir::new("cfg-invalid-static");
+    let state_dir = TempDir::new("cfg-invalid-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &answers_json("127.0.0.1", 0), // port 0 is invalid
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "a validation verdict rides the 200 IpcBody envelope"
+    );
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["success"], true, "{parsed}");
+    assert_eq!(parsed["data"]["ok"], false);
+    assert!(parsed["data"]["fieldErrors"]["port"].is_string(), "{parsed}");
+    assert!(
+        !server_config_file::server_config_path(state_dir.path()).exists(),
+        "a rejected apply writes nothing"
+    );
+}
+
+/// Whitespace-only path values are rejected with per-field verdicts (the
+/// CLI wizard trims its prompts; `"   "` must not reach the file).
+#[tokio::test]
+async fn server_config_post_rejects_whitespace_paths() {
+    let dir = TempDir::new("cfg-ws-static");
+    let state_dir = TempDir::new("cfg-ws-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+
+    let body = serde_json::json!({
+        "host": "127.0.0.1",
+        "port": 9090,
+        "sessionsDir": "   ",
+        "projectsFile": "\t ",
+        "allowRemoteWrites": false,
+        "updateIntervalSecs": 21600,
+    })
+    .to_string();
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &body,
+        ))
+        .await
+        .expect("router response");
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], false, "{parsed}");
+    assert!(
+        parsed["data"]["fieldErrors"]["sessionsDir"].is_string(),
+        "{parsed}"
+    );
+    assert!(
+        parsed["data"]["fieldErrors"]["projectsFile"].is_string(),
+        "{parsed}"
+    );
+    assert!(
+        !server_config_file::server_config_path(state_dir.path()).exists(),
+        "a rejected apply writes nothing"
+    );
+}
+
+/// Path values containing `..` are rejected before any filesystem probe —
+/// persisted config paths are resolved verbatim on every boot, so a parent
+/// traversal makes the effective location ambiguous.
+#[tokio::test]
+async fn server_config_post_rejects_parent_dir_components() {
+    let dir = TempDir::new("cfg-dotdot-static");
+    let state_dir = TempDir::new("cfg-dotdot-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+
+    let body = serde_json::json!({
+        "host": "127.0.0.1",
+        "port": 9090,
+        "sessionsDir": "/srv/termul/../sessions",
+        "projectsFile": "../projects.json",
+        "allowRemoteWrites": false,
+        "updateIntervalSecs": 21600,
+    })
+    .to_string();
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &body,
+        ))
+        .await
+        .expect("router response");
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], false, "{parsed}");
+    assert!(
+        parsed["data"]["fieldErrors"]["sessionsDir"].is_string(),
+        "{parsed}"
+    );
+    assert!(
+        parsed["data"]["fieldErrors"]["projectsFile"].is_string(),
+        "{parsed}"
+    );
+    assert!(
+        !server_config_file::server_config_path(state_dir.path()).exists(),
+        "a rejected apply writes nothing"
+    );
+}
+
+/// A sessions dir that exists as a regular FILE is accepted at apply time
+/// (request paths are never probed on disk) — but the written file is
+/// semantically invalid, so `load` marks it corrupt on the next boot and
+/// the server recovers into setup mode instead of `from_args` wedging.
+#[tokio::test]
+async fn server_config_post_non_directory_sessions_dir_recovers_at_load() {
+    let dir = TempDir::new("cfg-notdir-static");
+    let state_dir = TempDir::new("cfg-notdir-state");
+    let bogus = state_dir.path().join("not-a-dir");
+    fs::write(&bogus, b"x").expect("seed regular file");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+
+    let body = serde_json::json!({
+        "host": "127.0.0.1",
+        "port": 9090,
+        "sessionsDir": bogus,
+        "projectsFile": "/srv/termul/projects.json",
+        "allowRemoteWrites": false,
+        "updateIntervalSecs": 21600,
+    })
+    .to_string();
+    let resp = app
+        .oneshot(config_post(
+            SocketAddr::from(([127, 0, 0, 1], 54321)),
+            None,
+            &body,
+        ))
+        .await
+        .expect("router response");
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], true, "{parsed}");
+    let path = server_config_file::server_config_path(state_dir.path());
+    assert!(path.exists(), "the apply persists the answers verbatim");
+    // The wedge guard: `load` rejects the file → the restarted server runs
+    // setup mode rather than `from_args` exiting on the non-dir sessions dir.
+    let err = server_config_file::load(state_dir.path())
+        .expect_err("file with a file-as-sessions-dir must be treated as corrupt");
+    assert!(
+        err.to_string().contains("not a directory"),
+        "{err}"
+    );
+}
+
+/// A successful apply latches — a second apply in the pending-restart
+/// window conflicts instead of writing a config its caller never sees.
+/// A failed apply releases the latch so the client can retry.
+#[tokio::test]
+async fn server_config_post_allows_one_apply_then_conflicts() {
+    let dir = TempDir::new("cfg-latch-static");
+    let state_dir = TempDir::new("cfg-latch-state");
+    let app = standalone_router(dir.path(), state_dir.path(), None, false);
+    let peer = SocketAddr::from(([127, 0, 0, 1], 54321));
+
+    // Invalid apply releases the latch (the retry must not be refused).
+    let resp = app
+        .clone()
+        .oneshot(config_post(peer, None, &answers_json("127.0.0.1", 0)))
+        .await
+        .expect("router response");
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], false, "{parsed}");
+
+    // First successful apply latches.
+    let resp = app
+        .clone()
+        .oneshot(config_post(peer, None, &answers_json("127.0.0.1", 9090)))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], true, "{parsed}");
+
+    // Second apply is refused while the restart is pending — and does NOT
+    // overwrite the first apply's file.
+    let resp = app
+        .oneshot(config_post(peer, None, &answers_json("0.0.0.0", 9091)))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["code"], "SERVER_CONFIG_APPLY_IN_PROGRESS");
+    let written = server_config_file::load(state_dir.path())
+        .expect("load written config")
+        .expect("config file exists");
+    assert_eq!(written.port, 9090, "the first apply's config stands");
+}
+
+/// Ungated + no `--allow-remote-writes`: a same-host reverse proxy makes
+/// every visitor a loopback PEER, so a non-loopback Origin is the only
+/// signal the caller is remote — refused before anything is written.
+#[tokio::test]
+async fn server_config_post_refuses_non_loopback_origin_when_ungated() {
+    let dir = TempDir::new("cfg-proxy-static");
+    let state_dir = TempDir::new("cfg-proxy-state");
+    // The documented same-host reverse-proxy deployment: the public origin
+    // is in --allowed-origins, so the outer origin layer admits it — the
+    // request reaches the handler with a loopback PEER (the proxy).
+    let app = standalone_router_with_origins(
+        dir.path(),
+        state_dir.path(),
+        None,
+        false,
+        OriginPolicy::parse_list("https://termul.example.com").expect("valid origin"),
+    );
+    let peer = SocketAddr::from(([127, 0, 0, 1], 54321)); // the proxy itself
+
+    // Public-origin request through the proxy (Host forwarded too).
+    let resp = app
+        .clone()
+        .oneshot(config_post_with_origin(
+            peer,
+            None,
+            &answers_json("127.0.0.1", 9090),
+            Some("termul.example.com"),
+            Some("https://termul.example.com"),
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["code"], "SERVER_CONFIG_LOCAL_ORIGIN_REQUIRED");
+
+    // No Origin at all is refused the same way.
+    let resp = app
+        .clone()
+        .oneshot(config_post_with_origin(
+            peer,
+            None,
+            &answers_json("127.0.0.1", 9090),
+            Some("termul.example.com"),
+            None,
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["code"], "SERVER_CONFIG_LOCAL_ORIGIN_REQUIRED");
+
+    // A real loopback browser (loopback Host + Origin) reaches the handler.
+    let resp = app
+        .oneshot(config_post_with_origin(
+            peer,
+            None,
+            &answers_json("127.0.0.1", 9090),
+            Some("localhost:8080"),
+            Some("http://localhost:8080"),
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], true, "{parsed}");
+}
+
+/// `--allow-remote-writes` is the explicit opt-out: the origin guard steps
+/// aside for an operator who admitted remote callers.
+#[tokio::test]
+async fn server_config_post_allows_remote_origin_with_writes_opted_in() {
+    let dir = TempDir::new("cfg-remote-ok-static");
+    let state_dir = TempDir::new("cfg-remote-ok-state");
+    let app = standalone_router_with_origins(
+        dir.path(),
+        state_dir.path(),
+        None,
+        true,
+        OriginPolicy::parse_list("https://termul.example.com").expect("valid origin"),
+    );
+
+    let resp = app
+        .oneshot(config_post_with_origin(
+            SocketAddr::from(([10, 0, 0, 5], 50000)),
+            None,
+            &answers_json("127.0.0.1", 9090),
+            Some("termul.example.com"),
+            Some("https://termul.example.com"),
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = body_json(resp).await;
+    assert_eq!(parsed["data"]["ok"], true, "{parsed}");
 }

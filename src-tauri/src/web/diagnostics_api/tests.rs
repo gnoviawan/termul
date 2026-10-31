@@ -32,6 +32,7 @@ fn test_state_with(allow_remote_writes: bool, shared_live_writes_denied: bool) -
         acp_install: None,
         store: None,
         web_auth: None,
+        server_admin: None,
         allow_remote_writes,
         shared_live_writes_denied,
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
