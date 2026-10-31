@@ -407,7 +407,9 @@ impl AutomationService {
             .collect())
     }
 
-    /// The open suggestion `text` repeats, if any.
+    /// The open suggestion `text` repeats, if any. A hit tells the
+    /// project's open screens to list suggestions again: the prompt that
+    /// matched may be the one that made the ask a suggestion.
     pub fn match_prompt(
         &self,
         project_id: &str,
@@ -421,6 +423,7 @@ impl AutomationService {
                 "[Automation] a prompt in {project_id} repeats suggestion {}",
                 hit.fingerprint
             );
+            self.engine.notify(project_id.trim(), None);
         }
         Ok(hit)
     }
