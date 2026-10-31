@@ -171,6 +171,8 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("set_catalog_opt_in", CommandClass::idempotent()),
     ("fetch_acp_registry_snapshot", CommandClass::read()),
     ("search_mcp_catalog", CommandClass::read()),
+    ("get_mcp_catalog_status", CommandClass::read()),
+    ("set_mcp_catalog_sync", CommandClass::idempotent()),
     ("install_acp_agent", CommandClass::command(Replay::Payload)),
     (
         "acp_deliver_auth_redirect",
