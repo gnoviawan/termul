@@ -67,7 +67,11 @@ export function useMcpCatalogStatus(visible: boolean): McpCatalogStatusHandle {
     })
   }, [])
 
-  const syncing = state.status === 'ready' && state.catalog.sync.state === 'syncing'
+  // An enabled sync over the sample is about to crawl the whole registry.
+  const syncing =
+    state.status === 'ready' &&
+    (state.catalog.sync.state === 'syncing' ||
+      (state.catalog.sync.state === 'idle' && state.catalog.sample))
   const interval = syncing ? MCP_CATALOG_SYNCING_POLL_MS : MCP_CATALOG_IDLE_POLL_MS
 
   useEffect(() => {

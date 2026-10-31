@@ -405,6 +405,31 @@ describe('McpCatalogBrowser catalog source', () => {
     expect(vi.mocked(toast.error).mock.calls).toEqual([['Only the host can change catalog sync.']])
   })
 
+  it('shows the full download within one fast poll after sync is turned on over the sample', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    search.mockResolvedValue(page([installable], 22, null, { updatedAt: SNAPSHOT, sample: true }))
+    status
+      .mockResolvedValueOnce(catalog({ sample: true, servers: 22, sync: { state: 'disabled' } }))
+      .mockResolvedValue(
+        catalog({ sample: true, servers: 22, sync: { state: 'syncing', full: true, fetched: 300 } })
+      )
+    setSync.mockResolvedValue(catalog({ sample: true, servers: 22, sync: { state: 'idle' } }))
+    render(<McpCatalogBrowser />)
+    expect(
+      await screen.findByText('Sync is off. No catalog request leaves this host.')
+    ).toBeInTheDocument()
+
+    fireEvent.click(syncSwitch())
+    await waitFor(() => expect(syncSwitch()).not.toBeDisabled())
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000)
+    })
+
+    expect(
+      screen.getByText('Downloading the full registry… 300 servers so far.')
+    ).toBeInTheDocument()
+  })
+
   it('searches again when a sync replaces the sample with the full registry', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const full = Array.from({ length: 3 }, (_, index) => row({ name: `io.registry/s${index}` }))
