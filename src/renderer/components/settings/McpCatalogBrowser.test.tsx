@@ -11,14 +11,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { McpCatalogBrowser } from './McpCatalogBrowser'
 import { SettingsLayout, SettingsSection } from './SettingsLayout'
 
-const { search, status, setSync, openUrl } = vi.hoisted(() => ({
+const { search, status, setSync, icon, openUrl } = vi.hoisted(() => ({
   search: vi.fn<(request: McpCatalogSearchRequest) => Promise<IpcResult<McpCatalogPage>>>(),
   status: vi.fn<() => Promise<IpcResult<McpCatalogStatus>>>(),
   setSync: vi.fn<(enabled: boolean) => Promise<IpcResult<McpCatalogStatus>>>(),
+  icon: vi.fn<(name: string) => Promise<IpcResult<Blob>>>(),
   openUrl: vi.fn(async (_url: string) => ({ success: true as const, data: undefined }))
 }))
 
-vi.mock('@/lib/mcp-catalog-api', () => ({ mcpCatalogApi: { search, status, setSync } }))
+vi.mock('@/lib/mcp-catalog-api', () => ({ mcpCatalogApi: { search, status, setSync, icon } }))
 vi.mock('@/lib/api', () => ({ openerApi: { openUrlWithSystemBrowser: openUrl } }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(async () => {}) }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
@@ -62,6 +63,7 @@ function row(overrides: Partial<McpCatalogRow> & Pick<McpCatalogRow, 'name'>): M
     reason: null,
     defaultOption: { kind: 'remote', index: 0 },
     repositoryUrl: null,
+    hasIcon: false,
     ...overrides
   }
 }
@@ -126,6 +128,7 @@ beforeEach(() => {
   search.mockReset()
   status.mockReset()
   setSync.mockReset()
+  icon.mockReset()
   openUrl.mockClear()
   vi.mocked(toast.error).mockClear()
   status.mockReturnValue(new Promise(() => {}))
@@ -458,5 +461,87 @@ describe('McpCatalogBrowser catalog source', () => {
       [{ query: undefined, limit: 50 }],
       [{ query: undefined, limit: 50 }]
     ])
+  })
+})
+
+describe('McpCatalogBrowser logos', () => {
+  const objectUrls: string[] = []
+
+  beforeEach(() => {
+    objectUrls.length = 0
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+      objectUrls.push(`blob:logo-${objectUrls.length}`)
+      return objectUrls[objectUrls.length - 1] as string
+    })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  async function findRow(name: string): Promise<HTMLElement> {
+    await screen.findByText(name)
+    return rowOf(name)
+  }
+
+  const withLogo = row({ name: 'io.example/logo', title: 'Logo Server', hasIcon: true })
+  const withoutLogo = row({ name: 'io.example/plain', title: 'plain tools' })
+
+  it('shows the host logo through an img and a lettered tile when there is none', async () => {
+    icon.mockResolvedValue({ success: true, data: new Blob(['png'], { type: 'image/png' }) })
+    search.mockResolvedValue(page([withLogo, withoutLogo]))
+    render(<McpCatalogBrowser />)
+
+    const logoRow = await findRow('io.example/logo')
+    await waitFor(() => expect(logoRow.querySelector('img')).not.toBeNull())
+    const img = logoRow.querySelector('img') as HTMLImageElement
+    expect(img.getAttribute('src')).toBe('blob:logo-0')
+    expect(img.getAttribute('width')).toBe('32')
+    expect(img.alt).toBe('')
+    expect(within(logoRow).queryByTestId('mcp-catalog-icon-placeholder')).toBeNull()
+
+    const plainRow = await findRow('io.example/plain')
+    expect(plainRow.querySelector('img')).toBeNull()
+    expect(within(plainRow).getByTestId('mcp-catalog-icon-placeholder')).toHaveTextContent('P')
+    expect(icon.mock.calls).toEqual([['io.example/logo']])
+  })
+
+  it('keeps the lettered tile when the host has no logo to give', async () => {
+    icon.mockResolvedValue({
+      success: false,
+      error: 'the icon could not be loaded',
+      code: 'MCP_CATALOG_ICON_UNAVAILABLE'
+    })
+    search.mockResolvedValue(page([withLogo]))
+    render(<McpCatalogBrowser />)
+
+    const logoRow = await findRow('io.example/logo')
+    await waitFor(() => expect(icon).toHaveBeenCalledWith('io.example/logo'))
+    expect(within(logoRow).getByTestId('mcp-catalog-icon-placeholder')).toHaveTextContent('L')
+    expect(logoRow.querySelector('img')).toBeNull()
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the lettered tile when the bytes do not decode', async () => {
+    icon.mockResolvedValue({ success: true, data: new Blob(['junk'], { type: 'image/png' }) })
+    search.mockResolvedValue(page([withLogo]))
+    render(<McpCatalogBrowser />)
+
+    const logoRow = await findRow('io.example/logo')
+    await waitFor(() => expect(logoRow.querySelector('img')).not.toBeNull())
+    fireEvent.error(logoRow.querySelector('img') as HTMLImageElement)
+
+    expect(within(logoRow).getByTestId('mcp-catalog-icon-placeholder')).toHaveTextContent('L')
+    expect(logoRow.querySelector('img')).toBeNull()
+  })
+
+  it('names the tile after the registry name when there is no title', async () => {
+    search.mockResolvedValue(page([row({ name: 'io.example/zeta-server' })]))
+    render(<McpCatalogBrowser />)
+
+    const zeta = await findRow('io.example/zeta-server')
+    expect(within(zeta).getByTestId('mcp-catalog-icon-placeholder')).toHaveTextContent('Z')
+    expect(icon).not.toHaveBeenCalled()
   })
 })

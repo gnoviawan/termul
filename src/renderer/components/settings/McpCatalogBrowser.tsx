@@ -10,6 +10,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ExternalLink, Search } from '@/components/icons'
+import { McpCatalogIcon } from '@/components/settings/McpCatalogIcon'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { useSettingsSectionVisible } from '@/components/settings/SettingsLayout'
 import { SettingsNotice } from '@/components/settings/SettingsNotice'
@@ -131,35 +132,40 @@ function CatalogRow({ row, hintId }: { row: McpCatalogRow; hintId: string }): Re
   const displayName = row.title ?? row.name.slice(row.name.lastIndexOf('/') + 1)
   return (
     <div className="flex flex-col gap-2 px-4 py-3 @lg:flex-row @lg:items-start @lg:gap-4">
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 truncate text-sm font-medium text-foreground">
-            {displayName}
-          </span>
-          <span className="max-w-24 shrink-0 truncate text-3xs text-muted-foreground">
-            {row.version}
-          </span>
-          {row.status === 'deprecated' && (
-            <span className="shrink-0 rounded bg-warning/10 px-1.5 py-px text-3xs font-medium uppercase text-warning">
-              Deprecated
+      <div className="flex min-w-0 flex-1 items-start gap-3">
+        <McpCatalogIcon name={row.name} displayName={displayName} hasIcon={row.hasIcon} />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate text-sm font-medium text-foreground">
+              {displayName}
             </span>
-          )}
-        </div>
-        <p className="truncate font-mono text-xs text-muted-foreground" title={row.name}>
-          {row.name}
-        </p>
-        {row.description && (
-          <p className="mt-1 line-clamp-2 break-words text-xs text-secondary-foreground">
-            {row.description}
+            <span className="max-w-24 shrink-0 truncate text-3xs text-muted-foreground">
+              {row.version}
+            </span>
+            {row.status === 'deprecated' && (
+              <span className="shrink-0 rounded bg-warning/10 px-1.5 py-px text-3xs font-medium uppercase text-warning">
+                Deprecated
+              </span>
+            )}
+          </div>
+          <p className="truncate font-mono text-xs text-muted-foreground" title={row.name}>
+            {row.name}
           </p>
-        )}
-        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <StatusWord tone={STATE_TONE[row.state]}>{MCP_CATALOG_STATE_LABEL[row.state]}</StatusWord>
-          {row.reason && (
-            <span className="text-xs text-muted-foreground">
-              {mcpCatalogReasonText(row.reason)}
-            </span>
+          {row.description && (
+            <p className="mt-1 line-clamp-2 break-words text-xs text-secondary-foreground">
+              {row.description}
+            </p>
           )}
+          <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <StatusWord tone={STATE_TONE[row.state]}>
+              {MCP_CATALOG_STATE_LABEL[row.state]}
+            </StatusWord>
+            {row.reason && (
+              <span className="text-xs text-muted-foreground">
+                {mcpCatalogReasonText(row.reason)}
+              </span>
+            )}
+          </div>
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
