@@ -24,7 +24,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::rejection::JsonRejection;
+use axum::extract::rejection::{JsonRejection, QueryRejection};
 use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -179,6 +179,13 @@ fn invalid_body(route: &'static str, rejection: &JsonRejection) -> Refusal {
     )
 }
 
+fn invalid_query(route: &'static str, rejection: &QueryRejection) -> Refusal {
+    refusal(
+        route,
+        &ServiceError::InvalidInput(format!("query: {}", rejection.body_text())),
+    )
+}
+
 /// The service, once the caller is admitted. `write` marks a mutation, which
 /// also has to pass the remote-write guard.
 fn admit(
@@ -300,14 +307,16 @@ struct SuggestionBody {
 
 type Peer = ConnectInfo<SocketAddr>;
 type Body<T> = Result<Json<T>, JsonRejection>;
+type Params<T> = Result<Query<T>, QueryRejection>;
 
 async fn list(
     State(state): State<AutomationRouteState>,
     ConnectInfo(peer): Peer,
     parts: Parts,
-    Query(query): Query<ProjectQuery>,
+    query: Params<ProjectQuery>,
 ) -> Reply {
     let service = admit(&state, &parts, peer, AUTOMATIONS, false)?;
+    let Query(query) = query.map_err(|e| invalid_query(AUTOMATIONS, &e))?;
     reply(AUTOMATIONS, service.list(&query.project_id))
 }
 
@@ -412,9 +421,10 @@ async fn list_runs(
     ConnectInfo(peer): Peer,
     parts: Parts,
     Path(id): Path<String>,
-    Query(query): Query<RunsQuery>,
+    query: Params<RunsQuery>,
 ) -> Reply {
     let service = admit(&state, &parts, peer, RUNS, false)?;
+    let Query(query) = query.map_err(|e| invalid_query(RUNS, &e))?;
     let limit = query.limit.unwrap_or(DEFAULT_RUNS_LIMIT);
     reply(RUNS, service.list_runs(&AutomationId::from(id), limit))
 }
@@ -462,9 +472,10 @@ async fn list_secrets(
     State(state): State<AutomationRouteState>,
     ConnectInfo(peer): Peer,
     parts: Parts,
-    Query(query): Query<ProjectQuery>,
+    query: Params<ProjectQuery>,
 ) -> Reply {
     let service = admit(&state, &parts, peer, SECRETS, false)?;
+    let Query(query) = query.map_err(|e| invalid_query(SECRETS, &e))?;
     reply(SECRETS, service.list_secret_names(&query.project_id))
 }
 
@@ -486,9 +497,10 @@ async fn remove_secret(
     State(state): State<AutomationRouteState>,
     ConnectInfo(peer): Peer,
     parts: Parts,
-    Query(query): Query<SecretQuery>,
+    query: Params<SecretQuery>,
 ) -> Reply {
     let service = admit(&state, &parts, peer, SECRETS, true)?;
+    let Query(query) = query.map_err(|e| invalid_query(SECRETS, &e))?;
     reply(
         SECRETS,
         delete_secret(service, query.project_id, query.name).await,
@@ -499,9 +511,10 @@ async fn suggestions(
     State(state): State<AutomationRouteState>,
     ConnectInfo(peer): Peer,
     parts: Parts,
-    Query(query): Query<SuggestionsQuery>,
+    query: Params<SuggestionsQuery>,
 ) -> Reply {
     let service = admit(&state, &parts, peer, SUGGESTIONS, false)?;
+    let Query(query) = query.map_err(|e| invalid_query(SUGGESTIONS, &e))?;
     reply(
         SUGGESTIONS,
         list_suggestions(service, query.project_id, query.timezone).await,
