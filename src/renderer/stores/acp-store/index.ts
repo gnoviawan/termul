@@ -49,6 +49,7 @@ import {
   type BrowserAgentTabEvent,
   type BrowserOpenRequestEvent,
   type BrowserStopChangedEvent,
+  type BrowserTabClosedEvent,
   type BrowserTicketClosedEvent,
   type CommandsUpdateEvent,
   type ConfigOptionsUpdateEvent,
@@ -663,8 +664,11 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<BrowserOpenRequestEvent>(ACP_EVENTS.browserOpenRequest, (e) =>
       useAcpStore.getState()._onBrowserOpenRequest(e)
     ),
-    acpApi.onEvent<BrowserAgentTabEvent>(ACP_EVENTS.browserAgentTab, (e) =>
-      useAcpStore.getState()._onBrowserAgentTab(e)
+    acpApi.onEvent<BrowserAgentTabEvent>(ACP_EVENTS.browserAgentTab, (e, eventSeq) =>
+      useAcpStore.getState()._onBrowserAgentTab(e, eventSeq)
+    ),
+    acpApi.onEvent<BrowserTabClosedEvent>(ACP_EVENTS.browserTabClosed, (e) =>
+      useAcpStore.getState()._onBrowserTabClosed(e)
     ),
     acpApi.onEvent<BrowserTicketClosedEvent>(ACP_EVENTS.browserTicketClosed, (e) =>
       useAcpStore.getState()._onBrowserTicketClosed(e)

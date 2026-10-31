@@ -809,6 +809,11 @@ export interface BrowserAgentTabEvent {
   sessionId: string
 }
 
+/** The host registry dropped an agent tab (`acp:browser_tab_closed`). */
+export interface BrowserTabClosedEvent {
+  tabId: string
+}
+
 // --- Command wrappers ------------------------------------------------------
 
 export interface InstallAcpRegistryBinaryRequest {
