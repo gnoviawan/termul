@@ -88,8 +88,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 68 request types including warm-pool promotion, host-owned session delete and browser stop', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(68)
+  it('exports exactly 70 request types including warm-pool promotion, host-owned session delete and browser stop', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(70)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -132,6 +132,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'set_catalog_opt_in',
       'fetch_acp_registry_snapshot',
       'search_mcp_catalog',
+      'get_mcp_catalog_status',
+      'set_mcp_catalog_sync',
       'describe_mcp_install',
       'plan_mcp_install',
       'commit_mcp_install',

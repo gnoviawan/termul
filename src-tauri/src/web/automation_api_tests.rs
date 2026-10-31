@@ -10,7 +10,9 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::automation::engine::HttpConfig;
-use crate::automation::test_support::{test_engine, MemoryVault};
+use crate::automation::test_support::{
+    no_history, test_engine, weekday_asks, MemoryVault, FRIDAY_MS,
+};
 use crate::web::watch::WatchKind;
 use crate::web::ws::{outbound_channel, Outbound};
 
@@ -23,7 +25,7 @@ const OPEN: WriteFlags = WriteFlags {
 
 fn service_with(vault: MemoryVault) -> Arc<AutomationService> {
     let te = test_engine(std::env::temp_dir(), Arc::new(vault), HttpConfig::default());
-    Arc::new(AutomationService::new(te.engine))
+    Arc::new(AutomationService::new(te.engine, no_history()))
 }
 
 fn service() -> Arc<AutomationService> {
@@ -448,6 +450,18 @@ async fn service_errors_map_to_http_statuses() {
 
     let (status, no_body) = send(app.clone(), Method::POST, &ops_uri, None).await;
     assert_eq!((status, &no_body["code"]), (422, &json!("invalid_input")));
+
+    let (status, bad_limit) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/api/automations/{id}/runs?limit=many"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, &bad_limit["success"], &bad_limit["code"]),
+        (422, &json!(false), &json!("invalid_input"))
+    );
 }
 
 #[tokio::test]
@@ -606,5 +620,99 @@ async fn the_host_router_gates_and_serves_the_automation_routes() {
             expected,
             "token={token}"
         );
+    }
+}
+
+fn suggesting_service() -> Arc<AutomationService> {
+    let te = test_engine(
+        std::env::temp_dir(),
+        Arc::new(MemoryVault::default()),
+        HttpConfig::default(),
+    );
+    te.clock.set(FRIDAY_MS);
+    Arc::new(AutomationService::new(
+        te.engine,
+        Arc::new(|project_id: &str, _: i64| weekday_asks(project_id)),
+    ))
+}
+
+#[tokio::test]
+async fn suggestions_are_listed_matched_and_dismissed_over_their_routes() {
+    let service = suggesting_service();
+    let app = router(&service);
+    let list = "/api/automation-suggestions?project_id=p1&timezone=UTC";
+
+    let (status, body) = send(app.clone(), Method::GET, list, None).await;
+    assert_eq!(status, 200);
+    let fingerprint = body["data"][0]["fingerprint"].as_str().unwrap().to_string();
+    let suggestion = json!({
+        "fingerprint": fingerprint,
+        "representative": "summarize the 3 open PRs in termul",
+        "occurrences": 4,
+        "days": 4,
+        "last_at": 1_793_264_700_000_i64,
+        "cadence": {
+            "schedule": { "kind": "cron", "expr": "0 9 * * 1-5", "timezone": "UTC" },
+            "label": "weekdays at 09:00"
+        }
+    });
+    assert_eq!((status, body), ok(json!([suggestion.clone()])));
+
+    let matched = |text: &str| {
+        json!({ "project_id": "p1", "text": text, "timezone": "UTC" })
+    };
+    let match_uri = "/api/automation-suggestions/match";
+    assert_eq!(
+        send(app.clone(), Method::POST, match_uri, Some(matched("summarize the open PRs in termul"))).await,
+        ok(suggestion)
+    );
+    assert_eq!(
+        send(app.clone(), Method::POST, match_uri, Some(matched("fix the flaky reconnect test"))).await,
+        ok(Value::Null)
+    );
+
+    let answer = json!({ "project_id": "p1", "fingerprint": fingerprint });
+    assert_eq!(
+        send(app.clone(), Method::POST, "/api/automation-suggestions/dismiss", Some(answer)).await,
+        ok(Value::Null)
+    );
+    assert_eq!(send(app, Method::GET, list, None).await, ok(json!([])));
+}
+
+#[tokio::test]
+async fn answering_a_suggestion_is_a_write_and_matching_is_a_read() {
+    let service = suggesting_service();
+    let lan = |path: &str, body: Value| {
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        request.extensions_mut().insert(BearerVerified);
+        request
+    };
+    let app = router_for(Some(service), true, LAN, OPEN);
+    let status = |response: Response| response.status().as_u16();
+
+    let matched = app
+        .clone()
+        .oneshot(lan(
+            "/api/automation-suggestions/match",
+            json!({ "project_id": "p1", "text": "summarize the open PRs in termul" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(status(matched), 200);
+    for path in [
+        "/api/automation-suggestions/dismiss",
+        "/api/automation-suggestions/accept",
+    ] {
+        let answered = app
+            .clone()
+            .oneshot(lan(path, json!({ "project_id": "p1", "fingerprint": "abcd" })))
+            .await
+            .unwrap();
+        assert_eq!(status(answered), 403, "{path}");
     }
 }

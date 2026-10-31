@@ -6,7 +6,7 @@ use serde_json::json;
 use super::engine::HttpConfig;
 use super::model::{AutomationChanged, IssueCode, Op, RunStatus, Schedule};
 use super::service::{AutomationService, ServiceError};
-use super::test_support::{test_engine, MemoryVault};
+use super::test_support::{no_history, test_engine, weekday_asks, MemoryVault, FRIDAY_MS};
 use crate::acp::config::AgentConfig;
 
 fn service() -> AutomationService {
@@ -15,7 +15,7 @@ fn service() -> AutomationService {
         Arc::new(MemoryVault::default()),
         HttpConfig::default(),
     );
-    AutomationService::new(te.engine)
+    AutomationService::new(te.engine, no_history())
 }
 
 fn ops(value: serde_json::Value) -> Vec<Op> {
@@ -228,4 +228,130 @@ fn the_proposed_flag_is_on_the_wire_only_when_set() {
     let parsed: AutomationChanged =
         serde_json::from_value(json!({ "project_id": "p1", "automation_id": null })).unwrap();
     assert!(!parsed.proposed);
+}
+
+fn suggesting_service(asked: Arc<std::sync::Mutex<Vec<(String, i64)>>>) -> AutomationService {
+    let te = test_engine(
+        std::env::temp_dir(),
+        Arc::new(MemoryVault::default()),
+        HttpConfig::default(),
+    );
+    te.clock.set(FRIDAY_MS);
+    let history = move |project_id: &str, since_ms: i64| {
+        asked
+            .lock()
+            .unwrap()
+            .push((project_id.to_string(), since_ms));
+        weekday_asks(project_id)
+    };
+    AutomationService::new(te.engine, Arc::new(history))
+}
+
+#[test]
+fn suggestions_come_from_the_projects_last_thirty_days() {
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let service = suggesting_service(asked.clone());
+
+    let found = service.list_suggestions("p1", Some("UTC")).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(
+        found[0].representative,
+        "summarize the 3 open PRs in termul"
+    );
+    assert_eq!((found[0].occurrences, found[0].days), (4, 4));
+    assert_eq!(
+        found[0].cadence.schedule,
+        Schedule::Cron {
+            expr: "0 9 * * 1-5".to_string(),
+            timezone: "UTC".to_string(),
+        }
+    );
+    assert_eq!(service.list_suggestions("p2", Some("UTC")).unwrap(), vec![]);
+    assert_eq!(
+        asked.lock().unwrap().clone(),
+        vec![
+            ("p1".to_string(), FRIDAY_MS - 30 * 24 * 60 * 60 * 1000),
+            ("p2".to_string(), FRIDAY_MS - 30 * 24 * 60 * 60 * 1000),
+        ]
+    );
+}
+
+#[test]
+fn a_dismissed_suggestion_is_neither_listed_nor_matched() {
+    let service = suggesting_service(Arc::default());
+    let found = service.list_suggestions("p1", Some("UTC")).unwrap();
+    let again = "summarize the open PRs in termul";
+    assert_eq!(
+        service.match_prompt("p1", again, Some("UTC")).unwrap(),
+        Some(found[0].clone())
+    );
+
+    let mut changes = service.subscribe();
+    service
+        .dismiss_suggestion("p1", &found[0].fingerprint)
+        .unwrap();
+
+    assert_eq!(service.list_suggestions("p1", Some("UTC")).unwrap(), vec![]);
+    assert_eq!(
+        service.match_prompt("p1", again, Some("UTC")).unwrap(),
+        None
+    );
+    assert_eq!(
+        changes.try_recv().unwrap(),
+        AutomationChanged {
+            project_id: "p1".to_string(),
+            automation_id: None,
+            proposed: false,
+            proposed_by: None,
+        }
+    );
+}
+
+#[test]
+fn a_matched_prompt_tells_open_screens_to_list_suggestions_again() {
+    let service = suggesting_service(Arc::default());
+    let mut changes = service.subscribe();
+
+    service
+        .match_prompt("p1", "fix the flaky reconnect test", Some("UTC"))
+        .unwrap();
+    assert!(changes.try_recv().is_err());
+
+    service
+        .match_prompt("p1", "summarize the open PRs in termul", Some("UTC"))
+        .unwrap();
+    assert_eq!(
+        changes.try_recv().unwrap(),
+        AutomationChanged {
+            project_id: "p1".to_string(),
+            automation_id: None,
+            proposed: false,
+            proposed_by: None,
+        }
+    );
+}
+
+#[test]
+fn an_accepted_suggestion_is_not_offered_again() {
+    let service = suggesting_service(Arc::default());
+    let found = service.list_suggestions("p1", Some("UTC")).unwrap();
+
+    service
+        .accept_suggestion("p1", &found[0].fingerprint)
+        .unwrap();
+
+    assert_eq!(service.list_suggestions("p1", Some("UTC")).unwrap(), vec![]);
+}
+
+#[test]
+fn a_suggestion_answer_needs_a_project_and_a_fingerprint() {
+    let service = suggesting_service(Arc::default());
+    assert_eq!(
+        service.dismiss_suggestion("p1", " ").unwrap_err().code(),
+        "invalid_input"
+    );
+    assert_eq!(
+        service.accept_suggestion("", "abcd").unwrap_err().code(),
+        "invalid_input"
+    );
 }

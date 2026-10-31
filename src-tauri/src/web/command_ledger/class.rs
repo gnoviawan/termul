@@ -182,6 +182,8 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     // carries the entry's secret values.
     ("commit_mcp_install", CommandClass::command(Replay::Never)),
     ("cancel_mcp_install", CommandClass::idempotent()),
+    ("get_mcp_catalog_status", CommandClass::read()),
+    ("set_mcp_catalog_sync", CommandClass::idempotent()),
     ("install_acp_agent", CommandClass::command(Replay::Payload)),
     (
         "acp_deliver_auth_redirect",

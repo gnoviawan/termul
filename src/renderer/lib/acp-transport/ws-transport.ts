@@ -14,7 +14,11 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
-import type { McpCatalogPage, McpCatalogSearchRequest } from '@shared/types/mcp-catalog.types'
+import type {
+  McpCatalogPage,
+  McpCatalogSearchRequest,
+  McpCatalogStatus
+} from '@shared/types/mcp-catalog.types'
 import type {
   McpInstallCancelRequest,
   McpInstallCommitRequest,
@@ -816,6 +820,14 @@ export class WsAcpTransport implements AcpTransport {
   /** `search_mcp_catalog`: one page of the host's MCP catalog (see {@link AcpTransport.searchMcpCatalog}). */
   async searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage> {
     return this.request<McpCatalogPage>('search_mcp_catalog', request)
+  }
+
+  async getMcpCatalogStatus(): Promise<McpCatalogStatus> {
+    return this.request<McpCatalogStatus>('get_mcp_catalog_status', {})
+  }
+
+  async setMcpCatalogSync(enabled: boolean): Promise<McpCatalogStatus> {
+    return this.request<McpCatalogStatus>('set_mcp_catalog_sync', { enabled })
   }
 
   async describeMcpInstall(request: McpInstallFormRequest): Promise<McpInstallFormReply> {

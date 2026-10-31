@@ -1548,6 +1548,15 @@ pub fn run() {
                 acp_catalog_service.clone(),
             ));
 
+            let mcp_catalog_root = handle
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("failed to resolve app data directory: {error}"))?
+                .join("mcp-catalog");
+            tauri::async_runtime::spawn(crate::mcp_catalog::McpCatalogService::run(
+                mcp_catalog_root,
+            ));
+
             // CAP-6 / Story 9: open the host-owned verified-atomic ACP install
             // root. The desktop owns its own root under
             // `<app_data_dir>/acp-registry-binaries` (NEVER shared with a
@@ -2013,6 +2022,10 @@ pub fn run() {
             commands::automation_list_secrets,
             commands::automation_set_secret,
             commands::automation_delete_secret,
+            commands::automation_list_suggestions,
+            commands::automation_match_suggestion,
+            commands::automation_dismiss_suggestion,
+            commands::automation_accept_suggestion,
             commands::browser_tab_navigate,
             commands::browser_tab_resize,
             commands::browser_tab_show,

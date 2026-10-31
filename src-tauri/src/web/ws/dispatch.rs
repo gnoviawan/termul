@@ -192,6 +192,10 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "search_mcp_catalog" => {
             mcp_catalog::handle_search_mcp_catalog(id, &req.payload).await
         }
+        "get_mcp_catalog_status" => mcp_catalog::handle_get_mcp_catalog_status(id).await,
+        "set_mcp_catalog_sync" => {
+            mcp_catalog::handle_set_mcp_catalog_sync(id, &req.payload).await
+        }
         "describe_mcp_install" => {
             mcp_catalog::handle_describe_mcp_install(id, &req.payload).await
         }

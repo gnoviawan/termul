@@ -105,12 +105,17 @@ the open `issues` while any remain.";
 
 /// What `automation_propose` tells the agent once the user has been asked.
 #[must_use]
-pub fn proposed_text(name: &str, revision: u64) -> String {
+pub fn proposed_text(name: &str, revision: u64, enabled: bool) -> String {
+    let until = if enabled {
+        "they approve it"
+    } else {
+        "they approve and enable it"
+    };
     format!(
         "Proposed \"{name}\" (revision {revision}) for review. Tell the user it is waiting in \
 the Automations tab: they review its run policy (schedule, agents, secrets, outbound hosts) and \
-approve it there. It does not run until they approve and enable it. Any further edit creates a \
-new revision that needs approval again."
+approve it there. It does not run until {until}. Any further edit creates a new revision that \
+needs approval again."
     )
 }
 

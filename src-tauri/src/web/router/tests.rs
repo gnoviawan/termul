@@ -711,6 +711,8 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
         "/mcp-catalog/install/plan",
         "/mcp-catalog/install/commit",
         "/mcp-catalog/install/cancel",
+        "/mcp-catalog/status",
+        "/mcp-catalog/sync",
         "/fs/ls",
         "/git/status",
         "/search/content",

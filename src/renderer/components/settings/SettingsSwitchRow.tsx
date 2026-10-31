@@ -8,6 +8,7 @@ interface SettingsSwitchRowProps {
   label: string
   description: string
   checked: boolean
+  disabled?: boolean
   onToggle: (enabled: boolean) => void
 }
 
@@ -17,6 +18,7 @@ export function SettingsSwitchRow({
   label,
   description,
   checked,
+  disabled,
   onToggle
 }: SettingsSwitchRowProps): React.JSX.Element {
   return (
@@ -26,11 +28,13 @@ export function SettingsSwitchRow({
       label={label}
       description={description}
       layout="inline"
+      disabled={disabled}
     >
       <Switch
         id={id}
         aria-describedby={settingsDescriptionId(id)}
         checked={checked}
+        disabled={disabled}
         onCheckedChange={onToggle}
       />
     </SettingsRow>

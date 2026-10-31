@@ -6,6 +6,7 @@ import type {
   AutomationOp,
   AutomationRun,
   AutomationStep,
+  AutomationSuggestion,
   RunPolicy,
   Trigger
 } from './automation.types'
@@ -18,6 +19,7 @@ type WireFixture = {
   runs: AutomationRun[]
   steps: AutomationStep[]
   run_policy: RunPolicy
+  suggestion: AutomationSuggestion
 }
 
 // Literal ids cannot carry a brand, so the literal is checked against the
@@ -450,6 +452,17 @@ const typed: Unbranded<WireFixture> = {
     ],
     untrusted_flow: true,
     failure_policy: 'backoff 30s/1m/5m/15m/60m'
+  },
+  suggestion: {
+    fingerprint: '3f1c9a0d5b7e2468',
+    representative: 'summarize the open PRs in termul',
+    occurrences: 4,
+    days: 4,
+    last_at: 1793264700000,
+    cadence: {
+      schedule: { kind: 'cron', expr: '0 9 * * 1-5', timezone: 'Europe/Berlin' },
+      label: 'weekdays at 09:00'
+    }
   }
 }
 

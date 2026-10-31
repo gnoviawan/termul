@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::convert::{CatalogOption, Launch, McpCatalogReason, OptionKind, Runner};
-use super::snapshot::{CatalogItem, LoadedCatalog, RegistryStatus};
+use super::snapshot::{CatalogItem, LoadedCatalog, McpCatalogSource, RegistryStatus};
 
 pub const DEFAULT_PAGE_SIZE: usize = 50;
 pub const MAX_PAGE_SIZE: usize = 100;
@@ -69,7 +69,8 @@ pub struct McpCatalogPage {
     pub items: Vec<McpCatalogRow>,
     pub next_cursor: Option<String>,
     pub total: usize,
-    pub snapshot_fetched_at: Option<String>,
+    #[serde(flatten)]
+    pub source: McpCatalogSource,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -303,6 +304,6 @@ pub(crate) fn search(
         items,
         next_cursor: (end < total).then(|| end.to_string()),
         total,
-        snapshot_fetched_at: catalog.fetched_at.clone(),
+        source: catalog.source.clone(),
     })
 }

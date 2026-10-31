@@ -187,6 +187,8 @@ export const WS_REQUEST_TYPES = [
   // MCP catalog (spine AD-1): `{ query?, cursor?, limit? }` → one
   // `McpCatalogPage` of the host's converted registry snapshot. A read.
   'search_mcp_catalog',
+  'get_mcp_catalog_status',
+  'set_mcp_catalog_sync',
   'describe_mcp_install',
   'plan_mcp_install',
   'commit_mcp_install',
@@ -373,6 +375,8 @@ export const WS_COMMAND_CLASSES: Readonly<
   set_catalog_opt_in: ['idempotent', null],
   fetch_acp_registry_snapshot: ['read', null],
   search_mcp_catalog: ['read', null],
+  get_mcp_catalog_status: ['read', null],
+  set_mcp_catalog_sync: ['idempotent', null],
   describe_mcp_install: ['read', null],
   plan_mcp_install: ['idempotent', null],
   commit_mcp_install: ['command', 'never'],

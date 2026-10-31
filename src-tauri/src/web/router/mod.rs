@@ -313,6 +313,8 @@ pub fn router(
         .route("/mcp-catalog/install/plan", mcp_catalog_api::install_route(mcp_catalog_api::plan_install))
         .route("/mcp-catalog/install/commit", mcp_catalog_api::install_route(mcp_catalog_api::commit_install))
         .route("/mcp-catalog/install/cancel", mcp_catalog_api::install_route(mcp_catalog_api::cancel_install))
+        .route("/mcp-catalog/status", get(mcp_catalog_api::status))
+        .route("/mcp-catalog/sync", post(mcp_catalog_api::set_sync))
         // ACP install web route (CAP-6 / Story 9: verified-atomic install).
         // Mirrors the desktop `#[tauri::command] acp_install_agent` handler;
         // see `web/install_api.rs`. Registered AHEAD of the static fallback so
@@ -534,6 +536,8 @@ pub fn router_with_static(
         .route("/mcp-catalog/install/plan", mcp_catalog_api::install_route(mcp_catalog_api::plan_install))
         .route("/mcp-catalog/install/commit", mcp_catalog_api::install_route(mcp_catalog_api::commit_install))
         .route("/mcp-catalog/install/cancel", mcp_catalog_api::install_route(mcp_catalog_api::cancel_install))
+        .route("/mcp-catalog/status", get(mcp_catalog_api::status))
+        .route("/mcp-catalog/sync", post(mcp_catalog_api::set_sync))
         .route("/acp/install", post(install_api::install))
         .route("/worktree/list", post(worktree_api::list))
         .route("/worktree/create", post(worktree_api::create))

@@ -116,7 +116,8 @@ export function RunPolicyCard({
             disabled={issues.length > 0 || approving}
             onClick={onApprove}
           >
-            {approving ? 'Approving…' : 'Approve and arm'}
+            {/* Approval never enables: a disabled automation stays disabled. */}
+            {approving ? 'Approving…' : automation.enabled ? 'Approve and arm' : 'Approve'}
           </Button>
         </footer>
       )}

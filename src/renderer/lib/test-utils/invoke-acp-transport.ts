@@ -21,7 +21,7 @@ import type {
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
 import type { IpcResult } from '@shared/types/ipc.types'
-import type { McpCatalogPage } from '@shared/types/mcp-catalog.types'
+import type { McpCatalogPage, McpCatalogStatus } from '@shared/types/mcp-catalog.types'
 import type {
   McpInstallCommitResult,
   McpInstallFormReply,
@@ -163,6 +163,16 @@ export function createInvokeAcpTransport(): AcpTransport {
     },
     searchMcpCatalog: async (request) => {
       const result = await invoke<IpcResult<McpCatalogPage>>('search_mcp_catalog', { request })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    getMcpCatalogStatus: async () => {
+      const result = await invoke<IpcResult<McpCatalogStatus>>('get_mcp_catalog_status')
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    setMcpCatalogSync: async (enabled) => {
+      const result = await invoke<IpcResult<McpCatalogStatus>>('set_mcp_catalog_sync', { enabled })
       if (result.success) return result.data
       throw new AcpTransportError(result.code, result.error)
     },

@@ -7,7 +7,7 @@ use super::model::Op;
 use super::secrets::{choose_vault, SecretError, Secrets, FILE_VAULT_NAME};
 use super::service::AutomationService;
 use super::store::AutomationStore;
-use super::test_support::{test_engine, MemoryVault};
+use super::test_support::{no_history, test_engine, MemoryVault};
 use crate::web::log_capture::logged_lines;
 
 fn secrets(vault: Arc<MemoryVault>) -> Secrets {
@@ -169,7 +169,7 @@ fn a_file_vault_value_never_reaches_the_logs_or_the_service_views() {
         HttpConfig::default(),
     )
     .engine;
-    let service = AutomationService::new(engine);
+    let service = AutomationService::new(engine, no_history());
     service.set_secret("p1", "API_KEY", FILE_VALUE).unwrap();
     let created = service.create("p1", "Digest").unwrap();
     let applied = service

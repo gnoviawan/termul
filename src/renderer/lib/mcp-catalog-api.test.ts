@@ -1,4 +1,4 @@
-import type { McpCatalogPage } from '@shared/types/mcp-catalog.types'
+import type { McpCatalogPage, McpCatalogStatus } from '@shared/types/mcp-catalog.types'
 import type {
   McpInstallCommitResult,
   McpInstallFormReply,
@@ -9,6 +9,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const { transport } = vi.hoisted(() => ({
   transport: {
     searchMcpCatalog: vi.fn(),
+    getMcpCatalogStatus: vi.fn(),
+    setMcpCatalogSync: vi.fn(),
     describeMcpInstall: vi.fn(),
     planMcpInstall: vi.fn(),
     commitMcpInstall: vi.fn(),
@@ -45,7 +47,23 @@ const page: McpCatalogPage = {
   ],
   nextCursor: '1',
   total: 2,
-  snapshotFetchedAt: '2026-10-27T03:13:14.559Z'
+  updatedAt: '2026-10-27T03:13:14.559Z',
+  sample: false
+}
+
+const status: McpCatalogStatus = {
+  updatedAt: '2026-10-27T03:13:14.559Z',
+  sample: false,
+  servers: 54_210,
+  sync: { state: 'syncing', full: false, fetched: 0 }
+}
+
+const disabled: McpCatalogStatus = { ...status, sync: { state: 'disabled' } }
+
+const forbidden = {
+  success: false,
+  error: 'Only the host can change MCP catalog sync',
+  code: 'FORBIDDEN'
 }
 
 const source = { kind: 'catalog', name: 'to.hooka/mcp', version: '0.1.2' } as const
@@ -206,6 +224,54 @@ describe('MCP catalog facades', () => {
     const desktop = await createDesktopMcpCatalogApi().search({ limit: 500 })
     expect(desktop).toEqual({ success: false, error: message, code: 'VALIDATION_ERROR' })
     expect(desktop).toEqual(await webMcpCatalogApi.search({ limit: 500 }))
+  })
+
+  it('web status reads GET /mcp-catalog/status', async () => {
+    hostAnswers({ success: true, data: status })
+
+    const result = await webMcpCatalogApi.status()
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8080/mcp-catalog/status',
+      expect.objectContaining({ method: 'GET' })
+    )
+    expect(result).toEqual({ success: true, data: status })
+  })
+
+  it('web setSync posts { enabled } to /mcp-catalog/sync and returns the new status', async () => {
+    hostAnswers({ success: true, data: disabled })
+
+    const result = await webMcpCatalogApi.setSync(false)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8080/mcp-catalog/sync',
+      expect.objectContaining({ method: 'POST', body: '{"enabled":false}' })
+    )
+    expect(result).toEqual({ success: true, data: disabled })
+  })
+
+  it('web setSync passes a FORBIDDEN refusal through', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 403, json: async () => forbidden })
+
+    expect(await webMcpCatalogApi.setSync(true)).toEqual(forbidden)
+  })
+
+  it('desktop status and setSync send their requests over the transport', async () => {
+    transport.getMcpCatalogStatus.mockResolvedValueOnce(status)
+    transport.setMcpCatalogSync.mockResolvedValueOnce(disabled)
+    const api = createDesktopMcpCatalogApi()
+
+    expect(await api.status()).toEqual({ success: true, data: status })
+    expect(await api.setSync(false)).toEqual({ success: true, data: disabled })
+    expect(transport.setMcpCatalogSync.mock.calls).toEqual([[false]])
+  })
+
+  it('desktop setSync passes a FORBIDDEN refusal through like the web path', async () => {
+    transport.setMcpCatalogSync.mockRejectedValueOnce(
+      new AcpTransportError('FORBIDDEN', forbidden.error)
+    )
+
+    expect(await createDesktopMcpCatalogApi().setSync(true)).toEqual(forbidden)
   })
 
   it('web form posts the source to /mcp-catalog/install/form without a client id', async () => {

@@ -11,7 +11,11 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
-import type { McpCatalogPage, McpCatalogSearchRequest } from '@shared/types/mcp-catalog.types'
+import type {
+  McpCatalogPage,
+  McpCatalogSearchRequest,
+  McpCatalogStatus
+} from '@shared/types/mcp-catalog.types'
 import type {
   McpInstallCancelRequest,
   McpInstallCommitRequest,
@@ -214,6 +218,8 @@ export interface AcpTransport {
    * throw {@link AcpTransportError} carrying the host's code (`VALIDATION_ERROR`).
    */
   searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage>
+  getMcpCatalogStatus(): Promise<McpCatalogStatus>
+  setMcpCatalogSync(enabled: boolean): Promise<McpCatalogStatus>
   /**
    * The MCP install flow (spine AD-5) over the `/ws` requests
    * `describe_mcp_install`, `plan_mcp_install`, `commit_mcp_install` and

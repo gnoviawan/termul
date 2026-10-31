@@ -12,7 +12,7 @@ use super::plan::{
 };
 use super::resolved::{Provenance, ResolvedConfig, ValueSlot};
 use super::search::RunnerAvailability;
-use super::snapshot::{item_from_row, LoadedCatalog};
+use super::snapshot::{item_from_row, LoadedCatalog, McpCatalogSource};
 use super::McpCatalogService;
 
 const ALL_RUNNERS: RunnerAvailability = RunnerAvailability {
@@ -125,7 +125,10 @@ fn catalog(rows: Vec<Value>) -> LoadedCatalog {
     items.sort_by(|a, b| a.name.cmp(&b.name));
     LoadedCatalog {
         items,
-        fetched_at: Some("2026-10-27T00:00:00Z".to_string()),
+        source: McpCatalogSource {
+            updated_at: Some("2026-10-27T00:00:00Z".to_string()),
+            sample: false,
+        },
     }
 }
 

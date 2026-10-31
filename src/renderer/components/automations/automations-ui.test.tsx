@@ -27,6 +27,7 @@ vi.mock('@/lib/automation-api', () => api)
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
 import { AutomationDetail } from './AutomationDetail'
+import { AutomationDiagram } from './AutomationDiagram'
 import { AutomationList, EMPTY_EXAMPLE } from './AutomationList'
 import { AutomationRunDetail } from './AutomationRunDetail'
 import { AutomationSecretsDialog } from './AutomationSecretsDialog'
@@ -135,6 +136,21 @@ describe('RunPolicyCard', () => {
     expect(onApprove).not.toHaveBeenCalled()
   })
 
+  it('offers plain approval for a disabled automation, since approving does not arm it', () => {
+    render(
+      <RunPolicyCard
+        automation={automationWith({ revision: 2, approved_revision: 1, enabled: false })}
+        policy={fixturePolicy}
+        issues={[]}
+        approving={false}
+        onApprove={() => {}}
+      />
+    )
+
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: 'Approve and arm' })).toBeNull()
+  })
+
   it('hides approval once the revision on screen is approved', () => {
     render(
       <RunPolicyCard
@@ -228,6 +244,26 @@ describe('AutomationRunDetail', () => {
     fireEvent.click(steps.getByRole('button', { name: 'Output' }))
     expect(steps.getByText(/"title": "first"/)).toBeInTheDocument()
   })
+
+  it('shows the steps of a running run even when a reply takes longer than the poll', async () => {
+    vi.useFakeTimers()
+    try {
+      api.getAutomationRunSteps.mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve(ok(fixtureSteps)), 3000))
+      )
+      render(<AutomationRunDetail run={runWith({ status: 'running' })} />)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3100)
+      })
+
+      const steps = within(screen.getByRole('list', { name: 'Steps' }))
+      expect(steps.getByText('Succeeded')).toBeInTheDocument()
+      expect(api.getAutomationRunSteps).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('AutomationSecretsDialog', () => {
@@ -258,5 +294,41 @@ describe('AutomationSecretsDialog', () => {
     expect(screen.queryByDisplayValue('sk-live-123')).toBeNull()
     expect(document.body.innerHTML).not.toContain('sk-live-123')
     expect(screen.getByRole('button', { name: 'Replace' })).toBeInTheDocument()
+  })
+})
+
+describe('formatDateTime', () => {
+  it('names the year only for a time outside the current year', () => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 31, 12, 0), toFake: ['Date'] })
+    try {
+      expect(formatDateTime(new Date(2026, 10, 2, 9, 0).getTime())).toBe('Mon, Nov 2, 9:00 AM')
+      expect(formatDateTime(new Date(2027, 0, 4, 9, 0).getTime())).toBe('Mon, Jan 4, 2027, 9:00 AM')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('AutomationDiagram', () => {
+  it('reads out every step and branch as a list while the drawing stays hidden', () => {
+    render(
+      <AutomationDiagram graph={fixtureAutomation.graph} trigger={fixtureAutomation.trigger} />
+    )
+
+    const steps = within(screen.getByRole('list', { name: 'Automation steps' }))
+    expect(steps.getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'Trigger: Cron 0 5 * * 1-5 (America/New_York). Next: Fetch items',
+      'Fetch items, HTTP: GET api.example.com. Next: Extract. On error: Fetch failed',
+      'Extract, Agent: claude · sonnet. Next: Urgent?',
+      'Urgent?, Condition: {{nodes.extract.output.urgent}} eq true. If true: Shape',
+      'Shape, Transform: text. Next: Notify',
+      'Notify, HTTP: POST hooks.example.com',
+      'Fetch failed, Fail: fetch failed'
+    ])
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(screen.getByTestId('automation-diagram').lastElementChild).toHaveAttribute(
+      'aria-hidden',
+      'true'
+    )
   })
 })

@@ -8,6 +8,7 @@
     "git",
     "agents",
     "agent-setup",
+    "automations",
     "ssh",
     "remote",
     "browser",

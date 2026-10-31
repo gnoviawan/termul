@@ -404,7 +404,14 @@ pub(crate) fn normalize_title(text: &str) -> String {
 }
 
 pub(super) fn derive_title(payload: &Value) -> String {
-    let text = payload
+    let text = user_prompt_text(payload).unwrap_or_else(|| "Untitled Chat".to_string());
+    normalize_title(&text)
+}
+
+/// What the user typed in a `user_prompt` payload: its first text block with
+/// handoff and skills framing removed. `None` when it carries no user text.
+pub fn user_prompt_text(payload: &Value) -> Option<String> {
+    payload
         .get("content")
         .and_then(Value::as_array)
         .into_iter()
@@ -415,9 +422,9 @@ pub(super) fn derive_title(payload: &Value) -> String {
                 .flatten()
         })
         // spec-agent-switch-separator-redesign: a legacy framed handoff
-        // `user_prompt` (`summary + --- + draft`) must title the session with
-        // the draft, not the wire header — same strip the materialize fold
-        // applies. `Dropped` (summary-only) → fall through to Untitled.
+        // `user_prompt` (`summary + --- + draft`) yields the draft, not the
+        // wire header — same strip the materialize fold applies. `Dropped`
+        // (summary-only) carries no user text.
         .and_then(
             |text| match crate::acp::session_payload::strip_handoff_display_text(text) {
                 Some(crate::acp::session_payload::HandoffText::Draft(draft)) => Some(draft),
@@ -426,8 +433,6 @@ pub(super) fn derive_title(payload: &Value) -> String {
             },
         )
         .map(|text| skills_framing_title(&text).unwrap_or(text))
-        .unwrap_or_else(|| "Untitled Chat".to_string());
-    normalize_title(&text)
 }
 
 fn skills_framing_title(text: &str) -> Option<String> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mcpCatalogReasonText } from './mcp-catalog-copy'
+import { mcpCatalogReasonText, mcpCatalogSyncText } from './mcp-catalog-copy'
 
 describe('mcpCatalogReasonText', () => {
   it('names the runtime a needs-runtime row has to install', () => {
@@ -37,5 +37,25 @@ describe('mcpCatalogReasonText', () => {
     ).toBe(
       "It passes --registry to npx, which Termul doesn't allow because it can change what runs."
     )
+  })
+})
+
+describe('mcpCatalogSyncText', () => {
+  it('gives only the time of a retry later today', () => {
+    const now = new Date(2026, 9, 20, 12, 0)
+    const text = mcpCatalogSyncText(
+      {
+        updatedAt: null,
+        sample: false,
+        servers: 0,
+        sync: {
+          state: 'failed',
+          error: 'connection refused',
+          retryAt: new Date(2026, 9, 20, 12, 5).toISOString()
+        }
+      },
+      now
+    )
+    expect(text?.replace(/\s/g, ' ')).toBe('Sync failed: connection refused. Retrying at 12:05 PM.')
   })
 })

@@ -193,3 +193,19 @@ export type AutomationChanged = {
 
 /** An automation with what its editor and approval card render. */
 export type AutomationDetail = { automation: Automation; issues: Issue[]; policy: RunPolicy }
+
+/** When a repeated ask usually happens: a schedule plus "weekdays at 09:00". */
+export type SuggestionCadence = { schedule: Schedule; label: string }
+
+/**
+ * An ask the user repeated across chats on several days. `fingerprint` is its
+ * stable id; `representative` is the latest ask, at most 300 characters.
+ */
+export type AutomationSuggestion = {
+  fingerprint: string
+  representative: string
+  occurrences: number
+  days: number
+  last_at: number
+  cadence: SuggestionCadence
+}

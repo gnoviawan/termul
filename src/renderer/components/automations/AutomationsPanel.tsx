@@ -7,6 +7,7 @@ import { AutomationDetail } from './AutomationDetail'
 import { AutomationList, AutomationListEmpty } from './AutomationList'
 import { AutomationRunDetail } from './AutomationRunDetail'
 import { useAutomationFocus } from './automation-focus'
+import { SuggestedAutomations } from './SuggestedAutomations'
 import { useAutomationDetail, useAutomationList, useAutomationRuns } from './use-automations'
 
 interface AutomationsPanelProps {
@@ -26,8 +27,11 @@ export function AutomationsPanel({
   const [chosenId, setSelectedId] = useState<AutomationId | null>(null)
   const [runId, setRunId] = useState<RunId | null>(null)
   const list = useAutomationList(projectId)
+  // A choice deleted elsewhere (another device, an agent) counts as no choice.
+  const chosen =
+    list.data?.some((automation) => automation.id === chosenId) === false ? null : chosenId
   // Desktop shows the first automation until the user picks one.
-  const selectedId = chosenId ?? (phone ? null : (list.data?.[0]?.id ?? null))
+  const selectedId = chosen ?? (phone ? null : (list.data?.[0]?.id ?? null))
   const detail = useAutomationDetail(selectedId)
   const runs = useAutomationRuns(selectedId)
   const run = runs.data?.find((candidate) => candidate.id === runId) ?? null
@@ -49,12 +53,18 @@ export function AutomationsPanel({
     runs.reload()
   }
 
-  const listView =
-    list.data === null ? (
-      <PanelMessage text={list.error ? `Could not load automations: ${list.error}` : 'Loading…'} />
-    ) : (
-      <AutomationList automations={list.data} selectedId={selectedId} onSelect={select} />
-    )
+  const listView = (
+    <>
+      <SuggestedAutomations projectId={projectId} />
+      {list.data === null ? (
+        <PanelMessage
+          text={list.error ? `Could not load automations: ${list.error}` : 'Loading…'}
+        />
+      ) : (
+        <AutomationList automations={list.data} selectedId={selectedId} onSelect={select} />
+      )}
+    </>
+  )
 
   const detailView =
     selectedId === null ? null : detail.data === null ? (
@@ -98,7 +108,10 @@ export function AutomationsPanel({
 
   if (list.data?.length === 0) {
     return (
-      <div className="flex h-full min-h-0 items-center justify-center bg-background">
+      <div className="flex h-full min-h-0 flex-col items-center justify-center overflow-y-auto bg-background">
+        <div className="w-full max-w-md">
+          <SuggestedAutomations projectId={projectId} />
+        </div>
         <AutomationListEmpty />
       </div>
     )

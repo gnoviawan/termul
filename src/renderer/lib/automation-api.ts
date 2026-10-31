@@ -18,6 +18,7 @@ import type {
   AutomationOp,
   AutomationRun,
   AutomationStep,
+  AutomationSuggestion,
   KnownAgent,
   RunId,
   Schedule
@@ -35,6 +36,8 @@ import {
   parseSchedulePreview,
   parseSecretNames,
   parseStepList,
+  parseSuggestionList,
+  parseSuggestionMatch,
   type SchedulePreview,
   WireShapeError
 } from './automation-wire'
@@ -70,6 +73,10 @@ export interface AutomationTransport {
   listSecrets(projectId: string): Reply
   setSecret(projectId: string, name: string, value: string): Reply
   deleteSecret(projectId: string, name: string): Reply
+  listSuggestions(projectId: string, timezone: string): Reply
+  matchSuggestion(projectId: string, text: string, timezone: string): Reply
+  dismissSuggestion(projectId: string, fingerprint: string): Reply
+  acceptSuggestion(projectId: string, fingerprint: string): Reply
 }
 
 export const desktopAutomationTransport: AutomationTransport = {
@@ -90,12 +97,21 @@ export const desktopAutomationTransport: AutomationTransport = {
   listSecrets: (projectId) => invokeIpc('automation_list_secrets', { projectId }),
   setSecret: (projectId, name, value) =>
     invokeIpc('automation_set_secret', { projectId, name, value }),
-  deleteSecret: (projectId, name) => invokeIpc('automation_delete_secret', { projectId, name })
+  deleteSecret: (projectId, name) => invokeIpc('automation_delete_secret', { projectId, name }),
+  listSuggestions: (projectId, timezone) =>
+    invokeIpc('automation_list_suggestions', { projectId, timezone }),
+  matchSuggestion: (projectId, text, timezone) =>
+    invokeIpc('automation_match_suggestion', { projectId, text, timezone }),
+  dismissSuggestion: (projectId, fingerprint) =>
+    invokeIpc('automation_dismiss_suggestion', { projectId, fingerprint }),
+  acceptSuggestion: (projectId, fingerprint) =>
+    invokeIpc('automation_accept_suggestion', { projectId, fingerprint })
 }
 
 const AUTOMATIONS = '/api/automations'
 const RUNS = '/api/automation-runs'
 const SECRETS = '/api/automation-secrets'
+const SUGGESTIONS = '/api/automation-suggestions'
 const seg = encodeURIComponent
 
 export const webAutomationTransport: AutomationTransport = {
@@ -117,7 +133,15 @@ export const webAutomationTransport: AutomationTransport = {
   listSecrets: (projectId) => getJson(`${SECRETS}?project_id=${seg(projectId)}`),
   setSecret: (projectId, name, value) => putJson(SECRETS, { project_id: projectId, name, value }),
   deleteSecret: (projectId, name) =>
-    deleteJson(`${SECRETS}?project_id=${seg(projectId)}&name=${seg(name)}`)
+    deleteJson(`${SECRETS}?project_id=${seg(projectId)}&name=${seg(name)}`),
+  listSuggestions: (projectId, timezone) =>
+    getJson(`${SUGGESTIONS}?project_id=${seg(projectId)}&timezone=${seg(timezone)}`),
+  matchSuggestion: (projectId, text, timezone) =>
+    postJsonOnce(`${SUGGESTIONS}/match`, { project_id: projectId, text, timezone }),
+  dismissSuggestion: (projectId, fingerprint) =>
+    postJsonOnce(`${SUGGESTIONS}/dismiss`, { project_id: projectId, fingerprint }),
+  acceptSuggestion: (projectId, fingerprint) =>
+    postJsonOnce(`${SUGGESTIONS}/accept`, { project_id: projectId, fingerprint })
 }
 
 function transport(): AutomationTransport {
@@ -248,6 +272,58 @@ export async function deleteAutomationSecret(
 ): Promise<IpcResult<void>> {
   const result = await unit('delete_secret', transport().deleteSecret(projectId, name))
   if (result.success) log('info', `deleted secret name=${name} project=${projectId}`)
+  return result
+}
+
+/** The user's IANA zone: suggestion days and cadences are local to it. */
+function userTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone
+}
+
+/** Asks the user keeps repeating in `projectId`'s chats, most days first. */
+export function listAutomationSuggestions(
+  projectId: string
+): Promise<IpcResult<AutomationSuggestion[]>> {
+  return parsed(
+    'list_suggestions',
+    transport().listSuggestions(projectId, userTimezone()),
+    parseSuggestionList
+  )
+}
+
+/** The open suggestion `text` repeats, or `null`. The text is never logged. */
+export function matchAutomationSuggestion(
+  projectId: string,
+  text: string
+): Promise<IpcResult<AutomationSuggestion | null>> {
+  return parsed(
+    'match_suggestion',
+    transport().matchSuggestion(projectId, text, userTimezone()),
+    parseSuggestionMatch
+  )
+}
+
+export async function dismissAutomationSuggestion(
+  projectId: string,
+  fingerprint: string
+): Promise<IpcResult<void>> {
+  const result = await unit(
+    'dismiss_suggestion',
+    transport().dismissSuggestion(projectId, fingerprint)
+  )
+  if (result.success) log('info', `dismissed suggestion=${fingerprint} project=${projectId}`)
+  return result
+}
+
+export async function acceptAutomationSuggestion(
+  projectId: string,
+  fingerprint: string
+): Promise<IpcResult<void>> {
+  const result = await unit(
+    'accept_suggestion',
+    transport().acceptSuggestion(projectId, fingerprint)
+  )
+  if (result.success) log('info', `accepted suggestion=${fingerprint} project=${projectId}`)
   return result
 }
 

@@ -361,7 +361,7 @@ fn describe_catalog(
             repository_url: item.repository_url.clone(),
             version: item.version.clone(),
             mutable_tag,
-            snapshot_fetched_at: catalog.fetched_at.clone(),
+            snapshot_fetched_at: catalog.source.updated_at.clone(),
         }),
         deprecated: item.status == RegistryStatus::Deprecated,
         from_file: false,

@@ -1,4 +1,10 @@
-import type { McpCatalogApi, McpCatalogPage } from '@shared/types/mcp-catalog.types'
+/** HTTP implementation of the MCP catalog facade (spine AD-1). */
+
+import type {
+  McpCatalogApi,
+  McpCatalogPage,
+  McpCatalogStatus
+} from '@shared/types/mcp-catalog.types'
 import type {
   McpInstallCommitResult,
   McpInstallFormReply,
@@ -16,6 +22,8 @@ export const webMcpCatalogApi: McpCatalogApi = {
     const query = params.toString()
     return getJson<McpCatalogPage>(`/mcp-catalog/search${query ? `?${query}` : ''}`)
   },
+  status: () => getJson<McpCatalogStatus>('/mcp-catalog/status'),
+  setSync: (enabled) => postJson<McpCatalogStatus>('/mcp-catalog/sync', { enabled }),
   describeInstall(request) {
     return postJson<McpInstallFormReply>('/mcp-catalog/install/form', request)
   },

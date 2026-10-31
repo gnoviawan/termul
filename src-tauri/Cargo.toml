@@ -83,8 +83,8 @@ tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-chrono = "0.4"
+serde_json = { version = "1", features = ["raw_value"] }
+chrono = { version = "0.4", features = ["serde"] }
 # Automation schedules: 5-field cron (seconds prefixed) evaluated in an IANA zone.
 cron = "0.17"
 chrono-tz = "0.10"

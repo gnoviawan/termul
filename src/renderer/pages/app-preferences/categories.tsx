@@ -258,6 +258,13 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   },
   {
     categoryId: 'ai-agents',
+    label: 'Suggest automations from repeated chats',
+    description: 'Offer to schedule something you ask on several days.',
+    keywords: ['automation', 'schedule', 'repeat', 'suggestion', 'recurring'],
+    anchorId: rowId('suggest-automations')
+  },
+  {
+    categoryId: 'ai-agents',
     label: 'If an answer goes quiet',
     description: 'Cancel an answer that stops sending updates.',
     keywords: ['timeout', 'idle', 'silent', 'turn'],

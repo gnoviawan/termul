@@ -21,6 +21,7 @@ use super::policy;
 use super::schedule;
 use super::secrets::{self, SecretError, Secrets};
 use super::store::{AutomationStore, StoreError, DB_FILE_NAME};
+use super::suggest::{self, Candidate, PromptHistory, SessionHistory, Suggestion};
 use crate::acp::config::AgentConfig;
 use crate::acp::AcpManager;
 
@@ -133,16 +134,17 @@ pub struct AutomationDetail {
 
 pub struct AutomationService {
     engine: Arc<Engine>,
+    history: Arc<dyn PromptHistory>,
 }
 
 impl AutomationService {
-    pub fn new(engine: Arc<Engine>) -> Self {
-        Self { engine }
+    pub fn new(engine: Arc<Engine>, history: Arc<dyn PromptHistory>) -> Self {
+        Self { engine, history }
     }
 
     /// The production wiring: `automations.sqlite` and the known-agents file
     /// in `data_dir`, secrets in the OS keychain or, without one, the file
-    /// vault in `data_dir`.
+    /// vault in `data_dir`, suggestions from the chats `acp` persists.
     pub fn open(
         data_dir: &Path,
         acp: Arc<AcpManager>,
@@ -152,6 +154,10 @@ impl AutomationService {
             AutomationStore::open(&data_dir.join(DB_FILE_NAME))
                 .map_err(|e| format!("automation store: {e}"))?,
         );
+        let history: Arc<dyn PromptHistory> = match acp.persistence() {
+            Some(persistence) => Arc::new(SessionHistory::new(persistence)),
+            None => Arc::new(|_: &str, _: i64| Vec::new()),
+        };
         let engine = Engine::new(EngineDeps {
             secrets: Arc::new(Secrets::new(secrets::open_vault(data_dir), store.clone())),
             store,
@@ -161,7 +167,7 @@ impl AutomationService {
             clock: Arc::new(SystemClock),
             http: HttpConfig::default(),
         })?;
-        Ok(Self::new(engine))
+        Ok(Self::new(engine, history))
     }
 
     pub fn engine(&self) -> &Arc<Engine> {
@@ -385,6 +391,94 @@ impl AutomationService {
         Ok(self.engine.secrets().list_names(project_id)?)
     }
 
+    /// Asks repeated across `project_id`'s chats that the user has neither
+    /// dismissed nor accepted, most days first. Days and the cadence are
+    /// local to `timezone` (IANA), the host's zone when absent or unknown.
+    /// Reads chat logs: call it off the async runtime.
+    pub fn list_suggestions(
+        &self,
+        project_id: &str,
+        timezone: Option<&str>,
+    ) -> ServiceResult<Vec<Suggestion>> {
+        Ok(self
+            .candidates(project_id, timezone)?
+            .into_iter()
+            .map(|candidate| candidate.suggestion)
+            .collect())
+    }
+
+    /// The open suggestion `text` repeats, if any. A hit tells the
+    /// project's open screens to list suggestions again: the prompt that
+    /// matched may be the one that made the ask a suggestion.
+    pub fn match_prompt(
+        &self,
+        project_id: &str,
+        text: &str,
+        timezone: Option<&str>,
+    ) -> ServiceResult<Option<Suggestion>> {
+        let candidates = self.candidates(project_id, timezone)?;
+        let hit = suggest::match_prompt(&candidates, text).cloned();
+        if let Some(hit) = &hit {
+            log::info!(
+                "[Automation] a prompt in {project_id} repeats suggestion {}",
+                hit.fingerprint
+            );
+            self.engine.notify(project_id.trim(), None);
+        }
+        Ok(hit)
+    }
+
+    /// Never offer `fingerprint` in `project_id` again.
+    pub fn dismiss_suggestion(&self, project_id: &str, fingerprint: &str) -> ServiceResult<()> {
+        let (project_id, fingerprint) = suggestion_key(project_id, fingerprint)?;
+        self.engine
+            .store()
+            .dismiss_suggestion(project_id, fingerprint, self.engine.now_ms())?;
+        log::info!("[Automation] suggestion {fingerprint} dismissed in {project_id}");
+        self.engine.notify(project_id, None);
+        Ok(())
+    }
+
+    /// The user turns `fingerprint` into an automation; it is not offered
+    /// again.
+    pub fn accept_suggestion(&self, project_id: &str, fingerprint: &str) -> ServiceResult<()> {
+        let (project_id, fingerprint) = suggestion_key(project_id, fingerprint)?;
+        self.engine
+            .store()
+            .accept_suggestion(project_id, fingerprint, self.engine.now_ms())?;
+        log::info!("[Automation] suggestion {fingerprint} accepted in {project_id}");
+        self.engine.notify(project_id, None);
+        Ok(())
+    }
+
+    fn candidates(
+        &self,
+        project_id: &str,
+        timezone: Option<&str>,
+    ) -> ServiceResult<Vec<Candidate>> {
+        let project_id = project_id.trim();
+        if project_id.is_empty() {
+            return Err(ServiceError::InvalidInput(
+                "suggestions need a project".to_string(),
+            ));
+        }
+        let tz = timezone
+            .and_then(|name| name.parse::<chrono_tz::Tz>().ok())
+            .unwrap_or_else(suggest::host_timezone);
+        let now = self.engine.now_ms();
+        let answered = self.engine.store().answered_suggestions(project_id)?;
+        let prompts = self.history.prompts(project_id, now - suggest::WINDOW_MS);
+        let mut candidates = suggest::detect(&prompts, now, tz);
+        let found = candidates.len();
+        candidates.retain(|c| !answered.contains(&c.suggestion.fingerprint));
+        log::debug!(
+            "[Automation] suggestions in {project_id}: {} prompts, {found} repeated, {} open",
+            prompts.len(),
+            candidates.len()
+        );
+        Ok(candidates)
+    }
+
     fn load(&self, id: &AutomationId) -> ServiceResult<Automation> {
         self.engine
             .store()
@@ -420,4 +514,17 @@ impl AutomationService {
         self.engine
             .notify(&automation.project_id, Some(&automation.id));
     }
+}
+
+fn suggestion_key<'a>(
+    project_id: &'a str,
+    fingerprint: &'a str,
+) -> ServiceResult<(&'a str, &'a str)> {
+    let (project_id, fingerprint) = (project_id.trim(), fingerprint.trim());
+    if project_id.is_empty() || fingerprint.is_empty() {
+        return Err(ServiceError::InvalidInput(
+            "a suggestion needs a project and a fingerprint".to_string(),
+        ));
+    }
+    Ok((project_id, fingerprint))
 }

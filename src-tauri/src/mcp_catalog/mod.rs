@@ -1,10 +1,3 @@
-//! Host-owned MCP server catalog (SPEC CAP-1, CAP-4; spine AD-1 to AD-4).
-//!
-//! The catalog is the bundled registry snapshot, converted once per process
-//! through the AD-4 contract, and answered as paged search over every
-//! transport (HTTP `GET /mcp-catalog/search`, `/ws` `search_mcp_catalog` on
-//! the web socket and the desktop channel). Nothing here touches the network.
-//!
 //! The snapshot is embedded in the binary, so the service is one per process
 //! rather than per `AppState`: the desktop and `termul-server` each own their
 //! own copy, and every carrier in a process answers from the same one.
@@ -18,6 +11,7 @@ mod plan;
 mod resolved;
 mod search;
 mod snapshot;
+mod sync;
 pub mod trust;
 
 #[cfg(test)]
@@ -28,11 +22,15 @@ mod plan_tests;
 mod search_tests;
 #[cfg(test)]
 mod snapshot_tests;
+#[cfg(test)]
+mod sync_tests;
 
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
+use serde::Serialize;
 use tokio::sync::OnceCell;
 
 pub use consent::{ConsentProvenance, ConsentValue, ConsentView, ConsentWarning, Namespace};
@@ -48,9 +46,11 @@ pub use search::{
     McpCatalogDefaultOption, McpCatalogPage, McpCatalogRow, McpCatalogSearchRequest,
     McpCatalogState, RunnerAvailability, SearchError,
 };
-pub use snapshot::RegistryStatus;
+pub use snapshot::{McpCatalogSource, RegistryStatus};
+pub use sync::{McpCatalogSync, SyncPhase};
 
 use snapshot::LoadedCatalog;
+use sync::{Registry, SyncHost};
 
 /// Runner availability is re-probed at most this often (the ACP catalog's
 /// probe TTL), so installing a runtime shows up without a restart.
@@ -60,7 +60,9 @@ const MIN_DOTNET_SDK_MAJOR: u64 = 10;
 static SHARED: OnceCell<Arc<McpCatalogService>> = OnceCell::const_new();
 
 pub struct McpCatalogService {
-    catalog: Arc<LoadedCatalog>,
+    catalog: RwLock<Arc<LoadedCatalog>>,
+    phase: Mutex<SyncPhase>,
+    sync: OnceLock<Arc<SyncHost>>,
     /// Set by tests in place of probing the host's PATH.
     fixed_runners: Option<RunnerAvailability>,
     runner_probe: Mutex<Option<(Instant, RunnerAvailability)>>,
@@ -74,6 +76,15 @@ pub struct McpCatalogService {
 pub struct McpCatalogError {
     pub code: &'static str,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpCatalogStatus {
+    #[serde(flatten)]
+    pub source: McpCatalogSource,
+    pub servers: usize,
+    pub sync: McpCatalogSync,
 }
 
 impl From<SearchError> for McpCatalogError {
@@ -97,21 +108,35 @@ impl McpCatalogService {
                         log::error!("[mcp-catalog] snapshot load task failed: {error}");
                         LoadedCatalog::default()
                     });
-                Arc::new(Self {
-                    catalog: Arc::new(catalog),
-                    fixed_runners: None,
-                    runner_probe: Mutex::new(None),
-                    probe_gate: tokio::sync::Mutex::new(()),
-                    plans: PlanStore::default(),
-                })
+                Arc::new(Self::new(catalog, None))
             })
             .await
             .clone()
     }
 
+    fn new(catalog: LoadedCatalog, fixed_runners: Option<RunnerAvailability>) -> Self {
+        Self::with_plan_ttl(catalog, fixed_runners, PLAN_TTL)
+    }
+
+    fn with_plan_ttl(
+        catalog: LoadedCatalog,
+        fixed_runners: Option<RunnerAvailability>,
+        ttl: Duration,
+    ) -> Self {
+        Self {
+            catalog: RwLock::new(Arc::new(catalog)),
+            phase: Mutex::new(SyncPhase::Idle),
+            sync: OnceLock::new(),
+            fixed_runners,
+            runner_probe: Mutex::new(None),
+            probe_gate: tokio::sync::Mutex::new(()),
+            plans: PlanStore::new(ttl),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn with_runners(catalog: LoadedCatalog, runners: RunnerAvailability) -> Self {
-        Self::with_runners_and_ttl(catalog, runners, PLAN_TTL)
+        Self::new(catalog, Some(runners))
     }
 
     #[cfg(test)]
@@ -120,13 +145,69 @@ impl McpCatalogService {
         runners: RunnerAvailability,
         ttl: Duration,
     ) -> Self {
-        Self {
-            catalog: Arc::new(catalog),
-            fixed_runners: Some(runners),
-            runner_probe: Mutex::new(None),
-            probe_gate: tokio::sync::Mutex::new(()),
-            plans: PlanStore::new(ttl),
+        Self::with_plan_ttl(catalog, Some(runners), ttl)
+    }
+
+    pub async fn run(dir: PathBuf) {
+        match Registry::new(sync::REGISTRY_BASE) {
+            Ok(registry) => Self::shared().await.attach(dir, registry).await,
+            Err(error) => log::error!("[mcp-catalog] sync disabled, no HTTP client: {error}"),
         }
+    }
+
+    pub(crate) async fn attach(self: Arc<Self>, dir: PathBuf, registry: Registry) {
+        let host = match tokio::task::spawn_blocking(move || SyncHost::new(dir, registry)).await {
+            Ok(host) => Arc::new(host),
+            Err(error) => {
+                log::error!("[mcp-catalog] sync setup task failed: {error}");
+                return;
+            }
+        };
+        if self.sync.set(Arc::clone(&host)).is_err() {
+            log::warn!("[mcp-catalog] sync already started");
+            return;
+        }
+        log::info!("[mcp-catalog] sync attached enabled={}", host.enabled());
+        self.run_sync(host).await;
+    }
+
+    fn catalog(&self) -> Arc<LoadedCatalog> {
+        Arc::clone(&self.catalog.read())
+    }
+
+    fn swap(&self, catalog: LoadedCatalog) {
+        *self.catalog.write() = Arc::new(catalog);
+    }
+
+    pub fn status(&self) -> McpCatalogStatus {
+        let catalog = self.catalog();
+        let sync = match self.sync.get() {
+            Some(host) if host.enabled() => McpCatalogSync::Enabled(self.phase.lock().clone()),
+            _ => McpCatalogSync::Disabled,
+        };
+        McpCatalogStatus {
+            source: catalog.source.clone(),
+            servers: catalog.items.len(),
+            sync,
+        }
+    }
+
+    pub async fn set_sync(&self, enabled: bool) -> Result<McpCatalogStatus, McpCatalogError> {
+        let Some(host) = self.sync.get() else {
+            return Err(McpCatalogError {
+                code: "MCP_CATALOG_SYNC_UNAVAILABLE",
+                message: "mcp catalog sync is not running on this host".to_string(),
+            });
+        };
+        host.set_enabled(enabled).await.map_err(|error| {
+            log::error!("[mcp-catalog] sync setting write failed: {error}");
+            McpCatalogError {
+                code: "MCP_CATALOG_SYNC_SETTING_FAILED",
+                message: "the mcp catalog sync setting could not be saved".to_string(),
+            }
+        })?;
+        log::info!("[mcp-catalog] sync setting enabled={enabled}");
+        Ok(self.status())
     }
 
     pub async fn search(
@@ -135,7 +216,7 @@ impl McpCatalogService {
     ) -> Result<McpCatalogPage, McpCatalogError> {
         let query = search::validate(request)?;
         let runners = self.runners().await;
-        let catalog = Arc::clone(&self.catalog);
+        let catalog = self.catalog();
         tokio::task::spawn_blocking(move || search::search(&catalog, runners, &query))
             .await
             .map_err(|error| {
@@ -162,7 +243,7 @@ impl McpCatalogService {
         request: &FormRequest,
     ) -> Result<FormReply, McpCatalogError> {
         let runners = self.runners().await;
-        plan::describe_install(&self.catalog, runners, request)
+        plan::describe_install(&self.catalog(), runners, request)
     }
 
     pub async fn plan_install(
@@ -171,7 +252,7 @@ impl McpCatalogService {
         caller: PlanCaller,
     ) -> Result<PlanReply, McpCatalogError> {
         let runners = self.runners().await;
-        plan::plan_install(&self.catalog, runners, &self.plans, request, caller)
+        plan::plan_install(&self.catalog(), runners, &self.plans, request, caller)
     }
 
     pub fn commit_install(

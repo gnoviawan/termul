@@ -8,7 +8,8 @@
 import {
   MCP_CATALOG_MAX_QUERY_TERMS,
   type McpCatalogPage,
-  type McpCatalogRow
+  type McpCatalogRow,
+  type McpCatalogSource
 } from '@shared/types/mcp-catalog.types'
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { logFrontendError } from '@/lib/log-api'
@@ -19,13 +20,12 @@ export const MCP_CATALOG_PAGE_SIZE = 50
 export const MCP_CATALOG_MAX_ROWS = 500
 export const MCP_CATALOG_SEARCH_DEBOUNCE_MS = 250
 
-export interface McpCatalogResults {
+export interface McpCatalogResults extends McpCatalogSource {
   /** The trimmed query these rows answer, which can trail the search box. */
   query: string
   rows: McpCatalogRow[]
   total: number
   nextCursor: string | null
-  snapshotFetchedAt: string | null
 }
 
 export type McpCatalogSearchState =
@@ -75,7 +75,8 @@ function reduce(state: McpCatalogSearchState, action: Action): McpCatalogSearchS
           rows: [...previous, ...page.items],
           total: page.total,
           nextCursor: page.nextCursor,
-          snapshotFetchedAt: page.snapshotFetchedAt
+          updatedAt: page.updatedAt,
+          sample: page.sample
         }
       }
     }

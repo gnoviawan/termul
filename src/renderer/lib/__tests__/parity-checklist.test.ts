@@ -2761,6 +2761,59 @@ describe('MCP install plan parity (spine AD-5, AD-7, AD-12)', () => {
   })
 })
 
+describe('MCP catalog sync parity (spine AD-3, AD-12)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const SHARED_TYPES = join(LIB_DIR, '..', '..', 'shared', 'types')
+
+  it('both carriers answer from the one host service', () => {
+    const dispatch = readFileSync(join(SRC_TAURI, 'web', 'ws', 'dispatch.rs'), 'utf-8')
+    expect(dispatch).toMatch(
+      /"get_mcp_catalog_status" => mcp_catalog::handle_get_mcp_catalog_status/
+    )
+    expect(dispatch).toMatch(
+      /"set_mcp_catalog_sync" => \{\s*mcp_catalog::handle_set_mcp_catalog_sync/
+    )
+    const router = readFileSync(join(SRC_TAURI, 'web', 'router', 'mod.rs'), 'utf-8')
+    expect(router.match(/"\/mcp-catalog\/status", get\(mcp_catalog_api::status\)/g)).toHaveLength(2)
+    expect(router.match(/"\/mcp-catalog\/sync", post\(mcp_catalog_api::set_sync\)/g)).toHaveLength(
+      2
+    )
+    for (const adapter of [
+      join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'),
+      join(SRC_TAURI, 'web', 'ws', 'mcp_catalog.rs')
+    ]) {
+      const source = readFileSync(adapter, 'utf-8')
+      expect(source).toMatch(/McpCatalogService::shared\(\)\.await\.status\(\)/)
+      expect(source).toMatch(
+        /McpCatalogService::shared\(\)\s*\.await\s*\.set_sync\(request\.enabled\)/
+      )
+    }
+  })
+
+  it('the setting is a write on both carriers and status is a read', () => {
+    const http = readFileSync(join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'), 'utf-8')
+    expect(http).toMatch(/check_local_only\(\s*peer,[\s\S]*?"\/mcp-catalog\/sync"/)
+    const capabilities = readFileSync(join(SRC_TAURI, 'web', 'capabilities.rs'), 'utf-8')
+    expect(capabilities).toMatch(/\| "get_mcp_catalog_status"/)
+    expect(capabilities).not.toMatch(/"set_mcp_catalog_sync"/)
+    const protocol = readFileSync(join(SHARED_TYPES, 'web-protocol.types.ts'), 'utf-8')
+    expect(protocol).toMatch(/get_mcp_catalog_status: \['read', null\]/)
+    expect(protocol).toMatch(/set_mcp_catalog_sync: \['idempotent', null\]/)
+  })
+
+  it('both facade impls reach the host the same way', () => {
+    const desktop = readFileSync(join(LIB_DIR, 'desktop-mcp-catalog-api.ts'), 'utf-8')
+    expect(desktop).toMatch(/getAcpTransport\(\)\.getMcpCatalogStatus\(\)/)
+    expect(desktop).toMatch(/getAcpTransport\(\)\.setMcpCatalogSync\(enabled\)/)
+    const web = readFileSync(join(LIB_DIR, 'web-mcp-catalog-api.ts'), 'utf-8')
+    expect(web).toMatch(/'\/mcp-catalog\/status'/)
+    expect(web).toMatch(/'\/mcp-catalog\/sync'/)
+    const transport = readTsModule(join(LIB_DIR, 'acp-transport'))
+    expect(transport).toMatch(/'get_mcp_catalog_status'/)
+    expect(transport).toMatch(/'set_mcp_catalog_sync'/)
+  })
+})
+
 // Every Operations row of the automation contract: the facade method, the
 // Tauri command registered in lib.rs, and the HTTP route merged into both
 // router variants, all over the one host service.
@@ -2888,6 +2941,34 @@ describe('Automation parity (facade)', () => {
       command: 'automation_delete_secret',
       http: '"/api/automation-secrets"',
       route: 'deleteJson(`${SECRETS}?project_id='
+    },
+    {
+      fn: 'listAutomationSuggestions',
+      method: 'listSuggestions',
+      command: 'automation_list_suggestions',
+      http: '"/api/automation-suggestions"',
+      route: 'getJson(`${SUGGESTIONS}?project_id='
+    },
+    {
+      fn: 'matchAutomationSuggestion',
+      method: 'matchSuggestion',
+      command: 'automation_match_suggestion',
+      http: '"/api/automation-suggestions/match"',
+      route: 'postJsonOnce(`${SUGGESTIONS}/match`'
+    },
+    {
+      fn: 'dismissAutomationSuggestion',
+      method: 'dismissSuggestion',
+      command: 'automation_dismiss_suggestion',
+      http: '"/api/automation-suggestions/dismiss"',
+      route: 'postJsonOnce(`${SUGGESTIONS}/dismiss`'
+    },
+    {
+      fn: 'acceptAutomationSuggestion',
+      method: 'acceptSuggestion',
+      command: 'automation_accept_suggestion',
+      http: '"/api/automation-suggestions/accept"',
+      route: 'postJsonOnce(`${SUGGESTIONS}/accept`'
     }
   ] as const
 
