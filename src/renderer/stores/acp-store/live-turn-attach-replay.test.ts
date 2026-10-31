@@ -351,4 +351,66 @@ describe('acp-store: live-turn attach replays the open turn (reopen tool cards)'
     expect(transport.subscribeSession).toHaveBeenCalledWith(id, 12, true)
     expect(timelineKeys(id)).toEqual(['user:turn:t0', 'agent:snapshot:agent:2'])
   })
+
+  it('restores the model and mode controls from the payload when attaching to the live turn', async () => {
+    const id = 's-reopen-controls'
+    const transport = fakeWebTransport(id, {
+      ...livePayload(id, [
+        msg('turn:t0', 'user', 'earlier question', 1),
+        msg('turn:t1', 'user', 'edit auth', 5)
+      ]),
+      controls: {
+        modes: { currentModeId: 'plan', availableModes: PAYLOAD_MODES },
+        configOptions: [modelOption('opus')]
+      }
+    })
+    _setAcpTransportForTests(transport)
+
+    await useAcpStore.getState().openHistorySession(id)
+
+    expect(transport.subscribeSession).toHaveBeenCalledWith(id, 4, true)
+    const session = useAcpStore.getState().sessions[id]
+    expect(session.configOptions).toEqual([modelOption('opus')])
+    expect(session.modes).toEqual({ currentModeId: 'plan', availableModes: PAYLOAD_MODES })
+    expect(session.models).toBeNull()
+  })
+
+  it('lets the session/load reply replace the controls the payload seeded', async () => {
+    const id = 's-reopen-controls-load'
+    const payload = livePayload(id, [
+      msg('turn:t0', 'user', 'earlier question', 1),
+      msg('snapshot:agent:2', 'agent', 'earlier answer', 2)
+    ])
+    const transport = fakeWebTransport(id, {
+      ...payload,
+      metadata: { ...(payload.metadata as object), status: 'closed', turnActive: false },
+      controls: { configOptions: [modelOption('opus')] }
+    })
+    vi.mocked(transport.loadSession).mockResolvedValue({ configOptions: [modelOption('sonnet')] })
+    _setAcpTransportForTests(transport)
+
+    await useAcpStore.getState().openHistorySession(id)
+
+    expect(transport.loadSession).toHaveBeenCalledTimes(1)
+    expect(useAcpStore.getState().sessions[id].configOptions).toEqual([modelOption('sonnet')])
+  })
 })
+
+const PAYLOAD_MODES = [
+  { id: 'default', name: 'Default' },
+  { id: 'plan', name: 'Plan' }
+]
+
+function modelOption(currentValue: string) {
+  return {
+    id: 'model',
+    name: 'Model',
+    category: 'model',
+    type: 'select',
+    currentValue,
+    options: [
+      { value: 'sonnet', name: 'Sonnet' },
+      { value: 'opus', name: 'Opus' }
+    ]
+  }
+}
