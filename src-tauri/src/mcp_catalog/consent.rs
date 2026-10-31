@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::Serialize;
 
-use super::form::Origin;
+use super::form::{Origin, Shown};
 use super::launch_check::runs_inline_code;
 use super::resolved::ResolvedConfig;
 
@@ -96,27 +96,16 @@ pub fn escape_for_display(text: &str) -> String {
 
 pub(crate) struct ShownValue {
     pub name: String,
-    pub is_secret: bool,
-    pub value: Option<(String, Origin)>,
+    pub shown: Shown,
 }
 
 impl ShownValue {
-    /// Only a value the user typed into a secret field is withheld. Registry
-    /// or file text is shown even when flagged secret, because the user did
-    /// not choose it and is consenting to it.
     fn consent(&self) -> ConsentValue {
-        let (value, origin) = match &self.value {
-            Some((value, origin)) if !self.is_secret || *origin != Origin::User => {
-                (Some(escape_for_display(value)), *origin)
-            }
-            Some((_, origin)) => (None, *origin),
-            None => (None, Origin::User),
-        };
         ConsentValue {
             name: escape_for_display(&self.name),
-            is_secret: value.is_none(),
-            value,
-            origin,
+            value: self.shown.text.as_deref().map(escape_for_display),
+            is_secret: self.shown.withheld,
+            origin: self.shown.origin,
         }
     }
 }

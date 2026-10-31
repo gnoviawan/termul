@@ -92,7 +92,13 @@ export type McpConsentValueOrigin = 'registry' | 'user' | 'file'
 
 export interface McpConsentValue {
   name: string
+  /**
+   * What will be stored, or `null` when the whole value is one the user types
+   * into a secret field. A registry template keeps each secret variable as its
+   * `{name}` placeholder, so the registry text around it is still shown.
+   */
   value: string | null
+  /** Part or all of the value is a secret the user types; it is not shown. */
   isSecret: boolean
   origin: McpConsentValueOrigin
 }

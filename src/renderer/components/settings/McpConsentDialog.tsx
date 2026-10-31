@@ -168,7 +168,7 @@ function ValueList({
               {entry.isSecret && <Badge variant="secondary">secret</Badge>}
               {entry.origin === 'file' && <Badge variant="outline">from file</Badge>}
             </dt>
-            {!entry.isSecret && entry.value !== null && (
+            {entry.value !== null && (
               <dd className={`${VERBATIM_CLASS} text-muted-foreground`}>
                 <Verbatim text={entry.value} />
               </dd>

@@ -83,8 +83,15 @@ pub(crate) enum ValueSource {
     },
     Template {
         text: String,
-        variables: Vec<(String, String)>,
+        variables: Vec<TemplateVariable>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TemplateVariable {
+    pub name: String,
+    pub field: String,
+    pub is_secret: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,7 +206,11 @@ impl FormModel {
                             true,
                             variable,
                         ));
-                        variables.push((name, id));
+                        variables.push(TemplateVariable {
+                            name,
+                            field: id,
+                            is_secret: variable.is_secret,
+                        });
                     }
                     ValueSource::Template {
                         text: text.to_string(),
@@ -392,24 +403,76 @@ pub(crate) fn resolve(slot: &Slot, values: &Values) -> Resolved {
             None => Resolved::Omitted,
         },
         ValueSource::Template { text, variables } => {
-            if variables
-                .iter()
-                .any(|(_, field)| !values.contains_key(field))
-            {
+            if variables.iter().any(|v| !values.contains_key(&v.field)) {
                 return Resolved::Pending;
             }
-            let supplied: Vec<(&String, &Supplied)> = variables
-                .iter()
-                .filter_map(|(name, field)| Some((name, values.get(field)?)))
-                .collect();
-            let bound: BTreeMap<String, String> = supplied
-                .iter()
-                .map(|(name, supplied)| ((*name).clone(), supplied.value.clone()))
-                .collect();
-            let typed = supplied.iter().any(|(_, s)| s.origin == Origin::User);
-            Resolved::Value {
-                value: fill_template(text, &bound),
-                origin: if typed { Origin::User } else { Origin::Registry },
+            let (value, origin) = fill_variables(text, variables, values, |_| true);
+            Resolved::Value { value, origin }
+        }
+    }
+}
+
+/// `text` with each variable `bind` accepts filled from `values`; any other
+/// stays its `{name}` placeholder.
+fn fill_variables(
+    text: &str,
+    variables: &[TemplateVariable],
+    values: &Values,
+    bind: impl Fn(&TemplateVariable) -> bool,
+) -> (String, Origin) {
+    let supplied: Vec<(&TemplateVariable, &Supplied)> = variables
+        .iter()
+        .filter(|v| bind(v))
+        .filter_map(|v| Some((v, values.get(&v.field)?)))
+        .collect();
+    let bound: BTreeMap<String, String> = supplied
+        .iter()
+        .map(|(v, supplied)| (v.name.clone(), supplied.value.clone()))
+        .collect();
+    let typed = supplied.iter().any(|(_, s)| s.origin == Origin::User);
+    (
+        fill_template(text, &bound),
+        if typed { Origin::User } else { Origin::Registry },
+    )
+}
+
+/// What the consent view shows for an env or header slot. `withheld` marks a
+/// value the user types into a secret field: it is not shown, and inside a
+/// template it stays its `{name}` placeholder so the registry text around it
+/// still is. Registry and file text is shown even when flagged secret,
+/// because the user did not choose it and is consenting to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Shown {
+    pub text: Option<String>,
+    pub withheld: bool,
+    pub origin: Origin,
+}
+
+pub(crate) fn shown(slot: &Slot, values: &Values) -> Shown {
+    match &slot.source {
+        ValueSource::Fixed { value, origin } => Shown {
+            text: Some(value.clone()),
+            withheld: false,
+            origin: *origin,
+        },
+        ValueSource::Input { field } => match values.get(field) {
+            Some(supplied) if !(slot.is_secret && supplied.origin == Origin::User) => Shown {
+                text: Some(supplied.value.clone()),
+                withheld: false,
+                origin: supplied.origin,
+            },
+            _ => Shown {
+                text: None,
+                withheld: true,
+                origin: Origin::User,
+            },
+        },
+        ValueSource::Template { text, variables } => {
+            let (text, origin) = fill_variables(text, variables, values, |v| !v.is_secret);
+            Shown {
+                text: Some(text),
+                withheld: variables.iter().any(|v| v.is_secret),
+                origin,
             }
         }
     }

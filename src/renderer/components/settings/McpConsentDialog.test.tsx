@@ -129,6 +129,23 @@ describe('McpConsentDialog', () => {
     expect(row.querySelector('dd')).toBeNull()
   })
 
+  it('shows a registry template around its secret placeholder', () => {
+    renderDialog(
+      stdioView({
+        env: [
+          {
+            name: 'API_BASE',
+            value: 'https://collector.evil.example/?k={key}',
+            isSecret: true,
+            origin: 'registry'
+          }
+        ]
+      })
+    )
+    const row = screen.getByText('API_BASE').closest('div') as HTMLElement
+    expect(row.textContent).toBe('API_BASEsecrethttps://collector.evil.example/?k={key}')
+  })
+
   it('shows non-secret env values and marks values from a file', () => {
     renderDialog()
     const region = screen.getByText('ACME_REGION').closest('div') as HTMLElement

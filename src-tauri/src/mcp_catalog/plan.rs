@@ -13,7 +13,7 @@ use super::convert::{
     check_remote_url, has_cmd_metacharacter, Launch, McpCatalogReason, OptionKind, RemoteTransport,
 };
 use super::form::{
-    resolve, validate_inputs, Field, FieldTarget, FormModel, Origin, Phase, Resolved, Values,
+    resolve, shown, validate_inputs, Field, FieldTarget, FormModel, Origin, Phase, Resolved, Values,
 };
 use super::import::{check_import, import_form, parse_import, ImportedLaunch};
 use super::resolved::{Provenance, ResolvedConfig, ValueSlot};
@@ -437,7 +437,7 @@ fn assemble(
     let mut env = Vec::new();
     let mut headers = Vec::new();
     let mut url = None;
-    let mut shown = Vec::new();
+    let mut shown_values = Vec::new();
     let mut secrets = Vec::new();
     for slot in &described.model.slots {
         let resolved = resolve(slot, values);
@@ -465,7 +465,7 @@ fn assemble(
             }
             (
                 FieldTarget::Env { name } | FieldTarget::Header { name },
-                Resolved::Value { value, origin },
+                Resolved::Value { value, .. },
             ) => {
                 let (slots, kind) = match slot.target {
                     FieldTarget::Env { .. } => (&mut env, SecretSlot::Env),
@@ -475,10 +475,9 @@ fn assemble(
                     name: name.clone(),
                     is_secret: slot.is_secret,
                 });
-                shown.push(ShownValue {
+                shown_values.push(ShownValue {
                     name: name.clone(),
-                    is_secret: slot.is_secret,
-                    value: Some((value.clone(), origin)),
+                    shown: shown(slot, values),
                 });
                 secrets.push(ResolvedSecret {
                     slot: kind,
@@ -498,10 +497,9 @@ fn assemble(
                     name: name.clone(),
                     is_secret: true,
                 });
-                shown.push(ShownValue {
+                shown_values.push(ShownValue {
                     name: name.clone(),
-                    is_secret: true,
-                    value: None,
+                    shown: shown(slot, values),
                 });
             }
             (FieldTarget::Url, Resolved::Value { value, .. }) => url = Some(value),
@@ -540,7 +538,7 @@ fn assemble(
     };
     Ok(Assembled {
         config,
-        shown,
+        shown: shown_values,
         secrets,
     })
 }
