@@ -136,6 +136,21 @@ describe('RunPolicyCard', () => {
     expect(onApprove).not.toHaveBeenCalled()
   })
 
+  it('offers plain approval for a disabled automation, since approving does not arm it', () => {
+    render(
+      <RunPolicyCard
+        automation={automationWith({ revision: 2, approved_revision: 1, enabled: false })}
+        policy={fixturePolicy}
+        issues={[]}
+        approving={false}
+        onApprove={() => {}}
+      />
+    )
+
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: 'Approve and arm' })).toBeNull()
+  })
+
   it('hides approval once the revision on screen is approved', () => {
     render(
       <RunPolicyCard
