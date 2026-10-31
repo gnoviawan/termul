@@ -9,6 +9,16 @@ export function withRateLimit(
   return { ...base, rateLimit, updatedAt: Date.now() }
 }
 
+export function withoutRejectedRateLimit(
+  sessionUsage: Record<string, SessionUsage>,
+  sessionId: string
+): { sessionUsage: Record<string, SessionUsage> } | Record<string, never> {
+  const usage = sessionUsage[sessionId]
+  if (usage?.rateLimit?.status !== 'rejected') return {}
+  const { rateLimit: _cleared, ...rest } = usage
+  return { sessionUsage: { ...sessionUsage, [sessionId]: rest } }
+}
+
 export function rejectedRateLimit(message: string): ClaudeRateLimit {
   const kind = /5-hour/i.test(message) ? 'five_hour' : /weekly/i.test(message) ? 'seven_day' : null
   return { status: 'rejected', resetsAt: null, kind, percent: null, overageInUse: false }

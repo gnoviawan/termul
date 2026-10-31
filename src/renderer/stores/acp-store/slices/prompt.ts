@@ -54,6 +54,7 @@ import {
   writeAgentOptionsCache
 } from '../helpers'
 import { useAcpStore } from '../index'
+import { withoutRejectedRateLimit } from '../rate-limit'
 import {
   activeWirePromptTurns,
   bugReportCollectors,
@@ -1245,6 +1246,9 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
         pendingPermissions,
         pendingQuestions,
         pendingElicitations,
+        ...(e.stopReason === 'end_turn'
+          ? withoutRejectedRateLimit(s.sessionUsage, e.sessionId)
+          : {}),
         // A timed-out turn may have been cancelled cleanly or may sit on a
         // wedged agent; the host cannot tell. Retire the process from reuse so
         // a new chat spawns its own and Retry restarts this one.
