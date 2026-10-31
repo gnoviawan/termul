@@ -554,7 +554,7 @@ describe('MobileShellDrawer section nav', () => {
       name
     })
 
-  it('shows Chats, Terminals, Editors and GitHub as one row of equal 44px tabs, the preselected one current', async () => {
+  it('shows Chats, Terminals, Editors and GitHub as one row of 44px tabs, the preselected one current', async () => {
     seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1')
     terminalsRef.current = [{ id: 't1', name: 'zsh' }]
     const { dialog } = await openDrawer({ section: 'terminals', activeTabId: 'term-t1' })
@@ -563,16 +563,18 @@ describe('MobileShellDrawer section nav', () => {
       'button'
     )
     expect(rows.map((row) => row.textContent)).toEqual(['Chats', 'Terminals', 'Editors', 'GitHub'])
-    // One line: the four tabs are siblings in one horizontal flex track,
-    // each taking an equal share.
+    // One line: the four tabs are siblings in one horizontal flex track.
     const track = rows[0].parentElement
     expect(track).toHaveClass('flex', 'rounded-full', 'bg-secondary')
     expect(track?.className).not.toContain('flex-col')
     for (const row of rows) {
       expect(row.parentElement).toBe(track)
-      expect(row).toHaveClass('min-h-11', 'flex-1', 'rounded-full')
+      expect(row).toHaveClass('min-h-11', 'rounded-full')
       expect(row).toHaveAttribute('data-section-nav')
     }
+    // The labelled tabs share the row; GitHub is a 44px mark.
+    for (const row of rows.slice(0, 3)) expect(row).toHaveClass('flex-1')
+    expect(rows[3]).toHaveClass('w-11', 'shrink-0')
     expect(navButton(dialog, 'Terminals')).toHaveAttribute('aria-current', 'true')
     expect(navButton(dialog, 'Terminals')).toHaveClass('bg-background')
     expect(navButton(dialog, 'Chats')).not.toHaveAttribute('aria-current')

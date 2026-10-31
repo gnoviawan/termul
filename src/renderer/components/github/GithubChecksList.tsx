@@ -122,8 +122,9 @@ function CheckRow({
             size="xs"
             aria-expanded={open}
             aria-controls={logId}
+            aria-label={`Log of ${check.name}`}
             onClick={toggle}
-            className="shrink-0 gap-1"
+            className="shrink-0 gap-1 pointer-coarse:h-10"
           >
             <ChevronRight
               size={12}
@@ -138,7 +139,7 @@ function CheckRow({
             href={check.detailsUrl}
             aria-label={`Open ${check.name} on GitHub`}
             title="Open on GitHub"
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-foreground/[0.03] hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md pointer-coarse:size-10 text-muted-foreground hover:bg-foreground/[0.03] hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring"
           >
             <ExternalLink size={14} aria-hidden="true" />
           </ConfirmedExternalLink>

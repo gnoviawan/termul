@@ -1,19 +1,25 @@
 import { useRef } from 'react'
-import { Github, type TermulIcon } from '@/components/icons'
+import { FolderTree, GitBranch, Github, MessageSquare, type TermulIcon } from '@/components/icons'
 import { CountBadge } from '@/components/ui/count-badge'
 import { SEGMENTED_TRACK_CLASS, segmentClass } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import type { ShellLastColumnTab } from '@/stores/shell-layout-store'
 
 /**
- * `Icon` makes a tab icon-only (its label is the accessible name and tooltip):
- * four text segments do not fit the 220px minimum panel width.
+ * GitHub is always an icon. The text tabs switch to their Rail icons when the
+ * track is too narrow for four labels (a panel near its 220px minimum); the
+ * label stays as the accessible name and tooltip.
  */
-const TABS: ReadonlyArray<{ id: ShellLastColumnTab; label: string; Icon?: TermulIcon }> = [
-  { id: 'chats', label: 'Chats' },
-  { id: 'explorer', label: 'Explorer' },
-  { id: 'changes', label: 'Changes' },
-  { id: 'github', label: 'GitHub', Icon: Github }
+const TABS: ReadonlyArray<{
+  id: ShellLastColumnTab
+  label: string
+  Icon: TermulIcon
+  iconOnly?: boolean
+}> = [
+  { id: 'chats', label: 'Chats', Icon: MessageSquare },
+  { id: 'explorer', label: 'Explorer', Icon: FolderTree },
+  { id: 'changes', label: 'Changes', Icon: GitBranch },
+  { id: 'github', label: 'GitHub', Icon: Github, iconOnly: true }
 ]
 
 export function columnTabId(tab: ShellLastColumnTab): string {
@@ -55,7 +61,7 @@ export function ColumnTabs({
     <div
       role="tablist"
       aria-label="Side panel"
-      className={cn(SEGMENTED_TRACK_CLASS, 'mx-2 mb-2 h-7')}
+      className={cn(SEGMENTED_TRACK_CLASS, '@container mx-2 mb-2 h-7')}
     >
       {TABS.map((tab, index) => {
         const active = tab.id === selected
@@ -73,18 +79,21 @@ export function ColumnTabs({
             tabIndex={active ? 0 : -1}
             onClick={() => onSelect(tab.id)}
             onKeyDown={(event) => handleKeyDown(event, index)}
-            aria-label={tab.Icon ? tab.label : undefined}
-            title={tab.Icon ? tab.label : undefined}
+            aria-label={tab.iconOnly ? tab.label : undefined}
+            title={tab.label}
             className={cn(
               segmentClass(active),
               'h-full justify-center gap-1.5',
-              tab.Icon ? 'shrink-0' : 'min-w-0 flex-auto'
+              tab.iconOnly ? 'shrink-0' : 'min-w-0 flex-auto'
             )}
           >
-            {tab.Icon ? (
+            {tab.iconOnly ? (
               <tab.Icon size={14} aria-hidden="true" />
             ) : (
-              <span className="min-w-0 truncate">{tab.label}</span>
+              <>
+                <tab.Icon size={14} aria-hidden="true" className="hidden @max-[14.5rem]:block" />
+                <span className="truncate @max-[14.5rem]:sr-only">{tab.label}</span>
+              </>
             )}
             {tab.id === 'changes' && changedCount > 0 && (
               <CountBadge

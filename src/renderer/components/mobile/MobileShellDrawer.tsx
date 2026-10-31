@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ConnectionStatusIndicator } from '@/components/ConnectionStatusIndicator'
 import { findVisibleQuestionFocusTarget } from '@/components/chat/use-approval-dock'
@@ -19,7 +19,6 @@ import {
   Workflow
 } from '@/components/icons'
 import { ProjectIcon } from '@/components/ProjectIcon'
-import { useColumnWorkingCopy } from '@/components/shell/use-column-working-copy'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { CountBadge } from '@/components/ui/count-badge'
@@ -50,11 +49,8 @@ import { useActiveProject } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useWorktreePick } from '@/stores/shell-layout-store'
 import { MobileDrawerSectionList } from './MobileDrawerSectionList'
+import { MobileGithubSection } from './MobileGithubSection'
 import { MobileRecentsList } from './MobileRecentsList'
-
-const GithubPanel = lazy(() =>
-  import('@/components/github/GithubPanel').then((m) => ({ default: m.GithubPanel }))
-)
 
 /** Id of the shell header's `h1`: where a navigation hands focus. Without it the opener wins. */
 const SHELL_TITLE_ID = 'mobile-shell-title'
@@ -86,12 +82,22 @@ const resolveNavigationFocus = (): HTMLElement | null => {
   return document.getElementById(SHELL_TITLE_ID)
 }
 
-/** The drawer's section nav rows, Claude-app style, at the top of the drawer. */
-const SECTION_NAV: ReadonlyArray<{ section: MobileSection; label: string; Icon: TermulIcon }> = [
+/**
+ * The drawer's section nav rows, Claude-app style, at the top of the drawer.
+ * GitHub is its mark alone (label for screen readers), and below 400px the
+ * labelled tabs drop their icons: otherwise "Terminals" truncates on a
+ * 360-375px phone.
+ */
+const SECTION_NAV: ReadonlyArray<{
+  section: MobileSection
+  label: string
+  Icon: TermulIcon
+  iconOnly?: boolean
+}> = [
   { section: 'chats', label: 'Chats', Icon: MessageSquare },
   { section: 'terminals', label: 'Terminals', Icon: TerminalSquare },
   { section: 'editors', label: 'Editors', Icon: FileCode },
-  { section: 'github', label: 'GitHub', Icon: Github }
+  { section: 'github', label: 'GitHub', Icon: Github, iconOnly: true }
 ]
 
 /**
@@ -239,7 +245,6 @@ export function MobileShellDrawer({
 }: MobileShellDrawerProps): React.JSX.Element {
   const navigate = useNavigate()
   const activeProject = useActiveProject()
-  const { cwd: githubCwd } = useColumnWorkingCopy(activeProject)
   const [query, setQuery] = useState('')
   const contentRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
@@ -355,7 +360,7 @@ export function MobileShellDrawer({
         {/* Section tabs, one line: switch the list below without closing the drawer. */}
         <nav aria-label="Sections" className="shrink-0 px-2 pb-2">
           <div className="flex items-center gap-0.5 rounded-full bg-secondary p-1">
-            {SECTION_NAV.map(({ section: item, label, Icon }) => {
+            {SECTION_NAV.map(({ section: item, label, Icon, iconOnly }) => {
               const isCurrent = listSection === item
               const badge = item === 'chats' && attentionCount > 0 ? attentionCount : 0
               return (
@@ -369,14 +374,19 @@ export function MobileShellDrawer({
                   }
                   onClick={() => setListSection(item)}
                   className={cn(
-                    'flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full px-2 text-sm outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    'flex min-h-11 items-center justify-center gap-1.5 rounded-full text-sm outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    iconOnly ? 'w-11 shrink-0' : 'min-w-0 flex-1 px-2',
                     isCurrent
                       ? 'bg-background font-medium text-foreground shadow-sm'
                       : 'text-muted-foreground hover:text-foreground'
                   )}
                 >
-                  <Icon size={16} aria-hidden="true" className="shrink-0" />
-                  <span className="min-w-0 truncate">{label}</span>
+                  <Icon
+                    size={16}
+                    aria-hidden="true"
+                    className={cn('shrink-0', !iconOnly && 'max-[25rem]:hidden')}
+                  />
+                  <span className={iconOnly ? 'sr-only' : 'min-w-0 truncate'}>{label}</span>
                   {badge > 0 && (
                     <CountBadge
                       count={badge}
@@ -421,19 +431,7 @@ export function MobileShellDrawer({
             {SECTION_HEADINGS[listSection]}
           </h2>
           {listSection === 'github' ? (
-            activeProject && githubCwd ? (
-              <Suspense fallback={null}>
-                <GithubPanel
-                  projectId={activeProject.id}
-                  cwd={githubCwd}
-                  onNavigate={closeForNavigation}
-                />
-              </Suspense>
-            ) : (
-              <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-                Open a project to see its issues and pull requests.
-              </p>
-            )
+            <MobileGithubSection onNavigate={closeForNavigation} />
           ) : listSection === 'chats' ? (
             <MobileRecentsList
               query={query}

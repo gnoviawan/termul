@@ -130,9 +130,9 @@ describe('GithubItemPanel', () => {
     expect(within(rows[0]).getByRole('img', { name: 'Failed' })).toBeInTheDocument()
     expect(rows[0]).toHaveTextContent('test')
     expect(within(rows[1]).getByRole('img', { name: 'Passed' })).toBeInTheDocument()
-    expect(within(rows[1]).queryByRole('button', { name: 'Log' })).toBeNull()
+    expect(within(rows[1]).queryByRole('button', { name: /^Log of/ })).toBeNull()
 
-    fireEvent.click(within(rows[0]).getByRole('button', { name: 'Log' }))
+    fireEvent.click(within(rows[0]).getByRole('button', { name: 'Log of test' }))
     expect(await within(rows[0]).findByText('Error: expected 1 to be 2')).toBeInTheDocument()
     expect(api.getCheckLog).toHaveBeenCalledWith({ cwd: CWD, repo: 'origin', jobId: 2 })
   })

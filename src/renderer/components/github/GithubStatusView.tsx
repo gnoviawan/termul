@@ -81,9 +81,12 @@ export function GithubStatusView({
         <>
           <h3 className="text-sm font-medium text-foreground">Sign in to {blocker.host}</h3>
           <p className="text-xs text-muted-foreground">
-            Termul uses your GitHub CLI login and never stores a token. Sign in runs{' '}
-            <code className="break-all font-mono">{blocker.loginCommand}</code> in a terminal.
+            Termul uses your GitHub CLI login and never stores a token. Sign in opens a terminal
+            that runs:
           </p>
+          <code className="max-w-full rounded-md bg-muted px-2 py-1 font-mono text-2xs text-foreground [overflow-wrap:anywhere]">
+            {blocker.loginCommand}
+          </code>
           <div className="flex flex-wrap items-center justify-center gap-2">
             <Button size="sm" onClick={() => onSignIn(blocker.loginCommand)}>
               Sign in
@@ -132,7 +135,7 @@ function FixCommand({ command }: { command: string }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   return (
     <div className="flex min-w-0 items-center gap-1 rounded-md bg-background/60 pl-2 text-foreground">
-      <code className="min-w-0 flex-1 truncate font-mono text-2xs" title={command}>
+      <code className="min-w-0 flex-1 py-1 font-mono text-2xs [overflow-wrap:anywhere]">
         {command}
       </code>
       <Button
