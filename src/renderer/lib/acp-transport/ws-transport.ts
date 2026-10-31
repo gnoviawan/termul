@@ -19,6 +19,15 @@ import type {
   McpCatalogSearchRequest,
   McpCatalogStatus
 } from '@shared/types/mcp-catalog.types'
+import type {
+  McpInstallCancelRequest,
+  McpInstallCommitRequest,
+  McpInstallCommitResult,
+  McpInstallFormReply,
+  McpInstallFormRequest,
+  McpInstallPlanReply,
+  McpInstallPlanRequest
+} from '@shared/types/mcp-install.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AcpAuthenticateReply,
@@ -819,6 +828,22 @@ export class WsAcpTransport implements AcpTransport {
 
   async setMcpCatalogSync(enabled: boolean): Promise<McpCatalogStatus> {
     return this.request<McpCatalogStatus>('set_mcp_catalog_sync', { enabled })
+  }
+
+  async describeMcpInstall(request: McpInstallFormRequest): Promise<McpInstallFormReply> {
+    return this.request<McpInstallFormReply>('describe_mcp_install', request)
+  }
+
+  async planMcpInstall(request: McpInstallPlanRequest): Promise<McpInstallPlanReply> {
+    return this.request<McpInstallPlanReply>('plan_mcp_install', request)
+  }
+
+  async commitMcpInstall(request: McpInstallCommitRequest): Promise<McpInstallCommitResult> {
+    return this.request<McpInstallCommitResult>('commit_mcp_install', request)
+  }
+
+  async cancelMcpInstall(request: McpInstallCancelRequest): Promise<Record<string, never>> {
+    return this.request<Record<string, never>>('cancel_mcp_install', request)
   }
 
   /** `set_catalog_opt_in`: persist the host catalog opt-in. */

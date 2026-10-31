@@ -11,7 +11,9 @@
 //!
 //! `Create` and `Command` carry a [`Replay`] policy: `Payload` replays the
 //! stored (sanitized) reply, `Entity` rebuilds it from the entity the command
-//! stamped, `ReceiptOnly` never stores a payload (credential-bearing kinds).
+//! stamped, `ReceiptOnly` never stores a payload (credential-bearing kinds),
+//! `Never` keeps the command out of the ledger (one-shot kinds whose reply
+//! carries secrets).
 //! `send_prompt` is `Command` + `Entity`: its `turnId` is its `commandId` and
 //! `TurnWatermark` is its entity-lookup layer, so it never enters the ledger.
 
@@ -36,6 +38,9 @@ pub enum Replay {
     Entity,
     /// Success only; the payload (it may carry secrets) is never stored.
     ReceiptOnly,
+    /// Not ledgered and never replayed. The request refuses a repeat itself,
+    /// and its reply carries secrets, so not even a receipt is kept.
+    Never,
 }
 
 /// One row of the class table.
@@ -78,7 +83,7 @@ impl CommandClass {
     pub const fn ledgered(self) -> bool {
         match self.kind {
             ClassKind::Create => true,
-            ClassKind::Command => !matches!(self.replay, Some(Replay::Entity)),
+            ClassKind::Command => !matches!(self.replay, Some(Replay::Entity | Replay::Never)),
             ClassKind::Idempotent | ClassKind::Read => false,
         }
     }
@@ -93,7 +98,7 @@ impl CommandClass {
     /// Whether the reply payload may be stored for replay.
     #[must_use]
     pub const fn stores_payload(self) -> bool {
-        !matches!(self.replay, Some(Replay::ReceiptOnly))
+        !matches!(self.replay, Some(Replay::ReceiptOnly | Replay::Never))
     }
 }
 
@@ -171,6 +176,12 @@ pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("set_catalog_opt_in", CommandClass::idempotent()),
     ("fetch_acp_registry_snapshot", CommandClass::read()),
     ("search_mcp_catalog", CommandClass::read()),
+    ("describe_mcp_install", CommandClass::read()),
+    ("plan_mcp_install", CommandClass::idempotent()),
+    // A plan commits once (a repeat is `MCP_PLAN_CONSUMED`), and the reply
+    // carries the entry's secret values.
+    ("commit_mcp_install", CommandClass::command(Replay::Never)),
+    ("cancel_mcp_install", CommandClass::idempotent()),
     ("get_mcp_catalog_status", CommandClass::read()),
     ("set_mcp_catalog_sync", CommandClass::idempotent()),
     ("install_acp_agent", CommandClass::command(Replay::Payload)),

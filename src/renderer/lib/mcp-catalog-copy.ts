@@ -63,6 +63,18 @@ export function mcpCatalogReasonText(reason: McpCatalogReason): string {
       return "Its package name or version isn't valid."
     case 'unsupported-registry':
       return `Its package is hosted on ${reason.registry}, which Termul doesn't download from.`
+    case 'invalid-command':
+      return 'Its command starts with "-", so it would be read as an option.'
+    case 'invalid-header-name':
+      return `It sends "${reason.name}", which isn't a valid HTTP header name.`
+    case 'control-character':
+      return `Its ${reason.field} holds a control character.`
+    case 'duplicate-name':
+      return `It lists "${reason.name}" more than once.`
+    case 'unsupported-launch-argument':
+      return `It passes ${reason.argument} to ${reason.command}, which Termul doesn't allow because it can change what runs.`
+    case 'cmd-metacharacter':
+      return `Its ${reason.field} holds a character Windows reads as a command operator (& | < > ^ % ! " ( or )).`
   }
 }
 

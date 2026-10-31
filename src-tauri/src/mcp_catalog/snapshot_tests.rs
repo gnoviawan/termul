@@ -300,7 +300,7 @@ fn a_row_that_does_not_parse_is_unsupported_without_failing_the_load() {
     broken["server"]["title"] = json!("Broken");
     let item = item_from_row(broken).expect("the row still browses");
     assert_eq!(item.title.as_deref(), Some("Broken"));
-    assert_eq!(item.options, None);
+    assert!(item.parsed.is_none());
     assert_eq!(
         item_status(&item, ALL_RUNNERS),
         (

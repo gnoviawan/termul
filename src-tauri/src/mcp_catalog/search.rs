@@ -23,7 +23,7 @@ pub struct RunnerAvailability {
 }
 
 impl RunnerAvailability {
-    fn has(self, runner: Runner) -> bool {
+    pub(crate) fn has(self, runner: Runner) -> bool {
         match runner {
             Runner::Npx => self.npx,
             Runner::Uvx => self.uvx,
@@ -128,7 +128,7 @@ pub(crate) fn item_status(
     Option<McpCatalogReason>,
     Option<McpCatalogDefaultOption>,
 ) {
-    let Some(options) = &item.options else {
+    let Some(options) = item.parsed.as_ref().map(|parsed| &parsed.options) else {
         return (
             McpCatalogState::Unsupported,
             Some(McpCatalogReason::Unparseable),

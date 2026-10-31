@@ -8,6 +8,15 @@ export function createDesktopMcpCatalogApi(): McpCatalogApi {
   return {
     search: (request) => ipcResultFromTransport(() => getAcpTransport().searchMcpCatalog(request)),
     status: () => ipcResultFromTransport(() => getAcpTransport().getMcpCatalogStatus()),
-    setSync: (enabled) => ipcResultFromTransport(() => getAcpTransport().setMcpCatalogSync(enabled))
+    setSync: (enabled) =>
+      ipcResultFromTransport(() => getAcpTransport().setMcpCatalogSync(enabled)),
+    describeInstall: (request) =>
+      ipcResultFromTransport(() => getAcpTransport().describeMcpInstall(request)),
+    planInstall: (request) =>
+      ipcResultFromTransport(() => getAcpTransport().planMcpInstall(request)),
+    commitInstall: (request) =>
+      ipcResultFromTransport(() => getAcpTransport().commitMcpInstall(request)),
+    cancelInstall: (request) =>
+      ipcResultFromTransport(() => getAcpTransport().cancelMcpInstall(request))
   }
 }

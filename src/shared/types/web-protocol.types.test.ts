@@ -88,8 +88,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 66 request types including warm-pool promotion, host-owned session delete and browser stop', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(66)
+  it('exports exactly 70 request types including warm-pool promotion, host-owned session delete and browser stop', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(70)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -134,6 +134,10 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'search_mcp_catalog',
       'get_mcp_catalog_status',
       'set_mcp_catalog_sync',
+      'describe_mcp_install',
+      'plan_mcp_install',
+      'commit_mcp_install',
+      'cancel_mcp_install',
       // CAP-6 / Story 9: host-owned verified-atomic ACP install.
       'install_acp_agent',
       // Issue #613: server-side generic key-value store.
@@ -487,6 +491,10 @@ describe('web-protocol.types — command classes (AD-5)', () => {
     }
     expect(WS_COMMAND_CLASSES.send_prompt).toEqual(['command', 'entity'])
     expect(WS_COMMAND_CLASSES.create_session).toEqual(['create', 'entity'])
+  })
+
+  it('keeps the secret-bearing MCP install commit out of the ledger', () => {
+    expect(WS_COMMAND_CLASSES.commit_mcp_install).toEqual(['command', 'never'])
   })
 
   it('accepts 1-128 chars of [A-Za-z0-9_-] as a commandId and nothing else', () => {

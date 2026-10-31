@@ -22,6 +22,11 @@ import type {
 } from '@shared/types/claude-accounts.types'
 import type { IpcResult } from '@shared/types/ipc.types'
 import type { McpCatalogPage, McpCatalogStatus } from '@shared/types/mcp-catalog.types'
+import type {
+  McpInstallCommitResult,
+  McpInstallFormReply,
+  McpInstallPlanReply
+} from '@shared/types/mcp-install.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary, WsAgentSummary } from '@shared/types/web-protocol.types'
 import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'
@@ -168,6 +173,32 @@ export function createInvokeAcpTransport(): AcpTransport {
     },
     setMcpCatalogSync: async (enabled) => {
       const result = await invoke<IpcResult<McpCatalogStatus>>('set_mcp_catalog_sync', { enabled })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    describeMcpInstall: async (request) => {
+      const result = await invoke<IpcResult<McpInstallFormReply>>('describe_mcp_install', {
+        request
+      })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    planMcpInstall: async (request) => {
+      const result = await invoke<IpcResult<McpInstallPlanReply>>('plan_mcp_install', { request })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    commitMcpInstall: async (request) => {
+      const result = await invoke<IpcResult<McpInstallCommitResult>>('commit_mcp_install', {
+        request
+      })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    cancelMcpInstall: async (request) => {
+      const result = await invoke<IpcResult<Record<string, never>>>('cancel_mcp_install', {
+        request
+      })
       if (result.success) return result.data
       throw new AcpTransportError(result.code, result.error)
     },

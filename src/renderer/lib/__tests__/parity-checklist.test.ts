@@ -2656,6 +2656,111 @@ describe('MCP catalog parity (spine AD-1)', () => {
   })
 })
 
+describe('MCP install plan parity (spine AD-5, AD-7, AD-12)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const SHARED_TYPES = join(LIB_DIR, '..', '..', 'shared', 'types')
+  const REQUESTS = [
+    ['describe_mcp_install', 'describe_install'],
+    ['plan_mcp_install', 'plan_install'],
+    ['commit_mcp_install', 'commit_install'],
+    ['cancel_mcp_install', 'cancel_install']
+  ] as const
+  const ROUTES = ['form', 'plan', 'commit', 'cancel'] as const
+
+  it('both carriers answer every install request from the one host service', () => {
+    const dispatch = readFileSync(join(SRC_TAURI, 'web', 'ws', 'dispatch.rs'), 'utf-8')
+    const router = readFileSync(join(SRC_TAURI, 'web', 'router', 'mod.rs'), 'utf-8')
+    const ws = readFileSync(join(SRC_TAURI, 'web', 'ws', 'mcp_catalog.rs'), 'utf-8')
+    const http = readFileSync(join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'), 'utf-8')
+    for (const [request, method] of REQUESTS) {
+      expect(dispatch).toMatch(new RegExp(`"${request}" => \\{\\s*mcp_catalog::handle_${request}`))
+      for (const adapter of [ws, http]) {
+        expect(adapter).toMatch(
+          new RegExp(`McpCatalogService::shared\\(\\)\\s*\\.await\\s*\\.${method}\\(`)
+        )
+      }
+    }
+    for (const route of ROUTES) {
+      expect(
+        router.match(
+          new RegExp(
+            `"/mcp-catalog/install/${route}",\\s*mcp_catalog_api::install_route\\(mcp_catalog_api::`,
+            'g'
+          )
+        )
+      ).toHaveLength(2)
+    }
+    expect(http).toMatch(
+      /post\(handler\)\.layer\(DefaultBodyLimit::max\(MAX_INSTALL_BODY_BYTES\)\)/
+    )
+  })
+
+  it('the form is a read and the three mutations carry the shared write guard', () => {
+    const capabilities = readFileSync(join(SRC_TAURI, 'web', 'capabilities.rs'), 'utf-8')
+    expect(capabilities).toMatch(/\| "describe_mcp_install"/)
+    for (const request of ['plan_mcp_install', 'commit_mcp_install', 'cancel_mcp_install']) {
+      expect(capabilities).not.toMatch(new RegExp(`\\| "${request}"`))
+    }
+    const http = readFileSync(join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'), 'utf-8')
+    for (const route of ['plan', 'commit', 'cancel']) {
+      expect(http).toMatch(
+        new RegExp(`write_guard\\(&state, peer, "/mcp-catalog/install/${route}"\\)`)
+      )
+    }
+    expect(http).toMatch(/check_local_only::<T>\(/)
+    const protocol = readFileSync(join(SHARED_TYPES, 'web-protocol.types.ts'), 'utf-8')
+    expect(protocol).toMatch(/describe_mcp_install: \['read', null\]/)
+    for (const request of ['plan_mcp_install', 'commit_mcp_install', 'cancel_mcp_install']) {
+      expect(protocol).toMatch(new RegExp(`'${request}',`))
+    }
+    for (const request of ['plan_mcp_install', 'cancel_mcp_install']) {
+      expect(protocol).toMatch(new RegExp(`${request}: \\['idempotent', null\\]`))
+    }
+    expect(protocol).toMatch(/commit_mcp_install: \['command', 'never'\]/)
+  })
+
+  it('the facade binds a plan to the caller on both carriers', () => {
+    const desktop = readFileSync(join(LIB_DIR, 'desktop-mcp-catalog-api.ts'), 'utf-8')
+    const web = readFileSync(join(LIB_DIR, 'web-mcp-catalog-api.ts'), 'utf-8')
+    const transport = readTsModule(join(LIB_DIR, 'acp-transport'))
+    for (const method of [
+      'describeMcpInstall',
+      'planMcpInstall',
+      'commitMcpInstall',
+      'cancelMcpInstall'
+    ]) {
+      expect(desktop).toMatch(new RegExp(`getAcpTransport\\(\\)\\.${method}\\(request\\)`))
+      expect(transport).toMatch(new RegExp(`${method}\\(request`))
+    }
+    for (const route of ROUTES) {
+      expect(web).toMatch(new RegExp(`'/mcp-catalog/install/${route}'`))
+    }
+    expect((web.match(/clientInstanceId: getClientInstanceId\(\)/g) ?? []).length).toBe(3)
+    const ws = readFileSync(join(SRC_TAURI, 'web', 'ws', 'mcp_catalog.rs'), 'utf-8')
+    expect(ws).toMatch(/PlanCaller::Connection\(env\.connection_id\.to_string\(\)\)/)
+    const http = readFileSync(join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'), 'utf-8')
+    expect(http).toMatch(/Ok\(\(PlanCaller::Client\(id\), request\)\)/)
+    expect(http).toMatch(/id\.len\(\) > MAX_CLIENT_ID_LEN/)
+    const types = readFileSync(join(SHARED_TYPES, 'mcp-install.types.ts'), 'utf-8')
+    for (const method of ['describeInstall', 'planInstall', 'commitInstall', 'cancelInstall']) {
+      expect(types).toMatch(new RegExp(`  ${method}\\(request: McpInstall`))
+    }
+  })
+
+  it('launch_digest has one implementation, under trust/, and the plan engine uses it', () => {
+    const catalog = join(SRC_TAURI, 'mcp_catalog')
+    expect(existsSync(join(catalog, 'trust', 'digest.rs'))).toBe(true)
+    expect(existsSync(join(catalog, 'trust', 'digest_tests.rs'))).toBe(true)
+    expect(existsSync(join(catalog, 'plan_tests.rs'))).toBe(true)
+    const plan = readFileSync(join(catalog, 'plan.rs'), 'utf-8')
+    expect(plan).toMatch(/use super::trust::launch_digest;/)
+    expect((plan.match(/launch_digest\(&/g) ?? []).length).toBe(2)
+    const digest = readFileSync(join(catalog, 'trust', 'digest.rs'), 'utf-8')
+    expect(digest).toMatch(/pub fn launch_digest\(/)
+    expect((digest.match(/Sha256::digest/g) ?? []).length).toBe(1)
+  })
+})
+
 describe('MCP catalog sync parity (spine AD-3, AD-12)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const SHARED_TYPES = join(LIB_DIR, '..', '..', 'shared', 'types')

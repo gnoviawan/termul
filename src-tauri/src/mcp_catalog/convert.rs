@@ -26,7 +26,7 @@ where
     Option::<T>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct RegistryServer {
     pub name: String,
@@ -41,13 +41,14 @@ pub(crate) struct RegistryServer {
     pub packages: Vec<RegistryPackage>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct RegistryRepository {
     pub url: Option<String>,
+    pub id: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct RegistryRemote {
     #[serde(rename = "type")]
@@ -59,7 +60,7 @@ pub(crate) struct RegistryRemote {
     pub variables: BTreeMap<String, RegistryInput>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct RegistryPackage {
     pub registry_type: String,
@@ -76,22 +77,33 @@ pub(crate) struct RegistryPackage {
     pub environment_variables: Vec<RegistryInput>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct RegistryPackageTransport {
     #[serde(rename = "type")]
     pub kind: String,
 }
 
-/// An argument, header, env var or template variable. Only what conversion
-/// needs: the name and whether it, or any variable inside it, is secret.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct RegistryInput {
     #[serde(deserialize_with = "null_as_default")]
     pub name: String,
     #[serde(deserialize_with = "null_as_default")]
     pub is_secret: bool,
+    #[serde(deserialize_with = "null_as_default")]
+    pub is_required: bool,
+    pub description: Option<String>,
+    pub format: Option<String>,
+    /// A fixed value, or a template whose `{var}` names are keys of `variables`.
+    pub value: Option<String>,
+    pub default: Option<String>,
+    pub placeholder: Option<String>,
+    #[serde(deserialize_with = "null_as_default")]
+    pub choices: Vec<String>,
+    #[serde(rename = "type")]
+    pub argument_type: Option<String>,
+    pub value_hint: Option<String>,
     #[serde(deserialize_with = "null_as_default")]
     pub variables: BTreeMap<String, RegistryInput>,
 }
@@ -178,7 +190,7 @@ pub enum Launch {
     Stdio { runner: Runner, argv: Vec<String> },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OptionKind {
     Remote,
@@ -236,6 +248,49 @@ pub enum McpCatalogReason {
     UnsupportedRegistry {
         registry: String,
     },
+    InvalidCommand,
+    InvalidHeaderName {
+        name: String,
+    },
+    ControlCharacter {
+        field: String,
+    },
+    DuplicateName {
+        name: String,
+    },
+    /// A launch argument holds a character `cmd.exe` reads as an operator or
+    /// expansion. `field` names the registry or import field it came from.
+    CmdMetacharacter {
+        field: String,
+    },
+    /// An imported launch passes `command` an option outside its allowlist,
+    /// such as a runner flag that changes where the package comes from.
+    UnsupportedLaunchArgument {
+        command: String,
+        argument: String,
+    },
+}
+
+/// Each env or header name may appear once (headers case-insensitively), so
+/// every slot has its own form field and value.
+pub(crate) fn check_unique_names<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    case_insensitive: bool,
+) -> Result<(), McpCatalogReason> {
+    let mut seen = std::collections::HashSet::new();
+    for name in names {
+        let key = if case_insensitive {
+            name.to_ascii_lowercase()
+        } else {
+            name.to_string()
+        };
+        if !seen.insert(key) {
+            return Err(McpCatalogReason::DuplicateName {
+                name: name.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Options in default-preference order: remotes first (streamable-http before
@@ -283,6 +338,10 @@ fn convert_remote(remote: &RegistryRemote) -> Result<Launch, McpCatalogReason> {
         return Err(McpCatalogReason::SecretInUrl);
     }
     check_remote_url(&remote.url)?;
+    for header in &remote.headers {
+        check_header_name(&header.name)?;
+    }
+    check_unique_names(remote.headers.iter().map(|h| h.name.as_str()), true)?;
     Ok(Launch::Remote {
         transport,
         url: remote.url.clone(),
@@ -292,7 +351,7 @@ fn convert_remote(remote: &RegistryRemote) -> Result<Launch, McpCatalogReason> {
 /// `https` only, and never a loopback or private-network host. Template
 /// variables are stood in for, so a templated path still validates; the plan
 /// re-checks the resolved URL.
-fn check_remote_url(raw: &str) -> Result<(), McpCatalogReason> {
+pub(crate) fn check_remote_url(raw: &str) -> Result<(), McpCatalogReason> {
     let filled = fill_template_variables(raw).ok_or(McpCatalogReason::InvalidUrl)?;
     let url = Url::parse(&filled).map_err(|_| McpCatalogReason::InvalidUrl)?;
     if url.scheme() != "https" {
@@ -388,9 +447,20 @@ fn convert_package(package: &RegistryPackage) -> Result<Launch, McpCatalogReason
     {
         return Err(McpCatalogReason::SecretInArguments);
     }
+    for (index, argument) in package.package_arguments.iter().enumerate() {
+        if argument_registry_text(argument).any(has_cmd_metacharacter) {
+            return Err(McpCatalogReason::CmdMetacharacter {
+                field: format!("packageArguments[{index}]"),
+            });
+        }
+    }
     for env in &package.environment_variables {
         check_env_name(&env.name)?;
     }
+    check_unique_names(
+        package.environment_variables.iter().map(|e| e.name.as_str()),
+        false,
+    )?;
     let registry = package
         .registry_base_url
         .as_deref()
@@ -442,6 +512,32 @@ fn convert_package(package: &RegistryPackage) -> Result<Launch, McpCatalogReason
     })
 }
 
+/// Characters `cmd.exe` reads as operators, quoting or expansions. On
+/// Windows the `npx` and `uvx` shims are batch files, so an argv element
+/// holding one could start a second command. The rule holds on every OS so
+/// a plan means the same launch wherever it is made.
+const CMD_METACHARACTERS: &[char] = &['&', '|', '<', '>', '^', '%', '!', '"', '(', ')'];
+
+#[must_use]
+pub(crate) fn has_cmd_metacharacter(arg: &str) -> bool {
+    arg.contains(CMD_METACHARACTERS)
+}
+
+/// Every piece of registry text a package argument can put into argv: its
+/// flag name, fixed value or template, default and choices, and the same
+/// for each template variable.
+fn argument_registry_text(argument: &RegistryInput) -> Box<dyn Iterator<Item = &str> + '_> {
+    let own = [&argument.value, &argument.default]
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .chain(argument.choices.iter().map(String::as_str))
+        .chain(
+            (argument.argument_type.as_deref() == Some("named")).then_some(argument.name.as_str()),
+        );
+    Box::new(own.chain(argument.variables.values().flat_map(argument_registry_text)))
+}
+
 /// A name the runner reads from its own environment can redirect what it
 /// runs (`NODE_OPTIONS=--require`, `npm_config_registry`, `UV_INDEX_URL`) or
 /// where and how it downloads the package (`HTTPS_PROXY`,
@@ -488,7 +584,7 @@ pub(crate) fn is_denied_env_name(name: &str) -> bool {
 
 /// An env name becomes a docker `-e` argv element, so it must be a plain
 /// identifier (`-e NAME=value` would smuggle a value in from registry text).
-fn check_env_name(name: &str) -> Result<(), McpCatalogReason> {
+pub(crate) fn check_env_name(name: &str) -> Result<(), McpCatalogReason> {
     static ENV_NAME: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$").expect("env name regex"));
     if !ENV_NAME.is_match(name) {
@@ -502,6 +598,18 @@ fn check_env_name(name: &str) -> Result<(), McpCatalogReason> {
         });
     }
     Ok(())
+}
+
+pub(crate) fn check_header_name(name: &str) -> Result<(), McpCatalogReason> {
+    static HEADER_NAME: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$").expect("header regex"));
+    if HEADER_NAME.is_match(name) {
+        Ok(())
+    } else {
+        Err(McpCatalogReason::InvalidHeaderName {
+            name: name.to_string(),
+        })
+    }
 }
 
 /// The package grammar, per runner. Each admits only a name the runner reads
@@ -581,6 +689,18 @@ fn is_allowed_oci_host(host: &str) -> bool {
         "docker.io" | "ghcr.io" | "quay.io" | "mcr.microsoft.com"
     ) || name.ends_with(".pkg.dev")
         || name.ends_with(".azurecr.io")
+}
+
+pub(crate) fn check_package_spec(runner: Runner, spec: &str) -> Result<(), McpCatalogReason> {
+    let (identifier, version) = match spec.rsplit_once('@') {
+        Some((identifier, version)) if !identifier.is_empty() => (identifier, Some(version)),
+        _ => (spec, None),
+    };
+    if is_valid_identifier(runner, identifier) && version.is_none_or(is_valid_version) {
+        Ok(())
+    } else {
+        Err(McpCatalogReason::InvalidPackage)
+    }
 }
 
 #[must_use]

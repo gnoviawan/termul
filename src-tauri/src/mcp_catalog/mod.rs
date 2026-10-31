@@ -2,13 +2,22 @@
 //! rather than per `AppState`: the desktop and `termul-server` each own their
 //! own copy, and every carrier in a process answers from the same one.
 
+mod consent;
 mod convert;
+mod form;
+mod import;
+mod launch_check;
+mod plan;
+mod resolved;
 mod search;
 mod snapshot;
 mod sync;
+pub mod trust;
 
 #[cfg(test)]
 mod convert_tests;
+#[cfg(test)]
+mod plan_tests;
 #[cfg(test)]
 mod search_tests;
 #[cfg(test)]
@@ -24,7 +33,15 @@ use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use tokio::sync::OnceCell;
 
+pub use consent::{ConsentProvenance, ConsentValue, ConsentView, ConsentWarning, Namespace};
 pub use convert::{McpCatalogReason, OptionKind, Runner};
+pub use form::{Field, FieldFormat, FieldTarget, Origin};
+pub use plan::{
+    CancelRequest, CommitRequest, CommitResult, FormReply, FormRequest, InstallForm, InstallPlan,
+    PlanCaller, PlanChoice, PlanReply, PlanRequest, PlanSource, PlanStore, ResolvedSecret,
+    SecretSlot, MAX_PLAN_REQUEST_BYTES, PLAN_TTL,
+};
+pub use resolved::{Provenance, ResolvedConfig, ValueSlot};
 pub use search::{
     McpCatalogDefaultOption, McpCatalogPage, McpCatalogRow, McpCatalogSearchRequest,
     McpCatalogState, RunnerAvailability, SearchError,
@@ -51,6 +68,7 @@ pub struct McpCatalogService {
     runner_probe: Mutex<Option<(Instant, RunnerAvailability)>>,
     /// Held across a probe so concurrent cache misses share one.
     probe_gate: tokio::sync::Mutex<()>,
+    plans: PlanStore,
 }
 
 /// A failure every transport returns with the same code and message.
@@ -97,6 +115,14 @@ impl McpCatalogService {
     }
 
     fn new(catalog: LoadedCatalog, fixed_runners: Option<RunnerAvailability>) -> Self {
+        Self::with_plan_ttl(catalog, fixed_runners, PLAN_TTL)
+    }
+
+    fn with_plan_ttl(
+        catalog: LoadedCatalog,
+        fixed_runners: Option<RunnerAvailability>,
+        ttl: Duration,
+    ) -> Self {
         Self {
             catalog: RwLock::new(Arc::new(catalog)),
             phase: Mutex::new(SyncPhase::Idle),
@@ -104,12 +130,22 @@ impl McpCatalogService {
             fixed_runners,
             runner_probe: Mutex::new(None),
             probe_gate: tokio::sync::Mutex::new(()),
+            plans: PlanStore::new(ttl),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn with_runners(catalog: LoadedCatalog, runners: RunnerAvailability) -> Self {
         Self::new(catalog, Some(runners))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_runners_and_ttl(
+        catalog: LoadedCatalog,
+        runners: RunnerAvailability,
+        ttl: Duration,
+    ) -> Self {
+        Self::with_plan_ttl(catalog, Some(runners), ttl)
     }
 
     pub async fn run(dir: PathBuf) {
@@ -200,6 +236,58 @@ impl McpCatalogService {
                 .filter(|(probed_at, _)| probed_at.elapsed() < RUNNER_PROBE_TTL)
                 .map(|(_, runners)| runners)
         })
+    }
+
+    pub async fn describe_install(
+        &self,
+        request: &FormRequest,
+    ) -> Result<FormReply, McpCatalogError> {
+        let runners = self.runners().await;
+        plan::describe_install(&self.catalog(), runners, request)
+    }
+
+    pub async fn plan_install(
+        &self,
+        request: &PlanRequest,
+        caller: PlanCaller,
+    ) -> Result<PlanReply, McpCatalogError> {
+        let runners = self.runners().await;
+        plan::plan_install(&self.catalog(), runners, &self.plans, request, caller)
+    }
+
+    pub fn commit_install(
+        &self,
+        request: &CommitRequest,
+        caller: &PlanCaller,
+    ) -> Result<CommitResult, McpCatalogError> {
+        plan::commit_install(&self.plans, request, caller)
+    }
+
+    pub fn cancel_install(
+        &self,
+        request: &CancelRequest,
+        caller: &PlanCaller,
+    ) -> Result<(), McpCatalogError> {
+        plan::cancel_install(&self.plans, request, caller)
+    }
+
+    /// Drops the install plans a closed `/ws` connection held. A process
+    /// whose catalog never loaded holds no plans, so this does not load it.
+    pub fn forget_connection_plans(connection_id: &str) {
+        let Some(service) = SHARED.get() else {
+            return;
+        };
+        let dropped = service
+            .plans
+            .forget_caller(&PlanCaller::Connection(connection_id.to_string()));
+        if dropped > 0 {
+            log::info!("[mcp-catalog] dropped {dropped} plan(s) of a closed connection");
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stored_plans(&self) -> usize {
+        self.plans.count()
     }
 
     async fn runners(&self) -> RunnerAvailability {

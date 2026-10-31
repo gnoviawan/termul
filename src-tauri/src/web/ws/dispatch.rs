@@ -196,6 +196,18 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "set_mcp_catalog_sync" => {
             mcp_catalog::handle_set_mcp_catalog_sync(id, &req.payload).await
         }
+        "describe_mcp_install" => {
+            mcp_catalog::handle_describe_mcp_install(id, &req.payload).await
+        }
+        "plan_mcp_install" => {
+            mcp_catalog::handle_plan_mcp_install(id, &req.payload, env).await
+        }
+        "commit_mcp_install" => {
+            mcp_catalog::handle_commit_mcp_install(id, &req.payload, env).await
+        }
+        "cancel_mcp_install" => {
+            mcp_catalog::handle_cancel_mcp_install(id, &req.payload, env).await
+        }
         // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web
         // client installs a catalog agent through `install_acp_agent`; the
         // host resolves the agent by id from the catalog, downloads the HTTPS
