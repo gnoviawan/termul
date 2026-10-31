@@ -1,4 +1,8 @@
-import type { AutomationRun, RunId } from '@shared/types/automation.types'
+import type {
+  AutomationRun,
+  AutomationDetail as Detail,
+  RunId
+} from '@shared/types/automation.types'
 import type { IpcResult } from '@shared/types/ipc.types'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
@@ -9,7 +13,6 @@ import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { Switch } from '@/components/ui/switch'
 import {
   approveAutomation,
-  type AutomationDetail as Detail,
   deleteAutomation,
   markAutomationSeen,
   runAutomationNow,

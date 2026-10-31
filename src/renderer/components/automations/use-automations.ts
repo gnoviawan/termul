@@ -1,5 +1,7 @@
 import type {
   Automation,
+  AutomationChanged,
+  AutomationDetail,
   AutomationId,
   AutomationRun,
   AutomationStep,
@@ -8,8 +10,6 @@ import type {
 import type { IpcResult } from '@shared/types/ipc.types'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  type AutomationChange,
-  type AutomationDetail,
   getAutomation,
   getAutomationRunSteps,
   listAutomationRuns,
@@ -31,7 +31,7 @@ export interface HostQuery<T> {
 function useHostQuery<T>(
   key: string | null,
   load: () => Promise<IpcResult<T>>,
-  affects: (change: AutomationChange) => boolean
+  affects: (change: AutomationChanged) => boolean
 ): HostQuery<T> {
   const [state, setState] = useState<{ key: string | null; data: T | null; error: string | null }>({
     key: null,

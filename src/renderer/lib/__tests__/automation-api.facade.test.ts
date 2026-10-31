@@ -295,10 +295,15 @@ describe('automation facade transports', () => {
     const stop = onAutomationChanged((change) => seen.push(change))
 
     publishAutomationChange({ project_id: 'p1', automation_id: 'auto-1' })
+    publishAutomationChange({ project_id: 'p1', automation_id: null })
     publishAutomationChange({ project_id: 'p1' })
+    publishAutomationChange({ project_id: 'p1', automation_id: 7 })
     stop()
     publishAutomationChange({ project_id: 'p2', automation_id: 'auto-2' })
 
-    expect(seen).toEqual([{ project_id: 'p1', automation_id: 'auto-1' }])
+    expect(seen).toEqual([
+      { project_id: 'p1', automation_id: 'auto-1' },
+      { project_id: 'p1', automation_id: null }
+    ])
   })
 })

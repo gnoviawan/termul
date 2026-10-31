@@ -12,19 +12,19 @@
 import type {
   ApplyOpsResult,
   Automation,
+  AutomationChanged,
+  AutomationDetail,
   AutomationId,
   AutomationOp,
   AutomationRun,
   AutomationStep,
+  KnownAgent,
   RunId,
   Schedule
 } from '@shared/types/automation.types'
 import type { IpcResult } from '@shared/types/ipc.types'
 import { listen } from '@tauri-apps/api/event'
 import {
-  type AutomationAgent,
-  type AutomationChange,
-  type AutomationDetail,
   parseAgentList,
   parseApplyOpsResult,
   parseAutomation,
@@ -44,7 +44,7 @@ import { invokeIpc } from './ipc/tauri'
 import { logFrontendError } from './log-api'
 import { isTauriContext } from './tauri-runtime'
 
-export type { AutomationAgent, AutomationChange, AutomationDetail, SchedulePreview }
+export type { SchedulePreview }
 
 const SOURCE = 'automation-api'
 /** Tauri event and watch delta name. */
@@ -225,7 +225,7 @@ export function previewSchedule(schedule: Schedule): Promise<IpcResult<ScheduleP
   return parsed('preview_schedule', transport().previewSchedule(schedule), parseSchedulePreview)
 }
 
-export function listAutomationAgents(): Promise<IpcResult<AutomationAgent[]>> {
+export function listAutomationAgents(): Promise<IpcResult<KnownAgent[]>> {
   return parsed('list_agents', transport().listAgents(), parseAgentList)
 }
 
@@ -256,7 +256,7 @@ export async function deleteAutomationSecret(
  * `null` means "a change may have been missed" (the host's watch resynced):
  * re-read everything shown.
  */
-export type AutomationChangeListener = (change: AutomationChange | null) => void
+export type AutomationChangeListener = (change: AutomationChanged | null) => void
 
 const changeListeners = new Set<AutomationChangeListener>()
 let desktopListening = false
