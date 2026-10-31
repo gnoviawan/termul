@@ -74,7 +74,7 @@ fn rejected<T>(route: &str, error: &McpCatalogError) -> IpcBody<T> {
 
 fn parse_body<T: serde::de::DeserializeOwned, R>(route: &str, body: &Bytes) -> Result<T, IpcBody<R>> {
     serde_json::from_slice(body).map_err(|error| {
-        warn!(target: TARGET, route, error = %error, "install request malformed");
+        warn!(target: TARGET, route, category = ?error.classify(), "install request malformed");
         IpcBody::err(
             format!("invalid {route} request: {error}"),
             "VALIDATION_ERROR",

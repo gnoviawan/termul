@@ -21,12 +21,12 @@ import type {
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
 import type { IpcResult } from '@shared/types/ipc.types'
+import type { McpCatalogPage } from '@shared/types/mcp-catalog.types'
 import type {
-  McpCatalogPage,
   McpInstallCommitResult,
   McpInstallFormReply,
   McpInstallPlanReply
-} from '@shared/types/mcp-catalog.types'
+} from '@shared/types/mcp-install.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary, WsAgentSummary } from '@shared/types/web-protocol.types'
 import { WS_ERROR_CODES } from '@shared/types/web-protocol.types'

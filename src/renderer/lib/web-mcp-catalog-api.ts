@@ -8,13 +8,12 @@
  * a plan to it, so only the tab that planned can commit or cancel.
  */
 
+import type { McpCatalogApi, McpCatalogPage } from '@shared/types/mcp-catalog.types'
 import type {
-  McpCatalogApi,
-  McpCatalogPage,
   McpInstallCommitResult,
   McpInstallFormReply,
   McpInstallPlanReply
-} from '@shared/types/mcp-catalog.types'
+} from '@shared/types/mcp-install.types'
 import { getJson, postJson } from './ipc/http'
 import { getClientInstanceId } from './web-client-identity'
 

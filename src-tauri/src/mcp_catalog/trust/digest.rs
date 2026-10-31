@@ -76,11 +76,6 @@ pub fn launch_digest(config: &ResolvedConfig, provenance: Option<&Provenance>) -
             provenance,
         },
     };
-    let bytes = serde_json::to_vec(&canonical).unwrap_or_else(|error| {
-        // Every field is a string, a list of strings or a plain struct, so
-        // this is unreachable; the empty input still yields a stable digest.
-        log::error!("[mcp-catalog] launch digest canonical form failed: {error}");
-        Vec::new()
-    });
+    let bytes = serde_json::to_vec(&canonical).expect("strings and lists always serialize");
     format!("sha256:{:x}", Sha256::digest(bytes))
 }

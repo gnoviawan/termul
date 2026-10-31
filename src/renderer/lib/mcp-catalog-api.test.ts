@@ -1,9 +1,9 @@
+import type { McpCatalogPage } from '@shared/types/mcp-catalog.types'
 import type {
-  McpCatalogPage,
   McpInstallCommitResult,
   McpInstallFormReply,
   McpInstallPlanReply
-} from '@shared/types/mcp-catalog.types'
+} from '@shared/types/mcp-install.types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { transport } = vi.hoisted(() => ({
@@ -103,8 +103,7 @@ const planReply: McpInstallPlanReply = {
         version: '0.1.2',
         mutableTag: false,
         snapshotFetchedAt: '2026-10-27T03:13:14.559Z'
-      },
-      offerLiveSync: true
+      }
     },
     launchDigest: 'sha256:abc'
   }

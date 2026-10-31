@@ -448,7 +448,6 @@ async fn npm_plan_appends_the_positional_argument_and_lists_env_slots() {
         provenance.snapshot_fetched_at.as_deref(),
         Some("2026-10-27T00:00:00Z")
     );
-    assert!(view.offer_live_sync);
     assert_eq!(plan.form.len(), 3);
     assert!(plan.launch_digest.starts_with("sha256:"));
 }
@@ -772,7 +771,6 @@ async fn a_clean_import_shows_every_file_value_verbatim_and_commits_without_secr
         vec![ConsentWarning::RunsLocalCode, ConsentWarning::FromFile]
     );
     assert_eq!(view.provenance, None);
-    assert!(!view.offer_live_sync);
 
     let result = commit(&service, &plan, &[]).unwrap();
     assert_eq!(result.provenance, None);
@@ -1025,7 +1023,6 @@ async fn the_plan_serializes_to_the_wire_contract() {
         json["form"][2]["target"],
         json!({ "kind": "argument", "index": 0, "name": null })
     );
-    assert_eq!(json["consentView"]["offerLiveSync"], true);
     assert_eq!(json["consentView"]["warnings"], json!(["runs-local-code"]));
     assert_eq!(
         json["consentView"]["provenance"]["namespace"],

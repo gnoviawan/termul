@@ -2735,7 +2735,7 @@ describe('MCP install plan parity (spine AD-5, AD-7, AD-12)', () => {
     expect(ws).toMatch(/PlanCaller::Connection\(env\.connection_id\.to_string\(\)\)/)
     const http = readFileSync(join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'), 'utf-8')
     expect(http).toMatch(/PlanCaller::Client\(with_client\.client_instance_id\)/)
-    const types = readFileSync(join(SHARED_TYPES, 'mcp-catalog.types.ts'), 'utf-8')
+    const types = readFileSync(join(SHARED_TYPES, 'mcp-install.types.ts'), 'utf-8')
     for (const method of ['describeInstall', 'planInstall', 'commitInstall', 'cancelInstall']) {
       expect(types).toMatch(new RegExp(`  ${method}\\(request: McpInstall`))
     }

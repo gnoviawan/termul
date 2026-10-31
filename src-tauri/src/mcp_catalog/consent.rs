@@ -72,7 +72,6 @@ pub struct ConsentView {
     pub headers: Vec<ConsentValue>,
     pub warnings: Vec<ConsentWarning>,
     pub provenance: Option<ConsentProvenance>,
-    pub offer_live_sync: bool,
 }
 
 /// Characters that could make displayed text differ from what runs: every
@@ -183,9 +182,6 @@ impl ConsentView {
         if input.from_file {
             warnings.push(ConsentWarning::FromFile);
         }
-        // Live sync has no toggle yet (story 6), so every catalog install
-        // carries the offer; the renderer shows it as a flag.
-        let offer_live_sync = input.provenance.is_some();
         Self {
             transport,
             command,
@@ -195,7 +191,6 @@ impl ConsentView {
             headers,
             warnings,
             provenance: input.provenance,
-            offer_live_sync,
         }
     }
 }

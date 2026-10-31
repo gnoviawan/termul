@@ -11,9 +11,8 @@ import type {
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
+import type { McpCatalogPage, McpCatalogSearchRequest } from '@shared/types/mcp-catalog.types'
 import type {
-  McpCatalogPage,
-  McpCatalogSearchRequest,
   McpInstallCancelRequest,
   McpInstallCommitRequest,
   McpInstallCommitResult,
@@ -21,7 +20,7 @@ import type {
   McpInstallFormRequest,
   McpInstallPlanReply,
   McpInstallPlanRequest
-} from '@shared/types/mcp-catalog.types'
+} from '@shared/types/mcp-install.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AddProjectPayload,
