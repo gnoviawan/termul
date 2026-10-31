@@ -11,6 +11,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::convert::{convert, safe_repository_url, CatalogOption, RegistryServer};
+use super::icon::{self, IconSource};
 
 const EMBEDDED_SNAPSHOT: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -42,6 +43,7 @@ pub(crate) struct CatalogItem {
     pub version: String,
     pub status: RegistryStatus,
     pub repository_url: Option<String>,
+    pub icon: Option<IconSource>,
     /// `None` when the row did not parse: the item shows as unsupported.
     pub options: Option<Vec<CatalogOption>>,
 }
@@ -238,6 +240,7 @@ pub(crate) fn item_from_row(mut row: Value) -> Option<CatalogItem> {
     Some(match RegistryServer::deserialize(server) {
         Ok(parsed) => CatalogItem {
             options: Some(convert(&parsed)),
+            icon: icon::pick(&parsed.icons),
             repository_url: parsed
                 .repository
                 .and_then(|repository| repository.url)
@@ -255,6 +258,7 @@ pub(crate) fn item_from_row(mut row: Value) -> Option<CatalogItem> {
             version: version.unwrap_or_default(),
             status,
             repository_url: None,
+            icon: None,
             options: None,
         },
     })

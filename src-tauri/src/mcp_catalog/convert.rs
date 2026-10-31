@@ -39,6 +39,29 @@ pub(crate) struct RegistryServer {
     pub remotes: Vec<RegistryRemote>,
     #[serde(deserialize_with = "null_as_default")]
     pub packages: Vec<RegistryPackage>,
+    #[serde(deserialize_with = "lenient_icons")]
+    pub icons: Vec<RegistryIcon>,
+}
+
+/// A malformed `icons` list costs the server its logo, never its install options.
+fn lenient_icons<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<RegistryIcon>, D::Error> {
+    Ok(match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Array(icons) => icons
+            .into_iter()
+            .filter_map(|icon| serde_json::from_value(icon).ok())
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub(crate) struct RegistryIcon {
+    pub src: String,
+    pub mime_type: Option<String>,
+    #[serde(deserialize_with = "null_as_default")]
+    pub sizes: Vec<String>,
+    pub theme: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

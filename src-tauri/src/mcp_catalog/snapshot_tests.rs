@@ -191,7 +191,7 @@ fn the_fixture_covers_every_state_and_reason_class() {
     }
     assert_eq!(
         catalog.items.len(),
-        expected.len(),
+        expected.len() + ICON_FIXTURES.len(),
         "only the deleted row is dropped"
     );
     assert!(
@@ -333,4 +333,37 @@ fn parsing_ignores_schema_and_unknown_fields() {
         json!([{ "type": "streamable-http", "url": "https://mcp.example.com/mcp", "extra": 1 }]);
     let item = item_from_row(row).unwrap();
     assert_eq!(item_status(&item, ALL_RUNNERS), installable(remote(0)));
+}
+
+/// The fixture servers listed for their icons, with the logo each row shows.
+const ICON_FIXTURES: [(&str, &str); 3] = [
+    ("ai.abmeter/abmeter", "https://abmeter.ai/favicon.svg"),
+    ("ai.agenttrust/mcp-server", "https://agenttrust.ai/icon.png"),
+    (
+        "ai.alpic.mcp/alpic-mcp",
+        "https://raw.githubusercontent.com/alpic-ai/public-assets/refs/heads/main/alpic%20logo%20light%20200x200.png",
+    ),
+];
+
+#[test]
+fn the_fixture_picks_one_https_logo_for_each_server_that_lists_icons() {
+    let catalog = load_embedded();
+    let icon = |name: &str| {
+        catalog
+            .items
+            .iter()
+            .find(|item| item.name == name)
+            .unwrap_or_else(|| panic!("{name} is in the fixture"))
+            .icon
+            .as_ref()
+            .map(|source| source.url().to_string())
+    };
+    for (name, url) in ICON_FIXTURES {
+        assert_eq!(icon(name).as_deref(), Some(url), "{name}");
+    }
+    assert_eq!(
+        icon("io.github.BargLabs/cejel").as_deref(),
+        Some("https://cejel.dev/brand-icon.png")
+    );
+    assert_eq!(icon("to.hooka/mcp"), None);
 }
