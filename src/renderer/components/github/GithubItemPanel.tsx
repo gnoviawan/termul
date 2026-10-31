@@ -15,6 +15,7 @@ import {
 } from '@/stores/github-store'
 import { GithubChecksList } from './GithubChecksList'
 import { GithubComment, GithubMarkdown } from './GithubComment'
+import { GithubCommentComposer } from './GithubCommentComposer'
 import { GithubMergeControls } from './GithubMergeControls'
 import { GithubReviewThreads } from './GithubReviewThreads'
 import { ItemStatePill, LabelChip, relativeAgo } from './github-status'
@@ -188,21 +189,34 @@ export function GithubItemPanel({
           )}
         </section>
 
-        {data.comments.length > 0 && (
-          <section aria-labelledby="github-comments" className="flex flex-col gap-2">
-            <h2 id="github-comments" className="text-sm font-medium text-foreground">
-              Comments{' '}
-              <span className="font-normal tabular-nums text-muted-foreground">
-                {data.comments.length}
-              </span>
-            </h2>
-            {data.comments.map((comment) => (
-              <GithubComment key={comment.id} comment={comment} />
-            ))}
-          </section>
-        )}
+        <section aria-labelledby="github-comments" className="flex flex-col gap-2">
+          <h2 id="github-comments" className="text-sm font-medium text-foreground">
+            Comments{' '}
+            <span className="font-normal tabular-nums text-muted-foreground">
+              {data.comments.length}
+            </span>
+          </h2>
+          {data.comments.map((comment) => (
+            <GithubComment key={comment.id} comment={comment} />
+          ))}
+          <GithubCommentComposer
+            label="Add a comment"
+            submitLabel="Comment"
+            placeholder="Leave a comment (Markdown)"
+            onSubmit={(body) =>
+              useGithubStore.getState().comment(itemRef, { kind: 'conversation' }, body)
+            }
+          />
+        </section>
 
-        {pr && <GithubReviewThreads threads={pr.reviewThreads} />}
+        {pr && (
+          <GithubReviewThreads
+            threads={pr.reviewThreads}
+            onReply={(threadId, body) =>
+              useGithubStore.getState().comment(itemRef, { kind: 'review_thread', threadId }, body)
+            }
+          />
+        )}
       </div>
     </div>
   )
