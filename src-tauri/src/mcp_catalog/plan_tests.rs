@@ -1252,7 +1252,7 @@ async fn a_registry_fixed_value_flagged_secret_is_shown_and_commits_as_shown() {
 }
 
 #[tokio::test]
-async fn consent_view_escapes_every_invisible_character_and_the_plan_name() {
+async fn consent_view_escapes_every_invisible_character() {
     let service = service();
     let hidden = [
         '\u{00AD}', '\u{180E}', '\u{2028}', '\u{2029}', '\u{206A}', '\u{206F}', '\u{E0001}',
@@ -1260,7 +1260,7 @@ async fn consent_view_escapes_every_invisible_character_and_the_plan_name() {
     ];
     let arg: String = hidden.iter().collect();
     let json = serde_json::to_string(&json!({
-        "mcpServers": { "no\u{202E}tes\u{3164}": { "command": "node", "args": [arg] } }
+        "mcpServers": { "notes": { "command": "node", "args": [arg] } }
     }))
     .unwrap();
     let plan = plan(&service, import_source(&json), &[]).await;
@@ -1269,7 +1269,63 @@ async fn consent_view_escapes_every_invisible_character_and_the_plan_name() {
         "\\u{00AD}\\u{180E}\\u{2028}\\u{2029}\\u{206A}\\u{206F}\\u{E0001}\\u{E007F}\
          \\u{115F}\\u{1160}\\u{3164}\\u{FFA0}"
     );
-    assert_eq!(plan.name, "no\\u{202E}tes\\u{3164}");
+}
+
+#[tokio::test]
+async fn consent_view_escapes_variation_selectors_blank_glyphs_and_wide_spaces() {
+    let service = service();
+    let hidden = [
+        '\u{FE00}', '\u{FE0F}', '\u{E0100}', '\u{E01EF}', '\u{034F}', '\u{17B4}', '\u{17B5}',
+        '\u{180B}', '\u{2800}', '\u{00A0}', '\u{1680}', '\u{2000}', '\u{200A}', '\u{202F}',
+        '\u{205F}', '\u{3000}',
+    ];
+    let arg: String = hidden.iter().chain(" a".chars().collect::<Vec<_>>().iter()).collect();
+    let plan = plan(&service, stdio_import("node", &[&arg]), &[]).await;
+    assert_eq!(
+        plan.consent_view.argv[1],
+        "\\u{FE00}\\u{FE0F}\\u{E0100}\\u{E01EF}\\u{034F}\\u{17B4}\\u{17B5}\\u{180B}\
+         \\u{2800}\\u{00A0}\\u{1680}\\u{2000}\\u{200A}\\u{202F}\\u{205F}\\u{3000} a"
+    );
+}
+
+#[tokio::test]
+async fn consent_view_escapes_the_registry_version_and_namespace() {
+    let name = "io.github.ev\u{202E}il/shifty";
+    let version = "1.0.0\u{202E}\u{FE0F}";
+    let shifty = row(json!({
+        "name": name,
+        "description": "Shifty",
+        "version": version,
+        "remotes": [{ "type": "streamable-http", "url": "https://shifty.example/mcp" }]
+    }));
+    let service = McpCatalogService::with_runners(catalog(vec![shifty]), ALL_RUNNERS);
+    let plan = plan(&service, catalog_source(name, version), &[]).await;
+    let provenance = plan.consent_view.provenance.unwrap();
+    assert_eq!(provenance.version, "1.0.0\\u{202E}\\u{FE0F}");
+    assert_eq!(
+        provenance.namespace,
+        Namespace::Github {
+            account: "ev\\u{202E}il".to_string()
+        }
+    );
+}
+
+#[tokio::test]
+async fn an_imported_server_name_needing_an_escape_is_unsupported() {
+    let service = service();
+    for name in ["no\u{202E}tes", "notes\u{FE0F}", "a\u{00A0}b", "back\\slash"] {
+        let json = serde_json::to_string(&json!({
+            "mcpServers": { name: { "command": "node", "args": ["srv.js"] } }
+        }))
+        .unwrap();
+        assert_eq!(
+            unsupported(&service, import_source(&json)).await,
+            McpCatalogReason::ControlCharacter {
+                field: "name".to_string()
+            },
+            "{name:?}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -2,6 +2,7 @@ use std::fmt;
 
 use serde_json::{Map, Value};
 
+use super::consent::escape_for_display;
 use super::convert::{
     check_env_name, check_header_name, check_remote_url, check_unique_names, McpCatalogReason,
     RemoteTransport,
@@ -200,6 +201,12 @@ fn no_control(text: &str, field: impl Into<String>) -> Result<(), McpCatalogReas
 }
 
 pub(crate) fn check_import(server: &ImportedServer) -> Result<(), McpCatalogReason> {
+    // The name becomes the saved entry's name, which no later view escapes.
+    if escape_for_display(&server.name) != server.name {
+        return Err(McpCatalogReason::ControlCharacter {
+            field: "name".to_string(),
+        });
+    }
     match &server.launch {
         ImportedLaunch::Stdio { command, args, env } => {
             if command.starts_with('-') {

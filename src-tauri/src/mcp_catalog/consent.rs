@@ -51,6 +51,25 @@ pub struct ConsentProvenance {
     pub snapshot_fetched_at: Option<String>,
 }
 
+impl ConsentProvenance {
+    /// The namespace and version are registry text the user reads to decide.
+    fn escaped(self) -> Self {
+        let namespace = match self.namespace {
+            Namespace::Github { account } => Namespace::Github {
+                account: escape_for_display(&account),
+            },
+            Namespace::Domain { domain } => Namespace::Domain {
+                domain: escape_for_display(&domain),
+            },
+        };
+        Self {
+            namespace,
+            version: escape_for_display(&self.version),
+            ..self
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsentValue {
@@ -84,11 +103,14 @@ pub struct ConsentView {
 }
 
 /// A backslash, so an escape can't be forged, plus every character that
-/// draws nothing or reorders what follows: controls (Cc), format characters
-/// (Cf: bidi overrides, zero-width joiners, soft hyphen, tag characters),
-/// line and paragraph separators, and the Hangul fillers, which render blank.
+/// draws nothing, reorders what follows, or passes for a plain space:
+/// controls (Cc), format characters (Cf: bidi overrides, zero-width joiners,
+/// soft hyphen, tag characters), line and paragraph separators, default
+/// ignorables (variation selectors, the combining grapheme joiner, Hangul
+/// fillers, Khmer inherent vowels), the blank braille pattern, and every space
+/// separator other than the ASCII space.
 static MUST_ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"[\\\p{Cc}\p{Cf}\p{Zl}\p{Zp}\x{115F}\x{1160}\x{3164}\x{FFA0}]")
+    Regex::new(r"[\\\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\x{2800}[\p{Zs}--\x20]]")
         .expect("escape regex")
 });
 
@@ -195,7 +217,7 @@ impl ConsentView {
             headers,
             host_mounts: mounts,
             warnings,
-            provenance: input.provenance,
+            provenance: input.provenance.map(ConsentProvenance::escaped),
         }
     }
 }

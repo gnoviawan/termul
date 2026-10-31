@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::consent::{
-    escape_for_display, ConsentInput, ConsentProvenance, ConsentView, Namespace, ShownValue,
+    ConsentInput, ConsentProvenance, ConsentView, Namespace, ShownValue,
 };
 use super::convert::{
     check_remote_url, has_cmd_metacharacter, Launch, McpCatalogReason, OptionKind, RemoteTransport,
@@ -691,7 +691,7 @@ pub(crate) fn plan_install(
     let assembled = assemble(&described, &values, Phase::Plan)?;
     let digest = launch_digest(&assembled.config, described.provenance.as_ref());
     let consent_view = consent_view(&described, &assembled);
-    let name = escape_for_display(&described.name);
+    let name = described.name.clone();
     let fields = described.model.fields.clone();
     let (plan_id, expires_at) = store.insert(StoredPlan {
         caller,
