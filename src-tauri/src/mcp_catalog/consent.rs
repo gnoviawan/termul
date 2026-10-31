@@ -1,3 +1,6 @@
+use std::sync::LazyLock;
+
+use regex::Regex;
 use serde::Serialize;
 
 use super::form::Origin;
@@ -66,32 +69,27 @@ pub struct ConsentView {
     pub provenance: Option<ConsentProvenance>,
 }
 
-fn must_escape(ch: char) -> bool {
-    ch.is_control()
-        || matches!(
-            ch,
-            '\u{061C}'
-                | '\u{200B}'..='\u{200F}'
-                | '\u{202A}'..='\u{202E}'
-                | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{2069}'
-                | '\u{FEFF}'
-        )
-}
+/// A backslash, so an escape can't be forged, plus every character that
+/// draws nothing or reorders what follows: controls (Cc), format characters
+/// (Cf: bidi overrides, zero-width joiners, soft hyphen, tag characters),
+/// line and paragraph separators, and the Hangul fillers, which render blank.
+static MUST_ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[\\\p{Cc}\p{Cf}\p{Zl}\p{Zp}\x{115F}\x{1160}\x{3164}\x{FFA0}]")
+        .expect("escape regex")
+});
 
 #[must_use]
 pub fn escape_for_display(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            ch if must_escape(ch) => {
-                out.push_str(&format!("\\u{{{:04X}}}", u32::from(ch)));
+    MUST_ESCAPE
+        .replace_all(text, |capture: &regex::Captures<'_>| {
+            let ch = capture[0].chars().next().expect("one character matched");
+            if ch == '\\' {
+                "\\\\".to_string()
+            } else {
+                format!("\\u{{{:04X}}}", u32::from(ch))
             }
-            ch => out.push(ch),
-        }
-    }
-    out
+        })
+        .into_owned()
 }
 
 pub(crate) struct ShownValue {

@@ -1247,3 +1247,24 @@ async fn a_registry_fixed_value_flagged_secret_is_shown_and_commits_as_shown() {
         ]
     );
 }
+
+#[tokio::test]
+async fn consent_view_escapes_every_invisible_character_and_the_plan_name() {
+    let service = service();
+    let hidden = [
+        '\u{00AD}', '\u{180E}', '\u{2028}', '\u{2029}', '\u{206A}', '\u{206F}', '\u{E0001}',
+        '\u{E007F}', '\u{115F}', '\u{1160}', '\u{3164}', '\u{FFA0}',
+    ];
+    let arg: String = hidden.iter().collect();
+    let json = serde_json::to_string(&json!({
+        "mcpServers": { "no\u{202E}tes\u{3164}": { "command": "node", "args": [arg] } }
+    }))
+    .unwrap();
+    let plan = plan(&service, import_source(&json), &[]).await;
+    assert_eq!(
+        plan.consent_view.argv[1],
+        "\\u{00AD}\\u{180E}\\u{2028}\\u{2029}\\u{206A}\\u{206F}\\u{E0001}\\u{E007F}\
+         \\u{115F}\\u{1160}\\u{3164}\\u{FFA0}"
+    );
+    assert_eq!(plan.name, "no\\u{202E}tes\\u{3164}");
+}
