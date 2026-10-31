@@ -18,6 +18,13 @@ pub enum GithubError {
     },
     NotFound(String),
     NotMergeable(String),
+    /// A fork PR whose head branch the user cannot push to; says why.
+    ForkPushBlocked(String),
+    EmptyComment,
+    /// A `cwd` that is not one of Termul's own worktrees.
+    NotTermulWorktree(String),
+    /// A request Termul refuses before calling gh; the text is the reason.
+    Refused(String),
     Timeout,
     Failed(String),
 }
@@ -32,8 +39,11 @@ impl GithubError {
             Self::RateLimited { .. } => "GH_RATE_LIMITED",
             Self::NotFound(_) => "GH_NOT_FOUND",
             Self::NotMergeable(_) => "GH_NOT_MERGEABLE",
+            Self::ForkPushBlocked(_) => "GH_FORK_PUSH_BLOCKED",
+            Self::EmptyComment => "GH_EMPTY_COMMENT",
+            Self::NotTermulWorktree(_) => "PATH_VALIDATION_FAILED",
             Self::Timeout => "GH_TIMEOUT",
-            Self::Failed(_) => "GH_FAILED",
+            Self::Refused(_) | Self::Failed(_) => "GH_FAILED",
         }
     }
 }
@@ -50,6 +60,11 @@ impl std::fmt::Display for GithubError {
             }
             Self::NotFound(detail) => write!(f, "Not found on GitHub: {detail}"),
             Self::NotMergeable(detail) => write!(f, "The pull request cannot be merged: {detail}"),
+            Self::ForkPushBlocked(detail) | Self::Refused(detail) => f.write_str(detail),
+            Self::EmptyComment => f.write_str("The comment is empty"),
+            Self::NotTermulWorktree(path) => {
+                write!(f, "{path} is not a Termul chat worktree")
+            }
             Self::Timeout => f.write_str("gh did not respond in time"),
             Self::Failed(detail) => write!(f, "gh failed: {detail}"),
         }

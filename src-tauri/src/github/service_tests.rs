@@ -1,10 +1,7 @@
-use super::fake_gh::{fail, fake_gh, has, ok, CallLog, Reply};
+use super::fake_gh::{fail, fake_gh, has, ok, service_with, CallLog, Project, Reply, AUTH};
 use super::runner::SpawnFailure;
 use super::service::GithubService;
 use super::types::*;
-use crate::trackers::GitTracker;
-
-const AUTH: &str = r#"{"hosts":{"github.com":[{"state":"success","active":true,"host":"github.com","login":"octo","tokenSource":"keyring","scopes":"repo, read:org"}]}}"#;
 const FORK_PARENT: &str = r#"{"parent":{"name":"termul","owner":{"login":"gnoviawan"}}}"#;
 
 fn search_data(remaining: u64) -> String {
@@ -52,33 +49,10 @@ fn standard(args: &[String]) -> Reply {
     panic!("unscripted gh call: {args:?}");
 }
 
-struct Project {
-    dir: tempfile::TempDir,
-}
-
-impl Project {
-    fn new(remote: Option<&str>) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cwd = dir.path().to_str().unwrap();
-        let init = GitTracker::run_git_command(cwd, &["init", "-q"]).expect("git runs");
-        assert!(init.status.success());
-        if let Some(url) = remote {
-            let add = GitTracker::run_git_command(cwd, &["remote", "add", "origin", url]).unwrap();
-            assert!(add.status.success());
-        }
-        Self { dir }
-    }
-
-    fn cwd(&self) -> String {
-        self.dir.path().to_string_lossy().into_owned()
-    }
-}
-
 fn service(
     respond: impl Fn(&[String]) -> Reply + Send + Sync + 'static,
 ) -> (GithubService, CallLog) {
-    let (process, log) = fake_gh(respond);
-    (GithubService::with_process(process), log)
+    service_with(fake_gh(respond))
 }
 
 fn repo(owner: &str) -> GithubRepoRef {

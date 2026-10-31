@@ -2874,8 +2874,16 @@ describe('GitHub parity (spec-github-integration)', () => {
       route: '/github/check-log',
       handler: 'get_check_log'
     },
-    { method: 'merge', command: 'github_merge', route: '/github/merge', handler: 'merge' }
+    { method: 'merge', command: 'github_merge', route: '/github/merge', handler: 'merge' },
+    { method: 'comment', command: 'github_comment', route: '/github/comment', handler: 'comment' },
+    {
+      method: 'checkoutPr',
+      command: 'github_checkout_pr',
+      route: '/github/checkout-pr',
+      handler: 'checkout_pr'
+    }
   ]
+  const writeHandlers = new Set(['merge', 'comment', 'checkout_pr'])
 
   it('the facade branches on isTauriContext() between invokeIpc({ request }) and postJson', () => {
     expect(facade).toMatch(/isTauriContext\(\)\s*\?\s*await invokeIpc<T>\(command, \{ request \}\)/)
@@ -2896,13 +2904,22 @@ describe('GitHub parity (spec-github-integration)', () => {
     expect(read('web', 'github_api.rs')).toMatch(new RegExp(`pub async fn ${op.handler}\\(`))
   })
 
-  it('/github/* is token-gated, and only /github/merge takes the remote-write guard', () => {
+  it('/github/* is token-gated, and exactly the write routes take the remote-write guard', () => {
     expect(read('web', 'router', 'gate.rs')).toContain('"/github/",')
     const routes = read('web', 'github_api.rs')
     expect(routes.match(/check_local_only::</g)?.length).toBe(1)
-    expect(routes).toMatch(
-      /pub async fn merge\([\s\S]*?ConnectInfo\(peer\)[\s\S]*?check_local_only::<GithubMergeResult>/
-    )
+    for (const op of ops) {
+      const handler = routes.match(new RegExp(`pub async fn ${op.handler}\\([\\s\\S]*?\\n}`))?.[0]
+      expect(handler, op.handler).toBeDefined()
+      const guarded = new RegExp(
+        `ConnectInfo\\(peer\\)[\\s\\S]*write_refused\\(&state, peer, "${op.route}"\\)`
+      )
+      if (writeHandlers.has(op.handler)) {
+        expect(handler, op.handler).toMatch(guarded)
+      } else {
+        expect(handler, op.handler).not.toContain('ConnectInfo')
+      }
+    }
     expect(routes).toMatch(/resolve_cwd::<T>\(cwd, state, None, false\)/)
   })
 
@@ -2916,7 +2933,7 @@ describe('GitHub parity (spec-github-integration)', () => {
     const rustCodes = [...read('github', 'error.rs').matchAll(/=> "(GH_[A-Z_]+)"/g)]
       .map((m) => m[1])
       .sort()
-    expect(tsCodes.length).toBe(9)
+    expect(tsCodes.length).toBe(11)
     expect(rustCodes).toEqual(tsCodes)
   })
 })

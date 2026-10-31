@@ -5,23 +5,29 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+use serde_json::json;
+
 use parking_lot::Mutex;
 
 use super::auth::{self, HostInventory};
 use super::cache::{CacheKey, QuotaReserve, ReadCache, READ_TTL};
+use super::checkout;
 use super::checks::{self, CHECK_FIELDS, LOG_READ_BYTES};
+use super::comment;
 use super::detail::{self, MergeState};
 use super::error::GithubError;
 use super::graphql::{self, GraphqlVar};
 use super::items;
 use super::repo::{self, RemoteRoute};
-use super::runner::{GhCall, GhProcess, GhRunner, SystemGh, DEFAULT_HOST};
+use super::runner::{GhCall, GhProcess, GhRunner, SystemGh, DEFAULT_HOST, GH_TIMEOUT};
 use super::types::*;
 use crate::git_remote::{git_remote_url, parse_remote_url};
 
 /// A later `gh auth login` (or install) is picked up within this.
 const INVENTORY_TTL: Duration = Duration::from_secs(60);
 const UPSTREAM_TTL: Duration = Duration::from_secs(10 * 60);
+/// `gh pr checkout` fetches the PR head, which can take a while on a big repo.
+const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(120);
 
 static SHARED: OnceLock<Arc<GithubService>> = OnceLock::new();
 
@@ -133,7 +139,7 @@ impl GithubService {
 
     fn run_op<T>(
         &self,
-        op: &'static str,
+        op: &str,
         cwd: &str,
         slot: GithubRepoSlot,
         body: impl FnOnce(&GithubRepoRef) -> Result<T, GithubError>,
@@ -192,6 +198,21 @@ impl GithubService {
         vars: &[(&str, GraphqlVar<'_>)],
     ) -> Result<serde_json::Value, GithubError> {
         let data = graphql::run_graphql(&self.runner, &repo.host, query, vars)?;
+        if let Some(budget) = graphql::rate_budget(&data) {
+            self.reserve.observe(&repo.host, &budget);
+        }
+        Ok(data)
+    }
+
+    /// A query or mutation with its variables on stdin.
+    fn graphql_stdin(
+        &self,
+        repo: &GithubRepoRef,
+        query: &str,
+        variables: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, GithubError> {
+        let data = graphql::run_graphql_stdin(&self.runner, &repo.host, query, variables, timeout)?;
         if let Some(budget) = graphql::rate_budget(&data) {
             self.reserve.observe(&repo.host, &budget);
         }
@@ -324,6 +345,7 @@ impl GithubService {
         self.run_op("get_item", &request.cwd, request.repo, |repo| {
             let op = format!("item:{:?}:{number}", request.kind);
             self.read(repo, op, request.refresh, || {
+                let deadline = Instant::now() + GH_TIMEOUT;
                 let data = self.graphql(
                     repo,
                     &detail::detail_graphql(),
@@ -333,7 +355,15 @@ impl GithubService {
                         ("number", GraphqlVar::Int(number)),
                     ],
                 )?;
-                let node = detail::parse_item_node(&data, request.kind, number)?;
+                let mut node = detail::parse_item_node(&data, request.kind, number)?;
+                detail::load_remaining_pages(
+                    &mut node,
+                    json!({ "owner": repo.owner, "name": repo.name, "number": number }),
+                    deadline,
+                    &mut |query, variables, timeout| {
+                        self.graphql_stdin(repo, query, variables, timeout)
+                    },
+                );
                 let item = node
                     .list_item()
                     .ok_or_else(|| GithubError::NotFound(format!("#{number}")))?;
@@ -474,6 +504,122 @@ impl GithubService {
             // Even a failed write may have changed state on GitHub.
             self.cache.invalidate_repo(repo);
             result.map(|_| GithubMergeResult { number })
+        })
+    }
+
+    pub(crate) fn comment(
+        &self,
+        request: &GithubCommentRequest,
+    ) -> Result<GithubCommentResult, GithubError> {
+        let number = request.number;
+        let op = format!("comment #{number}");
+        let body = comment::checked_body(request).inspect_err(|error| {
+            log::warn!("[github] {op} refused code={}: {error}", error.code());
+        })?;
+        self.run_op(&op, &request.cwd, request.repo, |repo| {
+            let (mutation, variables, created) = match &request.target {
+                GithubCommentTarget::Conversation => {
+                    let data = self.graphql(
+                        repo,
+                        &comment::subject_graphql(),
+                        &[
+                            ("owner", GraphqlVar::Str(&repo.owner)),
+                            ("name", GraphqlVar::Str(&repo.name)),
+                            ("number", GraphqlVar::Int(number)),
+                        ],
+                    )?;
+                    let subject_id = comment::parse_subject(&data, request.kind, number)?;
+                    (
+                        comment::add_comment_graphql(),
+                        json!({ "subjectId": subject_id, "body": body }),
+                        "/addComment/commentEdge/node",
+                    )
+                }
+                GithubCommentTarget::ReviewThread { thread_id } => {
+                    let data = self.graphql(
+                        repo,
+                        &comment::thread_owner_graphql(),
+                        &[("id", GraphqlVar::Str(thread_id))],
+                    )?;
+                    comment::check_thread_owner(&data, repo, number)?;
+                    (
+                        comment::add_thread_reply_graphql(),
+                        json!({ "threadId": thread_id, "body": body }),
+                        "/addPullRequestReviewThreadReply/comment",
+                    )
+                }
+            };
+            let result = self
+                .graphql_stdin(repo, &mutation, variables, GH_TIMEOUT)
+                .and_then(|data| comment::parse_created(&data, created));
+            // Even a failed write may have changed state on GitHub.
+            self.cache.invalidate_repo(repo);
+            result.map(|comment| GithubCommentResult { comment })
+        })
+    }
+
+    /// Reset a chat worktree's branch to PR `number`'s head with `gh pr
+    /// checkout`, after checking an agent's pushes could land there.
+    pub(crate) fn checkout_pr(
+        &self,
+        request: &GithubCheckoutPrRequest,
+    ) -> Result<GithubCheckoutPrResult, GithubError> {
+        let number = request.number;
+        let op = format!("checkout_pr #{number}");
+        let worktree = checkout::chat_worktree(&request.cwd).inspect_err(|error| {
+            log::warn!(
+                "[github] {op} refused cwd={} code={}: {error}",
+                request.cwd,
+                error.code()
+            );
+        })?;
+        self.run_op(&op, &request.cwd, request.repo, |repo| {
+            let data = self.graphql(
+                repo,
+                &checkout::head_graphql(),
+                &[
+                    ("owner", GraphqlVar::Str(&repo.owner)),
+                    ("name", GraphqlVar::Str(&repo.name)),
+                    ("number", GraphqlVar::Int(number)),
+                ],
+            )?;
+            let head = checkout::parse_head(&data, number)?;
+            let push_repo = checkout::push_repo(repo, number, &head)?;
+            log::info!(
+                "[github] {op} running gh pr checkout repo={repo} head={push_repo}:{} branch={}",
+                head.head_ref_name,
+                worktree.branch
+            );
+            let number_arg = number.to_string();
+            let qualified = repo.qualified();
+            let call = GhCall::new(
+                Some(&repo.host),
+                [
+                    "pr",
+                    "checkout",
+                    &number_arg,
+                    "--repo",
+                    &qualified,
+                    "--branch",
+                    &worktree.branch,
+                    "--force",
+                ],
+            )
+            .in_checkout(&worktree.root, CHECKOUT_TIMEOUT);
+            self.runner.stdout(&call)?;
+            let head_sha = checkout::head_sha(&worktree.root)?;
+            if head_sha != head.head_ref_oid {
+                return Err(GithubError::Refused(format!(
+                    "The worktree is at {head_sha} but the pull request head is {}; it changed during checkout, so try again",
+                    head.head_ref_oid
+                )));
+            }
+            let remote = checkout::push_remote(&worktree.root, &worktree.branch, &push_repo);
+            Ok(GithubCheckoutPrResult {
+                head_sha,
+                push_command: checkout::push_command(&remote, &head.head_ref_name),
+                head_ref_name: head.head_ref_name,
+            })
         })
     }
 }

@@ -192,7 +192,10 @@ export interface GithubCheckLogRequest {
 
 export interface GithubCheckLog {
   jobId: number
-  /** The last lines of the job log, at most 200 lines / 16 KB. */
+  /**
+   * The lines around the last `##[error]` line of the job log (up to 150 before, 30 after),
+   * or its last 200 lines when no step failed; at most 16 KB.
+   */
   tail: string
   truncated: boolean
 }

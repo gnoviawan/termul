@@ -1,6 +1,8 @@
 //! `gh api graphql` calls and the issue/PR node shape the list and detail
 //! queries share.
 
+use std::time::Duration;
+
 use serde::Deserialize;
 
 use super::error::GithubError;
@@ -51,8 +53,27 @@ pub(super) fn run_graphql(
             GraphqlVar::Int(number) => args.extend(["-F".to_string(), format!("{name}={number}")]),
         }
     }
-    let stdout = runner.stdout(&GhCall::new(Some(host), args))?;
-    let mut response: serde_json::Value = serde_json::from_slice(&stdout)
+    data_of(&runner.stdout(&GhCall::new(Some(host), args))?)
+}
+
+/// Run a query or mutation on `host` with the request sent on stdin, so
+/// variables (comment bodies) never reach argv or the query text.
+pub(super) fn run_graphql_stdin(
+    runner: &GhRunner,
+    host: &str,
+    query: &str,
+    variables: serde_json::Value,
+    timeout: Duration,
+) -> Result<serde_json::Value, GithubError> {
+    let request = serde_json::json!({ "query": query, "variables": variables });
+    let mut call = GhCall::new(Some(host), ["api", "graphql", "--input", "-"])
+        .with_stdin(serde_json::to_vec(&request).expect("JSON values serialize"));
+    call.timeout = timeout;
+    data_of(&runner.stdout(&call)?)
+}
+
+fn data_of(stdout: &[u8]) -> Result<serde_json::Value, GithubError> {
+    let mut response: serde_json::Value = serde_json::from_slice(stdout)
         .map_err(|e| GithubError::Failed(format!("unreadable GraphQL response: {e}")))?;
     match response.get_mut("data").map(serde_json::Value::take) {
         Some(data) if !data.is_null() => Ok(data),
@@ -66,9 +87,26 @@ pub(super) fn rate_budget(data: &serde_json::Value) -> Option<RateBudget> {
     serde_json::from_value(data.get("rateLimit")?.clone()).ok()
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct PageInfo {
+    pub has_next_page: bool,
+    pub end_cursor: Option<String>,
+}
+
+impl PageInfo {
+    /// The cursor of the next page, when there is one.
+    pub fn next(&self) -> Option<&str> {
+        self.end_cursor.as_deref().filter(|_| self.has_next_page)
+    }
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct Nodes<T> {
     pub nodes: Vec<Option<T>>,
+    #[serde(default)]
+    pub page_info: PageInfo,
 }
 
 impl<T> Nodes<T> {
@@ -118,6 +156,8 @@ pub(super) struct Comments {
     pub total_count: u64,
     #[serde(default)]
     pub nodes: Vec<Option<CommentNode>>,
+    #[serde(default)]
+    pub page_info: PageInfo,
 }
 
 #[derive(Debug, Deserialize)]

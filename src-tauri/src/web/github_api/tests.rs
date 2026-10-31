@@ -42,6 +42,8 @@ fn app(state: AppState) -> axum::Router {
     axum::Router::new()
         .route("/github/items", post(list_items))
         .route("/github/merge", post(merge))
+        .route("/github/comment", post(comment))
+        .route("/github/checkout-pr", post(checkout_pr))
         .with_state(state)
 }
 
@@ -127,6 +129,47 @@ async fn merge_from_a_lan_peer_is_refused_before_any_gh_call() {
     )
     .await;
     assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+}
+
+#[tokio::test]
+async fn comment_and_checkout_from_a_lan_peer_are_refused_before_any_gh_call() {
+    let root = tempfile::tempdir().unwrap();
+    let cwd = root.path().to_string_lossy();
+    let lan = SocketAddr::from(([192, 168, 1, 20], 40000));
+    let comment: IpcBody<GithubCommentResult> = post_json(
+        test_state(root.path()),
+        "/github/comment",
+        serde_json::json!({
+            "cwd": cwd, "repo": "origin", "kind": "issue", "number": 1,
+            "target": { "kind": "conversation" }, "body": "hi"
+        }),
+        lan,
+    )
+    .await;
+    assert_eq!(comment.code.as_deref(), Some("FORBIDDEN"));
+    let checkout: IpcBody<GithubCheckoutPrResult> = post_json(
+        test_state(root.path()),
+        "/github/checkout-pr",
+        serde_json::json!({ "cwd": cwd, "repo": "origin", "number": 1 }),
+        lan,
+    )
+    .await;
+    assert_eq!(checkout.code.as_deref(), Some("FORBIDDEN"));
+}
+
+#[tokio::test]
+async fn checkout_into_the_project_checkout_itself_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let init = GitTracker::run_git_command(root.path().to_str().unwrap(), &["init", "-q"]);
+    assert!(init.expect("git runs").status.success());
+    let body: IpcBody<GithubCheckoutPrResult> = post_json(
+        test_state(root.path()),
+        "/github/checkout-pr",
+        serde_json::json!({ "cwd": root.path().to_string_lossy(), "repo": "origin", "number": 1 }),
+        loopback(),
+    )
+    .await;
+    assert_eq!(body.code.as_deref(), Some("PATH_VALIDATION_FAILED"));
 }
 
 #[tokio::test]

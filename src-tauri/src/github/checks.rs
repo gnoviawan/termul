@@ -9,9 +9,15 @@ use super::types::{GithubCheck, GithubCheckRollup, GithubCheckStatus};
 
 pub(super) const CHECK_FIELDS: &str = "name,state,bucket,link,workflow";
 pub(super) const LOG_TAIL_LINES: usize = 200;
+/// Around the last error line: the failing step's output before it, and the
+/// next lines (later errors, annotations) after it.
+pub(super) const LINES_BEFORE_ERROR: usize = 150;
+pub(super) const LINES_AFTER_ERROR: usize = 30;
+const ERROR_MARK: &str = "##[error]";
 pub(super) const LOG_TAIL_BYTES: usize = 16 * 1024;
 /// How much of the end of a job log is read before trimming to the tail.
-/// Generous so ANSI codes and `\r` noise stripped later still leave 200 lines.
+/// Generous so the last error line is usually inside it, and ANSI codes and
+/// `\r` noise stripped later still leave 200 lines.
 pub(super) const LOG_READ_BYTES: usize = 256 * 1024;
 
 #[derive(Deserialize)]
@@ -79,8 +85,11 @@ pub(super) fn rollup(checks: &[GithubCheck]) -> Option<GithubCheckRollup> {
     })
 }
 
-/// The last [`LOG_TAIL_LINES`] lines of a job log, at most [`LOG_TAIL_BYTES`],
-/// with terminal escape sequences and stray control characters removed.
+/// The part of a job log worth reading, with terminal escape sequences and
+/// stray control characters removed: up to [`LINES_BEFORE_ERROR`] lines
+/// before the last `##[error]` line and [`LINES_AFTER_ERROR`] after it, or
+/// the last [`LOG_TAIL_LINES`] lines when no step reported an error. At most
+/// [`LOG_TAIL_BYTES`]; the error line itself is kept first when trimming.
 /// `cut_before` is whether the read already dropped the log's beginning.
 pub(super) fn log_tail(raw: &[u8], cut_before: bool) -> (String, bool) {
     static ANSI: OnceLock<Regex> = OnceLock::new();
@@ -99,26 +108,43 @@ pub(super) fn log_tail(raw: &[u8], cut_before: bool) -> (String, bool) {
         // The first line is a fragment of a longer one.
         lines.remove(0);
     }
-    let mut truncated = cut_before;
-    if lines.len() > LOG_TAIL_LINES {
-        lines.drain(..lines.len() - LOG_TAIL_LINES);
-        truncated = true;
+    if lines.is_empty() {
+        return (String::new(), cut_before);
     }
-    let mut tail = lines.join("\n");
+    let (mut start, mut end, anchor) = match lines.iter().rposition(|l| l.contains(ERROR_MARK)) {
+        Some(error) => (
+            error.saturating_sub(LINES_BEFORE_ERROR),
+            (error + 1 + LINES_AFTER_ERROR).min(lines.len()),
+            error,
+        ),
+        None => (
+            lines.len().saturating_sub(LOG_TAIL_LINES),
+            lines.len(),
+            lines.len() - 1,
+        ),
+    };
+    let size = |start: usize, end: usize| -> usize {
+        lines[start..end].iter().map(|l| l.len() + 1).sum::<usize>() - 1
+    };
+    let mut bytes = size(start, end);
+    while bytes > LOG_TAIL_BYTES && start < anchor {
+        bytes -= lines[start].len() + 1;
+        start += 1;
+    }
+    while bytes > LOG_TAIL_BYTES && end > anchor + 1 {
+        end -= 1;
+        bytes -= lines[end].len() + 1;
+    }
+    let truncated = cut_before || start > 0 || end < lines.len();
+    let mut tail = lines[start..end].join("\n");
     if tail.len() > LOG_TAIL_BYTES {
-        let mut start = tail.len() - LOG_TAIL_BYTES;
-        while !tail.is_char_boundary(start) {
-            start += 1;
+        // One line longer than the cap: keep its end.
+        let mut cut = tail.len() - LOG_TAIL_BYTES;
+        while !tail.is_char_boundary(cut) {
+            cut += 1;
         }
-        // Start on a whole line when one begins inside the window.
-        if let Some(newline) = tail[start..]
-            .find('\n')
-            .filter(|n| start + n + 1 < tail.len())
-        {
-            start += newline + 1;
-        }
-        tail = tail[start..].to_string();
-        truncated = true;
+        tail = tail[cut..].to_string();
+        return (tail, true);
     }
     (tail, truncated)
 }

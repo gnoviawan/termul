@@ -6,6 +6,7 @@
 //! token` is never run.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
@@ -32,6 +33,12 @@ pub(super) struct GhCall {
     pub args: Vec<String>,
     pub host: Option<String>,
     pub stdout: StdoutCap,
+    /// Fed to `gh` on stdin; user text (comment bodies) travels here, never
+    /// in argv where other local users can read it.
+    pub stdin: Option<Vec<u8>>,
+    /// Working directory; `None` runs outside any checkout.
+    pub cwd: Option<String>,
+    pub timeout: Duration,
 }
 
 impl GhCall {
@@ -44,7 +51,22 @@ impl GhCall {
             args: args.into_iter().map(Into::into).collect(),
             host: host.map(str::to_string),
             stdout: StdoutCap::Bytes(STDOUT_CAP_BYTES),
+            stdin: None,
+            cwd: None,
+            timeout: GH_TIMEOUT,
         }
+    }
+
+    pub fn with_stdin(mut self, input: Vec<u8>) -> Self {
+        self.stdin = Some(input);
+        self
+    }
+
+    /// Run in `cwd` (a checkout `gh` itself changes) with a longer timeout.
+    pub fn in_checkout(mut self, cwd: &str, timeout: Duration) -> Self {
+        self.cwd = Some(cwd.to_string());
+        self.timeout = timeout;
+        self
     }
 
     pub fn keep_tail(mut self, bytes: usize) -> Self {
@@ -76,20 +98,30 @@ pub(super) enum SpawnFailure {
 /// Runs one `gh` process. The system implementation spawns the real binary;
 /// tests script outputs.
 pub(super) trait GhProcess: Send + Sync {
-    fn run(&self, call: &GhCall, timeout: Duration) -> Result<GhOutput, SpawnFailure>;
+    fn run(&self, call: &GhCall) -> Result<GhOutput, SpawnFailure>;
 }
 
 pub(super) struct SystemGh;
 
 impl GhProcess for SystemGh {
-    fn run(&self, call: &GhCall, timeout: Duration) -> Result<GhOutput, SpawnFailure> {
+    fn run(&self, call: &GhCall) -> Result<GhOutput, SpawnFailure> {
         let mut command = Command::new(resolve_executable("gh"));
         crate::process_util::background_command_hygiene(&mut command);
+        // Without an explicit cwd, never pick up a project checkout: every
+        // call names its repo.
+        let dir = call
+            .cwd
+            .as_ref()
+            .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+        let stdin = if call.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        };
         command
             .args(&call.args)
-            // Never pick up a project checkout: every call names its repo.
-            .current_dir(std::env::temp_dir())
-            .stdin(Stdio::null())
+            .current_dir(dir)
+            .stdin(stdin)
             .env("GH_PROMPT_DISABLED", "1")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GH_PAGER", "cat")
@@ -101,14 +133,21 @@ impl GhProcess for SystemGh {
             Some(host) => command.env("GH_HOST", host),
             None => command.env_remove("GH_HOST"),
         };
-        let child = spawn_captured(&mut command, call.stdout).map_err(|error| {
+        let mut child = spawn_captured(&mut command, call.stdout).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 SpawnFailure::Missing
             } else {
                 SpawnFailure::Io(error.to_string())
             }
         })?;
-        match child.wait(timeout.as_millis() as u64) {
+        if let (Some(input), Some(mut pipe)) = (call.stdin.clone(), child.take_stdin()) {
+            // Written off-thread so a gh that stops reading cannot block past
+            // the timeout; a broken pipe shows up as gh's own exit status.
+            std::thread::spawn(move || {
+                let _ = pipe.write_all(&input);
+            });
+        }
+        match child.wait(call.timeout.as_millis() as u64) {
             Ok(output) => Ok(GhOutput {
                 success: output.status.success(),
                 stdout: output.stdout,
@@ -178,7 +217,7 @@ impl GhRunner {
         }
         let output = {
             let _slot = self.take_slot()?;
-            self.process.run(call, GH_TIMEOUT)
+            self.process.run(call)
         };
         let output = match output {
             Ok(output) => output,
@@ -233,7 +272,7 @@ impl GhRunner {
         // `gh api rate_limit` itself does not count against the limit.
         let reset = self
             .process
-            .run(&GhCall::new(Some(host), ["api", "rate_limit"]), GH_TIMEOUT)
+            .run(&GhCall::new(Some(host), ["api", "rate_limit"]))
             .ok()
             .filter(|output| output.success)
             .and_then(|output| exhausted_reset(&output.stdout));

@@ -1,6 +1,8 @@
 import type {
   GithubCheckLogRequest,
+  GithubCheckoutPrRequest,
   GithubChecksRequest,
+  GithubCommentRequest,
   GithubItemRequest,
   GithubListRequest,
   GithubMergeRequest
@@ -41,6 +43,20 @@ const mergeRequest: GithubMergeRequest = {
   action: { kind: 'merge', method: 'squash' }
 }
 
+const commentRequest: GithubCommentRequest = {
+  cwd,
+  repo: 'origin',
+  kind: 'pr',
+  number: 42,
+  target: { kind: 'review_thread', threadId: 'PRRT_kwDO1' },
+  body: 'Fixed in the latest push.'
+}
+const checkoutRequest: GithubCheckoutPrRequest = {
+  cwd: `${cwd}/.termul/worktrees/abc`,
+  repo: 'upstream',
+  number: 42
+}
+
 const cases = [
   {
     call: () => githubApi.getContext(cwd),
@@ -77,6 +93,18 @@ const cases = [
     command: 'github_merge',
     route: '/github/merge',
     request: mergeRequest
+  },
+  {
+    call: () => githubApi.comment(commentRequest),
+    command: 'github_comment',
+    route: '/github/comment',
+    request: commentRequest
+  },
+  {
+    call: () => githubApi.checkoutPr(checkoutRequest),
+    command: 'github_checkout_pr',
+    route: '/github/checkout-pr',
+    request: checkoutRequest
   }
 ]
 

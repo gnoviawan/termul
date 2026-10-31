@@ -8,7 +8,9 @@
 
 mod auth;
 mod cache;
+mod checkout;
 mod checks;
+mod comment;
 mod detail;
 mod error;
 mod graphql;
@@ -25,7 +27,13 @@ pub(crate) use types::*;
 #[cfg(test)]
 mod auth_tests;
 #[cfg(test)]
+mod checkout_tests;
+#[cfg(test)]
 mod checks_tests;
+#[cfg(test)]
+mod comment_tests;
+#[cfg(test)]
+mod detail_tests;
 #[cfg(test)]
 mod fake_gh;
 #[cfg(test)]

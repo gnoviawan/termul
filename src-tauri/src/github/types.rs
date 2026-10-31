@@ -339,3 +339,46 @@ pub struct GithubMergeRequest {
 pub struct GithubMergeResult {
     pub number: u64,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum GithubCommentTarget {
+    Conversation,
+    ReviewThread { thread_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubCommentRequest {
+    pub cwd: String,
+    pub repo: GithubRepoSlot,
+    pub kind: GithubItemKind,
+    pub number: u64,
+    pub target: GithubCommentTarget,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubCommentResult {
+    pub comment: GithubComment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubCheckoutPrRequest {
+    pub cwd: String,
+    pub repo: GithubRepoSlot,
+    pub number: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubCheckoutPrResult {
+    pub head_sha: String,
+    pub head_ref_name: String,
+    pub push_command: String,
+}

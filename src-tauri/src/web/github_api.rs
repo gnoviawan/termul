@@ -1,10 +1,12 @@
-//! `POST /github/{context,items,item,checks,check-log,merge}`: web transport
-//! for the shared [`GithubService`] (desktop twins: the `github_*` Tauri
-//! commands). The body is the request object `lib/github-api.ts` sends.
+//! `POST /github/{context,items,item,checks,check-log,merge,comment,checkout-pr}`:
+//! web transport for the shared [`GithubService`] (desktop twins: the
+//! `github_*` Tauri commands). The body is the request object
+//! `lib/github-api.ts` sends.
 //!
-//! Reads go through `resolve_cwd(.., None, false)` (canonical cwd inside a
-//! registered project). `/github/merge` is a write: the remote-write guard
-//! runs first, so a LAN peer cannot merge without `--allow-remote-writes`.
+//! Every route resolves `cwd` with `resolve_cwd(.., None, false)` (canonical
+//! cwd inside a registered project). `merge`, `comment` and `checkout-pr` are
+//! writes: the remote-write guard runs first, so a LAN peer cannot change
+//! GitHub or a worktree without `--allow-remote-writes`.
 //!
 //! Replies are `IpcBody<T>` with the service's `GH_*` codes. Logs carry the
 //! op, cwd and code, never bodies or `gh` output.
@@ -108,22 +110,59 @@ pub async fn get_check_log(
     .await
 }
 
+/// The reply refusing a write from a peer the remote-write guard rejects.
+fn write_refused<T>(state: &AppState, peer: SocketAddr, route: &str) -> Option<Reply<T>> {
+    check_local_only::<T>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        route,
+    )
+    .map(|forbidden| (StatusCode::OK, Json(forbidden)))
+}
+
 pub async fn merge(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<GithubMergeRequest>,
 ) -> Reply<GithubMergeResult> {
-    if let Some(forbidden) = check_local_only::<GithubMergeResult>(
-        peer,
-        state.allow_remote_writes,
-        state.shared_live_writes_denied,
-        "/github/merge",
-    ) {
-        return (StatusCode::OK, Json(forbidden));
+    if let Some(refused) = write_refused(&state, peer, "/github/merge") {
+        return refused;
     }
     let cwd = req.cwd.clone();
     run(&state, "merge", &cwd, move |service, cwd| {
         service.merge(&GithubMergeRequest { cwd, ..req })
+    })
+    .await
+}
+
+pub async fn comment(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<GithubCommentRequest>,
+) -> Reply<GithubCommentResult> {
+    if let Some(refused) = write_refused(&state, peer, "/github/comment") {
+        return refused;
+    }
+    let cwd = req.cwd.clone();
+    run(&state, "comment", &cwd, move |service, cwd| {
+        service.comment(&GithubCommentRequest { cwd, ..req })
+    })
+    .await
+}
+
+/// The service accepts only Termul chat worktrees of the resolved project.
+pub async fn checkout_pr(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<GithubCheckoutPrRequest>,
+) -> Reply<GithubCheckoutPrResult> {
+    if let Some(refused) = write_refused(&state, peer, "/github/checkout-pr") {
+        return refused;
+    }
+    let cwd = req.cwd.clone();
+    run(&state, "checkout_pr", &cwd, move |service, cwd| {
+        service.checkout_pr(&GithubCheckoutPrRequest { cwd, ..req })
     })
     .await
 }

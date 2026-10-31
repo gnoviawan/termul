@@ -1,7 +1,8 @@
 //! Walks the real `gh` login against this checkout's `origin`. Read-only:
-//! never merges. Run with
+//! never merges, comments or checks out. Run with
 //! `cargo test --lib github::live_tests -- --ignored --nocapture`
-//! (`TERMUL_GH_LIVE_CWD` overrides the checkout).
+//! (`TERMUL_GH_LIVE_CWD` overrides the checkout, `TERMUL_GH_LIVE_LONG_PR` the
+//! PR whose conversation needs paging).
 
 use std::time::Instant;
 
@@ -142,14 +143,46 @@ fn live_gh_walkthrough() {
             })
             .expect("log");
         let lines: Vec<&str> = log.tail.lines().collect();
+        let error = lines.iter().rposition(|line| line.contains("##[error]"));
         println!(
-            "log tail of job {job_id}: {} lines, {} bytes, truncated={}; last 8:",
+            "log tail of job {job_id}: {} lines, {} bytes, truncated={}, last ##[error] at line {error:?}; around it:",
             lines.len(),
             log.tail.len(),
             log.truncated
         );
-        for line in &lines[lines.len().saturating_sub(8)..] {
+        let at = error.unwrap_or(lines.len().saturating_sub(1));
+        for line in &lines[at.saturating_sub(6)..(at + 3).min(lines.len())] {
             println!("  | {line}");
         }
     }
+
+    let long_pr = std::env::var("TERMUL_GH_LIVE_LONG_PR")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(707);
+    let started = Instant::now();
+    let long = service
+        .get_item(&GithubItemRequest {
+            cwd: cwd.clone(),
+            repo: GithubRepoSlot::Origin,
+            kind: GithubItemKind::Pr,
+            number: long_pr,
+            refresh: true,
+        })
+        .expect("long PR detail");
+    let threads = &long.pr.as_ref().expect("pr detail").review_threads;
+    println!(
+        "PR #{long_pr}: {} of {} conversation comments, {} threads ({} comments) in {:?}; last comment {}",
+        long.comments.len(),
+        long.item.comment_count,
+        threads.len(),
+        threads.iter().map(|t| t.comments.len()).sum::<usize>(),
+        started.elapsed(),
+        long.comments.last().map_or("-", |c| c.created_at.as_str())
+    );
+    assert_eq!(
+        long.comments.len() as u64,
+        long.item.comment_count.min(500),
+        "paging loads the whole conversation up to the cap"
+    );
 }

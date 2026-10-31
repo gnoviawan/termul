@@ -180,7 +180,7 @@ pub(crate) fn spawn_git(command: &mut Command, cap: StdoutCap) -> std::io::Resul
 }
 
 impl GitChild {
-    pub(super) fn take_stdin(&mut self) -> Option<std::process::ChildStdin> {
+    pub(crate) fn take_stdin(&mut self) -> Option<std::process::ChildStdin> {
         self.child.stdin.take()
     }
 

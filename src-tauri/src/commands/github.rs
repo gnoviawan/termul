@@ -91,3 +91,25 @@ pub async fn github_merge(
     })
     .await
 }
+
+#[tauri::command]
+pub async fn github_comment(
+    request: GithubCommentRequest,
+) -> Result<IpcResult<GithubCommentResult>, String> {
+    let cwd = request.cwd.clone();
+    run("github_comment", &cwd, move |service, cwd| {
+        service.comment(&GithubCommentRequest { cwd, ..request })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn github_checkout_pr(
+    request: GithubCheckoutPrRequest,
+) -> Result<IpcResult<GithubCheckoutPrResult>, String> {
+    let cwd = request.cwd.clone();
+    run("github_checkout_pr", &cwd, move |service, cwd| {
+        service.checkout_pr(&GithubCheckoutPrRequest { cwd, ..request })
+    })
+    .await
+}

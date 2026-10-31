@@ -1,4 +1,6 @@
-use super::checks::{is_no_checks, job_id_of, log_tail, parse_checks, rollup, LOG_TAIL_LINES};
+use super::checks::{
+    is_no_checks, job_id_of, log_tail, parse_checks, rollup, LOG_TAIL_BYTES, LOG_TAIL_LINES,
+};
 use super::types::{GithubCheck, GithubCheckRollup, GithubCheckStatus};
 
 /// Rows of `gh pr checks 1579 --json name,state,bucket,link,workflow` (gh 2.98).
@@ -132,4 +134,50 @@ fn log_tail_caps_bytes_on_a_line_boundary_and_drops_a_cut_first_line() {
 
     let (tail, truncated) = log_tail(b"agment of a line\nwhole line", true);
     assert_eq!((tail.as_str(), truncated), ("whole line", true));
+}
+
+/// A failed Actions job: setup, a test step that fails, then post-job
+/// cleanup longer than the old 200-line tail.
+fn failed_job_log(step_line: &str) -> String {
+    let mut log = String::new();
+    for i in 0..300 {
+        log.push_str(&format!("2026-10-30T17:42:09.1Z step {i}{step_line}\r\n"));
+    }
+    log.push_str(
+        "2026-10-30T17:42:10.1Z \x1b[31m##[error]Process completed with exit code 1.\x1b[0m\r\n",
+    );
+    for i in 0..250 {
+        log.push_str(&format!("2026-10-30T17:42:11.1Z Post job cleanup {i}\r\n"));
+    }
+    log
+}
+
+#[test]
+fn log_tail_centres_on_the_last_error_line() {
+    let (tail, truncated) = log_tail(failed_job_log("").as_bytes(), false);
+    let lines: Vec<&str> = tail.lines().collect();
+    assert_eq!(lines.len(), 150 + 1 + 30);
+    assert_eq!(lines[0], "2026-10-30T17:42:09.1Z step 150");
+    assert_eq!(
+        lines[150],
+        "2026-10-30T17:42:10.1Z ##[error]Process completed with exit code 1."
+    );
+    assert_eq!(lines[180], "2026-10-30T17:42:11.1Z Post job cleanup 29");
+    assert!(truncated);
+}
+
+#[test]
+fn log_tail_byte_cap_drops_lines_before_the_error_first() {
+    let padding = format!(" {}", "p".repeat(150));
+    let (tail, truncated) = log_tail(failed_job_log(&padding).as_bytes(), false);
+    let lines: Vec<&str> = tail.lines().collect();
+    assert!(tail.len() <= LOG_TAIL_BYTES, "{}", tail.len());
+    assert!(lines[0].starts_with("2026-10-30T17:42:09.1Z step "));
+    assert!(lines.contains(&"2026-10-30T17:42:10.1Z ##[error]Process completed with exit code 1."));
+    assert_eq!(
+        lines.last().unwrap(),
+        &"2026-10-30T17:42:11.1Z Post job cleanup 29",
+        "the lines after the error are kept whole"
+    );
+    assert!(truncated);
 }

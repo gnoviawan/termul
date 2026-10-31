@@ -278,6 +278,8 @@ pub fn router(
         .route("/github/checks", post(github_api::get_checks))
         .route("/github/check-log", post(github_api::get_check_log))
         .route("/github/merge", post(github_api::merge))
+        .route("/github/comment", post(github_api::comment))
+        .route("/github/checkout-pr", post(github_api::checkout_pr))
         // Project icon resolution (spec-project-icon). Mirrors the desktop
         // `project_icon_resolve` command — same shared resolver, read-route
         // posture (boundary check, no write guard).
@@ -528,6 +530,8 @@ pub fn router_with_static(
         .route("/github/checks", post(github_api::get_checks))
         .route("/github/check-log", post(github_api::get_check_log))
         .route("/github/merge", post(github_api::merge))
+        .route("/github/comment", post(github_api::comment))
+        .route("/github/checkout-pr", post(github_api::checkout_pr))
         .route("/project/icon", post(project_icon_api::resolve_icon))
         .route("/search/rg-info", get(search_api::rg_info))
         .route("/search/content", post(search_api::content))

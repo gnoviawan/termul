@@ -2101,6 +2101,8 @@ pub fn run() {
             commands::github_get_checks,
             commands::github_get_check_log,
             commands::github_merge,
+            commands::github_comment,
+            commands::github_checkout_pr,
             commands::git_stage,
             commands::git_unstage,
             commands::git_stage_hunk,
