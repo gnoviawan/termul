@@ -38,8 +38,9 @@ jobs:
             os: ubuntu-22.04
     runs-on: ${{ matrix.os }}
     # A cold Windows build compiles the whole Tauri stack twice (check and
-    # test profiles), then the post-job cache save adds minutes.
-    timeout-minutes: 75
+    # test profiles), then the post-job cache save adds minutes. The suite
+    # crossed 75 min on windows-latest, so the job needs headroom past that.
+    timeout-minutes: 100
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
