@@ -315,6 +315,12 @@ export function AgentModelSelector({
       </SheetTrigger>
       <SheetContent
         side="bottom"
+        // Focus the sheet, not its first field. A focused search field raises the
+        // keyboard, and the browser raises it again when the tab comes back.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          ;(event.currentTarget as HTMLElement).focus()
+        }}
         onEscapeKeyDown={onEscapeKeyDown}
         onCloseAutoFocus={onCloseAutoFocus}
         // The sheet's built-in close button is the last child; the grabber
