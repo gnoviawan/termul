@@ -125,7 +125,7 @@ describe('readBody', () => {
 })
 
 describe('verifySnapshot', () => {
-  function write(servers: number, sha?: string) {
+  function write(servers: number, sha?: string, sample?: boolean) {
     const dir = mkdtempSync(join(tmpdir(), 'mcp-snapshot-'))
     const snapshot = {
       formatVersion: 1,
@@ -137,7 +137,10 @@ describe('verifySnapshot', () => {
     const gz = gzipSync(Buffer.from(JSON.stringify(snapshot)))
     const sha256 = sha ?? createHash('sha256').update(gz).digest('hex')
     writeFileSync(join(dir, SNAPSHOT_FILE), gz)
-    writeFileSync(join(dir, META_FILE), JSON.stringify({ sha256, fetchedAt: 'now', servers }))
+    writeFileSync(
+      join(dir, META_FILE),
+      JSON.stringify({ sha256, fetchedAt: 'now', servers, sample })
+    )
     return dir
   }
 
@@ -148,5 +151,9 @@ describe('verifySnapshot', () => {
   it('rejects a mismatched sha256 or a truncated crawl', () => {
     expect(() => verifySnapshot(write(3, 'f'.repeat(64)), 3)).toThrow(/does not match/)
     expect(() => verifySnapshot(write(3), 4)).toThrow(/minimum 4/)
+  })
+
+  it('rejects the --only sample even when it is large enough', () => {
+    expect(() => verifySnapshot(write(3, undefined, true), 3)).toThrow(/sample/)
   })
 })

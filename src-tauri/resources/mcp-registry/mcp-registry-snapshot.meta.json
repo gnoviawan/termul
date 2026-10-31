@@ -3,5 +3,6 @@
   "fetchedAt": "2026-10-27T03:13:14.559Z",
   "bytes": 3895,
   "servers": 22,
-  "versions": 66
+  "versions": 66,
+  "sample": true
 }

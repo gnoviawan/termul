@@ -49,6 +49,7 @@ export function verifySnapshot(dir, minServers = MIN_RELEASE_SERVERS) {
   const sha256 = createHash('sha256').update(gz).digest('hex')
   if (sha256 !== meta.sha256)
     throw new Error(`snapshot sha256 ${sha256} does not match ${meta.sha256}`)
+  if (meta.sample) throw new Error('snapshot is the --only sample, not a release snapshot')
   const snapshot = JSON.parse(gunzipSync(gz).toString('utf8'))
   if (snapshot.formatVersion !== 1) throw new Error(`snapshot format ${snapshot.formatVersion}`)
   if (snapshot.servers.length !== meta.servers || snapshot.servers.length < minServers) {
@@ -190,7 +191,9 @@ async function main() {
     fetchedAt,
     bytes: gz.length,
     servers: snapshot.servers.length,
-    versions: snapshot.versions.length
+    versions: snapshot.versions.length,
+    // The host crawls the whole registry on its first sync over a sample.
+    ...(only && { sample: true })
   }
   mkdirSync(opts.out, { recursive: true })
   writeAtomic(resolve(opts.out, SNAPSHOT_FILE), gz)
