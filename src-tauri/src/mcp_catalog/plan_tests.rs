@@ -186,7 +186,7 @@ async fn plan(
     values: &[(&str, &str)],
 ) -> InstallPlan {
     match plan_with(service, source, None, values).await {
-        Ok(PlanReply::Plan { plan }) => plan,
+        Ok(PlanReply::Plan { plan }) => *plan,
         other => panic!("expected a plan, got {other:?}"),
     }
 }

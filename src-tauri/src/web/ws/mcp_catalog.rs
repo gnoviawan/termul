@@ -10,14 +10,14 @@ fn invalid_request<T: serde::de::DeserializeOwned>(
     id: &str,
     request: &str,
     payload: &Value,
-) -> Result<T, WsReply> {
+) -> Result<T, Box<WsReply>> {
     serde_json::from_value(payload.clone()).map_err(|error| {
         warn!(target: TARGET, request, category = ?error.classify(), "invalid mcp catalog request");
-        WsReply::err_with_code(
+        Box::new(WsReply::err_with_code(
             id.to_string(),
             "VALIDATION_ERROR",
             format!("invalid {request} request: {error}"),
-        )
+        ))
     })
 }
 
@@ -30,7 +30,7 @@ pub(super) async fn handle_search_mcp_catalog(id: String, payload: &Value) -> Ws
     let request: McpCatalogSearchRequest = match invalid_request(&id, "search_mcp_catalog", payload)
     {
         Ok(request) => request,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     match McpCatalogService::shared().await.search(&request).await {
         Ok(page) => {
@@ -50,7 +50,7 @@ pub(super) async fn handle_search_mcp_catalog(id: String, payload: &Value) -> Ws
 pub(super) async fn handle_describe_mcp_install(id: String, payload: &Value) -> WsReply {
     let request: FormRequest = match invalid_request(&id, "describe_mcp_install", payload) {
         Ok(request) => request,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     match McpCatalogService::shared()
         .await
@@ -65,7 +65,7 @@ pub(super) async fn handle_describe_mcp_install(id: String, payload: &Value) -> 
 pub(super) async fn handle_plan_mcp_install(id: String, payload: &Value, env: &HandlerEnv) -> WsReply {
     let request: PlanRequest = match invalid_request(&id, "plan_mcp_install", payload) {
         Ok(request) => request,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     let caller = PlanCaller::Connection(env.connection_id.to_string());
     match McpCatalogService::shared()
@@ -81,7 +81,7 @@ pub(super) async fn handle_plan_mcp_install(id: String, payload: &Value, env: &H
 pub(super) async fn handle_commit_mcp_install(id: String, payload: &Value, env: &HandlerEnv) -> WsReply {
     let request: CommitRequest = match invalid_request(&id, "commit_mcp_install", payload) {
         Ok(request) => request,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     let caller = PlanCaller::Connection(env.connection_id.to_string());
     match McpCatalogService::shared()
@@ -96,7 +96,7 @@ pub(super) async fn handle_commit_mcp_install(id: String, payload: &Value, env: 
 pub(super) async fn handle_cancel_mcp_install(id: String, payload: &Value, env: &HandlerEnv) -> WsReply {
     let request: CancelRequest = match invalid_request(&id, "cancel_mcp_install", payload) {
         Ok(request) => request,
-        Err(reply) => return reply,
+        Err(reply) => return *reply,
     };
     let caller = PlanCaller::Connection(env.connection_id.to_string());
     match McpCatalogService::shared()

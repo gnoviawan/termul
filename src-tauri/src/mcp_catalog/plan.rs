@@ -135,7 +135,7 @@ pub struct InstallPlan {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "outcome", rename_all = "lowercase")]
 pub enum PlanReply {
-    Plan { plan: InstallPlan },
+    Plan { plan: Box<InstallPlan> },
     Unsupported { reason: McpCatalogReason },
 }
 
@@ -643,7 +643,7 @@ pub(crate) fn plan_install(
         fields.len()
     );
     Ok(PlanReply::Plan {
-        plan: InstallPlan {
+        plan: Box::new(InstallPlan {
             plan_id,
             name,
             source: request.source.clone(),
@@ -653,7 +653,7 @@ pub(crate) fn plan_install(
             form: fields,
             consent_view,
             launch_digest: digest,
-        },
+        }),
     })
 }
 
