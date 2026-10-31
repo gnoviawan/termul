@@ -27,6 +27,7 @@ vi.mock('@/lib/automation-api', () => api)
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
 import { AutomationDetail } from './AutomationDetail'
+import { AutomationDiagram } from './AutomationDiagram'
 import { AutomationList, EMPTY_EXAMPLE } from './AutomationList'
 import { AutomationRunDetail } from './AutomationRunDetail'
 import { AutomationSecretsDialog } from './AutomationSecretsDialog'
@@ -270,5 +271,29 @@ describe('formatDateTime', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('AutomationDiagram', () => {
+  it('reads out every step and branch as a list while the drawing stays hidden', () => {
+    render(
+      <AutomationDiagram graph={fixtureAutomation.graph} trigger={fixtureAutomation.trigger} />
+    )
+
+    const steps = within(screen.getByRole('list', { name: 'Automation steps' }))
+    expect(steps.getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'Trigger: Cron 0 5 * * 1-5 (America/New_York). Next: Fetch items',
+      'Fetch items, HTTP: GET api.example.com. Next: Extract. On error: Fetch failed',
+      'Extract, Agent: claude · sonnet. Next: Urgent?',
+      'Urgent?, Condition: {{nodes.extract.output.urgent}} eq true. If true: Shape',
+      'Shape, Transform: text. Next: Notify',
+      'Notify, HTTP: POST hooks.example.com',
+      'Fetch failed, Fail: fetch failed'
+    ])
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(screen.getByTestId('automation-diagram').lastElementChild).toHaveAttribute(
+      'aria-hidden',
+      'true'
+    )
   })
 })

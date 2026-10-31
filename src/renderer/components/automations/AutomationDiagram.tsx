@@ -2,7 +2,12 @@ import type { Graph, Port, Trigger } from '@shared/types/automation.types'
 import { useId, useMemo } from 'react'
 import { Clock, Zap } from '@/components/icons'
 import { cn } from '@/lib/utils'
-import { NODE_KIND_PRESENTATION, nodeKeyDetail, triggerSummary } from './automation-format'
+import {
+  NODE_KIND_PRESENTATION,
+  nodeKeyDetail,
+  nodeLabels,
+  triggerSummary
+} from './automation-format'
 import { type LayoutMetrics, layoutGraph, TRIGGER } from './automation-layout'
 
 const WIDE: LayoutMetrics = { nodeWidth: 216, nodeHeight: 58, gapX: 24, gapY: 44 }
@@ -17,6 +22,13 @@ const EDGE_CLASS: Record<Port, string> = {
   false: 'text-muted-foreground'
 }
 
+const PORT_TEXT: Record<Port, string> = {
+  out: 'Next',
+  error: 'On error',
+  true: 'If true',
+  false: 'If false'
+}
+
 interface AutomationDiagramProps {
   graph: Graph
   trigger: Trigger
@@ -25,7 +37,8 @@ interface AutomationDiagramProps {
 
 /**
  * Read-only diagram: node cards in the DOM over an SVG of the edges, top to
- * bottom so it fits a phone. Wider graphs scroll sideways.
+ * bottom so it fits a phone. Wider graphs scroll sideways. Screen readers get
+ * the same steps and branches as a list instead.
  */
 export function AutomationDiagram({
   graph,
@@ -35,15 +48,27 @@ export function AutomationDiagram({
   const metrics = narrow ? NARROW : WIDE
   const layout = useMemo(() => layoutGraph(graph, metrics), [graph, metrics])
   const nodes = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node])), [graph])
+  const labels = useMemo(() => nodeLabels(graph.nodes), [graph])
   const markerPrefix = useId()
 
   return (
     <div className="overflow-x-auto pb-1" data-testid="automation-diagram">
+      <ol className="sr-only" aria-label="Automation steps">
+        {layout.nodes.map((placed) => {
+          const node = placed.id === TRIGGER ? undefined : nodes.get(placed.id)
+          const head = node
+            ? `${node.label}, ${NODE_KIND_PRESENTATION[node.spec.kind].label}: ${nodeKeyDetail(node.spec)}`
+            : `Trigger: ${triggerSummary(trigger)}`
+          const branches = layout.edges
+            .filter((edge) => edge.from === placed.id)
+            .map((edge) => `${PORT_TEXT[edge.port]}: ${labels.get(edge.to) ?? edge.to}`)
+          return <li key={placed.id}>{[head, ...branches].join('. ')}</li>
+        })}
+      </ol>
       <div
         className="relative mx-auto"
         style={{ width: layout.width, height: layout.height }}
-        role="img"
-        aria-label={`Automation diagram with ${graph.nodes.length} steps`}
+        aria-hidden="true"
       >
         <svg
           className="pointer-events-none absolute inset-0 overflow-visible"
@@ -122,12 +147,12 @@ export function AutomationDiagram({
           }
           const node = nodes.get(placed.id)
           if (!node) return null
-          const { Icon, label } = NODE_KIND_PRESENTATION[node.spec.kind]
+          const { Icon } = NODE_KIND_PRESENTATION[node.spec.kind]
           return (
             <DiagramCard
               key={node.id}
               style={style}
-              icon={<Icon size={14} aria-label={label} />}
+              icon={<Icon size={14} />}
               label={node.label}
               detail={nodeKeyDetail(node.spec)}
             />
