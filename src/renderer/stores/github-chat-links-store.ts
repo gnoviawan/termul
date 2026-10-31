@@ -38,7 +38,7 @@ interface GithubChatLinksState {
   unlink: (projectId: string, sessionId: string) => void
 }
 
-const hydrations = new Map<string, Promise<void>>()
+const hydrations = new Map<string, Promise<boolean>>()
 
 function persist(projectId: string, links: GithubChatLink[]): void {
   void persistenceApi.write(PersistenceKeys.githubChatLinks(projectId), links).catch(() => {})
@@ -69,20 +69,22 @@ export const useGithubChatLinksStore = create<GithubChatLinksState>((set, get) =
 
 /**
  * Load a project's persisted links once, merged under any linked this run.
- * Idempotent: later calls share the first successful read.
+ * Idempotent: later calls share the first successful read. Resolves false
+ * when the read failed, so a caller about to write links can stop instead of
+ * replacing the persisted list.
  */
-export function hydrateGithubChatLinks(projectId: string): Promise<void> {
+export function hydrateGithubChatLinks(projectId: string): Promise<boolean> {
   const existing = hydrations.get(projectId)
   if (existing) return existing
   const run = persistenceApi
     .read<GithubChatLink[]>(PersistenceKeys.githubChatLinks(projectId))
     .then((result) => {
       if (!result.success) {
-        if (result.code === 'KEY_NOT_FOUND') return
+        if (result.code === 'KEY_NOT_FOUND') return true
         // Not cached: the next call reads again.
         throw new Error(result.error)
       }
-      if (!Array.isArray(result.data)) return
+      if (!Array.isArray(result.data)) return true
       const persisted = result.data
       useGithubChatLinksStore.setState((state) => {
         const live = state.byProject[projectId] ?? []
@@ -90,6 +92,7 @@ export function hydrateGithubChatLinks(projectId: string): Promise<void> {
         const merged = [...persisted.filter((l) => !liveIds.has(l.sessionId)), ...live]
         return { byProject: { ...state.byProject, [projectId]: merged.slice(-MAX_LINKS) } }
       })
+      return true
     })
     .catch((err: unknown) => {
       hydrations.delete(projectId)
@@ -98,6 +101,7 @@ export function hydrateGithubChatLinks(projectId: string): Promise<void> {
         source: 'github.chatLinks.hydrate',
         message: `Could not read the GitHub chat links of project ${projectId}: ${String(err)}`
       })
+      return false
     })
   hydrations.set(projectId, run)
   return run

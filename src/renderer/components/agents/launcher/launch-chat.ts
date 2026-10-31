@@ -1,3 +1,4 @@
+import { toast } from 'sonner'
 import {
   type PrepareLaunchWorktreeResult,
   prepareLaunchWorktree
@@ -101,6 +102,9 @@ async function removeLaunchWorktree(
     log(
       'warn',
       `Could not remove the worktree ${worktreePath} of an aborted launch: ${removed.error}`
+    )
+    toast.error(
+      `Couldn't remove the unused worktree ${worktreePath}. Remove it from the worktree list.`
     )
     return
   }

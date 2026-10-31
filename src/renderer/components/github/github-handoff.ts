@@ -183,7 +183,11 @@ async function handOff(
   const { projectId, itemRef, detail } = ctx
   const { action } = request
   // Before any link is written: a write replaces the persisted list.
-  await hydrateGithubChatLinks(projectId)
+  if (!(await hydrateGithubChatLinks(projectId))) {
+    log('warn', action, `Hand-off of ${itemId} stopped: the chat links could not be read`)
+    toast.error("Couldn't read this project's linked chats. Try again.")
+    return
+  }
 
   if (REOPENED.has(action)) {
     const existing = (useGithubChatLinksStore.getState().byProject[projectId] ?? [])

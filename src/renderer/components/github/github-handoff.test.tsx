@@ -315,6 +315,24 @@ describe('runGithubHandoff', () => {
     ])
   })
 
+  it('stops the hand-off when the linked chats cannot be read', async () => {
+    vi.mocked(persistenceApi.read).mockResolvedValue({
+      success: false,
+      code: 'STORE_UNAVAILABLE',
+      error: 'socket closed'
+    })
+    await runGithubHandoff(
+      { projectId: 'p1', itemRef: itemRef('issue'), detail: detail('issue') },
+      { action: 'start' }
+    )
+
+    expect(seams.toastError).toHaveBeenCalledWith(
+      "Couldn't read this project's linked chats. Try again."
+    )
+    expect(seams.resolveBaseBranch).not.toHaveBeenCalled()
+    expect(persistenceApi.write).not.toHaveBeenCalled()
+  })
+
   it('shows a failure before the launch as a toast instead of rejecting', async () => {
     seams.resolveBaseBranch.mockRejectedValue(new Error('git is not installed'))
     await expect(
