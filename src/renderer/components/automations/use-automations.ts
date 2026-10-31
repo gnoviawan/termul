@@ -62,9 +62,14 @@ function useHostQuery<T>(
   useEffect(() => {
     reload()
     if (key === null) return
-    return onAutomationChanged((change) => {
+    const unsubscribe = onAutomationChanged((change) => {
       if (change === null || latest.current.affects(change)) reload()
     })
+    return () => {
+      unsubscribe()
+      // Drop any load still in flight so it never sets state after unmount.
+      latest.current.request++
+    }
   }, [key, reload])
 
   const current = state.key === key
