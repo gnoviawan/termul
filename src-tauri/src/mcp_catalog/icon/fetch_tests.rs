@@ -180,6 +180,19 @@ fn only_public_addresses_are_public() {
 }
 
 #[test]
+fn local_use_nat64_and_siit_translated_addresses_are_not_public() {
+    for ip in [
+        "64:ff9b:1::a00:1",
+        "64:ff9b:1::808:808",
+        "64:ff9b:1:ffff:ffff:ffff:ffff:ffff",
+        "::ffff:0:a00:1",
+        "::ffff:0:808:808",
+    ] {
+        assert!(!is_public(ip.parse().unwrap()), "{ip} is not public");
+    }
+}
+
+#[test]
 fn the_policy_refuses_http_and_non_public_ip_literals() {
     let check = |url: &str| Policy::PUBLIC_HTTPS.check(&Url::parse(url).unwrap());
     assert_eq!(check("http://a.example/icon.png"), Err(Refused::NotHttps));

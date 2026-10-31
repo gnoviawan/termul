@@ -132,7 +132,9 @@ const NON_PUBLIC_V4: [(Ipv4Addr, u32); 14] = [
     (Ipv4Addr::new(240, 0, 0, 0), 4),
 ];
 
-const NON_PUBLIC_V6: [(Ipv6Addr, u32); 6] = [
+const NON_PUBLIC_V6: [(Ipv6Addr, u32); 8] = [
+    (Ipv6Addr::new(0, 0, 0, 0, 0xffff, 0, 0, 0), 96),
+    (Ipv6Addr::new(0x64, 0xff9b, 1, 0, 0, 0, 0, 0), 48),
     (Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 0), 32),
     (Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32),
     (Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),
