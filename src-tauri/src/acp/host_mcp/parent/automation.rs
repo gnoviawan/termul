@@ -271,6 +271,7 @@ fn answer(
             Ok(Value::String(automation_tools::proposed_text(
                 &proposed.name,
                 proposed.revision,
+                proposed.enabled,
             )))
         }
     }

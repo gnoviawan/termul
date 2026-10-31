@@ -450,6 +450,18 @@ async fn service_errors_map_to_http_statuses() {
 
     let (status, no_body) = send(app.clone(), Method::POST, &ops_uri, None).await;
     assert_eq!((status, &no_body["code"]), (422, &json!("invalid_input")));
+
+    let (status, bad_limit) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/api/automations/{id}/runs?limit=many"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, &bad_limit["success"], &bad_limit["code"]),
+        (422, &json!(false), &json!("invalid_input"))
+    );
 }
 
 #[tokio::test]

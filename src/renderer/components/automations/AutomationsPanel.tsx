@@ -27,8 +27,11 @@ export function AutomationsPanel({
   const [chosenId, setSelectedId] = useState<AutomationId | null>(null)
   const [runId, setRunId] = useState<RunId | null>(null)
   const list = useAutomationList(projectId)
+  // A choice deleted elsewhere (another device, an agent) counts as no choice.
+  const chosen =
+    list.data?.some((automation) => automation.id === chosenId) === false ? null : chosenId
   // Desktop shows the first automation until the user picks one.
-  const selectedId = chosenId ?? (phone ? null : (list.data?.[0]?.id ?? null))
+  const selectedId = chosen ?? (phone ? null : (list.data?.[0]?.id ?? null))
   const detail = useAutomationDetail(selectedId)
   const runs = useAutomationRuns(selectedId)
   const run = runs.data?.find((candidate) => candidate.id === runId) ?? null

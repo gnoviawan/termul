@@ -188,3 +188,33 @@ describe('workspace-store per-project trees', () => {
     })
   })
 })
+
+describe('addAutomationsTab', () => {
+  beforeEach(() => {
+    useWorkspaceStore.setState({
+      ...createProjectWorkspace(),
+      activeProjectId: '',
+      parkedTrees: {}
+    })
+    store().activateProject('A', createProjectWorkspace())
+  })
+
+  function tabIds(): string[] {
+    const root = store().root
+    return root.type === 'leaf' ? root.tabs.map((tab) => tab.id) : []
+  }
+
+  it('opens the tab of the project on screen', () => {
+    store().addAutomationsTab('A')
+
+    expect(tabIds()).toEqual(['automations-A'])
+  })
+
+  it("never puts another project's tab in the tree on screen", () => {
+    store().addAutomationsTab('B')
+
+    expect(tabIds()).toEqual([])
+    store().activateProject('B', createProjectWorkspace())
+    expect(tabIds()).toEqual([])
+  })
+})

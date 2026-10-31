@@ -42,17 +42,26 @@ export const NODE_KIND_PRESENTATION: Record<NodeKind, { label: string; Icon: typ
   fail: { label: 'Fail', Icon: XCircle }
 }
 
-const DATE_TIME = new Intl.DateTimeFormat(undefined, {
+const DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
   weekday: 'short',
   month: 'short',
   day: 'numeric',
   hour: 'numeric',
   minute: '2-digit'
+}
+const DATE_TIME = new Intl.DateTimeFormat(undefined, DATE_TIME_OPTIONS)
+const DATE_TIME_WITH_YEAR = new Intl.DateTimeFormat(undefined, {
+  ...DATE_TIME_OPTIONS,
+  year: 'numeric'
 })
 
-/** Local wall-clock time, e.g. "Mon, Oct 30, 9:00 AM". */
+/**
+ * Local wall-clock time, e.g. "Mon, Oct 30, 9:00 AM", with the year when it
+ * is not the current one ("Mon, Jan 4, 2027, 9:00 AM").
+ */
 export function formatDateTime(ms: number): string {
-  return DATE_TIME.format(ms)
+  const sameYear = new Date(ms).getFullYear() === new Date().getFullYear()
+  return (sameYear ? DATE_TIME : DATE_TIME_WITH_YEAR).format(ms)
 }
 
 export function formatDuration(ms: number): string {
