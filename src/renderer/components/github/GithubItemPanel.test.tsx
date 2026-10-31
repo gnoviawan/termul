@@ -175,6 +175,39 @@ describe('GithubItemPanel', () => {
     expect(api.getChecks).toHaveBeenCalledTimes(2)
   })
 
+  it("hides the previous head's checks until the new head's checks arrive", async () => {
+    api.getItem.mockResolvedValue(ok(detail({ pr: pull({ headSha: 'def456' }) })))
+    const fresh = deferred<ReturnType<typeof ok<typeof CHECKS>>>()
+    api.getChecks.mockResolvedValueOnce(ok(CHECKS)).mockReturnValueOnce(fresh.promise)
+    renderPanel()
+
+    const checks = await screen.findByRole('region', { name: /Checks/ })
+    await waitFor(() => expect(api.getChecks).toHaveBeenCalledTimes(2))
+    expect(within(checks).queryAllByRole('listitem')).toHaveLength(0)
+
+    fresh.resolve(ok({ ...CHECKS, headSha: 'def456' }))
+    await waitFor(() => expect(within(checks).getAllByRole('listitem').length).toBeGreaterThan(0))
+  })
+
+  it('keeps the merge controls disabled while the item is being re-read', async () => {
+    api.getItem.mockResolvedValue(ok(detail({ pr: pull({ mergeStateStatus: 'CLEAN' }) })))
+    renderPanel()
+    const mergeBox = await screen.findByRole('region', { name: 'Merge' })
+    expect(within(mergeBox).getByRole('button', { name: 'Merge' })).toBeEnabled()
+
+    const reread = deferred<ReturnType<typeof ok<GithubItemDetail>>>()
+    api.getItem.mockReturnValueOnce(reread.promise)
+    fireEvent.click(screen.getByRole('button', { name: /Refresh/ }))
+    await waitFor(() =>
+      expect(within(mergeBox).getByRole('button', { name: 'Merge' })).toBeDisabled()
+    )
+
+    reread.resolve(ok(detail({ pr: pull({ mergeStateStatus: 'CLEAN' }) })))
+    await waitFor(() =>
+      expect(within(mergeBox).getByRole('button', { name: 'Merge' })).toBeEnabled()
+    )
+  })
+
   it('gives each Actions job its own row when two share a workflow and name', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     api.getItem.mockResolvedValue(ok(detail()))

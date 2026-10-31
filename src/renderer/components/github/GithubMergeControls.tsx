@@ -48,6 +48,8 @@ interface GithubMergeControlsProps {
   itemRef: GithubItemRef
   detail: GithubItemDetail
   pr: GithubPullDetail
+  /** The item is being re-read; its merge state may be about to change. */
+  refreshing?: boolean
 }
 
 /**
@@ -59,12 +61,14 @@ interface GithubMergeControlsProps {
 export function GithubMergeControls({
   itemRef,
   detail,
-  pr
+  pr,
+  refreshing = false
 }: GithubMergeControlsProps): React.JSX.Element | null {
   const admitted = useServerAdmitsRemoteWrites()
   const [method, setMethod] = useState<GithubMergeMethod>('merge')
   const [confirming, setConfirming] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [acting, setActing] = useState(false)
+  const busy = acting || refreshing
 
   const state = detail.item.state
   if (state === 'merged' || state === 'closed') return null
@@ -83,9 +87,9 @@ export function GithubMergeControls({
       : null
 
   const run = async (action: GithubMergeAction): Promise<void> => {
-    setBusy(true)
+    setActing(true)
     const result = await useGithubStore.getState().merge(itemRef, action)
-    setBusy(false)
+    setActing(false)
     if (result.success) {
       toast.success(SUCCESS_MESSAGE[action.kind])
     } else {
@@ -158,7 +162,7 @@ export function GithubMergeControls({
         title={`${verb} pull request #${detail.item.number}?`}
         message={`${verb} ${pr.headRefName} into ${pr.baseRefName} on GitHub.`}
         confirmLabel={verb}
-        isLoading={busy}
+        isLoading={acting}
         onCancel={() => setConfirming(false)}
         onConfirm={() => {
           setConfirming(false)

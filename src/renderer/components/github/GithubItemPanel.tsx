@@ -158,8 +158,17 @@ export function GithubItemPanel({
                 {pr.changedFiles} {pr.changedFiles === 1 ? 'file' : 'files'} changed
               </span>
             </div>
-            <GithubChecksList cwd={cwd} repo={repo} checks={checks} />
-            <GithubMergeControls itemRef={itemRef} detail={data} pr={pr} />
+            <GithubChecksList
+              cwd={cwd}
+              repo={repo}
+              checks={checksStale ? { ...checks, data: null, status: 'loading' } : checks}
+            />
+            <GithubMergeControls
+              itemRef={itemRef}
+              detail={data}
+              pr={pr}
+              refreshing={detail.status === 'loading'}
+            />
           </>
         )}
 

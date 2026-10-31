@@ -68,13 +68,13 @@ export function GithubChecksList({ cwd, repo, checks }: GithubChecksListProps): 
       )}
       {rows.length > 0 && (
         <ul className="flex flex-col divide-y divide-border rounded-lg border border-border">
-          {rows.map((check) => (
+          {rows.map((check, index) => (
             <CheckRow
               // A workflow that runs on both push and pull_request repeats a job name.
               key={
                 check.jobId !== null
                   ? `job-${check.jobId}`
-                  : `${check.workflow ?? ''}/${check.name}`
+                  : `${check.workflow ?? ''}/${check.name}#${index}`
               }
               cwd={cwd}
               repo={repo}
