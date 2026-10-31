@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ use serde_json::{json, Value};
 use super::search::{McpCatalogSearchRequest, RunnerAvailability};
 use super::snapshot::{item_from_row, LoadedCatalog, McpCatalogSource};
 use super::sync::{
-    commit, fetch, read_cache, Delta, McpCatalogSync, Registry, SyncError, SyncPhase, SyncPlan,
+    commit, fetch, read_cache, read_enabled, Delta, McpCatalogSync, Registry, SyncError, SyncPhase, SyncPlan,
 };
 use super::{McpCatalogService, McpCatalogStatus};
 
@@ -46,10 +47,20 @@ fn base(names: &[&str], sample: bool) -> LoadedCatalog {
     )
 }
 
+#[derive(Clone, Copy)]
 enum Mode {
     Serve,
     Status(u16),
     Oversized,
+    Hang,
+}
+
+struct SetOnDrop<'a>(&'a AtomicBool);
+
+impl Drop for SetOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
 }
 
 struct MockRegistry {
@@ -57,6 +68,7 @@ struct MockRegistry {
     latest: HashMap<String, Value>,
     mode: Mutex<Mode>,
     requests: Mutex<Vec<String>>,
+    abandoned: AtomicBool,
 }
 
 impl MockRegistry {
@@ -69,6 +81,7 @@ impl MockRegistry {
                 .collect(),
             mode: Mutex::new(Mode::Serve),
             requests: Mutex::new(Vec::new()),
+            abandoned: AtomicBool::new(false),
         })
     }
 
@@ -76,13 +89,18 @@ impl MockRegistry {
         self.requests.lock().clone()
     }
 
-    fn respond(&self, uri: &Uri) -> axum::response::Response {
+    async fn respond(&self, uri: &Uri) -> axum::response::Response {
         let query = uri.query().unwrap_or("");
         self.requests.lock().push(format!("{}?{query}", uri.path()));
-        match *self.mode.lock() {
+        let mode = *self.mode.lock();
+        match mode {
             Mode::Serve => {}
             Mode::Status(code) => return StatusCode::from_u16(code).unwrap().into_response(),
             Mode::Oversized => return "x".repeat(9 * 1024 * 1024).into_response(),
+            Mode::Hang => {
+                let _abandoned = SetOnDrop(&self.abandoned);
+                return std::future::pending().await;
+            }
         }
         let path = uri.path().replace("%2F", "/");
         if path == "/v0.1/servers" {
@@ -114,7 +132,7 @@ async fn serve(mock: &Arc<MockRegistry>) -> String {
     let mock = Arc::clone(mock);
     let app = axum::Router::new().fallback(move |uri: Uri| {
         let mock = Arc::clone(&mock);
-        async move { mock.respond(&uri) }
+        async move { mock.respond(&uri).await }
     });
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
@@ -143,6 +161,16 @@ async fn until(
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("status never settled: {:?}", service.status());
+}
+
+async fn until_requested(mock: &MockRegistry, count: usize) {
+    for _ in 0..500 {
+        if mock.requests().len() >= count {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the registry saw {:?}", mock.requests());
 }
 
 fn idle(status: &McpCatalogStatus) -> bool {
@@ -370,6 +398,88 @@ async fn sync_off_sends_no_request_until_it_is_turned_on() {
     assert_eq!(setting["syncEnabled"], json!(false));
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(mock.requests().len(), sent);
+}
+
+#[tokio::test]
+async fn turning_sync_off_during_a_retry_backoff_sends_no_retry() {
+    let mock = MockRegistry::new(
+        vec![row("io.example/alpha", "1.0.0", "active", true)],
+        vec![],
+    );
+    *mock.mode.lock() = Mode::Status(503);
+    let registry = serve(&mock).await;
+    let dir = tempfile::tempdir().unwrap();
+    let service = start(base(&["io.sample/only"], true), dir.path(), &registry);
+    until_requested(&mock, 1).await;
+
+    service.set_sync(false).await.unwrap();
+    // The first retry would go out 2 s after the 503.
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+
+    assert_eq!(mock.requests(), vec!["/v0.1/servers?limit=100&version=latest"]);
+    assert_eq!(service.status().sync, McpCatalogSync::Disabled);
+    assert!(!dir.path().join("registry-cache.json.gz").exists());
+
+    *mock.mode.lock() = Mode::Serve;
+    service.set_sync(true).await.unwrap();
+    let status = until(&service, idle).await;
+    assert_eq!(status.servers, 1);
+}
+
+#[tokio::test]
+async fn turning_sync_off_abandons_the_request_in_flight() {
+    let mock = MockRegistry::new(
+        vec![row("io.example/alpha", "1.0.0", "active", true)],
+        vec![],
+    );
+    *mock.mode.lock() = Mode::Hang;
+    let registry = serve(&mock).await;
+    let dir = tempfile::tempdir().unwrap();
+    let service = start(base(&["io.sample/only"], true), dir.path(), &registry);
+    until_requested(&mock, 1).await;
+
+    service.set_sync(false).await.unwrap();
+    for _ in 0..100 {
+        if mock.abandoned.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    assert!(
+        mock.abandoned.load(Ordering::SeqCst),
+        "the request is still open"
+    );
+    assert_eq!(service.status().sync, McpCatalogSync::Disabled);
+    assert!(!dir.path().join("registry-cache.json.gz").exists());
+
+    *mock.mode.lock() = Mode::Serve;
+    service.set_sync(true).await.unwrap();
+    let status = until(&service, idle).await;
+    assert_eq!(status.servers, 1);
+}
+
+#[test]
+fn only_a_missing_or_valid_setting_turns_sync_on() {
+    let cases = [
+        (None, true),
+        (Some(r#"{"schemaVersion":1,"syncEnabled":true}"#), true),
+        (Some(r#"{"schemaVersion":1,"syncEnabled":false}"#), false),
+        (Some(r#"{"schemaVersion":2,"syncEnabled":true}"#), false),
+        (Some(r#"{"schemaVersion":1,"syncEnabled":"yes"}"#), false),
+        (Some("not json"), false),
+    ];
+    for (setting, enabled) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        if let Some(setting) = setting {
+            std::fs::write(dir.path().join("config.json"), setting).unwrap();
+        }
+        assert_eq!(read_enabled(dir.path()), enabled, "{setting:?}");
+    }
+
+    let unreadable = tempfile::tempdir().unwrap();
+    std::fs::create_dir(unreadable.path().join("config.json")).unwrap();
+    assert!(!read_enabled(unreadable.path()));
 }
 
 #[tokio::test]
