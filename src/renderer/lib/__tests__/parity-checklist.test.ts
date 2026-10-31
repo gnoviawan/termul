@@ -2682,9 +2682,17 @@ describe('MCP install plan parity (spine AD-5, AD-7, AD-12)', () => {
     }
     for (const route of ROUTES) {
       expect(
-        router.match(new RegExp(`"/mcp-catalog/install/${route}", post\\(mcp_catalog_api::`, 'g'))
+        router.match(
+          new RegExp(
+            `"/mcp-catalog/install/${route}",\\s*mcp_catalog_api::install_route\\(mcp_catalog_api::`,
+            'g'
+          )
+        )
       ).toHaveLength(2)
     }
+    expect(http).toMatch(
+      /post\(handler\)\.layer\(DefaultBodyLimit::max\(MAX_INSTALL_BODY_BYTES\)\)/
+    )
   })
 
   it('the form is a read and the three mutations carry the shared write guard', () => {
@@ -2704,8 +2712,11 @@ describe('MCP install plan parity (spine AD-5, AD-7, AD-12)', () => {
     expect(protocol).toMatch(/describe_mcp_install: \['read', null\]/)
     for (const request of ['plan_mcp_install', 'commit_mcp_install', 'cancel_mcp_install']) {
       expect(protocol).toMatch(new RegExp(`'${request}',`))
+    }
+    for (const request of ['plan_mcp_install', 'cancel_mcp_install']) {
       expect(protocol).toMatch(new RegExp(`${request}: \\['idempotent', null\\]`))
     }
+    expect(protocol).toMatch(/commit_mcp_install: \['command', 'never'\]/)
   })
 
   it('the facade binds a plan to the caller on both carriers', () => {
@@ -2728,7 +2739,8 @@ describe('MCP install plan parity (spine AD-5, AD-7, AD-12)', () => {
     const ws = readFileSync(join(SRC_TAURI, 'web', 'ws', 'mcp_catalog.rs'), 'utf-8')
     expect(ws).toMatch(/PlanCaller::Connection\(env\.connection_id\.to_string\(\)\)/)
     const http = readFileSync(join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'), 'utf-8')
-    expect(http).toMatch(/PlanCaller::Client\(with_client\.client_instance_id\)/)
+    expect(http).toMatch(/Ok\(\(PlanCaller::Client\(id\), request\)\)/)
+    expect(http).toMatch(/id\.len\(\) > MAX_CLIENT_ID_LEN/)
     const types = readFileSync(join(SHARED_TYPES, 'mcp-install.types.ts'), 'utf-8')
     for (const method of ['describeInstall', 'planInstall', 'commitInstall', 'cancelInstall']) {
       expect(types).toMatch(new RegExp(`  ${method}\\(request: McpInstall`))
