@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use super::error::GithubError;
+use super::error::{stderr_kind, GithubError, StderrKind};
 use super::runner::{GhCall, GhRunner};
 use super::types::{GithubAuthStatus, GithubTokenSource};
 
@@ -90,8 +90,21 @@ impl HostInventory {
         else {
             return unauthenticated();
         };
+        let hidden_stored_login = accounts
+            .iter()
+            .any(|account| !account.active && account.ok && account.origin == TokenOrigin::Stored);
         if !active.ok {
-            return unauthenticated();
+            // gh prefers an environment token over a stored login, so signing
+            // in again does nothing until the variable is unset.
+            let login_command = match &active.origin {
+                TokenOrigin::Env(var) if hidden_stored_login => unset_command(var),
+                TokenOrigin::Env(var) => format!("{}; {}", unset_command(var), login_command(host)),
+                _ => login_command(host),
+            };
+            return GithubAuthStatus::Unauthenticated {
+                host: host.to_string(),
+                login_command,
+            };
         }
         let scopes = active.scopes.clone().unwrap_or_default();
         let missing_scopes: Vec<String> = match &active.scopes {
@@ -104,9 +117,6 @@ impl HostInventory {
                 .collect(),
             _ => Vec::new(),
         };
-        let hidden_stored_login = accounts
-            .iter()
-            .any(|account| !account.active && account.ok && account.origin == TokenOrigin::Stored);
         let mut fix_commands = Vec::new();
         let token_source = match &active.origin {
             TokenOrigin::Env(var) => {
@@ -255,7 +265,8 @@ fn paren_tail(text: &str) -> &str {
 
 /// Ask `gh` for every host it is signed in to. `--json` exits 0 even when an
 /// account fails to validate; the text report exits 1 then, but still lists
-/// every host, so its exit status is ignored.
+/// every host. A failed text report with no host is "signed out" only when
+/// gh says so; anything else is a gh failure, not a sign-out.
 pub(super) fn load_inventory(runner: &GhRunner) -> Result<HostInventory, GithubError> {
     let json = runner.output(&GhCall::new(None, ["auth", "status", "--json", "hosts"]))?;
     if json.success {
@@ -264,7 +275,13 @@ pub(super) fn load_inventory(runner: &GhRunner) -> Result<HostInventory, GithubE
         }
     }
     log::info!("[github] gh auth status has no usable --json output; parsing the text report");
-    let text = runner.output(&GhCall::new(None, ["auth", "status"]))?;
+    let call = GhCall::new(None, ["auth", "status"]);
+    let text = runner.output(&call)?;
     let combined = format!("{}\n{}", String::from_utf8_lossy(&text.stdout), text.stderr);
-    Ok(parse_auth_text(&combined))
+    let inventory = parse_auth_text(&combined);
+    let signed_out = matches!(stderr_kind(&combined), StderrKind::Unauthenticated);
+    if !text.success && inventory.hosts.is_empty() && !signed_out {
+        return Err(runner.failure(&call, &text));
+    }
+    Ok(inventory)
 }

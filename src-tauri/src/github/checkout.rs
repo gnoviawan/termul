@@ -83,7 +83,7 @@ pub(super) fn chat_worktree(cwd: &str) -> Result<ChatWorktree, GithubError> {
 pub(super) fn head_graphql() -> String {
     format!(
         "query($owner: String!, $name: String!, $number: Int!) {{ {RATE_LIMIT_FIELDS} \
-         repository(owner: $owner, name: $name) {{ pullRequest(number: $number) {{ \
+         repository(owner: $owner, name: $name) {{ viewerPermission pullRequest(number: $number) {{ \
          headRefName headRefOid isCrossRepository maintainerCanModify \
          headRepository {{ name owner {{ login }} viewerPermission }} }} }} }}"
     )
@@ -97,6 +97,9 @@ pub(super) struct PrHead {
     pub is_cross_repository: bool,
     pub maintainer_can_modify: bool,
     head_repository: Option<HeadRepo>,
+    /// The viewer's permission on the base repository.
+    #[serde(skip)]
+    base_permission: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,13 +115,23 @@ pub(super) fn parse_head(data: &serde_json::Value, number: u64) -> Result<PrHead
         .pointer("/repository/pullRequest")
         .filter(|pr| !pr.is_null())
         .ok_or_else(|| GithubError::NotFound(format!("pull request #{number}")))?;
-    serde_json::from_value(pr.clone())
-        .map_err(|e| GithubError::Failed(format!("unreadable pull request #{number}: {e}")))
+    let mut head: PrHead = serde_json::from_value(pr.clone())
+        .map_err(|e| GithubError::Failed(format!("unreadable pull request #{number}: {e}")))?;
+    head.base_permission = data
+        .pointer("/repository/viewerPermission")
+        .and_then(|p| p.as_str())
+        .map(str::to_string);
+    Ok(head)
+}
+
+fn can_write(permission: Option<&str>) -> bool {
+    matches!(permission, Some("ADMIN" | "MAINTAIN" | "WRITE"))
 }
 
 /// The repository commits must be pushed to for the PR's head branch, or
-/// why they cannot be. A fork PR is pushable when its author allows
-/// maintainer edits, or when the user can write to the fork themselves.
+/// why they cannot be. The branch is pushable when the user can write to the
+/// head repository, or when the PR allows maintainer edits and the user can
+/// write to the base repository.
 pub(super) fn push_repo(
     base: &GithubRepoRef,
     number: u64,
@@ -134,11 +147,16 @@ pub(super) fn push_repo(
         owner: repo.owner.login.clone(),
         name: repo.name.clone(),
     };
-    let can_write_fork = matches!(
-        repo.viewer_permission.as_deref(),
-        Some("ADMIN" | "MAINTAIN" | "WRITE")
-    );
-    if head.is_cross_repository && !head.maintainer_can_modify && !can_write_fork {
+    if can_write(repo.viewer_permission.as_deref()) {
+        return Ok(head_repo);
+    }
+    if !head.is_cross_repository {
+        return Err(GithubError::ForkPushBlocked(format!(
+            "You cannot push to {}/{}, so an agent's commits could not be pushed to the branch of pull request #{number}.",
+            base.owner, base.name
+        )));
+    }
+    if !head.maintainer_can_modify {
         return Err(GithubError::ForkPushBlocked(format!(
             "Pull request #{number} comes from the fork {}/{}, which does not allow edits by maintainers, \
              so an agent's commits could not be pushed to its branch. Ask the author to enable \
@@ -146,7 +164,24 @@ pub(super) fn push_repo(
             head_repo.owner, head_repo.name
         )));
     }
+    if !can_write(head.base_permission.as_deref()) {
+        return Err(GithubError::ForkPushBlocked(format!(
+            "Pull request #{number} comes from the fork {}/{}, which allows edits only by maintainers of {}/{}, \
+             and you cannot push to {}/{}, so an agent's commits could not be pushed to its branch.",
+            head_repo.owner, head_repo.name, base.owner, base.name, base.owner, base.name
+        )));
+    }
     Ok(head_repo)
+}
+
+/// Point `branch` at the detached HEAD and check it out; the working tree is
+/// left as it is.
+pub(super) fn attach_branch(root: &str, branch: &str) -> Result<(), GithubError> {
+    git(root, &["switch", "-q", "-C", branch])
+        .map(|_| ())
+        .ok_or_else(|| {
+            GithubError::Failed(format!("git switch -C {branch} failed in the worktree"))
+        })
 }
 
 pub(super) fn head_sha(root: &str) -> Result<String, GithubError> {
@@ -180,7 +215,7 @@ pub(super) fn push_remote(root: &str, branch: &str, head_repo: &GithubRepoRef) -
         .filter_map(|key| git(root, &["config", &format!("branch.{branch}.{key}")]));
     for candidate in configured.chain(remotes.iter().cloned()) {
         let url = if remotes.contains(&candidate) {
-            git(root, &["remote", "get-url", &candidate]).unwrap_or_default()
+            git(root, &["remote", "get-url", "--push", &candidate]).unwrap_or_default()
         } else {
             candidate.clone()
         };

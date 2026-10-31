@@ -48,7 +48,8 @@ pub(crate) fn git_remote_url(cwd: &str) -> Option<String> {
 
 /// Parse a `git remote` URL. Covers https/http/ssh/git+ssh/git schemes,
 /// scp-like `git@host:path`, trailing `.git`, ports, and self-hosted hosts.
-/// `None` for local paths and unparseable strings.
+/// `None` for local paths, unparseable strings, and hosts that are not a DNS
+/// name (the host is shown in `gh auth login --hostname <host>` commands).
 pub(crate) fn parse_remote_url(raw: &str) -> Option<ParsedRemote> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -60,6 +61,9 @@ pub(crate) fn parse_remote_url(raw: &str) -> Option<ParsedRemote> {
         let url = Url::parse(&normalized).ok()?;
         let scheme = url.scheme();
         let host = url.host_str()?.to_ascii_lowercase();
+        if !is_dns_name(&host) {
+            return None;
+        }
         let web = match scheme {
             "https" | "http" => true,
             "ssh" | "git" => false,
@@ -79,7 +83,7 @@ pub(crate) fn parse_remote_url(raw: &str) -> Option<ParsedRemote> {
     let (user_host, path) = raw.split_once(':')?;
     let (_, host) = user_host.rsplit_once('@')?;
     let host = host.trim().to_ascii_lowercase();
-    if host.is_empty() || host.contains('/') || path.is_empty() {
+    if !is_dns_name(&host) || path.is_empty() {
         return None;
     }
     let (owner, name) = path_owner_name(path);
@@ -90,6 +94,14 @@ pub(crate) fn parse_remote_url(raw: &str) -> Option<ParsedRemote> {
         name,
         insecure_http: false,
     })
+}
+
+/// Letters, digits, `.`, `-`, and `_` (SSH config aliases use it).
+fn is_dns_name(host: &str) -> bool {
+    !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
 fn path_owner_name(path: &str) -> (Option<String>, Option<String>) {

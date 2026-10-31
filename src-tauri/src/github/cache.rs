@@ -29,8 +29,16 @@ struct Entry {
 }
 
 #[derive(Default)]
+struct Entries {
+    map: HashMap<CacheKey, Entry>,
+    /// Bumped by every invalidation, so a read that started before a write
+    /// does not store what it fetched.
+    generation: u64,
+}
+
+#[derive(Default)]
 pub(super) struct ReadCache {
-    entries: Mutex<HashMap<CacheKey, Entry>>,
+    entries: Mutex<Entries>,
 }
 
 impl ReadCache {
@@ -41,18 +49,29 @@ impl ReadCache {
         max_age: Option<Duration>,
     ) -> Option<T> {
         let entries = self.entries.lock();
-        let entry = entries.get(key)?;
+        let entry = entries.map.get(key)?;
         if max_age.is_some_and(|max| entry.stored.elapsed() > max) {
             return None;
         }
         entry.value.downcast_ref::<T>().cloned()
     }
 
-    pub fn put<T: Send + Sync + 'static>(&self, key: CacheKey, value: T) {
+    /// Taken before a fetch and handed back to [`Self::put`].
+    pub fn generation(&self) -> u64 {
+        self.entries.lock().generation
+    }
+
+    /// Store `value` unless the cache was invalidated since `fetched_at`.
+    pub fn put<T: Send + Sync + 'static>(&self, key: CacheKey, value: T, fetched_at: u64) {
         let mut entries = self.entries.lock();
+        if entries.generation != fetched_at {
+            return;
+        }
         // Drop long-dead entries so a long session doesn't grow without bound.
-        entries.retain(|_, entry| entry.stored.elapsed() < READ_TTL * 20);
-        entries.insert(
+        entries
+            .map
+            .retain(|_, entry| entry.stored.elapsed() < READ_TTL * 20);
+        entries.map.insert(
             key,
             Entry {
                 stored: Instant::now(),
@@ -62,7 +81,9 @@ impl ReadCache {
     }
 
     pub fn invalidate_repo(&self, repo: &GithubRepoRef) {
-        self.entries.lock().retain(|key, _| key.repo != *repo);
+        let mut entries = self.entries.lock();
+        entries.generation += 1;
+        entries.map.retain(|key, _| key.repo != *repo);
     }
 }
 

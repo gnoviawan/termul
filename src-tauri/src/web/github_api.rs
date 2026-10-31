@@ -45,7 +45,7 @@ async fn run<T: Send + 'static>(
             IpcBody::ok(data)
         }
         Ok(Err(error)) => {
-            tracing::warn!(op, path = %cwd_for_log, code = error.code(), error = %error, "github op failed");
+            tracing::warn!(op, path = %cwd_for_log, code = error.code(), "github op failed");
             IpcBody::<T>::err(error.to_string(), error.code())
         }
         Err(error) => {

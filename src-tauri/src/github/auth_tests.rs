@@ -67,10 +67,53 @@ fn stored_login_with_required_scopes_is_connected_with_no_fixes() {
     );
 }
 
+fn unset(var: &str) -> String {
+    if cfg!(windows) {
+        format!("Remove-Item Env:{var}")
+    } else {
+        format!("unset {var}")
+    }
+}
+
 #[test]
-fn invalid_active_env_token_reads_as_unauthenticated() {
+fn invalid_env_token_hiding_a_stored_login_offers_unset() {
     assert_eq!(
         inventory(JSON_BAD_ENV).status_for("github.com"),
+        GithubAuthStatus::Unauthenticated {
+            host: "github.com".to_string(),
+            login_command: unset("GH_TOKEN"),
+        }
+    );
+}
+
+#[test]
+fn invalid_env_token_alone_offers_unset_then_login() {
+    let inventory = with_accounts(
+        "github.com",
+        vec![account(
+            false,
+            true,
+            TokenOrigin::Env("GH_TOKEN".into()),
+            None,
+        )],
+    );
+    assert_eq!(
+        inventory.status_for("github.com"),
+        GithubAuthStatus::Unauthenticated {
+            host: "github.com".to_string(),
+            login_command: format!("{}; gh auth login --hostname github.com", unset("GH_TOKEN")),
+        }
+    );
+}
+
+#[test]
+fn failed_stored_login_offers_login() {
+    let inventory = with_accounts(
+        "github.com",
+        vec![account(false, true, TokenOrigin::Stored, None)],
+    );
+    assert_eq!(
+        inventory.status_for("github.com"),
         GithubAuthStatus::Unauthenticated {
             host: "github.com".to_string(),
             login_command: "gh auth login --hostname github.com".to_string(),
@@ -257,5 +300,32 @@ fn auth_status_serializes_as_the_ts_union() {
     assert_eq!(
         serde_json::to_value(GithubAuthStatus::CliMissing).unwrap(),
         serde_json::json!({ "state": "cli_missing" })
+    );
+}
+
+fn text_inventory(stderr: &'static str) -> Result<HostInventory, crate::github::GithubError> {
+    let (process, _) = super::fake_gh::fake_gh(move |args| {
+        if args.iter().any(|arg| arg == "--json") {
+            return super::fake_gh::fail("unknown flag: --json");
+        }
+        super::fake_gh::fail(stderr)
+    });
+    super::auth::load_inventory(&super::runner::GhRunner::new(process))
+}
+
+#[test]
+fn old_gh_signed_out_text_report_is_an_empty_inventory() {
+    assert_eq!(
+        text_inventory("You are not logged into any GitHub hosts. To log in, run: gh auth login"),
+        Ok(HostInventory::default())
+    );
+}
+
+#[test]
+fn old_gh_failing_text_report_is_an_error_not_a_sign_out() {
+    let error = text_inventory("failed to read configuration: permission denied").unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "gh failed: failed to read configuration: permission denied"
     );
 }

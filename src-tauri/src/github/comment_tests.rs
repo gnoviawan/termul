@@ -1,4 +1,5 @@
 use super::fake_gh::{fail, fake_gh_with_stdin, has, ok, service_with, Project, Reply, AUTH};
+use super::runner::SpawnFailure;
 use super::types::*;
 use super::GithubError;
 
@@ -227,6 +228,39 @@ fn a_failed_mutation_reports_gh_and_still_drops_cached_reads() {
     assert_eq!(error.code(), "GH_FAILED");
     service.list_items(&list(project.cwd())).unwrap();
     assert_eq!(log.count_containing("q=repo:"), 2);
+}
+
+#[test]
+fn a_comment_write_with_an_unknown_outcome_says_it_may_be_posted() {
+    let project = Project::new(Some("https://github.com/me/termul.git"));
+    let comment = |reply: fn() -> Reply| {
+        let (service, _) = service_with(fake_gh_with_stdin(move |args, stdin| {
+            if has(args, "--input") {
+                reply()
+            } else {
+                standard(args, stdin)
+            }
+        }));
+        service
+            .comment(&request(
+                project.cwd(),
+                GithubItemKind::Issue,
+                GithubCommentTarget::Conversation,
+                "hi",
+            ))
+            .unwrap_err()
+            .to_string()
+    };
+    assert_eq!(
+        comment(|| Err(SpawnFailure::TimedOut)),
+        "gh failed: gh did not respond in time, so the comment may already be posted; \
+         check the conversation before sending it again"
+    );
+    assert_eq!(
+        comment(|| ok(r#"{"data":{"addComment":null}}"#)),
+        "gh failed: GitHub did not return the created comment, so the comment may already be posted; \
+         check the conversation before sending it again"
+    );
 }
 
 #[test]

@@ -159,5 +159,12 @@ pub(super) fn parse_created(
         .filter(|node| !node.is_null())
         .and_then(|node| serde_json::from_value::<CommentNode>(node.clone()).ok())
         .map(|node| node.to_comment())
-        .ok_or_else(|| GithubError::Failed("GitHub did not return the created comment".to_string()))
+        .ok_or_else(|| maybe_posted("GitHub did not return the created comment"))
+}
+
+/// A write whose outcome is unknown: resending it could post the comment twice.
+pub(super) fn maybe_posted(what: &str) -> GithubError {
+    GithubError::Failed(format!(
+        "{what}, so the comment may already be posted; check the conversation before sending it again"
+    ))
 }

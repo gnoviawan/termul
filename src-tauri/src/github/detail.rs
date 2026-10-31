@@ -103,10 +103,7 @@ pub(super) fn load_remaining_pages(
 ) {
     let mut pager = Pager { deadline, fetch };
     if let Err(error) = pager.load(node, &target) {
-        log::warn!(
-            "[github] detail paging stopped early code={}: {error}",
-            error.code()
-        );
+        log::warn!("[github] detail paging stopped early code={}", error.code());
     }
 }
 

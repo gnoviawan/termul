@@ -111,7 +111,8 @@ pub(super) fn log_tail(raw: &[u8], cut_before: bool) -> (String, bool) {
     if lines.is_empty() {
         return (String::new(), cut_before);
     }
-    let (mut start, mut end, anchor) = match lines.iter().rposition(|l| l.contains(ERROR_MARK)) {
+    let error = lines.iter().rposition(|l| l.contains(ERROR_MARK));
+    let (mut start, mut end, anchor) = match error {
         Some(error) => (
             error.saturating_sub(LINES_BEFORE_ERROR),
             (error + 1 + LINES_AFTER_ERROR).min(lines.len()),
@@ -138,12 +139,21 @@ pub(super) fn log_tail(raw: &[u8], cut_before: bool) -> (String, bool) {
     let truncated = cut_before || start > 0 || end < lines.len();
     let mut tail = lines[start..end].join("\n");
     if tail.len() > LOG_TAIL_BYTES {
-        // One line longer than the cap: keep its end.
-        let mut cut = tail.len() - LOG_TAIL_BYTES;
-        while !tail.is_char_boundary(cut) {
-            cut += 1;
+        // One line longer than the cap: keep the start of an error line,
+        // where its marker is, and the end of the log's last line.
+        if error.is_some() {
+            let mut cut = LOG_TAIL_BYTES;
+            while !tail.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            tail.truncate(cut);
+        } else {
+            let mut cut = tail.len() - LOG_TAIL_BYTES;
+            while !tail.is_char_boundary(cut) {
+                cut += 1;
+            }
+            tail = tail[cut..].to_string();
         }
-        tail = tail[cut..].to_string();
         return (tail, true);
     }
     (tail, truncated)

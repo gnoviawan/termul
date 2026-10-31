@@ -117,6 +117,12 @@ fn at_most_four_gh_processes_run_at_once() {
         fake_gh(move |_| {
             let now = running.fetch_add(1, Ordering::SeqCst) + 1;
             peak.fetch_max(now, Ordering::SeqCst);
+            // Hold the slot until four calls have overlapped, so a slow
+            // machine cannot serialise them; then linger so a fifth would show.
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while peak.load(Ordering::SeqCst) < 4 && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
             std::thread::sleep(Duration::from_millis(50));
             running.fetch_sub(1, Ordering::SeqCst);
             ok("{}")

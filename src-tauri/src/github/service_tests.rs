@@ -332,6 +332,46 @@ fn merge_pins_the_head_it_read_and_invalidates_cached_reads() {
 }
 
 #[test]
+fn a_read_that_overlaps_a_write_is_not_cached() {
+    let project = Project::new(Some("https://github.com/me/termul.git"));
+    let shared: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<GithubService>>> =
+        Default::default();
+    let cwd = project.cwd();
+    let (service, log) = {
+        let shared = shared.clone();
+        let searches = std::sync::atomic::AtomicUsize::new(0);
+        service(move |args| {
+            let first_search = query_has(args, "search(")
+                && searches.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+            if first_search {
+                // A merge lands while the list is being fetched.
+                let service = shared.get().expect("service set");
+                service
+                    .merge(&merge_request(
+                        cwd.clone(),
+                        GithubMergeAction::DisableAutoMerge,
+                    ))
+                    .unwrap();
+            }
+            standard(args)
+        })
+    };
+    let service = std::sync::Arc::new(service);
+    assert!(shared.set(service.clone()).is_ok());
+    service
+        .list_items(&list_request(project.cwd(), GithubRepoSlot::Origin, false))
+        .unwrap();
+    service
+        .list_items(&list_request(project.cwd(), GithubRepoSlot::Origin, false))
+        .unwrap();
+    assert_eq!(
+        log.count_containing("q=repo:"),
+        2,
+        "the list fetched before the merge was not served afterwards"
+    );
+}
+
+#[test]
 fn a_pr_without_checks_has_no_rollup() {
     let project = Project::new(Some("https://github.com/me/termul.git"));
     let (service, _) = service(standard);

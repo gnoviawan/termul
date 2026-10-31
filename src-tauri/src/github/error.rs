@@ -124,7 +124,7 @@ pub(super) fn classify_failure(stderr: &str, host: &str) -> GithubError {
     }
 }
 
-pub(super) fn bounded(stderr: &str) -> String {
+fn bounded(stderr: &str) -> String {
     let trimmed = stderr.trim();
     let trimmed = trimmed.strip_prefix("gh: ").unwrap_or(trimmed);
     match trimmed.char_indices().nth(MAX_DETAIL_CHARS) {

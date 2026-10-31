@@ -96,3 +96,16 @@ fn parse_local_paths_are_not_remotes() {
         );
     }
 }
+
+#[test]
+fn hosts_that_are_not_dns_names_are_not_remotes() {
+    for raw in [
+        "git@evil;touch x:acme/w.git",
+        "git@ev il:acme/w.git",
+        "git@$(id):acme/w.git",
+        "ssh://git@evil;id/acme/w.git",
+    ] {
+        assert_eq!(parse_remote_url(raw), None, "{raw} must not parse");
+    }
+    assert_eq!(parsed("git@github_work:acme/w.git").host, "github_work");
+}

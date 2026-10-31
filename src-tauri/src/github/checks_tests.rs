@@ -181,3 +181,15 @@ fn log_tail_byte_cap_drops_lines_before_the_error_first() {
     );
     assert!(truncated);
 }
+
+#[test]
+fn log_tail_keeps_the_marker_of_an_error_line_longer_than_the_cap() {
+    let message = "x".repeat(LOG_TAIL_BYTES * 2);
+    let log = format!("setup\n2026-10-30T17:42:10.1Z ##[error]{message}\ncleanup\n");
+    let (tail, truncated) = log_tail(log.as_bytes(), false);
+    assert_eq!(
+        tail,
+        format!("2026-10-30T17:42:10.1Z ##[error]{message}")[..LOG_TAIL_BYTES]
+    );
+    assert!(truncated);
+}

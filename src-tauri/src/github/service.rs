@@ -83,10 +83,7 @@ impl GithubService {
                 "[github] gh auth inventory loaded: hosts={:?}",
                 inventory.hosts.keys().collect::<Vec<_>>()
             ),
-            Err(error) => log::warn!(
-                "[github] gh auth inventory failed code={}: {error}",
-                error.code()
-            ),
+            Err(error) => log::warn!("[github] gh auth inventory failed code={}", error.code()),
         }
         if matches!(result, Ok(_) | Err(GithubError::CliMissing)) {
             *slot = Some((Instant::now(), result.clone()));
@@ -146,18 +143,12 @@ impl GithubService {
     ) -> Result<T, GithubError> {
         log::debug!("[github] {op} start cwd={cwd} slot={slot:?}");
         let repo = self.target(cwd, slot).inspect_err(|error| {
-            log::warn!(
-                "[github] {op} failed cwd={cwd} code={}: {error}",
-                error.code()
-            );
+            log::warn!("[github] {op} failed cwd={cwd} code={}", error.code());
         })?;
         let result = body(&repo);
         match &result {
             Ok(_) => log::info!("[github] {op} ok repo={repo}"),
-            Err(error) => log::warn!(
-                "[github] {op} failed repo={repo} code={}: {error}",
-                error.code()
-            ),
+            Err(error) => log::warn!("[github] {op} failed repo={repo} code={}", error.code()),
         }
         result
     }
@@ -186,8 +177,9 @@ impl GithubService {
                 return Ok(hit);
             }
         }
+        let generation = self.cache.generation();
         let value = fetch()?;
-        self.cache.put(key, value.clone());
+        self.cache.put(key, value.clone(), generation);
         Ok(value)
     }
 
@@ -293,7 +285,7 @@ impl GithubService {
         let upstream = match auth {
             GithubAuthStatus::Connected { .. } => self.upstream(&origin).unwrap_or_else(|error| {
                 log::warn!(
-                    "[github] fork parent lookup failed repo={origin} code={}: {error}",
+                    "[github] fork parent lookup failed repo={origin} code={}",
                     error.code()
                 );
                 None
@@ -514,7 +506,7 @@ impl GithubService {
         let number = request.number;
         let op = format!("comment #{number}");
         let body = comment::checked_body(request).inspect_err(|error| {
-            log::warn!("[github] {op} refused code={}: {error}", error.code());
+            log::warn!("[github] {op} refused code={}", error.code());
         })?;
         self.run_op(&op, &request.cwd, request.repo, |repo| {
             let (mutation, variables, created) = match &request.target {
@@ -551,6 +543,10 @@ impl GithubService {
             };
             let result = self
                 .graphql_stdin(repo, &mutation, variables, GH_TIMEOUT)
+                .map_err(|error| match error {
+                    GithubError::Timeout => comment::maybe_posted("gh did not respond in time"),
+                    other => other,
+                })
                 .and_then(|data| comment::parse_created(&data, created));
             // Even a failed write may have changed state on GitHub.
             self.cache.invalidate_repo(repo);
@@ -558,8 +554,11 @@ impl GithubService {
         })
     }
 
-    /// Reset a chat worktree's branch to PR `number`'s head with `gh pr
-    /// checkout`, after checking an agent's pushes could land there.
+    /// Move a chat worktree's branch to PR `number`'s head, after checking an
+    /// agent's pushes could land there. `gh pr checkout --detach` fetches and
+    /// checks out the head the way `git checkout` does, refusing to overwrite
+    /// local changes made since the cleanliness check; the chat branch is then
+    /// pointed at it.
     pub(crate) fn checkout_pr(
         &self,
         request: &GithubCheckoutPrRequest,
@@ -568,7 +567,7 @@ impl GithubService {
         let op = format!("checkout_pr #{number}");
         let worktree = checkout::chat_worktree(&request.cwd).inspect_err(|error| {
             log::warn!(
-                "[github] {op} refused cwd={} code={}: {error}",
+                "[github] {op} refused cwd={} code={}",
                 request.cwd,
                 error.code()
             );
@@ -600,13 +599,12 @@ impl GithubService {
                     &number_arg,
                     "--repo",
                     &qualified,
-                    "--branch",
-                    &worktree.branch,
-                    "--force",
+                    "--detach",
                 ],
             )
             .in_checkout(&worktree.root, CHECKOUT_TIMEOUT);
             self.runner.stdout(&call)?;
+            checkout::attach_branch(&worktree.root, &worktree.branch)?;
             let head_sha = checkout::head_sha(&worktree.root)?;
             if head_sha != head.head_ref_oid {
                 return Err(GithubError::Refused(format!(

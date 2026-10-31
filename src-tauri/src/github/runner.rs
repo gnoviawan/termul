@@ -2,7 +2,7 @@
 //! which caps concurrency, keeps a per-host rate-limit backoff window, and
 //! maps spawn and exit failures to [`GithubError`].
 //!
-//! Never logged: stdout of any call, environment contents, tokens. `gh auth
+//! Never logged: output of any call, environment contents, tokens. `gh auth
 //! token` is never run.
 
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime};
 
 use parking_lot::{Condvar, Mutex};
 
-use super::error::{bounded, classify_failure, stderr_kind, GithubError, StderrKind};
+use super::error::{classify_failure, stderr_kind, GithubError, StderrKind};
 use crate::trackers::git_tracker::{resolve_executable, spawn_captured, GitWaitError, StdoutCap};
 
 pub(super) const GH_TIMEOUT: Duration = Duration::from_secs(20);
@@ -198,12 +198,13 @@ impl GhRunner {
     /// The error for a non-zero exit of `call`.
     pub fn failure(&self, call: &GhCall, output: &GhOutput) -> GithubError {
         let host = call.host.as_deref().unwrap_or(DEFAULT_HOST);
+        let error = classify_failure(&output.stderr, host);
         log::warn!(
-            "[github] gh {} failed on {host}: {}",
+            "[github] gh {} failed on {host} code={}",
             call.label(),
-            bounded(&output.stderr)
+            error.code()
         );
-        classify_failure(&output.stderr, host)
+        error
     }
 
     /// Run `call` and return its output even on a non-zero exit, for commands

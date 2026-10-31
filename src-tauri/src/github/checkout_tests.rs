@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::fake_gh::{fake_gh, ok, service_with, Reply, AUTH};
+use super::fake_gh::{fail, fake_gh, ok, service_with, Reply, AUTH};
 use super::types::*;
 use super::GithubError;
 use crate::trackers::GitTracker;
@@ -99,7 +99,28 @@ fn pr_head(
     head_ref: &str,
     oid: &str,
 ) -> String {
-    serde_json::json!({ "data": { "repository": { "pullRequest": {
+    pr_head_on(
+        "ADMIN",
+        cross,
+        maintainer_can_modify,
+        owner,
+        permission,
+        head_ref,
+        oid,
+    )
+}
+
+/// `pr_head` where the viewer has `base_permission` on the base repository.
+fn pr_head_on(
+    base_permission: &str,
+    cross: bool,
+    maintainer_can_modify: bool,
+    owner: &str,
+    permission: &str,
+    head_ref: &str,
+    oid: &str,
+) -> String {
+    serde_json::json!({ "data": { "repository": { "viewerPermission": base_permission, "pullRequest": {
         "headRefName": head_ref,
         "headRefOid": oid,
         "isCrossRepository": cross,
@@ -109,10 +130,26 @@ fn pr_head(
     .to_string()
 }
 
+/// `gh pr checkout --detach` after its fetch: `git checkout --detach`, which
+/// refuses to overwrite local changes.
+fn detach(worktree: &Path, sha: &str) -> Reply {
+    let output = GitTracker::run_git_command_with_timeout(
+        worktree.to_str().unwrap(),
+        &["checkout", "-q", "--detach", sha],
+        10_000,
+    )
+    .expect("git runs");
+    if output.status.success() {
+        ok("")
+    } else {
+        fail(&String::from_utf8_lossy(&output.stderr))
+    }
+}
+
 /// gh whose PR #7 is `head`; `pr checkout` runs `on_checkout` (git in the worktree).
 fn gh(
     head: String,
-    on_checkout: impl Fn() + Send + Sync + 'static,
+    on_checkout: impl Fn() -> Reply + Send + Sync + 'static,
 ) -> impl Fn(&[String]) -> Reply + Send + Sync + 'static {
     move |args| {
         if args[0] == "auth" {
@@ -125,8 +162,7 @@ fn gh(
             return ok(&head);
         }
         if args[0] == "pr" && args[1] == "checkout" {
-            on_checkout();
-            return ok("");
+            return on_checkout();
         }
         panic!("unscripted gh call: {args:?}");
     }
@@ -141,14 +177,12 @@ fn request(cwd: String) -> GithubCheckoutPrRequest {
 }
 
 #[test]
-fn same_repo_pr_resets_the_chat_branch_and_pushes_through_origin() {
+fn same_repo_pr_moves_the_chat_branch_and_pushes_through_origin() {
     let repo = Checkout::new();
     let (worktree, sha) = (repo.worktree.clone(), repo.pr_head.clone());
     let (service, log) = service_with(fake_gh(gh(
         pr_head(false, false, "me", "ADMIN", "feat", &repo.pr_head),
-        move || {
-            git(&worktree, &["reset", "-q", "--hard", &sha]);
-        },
+        move || detach(&worktree, &sha),
     )));
     let result = service.checkout_pr(&request(repo.cwd())).unwrap();
     assert_eq!(
@@ -161,12 +195,16 @@ fn same_repo_pr_resets_the_chat_branch_and_pushes_through_origin() {
     );
     assert_eq!(
         log.calls().last().unwrap(),
-        "github.com pr checkout 7 --repo github.com/me/termul --branch chat/abc --force"
+        "github.com pr checkout 7 --repo github.com/me/termul --detach"
     );
     assert_eq!(log.cwds(), vec![repo.cwd()]);
     assert_eq!(
         git(&repo.worktree, &["symbolic-ref", "--short", "HEAD"]),
         "chat/abc"
+    );
+    assert_eq!(
+        git(&repo.worktree, &["rev-parse", "chat/abc"]),
+        repo.pr_head
     );
 }
 
@@ -190,24 +228,127 @@ fn fork_pr_without_maintainer_edits_is_blocked_before_git_is_touched() {
 }
 
 #[test]
-fn fork_pr_open_to_maintainers_pushes_to_the_fork_remote_gh_configured() {
+fn fork_pr_open_to_maintainers_pushes_to_the_fork_remote() {
     let repo = Checkout::new();
     let (worktree, sha) = (repo.worktree.clone(), repo.pr_head.clone());
-    let fork_url = "https://github.com/forker/termul.git";
+    git(
+        &repo.main,
+        &[
+            "remote",
+            "add",
+            "forker",
+            "git@github.com:forker/termul.git",
+        ],
+    );
     let (service, _) = service_with(fake_gh(gh(
         pr_head(true, true, "forker", "READ", "fix$(id);x", &repo.pr_head),
-        move || {
-            git(&worktree, &["reset", "-q", "--hard", &sha]);
-            git(
-                &worktree,
-                &["config", "branch.chat/abc.pushRemote", fork_url],
-            );
-        },
+        move || detach(&worktree, &sha),
+    )));
+    let result = service.checkout_pr(&request(repo.cwd())).unwrap();
+    assert_eq!(result.push_command, "git push forker 'HEAD:fix$(id);x'");
+}
+
+#[test]
+fn a_remote_whose_push_url_is_elsewhere_is_not_the_push_remote() {
+    let repo = Checkout::new();
+    let (worktree, sha) = (repo.worktree.clone(), repo.pr_head.clone());
+    git(
+        &repo.main,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            "https://github.com/someone/else.git",
+        ],
+    );
+    let (service, _) = service_with(fake_gh(gh(
+        pr_head(false, false, "me", "ADMIN", "feat", &repo.pr_head),
+        move || detach(&worktree, &sha),
     )));
     let result = service.checkout_pr(&request(repo.cwd())).unwrap();
     assert_eq!(
         result.push_command,
-        "git push https://github.com/forker/termul.git 'HEAD:fix$(id);x'"
+        "git push https://github.com/me/termul.git HEAD:feat"
+    );
+}
+
+#[test]
+fn fork_pr_open_to_maintainers_is_blocked_without_write_access_to_the_base() {
+    let repo = Checkout::new();
+    let (service, log) = service_with(fake_gh(gh(
+        pr_head_on("READ", true, true, "forker", "READ", "fix", &repo.pr_head),
+        || panic!("checkout must not run"),
+    )));
+    let error = service.checkout_pr(&request(repo.cwd())).unwrap_err();
+    assert_eq!(
+        error,
+        GithubError::ForkPushBlocked(
+            "Pull request #7 comes from the fork forker/termul, which allows edits only by maintainers of me/termul, \
+             and you cannot push to me/termul, so an agent's commits could not be pushed to its branch."
+                .into()
+        )
+    );
+    assert_eq!(log.count_containing("pr checkout"), 0);
+}
+
+#[test]
+fn same_repo_pr_is_blocked_without_write_access() {
+    let repo = Checkout::new();
+    let (service, _) = service_with(fake_gh(gh(
+        pr_head_on("READ", false, false, "me", "READ", "feat", &repo.pr_head),
+        || panic!("checkout must not run"),
+    )));
+    let error = service.checkout_pr(&request(repo.cwd())).unwrap_err();
+    assert_eq!(
+        error,
+        GithubError::ForkPushBlocked(
+            "You cannot push to me/termul, so an agent's commits could not be pushed to the branch of pull request #7."
+                .into()
+        )
+    );
+}
+
+#[test]
+fn an_edit_made_during_checkout_is_kept() {
+    let repo = Checkout::new();
+    let (worktree, sha) = (repo.worktree.clone(), repo.pr_head.clone());
+    let (service, _) = service_with(fake_gh(gh(
+        pr_head(false, false, "me", "ADMIN", "feat", &repo.pr_head),
+        move || {
+            std::fs::write(worktree.join("a.txt"), "agent edit").unwrap();
+            detach(&worktree, &sha)
+        },
+    )));
+    let result = service.checkout_pr(&request(repo.cwd())).unwrap();
+    assert_eq!(result.head_sha, repo.pr_head);
+    assert_eq!(
+        std::fs::read_to_string(repo.worktree.join("a.txt")).unwrap(),
+        "agent edit"
+    );
+}
+
+#[test]
+fn an_edit_the_pr_head_would_overwrite_stops_the_checkout() {
+    let repo = Checkout::new();
+    let (worktree, sha) = (repo.worktree.clone(), repo.pr_head.clone());
+    let (service, _) = service_with(fake_gh(gh(
+        pr_head(false, false, "me", "ADMIN", "feat", &repo.pr_head),
+        move || {
+            std::fs::write(worktree.join("b.txt"), "agent file").unwrap();
+            detach(&worktree, &sha)
+        },
+    )));
+    let error = service.checkout_pr(&request(repo.cwd())).unwrap_err();
+    assert_eq!(error.code(), "GH_FAILED");
+    assert_eq!(repo.head(), repo.base);
+    assert_eq!(
+        git(&repo.worktree, &["symbolic-ref", "--short", "HEAD"]),
+        "chat/abc"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.worktree.join("b.txt")).unwrap(),
+        "agent file"
     );
 }
 
@@ -217,9 +358,7 @@ fn own_fork_pr_is_pushable_and_falls_back_to_the_fork_url() {
     let (worktree, sha) = (repo.worktree.clone(), repo.pr_head.clone());
     let (service, _) = service_with(fake_gh(gh(
         pr_head(true, false, "octo", "ADMIN", "mine", &repo.pr_head),
-        move || {
-            git(&worktree, &["reset", "-q", "--hard", &sha]);
-        },
+        move || detach(&worktree, &sha),
     )));
     let result = service.checkout_pr(&request(repo.cwd())).unwrap();
     assert_eq!(
@@ -240,7 +379,7 @@ fn a_head_that_moved_during_checkout_is_an_error() {
             "feat",
             "0000000000000000000000000000000000000000",
         ),
-        || {},
+        || ok(""),
     )));
     let error = service.checkout_pr(&request(repo.cwd())).unwrap_err();
     assert_eq!(error.code(), "GH_FAILED");
