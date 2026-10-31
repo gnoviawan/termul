@@ -185,3 +185,15 @@ fn every_docker_host_mount_is_named_and_root_home_and_socket_are_sensitive() {
     );
     assert_eq!(host_mounts("node", &strings(&["-v", "/:/x"])), vec![]);
 }
+
+#[test]
+fn an_imported_npm_spec_naming_a_tarball_is_refused_as_in_the_catalog() {
+    for spec in ["ok@1.0.0-evil.tgz", "ok@1.0.0-a.TAR.GZ", "@scope/ok@2.0.0-x.tar"] {
+        assert_eq!(
+            check("npx", &["-y", spec]),
+            Err(McpCatalogReason::InvalidPackage),
+            "{spec}"
+        );
+    }
+    assert_eq!(check("npx", &["-y", "ok@1.0.0-rc.1"]), Ok(()));
+}

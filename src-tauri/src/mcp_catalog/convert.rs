@@ -703,7 +703,8 @@ pub(crate) fn check_package_spec(runner: Runner, spec: &str) -> Result<(), McpCa
         Some((identifier, version)) if !identifier.is_empty() => (identifier, Some(version)),
         _ => (spec, None),
     };
-    if is_valid_identifier(runner, identifier) && version.is_none_or(is_valid_version) {
+    let tarball = runner == Runner::Npx && NPM_FILE_SPEC.is_match(spec);
+    if !tarball && is_valid_identifier(runner, identifier) && version.is_none_or(is_valid_version) {
         Ok(())
     } else {
         Err(McpCatalogReason::InvalidPackage)
