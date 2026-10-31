@@ -141,12 +141,14 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
+import type { ContentBlock } from '@/lib/acp-api'
 import {
   _resetAcpTransportForTests,
   _setAcpTransportForTests,
   type AcpTransport,
   AcpTransportError
 } from '@/lib/acp-transport'
+import { buildReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { commandToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import {
@@ -162,6 +164,10 @@ import {
   _resetSessionIndexLoadGenerationForTesting,
   useAcpStore
 } from '@/stores/acp-store'
+import {
+  _resetGithubChatLinksForTesting,
+  useGithubChatLinksStore
+} from '@/stores/github-chat-links-store'
 import { flushNextQueuedPrompt } from './slices/prompt'
 import { deferred, FRESH, flushTurnEnd, seedSession } from './testkit'
 
@@ -1279,5 +1285,165 @@ describe('issue #838: live user_prompt echo marks the turn active', () => {
     expect(after.activeTurn).toBe(before.activeTurn)
     expect(after.openTurnId).toBe(before.openTurnId)
     expect(useAcpStore.getState().messages['s3']).toHaveLength(1)
+  })
+})
+
+describe('read-only GitHub chats (CAP-6)', () => {
+  const ITEM = { repo: { host: 'github.com', owner: 'acme', name: 'app' }, kind: 'pr', number: 15 }
+  const GUARD = buildReadOnlyGuard({ ...ITEM, kind: 'pr' })
+  const sent: ContentBlock[][] = []
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sent.length = 0
+    mockPersistenceApi.write.mockResolvedValue({ success: true })
+    _resetAcpTransportForTests(null)
+    _resetGithubChatLinksForTesting()
+    useAcpStore.setState(FRESH)
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string, args: unknown) => {
+      if (cmd === 'acp_send_prompt') sent.push((args as { content: ContentBlock[] }).content)
+      return undefined
+    })
+  })
+
+  async function finishTurn(sessionId: string): Promise<void> {
+    const user = [...(useAcpStore.getState().messages[sessionId] ?? [])]
+      .reverse()
+      .find((m) => m.role === 'user')
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId,
+      stopReason: 'end_turn',
+      turnId: user?.id.slice('turn:'.length)
+    })
+    await flushTurnEnd()
+  }
+
+  it('prepends the guard to every turn of a linked Ask chat, not only the first', async () => {
+    seedSession('s1', 'agent-1', false)
+    useGithubChatLinksStore.getState().link('p1', {
+      sessionId: 's1',
+      action: 'ask',
+      itemId: 'github.com/acme/app#15',
+      item: { ...ITEM, kind: 'pr' },
+      createdAt: '2026-10-31T00:00:00Z'
+    })
+
+    await useAcpStore.getState().sendPrompt('s1', 'what does it change?')
+    await finishTurn('s1')
+    await useAcpStore.getState().sendPrompt('s1', 'now fix it')
+
+    expect(sent).toEqual([
+      [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'what does it change?' }
+      ],
+      [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'now fix it' }
+      ]
+    ])
+    expect(
+      useAcpStore
+        .getState()
+        .messages.s1.filter((m) => m.role === 'user')
+        .map((m) => m.blocks)
+    ).toEqual([
+      [{ type: 'text', text: 'what does it change?' }],
+      [{ type: 'text', text: 'now fix it' }]
+    ])
+  })
+
+  it('leads the display blocks with the guard too, so chips replay as typed', async () => {
+    seedSession('s4', 'agent-1', false)
+    useGithubChatLinksStore.getState().link('p1', {
+      sessionId: 's4',
+      action: 'review',
+      itemId: 'github.com/acme/app#15',
+      item: { ...ITEM, kind: 'pr' },
+      createdAt: '2026-10-31T00:00:00Z'
+    })
+    const displayed: (ContentBlock[] | undefined)[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string, args: unknown) => {
+      if (cmd === 'acp_send_prompt') {
+        displayed.push((args as { displayContent?: ContentBlock[] }).displayContent)
+      }
+      return undefined
+    })
+
+    await useAcpStore.getState().sendPromptBlocks('s4', [{ type: 'text', text: 'see @src/a.ts' }], {
+      displayBlocks: [{ type: 'text', text: 'see a.ts' }]
+    })
+
+    expect(displayed).toEqual([
+      [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'see a.ts' }
+      ]
+    ])
+  })
+
+  it('keeps guarding a chat whose guarded turns arrive from another device', async () => {
+    seedSession('s2', 'agent-1', false)
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's2',
+      turnId: 'remote-turn',
+      content: [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'asked on the phone' }
+      ]
+    })
+    expect(useAcpStore.getState().messages.s2[0].blocks).toEqual([
+      { type: 'text', text: 'asked on the phone' }
+    ])
+    await finishTurn('s2')
+
+    await useAcpStore.getState().sendPrompt('s2', 'follow-up on desktop')
+
+    expect(sent).toEqual([
+      [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'follow-up on desktop' }
+      ]
+    ])
+  })
+
+  it('keeps guarding a chat this device started after its link is gone', async () => {
+    seedSession('s5', 'agent-1', false)
+    useGithubChatLinksStore.getState().link('p1', {
+      sessionId: 's5',
+      action: 'ask',
+      itemId: 'github.com/acme/app#15',
+      item: { ...ITEM, kind: 'pr' },
+      createdAt: '2026-10-31T00:00:00Z'
+    })
+    await useAcpStore.getState().sendPrompt('s5', 'what does it change?')
+    const [firstUser] = useAcpStore.getState().messages.s5
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's5',
+      turnId: firstUser.id.slice('turn:'.length),
+      content: [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'what does it change?' }
+      ]
+    })
+    await finishTurn('s5')
+    // Evicted by the per-project cap, or never hydrated on this run.
+    _resetGithubChatLinksForTesting()
+
+    await useAcpStore.getState().sendPrompt('s5', 'and the tests?')
+
+    expect(sent[1]).toEqual([
+      { type: 'text', text: GUARD },
+      { type: 'text', text: 'and the tests?' }
+    ])
+  })
+
+  it('sends an unlinked chat unchanged', async () => {
+    seedSession('s3', 'agent-1', false)
+    await useAcpStore.getState().sendPromptBlocks('s3', [{ type: 'text', text: 'hello' }])
+    expect(sent).toEqual([[{ type: 'text', text: 'hello' }]])
   })
 })

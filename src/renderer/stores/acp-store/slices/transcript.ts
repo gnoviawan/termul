@@ -27,6 +27,7 @@ import {
   setCachedSessionPayload,
   unpinSessionPayload
 } from '@/lib/acp-history-persistence'
+import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
 import {
@@ -1153,7 +1154,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
     // appended message use the same chip-rendering display blocks.
     // F-2 sibling: bound non-text block payloads (attachment/resource data)
     // at ingest — the echo path carries the same unbounded wire blocks.
-    const content = [...wireBlocksToDisplay(e.content)].map(clampLiveContentBlock)
+    const guarded = splitReadOnlyGuard(e.content ?? [])
+    const content = [...wireBlocksToDisplay(guarded.blocks)].map(clampLiveContentBlock)
     // spec-agent-switch-separator-redesign: a framed `# Conversation
     // handoff` echo persisted by an OLD-format sender (queued flush on a
     // stale build, another client) arrives verbatim — strip the preamble
@@ -1207,7 +1209,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         streaming: false,
         timestamp: Date.now(),
         seq: nextSeq(),
-        hostSeq: eventSeq
+        hostSeq: eventSeq,
+        ...(guarded.guard ? { readOnlyGuard: guarded.guard } : {})
       }
       if (duplicate) return {}
       return {
