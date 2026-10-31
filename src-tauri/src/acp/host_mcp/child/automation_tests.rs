@@ -243,6 +243,37 @@ fn another_projects_automation_is_not_found() {
 }
 
 #[test]
+fn a_token_authors_in_its_own_sessions_project_while_its_agent_has_another_turn() {
+    let (harness, configs) =
+        Harness::new(&[("sess-1", Some("proj-1")), ("sess-2", Some("proj-2"))]);
+    let service = service();
+    harness.server().use_automation_service(service.clone());
+    let theirs = service.create("proj-2", "Theirs").unwrap();
+    harness.server().begin_turn(&configs[0].agent_id, "sess-2");
+    harness
+        .runtime
+        .block_on(with_mcp_session(configs[0].clone(), |w, r| async move {
+            let mut agent = Agent::new(w, r);
+            let listed = agent.ok("automation_list", json!({})).await;
+            assert_eq!(listed, json!({ "automations": [] }));
+            let created = agent
+                .ok("automation_create", json!({ "name": "Mine" }))
+                .await;
+            assert_eq!(created["project_id"], "proj-1");
+        }));
+    let names = |project: &str| -> Vec<String> {
+        service
+            .list(project)
+            .unwrap()
+            .into_iter()
+            .map(|a| a.name)
+            .collect()
+    };
+    assert_eq!(names("proj-1"), ["Mine"]);
+    assert_eq!(names("proj-2"), [theirs.name]);
+}
+
+#[test]
 fn a_stale_revision_returns_the_current_one_and_a_bad_op_saves_nothing() {
     let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
     let service = service();
