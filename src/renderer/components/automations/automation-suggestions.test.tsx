@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
   matchAutomationSuggestion: vi.fn(),
   onAutomationChanged: vi.fn(() => () => {})
 }))
-const launch = vi.hoisted(() => ({ launchSuggestionChat: vi.fn(async () => {}) }))
+const launch = vi.hoisted(() => ({ launchSuggestionChat: vi.fn(async () => true) }))
 vi.mock('@/lib/automation-api', () => api)
 vi.mock('@/lib/automation-suggestion-launch', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/automation-suggestion-launch')>()),
@@ -84,16 +84,32 @@ describe('the in-chat suggestion card', () => {
     )
   })
 
-  it('creates: accepts the suggestion, then opens the seeded chat', async () => {
+  it('creates: opens the seeded chat, then accepts the suggestion', async () => {
     render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
     sendInChat('s1', 'summarize the open PRs in termul')
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create automation' }))
 
-    await waitFor(() => expect(launch.launchSuggestionChat).toHaveBeenCalledTimes(1))
-    expect(api.acceptAutomationSuggestion).toHaveBeenCalledWith('p1', '3f1c9a0d5b7e2468')
+    await waitFor(() => expect(screen.queryByTestId('automation-suggestion-card')).toBeNull())
     expect(launch.launchSuggestionChat).toHaveBeenCalledWith('p1', SUGGESTION)
-    expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
+    expect(api.acceptAutomationSuggestion).toHaveBeenCalledWith('p1', '3f1c9a0d5b7e2468')
+  })
+
+  it('create: a launch that fails keeps the suggestion open and unanswered', async () => {
+    launch.launchSuggestionChat.mockResolvedValueOnce(false)
+    render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
+    sendInChat('s1', 'summarize the open PRs in termul')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create automation' }))
+
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Create automation' }) as HTMLButtonElement).disabled
+      ).toBe(false)
+    )
+    expect(launch.launchSuggestionChat).toHaveBeenCalledTimes(1)
+    expect(api.acceptAutomationSuggestion).not.toHaveBeenCalled()
+    expect(screen.getByText(COPY)).toBeTruthy()
   })
 
   it("don't suggest: dismisses it on the host", async () => {
