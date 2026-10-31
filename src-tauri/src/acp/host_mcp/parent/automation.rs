@@ -256,7 +256,14 @@ fn answer(
         AutomationTool::Propose => {
             let AutomationRefInput { id } = parse(input)?;
             let id = owned(service, project, id)?.automation.id;
-            let proposed = service.propose(&id)?;
+            let by = caller.agent_id.as_ref().and_then(|agent_id| {
+                service
+                    .list_agents()
+                    .into_iter()
+                    .find(|agent| &agent.agent_id == agent_id)
+                    .map(|agent| agent.name)
+            });
+            let proposed = service.propose(&id, by)?;
             log::info!(
                 "[host-mcp] automation_propose {id} for session {session}: revision {}",
                 proposed.revision

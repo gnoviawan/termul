@@ -192,7 +192,6 @@ pub async fn serve(
                 tokio::spawn(crate::web::automation_api::forward_changes(
                     service.subscribe(),
                     ws_relay.clone(),
-                    |_| {},
                 ));
                 crate::automation::service::install(service);
                 Some(engine)

@@ -1694,20 +1694,12 @@ pub fn run() {
                             .engine()
                             .start(tauri::async_runtime::handle().inner()),
                     ));
-                    // Changes reach the desktop renderer as the Tauri event
-                    // and every relay client (its own carrier, shared-live
-                    // peers) as an `agents` watch delta.
-                    let emitter = handle.clone();
+                    // Changes reach the desktop renderer through its own
+                    // channel carrier and every other relay client
+                    // (shared-live peers) as an `agents` watch delta.
                     tauri::async_runtime::spawn(web::automation_api::forward_changes(
                         service.subscribe(),
                         Arc::clone(&ws_relay),
-                        move |payload| {
-                            if let Err(error) = emitter
-                                .emit(automation::model::EVENT_AUTOMATION_CHANGED, payload)
-                            {
-                                log::warn!("[Automation] change event not emitted: {error}");
-                            }
-                        },
                     ));
                     automation::service::install(service);
                 }

@@ -354,12 +354,17 @@ export function parseSecretNames(v: unknown): string[] {
 
 /**
  * `null` when the payload is not an `automation_changed` event. A null
- * `automation_id` is a project-wide change (secret names).
+ * `automation_id` is a project-wide change (secret names). `proposed` and
+ * `proposed_by` are kept only on a proposal.
  */
 export function parseAutomationChange(v: unknown): AutomationChanged | null {
   if (typeof v !== 'object' || v === null) return null
-  const { project_id, automation_id } = v as Obj
+  const { project_id, automation_id, proposed, proposed_by } = v as Obj
   if (typeof project_id !== 'string') return null
   if (automation_id !== null && typeof automation_id !== 'string') return null
-  return { project_id, automation_id: automation_id as AutomationId | null }
+  const change = { project_id, automation_id: automation_id as AutomationId | null }
+  if (proposed !== true) return change
+  return typeof proposed_by === 'string'
+    ? { ...change, proposed: true, proposed_by }
+    : { ...change, proposed: true }
 }

@@ -116,11 +116,13 @@ fn every_mutation_announces_one_change() {
         project_id: "p1".to_string(),
         automation_id: Some(created.id.clone()),
         proposed: false,
+        proposed_by: None,
     };
     let for_project = AutomationChanged {
         project_id: "p1".to_string(),
         automation_id: None,
         proposed: false,
+        proposed_by: None,
     };
     let seen: Vec<AutomationChanged> = std::iter::from_fn(|| changes.try_recv().ok()).collect();
     assert_eq!(
@@ -158,7 +160,7 @@ fn propose_announces_one_proposed_change_and_never_approves() {
     let created = service.create("p1", "Digest").unwrap();
     let mut changes = service.subscribe();
 
-    let refused = service.propose(&created.id).unwrap_err();
+    let refused = service.propose(&created.id, None).unwrap_err();
     assert_eq!(refused.code(), "has_issues");
     assert!(
         changes.try_recv().is_err(),
@@ -177,7 +179,9 @@ fn propose_announces_one_proposed_change_and_never_approves() {
         )
         .unwrap();
     let _applied = changes.try_recv().unwrap();
-    let proposed = service.propose(&created.id).unwrap();
+    let proposed = service
+        .propose(&created.id, Some("Claude".to_string()))
+        .unwrap();
 
     assert_eq!(proposed.approved_revision, None);
     assert_eq!(
@@ -186,6 +190,7 @@ fn propose_announces_one_proposed_change_and_never_approves() {
             project_id: "p1".to_string(),
             automation_id: Some(created.id.clone()),
             proposed: true,
+            proposed_by: Some("Claude".to_string()),
         }
     );
     assert!(changes.try_recv().is_err());
@@ -205,6 +210,7 @@ fn the_proposed_flag_is_on_the_wire_only_when_set() {
         project_id: "p1".to_string(),
         automation_id: None,
         proposed: false,
+        proposed_by: None,
     };
     assert_eq!(
         serde_json::to_value(&change).unwrap(),
@@ -212,11 +218,12 @@ fn the_proposed_flag_is_on_the_wire_only_when_set() {
     );
     let proposed = AutomationChanged {
         proposed: true,
+        proposed_by: Some("Claude".to_string()),
         ..change
     };
     assert_eq!(
         serde_json::to_value(&proposed).unwrap(),
-        json!({ "project_id": "p1", "automation_id": null, "proposed": true })
+        json!({ "project_id": "p1", "automation_id": null, "proposed": true, "proposed_by": "Claude" })
     );
     let parsed: AutomationChanged =
         serde_json::from_value(json!({ "project_id": "p1", "automation_id": null })).unwrap();

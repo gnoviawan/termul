@@ -11,7 +11,6 @@ const { mockFetch, mockIsTauriContext, mockInvoke, mockLog } = vi.hoisted(() => 
 
 vi.mock('../tauri-runtime', () => ({ isTauriContext: mockIsTauriContext }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
-vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }))
 vi.mock('../log-api', () => ({ logFrontendError: mockLog }))
 
 import {
@@ -296,6 +295,14 @@ describe('automation facade transports', () => {
 
     publishAutomationChange({ project_id: 'p1', automation_id: 'auto-1' })
     publishAutomationChange({ project_id: 'p1', automation_id: null })
+    publishAutomationChange({
+      project_id: 'p1',
+      automation_id: 'auto-1',
+      proposed: true,
+      proposed_by: 'Claude'
+    })
+    publishAutomationChange({ project_id: 'p1', automation_id: 'auto-1', proposed: true })
+    publishAutomationChange({ project_id: 'p1', automation_id: 'auto-1', proposed: false })
     publishAutomationChange({ project_id: 'p1' })
     publishAutomationChange({ project_id: 'p1', automation_id: 7 })
     stop()
@@ -303,7 +310,10 @@ describe('automation facade transports', () => {
 
     expect(seen).toEqual([
       { project_id: 'p1', automation_id: 'auto-1' },
-      { project_id: 'p1', automation_id: null }
+      { project_id: 'p1', automation_id: null },
+      { project_id: 'p1', automation_id: 'auto-1', proposed: true, proposed_by: 'Claude' },
+      { project_id: 'p1', automation_id: 'auto-1', proposed: true },
+      { project_id: 'p1', automation_id: 'auto-1' }
     ])
   })
 })

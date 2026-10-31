@@ -5,7 +5,6 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{Method, Request};
-use parking_lot::Mutex;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -537,38 +536,31 @@ async fn one_mutation_is_one_automation_changed_delta_on_the_agents_watch() {
         .watches()
         .subscribe(WatchKind::Agents, "", &out, || json!([]))
         .unwrap();
-    let emitted = Arc::new(Mutex::new(Vec::<Value>::new()));
-    let sink = emitted.clone();
-    tokio::spawn(forward_changes(
-        service.subscribe(),
-        relay.clone(),
-        move |payload| sink.lock().push(payload.clone()),
-    ));
+    tokio::spawn(forward_changes(service.subscribe(), relay.clone()));
 
     let id = create(&router(&service)).await;
-    let expected = json!({ "project_id": "p1", "automation_id": id });
+    let expected = json!({ "event": "automation_changed",
+        "payload": { "project_id": "p1", "automation_id": id } });
+    let mut deltas = Vec::new();
     for _ in 0..200 {
-        if !emitted.lock().is_empty() {
+        while let Ok(Outbound::Watch(frame)) = frames.try_recv() {
+            if let Some(delta) = frame.delta_value() {
+                deltas.push(delta.clone());
+            }
+        }
+        if !deltas.is_empty() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-
-    let mut deltas = Vec::new();
+    tokio::time::sleep(Duration::from_millis(20)).await;
     while let Ok(Outbound::Watch(frame)) = frames.try_recv() {
         if let Some(delta) = frame.delta_value() {
             deltas.push(delta.clone());
         }
     }
-    assert_eq!(
-        deltas,
-        vec![json!({ "event": "automation_changed", "payload": expected })]
-    );
-    assert_eq!(
-        *emitted.lock(),
-        vec![expected],
-        "the desktop event gets the same payload"
-    );
+
+    assert_eq!(deltas, vec![expected]);
 }
 
 /// Through the real host stack: the bearer gate covers the automation

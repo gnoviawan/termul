@@ -181,12 +181,14 @@ export type KnownAgent = { agent_id: string; name: string }
 
 /**
  * Wire event `automation_changed`; `automation_id` is null for project-wide changes.
- * `proposed` is present and true only when a chat agent asks the user to review it.
+ * `proposed` is present and true only when a chat agent asks the user to review it;
+ * `proposed_by` is that agent's display name when the host knows it.
  */
 export type AutomationChanged = {
   project_id: string
   automation_id: AutomationId | null
-  proposed?: boolean
+  proposed?: true
+  proposed_by?: string
 }
 
 /** An automation with what its editor and approval card render. */

@@ -145,7 +145,11 @@ mod engine_support {
 
     /// An engine on an in-memory store whose every project resolves to
     /// `root`.
-    pub fn test_engine(root: PathBuf, vault: Arc<MemoryVault>, http: HttpConfig) -> TestEngine {
+    pub fn test_engine(
+        root: PathBuf,
+        vault: Arc<dyn SecretVault>,
+        http: HttpConfig,
+    ) -> TestEngine {
         let store = Arc::new(AutomationStore::open_in_memory().unwrap());
         let clock = FakeClock::at(1_000);
         let agents = Arc::new(AgentRegistry::in_memory());

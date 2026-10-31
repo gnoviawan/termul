@@ -16,6 +16,7 @@ import { WhatsNewModal } from './components/WhatsNewModal'
 import { useAcpUpdateChecks } from './hooks/use-acp-update-checks'
 import { useAgentChatNotification } from './hooks/use-agent-chat-notification'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
+import { useAutomationProposals } from './hooks/use-automation-proposals'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
 import { useCrashRecovery } from './hooks/use-crash-recovery'
@@ -186,6 +187,8 @@ function AppEffects(): null {
   // A Claude chat at its account's limit continues on another account, even
   // off screen. Mounted on both renderer roots for parity.
   useClaudeAutoSwitch()
+  // A chat agent's proposed automation opens for review. Both roots.
+  useAutomationProposals()
   useAcpMcp()
   usePreventFileDropNavigation()
   // Suppress the native browser context menu app-wide (BUBBLE phase) for web

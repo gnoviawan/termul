@@ -2814,25 +2814,26 @@ describe('Automation parity (facade)', () => {
     expect(readTauri('commands', 'automation.rs')).toMatch(/webview\.label\(\) != "main"/)
   })
 
-  it('both hosts forward service changes to the agents watch, the desktop also as a Tauri event', () => {
+  it('both hosts forward service changes only to the agents watch', () => {
     expect(readTauri('web', 'automation_api.rs')).toContain(
       'publish_agent_event(&relay, EVENT_AUTOMATION_CHANGED'
     )
     const desktop = readTauri('lib.rs')
     expect(desktop).toContain('web::automation_api::forward_changes(')
-    expect(desktop).toContain('.emit(automation::model::EVENT_AUTOMATION_CHANGED')
+    expect(desktop).not.toContain('EVENT_AUTOMATION_CHANGED')
     expect(readTauri('web', 'mod.rs')).toContain('automation_api::forward_changes(')
     expect(readTauri('automation', 'model.rs')).toContain(
       'EVENT_AUTOMATION_CHANGED: &str = "automation_changed"'
     )
   })
 
-  it('the facade switches carriers and routes change events from both transports', () => {
+  it('the facade switches carriers and takes change events only from the roster watch', () => {
     const facade = readFileSync(Facade, 'utf-8')
     expect(facade).toMatch(
       /isTauriContext\(\) \? desktopAutomationTransport : webAutomationTransport/
     )
     expect(facade).toContain("AUTOMATION_CHANGED_EVENT = 'automation_changed'")
+    expect(facade).not.toContain('@tauri-apps/api/event')
     const roster = readFileSync(
       join(LIB_DIR, '..', 'stores', 'acp-store', 'agent-roster-watch.ts'),
       'utf-8'

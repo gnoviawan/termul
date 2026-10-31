@@ -578,8 +578,9 @@ export function initAcpEventListeners(): () => void {
   connection.attach()
   teardown = [
     startClosedTranscriptEviction(),
-    // Web only: the agent roster arrives through the `agents` watch (the
-    // desktop listens to the Tauri `acp:agent_*` events below).
+    // The `agents` watch: every relay transport has one, the desktop's
+    // channel carrier included. It carries the roster and the browser policy
+    // and automation change hints.
     ...(transport.watches
       ? [attachAgentRosterWatch(transport.watches, () => useAcpStore.getState())]
       : []),
