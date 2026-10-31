@@ -4,8 +4,9 @@
 //! every Account.
 
 use std::fs;
-use std::io;
+use std::io::{self, Read as _};
 use std::path::Path;
+use std::time::Duration;
 
 /// Shared directories. A missing one is created in the shared directory first,
 /// so an Account never grows a private copy that diverges from the others.
@@ -80,7 +81,7 @@ pub fn remove_links(account: &Path) {
 fn link_entry(target: &Path, link: &Path, name: &str, is_dir: bool) -> bool {
     match fs::symlink_metadata(link) {
         Ok(meta) if meta.file_type().is_symlink() => {
-            if fs::read_link(link).is_ok_and(|current| current == target) {
+            if link_points_to(link, target) {
                 return true;
             }
             if let Err(error) = remove_link(link, is_dir) {
@@ -91,10 +92,7 @@ fn link_entry(target: &Path, link: &Path, name: &str, is_dir: bool) -> bool {
                 return false;
             }
         }
-        Ok(_) => {
-            log::warn!("[claude-accounts] shared entry {name} is a real file; leaving it");
-            return false;
-        }
+        Ok(meta) => return migrate_or_leave(target, link, name, is_dir, &meta),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
             log::warn!(
@@ -116,6 +114,346 @@ fn link_entry(target: &Path, link: &Path, name: &str, is_dir: bool) -> bool {
     }
 }
 
+/// Whether the existing link at `link` already resolves to `target`.
+#[cfg(unix)]
+fn link_points_to(link: &Path, target: &Path) -> bool {
+    fs::read_link(link).is_ok_and(|current| current == target)
+}
+
+/// Whether the existing link at `link` already resolves to `target`. A Windows
+/// directory link is a junction whose stored target is an `\??\`-prefixed NT
+/// path, so compare canonical paths instead of the raw reparse target.
+#[cfg(windows)]
+fn link_points_to(link: &Path, target: &Path) -> bool {
+    match (fs::canonicalize(link), fs::canonicalize(target)) {
+        (Ok(resolved_link), Ok(resolved_target)) => resolved_link == resolved_target,
+        _ => false,
+    }
+}
+
+/// A real file or directory Claude Code already wrote where a link belongs.
+///
+/// On Unix the entry is always left alone (the `symlink` path never fails, so a
+/// real entry is user data we must not touch). On Windows a privately created
+/// shared *directory* means an earlier `symlink_dir` failed for lack of the
+/// symlink privilege, so its contents are merged into the shared directory and
+/// it is replaced with a privilege-free junction. Returns `true` only when the
+/// entry ends up linked.
+#[cfg(unix)]
+fn migrate_or_leave(
+    _target: &Path,
+    _link: &Path,
+    name: &str,
+    _is_dir: bool,
+    _meta: &fs::Metadata,
+) -> bool {
+    log::warn!("[claude-accounts] shared entry {name} is a real file; leaving it");
+    false
+}
+
+#[cfg(windows)]
+fn migrate_or_leave(
+    target: &Path,
+    link: &Path,
+    name: &str,
+    is_dir: bool,
+    meta: &fs::Metadata,
+) -> bool {
+    if is_dir && meta.is_dir() {
+        return migrate_dir_to_link(target, link, name);
+    }
+    log::warn!("[claude-accounts] shared entry {name} is a real file; leaving it");
+    false
+}
+
+/// Merge a private shared directory into the shared one, then replace it with a
+/// junction. See [`migrate_private_dir`] for the safety rules.
+#[cfg(windows)]
+fn migrate_dir_to_link(target: &Path, link: &Path, name: &str) -> bool {
+    let Some(account) = link.parent() else {
+        return false;
+    };
+    migrate_private_dir(account, name, target, |shared, at| {
+        create_link(shared, at, true)
+    })
+}
+
+/// How recently a file under a private directory must have changed for the
+/// directory to count as in use by a running Claude Code.
+const IN_USE_WINDOW: Duration = Duration::from_secs(30);
+
+/// Replace the private directory `account/name` with a link to `shared`,
+/// keeping its contents. Returns `true` only when the link is in place.
+///
+/// Steps, each of which leaves the private data intact when it fails:
+/// 1. `account/name` must be a real directory directly under `account`
+///    ([`ensure_real_dir_under`]); a link or reparse point is never touched.
+/// 2. If a file under it changed within [`IN_USE_WINDOW`] the migration is
+///    skipped this round (see [`recently_modified`]) and retried next resolve.
+/// 3. Its files are merged into `shared` ([`merge_dir`]); a failure stops here.
+/// 4. It is renamed to `<name>.migrating` (or `-2`, `-3`, ... when taken) in
+///    the same parent, `create_link(shared, account/name)` runs, and only then
+///    is the renamed directory deleted. When creating the link fails the
+///    rename is undone, so the original directory is back in place.
+///
+/// If the final delete of the renamed directory fails, the link is still in
+/// place and its contents are already in `shared`; the leftover
+/// `<name>.migrating` is only logged. A process crash between the rename and
+/// the link leaves `<name>.migrating` with a merged copy and no `<name>`, and
+/// the next resolve links it as a fresh entry.
+///
+/// The link creation is injected so the rules are tested on every platform;
+/// Windows passes a junction.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn migrate_private_dir(
+    account: &Path,
+    name: &str,
+    shared: &Path,
+    create_link: impl FnOnce(&Path, &Path) -> io::Result<()>,
+) -> bool {
+    let private = account.join(name);
+    if let Err(error) = ensure_real_dir_under(&private, account) {
+        log::warn!(
+            "[claude-accounts] private {name} is not a plain directory of the account ({:?}); leaving it",
+            error.kind()
+        );
+        return false;
+    }
+    if recently_modified(&private, IN_USE_WINDOW) {
+        log::warn!(
+            "[claude-accounts] private {name} changed in the last {}s, so Claude Code may be using it; skipping the migration this time",
+            IN_USE_WINDOW.as_secs()
+        );
+        return false;
+    }
+    log::info!("[claude-accounts] migrating private {name} into the shared directory");
+    if let Err(error) = merge_dir(&private, shared) {
+        log::warn!(
+            "[claude-accounts] could not merge private {name} into the shared dir ({:?}); leaving it",
+            error.kind()
+        );
+        return false;
+    }
+    let Some(backup) = free_migrating_name(account, name) else {
+        log::warn!("[claude-accounts] no free temporary name for private {name}; leaving it");
+        return false;
+    };
+    if let Err(error) = fs::rename(&private, &backup) {
+        log::warn!(
+            "[claude-accounts] merged private {name} but could not set it aside to link ({:?}); leaving it",
+            error.kind()
+        );
+        return false;
+    }
+    if let Err(error) = create_link(shared, &private) {
+        log::warn!(
+            "[claude-accounts] could not link {name} after merging its contents ({:?}); restoring the private directory",
+            error.kind()
+        );
+        restore_private_dir(&backup, &private, name);
+        return false;
+    }
+    match ensure_real_dir_under(&backup, account).and_then(|()| fs::remove_dir_all(&backup)) {
+        Ok(()) => log::info!("[claude-accounts] migrated private {name} to a shared link"),
+        Err(error) => log::warn!(
+            "[claude-accounts] linked {name}, but could not delete its merged copy ({:?}); it is safe to remove by hand",
+            error.kind()
+        ),
+    }
+    true
+}
+
+/// Undo the set-aside of a private directory after the link failed. A partial
+/// link left at `private` is removed first, but only when it is empty or a
+/// link, so a directory with data is never removed.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn restore_private_dir(backup: &Path, private: &Path, name: &str) {
+    if fs::symlink_metadata(private).is_ok() {
+        // `remove_dir` takes an empty directory or a junction without
+        // following it; a symlink needs `remove_file`.
+        let _ = fs::remove_dir(private).or_else(|_| fs::remove_file(private));
+    }
+    if let Err(error) = fs::rename(backup, private) {
+        log::error!(
+            "[claude-accounts] could not restore private {name} ({:?}); its files are in the {name}.migrating directory next to it",
+            error.kind()
+        );
+    }
+}
+
+/// `<name>.migrating`, or the first free `<name>.migrating-N`, in `account`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn free_migrating_name(account: &Path, name: &str) -> Option<std::path::PathBuf> {
+    (1..=100u32)
+        .map(|attempt| {
+            if attempt == 1 {
+                account.join(format!("{name}.migrating"))
+            } else {
+                account.join(format!("{name}.migrating-{attempt}"))
+            }
+        })
+        .find(|candidate| fs::symlink_metadata(candidate).is_err())
+}
+
+/// Fail unless `path` is a real directory (not a symlink, junction or other
+/// reparse point) whose parent is `account`, compared as canonical paths. Run
+/// before anything is deleted so a delete can never follow a link out of the
+/// account directory.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn ensure_real_dir_under(path: &Path, account: &Path) -> io::Result<()> {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a plain directory",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "reparse point"));
+        }
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no parent"))?;
+    if fs::canonicalize(parent)? != fs::canonicalize(account)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not directly under the account directory",
+        ));
+    }
+    Ok(())
+}
+
+/// Best-effort "is a Claude Code process using this directory right now": true
+/// when any file under `dir` was modified within `window`. A chat in progress
+/// keeps appending to its session file, so this catches the common case.
+///
+/// This is the only protection against a running process, and it does not
+/// close the window. A process that holds the directory but wrote nothing for
+/// `window` is not detected, and a write can land between this check and the
+/// rename (nothing is locked). Deleting a file that another process has open is
+/// not reliably refused on Windows either (Node opens files with
+/// `FILE_SHARE_DELETE`), so do not count on the delete failing. An unreadable
+/// entry counts as in use, to err on the side of not migrating.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn recently_modified(dir: &Path, window: Duration) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return true;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return true;
+        };
+        let Ok(file_type) = entry.file_type() else {
+            return true;
+        };
+        if file_type.is_dir() {
+            if recently_modified(&entry.path(), window) {
+                return true;
+            }
+            continue;
+        }
+        let modified = entry.metadata().and_then(|meta| meta.modified());
+        match modified {
+            // `elapsed` errs when the mtime is in the future: treat as recent.
+            Ok(time) => {
+                if time.elapsed().map_or(true, |age| age < window) {
+                    return true;
+                }
+            }
+            Err(_) => return true,
+        }
+    }
+    false
+}
+
+/// Copy every file under `src` into `dst`, keeping the relative layout and
+/// never overwriting a name that already exists under `dst` (the shared copy
+/// wins the name). A uniquely named private file is copied as is. A private
+/// file whose name is taken by a file with different content is copied next to
+/// it under a backup name (`<name>.private-backup`, then `-2`, `-3`, ...), so
+/// both versions survive; an identical one is skipped. On the first I/O error,
+/// already-copied files stay and the error is returned so the caller keeps the
+/// source rather than deleting unmerged data.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn merge_dir(src: &Path, dst: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            fs::create_dir_all(&to)?;
+            merge_dir(&from, &to)?;
+        } else if !to.exists() {
+            fs::copy(&from, &to)?;
+        } else {
+            keep_conflicting_file(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// The shared path `existing` already holds a different entry than the private
+/// file `from`. Preserve `from` under a backup name unless the shared entry is
+/// a file with the same content.
+fn keep_conflicting_file(from: &Path, existing: &Path) -> io::Result<()> {
+    if existing.is_file() && same_content(from, existing)? {
+        return Ok(());
+    }
+    let file_name = existing.file_name().unwrap_or_default();
+    for attempt in 1..=MAX_BACKUP_NAMES {
+        let mut backup_name = file_name.to_os_string();
+        backup_name.push(if attempt == 1 {
+            ".private-backup".to_string()
+        } else {
+            format!(".private-backup-{attempt}")
+        });
+        let backup = existing.with_file_name(backup_name);
+        if !backup.exists() {
+            fs::copy(from, &backup)?;
+            log::warn!(
+                "[claude-accounts] a private file clashed with a shared one; kept it as {}",
+                backup.file_name().unwrap_or_default().to_string_lossy()
+            );
+            return Ok(());
+        }
+        // A backup from an earlier, interrupted run with the same content.
+        if backup.is_file() && same_content(from, &backup)? {
+            return Ok(());
+        }
+    }
+    Err(io::Error::other("no free backup name for a clashing file"))
+}
+
+/// Upper bound on backup names tried for one clashing file.
+const MAX_BACKUP_NAMES: u32 = 1000;
+
+/// Whether the two files hold the same bytes, compared in chunks.
+fn same_content(a: &Path, b: &Path) -> io::Result<bool> {
+    if fs::metadata(a)?.len() != fs::metadata(b)?.len() {
+        return Ok(false);
+    }
+    let mut left = io::BufReader::new(fs::File::open(a)?);
+    let mut right = io::BufReader::new(fs::File::open(b)?);
+    let mut left_buf = [0u8; 64 * 1024];
+    let mut right_buf = [0u8; 64 * 1024];
+    loop {
+        let read = left.read(&mut left_buf)?;
+        if read == 0 {
+            // `a` is exhausted and the lengths match, so `b` is too.
+            return Ok(true);
+        }
+        right.read_exact(&mut right_buf[..read])?;
+        if left_buf[..read] != right_buf[..read] {
+            return Ok(false);
+        }
+    }
+}
+
 #[cfg(unix)]
 fn create_link(target: &Path, link: &Path, _is_dir: bool) -> io::Result<()> {
     std::os::unix::fs::symlink(target, link)
@@ -124,9 +462,23 @@ fn create_link(target: &Path, link: &Path, _is_dir: bool) -> io::Result<()> {
 #[cfg(windows)]
 fn create_link(target: &Path, link: &Path, is_dir: bool) -> io::Result<()> {
     if is_dir {
-        std::os::windows::fs::symlink_dir(target, link)
+        // A directory junction needs no symlink privilege, unlike `symlink_dir`.
+        crate::junction::create_junction(target, link).map_err(io::Error::other)
     } else {
-        std::os::windows::fs::symlink_file(target, link)
+        match std::os::windows::fs::symlink_file(target, link) {
+            Ok(()) => Ok(()),
+            // A file symlink needs Developer Mode or elevation. Without it, copy
+            // the shared file so the Account still has its contents; the copy
+            // will not track later shared edits, which we accept over failing.
+            Err(error) => {
+                log::warn!(
+                    "[claude-accounts] symlink for {} failed ({:?}); copying the shared file instead",
+                    link.display(),
+                    error.kind()
+                );
+                fs::copy(target, link).map(|_| ())
+            }
+        }
     }
 }
 
