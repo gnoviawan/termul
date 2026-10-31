@@ -39,6 +39,7 @@ fn test_state_with_project(project: &std::path::Path) -> AppState {
         )),
         oauth_base_url: "http://127.0.0.1".to_string(),
         connections: Default::default(),
+        server_admin: None,
     }
 }
 

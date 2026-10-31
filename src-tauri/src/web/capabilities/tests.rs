@@ -87,6 +87,7 @@ fn view_only_may_read_but_not_mutate() {
         "search_mcp_catalog",
         "describe_mcp_install",
         "get_mcp_catalog_status",
+        "get_mcp_catalog_icon",
         "list_claude_accounts",
         "list_claude_usage",
         "store_read",

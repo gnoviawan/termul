@@ -12,18 +12,19 @@
 //! This is a CONSOLE server — do NOT add `windows_subsystem = "windows"`.
 
 use termul_manager_lib::data_lock::StandalonePaths;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
 use termul_manager_lib::server_update::{
-    check_and_apply_update, current_version, embedded_public_key, is_update_enabled,
-    restart_binary, restore_previous, UpdateChannel, UpdateOptions, UpdateOutcome,
-    SERVER_PLATFORM_KEY,
+    check_and_apply_update, current_version, embedded_public_key, restart_binary,
+    restore_previous, UpdateChannel, UpdateOptions, UpdateOutcome, SERVER_PLATFORM_KEY,
 };
 use termul_manager_lib::web::auth::{resolve as resolve_web_auth, WebAuthResolution};
-use termul_manager_lib::web::config::ParseCliError;
+use termul_manager_lib::web::config::{BindMode, ParseCliError};
+use termul_manager_lib::web::server_config_file;
+use termul_manager_lib::web::setup;
 use termul_manager_lib::web::{
     serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
     WsRelaySink,
@@ -122,6 +123,22 @@ fn main() -> ExitCode {
         }
     };
 
+    // gh-1105: decide the setup-mode boot BEFORE web-auth resolution so the
+    // gate resolves against the bind this process will ACTUALLY serve. Setup
+    // mode binds 0.0.0.0 by default (spec Decision 2 — token-gated /setup/*
+    // only) so a headless install is reachable; resolving against that
+    // public bind makes `resolve` mint + persist the web-auth token the
+    // post-setup server reloads after re-exec — which is also the token the
+    // `/setup/apply` reply hands to the browser (`webAuthToken`). An
+    // explicit --host keeps its choice.
+    let state_dir = cfg.service_account_state_dir();
+    let setup_required = cfg.setup_required();
+    let effective_bind_mode = if setup_required && !cfg.host_explicit {
+        Some(BindMode::All)
+    } else {
+        cfg.bind_mode()
+    };
+
     // QA remediation Story 1 (CAP-1 interim): resolve the web auth gate
     // BEFORE any binding/serving setup. Fail-closed: a public bind whose
     // token can be neither resolved nor persisted aborts here with an
@@ -129,9 +146,9 @@ fn main() -> ExitCode {
     // token resolves Ungated (byte-identical legacy behavior; the token file
     // is not even read).
     let web_auth = match resolve_web_auth(
-        cfg.bind_mode(),
+        effective_bind_mode,
         cfg.web_auth_token.clone(),
-        &cfg.service_account_state_dir(),
+        &state_dir,
     ) {
         Ok(resolution) => resolution,
         Err(error) => {
@@ -147,7 +164,7 @@ fn main() -> ExitCode {
     // actually crosses a network. Loaded/Generated origins imply a public
     // bind (loopback never reads/generates the token file); a Configured
     // token can also gate a LOOPBACK bind, where the warning would be wrong.
-    let public_bind = cfg.bind_mode() == Some(termul_manager_lib::web::config::BindMode::All);
+    let public_bind = effective_bind_mode == Some(BindMode::All);
     let web_auth = match web_auth {
         WebAuthResolution::Ungated => None,
         WebAuthResolution::Gated { auth, origin } => {
@@ -172,19 +189,24 @@ fn main() -> ExitCode {
                     // service lands in durable logs (journald / nohup files),
                     // and secrets must not. It lives only in the
                     // owner-protected file; later boots load it silently.
-                    println!(
-                        "termul-server: generated a web auth token (first boot on a public bind).\n\
-                         The token is never printed or logged — read it from the\n\
-                         owner-protected file (mode 0600 on Unix): {}\n\
-                         Then open http://<host>:{}/#token=<token> — the token travels in\n\
-                         the URL FRAGMENT (never sent to the server or logged by it).\n\
-                         NOTE: this is a PLAINTEXT HTTP/WebSocket server — bearer traffic,\n\
-                         including the token, is readable by network observers. For\n\
-                         non-local access, place the server behind an HTTPS reverse proxy\n\
-                         that terminates TLS.",
-                        path.display(),
-                        cfg.port,
-                    );
+                    // In setup mode the actionable URL is the `?setup=` one
+                    // printed below — the apply reply hands this token to the
+                    // browser itself, so skip the read-the-file directions.
+                    if !setup_required {
+                        println!(
+                            "termul-server: generated a web auth token (first boot on a public bind).\n\
+                             The token is never printed or logged — read it from the\n\
+                             owner-protected file (mode 0600 on Unix): {}\n\
+                             Then open http://<host>:{}/#token=<token> — the token travels in\n\
+                             the URL FRAGMENT (never sent to the server or logged by it).\n\
+                             NOTE: this is a PLAINTEXT HTTP/WebSocket server — bearer traffic,\n\
+                             including the token, is readable by network observers. For\n\
+                             non-local access, place the server behind an HTTPS reverse proxy\n\
+                             that terminates TLS.",
+                            path.display(),
+                            cfg.port,
+                        );
+                    }
                     info!(
                         "termul-server: web auth enabled (token generated, persisted to {})",
                         path.display()
@@ -194,6 +216,21 @@ fn main() -> ExitCode {
             }
             Some(auth)
         }
+    };
+
+    // gh-1105: capture the resolved gate token's TEXT for the setup-mode
+    // `/setup/apply` reply (`webAuthToken`) — the browser lands on the
+    // post-restart origin already authenticated. A configured token comes
+    // straight from cfg; a generated/loaded token is re-read from the
+    // owner-only token file `resolve` just wrote/validated (the re-exec'd
+    // server loads the same secret). NEVER logged.
+    let resolved_gate_token: Option<String> = if gate_active {
+        cfg.web_auth_token
+            .as_ref()
+            .map(|token| token.as_str().to_string())
+            .or_else(|| persisted_web_auth_token(&state_dir))
+    } else {
+        None
     };
 
     // Operator opt-in boundary log (AGENTS.md durable-log policy). When the
@@ -216,7 +253,7 @@ fn main() -> ExitCode {
             host,
             auth_tail = auth_tail,
         );
-        if cfg.bind_mode() == Some(termul_manager_lib::web::config::BindMode::Localhost) {
+        if cfg.bind_mode() == Some(BindMode::Localhost) {
             tracing::warn!(
                 "termul-server: --allow-remote-writes is a no-op when bound to 127.0.0.1 \
                  (no non-loopback peer can ever reach the server)"
@@ -229,6 +266,17 @@ fn main() -> ExitCode {
             "termul-server: extra request origins allowed ({})",
             cfg.allowed_origins
         );
+    }
+
+    // gh-1105: no completed server config → run the minimal setup-mode
+    // server INSTEAD of the full stack: `/health` (+ `setupRequired`),
+    // the setup-token-gated `/setup/*` API, and the SPA fallback — the
+    // onboarding page loads and the wizard's apply persists
+    // `server-config.json` then re-execs back through this `main` in normal
+    // mode. `AppState`/`AcpManager`/the store/PTYs are never constructed
+    // here, and no gated API prefix is mounted.
+    if setup_required {
+        return run_setup_mode(&cfg, resolved_gate_token, &state_dir);
     }
 
     let runtime = match tokio::runtime::Runtime::new() {
@@ -404,11 +452,14 @@ fn main() -> ExitCode {
         // The `/canvas/<id>/` figcraft bundle route rides the same web router,
         // same-origin; there is no separate listener to start here.
         termul_manager_lib::canvas::static_server::log_bundle_status();
-        // Opt-in self-update loop (default off): only runs when the operator set
-        // TERMUL_SERVER_UPDATE_ENABLED=true + TERMUL_SERVER_UPDATE_CHANNEL. A bad
-        // signature keeps the current binary running (verify-before-swap), so an
+        // Opt-in self-update loop (default off): enablement + channel +
+        // interval resolve via `resolve_update_settings` — the
+        // `server-config.json` file written by onboarding wins over the
+        // legacy TERMUL_SERVER_UPDATE_* env vars, so the web wizard can
+        // steer the loop even on an argv-pinned install. A bad signature
+        // keeps the current binary running (verify-before-swap), so an
         // unattended server is never bricked by a failed update attempt.
-        spawn_periodic_update_loop();
+        spawn_periodic_update_loop(&data_paths.state_dir);
         match serve(
             acp,
             pty,
@@ -465,13 +516,120 @@ fn current_binary_path() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("termul-server"))
 }
 
+/// Read the persisted `<state dir>/web-auth-token` for the setup-mode apply
+/// reply. `resolve` already generated + validated (or configured) it this
+/// boot; a read failure is non-fatal — the reply just omits `webAuthToken`.
+/// NEVER log the contents.
+fn persisted_web_auth_token(state_dir: &Path) -> Option<String> {
+    use termul_manager_lib::web::auth::{WebAuthToken, WEB_AUTH_TOKEN_FILE};
+    let path = state_dir.join(WEB_AUTH_TOKEN_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => WebAuthToken::new(&contents).map(|token| token.as_str().to_string()),
+        Err(error) => {
+            warn!(
+                "termul-server: could not re-read the web auth token file for the \
+                 setup apply reply: {error}"
+            );
+            None
+        }
+    }
+}
+
+/// gh-1105 setup mode: no completed `server-config.json`. Mint the one-time
+/// setup token, print the full bootstrap URL to stdout AND tracing (it is
+/// the only credential hand-off a headless install gets — spec Decision 1,
+/// the one token the spec permits to print), then serve ONLY the setup
+/// router (`web::setup`) until the operator finishes the wizard or the
+/// process exits. The apply route schedules a `restart_binary` re-exec
+/// back through `main`, which then boots the normal stack.
+fn run_setup_mode(
+    cfg: &ServerConfig,
+    resolved_gate_token: Option<String>,
+    state_dir: &Path,
+) -> ExitCode {
+    // A present-but-corrupt config file lands here too —
+    // `ServerConfig::setup_required` already error-logged it durably, so a
+    // single boundary info! suffices either way.
+    info!("termul-server: no usable server config — entering setup mode");
+    let setup_token = match server_config_file::generate_setup_token() {
+        Ok(token) => token,
+        Err(e) => {
+            error!("termul-server: {e}");
+            eprintln!("termul-server: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    // Spec Decision 2: the unconfigured default bind is 0.0.0.0 (setup
+    // routes are token-gated) so the page is reachable off-box; an explicit
+    // --host keeps the operator's choice.
+    let bind_mode = if cfg.host_explicit {
+        cfg.bind_mode().unwrap_or(BindMode::All)
+    } else {
+        BindMode::All
+    };
+    let bind_addr = bind_mode.bind_addr(cfg.port);
+    let setup_url = format!(
+        "http://{}:{}/?setup={setup_token}",
+        bind_mode.display_host(),
+        cfg.port
+    );
+    // `0.0.0.0` binds every interface but is not a browsable destination —
+    // tell the operator to substitute the machine's reachable hostname/IP.
+    let host_hint = if bind_mode == BindMode::All {
+        "\n    (replace 0.0.0.0 with this machine's hostname or IP address)"
+    } else {
+        ""
+    };
+    println!(
+        "termul-server: setup required — no completed server config.\n\
+         Open this one-time URL to configure the server (valid for this boot only):\n\
+         \n    {setup_url}{host_hint}\n"
+    );
+    info!("termul-server: setup mode — configure the server at {setup_url}");
+
+    let state = setup::SetupState::new(
+        setup_token,
+        state_dir.to_path_buf(),
+        // The wizard's sessions/projects defaults come from the RESOLVED
+        // config (honors `--state-dir`), never `dirs` — a `--state-dir`
+        // install must pre-fill paths under its own state dir.
+        cfg.sessions_dir
+            .clone()
+            .unwrap_or_else(|| state_dir.join("sessions")),
+        cfg.projects_file
+            .clone()
+            .unwrap_or_else(|| state_dir.join("projects.json")),
+        resolved_gate_token,
+        cfg.web_auth_token.is_some(),
+    );
+    let allowed_origins = cfg.allowed_origins.clone();
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("failed to start tokio runtime: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    match runtime.block_on(setup::serve(state, bind_addr, allowed_origins)) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            error!("termul-server: setup-mode server failed: {e}");
+            eprintln!("termul-server setup mode failed: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 /// Build the self-update options from env + the embedded pubkey. `Err` when
 /// self-update is unavailable (no pubkey baked in) — the caller logs + skips.
 ///
 /// `default_channel`: when `TERMUL_SERVER_UPDATE_CHANNEL` is unset/invalid,
-/// `Some(c)` falls back to `c` (used by the operator-explicit `--check-update`
-/// one-shot, which defaults to Stable), while `None` surfaces an error (used by
-/// the periodic loop, which requires the env to opt in).
+/// `Some(c)` falls back to `c` (the operator-explicit `--check-update`
+/// one-shot defaults to Stable), while `None` surfaces an error. The
+/// periodic loop does NOT go through this — its channel comes from
+/// `resolve_update_settings` (file-wins) and reaches
+/// [`update_options_for_channel`] directly.
 fn build_update_options(default_channel: Option<UpdateChannel>) -> Result<UpdateOptions, String> {
     let channel =
         UpdateChannel::parse(&std::env::var("TERMUL_SERVER_UPDATE_CHANNEL").unwrap_or_default())
@@ -484,9 +642,19 @@ fn build_update_options(default_channel: Option<UpdateChannel>) -> Result<Update
             )
         }
     };
-    // `embedded_public_key()` returns `Result<&'static PublicKey>` backed by a
-    // `OnceLock`; the `&'static` ref moves into `UpdateOptions` (and across the
-    // spawned periodic task) directly — no clone needed.
+    update_options_for_channel(channel)
+}
+
+/// Shared tail of [`build_update_options`]: build `UpdateOptions` for an
+/// already-resolved channel. The periodic loop's channel comes from
+/// `resolve_update_settings` (config file wins over env); the `--check-update`
+/// one-shot's channel comes from env-or-Stable — each caller resolves its
+/// own precedence, so the env is never re-parsed here.
+///
+/// `embedded_public_key()` returns `Result<&'static PublicKey>` backed by a
+/// `OnceLock`; the `&'static` ref moves into `UpdateOptions` (and across the
+/// spawned periodic task) directly — no clone needed.
+fn update_options_for_channel(channel: UpdateChannel) -> Result<UpdateOptions, String> {
     let public_key = embedded_public_key().map_err(|e| e.to_string())?;
     Ok(UpdateOptions {
         channel,
@@ -567,39 +735,47 @@ fn run_one_shot_update_check() -> ExitCode {
 }
 
 /// Spawn the background periodic self-update loop on the server's tokio runtime.
-/// No-op (with an info log) when the operator did not opt in via env — the
-/// default is off so an unattended server never auto-updates.
-fn spawn_periodic_update_loop() {
-    if !is_update_enabled() {
+/// Enablement, channel, and interval come from
+/// `server_config_file::resolve_update_settings(state_dir)` — once
+/// `server-config.json` exists (web onboarding or `termul-server onboard`),
+/// the file is authoritative; otherwise the legacy
+/// `TERMUL_SERVER_UPDATE_ENABLED`/`_CHANNEL`/`_INTERVAL_SECS` env vars apply.
+/// No-op (with an info log) when the resolved settings are disabled — the
+/// default stays off so an unattended server never auto-updates.
+fn spawn_periodic_update_loop(state_dir: &Path) {
+    let settings = server_config_file::resolve_update_settings(state_dir);
+    if !settings.enabled {
         info!(
             target: "termul::server_update",
-            "self-update disabled (set TERMUL_SERVER_UPDATE_ENABLED=true + \
-             TERMUL_SERVER_UPDATE_CHANNEL to opt in)"
+            "self-update disabled (no update channel in server-config.json; or set \
+             TERMUL_SERVER_UPDATE_ENABLED=true + TERMUL_SERVER_UPDATE_CHANNEL to opt in)"
         );
         return;
     }
+    let Some(channel) = settings.channel else {
+        warn!(
+            target: "termul::server_update",
+            "self-update enabled without a channel — periodic loop disabled"
+        );
+        return;
+    };
 
-    // Periodic loop: opt-in requires the channel env (no default) — an
-    // unattended server never auto-updates unless the operator named a channel.
-    let opts = match build_update_options(None) {
+    // Periodic loop: the resolved settings already named a channel (file or
+    // env) — an unattended server never auto-updates without one.
+    let opts = match update_options_for_channel(channel) {
         Ok(o) => o,
         Err(reason) => {
             warn!(
                 target: "termul::server_update",
-                "TERMUL_SERVER_UPDATE_ENABLED=true but self-update unavailable: {reason} \
-                 (periodic loop disabled)"
+                "self-update enabled but unavailable: {reason} (periodic loop disabled)"
             );
             return;
         }
     };
 
-    // Default 6h, mirroring the desktop's periodic cadence. Overridable so an
-    // operator can tune the polling frequency for their deployment.
-    let interval_secs = std::env::var("TERMUL_SERVER_UPDATE_INTERVAL_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(6 * 60 * 60);
+    // Resolved interval (file: the wizard's choice; env: the legacy var; else
+    // 6h, mirroring the desktop's periodic cadence).
+    let interval_secs = settings.interval_secs;
 
     let channel = opts.channel;
     info!(

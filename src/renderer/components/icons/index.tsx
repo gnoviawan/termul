@@ -28,12 +28,16 @@ import {
   ChevronsRightIcon,
   ChevronUpIcon,
   CircleArrowUp02Icon,
+  CircleCheckIcon,
+  CircleDashedIcon,
   CircleDotIcon,
   CircleIcon,
+  CircleMinusIcon,
   ClipboardIcon,
   ClipboardPasteIcon,
   Clock01Icon,
   CodeIcon,
+  Comment01Icon,
   CopyIcon,
   CopyXIcon,
   CpuIcon,
@@ -61,7 +65,11 @@ import {
   FolderTreeIcon,
   GitBranchIcon,
   GitCommitHorizontalIcon,
+  GithubIcon,
   GitMergeIcon,
+  GitPullRequestClosedIcon,
+  GitPullRequestDraftIcon,
+  GitPullRequestIcon,
   Globe02Icon,
   Grid3X3Icon,
   GripVerticalIcon,
@@ -372,3 +380,12 @@ export const PaperclipIcon = Paperclip
 export const Settings2 = Settings
 export const SlidersHorizontal = Sliders
 export const XIcon = X
+
+export const CircleCheck = hugeIcon('CircleCheck', CircleCheckIcon)
+export const CircleDashed = hugeIcon('CircleDashed', CircleDashedIcon)
+export const CircleMinus = hugeIcon('CircleMinus', CircleMinusIcon)
+export const Comment = hugeIcon('Comment', Comment01Icon)
+export const Github = hugeIcon('Github', GithubIcon)
+export const GitPullRequest = hugeIcon('GitPullRequest', GitPullRequestIcon)
+export const GitPullRequestClosed = hugeIcon('GitPullRequestClosed', GitPullRequestClosedIcon)
+export const GitPullRequestDraft = hugeIcon('GitPullRequestDraft', GitPullRequestDraftIcon)

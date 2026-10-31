@@ -628,6 +628,7 @@ fn item(server: Value) -> CatalogItem {
             options: convert(&parsed),
             server: parsed,
         }),
+        icon: None,
     }
 }
 

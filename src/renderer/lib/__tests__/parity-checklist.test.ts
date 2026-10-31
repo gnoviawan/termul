@@ -3029,3 +3029,281 @@ describe('Automation parity (facade)', () => {
     expect(facade).toContain("from './log-api'")
   })
 })
+
+describe('MCP catalog icon parity (spine AD-1, AD-15)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const SHARED_TYPES = join(LIB_DIR, '..', '..', 'shared', 'types')
+
+  it('both carriers answer from the one host service', () => {
+    const dispatch = readFileSync(join(SRC_TAURI, 'web', 'ws', 'dispatch.rs'), 'utf-8')
+    expect(dispatch).toMatch(
+      /"get_mcp_catalog_icon" => \{\s*mcp_catalog::handle_get_mcp_catalog_icon/
+    )
+    const router = readFileSync(join(SRC_TAURI, 'web', 'router', 'mod.rs'), 'utf-8')
+    expect(
+      router.match(/"\/mcp-catalog\/icon\/\{\*name\}", get\(mcp_catalog_api::icon\)/g)
+    ).toHaveLength(2)
+    expect(readFileSync(join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'), 'utf-8')).toMatch(
+      /McpCatalogService::shared\(\)\.await\.icon\(&name\)/
+    )
+    expect(readFileSync(join(SRC_TAURI, 'web', 'ws', 'mcp_catalog.rs'), 'utf-8')).toMatch(
+      /McpCatalogService::shared\(\)\.await\.icon\(&request\.name\)/
+    )
+  })
+
+  it('the icon is a read every connection may make, behind the bearer gate on HTTP', () => {
+    const capabilities = readFileSync(join(SRC_TAURI, 'web', 'capabilities.rs'), 'utf-8')
+    expect(capabilities).toMatch(/\| "get_mcp_catalog_icon"/)
+    const ledger = readFileSync(join(SRC_TAURI, 'web', 'command_ledger', 'class.rs'), 'utf-8')
+    expect(ledger).toMatch(/\("get_mcp_catalog_icon", CommandClass::read\(\)\)/)
+    const gate = readFileSync(join(SRC_TAURI, 'web', 'router', 'gate.rs'), 'utf-8')
+    expect(gate).toMatch(/"\/mcp-catalog\/",/)
+    const protocol = readFileSync(join(SHARED_TYPES, 'web-protocol.types.ts'), 'utf-8')
+    expect(protocol).toMatch(/'get_mcp_catalog_icon',/)
+    expect(protocol).toMatch(/get_mcp_catalog_icon: \['read', null\]/)
+  })
+
+  it('HTTP serves the bytes as an inert image', () => {
+    const http = readFileSync(join(SRC_TAURI, 'web', 'mcp_catalog_api.rs'), 'utf-8')
+    expect(http).toMatch(/header::X_CONTENT_TYPE_OPTIONS, "nosniff"/)
+    expect(http).toMatch(
+      /ICON_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox"/
+    )
+  })
+
+  it('both facade impls reach the host the same way and the UI uses only <img>', () => {
+    const desktop = readFileSync(join(LIB_DIR, 'desktop-mcp-catalog-api.ts'), 'utf-8')
+    expect(desktop).toMatch(/getAcpTransport\(\)\.getMcpCatalogIcon\(name\)/)
+    const web = readFileSync(join(LIB_DIR, 'web-mcp-catalog-api.ts'), 'utf-8')
+    expect(web).toMatch(/\/mcp-catalog\/icon\/\$\{encodeURIComponent\(name\)\}/)
+    expect(web).toMatch(/headers: authHeader\(\)/)
+    const transport = readTsModule(join(LIB_DIR, 'acp-transport'))
+    expect(transport).toMatch(/'get_mcp_catalog_icon'/)
+    const types = readFileSync(join(SHARED_TYPES, 'mcp-catalog.types.ts'), 'utf-8')
+    expect(types).toMatch(/hasIcon: boolean/)
+    expect(types).toMatch(/icon\(name: string\): Promise<IpcResult<McpCatalogIconUrl>>/)
+    expect(types).toMatch(/type McpCatalogIconUrl = `data:\$\{string\}`/)
+    const ui = readFileSync(
+      join(LIB_DIR, '..', 'components', 'settings', 'McpCatalogIcon.tsx'),
+      'utf-8'
+    )
+    expect(ui).toMatch(/<img\b/)
+    expect(ui).not.toMatch(/dangerouslySetInnerHTML|innerHTML|<svg\b|createObjectURL/)
+  })
+})
+
+describe('GitHub parity (spec-github-integration)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const read = (...parts: string[]) => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
+  const facade = readFileSync(join(LIB_DIR, 'github-api.ts'), 'utf-8')
+  const ops = [
+    {
+      method: 'getContext',
+      command: 'github_get_context',
+      route: '/github/context',
+      handler: 'context'
+    },
+    {
+      method: 'listItems',
+      command: 'github_list_items',
+      route: '/github/items',
+      handler: 'list_items'
+    },
+    { method: 'getItem', command: 'github_get_item', route: '/github/item', handler: 'get_item' },
+    {
+      method: 'getChecks',
+      command: 'github_get_checks',
+      route: '/github/checks',
+      handler: 'get_checks'
+    },
+    {
+      method: 'getCheckLog',
+      command: 'github_get_check_log',
+      route: '/github/check-log',
+      handler: 'get_check_log'
+    },
+    { method: 'merge', command: 'github_merge', route: '/github/merge', handler: 'merge' },
+    { method: 'comment', command: 'github_comment', route: '/github/comment', handler: 'comment' },
+    {
+      method: 'checkoutPr',
+      command: 'github_checkout_pr',
+      route: '/github/checkout-pr',
+      handler: 'checkout_pr'
+    }
+  ]
+  const writeHandlers = new Set(['merge', 'comment', 'checkout_pr'])
+
+  it('the facade branches on isTauriContext() between invokeIpc({ request }) and postJson', () => {
+    expect(facade).toMatch(/isTauriContext\(\)\s*\?\s*await invokeIpc<T>\(command, \{ request \}\)/)
+    expect(facade).toMatch(/await postJson<T>\(route, request\)/)
+  })
+
+  it.each(ops)('$command is wired through the facade, lib.rs, commands and both routers', (op) => {
+    expect(facade).toMatch(
+      new RegExp(`${op.method}\\([^)]*\\)[^{]*\\{\\s*return call\\('${op.command}', '${op.route}'`)
+    )
+    expect(read('lib.rs')).toContain(`commands::${op.command},`)
+    expect(read('commands', 'github.rs')).toMatch(
+      new RegExp(`pub async fn ${op.command}\\(\\s*request:`)
+    )
+    const router = read('web', 'router', 'mod.rs')
+    const registration = `.route("${op.route}", post(github_api::${op.handler}))`
+    expect(router.split(registration).length - 1, 'router() and router_with_static()').toBe(2)
+    expect(read('web', 'github_api.rs')).toMatch(new RegExp(`pub async fn ${op.handler}\\(`))
+  })
+
+  it('/github/* is token-gated, and exactly the write routes take the remote-write guard', () => {
+    expect(read('web', 'router', 'gate.rs')).toContain('"/github/",')
+    const routes = read('web', 'github_api.rs')
+    expect(routes.match(/check_local_only::</g)?.length).toBe(1)
+    for (const op of ops) {
+      const handler = routes.match(new RegExp(`pub async fn ${op.handler}\\([\\s\\S]*?\\n}`))?.[0]
+      expect(handler, op.handler).toBeDefined()
+      const guarded = new RegExp(
+        `ConnectInfo\\(peer\\)[\\s\\S]*write_refused\\(&state, peer, "${op.route}"\\)`
+      )
+      if (writeHandlers.has(op.handler)) {
+        expect(handler, op.handler).toMatch(guarded)
+      } else {
+        expect(handler, op.handler).not.toContain('ConnectInfo')
+      }
+    }
+    expect(routes).toMatch(/resolve_cwd::<T>\(cwd, state, None, false\)/)
+  })
+
+  it('every TS error code is a Rust GithubError code and vice versa', () => {
+    const types = readFileSync(
+      join(LIB_DIR, '..', '..', 'shared', 'types', 'github.types.ts'),
+      'utf-8'
+    )
+    const list = types.match(/GITHUB_ERROR_CODES = \[([\s\S]*?)\] as const/)?.[1] ?? ''
+    const tsCodes = [...list.matchAll(/'(GH_[A-Z_]+)'/g)].map((m) => m[1]).sort()
+    const rustCodes = [...read('github', 'error.rs').matchAll(/=> "(GH_[A-Z_]+)"/g)]
+      .map((m) => m[1])
+      .sort()
+    expect(tsCodes.length).toBe(11)
+    expect(rustCodes).toEqual(tsCodes)
+  })
+})
+
+// gh-1105: web onboarding plumbing. A `termul-server` with no
+// `server-config.json` boots a minimal setup mode (`/health` +
+// token-gated `/setup/*` + SPA); the web client detects it on the public
+// `/health` `setupRequired` flag and swaps the app tree for the wizard via
+// `ServerSetupGate`. Web-only surface: the desktop root (`TauriApp.tsx`)
+// never mounts the gate and the desktop context answers an explicit
+// unsupported result (AGENTS.md: gate platform-only behavior with
+// `isTauriContext()`, never a throwing stub).
+describe('Web server setup plumbing parity (gh-1105)', () => {
+  const WebSetupApi = join(LIB_DIR, 'web-setup-api.ts')
+  const WebSetupGate = join(LIB_DIR, 'web-setup-gate.ts')
+  const SharedTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'server-setup.types.ts')
+  const WebApp = join(LIB_DIR, '..', 'App.tsx')
+  const TauriApp = join(LIB_DIR, '..', 'TauriApp.tsx')
+  const ApiBridge = join(LIB_DIR, 'api.ts')
+
+  it('server-setup.types.ts declares the settled wire contract', () => {
+    expect(existsSync(SharedTypes), 'server-setup.types.ts should exist').toBe(true)
+    const content = readFileSync(SharedTypes, 'utf-8')
+    expect(content).toMatch(/export const SETUP_TOKEN_PARAM\b/)
+    expect(content).toMatch(/export const SETUP_API_PATHS\b/)
+    expect(content).toMatch(/export interface ServerSetupAnswers\b/)
+    expect(content).toMatch(/export interface SetupStatusResponse\b/)
+    expect(content).toMatch(/export interface SetupValidateResponse\b/)
+    expect(content).toMatch(/export interface SetupApplyResponse\b/)
+    expect(content).toMatch(/export interface ServerConfigResponse\b/)
+  })
+
+  it('web-setup-api.ts exists and exports the webSetupApi singleton with the contract methods', () => {
+    expect(existsSync(WebSetupApi), 'web-setup-api.ts should exist').toBe(true)
+    const content = readFileSync(WebSetupApi, 'utf-8')
+    expect(content).toMatch(/export\s+const\s+\bwebSetupApi\b/)
+    for (const method of [
+      'getStatus',
+      'validate',
+      'apply',
+      'getServerConfig',
+      'applyServerConfig'
+    ]) {
+      expect(content, `webSetupApi should implement ${method}`).toMatch(
+        new RegExp(`\\b${method}\\s*\\(`)
+      )
+    }
+  })
+
+  it('web-setup-api hits the /setup/* and /server/config routes and maps failures to NETWORK_ERROR', () => {
+    const content = readFileSync(WebSetupApi, 'utf-8')
+    // Route paths come only from the shared SETUP_API_PATHS contract.
+    expect(content).toMatch(/SETUP_API_PATHS\.status/)
+    expect(content).toMatch(/SETUP_API_PATHS\.validate/)
+    expect(content).toMatch(/SETUP_API_PATHS\.apply\b/)
+    expect(content).toMatch(/SETUP_API_PATHS\.serverConfig/)
+    expect(content).toMatch(/NETWORK_ERROR/)
+  })
+
+  it('the ?setup= token is Bearer on /setup/* only — sessionStorage, never localStorage, never logged', () => {
+    const content = readFileSync(WebSetupApi, 'utf-8')
+    expect(content).toMatch(/SETUP_TOKEN_PARAM/)
+    expect(content).toMatch(/location\.search/)
+    expect(content).toMatch(/Authorization:\s*`Bearer /)
+    expect(content).toMatch(/sessionStorage/)
+    // Same "no `localStorage` API" assert the other blocks use — doc comments
+    // may name it, the code may never touch it.
+    expect(content).not.toMatch(/localStorage(?:\.|\[)/)
+  })
+
+  it('every webSetupApi method answers an explicit unsupported result under isTauriContext()', () => {
+    const content = readFileSync(WebSetupApi, 'utf-8')
+    expect(content).toMatch(/isTauriContext\(\)/)
+    expect(content).toMatch(/UNSUPPORTED/)
+  })
+
+  it('web-setup-gate.ts exports useWebSetupGate probing /health for setupRequired', () => {
+    expect(existsSync(WebSetupGate), 'web-setup-gate.ts should exist').toBe(true)
+    const content = readFileSync(WebSetupGate, 'utf-8')
+    expect(content).toMatch(/export\s+function\s+\buseWebSetupGate\b/)
+    expect(content).toMatch(/export\s+function\s+\bcheckWebSetupGate\b/)
+    expect(content).toMatch(/\/health/)
+    expect(content).toMatch(/setupRequired/)
+    for (const status of ['checking', 'setup', 'ok']) {
+      expect(content).toMatch(new RegExp(`'${status}'`))
+    }
+    expect(content).toMatch(/isTauriContext\(\)/)
+    expect(content).toMatch(/useSyncExternalStore/)
+  })
+
+  it('api.ts re-exports webSetupApi', () => {
+    const content = readFileSync(ApiBridge, 'utf-8')
+    expect(content).toMatch(
+      /export\s*\{[^}]*\bwebSetupApi\b[^}]*\}\s*from\s*['"]\.\/web-setup-api['"]/
+    )
+  })
+
+  it('App.tsx mounts ServerSetupGate + primes the probe; TauriApp.tsx stays untouched', () => {
+    const web = readFileSync(WebApp, 'utf-8')
+    expect(web).toMatch(/ServerSetupGate/)
+    expect(web).toMatch(/from\s+['"]@\/components\/setup\/ServerSetupGate['"]/)
+    expect(web).toMatch(/checkWebSetupGate/)
+    const desktop = readFileSync(TauriApp, 'utf-8')
+    expect(desktop).not.toMatch(/ServerSetupGate|web-setup/)
+  })
+
+  it('App.tsx strips the #token= fragment BEFORE createHashRouter claims it as a route', () => {
+    // The setup/reconfigure restart lands on `/#token=…` — if the hash router
+    // evaluates first it routes `/token=…` to the 404 page. The module-scope
+    // `getWebAuthToken()` call must precede `createHashRouter(` in App.tsx.
+    const web = readFileSync(WebApp, 'utf-8')
+    const strip = web.indexOf('getWebAuthToken()')
+    const router = web.indexOf('createHashRouter(')
+    expect(strip, 'App.tsx should resolve the #token= fragment at module scope').toBeGreaterThan(-1)
+    expect(router, 'App.tsx should create the hash router at module scope').toBeGreaterThan(-1)
+    expect(strip).toBeLessThan(router)
+  })
+
+  it('slice test files exist', () => {
+    expect(fileExists('web-setup-api.web.test.ts'), 'web-setup-api.web.test.ts should exist').toBe(
+      true
+    )
+    expect(fileExists('web-setup-gate.test.ts'), 'web-setup-gate.test.ts should exist').toBe(true)
+  })
+})

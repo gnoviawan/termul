@@ -1,7 +1,7 @@
 use super::super::tests::{route, test_env, test_outbound};
 use super::*;
 use crate::web::mcp_catalog_api::tests::{
-    http_install_local, http_search, http_status, import_plan_body,
+    http_icon, http_install_local, http_search, http_status, import_plan_body, FIXED_ICON,
 };
 
 async fn ws_search(payload: Value) -> WsReply {
@@ -219,4 +219,33 @@ async fn a_commit_resent_with_its_command_id_runs_again_instead_of_replaying_sec
     assert_eq!(first["data"]["secrets"][0]["value"], "from-file", "{first}");
     let resent = as_ipc_result(send().await);
     assert_eq!(resent["code"], "MCP_PLAN_CONSUMED", "{resent}");
+}
+
+#[tokio::test]
+async fn ws_and_http_serve_the_same_icon_bytes() {
+    use base64::Engine as _;
+    let http = http_icon("ai.abmeter%2Fabmeter").await;
+    let http_bytes = axum::body::to_bytes(http.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let ws = as_ipc_result(
+        ws_request(
+            "get_mcp_catalog_icon",
+            json!({ "name": "ai.abmeter/abmeter" }),
+        )
+        .await,
+    );
+    assert_eq!(ws["success"], true);
+    assert_eq!(ws["data"]["contentType"], "image/png");
+    let ws_bytes = base64::engine::general_purpose::STANDARD
+        .decode(ws["data"]["base64"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(ws_bytes, FIXED_ICON);
+    assert_eq!(ws_bytes, http_bytes);
+
+    let missing =
+        as_ipc_result(ws_request("get_mcp_catalog_icon", json!({ "name": "to.hooka/mcp" })).await);
+    assert_eq!(missing["code"], "NOT_FOUND");
+    let invalid = as_ipc_result(ws_request("get_mcp_catalog_icon", json!({ "id": 1 })).await);
+    assert_eq!(invalid["code"], "VALIDATION_ERROR");
 }

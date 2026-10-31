@@ -2,6 +2,7 @@
  * Workspace store contract — extracted from ../workspace-store.ts. Pure move, no logic changes.
  */
 
+import type { GithubItemKind, GithubRepoSlot } from '@shared/types/github.types'
 import type { DropPosition, LeafNode, PaneDirection, PaneNode } from '@/types/workspace.types'
 
 export type WorkspaceTab =
@@ -17,6 +18,18 @@ export type WorkspaceTab =
       mountKey?: string
     }
   | { type: 'git-history'; id: string; cwd: string }
+  | {
+      /** One GitHub issue or PR of the project at `cwd`. The id is
+       * `githubItemTabId(cwd, repo, number)`; `title` is the label the tab
+       * shows until the detail loads. */
+      type: 'github-item'
+      id: string
+      cwd: string
+      repo: GithubRepoSlot
+      kind: GithubItemKind
+      number: number
+      title: string
+    }
   | {
       /** One file's staged or working-tree diff (CAP-9). The id is a stable hash of
        * the canonical identity (cwd, path, side); the tab keeps its stored `cwd`
@@ -55,6 +68,12 @@ export type WorkspaceTab =
       id: string
       projectId: string
     }
+
+/** What identifies a `github-item` tab, plus the label it shows before the detail loads. */
+export type GithubItemTabTarget = Omit<
+  Extract<WorkspaceTab, { type: 'github-item' }>,
+  'type' | 'id'
+>
 
 /** Options for `splitPane`. */
 export interface SplitPaneOptions {
@@ -188,6 +207,8 @@ export interface WorkspaceState extends ProjectWorkspace {
    * Open (or activate) the Git History tab for `cwd`, same reuse semantics.
    */
   addGitHistoryTab: (cwd: string, targetPaneId?: string) => void
+  /** Open (or focus) the detail tab of one GitHub issue or PR. */
+  addGithubItemTab: (item: GithubItemTabTarget, targetPaneId?: string) => void
   /** Open (or focus) the read-only diff of one file at a commit. */
   addCommitDiffTab: (
     cwd: string,

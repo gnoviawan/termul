@@ -18,6 +18,7 @@ export const WORKSPACE_TAB_KIND_TRAITS = {
   git: { persisted: true },
   'agent-chat': { persisted: true },
   'git-history': { persisted: true },
+  'github-item': { persisted: true },
   diff: { persisted: true },
   'commit-diff': { persisted: true },
   canvas: { persisted: false },

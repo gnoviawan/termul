@@ -17,6 +17,7 @@ import {
 } from '@/components/agents/launcher/constants'
 import { LauncherContextStrip } from '@/components/agents/launcher/context-strip'
 import { useFactoryKeyAuth } from '@/components/agents/launcher/FactoryApiKeyForm'
+import { type LaunchCheckout, launchChat } from '@/components/agents/launcher/launch-chat'
 import {
   LAUNCHER_DISMISS_MS,
   LAUNCHER_DOCK_SLIDE_MS,
@@ -100,7 +101,6 @@ import { platform as osPlatform } from '@/lib/tauri-os'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
-import { randomUUID } from '@/lib/uuid'
 import { worktreeApi } from '@/lib/worktree-api'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
@@ -115,8 +115,7 @@ import {
 } from '@/stores/acp-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useWorktreePick } from '@/stores/shell-layout-store'
-import { agentChatTabId, findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
-import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
+import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 
 interface AgentLauncherProps {
   paneId: string
@@ -345,80 +344,47 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     const version = pendingRestartVersion
     setRestartingUpdatedAgent(true)
     void (async () => {
-      const store = useAcpStore.getState()
-      let launchCwd = projectRoot
-      let worktreePath: string | undefined
-      let worktreeBranch: string | undefined
-      let placeholderId: string | null = null
-      let progressId: string | undefined
       try {
         // Honor the same isolation mode as a normal launch. Restart must not
         // silently start the updated agent at the project root when New
-        // worktree is selected. Same ordering as `launch`: the chat tab opens
-        // first so worktree progress streams into the timeline card.
-        if (isolationMode === 'worktree' && canUseWorktree) {
-          progressId = randomUUID()
-          placeholderId = store.createLaunchPlaceholder({
-            cwd: launchCwd,
-            projectId: activeProjectId,
-            worktreeProgressId: progressId
-          })
-          useWorkspaceStore.getState().addAgentChatTab(placeholderId, paneId)
-          useWorkspaceStore.getState().hideAgentLauncher()
-          setWorktreeCreating(true)
-          try {
-            const prepared = await prepareLaunchWorktree({
-              isolationMode,
-              canUseWorktree,
-              baseBranch,
-              projectRoot,
-              projectId: activeProjectId,
-              progressId
-            })
-            launchCwd = prepared.launchCwd
-            worktreePath = prepared.worktreePath
-            worktreeBranch = prepared.worktreeBranch
-          } catch (err) {
-            useWorkspaceStore.getState().removeTab(agentChatTabId(placeholderId))
-            store.discardLaunchPlaceholder(placeholderId)
-            useWorktreeProgressStore.getState().clear(progressId)
-            useWorkspaceStore.getState().showAgentLauncher(paneId)
-            throw err
-          } finally {
-            setWorktreeCreating(false)
-          }
-        } else if (isolationMode === 'existing') {
-          // A read: resolve the listed worktree (throws when it is gone).
-          ;({ launchCwd, worktreePath, worktreeBranch } = await prepareLaunchWorktree({
-            isolationMode,
-            projectRoot,
-            projectId: activeProjectId,
-            existingWorktreeId
-          }))
-        }
-        // Start a fresh session against the updated config. Update Application
+        // worktree is selected. Same sequence as `launch`: the chat tab opens
+        // first so worktree progress streams into the timeline card. A fresh
+        // session starts against the updated config; Update Application
         // detaches any process with live chats, so those chats keep running
         // the old version while this new chat uses the applied version.
-        if (placeholderId) {
-          await store.finalizeChatLaunch({
-            placeholderId,
+        if (isolationMode === 'worktree' && canUseWorktree) {
+          await launchChat({
             configId,
-            cwd: launchCwd,
             projectId: activeProjectId,
-            adoptSession: (from, to) => {
-              useWorkspaceStore.getState().remapAgentChatSession(from, to, paneId)
-            },
-            worktreePath,
-            worktreeBranch
-          })
+            paneId,
+            checkout: { launchCwd: projectRoot },
+            newWorktree: { projectRoot, baseBranch },
+            onOpened: () => useWorkspaceStore.getState().hideAgentLauncher(),
+            onWorktreeCreating: setWorktreeCreating,
+            onWorktreeFailed: () => useWorkspaceStore.getState().showAgentLauncher(paneId)
+          }).started
         } else {
-          const sessionId = await store.startChat(
-            configId,
-            launchCwd,
-            undefined,
-            activeProjectId,
-            worktreePath || worktreeBranch ? { worktreePath, worktreeBranch } : undefined
-          )
+          let launchCwd = projectRoot
+          let worktreePath: string | undefined
+          let worktreeBranch: string | undefined
+          if (isolationMode === 'existing') {
+            // A read: resolve the listed worktree (throws when it is gone).
+            ;({ launchCwd, worktreePath, worktreeBranch } = await prepareLaunchWorktree({
+              isolationMode,
+              projectRoot,
+              projectId: activeProjectId,
+              existingWorktreeId
+            }))
+          }
+          const sessionId = await useAcpStore
+            .getState()
+            .startChat(
+              configId,
+              launchCwd,
+              undefined,
+              activeProjectId,
+              worktreePath || worktreeBranch ? { worktreePath, worktreeBranch } : undefined
+            )
           useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
           useWorkspaceStore.getState().hideAgentLauncher()
         }
@@ -1537,26 +1503,23 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
     const { wireWithCommand, displayWithCommand, fileBlocks } = parts
 
-    // CAP-3 ordering update: the chat placeholder opens BEFORE the worktree
-    // prepare so `git worktree add`'s stderr lines stream into the in-timeline
-    // progress card (keyed by `progressId`) while the checkout runs. The
-    // agent's cwd is still the worktree path from the first turn —
-    // `finalizeChatLaunch`/`startChat` only run after preparation resolves.
-    const progressId = isolationMode === 'worktree' && canUseWorktree ? randomUUID() : undefined
-    let worktreePath: string | undefined
-    let worktreeBranch: string | undefined
-    let launchCwd = projectRootSnapshot
+    // CAP-3 ordering: the chat placeholder opens BEFORE the worktree prepare
+    // (`launchChat`) so `git worktree add`'s stderr lines stream into the
+    // in-timeline progress card while the checkout runs. The agent's cwd is
+    // still the worktree path from the first turn.
+    const makeWorktree = isolationMode === 'worktree' && canUseWorktree
+    let checkout: LaunchCheckout = { launchCwd: projectRootSnapshot }
 
     // Existing worktree is a read: resolve it BEFORE the placeholder exists, so
     // a stale worktree toasts and returns with nothing to roll back.
     if (isolationMode === 'existing') {
       try {
-        ;({ launchCwd, worktreePath, worktreeBranch } = await prepareLaunchWorktree({
+        checkout = await prepareLaunchWorktree({
           isolationMode,
           projectRoot: projectRootSnapshot,
           projectId: projectIdSnapshot,
           existingWorktreeId
-        }))
+        })
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'That worktree is no longer available.')
         launchInFlightRef.current = false
@@ -1576,144 +1539,132 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       syncBlocks.push({ type: 'text', text: displayWithCommand })
     }
 
+    const resetComposer = (): void => {
+      useWorkspaceStore.getState().hideAgentLauncher()
+      setPendingOptions(emptyPendingLauncherOptions())
+      skillPathsRef.current = {}
+      clearAttachments()
+      resetMentions()
+      setPrompt('')
+    }
+
+    // Runs once the checkout is ready: persist the picks, then build the wire
+    // turn (path-framed skills, command-prefixed) so the agent receives paths,
+    // not tokens.
+    const prepareFirstTurn = async (): Promise<{
+      wireBlocks: ContentBlock[]
+      pendingPayload: ReturnType<typeof optionsToPending> | null
+    }> => {
+      if (needsSave) {
+        await saveAgentConfig(configSnapshot)
+      }
+      persistSelection(configSnapshot.id)
+      // Persist only the user's PICKED values (the not-yet-flushed pending
+      // queue), never the displayed snapshot: picks that already flushed to
+      // a warm session were persisted at pick time, and persisting
+      // untouched agent defaults would pin them as "last picks" forever,
+      // masking any future agent-side default change.
+      persistComposerOptions(configSnapshot.id, {
+        modelId: pendingOptions.modelId,
+        modeId: pendingOptions.modeId,
+        configValues:
+          Object.keys(pendingOptions.configValues).length > 0
+            ? pendingOptions.configValues
+            : undefined,
+        isolationMode: persistedIsolationMode(isolationMode),
+        baseBranch: isolationMode === 'worktree' ? baseBranch : null
+      })
+      const wireTrimmed = wireWithCommand.trim()
+      const blocks: ContentBlock[] = []
+      if (attachmentsSnapshot.length > 0) {
+        if (wireTrimmed) blocks.push({ type: 'text', text: wireWithCommand })
+        for (const a of attachmentsSnapshot) blocks.push(attachmentToBlock(a))
+      } else if (wireTrimmed.length > 0) {
+        blocks.push({ type: 'text', text: wireWithCommand })
+      }
+      // File-mention `resource_link` blocks append to the wire only — the
+      // display keeps the raw token text so the timeline renders inline
+      // file pills. Dedupe by path (matching `dedupeAttachmentBlocks`).
+      blocks.push(...fileBlocks)
+      return {
+        wireBlocks: dedupeAttachmentBlocks(blocks),
+        pendingPayload: hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null
+      }
+    }
+
     // Open the chat immediately; worktree prepare + ACP spawn/session/send
     // continue in the chat view.
-    const store = useAcpStore.getState()
-    let sessionId =
+    const claimedId =
       preparedKeySnapshot != null && isolationMode === 'current'
-        ? store.claimPreparedChat(preparedKeySnapshot, projectIdSnapshot)
+        ? useAcpStore.getState().claimPreparedChat(preparedKeySnapshot, projectIdSnapshot)
         : null
-    let usedPlaceholder = false
-    let seededOptimistic = false
 
-    if (!sessionId) {
-      sessionId = store.createLaunchPlaceholder({
-        cwd: launchCwd,
+    if (!claimedId) {
+      let worktreeFailed = false
+      const { started } = launchChat({
+        configId: configSnapshot.id,
         projectId: projectIdSnapshot,
-        models: modelsSnapshot,
-        modes: modesSnapshot,
-        configOptions: configOptionsSnapshot,
-        initialUserBlocks: syncBlocks.length > 0 ? syncBlocks : undefined,
-        worktreeProgressId: progressId
+        paneId: paneSnapshot,
+        checkout,
+        newWorktree: makeWorktree
+          ? { projectRoot: projectRootSnapshot, baseBranch: baseBranch ?? null }
+          : undefined,
+        placeholder: {
+          models: modelsSnapshot,
+          modes: modesSnapshot,
+          configOptions: configOptionsSnapshot,
+          initialUserBlocks: syncBlocks.length > 0 ? syncBlocks : undefined
+        },
+        onOpened: resetComposer,
+        onWorktreeCreating: setWorktreeCreating,
+        // Roll back to the launcher: the tab closes and the launcher reappears.
+        onWorktreeFailed: () => {
+          worktreeFailed = true
+          useWorkspaceStore.getState().showAgentLauncher(paneSnapshot)
+        },
+        beforeStart: async () => {
+          const { wireBlocks, pendingPayload } = await prepareFirstTurn()
+          return { blocks: wireBlocks, pending: pendingPayload }
+        }
       })
-      usedPlaceholder = true
-      seededOptimistic = syncBlocks.length > 0
-    } else if (syncBlocks.length > 0) {
-      store.seedLaunchUserMessage(sessionId, syncBlocks)
-      seededOptimistic = true
+      void started
+        .then((realId) => registerSessionTempFiles(realId, appOwnedPaths))
+        .catch((err: unknown) => {
+          const fallback = worktreeFailed
+            ? 'Failed to create worktree'
+            : 'Failed to start agent chat'
+          toast.error(err instanceof Error ? err.message : fallback)
+        })
+        .finally(() => {
+          launchInFlightRef.current = false
+        })
+      return
     }
-    useWorkspaceStore.getState().addAgentChatTab(sessionId, paneSnapshot)
-    useWorkspaceStore.getState().hideAgentLauncher()
-    setPendingOptions(emptyPendingLauncherOptions())
-    skillPathsRef.current = {}
-    clearAttachments()
-    resetMentions()
-    setPrompt('')
+
+    const seededOptimistic = syncBlocks.length > 0
+    if (seededOptimistic) useAcpStore.getState().seedLaunchUserMessage(claimedId, syncBlocks)
+    useWorkspaceStore.getState().addAgentChatTab(claimedId, paneSnapshot)
+    resetComposer()
 
     void (async () => {
       try {
-        // Worktree mode: prepare the isolated checkout now that the chat tab
-        // is open — progress lines stream into the timeline card bound to
-        // `progressId`. `startChat` still only runs after this resolves.
-        if (progressId) {
-          setWorktreeCreating(true)
-          try {
-            const prepared = await prepareLaunchWorktree({
-              isolationMode,
-              canUseWorktree,
-              baseBranch,
-              projectRoot: projectRootSnapshot,
-              projectId: projectIdSnapshot,
-              progressId
-            })
-            launchCwd = prepared.launchCwd
-            worktreePath = prepared.worktreePath
-            worktreeBranch = prepared.worktreeBranch
-          } catch (err) {
-            // Roll back to the launcher — same end state as the old
-            // pre-placeholder failure (tab closes, launcher reappears, toast).
-            useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))
-            store.discardLaunchPlaceholder(sessionId)
-            useWorktreeProgressStore.getState().clear(progressId)
-            useWorkspaceStore.getState().showAgentLauncher(paneSnapshot)
-            toast.error(err instanceof Error ? err.message : 'Failed to create worktree')
-            return
-          } finally {
-            setWorktreeCreating(false)
-          }
-        }
-        if (needsSave) {
-          await saveAgentConfig(configSnapshot)
-        }
-        persistSelection(configSnapshot.id)
-        // Persist only the user's PICKED values (the not-yet-flushed pending
-        // queue), never the displayed snapshot: picks that already flushed to
-        // a warm session were persisted at pick time, and persisting
-        // untouched agent defaults would pin them as "last picks" forever,
-        // masking any future agent-side default change.
-        persistComposerOptions(configSnapshot.id, {
-          modelId: pendingOptions.modelId,
-          modeId: pendingOptions.modeId,
-          configValues:
-            Object.keys(pendingOptions.configValues).length > 0
-              ? pendingOptions.configValues
-              : undefined,
-          isolationMode: persistedIsolationMode(isolationMode),
-          baseBranch: isolationMode === 'worktree' ? baseBranch : null
-        })
-
-        // Real send carries the WIRE text (path-framed skills, command-prefixed)
-        // so the agent receives paths, not tokens.
-        const wireTrimmed = wireWithCommand.trim()
-        const blocks: ContentBlock[] = []
-        if (attachmentsSnapshot.length > 0) {
-          if (wireTrimmed) blocks.push({ type: 'text', text: wireWithCommand })
-          for (const a of attachmentsSnapshot) blocks.push(attachmentToBlock(a))
-        } else if (wireTrimmed.length > 0) {
-          blocks.push({ type: 'text', text: wireWithCommand })
-        }
-        // File-mention `resource_link` blocks append to the wire only — the
-        // display keeps the raw token text so the timeline renders inline
-        // file pills. Dedupe by path (matching `dedupeAttachmentBlocks`).
-        blocks.push(...fileBlocks)
-        const wireBlocks = dedupeAttachmentBlocks(blocks)
-        const pendingPayload = hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null
-
+        const { wireBlocks, pendingPayload } = await prepareFirstTurn()
         const liveStore = useAcpStore.getState()
-        let realId = sessionId
-        if (usedPlaceholder) {
-          realId = await liveStore.finalizeChatLaunch({
-            placeholderId: sessionId,
-            configId: configSnapshot.id,
-            cwd: launchCwd,
-            projectId: projectIdSnapshot,
-            mcpServers: undefined,
-            pending: pendingPayload,
-            initialText: null,
-            initialBlocks: wireBlocks.length > 0 ? wireBlocks : null,
-            adoptSession: (from, to) => {
-              useWorkspaceStore.getState().remapAgentChatSession(from, to, paneSnapshot)
-            },
-            worktreePath,
-            worktreeBranch
-          })
-        } else {
-          try {
-            await liveStore.applyPendingLauncherOptions(realId, pendingPayload)
-            if (wireBlocks.length > 0) {
-              await liveStore.sendPromptBlocks(realId, wireBlocks, {
-                skipUserAppend: seededOptimistic
-              })
-            }
-          } finally {
-            // The launch marker armed by seedLaunchUserMessage must clear on
-            // failure too — `session/prompt` resolves at turn END, so an
-            // agent that dies mid-first-turn rejects here, and an armed
-            // marker counts as busy evidence forever (unclosable tab).
-            liveStore.clearLaunchingSession(realId)
+        try {
+          await liveStore.applyPendingLauncherOptions(claimedId, pendingPayload)
+          if (wireBlocks.length > 0) {
+            await liveStore.sendPromptBlocks(claimedId, wireBlocks, {
+              skipUserAppend: seededOptimistic
+            })
           }
+        } finally {
+          // The launch marker armed by seedLaunchUserMessage must clear on
+          // failure too — `session/prompt` resolves at turn END, so an
+          // agent that dies mid-first-turn rejects here, and an armed
+          // marker counts as busy evidence forever (unclosable tab).
+          liveStore.clearLaunchingSession(claimedId)
         }
-        registerSessionTempFiles(realId, appOwnedPaths)
+        registerSessionTempFiles(claimedId, appOwnedPaths)
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
       } finally {

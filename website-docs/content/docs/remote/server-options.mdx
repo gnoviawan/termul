@@ -22,7 +22,7 @@ This page lists the `termul-server` settings you are most likely to change. Run 
 | `--max-terminals-per-project <N>` | `TERMUL_MAX_TERMINALS_PER_PROJECT` | `10` | The most terminals one project can have open. The whole server allows 30. |
 | `--check-update` | | | Check for a new server version once, then exit. See [Update the server](#update-the-server). |
 
-When you set both a flag and its environment variable, the flag wins.
+When you set both a flag and its environment variable, the flag wins. A `server-config.json` in the state folder — written by the setup page or by `termul-server onboard` — wins over both for the settings it holds: host, port, sessions directory, projects file, remote writes, and updates.
 
 The state folder is `$XDG_STATE_HOME/termul` when `XDG_STATE_HOME` is set. Otherwise it is `~/.local/state/termul`.
 
@@ -124,6 +124,6 @@ To check for updates in the background, set these environment variables before y
 | `TERMUL_SERVER_UPDATE_CHANNEL` | `stable`, `insider` or `nightly`. Required. |
 | `TERMUL_SERVER_UPDATE_INTERVAL_SECS` | How often to check. The default is `21600` (6 hours). |
 
-When the server finds a new version in the background, it installs it and restarts itself. The setup wizard sets these variables for you when you pick an update channel.
+When the server finds a new version in the background, it installs it and restarts itself. Picking an update channel during setup — in the browser or with `termul-server onboard` — turns background checks on for you.
 
 Docker images don't update themselves. Pull a new image instead. See [Install the server](/docs/remote/server#install-the-server).

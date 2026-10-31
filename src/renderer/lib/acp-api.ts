@@ -526,6 +526,8 @@ export interface PermissionRequestEvent {
   requestId: string
   toolCall: ToolCallUpdate
   options: PermissionOption[]
+  /** The client turn id of the turn that raised it (absent for a turnless prompt). */
+  turnId?: string
 }
 
 /** One selectable option of an `AskUserQuestionEvent` (issue #411). */
@@ -805,6 +807,11 @@ export interface BrowserAgentTabEvent {
   tabId: string
   url?: string
   sessionId: string
+}
+
+/** The host registry dropped an agent tab (`acp:browser_tab_closed`). */
+export interface BrowserTabClosedEvent {
+  tabId: string
 }
 
 // --- Command wrappers ------------------------------------------------------

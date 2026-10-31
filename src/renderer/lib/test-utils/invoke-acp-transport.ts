@@ -21,7 +21,11 @@ import type {
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
 import type { IpcResult } from '@shared/types/ipc.types'
-import type { McpCatalogPage, McpCatalogStatus } from '@shared/types/mcp-catalog.types'
+import type {
+  McpCatalogIconPayload,
+  McpCatalogPage,
+  McpCatalogStatus
+} from '@shared/types/mcp-catalog.types'
 import type {
   McpInstallCommitResult,
   McpInstallFormReply,
@@ -198,6 +202,13 @@ export function createInvokeAcpTransport(): AcpTransport {
     cancelMcpInstall: async (request) => {
       const result = await invoke<IpcResult<Record<string, never>>>('cancel_mcp_install', {
         request
+      })
+      if (result.success) return result.data
+      throw new AcpTransportError(result.code, result.error)
+    },
+    getMcpCatalogIcon: async (name) => {
+      const result = await invoke<IpcResult<McpCatalogIconPayload>>('get_mcp_catalog_icon', {
+        name
       })
       if (result.success) return result.data
       throw new AcpTransportError(result.code, result.error)

@@ -644,6 +644,13 @@ pub struct AppState {
     /// `None` keeps the legacy ungated behavior (accept-any-token
     /// `authenticate`, no `/terminal/ws` connection gate).
     pub web_auth: Option<Arc<WebAuth>>,
+    /// Standalone `termul-server` host-administration context (gh-1105): the
+    /// resolved state dir + the effective setup answers the `/server/config`
+    /// reconfigure routes read, persist, and restart onto. `Some` only on the
+    /// standalone server; `None` on the desktop shared-live host (and the
+    /// desktop's in-process channel state) so `/server/config` stays
+    /// unreachable there and `/health` reports `setupRequired: false`.
+    pub server_admin: Option<crate::web::server_config_file::ServerAdminContext>,
     /// Host shutdown coordination + per-connection overflow tolerance, shared
     /// by every upgraded `/ws` and `/terminal/ws` socket (AD-19).
     pub connections: ConnectionRuntime,
@@ -812,6 +819,8 @@ mod capability_tests;
 mod project_binding_tests;
 #[cfg(test)]
 mod host_ticket_route_tests;
+#[cfg(test)]
+mod pending_permission_tests;
 #[cfg(test)]
 mod project_command_tests;
 #[cfg(test)]

@@ -26,6 +26,20 @@
 //! as long as the ticket exists. Answered and released ids are remembered in a
 //! bounded tombstone memory, so a later answer reads `already_resolved`.
 //!
+//! A ticket keeps its original `permission_request` payload, so a client that
+//! (re)subscribes gets every still-pending request of the session back
+//! ([`PermissionRendezvous::pending_requests`]): the request event is not in
+//! the durable log, so neither a snapshot nor a replay past its seq carries it.
+//!
+//! # Late requests of an ended turn
+//!
+//! The relay registers a request and a turn end releases the session from
+//! separate `emit` calls, so a request's registration can land after its
+//! turn's release. A request carries the turn it belongs to (`turnId`), and
+//! [`PermissionRendezvous::release_turn`] records the ended turn under the
+//! same lock that registration takes: a request of an ended turn is dropped
+//! (and remembered as resolved) instead of becoming a ticket nothing releases.
+//!
 //! At most one ticket per session is outstanding; the rest wait in a FIFO
 //! queue. Every answer promotes the next queued ticket. A lifecycle release
 //! drops the whole session queue instead: the driver has already cancelled
@@ -128,6 +142,9 @@ struct PermissionTicket {
     /// The immutable args snapshot — `options` array from the original
     /// `PermissionRequestEvent` payload. Used for TOCTOU re-validation.
     options: Value,
+    /// The original `permission_request` payload, re-delivered to a client
+    /// that subscribes while the ticket is pending.
+    request: Value,
     /// `Some(client)` once a client has won the ticket (first-response-wins);
     /// further responses are `AlreadyResolved` or `Duplicate`.
     resolved_by: Option<ClientId>,
@@ -147,7 +164,12 @@ struct QueuedTicket {
     request_id: String,
     agent_id: AgentId,
     options: Value,
+    request: Value,
 }
+
+/// How many ended turn ids a session remembers. A late request belongs to
+/// the turn that just ended, so a short memory is enough.
+const ENDED_TURNS_PER_SESSION: usize = 4;
 
 /// The ticket table and the per-session queues. One lock covers both, so the
 /// outstanding slot and its ticket never disagree.
@@ -158,23 +180,21 @@ struct State {
     /// `session_id → at-most-one queue`. A session has an entry only while it
     /// has an outstanding ticket.
     sessions: HashMap<String, SessionQueue>,
+    /// `session_id → the latest turn ids released by a turn end`, newest
+    /// last. A request of one of these turns is never registered.
+    ended_turns: HashMap<String, VecDeque<String>>,
 }
 
 impl State {
     /// Make `request_id` of `session_id` the outstanding ticket.
-    fn open_ticket(
-        &mut self,
-        session_id: &str,
-        request_id: String,
-        agent_id: AgentId,
-        options: Value,
-    ) {
+    fn open_ticket(&mut self, session_id: &str, ticket: QueuedTicket) {
         self.tickets.insert(
-            request_id,
+            ticket.request_id,
             PermissionTicket {
-                agent_id,
+                agent_id: ticket.agent_id,
                 session_id: session_id.to_string(),
-                options,
+                options: ticket.options,
+                request: ticket.request,
                 resolved_by: None,
             },
         );
@@ -204,7 +224,7 @@ impl State {
             match queue.queued.pop_front() {
                 Some(next) => {
                     queue.outstanding.clone_from(&next.request_id);
-                    self.open_ticket(&session_id, next.request_id, next.agent_id, next.options);
+                    self.open_ticket(&session_id, next);
                 }
                 None => {
                     self.sessions.remove(&session_id);
@@ -212,6 +232,25 @@ impl State {
             }
         }
         true
+    }
+
+    /// Record that `turn_id` of `session_id` ended.
+    fn end_turn(&mut self, session_id: &str, turn_id: &str) {
+        let ended = self.ended_turns.entry(session_id.to_string()).or_default();
+        if ended.iter().any(|id| id == turn_id) {
+            return;
+        }
+        if ended.len() == ENDED_TURNS_PER_SESSION {
+            ended.pop_front();
+        }
+        ended.push_back(turn_id.to_string());
+    }
+
+    /// Whether `turn_id` of `session_id` already ended.
+    fn turn_ended(&self, session_id: &str, turn_id: &str) -> bool {
+        self.ended_turns
+            .get(session_id)
+            .is_some_and(|ended| ended.iter().any(|id| id == turn_id))
     }
 
     /// Drop a whole session queue (outstanding + queued). Returns the ids.
@@ -331,12 +370,43 @@ impl PermissionRendezvous {
             .map_or(0, |q| q.queued.len())
     }
 
-    /// Snapshot a `permission_request` event into a ticket (FR14: at-most-one
-    /// outstanding per session; the rest are queued).
+    /// Snapshot a `permission_request` event payload into a ticket.
     ///
     /// Called by [`WsRelaySink::emit`] when it sees `acp:permission_request`.
-    /// `options` is the `Value` of the event's `options` field (array of
-    /// `{optionId, …}`) — the immutable-args snapshot for TOCTOU re-validation.
+    /// The payload is `{agentId, sessionId, requestId, toolCall, options}`
+    /// (events.rs → camelCase wire); it is kept whole so a resubscribing
+    /// client can render the request again. A payload without a `requestId`
+    /// would collide all such tickets on the empty key, so it is skipped
+    /// (`DriverState::register_permission` always mints `perm-{uuid}`; this
+    /// only triggers on a dispatcher bug).
+    ///
+    /// A payload whose `turnId` names a turn that already ended (see
+    /// [`Self::release_turn`]) is not registered: the driver cancelled its
+    /// responder with the turn, so it is remembered as resolved instead.
+    pub fn register_event(&self, payload: &Value) {
+        let field = |name: &str| payload.get(name).and_then(Value::as_str);
+        let request_id = field("requestId").unwrap_or_default();
+        if request_id.is_empty() {
+            warn!("[permissions] dropping permission_request with no requestId (dispatcher bug?)");
+            return;
+        }
+        self.insert(
+            field("sessionId").unwrap_or_default().to_string(),
+            field("turnId").filter(|turn_id| !turn_id.is_empty()),
+            QueuedTicket {
+                request_id: request_id.to_string(),
+                agent_id: AgentId(field("agentId").unwrap_or("unknown").to_string()),
+                options: payload.get("options").cloned().unwrap_or(Value::Array(vec![])),
+                request: payload.clone(),
+            },
+        );
+    }
+
+    /// Register a ticket from its fields (FR14: at-most-one outstanding per
+    /// session; the rest are queued). `options` is the `Value` of the event's
+    /// `options` field (array of `{optionId, …}`) — the immutable-args snapshot
+    /// for TOCTOU re-validation. The kept request payload is built from the
+    /// same fields.
     pub fn register(
         &self,
         request_id: String,
@@ -344,26 +414,71 @@ impl PermissionRendezvous {
         session_id: String,
         options: Value,
     ) {
-        if is_host_ticket_id(&request_id) {
-            return;
-        }
-        let mut state = self.state.lock();
-        if let Some(queue) = state.sessions.get_mut(&session_id) {
-            queue.queued.push_back(QueuedTicket {
+        let request = serde_json::json!({
+            "agentId": agent_id.0,
+            "sessionId": session_id,
+            "requestId": request_id,
+            "options": options,
+        });
+        self.insert(
+            session_id,
+            None,
+            QueuedTicket {
                 request_id,
                 agent_id,
                 options,
-            });
+                request,
+            },
+        );
+    }
+
+    fn insert(&self, session_id: String, turn_id: Option<&str>, ticket: QueuedTicket) {
+        if is_host_ticket_id(&ticket.request_id) {
+            return;
+        }
+        let mut state = self.state.lock();
+        if turn_id.is_some_and(|turn_id| state.turn_ended(&session_id, turn_id)) {
+            warn!(
+                "[permissions] dropping a permission_request of an already-ended turn (session {})",
+                crate::logging::redact_session_id(&session_id)
+            );
+            self.resolved.lock().record(&ticket.request_id);
+            return;
+        }
+        if let Some(queue) = state.sessions.get_mut(&session_id) {
+            queue.queued.push_back(ticket);
             return;
         }
         state.sessions.insert(
             session_id.clone(),
             SessionQueue {
-                outstanding: request_id.clone(),
+                outstanding: ticket.request_id.clone(),
                 queued: VecDeque::new(),
             },
         );
-        state.open_ticket(&session_id, request_id, agent_id, options);
+        state.open_ticket(&session_id, ticket);
+    }
+
+    /// The `permission_request` payloads of a session that still wait for an
+    /// answer: the outstanding one first, then the queued ones in FIFO order.
+    /// An outstanding ticket whose answer is already being forwarded to the
+    /// agent is not pending any more and is left out. A subscribing client
+    /// installs this list as the session's pending approvals.
+    #[must_use]
+    pub fn pending_requests(&self, session_id: &str) -> Vec<Value> {
+        let state = self.state.lock();
+        let Some(queue) = state.sessions.get(session_id) else {
+            return Vec::new();
+        };
+        let outstanding = state
+            .tickets
+            .get(&queue.outstanding)
+            .filter(|ticket| ticket.resolved_by.is_none())
+            .map(|ticket| ticket.request.clone());
+        outstanding
+            .into_iter()
+            .chain(queue.queued.iter().map(|ticket| ticket.request.clone()))
+            .collect()
     }
 
     /// The rejection for a `request_id` with no outstanding ticket: a recently
@@ -475,6 +590,28 @@ impl PermissionRendezvous {
         released.len()
     }
 
+    /// Drop every ticket of a session whose turn `turn_id` ended, like
+    /// [`Self::release_session`], and remember the turn as ended under the
+    /// same lock, so a request of that turn registered afterwards is dropped
+    /// rather than kept as a ticket nothing releases. Returns how many
+    /// tickets were released.
+    pub fn release_turn(&self, session_id: &str, turn_id: &str) -> usize {
+        let mut state = self.state.lock();
+        state.end_turn(session_id, turn_id);
+        let released = state.release_session(session_id);
+        let mut resolved = self.resolved.lock();
+        for id in &released {
+            resolved.record(id);
+        }
+        released.len()
+    }
+
+    /// Forget the ended turns of a disposed session (its tickets are released
+    /// by [`Self::release_session`]).
+    pub fn forget_session(&self, session_id: &str) {
+        self.state.lock().ended_turns.remove(session_id);
+    }
+
     /// Drop every ticket of an agent that disconnected, crashed or was killed.
     /// Returns how many tickets were released.
     pub fn release_agent(&self, agent_id: &AgentId) -> usize {
@@ -525,6 +662,8 @@ impl Default for PermissionRendezvous {
 
 #[cfg(test)]
 mod durable_tests;
+#[cfg(test)]
+mod pending_tests;
 #[cfg(test)]
 mod question_tests;
 #[cfg(test)]

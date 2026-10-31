@@ -23,6 +23,7 @@ use std::process::{Command, ExitCode, Stdio};
 
 use crate::server_update::UpdateChannel;
 use crate::web::config::{default_projects_file, default_sessions_dir, BindMode, ServerConfig};
+use crate::web::server_config_file::{self, ServerConfigFile};
 
 // ---------------------------------------------------------------------------
 // OnboardAnswers — validated answers + synthesis trio.
@@ -50,7 +51,7 @@ pub struct OnboardAnswers {
 /// which runs with an unpredictable working directory — never bakes in a
 /// CWD-relative `--projects-file`. Falls back to the raw path only when the
 /// cwd is unavailable.
-fn normalize_projects_file_path(path: PathBuf) -> PathBuf {
+pub(crate) fn normalize_projects_file_path(path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         return path;
     }
@@ -248,6 +249,11 @@ impl OnboardAnswers {
             // `run_interactive` resolves the state dir and passes it to the
             // launched server explicitly via `--state-dir` (see there).
             state_dir: None,
+            // gh-1105: a wizard-completed config is fully specified — every
+            // onboarding field was answered, so a boot synthesized from these
+            // answers must never enter setup mode.
+            explicit_config: true,
+            host_explicit: true,
         }
     }
 
@@ -868,6 +874,31 @@ fn ensure_state_dir<W: Write>(stdout: &mut W, state_dir: &Path) -> Result<(), Ex
     })
 }
 
+/// Write `<state_dir>/server-config.json` — the SAME durable record the web
+/// onboarding flow persists (gh-1105), through the shared
+/// [`ServerConfigFile`]/[`server_config_file::save`] contract so the CLI and
+/// web wizards can never drift. `run_interactive` calls this right after
+/// [`ensure_state_dir`], failing fast with `Err(ExitCode::FAILURE)` when the
+/// file cannot be written: a service launched without it could never be
+/// reconfigured from the web — and would drop into setup mode if its argv
+/// were ever dropped — so a half-onboarded install is worse than no launch.
+fn persist_server_config<W: Write>(
+    stdout: &mut W,
+    answers: &OnboardAnswers,
+    state_dir: &Path,
+) -> Result<(), ExitCode> {
+    let file = ServerConfigFile::from(answers);
+    server_config_file::save(state_dir, &file).map_err(|e| {
+        writeln!(
+            stdout,
+            "error: cannot write {}: {e}",
+            server_config_file::server_config_path(state_dir).display()
+        )
+        .ok();
+        ExitCode::FAILURE
+    })
+}
+
 /// TTY path: collect → synthesize → access info → launch → boundary log.
 fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitCode {
     let answers = OnboardAnswers::collect(stdin, stdout);
@@ -878,6 +909,17 @@ fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitC
     // the state dir there is nowhere to persist the web-auth token, the env
     // file, or the pid/log files the unit references.
     if let Err(code) = ensure_state_dir(stdout, &state_dir) {
+        return code;
+    }
+    // gh-1105: persist the SAME `<state_dir>/server-config.json` the web
+    // onboarding flow writes — the `ServerConfigFile::from(&answers)`
+    // conversion mirrors `to_command_args`/`to_env_lines` normalization
+    // (display-form host, remote-writes forced off on loopback), so the CLI
+    // and web records can never drift. Written BEFORE the env-file prompt
+    // and the service install: the launched server's `from_args` merge
+    // makes this file authoritative over the argv the unit pins, which is
+    // what later makes this install reconfigurable from the web.
+    if let Err(code) = persist_server_config(stdout, &answers, &state_dir) {
         return code;
     }
     let env_lines = answers.to_env_lines();

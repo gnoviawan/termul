@@ -2,18 +2,18 @@ use std::net::SocketAddr;
 
 use axum::{
     body::Bytes,
-    extract::{rejection::QueryRejection, ConnectInfo, DefaultBodyLimit, Query, State},
+    extract::{rejection::QueryRejection, ConnectInfo, DefaultBodyLimit, Path, Query, State},
     handler::Handler,
-    http::StatusCode,
-    response::IntoResponse,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     routing::{post, MethodRouter},
     Json,
 };
-use serde::Deserialize;
-use tracing::{info, warn};
+use serde::{Deserialize, Serialize};
+use tracing::{debug, info, warn};
 
 use crate::mcp_catalog::{
-    CancelRequest, CommitRequest, FormRequest, McpCatalogError, McpCatalogPage,
+    CancelRequest, CommitRequest, FormRequest, Icon, McpCatalogError, McpCatalogPage,
     McpCatalogSearchRequest, McpCatalogService, McpCatalogStatus, PlanCaller, PlanRequest,
     MAX_PLAN_REQUEST_BYTES,
 };
@@ -24,6 +24,29 @@ use crate::web::ws::{AppState, MAX_CLIENT_ID_LEN};
 #[serde(deny_unknown_fields)]
 pub struct SetMcpCatalogSyncRequest {
     pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpCatalogIconRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpCatalogIconPayload {
+    pub content_type: &'static str,
+    pub base64: String,
+}
+
+impl From<Icon> for McpCatalogIconPayload {
+    fn from(icon: Icon) -> Self {
+        use base64::Engine as _;
+        Self {
+            content_type: icon.content_type.mime(),
+            base64: base64::engine::general_purpose::STANDARD.encode(&icon.bytes),
+        }
+    }
 }
 
 const TARGET: &str = "termul::web::mcp_catalog_api";
@@ -41,6 +64,10 @@ where
 {
     post(handler).layer(DefaultBodyLimit::max(MAX_INSTALL_BODY_BYTES))
 }
+
+/// An SVG opened as a page instead of through `<img>` runs no script.
+const ICON_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+const ICON_CACHE_CONTROL: &str = "private, max-age=86400";
 
 pub async fn search(
     query: Result<Query<McpCatalogSearchRequest>, QueryRejection>,
@@ -268,6 +295,32 @@ pub async fn cancel_install(
         Err(error) => rejected("install/cancel", &error),
     };
     Json(reply)
+}
+
+pub async fn icon(Path(name): Path<String>) -> Response {
+    match McpCatalogService::shared().await.icon(&name).await {
+        Ok(icon) => {
+            debug!(target: TARGET, bytes = icon.bytes.len(), "icon: served");
+            (
+                [
+                    (header::CONTENT_TYPE, icon.content_type.mime()),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                    (header::CONTENT_SECURITY_POLICY, ICON_CSP),
+                    (header::CACHE_CONTROL, ICON_CACHE_CONTROL),
+                ],
+                icon.bytes.to_vec(),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            debug!(target: TARGET, code = error.code, "icon: unavailable");
+            (
+                StatusCode::NOT_FOUND,
+                Json(IpcBody::<()>::err(error.message, error.code)),
+            )
+                .into_response()
+        }
+    }
 }
 
 #[cfg(test)]

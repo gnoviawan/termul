@@ -51,6 +51,9 @@ pub use commit_detail::{
     GitCommitFileDiff,
 };
 pub use diff_stat::{git_get_diff_stat, DiffStatError, GitDiffStat};
+/// The capped, drained, timeout-and-kill-tree process runner git uses, shared
+/// with the `gh` runner (`crate::github`).
+pub(crate) use git_exec::{spawn_git as spawn_captured, GitWaitError, StdoutCap};
 #[cfg(test)]
 pub(crate) use diff_stat::GitFileDiffStat;
 pub use resolve::{resolve_executable, resolve_git_binary};

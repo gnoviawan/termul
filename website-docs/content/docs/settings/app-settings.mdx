@@ -77,6 +77,14 @@ Change any shortcut in the list. See [Keyboard shortcuts](/docs/settings/keyboar
 
 Pick a release channel, check for updates, and turn automatic checks on or off. See [Updates](/docs/settings/updates).
 
+## Server
+
+<Callout type="info">This works in the browser version only, when Termul is served by `termul-server`.</Callout>
+
+This tab changes how the server itself runs: its bind host and port, sessions directory, projects file, whether other devices can make changes, and its update channel. It is the same page as the setup wizard shown on a fresh install.
+
+Applying saves the settings to `server-config.json` in the server's state folder and restarts the server. If the address changes, your browser follows the server to the new address by itself. See [Install and start termul-server](/docs/remote/server#set-it-up-in-the-browser).
+
 ## Diagnostics & Logs
 
 Termul writes a log file that helps find the cause of a problem. This tab gets the log out of the app.

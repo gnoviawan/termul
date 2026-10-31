@@ -39,7 +39,8 @@ use serde::Deserialize;
 
 /// GitHub release channel the server tracks. Mirrors the desktop renderer's
 /// `UpdateChannel` so both targets share one channel model + manifest scheme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum UpdateChannel {
     Stable,
     Insider,

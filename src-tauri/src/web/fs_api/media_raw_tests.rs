@@ -25,6 +25,7 @@ fn app(static_dir: &std::path::Path, token: Option<&str>) -> Router {
         false,
         token.map(|t| Arc::new(WebAuth::new(WebAuthToken::new(t).expect("non-empty")))),
         OriginPolicy::default(),
+        None,
     )
 }
 

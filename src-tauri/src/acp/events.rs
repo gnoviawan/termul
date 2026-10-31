@@ -363,6 +363,11 @@ pub struct PermissionRequestEvent {
     pub request_id: String,
     pub tool_call: ToolCallUpdate,
     pub options: Vec<PermissionOption>,
+    /// The client turn id of the turn that raised the request (absent for a
+    /// turnless prompt). The relay drops a request whose turn already ended,
+    /// so a late registration cannot outlive its `prompt_complete`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
 }
 
 /// `acp:question_request` (issue #411)
