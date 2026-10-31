@@ -8,7 +8,7 @@ export const MOBILE_SECTIONS: readonly MobileSection[] = ['chats', 'terminals', 
 /**
  * The section a tab kind belongs to. Editors holds editor files, Git Changes,
  * Diff and Browser tabs (and a stray canvas tab, for exhaustiveness: canvas has
- * no web UI of its own). Git History lives in the menu, so it belongs to none.
+ * no web UI of its own). Git History and Automations live in the drawer footer, so they belong to none.
  */
 export function sectionForTab(tab: WorkspaceTab | null | undefined): MobileSection | null {
   if (!tab) return null
@@ -25,6 +25,7 @@ export function sectionForTab(tab: WorkspaceTab | null | undefined): MobileSecti
     case 'canvas':
       return 'editors'
     case 'git-history':
+    case 'automations':
       return null
     default: {
       const unhandled: never = tab

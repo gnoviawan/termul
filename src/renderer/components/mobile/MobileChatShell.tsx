@@ -236,6 +236,8 @@ export function MobileChatShell({
         return browserTabLabel(activeBrowserTab)
       case 'canvas':
         return basename(activeTab.docPath)
+      case 'automations':
+        return 'Automations'
       default:
         reportUnknownTabKind(activeTab, 'MobileChatShell.headerTitle', 'using default title')
         return 'Termul'
@@ -308,6 +310,13 @@ export function MobileChatShell({
   const openGitHistory = onOpenGitHistory
     ? (): void => {
         onOpenGitHistory()
+        returnToWorkspace()
+      }
+    : undefined
+  const automationsProjectId = activeProject?.id
+  const openAutomations = automationsProjectId
+    ? (): void => {
+        useWorkspaceStore.getState().addAutomationsTab(automationsProjectId)
         returnToWorkspace()
       }
     : undefined
@@ -456,6 +465,7 @@ export function MobileChatShell({
         onRenameTerminal={onRenameTerminal}
         onCloseEditorTab={onCloseEditorTab}
         onOpenGitHistory={openGitHistory}
+        onOpenAutomations={openAutomations}
         onOpenProjects={openProjectSheet}
         onOpenFiles={openFilesFrom ? () => openFilesFrom(menuButtonRef.current) : undefined}
       />

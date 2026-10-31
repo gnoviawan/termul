@@ -50,6 +50,11 @@ const DiffTab = lazy(() => import('@/components/git/DiffTab').then((m) => ({ def
 const CommitDiffTab = lazy(() =>
   import('@/components/git/CommitDiffTab').then((m) => ({ default: m.CommitDiffTab }))
 )
+const AutomationsPanel = lazy(() =>
+  import('@/components/automations/AutomationsPanel').then((m) => ({
+    default: m.AutomationsPanel
+  }))
+)
 const GitHistoryPanel = lazy(() =>
   import('@/components/git/GitHistoryPanel').then((m) => ({ default: m.GitHistoryPanel }))
 )
@@ -499,6 +504,22 @@ export function PaneContent({
                   >
                     <Suspense fallback={<PaneSkeleton />}>
                       <GitHistoryPanel cwd={tab.cwd} isVisible={isVisible} />
+                    </Suspense>
+                  </div>
+                )
+              })}
+
+            {pane.tabs
+              .filter((t): t is WorkspaceTab & { type: 'automations' } => t.type === 'automations')
+              .map((tab) => {
+                const isVisible = visibleTabId === tab.id
+                return (
+                  <div
+                    key={tab.id}
+                    className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
+                  >
+                    <Suspense fallback={<PaneSkeleton />}>
+                      <AutomationsPanel projectId={tab.projectId} isVisible={isVisible} />
                     </Suspense>
                   </div>
                 )

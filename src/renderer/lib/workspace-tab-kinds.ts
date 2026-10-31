@@ -20,7 +20,8 @@ export const WORKSPACE_TAB_KIND_TRAITS = {
   'git-history': { persisted: true },
   diff: { persisted: true },
   'commit-diff': { persisted: true },
-  canvas: { persisted: false }
+  canvas: { persisted: false },
+  automations: { persisted: true }
 } as const satisfies Record<WorkspaceTabKind, { persisted: boolean }>
 
 /** The tab kinds that are written to the workspace record (derived from the traits). */
