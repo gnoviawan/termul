@@ -13,7 +13,7 @@ export function createDesktopMcpCatalogApi(): McpCatalogApi {
     icon: (name) =>
       ipcResultFromTransport(async () => {
         const icon = await getAcpTransport().getMcpCatalogIcon(name)
-        const bytes = Uint8Array.from(atob(icon.data), (char) => char.charCodeAt(0))
+        const bytes = Uint8Array.from(atob(icon.base64), (char) => char.charCodeAt(0))
         return new Blob([bytes], { type: icon.contentType })
       })
   }

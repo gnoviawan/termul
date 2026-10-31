@@ -32,8 +32,6 @@ fn lookup(answers: &[(&str, &[&str])]) -> Lookup {
     })
 }
 
-/// The production rules, except that `http` to loopback is allowed so tests
-/// can reach a local server. Private addresses stay refused.
 const LOCAL_HTTP: Policy = Policy {
     scheme: "http",
     allows: |ip| ip.is_loopback() || is_public(ip),
@@ -92,7 +90,9 @@ async fn serve() -> Server {
         )
         .route(
             "/to-private",
-            get(move || async move { redirect(&format!("http://private.test:{port}/png-as-text")) }),
+            get(
+                move || async move { redirect(&format!("http://private.test:{port}/png-as-text")) },
+            ),
         )
         .route(
             "/to-private-ip",
@@ -183,9 +183,18 @@ fn only_public_addresses_are_public() {
 fn the_policy_refuses_http_and_non_public_ip_literals() {
     let check = |url: &str| Policy::PUBLIC_HTTPS.check(&Url::parse(url).unwrap());
     assert_eq!(check("http://a.example/icon.png"), Err(Refused::NotHttps));
-    assert_eq!(check("https://127.0.0.1/icon.png"), Err(Refused::NonPublicAddress));
-    assert_eq!(check("https://[::1]/icon.png"), Err(Refused::NonPublicAddress));
-    assert_eq!(check("https://169.254.169.254/latest"), Err(Refused::NonPublicAddress));
+    assert_eq!(
+        check("https://127.0.0.1/icon.png"),
+        Err(Refused::NonPublicAddress)
+    );
+    assert_eq!(
+        check("https://[::1]/icon.png"),
+        Err(Refused::NonPublicAddress)
+    );
+    assert_eq!(
+        check("https://169.254.169.254/latest"),
+        Err(Refused::NonPublicAddress)
+    );
     assert_eq!(check("https://93.184.216.34/icon.png"), Ok(()));
     assert_eq!(check("https://a.example/icon.png"), Ok(()));
 }
@@ -266,7 +275,10 @@ async fn up_to_three_redirects_are_followed_and_a_fourth_is_refused() {
     let server = serve().await;
     let (client, url) = local_client(server.port);
     assert_eq!(
-        client.fetch(&url("/hop/2")).await.map(|icon| icon.content_type),
+        client
+            .fetch(&url("/hop/2"))
+            .await
+            .map(|icon| icon.content_type),
         Ok(IconType::Png)
     );
     assert_eq!(

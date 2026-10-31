@@ -1,8 +1,3 @@
-//! The one path a logo takes from a publisher to the host. Every hop is
-//! checked: `https`, a public address resolved by our own resolver (so the
-//! connection goes to the address that was checked), at most
-//! [`MAX_REDIRECTS`] redirects, a body cap, and a type sniffed from the bytes.
-
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,7 +14,6 @@ pub(crate) const MAX_REDIRECTS: usize = 3;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const ACCEPT: &str = "image/png,image/jpeg,image/webp,image/gif,image/svg+xml";
 
-/// Why a hop was refused before any byte was sent to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refused {
     NotHttps,
@@ -83,8 +77,6 @@ impl From<reqwest::Error> for FetchError {
     }
 }
 
-/// Which hops may be fetched. Production allows only `https` to public
-/// addresses; tests swap in a loopback `http` policy to reach a local server.
 #[derive(Clone, Copy)]
 pub(crate) struct Policy {
     pub scheme: &'static str,
@@ -123,57 +115,59 @@ pub(crate) fn is_public(ip: IpAddr) -> bool {
     }
 }
 
+const NON_PUBLIC_V4: [(Ipv4Addr, u32); 14] = [
+    (Ipv4Addr::new(0, 0, 0, 0), 8),
+    (Ipv4Addr::new(10, 0, 0, 0), 8),
+    (Ipv4Addr::new(100, 64, 0, 0), 10),
+    (Ipv4Addr::new(127, 0, 0, 0), 8),
+    (Ipv4Addr::new(169, 254, 0, 0), 16),
+    (Ipv4Addr::new(172, 16, 0, 0), 12),
+    (Ipv4Addr::new(192, 0, 0, 0), 24),
+    (Ipv4Addr::new(192, 0, 2, 0), 24),
+    (Ipv4Addr::new(192, 168, 0, 0), 16),
+    (Ipv4Addr::new(198, 18, 0, 0), 15),
+    (Ipv4Addr::new(198, 51, 100, 0), 24),
+    (Ipv4Addr::new(203, 0, 113, 0), 24),
+    (Ipv4Addr::new(224, 0, 0, 0), 4),
+    (Ipv4Addr::new(240, 0, 0, 0), 4),
+];
+
+const NON_PUBLIC_V6: [(Ipv6Addr, u32); 6] = [
+    (Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 0), 32),
+    (Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32),
+    (Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),
+    (Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10),
+    (Ipv6Addr::new(0xfec0, 0, 0, 0, 0, 0, 0, 0), 10),
+    (Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0), 8),
+];
+
 fn is_public_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    !(a == 0
-        || ip.is_loopback()
-        || ip.is_private()
-        || ip.is_link_local()
-        || ip.is_multicast()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        // 100.64.0.0/10 carrier-grade NAT.
-        || (a == 100 && (64..128).contains(&b))
-        // 192.0.0.0/24 IETF protocol assignments.
-        || (a == 192 && b == 0 && c == 0)
-        // 198.18.0.0/15 benchmarking.
-        || (a == 198 && (18..20).contains(&b))
-        // 240.0.0.0/4 reserved.
-        || a >= 240)
+    let ip = u32::from(ip);
+    NON_PUBLIC_V4
+        .iter()
+        .all(|(net, len)| (ip ^ u32::from(*net)) >> (32 - len) != 0)
 }
 
 fn is_public_v6(ip: Ipv6Addr) -> bool {
-    if let Some(v4) = ip.to_ipv4_mapped() {
+    if let Some(v4) = embedded_v4(ip) {
         return is_public_v4(v4);
     }
-    let segments = ip.segments();
-    let embedded_v4 = |high: u16, low: u16| {
-        let [a, b] = high.to_be_bytes();
-        let [c, d] = low.to_be_bytes();
-        Ipv4Addr::new(a, b, c, d)
-    };
-    match segments {
-        // 64:ff9b::/96 NAT64 and ::/96 IPv4-compatible carry an IPv4 address.
-        [0x64, 0xff9b, 0, 0, 0, 0, high, low] | [0, 0, 0, 0, 0, 0, high, low]
-            if !ip.is_loopback() && !ip.is_unspecified() =>
-        {
-            return is_public_v4(embedded_v4(high, low));
-        }
-        // 2002::/16 6to4 carries one in its next 32 bits.
-        [0x2002, high, low, ..] => return is_public_v4(embedded_v4(high, low)),
-        _ => {}
+    let ip = u128::from(ip);
+    NON_PUBLIC_V6
+        .iter()
+        .all(|(net, len)| (ip ^ u128::from(*net)) >> (128 - len) != 0)
+}
+
+/// The IPv4 address an IPv4-mapped, IPv4-compatible, NAT64 or 6to4 address
+/// reaches.
+fn embedded_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let v4 = |high: u16, low: u16| Some(Ipv4Addr::from((u32::from(high) << 16) | u32::from(low)));
+    match ip.segments() {
+        [0, 0, 0, 0, 0, 0xffff, high, low] | [0x64, 0xff9b, 0, 0, 0, 0, high, low] => v4(high, low),
+        [0, 0, 0, 0, 0, 0, high, low] => v4(high, low),
+        [0x2002, high, low, ..] => v4(high, low),
+        _ => None,
     }
-    let first = segments[0];
-    !(ip.is_loopback()
-        || ip.is_unspecified()
-        || ip.is_multicast()
-        // fc00::/7 unique local.
-        || (first & 0xfe00) == 0xfc00
-        // fe80::/10 link local, fec0::/10 deprecated site local.
-        || (first & 0xffc0) == 0xfe80
-        || (first & 0xffc0) == 0xfec0
-        // 2001:db8::/32 documentation, 2001::/32 Teredo.
-        || (first == 0x2001 && (segments[1] == 0x0db8 || segments[1] == 0)))
 }
 
 pub(crate) type Lookup =
@@ -273,7 +267,6 @@ impl IconClient {
     }
 }
 
-/// The type the bytes are, whatever the response header claimed.
 pub(crate) fn sniff(bytes: &[u8]) -> Option<IconType> {
     match bytes {
         [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n', ..] => Some(IconType::Png),
@@ -284,8 +277,6 @@ pub(crate) fn sniff(bytes: &[u8]) -> Option<IconType> {
     }
 }
 
-/// UTF-8 whose first element, after any XML declaration, comments and
-/// doctype, is `<svg`.
 fn is_svg(bytes: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;

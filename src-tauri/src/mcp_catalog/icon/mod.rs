@@ -1,6 +1,3 @@
-//! Server logos (AD-15). Only the host fetches a publisher's icon URL; surfaces
-//! get the validated bytes through the catalog's own transports.
-
 mod cache;
 mod fetch;
 mod pick;
@@ -16,12 +13,11 @@ use std::sync::Arc;
 
 use url::Url;
 
-pub(crate) use cache::IconCache;
 #[cfg(test)]
 pub(crate) use cache::FetchIcon;
+pub(crate) use cache::IconCache;
 pub(crate) use pick::pick;
 
-/// The image types a logo may be served as, decided by sniffing the bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IconType {
     Png,
@@ -49,8 +45,6 @@ pub struct Icon {
     pub bytes: Arc<[u8]>,
 }
 
-/// A registry icon URL that passed the AD-15 check: `https`, no control
-/// characters. Only [`pick`] makes one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IconSource(Url);
 
@@ -59,7 +53,6 @@ impl IconSource {
         &self.0
     }
 
-    /// The host alone, so a log line never carries a path or query.
     pub(crate) fn host(&self) -> &str {
         self.0.host_str().unwrap_or("")
     }

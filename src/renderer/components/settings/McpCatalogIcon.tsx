@@ -1,11 +1,6 @@
 import { useEffect, useState } from 'react'
 import { mcpCatalogApi } from '@/lib/mcp-catalog-api'
 
-/**
- * The row's logo as an object URL once the host serves it. Rows mount as
- * they scroll into view, so this loads lazily. `null` while loading, when the
- * row has no logo, or when the host couldn't get one.
- */
 function useMcpCatalogIconUrl(name: string, hasIcon: boolean): string | null {
   const [loaded, setLoaded] = useState<{ name: string; url: string } | null>(null)
 
@@ -31,10 +26,6 @@ function useMcpCatalogIconUrl(name: string, hasIcon: boolean): string | null {
   return hasIcon && loaded?.name === name ? loaded.url : null
 }
 
-/**
- * A 32px logo from host bytes, only ever through `<img>`, or the first letter
- * of `displayName` on a neutral tile.
- */
 export function McpCatalogIcon({
   name,
   displayName,

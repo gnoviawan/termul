@@ -43,8 +43,9 @@ pub(crate) struct RegistryServer {
     pub icons: Vec<RegistryIcon>,
 }
 
-/// A malformed `icons` list costs the server its logo, never its install options.
-fn lenient_icons<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<RegistryIcon>, D::Error> {
+fn lenient_icons<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<RegistryIcon>, D::Error> {
     Ok(match serde_json::Value::deserialize(deserializer)? {
         serde_json::Value::Array(icons) => icons
             .into_iter()

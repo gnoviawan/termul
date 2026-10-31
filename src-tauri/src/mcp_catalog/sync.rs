@@ -26,7 +26,6 @@ const MAX_SERVER_BYTES: usize = 1024 * 1024;
 const MAX_CACHE_JSON_BYTES: u64 = 512 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_ATTEMPTS: u32 = 3;
-/// 2 keeps `icons`; a version 1 cache predates them and is re-fetched.
 const CACHE_FORMAT_VERSION: u32 = 2;
 const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CACHE_FILE: &str = "registry-cache.json.gz";
@@ -276,8 +275,6 @@ impl Row {
     }
 }
 
-/// Keeps [`ICON_FIELDS`] of each icon with a string `src`, like the snapshot
-/// script does.
 fn slim_icons(server: &mut serde_json::Map<String, Value>) {
     let icons: Vec<Value> = match server.remove("icons") {
         Some(Value::Array(icons)) => icons

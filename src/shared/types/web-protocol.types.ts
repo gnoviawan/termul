@@ -189,7 +189,6 @@ export const WS_REQUEST_TYPES = [
   'search_mcp_catalog',
   'get_mcp_catalog_status',
   'set_mcp_catalog_sync',
-  // `{ name }` → `McpCatalogIconPayload`, a logo the host fetched (AD-15).
   'get_mcp_catalog_icon',
   // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web client
   // installs a catalog agent through `install_acp_agent` (the host downloads +

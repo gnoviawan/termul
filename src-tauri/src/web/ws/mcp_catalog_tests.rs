@@ -75,19 +75,22 @@ async fn ws_and_http_serve_the_same_icon_bytes() {
         .await
         .unwrap();
     let ws = as_ipc_result(
-        ws_request("get_mcp_catalog_icon", json!({ "name": "ai.abmeter/abmeter" })).await,
+        ws_request(
+            "get_mcp_catalog_icon",
+            json!({ "name": "ai.abmeter/abmeter" }),
+        )
+        .await,
     );
     assert_eq!(ws["success"], true);
     assert_eq!(ws["data"]["contentType"], "image/png");
     let ws_bytes = base64::engine::general_purpose::STANDARD
-        .decode(ws["data"]["data"].as_str().unwrap())
+        .decode(ws["data"]["base64"].as_str().unwrap())
         .unwrap();
     assert_eq!(ws_bytes, FIXED_ICON);
     assert_eq!(ws_bytes, http_bytes);
 
-    let missing = as_ipc_result(
-        ws_request("get_mcp_catalog_icon", json!({ "name": "to.hooka/mcp" })).await,
-    );
+    let missing =
+        as_ipc_result(ws_request("get_mcp_catalog_icon", json!({ "name": "to.hooka/mcp" })).await);
     assert_eq!(missing["code"], "NOT_FOUND");
     let invalid = as_ipc_result(ws_request("get_mcp_catalog_icon", json!({ "id": 1 })).await);
     assert_eq!(invalid["code"], "VALIDATION_ERROR");

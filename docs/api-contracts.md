@@ -528,7 +528,7 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `search_mcp_catalog` | read | Searches the host's MCP server catalog (`{query?, cursor?, limit?}`) and returns one ranked page, `{items, nextCursor, total, updatedAt, sample}`. The desktop sends it over its `ws_channel_*` relay, and `GET /mcp-catalog/search` gives a browser the same answer. |
 | `get_mcp_catalog_status` | read | Returns where the catalog comes from and what live sync is doing, `{updatedAt, sample, servers, sync}`. `GET /mcp-catalog/status` gives a browser the same answer. |
 | `set_mcp_catalog_sync` | idempotent | Turns live registry sync on or off (`{enabled}`) and returns the new status. A write: shared-live and view-only connections are refused. `POST /mcp-catalog/sync` is the HTTP route. |
-| `get_mcp_catalog_icon` | read | Returns a catalog server's logo, `{contentType, data}` with the bytes in base64 (`{name}`). Only the host fetches the publisher URL; rows carry `hasIcon`, never the URL. `GET /mcp-catalog/icon/<name>` serves the raw bytes to a browser. |
+| `get_mcp_catalog_icon` | read | Returns a catalog server's logo, `{contentType, base64}` (`{name}`). Only the host fetches the publisher URL; rows carry `hasIcon`, never the URL. `GET /mcp-catalog/icon/<name>` serves the raw bytes to a browser. |
 | `list_claude_accounts` | read | Returns the Claude Accounts snapshot. |
 | `list_claude_usage` | read | Returns Account usage windows. The host caches reads for 5 minutes. |
 | `set_default_claude_account` | idempotent | Chooses the Default Account. |

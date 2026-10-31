@@ -114,10 +114,7 @@ export async function crawl(fetcher = fetchPage) {
   throw new Error(`registry crawl did not finish within ${MAX_PAGES} pages`)
 }
 
-// The host never reads these: publisher `_meta` is enrichment (deferred), and
-// parsing never depends on `$schema`.
 export const DROPPED_SERVER_FIELDS = new Set(['$schema', '_meta'])
-// The icon fields the host picks a logo from (AD-15).
 export const ICON_FIELDS = ['src', 'mimeType', 'sizes', 'theme']
 
 function slimIcons(icons) {

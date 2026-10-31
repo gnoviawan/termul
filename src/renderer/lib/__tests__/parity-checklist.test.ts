@@ -2925,10 +2925,6 @@ describe('Automation parity (facade)', () => {
   })
 })
 
-// MCP catalog logos (spine AD-1, AD-15): the host fetches a publisher icon and
-// serves the bytes over `GET /mcp-catalog/icon/<name>` (web, shared-live) and
-// the `/ws` request `get_mcp_catalog_icon` (desktop channel). Rows carry only
-// `hasIcon`, and the UI draws a logo only through `<img>`.
 describe('MCP catalog icon parity (spine AD-1, AD-15)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const SHARED_TYPES = join(LIB_DIR, '..', '..', 'shared', 'types')

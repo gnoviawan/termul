@@ -199,7 +199,7 @@ describe('MCP catalog facades', () => {
     const svg = '<svg xmlns="http://www.w3.org/2000/svg"/>'
     transport.getMcpCatalogIcon.mockResolvedValueOnce({
       contentType: 'image/svg+xml',
-      data: btoa(svg)
+      base64: btoa(svg)
     })
     fetchMock.mockResolvedValueOnce({
       ok: true,

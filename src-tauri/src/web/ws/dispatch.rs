@@ -196,8 +196,6 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "set_mcp_catalog_sync" => {
             mcp_catalog::handle_set_mcp_catalog_sync(id, &req.payload).await
         }
-        // A server logo, fetched only by this host (AD-15). Shares its service
-        // with `GET /mcp-catalog/icon/<name>`.
         "get_mcp_catalog_icon" => {
             mcp_catalog::handle_get_mcp_catalog_icon(id, &req.payload).await
         }

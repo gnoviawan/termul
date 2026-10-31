@@ -587,8 +587,10 @@ async fn synced_rows_keep_only_the_icon_fields_the_host_picks_from() {
         json!([{ "src": "https://a.example/logo.png", "mimeType": "image/png", "sizes": ["96x96"], "theme": "light" }])
     );
     assert_eq!(server("io.example/plain").get("icons"), None);
-    let item = item_from_row(serde_json::from_str(delta.rows["io.example/logo"].as_ref().unwrap().get()).unwrap())
-        .unwrap();
+    let item = item_from_row(
+        serde_json::from_str(delta.rows["io.example/logo"].as_ref().unwrap().get()).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         item.icon.map(|icon| icon.url().to_string()),
         Some("https://a.example/logo.png".to_string())

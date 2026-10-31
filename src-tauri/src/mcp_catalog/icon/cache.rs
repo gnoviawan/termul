@@ -1,7 +1,3 @@
-//! The host's logo cache: one file per source URL under
-//! `<state>/mcp-catalog/icons/`, named by the URL's sha256. A file holds a
-//! fetched logo or a failure, each with the time it was recorded.
-
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -20,14 +16,13 @@ use super::{Icon, IconSource, IconType};
 pub(crate) const FRESH_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 pub(crate) const FAILED_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+const EVICT_TO_PERCENT: u64 = 75;
 const MAGIC: &str = "termul-icon/1";
 
 pub(crate) type FetchIcon =
     Arc<dyn Fn(Url) -> BoxFuture<'static, Result<Icon, FetchError>> + Send + Sync>;
 pub(crate) type Clock = Arc<dyn Fn() -> SystemTime + Send + Sync>;
 
-/// The logo is missing from this host's point of view. The reason was logged
-/// where it was learned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct IconUnavailable;
 
@@ -120,10 +115,8 @@ pub(crate) struct IconCache {
     fetch: FetchIcon,
     now: Clock,
     max_bytes: u64,
-    /// One lookup per key at a time; later callers await the same one.
     in_flight: Mutex<HashMap<String, Lookup>>,
-    /// Bytes on disk, counted on the first write.
-    total: Mutex<Option<u64>>,
+    bytes_on_disk: Mutex<Option<u64>>,
 }
 
 impl IconCache {
@@ -136,7 +129,12 @@ impl IconCache {
             let client = Arc::clone(&client);
             Box::pin(async move { client.fetch(&url).await })
         });
-        Ok(Self::with(dir, fetch, Arc::new(SystemTime::now), MAX_CACHE_BYTES))
+        Ok(Self::with(
+            dir,
+            fetch,
+            Arc::new(SystemTime::now),
+            MAX_CACHE_BYTES,
+        ))
     }
 
     pub(crate) fn with(dir: PathBuf, fetch: FetchIcon, now: Clock, max_bytes: u64) -> Self {
@@ -146,38 +144,41 @@ impl IconCache {
             now,
             max_bytes,
             in_flight: Mutex::new(HashMap::new()),
-            total: Mutex::new(None),
+            bytes_on_disk: Mutex::new(None),
         }
     }
 
-    pub(crate) async fn icon(self: &Arc<Self>, source: &IconSource) -> Result<Icon, IconUnavailable> {
+    pub(crate) async fn icon(
+        self: &Arc<Self>,
+        source: &IconSource,
+    ) -> Result<Icon, IconUnavailable> {
         let key = key(source.url());
         let lookup = self
             .in_flight
             .lock()
             .entry(key.clone())
-            .or_insert_with(|| {
-                // Spawned so a caller that goes away mid-fetch doesn't leave
-                // the fetch half done for the next caller to resume.
-                let task = tokio::spawn({
-                    let cache = Arc::clone(self);
-                    let source = source.clone();
-                    let key = key.clone();
-                    async move {
-                        let outcome = cache.lookup(&key, &source).await;
-                        cache.in_flight.lock().remove(&key);
-                        outcome
-                    }
-                });
-                async move { task.await.unwrap_or(Err(IconUnavailable)) }
-                    .boxed()
-                    .shared()
-            })
+            .or_insert_with(|| self.spawn_lookup(key.clone(), source.clone()))
             .clone();
         lookup.await
     }
 
-    async fn lookup(self: &Arc<Self>, key: &str, source: &IconSource) -> Result<Icon, IconUnavailable> {
+    fn spawn_lookup(self: &Arc<Self>, key: String, source: IconSource) -> Lookup {
+        let cache = Arc::clone(self);
+        let task = tokio::spawn(async move {
+            let outcome = cache.lookup(&key, &source).await;
+            cache.in_flight.lock().remove(&key);
+            outcome
+        });
+        async move { task.await.unwrap_or(Err(IconUnavailable)) }
+            .boxed()
+            .shared()
+    }
+
+    async fn lookup(
+        self: &Arc<Self>,
+        key: &str,
+        source: &IconSource,
+    ) -> Result<Icon, IconUnavailable> {
         let now = (self.now)();
         let path = self.dir.join(key);
         let cached = tokio::task::spawn_blocking(move || fs::read(path).ok())
@@ -223,14 +224,12 @@ impl IconCache {
         outcome.map_err(|_| IconUnavailable)
     }
 
-    /// Blocking. Writes the entry, then evicts the oldest files once the cache
-    /// passes its cap, down to three quarters of it.
     fn store(&self, key: &str, entry: &Entry) -> io::Result<()> {
         let path = self.dir.join(key);
         let previous = fs::metadata(&path).map_or(0, |metadata| metadata.len());
         let bytes = entry.encode();
         crate::acp::atomic_file::replace(&path, &bytes)?;
-        let mut total = self.total.lock();
+        let mut total = self.bytes_on_disk.lock();
         let total = match total.as_mut() {
             Some(total) => {
                 *total = (*total + bytes.len() as u64).saturating_sub(previous);
@@ -239,7 +238,12 @@ impl IconCache {
             None => total.insert(cache_files(&self.dir)?.iter().map(|file| file.len).sum()),
         };
         if *total > self.max_bytes {
-            let evicted = evict(&self.dir, key, total, self.max_bytes / 4 * 3)?;
+            let evicted = evict(
+                &self.dir,
+                key,
+                total,
+                self.max_bytes / 100 * EVICT_TO_PERCENT,
+            )?;
             log::info!("[mcp-catalog] icon cache evicted files={evicted} bytes={total}");
         }
         Ok(())
@@ -269,8 +273,6 @@ fn cache_files(dir: &Path) -> io::Result<Vec<CacheFile>> {
     Ok(files)
 }
 
-/// Removes the least recently written files, never `keep`, until `total` is
-/// at most `target`. Returns how many it removed.
 fn evict(dir: &Path, keep: &str, total: &mut u64, target: u64) -> io::Result<usize> {
     let mut files = cache_files(dir)?;
     files.sort_by_key(|file| file.modified);

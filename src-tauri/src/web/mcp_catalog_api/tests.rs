@@ -172,7 +172,6 @@ async fn set_sync_validates_its_body_before_reaching_the_service() {
 
 pub(crate) const FIXED_ICON: &[u8] = b"\x89PNG\r\n\x1a\nfixture";
 
-/// Every icon this process serves in tests is [`FIXED_ICON`].
 pub(crate) async fn with_fixed_icons() {
     let dir = tempfile::tempdir().expect("icon dir").keep();
     crate::mcp_catalog::McpCatalogService::shared()

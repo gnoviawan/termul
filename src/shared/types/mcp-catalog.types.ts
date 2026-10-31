@@ -56,7 +56,6 @@ export interface McpCatalogRow {
   defaultOption: McpCatalogDefaultOption | null
   /** Host-validated `https` link, or `null`. */
   repositoryUrl: string | null
-  /** The host has a logo for this row; load it with `McpCatalogApi.icon(name)`. */
   hasIcon: boolean
 }
 
@@ -90,16 +89,14 @@ export interface McpCatalogStatus extends McpCatalogSource {
   sync: McpCatalogSync
 }
 
-/** A logo on the `/ws` carrier: the host-sniffed type and base64 bytes. */
 export interface McpCatalogIconPayload {
   contentType: string
-  data: string
+  base64: string
 }
 
 export interface McpCatalogApi {
   search(request: McpCatalogSearchRequest): Promise<IpcResult<McpCatalogPage>>
   status(): Promise<IpcResult<McpCatalogStatus>>
   setSync(enabled: boolean): Promise<IpcResult<McpCatalogStatus>>
-  /** The row's logo bytes, fetched by the host only (spine AD-15). */
   icon(name: string): Promise<IpcResult<Blob>>
 }

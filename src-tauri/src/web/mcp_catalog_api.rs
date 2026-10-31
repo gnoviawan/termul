@@ -28,12 +28,11 @@ pub struct McpCatalogIconRequest {
     pub name: String,
 }
 
-/// The `/ws` shape of a logo: JSON frames carry the bytes as base64.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpCatalogIconPayload {
     pub content_type: &'static str,
-    pub data: String,
+    pub base64: String,
 }
 
 impl From<Icon> for McpCatalogIconPayload {
@@ -41,7 +40,7 @@ impl From<Icon> for McpCatalogIconPayload {
         use base64::Engine as _;
         Self {
             content_type: icon.content_type.mime(),
-            data: base64::engine::general_purpose::STANDARD.encode(&icon.bytes),
+            base64: base64::engine::general_purpose::STANDARD.encode(&icon.bytes),
         }
     }
 }
@@ -135,8 +134,6 @@ pub async fn set_sync(
     }
 }
 
-/// `GET /mcp-catalog/icon/<name>`: the logo bytes, for an `<img>` on every
-/// web surface. The publisher URL never leaves the host (AD-15).
 pub async fn icon(Path(name): Path<String>) -> Response {
     match McpCatalogService::shared().await.icon(&name).await {
         Ok(icon) => {

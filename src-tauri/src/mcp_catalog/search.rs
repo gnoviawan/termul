@@ -61,7 +61,6 @@ pub struct McpCatalogRow {
     pub reason: Option<McpCatalogReason>,
     pub default_option: Option<McpCatalogDefaultOption>,
     pub repository_url: Option<String>,
-    /// The host has a logo source for this server; fetch it by `name`.
     pub has_icon: bool,
 }
 

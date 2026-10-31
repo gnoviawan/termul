@@ -335,7 +335,6 @@ fn parsing_ignores_schema_and_unknown_fields() {
     assert_eq!(item_status(&item, ALL_RUNNERS), installable(remote(0)));
 }
 
-/// The fixture servers listed for their icons, with the logo each row shows.
 const ICON_FIXTURES: [(&str, &str); 3] = [
     ("ai.abmeter/abmeter", "https://abmeter.ai/favicon.svg"),
     ("ai.agenttrust/mcp-server", "https://agenttrust.ai/icon.png"),

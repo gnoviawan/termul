@@ -36,7 +36,6 @@ fn icon_for(url: &Url, len: usize) -> Icon {
     }
 }
 
-/// Fetches succeed unless the path contains `fail`, after `delay`.
 fn cache(dir: &Path, max_bytes: u64, len: usize, delay: Duration) -> (Arc<IconCache>, Harness) {
     let clock = Arc::new(AtomicU64::new(START));
     let fetches = Arc::new(AtomicUsize::new(0));
@@ -126,7 +125,11 @@ async fn concurrent_requests_for_one_icon_share_one_fetch() {
     let requests: Vec<_> = (0..8)
         .map(|index| {
             let cache = Arc::clone(&cache);
-            let source = if index < 6 { logo.clone() } else { other.clone() };
+            let source = if index < 6 {
+                logo.clone()
+            } else {
+                other.clone()
+            };
             tokio::spawn(async move { cache.icon(&source).await })
         })
         .collect();
@@ -174,7 +177,6 @@ async fn the_oldest_icons_are_evicted_once_the_cache_passes_its_cap() {
         .collect();
     for logo in &logos {
         cache.icon(logo).await.unwrap();
-        // Eviction orders by write time; keep the writes distinguishable.
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(cached_bytes(dir.path()) <= 10_000);

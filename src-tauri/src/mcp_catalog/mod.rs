@@ -117,7 +117,6 @@ impl McpCatalogService {
         Self::new(catalog, Some(runners))
     }
 
-    /// Icons are served whether or not sync is on (AD-15).
     pub async fn run(dir: PathBuf) {
         let service = Self::shared().await;
         match IconCache::new(dir.join("icons")) {
@@ -136,7 +135,6 @@ impl McpCatalogService {
         }
     }
 
-    /// Serves `icon` for every icon source, so transport tests need no network.
     #[cfg(test)]
     pub(crate) fn attach_fixed_icon(&self, dir: PathBuf, icon: Icon) {
         let fetch: icon::FetchIcon = Arc::new(move |_| {
@@ -225,7 +223,6 @@ impl McpCatalogService {
             .map_err(McpCatalogError::from)
     }
 
-    /// The logo of the catalog item `name`, fetched by this host only.
     pub async fn icon(&self, name: &str) -> Result<Icon, McpCatalogError> {
         let catalog = self.catalog();
         let source = catalog
