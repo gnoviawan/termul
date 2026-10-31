@@ -2,6 +2,20 @@ import { PersistenceKeys } from '@shared/types/persistence.types'
 import { type Dispatch, type SetStateAction, useEffect, useRef, useState } from 'react'
 import { persistenceApi } from '@/lib/api'
 
+/** Drafts handed to a chat before its composer mounts, by draft key (see {@link seedComposerDraft}). */
+const draftSeeds = new Map<string, string>()
+
+/**
+ * Put an editable, unsent draft into a chat's composer (a GitHub Start card).
+ * It is persisted like a typed draft, and also held in memory so a composer
+ * that mounts or re-keys before the write lands still opens with it.
+ */
+export function seedComposerDraft(projectId: string, sessionId: string, text: string): void {
+  const key = PersistenceKeys.chatDraft(projectId, sessionId)
+  draftSeeds.set(key, text)
+  void persistenceApi.write(key, text).catch(() => {})
+}
+
 interface UseComposerDraftArgs {
   projectId: string | null | undefined
   sessionId: string | null | undefined
@@ -40,6 +54,13 @@ export function useComposerDraft({
     if (!canPersistDraft) {
       // projectId/sessionId missing — can't key a draft; treat as hydrated so
       // the write effect's hydration gate doesn't block (it also guards).
+      hydratedRef.current = true
+      return
+    }
+    const seeded = draftSeeds.get(draftKey)
+    if (seeded !== undefined) {
+      draftSeeds.delete(draftKey)
+      setValue(seeded)
       hydratedRef.current = true
       return
     }

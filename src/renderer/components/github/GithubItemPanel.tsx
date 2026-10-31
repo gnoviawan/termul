@@ -1,4 +1,9 @@
-import type { GithubItemDetail, GithubItemKind, GithubRepoSlot } from '@shared/types/github.types'
+import type {
+  GithubChecksResult,
+  GithubItemDetail,
+  GithubItemKind,
+  GithubRepoSlot
+} from '@shared/types/github.types'
 import { useEffect, useMemo } from 'react'
 import { ConfirmedExternalLink } from '@/components/external-link/ExternalLinkConfirm'
 import { AlertTriangle, ExternalLink, GitBranch, RefreshCw } from '@/components/icons'
@@ -7,15 +12,19 @@ import { DiffStatCounts } from '@/components/ui/diff-stat-counts'
 import { PANEL_ICON_BUTTON_CLASS } from '@/components/ui/panel-styles'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+import { githubItemIdentity } from '@/stores/github-chat-links-store'
 import {
   type GithubItemRef,
   githubItemKey,
   resourceOf,
   useGithubStore
 } from '@/stores/github-store'
+import { useProjectStore } from '@/stores/project-store'
 import { GithubChecksList } from './GithubChecksList'
 import { GithubComment, GithubMarkdown } from './GithubComment'
 import { GithubCommentComposer } from './GithubCommentComposer'
+import { GithubHandoffBar } from './GithubHandoffBar'
+import { GithubLinkedChats } from './GithubLinkedChats'
 import { GithubMergeControls } from './GithubMergeControls'
 import { GithubReviewThreads } from './GithubReviewThreads'
 import { ItemStatePill, LabelChip, relativeAgo } from './github-status'
@@ -54,6 +63,7 @@ export function GithubItemPanel({
   const detail = useGithubStore((s) => resourceOf(s.items[key]))
   const checks = useGithubStore((s) => resourceOf(s.checks[key]))
   const isPr = kind === 'pr'
+  const projectId = useProjectStore((s) => s.activeProjectId)
 
   // Restored tabs mount hidden; reading only on screen keeps them off the shared `gh` slots.
   useEffect(() => {
@@ -123,7 +133,16 @@ export function GithubItemPanel({
   return (
     <div className="h-full overflow-y-auto bg-background">
       <div className="mx-auto flex max-w-3xl flex-col gap-5 px-4 py-4 sm:px-6">
-        <ItemHeader detail={data} refreshing={refreshing} onRefresh={refresh} />
+        <ItemHeader
+          itemRef={itemRef}
+          detail={data}
+          checks={checks.data}
+          refreshing={refreshing}
+          onRefresh={refresh}
+        />
+        {projectId && (
+          <GithubLinkedChats projectId={projectId} itemId={githubItemIdentity(data.repo, number)} />
+        )}
 
         {detail.status === 'error' && (
           <p
@@ -223,11 +242,15 @@ export function GithubItemPanel({
 }
 
 function ItemHeader({
+  itemRef,
   detail,
+  checks,
   refreshing,
   onRefresh
 }: {
+  itemRef: GithubItemRef
   detail: GithubItemDetail
+  checks: GithubChecksResult | null
   refreshing: boolean
   onRefresh: () => void
 }): React.JSX.Element {
@@ -277,6 +300,7 @@ function ItemHeader({
           ))}
         </div>
       )}
+      <GithubHandoffBar itemRef={itemRef} detail={detail} checks={checks} />
     </header>
   )
 }
