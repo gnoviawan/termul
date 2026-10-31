@@ -26,6 +26,11 @@
 //! as long as the ticket exists. Answered and released ids are remembered in a
 //! bounded tombstone memory, so a later answer reads `already_resolved`.
 //!
+//! A ticket keeps its original `permission_request` payload, so a client that
+//! (re)subscribes gets every still-pending request of the session back
+//! ([`PermissionRendezvous::pending_requests`]): the request event is not in
+//! the durable log, so neither a snapshot nor a replay past its seq carries it.
+//!
 //! At most one ticket per session is outstanding; the rest wait in a FIFO
 //! queue. Every answer promotes the next queued ticket. A lifecycle release
 //! drops the whole session queue instead: the driver has already cancelled
@@ -128,6 +133,9 @@ struct PermissionTicket {
     /// The immutable args snapshot — `options` array from the original
     /// `PermissionRequestEvent` payload. Used for TOCTOU re-validation.
     options: Value,
+    /// The original `permission_request` payload, re-delivered to a client
+    /// that subscribes while the ticket is pending.
+    request: Value,
     /// `Some(client)` once a client has won the ticket (first-response-wins);
     /// further responses are `AlreadyResolved` or `Duplicate`.
     resolved_by: Option<ClientId>,
@@ -147,6 +155,7 @@ struct QueuedTicket {
     request_id: String,
     agent_id: AgentId,
     options: Value,
+    request: Value,
 }
 
 /// The ticket table and the per-session queues. One lock covers both, so the
@@ -162,19 +171,14 @@ struct State {
 
 impl State {
     /// Make `request_id` of `session_id` the outstanding ticket.
-    fn open_ticket(
-        &mut self,
-        session_id: &str,
-        request_id: String,
-        agent_id: AgentId,
-        options: Value,
-    ) {
+    fn open_ticket(&mut self, session_id: &str, ticket: QueuedTicket) {
         self.tickets.insert(
-            request_id,
+            ticket.request_id,
             PermissionTicket {
-                agent_id,
+                agent_id: ticket.agent_id,
                 session_id: session_id.to_string(),
-                options,
+                options: ticket.options,
+                request: ticket.request,
                 resolved_by: None,
             },
         );
@@ -204,7 +208,7 @@ impl State {
             match queue.queued.pop_front() {
                 Some(next) => {
                     queue.outstanding.clone_from(&next.request_id);
-                    self.open_ticket(&session_id, next.request_id, next.agent_id, next.options);
+                    self.open_ticket(&session_id, next);
                 }
                 None => {
                     self.sessions.remove(&session_id);
@@ -331,12 +335,38 @@ impl PermissionRendezvous {
             .map_or(0, |q| q.queued.len())
     }
 
-    /// Snapshot a `permission_request` event into a ticket (FR14: at-most-one
-    /// outstanding per session; the rest are queued).
+    /// Snapshot a `permission_request` event payload into a ticket.
     ///
     /// Called by [`WsRelaySink::emit`] when it sees `acp:permission_request`.
-    /// `options` is the `Value` of the event's `options` field (array of
-    /// `{optionId, …}`) — the immutable-args snapshot for TOCTOU re-validation.
+    /// The payload is `{agentId, sessionId, requestId, toolCall, options}`
+    /// (events.rs → camelCase wire); it is kept whole so a resubscribing
+    /// client can render the request again. A payload without a `requestId`
+    /// would collide all such tickets on the empty key, so it is skipped
+    /// (`DriverState::register_permission` always mints `perm-{uuid}`; this
+    /// only triggers on a dispatcher bug).
+    pub fn register_event(&self, payload: &Value) {
+        let field = |name: &str| payload.get(name).and_then(Value::as_str);
+        let request_id = field("requestId").unwrap_or_default();
+        if request_id.is_empty() {
+            warn!("[permissions] dropping permission_request with no requestId (dispatcher bug?)");
+            return;
+        }
+        self.insert(
+            field("sessionId").unwrap_or_default().to_string(),
+            QueuedTicket {
+                request_id: request_id.to_string(),
+                agent_id: AgentId(field("agentId").unwrap_or("unknown").to_string()),
+                options: payload.get("options").cloned().unwrap_or(Value::Array(vec![])),
+                request: payload.clone(),
+            },
+        );
+    }
+
+    /// Register a ticket from its fields (FR14: at-most-one outstanding per
+    /// session; the rest are queued). `options` is the `Value` of the event's
+    /// `options` field (array of `{optionId, …}`) — the immutable-args snapshot
+    /// for TOCTOU re-validation. The kept request payload is built from the
+    /// same fields.
     pub fn register(
         &self,
         request_id: String,
@@ -344,26 +374,62 @@ impl PermissionRendezvous {
         session_id: String,
         options: Value,
     ) {
-        if is_host_ticket_id(&request_id) {
+        let request = serde_json::json!({
+            "agentId": agent_id.0,
+            "sessionId": session_id,
+            "requestId": request_id,
+            "options": options,
+        });
+        self.insert(
+            session_id,
+            QueuedTicket {
+                request_id,
+                agent_id,
+                options,
+                request,
+            },
+        );
+    }
+
+    fn insert(&self, session_id: String, ticket: QueuedTicket) {
+        if is_host_ticket_id(&ticket.request_id) {
             return;
         }
         let mut state = self.state.lock();
         if let Some(queue) = state.sessions.get_mut(&session_id) {
-            queue.queued.push_back(QueuedTicket {
-                request_id,
-                agent_id,
-                options,
-            });
+            queue.queued.push_back(ticket);
             return;
         }
         state.sessions.insert(
             session_id.clone(),
             SessionQueue {
-                outstanding: request_id.clone(),
+                outstanding: ticket.request_id.clone(),
                 queued: VecDeque::new(),
             },
         );
-        state.open_ticket(&session_id, request_id, agent_id, options);
+        state.open_ticket(&session_id, ticket);
+    }
+
+    /// The `permission_request` payloads of a session that still wait for an
+    /// answer: the outstanding one first, then the queued ones in FIFO order.
+    /// An outstanding ticket whose answer is already being forwarded to the
+    /// agent is not pending any more and is left out. A subscribing client
+    /// installs this list as the session's pending approvals.
+    #[must_use]
+    pub fn pending_requests(&self, session_id: &str) -> Vec<Value> {
+        let state = self.state.lock();
+        let Some(queue) = state.sessions.get(session_id) else {
+            return Vec::new();
+        };
+        let outstanding = state
+            .tickets
+            .get(&queue.outstanding)
+            .filter(|ticket| ticket.resolved_by.is_none())
+            .map(|ticket| ticket.request.clone());
+        outstanding
+            .into_iter()
+            .chain(queue.queued.iter().map(|ticket| ticket.request.clone()))
+            .collect()
     }
 
     /// The rejection for a `request_id` with no outstanding ticket: a recently
@@ -525,6 +591,8 @@ impl Default for PermissionRendezvous {
 
 #[cfg(test)]
 mod durable_tests;
+#[cfg(test)]
+mod pending_tests;
 #[cfg(test)]
 mod question_tests;
 #[cfg(test)]

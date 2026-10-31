@@ -806,6 +806,8 @@ export interface SessionSnapshotEvent {
   /** Identity of the log incarnation the cursor belongs to. */
   logEpoch: string
   events: WsEvent[]
+  /** The session's still-pending approvals (see `SessionSubscribeReply`). */
+  pendingPermissions?: unknown[]
 }
 
 /**
@@ -820,6 +822,14 @@ export interface SessionSubscribeReply {
   replayed: number
   logEpoch: string
   headSeq: number
+  /**
+   * The session's still-pending approvals at registration: the original
+   * `permission_request` payloads, in queue order. A `permission_request` is
+   * not in the durable log, so this list (not the replay) is authoritative for
+   * every request at or below `headSeq`. Absent when the host keeps no
+   * approval tickets.
+   */
+  pendingPermissions?: unknown[]
 }
 
 /**

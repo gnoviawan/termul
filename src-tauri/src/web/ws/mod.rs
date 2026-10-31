@@ -813,6 +813,8 @@ mod project_binding_tests;
 #[cfg(test)]
 mod host_ticket_route_tests;
 #[cfg(test)]
+mod pending_permission_tests;
+#[cfg(test)]
 mod project_command_tests;
 #[cfg(test)]
 mod provider_error_tests;
