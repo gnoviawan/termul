@@ -114,14 +114,31 @@ export async function crawl(fetcher = fetchPage) {
   throw new Error(`registry crawl did not finish within ${MAX_PAGES} pages`)
 }
 
-// The host never reads these: icons are never fetched (AD-15), publisher
-// `_meta` is enrichment (deferred), and parsing never depends on `$schema`.
-export const DROPPED_SERVER_FIELDS = new Set(['$schema', 'icons', '_meta'])
+// The host never reads these: publisher `_meta` is enrichment (deferred), and
+// parsing never depends on `$schema`.
+export const DROPPED_SERVER_FIELDS = new Set(['$schema', '_meta'])
+// The icon fields the host picks a logo from (AD-15).
+export const ICON_FIELDS = ['src', 'mimeType', 'sizes', 'theme']
+
+function slimIcons(icons) {
+  if (!Array.isArray(icons)) return undefined
+  return icons
+    .filter((icon) => typeof icon?.src === 'string')
+    .map((icon) =>
+      Object.fromEntries(ICON_FIELDS.filter((key) => key in icon).map((key) => [key, icon[key]]))
+    )
+}
 
 function slimServer(server) {
-  return Object.fromEntries(
+  const slim = Object.fromEntries(
     Object.entries(server).filter(([key]) => !DROPPED_SERVER_FIELDS.has(key))
   )
+  if ('icons' in slim) {
+    const icons = slimIcons(slim.icons)
+    if (icons?.length) slim.icons = icons
+    else delete slim.icons
+  }
+  return slim
 }
 
 /**

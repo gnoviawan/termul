@@ -44,3 +44,9 @@ io.github.mbtest870-ctrl/agenza
 ai.fluxink/mcp-server
 # latest version deprecated
 io.github.sharan01x/usetested
+# icons: a 192px PNG and an SVG, the SVG is picked
+ai.abmeter/abmeter
+# icons: a 96px PNG with no mimeType
+ai.agenttrust/mcp-server
+# icons: a raw.githubusercontent.com PNG with an escaped path
+ai.alpic.mcp/alpic-mcp
