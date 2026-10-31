@@ -176,27 +176,35 @@ fn an_agent_builds_fixes_and_proposes_an_automation_that_stays_unapproved() {
             );
 
             let proposed = agent.text("automation_propose", json!({ "id": id })).await;
+            assert_eq!(
+                proposed,
+                "Proposed \"Digest\" (revision 3) for review. Tell the user it is waiting in \
+the Automations tab: they review its run policy (schedule, agents, secrets, outbound hosts) and \
+approve it there. It does not run until they approve it. Any further edit creates a new revision \
+that needs approval again."
+            );
+            assert_eq!(approved_revision(&svc, &id), None);
+
+            svc.set_enabled(&AutomationId::from(id.clone()), false)
+                .unwrap();
+            let proposed = agent.text("automation_propose", json!({ "id": id })).await;
             assert!(
-                proposed.starts_with("Proposed \"Digest\" (revision 3) for review."),
+                proposed.contains(" It does not run until they approve and enable it. "),
                 "{proposed}"
             );
-            assert!(proposed.contains("the Automations tab"), "{proposed}");
-            assert_eq!(approved_revision(&svc, &id), None);
         }));
 
     let id = service.list("proj-1").unwrap()[0].id.clone();
     let proposals: Vec<AutomationChanged> = std::iter::from_fn(|| changes.try_recv().ok())
         .filter(|change| change.proposed)
         .collect();
-    assert_eq!(
-        proposals,
-        [AutomationChanged {
-            project_id: "proj-1".to_string(),
-            automation_id: Some(id.clone()),
-            proposed: true,
-            proposed_by: Some("Test agent".to_string()),
-        }]
-    );
+    let proposal = AutomationChanged {
+        project_id: "proj-1".to_string(),
+        automation_id: Some(id.clone()),
+        proposed: true,
+        proposed_by: Some("Test agent".to_string()),
+    };
+    assert_eq!(proposals, [proposal.clone(), proposal]);
     let stored = service.get(&id).unwrap().automation;
     assert_eq!((stored.revision, stored.approved_revision), (3, None));
     assert!(!stored.armed());
