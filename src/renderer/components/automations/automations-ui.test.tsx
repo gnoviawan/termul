@@ -244,6 +244,26 @@ describe('AutomationRunDetail', () => {
     fireEvent.click(steps.getByRole('button', { name: 'Output' }))
     expect(steps.getByText(/"title": "first"/)).toBeInTheDocument()
   })
+
+  it('shows the steps of a running run even when a reply takes longer than the poll', async () => {
+    vi.useFakeTimers()
+    try {
+      api.getAutomationRunSteps.mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve(ok(fixtureSteps)), 3000))
+      )
+      render(<AutomationRunDetail run={runWith({ status: 'running' })} />)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3100)
+      })
+
+      const steps = within(screen.getByRole('list', { name: 'Steps' }))
+      expect(steps.getByText('Succeeded')).toBeInTheDocument()
+      expect(api.getAutomationRunSteps).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('AutomationSecretsDialog', () => {
