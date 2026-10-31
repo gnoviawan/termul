@@ -38,6 +38,9 @@
 use serde::Serialize;
 use serde_json::Value;
 
+mod controls;
+pub use controls::{SessionControls, CONTROL_RECORD_TYPES};
+
 use crate::acp::session_persistence::{
     is_file_change_kind, is_subagent_chunk, last_unmatched_user_prompt, PersistedEventRecord,
     PersistedSessionStatus, SessionMetadata, MAX_SUMMARY_PATH_CHARS,
@@ -209,6 +212,10 @@ pub struct MaterializedSessionPayload {
     /// when the host knows of none.
     #[serde(flatten)]
     pub commands: Option<CommandList>,
+    /// The session's last known modes, models, and config options. Absent
+    /// when the log holds none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub controls: Option<SessionControls>,
 }
 
 /// The newest `commands_update` record's `availableCommands` and seq. The
@@ -292,6 +299,7 @@ pub fn materialize_session_payload(
         switches,
         tool_calls,
         commands: last_command_list(records),
+        controls: SessionControls::fold(records),
     }
 }
 

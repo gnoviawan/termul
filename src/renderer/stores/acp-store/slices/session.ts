@@ -776,8 +776,9 @@ async function openHistorySessionInner(
     return true
   }
 
-  // Preserve controls already held by a cached closed session. Persisted
-  // history does not contain them, and optional reopen fields may be omitted.
+  // Controls already held by a cached closed session win; otherwise the
+  // host's last known controls seed the record. A live-turn attach never
+  // receives them again, and a load/resume reply still replaces them below.
   const existingControls = captureReopenControlBaseline(get().sessions, id)
 
   // Register the session record + local transcript BEFORE any agent work, so
@@ -821,9 +822,11 @@ async function openHistorySessionInner(
         // connected to keep it running (dead turn).
         activeTurn: turnLive,
         openTurnId: turnLive ? openTurn : null,
-        modes: existingControls?.modes ?? null,
-        models: existingControls?.models ?? null,
-        configOptions: existingControls?.configOptions ?? [],
+        modes: existingControls?.modes ?? payload.controls?.modes ?? null,
+        models: existingControls?.models ?? payload.controls?.models ?? null,
+        configOptions: existingControls?.configOptions.length
+          ? existingControls.configOptions
+          : (payload.controls?.configOptions ?? []),
         ...restoredTurnError,
         createdAt: meta.createdAt,
         replaying: null,

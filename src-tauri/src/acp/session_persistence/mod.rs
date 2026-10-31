@@ -53,6 +53,7 @@ const WRITER_CAPACITY: usize = 1024;
 const TAIL_DEEPEN_MAX_LINES: usize = 16_384;
 const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
+mod controls;
 mod diff_stat;
 mod jsonl;
 mod model;
@@ -152,6 +153,9 @@ struct Inner {
     /// `delete_session` removes one: a seed racing an append can then never
     /// fill a hole with the older list.
     last_commands: Mutex<HashMap<String, Option<CommandList>>>,
+    /// Last known controls per session, for the same tail payloads. See
+    /// `controls::CachedControls`.
+    last_controls: Mutex<HashMap<String, controls::CachedControls>>,
     /// Test gate: the writer awaits this before executing each command so a
     /// close can be queued behind appends that have not been written yet.
     #[cfg(test)]
@@ -340,6 +344,7 @@ impl SessionPersistence {
                 seq_authority: Mutex::new(None),
                 unsalvageable_log_stamps: Mutex::new(HashMap::new()),
                 last_commands: Mutex::new(HashMap::new()),
+                last_controls: Mutex::new(HashMap::new()),
                 #[cfg(test)]
                 writer_gate_hook: Mutex::new(None),
                 #[cfg(test)]
@@ -692,10 +697,14 @@ impl SessionPersistence {
         let session_id = record.session_id.clone();
         let runtime = self.runtime(&session_id)?;
         let commands = (record.type_ == "commands_update").then(|| CommandList::of_record(&record));
+        let control = controls::is_control_record(&record.type_).then(|| record.clone());
         let _order = runtime.send_lock.lock();
         Self::deliver(&runtime, &session_id, WriterCommand::Append(record))?;
         if let Some(commands) = commands {
             self.inner.last_commands.lock().insert(session_id, commands);
+        }
+        if let Some(control) = control {
+            self.note_control_record(&control);
         }
         Ok(())
     }
@@ -1214,6 +1223,7 @@ impl SessionPersistence {
         }
         self.inner.sessions.lock().remove(session_id);
         self.inner.last_commands.lock().remove(session_id);
+        self.inner.last_controls.lock().remove(session_id);
         let dir = self.session_dir(&metadata.storage_key)?;
         // Drop the catalog entry BEFORE touching the dir: a read-path
         // salvage serializes its rewrite on the catalog lock, so once the
@@ -1700,6 +1710,7 @@ impl SessionPersistence {
         // summaries must still cover the whole session.
         payload.tool_calls = crate::acp::session_payload::fold_tool_call_summaries(&tool_records);
         payload.commands = self.last_commands_async(session_id).await?;
+        payload.controls = self.last_controls_async(session_id).await?;
         // If the tail fold produced fewer than `limit` messages AND the
         // session has more on disk (metadata.message_count > tail len), the
         // heuristic under-read (the 4× line ratio wasn't enough). Fall back

@@ -2,7 +2,14 @@
 
 import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
-import type { AvailableCommand, StopReason, ToolCall } from '@/lib/acp-api'
+import type {
+  AvailableCommand,
+  SessionConfigOption,
+  SessionModelState,
+  SessionModeState,
+  StopReason,
+  ToolCall
+} from '@/lib/acp-api'
 import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi } from '@/lib/api'
@@ -133,6 +140,19 @@ export interface SessionPayload {
   commands?: AvailableCommand[]
   /** Seq of the `commands_update` record that set `commands`. */
   commandsSeq?: number
+  /**
+   * The session's last known mode, model, and config-option controls, folded
+   * by the host from the whole log. Absent when the log holds none, and on
+   * older hosts.
+   */
+  controls?: SessionControls
+}
+
+/** Each key is absent when no record of the log set it. */
+export interface SessionControls {
+  modes?: SessionModeState
+  models?: SessionModelState
+  configOptions?: SessionConfigOption[]
 }
 
 /**
