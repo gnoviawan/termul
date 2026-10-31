@@ -27,6 +27,26 @@ impl WsRelaySink {
         }
     }
 
+    /// Release every pending permission and question of `session_id` whose
+    /// turn `turn_id` ended. The permission side also remembers the turn, so a
+    /// request of it whose registration lands after this release is dropped.
+    pub fn release_turn_tickets(&self, session_id: &str, turn_id: &str) {
+        let permissions = self
+            .rendezvous()
+            .map_or(0, |rendezvous| rendezvous.release_turn(session_id, turn_id));
+        let questions = self
+            .question_rendezvous()
+            .map_or(0, |rendezvous| rendezvous.release_session(session_id));
+        if permissions + questions > 0 {
+            tracing::info!(
+                session_id = %crate::logging::redact_session_id(session_id),
+                permissions,
+                questions,
+                "released pending approvals after the turn ended"
+            );
+        }
+    }
+
     /// Release one question its agent withdrew while the turn goes on (an
     /// `ask_user` call whose caller hung up). A later answer reads
     /// `already_resolved`.

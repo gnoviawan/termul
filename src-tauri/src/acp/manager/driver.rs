@@ -603,13 +603,16 @@ pub(super) async fn drive_connection(
                 // on user input, not wedged. Nudge the idle deadline so a
                 // user-input wait doesn't false-fire the idle timeout.
                 perm_state.lock().signal_idle(&session_string);
-                let request_id = {
+                let (request_id, turn_id) = {
                     let mut state = perm_state.lock();
                     state.bind_tool_call(
                         tool_call.tool_call_id.0.to_string(),
                         session_string.clone(),
                     );
-                    state.register_permission(session_string.clone(), responder)
+                    (
+                        state.register_permission(session_string.clone(), responder),
+                        state.active_turn_id(&session_string),
+                    )
                 };
                 let event = events::PermissionRequestEvent {
                     agent_id: perm_agent_id.clone(),
@@ -617,6 +620,7 @@ pub(super) async fn drive_connection(
                     request_id,
                     tool_call,
                     options,
+                    turn_id,
                 };
                 events::fan_out(
                     &perm_sinks,

@@ -526,6 +526,8 @@ export interface PermissionRequestEvent {
   requestId: string
   toolCall: ToolCallUpdate
   options: PermissionOption[]
+  /** The client turn id of the turn that raised it (absent for a turnless prompt). */
+  turnId?: string
 }
 
 /** One selectable option of an `AskUserQuestionEvent` (issue #411). */

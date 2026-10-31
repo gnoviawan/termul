@@ -435,16 +435,16 @@ pub(super) async fn handle_recover_session_snapshot(
         relay.unsubscribe(&parsed.session_id, prior);
     }
     spawn_event_forwarder(stream, out_tx.clone());
-    WsReply::ok(
-        id,
-        Some(json!({
-            "sessionId": parsed.session_id,
-            "watermark": head.head_seq,
-            "headSeq": head.head_seq,
-            "logEpoch": head.log_epoch,
-            "events": events,
-        })),
-    )
+    let mut reply = json!({
+        "sessionId": parsed.session_id,
+        "watermark": head.head_seq,
+        "headSeq": head.head_seq,
+        "logEpoch": head.log_epoch,
+        "events": events,
+    });
+    // The snapshot holds durable events only: pending approvals ride beside it.
+    attach_pending_permissions(&mut reply, relay, &parsed.session_id);
+    WsReply::ok(id, Some(reply))
 }
 
 /// `get_session_cursor` (R2) — returns the server-authoritative replay

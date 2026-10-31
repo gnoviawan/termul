@@ -54,6 +54,7 @@ import {
   writeAgentOptionsCache
 } from '../helpers'
 import { useAcpStore } from '../index'
+import { forgetAnsweringPermission, noteAnsweringPermission } from '../pending-permission-sync'
 import { withoutRejectedRateLimit } from '../rate-limit'
 import {
   activeWirePromptTurns,
@@ -979,6 +980,8 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       delete pendingPermissions[requestId]
       return { pendingPermissions }
     })
+    // A resubscribe racing the answer must not restore the card (#1595).
+    noteAnsweringPermission(requestId)
     try {
       await acpApi.respondPermission(pending.agentId, requestId, optionId)
     } catch (err) {
@@ -989,6 +992,8 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       // Restore the entry so the user can retry.
       set((s) => ({ pendingPermissions: { ...s.pendingPermissions, [requestId]: pending } }))
       throw err
+    } finally {
+      forgetAnsweringPermission(requestId)
     }
   },
 
