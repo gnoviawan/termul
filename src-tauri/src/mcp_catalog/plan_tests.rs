@@ -224,10 +224,6 @@ fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| (*s).to_string()).collect()
 }
 
-// ---------------------------------------------------------------------------
-// Forms
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn the_form_has_one_field_per_input_and_template_variable() {
     let reply = service()
@@ -383,10 +379,6 @@ async fn reapprove_and_upgrade_are_not_available_yet() {
         assert_eq!(error.code, "MCP_PLAN_NOT_AVAILABLE");
     }
 }
-
-// ---------------------------------------------------------------------------
-// Plans per runner and one remote
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn npm_plan_appends_the_positional_argument_and_lists_env_slots() {
@@ -660,10 +652,6 @@ async fn a_choice_outside_the_listed_values_or_a_secret_at_plan_time_is_refused(
     );
 }
 
-// ---------------------------------------------------------------------------
-// Imports
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn an_import_with_a_denied_env_name_is_unsupported_with_the_typed_reason() {
     let service = service();
@@ -813,10 +801,6 @@ async fn a_remote_import_keeps_its_headers_and_transport() {
     assert_eq!(local, McpCatalogReason::InsecureUrl);
 }
 
-// ---------------------------------------------------------------------------
-// Consent escaping
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 async fn consent_view_escapes_bidi_and_control_characters_in_argv() {
     let service = service();
@@ -832,10 +816,6 @@ async fn consent_view_escapes_bidi_and_control_characters_in_argv() {
         other => panic!("{other:?}"),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Plan lifetime
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn a_plan_commits_once() {
@@ -858,6 +838,7 @@ async fn a_plan_commits_once() {
             (super::SecretSlot::Env, "HOOKA_REGION", "eu"),
         ]
     );
+    assert!(!format!("{first:?}").contains("hk_live_1"));
     assert_eq!(first.name, "hooka-mcp");
     assert_eq!(first.launch_digest, plan.launch_digest);
     let second = commit(&service, &plan, &[("env/HOOKA_API_KEY", "hk_live_1")]).unwrap_err();
@@ -978,10 +959,6 @@ async fn cancel_drops_the_plan_and_is_idempotent() {
         "MCP_PLAN_NOT_FOUND"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Digest
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn the_digest_follows_the_launch_spec_not_the_secret_values() {

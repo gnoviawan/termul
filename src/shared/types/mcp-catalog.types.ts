@@ -41,7 +41,6 @@ export type McpCatalogReason =
   | { code: 'unpinned-version' }
   | { code: 'invalid-package' }
   | { code: 'unsupported-registry'; registry: string }
-  // Import plans only (AD-5 applies the AD-4 rules to a pasted file).
   | { code: 'invalid-command' }
   | { code: 'invalid-header-name'; name: string }
   | { code: 'control-character'; field: string }

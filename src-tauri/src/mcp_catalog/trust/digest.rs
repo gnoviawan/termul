@@ -1,19 +1,3 @@
-//! The one `launch_digest` (AD-7): SHA-256 over canonical JSON of the launch
-//! spec and its catalog provenance. Secret values are not an input, so
-//! rotating a key is not drift. The renderer never computes it.
-//!
-//! Canonical form: a fixed-field struct serialized by `serde_json` (field
-//! order is the struct's, never a caller's map order), env and header names
-//! sorted, argv in order. The `v` field versions the form itself; bump it
-//! only with a migration of every stored approval.
-//!
-//! Secret references (AD-6) enter the digest through the slot name: a ref is
-//! owned by exactly one entry, so `<entryId>` plus `env:<NAME>` or
-//! `header:<NAME>` identifies it, and the name is already here. Story 8 must
-//! derive its ref ids from the slot name for this to hold. If it mints random
-//! ids and adds them here, a plan can no longer carry the digest its entry
-//! will have, and CAP-3's "saved digest equals the consented digest" breaks.
-
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -39,7 +23,6 @@ fn sorted_names(slots: &[super::super::resolved::ValueSlot]) -> Vec<&str> {
     names
 }
 
-/// `sha256:<hex>` of the canonical launch spec.
 #[must_use]
 pub fn launch_digest(config: &ResolvedConfig, provenance: Option<&Provenance>) -> String {
     let canonical = match config {

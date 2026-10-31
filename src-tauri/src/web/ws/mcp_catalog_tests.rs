@@ -32,8 +32,6 @@ fn as_ipc_result(reply: WsReply) -> Value {
     }
 }
 
-/// `import_plan_body` without the HTTP-only `clientInstanceId`: the WS
-/// caller is the connection.
 fn ws_plan_payload() -> Value {
     let mut body = import_plan_body("unused");
     body.as_object_mut().unwrap().remove("clientInstanceId");
@@ -70,9 +68,6 @@ async fn ws_and_http_describe_the_same_form() {
     assert_eq!(ws["data"], http["data"]);
 }
 
-/// Plan, commit and cancel answer identically on both carriers: the same
-/// plan shape (ids and expiry aside), the same commit result, the same
-/// lifecycle codes.
 #[tokio::test]
 async fn ws_and_http_plan_commit_and_cancel_alike() {
     let env = env();

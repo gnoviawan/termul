@@ -1,12 +1,3 @@
-//! The install plan engine (AD-5): a source (a catalog row, a pasted
-//! `mcpServers` file, or later an existing entry) becomes a generated form,
-//! then an immutable plan the user consents to, then a commit that returns
-//! the resolved entry. Plans are single-use, expire after [`PLAN_TTL`], and
-//! are bound to the caller that created them.
-//!
-//! The engine only resolves and checks; it never starts a server, never
-//! touches the network, and never logs a value (argv, env, header or URL).
-
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
@@ -25,9 +16,7 @@ use super::snapshot::{LoadedCatalog, RegistryStatus};
 use super::trust::launch_digest;
 use super::McpCatalogError;
 
-/// How long a plan stays committable.
 pub const PLAN_TTL: Duration = Duration::from_secs(10 * 60);
-/// Plans held per process; the oldest goes when a new one would exceed it.
 const MAX_PLANS: usize = 256;
 
 pub const NOT_FOUND: &str = "MCP_CATALOG_NOT_FOUND";
@@ -39,10 +28,6 @@ pub const PLAN_EXPIRED: &str = "MCP_PLAN_EXPIRED";
 pub const PLAN_MISMATCH: &str = "MCP_PLAN_MISMATCH";
 pub const PLAN_WRONG_CALLER: &str = "MCP_PLAN_WRONG_CALLER";
 pub const VALIDATION_ERROR: &str = "VALIDATION_ERROR";
-
-// ---------------------------------------------------------------------------
-// Wire shapes (`src/shared/types/mcp-catalog.types.ts`)
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -161,8 +146,7 @@ pub enum SecretSlot {
     Header,
 }
 
-/// One env or header value, by slot. Returned once, at commit, never logged.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedSecret {
     pub slot: SecretSlot,
@@ -170,9 +154,16 @@ pub struct ResolvedSecret {
     pub value: String,
 }
 
-/// The committed entry. Until the trust store ships (story 11) the host
-/// cannot write the entry list, so the caller persists this; story 11
-/// replaces this one shape with the host-held entry.
+impl std::fmt::Debug for ResolvedSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedSecret")
+            .field("slot", &self.slot)
+            .field("name", &self.name)
+            .field("value", &"<redacted>")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitResult {
@@ -183,22 +174,14 @@ pub struct CommitResult {
     pub launch_digest: String,
 }
 
-/// Who created a plan: a `/ws` connection (desktop channel or web socket) or
-/// an HTTP client instance. Only the same caller may commit or cancel it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlanCaller {
     Connection(String),
     Client(String),
 }
 
-// ---------------------------------------------------------------------------
-// Describing a source
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BaseLaunch {
-    /// `args` is the runner template's tail (`-y pkg@1.2.3`); argument slots
-    /// append to it in order.
     Stdio {
         command: String,
         args: Vec<String>,
@@ -208,7 +191,6 @@ enum BaseLaunch {
     },
 }
 
-/// A source resolved up to its inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Described {
     name: String,
@@ -230,8 +212,6 @@ fn error(code: &'static str, message: impl Into<String>) -> McpCatalogError {
     }
 }
 
-/// A proposed entry name: lowercase, `-` between words, from the title or
-/// the registry name's last segment.
 fn slug(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut pending_dash = false;
@@ -423,19 +403,12 @@ fn describe(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Assembling the launch spec from the slots
-// ---------------------------------------------------------------------------
-
 struct Assembled {
     config: ResolvedConfig,
     shown: Vec<ShownValue>,
     secrets: Vec<ResolvedSecret>,
 }
 
-/// Fold the slots, in order, over the values known in this phase. A secret
-/// slot without its value stays listed (by name) until commit; an optional
-/// input left empty drops its slot.
 fn assemble(
     described: &Described,
     values: &BTreeMap<String, String>,
@@ -544,10 +517,6 @@ fn assemble(
     })
 }
 
-// ---------------------------------------------------------------------------
-// The plan store
-// ---------------------------------------------------------------------------
-
 struct StoredPlan {
     caller: PlanCaller,
     created_at: Instant,
@@ -609,15 +578,9 @@ impl PlanStore {
     }
 }
 
-/// The first 8 characters of a plan id: enough to correlate log lines, never
-/// enough to commit with.
 fn log_label(plan_id: &str) -> String {
     plan_id.chars().take(8).collect()
 }
-
-// ---------------------------------------------------------------------------
-// The engine entry points
-// ---------------------------------------------------------------------------
 
 pub(crate) fn describe_install(
     catalog: &LoadedCatalog,
@@ -693,8 +656,6 @@ pub(crate) fn plan_install(
     })
 }
 
-/// Look a plan up for its caller. `Err` for a plan that is not this caller's
-/// to touch, is gone, or has expired (an expired plan is dropped here).
 fn take_live<'a>(
     store: &PlanStore,
     plans: &'a mut HashMap<String, StoredPlan>,
@@ -778,8 +739,6 @@ fn commit_locked(
     })
 }
 
-/// Drop the caller's plan. A plan that is already gone is not an error: the
-/// end state is the same.
 pub(crate) fn cancel_install(
     store: &PlanStore,
     request: &CancelRequest,

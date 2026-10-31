@@ -2656,12 +2656,6 @@ describe('MCP catalog parity (spine AD-1)', () => {
   })
 })
 
-// MCP install plans (spine AD-5, AD-7, AD-12): form, plan, commit and cancel
-// on one host service, reached through `POST /mcp-catalog/install/*` (web)
-// and the `/ws` requests `describe_mcp_install`, `plan_mcp_install`,
-// `commit_mcp_install`, `cancel_mcp_install` (desktop channel and web
-// socket). The Rust suite compares the two replies; this block pins the
-// wiring, the write guard on the mutations, and the shared facade.
 describe('MCP install plan parity (spine AD-5, AD-7, AD-12)', () => {
   const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
   const SHARED_TYPES = join(LIB_DIR, '..', '..', 'shared', 'types')

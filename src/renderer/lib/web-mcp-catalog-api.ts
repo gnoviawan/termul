@@ -1,13 +1,3 @@
-/**
- * HTTP implementation of the MCP catalog facade (spine AD-1, AD-5): `GET
- * /mcp-catalog/search` and `POST /mcp-catalog/install/{form,plan,commit,
- * cancel}` on the host serving this client. Network and parse failures map
- * to `NETWORK_ERROR`; the route's own `IpcBody` passes through.
- *
- * The install mutations carry this tab's `clientInstanceId`: the host binds
- * a plan to it, so only the tab that planned can commit or cancel.
- */
-
 import type { McpCatalogApi, McpCatalogPage } from '@shared/types/mcp-catalog.types'
 import type {
   McpInstallCommitResult,

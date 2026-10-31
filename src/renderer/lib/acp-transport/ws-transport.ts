@@ -818,22 +818,18 @@ export class WsAcpTransport implements AcpTransport {
     return this.request<McpCatalogPage>('search_mcp_catalog', request)
   }
 
-  /** `describe_mcp_install`: the generated install form (see {@link AcpTransport.describeMcpInstall}). */
   async describeMcpInstall(request: McpInstallFormRequest): Promise<McpInstallFormReply> {
     return this.request<McpInstallFormReply>('describe_mcp_install', request)
   }
 
-  /** `plan_mcp_install`: the immutable plan, bound to this connection. */
   async planMcpInstall(request: McpInstallPlanRequest): Promise<McpInstallPlanReply> {
     return this.request<McpInstallPlanReply>('plan_mcp_install', request)
   }
 
-  /** `commit_mcp_install`: the resolved entry, once per plan. */
   async commitMcpInstall(request: McpInstallCommitRequest): Promise<McpInstallCommitResult> {
     return this.request<McpInstallCommitResult>('commit_mcp_install', request)
   }
 
-  /** `cancel_mcp_install`: drop the plan. */
   async cancelMcpInstall(request: McpInstallCancelRequest): Promise<Record<string, never>> {
     return this.request<Record<string, never>>('cancel_mcp_install', request)
   }

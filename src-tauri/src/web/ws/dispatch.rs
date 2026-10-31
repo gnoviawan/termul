@@ -192,9 +192,6 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "search_mcp_catalog" => {
             mcp_catalog::handle_search_mcp_catalog(id, &req.payload).await
         }
-        // MCP install (spine AD-5): form, plan, commit and cancel on the same
-        // service as `POST /mcp-catalog/install/{form,plan,commit,cancel}`.
-        // The plan is bound to this connection.
         "describe_mcp_install" => {
             mcp_catalog::handle_describe_mcp_install(id, &req.payload).await
         }

@@ -27,8 +27,6 @@ fn hooka_provenance() -> Provenance {
     }
 }
 
-/// Stored approvals outlive releases, so the digest of a fixed spec is a
-/// promise: this literal changes only with `DIGEST_FORM_VERSION`.
 #[test]
 fn digest_of_a_fixed_spec_is_pinned() {
     assert_eq!(

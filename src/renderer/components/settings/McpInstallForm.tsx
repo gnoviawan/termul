@@ -24,7 +24,6 @@ const FIELD_GROUPS: ReadonlyArray<{ kind: McpInstallFieldTarget['kind']; heading
 
 type ControlKind = 'secret' | 'choice' | 'boolean' | 'number' | 'filepath' | 'text'
 
-/** A secret wins over `choices`: a Select would echo the value in its trigger. */
 function controlKind(field: McpInstallField): ControlKind {
   if (field.isSecret) return 'secret'
   if (field.choices !== null) return 'choice'
@@ -32,7 +31,6 @@ function controlKind(field: McpInstallField): ControlKind {
   return field.format
 }
 
-/** Form values seeded from each field's default. A boolean is always 'true' or 'false'. */
 export function initialInstallValues(fields: McpInstallField[]): Record<string, string> {
   return Object.fromEntries(
     fields.map((field) => [
@@ -44,10 +42,6 @@ export function initialInstallValues(fields: McpInstallField[]): Record<string, 
   )
 }
 
-/**
- * Splits form values into the plan request's `inputs` and the commit
- * request's `secretValues`, so a secret never travels at plan time.
- */
 export function splitInstallValues(
   fields: McpInstallField[],
   values: Record<string, string>
@@ -66,7 +60,6 @@ interface McpInstallFormProps {
   values: Record<string, string>
   onChange: (id: string, value: string) => void
   disabled?: boolean
-  /** Host validation message per field id. */
   errors?: Record<string, string>
 }
 
@@ -216,7 +209,6 @@ function InstallField({
   )
 }
 
-/** Picks a path on the host filesystem: the in-app picker on the web, the native dialog on desktop. */
 async function browseHostPath(onChange: (value: string) => void): Promise<void> {
   const result = await dialogApi.selectDirectory()
   if (result.success) {

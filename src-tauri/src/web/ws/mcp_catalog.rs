@@ -1,13 +1,3 @@
-//! `/ws` adapter for the host-owned MCP catalog (spine AD-1, AD-5). The
-//! desktop channel and the web socket both route `search_mcp_catalog` and
-//! the install requests (`describe_mcp_install`, `plan_mcp_install`,
-//! `commit_mcp_install`, `cancel_mcp_install`) here, and each answers through
-//! the same [`McpCatalogService`] call as its `/mcp-catalog/...` HTTP route.
-//!
-//! The install mutations need the connection's write capability (AD-12; the
-//! capability check runs before dispatch). A plan is bound to the connection
-//! that made it, so a commit or cancel from another connection is refused.
-
 use super::*;
 use crate::mcp_catalog::{
     CancelRequest, CommitRequest, FormRequest, McpCatalogSearchRequest, McpCatalogService,
@@ -57,7 +47,6 @@ pub(super) async fn handle_search_mcp_catalog(id: String, payload: &Value) -> Ws
     }
 }
 
-/// `describe_mcp_install { source, choice? }`: the generated form. A read.
 pub(super) async fn handle_describe_mcp_install(id: String, payload: &Value) -> WsReply {
     let request: FormRequest = match invalid_request(&id, "describe_mcp_install", payload) {
         Ok(request) => request,
@@ -73,8 +62,6 @@ pub(super) async fn handle_describe_mcp_install(id: String, payload: &Value) -> 
     }
 }
 
-/// `plan_mcp_install { source, choice?, inputs }`: the immutable plan, bound
-/// to this connection.
 pub(super) async fn handle_plan_mcp_install(id: String, payload: &Value, env: &HandlerEnv) -> WsReply {
     let request: PlanRequest = match invalid_request(&id, "plan_mcp_install", payload) {
         Ok(request) => request,
@@ -91,8 +78,6 @@ pub(super) async fn handle_plan_mcp_install(id: String, payload: &Value, env: &H
     }
 }
 
-/// `commit_mcp_install { planId, launchDigest, secretValues }`: the resolved
-/// entry, once.
 pub(super) async fn handle_commit_mcp_install(id: String, payload: &Value, env: &HandlerEnv) -> WsReply {
     let request: CommitRequest = match invalid_request(&id, "commit_mcp_install", payload) {
         Ok(request) => request,
@@ -108,7 +93,6 @@ pub(super) async fn handle_commit_mcp_install(id: String, payload: &Value, env: 
     }
 }
 
-/// `cancel_mcp_install { planId }`: drop the plan.
 pub(super) async fn handle_cancel_mcp_install(id: String, payload: &Value, env: &HandlerEnv) -> WsReply {
     let request: CancelRequest = match invalid_request(&id, "cancel_mcp_install", payload) {
         Ok(request) => request,

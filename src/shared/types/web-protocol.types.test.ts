@@ -132,7 +132,6 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'set_catalog_opt_in',
       'fetch_acp_registry_snapshot',
       'search_mcp_catalog',
-      // MCP install (spine AD-5): form, plan, commit, cancel.
       'describe_mcp_install',
       'plan_mcp_install',
       'commit_mcp_install',

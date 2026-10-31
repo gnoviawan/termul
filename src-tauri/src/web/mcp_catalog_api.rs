@@ -1,16 +1,9 @@
-//! HTTP adapter for the host-owned MCP catalog (spine AD-1, AD-5).
+//! HTTP adapter for the host-owned MCP catalog (spine AD-1).
 //!
 //! `GET /mcp-catalog/search?query=&cursor=&limit=` answers one page from
 //! [`McpCatalogService`], the same call the `/ws` `search_mcp_catalog`
 //! request makes, so both return the same `IpcBody` for the same request.
 //! Search is a read: view-only and shared-live clients may call it.
-//!
-//! `POST /mcp-catalog/install/form` is a read too. `POST
-//! /mcp-catalog/install/{plan,commit,cancel}` mutate host state, so they sit
-//! behind the shared write predicate (`check_local_only`, AD-12): shared-live
-//! denies them all. The body is taken raw and parsed only after the guard, so
-//! a refused peer always gets `FORBIDDEN`. A plan is bound to the
-//! `clientInstanceId` the body carries, so another client cannot commit it.
 
 use std::net::SocketAddr;
 
@@ -82,8 +75,6 @@ fn parse_body<T: serde::de::DeserializeOwned, R>(route: &str, body: &Bytes) -> R
     })
 }
 
-/// The caller a browser tab states for itself on an install mutation. The
-/// same tab must commit or cancel the plan it made.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WithClient<T> {

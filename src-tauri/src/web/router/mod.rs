@@ -307,9 +307,7 @@ pub fn router(
         )
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
         // MCP catalog search (spine AD-1), a read open to every connected
-        // client; see `web/mcp_catalog_api.rs`. The install routes (AD-5):
-        // the form is a read, the plan/commit/cancel mutations carry the
-        // shared write guard (AD-12).
+        // client; see `web/mcp_catalog_api.rs`.
         .route("/mcp-catalog/search", get(mcp_catalog_api::search))
         .route("/mcp-catalog/install/form", post(mcp_catalog_api::describe_install))
         .route("/mcp-catalog/install/plan", post(mcp_catalog_api::plan_install))

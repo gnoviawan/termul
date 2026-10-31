@@ -41,12 +41,6 @@ interface McpConsentDialogProps {
   error?: string | null
 }
 
-/**
- * The SEP-1024 consent view of a host-built install plan (spine AD-5). The
- * host already escaped control and bidi characters, so every string is drawn
- * as sent. Approve fires only on an explicit click; Escape, the scrim and the
- * close button cancel.
- */
 export function McpConsentDialog({
   open,
   plan,
@@ -248,7 +242,6 @@ function Section({
   )
 }
 
-/** An empty string would otherwise render as nothing at all. */
 function Verbatim({ text }: { text: string }): React.JSX.Element {
   if (text === '') return <span className="text-muted-foreground italic">(empty)</span>
   return <>{text}</>

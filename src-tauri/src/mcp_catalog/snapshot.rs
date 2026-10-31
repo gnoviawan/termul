@@ -49,8 +49,6 @@ pub(crate) struct CatalogItem {
     pub parsed: Option<ParsedItem>,
 }
 
-/// The parsed row and its conversion. Both are needed again when a plan is
-/// built from the row (`plan.rs` reads the inputs behind each option).
 #[derive(Debug, Clone)]
 pub(crate) struct ParsedItem {
     pub server: RegistryServer,

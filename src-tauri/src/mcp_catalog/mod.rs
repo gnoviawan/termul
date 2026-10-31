@@ -8,12 +8,6 @@
 //! The snapshot is embedded in the binary, so the service is one per process
 //! rather than per `AppState`: the desktop and `termul-server` each own their
 //! own copy, and every carrier in a process answers from the same one.
-//!
-//! Installing is plan, consent, commit (AD-5): `describe_install` generates
-//! the form, `plan_install` builds the immutable plan and its consent view,
-//! `commit_install` resolves the secrets and returns the entry, and
-//! `cancel_install` drops the plan. The plan store is per process too, so a
-//! plan made over one carrier is answered consistently by the other.
 
 mod consent;
 mod convert;
@@ -162,8 +156,6 @@ impl McpCatalogService {
         })
     }
 
-    /// The generated install form of a source (install-form.md), or the
-    /// typed reason the chosen option cannot install.
     pub async fn describe_install(
         &self,
         request: &FormRequest,
@@ -172,8 +164,6 @@ impl McpCatalogService {
         plan::describe_install(&self.catalog, runners, request)
     }
 
-    /// Build an immutable plan from the filled non-secret inputs, bound to
-    /// `caller` (AD-5).
     pub async fn plan_install(
         &self,
         request: &PlanRequest,
@@ -183,8 +173,6 @@ impl McpCatalogService {
         plan::plan_install(&self.catalog, runners, &self.plans, request, caller)
     }
 
-    /// Resolve the secrets into the consented plan and return the entry. The
-    /// plan is consumed on success and on a digest mismatch.
     pub fn commit_install(
         &self,
         request: &CommitRequest,

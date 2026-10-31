@@ -187,13 +187,6 @@ export const WS_REQUEST_TYPES = [
   // MCP catalog (spine AD-1): `{ query?, cursor?, limit? }` → one
   // `McpCatalogPage` of the host's converted registry snapshot. A read.
   'search_mcp_catalog',
-  // MCP install (spine AD-5): `describe_mcp_install { source, choice? }` is
-  // the generated form (a read); `plan_mcp_install { source, choice?, inputs }`
-  // builds the immutable plan bound to this connection; `commit_mcp_install
-  // { planId, launchDigest, secretValues }` resolves it once; and
-  // `cancel_mcp_install { planId }` drops it. The three mutations need the
-  // connection's write capability (AD-12). Payloads and replies are the
-  // `McpInstall*` shapes of `mcp-catalog.types.ts`.
   'describe_mcp_install',
   'plan_mcp_install',
   'commit_mcp_install',

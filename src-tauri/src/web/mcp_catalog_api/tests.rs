@@ -69,8 +69,6 @@ fn install_app(allow_remote_writes: bool, shared_live_writes_denied: bool) -> ax
         .with_state(state)
 }
 
-/// `POST /mcp-catalog/install/<route>` with `body` from `peer`, on a host
-/// with the given write flags. Returns the `IpcBody` JSON.
 pub(crate) async fn http_install(
     route: &str,
     body: &str,
@@ -97,13 +95,10 @@ pub(crate) async fn http_install(
     serde_json::from_slice(&bytes).expect("IpcBody json")
 }
 
-/// The loopback, non-shared-live call every parity test starts from.
 pub(crate) async fn http_install_local(route: &str, body: &Value) -> Value {
     http_install(route, &body.to_string(), LOOPBACK, false, false).await
 }
 
-/// A pasted `mcpServers` file: the one plan source that needs no runner on
-/// the test host.
 pub(crate) fn import_plan_body(client: &str) -> Value {
     json!({
         "clientInstanceId": client,
@@ -250,8 +245,6 @@ async fn a_plan_mutation_without_a_client_id_is_a_validation_error() {
     assert_eq!(planned["code"], "VALIDATION_ERROR");
 }
 
-/// AD-12: shared-live denies every install mutation, a non-loopback peer
-/// needs the opt-in, and the guard runs before the body is read.
 #[tokio::test]
 async fn install_mutations_carry_the_shared_write_guard() {
     for route in ["plan", "commit", "cancel"] {

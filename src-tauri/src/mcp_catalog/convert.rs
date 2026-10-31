@@ -84,9 +84,6 @@ pub(crate) struct RegistryPackageTransport {
     pub kind: String,
 }
 
-/// An argument, header, env var or template variable (registry `Input`,
-/// `KeyValueInput` and `Argument`). Conversion reads the name and the secret
-/// flags; the install form (`form.rs`) reads the rest.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct RegistryInput {
@@ -104,10 +101,8 @@ pub(crate) struct RegistryInput {
     pub placeholder: Option<String>,
     #[serde(deserialize_with = "null_as_default")]
     pub choices: Vec<String>,
-    /// `Argument` only: `positional` or `named`.
     #[serde(rename = "type")]
     pub argument_type: Option<String>,
-    /// `Argument` only: the label of a positional argument.
     pub value_hint: Option<String>,
     #[serde(deserialize_with = "null_as_default")]
     pub variables: BTreeMap<String, RegistryInput>,
@@ -253,7 +248,6 @@ pub enum McpCatalogReason {
     UnsupportedRegistry {
         registry: String,
     },
-    // Import plans only (AD-5 applies the AD-4 rules to a pasted file).
     InvalidCommand,
     InvalidHeaderName {
         name: String,
@@ -529,8 +523,6 @@ pub(crate) fn check_env_name(name: &str) -> Result<(), McpCatalogReason> {
     Ok(())
 }
 
-/// An HTTP header field name (RFC 9110 token). A name with `:` or a control
-/// character could end the header or start another one.
 pub(crate) fn check_header_name(name: &str) -> Result<(), McpCatalogReason> {
     static HEADER_NAME: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$").expect("header regex"));
@@ -620,9 +612,6 @@ fn is_allowed_oci_host(host: &str) -> bool {
         || name.ends_with(".azurecr.io")
 }
 
-/// Import plans hand a runner an `id` or `id@version` spec from a file. It
-/// must obey the same grammar the catalog templates do (AD-5 applies AD-4 to
-/// imports), so a spec a registry row could not carry is refused here too.
 pub(crate) fn check_package_spec(runner: Runner, spec: &str) -> Result<(), McpCatalogReason> {
     let (identifier, version) = match spec.rsplit_once('@') {
         Some((identifier, version)) if !identifier.is_empty() => (identifier, Some(version)),

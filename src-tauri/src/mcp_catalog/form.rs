@@ -1,14 +1,3 @@
-//! The generated install form (install-form.md) and how its values become
-//! the launch spec. A registry input is a *slot* (an env var, a header, an
-//! argument or the URL) with one value source: fixed text, one user field, or
-//! a template whose variables are each a field (AD-4). The host composes
-//! every value; the renderer only draws the fields.
-//!
-//! Secret fields are collected by the form but sent at commit (AD-5), so a
-//! slot that depends on one stays pending until then. Every secret field is
-//! required: the consented config lists the slot, and an empty secret would
-//! leave it set to nothing.
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::LazyLock;
@@ -59,7 +48,6 @@ impl FieldFormat {
     }
 }
 
-/// One form field; the wire `McpInstallField`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Field {
@@ -76,7 +64,6 @@ pub struct Field {
     pub description: Option<String>,
 }
 
-/// Who supplied a value: registry text, the user, or an imported file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Origin {
@@ -94,7 +81,6 @@ pub(crate) enum ValueSource {
     Input {
         field: String,
     },
-    /// `text` with `{var}` placeholders; each variable is a field.
     Template {
         text: String,
         variables: Vec<(String, String)>,
@@ -114,7 +100,6 @@ pub(crate) struct FormModel {
     pub slots: Vec<Slot>,
 }
 
-/// A registry template names a variable it does not declare (AD-4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnresolvedVariable {
     pub slot: String,
@@ -181,8 +166,6 @@ fn field_from(
 }
 
 impl FormModel {
-    /// One slot from a registry input: a fixed value, a whole-value field or
-    /// a template with one field per variable.
     fn add_registry_slot(
         &mut self,
         target: FieldTarget,
@@ -292,7 +275,6 @@ impl FormModel {
         Ok(model)
     }
 
-    /// Every value from a file: no fields, every slot fixed (AD-5 import).
     pub(crate) fn fixed(slots: impl IntoIterator<Item = (FieldTarget, String)>) -> Self {
         Self {
             fields: Vec::new(),
@@ -311,7 +293,6 @@ impl FormModel {
     }
 }
 
-/// Which half of the form a request carries (AD-5: secrets only at commit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
     Plan,
@@ -340,8 +321,6 @@ fn check_value(field: &Field, raw: &str) -> Result<String, String> {
     }
 }
 
-/// Validate the fields of one phase against `inputs` and apply defaults.
-/// Returns field id → value for every field of that phase that has one.
 pub(crate) fn validate_inputs(
     fields: &[Field],
     inputs: &BTreeMap<String, String>,
@@ -379,16 +358,13 @@ pub(crate) fn validate_inputs(
     Ok(values)
 }
 
-/// A slot's value given the values known so far.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Resolved {
     Value {
         value: String,
         origin: Origin,
     },
-    /// Depends on a field not in `values` (a secret before commit).
     Pending,
-    /// An optional input left empty: the slot is left out.
     Omitted,
 }
 

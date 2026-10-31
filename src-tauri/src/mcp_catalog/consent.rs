@@ -1,8 +1,3 @@
-//! The SEP-1024 consent view (AD-5): the exact launch spec, untruncated, with
-//! control and bidi characters escaped so what the user reads is what runs;
-//! every env and header name with its non-secret value; typed warnings; and
-//! catalog provenance.
-
 use serde::Serialize;
 
 use super::form::Origin;
@@ -26,8 +21,6 @@ pub enum Namespace {
 }
 
 impl Namespace {
-    /// `io.github.<account>/…` is bound to a GitHub account; any other
-    /// reverse-DNS prefix is domain-verified.
     pub(crate) fn of(registry_name: &str) -> Self {
         let prefix = registry_name.split('/').next().unwrap_or(registry_name);
         match prefix.strip_prefix("io.github.") {
@@ -55,7 +48,6 @@ pub struct ConsentProvenance {
 #[serde(rename_all = "camelCase")]
 pub struct ConsentValue {
     pub name: String,
-    /// Escaped for display; `None` for a secret.
     pub value: Option<String>,
     pub is_secret: bool,
     pub origin: Origin,
@@ -74,8 +66,6 @@ pub struct ConsentView {
     pub provenance: Option<ConsentProvenance>,
 }
 
-/// Characters that could make displayed text differ from what runs: every
-/// control character, the bidi controls, and the invisible formatters.
 fn must_escape(ch: char) -> bool {
     ch.is_control()
         || matches!(
@@ -89,8 +79,6 @@ fn must_escape(ch: char) -> bool {
         )
 }
 
-/// `\` becomes `\\` and every [`must_escape`] character becomes `\u{XXXX}`,
-/// so the escaped form is unambiguous.
 #[must_use]
 pub fn escape_for_display(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -106,7 +94,6 @@ pub fn escape_for_display(text: &str) -> String {
     out
 }
 
-/// One env or header slot with what the consent view may show of it.
 pub(crate) struct ShownValue {
     pub name: String,
     pub is_secret: bool,

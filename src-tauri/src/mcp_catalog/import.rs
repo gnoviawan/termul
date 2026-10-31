@@ -1,8 +1,3 @@
-//! `import` plans (AD-5, CAP-7): an `mcpServers` JSON blob, or one bare
-//! server object, becomes a launch spec whose every value came from a file.
-//! The AD-4 env deny-list, package grammar and URL rules apply exactly as to
-//! catalog conversion, through the same `convert.rs` functions.
-
 use std::fmt;
 
 use serde_json::{Map, Value};
@@ -33,8 +28,6 @@ pub(crate) struct ImportedServer {
     pub launch: ImportedLaunch,
 }
 
-/// Why the blob is not an import (`MCP_IMPORT_INVALID`). Messages never
-/// echo file values, only keys.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ImportError {
     Json,
@@ -65,7 +58,6 @@ impl fmt::Display for ImportError {
     }
 }
 
-/// `{"name": "value"}` maps and `[{"name", "value"}]` lists both read as pairs.
 fn name_value_pairs(value: Option<&Value>) -> Option<Vec<(String, String)>> {
     match value {
         None | Some(Value::Null) => Some(Vec::new()),
@@ -143,8 +135,6 @@ fn server_from(name: &str, raw: &Map<String, Value>) -> Result<ImportedServer, I
     })
 }
 
-/// Pick one server out of the blob. `server` is the `mcpServers` key; it is
-/// required when the blob holds several.
 pub(crate) fn parse_import(
     json: &str,
     server: Option<&str>,
@@ -208,7 +198,6 @@ fn no_control(text: &str, field: impl Into<String>) -> Result<(), McpCatalogReas
     }
 }
 
-/// Which fixed runner a command on a file names, if any.
 fn runner_of(command: &str) -> Option<Runner> {
     let base = command
         .rsplit(['/', '\\'])
@@ -253,7 +242,6 @@ fn check_runner_package_specs(runner: Runner, args: &[String]) -> Result<(), Mcp
     Ok(())
 }
 
-/// The AD-4 rules on a file's launch spec, with the typed reason.
 pub(crate) fn check_import(server: &ImportedServer) -> Result<(), McpCatalogReason> {
     match &server.launch {
         ImportedLaunch::Stdio { command, args, env } => {
@@ -283,7 +271,6 @@ pub(crate) fn check_import(server: &ImportedServer) -> Result<(), McpCatalogReas
     Ok(())
 }
 
-/// No fields: every slot is a fixed file value.
 pub(crate) fn import_form(server: &ImportedServer) -> FormModel {
     match &server.launch {
         ImportedLaunch::Stdio { args, env, .. } => FormModel::fixed(
