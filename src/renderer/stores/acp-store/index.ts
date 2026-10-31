@@ -49,6 +49,7 @@ import {
   type BrowserAgentTabEvent,
   type BrowserOpenRequestEvent,
   type BrowserStopChangedEvent,
+  type BrowserTabClosedEvent,
   type BrowserTicketClosedEvent,
   type CommandsUpdateEvent,
   type ConfigOptionsUpdateEvent,
@@ -94,6 +95,7 @@ import {
   withCommands
 } from './helpers'
 import { setLaunchPlaceholderNotedListener, setLiveLaunchSessionLookup } from './live-turn'
+import { syncPendingPermissions } from './pending-permission-sync'
 import {
   historySeqWatermarks,
   isCurrentRecoveryGeneration,
@@ -558,6 +560,8 @@ export function initAcpEventListeners(): () => void {
         )
       )
     ],
+    installPendingPermissions: (sessionId, requests) =>
+      syncPendingPermissions(useAcpStore.getState, useAcpStore.setState, sessionId, requests),
     setReconnecting: (reconnecting, recovered) => {
       useAcpStore.setState({ transportReconnecting: reconnecting })
       if (!reconnecting) {
@@ -660,8 +664,11 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<BrowserOpenRequestEvent>(ACP_EVENTS.browserOpenRequest, (e) =>
       useAcpStore.getState()._onBrowserOpenRequest(e)
     ),
-    acpApi.onEvent<BrowserAgentTabEvent>(ACP_EVENTS.browserAgentTab, (e) =>
-      useAcpStore.getState()._onBrowserAgentTab(e)
+    acpApi.onEvent<BrowserAgentTabEvent>(ACP_EVENTS.browserAgentTab, (e, eventSeq) =>
+      useAcpStore.getState()._onBrowserAgentTab(e, eventSeq)
+    ),
+    acpApi.onEvent<BrowserTabClosedEvent>(ACP_EVENTS.browserTabClosed, (e) =>
+      useAcpStore.getState()._onBrowserTabClosed(e)
     ),
     acpApi.onEvent<BrowserTicketClosedEvent>(ACP_EVENTS.browserTicketClosed, (e) =>
       useAcpStore.getState()._onBrowserTicketClosed(e)

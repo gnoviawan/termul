@@ -5,7 +5,7 @@
 //! redirects are bounded to the remote host or `avatars.githubusercontent.com`
 //! (GitHub's `<owner>.png` 302s there). Response guard: `image/*` content-type,
 //! ≤256 KB stream-read, and the shared magic-byte/square pipeline. Remote-URL
-//! parsing covers `https://`, `ssh://`, `git+ssh://`, `git://`, and scp-like
+//! parsing ([`crate::git_remote`]) covers `https://`, `ssh://`, `git+ssh://`, `git://`, and scp-like
 //! `git@host:owner/repo(.git)` forms, trailing `.git`, ports, and self-hosted
 //! hosts (GHES/Gitea).
 //!
@@ -27,7 +27,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use reqwest::Url;
 
-use crate::trackers::git_tracker::GitTracker;
+use crate::git_remote::{git_remote_url, parse_remote_url};
 
 use super::local::{decode_image, Decode};
 use super::{boundary_warn, ProjectIcon, ProjectIconSource};
@@ -49,28 +49,6 @@ pub(super) struct FetchTarget {
     pub allowed_host: String,
 }
 
-/// Parsed remote — host normalized (`ssh.github.com` → `github.com`,
-/// lowercased), port kept only for `https` remotes.
-pub(super) struct ParsedRemote {
-    /// Hostname only — safe to log (credentials never reach this field).
-    pub host: String,
-    /// Explicit non-default port of an `https://` remote (a Gitea on :8443
-    /// serves its favicon on the same port). `ssh`/`git` ports are dropped —
-    /// they describe the SSH endpoint, not the web service.
-    pub port: Option<u16>,
-    /// First path segment (the GitHub avatar owner). `None` for pathless or
-    /// empty-path remotes — they still get the `favicon.ico` candidate.
-    pub owner: Option<String>,
-}
-
-pub(super) enum RemoteParse {
-    Remote(ParsedRemote),
-    /// `http://` remote — refused (https only); caller emits the warn log.
-    HttpScheme,
-    /// Local path / unparseable string — silent miss.
-    NotRemote,
-}
-
 /// Build the ordered fetch candidates for a repo: GitHub-family hosts get
 /// `https://<host>/<owner>.png?size=64` before the `favicon.ico` fallback
 /// every forge host gets. Empty when the repo has no usable remote.
@@ -81,16 +59,13 @@ pub(super) fn fetch_targets(cwd: &Path) -> Vec<FetchTarget> {
     let Some(remote_url) = git_remote_url(cwd_str) else {
         return Vec::new();
     };
-    let parsed = match parse_remote_url(&remote_url) {
-        RemoteParse::Remote(parsed) => parsed,
-        RemoteParse::HttpScheme => {
-            boundary_warn(
-                "remote icon fetch refused: http:// remotes are not fetched (https only)",
-            );
-            return Vec::new();
-        }
-        RemoteParse::NotRemote => return Vec::new(),
+    let Some(parsed) = parse_remote_url(&remote_url) else {
+        return Vec::new();
     };
+    if parsed.insecure_http {
+        boundary_warn("remote icon fetch refused: http:// remotes are not fetched (https only)");
+        return Vec::new();
+    }
     if is_refused_host(&parsed.host) {
         boundary_warn("remote icon fetch refused: remote host is a local/refused address");
         return Vec::new();
@@ -113,102 +88,6 @@ pub(super) fn fetch_targets(cwd: &Path) -> Vec<FetchTarget> {
         allowed_host: parsed.host.clone(),
     });
     targets
-}
-
-/// `git remote get-url origin` → stdout trimmed; on failure/empty, the first
-/// URL field of `git remote -v` (`origin\t<url> (fetch)` → field 1).
-/// The raw remote string is never logged — it may embed credentials.
-fn git_remote_url(cwd: &str) -> Option<String> {
-    if let Some(out) = GitTracker::run_git_command(cwd, &["remote", "get-url", "origin"]) {
-        if out.status.success() {
-            let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !url.is_empty() {
-                return Some(url);
-            }
-        }
-    }
-    let out = GitTracker::run_git_command(cwd, &["remote", "-v"])?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let line = text.lines().next()?;
-    let url = line.split_whitespace().nth(1)?.trim().to_string();
-    (!url.is_empty()).then_some(url)
-}
-
-/// Parse a `git remote` URL into `(host, port?, owner)`. Covers https/ssh/
-/// git+ssh/git schemes, scp-like `git@host:path`, trailing `.git`, ports, and
-/// self-hosted hosts.
-pub(super) fn parse_remote_url(raw: &str) -> RemoteParse {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return RemoteParse::NotRemote;
-    }
-    if raw.contains("://") {
-        // `git+ssh://` is not a registered scheme — normalize to `ssh://`.
-        let normalized = raw.replacen("git+ssh://", "ssh://", 1);
-        let Ok(url) = Url::parse(&normalized) else {
-            return RemoteParse::NotRemote;
-        };
-        let scheme = url.scheme();
-        let Some(host) = url.host_str().map(|h| h.to_ascii_lowercase()) else {
-            return RemoteParse::NotRemote;
-        };
-        match scheme {
-            "http" => return RemoteParse::HttpScheme,
-            "https" | "ssh" | "git" => {}
-            _ => return RemoteParse::NotRemote,
-        }
-        return RemoteParse::Remote(ParsedRemote {
-            host: normalize_host(&host),
-            port: if scheme == "https" { url.port() } else { None },
-            owner: path_owner(url.path()),
-        });
-    }
-    // scp-like `user@host:owner/repo(.git)` — the `@` is required so Windows
-    // drive paths (`C:\…`) and bare `host:path` can't be mistaken for remotes.
-    let Some((user_host, path)) = raw.split_once(':') else {
-        return RemoteParse::NotRemote;
-    };
-    let Some((_, host)) = user_host.rsplit_once('@') else {
-        return RemoteParse::NotRemote;
-    };
-    let host = host.trim().to_ascii_lowercase();
-    if host.is_empty() || host.contains('/') || path.is_empty() {
-        return RemoteParse::NotRemote;
-    }
-    RemoteParse::Remote(ParsedRemote {
-        host: normalize_host(&host),
-        port: None,
-        owner: path_owner(path),
-    })
-}
-
-/// First path segment after stripping trailing `.git` on the last segment.
-fn path_owner(path: &str) -> Option<String> {
-    let mut segs: Vec<&str> = path
-        .trim_matches('/')
-        .split('/')
-        .filter(|seg| !seg.is_empty())
-        .collect();
-    if let Some(last) = segs.last_mut() {
-        if let Some(stripped) = last.strip_suffix(".git") {
-            *last = stripped;
-        }
-    }
-    segs.first()
-        .filter(|seg| !seg.is_empty())
-        .map(|seg| seg.to_string())
-}
-
-/// `ssh.github.com`/`www.github.com` collapse to `github.com` (SSH endpoint
-/// and www redirect respectively — the icon service is the bare host).
-fn normalize_host(host: &str) -> String {
-    match host {
-        "ssh.github.com" | "www.github.com" => "github.com".to_string(),
-        _ => host.to_string(),
-    }
 }
 
 /// GitHub-family: `github.com` itself plus `github.*` self-hosted GHES hosts.

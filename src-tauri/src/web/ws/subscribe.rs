@@ -36,6 +36,29 @@ pub(super) fn spawn_event_forwarder(mut stream: EventStream, out_tx: OutboundSen
     });
 }
 
+/// Add the session's still-pending permission requests to a subscribe or
+/// snapshot reply (`pendingPermissions`, in queue order). Read AFTER the
+/// subscription registered: a request published later is delivered live, and
+/// its ticket is registered before the publish, so none falls in between. The
+/// request event is not in the durable log, so this list is the only way a
+/// client whose snapshot or cursor already passed it can render it again
+/// (issue #1595). Without a rendezvous nothing is added and the client keeps
+/// what it has.
+pub(super) fn attach_pending_permissions(reply: &mut Value, relay: &WsRelaySink, session_id: &str) {
+    let Some(rdz) = relay.rendezvous() else {
+        return;
+    };
+    let pending = rdz.pending_requests(session_id);
+    if !pending.is_empty() {
+        log::info!(
+            "[ws] subscription restores {} pending permission request(s) for session_id={}",
+            pending.len(),
+            crate::logging::redact_session_id(session_id)
+        );
+    }
+    reply["pendingPermissions"] = Value::Array(pending);
+}
+
 /// Wire `subscribe` → [`WsRelaySink::subscribe`] + forward replay/live to this connection.
 pub(super) async fn handle_subscribe(
     id: String,
@@ -121,6 +144,7 @@ pub(super) async fn handle_subscribe(
                 reply["logEpoch"] = json!(head.log_epoch);
                 reply["headSeq"] = json!(head.head_seq);
             }
+            attach_pending_permissions(&mut reply, relay, &parsed.session_id);
             WsReply::ok(id, Some(reply))
         }
     }

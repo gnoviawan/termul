@@ -43,6 +43,7 @@ fn app_with_registry(registry: Arc<crate::web::project_registry::ProjectRegistry
         allow_remote_writes: false,
         shared_live_writes_denied: false,
         connections: Default::default(),
+        server_admin: None,
     };
     axum::Router::new()
         .route("/mcp-servers", get(super::get).put(super::put))
@@ -195,6 +196,7 @@ async fn put_refused_in_shared_live_mode() {
         allow_remote_writes: false,
         shared_live_writes_denied: true,
         connections: Default::default(),
+        server_admin: None,
     };
     let app = axum::Router::new()
         .route("/mcp-servers", get(super::get).put(super::put))

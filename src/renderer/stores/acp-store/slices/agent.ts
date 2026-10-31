@@ -20,17 +20,11 @@ import {
 import { answerBrowserConsent } from '@/lib/browser-consent-api'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { useBrowserControlStore } from '@/stores/browser-control-store'
-import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useProjectStore } from '@/stores/project-store'
-import {
-  agentChatTabId,
-  findPaneContainingTab,
-  useWorkspaceStore,
-  browserTabId as workspaceBrowserTabId
-} from '@/stores/workspace-store'
+import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 import { isDetachedReuseKey, parseReuseKey } from '../../acp-reuse-keys'
+import { applyBrowserAgentTab, applyBrowserTabClosed } from '../browser-agent-tabs'
 import { stoppingAgentIds } from '../ephemeral-ids'
 import {
   authPickerUnavailableError,
@@ -555,6 +549,7 @@ type AgentSliceState = Pick<
   | '_onAgentDisconnected'
   | '_onBrowserOpenRequest'
   | '_onBrowserAgentTab'
+  | '_onBrowserTabClosed'
   | '_onBrowserConsentTicket'
   | '_onBrowserTicketClosed'
   | '_onBrowserStopChanged'
@@ -1295,38 +1290,9 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     })
   },
 
-  _onBrowserAgentTab: (e) => {
-    // Host-mediated agent tab lifecycle (spec-acp-browser-pane-automation).
-    // "open": create the session record + mount a workspace tab — mounting
-    // runs `browserTabCreate`, which resolves the host's pending open waiter.
-    // "close": drop the workspace tab + session record (the host already
-    // destroyed the native webview; the unmount's destroy is a benign miss).
-    // Remote/web clients have no native browser pane: there the event only
-    // feeds the Stop indicator; only the desktop host opens the tab.
-    if (typeof e.tabId !== 'string' || e.tabId.length === 0) return
-    const control = useBrowserControlStore.getState()
-    if (e.action === 'open' && typeof e.sessionId === 'string' && e.sessionId.length > 0) {
-      control.trackAgentTab(e.tabId, e.sessionId)
-    } else if (e.action === 'close') {
-      control.untrackAgentTab(e.tabId)
-    }
-    if (!isTauriContext()) return
-    if (e.action === 'open') {
-      const url = typeof e.url === 'string' && /^https?:\/\//i.test(e.url) ? e.url : undefined
-      useBrowserSessionStore.getState().createTab(e.tabId, url)
-      useWorkspaceStore.getState().openAgentBrowserTab(e.tabId, url)
-      void logFrontendError({
-        level: 'info',
-        message: `[acp] agent browser tab opened (tabId=${e.tabId})`,
-        source: 'acp-store:_onBrowserAgentTab'
-      })
-      return
-    }
-    if (e.action === 'close') {
-      useWorkspaceStore.getState().removeTab(workspaceBrowserTabId(e.tabId))
-      useBrowserSessionStore.getState().removeTab(e.tabId)
-    }
-  },
+  _onBrowserAgentTab: (e, eventSeq) => applyBrowserAgentTab(e, eventSeq),
+
+  _onBrowserTabClosed: (e) => applyBrowserTabClosed(e),
 
   _onBrowserConsentTicket: (ticket) => {
     set((s) => ({

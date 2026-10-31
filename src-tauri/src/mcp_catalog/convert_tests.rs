@@ -625,6 +625,7 @@ fn item(server: Value) -> CatalogItem {
         version: parsed.version,
         status: RegistryStatus::Active,
         repository_url: None,
+        icon: None,
     }
 }
 

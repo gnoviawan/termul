@@ -1,6 +1,7 @@
 import type { SessionSnapshotEvent } from '@shared/types/web-protocol.types'
 import type { SessionId } from '@/lib/acp-api'
 import type { AcpTransport } from '@/lib/acp-transport'
+import type { PendingPermissionsHandler } from '@/lib/acp-transport/pending-permissions'
 
 export type AcpRecovery = SessionSnapshotEvent | { sessionId: string; degraded: true }
 
@@ -14,6 +15,8 @@ export interface AcpConnectionCoordinatorOptions {
    */
   recoveryGeneration?: (sessionId: SessionId) => number
   pendingPermissionSessions: () => SessionId[]
+  /** Install the host's still-pending approvals of a (re)subscribed session. */
+  installPendingPermissions?: PendingPermissionsHandler
   setReconnecting: (reconnecting: boolean, recovered?: boolean) => void
 }
 
@@ -33,6 +36,9 @@ export class AcpConnectionCoordinator {
     this.transport.setRecoveryHandler?.(this.options.installRecovery)
     if (this.options.recoveryGeneration) {
       this.transport.setRecoveryGenerationProvider?.(this.options.recoveryGeneration)
+    }
+    if (this.options.installPendingPermissions) {
+      this.transport.setPendingPermissionsHandler?.(this.options.installPendingPermissions)
     }
   }
 }

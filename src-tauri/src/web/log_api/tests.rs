@@ -34,6 +34,7 @@ fn test_state() -> AppState {
         )),
         oauth_base_url: "http://127.0.0.1".to_string(),
         connections: Default::default(),
+        server_admin: None,
     }
 }
 
@@ -173,6 +174,7 @@ fn gated_shared_live_router() -> axum::Router {
         true,
         Some(Arc::new(crate::web::auth::WebAuth::new(token))),
         crate::web::origin::OriginPolicy::default(),
+        None,
     )
 }
 

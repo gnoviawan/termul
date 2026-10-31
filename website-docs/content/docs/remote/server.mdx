@@ -81,54 +81,76 @@ To follow the nightly builds, set `TERMUL_IMAGE=ghcr.io/gnoviawan/termul-server:
 </Tab>
 </Tabs>
 
-## Set it up with the wizard
+## Set it up in the browser
 
-`termul-server onboard` asks a few questions, then starts the server in the background so it keeps running after you log out of SSH.
+A fresh `termul-server` has no settings yet, so the first run serves a setup page instead of the app. While it waits for you, the server listens on every network interface, so you can open the page from another device.
 
 <Steps>
 <Step>
 
-### Start the wizard
+### Start the server
 
 Run this in a terminal on the server:
 
 ```bash
-termul-server onboard
+termul-server
 ```
 
-Press Enter at any question to keep the default shown in brackets.
+The server prints a setup link to the terminal, or to the service's journal, and waits:
+
+```text
+http://<server-address>:8080/?setup=<token>
+```
+
+The `?setup=` part is a one-time key for this run. Without it the setup page stays closed, so only someone who can read the server's output can finish the setup.
 
 </Step>
 <Step>
 
 ### Answer the questions
 
-- **Bind host.** Keep `127.0.0.1` to allow only this machine, for example behind a reverse proxy. Enter `0.0.0.0` to accept connections from other devices.
-- **Bind port.** The default is `8080`.
-- **Sessions directory** and **Projects registry file.** Where Termul keeps chat history and your project list. The defaults are in `~/.local/state/termul`.
-- **Allow non-loopback write peers.** Asked only when the host is `0.0.0.0`. Answer `y` to let other devices make changes. See [Allow changes from other devices](/docs/remote/server-options#allow-changes-from-other-devices).
-- **Update channel.** `stable`, `insider`, `nightly`, or `none`. If you pick a channel, the wizard also asks how often to check, in seconds.
+Open the link in a browser. The setup page asks for:
 
-The wizard may also offer to write a settings file, `termul-server.env`, in the state folder. Answer `y` so the background server gets the same settings.
+- **Bind host.** Keep `127.0.0.1` to allow only this machine, for example behind a reverse proxy. Pick `0.0.0.0` to accept connections from other devices.
+- **Bind port.** The default is `8080`.
+- **Allow changes from other devices.** Shown when the host is `0.0.0.0`. Turn it on to let other devices make changes. See [Allow changes from other devices](/docs/remote/server-options#allow-changes-from-other-devices).
+- **Update channel.** `stable`, `insider`, `nightly`, or `none`. See [Update the server](/docs/remote/server-options#update-the-server).
+
+The **Advanced** section holds the **sessions directory** (where Termul keeps chat history), the **projects registry file** (your project list), and how often the server checks for updates. The defaults are in `~/.local/state/termul`.
+
+The page checks each answer and shows mistakes next to its field, so nothing is saved until everything is valid.
 
 </Step>
 <Step>
 
-### Read the summary
+### Let the server restart
 
-The wizard starts the server and prints where to find it:
+Applying saves your answers to `server-config.json` in the server's state folder. The server restarts itself on the address you picked, your browser follows it there, and you land in the normal Termul app.
 
-- The address, `http://localhost:<port>`.
-- When the host is `0.0.0.0`, the path of the file that holds the access token.
-- How to read the logs and how to stop the server.
-- A command to run the same server in the foreground.
+When the host is `0.0.0.0`, the server also creates an access token and hands it to your browser on the way. Other browsers and devices still need it. See [The access token](/docs/remote/server-options#the-access-token).
+
+</Step>
+</Steps>
+
+To change these settings later, open **Settings** in the browser (`Alt+,`) and select **Server**. It is the same page filled in with the current settings. Applying them saves the file and restarts the server again, and the browser follows when the address changes. The **Server** tab is in the browser version only.
+
+For the settings it holds, `server-config.json` wins over flags and environment variables, so reconfiguring works even on a server whose service still passes old flags. If the file ever becomes unreadable, the server logs an error and goes back to the setup page instead of locking you out.
+
+### Set it up in the terminal instead
+
+`termul-server onboard` asks the same questions in a terminal and writes the same `server-config.json` — both paths produce identical settings. Use it for scripted or headless installs, or when you want the wizard to install the server as a service so it keeps running after you log out of SSH:
+
+```bash
+termul-server onboard
+```
+
+Press Enter at any question to keep the default shown in brackets. When the wizard finishes, it starts the server and prints its address, how to read the logs, and how to stop it.
+
+The wizard may also offer to write a settings file, `termul-server.env`, in the state folder. Answer `y` so the background server gets the same settings.
 
 On machines with systemd, the wizard installs a `termul-server` service. When you run it as root, it is a system service and you manage it with `systemctl stop termul-server` and `journalctl -u termul-server -f`. As another user, it is a user service, so add `--user` to both commands.
 
 On machines without systemd, the wizard starts the server as a background process. The log is `termul-server.log` and the process ID is in `termul-server.pid`, both in the state folder. A background process doesn't restart after a crash or a reboot.
-
-</Step>
-</Steps>
 
 ## Start the server by hand
 
@@ -138,7 +160,7 @@ To try the server, run it in the foreground:
 termul-server
 ```
 
-This serves Termul at `http://localhost:8080` for browsers on the same machine. Press `Ctrl+C` to stop it.
+On a server that is already set up, this serves Termul at `http://localhost:8080` for browsers on the same machine. On a fresh install it starts the setup page described above instead. Press `Ctrl+C` to stop it.
 
 To let phones and other computers connect, listen on all network interfaces:
 
@@ -146,7 +168,9 @@ To let phones and other computers connect, listen on all network interfaces:
 termul-server --host 0.0.0.0 --port 8080
 ```
 
-The first time you do this, the server creates an access token and prints the path of the file that holds it. Read the token from that file, then open `http://<server-address>:8080/#token=<token>`. See [The access token](/docs/remote/server-options#the-access-token).
+Flags such as `--host` and `--port` count as a configuration, so a fresh install started this way skips the setup page. Once a `server-config.json` exists it wins over these flags for the settings it holds — change those under **Settings**, in the **Server** tab, instead. Flags the file doesn't cover, such as `--allowed-origins`, still apply.
+
+The first time the server listens on `0.0.0.0` without a token, it creates an access token and prints the path of the file that holds it. Read the token from that file, then open `http://<server-address>:8080/#token=<token>`. See [The access token](/docs/remote/server-options#the-access-token).
 
 Plain `http://` sends the token and everything else unencrypted over the network. Use it only on a network you trust. For anything else, put an HTTPS reverse proxy in front of the server.
 

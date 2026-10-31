@@ -22,6 +22,7 @@ import type {
   BrowserAgentTabEvent,
   BrowserOpenRequestEvent,
   BrowserStopChangedEvent,
+  BrowserTabClosedEvent,
   BrowserTicketClosedEvent,
   CommandsUpdateEvent,
   ConfigOptionsUpdateEvent,
@@ -978,7 +979,9 @@ export interface AcpState {
    * Agent browser automation (`browser` tool): host asks the renderer to
    * open/close a visible agent-controlled browser tab.
    */
-  _onBrowserAgentTab: (e: BrowserAgentTabEvent) => void
+  _onBrowserAgentTab: (e: BrowserAgentTabEvent, eventSeq?: number) => void
+  /** `acp:browser_tab_closed`: the host registry dropped an agent tab. */
+  _onBrowserTabClosed: (e: BrowserTabClosedEvent) => void
   /** A browser consent ticket arrived on the permission contract. */
   _onBrowserConsentTicket: (ticket: BrowserConsentTicket) => void
   /** `acp:browser_ticket_closed`: the ticket was settled somewhere. */

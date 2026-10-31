@@ -12,6 +12,7 @@ import type {
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
 import type {
+  McpCatalogIconPayload,
   McpCatalogPage,
   McpCatalogSearchRequest,
   McpCatalogStatus
@@ -49,6 +50,7 @@ import type {
 import type { SessionPayload } from '@/lib/acp-history-persistence'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import type { CanvasGatewayClient } from './canvas-gateway-client'
+import type { PendingPermissionsHandler } from './pending-permissions'
 import type { WatchClient } from './watch-client'
 
 /**
@@ -211,6 +213,7 @@ export interface AcpTransport {
   searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage>
   getMcpCatalogStatus(): Promise<McpCatalogStatus>
   setMcpCatalogSync(enabled: boolean): Promise<McpCatalogStatus>
+  getMcpCatalogIcon(name: string): Promise<McpCatalogIconPayload>
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
   setTurnIdleTimeout(secs: number | null): Promise<void>
@@ -575,5 +578,11 @@ export interface AcpTransport {
    * re-subscribe uses the server cursor, not a dead per-instance 0. */
   seedSessionCursor?(sessionId: SessionId, cursor: SessionCursor): void
   setReconnectPriorityProvider?(provider: () => SessionId[]): void
+  /**
+   * Issue #1595: register the installer for the host's still-pending
+   * approvals a `subscribe` / snapshot reply carries (authoritative for the
+   * session: an approval not listed was answered or released).
+   */
+  setPendingPermissionsHandler?(handler: PendingPermissionsHandler): void
   dispose(): void
 }

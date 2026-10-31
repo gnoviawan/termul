@@ -15,6 +15,7 @@ import type {
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
 import type {
+  McpCatalogIconPayload,
   McpCatalogPage,
   McpCatalogSearchRequest,
   McpCatalogStatus
@@ -85,6 +86,11 @@ import { judgeEvent, SyncGate } from './cursor'
 import { toWsEventType } from './event-names'
 import { HOST_GOING_AWAY_CLOSE_CODE, HostOfflineMonitor } from './host-offline'
 import { HOST_SILENCE_LIMIT_MS, HostLiveness } from './liveness'
+import {
+  PendingPermissionCoverage,
+  type PendingPermissionsHandler,
+  readPendingPermissions
+} from './pending-permissions'
 import {
   type AcpConnectionState,
   type AcpTransport,
@@ -299,6 +305,10 @@ export class WsAcpTransport implements AcpTransport {
   private eventTail: Promise<void> = Promise.resolve()
   private recoveryGenerationProvider?: (sessionId: SessionId) => number
   private reconnectPriorityProvider?: () => SessionId[]
+  /** Installs the host's pending approvals a subscribe/snapshot reply carries. */
+  private pendingPermissionsHandler?: PendingPermissionsHandler
+  /** Per session, the head below which that list settles replayed approvals. */
+  private readonly pendingCoverage = new PendingPermissionCoverage()
   private readonly wsUrl: string
   private readonly webSocketCtor: typeof WebSocket
   /**
@@ -423,6 +433,59 @@ export class WsAcpTransport implements AcpTransport {
     this.reconnectPriorityProvider = provider
   }
 
+  setPendingPermissionsHandler(handler: PendingPermissionsHandler): void {
+    this.pendingPermissionsHandler = handler
+  }
+
+  /**
+   * Issue #1595: a `permission_request` is not in the durable log, so neither a
+   * snapshot nor a replay from a cursor past it brings it back after a
+   * reconnect. The reply's pending list does: hand it to the store and let it
+   * settle every approval at or below the reply's head.
+   */
+  private installPendingPermissions(
+    sessionId: string,
+    reply: { headSeq?: number; pendingPermissions?: unknown[] } | undefined
+  ): void {
+    const requests = readPendingPermissions(sessionId, reply)
+    this.pendingCoverage.note(sessionId, reply?.headSeq, requests !== null)
+    if (requests === null) return
+    if (requests.length > 0) {
+      void logFrontendError({
+        level: 'info',
+        source: 'WsAcpTransport.pendingPermissions',
+        message: `Session ${sessionId} restores ${requests.length} pending permission request(s) from the host`
+      })
+    }
+    this.pendingPermissionsHandler?.(sessionId, requests)
+  }
+
+  /**
+   * The recovery path's install of a reply's pending approvals, gated like the
+   * transcript install: a close/delete/reopen during the round-trip makes the
+   * reply stale, and it must not restore approvals into the replaced session.
+   * A stale reply also covers no replay (the next subscribe records its own).
+   */
+  private installRecoveredPendingPermissions(
+    sessionId: SessionId,
+    reply: { headSeq?: number; pendingPermissions?: unknown[] } | undefined,
+    reopenGeneration: number | undefined
+  ): void {
+    if (
+      reopenGeneration !== undefined &&
+      this.recoveryGenerationProvider?.(sessionId) !== reopenGeneration
+    ) {
+      this.pendingCoverage.forget(sessionId)
+      void logFrontendError({
+        level: 'info',
+        source: 'WsAcpTransport.pendingPermissions',
+        message: `Session ${sessionId} was reopened during recovery; its stale pending approvals are not restored`
+      })
+      return
+    }
+    this.installPendingPermissions(sessionId, reply)
+  }
+
   getSessionCursor(sessionId: SessionId): SessionCursor | null {
     const lastSeq = this.lastSeq.get(sessionId)
     if (lastSeq === undefined) return null
@@ -457,6 +520,7 @@ export class WsAcpTransport implements AcpTransport {
     this.lastSeq.delete(sessionId)
     this.logEpochs.delete(sessionId)
     this.headSeqs.delete(sessionId)
+    this.pendingCoverage.forget(sessionId)
   }
 
   async connect(): Promise<void> {
@@ -584,6 +648,8 @@ export class WsAcpTransport implements AcpTransport {
       return
     }
     let reply: SessionSubscribeReply | undefined
+    // A close/delete/reopen during the round-trip makes the reply's approvals stale.
+    const reopenGeneration = this.recoveryGenerationProvider?.(sessionId)
     try {
       reply = await this.request<SessionSubscribeReply>('subscribe', payload, timeoutMs)
     } catch (err) {
@@ -593,6 +659,7 @@ export class WsAcpTransport implements AcpTransport {
       }
       throw err
     }
+    this.installRecoveredPendingPermissions(sessionId, reply, reopenGeneration)
     const replyEpoch = reply?.logEpoch
     if (!replyEpoch) return
     if (epoch && epoch !== replyEpoch && this.lastSeq.has(sessionId)) {
@@ -647,6 +714,7 @@ export class WsAcpTransport implements AcpTransport {
         else this.logEpochs.delete(sessionId)
         this.seenTurnIds.delete(sessionId)
         await this.recoveryHandler?.(recovery, reopenGeneration)
+        this.installRecoveredPendingPermissions(sessionId, recovery, reopenGeneration)
         // handle_recover_session_snapshot server-side re-registers the
         // subscription for continued live delivery — no separate subscribe
         // call needed here.
@@ -660,6 +728,7 @@ export class WsAcpTransport implements AcpTransport {
         )
         if (typeof reply?.headSeq === 'number') this.headSeqs.set(sessionId, reply.headSeq)
         if (reply?.logEpoch) this.logEpochs.set(sessionId, reply.logEpoch)
+        this.installRecoveredPendingPermissions(sessionId, reply, reopenGeneration)
         await this.recoveryHandler?.({ sessionId, degraded: true }, reopenGeneration)
       }
       completed = true
@@ -711,13 +780,15 @@ export class WsAcpTransport implements AcpTransport {
    * durable log, so a snapshot never carries it even when its seq is below the
    * snapshot's head: one that arrived during the sync and was not applied before
    * it is still delivered (without a seq, which the store would read as covered
-   * by the snapshot) so the user can answer it.
+   * by the snapshot) so the user can answer it — unless the reply's pending
+   * list already settled it.
    */
   private applyHeldEvent(sessionId: string, evt: WsEvent, floorSeq: number): void {
     const last = this.lastSeq.get(sessionId) ?? 0
     const head = this.headSeqs.get(sessionId) ?? last
     if (
       evt.type === 'permission_request' &&
+      !this.pendingCoverage.covers(sessionId, evt) &&
       evt.seq > floorSeq &&
       judgeEvent(last, head, evt.seq) === 'duplicate'
     ) {
@@ -819,6 +890,10 @@ export class WsAcpTransport implements AcpTransport {
 
   async setMcpCatalogSync(enabled: boolean): Promise<McpCatalogStatus> {
     return this.request<McpCatalogStatus>('set_mcp_catalog_sync', { enabled })
+  }
+
+  async getMcpCatalogIcon(name: string): Promise<McpCatalogIconPayload> {
+    return this.request<McpCatalogIconPayload>('get_mcp_catalog_icon', { name })
   }
 
   /** `set_catalog_opt_in`: persist the host catalog opt-in. */
@@ -2417,6 +2492,9 @@ export class WsAcpTransport implements AcpTransport {
         seen.add(turnId)
       }
     }
+    // A replayed approval the reply's pending list settled: the list already
+    // restored it if it is still pending, and an answered one stays gone.
+    if (this.pendingCoverage.covers(sid, evt)) return
     // Pass the envelope seq through so store handlers can seq-dedupe live
     // events against the authoritative fetched payload (CAP-3 replay
     // contract): events already covered by the payload are dropped.

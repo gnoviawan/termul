@@ -1,13 +1,16 @@
 import { useRef } from 'react'
+import { FolderTree, GitBranch, Github, MessageSquare, type TermulIcon } from '@/components/icons'
 import { CountBadge } from '@/components/ui/count-badge'
 import { SEGMENTED_TRACK_CLASS, segmentClass } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import type { ShellLastColumnTab } from '@/stores/shell-layout-store'
 
-const TABS: ReadonlyArray<{ id: ShellLastColumnTab; label: string }> = [
-  { id: 'chats', label: 'Chats' },
-  { id: 'explorer', label: 'Explorer' },
-  { id: 'changes', label: 'Changes' }
+/** Every tab is an equal-width icon; the label is its accessible name and tooltip. */
+const TABS: ReadonlyArray<{ id: ShellLastColumnTab; label: string; Icon: TermulIcon }> = [
+  { id: 'chats', label: 'Chats', Icon: MessageSquare },
+  { id: 'explorer', label: 'Explorer', Icon: FolderTree },
+  { id: 'changes', label: 'Changes', Icon: GitBranch },
+  { id: 'github', label: 'GitHub', Icon: Github }
 ]
 
 export function columnTabId(tab: ShellLastColumnTab): string {
@@ -26,7 +29,7 @@ interface ColumnTabsProps {
 }
 
 /**
- * Side panel Column tabs: Chats, Explorer, Changes in a fixed order. A
+ * Side panel Column tabs: Chats, Explorer, Changes, GitHub in a fixed order. A
  * `tablist` with a roving tabindex; Left/Right move and select, wrapping.
  */
 export function ColumnTabs({
@@ -67,9 +70,11 @@ export function ColumnTabs({
             tabIndex={active ? 0 : -1}
             onClick={() => onSelect(tab.id)}
             onKeyDown={(event) => handleKeyDown(event, index)}
-            className={cn(segmentClass(active), 'h-full flex-1 justify-center gap-1.5')}
+            aria-label={tab.label}
+            title={tab.label}
+            className={cn(segmentClass(active), 'h-full min-w-0 flex-1 justify-center gap-1')}
           >
-            {tab.label}
+            <tab.Icon size={14} aria-hidden="true" />
             {tab.id === 'changes' && changedCount > 0 && (
               <CountBadge
                 count={changedCount}

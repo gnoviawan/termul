@@ -598,3 +598,127 @@ fn ensure_state_dir_fails_fast_when_path_is_a_file() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+// --- gh-1105: the CLI wizard persists the shared server-config.json ---
+
+fn temp_state_dir(label: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "termul-onboard-{label}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp state dir");
+    dir
+}
+
+#[test]
+fn persist_server_config_writes_shared_record() {
+    // The CLI wizard must write the SAME `server-config.json` the web
+    // onboarding flow persists, via `ServerConfigFile::from(&answers)` +
+    // `server_config_file::save` — the file the launched server's
+    // `from_args` merge then treats as authoritative.
+    let base = temp_state_dir("persist-ok");
+    let answers = answers_expose_remote();
+    let mut out = Vec::new();
+    persist_server_config(&mut out, &answers, &base).expect("config file write succeeds");
+
+    let path = crate::web::server_config_file::server_config_path(&base);
+    let loaded = crate::web::server_config_file::load(&base)
+        .expect("the written file must parse")
+        .expect("server-config.json must exist after onboard");
+    let expected = crate::web::server_config_file::ServerConfigFile::from(&answers);
+    assert_eq!(
+        loaded, expected,
+        "the file must carry the shared ServerConfigFile shape"
+    );
+    assert_eq!(loaded.host, "0.0.0.0");
+    assert_eq!(loaded.port, 8080);
+    assert!(loaded.allow_remote_writes);
+    assert_eq!(loaded.sessions_dir, answers.sessions_dir);
+    assert_eq!(loaded.projects_file, answers.projects_file);
+    assert!(
+        crate::web::server_config_file::is_onboarded(&base),
+        "a written config file must make the install onboarded"
+    );
+    assert!(path.is_file(), "file must live at <state>/server-config.json");
+    // The file can drive host security settings (allow_remote_writes), so
+    // it must carry owner-only permissions like the web-auth token.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "server-config.json must be 0600, got {mode:o}");
+    }
+    assert!(out.is_empty(), "a successful write prints nothing: {out:?}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn persist_server_config_loopback_forces_remote_writes_off() {
+    // Same normalization `to_command_args`/`to_server_config` apply:
+    // --allow-remote-writes is a documented no-op on 127.0.0.1 and must not
+    // be persisted as enabled.
+    let base = temp_state_dir("persist-loopback");
+    let mut answers = answers_localhost();
+    answers.allow_remote_writes = true; // can only be true when the wizard asked, i.e. 0.0.0.0
+    let mut out = Vec::new();
+    persist_server_config(&mut out, &answers, &base).expect("config file write succeeds");
+    let loaded = crate::web::server_config_file::load(&base)
+        .expect("parse")
+        .expect("file exists");
+    assert!(
+        !loaded.allow_remote_writes,
+        "a loopback bind must persist allowRemoteWrites=false"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn persist_server_config_carries_update_settings() {
+    // update_channel/update_interval_secs are file fields too — the web
+    // reconfigure flow and `resolve_update_settings` read them back.
+    let base = temp_state_dir("persist-update");
+    let mut answers = answers_with_update();
+    answers.update_interval_secs = 3600;
+    let mut out = Vec::new();
+    persist_server_config(&mut out, &answers, &base).expect("config file write succeeds");
+    let loaded = crate::web::server_config_file::load(&base)
+        .expect("parse")
+        .expect("file exists");
+    assert_eq!(loaded.update_channel, Some(UpdateChannel::Stable));
+    assert_eq!(loaded.update_interval_secs, 3600);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn persist_server_config_fails_fast_when_state_dir_is_a_file() {
+    // A regular FILE where a dir should be makes `save`'s create_dir_all
+    // fail on every platform (mirrors ensure_state_dir's failure test) —
+    // the wizard must abort rather than launch a service that could never
+    // be reconfigured from the web.
+    let base = temp_state_dir("persist-file-conflict");
+    let file_path = base.join("state-is-a-file");
+    std::fs::write(&file_path, "not a directory").expect("write file");
+    let mut out = Vec::new();
+    let err = persist_server_config(&mut out, &answers_localhost(), &file_path.join("child"))
+        .expect_err("an unwritable state dir must abort onboarding");
+    assert_eq!(err, ExitCode::FAILURE);
+    let s = String::from_utf8(out).unwrap();
+    assert!(
+        s.contains("server-config.json"),
+        "the error must name the file that failed, got: {s}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn to_server_config_marks_wizard_answers_explicit() {
+    // A config synthesized from completed wizard answers is fully
+    // specified: `setup_required` must never bounce it into setup mode.
+    let cfg = answers_localhost().to_server_config();
+    assert!(cfg.explicit_config, "wizard answers are explicit config");
+    assert!(cfg.host_explicit, "the wizard always answers the host prompt");
+}

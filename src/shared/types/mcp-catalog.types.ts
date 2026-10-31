@@ -56,6 +56,7 @@ export interface McpCatalogRow {
   defaultOption: McpCatalogDefaultOption | null
   /** Host-validated `https` link, or `null`. */
   repositoryUrl: string | null
+  hasIcon: boolean
 }
 
 export interface McpCatalogSearchRequest {
@@ -88,8 +89,21 @@ export interface McpCatalogStatus extends McpCatalogSource {
   sync: McpCatalogSync
 }
 
+export interface McpCatalogIconPayload {
+  contentType: string
+  base64: string
+}
+
+/**
+ * A logo as a `data:` URL, never a `blob:` URL. A `blob:` URL shares the app's
+ * origin, so opening a registry SVG through one runs its script against the
+ * app's storage. A `data:` document has an opaque origin (spine AD-15).
+ */
+export type McpCatalogIconUrl = `data:${string}`
+
 export interface McpCatalogApi {
   search(request: McpCatalogSearchRequest): Promise<IpcResult<McpCatalogPage>>
   status(): Promise<IpcResult<McpCatalogStatus>>
   setSync(enabled: boolean): Promise<IpcResult<McpCatalogStatus>>
+  icon(name: string): Promise<IpcResult<McpCatalogIconUrl>>
 }

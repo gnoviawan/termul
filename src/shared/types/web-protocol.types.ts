@@ -189,6 +189,7 @@ export const WS_REQUEST_TYPES = [
   'search_mcp_catalog',
   'get_mcp_catalog_status',
   'set_mcp_catalog_sync',
+  'get_mcp_catalog_icon',
   // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web client
   // installs a catalog agent through `install_acp_agent` (the host downloads +
   // verifies sha256 + extracts + atomically activates). The request is
@@ -372,6 +373,7 @@ export const WS_COMMAND_CLASSES: Readonly<
   search_mcp_catalog: ['read', null],
   get_mcp_catalog_status: ['read', null],
   set_mcp_catalog_sync: ['idempotent', null],
+  get_mcp_catalog_icon: ['read', null],
   install_acp_agent: ['command', 'payload'],
   acp_deliver_auth_redirect: ['command', 'receipt-only'],
   store_read: ['read', null],
@@ -810,6 +812,8 @@ export interface SessionSnapshotEvent {
   /** Identity of the log incarnation the cursor belongs to. */
   logEpoch: string
   events: WsEvent[]
+  /** The session's still-pending approvals (see `SessionSubscribeReply`). */
+  pendingPermissions?: unknown[]
 }
 
 /**
@@ -824,6 +828,14 @@ export interface SessionSubscribeReply {
   replayed: number
   logEpoch: string
   headSeq: number
+  /**
+   * The session's still-pending approvals at registration: the original
+   * `permission_request` payloads, in queue order. A `permission_request` is
+   * not in the durable log, so this list (not the replay) is authoritative for
+   * every request at or below `headSeq`. Absent when the host keeps no
+   * approval tickets.
+   */
+  pendingPermissions?: unknown[]
 }
 
 /**

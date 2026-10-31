@@ -61,6 +61,7 @@ pub struct McpCatalogRow {
     pub reason: Option<McpCatalogReason>,
     pub default_option: Option<McpCatalogDefaultOption>,
     pub repository_url: Option<String>,
+    pub has_icon: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -297,6 +298,7 @@ pub(crate) fn search(
                 reason,
                 default_option,
                 repository_url: item.repository_url.clone(),
+                has_icon: item.icon.is_some(),
             }
         })
         .collect();
