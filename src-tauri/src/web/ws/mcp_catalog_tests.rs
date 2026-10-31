@@ -172,3 +172,21 @@ async fn a_closed_connection_drops_its_install_plans() {
     let gone = ws_request(&env, "commit_mcp_install", commit).await;
     assert_eq!(gone["code"], "MCP_PLAN_NOT_FOUND");
 }
+
+#[tokio::test]
+async fn a_commit_resent_with_its_command_id_runs_again_instead_of_replaying_secrets() {
+    let env = env();
+    let planned = ws_request(&env, "plan_mcp_install", ws_plan_payload()).await;
+    let plan = &planned["data"]["plan"];
+    let frame = json!({
+        "id": "r1",
+        "type": "commit_mcp_install",
+        "commandId": "commit-1",
+        "payload": { "planId": plan["planId"], "launchDigest": plan["launchDigest"], "secretValues": {} }
+    });
+    let send = || super::super::commands::execute_request(serde_json::from_value(frame.clone()).unwrap(), &env);
+    let first = as_ipc_result(send().await);
+    assert_eq!(first["data"]["secrets"][0]["value"], "from-file", "{first}");
+    let resent = as_ipc_result(send().await);
+    assert_eq!(resent["code"], "MCP_PLAN_CONSUMED", "{resent}");
+}

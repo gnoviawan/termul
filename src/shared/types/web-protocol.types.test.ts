@@ -491,6 +491,10 @@ describe('web-protocol.types — command classes (AD-5)', () => {
     expect(WS_COMMAND_CLASSES.create_session).toEqual(['create', 'entity'])
   })
 
+  it('keeps the secret-bearing MCP install commit out of the ledger', () => {
+    expect(WS_COMMAND_CLASSES.commit_mcp_install).toEqual(['command', 'never'])
+  })
+
   it('accepts 1-128 chars of [A-Za-z0-9_-] as a commandId and nothing else', () => {
     expect(MAX_COMMAND_ID_LEN).toBe(128)
     expect(COMMAND_ID_PATTERN.test('3f2b9c0e-1d4a-4b7e-9a10-aabbccddeeff')).toBe(true)

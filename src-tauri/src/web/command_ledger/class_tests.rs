@@ -56,6 +56,7 @@ fn replay_name(replay: Replay) -> &'static str {
         Replay::Payload => "payload",
         Replay::Entity => "entity",
         Replay::ReceiptOnly => "receipt-only",
+        Replay::Never => "never",
     }
 }
 
@@ -253,4 +254,13 @@ fn blank_and_padded_ids_normalize_like_the_handlers_do() {
     assert_eq!(print(json!("   ")), absent, "a blank projectId is no projectId");
     assert_eq!(print(json!(" p1 ")), print(json!("p1")));
     assert_ne!(print(json!("p1")), print(json!("p2")));
+}
+
+#[test]
+fn the_mcp_install_commit_is_a_command_kept_out_of_the_ledger() {
+    let (_, class) = class_of("commit_mcp_install").unwrap();
+    assert_eq!(
+        (class.kind, class.replay, class.ledgered(), class.stores_payload()),
+        (ClassKind::Command, Some(Replay::Never), false, false)
+    );
 }

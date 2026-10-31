@@ -310,10 +310,11 @@ export type WsCommandKind = 'create' | 'command' | 'idempotent' | 'read'
  * How a settled command is answered on a same-id resend: `payload` replays the
  * stored reply, `entity` rebuilds it from the entity stamped with the
  * `commandId` (`send_prompt`: its `turnId` is its `commandId`), `receipt-only`
- * never stores a payload (credential-bearing kinds). `null` for `idempotent`
- * and `read`. Mirrors the Rust `Replay`.
+ * never stores a payload (credential-bearing kinds), `never` keeps the command
+ * out of the ledger (one-shot kinds whose reply carries secrets). `null` for
+ * `idempotent` and `read`. Mirrors the Rust `Replay`.
  */
-export type WsCommandReplay = 'payload' | 'entity' | 'receipt-only'
+export type WsCommandReplay = 'payload' | 'entity' | 'receipt-only' | 'never'
 
 /**
  * The command class of every `/ws` request type — mirrors the Rust
@@ -374,7 +375,7 @@ export const WS_COMMAND_CLASSES: Readonly<
   search_mcp_catalog: ['read', null],
   describe_mcp_install: ['read', null],
   plan_mcp_install: ['idempotent', null],
-  commit_mcp_install: ['idempotent', null],
+  commit_mcp_install: ['command', 'never'],
   cancel_mcp_install: ['idempotent', null],
   install_acp_agent: ['command', 'payload'],
   acp_deliver_auth_redirect: ['command', 'receipt-only'],
