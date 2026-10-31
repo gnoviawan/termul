@@ -4,12 +4,14 @@ use regex::Regex;
 use serde::Serialize;
 
 use super::form::Origin;
+use super::launch_check::runs_inline_code;
 use super::resolved::ResolvedConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConsentWarning {
     RunsLocalCode,
+    RunsInlineCode,
     SendsDataRemote,
     MutableTag,
     Deprecated,
@@ -134,6 +136,9 @@ impl ConsentView {
         let (transport, command, argv, url, env, headers) = match input.config {
             ResolvedConfig::Stdio { command, args, .. } => {
                 warnings.push(ConsentWarning::RunsLocalCode);
+                if runs_inline_code(command, args) {
+                    warnings.push(ConsentWarning::RunsInlineCode);
+                }
                 (
                     "stdio",
                     Some(escape_for_display(command)),

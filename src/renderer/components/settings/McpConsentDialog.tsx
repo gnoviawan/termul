@@ -24,6 +24,8 @@ import { formatRelativeTime } from '@/lib/relative-time'
 
 export const CONSENT_WARNING_COPY: Record<McpConsentWarning, string> = {
   'runs-local-code': 'This runs a program on this computer with your permissions.',
+  'runs-inline-code':
+    'It hands a shell or interpreter code written in its arguments. Read every argument before you approve.',
   'sends-data-remote': 'This sends your data to a remote server.',
   'mutable-tag': 'This image tag can change without notice.',
   deprecated: 'The registry marks this server deprecated.',

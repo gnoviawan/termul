@@ -140,6 +140,7 @@ describe('McpConsentDialog', () => {
   it('maps every warning code to its copy', () => {
     const warnings: McpConsentWarning[] = [
       'runs-local-code',
+      'runs-inline-code',
       'sends-data-remote',
       'mutable-tag',
       'deprecated',
@@ -148,6 +149,7 @@ describe('McpConsentDialog', () => {
     renderDialog(stdioView({ warnings }))
     for (const copy of [
       'This runs a program on this computer with your permissions.',
+      'It hands a shell or interpreter code written in its arguments. Read every argument before you approve.',
       'This sends your data to a remote server.',
       'This image tag can change without notice.',
       'The registry marks this server deprecated.',

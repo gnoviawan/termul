@@ -26,4 +26,16 @@ describe('mcpCatalogReasonText', () => {
       'Its args[2] holds a character Windows reads as a command operator (& | < > ^ % ! " ( or )).'
     )
   })
+
+  it('names the launch argument an import may not pass its runner', () => {
+    expect(
+      mcpCatalogReasonText({
+        code: 'unsupported-launch-argument',
+        command: 'npx',
+        argument: '--registry'
+      })
+    ).toBe(
+      "It passes --registry to npx, which Termul doesn't allow because it can change what runs."
+    )
+  })
 })

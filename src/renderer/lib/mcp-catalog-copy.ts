@@ -70,6 +70,8 @@ export function mcpCatalogReasonText(reason: McpCatalogReason): string {
       return `Its ${reason.field} holds a control character.`
     case 'duplicate-name':
       return `It lists "${reason.name}" more than once.`
+    case 'unsupported-launch-argument':
+      return `It passes ${reason.argument} to ${reason.command}, which Termul doesn't allow because it can change what runs.`
     case 'cmd-metacharacter':
       return `Its ${reason.field} holds a character Windows reads as a command operator (& | < > ^ % ! " ( or )).`
   }

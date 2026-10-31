@@ -46,6 +46,7 @@ export type McpCatalogReason =
   | { code: 'control-character'; field: string }
   | { code: 'duplicate-name'; name: string }
   | { code: 'cmd-metacharacter'; field: string }
+  | { code: 'unsupported-launch-argument'; command: string; argument: string }
 
 /** The option an install would use: an index into the row's `remotes` or `packages`. */
 export interface McpCatalogDefaultOption {

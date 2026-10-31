@@ -263,6 +263,12 @@ pub enum McpCatalogReason {
     CmdMetacharacter {
         field: String,
     },
+    /// An imported launch passes `command` an option outside its allowlist,
+    /// such as a runner flag that changes where the package comes from.
+    UnsupportedLaunchArgument {
+        command: String,
+        argument: String,
+    },
 }
 
 /// Each env or header name may appear once (headers case-insensitively), so

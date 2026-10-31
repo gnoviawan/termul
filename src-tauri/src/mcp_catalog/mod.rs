@@ -13,6 +13,7 @@ mod consent;
 mod convert;
 mod form;
 mod import;
+mod launch_check;
 mod plan;
 mod resolved;
 mod search;

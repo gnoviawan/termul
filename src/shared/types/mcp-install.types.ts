@@ -99,6 +99,7 @@ export interface McpConsentValue {
 
 export type McpConsentWarning =
   | 'runs-local-code'
+  | 'runs-inline-code'
   | 'sends-data-remote'
   | 'mutable-tag'
   | 'deprecated'

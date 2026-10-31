@@ -3,9 +3,10 @@ use std::fmt;
 use serde_json::{Map, Value};
 
 use super::convert::{
-    check_env_name, check_header_name, check_package_spec, check_remote_url, check_unique_names,
-    McpCatalogReason, RemoteTransport, Runner,
+    check_env_name, check_header_name, check_remote_url, check_unique_names, McpCatalogReason,
+    RemoteTransport,
 };
+use super::launch_check::check_stdio_launch;
 use super::form::{FieldTarget, FormModel};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,50 +199,6 @@ fn no_control(text: &str, field: impl Into<String>) -> Result<(), McpCatalogReas
     }
 }
 
-fn runner_of(command: &str) -> Option<Runner> {
-    let base = command
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(command)
-        .to_ascii_lowercase();
-    let base = base
-        .strip_suffix(".exe")
-        .or_else(|| base.strip_suffix(".cmd"))
-        .unwrap_or(&base);
-    match base {
-        "npx" => Some(Runner::Npx),
-        "uvx" => Some(Runner::Uvx),
-        "docker" => Some(Runner::Docker),
-        "dotnet" => Some(Runner::Dotnet),
-        _ => None,
-    }
-}
-
-/// The package spec handed to a runner, when its CLI shape makes it
-/// identifiable: the first non-flag argument (`npx`, `uvx`, and `dotnet dnx`)
-/// plus any `--flag=value` payload, which is how a package is also named.
-/// Docker's image sits behind value-taking flags, so it is not checked.
-fn check_runner_package_specs(runner: Runner, args: &[String]) -> Result<(), McpCatalogReason> {
-    let args = match runner {
-        Runner::Docker => return Ok(()),
-        Runner::Dotnet => match args.first().map(String::as_str) {
-            Some("dnx") => &args[1..],
-            _ => return Ok(()),
-        },
-        Runner::Npx | Runner::Uvx => args,
-    };
-    for arg in args {
-        if let Some(stripped) = arg.strip_prefix('-') {
-            if let Some((_, value)) = stripped.split_once('=') {
-                check_package_spec(runner, value)?;
-            }
-            continue;
-        }
-        return check_package_spec(runner, arg);
-    }
-    Ok(())
-}
-
 pub(crate) fn check_import(server: &ImportedServer) -> Result<(), McpCatalogReason> {
     match &server.launch {
         ImportedLaunch::Stdio { command, args, env } => {
@@ -257,9 +214,7 @@ pub(crate) fn check_import(server: &ImportedServer) -> Result<(), McpCatalogReas
                 no_control(value, format!("env/{name}"))?;
             }
             check_unique_names(env.iter().map(|(name, _)| name.as_str()), false)?;
-            if let Some(runner) = runner_of(command) {
-                check_runner_package_specs(runner, args)?;
-            }
+            check_stdio_launch(command, args)?;
         }
         ImportedLaunch::Remote { url, headers, .. } => {
             check_remote_url(url)?;

