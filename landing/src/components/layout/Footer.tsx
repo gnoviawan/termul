@@ -41,6 +41,9 @@ const footerColumns: { title: string; links: FooterLinkData[] }[] = [
   },
 ];
 
+const legalLinkClassName =
+  'hover:text-white transition-[color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]';
+
 export const Footer = () => {
   return (
     <footer id="download" className="mt-20 border-t border-border-subtle pt-20 pb-10 px-6 bg-background">
@@ -70,7 +73,9 @@ export const Footer = () => {
         
         <div className="mt-12 pt-8 border-t border-border-subtle flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-gray-600">
           <p>© {new Date().getFullYear()} Termul Contributors. MIT Licensed.</p>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 text-gray-400">
+            <a href="/privacy/" className={legalLinkClassName}>Privacy</a>
+            <a href="/terms/" className={legalLinkClassName}>Terms</a>
             <FooterLink href={GITHUB_REPO_URL}>GitHub</FooterLink>
           </div>
         </div>
