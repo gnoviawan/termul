@@ -10,8 +10,12 @@
 import type {
   GithubCheckLog,
   GithubCheckLogRequest,
+  GithubCheckoutPrRequest,
+  GithubCheckoutPrResult,
   GithubChecksRequest,
   GithubChecksResult,
+  GithubCommentRequest,
+  GithubCommentResult,
   GithubContext,
   GithubItemDetail,
   GithubItemRequest,
@@ -63,5 +67,13 @@ export const githubApi = {
 
   merge(request: GithubMergeRequest): Promise<IpcResult<GithubMergeResult>> {
     return call('github_merge', '/github/merge', request)
+  },
+
+  comment(request: GithubCommentRequest): Promise<IpcResult<GithubCommentResult>> {
+    return call('github_comment', '/github/comment', request)
+  },
+
+  checkoutPr(request: GithubCheckoutPrRequest): Promise<IpcResult<GithubCheckoutPrResult>> {
+    return call('github_checkout_pr', '/github/checkout-pr', request)
   }
 }

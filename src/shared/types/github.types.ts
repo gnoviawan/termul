@@ -215,6 +215,43 @@ export interface GithubMergeResult {
   number: number
 }
 
+/** Where a new comment goes: the issue/PR conversation, or a reply in a PR review thread. */
+export type GithubCommentTarget =
+  | { kind: 'conversation' }
+  | { kind: 'review_thread'; threadId: string }
+
+export interface GithubCommentRequest {
+  cwd: string
+  repo: GithubRepoSlot
+  kind: GithubItemKind
+  number: number
+  target: GithubCommentTarget
+  /** Markdown, as typed by the user. */
+  body: string
+}
+
+export interface GithubCommentResult {
+  comment: GithubComment
+}
+
+/**
+ * Point an agent worktree at a PR's head (Fix CI, Resolve comments). `cwd` is
+ * the worktree the chat runs in; the host runs `gh pr checkout` there, which
+ * handles fork remotes.
+ */
+export interface GithubCheckoutPrRequest {
+  cwd: string
+  repo: GithubRepoSlot
+  number: number
+}
+
+export interface GithubCheckoutPrResult {
+  headSha: string
+  headRefName: string
+  /** The exact command that pushes this worktree's commits to the PR head branch. */
+  pushCommand: string
+}
+
 /**
  * `IpcResult` failure codes the GitHub host ops return beyond
  * `PATH_VALIDATION_FAILED` / transport codes.
@@ -227,6 +264,9 @@ export const GITHUB_ERROR_CODES = [
   'GH_RATE_LIMITED',
   'GH_NOT_FOUND',
   'GH_NOT_MERGEABLE',
+  /** A fork PR that does not allow maintainer edits: agents cannot push to it. */
+  'GH_FORK_PUSH_BLOCKED',
+  'GH_EMPTY_COMMENT',
   'GH_TIMEOUT',
   'GH_FAILED'
 ] as const
