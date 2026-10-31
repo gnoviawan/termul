@@ -584,7 +584,7 @@ async fn remote_plan_bakes_the_url_variable_and_composes_the_secret_header_at_co
     assert_eq!(view.warnings, vec![ConsentWarning::SendsDataRemote]);
 
     let result = commit(&service, &plan, &[("header/Authorization/token", "t0k")]).unwrap();
-    assert_eq!(result.name, "com-tre-app-tre");
+    assert_eq!(result.name, "tre");
     assert_eq!(result.config, plan.config);
     assert_eq!(result.launch_digest, plan.launch_digest);
     assert_eq!(

@@ -312,16 +312,17 @@ fn describe_catalog(
             )
         }
     };
-    let title = item
-        .title
-        .clone()
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| item.name.clone());
+    let registry_title = item.title.as_deref().unwrap_or_default();
     let short_name = item.name.rsplit('/').next().unwrap_or(&item.name);
-    let mut entry_name = slug(&title);
+    let mut entry_name = slug(registry_title);
     if entry_name.is_empty() {
         entry_name = slug(short_name);
     }
+    let title = if registry_title.trim().is_empty() {
+        item.name.clone()
+    } else {
+        registry_title.to_string()
+    };
     Ok(Ok(Described {
         name: entry_name,
         title,
