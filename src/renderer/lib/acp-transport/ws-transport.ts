@@ -455,6 +455,32 @@ export class WsAcpTransport implements AcpTransport {
     this.pendingPermissionsHandler?.(sessionId, requests)
   }
 
+  /**
+   * The recovery path's install of a reply's pending approvals, gated like the
+   * transcript install: a close/delete/reopen during the round-trip makes the
+   * reply stale, and it must not restore approvals into the replaced session.
+   * A stale reply also covers no replay (the next subscribe records its own).
+   */
+  private installRecoveredPendingPermissions(
+    sessionId: SessionId,
+    reply: { headSeq?: number; pendingPermissions?: unknown[] } | undefined,
+    reopenGeneration: number | undefined
+  ): void {
+    if (
+      reopenGeneration !== undefined &&
+      this.recoveryGenerationProvider?.(sessionId) !== reopenGeneration
+    ) {
+      this.pendingCoverage.forget(sessionId)
+      void logFrontendError({
+        level: 'info',
+        source: 'WsAcpTransport.pendingPermissions',
+        message: `Session ${sessionId} was reopened during recovery; its stale pending approvals are not restored`
+      })
+      return
+    }
+    this.installPendingPermissions(sessionId, reply)
+  }
+
   getSessionCursor(sessionId: SessionId): SessionCursor | null {
     const lastSeq = this.lastSeq.get(sessionId)
     if (lastSeq === undefined) return null
@@ -681,7 +707,7 @@ export class WsAcpTransport implements AcpTransport {
         else this.logEpochs.delete(sessionId)
         this.seenTurnIds.delete(sessionId)
         await this.recoveryHandler?.(recovery, reopenGeneration)
-        this.installPendingPermissions(sessionId, recovery)
+        this.installRecoveredPendingPermissions(sessionId, recovery, reopenGeneration)
         // handle_recover_session_snapshot server-side re-registers the
         // subscription for continued live delivery — no separate subscribe
         // call needed here.
@@ -695,7 +721,7 @@ export class WsAcpTransport implements AcpTransport {
         )
         if (typeof reply?.headSeq === 'number') this.headSeqs.set(sessionId, reply.headSeq)
         if (reply?.logEpoch) this.logEpochs.set(sessionId, reply.logEpoch)
-        this.installPendingPermissions(sessionId, reply)
+        this.installRecoveredPendingPermissions(sessionId, reply, reopenGeneration)
         await this.recoveryHandler?.({ sessionId, degraded: true }, reopenGeneration)
       }
       completed = true

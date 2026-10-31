@@ -103,3 +103,55 @@ fn a_field_registered_ticket_lists_its_fields() {
     assert_eq!(pending[0]["agentId"], "a1");
     assert_eq!(pending[0]["options"][0]["optionId"], "allow");
 }
+
+fn request_of_turn(id: &str, session: &str, turn: &str) -> Value {
+    let mut request = request(id, session);
+    request["turnId"] = json!(turn);
+    request
+}
+
+#[test]
+fn a_request_of_an_ended_turn_is_dropped_and_reads_already_resolved() {
+    let rdz = permissions();
+    rdz.register_event(&request_of_turn("perm-1", "sess-1", "turn-1"));
+    assert_eq!(rdz.release_turn("sess-1", "turn-1"), 1);
+
+    // Registered after its turn's release (separate emits raced).
+    rdz.register_event(&request_of_turn("perm-late", "sess-1", "turn-1"));
+    assert!(rdz.pending_requests("sess-1").is_empty());
+    assert!(!rdz.is_outstanding("perm-late"));
+    assert_eq!(
+        rdz.missing_ticket_error("perm-late"),
+        RespondError::AlreadyResolved
+    );
+
+    // Another turn, another session and a turnless request are untouched.
+    rdz.register_event(&request_of_turn("perm-2", "sess-1", "turn-2"));
+    rdz.register_event(&request_of_turn("perm-3", "sess-2", "turn-1"));
+    rdz.register_event(&request("perm-4", "sess-1"));
+    assert_eq!(
+        ids(&rdz.pending_requests("sess-1")),
+        vec!["perm-2", "perm-4"]
+    );
+    assert_eq!(ids(&rdz.pending_requests("sess-2")), vec!["perm-3"]);
+}
+
+#[test]
+fn a_session_remembers_only_its_latest_ended_turns() {
+    let rdz = permissions();
+    for n in 0..=ENDED_TURNS_PER_SESSION {
+        rdz.release_turn("sess-1", &format!("turn-{n}"));
+    }
+    rdz.register_event(&request_of_turn("perm-old", "sess-1", "turn-0"));
+    rdz.register_event(&request_of_turn("perm-new", "sess-1", "turn-1"));
+    assert_eq!(ids(&rdz.pending_requests("sess-1")), vec!["perm-old"]);
+
+    rdz.release_session("sess-1");
+    rdz.forget_session("sess-1");
+    rdz.register_event(&request_of_turn("perm-again", "sess-1", "turn-1"));
+    assert_eq!(
+        ids(&rdz.pending_requests("sess-1")),
+        vec!["perm-again"],
+        "a forgotten session keeps no ended turns"
+    );
+}

@@ -7,7 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::tests::test_outbound;
 use super::*;
-use crate::web::permissions::{PermissionRendezvous, RespondOutcome};
+use crate::web::permissions::{PermissionRendezvous, RespondError, RespondOutcome};
 use crate::web::sink::{AcpEvent, EventSink};
 
 const SID: &str = "session-pending";
@@ -166,6 +166,76 @@ async fn a_ticket_is_listed_as_soon_as_its_event_is_published() {
         pending_ids(&reply.payload.unwrap()),
         vec!["perm-1", "perm-2"]
     );
+}
+
+/// A turn end and the registration of a request of that turn are separate
+/// `emit` calls. When the release runs first, the late request must not
+/// become a ticket nothing releases: a reconnecting client would get an
+/// approval back for a turn that already ended. A request of the next turn is
+/// still registered.
+#[tokio::test]
+async fn a_request_registered_after_its_turn_ended_is_not_pending() {
+    let relay = Arc::new(WsRelaySink::new());
+    relay.seed_session_for_test(SID);
+    let rendezvous = Arc::new(PermissionRendezvous::default());
+    relay.set_rendezvous(Arc::clone(&rendezvous));
+    let request_of = |request_id: &str, turn_id: &str| {
+        let mut request = permission_request(request_id);
+        request["turnId"] = json!(turn_id);
+        request
+    };
+
+    // The release of turn-1 runs before the registration of its request.
+    emit(
+        &relay,
+        "acp:prompt_complete",
+        json!({"agentId": "agent-1", "sessionId": SID, "turnId": "turn-1", "stopReason": "cancelled"}),
+    );
+    emit(
+        &relay,
+        "acp:permission_request",
+        request_of("perm-late", "turn-1"),
+    );
+
+    let (tx, _rx) = test_outbound();
+    let subs = Arc::new(Subscriptions::default());
+    let reply = handle_subscribe(
+        "s1".to_string(),
+        &json!({"sessionId": SID}),
+        &relay,
+        &tx,
+        &subs,
+    )
+    .await;
+    assert!(reply.ok, "{reply:?}");
+    assert!(
+        pending_ids(&reply.payload.unwrap()).is_empty(),
+        "a request of an ended turn is not restored"
+    );
+    assert_eq!(
+        rendezvous
+            .try_respond(ClientId::new(), "perm-late", Some("allow"))
+            .await,
+        Err(RespondError::AlreadyResolved),
+        "its responder was cancelled with the turn"
+    );
+
+    // The next turn raises approvals as before.
+    emit(
+        &relay,
+        "acp:permission_request",
+        request_of("perm-next", "turn-2"),
+    );
+    let reply = handle_subscribe(
+        "s2".to_string(),
+        &json!({"sessionId": SID}),
+        &relay,
+        &tx,
+        &subs,
+    )
+    .await;
+    assert!(reply.ok, "{reply:?}");
+    assert_eq!(pending_ids(&reply.payload.unwrap()), vec!["perm-next"]);
 }
 
 /// Without a rendezvous the host knows no tickets: the reply has no list, and

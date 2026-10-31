@@ -190,6 +190,29 @@ describe('WsAcpTransport pending approvals (issue #1595)', () => {
     transport.dispose()
   })
 
+  it('does not restore approvals from a snapshot that a close/reopen made stale', async () => {
+    PendingHost.pending = [request('perm-1')]
+    PendingHost.staleCursor = true
+    const { transport, installed } = await connected()
+    let generation = 1
+    transport.setRecoveryGenerationProvider(() => generation)
+    // The session is closed and reopened while the snapshot is in flight.
+    transport.setRecoveryHandler(async () => {
+      generation = 2
+    })
+    transport.seedSessionCursor(SID, { lastSeq: 3, logEpoch: 'epoch-A' })
+    await transport.subscribeSession(SID)
+    expect(PendingHost.last?.sent.map((req) => req.type)).toContain('recover_session_snapshot')
+    expect(installed).toEqual([])
+
+    // The same snapshot for an unchanged generation still restores them.
+    transport.setRecoveryHandler(async () => {})
+    transport.seedSessionCursor(SID, { lastSeq: 3, logEpoch: 'epoch-A' })
+    await transport.subscribeSession(SID, undefined, true)
+    expect(installed).toEqual([{ sessionId: SID, requests: [request('perm-1')] }])
+    transport.dispose()
+  })
+
   it('does not replay an answered approval the list settled, but delivers live ones', async () => {
     PendingHost.pending = []
     const { transport, installed, delivered } = await connected()

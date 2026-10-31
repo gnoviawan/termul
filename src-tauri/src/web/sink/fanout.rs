@@ -348,6 +348,9 @@ impl WsRelaySink {
             }
         }
         self.release_session_tickets(sid);
+        if let Some(rendezvous) = self.rendezvous() {
+            rendezvous.forget_session(sid);
+        }
         self.turn_watermark.forget_session(sid);
         self.restore_gates.lock().remove(sid);
         self.replay_gates.lock().await.remove(sid);
@@ -423,9 +426,17 @@ impl EventSink for WsRelaySink {
                 // The turn is over or the session is gone: the driver already
                 // cancelled its parked approvals, so release the relay tickets
                 // (and the session's queue slot) before the next turn can raise
-                // a new one.
-                if matches!(type_, "prompt_complete" | "session_closed") {
-                    self.release_session_tickets(sid);
+                // a new one. A turn end with a turn id also records the turn as
+                // ended, so a request of it registered after this (a separate
+                // `emit`) is dropped instead of outliving the turn.
+                match (type_, &terminated_turn) {
+                    ("prompt_complete", Some(turn_id)) => {
+                        self.release_turn_tickets(sid, turn_id);
+                    }
+                    ("prompt_complete" | "session_closed", _) => {
+                        self.release_session_tickets(sid);
+                    }
+                    _ => {}
                 }
                 // Issue #784: one question withdrawn while its turn goes on.
                 if type_ == "question_cancelled" {

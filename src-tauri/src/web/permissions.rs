@@ -31,6 +31,15 @@
 //! ([`PermissionRendezvous::pending_requests`]): the request event is not in
 //! the durable log, so neither a snapshot nor a replay past its seq carries it.
 //!
+//! # Late requests of an ended turn
+//!
+//! The relay registers a request and a turn end releases the session from
+//! separate `emit` calls, so a request's registration can land after its
+//! turn's release. A request carries the turn it belongs to (`turnId`), and
+//! [`PermissionRendezvous::release_turn`] records the ended turn under the
+//! same lock that registration takes: a request of an ended turn is dropped
+//! (and remembered as resolved) instead of becoming a ticket nothing releases.
+//!
 //! At most one ticket per session is outstanding; the rest wait in a FIFO
 //! queue. Every answer promotes the next queued ticket. A lifecycle release
 //! drops the whole session queue instead: the driver has already cancelled
@@ -158,6 +167,10 @@ struct QueuedTicket {
     request: Value,
 }
 
+/// How many ended turn ids a session remembers. A late request belongs to
+/// the turn that just ended, so a short memory is enough.
+const ENDED_TURNS_PER_SESSION: usize = 4;
+
 /// The ticket table and the per-session queues. One lock covers both, so the
 /// outstanding slot and its ticket never disagree.
 #[derive(Default)]
@@ -167,6 +180,9 @@ struct State {
     /// `session_id → at-most-one queue`. A session has an entry only while it
     /// has an outstanding ticket.
     sessions: HashMap<String, SessionQueue>,
+    /// `session_id → the latest turn ids released by a turn end`, newest
+    /// last. A request of one of these turns is never registered.
+    ended_turns: HashMap<String, VecDeque<String>>,
 }
 
 impl State {
@@ -216,6 +232,25 @@ impl State {
             }
         }
         true
+    }
+
+    /// Record that `turn_id` of `session_id` ended.
+    fn end_turn(&mut self, session_id: &str, turn_id: &str) {
+        let ended = self.ended_turns.entry(session_id.to_string()).or_default();
+        if ended.iter().any(|id| id == turn_id) {
+            return;
+        }
+        if ended.len() == ENDED_TURNS_PER_SESSION {
+            ended.pop_front();
+        }
+        ended.push_back(turn_id.to_string());
+    }
+
+    /// Whether `turn_id` of `session_id` already ended.
+    fn turn_ended(&self, session_id: &str, turn_id: &str) -> bool {
+        self.ended_turns
+            .get(session_id)
+            .is_some_and(|ended| ended.iter().any(|id| id == turn_id))
     }
 
     /// Drop a whole session queue (outstanding + queued). Returns the ids.
@@ -344,6 +379,10 @@ impl PermissionRendezvous {
     /// would collide all such tickets on the empty key, so it is skipped
     /// (`DriverState::register_permission` always mints `perm-{uuid}`; this
     /// only triggers on a dispatcher bug).
+    ///
+    /// A payload whose `turnId` names a turn that already ended (see
+    /// [`Self::release_turn`]) is not registered: the driver cancelled its
+    /// responder with the turn, so it is remembered as resolved instead.
     pub fn register_event(&self, payload: &Value) {
         let field = |name: &str| payload.get(name).and_then(Value::as_str);
         let request_id = field("requestId").unwrap_or_default();
@@ -353,6 +392,7 @@ impl PermissionRendezvous {
         }
         self.insert(
             field("sessionId").unwrap_or_default().to_string(),
+            field("turnId").filter(|turn_id| !turn_id.is_empty()),
             QueuedTicket {
                 request_id: request_id.to_string(),
                 agent_id: AgentId(field("agentId").unwrap_or("unknown").to_string()),
@@ -382,6 +422,7 @@ impl PermissionRendezvous {
         });
         self.insert(
             session_id,
+            None,
             QueuedTicket {
                 request_id,
                 agent_id,
@@ -391,11 +432,19 @@ impl PermissionRendezvous {
         );
     }
 
-    fn insert(&self, session_id: String, ticket: QueuedTicket) {
+    fn insert(&self, session_id: String, turn_id: Option<&str>, ticket: QueuedTicket) {
         if is_host_ticket_id(&ticket.request_id) {
             return;
         }
         let mut state = self.state.lock();
+        if turn_id.is_some_and(|turn_id| state.turn_ended(&session_id, turn_id)) {
+            warn!(
+                "[permissions] dropping a permission_request of an already-ended turn (session {})",
+                crate::logging::redact_session_id(&session_id)
+            );
+            self.resolved.lock().record(&ticket.request_id);
+            return;
+        }
         if let Some(queue) = state.sessions.get_mut(&session_id) {
             queue.queued.push_back(ticket);
             return;
@@ -539,6 +588,28 @@ impl PermissionRendezvous {
             resolved.record(id);
         }
         released.len()
+    }
+
+    /// Drop every ticket of a session whose turn `turn_id` ended, like
+    /// [`Self::release_session`], and remember the turn as ended under the
+    /// same lock, so a request of that turn registered afterwards is dropped
+    /// rather than kept as a ticket nothing releases. Returns how many
+    /// tickets were released.
+    pub fn release_turn(&self, session_id: &str, turn_id: &str) -> usize {
+        let mut state = self.state.lock();
+        state.end_turn(session_id, turn_id);
+        let released = state.release_session(session_id);
+        let mut resolved = self.resolved.lock();
+        for id in &released {
+            resolved.record(id);
+        }
+        released.len()
+    }
+
+    /// Forget the ended turns of a disposed session (its tickets are released
+    /// by [`Self::release_session`]).
+    pub fn forget_session(&self, session_id: &str) {
+        self.state.lock().ended_turns.remove(session_id);
     }
 
     /// Drop every ticket of an agent that disconnected, crashed or was killed.

@@ -118,10 +118,12 @@ fn permission_request_serializes_request_id() {
             agent_client_protocol::schema::v1::ToolCallUpdateFields::new(),
         ),
         options: vec![],
+        turn_id: None,
     };
     let value = serde_json::to_value(&event).unwrap();
     assert_eq!(value["requestId"], "req-7");
     assert_eq!(value["sessionId"], "s");
+    assert!(value.get("turnId").is_none(), "a turnless request omits it");
 }
 
 #[test]
