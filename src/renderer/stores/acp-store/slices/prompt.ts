@@ -263,11 +263,14 @@ export async function runPromptTurn(
   const send: typeof dispatch = (live, turnId) => {
     const guard = readOnlyGuardOf(get(), sessionId)
     if (!guard) return dispatch(live, turnId)
+    const guardBlock: ContentBlock = { type: 'text', text: guard }
+    const display = options?.displayBlocks
     return acpApi.sendPromptBlocks(
       live.agentId,
       sessionId,
-      [{ type: 'text', text: guard }, ...userBlocks],
-      turnId
+      [guardBlock, ...userBlocks],
+      turnId,
+      display ? [guardBlock, ...display] : undefined
     )
   }
 

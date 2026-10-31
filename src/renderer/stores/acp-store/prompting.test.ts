@@ -1354,6 +1354,35 @@ describe('read-only GitHub chats (CAP-6)', () => {
     ])
   })
 
+  it('leads the display blocks with the guard too, so chips replay as typed', async () => {
+    seedSession('s4', 'agent-1', false)
+    useGithubChatLinksStore.getState().link('p1', {
+      sessionId: 's4',
+      action: 'review',
+      itemId: 'github.com/acme/app#15',
+      item: { ...ITEM, kind: 'pr' },
+      createdAt: '2026-10-31T00:00:00Z'
+    })
+    const displayed: (ContentBlock[] | undefined)[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string, args: unknown) => {
+      if (cmd === 'acp_send_prompt') {
+        displayed.push((args as { displayContent?: ContentBlock[] }).displayContent)
+      }
+      return undefined
+    })
+
+    await useAcpStore.getState().sendPromptBlocks('s4', [{ type: 'text', text: 'see @src/a.ts' }], {
+      displayBlocks: [{ type: 'text', text: 'see a.ts' }]
+    })
+
+    expect(displayed).toEqual([
+      [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'see a.ts' }
+      ]
+    ])
+  })
+
   it('keeps guarding a chat whose guarded turns arrive from another device', async () => {
     seedSession('s2', 'agent-1', false)
     useAcpStore.getState()._onUserPrompt({
