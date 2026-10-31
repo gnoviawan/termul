@@ -57,10 +57,16 @@ vi.mock('@/lib/web-tab-session', () => ({
 }))
 
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { useBrowserControlStore } from '@/stores/browser-control-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
 import { useAcpStore } from './index'
+import {
+  _resetHistorySeqWatermarksForTesting,
+  historySeqWatermarks,
+  noteLiveTurnReplayFloor
+} from './shared-state'
 
 function getLeavesFromNode(node: PaneNode): LeafNode[] {
   if (node.type === 'leaf') return [node]
@@ -84,6 +90,8 @@ beforeEach(() => {
     }
   })
   useBrowserSessionStore.setState({ tabs: new Map() })
+  useBrowserControlStore.setState({ tabSessions: {}, stoppedSessions: {} })
+  _resetHistorySeqWatermarksForTesting()
 })
 
 describe('_onBrowserAgentTab open (CAP-3 dedicated agent browser pane)', () => {
@@ -149,5 +157,66 @@ describe('_onBrowserAgentTab open (CAP-3 dedicated agent browser pane)', () => {
     expect(state.root.type).toBe('leaf')
     expect(state.activePaneId).toBe('pane-chat')
     expect(useBrowserSessionStore.getState().getTab('agent-tab-1')).toBeUndefined()
+  })
+})
+
+describe('replayed agent tab events (issue #1606)', () => {
+  const OPEN = {
+    action: 'open',
+    tabId: 'agent-tab-1',
+    url: 'https://example.com',
+    sessionId: 'sess-1'
+  } as const
+
+  it('a history-covered open recreates no tab after restart: its automation session is gone', () => {
+    historySeqWatermarks.set('sess-1', 40)
+
+    useAcpStore.getState()._onBrowserAgentTab(OPEN, 12)
+
+    expect(useWorkspaceStore.getState().root.type).toBe('leaf')
+    expect(useBrowserSessionStore.getState().getTab('agent-tab-1')).toBeUndefined()
+    expect(useBrowserControlStore.getState().tabSessions).toEqual({})
+  })
+
+  it('an open above the history watermark is live and still opens the tab', () => {
+    historySeqWatermarks.set('sess-1', 40)
+
+    useAcpStore.getState()._onBrowserAgentTab(OPEN, 41)
+
+    expect(useBrowserSessionStore.getState().getTab('agent-tab-1')).toBeDefined()
+    expect(useBrowserControlStore.getState().tabSessions).toEqual({ 'agent-tab-1': 'sess-1' })
+  })
+
+  it('an open the live-turn attach replays in full still opens: the host turn is running', () => {
+    historySeqWatermarks.set('sess-1', 40)
+    noteLiveTurnReplayFloor('sess-1', 30)
+
+    useAcpStore.getState()._onBrowserAgentTab(OPEN, 35)
+
+    expect(useBrowserSessionStore.getState().getTab('agent-tab-1')).toBeDefined()
+  })
+
+  it('browser_tab_closed drops the agent tab, its pane tab and its Stop ownership', () => {
+    const store = useAcpStore.getState()
+    store._onBrowserAgentTab(OPEN)
+
+    store._onBrowserTabClosed({ tabId: 'agent-tab-1' })
+
+    const leaves = getLeavesFromNode(useWorkspaceStore.getState().root)
+    expect(leaves.flatMap((leaf) => leaf.tabs.map((t) => t.id))).not.toContain(
+      'browser-agent-tab-1'
+    )
+    expect(useBrowserSessionStore.getState().getTab('agent-tab-1')).toBeUndefined()
+    expect(useBrowserControlStore.getState().tabSessions).toEqual({})
+  })
+
+  it('browser_tab_closed clears Stop ownership on remote surfaces too', () => {
+    const store = useAcpStore.getState()
+    store._onBrowserAgentTab(OPEN)
+    vi.mocked(isTauriContext).mockReturnValueOnce(false)
+
+    store._onBrowserTabClosed({ tabId: 'agent-tab-1' })
+
+    expect(useBrowserControlStore.getState().tabSessions).toEqual({})
   })
 })
