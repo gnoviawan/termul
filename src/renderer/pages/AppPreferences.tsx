@@ -23,6 +23,7 @@ import {
   useAcpTurnIdleTimeout,
   useAcpTurnTimeout,
   useAgentIdleWindow,
+  useAutomaticCompletionRefresh,
   useConfirmTerminalClose,
   useDefaultProjectColor,
   useDefaultShell,
@@ -74,6 +75,7 @@ export function AppPreferencesModal(): React.JSX.Element {
   const bufferSize = useTerminalBufferSize()
   const terminalRenderer = useTerminalRenderer()
   const terminalScreenReaderMode = useTerminalScreenReaderMode()
+  const automaticCompletionRefresh = useAutomaticCompletionRefresh()
   const defaultShell = useDefaultShell()
   const defaultProjectColor = useDefaultProjectColor() as ProjectColor
   const _confirmTerminalClose = useConfirmTerminalClose()
@@ -163,6 +165,15 @@ export function AppPreferencesModal(): React.JSX.Element {
       level: 'info',
       source: 'AppPreferences.terminalScreenReaderMode',
       message: `Terminal screen reader mode ${enabled ? 'enabled' : 'disabled'}; applies to new terminals only (can repeat typed characters, xterm.js #3467 / repo #267)`
+    })
+  }
+
+  const handleAutomaticCompletionRefreshChange = async (enabled: boolean) => {
+    await updateSetting('automaticCompletionRefresh', enabled)
+    void logFrontendError({
+      level: 'info',
+      source: 'AppPreferences.automaticCompletionRefresh',
+      message: `Automatic completion refresh ${enabled ? 'enabled' : 'disabled'}; applies to new terminals only`
     })
   }
 
@@ -310,11 +321,13 @@ export function AppPreferencesModal(): React.JSX.Element {
             bufferSize={bufferSize}
             terminalRenderer={terminalRenderer}
             screenReaderMode={terminalScreenReaderMode}
+            automaticCompletionRefresh={automaticCompletionRefresh}
             terminalUrlOpenMode={terminalUrlOpenMode}
             handleFontSizeChange={handleFontSizeChange}
             handleBufferSizeChange={handleBufferSizeChange}
             handleRendererChange={handleRendererChange}
             handleScreenReaderModeChange={handleScreenReaderModeChange}
+            handleAutomaticCompletionRefreshChange={handleAutomaticCompletionRefreshChange}
             handleTerminalUrlOpenModeChange={handleTerminalUrlOpenModeChange}
           />
           <ShellSection

@@ -5,7 +5,7 @@ import { logFrontendError } from '@/lib/log-api'
 
 export interface UseTerminalClipboardOptions {
   terminal: Terminal | null
-  pasteText?: (text: string) => Promise<void> | void
+  pasteText?: (text: string, normalizedText?: string) => Promise<void> | void
   onImagePaste?: () => Promise<void> | void
 }
 
@@ -147,7 +147,10 @@ export function useTerminalClipboard(
         const normalizedText = normalizePasteText(result.data)
         if (pasteText) {
           const sanitizedText = sanitizeEscapeSequences(normalizedText)
-          await pasteText(`${BRACKETED_PASTE_START}${sanitizedText}${BRACKETED_PASTE_END}`)
+          await pasteText(
+            `${BRACKETED_PASTE_START}${sanitizedText}${BRACKETED_PASTE_END}`,
+            normalizedText
+          )
         } else {
           currentTerminal.paste(normalizedText)
         }

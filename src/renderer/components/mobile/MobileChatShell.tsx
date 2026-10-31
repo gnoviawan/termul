@@ -448,7 +448,7 @@ export function MobileChatShell({
           to 0 in engines that treat flex-resolved sizes as indefinite. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
       {showTerminalControls && activeTerminal?.ptyId ? (
-        <MobileTerminalControls terminalId={activeTerminal.ptyId} />
+        <MobileTerminalControls terminalId={activeTerminal.id} />
       ) : null}
 
       <MobileShellDrawer

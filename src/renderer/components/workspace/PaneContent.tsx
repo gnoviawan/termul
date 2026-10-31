@@ -398,6 +398,7 @@ export function PaneContent({
                         initialModes={terminal.pendingModes}
                         className="w-full h-full"
                         isVisible={isVisible}
+                        isActivePane={isActivePane}
                       />
                     </Suspense>
                     {/* Agent loading overlay: shown until ConnectedTerminal attaches

@@ -2,6 +2,10 @@ import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useCallback } from 'react'
 import { toast } from 'sonner'
 import {
+  findEditorInputTarget,
+  routeForeignInsert
+} from '@/components/terminal/command-editor/foreign-insert'
+import {
   useAllCommandHistory,
   useCommandHistory,
   useCommandHistoryLoader
@@ -10,6 +14,7 @@ import { usePinnedCommandsLoader } from '@/hooks/use-pinned-commands'
 import { useRecentCommandsLoader } from '@/hooks/use-recent-commands'
 import { useCreateSnapshot, useSnapshotLoader } from '@/hooks/use-snapshots'
 import { persistenceApi, terminalApi } from '@/lib/api'
+import { canTerminalWriteToPty } from '@/lib/command-lifecycle/input-guard'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
 import { useActiveTerminal } from '@/stores/terminal-store'
 
@@ -43,8 +48,26 @@ export function useCommandPaletteData({ activeProjectId }: UseCommandPaletteData
   // Command history handlers
   const handleInsertCommand = useCallback(
     (command: string) => {
-      // TODO: Route to active terminal pane via context
       if (activeTerminal?.ptyId) {
+        const target = findEditorInputTarget(activeTerminal.ptyId)
+        if (target) {
+          void routeForeignInsert(
+            target,
+            'history',
+            command,
+            async (text) => {
+              await terminalApi.write(activeTerminal.ptyId!, text)
+            },
+            (message) => toast.error(message)
+          )
+          return
+        }
+        if (
+          !canTerminalWriteToPty(activeTerminal.id, command) ||
+          !canTerminalWriteToPty(activeTerminal.ptyId, command)
+        ) {
+          return
+        }
         terminalApi.write(activeTerminal.ptyId, command)
       }
     },

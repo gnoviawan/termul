@@ -65,6 +65,15 @@ describe('terminal-registry', () => {
       expect(getTerminal('term-1')).toBe(terminal1)
       expect(getTerminal('term-2')).toBe(terminal2)
     })
+
+    it('attaches command separators on registerTerminal without throwing for terminals without a parser', async () => {
+      const sepModule = await import('../components/terminal/command-separators')
+      const spy = vi.spyOn(sepModule, 'attachCommandSeparators')
+      const terminal = createMockTerminal()
+
+      expect(() => registerTerminal('term-sep', terminal)).not.toThrow()
+      expect(spy).toHaveBeenCalledWith(terminal)
+    })
   })
 
   describe('extractScrollback', () => {

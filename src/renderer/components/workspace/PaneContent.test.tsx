@@ -56,12 +56,27 @@ vi.mock('@/stores/project-store', () => ({
   )
 }))
 
+const { terminalStateRef, connectedTerminalProps } = vi.hoisted(() => ({
+  terminalStateRef: { current: [] as Record<string, unknown>[] },
+  connectedTerminalProps: [] as Record<string, unknown>[]
+}))
+
 vi.mock('@/stores/terminal-store', () => ({
-  useTerminalStore: vi.fn((selector: (s: { terminals: never[] }) => unknown) =>
-    selector({ terminals: [] })
+  useTerminalStore: vi.fn((selector: (s: { terminals: Record<string, unknown>[] }) => unknown) =>
+    selector({ terminals: terminalStateRef.current })
   ),
   useTerminalActions: vi.fn(() => ({ setTerminalPtyId: vi.fn() }))
 }))
+
+vi.mock('@/components/terminal/ConnectedTerminal', async () => {
+  const React = await import('react')
+  return {
+    ConnectedTerminal: (props: Record<string, unknown>) => {
+      connectedTerminalProps.push(props)
+      return React.createElement('div', { 'data-testid': 'connected-terminal-stub' })
+    }
+  }
+})
 
 // Mutable so the pane-ring tests can seed a multi-leaf tree, a fullscreen pane
 // and the mobile shell. Defaults match the single-leaf desktop workspace the
@@ -137,6 +152,48 @@ const editorPane: LeafNode = {
   activeTabId: 'tab-editor-1',
   tabs: [{ type: 'editor', id: 'tab-editor-1', filePath: '/project/foo.ts' }]
 }
+
+describe('PaneContent active terminal focus wiring', () => {
+  it('marks only the active pane terminal as focused across two visible splits', async () => {
+    paneStateRef.current = {
+      activePaneId: 'leaf-0',
+      fullscreenPaneId: null,
+      leafCount: 2
+    }
+    terminalStateRef.current = ['term-0', 'term-1'].map((id, index) => ({
+      id,
+      ptyId: `pty-${index}`,
+      projectId: 'proj-1',
+      kind: 'shell',
+      cwd: '/repo',
+      shell: null,
+      pendingScrollback: null,
+      pendingModes: null,
+      needsAttention: false
+    }))
+    connectedTerminalProps.length = 0
+    const pane = (index: number): LeafNode => ({
+      type: 'leaf',
+      id: `leaf-${index}`,
+      activeTabId: `tab-${index}`,
+      tabs: [{ type: 'terminal', id: `tab-${index}`, terminalId: `term-${index}` }]
+    })
+    const panes = () => (
+      <>
+        <PaneContent pane={pane(0)} />
+        <PaneContent pane={pane(1)} />
+      </>
+    )
+    const { rerender } = render(panes())
+    await screen.findAllByTestId('connected-terminal-stub')
+    expect(connectedTerminalProps.map((props) => props.isActivePane)).toEqual([true, false])
+
+    connectedTerminalProps.length = 0
+    paneStateRef.current.activePaneId = 'leaf-1'
+    rerender(panes())
+    expect(connectedTerminalProps.map((props) => props.isActivePane)).toEqual([false, true])
+  })
+})
 
 describe('PaneContent — editor pane lazy/Suspense boundary (CAP-6 Row 3)', () => {
   beforeEach(() => {
