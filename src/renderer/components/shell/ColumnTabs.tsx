@@ -5,21 +5,12 @@ import { SEGMENTED_TRACK_CLASS, segmentClass } from '@/components/ui/panel-style
 import { cn } from '@/lib/utils'
 import type { ShellLastColumnTab } from '@/stores/shell-layout-store'
 
-/**
- * GitHub is always an icon. The text tabs switch to their Rail icons when the
- * track is too narrow for four labels (a panel near its 220px minimum); the
- * label stays as the accessible name and tooltip.
- */
-const TABS: ReadonlyArray<{
-  id: ShellLastColumnTab
-  label: string
-  Icon: TermulIcon
-  iconOnly?: boolean
-}> = [
+/** Every tab is an equal-width icon; the label is its accessible name and tooltip. */
+const TABS: ReadonlyArray<{ id: ShellLastColumnTab; label: string; Icon: TermulIcon }> = [
   { id: 'chats', label: 'Chats', Icon: MessageSquare },
   { id: 'explorer', label: 'Explorer', Icon: FolderTree },
   { id: 'changes', label: 'Changes', Icon: GitBranch },
-  { id: 'github', label: 'GitHub', Icon: Github, iconOnly: true }
+  { id: 'github', label: 'GitHub', Icon: Github }
 ]
 
 export function columnTabId(tab: ShellLastColumnTab): string {
@@ -61,7 +52,7 @@ export function ColumnTabs({
     <div
       role="tablist"
       aria-label="Side panel"
-      className={cn(SEGMENTED_TRACK_CLASS, '@container mx-2 mb-2 h-7')}
+      className={cn(SEGMENTED_TRACK_CLASS, 'mx-2 mb-2 h-7')}
     >
       {TABS.map((tab, index) => {
         const active = tab.id === selected
@@ -79,22 +70,11 @@ export function ColumnTabs({
             tabIndex={active ? 0 : -1}
             onClick={() => onSelect(tab.id)}
             onKeyDown={(event) => handleKeyDown(event, index)}
-            aria-label={tab.iconOnly ? tab.label : undefined}
+            aria-label={tab.label}
             title={tab.label}
-            className={cn(
-              segmentClass(active),
-              'h-full justify-center gap-1.5',
-              tab.iconOnly ? 'shrink-0' : 'min-w-0 flex-auto'
-            )}
+            className={cn(segmentClass(active), 'h-full min-w-0 flex-1 justify-center gap-1')}
           >
-            {tab.iconOnly ? (
-              <tab.Icon size={14} aria-hidden="true" />
-            ) : (
-              <>
-                <tab.Icon size={14} aria-hidden="true" className="hidden @max-[14.5rem]:block" />
-                <span className="truncate @max-[14.5rem]:sr-only">{tab.label}</span>
-              </>
-            )}
+            <tab.Icon size={14} aria-hidden="true" />
             {tab.id === 'changes' && changedCount > 0 && (
               <CountBadge
                 count={changedCount}
