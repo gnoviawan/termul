@@ -3,6 +3,7 @@
 //! own copy, and every carrier in a process answers from the same one.
 
 mod convert;
+mod icon;
 mod search;
 mod snapshot;
 mod sync;
@@ -25,6 +26,7 @@ use serde::Serialize;
 use tokio::sync::OnceCell;
 
 pub use convert::{McpCatalogReason, OptionKind, Runner};
+pub use icon::{Icon, IconType};
 pub use search::{
     McpCatalogDefaultOption, McpCatalogPage, McpCatalogRow, McpCatalogSearchRequest,
     McpCatalogState, RunnerAvailability, SearchError,
@@ -32,6 +34,7 @@ pub use search::{
 pub use snapshot::{McpCatalogSource, RegistryStatus};
 pub use sync::{McpCatalogSync, SyncPhase};
 
+use icon::IconCache;
 use snapshot::LoadedCatalog;
 use sync::{Registry, SyncHost};
 
@@ -46,6 +49,7 @@ pub struct McpCatalogService {
     catalog: RwLock<Arc<LoadedCatalog>>,
     phase: Mutex<SyncPhase>,
     sync: OnceLock<Arc<SyncHost>>,
+    icons: OnceLock<Arc<IconCache>>,
     /// Set by tests in place of probing the host's PATH.
     fixed_runners: Option<RunnerAvailability>,
     runner_probe: Mutex<Option<(Instant, RunnerAvailability)>>,
@@ -101,6 +105,7 @@ impl McpCatalogService {
             catalog: RwLock::new(Arc::new(catalog)),
             phase: Mutex::new(SyncPhase::Idle),
             sync: OnceLock::new(),
+            icons: OnceLock::new(),
             fixed_runners,
             runner_probe: Mutex::new(None),
             probe_gate: tokio::sync::Mutex::new(()),
@@ -113,10 +118,35 @@ impl McpCatalogService {
     }
 
     pub async fn run(dir: PathBuf) {
+        let service = Self::shared().await;
+        match IconCache::new(dir.join("icons")) {
+            Ok(icons) => service.attach_icons(Arc::new(icons)),
+            Err(error) => log::error!("[mcp-catalog] icons disabled, no HTTP client: {error}"),
+        }
         match Registry::new(sync::REGISTRY_BASE) {
-            Ok(registry) => Self::shared().await.attach(dir, registry).await,
+            Ok(registry) => service.attach(dir, registry).await,
             Err(error) => log::error!("[mcp-catalog] sync disabled, no HTTP client: {error}"),
         }
+    }
+
+    pub(crate) fn attach_icons(&self, icons: Arc<IconCache>) {
+        if self.icons.set(icons).is_err() {
+            log::warn!("[mcp-catalog] icons already attached");
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn attach_fixed_icon(&self, dir: PathBuf, icon: Icon) {
+        let fetch: icon::FetchIcon = Arc::new(move |_| {
+            let icon = icon.clone();
+            Box::pin(async move { Ok(icon) })
+        });
+        self.attach_icons(Arc::new(IconCache::with(
+            dir,
+            fetch,
+            Arc::new(std::time::SystemTime::now),
+            u64::MAX,
+        )));
     }
 
     pub(crate) async fn attach(self: Arc<Self>, dir: PathBuf, registry: Registry) {
@@ -191,6 +221,25 @@ impl McpCatalogService {
                 }
             })?
             .map_err(McpCatalogError::from)
+    }
+
+    pub async fn icon(&self, name: &str) -> Result<Icon, McpCatalogError> {
+        let catalog = self.catalog();
+        let source = catalog
+            .items
+            .binary_search_by(|item| item.name.as_str().cmp(name))
+            .ok()
+            .and_then(|index| catalog.items[index].icon.clone())
+            .ok_or_else(|| McpCatalogError {
+                code: "NOT_FOUND",
+                message: "this catalog server has no icon".to_string(),
+            })?;
+        let unavailable = || McpCatalogError {
+            code: "MCP_CATALOG_ICON_UNAVAILABLE",
+            message: "the icon could not be loaded".to_string(),
+        };
+        let icons = self.icons.get().ok_or_else(unavailable)?;
+        icons.icon(&source).await.map_err(|_| unavailable())
     }
 
     fn cached_runners(&self) -> Option<RunnerAvailability> {

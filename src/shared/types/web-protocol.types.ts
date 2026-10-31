@@ -189,6 +189,7 @@ export const WS_REQUEST_TYPES = [
   'search_mcp_catalog',
   'get_mcp_catalog_status',
   'set_mcp_catalog_sync',
+  'get_mcp_catalog_icon',
   // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web client
   // installs a catalog agent through `install_acp_agent` (the host downloads +
   // verifies sha256 + extracts + atomically activates). The request is
@@ -372,6 +373,7 @@ export const WS_COMMAND_CLASSES: Readonly<
   search_mcp_catalog: ['read', null],
   get_mcp_catalog_status: ['read', null],
   set_mcp_catalog_sync: ['idempotent', null],
+  get_mcp_catalog_icon: ['read', null],
   install_acp_agent: ['command', 'payload'],
   acp_deliver_auth_redirect: ['command', 'receipt-only'],
   store_read: ['read', null],

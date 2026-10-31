@@ -563,3 +563,36 @@ fn a_cache_older_than_the_snapshot_never_loads() {
     assert_eq!(cache.servers.len(), 1);
     assert!(read_cache(dir.path(), &newer_snapshot).is_none());
 }
+
+#[tokio::test]
+async fn synced_rows_keep_only_the_icon_fields_the_host_picks_from() {
+    let mut withicons = row("io.example/logo", "1.0.0", "active", true);
+    withicons["server"]["icons"] = json!([
+        { "src": "https://a.example/logo.png", "mimeType": "image/png", "sizes": ["96x96"], "theme": "light", "extra": true },
+        { "mimeType": "image/png" }
+    ]);
+    let mut without = row("io.example/plain", "1.0.0", "active", true);
+    without["server"]["icons"] = json!([{ "src": 7 }]);
+    let mock = MockRegistry::new(vec![withicons, without], vec![]);
+    let registry = Registry::new(serve(&mock).await).unwrap();
+
+    let delta = fetch(&registry, SyncPlan::Full, |_| {}).await.unwrap();
+
+    let server = |name: &str| -> Value {
+        serde_json::from_str::<Value>(delta.rows[name].as_ref().unwrap().get()).unwrap()["server"]
+            .clone()
+    };
+    assert_eq!(
+        server("io.example/logo")["icons"],
+        json!([{ "src": "https://a.example/logo.png", "mimeType": "image/png", "sizes": ["96x96"], "theme": "light" }])
+    );
+    assert_eq!(server("io.example/plain").get("icons"), None);
+    let item = item_from_row(
+        serde_json::from_str(delta.rows["io.example/logo"].as_ref().unwrap().get()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        item.icon.map(|icon| icon.url().to_string()),
+        Some("https://a.example/logo.png".to_string())
+    );
+}
