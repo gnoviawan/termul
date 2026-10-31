@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -284,16 +283,12 @@ pub(crate) struct Delta {
 pub(crate) async fn fetch(
     registry: &Registry,
     plan: SyncPlan,
-    keep_going: impl Fn() -> bool,
     progress: impl Fn(usize),
 ) -> Result<Delta, SyncError> {
     let mut delta = Delta::default();
     let mut refetch = BTreeSet::new();
     let mut cursor: Option<String> = None;
     for _ in 0..MAX_PAGES {
-        if !keep_going() {
-            return Err(SyncError::Cancelled);
-        }
         let page = registry.page(plan, cursor.as_deref()).await?;
         for row in page.servers.iter().filter_map(|raw| Row::parse(raw)) {
             delta.received += 1;
@@ -312,9 +307,6 @@ pub(crate) async fn fetch(
         cursor = page.metadata.next_cursor.filter(|next| !next.is_empty());
         if cursor.is_none() {
             for name in refetch {
-                if !keep_going() {
-                    return Err(SyncError::Cancelled);
-                }
                 let latest = registry.latest(&name).await?;
                 delta.refetched += 1;
                 let row = latest
@@ -469,23 +461,29 @@ pub(crate) fn read_enabled(dir: &Path) -> bool {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return true,
         Err(error) => {
-            log::warn!("[mcp-catalog] sync setting unreadable, using the default: {error}");
-            return true;
+            log::warn!("[mcp-catalog] sync setting unreadable, keeping sync off: {error}");
+            return false;
         }
     };
     match serde_json::from_slice::<SyncConfig>(&bytes) {
         Ok(config) if config.schema_version == CONFIG_SCHEMA_VERSION => config.sync_enabled,
         Ok(config) => {
             log::warn!(
-                "[mcp-catalog] sync setting schema {} unsupported, using the default",
+                "[mcp-catalog] sync setting schema {} unsupported, keeping sync off",
                 config.schema_version
             );
-            true
+            false
         }
         Err(error) => {
-            log::warn!("[mcp-catalog] sync setting is invalid, using the default: {error}");
+            // serde_json's message quotes the offending value, so log only where it failed.
+            log::warn!(
+                "[mcp-catalog] sync setting is invalid ({:?} at {}:{}), keeping sync off",
+                error.classify(),
+                error.line(),
+                error.column()
+            );
             let _ = crate::acp::atomic_file::backup_corrupt(&path, &bytes);
-            true
+            false
         }
     }
 }
@@ -502,8 +500,7 @@ fn write_enabled(dir: &Path, enabled: bool) -> io::Result<()> {
 pub(crate) struct SyncHost {
     dir: PathBuf,
     registry: Registry,
-    enabled: AtomicBool,
-    wake: tokio::sync::Notify,
+    enabled: tokio::sync::watch::Sender<bool>,
     setting: tokio::sync::Mutex<()>,
 }
 
@@ -513,14 +510,22 @@ impl SyncHost {
         Self {
             dir,
             registry,
-            enabled: AtomicBool::new(enabled),
-            wake: tokio::sync::Notify::new(),
+            enabled: tokio::sync::watch::Sender::new(enabled),
             setting: tokio::sync::Mutex::new(()),
         }
     }
 
     pub(crate) fn enabled(&self) -> bool {
-        self.enabled.load(Ordering::SeqCst)
+        *self.enabled.borrow()
+    }
+
+    async fn until_enabled_is(&self, enabled: bool) {
+        // `wait_for` fails only once the sender is dropped, and `self` owns it.
+        let _ = self
+            .enabled
+            .subscribe()
+            .wait_for(|now| *now == enabled)
+            .await;
     }
 
     pub(crate) async fn set_enabled(&self, enabled: bool) -> io::Result<()> {
@@ -529,8 +534,7 @@ impl SyncHost {
         tokio::task::spawn_blocking(move || write_enabled(&dir, enabled))
             .await
             .map_err(io::Error::other)??;
-        self.enabled.store(enabled, Ordering::SeqCst);
-        self.wake.notify_one();
+        self.enabled.send_replace(enabled);
         Ok(())
     }
 }
@@ -558,13 +562,13 @@ impl McpCatalogService {
         loop {
             if !host.enabled() {
                 log::info!("[mcp-catalog] sync is off");
-                host.wake.notified().await;
+                host.until_enabled_is(true).await;
                 continue;
             }
             if tokio::time::Instant::now() < next_run {
                 tokio::select! {
                     () = tokio::time::sleep_until(next_run) => {}
-                    () = host.wake.notified() => {}
+                    () = host.until_enabled_is(false) => {}
                 }
                 continue;
             }
@@ -602,13 +606,15 @@ impl McpCatalogService {
             SyncPlan::Since(at) => log::info!("[mcp-catalog] sync start: cursor={}", rfc3339(at)),
         }
         *self.phase.lock() = SyncPhase::Syncing { full, fetched: 0 };
-        let delta = fetch(
-            &host.registry,
-            plan,
-            || host.enabled(),
-            |fetched| *self.phase.lock() = SyncPhase::Syncing { full, fetched },
-        )
-        .await?;
+        // Biased so the setting is checked before every poll of the crawl: no page,
+        // refetch, or retry goes out once sync is off, and a request in flight is dropped.
+        let delta = tokio::select! {
+            biased;
+            () = host.until_enabled_is(false) => return Err(SyncError::Cancelled),
+            delta = fetch(&host.registry, plan, |fetched| {
+                *self.phase.lock() = SyncPhase::Syncing { full, fetched };
+            }) => delta?,
+        };
         let (received, refetched, changed) = (delta.received, delta.refetched, delta.rows.len());
         let dir = host.dir.clone();
         let current = self.catalog();

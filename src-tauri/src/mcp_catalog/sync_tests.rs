@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use super::search::{McpCatalogSearchRequest, RunnerAvailability};
 use super::snapshot::{item_from_row, LoadedCatalog, McpCatalogSource};
 use super::sync::{
-    commit, fetch, read_cache, read_enabled, Delta, McpCatalogSync, Registry, SyncError, SyncPhase, SyncPlan,
+    commit, fetch, read_cache, read_enabled, Delta, McpCatalogSync, Registry, SyncPhase, SyncPlan,
 };
 use super::{McpCatalogService, McpCatalogStatus};
 
@@ -416,7 +416,10 @@ async fn turning_sync_off_during_a_retry_backoff_sends_no_retry() {
     // The first retry would go out 2 s after the 503.
     tokio::time::sleep(Duration::from_millis(2500)).await;
 
-    assert_eq!(mock.requests(), vec!["/v0.1/servers?limit=100&version=latest"]);
+    assert_eq!(
+        mock.requests(),
+        vec!["/v0.1/servers?limit=100&version=latest"]
+    );
     assert_eq!(service.status().sync, McpCatalogSync::Disabled);
     assert!(!dir.path().join("registry-cache.json.gz").exists());
 
@@ -450,6 +453,7 @@ async fn turning_sync_off_abandons_the_request_in_flight() {
         mock.abandoned.load(Ordering::SeqCst),
         "the request is still open"
     );
+    assert_eq!(mock.requests().len(), 1);
     assert_eq!(service.status().sync, McpCatalogSync::Disabled);
     assert!(!dir.path().join("registry-cache.json.gz").exists());
 
@@ -520,35 +524,12 @@ async fn a_response_over_the_size_cap_fails_the_run() {
     *mock.mode.lock() = Mode::Oversized;
     let registry = Registry::new(serve(&mock).await).unwrap();
 
-    let outcome = fetch(&registry, SyncPlan::Full, || true, |_| {}).await;
+    let outcome = fetch(&registry, SyncPlan::Full, |_| {}).await;
 
     assert_eq!(
         outcome.map(|_| ()).unwrap_err().to_string(),
         "registry response exceeded 8388608 bytes"
     );
-}
-
-#[tokio::test]
-async fn turning_sync_off_stops_a_crawl_before_its_next_request() {
-    let mock = MockRegistry::new(
-        (0..6)
-            .map(|index| row(&format!("io.example/s{index}"), "1.0.0", "active", true))
-            .collect(),
-        vec![],
-    );
-    let registry = Registry::new(serve(&mock).await).unwrap();
-    let pages = Mutex::new(0);
-
-    let outcome = fetch(
-        &registry,
-        SyncPlan::Full,
-        || *pages.lock() < 1,
-        |_| *pages.lock() += 1,
-    )
-    .await;
-
-    assert!(matches!(outcome, Err(SyncError::Cancelled)));
-    assert_eq!(mock.requests().len(), 1);
 }
 
 #[test]
