@@ -22,6 +22,10 @@ pub mod data_lock;
 // desktop and `termul-server` share it (like `data_lock`/`server_update`).
 pub mod diagnostics;
 mod exit_cleanup;
+mod git_remote;
+// GitHub issues & PRs through the host `gh` CLI; shared by the Tauri commands
+// and the `/github/*` web routes.
+mod github;
 mod host_perimeter;
 mod logging;
 pub mod mcp_catalog;
@@ -2091,6 +2095,12 @@ pub fn run() {
             commands::git_get_status,
             commands::git_get_diff,
             commands::git_get_diff_stat,
+            commands::github_get_context,
+            commands::github_list_items,
+            commands::github_get_item,
+            commands::github_get_checks,
+            commands::github_get_check_log,
+            commands::github_merge,
             commands::git_stage,
             commands::git_unstage,
             commands::git_stage_hunk,
