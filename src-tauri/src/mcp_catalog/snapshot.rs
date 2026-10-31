@@ -1,9 +1,11 @@
 //! The bundled registry snapshot (AD-3). Dev and test builds embed the
-//! committed fixture in `resources/mcp-registry/`; the release workflow
-//! overwrites those two files with the full fetch from its secret-less
-//! snapshot job before `cargo build`. Loading verifies the recorded sha256,
-//! and any failure leaves an empty catalog rather than a panic.
+//! committed fixture in `resources/mcp-registry/`, whose metadata marks it as
+//! a sample; the release workflow overwrites those two files with the full
+//! fetch from its secret-less snapshot job before `cargo build`. Loading
+//! verifies the recorded sha256, and any failure leaves an empty catalog
+//! rather than a panic.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
 
@@ -49,11 +51,56 @@ pub(crate) struct CatalogItem {
     pub options: Option<Vec<CatalogOption>>,
 }
 
+/// Which registry data a catalog holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpCatalogSource {
+    /// When its newest registry data was fetched.
+    pub updated_at: Option<String>,
+    /// The committed dev/test fixture rather than the full registry.
+    pub sample: bool,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct LoadedCatalog {
     /// Sorted by name, one per name.
     pub items: Vec<CatalogItem>,
-    pub fetched_at: Option<String>,
+    pub source: McpCatalogSource,
+}
+
+impl LoadedCatalog {
+    /// A catalog of exactly `items`, in any order.
+    pub(crate) fn from_items(items: Vec<CatalogItem>, source: McpCatalogSource) -> Self {
+        Self::default().with_changes(
+            items
+                .into_iter()
+                .map(|item| (item.name.clone(), Some(item))),
+            source,
+        )
+    }
+
+    /// This catalog with each named item replaced, added, or (`None`) removed.
+    pub(crate) fn with_changes(
+        &self,
+        changes: impl IntoIterator<Item = (String, Option<CatalogItem>)>,
+        source: McpCatalogSource,
+    ) -> Self {
+        let mut items: BTreeMap<String, CatalogItem> = self
+            .items
+            .iter()
+            .map(|item| (item.name.clone(), item.clone()))
+            .collect();
+        for (name, item) in changes {
+            match item {
+                Some(item) => items.insert(name, item),
+                None => items.remove(&name),
+            };
+        }
+        Self {
+            items: items.into_values().collect(),
+            source,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -86,6 +133,8 @@ impl fmt::Display for SnapshotError {
 struct SnapshotMeta {
     sha256: String,
     fetched_at: String,
+    #[serde(default)]
+    sample: bool,
 }
 
 #[derive(Deserialize)]
@@ -109,10 +158,11 @@ pub(crate) fn load_or_empty(gz: &[u8], meta: &str) -> LoadedCatalog {
                 .filter(|item| item.options.is_none())
                 .count();
             log::info!(
-                "[mcp-catalog] snapshot loaded items={} unparseable={} fetched_at={}",
+                "[mcp-catalog] snapshot loaded items={} unparseable={} fetched_at={} sample={}",
                 catalog.items.len(),
                 unparseable,
-                catalog.fetched_at.as_deref().unwrap_or("")
+                catalog.source.updated_at.as_deref().unwrap_or(""),
+                catalog.source.sample
             );
             catalog
         }
@@ -148,7 +198,10 @@ pub(crate) fn load(gz: &[u8], meta: &str) -> Result<LoadedCatalog, SnapshotError
     items.dedup_by(|a, b| a.name == b.name);
     Ok(LoadedCatalog {
         items,
-        fetched_at: Some(meta.fetched_at),
+        source: McpCatalogSource {
+            updated_at: Some(meta.fetched_at),
+            sample: meta.sample,
+        },
     })
 }
 

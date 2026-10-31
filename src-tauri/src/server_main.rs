@@ -286,6 +286,11 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+        // SPEC CAP-2: live MCP registry sync, cached under
+        // `<state dir>/mcp-catalog`.
+        tokio::spawn(termul_manager_lib::mcp_catalog::McpCatalogService::start(
+            data_paths.state_dir.join("mcp-catalog"),
+        ));
         // CAP-6 / Story 8: open the host-owned ACP catalog root. The
         // standalone binary owns its own root — NEVER shared with a desktop
         // host on the same machine. Defaults to `<state dir>/acp-catalog`.

@@ -83,8 +83,8 @@ tauri-plugin-notification = "2"
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-chrono = "0.4"
+serde_json = { version = "1", features = ["raw_value"] }
+chrono = { version = "0.4", features = ["serde"] }
 url = "2"
 
 # ADR-004.6: opt-in, read-only fetch of the ACP Registry (identity/discovery

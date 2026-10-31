@@ -1545,6 +1545,17 @@ pub fn run() {
                 acp_catalog_service.clone(),
             ));
 
+            // SPEC CAP-2: live MCP registry sync, cached under
+            // `<app_data_dir>/mcp-catalog`.
+            let mcp_catalog_root = handle
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("failed to resolve app data directory: {error}"))?
+                .join("mcp-catalog");
+            tauri::async_runtime::spawn(crate::mcp_catalog::McpCatalogService::start(
+                mcp_catalog_root,
+            ));
+
             // CAP-6 / Story 9: open the host-owned verified-atomic ACP install
             // root. The desktop owns its own root under
             // `<app_data_dir>/acp-registry-binaries` (NEVER shared with a

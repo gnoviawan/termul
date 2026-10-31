@@ -6,7 +6,7 @@ use super::search::{
     search as scan, validate, McpCatalogPage, McpCatalogSearchRequest, McpCatalogState,
     RunnerAvailability, SearchError, MAX_QUERY_CHARS, MAX_QUERY_TERMS,
 };
-use super::snapshot::{item_from_row, LoadedCatalog};
+use super::snapshot::{item_from_row, LoadedCatalog, McpCatalogSource};
 use super::{McpCatalogError, McpCatalogService};
 
 fn search(
@@ -31,12 +31,13 @@ fn row(name: &str, title: Option<&str>, description: &str, status: &str) -> Valu
 }
 
 fn catalog(rows: Vec<Value>) -> LoadedCatalog {
-    let mut items: Vec<_> = rows.into_iter().filter_map(item_from_row).collect();
-    items.sort_by(|a, b| a.name.cmp(&b.name));
-    LoadedCatalog {
-        items,
-        fetched_at: Some("2026-10-27T00:00:00Z".to_string()),
-    }
+    LoadedCatalog::from_items(
+        rows.into_iter().filter_map(item_from_row).collect(),
+        McpCatalogSource {
+            updated_at: Some("2026-10-27T00:00:00Z".to_string()),
+            sample: false,
+        },
+    )
 }
 
 fn request(query: &str, cursor: Option<&str>, limit: Option<usize>) -> McpCatalogSearchRequest {
@@ -139,7 +140,12 @@ fn title_and_description_hits_outrank_namespace_only_hits() {
     let catalog = catalog(vec![
         row("io.github.aaa/one", None, "a server", "active"),
         row("io.github.bbb/two", None, "a server", "active"),
-        row("io.example/zulu", Some("GitHub Issues"), "a server", "active"),
+        row(
+            "io.example/zulu",
+            Some("GitHub Issues"),
+            "a server",
+            "active",
+        ),
         row("io.example/yankee", None, "reads github issues", "active"),
     ]);
     assert_eq!(
@@ -159,8 +165,18 @@ fn whole_word_hits_outrank_substring_hits_in_each_field() {
         row("io.git.example/umber", None, "a server", "active"),
         row("io.example/violet", None, "legitimate tools", "active"),
         row("io.example/whale", None, "works with git", "active"),
-        row("io.example/xray", Some("Digital Toolkit"), "a server", "active"),
-        row("io.example/yak", Some("Tools for git"), "a server", "active"),
+        row(
+            "io.example/xray",
+            Some("Digital Toolkit"),
+            "a server",
+            "active",
+        ),
+        row(
+            "io.example/yak",
+            Some("Tools for git"),
+            "a server",
+            "active",
+        ),
         row("io.example/zeta", Some("Git Tools"), "a server", "active"),
     ]);
     assert_eq!(
@@ -256,7 +272,14 @@ async fn worst_case_search_latency() {
     let service = McpCatalogService::with_runners(
         catalog(
             (0..ITEMS)
-                .map(|i| row(&format!("io.example/server-{i}"), None, &description, "active"))
+                .map(|i| {
+                    row(
+                        &format!("io.example/server-{i}"),
+                        None,
+                        &description,
+                        "active",
+                    )
+                })
                 .collect(),
         ),
         RunnerAvailability::default(),
