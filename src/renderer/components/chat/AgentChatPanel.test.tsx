@@ -206,6 +206,10 @@ const {
   }
 }))
 
+vi.mock('@/components/automations/ChatAutomationSuggestion', () => ({
+  ChatAutomationSuggestion: () => null
+}))
+
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))

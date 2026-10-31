@@ -21,6 +21,7 @@ use crate::automation::model::{
 use crate::automation::service::{
     self, AutomationDetail, AutomationService, ServiceError, ServiceResult,
 };
+use crate::automation::suggest::Suggestion;
 
 /// Wire code when the host has no automation service (its store could not
 /// open).
@@ -74,12 +75,30 @@ pub(crate) async fn delete_secret(
     blocking(move || service.delete_secret(&project_id, &name)).await
 }
 
+/// Suggestions read chat logs from disk, so they leave the async runtime.
+pub(crate) async fn list_suggestions(
+    service: Arc<AutomationService>,
+    project_id: String,
+    timezone: Option<String>,
+) -> ServiceResult<Vec<Suggestion>> {
+    blocking(move || service.list_suggestions(&project_id, timezone.as_deref())).await
+}
+
+pub(crate) async fn match_suggestion(
+    service: Arc<AutomationService>,
+    project_id: String,
+    text: String,
+    timezone: Option<String>,
+) -> ServiceResult<Option<Suggestion>> {
+    blocking(move || service.match_prompt(&project_id, &text, timezone.as_deref())).await
+}
+
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> ServiceResult<T> + Send + 'static,
 ) -> ServiceResult<T> {
     tokio::task::spawn_blocking(work)
         .await
-        .unwrap_or_else(|e| Err(ServiceError::Internal(format!("keychain task failed: {e}"))))
+        .unwrap_or_else(|e| Err(ServiceError::Internal(format!("blocking task failed: {e}"))))
 }
 
 fn reply<T>(result: ServiceResult<T>) -> IpcResult<T> {
@@ -243,4 +262,47 @@ pub async fn automation_delete_secret(
         Ok(service) => reply(delete_secret(service, project_id, name).await),
         Err(refused) => refused,
     }
+}
+
+#[tauri::command]
+pub async fn automation_list_suggestions(
+    project_id: String,
+    timezone: Option<String>,
+    webview: Webview,
+) -> IpcResult<Vec<Suggestion>> {
+    match service(&webview) {
+        Ok(service) => reply(list_suggestions(service, project_id, timezone).await),
+        Err(refused) => refused,
+    }
+}
+
+#[tauri::command]
+pub async fn automation_match_suggestion(
+    project_id: String,
+    text: String,
+    timezone: Option<String>,
+    webview: Webview,
+) -> IpcResult<Option<Suggestion>> {
+    match service(&webview) {
+        Ok(service) => reply(match_suggestion(service, project_id, text, timezone).await),
+        Err(refused) => refused,
+    }
+}
+
+#[tauri::command]
+pub async fn automation_dismiss_suggestion(
+    project_id: String,
+    fingerprint: String,
+    webview: Webview,
+) -> IpcResult<()> {
+    call(&webview, |s| s.dismiss_suggestion(&project_id, &fingerprint))
+}
+
+#[tauri::command]
+pub async fn automation_accept_suggestion(
+    project_id: String,
+    fingerprint: String,
+    webview: Webview,
+) -> IpcResult<()> {
+    call(&webview, |s| s.accept_suggestion(&project_id, &fingerprint))
 }

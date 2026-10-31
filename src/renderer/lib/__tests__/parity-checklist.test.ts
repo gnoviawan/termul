@@ -2783,6 +2783,34 @@ describe('Automation parity (facade)', () => {
       command: 'automation_delete_secret',
       http: '"/api/automation-secrets"',
       route: 'deleteJson(`${SECRETS}?project_id='
+    },
+    {
+      fn: 'listAutomationSuggestions',
+      method: 'listSuggestions',
+      command: 'automation_list_suggestions',
+      http: '"/api/automation-suggestions"',
+      route: 'getJson(`${SUGGESTIONS}?project_id='
+    },
+    {
+      fn: 'matchAutomationSuggestion',
+      method: 'matchSuggestion',
+      command: 'automation_match_suggestion',
+      http: '"/api/automation-suggestions/match"',
+      route: 'postJsonOnce(`${SUGGESTIONS}/match`'
+    },
+    {
+      fn: 'dismissAutomationSuggestion',
+      method: 'dismissSuggestion',
+      command: 'automation_dismiss_suggestion',
+      http: '"/api/automation-suggestions/dismiss"',
+      route: 'postJsonOnce(`${SUGGESTIONS}/dismiss`'
+    },
+    {
+      fn: 'acceptAutomationSuggestion',
+      method: 'acceptSuggestion',
+      command: 'automation_accept_suggestion',
+      http: '"/api/automation-suggestions/accept"',
+      route: 'postJsonOnce(`${SUGGESTIONS}/accept`'
     }
   ] as const
 

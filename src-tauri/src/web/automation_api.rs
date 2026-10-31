@@ -38,7 +38,8 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use crate::automation::model::{AutomationChanged, AutomationId, RunId, EVENT_AUTOMATION_CHANGED};
 use crate::automation::service::{AutomationService, ServiceError, ServiceResult};
 use crate::commands::automation::{
-    delete_secret, parse_ops, preview_schedule, set_secret, UNAVAILABLE,
+    delete_secret, list_suggestions, match_suggestion, parse_ops, preview_schedule, set_secret,
+    UNAVAILABLE,
 };
 use crate::web::auth::BearerVerified;
 use crate::web::capabilities::WriteFlags;
@@ -73,6 +74,10 @@ const CANCEL_RUN: &str = "/api/automation-runs/{run_id}/cancel";
 const RUN_STEPS: &str = "/api/automation-runs/{run_id}/steps";
 const AGENTS: &str = "/api/automation-agents";
 const SECRETS: &str = "/api/automation-secrets";
+const SUGGESTIONS: &str = "/api/automation-suggestions";
+const SUGGESTION_MATCH: &str = "/api/automation-suggestions/match";
+const SUGGESTION_DISMISS: &str = "/api/automation-suggestions/dismiss";
+const SUGGESTION_ACCEPT: &str = "/api/automation-suggestions/accept";
 
 pub fn automation_router<S>(state: AutomationRouteState) -> Router<S> {
     Router::new()
@@ -92,6 +97,10 @@ pub fn automation_router<S>(state: AutomationRouteState) -> Router<S> {
             SECRETS,
             get(list_secrets).put(put_secret).delete(remove_secret),
         )
+        .route(SUGGESTIONS, get(suggestions))
+        .route(SUGGESTION_MATCH, post(match_one))
+        .route(SUGGESTION_DISMISS, post(dismiss))
+        .route(SUGGESTION_ACCEPT, post(accept))
         .with_state(state)
 }
 
@@ -266,6 +275,27 @@ struct SecretBody {
     project_id: String,
     name: String,
     value: String,
+}
+
+#[derive(Deserialize)]
+struct SuggestionsQuery {
+    #[serde(default)]
+    project_id: String,
+    timezone: Option<String>,
+}
+
+/// No `Debug`: `text` is the user's prompt.
+#[derive(Deserialize)]
+struct MatchBody {
+    project_id: String,
+    text: String,
+    timezone: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SuggestionBody {
+    project_id: String,
+    fingerprint: String,
 }
 
 type Peer = ConnectInfo<SocketAddr>;
@@ -462,6 +492,62 @@ async fn remove_secret(
     reply(
         SECRETS,
         delete_secret(service, query.project_id, query.name).await,
+    )
+}
+
+async fn suggestions(
+    State(state): State<AutomationRouteState>,
+    ConnectInfo(peer): Peer,
+    parts: Parts,
+    Query(query): Query<SuggestionsQuery>,
+) -> Reply {
+    let service = admit(&state, &parts, peer, SUGGESTIONS, false)?;
+    reply(
+        SUGGESTIONS,
+        list_suggestions(service, query.project_id, query.timezone).await,
+    )
+}
+
+/// A read: it answers whether a prompt repeats a suggestion.
+async fn match_one(
+    State(state): State<AutomationRouteState>,
+    ConnectInfo(peer): Peer,
+    parts: Parts,
+    body: Body<MatchBody>,
+) -> Reply {
+    let service = admit(&state, &parts, peer, SUGGESTION_MATCH, false)?;
+    let Json(body) = body.map_err(|e| invalid_body(SUGGESTION_MATCH, &e))?;
+    reply(
+        SUGGESTION_MATCH,
+        match_suggestion(service, body.project_id, body.text, body.timezone).await,
+    )
+}
+
+async fn dismiss(
+    State(state): State<AutomationRouteState>,
+    ConnectInfo(peer): Peer,
+    parts: Parts,
+    body: Body<SuggestionBody>,
+) -> Reply {
+    let service = admit(&state, &parts, peer, SUGGESTION_DISMISS, true)?;
+    let Json(body) = body.map_err(|e| invalid_body(SUGGESTION_DISMISS, &e))?;
+    reply(
+        SUGGESTION_DISMISS,
+        service.dismiss_suggestion(&body.project_id, &body.fingerprint),
+    )
+}
+
+async fn accept(
+    State(state): State<AutomationRouteState>,
+    ConnectInfo(peer): Peer,
+    parts: Parts,
+    body: Body<SuggestionBody>,
+) -> Reply {
+    let service = admit(&state, &parts, peer, SUGGESTION_ACCEPT, true)?;
+    let Json(body) = body.map_err(|e| invalid_body(SUGGESTION_ACCEPT, &e))?;
+    reply(
+        SUGGESTION_ACCEPT,
+        service.accept_suggestion(&body.project_id, &body.fingerprint),
     )
 }
 

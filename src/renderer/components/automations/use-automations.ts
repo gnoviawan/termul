@@ -5,6 +5,7 @@ import type {
   AutomationId,
   AutomationRun,
   AutomationStep,
+  AutomationSuggestion,
   RunId
 } from '@shared/types/automation.types'
 import type { IpcResult } from '@shared/types/ipc.types'
@@ -13,9 +14,11 @@ import {
   getAutomation,
   getAutomationRunSteps,
   listAutomationRuns,
+  listAutomationSuggestions,
   listAutomations,
   onAutomationChanged
 } from '@/lib/automation-api'
+import { useSuggestAutomations } from '@/stores/app-settings-store'
 
 export interface HostQuery<T> {
   data: T | null
@@ -72,6 +75,16 @@ export function useAutomationList(projectId: string): HostQuery<Automation[]> {
   return useHostQuery(
     projectId,
     () => listAutomations(projectId),
+    (change) => change.project_id === projectId
+  )
+}
+
+/** Open suggestions of the project; nothing is asked while the setting is off. */
+export function useAutomationSuggestions(projectId: string): HostQuery<AutomationSuggestion[]> {
+  const enabled = useSuggestAutomations()
+  return useHostQuery(
+    enabled ? projectId : null,
+    () => listAutomationSuggestions(projectId),
     (change) => change.project_id === projectId
   )
 }

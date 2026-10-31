@@ -7,6 +7,7 @@ import { AutomationDetail } from './AutomationDetail'
 import { AutomationList, AutomationListEmpty } from './AutomationList'
 import { AutomationRunDetail } from './AutomationRunDetail'
 import { useAutomationFocus } from './automation-focus'
+import { SuggestedAutomations } from './SuggestedAutomations'
 import { useAutomationDetail, useAutomationList, useAutomationRuns } from './use-automations'
 
 interface AutomationsPanelProps {
@@ -49,12 +50,18 @@ export function AutomationsPanel({
     runs.reload()
   }
 
-  const listView =
-    list.data === null ? (
-      <PanelMessage text={list.error ? `Could not load automations: ${list.error}` : 'Loading…'} />
-    ) : (
-      <AutomationList automations={list.data} selectedId={selectedId} onSelect={select} />
-    )
+  const listView = (
+    <>
+      <SuggestedAutomations projectId={projectId} />
+      {list.data === null ? (
+        <PanelMessage
+          text={list.error ? `Could not load automations: ${list.error}` : 'Loading…'}
+        />
+      ) : (
+        <AutomationList automations={list.data} selectedId={selectedId} onSelect={select} />
+      )}
+    </>
+  )
 
   const detailView =
     selectedId === null ? null : detail.data === null ? (
@@ -98,7 +105,10 @@ export function AutomationsPanel({
 
   if (list.data?.length === 0) {
     return (
-      <div className="flex h-full min-h-0 items-center justify-center bg-background">
+      <div className="flex h-full min-h-0 flex-col items-center justify-center overflow-y-auto bg-background">
+        <div className="w-full max-w-md">
+          <SuggestedAutomations projectId={projectId} />
+        </div>
         <AutomationListEmpty />
       </div>
     )

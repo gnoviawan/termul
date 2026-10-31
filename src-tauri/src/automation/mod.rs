@@ -13,6 +13,7 @@ pub mod schema;
 pub mod secrets;
 pub mod service;
 pub mod store;
+pub mod suggest;
 pub mod template;
 
 #[cfg(test)]

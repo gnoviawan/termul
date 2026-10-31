@@ -15,6 +15,7 @@ import type {
   AutomationNode,
   AutomationRun,
   AutomationStep,
+  AutomationSuggestion,
   Edge,
   Graph,
   Issue,
@@ -350,6 +351,31 @@ export function parseAgentList(v: unknown): KnownAgent[] {
 
 export function parseSecretNames(v: unknown): string[] {
   return arr(v, 'secrets', str)
+}
+
+function suggestion(v: unknown, p: string): AutomationSuggestion {
+  const o = obj(v, p)
+  const cadence = obj(o.cadence, `${p}.cadence`)
+  return {
+    fingerprint: str(o.fingerprint, `${p}.fingerprint`),
+    representative: str(o.representative, `${p}.representative`),
+    occurrences: num(o.occurrences, `${p}.occurrences`),
+    days: num(o.days, `${p}.days`),
+    last_at: num(o.last_at, `${p}.last_at`),
+    cadence: {
+      schedule: schedule(cadence.schedule, `${p}.cadence.schedule`),
+      label: str(cadence.label, `${p}.cadence.label`)
+    }
+  }
+}
+
+export function parseSuggestionList(v: unknown): AutomationSuggestion[] {
+  return arr(v, 'suggestions', suggestion)
+}
+
+/** A match reply: the suggestion the prompt repeats, or `null`. */
+export function parseSuggestionMatch(v: unknown): AutomationSuggestion | null {
+  return nullable(v, 'match', suggestion)
 }
 
 /**

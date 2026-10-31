@@ -259,6 +259,9 @@ async fn initialize_advertises_the_chat_and_canvas_instructions() {
             "Canvas button in Termul's left rail",
             "read_canvas_guide",
             "get_canvas_style",
+            "This looks repeatable. Want me to turn it into a scheduled background automation?",
+            "\"Yes, schedule it\" and \"Not now\"",
+            "ask once per chat with the `ask_user` tool",
         ] {
             assert!(instructions.contains(needle), "missing {needle:?}");
         }
