@@ -1,13 +1,19 @@
 import { useRef } from 'react'
+import { Github, type TermulIcon } from '@/components/icons'
 import { CountBadge } from '@/components/ui/count-badge'
 import { SEGMENTED_TRACK_CLASS, segmentClass } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import type { ShellLastColumnTab } from '@/stores/shell-layout-store'
 
-const TABS: ReadonlyArray<{ id: ShellLastColumnTab; label: string }> = [
+/**
+ * `Icon` makes a tab icon-only (its label is the accessible name and tooltip):
+ * four text segments do not fit the 220px minimum panel width.
+ */
+const TABS: ReadonlyArray<{ id: ShellLastColumnTab; label: string; Icon?: TermulIcon }> = [
   { id: 'chats', label: 'Chats' },
   { id: 'explorer', label: 'Explorer' },
-  { id: 'changes', label: 'Changes' }
+  { id: 'changes', label: 'Changes' },
+  { id: 'github', label: 'GitHub', Icon: Github }
 ]
 
 export function columnTabId(tab: ShellLastColumnTab): string {
@@ -26,7 +32,7 @@ interface ColumnTabsProps {
 }
 
 /**
- * Side panel Column tabs: Chats, Explorer, Changes in a fixed order. A
+ * Side panel Column tabs: Chats, Explorer, Changes, GitHub in a fixed order. A
  * `tablist` with a roving tabindex; Left/Right move and select, wrapping.
  */
 export function ColumnTabs({
@@ -67,9 +73,19 @@ export function ColumnTabs({
             tabIndex={active ? 0 : -1}
             onClick={() => onSelect(tab.id)}
             onKeyDown={(event) => handleKeyDown(event, index)}
-            className={cn(segmentClass(active), 'h-full flex-1 justify-center gap-1.5')}
+            aria-label={tab.Icon ? tab.label : undefined}
+            title={tab.Icon ? tab.label : undefined}
+            className={cn(
+              segmentClass(active),
+              'h-full justify-center gap-1.5',
+              tab.Icon ? 'shrink-0' : 'min-w-0 flex-auto'
+            )}
           >
-            {tab.label}
+            {tab.Icon ? (
+              <tab.Icon size={14} aria-hidden="true" />
+            ) : (
+              <span className="min-w-0 truncate">{tab.label}</span>
+            )}
             {tab.id === 'changes' && changedCount > 0 && (
               <CountBadge
                 count={changedCount}

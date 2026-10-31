@@ -1,3 +1,4 @@
+import type { GithubItemKind, GithubRepoSlot } from '@shared/types/github.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { PersistedWorkspaceTabKind } from '@/lib/workspace-tab-kinds'
 import type { PaneDirection } from '@/types/workspace.types'
@@ -47,6 +48,16 @@ interface PersistedGitHistoryTabRef {
   cwd: string
 }
 
+interface PersistedGithubItemTabRef {
+  type: 'github-item'
+  id: string
+  cwd: string
+  repo: GithubRepoSlot
+  kind: GithubItemKind
+  number: number
+  title: string
+}
+
 interface PersistedDiffTabRef {
   type: 'diff'
   id: string
@@ -77,6 +88,7 @@ export type PersistedTabRef =
   | PersistedGitTabRef
   | PersistedAgentChatTabRef
   | PersistedGitHistoryTabRef
+  | PersistedGithubItemTabRef
   | PersistedDiffTabRef
   | PersistedCommitDiffTabRef
   | PersistedAutomationsTabRef

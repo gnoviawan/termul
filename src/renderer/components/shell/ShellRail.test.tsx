@@ -431,6 +431,7 @@ describe('ShellRail', () => {
         'Chats',
         'Explorer',
         'Changes',
+        'GitHub',
         'Search',
         'Open canvas',
         'Open automations',

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
+import { githubItemTabLabel } from '@/components/github/github-status'
 import {
   describeProjectSubtitle,
   useChatIsolationContext
@@ -228,6 +229,8 @@ export function MobileChatShell({
         return 'Git Changes'
       case 'git-history':
         return 'Git History'
+      case 'github-item':
+        return githubItemTabLabel(activeTab.number, activeTab.title)
       case 'diff':
         return basename(activeTab.path)
       case 'commit-diff':

@@ -90,6 +90,24 @@ vi.mock('@/stores/workspace-store', () => ({
   )
 }))
 
+vi.mock('@/components/github/GithubPanel', () => ({
+  GithubPanel: ({
+    cwd,
+    projectId,
+    onNavigate
+  }: {
+    cwd: string
+    projectId: string
+    onNavigate?: () => void
+  }) => (
+    <div data-testid="github-panel" data-cwd={cwd} data-project={projectId}>
+      <button type="button" onClick={onNavigate}>
+        Open issue
+      </button>
+    </div>
+  )
+}))
+
 vi.mock('@/stores/terminal-store', () => ({
   useTerminalStore: Object.assign(
     vi.fn((sel: (s: { terminals: unknown[] }) => unknown) =>
@@ -374,9 +392,9 @@ describe('MobileShellDrawer shell', () => {
         within(dialog).getByRole('navigation', { name: 'Sections' })
       ) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
-    expect(within(dialog).getByText('Browse and open chats, terminals and editors')).toHaveClass(
-      'sr-only'
-    )
+    expect(
+      within(dialog).getByText('Browse and open chats, terminals, editors and GitHub issues')
+    ).toHaveClass('sr-only')
   })
 
   it('orders project row, section tabs, search, Recents, footer and the New chat pill on Chats', async () => {
@@ -536,7 +554,7 @@ describe('MobileShellDrawer section nav', () => {
       name
     })
 
-  it('shows Chats, Terminals and Editors as one row of equal 44px tabs, the preselected one current', async () => {
+  it('shows Chats, Terminals, Editors and GitHub as one row of equal 44px tabs, the preselected one current', async () => {
     seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1')
     terminalsRef.current = [{ id: 't1', name: 'zsh' }]
     const { dialog } = await openDrawer({ section: 'terminals', activeTabId: 'term-t1' })
@@ -544,8 +562,8 @@ describe('MobileShellDrawer section nav', () => {
     const rows = within(within(dialog).getByRole('navigation', { name: 'Sections' })).getAllByRole(
       'button'
     )
-    expect(rows.map((row) => row.textContent)).toEqual(['Chats', 'Terminals', 'Editors'])
-    // One line: the three tabs are siblings in one horizontal flex track,
+    expect(rows.map((row) => row.textContent)).toEqual(['Chats', 'Terminals', 'Editors', 'GitHub'])
+    // One line: the four tabs are siblings in one horizontal flex track,
     // each taking an equal share.
     const track = rows[0].parentElement
     expect(track).toHaveClass('flex', 'rounded-full', 'bg-secondary')
@@ -631,6 +649,29 @@ describe('MobileShellDrawer section nav', () => {
 
     expect(navButton(dialog, 'Chats')).toBeInTheDocument()
     expect(within(dialog).queryByTestId('drawer-attention-badge')).not.toBeInTheDocument()
+  })
+
+  it('lists the project GitHub items in the GitHub section and closes once one opens', async () => {
+    seedProject(makeProject())
+    const { dialog } = await openDrawer({ section: 'chats' })
+
+    fireEvent.click(navButton(dialog, 'GitHub'))
+    expect(navButton(dialog, 'GitHub')).toHaveAttribute('aria-current', 'true')
+    expect(
+      within(dialog).getByRole('heading', { level: 2, name: 'Issues and pull requests' })
+    ).toBeInTheDocument()
+    const panel = await within(dialog).findByTestId('github-panel')
+    expect(panel).toHaveAttribute('data-cwd', '/work')
+    expect(panel).toHaveAttribute('data-project', 'p1')
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Open issue' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+  })
+
+  it('preselects GitHub when a GitHub item tab is on screen', async () => {
+    seedProject(makeProject())
+    const { dialog } = await openDrawer({ section: 'github' })
+    expect(navButton(dialog, 'GitHub')).toHaveAttribute('aria-current', 'true')
   })
 
   it('preselects again on the next open after a nav switch', async () => {

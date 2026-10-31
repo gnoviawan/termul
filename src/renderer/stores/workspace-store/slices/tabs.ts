@@ -18,6 +18,7 @@ import {
   findPaneContainingTab,
   getAllLeafPanes,
   gitHistoryTabId,
+  githubItemTabId,
   gitTabId,
   makeBrowserTabId,
   resolveActivePaneId,
@@ -37,6 +38,7 @@ type TabsSliceState = Pick<
   | 'insertAgentChatTab'
   | 'addGitTab'
   | 'addGitHistoryTab'
+  | 'addGithubItemTab'
   | 'addDiffTab'
   | 'addCommitDiffTab'
   | 'addCanvasTab'
@@ -339,6 +341,12 @@ export const createTabsSlice: StateCreator<WorkspaceState, [], [], TabsSliceStat
 
     const tab: WorkspaceTab = { type: 'git-history', id, cwd }
     get().addTabToPane(paneId, tab)
+  },
+
+  // GitHub item tab: one per (cwd, repo slot, number). A repeat open focuses it.
+  addGithubItemTab: (item, targetPaneId?: string): void => {
+    const id = githubItemTabId(item.cwd, item.repo, item.number)
+    focusOrAddTab({ get, set }, id, () => ({ type: 'github-item', id, ...item }), targetPaneId)
   },
 
   // Diff tab (CAP-9): the id hashes the canonical (cwd, path, side) identity, so

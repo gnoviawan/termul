@@ -494,6 +494,21 @@ describe('MobileChatShell', () => {
         ['git changes', [{ type: 'git', id: 'g1', cwd: '/proj' }], 'Git Changes'],
         ['git history', [{ type: 'git-history', id: 'gh1', cwd: '/proj' }], 'Git History'],
         [
+          'a GitHub item',
+          [
+            {
+              type: 'github-item',
+              id: 'github-item-/proj-origin-12',
+              cwd: '/proj',
+              repo: 'origin',
+              kind: 'issue',
+              number: 12,
+              title: 'Crash on start'
+            }
+          ],
+          '#12 Crash on start'
+        ],
+        [
           'a commit diff',
           [
             {
@@ -2003,6 +2018,22 @@ describe('MobileChatShell', () => {
       ['an editor', [{ type: 'editor', id: 'e1', filePath: '/demo/a.ts' }], 'e1', 'editors'],
       ['Git Changes', [{ type: 'git', id: 'g1', cwd: '/demo' }], 'g1', 'editors'],
       ['Git History', [{ type: 'git-history', id: 'gh1', cwd: '/demo' }], 'gh1', null],
+      [
+        'a GitHub item',
+        [
+          {
+            type: 'github-item',
+            id: 'github-item-/demo-origin-4',
+            cwd: '/demo',
+            repo: 'origin',
+            kind: 'pr',
+            number: 4,
+            title: 'Fix'
+          }
+        ],
+        'github-item-/demo-origin-4',
+        'github'
+      ],
       ['no tab', [], null, null]
     ])('preselects the drawer section of %s', (_label, tabs, activeTabId, section) => {
       seedTabs(tabs, activeTabId)

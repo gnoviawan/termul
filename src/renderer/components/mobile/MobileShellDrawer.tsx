@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ConnectionStatusIndicator } from '@/components/ConnectionStatusIndicator'
 import { findVisibleQuestionFocusTarget } from '@/components/chat/use-approval-dock'
@@ -8,6 +8,7 @@ import {
   FileCode,
   FolderGit2,
   FolderTree,
+  Github,
   History,
   MessageSquare,
   Plus,
@@ -18,6 +19,7 @@ import {
   Workflow
 } from '@/components/icons'
 import { ProjectIcon } from '@/components/ProjectIcon'
+import { useColumnWorkingCopy } from '@/components/shell/use-column-working-copy'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { CountBadge } from '@/components/ui/count-badge'
@@ -49,6 +51,10 @@ import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useWorktreePick } from '@/stores/shell-layout-store'
 import { MobileDrawerSectionList } from './MobileDrawerSectionList'
 import { MobileRecentsList } from './MobileRecentsList'
+
+const GithubPanel = lazy(() =>
+  import('@/components/github/GithubPanel').then((m) => ({ default: m.GithubPanel }))
+)
 
 /** Id of the shell header's `h1`: where a navigation hands focus. Without it the opener wins. */
 const SHELL_TITLE_ID = 'mobile-shell-title'
@@ -84,7 +90,8 @@ const resolveNavigationFocus = (): HTMLElement | null => {
 const SECTION_NAV: ReadonlyArray<{ section: MobileSection; label: string; Icon: TermulIcon }> = [
   { section: 'chats', label: 'Chats', Icon: MessageSquare },
   { section: 'terminals', label: 'Terminals', Icon: TerminalSquare },
-  { section: 'editors', label: 'Editors', Icon: FileCode }
+  { section: 'editors', label: 'Editors', Icon: FileCode },
+  { section: 'github', label: 'GitHub', Icon: Github }
 ]
 
 /**
@@ -98,7 +105,8 @@ const FOOTER_PILL_CLASS =
 const SECTION_HEADINGS: Record<MobileSection, string> = {
   chats: 'Recents',
   terminals: 'Terminals',
-  editors: 'Editors'
+  editors: 'Editors',
+  github: 'Issues and pull requests'
 }
 
 interface MobileShellDrawerProps {
@@ -231,6 +239,7 @@ export function MobileShellDrawer({
 }: MobileShellDrawerProps): React.JSX.Element {
   const navigate = useNavigate()
   const activeProject = useActiveProject()
+  const { cwd: githubCwd } = useColumnWorkingCopy(activeProject)
   const [query, setQuery] = useState('')
   const contentRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLHeadingElement>(null)
@@ -339,7 +348,7 @@ export function MobileShellDrawer({
             )}
           </div>
           <SheetDescription className="sr-only">
-            Browse and open chats, terminals and editors
+            Browse and open chats, terminals, editors and GitHub issues
           </SheetDescription>
         </SheetHeader>
 
@@ -411,7 +420,21 @@ export function MobileShellDrawer({
           >
             {SECTION_HEADINGS[listSection]}
           </h2>
-          {listSection === 'chats' ? (
+          {listSection === 'github' ? (
+            activeProject && githubCwd ? (
+              <Suspense fallback={null}>
+                <GithubPanel
+                  projectId={activeProject.id}
+                  cwd={githubCwd}
+                  onNavigate={closeForNavigation}
+                />
+              </Suspense>
+            ) : (
+              <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+                Open a project to see its issues and pull requests.
+              </p>
+            )
+          ) : listSection === 'chats' ? (
             <MobileRecentsList
               query={query}
               headingId={listHeadingId}
