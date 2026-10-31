@@ -27,6 +27,12 @@ describe('mcpCatalogReasonText', () => {
     )
   })
 
+  it('names the runner alias an import may not use', () => {
+    expect(mcpCatalogReasonText({ code: 'unsupported-runner', command: 'npm exec' })).toBe(
+      "It runs its package through npm exec, which Termul can't check. Use npx, uvx, docker or dotnet dnx instead."
+    )
+  })
+
   it('names the launch argument an import may not pass its runner', () => {
     expect(
       mcpCatalogReasonText({

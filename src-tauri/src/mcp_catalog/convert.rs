@@ -269,6 +269,10 @@ pub enum McpCatalogReason {
         command: String,
         argument: String,
     },
+    /// An imported launch runs a package through a runner alias (`npm exec`, `bunx`).
+    UnsupportedRunner {
+        command: String,
+    },
 }
 
 /// Each env or header name may appear once (headers case-insensitively), so

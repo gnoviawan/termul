@@ -33,6 +33,7 @@ function stdioView(overrides: Partial<McpConsentView> = {}): McpConsentView {
       { name: 'ACME_PROFILE', value: 'staging', isSecret: false, origin: 'file' }
     ],
     headers: [],
+    hostMounts: [],
     warnings: ['runs-local-code'],
     provenance: {
       namespace: { kind: 'github', account: 'acme' },
@@ -158,6 +159,8 @@ describe('McpConsentDialog', () => {
     const warnings: McpConsentWarning[] = [
       'runs-local-code',
       'runs-inline-code',
+      'mounts-host-path',
+      'mounts-sensitive-path',
       'sends-data-remote',
       'mutable-tag',
       'deprecated',
@@ -167,6 +170,8 @@ describe('McpConsentDialog', () => {
     for (const copy of [
       'This runs a program on this computer with your permissions.',
       'It hands a shell or interpreter code written in its arguments. Read every argument before you approve.',
+      'The container can read and change the folders on this computer listed below.',
+      'It mounts the root folder, a home folder or the Docker socket, which gives the container control of this computer.',
       'This sends your data to a remote server.',
       'This image tag can change without notice.',
       'The registry marks this server deprecated.',
@@ -174,6 +179,28 @@ describe('McpConsentDialog', () => {
     ]) {
       expect(screen.getByText(copy)).toBeInTheDocument()
     }
+  })
+
+  it('lists each mounted host folder and flags a dangerous one in a danger notice', () => {
+    renderDialog(
+      stdioView({
+        hostMounts: [
+          { hostPath: '/srv/data', sensitive: false },
+          { hostPath: '/var/run/docker.sock', sensitive: true }
+        ],
+        warnings: ['runs-local-code', 'mounts-host-path', 'mounts-sensitive-path']
+      })
+    )
+    const section = screen.getByRole('region', { name: 'Folders from this computer' })
+    expect(Array.from(section.querySelectorAll('li')).map((item) => item.textContent)).toEqual([
+      '/srv/data',
+      '/var/run/docker.sockdangerous'
+    ])
+    const danger = screen.getByText(
+      'It mounts the root folder, a home folder or the Docker socket, which gives the container control of this computer.'
+    )
+    const caution = screen.getByText('This runs a program on this computer with your permissions.')
+    expect(danger.closest('ul')).not.toBe(caution.closest('ul'))
   })
 
   it('shows provenance and opens the repository through the safe opener', () => {

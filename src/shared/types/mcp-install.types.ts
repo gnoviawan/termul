@@ -106,6 +106,8 @@ export interface McpConsentValue {
 export type McpConsentWarning =
   | 'runs-local-code'
   | 'runs-inline-code'
+  | 'mounts-host-path'
+  | 'mounts-sensitive-path'
   | 'sends-data-remote'
   | 'mutable-tag'
   | 'deprecated'
@@ -127,6 +129,14 @@ export interface McpConsentProvenance {
   snapshotFetchedAt: string | null
 }
 
+/** A host path a docker launch mounts into its container. */
+export interface McpHostMount {
+  /** Escaped like `argv`. */
+  hostPath: string
+  /** The filesystem root, a home directory, or the docker socket. */
+  sensitive: boolean
+}
+
 /**
  * The SEP-1024 consent view. `command`, `argv` and `url` are the exact launch
  * spec, untruncated, with control and bidi characters escaped as `\u{XXXX}`
@@ -140,6 +150,7 @@ export interface McpConsentView {
   url: string | null
   env: McpConsentValue[]
   headers: McpConsentValue[]
+  hostMounts: McpHostMount[]
   warnings: McpConsentWarning[]
   provenance: McpConsentProvenance | null
 }

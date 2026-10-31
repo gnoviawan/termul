@@ -73,6 +73,8 @@ export function mcpCatalogReasonText(reason: McpCatalogReason): string {
       return `It lists "${reason.name}" more than once.`
     case 'unsupported-launch-argument':
       return `It passes ${reason.argument} to ${reason.command}, which Termul doesn't allow because it can change what runs.`
+    case 'unsupported-runner':
+      return `It runs its package through ${reason.command}, which Termul can't check. Use npx, uvx, docker or dotnet dnx instead.`
     case 'cmd-metacharacter':
       return `Its ${reason.field} holds a character Windows reads as a command operator (& | < > ^ % ! " ( or )).`
   }

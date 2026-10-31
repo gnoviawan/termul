@@ -4,6 +4,7 @@ import type {
   McpConsentValue,
   McpConsentView,
   McpConsentWarning,
+  McpHostMount,
   McpInstallPlan
 } from '@shared/types/mcp-install.types'
 import { useId, useRef } from 'react'
@@ -26,6 +27,10 @@ export const CONSENT_WARNING_COPY: Record<McpConsentWarning, string> = {
   'runs-local-code': 'This runs a program on this computer with your permissions.',
   'runs-inline-code':
     'It hands a shell or interpreter code written in its arguments. Read every argument before you approve.',
+  'mounts-host-path':
+    'The container can read and change the folders on this computer listed below.',
+  'mounts-sensitive-path':
+    'It mounts the root folder, a home folder or the Docker socket, which gives the container control of this computer.',
   'sends-data-remote': 'This sends your data to a remote server.',
   'mutable-tag': 'This image tag can change without notice.',
   deprecated: 'The registry marks this server deprecated.',
@@ -81,6 +86,7 @@ export function McpConsentDialog({
           <div className="grid gap-4">
             <Warnings warnings={plan.consentView.warnings} />
             <LaunchSpec view={plan.consentView} />
+            <HostMounts mounts={plan.consentView.hostMounts} />
             <ValueList heading="Environment" values={plan.consentView.env} />
             <ValueList heading="Headers" values={plan.consentView.headers} />
             {plan.consentView.provenance !== null && (
@@ -111,16 +117,52 @@ export function McpConsentDialog({
   )
 }
 
-function Warnings({ warnings }: { warnings: McpConsentWarning[] }): React.JSX.Element | null {
-  if (warnings.length === 0) return null
+const DANGER_WARNINGS: ReadonlySet<McpConsentWarning> = new Set(['mounts-sensitive-path'])
+
+function Warnings({ warnings }: { warnings: McpConsentWarning[] }): React.JSX.Element {
+  const danger = warnings.filter((warning) => DANGER_WARNINGS.has(warning))
+  const caution = warnings.filter((warning) => !DANGER_WARNINGS.has(warning))
   return (
-    <SettingsNotice tone="warning">
-      <ul className="grid gap-1">
-        {warnings.map((warning) => (
-          <li key={warning}>{CONSENT_WARNING_COPY[warning]}</li>
+    <>
+      {danger.length > 0 && (
+        <SettingsNotice tone="danger">
+          <WarningList warnings={danger} />
+        </SettingsNotice>
+      )}
+      {caution.length > 0 && (
+        <SettingsNotice tone="warning">
+          <WarningList warnings={caution} />
+        </SettingsNotice>
+      )}
+    </>
+  )
+}
+
+function WarningList({ warnings }: { warnings: McpConsentWarning[] }): React.JSX.Element {
+  return (
+    <ul className="grid gap-1">
+      {warnings.map((warning) => (
+        <li key={warning}>{CONSENT_WARNING_COPY[warning]}</li>
+      ))}
+    </ul>
+  )
+}
+
+function HostMounts({ mounts }: { mounts: McpHostMount[] }): React.JSX.Element | null {
+  if (mounts.length === 0) return null
+  return (
+    <Section heading="Folders from this computer">
+      <ul className="grid gap-0.5 rounded-lg border border-border/60 bg-muted/40 px-3 py-2">
+        {mounts.map((mount, index) => (
+          <li key={index} className="flex flex-wrap items-center gap-1.5">
+            <span className={VERBATIM_CLASS}>
+              <Verbatim text={mount.hostPath} />
+            </span>
+            {mount.sensitive && <Badge variant="destructive">dangerous</Badge>}
+          </li>
         ))}
       </ul>
-    </SettingsNotice>
+    </Section>
   )
 }
 

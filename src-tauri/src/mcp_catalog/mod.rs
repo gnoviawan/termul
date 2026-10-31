@@ -17,6 +17,8 @@ pub mod trust;
 #[cfg(test)]
 mod convert_tests;
 #[cfg(test)]
+mod launch_check_tests;
+#[cfg(test)]
 mod plan_tests;
 #[cfg(test)]
 mod search_tests;

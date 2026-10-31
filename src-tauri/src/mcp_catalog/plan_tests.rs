@@ -1628,3 +1628,54 @@ async fn a_registry_template_is_shown_with_its_secret_variables_as_placeholders(
         ]
     );
 }
+
+#[tokio::test]
+async fn a_docker_import_names_each_host_path_it_mounts() {
+    let service = service();
+    let plan = plan(
+        &service,
+        stdio_import(
+            "docker",
+            &["run", "-i", "--rm", "-v", "/srv/data:/data", "-v", "/:/host", "ghcr.io/a/b:1.0"],
+        ),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        plan.consent_view.host_mounts,
+        vec![
+            super::consent::HostMount {
+                host_path: "/srv/data".to_string(),
+                sensitive: false,
+            },
+            super::consent::HostMount {
+                host_path: "/".to_string(),
+                sensitive: true,
+            },
+        ]
+    );
+    assert_eq!(
+        plan.consent_view.warnings,
+        vec![
+            ConsentWarning::RunsLocalCode,
+            ConsentWarning::MountsHostPath,
+            ConsentWarning::MountsSensitivePath,
+            ConsentWarning::FromFile,
+        ]
+    );
+    let plain = plan_with(
+        &service,
+        stdio_import("docker", &["run", "-i", "--rm", "ghcr.io/a/b:1.0"]),
+        None,
+        &[],
+    )
+    .await;
+    let Ok(PlanReply::Plan { plan: plain }) = plain else {
+        panic!("{plain:?}");
+    };
+    assert_eq!(plain.consent_view.host_mounts, vec![]);
+    assert_eq!(
+        plain.consent_view.warnings,
+        vec![ConsentWarning::RunsLocalCode, ConsentWarning::FromFile]
+    );
+}

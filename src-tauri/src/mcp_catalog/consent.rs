@@ -4,7 +4,7 @@ use regex::Regex;
 use serde::Serialize;
 
 use super::form::{Origin, Shown};
-use super::launch_check::runs_inline_code;
+use super::launch_check::{host_mounts, runs_inline_code};
 use super::resolved::ResolvedConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -12,6 +12,8 @@ use super::resolved::ResolvedConfig;
 pub enum ConsentWarning {
     RunsLocalCode,
     RunsInlineCode,
+    MountsHostPath,
+    MountsSensitivePath,
     SendsDataRemote,
     MutableTag,
     Deprecated,
@@ -58,6 +60,15 @@ pub struct ConsentValue {
     pub origin: Origin,
 }
 
+/// A host path a docker launch mounts into the container. `sensitive` marks
+/// the filesystem root, a home directory, or the docker socket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostMount {
+    pub host_path: String,
+    pub sensitive: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsentView {
@@ -67,6 +78,7 @@ pub struct ConsentView {
     pub url: Option<String>,
     pub env: Vec<ConsentValue>,
     pub headers: Vec<ConsentValue>,
+    pub host_mounts: Vec<HostMount>,
     pub warnings: Vec<ConsentWarning>,
     pub provenance: Option<ConsentProvenance>,
 }
@@ -122,11 +134,19 @@ impl ConsentView {
     pub(crate) fn build(input: ConsentInput<'_>) -> Self {
         let shown: Vec<ConsentValue> = input.values.iter().map(ShownValue::consent).collect();
         let mut warnings = Vec::new();
+        let mut mounts = Vec::new();
         let (transport, command, argv, url, env, headers) = match input.config {
             ResolvedConfig::Stdio { command, args, .. } => {
                 warnings.push(ConsentWarning::RunsLocalCode);
                 if runs_inline_code(command, args) {
                     warnings.push(ConsentWarning::RunsInlineCode);
+                }
+                mounts = host_mounts(command, args);
+                if !mounts.is_empty() {
+                    warnings.push(ConsentWarning::MountsHostPath);
+                }
+                if mounts.iter().any(|mount| mount.sensitive) {
+                    warnings.push(ConsentWarning::MountsSensitivePath);
                 }
                 (
                     "stdio",
@@ -173,6 +193,7 @@ impl ConsentView {
             url,
             env,
             headers,
+            host_mounts: mounts,
             warnings,
             provenance: input.provenance,
         }

@@ -114,6 +114,7 @@ const planReply: McpInstallPlanReply = {
       url: null,
       env: [{ name: 'HOOKA_API_KEY', value: null, isSecret: true, origin: 'user' }],
       headers: [],
+      hostMounts: [],
       warnings: ['runs-local-code'],
       provenance: {
         namespace: { kind: 'domain', domain: 'to.hooka' },
