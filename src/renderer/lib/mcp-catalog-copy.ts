@@ -7,7 +7,8 @@
 import type {
   McpCatalogReason,
   McpCatalogRunner,
-  McpCatalogState
+  McpCatalogState,
+  McpCatalogStatus
 } from '@shared/types/mcp-catalog.types'
 
 export const MCP_CATALOG_STATE_LABEL: Record<McpCatalogState, string> = {
@@ -63,4 +64,51 @@ export function mcpCatalogReasonText(reason: McpCatalogReason): string {
     case 'unsupported-registry':
       return `Its package is hosted on ${reason.registry}, which Termul doesn't download from.`
   }
+}
+
+const count = new Intl.NumberFormat('en-US')
+const dateTime = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' })
+const timeOfDay = new Intl.DateTimeFormat('en-US', { timeStyle: 'short' })
+
+export function mcpCatalogUpdatedText(updatedAt: string | null): string {
+  return updatedAt === null
+    ? 'No catalog is loaded yet.'
+    : `Updated ${dateTime.format(new Date(updatedAt))}.`
+}
+
+export function mcpCatalogSampleText(status: McpCatalogStatus): string | null {
+  if (!status.sample) return null
+  const next =
+    status.sync.state === 'disabled'
+      ? 'Turn on sync to load the full catalog.'
+      : 'Sync replaces it with the full catalog.'
+  return `This is the small sample bundled with this build, not the full registry. ${next}`
+}
+
+export function mcpCatalogSyncText(status: McpCatalogStatus, now = new Date()): string | null {
+  const { sync } = status
+  switch (sync.state) {
+    case 'disabled':
+      return 'Sync is off. No catalog request leaves this host.'
+    case 'idle':
+      return status.sample ? null : 'Up to date.'
+    case 'syncing':
+      return sync.full
+        ? `Downloading the full registry… ${count.format(sync.fetched)} servers so far.`
+        : 'Checking for updates…'
+    case 'failed': {
+      const retryAt = new Date(sync.retryAt)
+      const when =
+        retryAt.toDateString() === now.toDateString()
+          ? timeOfDay.format(retryAt)
+          : dateTime.format(retryAt)
+      return `Sync failed: ${sync.error.replace(/\.$/, '')}. Retrying at ${when}.`
+    }
+  }
+}
+
+export function mcpCatalogSyncErrorText(code: string): string {
+  return code === 'FORBIDDEN'
+    ? 'Only the host can change catalog sync.'
+    : "Couldn't change catalog sync. Try again."
 }

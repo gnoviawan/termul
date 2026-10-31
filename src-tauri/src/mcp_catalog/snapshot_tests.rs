@@ -82,7 +82,11 @@ fn installable(
 #[test]
 fn the_fixture_covers_every_state_and_reason_class() {
     let catalog = load_embedded();
-    assert!(catalog.fetched_at.is_some());
+    assert!(catalog.source.updated_at.is_some());
+    assert!(
+        catalog.source.sample,
+        "the committed fixture is marked as the sample"
+    );
     let status = |name: &str, runners| {
         let item = catalog
             .items
@@ -236,7 +240,10 @@ fn a_valid_snapshot_loads_sorted_with_its_fetch_time() {
         .map(|item| item.name.as_str())
         .collect();
     assert_eq!(names, ["io.example/a", "io.example/b"]);
-    assert_eq!(catalog.fetched_at.as_deref(), Some("2026-10-27T00:00:00Z"));
+    assert_eq!(
+        catalog.source.updated_at.as_deref(),
+        Some("2026-10-27T00:00:00Z")
+    );
 }
 
 #[test]
@@ -282,7 +289,7 @@ fn a_corrupted_or_empty_snapshot_serves_an_empty_catalog() {
     ] {
         let catalog = load_or_empty(&gz, &meta);
         assert!(catalog.items.is_empty());
-        assert_eq!(catalog.fetched_at, None);
+        assert_eq!(catalog.source.updated_at, None);
     }
 }
 

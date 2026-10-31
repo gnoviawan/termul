@@ -541,8 +541,10 @@ struct OciReference<'a> {
 /// or `:` or is `localhost`, as the docker CLI reads it.
 fn parse_oci_reference(identifier: &str) -> Option<OciReference<'_>> {
     static HOST: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$")
-            .expect("oci host regex")
+        Regex::new(
+            r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$",
+        )
+        .expect("oci host regex")
     });
     static REPOSITORY: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(concat!(
@@ -631,7 +633,10 @@ fn pinned_oci_image(
     if let Some(url) = registry_base_url {
         let base_host = Url::parse(url).ok().and_then(|base| {
             let name = base.host_str()?;
-            Some(base.port().map_or_else(|| name.to_string(), |port| format!("{name}:{port}")))
+            Some(
+                base.port()
+                    .map_or_else(|| name.to_string(), |port| format!("{name}:{port}")),
+            )
         });
         if base_host.as_deref() != Some(host) {
             return Err(McpCatalogReason::UnsupportedRegistry {

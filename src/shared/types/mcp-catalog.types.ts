@@ -1,14 +1,10 @@
 /**
  * Wire shapes of the host-owned MCP server catalog (spine AD-1 to AD-4).
- *
- * The host converts the official MCP Registry snapshot and answers paged
- * search. Every transport (`GET /mcp-catalog/search` and the `/ws` request
- * `search_mcp_catalog` on the web socket and the desktop channel) returns the
- * same `IpcResult<McpCatalogPage>`. The renderer never holds the full catalog
- * and never parses `server.json`.
  */
 
 import type { IpcResult } from './ipc.types'
+
+export const MCP_REGISTRY_URL = 'https://registry.modelcontextprotocol.io'
 
 /** The host's caps on a search query (`search.rs` `MAX_QUERY_CHARS`, `MAX_QUERY_TERMS`). */
 export const MCP_CATALOG_MAX_QUERY_CHARS = 200
@@ -70,18 +66,30 @@ export interface McpCatalogSearchRequest {
   limit?: number
 }
 
-export interface McpCatalogPage {
+export interface McpCatalogSource {
+  updatedAt: string | null
+  sample: boolean
+}
+
+export interface McpCatalogPage extends McpCatalogSource {
   items: McpCatalogRow[]
   nextCursor: string | null
   total: number
-  /** When the bundled snapshot was fetched; `null` if it failed to load. */
-  snapshotFetchedAt: string | null
 }
 
-/**
- * The renderer facade. The desktop impl sends `search_mcp_catalog` over the
- * Tauri channel; the web impl calls `GET /mcp-catalog/search`.
- */
+export type McpCatalogSync =
+  | { state: 'disabled' }
+  | { state: 'idle' }
+  | { state: 'syncing'; full: boolean; fetched: number }
+  | { state: 'failed'; error: string; retryAt: string }
+
+export interface McpCatalogStatus extends McpCatalogSource {
+  servers: number
+  sync: McpCatalogSync
+}
+
 export interface McpCatalogApi {
   search(request: McpCatalogSearchRequest): Promise<IpcResult<McpCatalogPage>>
+  status(): Promise<IpcResult<McpCatalogStatus>>
+  setSync(enabled: boolean): Promise<IpcResult<McpCatalogStatus>>
 }

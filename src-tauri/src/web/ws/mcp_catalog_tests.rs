@@ -1,14 +1,18 @@
 use super::super::tests::{route, test_env, test_outbound};
 use super::*;
-use crate::web::mcp_catalog_api::tests::http_search;
+use crate::web::mcp_catalog_api::tests::{http_search, http_status};
 
 async fn ws_search(payload: Value) -> WsReply {
+    ws_request("search_mcp_catalog", payload).await
+}
+
+async fn ws_request(request_type: &str, payload: Value) -> WsReply {
     let relay = Arc::new(WsRelaySink::new());
     let acp = Arc::new(AcpManager::new(vec![]));
     let (tx, _rx) = test_outbound();
     let subscriptions = Arc::new(Subscriptions::default());
     let registry = Arc::new(ProjectRegistry::new());
-    let frame = json!({ "id": "r1", "type": "search_mcp_catalog", "payload": payload }).to_string();
+    let frame = json!({ "id": "r1", "type": request_type, "payload": payload }).to_string();
     route(
         &frame,
         &test_env(&acp, &relay, &registry, &tx, &subscriptions),
@@ -46,4 +50,19 @@ async fn ws_and_http_return_the_same_validation_error() {
 
     let malformed = as_ipc_result(ws_search(json!({ "query": 7 })).await);
     assert_eq!(malformed["code"], "VALIDATION_ERROR");
+}
+
+#[tokio::test]
+async fn ws_and_http_return_the_same_status() {
+    let ws = as_ipc_result(ws_request("get_mcp_catalog_status", json!({})).await);
+    assert_eq!(ws, http_status().await);
+}
+
+#[tokio::test]
+async fn ws_set_sync_validates_then_reports_sync_unavailable_without_a_host() {
+    let invalid = as_ipc_result(ws_request("set_mcp_catalog_sync", json!({ "on": true })).await);
+    assert_eq!(invalid["code"], "VALIDATION_ERROR");
+    let unattached =
+        as_ipc_result(ws_request("set_mcp_catalog_sync", json!({ "enabled": true })).await);
+    assert_eq!(unattached["code"], "MCP_CATALOG_SYNC_UNAVAILABLE");
 }

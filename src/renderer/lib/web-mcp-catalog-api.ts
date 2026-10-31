@@ -1,11 +1,11 @@
-/**
- * HTTP implementation of the MCP catalog facade (spine AD-1): `GET
- * /mcp-catalog/search` on the host serving this client. Network and parse
- * failures map to `NETWORK_ERROR`; the route's own `IpcBody` passes through.
- */
+/** HTTP implementation of the MCP catalog facade (spine AD-1). */
 
-import type { McpCatalogApi, McpCatalogPage } from '@shared/types/mcp-catalog.types'
-import { getJson } from './ipc/http'
+import type {
+  McpCatalogApi,
+  McpCatalogPage,
+  McpCatalogStatus
+} from '@shared/types/mcp-catalog.types'
+import { getJson, postJson } from './ipc/http'
 
 export const webMcpCatalogApi: McpCatalogApi = {
   search(request) {
@@ -15,5 +15,7 @@ export const webMcpCatalogApi: McpCatalogApi = {
     if (request.limit !== undefined) params.set('limit', String(request.limit))
     const query = params.toString()
     return getJson<McpCatalogPage>(`/mcp-catalog/search${query ? `?${query}` : ''}`)
-  }
+  },
+  status: () => getJson<McpCatalogStatus>('/mcp-catalog/status'),
+  setSync: (enabled) => postJson<McpCatalogStatus>('/mcp-catalog/sync', { enabled })
 }

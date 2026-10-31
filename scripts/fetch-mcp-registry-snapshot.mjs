@@ -49,6 +49,7 @@ export function verifySnapshot(dir, minServers = MIN_RELEASE_SERVERS) {
   const sha256 = createHash('sha256').update(gz).digest('hex')
   if (sha256 !== meta.sha256)
     throw new Error(`snapshot sha256 ${sha256} does not match ${meta.sha256}`)
+  if (meta.sample) throw new Error('snapshot is the --only sample, not a release snapshot')
   const snapshot = JSON.parse(gunzipSync(gz).toString('utf8'))
   if (snapshot.formatVersion !== 1) throw new Error(`snapshot format ${snapshot.formatVersion}`)
   if (snapshot.servers.length !== meta.servers || snapshot.servers.length < minServers) {
@@ -115,7 +116,7 @@ export async function crawl(fetcher = fetchPage) {
 
 // The host never reads these: icons are never fetched (AD-15), publisher
 // `_meta` is enrichment (deferred), and parsing never depends on `$schema`.
-const DROPPED_SERVER_FIELDS = new Set(['$schema', 'icons', '_meta'])
+export const DROPPED_SERVER_FIELDS = new Set(['$schema', 'icons', '_meta'])
 
 function slimServer(server) {
   return Object.fromEntries(
@@ -190,7 +191,8 @@ async function main() {
     fetchedAt,
     bytes: gz.length,
     servers: snapshot.servers.length,
-    versions: snapshot.versions.length
+    versions: snapshot.versions.length,
+    ...(only && { sample: true })
   }
   mkdirSync(opts.out, { recursive: true })
   writeAtomic(resolve(opts.out, SNAPSHOT_FILE), gz)

@@ -1,8 +1,10 @@
 import {
   MCP_CATALOG_MAX_QUERY_CHARS,
   MCP_CATALOG_MAX_QUERY_TERMS,
+  MCP_REGISTRY_URL,
   type McpCatalogRow,
-  type McpCatalogState
+  type McpCatalogState,
+  type McpCatalogSync
 } from '@shared/types/mcp-catalog.types'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useEffect, useId, useRef, useState } from 'react'
@@ -11,13 +13,26 @@ import { ExternalLink, Search } from '@/components/icons'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { useSettingsSectionVisible } from '@/components/settings/SettingsLayout'
 import { SettingsNotice } from '@/components/settings/SettingsNotice'
+import { SettingsSwitchRow } from '@/components/settings/SettingsSwitchRow'
 import { type StatusTone, StatusWord } from '@/components/settings/StatusWord'
 import { Button } from '@/components/ui/button'
 import { PANEL_FIELD_CLASS, PANEL_FIELD_ICON_CLASS } from '@/components/ui/panel-styles'
 import { Spinner } from '@/components/ui/spinner'
 import { type McpCatalogResults, useMcpCatalogSearch } from '@/hooks/use-mcp-catalog-search'
+import {
+  type McpCatalogStatusHandle,
+  useMcpCatalogStatus,
+  useSearchFollowsCatalog
+} from '@/hooks/use-mcp-catalog-status'
 import { openerApi } from '@/lib/api'
-import { MCP_CATALOG_STATE_LABEL, mcpCatalogReasonText } from '@/lib/mcp-catalog-copy'
+import {
+  MCP_CATALOG_STATE_LABEL,
+  mcpCatalogReasonText,
+  mcpCatalogSampleText,
+  mcpCatalogSyncErrorText,
+  mcpCatalogSyncText,
+  mcpCatalogUpdatedText
+} from '@/lib/mcp-catalog-copy'
 import { cn } from '@/lib/utils'
 
 const STATE_TONE: Record<McpCatalogState, StatusTone> = {
@@ -32,11 +47,14 @@ const ESTIMATED_ROW_HEIGHT = 112
 /** Fetch the next page once the last rendered row is this close to the end. */
 const LOAD_AHEAD_ROWS = 8
 
-const count = new Intl.NumberFormat('en-US')
-
-function snapshotDate(iso: string): string {
-  return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' }).format(new Date(iso))
+const SYNC_TONE: Record<McpCatalogSync['state'], StatusTone> = {
+  disabled: 'muted',
+  idle: 'success',
+  syncing: 'muted',
+  failed: 'danger'
 }
+
+const count = new Intl.NumberFormat('en-US')
 
 function summary(results: McpCatalogResults): string {
   const noun = results.query
@@ -46,16 +64,67 @@ function summary(results: McpCatalogResults): string {
     : results.total === 1
       ? 'server'
       : 'servers'
-  const size = `${count.format(results.total)} ${noun}`
-  return results.snapshotFetchedAt
-    ? `${size} · catalog from ${snapshotDate(results.snapshotFetchedAt)}`
-    : size
+  return `${count.format(results.total)} ${noun}`
 }
 
-function openRepository(url: string): void {
+function openLink(url: string, failure: string): void {
   void openerApi.openUrlWithSystemBrowser(url).then((result) => {
-    if (!result.success) toast.error("Couldn't open the repository link.")
+    if (!result.success) toast.error(failure)
   })
+}
+
+function CatalogSource({ state, setSync }: McpCatalogStatusHandle): React.JSX.Element | null {
+  if (state.status === 'loading') return null
+  if (state.status === 'unavailable') {
+    return (
+      <p className="px-1 text-xs text-muted-foreground">
+        Termul couldn't check where the catalog comes from.
+      </p>
+    )
+  }
+  const { catalog, requested } = state
+  const sample = mcpCatalogSampleText(catalog)
+  const sync = mcpCatalogSyncText(catalog)
+  return (
+    <SettingsCard>
+      <div className="flex flex-col gap-1 px-4 py-3 text-xs text-muted-foreground">
+        <p className="text-sm text-foreground">
+          From the{' '}
+          <Button
+            type="button"
+            variant="link"
+            className="h-auto gap-1 p-0 text-sm"
+            onClick={() => openLink(MCP_REGISTRY_URL, "Couldn't open the MCP Registry link.")}
+          >
+            official MCP Registry
+            <ExternalLink size={12} aria-hidden />
+          </Button>
+        </p>
+        <p>{mcpCatalogUpdatedText(catalog.updatedAt)}</p>
+        {sample && <p>{sample}</p>}
+        {sync && (
+          <StatusWord
+            tone={SYNC_TONE[catalog.sync.state]}
+            pending={catalog.sync.state === 'syncing'}
+          >
+            {sync}
+          </StatusWord>
+        )}
+      </div>
+      <SettingsSwitchRow
+        id="mcp-catalog-sync"
+        label="Keep the catalog up to date"
+        description="The host downloads the official MCP Registry and checks it for changes."
+        checked={requested ?? catalog.sync.state !== 'disabled'}
+        disabled={requested !== null}
+        onToggle={(enabled) => {
+          void setSync(enabled).then((result) => {
+            if (!result.success) toast.error(mcpCatalogSyncErrorText(result.code))
+          })
+        }}
+      />
+    </SettingsCard>
+  )
 }
 
 function CatalogRow({ row, hintId }: { row: McpCatalogRow; hintId: string }): React.JSX.Element {
@@ -100,7 +169,9 @@ function CatalogRow({ row, hintId }: { row: McpCatalogRow; hintId: string }): Re
             size="xs"
             variant="ghost"
             aria-label={`Open the ${displayName} repository`}
-            onClick={() => openRepository(row.repositoryUrl as string)}
+            onClick={() =>
+              openLink(row.repositoryUrl as string, "Couldn't open the repository link.")
+            }
           >
             <ExternalLink size={13} />
             Repository
@@ -171,15 +242,13 @@ function CatalogList({
   )
 }
 
-/**
- * Browse and search the host's MCP catalog (SPEC CAP-1, CAP-4). Read-only:
- * search is the only host call, so shared-live viewers browse it too.
- * Install arrives with the consent flow.
- */
 export function McpCatalogBrowser(): React.JSX.Element {
   const visible = useSettingsSectionVisible()
   const [query, setQuery] = useState('')
-  const { state, canLoadMore, loadMore, retry } = useMcpCatalogSearch(query, visible)
+  const search = useMcpCatalogSearch(query, visible)
+  const { state, canLoadMore, loadMore, retry } = search
+  const status = useMcpCatalogStatus(visible)
+  useSearchFollowsCatalog(status.state.status === 'ready' ? status.state.catalog : null, search)
   const hintId = useId()
 
   const results =
@@ -193,6 +262,7 @@ export function McpCatalogBrowser(): React.JSX.Element {
         <span id={hintId}>{INSTALL_SOON} Until then, add servers by hand in the list above.</span>
       }
     >
+      <CatalogSource {...status} />
       <div className="relative">
         <Search size={13} aria-hidden className={PANEL_FIELD_ICON_CLASS} />
         <input
@@ -238,9 +308,9 @@ export function McpCatalogBrowser(): React.JSX.Element {
           <p aria-live="polite" className="px-1 text-xs text-muted-foreground">
             {summary(results)}
           </p>
-          {results.snapshotFetchedAt === null ? (
+          {results.updatedAt === null ? (
             <SettingsNotice tone="warning">
-              The catalog that ships with Termul didn't load, so there is nothing to browse.
+              No catalog is loaded yet, so there is nothing to browse.
             </SettingsNotice>
           ) : results.rows.length === 0 ? (
             <div className="flex flex-col items-center gap-2 rounded-lg border border-border bg-card p-5 text-center">

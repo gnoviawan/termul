@@ -286,6 +286,9 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+        tokio::spawn(termul_manager_lib::mcp_catalog::McpCatalogService::run(
+            data_paths.state_dir.join("mcp-catalog"),
+        ));
         // CAP-6 / Story 8: open the host-owned ACP catalog root. The
         // standalone binary owns its own root — NEVER shared with a desktop
         // host on the same machine. Defaults to `<state dir>/acp-catalog`.

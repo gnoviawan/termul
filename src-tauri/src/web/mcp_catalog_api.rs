@@ -1,20 +1,26 @@
-//! HTTP adapter for the host-owned MCP catalog (spine AD-1).
-//!
-//! `GET /mcp-catalog/search?query=&cursor=&limit=` answers one page from
-//! [`McpCatalogService`], the same call the `/ws` `search_mcp_catalog`
-//! request makes, so both return the same `IpcBody` for the same request.
-//! Search is a read: view-only and shared-live clients may call it.
+use std::net::SocketAddr;
 
 use axum::{
-    extract::{rejection::QueryRejection, Query},
+    body::Bytes,
+    extract::{rejection::QueryRejection, ConnectInfo, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
+use serde::Deserialize;
 use tracing::{info, warn};
 
-use crate::mcp_catalog::{McpCatalogPage, McpCatalogSearchRequest, McpCatalogService};
-use crate::web::fs_api::IpcBody;
+use crate::mcp_catalog::{
+    McpCatalogPage, McpCatalogSearchRequest, McpCatalogService, McpCatalogStatus,
+};
+use crate::web::fs_api::{check_local_only, IpcBody};
+use crate::web::ws::AppState;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetMcpCatalogSyncRequest {
+    pub enabled: bool,
+}
 
 const TARGET: &str = "termul::web::mcp_catalog_api";
 
@@ -54,6 +60,49 @@ pub async fn search(
                 StatusCode::OK,
                 Json(IpcBody::err(error.message, error.code)),
             )
+        }
+    }
+}
+
+pub async fn status() -> Json<IpcBody<McpCatalogStatus>> {
+    Json(IpcBody::ok(McpCatalogService::shared().await.status()))
+}
+
+pub async fn set_sync(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    body: Bytes,
+) -> Json<IpcBody<McpCatalogStatus>> {
+    if let Some(forbidden) = check_local_only(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/mcp-catalog/sync",
+    ) {
+        return Json(forbidden);
+    }
+    let request: SetMcpCatalogSyncRequest = match serde_json::from_slice(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            warn!(target: TARGET, category = ?error.classify(), "set_sync: invalid request");
+            return Json(IpcBody::err(
+                format!("invalid mcp catalog sync request: {error}"),
+                "VALIDATION_ERROR",
+            ));
+        }
+    };
+    match McpCatalogService::shared()
+        .await
+        .set_sync(request.enabled)
+        .await
+    {
+        Ok(status) => {
+            info!(target: TARGET, enabled = request.enabled, "set_sync: saved");
+            Json(IpcBody::ok(status))
+        }
+        Err(error) => {
+            warn!(target: TARGET, code = error.code, "set_sync: rejected");
+            Json(IpcBody::err(error.message, error.code))
         }
     }
 }
