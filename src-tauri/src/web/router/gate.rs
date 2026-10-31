@@ -44,6 +44,7 @@ const GATED_PREFIXES: &[&str] = &[
     "/mcp-catalog/",
     "/fs/",
     "/git/",
+    "/github/",
     "/search/",
     "/skills",
     "/log/",

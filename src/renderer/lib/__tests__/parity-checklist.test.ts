@@ -2924,3 +2924,97 @@ describe('Automation parity (facade)', () => {
     expect(facade).toContain("from './log-api'")
   })
 })
+
+describe('GitHub parity (spec-github-integration)', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const read = (...parts: string[]) => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
+  const facade = readFileSync(join(LIB_DIR, 'github-api.ts'), 'utf-8')
+  const ops = [
+    {
+      method: 'getContext',
+      command: 'github_get_context',
+      route: '/github/context',
+      handler: 'context'
+    },
+    {
+      method: 'listItems',
+      command: 'github_list_items',
+      route: '/github/items',
+      handler: 'list_items'
+    },
+    { method: 'getItem', command: 'github_get_item', route: '/github/item', handler: 'get_item' },
+    {
+      method: 'getChecks',
+      command: 'github_get_checks',
+      route: '/github/checks',
+      handler: 'get_checks'
+    },
+    {
+      method: 'getCheckLog',
+      command: 'github_get_check_log',
+      route: '/github/check-log',
+      handler: 'get_check_log'
+    },
+    { method: 'merge', command: 'github_merge', route: '/github/merge', handler: 'merge' },
+    { method: 'comment', command: 'github_comment', route: '/github/comment', handler: 'comment' },
+    {
+      method: 'checkoutPr',
+      command: 'github_checkout_pr',
+      route: '/github/checkout-pr',
+      handler: 'checkout_pr'
+    }
+  ]
+  const writeHandlers = new Set(['merge', 'comment', 'checkout_pr'])
+
+  it('the facade branches on isTauriContext() between invokeIpc({ request }) and postJson', () => {
+    expect(facade).toMatch(/isTauriContext\(\)\s*\?\s*await invokeIpc<T>\(command, \{ request \}\)/)
+    expect(facade).toMatch(/await postJson<T>\(route, request\)/)
+  })
+
+  it.each(ops)('$command is wired through the facade, lib.rs, commands and both routers', (op) => {
+    expect(facade).toMatch(
+      new RegExp(`${op.method}\\([^)]*\\)[^{]*\\{\\s*return call\\('${op.command}', '${op.route}'`)
+    )
+    expect(read('lib.rs')).toContain(`commands::${op.command},`)
+    expect(read('commands', 'github.rs')).toMatch(
+      new RegExp(`pub async fn ${op.command}\\(\\s*request:`)
+    )
+    const router = read('web', 'router', 'mod.rs')
+    const registration = `.route("${op.route}", post(github_api::${op.handler}))`
+    expect(router.split(registration).length - 1, 'router() and router_with_static()').toBe(2)
+    expect(read('web', 'github_api.rs')).toMatch(new RegExp(`pub async fn ${op.handler}\\(`))
+  })
+
+  it('/github/* is token-gated, and exactly the write routes take the remote-write guard', () => {
+    expect(read('web', 'router', 'gate.rs')).toContain('"/github/",')
+    const routes = read('web', 'github_api.rs')
+    expect(routes.match(/check_local_only::</g)?.length).toBe(1)
+    for (const op of ops) {
+      const handler = routes.match(new RegExp(`pub async fn ${op.handler}\\([\\s\\S]*?\\n}`))?.[0]
+      expect(handler, op.handler).toBeDefined()
+      const guarded = new RegExp(
+        `ConnectInfo\\(peer\\)[\\s\\S]*write_refused\\(&state, peer, "${op.route}"\\)`
+      )
+      if (writeHandlers.has(op.handler)) {
+        expect(handler, op.handler).toMatch(guarded)
+      } else {
+        expect(handler, op.handler).not.toContain('ConnectInfo')
+      }
+    }
+    expect(routes).toMatch(/resolve_cwd::<T>\(cwd, state, None, false\)/)
+  })
+
+  it('every TS error code is a Rust GithubError code and vice versa', () => {
+    const types = readFileSync(
+      join(LIB_DIR, '..', '..', 'shared', 'types', 'github.types.ts'),
+      'utf-8'
+    )
+    const list = types.match(/GITHUB_ERROR_CODES = \[([\s\S]*?)\] as const/)?.[1] ?? ''
+    const tsCodes = [...list.matchAll(/'(GH_[A-Z_]+)'/g)].map((m) => m[1]).sort()
+    const rustCodes = [...read('github', 'error.rs').matchAll(/=> "(GH_[A-Z_]+)"/g)]
+      .map((m) => m[1])
+      .sort()
+    expect(tsCodes.length).toBe(11)
+    expect(rustCodes).toEqual(tsCodes)
+  })
+})
