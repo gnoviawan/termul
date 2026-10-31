@@ -12,7 +12,7 @@ export function SuggestedAutomations({
   const suggestions = useAutomationSuggestions(projectId)
   const snoozes = useSuggestionSnoozes((s) => s.until)
   const actions = useSuggestionActions(projectId, () => suggestions.reload())
-  const open = (suggestions.data ?? []).filter((s) => !isSnoozed(snoozes, s.fingerprint))
+  const open = (suggestions.data ?? []).filter((s) => !isSnoozed(snoozes, projectId, s.fingerprint))
   if (open.length === 0) return null
   return (
     <section aria-label="Suggested" className="flex flex-col gap-2 p-2">

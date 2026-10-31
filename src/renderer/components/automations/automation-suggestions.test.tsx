@@ -131,7 +131,7 @@ describe('the in-chat suggestion card', () => {
 
     expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
     const stored = JSON.parse(localStorage.getItem('termul.automation-suggestion-snoozes') ?? '{}')
-    expect(stored['3f1c9a0d5b7e2468']).toBeGreaterThanOrEqual(before + SNOOZE_MS)
+    expect(stored['p1:3f1c9a0d5b7e2468']).toBeGreaterThanOrEqual(before + SNOOZE_MS)
     expect(api.dismissAutomationSuggestion).not.toHaveBeenCalled()
     expect(api.acceptAutomationSuggestion).not.toHaveBeenCalled()
   })
@@ -212,11 +212,28 @@ describe('the Suggested section', () => {
   })
 
   it('hides a snoozed suggestion', async () => {
-    useSuggestionSnoozes.getState().snooze('3f1c9a0d5b7e2468')
+    useSuggestionSnoozes.getState().snooze('p1', '3f1c9a0d5b7e2468')
     render(<SuggestedAutomations projectId="p1" />)
 
     await waitFor(() => expect(api.listAutomationSuggestions).toHaveBeenCalledTimes(1))
     expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
+  })
+
+  it('a snooze in one project does not hide the same ask in another', async () => {
+    useSuggestionSnoozes.getState().snooze('p1', '3f1c9a0d5b7e2468')
+    render(<SuggestedAutomations projectId="p2" />)
+
+    expect(await screen.findByText(COPY)).toBeTruthy()
+  })
+
+  it('shows a snoozed suggestion again when the snooze ends with the panel open', async () => {
+    useSuggestionSnoozes.getState().snooze('p1', '3f1c9a0d5b7e2468', Date.now() - SNOOZE_MS + 100)
+    render(<SuggestedAutomations projectId="p1" />)
+    await waitFor(() => expect(api.listAutomationSuggestions).toHaveBeenCalledTimes(1))
+    expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
+
+    expect(await screen.findByText(COPY)).toBeTruthy()
+    expect(api.listAutomationSuggestions).toHaveBeenCalledTimes(1)
   })
 
   it('with the setting off, is not loaded or shown', async () => {

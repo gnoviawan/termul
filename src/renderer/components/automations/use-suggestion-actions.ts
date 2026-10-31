@@ -45,7 +45,7 @@ export function useSuggestionActions(
   }
 
   const later = (suggestion: AutomationSuggestion): void => {
-    snooze(suggestion.fingerprint)
+    snooze(projectId, suggestion.fingerprint)
     onAnswered(suggestion)
   }
 
