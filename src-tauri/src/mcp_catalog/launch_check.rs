@@ -309,10 +309,15 @@ fn check_runner(base: &str, args: &[String]) -> Result<bool, McpCatalogReason> {
         }
         "uv" => return check_uv(args),
         "bunx" | "pnpx" => return Err(alias(base.to_string())),
-        "npm" => &["exec", "x"],
-        "pnpm" => &["dlx", "exec"],
-        "yarn" => &["dlx"],
-        "bun" => &["x"],
+        // npm takes any unique prefix of a command, and `init <pkg>` (alias
+        // `create`) runs `npm exec create-<pkg>`.
+        "npm" => &[
+            "exe", "exec", "x", "ini", "init", "inn", "inni", "innit", "cr", "cre", "crea",
+            "creat", "create",
+        ],
+        "pnpm" => &["dlx", "exec", "create"],
+        "yarn" => &["dlx", "create"],
+        "bun" => &["x", "create"],
         _ => return Ok(false),
     };
     match subcommand(args, alias_words) {
@@ -427,7 +432,7 @@ pub(crate) fn runs_inline_code(command: &str, args: &[String]) -> bool {
             .find(|arg| !arg.starts_with('-'))
             .is_some_and(|arg| arg == "eval"),
         "npm" => {
-            subcommand(args, &["exec", "x"]).is_some()
+            subcommand(args, &["exe", "exec", "x"]).is_some()
                 && any(&|arg| arg == "-c" || long_flag(arg, &["--call"]))
         }
         "pnpm" => {
