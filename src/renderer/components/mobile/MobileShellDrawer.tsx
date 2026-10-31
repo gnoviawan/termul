@@ -14,7 +14,8 @@ import {
   Search,
   Settings,
   TerminalSquare,
-  type TermulIcon
+  type TermulIcon,
+  Workflow
 } from '@/components/icons'
 import { ProjectIcon } from '@/components/ProjectIcon'
 import { TermulMark } from '@/components/TermulMark'
@@ -126,6 +127,8 @@ interface MobileShellDrawerProps {
   onCloseEditorTab?: (filePath: string) => boolean
   /** Opens a git history tab in the active pane (desktop entry mirrors this). */
   onOpenGitHistory?: () => void
+  /** Opens the active project's Automations tab. */
+  onOpenAutomations?: () => void
   /** Opens the project sheet (web only). */
   onOpenProjects: () => void
   /** Opens the Files sheet: the Editors section's Browse files (web only). */
@@ -222,6 +225,7 @@ export function MobileShellDrawer({
   onRenameTerminal,
   onCloseEditorTab,
   onOpenGitHistory,
+  onOpenAutomations,
   onOpenProjects,
   onOpenFiles
 }: MobileShellDrawerProps): React.JSX.Element {
@@ -471,6 +475,21 @@ export function MobileShellDrawer({
                 }}
               >
                 <History size={16} />
+              </Button>
+            )}
+            {onOpenAutomations && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-11 shrink-0"
+                aria-label="Automations"
+                onClick={() => {
+                  closeForNavigation()
+                  onOpenAutomations()
+                }}
+              >
+                <Workflow size={16} />
               </Button>
             )}
             <div className="ml-auto flex min-w-0 shrink items-center">

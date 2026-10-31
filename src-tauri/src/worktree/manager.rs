@@ -234,6 +234,13 @@ impl WorktreeManager {
         Ok(())
     }
 
+    /// Force-delete a local branch (`git branch -D`), for callers that own a
+    /// throwaway branch such as a per-run automation worktree's.
+    pub fn delete_branch(project_path: &str, branch: &str) -> Result<(), WorktreeError> {
+        ensure_valid_branch_name(branch, project_path)?;
+        run_git(&["branch", "-D", branch], Some(project_path)).map(|_| ())
+    }
+
     /// List branches for a git repo.
     /// Returns local and remote branches with metadata.
     pub fn branches(project_path: &str) -> Result<Vec<BranchEntry>, WorktreeError> {

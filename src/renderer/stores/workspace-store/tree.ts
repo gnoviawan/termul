@@ -165,6 +165,10 @@ export function canvasTabId(projectId: string): string {
   return `canvas-${projectId}`
 }
 
+export function automationsTabId(projectId: string): string {
+  return `automations-${projectId}`
+}
+
 export function agentChatTabId(sessionId: string): string {
   return `chat-${sessionId}`
 }

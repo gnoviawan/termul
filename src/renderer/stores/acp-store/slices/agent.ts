@@ -45,6 +45,7 @@ import {
   liveInlineKeyAuthPolicy
 } from '../helpers'
 import { useAcpStore } from '../index'
+import { rejectedRateLimit, withRateLimit } from '../rate-limit'
 import {
   activeWirePromptTurns,
   bugReportCollectors,
@@ -930,6 +931,17 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
           // reuse pool, and Retry restarts it (AgentChatPanel).
           ...(detail.code === ACP_AUTH_REQUIRED_RPC_CODE
             ? { agentStatus: { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus } }
+            : {}),
+          ...(detail.providerCode === 'provider_quota_exceeded' && session.agentId === e.agentId
+            ? {
+                sessionUsage: {
+                  ...s.sessionUsage,
+                  [e.sessionId]: withRateLimit(
+                    s.sessionUsage[e.sessionId],
+                    rejectedRateLimit(e.message)
+                  )
+                }
+              }
             : {}),
           // Finalize streaming markers: the turn is over (errored), and the
           // persist below must not capture a message mid-shimmer.

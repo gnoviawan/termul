@@ -1120,6 +1120,9 @@ export interface AgentsWatchDelta {
     // One browser policy scope changed; the payload is `{ scope, projectId?,
     // revision }` and clients re-read that scope. Not roster state either.
     | 'browser_policy_changed'
+    // One automation changed; the payload is `{ project_id, automation_id }`
+    // and clients re-read it. Not roster state either.
+    | 'automation_changed'
   payload: unknown
 }
 

@@ -14,8 +14,10 @@ import { claudeAccountsApi } from '@/lib/claude-accounts-api'
 import { logFrontendError } from '@/lib/log-api'
 import {
   type AcpState,
+  historyOpenInFlight,
   lastOwnUserPromptBlocks,
   renewAgentCredentials,
+  runsCurrentLaunch,
   switchBlockedReason,
   useAcpStore
 } from '@/stores/acp-store'
@@ -38,6 +40,17 @@ export function sessionAgentConfigId(state: AcpState, sessionId: string): string
 
 export function isClaudeSession(state: AcpState, sessionId: string): boolean {
   return sessionAgentConfigId(state, sessionId) === CLAUDE_AGENT_CONFIG_ID
+}
+
+export function runsProjectAccount(state: AcpState, sessionId: string): boolean {
+  const session = state.sessions[sessionId]
+  return runsCurrentLaunch(
+    state,
+    session.agentId,
+    CLAUDE_AGENT_CONFIG_ID,
+    session.cwd,
+    session.projectId
+  )
 }
 
 const isOpen = (state: AcpState, sessionId: string): boolean => {
@@ -180,6 +193,19 @@ export async function restartClaudeSession(
   }
 }
 
+async function restartAfterReopen(sessionId: string, projectId: string): Promise<void> {
+  await historyOpenInFlight(sessionId)?.catch(() => undefined)
+  const state = useAcpStore.getState()
+  if (state.sessions[sessionId]?.projectId !== projectId) return
+  if (!isClaudeSession(state, sessionId) || runsProjectAccount(state, sessionId)) return
+  void logFrontendError({
+    level: 'info',
+    source: 'claudeAccountSwitch.apply',
+    message: `Chat ${sessionId} reopened on an agent of the previous account; restarting it`
+  })
+  await restartClaudeSession(sessionId)
+}
+
 /**
  * Restart every open Claude chat of a Project after its Account changed: a
  * chat with a tab, or one kept for its Project while that Project is off
@@ -230,6 +256,7 @@ export async function applyProjectClaudeAccount(
     })
     void restartClaudeSession(id)
   }
+  for (const id of Object.keys(state.openingHistoryIds)) void restartAfterReopen(id, projectId)
   for (const cwd of rewarmCwds) {
     useAcpStore
       .getState()

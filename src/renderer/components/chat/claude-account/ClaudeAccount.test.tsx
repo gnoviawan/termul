@@ -201,6 +201,21 @@ describe('ClaudeLimitNotice', () => {
     const { container } = render(<ClaudeLimitNotice sessionId="s1" />)
     expect(container).toBeEmptyDOMElement()
   })
+
+  it('appears when a turn is rejected at the limit', async () => {
+    seed()
+    render(<ClaudeLimitNotice sessionId="s1" />)
+    act(() =>
+      useAcpStore.getState()._onAgentError({
+        agentId: 'a1',
+        sessionId: 's1',
+        message: "Internal error: You've hit your 5-hour limit · resets 4am (Europe/Berlin)",
+        providerCode: 'provider_quota_exceeded'
+      })
+    )
+    expect(await screen.findByText('Personal reached its 5-hour limit')).toBeInTheDocument()
+    expect(screen.getByText(/Switch to Work \(4% used\) and continue\?/)).toBeInTheDocument()
+  })
 })
 
 describe('ClaudeLimitWarning', () => {

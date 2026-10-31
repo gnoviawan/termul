@@ -51,6 +51,8 @@ export function serializePaneTree(node: PaneNode): PersistedPaneNode {
               ...(tab.oldPath ? { oldPath: tab.oldPath } : {})
             }
           ]
+        case 'automations':
+          return [{ type: 'automations', id: tab.id, projectId: tab.projectId }]
         case 'canvas':
           // Not persisted (see WORKSPACE_TAB_KIND_TRAITS): the canvas re-opens
           // user-initiated.
@@ -223,6 +225,7 @@ export function reconcileTerminalTabs(
           case 'git-history':
           case 'diff':
           case 'commit-diff':
+          case 'automations':
             return [tab]
           case 'canvas':
             // Canvas tabs: the mount/iframe runtime is host-local state, never
@@ -381,6 +384,16 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
                 cwd: tab.cwd
               }
             ]
+          case 'automations':
+            if (typeof tab.projectId !== 'string') {
+              void logFrontendError({
+                level: 'warn',
+                source: 'useEditorPersistence.deserializePaneTree',
+                message: 'Dropped automations tab with a missing projectId during workspace restore'
+              })
+              return []
+            }
+            return [{ type: 'automations', id: tab.id, projectId: tab.projectId }]
           case 'diff': {
             // Never coerce a malformed diff ref: drop it with one warn.
             if (

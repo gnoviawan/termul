@@ -31,6 +31,7 @@ pub mod legacy_models;
 pub mod manager;
 pub mod mcp_oauth;
 pub mod mcp_probe;
+pub mod oneshot;
 pub mod opencode_version;
 pub mod project_registry;
 pub mod provider_errors;

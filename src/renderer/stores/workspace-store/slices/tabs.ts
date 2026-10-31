@@ -9,6 +9,7 @@ import { navigateToChatSession } from '@/lib/router-navigate'
 import {
   AGENT_BROWSER_SPLIT_SIZES,
   agentChatTabId,
+  automationsTabId,
   canvasTabId,
   closeTabInWorkspace,
   diffTabId,
@@ -39,6 +40,7 @@ type TabsSliceState = Pick<
   | 'addDiffTab'
   | 'addCommitDiffTab'
   | 'addCanvasTab'
+  | 'addAutomationsTab'
   | 'remapAgentChatSession'
   | 'removeTab'
   | 'renameEditorTab'
@@ -410,6 +412,11 @@ export const createTabsSlice: StateCreator<WorkspaceState, [], [], TabsSliceStat
 
     const tab: WorkspaceTab = { type: 'canvas', id, projectId, docPath }
     get().addTabToPane(paneId, tab)
+  },
+
+  addAutomationsTab: (projectId: string, targetPaneId?: string): void => {
+    const id = automationsTabId(projectId)
+    focusOrAddTab({ get, set }, id, () => ({ type: 'automations', id, projectId }), targetPaneId)
   },
 
   remapAgentChatSession: (fromSessionId, toSessionId, targetPaneId?: string): void => {
