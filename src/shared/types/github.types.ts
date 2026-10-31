@@ -16,6 +16,7 @@ export interface GithubRepoRef {
   name: string
 }
 
+/** `keyring`: gh's stored login (system keyring or gh's `hosts.yml`). `env`: `GH_TOKEN` and friends. */
 export type GithubTokenSource = 'keyring' | 'env' | 'unknown'
 
 /** `gh` availability and login for the project's host (CAP-1, CAP-9). */

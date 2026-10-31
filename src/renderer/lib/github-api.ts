@@ -26,11 +26,7 @@ import { invokeIpc } from './ipc/tauri'
 import { logFrontendError } from './log-api'
 import { isTauriContext } from './tauri-runtime'
 
-async function call<T>(
-  command: string,
-  route: string,
-  request: object
-): Promise<IpcResult<T>> {
+async function call<T>(command: string, route: string, request: object): Promise<IpcResult<T>> {
   const result = isTauriContext()
     ? await invokeIpc<T>(command, { request })
     : await postJson<T>(route, request)

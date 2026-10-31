@@ -232,6 +232,28 @@ The renderer-authored store under `<app data dir>/acp-chat-history` (`ChatHistor
 
 The `/ws` requests `list_persisted_sessions`, `get_session_payload` and `get_session_payload_tail` read `SessionPersistence` directly, on the desktop-hosted browser and on the standalone server alike.
 
+## GitHub Issues and PRs
+
+The host runs the user's `gh` CLI for every GitHub read and write. Termul stores no GitHub token. The contract is `src/shared/types/github.types.ts`, and the renderer facade is `src/renderer/lib/github-api.ts`. `GithubService` (`src-tauri/src/github/`) implements each operation once. The desktop calls it through a Tauri command, and the browser and `termul-server` call it through an HTTP route.
+
+| Facade method | Tauri command | Web route | Reply `data` |
+|---|---|---|---|
+| `getContext(cwd)` | `github_get_context` | `POST /github/context` | `GithubContext` |
+| `listItems(request)` | `github_list_items` | `POST /github/items` | `GithubListResult` |
+| `getItem(request)` | `github_get_item` | `POST /github/item` | `GithubItemDetail` |
+| `getChecks(request)` | `github_get_checks` | `POST /github/checks` | `GithubChecksResult` |
+| `getCheckLog(request)` | `github_get_check_log` | `POST /github/check-log` | `GithubCheckLog` |
+| `merge(request)` | `github_merge` | `POST /github/merge` | `GithubMergeResult` |
+
+Each Tauri command takes one argument, `request`. Each route takes the same object as its JSON body. Every reply is `IpcResult<T>`.
+
+- **Repository.** A request names a `cwd` and a slot (`origin` or `upstream`), never a host or `owner/name`. The host reads the `origin` remote, or the first remote when there is no `origin`. It finds a fork's parent with `gh repo view --json parent`.
+- **Host routing.** The host passes a remote's host to `gh` only when the host is `github.com` or is in `gh auth status`. For any other host, `getContext` returns `auth: unauthenticated` with a `gh auth login --hostname <host>` command and `repo: { kind: 'not_github' }`. The host makes no `gh` call to that host.
+- **Caching and quota.** Reads are cached for 30 seconds per repository and arguments. `refresh: true` skips the cache. At most four `gh` processes run at once. When `gh` reports a rate limit, every call for that host fails with `GH_RATE_LIMITED` until the reset. When less than 40% of the GraphQL budget remains, reads are served from the cache until the budget resets, even with `refresh: true`.
+- **Merge.** `/github/merge` is a write route. A LAN peer needs `--allow-remote-writes`. A direct merge runs only when GitHub reports the merge state as `CLEAN` or `HAS_HOOKS`, and it pins the head commit it read. Otherwise the reply is `GH_NOT_MERGEABLE`. A write clears that repository's cached reads.
+- **Errors.** The failure codes are `GITHUB_ERROR_CODES` in the contract file, plus `PATH_VALIDATION_FAILED` (desktop) and `OUTSIDE_PROJECT_ROOT` (web).
+- **Logging.** Each operation logs its start, success or failure with the repository, operation and code. The logs never include tokens, `gh` output, request bodies or remote URLs.
+
 ## Web Terminal WebSocket
 
 `GET /terminal/ws` upgrades to the browser terminal transport and is isolated from ACP `/ws`.
