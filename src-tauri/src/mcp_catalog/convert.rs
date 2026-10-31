@@ -255,6 +255,31 @@ pub enum McpCatalogReason {
     ControlCharacter {
         field: String,
     },
+    DuplicateName {
+        name: String,
+    },
+}
+
+/// Each env or header name may appear once (headers case-insensitively), so
+/// every slot has its own form field and value.
+pub(crate) fn check_unique_names<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    case_insensitive: bool,
+) -> Result<(), McpCatalogReason> {
+    let mut seen = std::collections::HashSet::new();
+    for name in names {
+        let key = if case_insensitive {
+            name.to_ascii_lowercase()
+        } else {
+            name.to_string()
+        };
+        if !seen.insert(key) {
+            return Err(McpCatalogReason::DuplicateName {
+                name: name.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Options in default-preference order: remotes first (streamable-http before
@@ -302,6 +327,10 @@ fn convert_remote(remote: &RegistryRemote) -> Result<Launch, McpCatalogReason> {
         return Err(McpCatalogReason::SecretInUrl);
     }
     check_remote_url(&remote.url)?;
+    for header in &remote.headers {
+        check_header_name(&header.name)?;
+    }
+    check_unique_names(remote.headers.iter().map(|h| h.name.as_str()), true)?;
     Ok(Launch::Remote {
         transport,
         url: remote.url.clone(),
@@ -410,6 +439,10 @@ fn convert_package(package: &RegistryPackage) -> Result<Launch, McpCatalogReason
     for env in &package.environment_variables {
         check_env_name(&env.name)?;
     }
+    check_unique_names(
+        package.environment_variables.iter().map(|e| e.name.as_str()),
+        false,
+    )?;
     let registry = package
         .registry_base_url
         .as_deref()

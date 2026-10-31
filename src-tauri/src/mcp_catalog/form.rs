@@ -159,7 +159,7 @@ fn field_from(
         is_secret,
         format: FieldFormat::from_registry(spec.format.as_deref()),
         choices: (!spec.choices.is_empty()).then(|| spec.choices.clone()),
-        default: spec.default.clone(),
+        default: spec.default.clone().filter(|_| !is_secret),
         placeholder: spec.placeholder.clone(),
         description: spec.description.clone(),
     }
@@ -321,11 +321,19 @@ fn check_value(field: &Field, raw: &str) -> Result<String, String> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Supplied {
+    pub value: String,
+    pub origin: Origin,
+}
+
+pub(crate) type Values = BTreeMap<String, Supplied>;
+
 pub(crate) fn validate_inputs(
     fields: &[Field],
     inputs: &BTreeMap<String, String>,
     phase: Phase,
-) -> Result<BTreeMap<String, String>, String> {
+) -> Result<Values, String> {
     let in_phase = |field: &Field| field.is_secret == matches!(phase, Phase::Commit);
     for id in inputs.keys() {
         match fields.iter().find(|field| &field.id == id) {
@@ -343,13 +351,14 @@ pub(crate) fn validate_inputs(
     }
     let mut values = BTreeMap::new();
     for field in fields.iter().filter(|field| in_phase(field)) {
-        let raw = inputs
-            .get(&field.id)
-            .filter(|value| !value.is_empty())
-            .or(field.default.as_ref());
+        let raw = match inputs.get(&field.id).filter(|value| !value.is_empty()) {
+            Some(typed) => Some((typed, Origin::User)),
+            None => field.default.as_ref().map(|default| (default, Origin::Registry)),
+        };
         match raw {
-            Some(raw) => {
-                values.insert(field.id.clone(), check_value(field, raw)?);
+            Some((raw, origin)) => {
+                let value = check_value(field, raw)?;
+                values.insert(field.id.clone(), Supplied { value, origin });
             }
             None if field.is_required => return Err(format!("`{}` is required", field.id)),
             None => {}
@@ -368,16 +377,16 @@ pub(crate) enum Resolved {
     Omitted,
 }
 
-pub(crate) fn resolve(slot: &Slot, values: &BTreeMap<String, String>) -> Resolved {
+pub(crate) fn resolve(slot: &Slot, values: &Values) -> Resolved {
     match &slot.source {
         ValueSource::Fixed { value, origin } => Resolved::Value {
             value: value.clone(),
             origin: *origin,
         },
         ValueSource::Input { field } => match values.get(field) {
-            Some(value) => Resolved::Value {
-                value: value.clone(),
-                origin: Origin::User,
+            Some(supplied) => Resolved::Value {
+                value: supplied.value.clone(),
+                origin: supplied.origin,
             },
             None if slot.is_secret => Resolved::Pending,
             None => Resolved::Omitted,
@@ -389,13 +398,18 @@ pub(crate) fn resolve(slot: &Slot, values: &BTreeMap<String, String>) -> Resolve
             {
                 return Resolved::Pending;
             }
-            let bound: BTreeMap<String, String> = variables
+            let supplied: Vec<(&String, &Supplied)> = variables
                 .iter()
-                .filter_map(|(name, field)| Some((name.clone(), values.get(field)?.clone())))
+                .filter_map(|(name, field)| Some((name, values.get(field)?)))
                 .collect();
+            let bound: BTreeMap<String, String> = supplied
+                .iter()
+                .map(|(name, supplied)| ((*name).clone(), supplied.value.clone()))
+                .collect();
+            let typed = supplied.iter().any(|(_, s)| s.origin == Origin::User);
             Resolved::Value {
                 value: fill_template(text, &bound),
-                origin: Origin::User,
+                origin: if typed { Origin::User } else { Origin::Registry },
             }
         }
     }

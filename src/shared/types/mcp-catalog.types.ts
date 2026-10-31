@@ -44,6 +44,7 @@ export type McpCatalogReason =
   | { code: 'invalid-command' }
   | { code: 'invalid-header-name'; name: string }
   | { code: 'control-character'; field: string }
+  | { code: 'duplicate-name'; name: string }
 
 /** The option an install would use: an index into the row's `remotes` or `packages`. */
 export interface McpCatalogDefaultOption {

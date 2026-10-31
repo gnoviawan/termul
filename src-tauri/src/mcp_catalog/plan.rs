@@ -8,7 +8,9 @@ use uuid::Uuid;
 
 use super::consent::{ConsentInput, ConsentProvenance, ConsentView, Namespace, ShownValue};
 use super::convert::{check_remote_url, Launch, McpCatalogReason, OptionKind, RemoteTransport};
-use super::form::{resolve, validate_inputs, Field, FieldTarget, FormModel, Phase, Resolved};
+use super::form::{
+    resolve, validate_inputs, Field, FieldTarget, FormModel, Phase, Resolved, Values,
+};
 use super::import::{check_import, import_form, parse_import, ImportedLaunch};
 use super::resolved::{Provenance, ResolvedConfig, ValueSlot};
 use super::search::{item_status, RunnerAvailability};
@@ -18,6 +20,9 @@ use super::McpCatalogError;
 
 pub const PLAN_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_PLANS: usize = 256;
+const MAX_PLANS_PER_CALLER: usize = 16;
+/// Bounds what one plan request makes the host parse and retain.
+pub const MAX_PLAN_REQUEST_BYTES: usize = 64 * 1024;
 
 pub const NOT_FOUND: &str = "MCP_CATALOG_NOT_FOUND";
 pub const IMPORT_INVALID: &str = "MCP_IMPORT_INVALID";
@@ -27,6 +32,7 @@ pub const PLAN_CONSUMED: &str = "MCP_PLAN_CONSUMED";
 pub const PLAN_EXPIRED: &str = "MCP_PLAN_EXPIRED";
 pub const PLAN_MISMATCH: &str = "MCP_PLAN_MISMATCH";
 pub const PLAN_WRONG_CALLER: &str = "MCP_PLAN_WRONG_CALLER";
+pub const PLAN_LIMIT: &str = "MCP_PLAN_LIMIT";
 pub const VALIDATION_ERROR: &str = "VALIDATION_ERROR";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -412,7 +418,7 @@ struct Assembled {
 
 fn assemble(
     described: &Described,
-    values: &BTreeMap<String, String>,
+    values: &Values,
     phase: Phase,
 ) -> Result<Assembled, McpCatalogError> {
     let mut args = Vec::new();
@@ -523,7 +529,7 @@ struct StoredPlan {
     created_at: Instant,
     consumed: bool,
     described: Described,
-    values: BTreeMap<String, String>,
+    values: Values,
     digest: String,
 }
 
@@ -547,12 +553,21 @@ impl PlanStore {
         }
     }
 
-    fn sweep(&self, plans: &mut HashMap<String, StoredPlan>) {
+    /// Drops expired plans, then the caller's own oldest plan while it holds
+    /// its quota. Another caller's live plan is never evicted.
+    fn make_room(
+        &self,
+        plans: &mut HashMap<String, StoredPlan>,
+        caller: &PlanCaller,
+    ) -> Result<(), McpCatalogError> {
         let ttl = self.ttl;
         plans.retain(|_, plan| plan.created_at.elapsed() < ttl);
-        while plans.len() >= MAX_PLANS {
-            let Some(oldest) = plans
-                .iter()
+        loop {
+            let mine = plans.iter().filter(|(_, plan)| plan.caller == *caller);
+            if mine.clone().count() < MAX_PLANS_PER_CALLER {
+                break;
+            }
+            let Some(oldest) = mine
                 .min_by_key(|(_, plan)| plan.created_at)
                 .map(|(id, _)| id.clone())
             else {
@@ -560,17 +575,24 @@ impl PlanStore {
             };
             plans.remove(&oldest);
         }
+        if plans.len() >= MAX_PLANS {
+            return Err(error(
+                PLAN_LIMIT,
+                "too many install plans are open; try again in a few minutes",
+            ));
+        }
+        Ok(())
     }
 
-    fn insert(&self, plan: StoredPlan) -> (String, String) {
+    fn insert(&self, plan: StoredPlan) -> Result<(String, String), McpCatalogError> {
         let mut plans = self.plans.lock();
-        self.sweep(&mut plans);
+        self.make_room(&mut plans, &plan.caller)?;
         let plan_id = Uuid::new_v4().to_string();
         let expires_at = (Utc::now()
             + chrono::Duration::from_std(self.ttl).unwrap_or(chrono::Duration::zero()))
         .to_rfc3339_opts(SecondsFormat::Millis, true);
         plans.insert(plan_id.clone(), plan);
-        (plan_id, expires_at)
+        Ok((plan_id, expires_at))
     }
 
     #[cfg(test)]
@@ -610,6 +632,17 @@ pub(crate) fn plan_install(
     request: &PlanRequest,
     caller: PlanCaller,
 ) -> Result<PlanReply, McpCatalogError> {
+    let import_bytes = match &request.source {
+        PlanSource::Import { json, server } => json.len() + server.as_deref().map_or(0, str::len),
+        _ => 0,
+    };
+    let input_bytes: usize = request.inputs.iter().map(|(k, v)| k.len() + v.len()).sum();
+    if import_bytes + input_bytes > MAX_PLAN_REQUEST_BYTES {
+        return Err(error(
+            VALIDATION_ERROR,
+            format!("the plan request exceeds {} KiB", MAX_PLAN_REQUEST_BYTES / 1024),
+        ));
+    }
     let described = match describe(catalog, runners, &request.source, request.choice)? {
         Ok(described) => described,
         Err(reason) => return Ok(PlanReply::Unsupported { reason }),
@@ -634,7 +667,7 @@ pub(crate) fn plan_install(
         described,
         values,
         digest: digest.clone(),
-    });
+    })?;
     log::info!(
         "[mcp-catalog] plan created plan={} source={} transport={} fields={}",
         log_label(&plan_id),

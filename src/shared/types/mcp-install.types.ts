@@ -189,7 +189,8 @@ export const MCP_INSTALL_ERROR_CODES = [
   'MCP_PLAN_CONSUMED',
   'MCP_PLAN_EXPIRED',
   'MCP_PLAN_MISMATCH',
-  'MCP_PLAN_WRONG_CALLER'
+  'MCP_PLAN_WRONG_CALLER',
+  'MCP_PLAN_LIMIT'
 ] as const
 
 export type McpInstallErrorCode = (typeof MCP_INSTALL_ERROR_CODES)[number]

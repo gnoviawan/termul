@@ -68,5 +68,7 @@ export function mcpCatalogReasonText(reason: McpCatalogReason): string {
       return `It sends "${reason.name}", which isn't a valid HTTP header name.`
     case 'control-character':
       return `Its ${reason.field} holds a control character.`
+    case 'duplicate-name':
+      return `It lists "${reason.name}" more than once.`
   }
 }

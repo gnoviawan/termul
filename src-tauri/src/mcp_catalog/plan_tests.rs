@@ -418,7 +418,7 @@ async fn npm_plan_appends_the_positional_argument_and_lists_env_slots() {
                 name: "HOOKA_REGION".to_string(),
                 value: Some("eu".to_string()),
                 is_secret: false,
-                origin: Origin::User,
+                origin: Origin::Registry,
             },
         ]
     );
@@ -1016,4 +1016,185 @@ async fn the_plan_serializes_to_the_wire_contract() {
         unsupported,
         json!({ "outcome": "unsupported", "reason": { "code": "denied-env", "name": "PATH" } })
     );
+}
+
+#[tokio::test]
+async fn a_typed_value_is_the_users_and_an_untouched_default_the_registrys() {
+    let service = service();
+    let typed = plan(
+        &service,
+        catalog_source("to.hooka/mcp", "0.1.2"),
+        &[("arg/0", "acme"), ("env/HOOKA_REGION", "us")],
+    )
+    .await;
+    let region = &typed.consent_view.env[1];
+    assert_eq!(
+        (region.value.as_deref(), region.origin),
+        (Some("us"), Origin::User)
+    );
+}
+
+#[tokio::test]
+async fn a_secret_fields_registry_default_never_leaves_the_host() {
+    let leaky = row(json!({
+        "name": "io.example/leaky",
+        "description": "Leaky",
+        "version": "1.0.0",
+        "packages": [{
+            "registryType": "npm",
+            "identifier": "leaky-mcp",
+            "version": "1.0.0",
+            "environmentVariables": [
+                { "name": "LEAKY_KEY", "isSecret": true, "default": "sk-shipped-in-registry" }
+            ]
+        }]
+    }));
+    let service = McpCatalogService::with_runners(catalog(vec![leaky]), ALL_RUNNERS);
+    let reply = service
+        .describe_install(&FormRequest {
+            source: catalog_source("io.example/leaky", "1.0.0"),
+            choice: None,
+        })
+        .await
+        .unwrap();
+    let json = serde_json::to_string(&reply).unwrap();
+    assert!(!json.contains("sk-shipped-in-registry"), "{json}");
+    let plan = plan(&service, catalog_source("io.example/leaky", "1.0.0"), &[]).await;
+    assert_eq!(
+        commit(&service, &plan, &[]).unwrap_err().message,
+        "`env/LEAKY_KEY` is required"
+    );
+}
+
+#[tokio::test]
+async fn a_caller_over_its_quota_loses_its_own_oldest_plan_not_anothers() {
+    let service = service();
+    let other = PlanCaller::Connection("conn-2".to_string());
+    let request = PlanRequest {
+        source: catalog_source("to.hooka/mcp", "0.1.2"),
+        choice: None,
+        inputs: inputs(&[("arg/0", "acme")]),
+    };
+    let theirs = match service.plan_install(&request, other.clone()).await.unwrap() {
+        PlanReply::Plan { plan } => plan,
+        reply => panic!("{reply:?}"),
+    };
+    let source = || catalog_source("to.hooka/mcp", "0.1.2");
+    let first = plan(&service, source(), &[("arg/0", "acme")]).await;
+    for _ in 0..16 {
+        plan(&service, source(), &[("arg/0", "acme")]).await;
+    }
+    assert_eq!(service.stored_plans(), 17);
+    assert_eq!(
+        commit(&service, &first, &[("env/HOOKA_API_KEY", "hk")])
+            .unwrap_err()
+            .code,
+        "MCP_PLAN_NOT_FOUND"
+    );
+    let commit_theirs = CommitRequest {
+        plan_id: theirs.plan_id.clone(),
+        launch_digest: theirs.launch_digest.clone(),
+        secret_values: inputs(&[("env/HOOKA_API_KEY", "hk")]),
+    };
+    assert!(service.commit_install(&commit_theirs, &other).is_ok());
+}
+
+#[tokio::test]
+async fn a_full_store_refuses_new_plans_instead_of_evicting_live_ones() {
+    let service = service();
+    let request = PlanRequest {
+        source: catalog_source("to.hooka/mcp", "0.1.2"),
+        choice: None,
+        inputs: inputs(&[("arg/0", "acme")]),
+    };
+    for connection in 0..16 {
+        let caller = PlanCaller::Connection(format!("conn-{connection}"));
+        for _ in 0..16 {
+            service.plan_install(&request, caller.clone()).await.unwrap();
+        }
+    }
+    let error = service
+        .plan_install(&request, PlanCaller::Connection("late".to_string()))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "MCP_PLAN_LIMIT");
+    assert_eq!(service.stored_plans(), 256);
+}
+
+#[tokio::test]
+async fn an_oversized_plan_request_is_refused_before_parsing() {
+    let service = service();
+    let big = format!(
+        r#"{{"command":"node","args":["{}"]}}"#,
+        "a".repeat(super::plan::MAX_PLAN_REQUEST_BYTES)
+    );
+    let error = plan_with(&service, import_source(&big), None, &[])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (error.code, error.message.as_str()),
+        ("VALIDATION_ERROR", "the plan request exceeds 64 KiB")
+    );
+    assert_eq!(service.stored_plans(), 0);
+}
+
+#[tokio::test]
+async fn duplicate_env_or_header_names_are_unsupported() {
+    let service = service();
+    let env_twice = unsupported(
+        &service,
+        import_source(
+            r#"{"command":"node","env":[{"name":"A","value":"1"},{"name":"A","value":"2"}]}"#,
+        ),
+    )
+    .await;
+    assert_eq!(
+        env_twice,
+        McpCatalogReason::DuplicateName {
+            name: "A".to_string()
+        }
+    );
+    let header_case = unsupported(
+        &service,
+        import_source(r#"{"url":"https://mcp.example.com","headers":{"X-Key":"1","x-key":"2"}}"#),
+    )
+    .await;
+    assert_eq!(
+        header_case,
+        McpCatalogReason::DuplicateName {
+            name: "x-key".to_string()
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_registry_remote_with_a_bad_or_repeated_header_name_is_unsupported() {
+    let remote = |headers: Value| {
+        row(json!({
+            "name": "io.example/remote",
+            "description": "Remote",
+            "version": "1.0.0",
+            "remotes": [{ "type": "streamable-http", "url": "https://mcp.example.com/mcp", "headers": headers }]
+        }))
+    };
+    for (headers, reason) in [
+        (
+            json!([{ "name": "Bad Header" }]),
+            McpCatalogReason::InvalidHeaderName {
+                name: "Bad Header".to_string(),
+            },
+        ),
+        (
+            json!([{ "name": "X-Key" }, { "name": "x-key" }]),
+            McpCatalogReason::DuplicateName {
+                name: "x-key".to_string(),
+            },
+        ),
+    ] {
+        let service = McpCatalogService::with_runners(catalog(vec![remote(headers)]), ALL_RUNNERS);
+        assert_eq!(
+            unsupported(&service, catalog_source("io.example/remote", "1.0.0")).await,
+            reason
+        );
+    }
 }

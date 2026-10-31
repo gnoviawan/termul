@@ -3,8 +3,8 @@ use std::fmt;
 use serde_json::{Map, Value};
 
 use super::convert::{
-    check_env_name, check_header_name, check_package_spec, check_remote_url, McpCatalogReason,
-    RemoteTransport, Runner,
+    check_env_name, check_header_name, check_package_spec, check_remote_url, check_unique_names,
+    McpCatalogReason, RemoteTransport, Runner,
 };
 use super::form::{FieldTarget, FormModel};
 
@@ -256,6 +256,7 @@ pub(crate) fn check_import(server: &ImportedServer) -> Result<(), McpCatalogReas
                 check_env_name(name)?;
                 no_control(value, format!("env/{name}"))?;
             }
+            check_unique_names(env.iter().map(|(name, _)| name.as_str()), false)?;
             if let Some(runner) = runner_of(command) {
                 check_runner_package_specs(runner, args)?;
             }
@@ -266,6 +267,7 @@ pub(crate) fn check_import(server: &ImportedServer) -> Result<(), McpCatalogReas
                 check_header_name(name)?;
                 no_control(value, format!("header/{name}"))?;
             }
+            check_unique_names(headers.iter().map(|(name, _)| name.as_str()), true)?;
         }
     }
     Ok(())
