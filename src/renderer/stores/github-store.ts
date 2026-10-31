@@ -72,7 +72,11 @@ export interface GithubState extends GithubResources {
   loadItem: (ref: GithubItemRef, options?: { refresh?: boolean }) => Promise<void>
   loadChecks: (ref: GithubItemRef, options?: { refresh?: boolean }) => Promise<void>
   loadCheckLog: (cwd: string, repo: GithubRepoSlot, jobId: number) => Promise<void>
-  /** Run a merge action, then re-read the PR, its checks and the list past the host cache. */
+  /**
+   * Run a merge action, then re-read the PR, its checks and the list past the
+   * host cache. Resolves once the PR re-read lands, so the merge controls stay
+   * busy until they show what GitHub now reports.
+   */
   merge: (ref: GithubItemRef, action: GithubMergeAction) => Promise<IpcResult<GithubMergeResult>>
 }
 
@@ -203,9 +207,9 @@ export const useGithubStore = create<GithubState>((set, get) => {
       })
       // A refused merge can still mean GitHub's state moved (someone else merged,
       // a check finished), so re-read either way; the pane shows what GitHub reports.
-      void get().loadItem(ref, { refresh: true })
       void get().loadChecks(ref, { refresh: true })
       void get().loadList(ref.cwd, { refresh: true })
+      await get().loadItem(ref, { refresh: true })
       return result
     }
   }

@@ -70,7 +70,12 @@ export function GithubChecksList({ cwd, repo, checks }: GithubChecksListProps): 
         <ul className="flex flex-col divide-y divide-border rounded-lg border border-border">
           {rows.map((check) => (
             <CheckRow
-              key={`${check.workflow ?? ''}/${check.name}`}
+              // A workflow that runs on both push and pull_request repeats a job name.
+              key={
+                check.jobId !== null
+                  ? `job-${check.jobId}`
+                  : `${check.workflow ?? ''}/${check.name}`
+              }
               cwd={cwd}
               repo={repo}
               check={check}

@@ -1,8 +1,10 @@
+import type { GithubItemDetail } from '@shared/types/github.types'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { _resetSheetFocusReturnForTests, sheetCloseAutoFocus } from '@/lib/sheet-focus-return'
+import { githubItemKey, useGithubStore } from '@/stores/github-store'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import {
   _resetShellAnnouncerForTests,
@@ -537,6 +539,36 @@ describe('MobileChatShell', () => {
         renderShell()
 
         expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(expected)
+      })
+
+      it("prefers a GitHub item's loaded title over the one stored at open", () => {
+        seedTabs(
+          [
+            {
+              type: 'github-item',
+              id: 'github-item-/proj-origin-12',
+              cwd: '/proj',
+              repo: 'origin',
+              kind: 'issue',
+              number: 12,
+              title: 'Crash on start'
+            }
+          ],
+          'github-item-/proj-origin-12'
+        )
+        const loaded = {
+          data: { item: { title: 'Crash on start (macOS)' } } as GithubItemDetail,
+          status: 'idle' as const,
+          errorCode: null,
+          error: null
+        }
+        useGithubStore.setState({ items: { [githubItemKey('/proj', 'origin', 12)]: loaded } })
+        renderShell()
+
+        expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+          '#12 Crash on start (macOS)'
+        )
+        useGithubStore.setState({ items: {} })
       })
 
       it('uses the named terminal when the terminal has a name', () => {

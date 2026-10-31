@@ -26,6 +26,7 @@ import { returnToWorkspaceRoute } from '@/lib/workspace-route'
 import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
 import { useAcpStore } from '@/stores/acp-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import { githubItemKey, useGithubStore } from '@/stores/github-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useShellAnnouncerStore } from '@/stores/shell-announcer-store'
@@ -209,6 +210,12 @@ export function MobileChatShell({
   const activeBrowserTab = useBrowserSessionStore((s) =>
     activeTab?.type === 'browser' ? s.tabs.get(activeTab.browserTabId) : undefined
   )
+  // As on the desktop tab, the loaded title wins over the one stored at open.
+  const githubItemTitle = useGithubStore((s) =>
+    activeTab?.type === 'github-item'
+      ? s.items[githubItemKey(activeTab.cwd, activeTab.repo, activeTab.number)]?.data?.item.title
+      : undefined
+  )
 
   // An empty terminal name falls back like a missing one (the old header
   // tested truthiness), so the title and the terminal sheet are never blank.
@@ -230,7 +237,7 @@ export function MobileChatShell({
       case 'git-history':
         return 'Git History'
       case 'github-item':
-        return githubItemTabLabel(activeTab.number, activeTab.title)
+        return githubItemTabLabel(activeTab.number, githubItemTitle ?? activeTab.title)
       case 'diff':
         return basename(activeTab.path)
       case 'commit-diff':

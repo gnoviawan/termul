@@ -54,11 +54,13 @@ export function GithubItemPanel({
   const checks = useGithubStore((s) => resourceOf(s.checks[key]))
   const isPr = kind === 'pr'
 
+  // Restored tabs mount hidden; reading only on screen keeps them off the shared `gh` slots.
   useEffect(() => {
+    if (!isVisible) return
     const store = useGithubStore.getState()
     void store.loadItem(itemRef)
     if (isPr) void store.loadChecks(itemRef)
-  }, [itemRef, isPr])
+  }, [itemRef, isPr, isVisible])
 
   const refresh = (): void => {
     const store = useGithubStore.getState()
@@ -66,7 +68,16 @@ export function GithubItemPanel({
     if (isPr) void store.loadChecks(itemRef, { refresh: true })
   }
 
-  const checksPending = (checks.data?.rollup ?? detail.data?.item.checks) === 'pending'
+  // After a push the item reports a new head before the cached checks do.
+  const headSha = detail.data?.pr?.headSha
+  const checksStale = Boolean(headSha && checks.data && checks.data.headSha !== headSha)
+  useEffect(() => {
+    if (checksStale) void useGithubStore.getState().loadChecks(itemRef, { refresh: true })
+  }, [checksStale, itemRef])
+
+  const checksPending =
+    (checksStale ? detail.data?.item.checks : (checks.data?.rollup ?? detail.data?.item.checks)) ===
+    'pending'
   useGithubPoll(
     () => void useGithubStore.getState().loadItem(itemRef),
     ITEM_POLL_MS,

@@ -430,9 +430,7 @@ export function MobileShellDrawer({
           >
             {SECTION_HEADINGS[listSection]}
           </h2>
-          {listSection === 'github' ? (
-            <MobileGithubSection onNavigate={closeForNavigation} />
-          ) : listSection === 'chats' ? (
+          {listSection === 'chats' ? (
             <MobileRecentsList
               query={query}
               headingId={listHeadingId}
@@ -441,16 +439,19 @@ export function MobileShellDrawer({
               onNavigate={closeForNavigation}
             />
           ) : (
-            <MobileDrawerSectionList
-              section={listSection}
-              headingId={listHeadingId}
-              activeTabId={activeTabId}
-              onNavigate={closeForNavigation}
-              onCloseTerminal={onCloseTerminal}
-              onRenameTerminal={onRenameTerminal}
-              onCloseEditorTab={onCloseEditorTab}
-              onConfirmOpened={onConfirmOpened}
-            />
+            <>
+              <MobileDrawerSectionList
+                section={listSection}
+                headingId={listHeadingId}
+                activeTabId={activeTabId}
+                onNavigate={closeForNavigation}
+                onCloseTerminal={onCloseTerminal}
+                onRenameTerminal={onRenameTerminal}
+                onCloseEditorTab={onCloseEditorTab}
+                onConfirmOpened={onConfirmOpened}
+              />
+              {listSection === 'github' && <MobileGithubSection onNavigate={closeForNavigation} />}
+            </>
           )}
         </div>
 

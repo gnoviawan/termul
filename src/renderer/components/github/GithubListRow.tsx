@@ -2,7 +2,13 @@ import type { GithubListItem } from '@shared/types/github.types'
 import { Comment } from '@/components/icons'
 import { formatRelativeTime } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
-import { CheckRollupIcon, ItemStateIcon, itemStateLook, LabelChip } from './github-status'
+import {
+  CheckRollupIcon,
+  ItemStateIcon,
+  itemStateLook,
+  LabelChip,
+  ROLLUP_LABEL
+} from './github-status'
 
 /** Labels shown on a row; the rest fold into `+N`. */
 const MAX_ROW_LABELS = 3
@@ -24,6 +30,15 @@ export function GithubListRow({ item, isActive, onOpen }: GithubListRowProps): R
   const kindWord = item.kind === 'pr' ? 'pull request' : 'issue'
   const shownLabels = item.labels.slice(0, MAX_ROW_LABELS)
   const hiddenLabels = item.labels.length - shownLabels.length
+  // The explicit name replaces the row's content as its name, so it repeats checks, comments and labels.
+  const accessibleName = [
+    `${stateWord} ${kindWord} #${item.number}: ${item.title}`,
+    item.checks && ROLLUP_LABEL[item.checks].toLowerCase(),
+    item.commentCount > 0 && `${item.commentCount} comments`,
+    item.labels.length > 0 && `labels ${item.labels.map((label) => label.name).join(', ')}`
+  ]
+    .filter(Boolean)
+    .join(', ')
 
   return (
     <li>
@@ -32,7 +47,7 @@ export function GithubListRow({ item, isActive, onOpen }: GithubListRowProps): R
         data-github-item={item.number}
         onClick={() => onOpen(item)}
         aria-current={isActive ? 'true' : undefined}
-        aria-label={`${stateWord} ${kindWord} #${item.number}: ${item.title}`}
+        aria-label={accessibleName}
         title={item.title}
         className={cn(
           'flex w-full min-w-0 items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors duration-150 ease-out',

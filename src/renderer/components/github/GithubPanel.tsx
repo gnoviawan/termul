@@ -67,6 +67,13 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
   const blocker = context.data ? githubBlocker(context.data) : null
   const resolved = context.data?.repo.kind === 'resolved' ? context.data.repo : null
   const ready = Boolean(resolved && !blocker)
+  const slotRepo = filter.repo === 'upstream' ? resolved?.upstream : resolved?.origin
+  const slotRepoId = slotRepo ? `${slotRepo.host}/${repoName(slotRepo)}` : null
+  // The list cache is keyed by slot: after a remote change it holds the old repository's items.
+  const listData =
+    list.data && `${list.data.repo.host}/${repoName(list.data.repo)}` === slotRepoId
+      ? list.data
+      : null
 
   useEffect(() => {
     if (cwd) void useGithubStore.getState().loadContext(cwd)
@@ -79,10 +86,10 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
     }
   }, [resolved, filter.repo, cwd])
 
-  // A filter change loads through `setFilter`; this covers mount and becoming ready.
+  // A filter change loads through `setFilter`; this covers mount, becoming ready and a remote change.
   useEffect(() => {
-    if (ready) void useGithubStore.getState().loadList(cwd)
-  }, [ready, cwd])
+    if (ready && slotRepoId) void useGithubStore.getState().loadList(cwd)
+  }, [ready, cwd, slotRepoId])
 
   useGithubPoll(() => void loadList(cwd), LIST_POLL_VISIBLE_MS, LIST_POLL_HIDDEN_MS, ready)
   useGithubPoll(
@@ -139,7 +146,7 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
   }
 
   const auth = context.data.auth
-  const items = list.data?.items ?? []
+  const items = listData?.items ?? []
   const refreshing = list.status === 'loading'
 
   return (
@@ -184,7 +191,7 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
       {auth.state === 'connected' && <GithubAuthWarning auth={auth} />}
       <GithubFilters filter={filter} onChange={(patch) => setFilter(cwd, patch)} />
 
-      {list.status === 'error' && list.data && (
+      {list.status === 'error' && listData && (
         <p
           role="status"
           className="mx-2 mb-1 flex shrink-0 items-start gap-1.5 rounded-lg bg-warning/10 px-2.5 py-1.5 text-2xs text-warning"
@@ -194,12 +201,12 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
             {list.errorCode === 'GH_RATE_LIMITED'
               ? 'GitHub rate limit reached.'
               : "Couldn't refresh."}{' '}
-            Showing the list from {relativeAgo(list.data.fetchedAt)}.
+            Showing the list from {relativeAgo(listData.fetchedAt)}.
           </span>
         </p>
       )}
 
-      {list.data === null ? (
+      {listData === null ? (
         list.status === 'error' ? (
           <PanelMessage
             title={

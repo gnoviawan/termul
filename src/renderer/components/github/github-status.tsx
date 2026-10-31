@@ -153,7 +153,7 @@ export function checkLook(status: GithubCheckStatus) {
   return CHECK_LOOK[status]
 }
 
-const ROLLUP_LABEL: Record<GithubCheckRollup, string> = {
+export const ROLLUP_LABEL: Record<GithubCheckRollup, string> = {
   success: 'Checks passed',
   failure: 'Checks failed',
   pending: 'Checks running'

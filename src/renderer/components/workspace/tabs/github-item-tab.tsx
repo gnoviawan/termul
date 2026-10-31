@@ -1,4 +1,5 @@
 import { githubItemTabLabel, ItemStateIcon } from '@/components/github/github-status'
+import { Github } from '@/components/icons'
 import { githubItemKey, useGithubStore } from '@/stores/github-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import { TabContextMenu } from '../tab-context-menu'
@@ -39,7 +40,14 @@ export function GithubItemTabInline({
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
-        icon={<ItemStateIcon kind={tab.kind} state={item?.state ?? 'open'} size={12} />}
+        // The GitHub mark until the detail says the state: a closed item never shows as open.
+        icon={
+          item ? (
+            <ItemStateIcon kind={item.kind} state={item.state} size={12} />
+          ) : (
+            <Github size={12} aria-hidden="true" className="shrink-0" />
+          )
+        }
         // The loaded detail's title wins over the one stored when the tab opened.
         label={githubItemTabLabel(tab.number, item?.title ?? tab.title)}
         pinClose={isActive}

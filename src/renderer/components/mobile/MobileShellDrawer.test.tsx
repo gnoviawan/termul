@@ -670,6 +670,40 @@ describe('MobileShellDrawer section nav', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
   })
 
+  it('keeps open GitHub tabs reachable and closable above the list', async () => {
+    seedProject(makeProject())
+    seedTabs(
+      [
+        {
+          type: 'github-item',
+          id: 'github-item-/work-origin-4',
+          cwd: '/work',
+          repo: 'origin',
+          kind: 'issue',
+          number: 4,
+          title: 'Closed long ago'
+        }
+      ],
+      null
+    )
+    const { dialog } = await openDrawer({ section: 'github' })
+
+    const group = within(dialog).getByRole('group', { name: 'Issues and pull requests' })
+    expect(
+      group.compareDocumentPosition(await within(dialog).findByTestId('github-panel')) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    fireEvent.click(within(group).getByRole('button', { name: 'Close #4 Closed long ago' }))
+    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('github-item-/work-origin-4')
+
+    fireEvent.click(within(group).getByRole('button', { name: '#4 Closed long ago' }))
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith(
+      'pane-1',
+      'github-item-/work-origin-4'
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+  })
+
   it('preselects GitHub when a GitHub item tab is on screen', async () => {
     seedProject(makeProject())
     const { dialog } = await openDrawer({ section: 'github' })

@@ -1,5 +1,5 @@
 import type { GithubContext, GithubListItem, GithubListResult } from '@shared/types/github.types'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_GITHUB_FILTER, useGithubStore } from '@/stores/github-store'
@@ -167,11 +167,15 @@ describe('GithubPanel list', () => {
     api.listItems.mockResolvedValue(ok(list(ISSUE, PR)))
     renderPanel()
 
-    const issue = await screen.findByRole('button', { name: 'Open issue #12: Crash on start' })
+    const issue = await screen.findByRole('button', {
+      name: 'Open issue #12: Crash on start, 3 comments, labels bug'
+    })
     expect(issue).toHaveTextContent('#12')
     expect(issue).toHaveTextContent('ana')
     expect(issue).toHaveTextContent('bug')
-    const pr = screen.getByRole('button', { name: 'Open pull request #15: Fix the crash' })
+    const pr = screen.getByRole('button', {
+      name: 'Open pull request #15: Fix the crash, checks failed'
+    })
     expect(within(pr).getByRole('img', { name: 'Checks failed' })).toBeInTheDocument()
     expect(api.listItems).toHaveBeenCalledWith({
       cwd: CWD,
@@ -230,6 +234,40 @@ describe('GithubPanel list', () => {
 
     expect(await screen.findByText(/GitHub rate limit reached/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /#12/ })).toBeInTheDocument()
+  })
+
+  it("reloads after the remote changes and never shows the old repository's items", async () => {
+    api.listItems.mockResolvedValueOnce(ok(list(ISSUE)))
+    renderPanel()
+    await screen.findByRole('button', { name: /#12/ })
+
+    const moved = { ...ORIGIN, name: 'app-renamed' }
+    let resolveList: (value: ReturnType<typeof ok<GithubListResult>>) => void = () => {}
+    api.listItems.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveList = resolve
+      })
+    )
+    act(() => {
+      useGithubStore.setState({
+        contexts: {
+          [CWD]: {
+            data: { ...connected(), repo: { kind: 'resolved', origin: moved, upstream: null } },
+            status: 'idle',
+            errorCode: null,
+            error: null
+          }
+        }
+      })
+    })
+
+    expect(screen.queryByRole('button', { name: /#12/ })).toBeNull()
+    expect(screen.getByRole('status', { name: 'Loading' })).toBeInTheDocument()
+    expect(api.listItems).toHaveBeenCalledTimes(2)
+    await act(async () => {
+      resolveList(ok({ ...list(PR), repo: moved }))
+    })
+    expect(await screen.findByRole('button', { name: /#15/ })).toBeInTheDocument()
   })
 
   it('opens the clicked item as a GitHub tab in the active pane', async () => {
