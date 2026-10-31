@@ -196,12 +196,10 @@ export function ContextUsageDetails({
         </p>
         {/* Always mounted, so screen readers announce the failure when it appears. */}
         <p role="status">
-          {compactPhase === 'failed' ? (
+          {compactPhase === 'failed' && (
             <span className="animate-in fade-in-0 duration-150 text-destructive motion-reduce:animate-none">
               Compact didn't finish
             </span>
-          ) : (
-            'Reported by agent'
           )}
         </p>
       </div>

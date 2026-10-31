@@ -79,7 +79,7 @@ describe('ContextUsageIndicator on desktop', () => {
     expect(within(popover).getByText('Conversation')).toBeInTheDocument()
     expect(within(popover).getByTestId('context-left')).toHaveTextContent('150K left')
     expect(within(popover).getByText('Reported cost')).toBeInTheDocument()
-    expect(within(popover).getByText('Reported by agent')).toBeInTheDocument()
+    expect(within(popover).queryByText('Reported by agent')).not.toBeInTheDocument()
     // No overlay-stack entry: the popover is not part of the mobile back stack.
     expect(overlayIds()).toEqual([])
   })
@@ -122,7 +122,7 @@ describe('ContextUsageIndicator on the mobile web shell', () => {
     expect(within(sheet).getByText('Conversation')).toBeInTheDocument()
     expect(within(sheet).getByTestId('context-left')).toHaveTextContent('150K left')
     expect(within(sheet).getByText('Reported cost')).toBeInTheDocument()
-    expect(within(sheet).getByText('Reported by agent')).toBeInTheDocument()
+    expect(within(sheet).queryByText('Reported by agent')).not.toBeInTheDocument()
   })
 
   it('registers context-details-sheet while open and unregisters on close', () => {
@@ -217,7 +217,6 @@ describe('ContextUsageDetails', () => {
 
     render(<ContextUsageDetails usage={usage()} showHeading={false} />)
     expect(screen.queryByText('Context window')).not.toBeInTheDocument()
-    expect(screen.getByText('Reported by agent')).toBeInTheDocument()
   })
 })
 
