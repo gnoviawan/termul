@@ -31,6 +31,7 @@ use crate::web::git_api;
 use crate::web::git_diff_stat_api;
 use crate::web::git_history_api;
 use crate::web::git_hunk_api;
+use crate::web::github_api;
 use crate::web::install_api;
 use crate::web::log_api;
 use crate::web::mcp_oauth_api;
@@ -269,6 +270,16 @@ pub fn router(
         .route("/git/branch-list", get(git_api::branch_list))
         .route("/git/branch-switch", post(git_api::branch_switch))
         .route("/git/diff-stat", post(git_diff_stat_api::get_diff_stat))
+        // GitHub issues & PRs (spec-github-integration); twins of the
+        // desktop `github_*` commands over the shared `GithubService`.
+        .route("/github/context", post(github_api::context))
+        .route("/github/items", post(github_api::list_items))
+        .route("/github/item", post(github_api::get_item))
+        .route("/github/checks", post(github_api::get_checks))
+        .route("/github/check-log", post(github_api::get_check_log))
+        .route("/github/merge", post(github_api::merge))
+        .route("/github/comment", post(github_api::comment))
+        .route("/github/checkout-pr", post(github_api::checkout_pr))
         // Project icon resolution (spec-project-icon). Mirrors the desktop
         // `project_icon_resolve` command — same shared resolver, read-route
         // posture (boundary check, no write guard).
@@ -514,6 +525,16 @@ pub fn router_with_static(
         .route("/git/branch-list", get(git_api::branch_list))
         .route("/git/branch-switch", post(git_api::branch_switch))
         .route("/git/diff-stat", post(git_diff_stat_api::get_diff_stat))
+        // GitHub issues & PRs (spec-github-integration); twins of the
+        // desktop `github_*` commands over the shared `GithubService`.
+        .route("/github/context", post(github_api::context))
+        .route("/github/items", post(github_api::list_items))
+        .route("/github/item", post(github_api::get_item))
+        .route("/github/checks", post(github_api::get_checks))
+        .route("/github/check-log", post(github_api::get_check_log))
+        .route("/github/merge", post(github_api::merge))
+        .route("/github/comment", post(github_api::comment))
+        .route("/github/checkout-pr", post(github_api::checkout_pr))
         .route("/project/icon", post(project_icon_api::resolve_icon))
         .route("/search/rg-info", get(search_api::rg_info))
         .route("/search/content", post(search_api::content))

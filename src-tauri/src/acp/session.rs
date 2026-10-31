@@ -684,6 +684,12 @@ impl DriverState {
         }
     }
 
+    /// The client turn id of the session's active turn, if it has one.
+    #[must_use]
+    pub(crate) fn active_turn_id(&self, session_id: &str) -> Option<String> {
+        self.active_turn_ids.get(session_id).cloned().flatten()
+    }
+
     /// Remove and return every session that still has an active turn, with
     /// its turn id. Used when the connection ends: the turn tasks were
     /// dropped before emitting their terminator, so the teardown owns it.
