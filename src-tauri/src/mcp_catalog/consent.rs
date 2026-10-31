@@ -101,16 +101,21 @@ pub(crate) struct ShownValue {
 }
 
 impl ShownValue {
+    /// Only a value the user typed into a secret field is withheld. Registry
+    /// or file text is shown even when flagged secret, because the user did
+    /// not choose it and is consenting to it.
     fn consent(&self) -> ConsentValue {
         let (value, origin) = match &self.value {
-            Some((value, origin)) if !self.is_secret => (Some(escape_for_display(value)), *origin),
+            Some((value, origin)) if !self.is_secret || *origin != Origin::User => {
+                (Some(escape_for_display(value)), *origin)
+            }
             Some((_, origin)) => (None, *origin),
             None => (None, Origin::User),
         };
         ConsentValue {
             name: escape_for_display(&self.name),
+            is_secret: value.is_none(),
             value,
-            is_secret: self.is_secret,
             origin,
         }
     }

@@ -524,6 +524,18 @@ fn assemble(
     })
 }
 
+/// The digest names env and header slots but not their values (AD-7), so
+/// commit also re-derives this view and refuses any value the user did not see.
+fn consent_view(described: &Described, assembled: &Assembled) -> ConsentView {
+    ConsentView::build(ConsentInput {
+        config: &assembled.config,
+        values: &assembled.shown,
+        provenance: described.consent_provenance.clone(),
+        deprecated: described.deprecated,
+        from_file: described.from_file,
+    })
+}
+
 struct StoredPlan {
     caller: PlanCaller,
     created_at: Instant,
@@ -531,6 +543,7 @@ struct StoredPlan {
     described: Described,
     values: Values,
     digest: String,
+    consent_view: ConsentView,
 }
 
 pub struct PlanStore {
@@ -651,13 +664,7 @@ pub(crate) fn plan_install(
         .map_err(|message| error(VALIDATION_ERROR, message))?;
     let assembled = assemble(&described, &values, Phase::Plan)?;
     let digest = launch_digest(&assembled.config, described.provenance.as_ref());
-    let consent_view = ConsentView::build(ConsentInput {
-        config: &assembled.config,
-        values: &assembled.shown,
-        provenance: described.consent_provenance.clone(),
-        deprecated: described.deprecated,
-        from_file: described.from_file,
-    });
+    let consent_view = consent_view(&described, &assembled);
     let name = described.name.clone();
     let fields = described.model.fields.clone();
     let (plan_id, expires_at) = store.insert(StoredPlan {
@@ -667,6 +674,7 @@ pub(crate) fn plan_install(
         described,
         values,
         digest: digest.clone(),
+        consent_view: consent_view.clone(),
     })?;
     log::info!(
         "[mcp-catalog] plan created plan={} source={} transport={} fields={}",
@@ -756,7 +764,7 @@ fn commit_locked(
     values.extend(secret_values);
     let assembled = assemble(&plan.described, &values, Phase::Commit)?;
     let digest = launch_digest(&assembled.config, plan.described.provenance.as_ref());
-    if digest != plan.digest {
+    if digest != plan.digest || consent_view(&plan.described, &assembled) != plan.consent_view {
         plans.remove(&request.plan_id);
         return Err(error(
             PLAN_MISMATCH,
