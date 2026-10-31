@@ -127,10 +127,10 @@ impl McpCatalogService {
     /// Starts live sync for this process with its cache and setting under
     /// `dir` (`<state>/mcp-catalog`). Runs until the process exits.
     pub async fn start(dir: PathBuf) {
-        Self::shared()
-            .await
-            .attach(dir, Registry::new(sync::REGISTRY_BASE))
-            .await;
+        match Registry::new(sync::REGISTRY_BASE) {
+            Ok(registry) => Self::shared().await.attach(dir, registry).await,
+            Err(error) => log::error!("[mcp-catalog] sync disabled, no HTTP client: {error}"),
+        }
     }
 
     pub(crate) async fn attach(self: Arc<Self>, dir: PathBuf, registry: Registry) {

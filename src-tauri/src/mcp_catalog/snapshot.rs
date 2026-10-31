@@ -28,7 +28,7 @@ const EMBEDDED_META: &str = include_str!(concat!(
 
 const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 const MAX_SNAPSHOT_JSON_BYTES: u64 = 256 * 1024 * 1024;
-const OFFICIAL_META: &str = "io.modelcontextprotocol.registry/official";
+pub(super) const OFFICIAL_META: &str = "io.modelcontextprotocol.registry/official";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

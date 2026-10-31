@@ -129,7 +129,7 @@ fn start(catalog: LoadedCatalog, dir: &Path, registry: &str) -> Arc<McpCatalogSe
         catalog,
         RunnerAvailability::default(),
     ));
-    tokio::spawn(Arc::clone(&service).attach(dir.to_path_buf(), Registry::new(registry)));
+    tokio::spawn(Arc::clone(&service).attach(dir.to_path_buf(), Registry::new(registry).unwrap()));
     service
 }
 
@@ -410,7 +410,7 @@ async fn a_failed_sync_waits_an_hour_even_across_a_toggle() {
 async fn a_response_over_the_size_cap_fails_the_run() {
     let mock = MockRegistry::new(vec![], vec![]);
     *mock.mode.lock() = Mode::Oversized;
-    let registry = Registry::new(serve(&mock).await);
+    let registry = Registry::new(serve(&mock).await).unwrap();
 
     let outcome = fetch(&registry, SyncPlan::Full, || true, |_| {}).await;
 
@@ -428,7 +428,7 @@ async fn turning_sync_off_stops_a_crawl_before_its_next_request() {
             .collect(),
         vec![],
     );
-    let registry = Registry::new(serve(&mock).await);
+    let registry = Registry::new(serve(&mock).await).unwrap();
     let pages = Mutex::new(0);
 
     let outcome = fetch(

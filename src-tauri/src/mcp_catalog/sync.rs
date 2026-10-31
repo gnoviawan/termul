@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::Value;
 
-use super::snapshot::{item_from_row, CatalogItem, LoadedCatalog, McpCatalogSource};
+use super::snapshot::{item_from_row, CatalogItem, LoadedCatalog, McpCatalogSource, OFFICIAL_META};
 use super::McpCatalogService;
 
 pub(crate) const REGISTRY_BASE: &str = "https://registry.modelcontextprotocol.io";
@@ -43,7 +43,6 @@ const CACHE_FORMAT_VERSION: u32 = 1;
 const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CACHE_FILE: &str = "registry-cache.json.gz";
 const CONFIG_FILE: &str = "config.json";
-const OFFICIAL_META: &str = "io.modelcontextprotocol.registry/official";
 /// The snapshot script drops the same fields: icons are fetched by the host
 /// only, publisher `_meta` is enrichment, and parsing ignores `$schema`.
 const DROPPED_SERVER_FIELDS: [&str; 3] = ["$schema", "icons", "_meta"];
@@ -160,16 +159,15 @@ struct PageMetadata {
 }
 
 impl Registry {
-    pub(crate) fn new(base: impl Into<String>) -> Self {
+    pub(crate) fn new(base: impl Into<String>) -> reqwest::Result<Self> {
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .redirect(crate::acp::https_only::redirect_policy())
-            .build()
-            .unwrap_or_default();
-        Self {
+            .build()?;
+        Ok(Self {
             base: base.into(),
             client,
-        }
+        })
     }
 
     fn url(&self, segments: &[&str]) -> Result<reqwest::Url, SyncError> {
