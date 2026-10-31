@@ -3,7 +3,10 @@ import {
   prepareLaunchWorktree
 } from '@/components/agents/launcher/prepare-launch-worktree'
 import type { ContentBlock, SessionId } from '@/lib/acp-api'
+import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
+import { worktreeApi } from '@/lib/worktree-api'
+import { reconcileProjectWorktrees } from '@/lib/worktree-reconciler'
 import { useAcpStore } from '@/stores/acp-store'
 import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
@@ -42,7 +45,10 @@ export interface ChatLaunchRequest {
   newWorktree?: { projectRoot: string; baseBranch: string | null }
   /** Paint the placeholder (option snapshot, optimistic first turn). */
   placeholder?: Omit<PlaceholderArgs, 'cwd' | 'projectId' | 'worktreeProgressId'>
-  /** Runs once the checkout is ready and before the agent session starts. */
+  /**
+   * Runs once the checkout is ready and before the agent session starts.
+   * Throwing {@link LaunchAbort} calls the launch off.
+   */
   beforeStart?: (checkout: LaunchCheckout) => Promise<LaunchFirstTurn | undefined>
   /** The chat tab is open on the placeholder (runs synchronously inside {@link launchChat}). */
   onOpened?: (placeholderId: SessionId) => void
@@ -59,11 +65,46 @@ export interface ChatLaunch {
   started: Promise<SessionId>
 }
 
+/**
+ * Thrown by `beforeStart` to call a launch off before the agent starts: the
+ * chat tab closes, and a worktree the launch made is removed.
+ */
+export class LaunchAbort extends Error {
+  constructor(
+    message: string,
+    readonly code: string
+  ) {
+    super(message)
+  }
+}
+
+function log(level: 'info' | 'warn' | 'error', message: string): void {
+  void logFrontendError({ level, source: 'launch-chat.launchChat', message })
+}
+
 /** Close a launch's chat tab and forget its placeholder (and its worktree progress card). */
-export function rollbackLaunchPlaceholder(placeholderId: SessionId, progressId?: string): void {
+function rollbackLaunchPlaceholder(placeholderId: SessionId, progressId?: string): void {
   useWorkspaceStore.getState().removeTab(agentChatTabId(placeholderId))
   useAcpStore.getState().discardLaunchPlaceholder(placeholderId)
   if (progressId) useWorktreeProgressStore.getState().clear(progressId)
+}
+
+async function removeLaunchWorktree(
+  projectId: string,
+  projectRoot: string,
+  worktreePath: string
+): Promise<void> {
+  const removed = await worktreeApi
+    .remove(projectRoot, worktreePath, true)
+    .catch((err: unknown) => ({ success: false as const, error: String(err) }))
+  if (!removed.success) {
+    log(
+      'warn',
+      `Could not remove the worktree ${worktreePath} of an aborted launch: ${removed.error}`
+    )
+    return
+  }
+  await reconcileProjectWorktrees(projectId).catch(() => {})
 }
 
 /**
@@ -88,6 +129,10 @@ export function launchChat(request: ChatLaunchRequest): ChatLaunch {
   })
   useWorkspaceStore.getState().addAgentChatTab(placeholderId, paneId)
   request.onOpened?.(placeholderId)
+  log(
+    'info',
+    `Chat launch ${placeholderId} opened for agent ${configId}${newWorktree ? ' in a new worktree' : ''}`
+  )
 
   const started = (async (): Promise<SessionId> => {
     let checkout = request.checkout
@@ -110,7 +155,18 @@ export function launchChat(request: ChatLaunchRequest): ChatLaunch {
         request.onWorktreeCreating?.(false)
       }
     }
-    const firstTurn = (await request.beforeStart?.(checkout)) ?? {}
+    let firstTurn: LaunchFirstTurn
+    try {
+      firstTurn = (await request.beforeStart?.(checkout)) ?? {}
+    } catch (err) {
+      if (err instanceof LaunchAbort) {
+        rollbackLaunchPlaceholder(placeholderId, progressId)
+        if (newWorktree && checkout.worktreePath) {
+          await removeLaunchWorktree(projectId, newWorktree.projectRoot, checkout.worktreePath)
+        }
+      }
+      throw err
+    }
     return useAcpStore.getState().finalizeChatLaunch({
       placeholderId,
       configId,
@@ -127,6 +183,14 @@ export function launchChat(request: ChatLaunchRequest): ChatLaunch {
       worktreePath: checkout.worktreePath,
       worktreeBranch: firstTurn.worktreeBranch ?? checkout.worktreeBranch
     })
-  })()
+  })().catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err)
+    if (err instanceof LaunchAbort) {
+      log('warn', `Chat launch ${placeholderId} called off (code=${err.code}): ${message}`)
+    } else {
+      log('error', `Chat launch ${placeholderId} failed: ${message}`)
+    }
+    throw err
+  })
   return { placeholderId, started }
 }

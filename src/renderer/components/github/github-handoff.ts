@@ -8,10 +8,10 @@ import type {
 import { type LastSelectedAgent, PersistenceKeys } from '@shared/types/persistence.types'
 import { toast } from 'sonner'
 import {
+  LaunchAbort,
   type LaunchCheckout,
   type LaunchFirstTurn,
-  launchChat,
-  rollbackLaunchPlaceholder
+  launchChat
 } from '@/components/agents/launcher/launch-chat'
 import { seedComposerDraft } from '@/components/chat/use-composer-draft'
 import type { ContentBlock } from '@/lib/acp-api'
@@ -35,7 +35,6 @@ import {
 } from '@/stores/github-chat-links-store'
 import type { GithubItemRef } from '@/stores/github-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
-import { FORK_PUSH_BLOCKED_REASON } from './handoff-actions'
 
 /** One hand-off, with what that action needs beyond the item. */
 export type GithubHandoffRequest =
@@ -60,16 +59,6 @@ const IN_NEW_WORKTREE: ReadonlySet<GithubHandoffAction> = new Set([
   'fix_ci',
   'resolve_comments'
 ])
-
-/** A hand-off step failed before the agent started: the chat tab is rolled back. */
-class HandoffAbort extends Error {
-  constructor(
-    message: string,
-    readonly code: string
-  ) {
-    super(message)
-  }
-}
 
 function log(level: 'info' | 'warn' | 'error', action: GithubHandoffAction, message: string): void {
   void logFrontendError({ level, source: `github.handoff.${action}`, message })
@@ -101,9 +90,11 @@ async function checkoutPullRequest(
     number: ctx.itemRef.number
   })
   if (result.success) return result.data
-  throw new HandoffAbort(
+  // The host decides whether the agent can push (head-repo write, or
+  // maintainer edits plus base write) and says why not.
+  throw new LaunchAbort(
     result.code === 'GH_FORK_PUSH_BLOCKED'
-      ? FORK_PUSH_BLOCKED_REASON
+      ? result.error
       : `Couldn't check out the pull request: ${result.error}`,
     result.code
   )
@@ -156,19 +147,45 @@ async function pullRequestTurn(
  * Hand a GitHub issue or PR to an agent chat (CAP-5 to CAP-8) through the
  * shared launch path. Every chat is linked to its item; Ask and Review reopen
  * their existing chat. Start leaves its prompt as an unsent composer draft.
- * Termul never resolves threads or closes items itself.
+ * Termul never resolves threads or closes items itself. Never rejects: a
+ * failure is shown as a toast and logged.
  */
 export async function runGithubHandoff(
   ctx: GithubHandoffContext,
   request: GithubHandoffRequest
 ): Promise<void> {
+  const { action } = request
+  const itemId = githubItemIdentity(ctx.detail.repo, ctx.itemRef.number)
+  log('info', action, `Hand-off of ${itemId} started`)
+  try {
+    await handOff(ctx, request, itemId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (err instanceof LaunchAbort) {
+      toast.error(message)
+      log(
+        'warn',
+        action,
+        `Hand-off of ${itemId} stopped before the agent started (code=${err.code})`
+      )
+      return
+    }
+    toast.error(err instanceof Error ? message : 'Failed to start the agent chat')
+    log('error', action, `Hand-off of ${itemId} failed: ${message}`)
+  }
+}
+
+async function handOff(
+  ctx: GithubHandoffContext,
+  request: GithubHandoffRequest,
+  itemId: string
+): Promise<void> {
   const { projectId, itemRef, detail } = ctx
   const { action } = request
-  const itemId = githubItemIdentity(detail.repo, itemRef.number)
-  log('info', action, `Hand-off of ${itemId} started`)
+  // Before any link is written: a write replaces the persisted list.
+  await hydrateGithubChatLinks(projectId)
 
   if (REOPENED.has(action)) {
-    await hydrateGithubChatLinks(projectId)
     const existing = (useGithubChatLinksStore.getState().byProject[projectId] ?? [])
       .filter((l) => l.itemId === itemId && l.action === action && sessionExists(l.sessionId))
       .at(-1)
@@ -243,21 +260,8 @@ export async function runGithubHandoff(
     seedDraft(sessionId)
     log('info', action, `Hand-off of ${itemId} started chat ${sessionId}`)
   } catch (err) {
-    if (err instanceof HandoffAbort) {
-      rollbackLaunchPlaceholder(placeholderId)
-      toast.error(err.message)
-      log(
-        'warn',
-        action,
-        `Hand-off of ${itemId} stopped before the agent started (code=${err.code})`
-      )
-      return
-    }
-    toast.error(err instanceof Error ? err.message : 'Failed to start the agent chat')
-    log(
-      'error',
-      action,
-      `Hand-off of ${itemId} failed: ${err instanceof Error ? err.message : String(err)}`
-    )
+    // A launch rolled back before its session existed leaves no chat to link.
+    if (!sessionExists(placeholderId)) links.unlink(projectId, placeholderId)
+    throw err
   }
 }

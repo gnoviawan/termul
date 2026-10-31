@@ -7,12 +7,14 @@ import type {
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatLaunchRequest } from '@/components/agents/launcher/launch-chat'
+import { persistenceApi } from '@/lib/api'
 import { buildReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { startIssuePrompt } from '@/lib/github-handoff/start'
 import { renderHandoffPrompt } from '@/lib/github-handoff/untrusted'
 import { useAcpStore } from '@/stores/acp-store'
 import {
   _resetGithubChatLinksForTesting,
+  hydrateGithubChatLinks,
   readOnlyGuardOfSession,
   useGithubChatLinksStore
 } from '@/stores/github-chat-links-store'
@@ -33,8 +35,7 @@ const api = vi.hoisted(() => ({
 }))
 const launch = vi.hoisted(() => ({
   requests: [] as ChatLaunchRequest[],
-  launchChat: vi.fn(),
-  rollbackLaunchPlaceholder: vi.fn()
+  launchChat: vi.fn()
 }))
 const seams = vi.hoisted(() => ({
   seedComposerDraft: vi.fn(),
@@ -44,7 +45,10 @@ const seams = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/github-api', () => ({ githubApi: api }))
-vi.mock('@/components/agents/launcher/launch-chat', () => launch)
+vi.mock('@/components/agents/launcher/launch-chat', async (importActual) => ({
+  ...(await importActual<typeof import('@/components/agents/launcher/launch-chat')>()),
+  launchChat: launch.launchChat
+}))
 vi.mock('@/components/chat/use-composer-draft', () => ({
   seedComposerDraft: seams.seedComposerDraft
 }))
@@ -162,6 +166,7 @@ beforeEach(() => {
   launch.requests.length = 0
   launch.launchChat.mockImplementation(fakeLaunch)
   seams.resolveBaseBranch.mockResolvedValue(ok({ defaultBase: 'main', isDetached: false }))
+  vi.mocked(persistenceApi.read).mockResolvedValue(ok(null))
   _resetGithubChatLinksForTesting()
   useAcpStore.setState({
     agentConfigs: [{ id: 'claude', name: 'Claude' } as never],
@@ -244,11 +249,12 @@ describe('runGithubHandoff', () => {
     expect(readOnlyGuardOfSession('p1', 'chat-1')).toBeNull()
   })
 
-  it('rolls the chat back with the reason when a fork blocks pushes', async () => {
+  it("calls the launch off with the host's reason when the agent could not push, and drops its link", async () => {
+    const reason = 'You cannot push to acme/app, so an agent could not push to pull request #15.'
     api.checkoutPr.mockResolvedValue({
       success: false,
       code: 'GH_FORK_PUSH_BLOCKED',
-      error: 'maintainer edits are off'
+      error: reason
     })
     await runGithubHandoff(
       {
@@ -259,10 +265,67 @@ describe('runGithubHandoff', () => {
       { action: 'resolve_comments', threads: [THREAD] }
     )
 
-    expect(launch.rollbackLaunchPlaceholder).toHaveBeenCalledWith('ph-1')
-    expect(seams.toastError).toHaveBeenCalledWith(
-      "This fork PR doesn't allow maintainer edits, so an agent can't push to it."
+    await expect(turnOf(0)).rejects.toMatchObject({ message: reason })
+    expect(seams.toastError).toHaveBeenCalledWith(reason)
+    expect(useGithubChatLinksStore.getState().byProject.p1).toEqual([])
+    expect(vi.mocked(persistenceApi.write)).toHaveBeenLastCalledWith('github/chat-links/p1', [])
+  })
+
+  it('keeps the persisted links of the project when a new chat is linked', async () => {
+    const older = {
+      sessionId: 'chat-old',
+      action: 'ask',
+      itemId: 'github.com/acme/app#9',
+      item: { repo: REPO, kind: 'issue', number: 9 },
+      createdAt: '2026-10-01T00:00:00Z'
+    }
+    vi.mocked(persistenceApi.read).mockImplementation(async (key: string) =>
+      key === 'github/chat-links/p1' ? ok([older]) : ok(null)
     )
+    await runGithubHandoff(
+      { projectId: 'p1', itemRef: itemRef('issue'), detail: detail('issue') },
+      { action: 'start' }
+    )
+
+    const writes = vi
+      .mocked(persistenceApi.write)
+      .mock.calls.filter(([key]) => key === 'github/chat-links/p1')
+    expect(writes.at(-1)?.[1]).toMatchObject([
+      { sessionId: 'chat-old' },
+      { sessionId: 'chat-1', action: 'start' }
+    ])
+  })
+
+  it('reads the persisted links again after a failed read', async () => {
+    const older = {
+      sessionId: 'chat-old',
+      action: 'ask',
+      itemId: 'github.com/acme/app#15',
+      item: { repo: REPO, kind: 'pr', number: 15 },
+      createdAt: '2026-10-01T00:00:00Z'
+    }
+    vi.mocked(persistenceApi.read)
+      .mockResolvedValueOnce({ success: false, code: 'STORE_UNAVAILABLE', error: 'socket closed' })
+      .mockResolvedValue(ok([older]))
+    await hydrateGithubChatLinks('p1')
+    await hydrateGithubChatLinks('p1')
+
+    expect(useGithubChatLinksStore.getState().byProject.p1).toMatchObject([
+      { sessionId: 'chat-old' }
+    ])
+  })
+
+  it('shows a failure before the launch as a toast instead of rejecting', async () => {
+    seams.resolveBaseBranch.mockRejectedValue(new Error('git is not installed'))
+    await expect(
+      runGithubHandoff(
+        { projectId: 'p1', itemRef: itemRef('issue'), detail: detail('issue') },
+        { action: 'start' }
+      )
+    ).resolves.toBeUndefined()
+
+    expect(seams.toastError).toHaveBeenCalledWith('git is not installed')
+    expect(launch.launchChat).not.toHaveBeenCalled()
   })
 })
 
@@ -284,15 +347,26 @@ describe('GithubHandoffBar', () => {
     ).toEqual(['Review', 'Ask', 'Fix CI', 'Resolve comments'])
   })
 
-  it('disables Fix CI and Resolve comments on a fork PR that refuses maintainer edits', async () => {
+  it('leaves Fix CI and Resolve comments to the checkout on a fork PR without maintainer edits', async () => {
+    // The user may own the fork; only the host knows whether the agent can push.
     renderPr(pull({ isCrossRepository: true, maintainerCanModify: false, reviewThreads: [THREAD] }))
     const bar = await screen.findByRole('toolbar', { name: 'Agent actions' })
-    expect(await within(bar).findByRole('button', { name: 'Fix CI' })).toBeDisabled()
-    expect(within(bar).getByRole('button', { name: 'Resolve comments' })).toBeDisabled()
-    expect(within(bar).getByRole('button', { name: 'Ask' })).toBeEnabled()
+    expect(await within(bar).findByRole('button', { name: 'Fix CI' })).toBeEnabled()
+    expect(within(bar).getByRole('button', { name: 'Resolve comments' })).toBeEnabled()
+  })
+
+  it("offers no Fix CI from the previous head's failed checks", async () => {
+    api.getItem.mockResolvedValue(ok(detail('pr', pull({ headSha: 'def456' }))))
+    api.getChecks.mockResolvedValueOnce(ok(CHECKS)).mockReturnValueOnce(new Promise(() => {}))
+    render(<GithubItemPanel cwd={CWD} repo="origin" kind="pr" number={15} isVisible />)
+
+    const bar = await screen.findByRole('toolbar', { name: 'Agent actions' })
+    await waitFor(() => expect(api.getChecks).toHaveBeenCalledTimes(2))
     expect(
-      screen.getByText("This fork PR doesn't allow maintainer edits, so an agent can't push to it.")
-    ).toBeInTheDocument()
+      within(bar)
+        .getAllByRole('button')
+        .map((b) => b.textContent)
+    ).toEqual(['Review', 'Ask'])
   })
 
   it('hands only the threads left selected in the picker to the agent', async () => {

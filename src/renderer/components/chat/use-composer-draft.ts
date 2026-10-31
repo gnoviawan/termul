@@ -45,7 +45,11 @@ export function useComposerDraft({
   // `chat-draft/undefined/undefined` and cross-session drafts colliding.
   const canPersistDraft = projectId != null && sessionId != null
   const hydratedRef = useRef(false)
+  // A seeded draft counts as hydrated only once it renders: until then `value`
+  // is the previous text, and writing that would delete the persisted seed.
+  const pendingSeedRef = useRef<string | null>(null)
   useEffect(() => {
+    pendingSeedRef.current = null
     if (seedNonce !== undefined) {
       // Editing/seeding a message — don't restore a stale draft over the seed.
       hydratedRef.current = true
@@ -60,8 +64,9 @@ export function useComposerDraft({
     const seeded = draftSeeds.get(draftKey)
     if (seeded !== undefined) {
       draftSeeds.delete(draftKey)
+      hydratedRef.current = false
+      pendingSeedRef.current = seeded
       setValue(seeded)
-      hydratedRef.current = true
       return
     }
     let cancelled = false
@@ -94,7 +99,11 @@ export function useComposerDraft({
   useEffect(() => {
     if (seedNonce !== undefined) return
     if (!canPersistDraft) return
-    if (!hydratedRef.current) return
+    if (!hydratedRef.current) {
+      if (pendingSeedRef.current === null || value !== pendingSeedRef.current) return
+      pendingSeedRef.current = null
+      hydratedRef.current = true
+    }
     if (!value) {
       void persistenceApi.delete(draftKey).catch(() => {})
       return

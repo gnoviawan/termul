@@ -1409,6 +1409,38 @@ describe('read-only GitHub chats (CAP-6)', () => {
     ])
   })
 
+  it('keeps guarding a chat this device started after its link is gone', async () => {
+    seedSession('s5', 'agent-1', false)
+    useGithubChatLinksStore.getState().link('p1', {
+      sessionId: 's5',
+      action: 'ask',
+      itemId: 'github.com/acme/app#15',
+      item: { ...ITEM, kind: 'pr' },
+      createdAt: '2026-10-31T00:00:00Z'
+    })
+    await useAcpStore.getState().sendPrompt('s5', 'what does it change?')
+    const [firstUser] = useAcpStore.getState().messages.s5
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's5',
+      turnId: firstUser.id.slice('turn:'.length),
+      content: [
+        { type: 'text', text: GUARD },
+        { type: 'text', text: 'what does it change?' }
+      ]
+    })
+    await finishTurn('s5')
+    // Evicted by the per-project cap, or never hydrated on this run.
+    _resetGithubChatLinksForTesting()
+
+    await useAcpStore.getState().sendPrompt('s5', 'and the tests?')
+
+    expect(sent[1]).toEqual([
+      { type: 'text', text: GUARD },
+      { type: 'text', text: 'and the tests?' }
+    ])
+  })
+
   it('sends an unlinked chat unchanged', async () => {
     seedSession('s3', 'agent-1', false)
     await useAcpStore.getState().sendPromptBlocks('s3', [{ type: 'text', text: 'hello' }])

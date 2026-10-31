@@ -376,6 +376,22 @@ describe('GithubItemPanel', () => {
     })
   })
 
+  it('locks the comment text while the post is in flight', async () => {
+    api.getItem.mockResolvedValue(ok(detail()))
+    const post = deferred<{ success: false; code: string; error: string }>()
+    api.comment.mockReturnValue(post.promise)
+    renderPanel()
+
+    const box = await screen.findByRole('textbox', { name: 'Add a comment' })
+    fireEvent.change(box, { target: { value: 'First thought' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }))
+    expect(await screen.findByRole('button', { name: 'Posting…' })).toBeDisabled()
+    expect(box).toHaveAttribute('readonly')
+
+    await act(async () => post.resolve({ success: false, code: 'GH_FAILED', error: 'nope' }))
+    expect(box).not.toHaveAttribute('readonly')
+  })
+
   it('keeps the text and shows the error when GitHub refuses the comment', async () => {
     api.getItem.mockResolvedValue(ok(detail()))
     api.comment.mockResolvedValue({

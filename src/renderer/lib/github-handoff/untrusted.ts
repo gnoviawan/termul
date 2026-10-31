@@ -27,9 +27,50 @@ export function escapeUntrusted(data: string): string {
   return data.replace(MARKER_RE, `${MARKER}_ESCAPED`)
 }
 
+export const RECORD_TRUNCATION_MARKER =
+  '\n[... truncated by Termul to fit the GitHub data limit ...]'
+
+/**
+ * `text` cut so its escaped form plus `marker` fits in `room` characters.
+ * `growth` is how much escaping lengthens the whole of `text`; a prefix grows
+ * by at most that much.
+ */
+function truncate(text: string, room: number, marker: string, growth: number): string {
+  if (room <= marker.length) return text.slice(0, Math.max(0, room - growth))
+  return text.slice(0, Math.max(0, room - marker.length - growth)) + marker
+}
+
 function capUntrusted(data: string, budget: number): string {
   if (data.length <= budget) return data
-  return data.slice(0, budget - TRUNCATION_MARKER.length) + TRUNCATION_MARKER
+  return truncate(data, budget, TRUNCATION_MARKER, 0)
+}
+
+/**
+ * `heading` and `records` as one data block of at most `budget` escaped
+ * characters, every record present. When they do not fit, the shortest
+ * records stay whole and the longer ones share what is left equally, each
+ * cut at its end, so no record is dropped for the ones before it.
+ */
+export function fitUntrustedRecords(
+  heading: string,
+  records: string[],
+  budget: number = UNTRUSTED_DATA_BUDGET
+): string {
+  const separator = '\n\n'
+  const sizes = records.map((record) => escapeUntrusted(record).length)
+  let left = budget - escapeUntrusted(heading).length - separator.length * records.length
+  const rooms = new Array<number>(records.length)
+  const shortestFirst = records.map((_, i) => i).sort((a, b) => sizes[a] - sizes[b])
+  shortestFirst.forEach((i, done) => {
+    rooms[i] = Math.max(0, Math.min(sizes[i], Math.floor(left / (records.length - done))))
+    left -= rooms[i]
+  })
+  const fitted = records.map((record, i) =>
+    sizes[i] <= rooms[i]
+      ? record
+      : truncate(record, rooms[i], RECORD_TRUNCATION_MARKER, sizes[i] - record.length)
+  )
+  return [heading, ...fitted].join(separator)
 }
 
 /** The instruction prefix, the untrusted label, then the escaped and capped data block. */

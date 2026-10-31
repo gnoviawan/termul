@@ -330,6 +330,10 @@ export async function runPromptTurn(
     }
 
     openTurnId = newId('turn')
+    // Stamped on the bubble so the chat stays guarded once its link is gone
+    // (the echo that would carry it is deduped against this bubble).
+    const readOnlyGuard = readOnlyGuardOf(s, sessionId)
+    const guardField = readOnlyGuard ? { readOnlyGuard } : {}
     if (skipUserAppend) {
       // Reuse the trailing optimistic user message (the launch placeholder
       // or a seeded follow-up) instead of appending a new one — but RE-STAMP
@@ -353,7 +357,8 @@ export async function runPromptTurn(
           break
         }
       }
-      userMessage = userIndex >= 0 ? { ...list[userIndex], id: `turn:${turnId}` } : null
+      userMessage =
+        userIndex >= 0 ? { ...list[userIndex], id: `turn:${turnId}`, ...guardField } : null
       if (!userMessage) {
         // An explicitly-empty display override (the summary-only switch
         // dispatch) appends NO user bubble: the caller said the turn has no
@@ -381,7 +386,8 @@ export async function runPromptTurn(
           blocks: displayBlocks,
           streaming: false,
           timestamp: Date.now(),
-          seq: nextSeq()
+          seq: nextSeq(),
+          ...guardField
         }
         // Plan persistence: do NOT drop `plans[sessionId]` here. The ACP
         // spec's empty-entries rule (`_onPlanUpdate`) remains the sole
@@ -430,7 +436,8 @@ export async function runPromptTurn(
       blocks: displayBlocks,
       streaming: false,
       timestamp: Date.now(),
-      seq: nextSeq()
+      seq: nextSeq(),
+      ...guardField
     }
     return {
       messages: {

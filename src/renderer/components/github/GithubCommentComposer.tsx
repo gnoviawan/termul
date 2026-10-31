@@ -78,6 +78,8 @@ export function GithubCommentComposer({
         }}
         placeholder={placeholder}
         disabled={gated}
+        // Text typed during the post would be cleared with the sent text.
+        readOnly={posting}
         autoFocus={autoFocus}
         aria-describedby={error ? `${id}-error` : undefined}
         className="min-h-[72px] resize-y"

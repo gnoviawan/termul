@@ -136,7 +136,8 @@ export function GithubItemPanel({
         <ItemHeader
           itemRef={itemRef}
           detail={data}
-          checks={checks.data}
+          // Fix CI acts on the current head's failures only.
+          checks={checksStale ? null : checks.data}
           refreshing={refreshing}
           onRefresh={refresh}
         />

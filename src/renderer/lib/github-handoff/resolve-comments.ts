@@ -4,7 +4,7 @@ import type {
   GithubReviewThread
 } from '@shared/types/github.types'
 import { commentData, itemReference } from './item-context'
-import type { HandoffPrompt } from './untrusted'
+import { fitUntrustedRecords, type HandoffPrompt } from './untrusted'
 
 export interface ResolveCommentsInput {
   detail: GithubItemDetail
@@ -41,6 +41,6 @@ export function resolveCommentsPrompt({
       `Commit the changes and push them with: ${checkout.pushCommand}`,
       'Do not resolve threads, reply to them, or post anything to GitHub.'
     ].join('\n'),
-    data: [`Review threads on ${ref}:`, ...threads.map(threadData)].join('\n\n')
+    data: fitUntrustedRecords(`Review threads on ${ref}:`, threads.map(threadData))
   }
 }

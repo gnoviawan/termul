@@ -34,6 +34,8 @@ interface GithubChatLinksState {
   link: (projectId: string, link: GithubChatLink) => void
   /** A launch placeholder became its real session: move its links along. */
   rekey: (projectId: string, fromSessionId: string, toSessionId: string) => void
+  /** The launch failed before its chat existed. */
+  unlink: (projectId: string, sessionId: string) => void
 }
 
 const hydrations = new Map<string, Promise<void>>()
@@ -58,13 +60,16 @@ export const useGithubChatLinksStore = create<GithubChatLinksState>((set, get) =
       update(projectId, (links) =>
         links.map((l) => (l.sessionId === fromSessionId ? { ...l, sessionId: toSessionId } : l))
       )
+    },
+    unlink: (projectId, sessionId) => {
+      update(projectId, (links) => links.filter((l) => l.sessionId !== sessionId))
     }
   }
 })
 
 /**
  * Load a project's persisted links once, merged under any linked this run.
- * Idempotent: later calls share the first read.
+ * Idempotent: later calls share the first successful read.
  */
 export function hydrateGithubChatLinks(projectId: string): Promise<void> {
   const existing = hydrations.get(projectId)
@@ -72,7 +77,12 @@ export function hydrateGithubChatLinks(projectId: string): Promise<void> {
   const run = persistenceApi
     .read<GithubChatLink[]>(PersistenceKeys.githubChatLinks(projectId))
     .then((result) => {
-      if (!result.success || !Array.isArray(result.data)) return
+      if (!result.success) {
+        if (result.code === 'KEY_NOT_FOUND') return
+        // Not cached: the next call reads again.
+        throw new Error(result.error)
+      }
+      if (!Array.isArray(result.data)) return
       const persisted = result.data
       useGithubChatLinksStore.setState((state) => {
         const live = state.byProject[projectId] ?? []

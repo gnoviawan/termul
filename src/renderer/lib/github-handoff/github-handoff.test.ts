@@ -10,7 +10,13 @@ import { buildReadOnlyGuard, splitReadOnlyGuard } from './read-only-guard'
 import { resolveCommentsPrompt } from './resolve-comments'
 import { reviewPrPrompt } from './review'
 import { startIssuePrompt } from './start'
-import { renderHandoffPrompt, TRUNCATION_MARKER, UNTRUSTED_DATA_BUDGET } from './untrusted'
+import {
+  RECORD_TRUNCATION_MARKER,
+  renderHandoffPrompt,
+  TRUNCATION_MARKER,
+  UNTRUSTED_DATA_BUDGET,
+  UNTRUSTED_LABEL
+} from './untrusted'
 
 const REPO = { host: 'github.com', owner: 'acme', name: 'app' }
 
@@ -109,6 +115,12 @@ describe('renderHandoffPrompt', () => {
     expect(UNTRUSTED_DATA_BUDGET).toBe(12_000)
     expect(data).toHaveLength(12_000)
     expect(data.endsWith(TRUNCATION_MARKER)).toBe(true)
+  })
+
+  it('keeps the data within a budget shorter than the truncation marker', () => {
+    expect(renderHandoffPrompt({ instructions: 'I', data: 'y'.repeat(100) }, 10)).toBe(
+      `I\n\n${UNTRUSTED_LABEL}\n<<<GITHUB_UNTRUSTED_DATA\nyyyyyyyyyy\nGITHUB_UNTRUSTED_DATA>>>`
+    )
   })
 })
 
@@ -258,6 +270,43 @@ describe('resolveCommentsPrompt', () => {
         'URL: https://github.com/acme/app/pull/15#discussion_t3\n' +
         'rev (2026-10-30T10:00:00Z):\nRename this.'
     )
+  })
+
+  it('keeps every selected thread, cut at its own end, when they overflow the data budget', () => {
+    const long = (id: string, path: string) =>
+      thread(id, {
+        path,
+        comments: [{ ...thread(id).comments[0], body: `${id} says `.repeat(1_000) }]
+      })
+    const short = thread('t2', { path: 'src/short.ts' })
+    const prompt = resolveCommentsPrompt({
+      detail: pr(),
+      threads: [long('t1', 'src/a.ts'), short, long('t3', 'src/c.ts')],
+      checkout: CHECKOUT
+    })
+    const rendered = renderHandoffPrompt(prompt)
+    const data = rendered.slice(
+      rendered.indexOf('<<<GITHUB_UNTRUSTED_DATA\n') + '<<<GITHUB_UNTRUSTED_DATA\n'.length,
+      rendered.lastIndexOf('\nGITHUB_UNTRUSTED_DATA>>>')
+    )
+
+    expect(data.length).toBeLessThanOrEqual(UNTRUSTED_DATA_BUDGET)
+    expect(data.endsWith(TRUNCATION_MARKER)).toBe(false)
+    const records = data.split('\n\nThread ')
+    expect(records.map((r) => r.split('\n')[0])).toEqual([
+      'Review threads on acme/app#15:',
+      '1: src/a.ts:10',
+      '2: src/short.ts:10',
+      '3: src/c.ts:10'
+    ])
+    expect(records[1].endsWith(RECORD_TRUNCATION_MARKER)).toBe(true)
+    expect(records[2]).toBe(
+      '2: src/short.ts:10\n' +
+        'URL: https://github.com/acme/app/pull/15#discussion_t2\n' +
+        'rev (2026-10-30T10:00:00Z):\nRename this.'
+    )
+    expect(records[3]).toContain('URL: https://github.com/acme/app/pull/15#discussion_t3')
+    expect(records[3].endsWith(RECORD_TRUNCATION_MARKER)).toBe(true)
   })
 })
 
