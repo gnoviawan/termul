@@ -596,6 +596,7 @@ async fn the_host_router_gates_and_serves_the_automation_routes() {
         false,
         Some(auth),
         crate::web::origin::OriginPolicy::default(),
+        None,
     );
     let peer: SocketAddr = LOOPBACK.parse().unwrap();
     for (token, expected) in [
