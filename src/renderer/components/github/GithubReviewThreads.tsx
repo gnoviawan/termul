@@ -1,6 +1,13 @@
 import type { GithubReviewThread } from '@shared/types/github.types'
+import type { IpcResult } from '@shared/types/ipc.types'
+import { useState } from 'react'
 import { CheckCircle2 } from '@/components/icons'
+import { Button } from '@/components/ui/button'
+import { WriteGate } from '@/components/ui/write-gate'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { GithubComment } from './GithubComment'
+import { GithubCommentComposer } from './GithubCommentComposer'
 
 function ThreadBadges({ thread }: { thread: GithubReviewThread }): React.JSX.Element {
   return (
@@ -29,14 +36,54 @@ function ThreadLocation({ thread }: { thread: GithubReviewThread }): React.JSX.E
   )
 }
 
+/** A thread's "Reply" button, which opens a small reply box in place. */
+function ThreadReply({
+  onReply
+}: {
+  onReply: (body: string) => Promise<IpcResult<unknown>>
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const gated = !useServerAdmitsRemoteWrites()
+  const isMobileShell = useMobileWebShell()
+  if (open) {
+    return (
+      <GithubCommentComposer
+        label="Reply to this thread"
+        submitLabel="Reply"
+        placeholder="Write a reply"
+        onSubmit={onReply}
+        onCancel={() => setOpen(false)}
+        autoFocus
+        className="px-1"
+      />
+    )
+  }
+  return (
+    <WriteGate gated={gated} className="self-start">
+      <Button
+        variant="ghost"
+        size={isMobileShell ? 'touch' : 'xs'}
+        className="px-3"
+        disabled={gated}
+        onClick={() => setOpen(true)}
+      >
+        Reply
+      </Button>
+    </WriteGate>
+  )
+}
+
 /**
  * CAP-3 review threads with file and line, as GitHub reports them. Resolved
  * threads start folded (native `details`); Termul never resolves a thread.
  */
 export function GithubReviewThreads({
-  threads
+  threads,
+  onReply
 }: {
   threads: GithubReviewThread[]
+  /** Post a reply into a thread; the panel shows what GitHub returns. */
+  onReply: (threadId: string, body: string) => Promise<IpcResult<unknown>>
 }): React.JSX.Element | null {
   if (threads.length === 0) return null
   const unresolved = threads.filter((t) => !t.isResolved).length
@@ -64,6 +111,7 @@ export function GithubReviewThreads({
             {thread.comments.map((comment) => (
               <GithubComment key={comment.id} comment={comment} />
             ))}
+            <ThreadReply onReply={(body) => onReply(thread.id, body)} />
           </div>
         </details>
       ))}

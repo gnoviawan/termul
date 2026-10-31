@@ -45,6 +45,7 @@ import {
 } from '@/lib/agents/acp-spawn-errors'
 import { persistenceApi } from '@/lib/api'
 import { serializeSelectionContexts } from '@/lib/composer/selection-context'
+import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
 import {
   isFolderTokenPath,
@@ -215,8 +216,12 @@ export function dropHiddenToolCalls(
  * Non-user roles pass through untouched — the agent may legitimately echo
  * the framing in prose.
  */
-export function normalizeUserMessageBlocks(message: ChatMessage): ChatMessage {
-  if (message.role !== 'user') return message
+export function normalizeUserMessageBlocks(input: ChatMessage): ChatMessage {
+  if (input.role !== 'user') return input
+  const guarded = splitReadOnlyGuard(input.blocks)
+  const message: ChatMessage = guarded.guard
+    ? { ...input, blocks: guarded.blocks, readOnlyGuard: guarded.guard }
+    : input
   // spec-agent-switch-separator-redesign: a user bubble re-streamed from
   // message_chunks (recovery fold) still carries the handoff wire framing —
   // the `user_prompt` fold strips it, this pass covers the chunk path.

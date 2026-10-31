@@ -124,6 +124,13 @@ export interface ChatMessage {
    * A different id starts a new bubble.
    */
   messageId?: string
+  /**
+   * CAP-6: the read-only guard this user turn was sent with (a GitHub Ask or
+   * Review chat). Folded off the display blocks; the send path re-applies the
+   * latest one to the next turn, so a guarded chat stays guarded on every
+   * device that loads it.
+   */
+  readOnlyGuard?: string
 }
 
 /**

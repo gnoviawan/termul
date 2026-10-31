@@ -1,6 +1,8 @@
 import type {
   GithubCheckLog,
   GithubChecksResult,
+  GithubCommentResult,
+  GithubCommentTarget,
   GithubContext,
   GithubItemDetail,
   GithubItemKind,
@@ -78,6 +80,15 @@ export interface GithubState extends GithubResources {
    * busy until they show what GitHub now reports.
    */
   merge: (ref: GithubItemRef, action: GithubMergeAction) => Promise<IpcResult<GithubMergeResult>>
+  /**
+   * Post a comment (CAP-11) or a review-thread reply, show the comment GitHub
+   * returns, then re-read the item past the host cache.
+   */
+  comment: (
+    ref: GithubItemRef,
+    target: GithubCommentTarget,
+    body: string
+  ) => Promise<IpcResult<GithubCommentResult>>
 }
 
 const SEP = '\u0000'
@@ -210,6 +221,44 @@ export const useGithubStore = create<GithubState>((set, get) => {
       void get().loadChecks(ref, { refresh: true })
       void get().loadList(ref.cwd, { refresh: true })
       await get().loadItem(ref, { refresh: true })
+      return result
+    },
+
+    comment: async (ref, target, body) => {
+      const result = await githubApi.comment({
+        cwd: ref.cwd,
+        repo: ref.repo,
+        kind: ref.kind,
+        number: ref.number,
+        target,
+        body
+      })
+      if (!result.success) return result
+      const { comment } = result.data
+      const key = githubItemKey(ref.cwd, ref.repo, ref.number)
+      set((state) => {
+        const resource = state.items[key]
+        const detail = resource?.data
+        if (!detail) return {}
+        const next: GithubItemDetail =
+          target.kind === 'conversation'
+            ? { ...detail, comments: [...detail.comments, comment] }
+            : detail.pr
+              ? {
+                  ...detail,
+                  pr: {
+                    ...detail.pr,
+                    reviewThreads: detail.pr.reviewThreads.map((thread) =>
+                      thread.id === target.threadId
+                        ? { ...thread, comments: [...thread.comments, comment] }
+                        : thread
+                    )
+                  }
+                }
+              : detail
+        return { items: { ...state.items, [key]: { ...resource, data: next } } }
+      })
+      void get().loadItem(ref, { refresh: true })
       return result
     }
   }
