@@ -11,13 +11,13 @@ Accounts apply to **Claude Agent** chats only. To set up Claude Agent itself, se
 
 Open Settings with `Ctrl+,` (`Cmd+,` on macOS) and click **Provider**. The **Claude Code** group lists every account, whether it is signed in, which projects use it, and how much of its limits it has used.
 
-![The Provider page in the browser version, with one account named Default that is signed out, and a note that you sign in from the desktop app or the server](/screenshots/agent-setup-provider.png)
+![The Provider page in the browser version, with one account named Default that is signed out, and a note to add or sign in to an account from the desktop app or with termul-server claude account on the host](/screenshots/agent-setup-provider.png)
 
 The first account is called **Default**. It is the Claude Code login you made with `claude auth login`. Termul shows a name you choose for each account, never its email address.
 
 ## Add an account and sign in
 
-<Callout type="info">Adding, signing in to, renaming and removing accounts works in the desktop app only. In the browser version, use the `termul-server claude account` commands on the server. See [Manage accounts on a server](#manage-accounts-on-a-server).</Callout>
+### In the desktop app
 
 1. In **Settings** > **Provider**, click **Add account**.
 2. Type a short name, such as `Work`, and click **Continue**.
@@ -25,24 +25,39 @@ The first account is called **Default**. It is the Claude Code login you made wi
 4. Go back to Termul. When the sign-in finishes, Termul shows the account's plan and usage.
 5. Click **Done**, or click **Make default** to use the new account for every project that follows the default.
 
-If you are already signed in to another account on claude.ai, sign out there first, or open the sign-in page in a private window. If the sign-in does not finish, the account stays in the list, signed out. Click **Try again**.
+### In the browser version
+
+The browser can be on another computer or a phone, so Termul shows you the sign-in link instead of opening a browser on the server.
+
+1. In **Settings** > **Provider**, click **Add account**.
+2. Type a short name, such as `Work`, and click **Continue**.
+3. Click **Open sign-in page**. To sign in in another browser or on another device, click **Copy link** and open the link there.
+4. Sign in on claude.com with the account you want to add. The Claude page then shows a code.
+5. Copy the code, paste it into **Code from the Claude page**, and click **Finish sign-in**.
+6. Click **Done**, or click **Make default** to use the new account for every project that follows the default.
+
+If Termul says the code is incomplete, copy the whole code from the Claude page and paste it again. If Claude does not accept the code, click **Start again** to get a new link.
+
+### If the sign-in does not finish
+
+If you are already signed in to another account on claude.ai, sign out there first, or open the sign-in page in a private window. If the sign-in does not finish, the account stays in the list, signed out. Click **Try again** in the desktop app or **Start again** in the browser version, or click **Sign in** on the account later.
+
+If the server is read-only for remote clients, the browser version shows your accounts but cannot add, sign in, rename or remove them. Use the desktop app, or run `termul-server claude account` on the host.
 
 Each account has a **⋯** menu with these actions:
 
 - **Make default**: projects that follow the default use this account.
-- **Sign in** or **Sign in again**: repeat the browser sign-in, for example after the login expires.
+- **Sign in** or **Sign in again**: repeat the sign-in, for example after the login expires.
 - **Rename**: change the name Termul shows.
-- **Remove**: sign Claude Code out of the account on this computer. Its chat history stays. Projects that used it move to the default account. You cannot remove **Default**.
+- **Remove**: sign Claude Code out of the account on this computer. Its chat history stays. Projects that used it move to the default account, and their open Claude Agent chats start again on it. You cannot remove **Default**.
 
 Every account shares the same Claude Code settings, skills, plugins and chat history. Only the login is separate.
 
 ## Choose the account for a project
 
 1. Hover over the project in the sidebar and click its settings button.
-2. Click **Provider**.
+2. Click **Accounts**.
 3. Pick **Follow default**, or pick one account.
-
-![Project Settings for acme-shop, on the Provider page, with Follow default selected](/screenshots/agent-setup-project-provider.png)
 
 New Claude Agent chats in the project use the account you pick. Chats that are already open move to it when they start again.
 
@@ -51,6 +66,8 @@ You can also change the account from a Claude Agent chat. Click the account butt
 ## Watch your usage and limits
 
 Claude plans have a 5-hour limit and weekly limits. In **Settings** > **Provider**, each account shows how much of its main limit it has used and when the limit resets. Click an account's usage bar to see all of its limits. To read the numbers again, click the refresh button at the right end of the **Claude Code** row.
+
+In a Claude Agent chat, the account button in the chat box shows how much of the 5-hour limit the account has used, for example `5h 42%`. When a weekly limit reaches 80% or more, the button also shows it, for example `5h 42% · Wk 86%`. The number turns yellow at 80% and red at 100%. Open the button to see each account's plan with its 5-hour and weekly use, for example `Max · 5-hour 42% · Weekly 86%`.
 
 Termul reads these numbers through Claude Code. It never reads your login token. If Termul cannot read them, the account shows **Usage is not available right now**.
 
@@ -66,13 +83,13 @@ In the red box, you can:
 - Click **Switch to** _account_ **and continue**. Termul moves the project to that account and continues the same chat. Termul suggests the account with the most room left.
 - Click **Other account** to pick a different one.
 - Click **Continue when it resets**. Termul continues the chat when the limit resets. Click **Cancel** to stop the wait.
-- Click **Add account** to sign in to another account. This button is in the desktop app only.
+- Click **Add account** to sign in to another account.
 
 Project Settings shows the same warning when the project's account is at its limit, with a **Use** button for the account with the most room.
 
 ## Manage accounts on a server
 
-When Termul runs as a server for the browser version, the browser can list accounts, make one the default, and pick one per project. To add, sign in to, rename or remove an account, run these commands on the server. If the server uses `--state-dir`, add the same `--state-dir PATH` after `claude`.
+When Termul runs as a server for the browser version, the browser can list, add, sign in to, rename, and remove accounts, make one the default, and pick one per project. To manage accounts without a browser, run these commands on the server. If the server uses `--state-dir`, add the same `--state-dir PATH` after `claude`.
 
 ```bash
 termul-server claude account list

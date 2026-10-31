@@ -14,7 +14,8 @@ import { editorTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/
 export function blockSaveOnDraftConflict(filePaths: Iterable<string>): boolean {
   const { openFiles } = useEditorStore.getState()
   for (const filePath of filePaths) {
-    if (!openFiles.get(filePath)?.draftConflict) continue
+    const file = openFiles.get(filePath)
+    if (file?.kind !== 'text' || !file.draftConflict) continue
 
     const workspace = useWorkspaceStore.getState()
     const tabId = editorTabId(filePath)

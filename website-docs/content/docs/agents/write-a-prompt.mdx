@@ -14,13 +14,23 @@ If the agent is still working when you send, Termul queues your message and send
 
 ## Change the model, effort, and fast mode
 
-Click the model button. It sits to the left of the mode button and shows the current model, followed by the effort level when the agent has one.
+Click the model button. It sits to the left of the mode button and shows the current model, followed by the effort level when the agent has one. The model panel opens with the cursor in its search field.
 
-- Click a model in the list to switch to it.
-- Click a level in the effort row, such as **Low**, **Medium**, or **High**, to set how hard the model thinks before it answers. Higher effort is slower and gives more careful answers.
-- Click the lightning button at the end of the effort row to turn fast mode on or off. It turns yellow when it is on.
+- Click a model in the list to switch to it. A check mark shows the current model.
+- Type in the search field to filter models and agents by name. The number of matches shows at the end of the field. Press Enter to pick the first match. When nothing matches, Enter does nothing.
+- Use the up and down arrow keys to move through the list, and Enter to pick a model.
 
-The effort row and fast mode appear only when the agent offers them. When a model has no fast mode, the button is off and its tooltip says "Fast mode is not available for this model". To hand the chat to a different agent instead, see [Switch agents mid-chat](/docs/agents/switch-agents).
+The current model's row has a button on its right. It shows the effort level, or **Edit** when the agent has no effort levels. Click it, or press the right arrow key on the row, to open the model's options beside the list:
+
+- **Thinking** sets how hard the model thinks before it answers. Higher levels are slower and give more careful answers.
+- **Context** sets the size of the context window, when the agent offers more than one.
+- **Fast mode** turns fast mode on or off.
+
+Each option appears only when the agent offers it. Press the left arrow key or Escape to close the options and go back to the row. The agent's other settings appear at the bottom of the panel. To hand the chat to a different agent instead, see [Switch agents mid-chat](/docs/agents/switch-agents).
+
+### Keep favorite models at the top
+
+Hover over a model and click its star to add it to **Favorites**. Favorites appear at the top of the list and can come from different agents. Click the star again to remove a model.
 
 ## Choose how much the agent may do
 

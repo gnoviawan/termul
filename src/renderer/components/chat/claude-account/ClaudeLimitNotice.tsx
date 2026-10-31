@@ -7,12 +7,15 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Spinner } from '@/components/ui/spinner'
-import { claudeAccountsApi } from '@/lib/claude-accounts-api'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
-import { isAtLimit, useClaudeLimit, useClaudeResumeStore, windowName } from './use-claude-limit'
-
-const formatClock = (ms: number): string =>
-  new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+import {
+  formatClock,
+  isAtLimit,
+  useClaudeLimit,
+  useClaudeResumeStore,
+  windowName
+} from './use-claude-limit'
 
 /**
  * In-chat card for a Claude chat at its Account's limit: the offer to switch
@@ -25,13 +28,11 @@ export function ClaudeLimitNotice({ sessionId }: { sessionId: string }): React.J
   const scheduledAt = useClaudeResumeStore((s) => s.at[sessionId] ?? null)
   const schedule = useClaudeResumeStore((s) => s.schedule)
   const cancelResume = useClaudeResumeStore((s) => s.cancel)
+  const canAddAccount = useServerAdmitsRemoteWrites()
   if (!state || !isAtLimit(state.limit)) return null
 
-  const { ctx, limit, name, reset, switchTo, switchingTo, dismiss } = state
+  const { ctx, limit, name, reset, switchTo, switchingTo: switching, dismiss } = state
   const [best, ...others] = ctx.alternatives
-  const switching = switchingTo
-    ? ctx.alternatives.find((c) => c.account.id === switchingTo)?.account.name
-    : null
 
   return (
     <div
@@ -120,7 +121,7 @@ export function ClaudeLimitNotice({ sessionId }: { sessionId: string }): React.J
                 Continue when it resets
               </Button>
             )}
-            {claudeAccountsApi.canManageAccounts() && (
+            {canAddAccount && (
               <Button
                 type="button"
                 size="xs"

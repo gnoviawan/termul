@@ -10,6 +10,7 @@
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
 import type {
+  ClaudeAccount,
   ClaudeAccountsSnapshot,
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
@@ -990,8 +991,68 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('set_default_claude_account', { accountId })
   }
 
-  async setProjectClaudeAccount(projectId: string, accountId: string | null): Promise<void> {
-    await this.request('set_project_claude_account', { projectId, accountId })
+  async setProjectClaudeAccount(
+    projectId: string,
+    accountId: string | null,
+    expectedAccountId?: string
+  ): Promise<boolean> {
+    const reply = await this.request<{ applied?: boolean }>('set_project_claude_account', {
+      projectId,
+      accountId,
+      ...(expectedAccountId ? { expectedAccountId } : {})
+    })
+    return reply?.applied !== false
+  }
+
+  async setClaudeAutoSwitch(enabled: boolean): Promise<void> {
+    await this.request('set_claude_auto_switch', { enabled })
+  }
+
+  async addClaudeAccount(name: string, options?: CommandCallOptions): Promise<ClaudeAccount> {
+    return this.request<ClaudeAccount>('add_claude_account', { name }, undefined, options)
+  }
+
+  async renameClaudeAccount(accountId: string, name: string): Promise<void> {
+    await this.request('rename_claude_account', { accountId, name })
+  }
+
+  async removeClaudeAccount(accountId: string): Promise<string[]> {
+    const reply = await this.request<{ movedProjectIds?: unknown }>('remove_claude_account', {
+      accountId
+    })
+    if (!Array.isArray(reply.movedProjectIds)) {
+      throw new AcpTransportError(
+        'protocol',
+        'malformed remove_claude_account reply (missing movedProjectIds)'
+      )
+    }
+    return reply.movedProjectIds.filter((id): id is string => typeof id === 'string')
+  }
+
+  async startClaudeLinkLogin(accountId: string): Promise<string> {
+    const reply = await this.request<{ url?: unknown }>('start_claude_link_login', { accountId })
+    if (typeof reply.url !== 'string') {
+      throw new AcpTransportError(
+        'protocol',
+        'malformed start_claude_link_login reply (missing url)'
+      )
+    }
+    return reply.url
+  }
+
+  async finishClaudeLinkLogin(
+    accountId: string,
+    code: string,
+    options?: CommandCallOptions
+  ): Promise<void> {
+    await this.request('finish_claude_link_login', { accountId, code }, undefined, options)
+  }
+
+  async cancelClaudeLogin(accountId: string): Promise<boolean> {
+    const reply = await this.request<{ cancelled?: boolean }>('cancel_claude_login', {
+      accountId
+    })
+    return reply.cancelled === true
   }
 
   async spawnAgent(

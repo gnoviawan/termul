@@ -33,11 +33,11 @@ This batch creates a heading text style and a button component bound to variable
     { "command": "variable.create", "params": { "collection": "Core", "name": "color/primary", "type": "color", "values": { "Light": "#4338CA", "Dark": "#8B87F5" } } },
     { "command": "variable.create", "params": { "collection": "Core", "name": "color/onPrimary", "type": "color", "values": { "Light": "#FFFFFF", "Dark": "#0B1020" } } },
     { "command": "node.create", "as": "h1", "params": { "type": "text", "name": "H1 sample", "text": "Heading 1", "props": { "fontSize": 44, "fontStyle": "Semi Bold", "lineHeight": 52, "letterSpacing": "-2%", "fill": "#0F172A" } } },
-    { "command": "style.create", "params": { "type": "text", "name": "Heading/H1", "from": { "$name": "h1" } } },
+    { "command": "style.create", "params": { "type": "text", "name": "Heading/H1", "from": { "$ref": "h1" } } },
     { "command": "node.create", "as": "button", "params": { "type": "component", "name": "Button/Primary", "x": 0, "y": 120, "props": { "layout": "horizontal", "sizingH": "hug", "sizingV": "hug", "padding": [12, 20, 12, 20], "cornerRadius": 10 } } },
-    { "command": "node.create", "as": "label", "params": { "type": "text", "name": "Label", "parent": { "$name": "button" }, "text": "Mulai gratis", "props": { "fontSize": 16, "fontStyle": "Semi Bold" } } },
-    { "command": "variable.bind", "params": { "ids": [{ "$name": "button" }], "field": "fill", "variable": "color/primary" } },
-    { "command": "variable.bind", "params": { "ids": [{ "$name": "label" }], "field": "fill", "variable": "color/onPrimary" } }
+    { "command": "node.create", "as": "label", "params": { "type": "text", "name": "Label", "parent": { "$ref": "button" }, "text": "Mulai gratis", "props": { "fontSize": 16, "fontStyle": "Semi Bold" } } },
+    { "command": "variable.bind", "params": { "ids": [{ "$ref": "button" }], "field": "fill", "variable": "color/primary" } },
+    { "command": "variable.bind", "params": { "ids": [{ "$ref": "label" }], "field": "fill", "variable": "color/onPrimary" } }
   ]
 }
 ```

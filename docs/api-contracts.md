@@ -417,13 +417,10 @@ These are the `acp_*`, `claude_accounts_*`, `ws_channel_*` and `codex_cli_auth_s
 | `acp_install_registry_binary` | Legacy desktop-only install of a registry release archive (`agentId`, `archiveUrl`, `cmd`, `args?`) into `<app data dir>/acp-registry-binaries/<agentId>`. The archive URL must be `https`. The verified install is `install_acp_agent`. |
 | `claude_accounts_list` | Returns the Claude Accounts snapshot. `/ws` equivalent: `list_claude_accounts`. |
 | `claude_accounts_usage` | Returns the usage windows of every Account. `force` refreshes reads older than 60 seconds. `/ws` equivalent: `list_claude_usage`. |
-| `claude_accounts_add` | Adds an Account with the given name. Desktop only. |
-| `claude_accounts_login` | Runs the Claude browser login for one Account and resolves when it finishes. Desktop only. |
-| `claude_accounts_login_cancel` | Stops a running login. Returns `false` when none was running. Desktop only. |
-| `claude_accounts_rename` | Renames an Account. Desktop only. |
-| `claude_accounts_remove` | Removes an Account and returns the ids of the Projects that moved to the Default Account. Desktop only. |
+| `claude_accounts_login` | Runs the Claude browser login for one Account and resolves when it finishes. Desktop only. `/ws` `cancel_claude_login` stops it. |
 | `claude_accounts_set_default` | Chooses the Default Account. `/ws` equivalent: `set_default_claude_account`. |
-| `claude_accounts_set_project` | Chooses a Project's Account, or clears it with `null`. `/ws` equivalent: `set_project_claude_account`. |
+| `claude_accounts_set_project` | Chooses a Project's Account, or clears it with `null`. With `expectedAccountId`, applies only while the Project still uses that Account; returns whether it applied. `/ws` equivalent: `set_project_claude_account`. |
+| `claude_accounts_set_auto_switch` | Turns automatic switching at a usage limit on or off (default on). `/ws` equivalent: `set_claude_auto_switch`. |
 | `acp_history_list` | Returns `{sessions, legacyImportComplete}`. The sessions come from the host's durable session index (`SessionPersistence`) and are empty when the host opened no persistence. |
 | `acp_history_get` | Returns one session's `{metadata, messages, toolCalls?}` payload from the host store, or `null` when absent. |
 | `acp_history_get_tail` | Same as `acp_history_get` for the last `limit` messages (default 50, clamped to 1-500) and their tool calls. |
@@ -483,10 +480,18 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `set_catalog_opt_in` | idempotent | Sets the host-persisted opt-in for registry augmentation of the catalog. |
 | `fetch_acp_registry_snapshot` | read | The registry check behind "Check for updates". Every check bypasses the cache TTL. |
 | `install_acp_agent` | command | Installs a catalog agent. The host downloads, verifies the sha256, extracts and activates it atomically. The request is `{agentId}` only. |
+| `search_mcp_catalog` | read | Searches the bundled MCP server catalog (`{query?, cursor?, limit?}`) and returns one ranked page, `{items, nextCursor, total, snapshotFetchedAt}`. The desktop sends it over its `ws_channel_*` relay, and `GET /mcp-catalog/search` gives a browser the same answer. |
 | `list_claude_accounts` | read | Returns the Claude Accounts snapshot. |
 | `list_claude_usage` | read | Returns Account usage windows. The host caches reads for 5 minutes. |
 | `set_default_claude_account` | idempotent | Chooses the Default Account. |
-| `set_project_claude_account` | idempotent | Chooses a Project's Account, or clears it with `null`. |
+| `set_project_claude_account` | idempotent | Chooses a Project's Account, or clears it with `null`. With `expectedAccountId`, applies only while the Project still uses that Account; replies `{ applied }`. |
+| `set_claude_auto_switch` | idempotent | Turns automatic switching at a usage limit on or off (default on). |
+| `add_claude_account` | command | Adds a signed-out Account named `{name}` and replies with it. A resent command replays the first reply. |
+| `rename_claude_account` | idempotent | Renames `{accountId}` to `{name}` and replies `{}`. Renaming to the current name succeeds. |
+| `remove_claude_account` | idempotent | Signs the Claude CLI out of `{accountId}`, removes it and replies `{movedProjectIds}`, the Projects that moved to the Default Account. An Account that is already gone replies `{movedProjectIds: []}`. The built-in Account is refused. |
+| `start_claude_link_login` | idempotent | Starts a link sign-in for `{accountId}` and replies `{url}`, the Claude sign-in link. Stops a sign-in already running for the Account. |
+| `finish_claude_link_login` | command | Writes `{code}` from the Claude page to the link sign-in of `{accountId}`. Replies `{}` once the Claude CLI stored the login. Two errors leave the sign-in running: `claude_login_code_incomplete` (it still waits for the whole code) and `claude_login_busy` (the CLI still checks an earlier code, whose sender gets the verdict). Any other error ended the sign-in for this caller, including a code that reaches a newer sign-in still waiting for its link. Receipt-only: the code is never stored or digested. |
+| `cancel_claude_login` | idempotent | Stops the browser or link sign-in of `{accountId}`. Replies `{cancelled}`, `false` when none was running. On one connection it runs after a `start_claude_link_login` of the same Account sent before it, so a cancel sent while the link loads stops that sign-in. |
 | `add_project` | idempotent | Adds a project to the host registry. See "Project registry commands". |
 | `update_project` | idempotent | Changes a project's name, color, archive flag or root. See "Project registry commands". |
 | `remove_project` | idempotent | Removes a project. See "Project registry commands". |

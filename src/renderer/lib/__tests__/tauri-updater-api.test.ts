@@ -5,9 +5,41 @@ vi.mock('@tauri-apps/api/app', () => ({
   getVersion: vi.fn()
 }))
 
+const { mockInvoke, constructedUpdates } = vi.hoisted(() => ({
+  mockInvoke: vi.fn(),
+  constructedUpdates: [] as Array<{
+    rid: number
+    version: string
+    body?: string
+    date?: string
+    download: ReturnType<typeof vi.fn>
+    install: ReturnType<typeof vi.fn>
+  }>
+}))
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: mockInvoke
+}))
+
 vi.mock('@tauri-apps/plugin-updater', () => ({
   check: vi.fn(),
-  Update: class {}
+  // Mirrors the plugin's `new Update(metadata)` constructor so the signed
+  // channel path can be asserted without a Tauri runtime.
+  Update: class {
+    rid: number
+    version: string
+    body?: string
+    date?: string
+    download = vi.fn()
+    install = vi.fn()
+    constructor(metadata: { rid: number; version: string; body?: string; date?: string }) {
+      this.rid = metadata.rid
+      this.version = metadata.version
+      this.body = metadata.body
+      this.date = metadata.date
+      constructedUpdates.push(this)
+    }
+  }
 }))
 
 vi.mock('@tauri-apps/plugin-process', () => ({
@@ -45,9 +77,11 @@ import {
   getUpdaterState,
   installAndRestart,
   isUpdateAvailable,
+  isUpdateDownloaded,
   mapTauriUpdateToInfo,
   registerUpdateEventHandlers,
-  setAutoUpdateEnabled
+  setAutoUpdateEnabled,
+  supportsSignedChannelUpdate
 } from '../tauri-updater-api'
 
 function createMockUpdate(version: string, body?: string, date?: string) {
@@ -57,7 +91,8 @@ function createMockUpdate(version: string, body?: string, date?: string) {
     date,
     download: vi.fn(),
     install: vi.fn(),
-    downloadAndInstall: vi.fn()
+    downloadAndInstall: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined)
   }
 }
 
@@ -100,6 +135,152 @@ describe('tauri-updater-api', () => {
     } as never)
     mockFetch.mockReset()
     vi.stubGlobal('fetch', mockFetch)
+    mockInvoke.mockReset()
+    constructedUpdates.length = 0
+  })
+
+  describe('signed channel updates (nightly)', () => {
+    const NIGHTLY_METADATA = {
+      rid: 42,
+      currentVersion: '0.5.0-nightly.20261027.aaaaaaa',
+      version: '0.5.0-nightly.20261028.bbbbbbb',
+      date: '2026-10-27T17:46:13Z',
+      body: 'nightly notes',
+      rawJson: {}
+    }
+
+    function routeInvoke(handlers: Record<string, () => unknown>): void {
+      mockInvoke.mockImplementation(async (command: string) => {
+        const handler = handlers[command]
+        if (!handler) throw new Error(`unexpected invoke: ${command}`)
+        return handler()
+      })
+    }
+
+    it('only nightly uses the signed in-app channel flow', () => {
+      expect(supportsSignedChannelUpdate('nightly')).toBe(true)
+      expect(supportsSignedChannelUpdate('insider')).toBe(false)
+      expect(supportsSignedChannelUpdate('stable')).toBe(false)
+    })
+
+    it('checks nightly through the signed channel command, not the stable endpoint', async () => {
+      routeInvoke({ updater_check_channel: () => NIGHTLY_METADATA })
+
+      const result = await checkForUpdates('nightly')
+
+      expect(mockInvoke).toHaveBeenCalledWith('updater_check_channel', { channel: 'nightly' })
+      expect(mockInvoke).not.toHaveBeenCalledWith(
+        'updater_fetch_channel_manifest',
+        expect.anything()
+      )
+      expect(check).not.toHaveBeenCalled()
+      expect(result).toEqual({
+        version: '0.5.0-nightly.20261028.bbbbbbb',
+        releaseDate: '2026-10-27T17:46:13Z',
+        releaseNotes: 'nightly notes',
+        isSecurityUpdate: false,
+        installMode: 'in-app'
+      })
+      expect(constructedUpdates).toHaveLength(1)
+      expect(constructedUpdates[0]?.rid).toBe(42)
+
+      const state = await getUpdaterState()
+      expect(state.success && state.data.isManualUpdateMode).toBe(false)
+      expect(state.success && state.data.updateAvailable).toBe(true)
+    })
+
+    it('downloads, installs and relaunches a nightly update in-app', async () => {
+      routeInvoke({ updater_check_channel: () => NIGHTLY_METADATA })
+      vi.mocked(getVersion).mockResolvedValue('0.5.0-nightly.20261027.aaaaaaa')
+
+      await checkForUpdates('nightly')
+      const download = await downloadUpdate()
+      expect(download.success).toBe(true)
+      expect(constructedUpdates[0]?.download).toHaveBeenCalledTimes(1)
+
+      const install = await installAndRestart()
+      expect(install.success).toBe(true)
+      expect(constructedUpdates[0]?.install).toHaveBeenCalledTimes(1)
+      expect(relaunch).toHaveBeenCalledTimes(1)
+    })
+
+    it('reports up to date when the signed nightly check finds nothing newer', async () => {
+      routeInvoke({ updater_check_channel: () => null })
+
+      await expect(checkForUpdates('nightly')).resolves.toBeNull()
+      expect(mockInvoke).not.toHaveBeenCalledWith(
+        'updater_fetch_channel_manifest',
+        expect.anything()
+      )
+      const state = await getUpdaterState()
+      expect(state.success && state.data.updateAvailable).toBe(false)
+      expect(state.success && state.data.isManualUpdateMode).toBe(false)
+    })
+
+    it('falls back to the manual nightly release page when the signed check fails', async () => {
+      routeInvoke({
+        updater_check_channel: () => {
+          throw new Error('the platform `darwin-aarch64` was not found on the response')
+        },
+        updater_fetch_channel_manifest: () => ({
+          success: true,
+          data: { version: '0.5.0-nightly.20261028.bbbbbbb', notes: 'n', platforms: {} }
+        })
+      })
+      vi.mocked(getVersion).mockResolvedValue('0.5.0-nightly.20261027.aaaaaaa')
+
+      const result = await checkForUpdates('nightly')
+
+      expect(result?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/nightly')
+      expect(result?.installMode).toBe('manual')
+      const state = await getUpdaterState()
+      expect(state.success && state.data.isManualUpdateMode).toBe(true)
+    })
+
+    it.each([
+      ['a stable release', '0.6.0'],
+      ['an insider release candidate', '0.6.0-rc.1']
+    ])('never offers %s from the nightly manifest in the manual fallback', async (_label, version) => {
+      routeInvoke({
+        updater_check_channel: () => {
+          throw new Error('signature verification failed')
+        },
+        updater_fetch_channel_manifest: () => ({
+          success: true,
+          data: { version, platforms: {} }
+        })
+      })
+      vi.mocked(getVersion).mockResolvedValue('0.5.0-nightly.20261027.100.aaaaaaa')
+
+      await expect(checkForUpdates('nightly')).resolves.toBeNull()
+      const state = await getUpdaterState()
+      expect(state.success && state.data.updateAvailable).toBe(false)
+      expect(state.success && state.data.isManualUpdateMode).toBe(false)
+    })
+
+    it('keeps insider on the manual manifest path', async () => {
+      routeInvoke({
+        updater_fetch_channel_manifest: () => ({
+          success: true,
+          data: { version: '0.6.0-rc.1', platforms: {} }
+        })
+      })
+
+      const result = await checkForUpdates('insider')
+
+      expect(mockInvoke).not.toHaveBeenCalledWith('updater_check_channel', expect.anything())
+      expect(result?.downloadUrl).toBe('https://github.com/gnoviawan/termul/releases/tag/insider')
+      expect(result?.installMode).toBe('manual')
+    })
+
+    it('keeps stable on the built-in signed endpoint and never asks for the nightly channel', async () => {
+      vi.mocked(check).mockResolvedValue(null)
+
+      await checkForUpdates('stable')
+
+      expect(check).toHaveBeenCalledTimes(1)
+      expect(mockInvoke).not.toHaveBeenCalledWith('updater_check_channel', expect.anything())
+    })
   })
 
   describe('checkForUpdates', () => {
@@ -127,7 +308,8 @@ describe('tauri-updater-api', () => {
         version: '2.0.0',
         releaseDate: '2026-03-01T00:00:00.000Z',
         releaseNotes: 'release notes',
-        isSecurityUpdate: false
+        isSecurityUpdate: false,
+        installMode: 'in-app'
       })
     })
 
@@ -156,7 +338,8 @@ describe('tauri-updater-api', () => {
         releaseDate: '2026-05-01T15:13:12Z',
         releaseNotes: 'release notes',
         isSecurityUpdate: false,
-        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4'
+        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4',
+        installMode: 'manual'
       })
 
       const state = await getUpdaterState()
@@ -175,6 +358,69 @@ describe('tauri-updater-api', () => {
         'Failed to check for updates from https://github.com/gnoviawan/termul/releases/latest/download/latest.json: {"status":500,"url":"latest.json"}'
       )
       expect(mockFetch).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('superseded update handles', () => {
+    it('closes the previous handle when a re-check replaces it', async () => {
+      const first = createMockUpdate('2.1.0')
+      const second = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValueOnce(first as never)
+      await checkForUpdates()
+      vi.mocked(check).mockResolvedValueOnce(second as never)
+      await checkForUpdates()
+      await flushPromises()
+
+      expect(first.close).toHaveBeenCalledTimes(1)
+      expect(second.close).not.toHaveBeenCalled()
+    })
+
+    it('keeps the downloaded handle open when a re-check returns the same version', async () => {
+      const first = createMockUpdate('2.1.1')
+      vi.mocked(check).mockResolvedValueOnce(first as never)
+      await checkForUpdates()
+      await downloadUpdate()
+      vi.mocked(check).mockResolvedValueOnce(createMockUpdate('2.1.1') as never)
+      await checkForUpdates()
+      await flushPromises()
+
+      expect(first.close).not.toHaveBeenCalled()
+      const state = await getUpdaterState()
+      expect(state.success && state.data.downloaded).toBe(true)
+    })
+
+    it('closes the downloaded handle once a newer version replaces it', async () => {
+      const first = createMockUpdate('2.1.2')
+      vi.mocked(check).mockResolvedValueOnce(first as never)
+      await checkForUpdates()
+      await downloadUpdate()
+      vi.mocked(check).mockResolvedValueOnce(createMockUpdate('2.1.3') as never)
+      await checkForUpdates()
+      await flushPromises()
+
+      expect(first.close).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not close a handle mid-download, and closes it after if it was superseded and failed', async () => {
+      const first = createMockUpdate('2.1.4')
+      let rejectDownload: (error: Error) => void = () => {}
+      vi.mocked(first.download).mockImplementation(
+        () => new Promise<void>((_resolve, reject) => (rejectDownload = reject))
+      )
+      vi.mocked(check).mockResolvedValueOnce(first as never)
+      await checkForUpdates()
+      const download = downloadUpdate()
+      await vi.waitFor(() => expect(first.download).toHaveBeenCalled())
+
+      vi.mocked(check).mockResolvedValueOnce(createMockUpdate('2.1.5') as never)
+      await checkForUpdates()
+      await flushPromises()
+      expect(first.close).not.toHaveBeenCalled()
+
+      rejectDownload(new Error('network'))
+      await download
+      await flushPromises()
+      expect(first.close).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -366,6 +612,56 @@ describe('tauri-updater-api', () => {
     })
   })
 
+  // N2: the store asks this after a re-check so a same-version re-check keeps
+  // the update ready to install instead of resetting it.
+  describe('isUpdateDownloaded', () => {
+    it('is false before anything is downloaded', async () => {
+      vi.mocked(check).mockResolvedValue(createMockUpdate('2.1.0') as never)
+      await checkForUpdates()
+
+      expect(isUpdateDownloaded('2.1.0')).toBe(false)
+    })
+
+    it('stays true across a re-check of the same version', async () => {
+      const update = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+      vi.mocked(update.download).mockImplementation(async () => {})
+      await downloadUpdate()
+
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+
+      expect(isUpdateDownloaded('2.1.0')).toBe(true)
+    })
+
+    it('is false for a newer version that replaced the downloaded one', async () => {
+      const update = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+      vi.mocked(update.download).mockImplementation(async () => {})
+      await downloadUpdate()
+
+      vi.mocked(check).mockResolvedValue(createMockUpdate('2.2.0') as never)
+      await checkForUpdates()
+
+      expect(isUpdateDownloaded('2.2.0')).toBe(false)
+      expect(isUpdateDownloaded('2.1.0')).toBe(false)
+    })
+
+    it('is false once the pending update is cleared', async () => {
+      const update = createMockUpdate('2.1.0')
+      vi.mocked(check).mockResolvedValue(update as never)
+      await checkForUpdates()
+      vi.mocked(update.download).mockImplementation(async () => {})
+      await downloadUpdate()
+
+      await clearPendingUpdate()
+
+      expect(isUpdateDownloaded('2.1.0')).toBe(false)
+    })
+  })
+
   describe('state and helpers', () => {
     it('clearPendingUpdate resets pending and downloaded state', async () => {
       const update = createMockUpdate('2.2.0')
@@ -402,7 +698,8 @@ describe('tauri-updater-api', () => {
         version: '3.0.0',
         releaseDate: '2026-03-01T12:00:00.000Z',
         releaseNotes: 'notes',
-        isSecurityUpdate: false
+        isSecurityUpdate: false,
+        installMode: 'in-app'
       })
     })
 

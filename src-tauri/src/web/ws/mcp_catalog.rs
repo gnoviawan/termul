@@ -22,7 +22,7 @@ fn invalid_request<T: serde::de::DeserializeOwned>(
     payload: &Value,
 ) -> Result<T, WsReply> {
     serde_json::from_value(payload.clone()).map_err(|error| {
-        warn!(target: TARGET, request, error = %error, "invalid mcp catalog request");
+        warn!(target: TARGET, request, category = ?error.classify(), "invalid mcp catalog request");
         WsReply::err_with_code(
             id.to_string(),
             "VALIDATION_ERROR",

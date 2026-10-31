@@ -59,6 +59,12 @@ interface SettingsLayoutProps {
 export const SETTINGS_TARGET_MS = 2000
 
 const ActivePageContext = createContext<string | undefined>(undefined)
+const SectionVisibleContext = createContext(true)
+
+/** False while this settings page is mounted but hidden behind another page. */
+export function useSettingsSectionVisible(): boolean {
+  return useContext(SectionVisibleContext)
+}
 
 const ROW_CLASS = `flex flex-shrink-0 items-center gap-2.5 rounded-md px-2.5 text-left text-xs transition-colors duration-150 ease-out md:w-full ${FOCUS_RING_CLASS}`
 
@@ -84,7 +90,7 @@ export function SettingsSection({
       hidden={hidden}
       className={cn('flex flex-col gap-6', className)}
     >
-      {children}
+      <SectionVisibleContext.Provider value={!hidden}>{children}</SectionVisibleContext.Provider>
     </section>
   )
 }

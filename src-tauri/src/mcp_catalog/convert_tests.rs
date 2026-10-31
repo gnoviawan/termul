@@ -160,11 +160,14 @@ fn oci_images_pin_by_tag_or_digest() {
         ))[4],
         "docker.io/example/server:1.4"
     );
-    for identifier in [
-        "ghcr.io/example/server:latest",
-        "ghcr.io/example/server",
-        "localhost:5000/server",
-    ] {
+    let tagged_digest = format!("ghcr.io/example/server:1.4@sha256:{}", "b".repeat(64));
+    assert_eq!(
+        argv(package(
+            json!({ "registryType": "oci", "identifier": tagged_digest })
+        ))[4],
+        tagged_digest
+    );
+    for identifier in ["ghcr.io/example/server:latest", "ghcr.io/example/server"] {
         assert_eq!(
             reason(package(
                 json!({ "registryType": "oci", "identifier": identifier })
@@ -279,6 +282,177 @@ fn package_grammar_rejects_flags_and_cmd_metacharacters() {
             McpCatalogReason::InvalidPackage,
             "{version:?}"
         );
+    }
+}
+
+#[test]
+fn package_grammar_rejects_url_path_vcs_and_alias_specs() {
+    for (registry_type, identifier) in [
+        ("npm", "https://evil.example/p.tgz"),
+        ("npm", "file:../x"),
+        ("npm", "git+https://evil.example/r.git"),
+        ("npm", "github:user/repo"),
+        ("npm", "npm:other"),
+        ("npm", "user/repo"),
+        ("npm", "../server"),
+        ("npm", "server.tgz"),
+        ("npm", "Server"),
+        ("pypi", "https://evil.example/p.whl"),
+        ("pypi", "https://evil.example/pkg@1.0.whl"),
+        ("pypi", "git+https://evil.example/r"),
+        ("pypi", "./server"),
+        ("nuget", "https://evil.example/p.nupkg"),
+        ("nuget", "../Server"),
+        ("oci", "https://ghcr.io/example/server:1.0.0"),
+        ("oci", "ghcr.io/Example/server:1.0.0"),
+    ] {
+        assert_eq!(
+            reason(package(
+                json!({ "registryType": registry_type, "identifier": identifier, "version": "1.0.0" })
+            )),
+            McpCatalogReason::InvalidPackage,
+            "{registry_type} {identifier:?}"
+        );
+    }
+    for version in ["1.0.0-a.tgz", "1.0.0+b.TAR.GZ", "1.0.0-x.tar"] {
+        assert_eq!(
+            reason(package(
+                json!({ "registryType": "npm", "identifier": "server", "version": version })
+            )),
+            McpCatalogReason::InvalidPackage,
+            "{version}"
+        );
+    }
+    for (registry_type, identifier, expected) in [
+        (
+            "npm",
+            "@scope/server-name",
+            vec!["npx", "-y", "@scope/server-name@1.0.0"],
+        ),
+        ("npm", "server.js", vec!["npx", "-y", "server.js@1.0.0"]),
+        ("pypi", "Mcp_Server.x", vec!["uvx", "Mcp_Server.x@1.0.0"]),
+        (
+            "nuget",
+            "Example.Mcp.Server",
+            vec!["dotnet", "dnx", "Example.Mcp.Server@1.0.0", "--yes"],
+        ),
+    ] {
+        assert_eq!(
+            argv(package(
+                json!({ "registryType": registry_type, "identifier": identifier, "version": "1.0.0" })
+            )),
+            expected,
+            "{registry_type} {identifier:?}"
+        );
+    }
+}
+
+#[test]
+fn packages_must_come_from_the_runners_registry() {
+    for (registry_type, base) in [
+        ("npm", "https://registry.npmjs.org"),
+        ("npm", "https://registry.npmjs.org/"),
+        ("pypi", "https://pypi.org"),
+        ("nuget", "https://api.nuget.org/v3/index.json"),
+        ("npm", ""),
+    ] {
+        assert!(
+            argv(package(json!({
+                "registryType": registry_type,
+                "identifier": "server",
+                "version": "1.0.0",
+                "registryBaseUrl": base
+            })))
+            .contains(&"server@1.0.0".to_string()),
+            "{registry_type} {base}"
+        );
+    }
+    for (registry_type, base) in [
+        ("npm", "https://evil.example"),
+        ("pypi", "https://evil.example/simple"),
+        ("nuget", "https://evil.example/v3/index.json"),
+    ] {
+        assert_eq!(
+            reason(package(json!({
+                "registryType": registry_type,
+                "identifier": "server",
+                "version": "1.0.0",
+                "registryBaseUrl": base
+            }))),
+            McpCatalogReason::UnsupportedRegistry {
+                registry: base.to_string()
+            },
+            "{registry_type} {base}"
+        );
+    }
+}
+
+#[test]
+fn oci_images_must_come_from_an_allowed_registry() {
+    for identifier in [
+        "example/server:1.0.0",
+        "ghcr.io/example/server:1.0.0",
+        "quay.io/example/server:1.0.0",
+        "us-docker.pkg.dev/project/repo/server:1.0.0",
+    ] {
+        assert_eq!(
+            argv(package(
+                json!({ "registryType": "oci", "identifier": identifier })
+            ))[4],
+            identifier
+        );
+    }
+    for (identifier, host) in [
+        ("localhost:5000/server:1.0.0", "localhost:5000"),
+        ("evil.example/server:1.0.0", "evil.example"),
+        ("ghcr.io.evil.example/server:1.0.0", "ghcr.io.evil.example"),
+        ("pkg.dev.evil.example/server:1.0.0", "pkg.dev.evil.example"),
+    ] {
+        assert_eq!(
+            reason(package(
+                json!({ "registryType": "oci", "identifier": identifier })
+            )),
+            McpCatalogReason::UnsupportedRegistry {
+                registry: host.to_string()
+            },
+            "{identifier}"
+        );
+    }
+    assert_eq!(
+        reason(package(json!({
+            "registryType": "oci",
+            "identifier": "ghcr.io/example/server:1.0.0",
+            "registryBaseUrl": "https://quay.io"
+        }))),
+        McpCatalogReason::UnsupportedRegistry {
+            registry: "https://quay.io".to_string()
+        }
+    );
+    assert_eq!(
+        argv(package(json!({
+            "registryType": "oci",
+            "identifier": "ghcr.io/example/server:1.0.0",
+            "registryBaseUrl": "https://ghcr.io"
+        })))[4],
+        "ghcr.io/example/server:1.0.0"
+    );
+}
+
+#[test]
+fn download_redirect_env_names_are_denied() {
+    for name in [
+        "HTTPS_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "Ssl_Cert_Dir",
+        "REQUESTS_CA_BUNDLE",
+        "curl_ca_bundle",
+    ] {
+        assert!(is_denied_env_name(name), "{name}");
     }
 }
 
@@ -398,6 +572,12 @@ fn remotes_must_be_https_on_a_public_host() {
         json!({ "type": "streamable-http", "url": "https://{tenant}.example.com/mcp" })
     )
     .is_ok());
+    assert_eq!(
+        reason(remote(
+            json!({ "type": "streamable-http", "url": "https://mcp.example.com/path/{tenant" })
+        )),
+        McpCatalogReason::InvalidUrl
+    );
 }
 
 #[test]
@@ -569,5 +749,12 @@ fn reasons_serialize_as_a_code_with_camel_case_detail() {
     assert_eq!(
         serde_json::to_value(McpCatalogReason::NoInstallOptions).unwrap(),
         json!({ "code": "no-install-options" })
+    );
+    assert_eq!(
+        serde_json::to_value(McpCatalogReason::UnsupportedRegistry {
+            registry: "evil.example".to_string()
+        })
+        .unwrap(),
+        json!({ "code": "unsupported-registry", "registry": "evil.example" })
     );
 }

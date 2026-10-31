@@ -71,14 +71,12 @@ pub const ENV_AGENT_ID: &str = "TERMUL_PLAN_AGENT_ID";
 /// Server `instructions` returned in the child's MCP `initialize` result.
 /// Agents that connect the injected `termul` server surface this guidance in
 /// model context, so it doubles as the advertisement for the chat renderer's
-/// markdown affordances: inline images (`![alt](path)`) and file references
-/// that open in Termul's built-in editor (`[label](path)` and bare paths).
-/// Keep it static and surface-honest — where a URL form is unreadable the
-/// renderer's existing fallbacks apply (alt chip / plain text).
+/// markdown affordances.
 pub const TERMUL_CHAT_INSTRUCTIONS: &str = "Termul renders your markdown replies in a rich chat UI. \
-Embed images inline with `![alt](path)` — https URLs render everywhere; paths relative to the \
-session working directory, absolute paths, and `file://` URLs render in the desktop app and \
-fall back to alt text elsewhere (use this for generated charts, screenshots, diagrams). \
+Embed images and videos inline with `![alt](path)`, for generated charts, screenshots, diagrams, \
+and screen recordings: paths relative to the session working directory, absolute paths, \
+`file://` URLs, and https URLs render in the desktop app and on the web. A markdown link to an \
+image or video file also shows it inline. \
 Reference files as markdown links `[label](path)`: Termul renders them as buttons that open \
 the file in its built-in editor — absolute and cwd-relative paths inside the session workspace \
 roots work, a `:line` suffix (or `#L<line>` on the link target) positions the cursor, and \

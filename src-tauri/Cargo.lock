@@ -1099,6 +1099,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-text"
+version = "22.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "333dab512ce710ca2d08574c373d246dbeac8b22769e47da4c0e72730ce442b7"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-graphics",
+ "foreign-types",
+]
+
+[[package]]
 name = "core_maths"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1130,6 +1141,11 @@ checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "craft-docpath"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=495e5971bc024aa96e6ed318cb6e7cd3a0103184#495e5971bc024aa96e6ed318cb6e7cd3a0103184"
 
 [[package]]
 name = "crc"
@@ -1521,6 +1537,12 @@ checksum = "916a94e407b54f9034d71dd748234cd1e516ced6284009906ae246f177eafe5a"
 dependencies = [
  "cipher 0.5.2",
 ]
+
+[[package]]
+name = "deunicode"
+version = "1.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
 
 [[package]]
 name = "digest"
@@ -1969,10 +1991,11 @@ dependencies = [
 
 [[package]]
 name = "figcraft-collab"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "figcraft-doc",
  "imbl",
  "postcard",
@@ -1983,8 +2006,8 @@ dependencies = [
 
 [[package]]
 name = "figcraft-collab-net"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "base64 0.22.1",
  "figcraft-collab",
@@ -2005,8 +2028,8 @@ dependencies = [
 
 [[package]]
 name = "figcraft-color"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "kurbo",
  "serde",
@@ -2014,8 +2037,8 @@ dependencies = [
 
 [[package]]
 name = "figcraft-doc"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "figcraft-color",
  "figcraft-geom",
@@ -2027,10 +2050,12 @@ dependencies = [
 
 [[package]]
 name = "figcraft-engine"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "base64 0.22.1",
+ "craft-docpath",
+ "deunicode",
  "figcraft-collab",
  "figcraft-color",
  "figcraft-doc",
@@ -2043,8 +2068,10 @@ dependencies = [
  "figcraft-render",
  "figcraft-svg",
  "figcraft-text",
+ "figcraft-vectordrawable",
  "log",
  "regex",
+ "same-file",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2053,8 +2080,8 @@ dependencies = [
 
 [[package]]
 name = "figcraft-format"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "figcraft-doc",
  "figcraft-pathops",
@@ -2063,14 +2090,15 @@ dependencies = [
  "ruzstd",
  "serde",
  "serde_json",
+ "sha1 0.11.0",
  "sha2 0.10.9",
  "zip 2.4.2",
 ]
 
 [[package]]
 name = "figcraft-geom"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "kurbo",
  "serde",
@@ -2078,8 +2106,8 @@ dependencies = [
 
 [[package]]
 name = "figcraft-layout"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
@@ -2087,8 +2115,8 @@ dependencies = [
 
 [[package]]
 name = "figcraft-mcp"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "base64 0.22.1",
  "figcraft-collab-net",
@@ -2102,8 +2130,8 @@ dependencies = [
 
 [[package]]
 name = "figcraft-pathops"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
@@ -2112,8 +2140,8 @@ dependencies = [
 
 [[package]]
 name = "figcraft-pdf"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "figcraft-color",
  "figcraft-doc",
@@ -2129,8 +2157,8 @@ dependencies = [
 
 [[package]]
 name = "figcraft-plugin"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "figcraft-color",
  "serde",
@@ -2142,8 +2170,8 @@ dependencies = [
 
 [[package]]
 name = "figcraft-render"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "crc32fast",
  "figcraft-color",
@@ -2161,8 +2189,8 @@ dependencies = [
 
 [[package]]
 name = "figcraft-svg"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
  "base64 0.22.1",
  "figcraft-color",
@@ -2178,17 +2206,33 @@ dependencies = [
 
 [[package]]
 name = "figcraft-text"
-version = "0.6.0"
-source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.4.0#e2ae9b3e8a05c6f136d31706c8ea912b6a5ff623"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
 dependencies = [
+ "core-text",
  "figcraft-doc",
  "figcraft-geom",
  "harfrust 0.13.3",
  "log",
+ "objc2",
  "png 0.18.1",
  "skrifa 0.47.0",
  "unicode-bidi",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "figcraft-vectordrawable"
+version = "0.11.2"
+source = "git+https://github.com/gnoviawan/figcraft?tag=termul-v0.5.0#2bb5b4c5e9f1445c557ad2e9d7faa05cb8590719"
+dependencies = [
+ "figcraft-color",
+ "figcraft-doc",
+ "figcraft-geom",
+ "figcraft-pathops",
+ "figcraft-render",
+ "figcraft-text",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -7669,6 +7713,7 @@ dependencies = [
  "russh-sftp",
  "rust-embed",
  "rustix",
+ "semver",
  "serde",
  "serde_json",
  "sha1 0.11.0",

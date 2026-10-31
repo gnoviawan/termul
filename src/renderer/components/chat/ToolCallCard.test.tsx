@@ -208,7 +208,14 @@ describe('ToolCallCard', () => {
     expect(screen.getByText('Result')).toBeInTheDocument()
   })
 
-  it('renders nested audio controls and embedded resource text', () => {
+  it('renders nested audio as a blob: URL and embedded resource text', async () => {
+    const created: Blob[] = []
+    const urlApi = URL as unknown as { createObjectURL?: unknown; revokeObjectURL?: unknown }
+    urlApi.createObjectURL = (blob: Blob) => {
+      created.push(blob)
+      return 'blob:termul/audio'
+    }
+    urlApi.revokeObjectURL = () => {}
     render(
       <Card
         toolCall={toolCall('completed', [
@@ -238,15 +245,20 @@ describe('ToolCallCard', () => {
 
     fireEvent.click(screen.getByRole('button'))
 
-    expect(document.querySelector('audio')).toHaveAttribute(
-      'src',
-      'data:audio/mpeg;base64,aGVsbG8='
-    )
-    expect(document.querySelector('audio')).toHaveAttribute('aria-label', 'Play audio')
-    expect(screen.getByText('embedded')).toBeInTheDocument()
-    expect(
-      screen.getByText('embedded').closest('[data-embedded-resource="result.txt"]')
-    ).toBeInTheDocument()
+    try {
+      await waitFor(() => {
+        expect(document.querySelector('audio')).toHaveAttribute('src', 'blob:termul/audio')
+      })
+      expect(created.map((blob) => [blob.type, blob.size])).toEqual([['audio/mpeg', 5]])
+      expect(document.querySelector('audio')).toHaveAttribute('aria-label', 'Play audio')
+      expect(screen.getByText('embedded')).toBeInTheDocument()
+      expect(
+        screen.getByText('embedded').closest('[data-embedded-resource="result.txt"]')
+      ).toBeInTheDocument()
+    } finally {
+      delete urlApi.createObjectURL
+      delete urlApi.revokeObjectURL
+    }
   })
 
   it('does not auto-load remote nested audio', () => {

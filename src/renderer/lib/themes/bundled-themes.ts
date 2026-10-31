@@ -1,6 +1,8 @@
 import { BUNDLED_LIGHT_COLOR_THEMES } from './bundled-light-themes'
+import { TERMUL_BLUE } from './termul-brand'
 import { TERMUL_DARK_CHROME } from './termul-dark-chrome'
 import { TERMUL_DARK_SYNTAX } from './termul-syntax'
+import { TERMUL_DARK_TERMINAL } from './termul-terminal'
 import type { ColorThemeDefinition } from './types'
 
 export interface ColorThemeFamily {
@@ -22,12 +24,13 @@ const BUNDLED_DARK_COLOR_THEMES: Record<string, ColorThemeDefinition> = {
       palette: {
         neutral: TERMUL_DARK_CHROME.background,
         ink: TERMUL_DARK_CHROME.foreground,
-        primary: '#3b82f6',
-        accent: '#3b82f6',
+        primary: TERMUL_BLUE.darkText,
+        accent: TERMUL_BLUE.darkText,
         success: '#22c55e',
         warning: '#eab308',
         error: '#ef4444',
-        info: '#38bdf8'
+        info: '#38bdf8',
+        terminal: TERMUL_DARK_TERMINAL
       },
       chrome: TERMUL_DARK_CHROME,
       overrides: TERMUL_DARK_SYNTAX

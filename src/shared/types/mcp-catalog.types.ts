@@ -16,6 +16,10 @@
 
 import type { IpcResult } from './ipc.types'
 
+/** The host's caps on a search query (`search.rs` `MAX_QUERY_CHARS`, `MAX_QUERY_TERMS`). */
+export const MCP_CATALOG_MAX_QUERY_CHARS = 200
+export const MCP_CATALOG_MAX_QUERY_TERMS = 8
+
 /** Ranked best first; an item takes its best option's state. */
 export type McpCatalogState = 'installable' | 'needs-runtime' | 'unsupported' | 'source-only'
 
@@ -41,6 +45,7 @@ export type McpCatalogReason =
   | { code: 'non-stdio-transport'; transport: string }
   | { code: 'unpinned-version' }
   | { code: 'invalid-package' }
+  | { code: 'unsupported-registry'; registry: string }
   // Import plans only (AD-5 applies the AD-4 rules to a pasted file).
   | { code: 'invalid-command' }
   | { code: 'invalid-header-name'; name: string }

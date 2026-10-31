@@ -1,13 +1,15 @@
 //! Desktop `#[tauri::command]` wrappers over the Claude Account operations of
-//! [`ClaudeAgentService`]. The web client has only the list/default/project
-//! subset (`web::ws::claude_accounts`).
+//! [`ClaudeAgentService`]. Adding, renaming and removing an Account, the link
+//! sign-in and stopping a sign-in are `/ws` requests only
+//! (`web::ws::claude_accounts`), which the desktop renderer reaches over its
+//! Tauri Channel carrier.
 
 use std::sync::Arc;
 
 use tauri::State;
 
 use crate::acp::claude_accounts::usage::ClaudeAccountUsage;
-use crate::acp::claude_accounts::{ClaudeAccount, ClaudeAccountsSnapshot};
+use crate::acp::claude_accounts::ClaudeAccountsSnapshot;
 use crate::acp::{ClaudeAgentService, SignInCheck};
 
 #[tauri::command]
@@ -27,14 +29,6 @@ pub async fn claude_accounts_usage(
     service.accounts_usage(force.unwrap_or(false)).await
 }
 
-#[tauri::command]
-pub fn claude_accounts_add(
-    service: State<'_, Arc<ClaudeAgentService>>,
-    name: String,
-) -> Result<ClaudeAccount, String> {
-    service.add_account(&name)
-}
-
 /// Run the Claude browser login for one Account. Resolves when it finishes.
 #[tauri::command]
 pub async fn claude_accounts_login(
@@ -43,34 +37,6 @@ pub async fn claude_accounts_login(
 ) -> Result<(), String> {
     let service = Arc::clone(service.inner());
     service.login_account(&account_id).await
-}
-
-/// Stop a running browser login. Returns `false` when none was running.
-#[tauri::command]
-pub fn claude_accounts_login_cancel(
-    service: State<'_, Arc<ClaudeAgentService>>,
-    account_id: String,
-) -> bool {
-    service.cancel_login(&account_id)
-}
-
-#[tauri::command]
-pub fn claude_accounts_rename(
-    service: State<'_, Arc<ClaudeAgentService>>,
-    account_id: String,
-    name: String,
-) -> Result<(), String> {
-    service.rename_account(&account_id, &name)
-}
-
-/// Returns the ids of the Projects that moved to the Default Account.
-#[tauri::command]
-pub async fn claude_accounts_remove(
-    service: State<'_, Arc<ClaudeAgentService>>,
-    account_id: String,
-) -> Result<Vec<String>, String> {
-    let service = Arc::clone(service.inner());
-    service.remove_account(&account_id).await
 }
 
 #[tauri::command]
@@ -84,14 +50,30 @@ pub async fn claude_accounts_set_default(
         .await
 }
 
+/// With `expected_account_id`, the choice applies only while the Project still
+/// uses that Account. Returns whether it applied.
 #[tauri::command]
 pub async fn claude_accounts_set_project(
     service: State<'_, Arc<ClaudeAgentService>>,
     project_id: String,
     account_id: Option<String>,
-) -> Result<(), String> {
+    expected_account_id: Option<String>,
+) -> Result<bool, String> {
     let service = Arc::clone(service.inner());
     service
-        .set_project_account(&project_id, account_id.as_deref(), SignInCheck::Required)
+        .set_project_account(
+            &project_id,
+            account_id.as_deref(),
+            expected_account_id.as_deref(),
+            SignInCheck::Required,
+        )
         .await
+}
+
+#[tauri::command]
+pub fn claude_accounts_set_auto_switch(
+    service: State<'_, Arc<ClaudeAgentService>>,
+    enabled: bool,
+) -> Result<(), String> {
+    service.set_auto_switch(enabled)
 }

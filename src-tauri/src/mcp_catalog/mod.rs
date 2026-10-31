@@ -65,10 +65,12 @@ const MIN_DOTNET_SDK_MAJOR: u64 = 10;
 static SHARED: OnceCell<Arc<McpCatalogService>> = OnceCell::const_new();
 
 pub struct McpCatalogService {
-    catalog: LoadedCatalog,
+    catalog: Arc<LoadedCatalog>,
     /// Set by tests in place of probing the host's PATH.
     fixed_runners: Option<RunnerAvailability>,
     runner_probe: Mutex<Option<(Instant, RunnerAvailability)>>,
+    /// Held across a probe so concurrent cache misses share one.
+    probe_gate: tokio::sync::Mutex<()>,
     plans: PlanStore,
 }
 
@@ -101,9 +103,10 @@ impl McpCatalogService {
                         LoadedCatalog::default()
                     });
                 Arc::new(Self {
-                    catalog,
+                    catalog: Arc::new(catalog),
                     fixed_runners: None,
                     runner_probe: Mutex::new(None),
+                    probe_gate: tokio::sync::Mutex::new(()),
                     plans: PlanStore::default(),
                 })
             })
@@ -123,9 +126,10 @@ impl McpCatalogService {
         ttl: Duration,
     ) -> Self {
         Self {
-            catalog,
+            catalog: Arc::new(catalog),
             fixed_runners: Some(runners),
             runner_probe: Mutex::new(None),
+            probe_gate: tokio::sync::Mutex::new(()),
             plans: PlanStore::new(ttl),
         }
     }
@@ -134,8 +138,28 @@ impl McpCatalogService {
         &self,
         request: &McpCatalogSearchRequest,
     ) -> Result<McpCatalogPage, McpCatalogError> {
+        let query = search::validate(request)?;
         let runners = self.runners().await;
-        Ok(search::search(&self.catalog, runners, request)?)
+        let catalog = Arc::clone(&self.catalog);
+        tokio::task::spawn_blocking(move || search::search(&catalog, runners, &query))
+            .await
+            .map_err(|error| {
+                log::error!("[mcp-catalog] search task failed: {error}");
+                McpCatalogError {
+                    code: "SEARCH_ERROR",
+                    message: "mcp catalog search failed".to_string(),
+                }
+            })?
+            .map_err(McpCatalogError::from)
+    }
+
+    fn cached_runners(&self) -> Option<RunnerAvailability> {
+        let probe = *self.runner_probe.lock();
+        self.fixed_runners.or_else(|| {
+            probe
+                .filter(|(probed_at, _)| probed_at.elapsed() < RUNNER_PROBE_TTL)
+                .map(|(_, runners)| runners)
+        })
     }
 
     /// The generated install form of a source (install-form.md), or the
@@ -183,13 +207,12 @@ impl McpCatalogService {
     }
 
     async fn runners(&self) -> RunnerAvailability {
-        if let Some(runners) = self.fixed_runners {
+        if let Some(runners) = self.cached_runners() {
             return runners;
         }
-        if let Some((probed_at, runners)) = *self.runner_probe.lock() {
-            if probed_at.elapsed() < RUNNER_PROBE_TTL {
-                return runners;
-            }
+        let _probe_gate = self.probe_gate.lock().await;
+        if let Some(runners) = self.cached_runners() {
+            return runners;
         }
         let runners = tokio::task::spawn_blocking(probe_runners)
             .await

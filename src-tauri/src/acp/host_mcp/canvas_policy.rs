@@ -7,7 +7,8 @@
 //! path only when it lies inside the project. The editor picks an export's
 //! format from the path's extension when none is given, so without the path
 //! Termul names the format itself. Every other command or method that reads
-//! or writes a path is refused with `UNSUPPORTED_IN_KIOSK`.
+//! or writes a path is refused with `UNSUPPORTED_IN_KIOSK`, and so is every
+//! command that would leave the project's one document behind ([`Why`]).
 
 use std::path::{Component, Path, PathBuf};
 
@@ -31,9 +32,9 @@ pub enum CanvasRoute {
     Refuse(CanvasError),
 }
 
-/// When a command or method reaches the file system.
+/// When a refused command or method is refused.
 #[derive(Clone, Copy)]
-enum FileArg {
+enum When {
     Always,
     /// A string param with this name is a file path.
     Path(&'static str),
@@ -41,48 +42,134 @@ enum FileArg {
     VariablesPath,
 }
 
+/// Why a command is refused, which its refusal message says.
+#[derive(Clone, Copy)]
+enum Why {
+    /// It reads or writes a file on disk. `instead` is its inline form, if
+    /// it has one.
+    Files { instead: Option<&'static str> },
+    /// It opens, closes or switches documents. The kiosk hides the tab bar,
+    /// so the project's document could not be brought back, and Termul's
+    /// save would write whichever document is in front over its file.
+    OtherDocument,
+    /// It clears the unsaved mark without writing anything, so Termul's
+    /// autosave, which waits for that mark, would skip the changes.
+    SkipsSave,
+    /// It hands the document to a server or a live session.
+    LeavesTermul,
+    /// It installs, updates or publishes plugin code. An installed plugin's
+    /// code runs on this machine, so an agent may not bring new code in.
+    PluginCode,
+}
+
 #[derive(Clone, Copy)]
 enum CommandPolicy {
     HostSave,
     ExportTo,
-    Refuse(&'static [FileArg]),
+    Refuse(&'static [When], Why),
 }
 
-const ALWAYS: &[FileArg] = &[FileArg::Always];
-const PATH: &[FileArg] = &[FileArg::Path("path")];
+const ALWAYS: &[When] = &[When::Always];
+const PATH: &[When] = &[When::Path("path")];
+const DIR: &[When] = &[When::Path("dir")];
+const FILES: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::Files { instead: None });
+const FILE_AT_PATH: CommandPolicy = CommandPolicy::Refuse(PATH, Why::Files { instead: None });
+const OTHER_DOCUMENT: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::OtherDocument);
+const LEAVES_TERMUL: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::LeavesTermul);
+const PLUGIN_CODE: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::PluginCode);
 
-/// figcraft engine commands that name files (`crates/engine/src/cmd`).
+const fn files_unless(when: &'static [When], instead: &'static str) -> CommandPolicy {
+    CommandPolicy::Refuse(
+        when,
+        Why::Files {
+            instead: Some(instead),
+        },
+    )
+}
+
+/// figcraft engine commands Termul runs itself or refuses (`crates/engine/src`).
 const COMMANDS: &[(&str, CommandPolicy)] = &[
     ("file.save", CommandPolicy::HostSave),
     ("file.export", CommandPolicy::ExportTo),
     ("file.exportSvg", CommandPolicy::ExportTo),
     ("file.exportFramesPdf", CommandPolicy::ExportTo),
-    ("file.saveAs", CommandPolicy::Refuse(ALWAYS)),
-    ("file.open", CommandPolicy::Refuse(ALWAYS)),
-    ("file.openRecent", CommandPolicy::Refuse(ALWAYS)),
-    ("file.recover", CommandPolicy::Refuse(ALWAYS)),
-    ("file.revert", CommandPolicy::Refuse(ALWAYS)),
-    ("library.add", CommandPolicy::Refuse(ALWAYS)),
-    ("window.new", CommandPolicy::Refuse(ALWAYS)),
+    ("file.saveAs", FILES),
+    ("file.open", FILES),
+    ("file.openRecent", FILES),
+    ("file.recover", FILES),
+    ("file.revert", FILES),
+    ("library.add", FILES),
     (
         "file.exportLayers",
-        CommandPolicy::Refuse(&[FileArg::Path("dir")]),
+        files_unless(DIR, "leave out `dir` to get the files back as `data`"),
     ),
     (
         "file.import",
-        CommandPolicy::Refuse(&[FileArg::Path("path"), FileArg::VariablesPath]),
+        CommandPolicy::Refuse(
+            &[When::Path("path"), When::VariablesPath],
+            Why::Files { instead: None },
+        ),
     ),
-    ("file.placeImage", CommandPolicy::Refuse(PATH)),
-    ("image.place", CommandPolicy::Refuse(PATH)),
-    ("variable.export", CommandPolicy::Refuse(PATH)),
+    ("file.placeImage", FILE_AT_PATH),
+    ("image.place", FILE_AT_PATH),
+    ("variable.export", FILE_AT_PATH),
     (
         "variable.import",
-        CommandPolicy::Refuse(&[FileArg::VariablesPath]),
+        CommandPolicy::Refuse(&[When::VariablesPath], Why::Files { instead: None }),
     ),
+    (
+        "text.loadFont",
+        files_unless(PATH, "pass the font file's bytes as base64 `data`"),
+    ),
+    (
+        "data.fill",
+        files_unless(DIR, "leave out `dir` and export the copies with export"),
+    ),
+    (
+        "component.playground",
+        files_unless(PATH, "leave out `path` and export the preview with export"),
+    ),
+    (
+        "codeConnect.export",
+        files_unless(PATH, "leave out `path` to get the JSON back as `text`"),
+    ),
+    (
+        "codeConnect.import",
+        files_unless(PATH, "pass the JSON itself as `json`"),
+    ),
+    ("file.new", OTHER_DOCUMENT),
+    ("file.newBoard", OTHER_DOCUMENT),
+    ("file.newFromTemplate", OTHER_DOCUMENT),
+    ("file.duplicate", OTHER_DOCUMENT),
+    ("file.close", OTHER_DOCUMENT),
+    ("version.duplicate", OTHER_DOCUMENT),
+    ("branch.create", OTHER_DOCUMENT),
+    ("branch.open", OTHER_DOCUMENT),
+    ("doc.switch", OTHER_DOCUMENT),
+    ("doc.nextTab", OTHER_DOCUMENT),
+    ("doc.previousTab", OTHER_DOCUMENT),
+    ("collab.join", OTHER_DOCUMENT),
+    ("collab.openFile", OTHER_DOCUMENT),
+    ("collab.recoverFile", OTHER_DOCUMENT),
+    ("window.new", OTHER_DOCUMENT),
+    (
+        "file.markSaved",
+        CommandPolicy::Refuse(ALWAYS, Why::SkipsSave),
+    ),
+    ("library.publishToServer", LEAVES_TERMUL),
+    ("collab.host", LEAVES_TERMUL),
+    ("collab.publish", LEAVES_TERMUL),
+    ("collab.share", LEAVES_TERMUL),
+    // Listing plugins and running, using or closing an installed one stay
+    // allowed: they bring in no code.
+    ("plugin.directory.install", PLUGIN_CODE),
+    ("plugin.import", PLUGIN_CODE),
+    ("plugin.directory.publish", PLUGIN_CODE),
+    ("plugin.directory.unpublish", PLUGIN_CODE),
 ];
 
 /// Control methods other than `engine.execute` that can name a file.
-const METHODS: &[(&str, &[FileArg])] = &[("ui.render", PATH), ("ui.screenshot", PATH)];
+const METHODS: &[(&str, &[When])] = &[("ui.render", PATH), ("ui.screenshot", PATH)];
 
 const EXECUTE: &str = "engine.execute";
 const EXPORT: &str = "file.export";
@@ -95,7 +182,9 @@ pub fn route(method: &str, params: &Value) -> CanvasRoute {
         return route_execute(params);
     }
     match METHODS.iter().find(|(name, _)| *name == method) {
-        Some((_, args)) if touches_files(args, params) => CanvasRoute::Refuse(unsupported(method)),
+        Some((_, when)) if applies(when, params) => {
+            CanvasRoute::Refuse(refusal(method, Why::Files { instead: None }))
+        }
         _ => CanvasRoute::Forward,
     }
 }
@@ -131,15 +220,16 @@ fn route_execute(execute: &Value) -> CanvasRoute {
                 }
             }
         },
-        Some((_, CommandPolicy::Refuse(args))) if touches_files(args, params) => {
-            CanvasRoute::Refuse(unsupported(command))
+        Some((_, CommandPolicy::Refuse(when, why))) if applies(when, params) => {
+            CanvasRoute::Refuse(refusal(command, *why))
         }
-        Some((_, CommandPolicy::Refuse(_))) => CanvasRoute::Forward,
+        Some((_, CommandPolicy::Refuse(..))) => CanvasRoute::Forward,
     }
 }
 
 /// A batch runs as one undo step inside the editor, so a step Termul would
-/// have to handle itself refuses the whole batch.
+/// have to handle itself refuses the whole batch, and a step the kiosk
+/// refuses on its own refuses it for the same reason.
 fn route_batch(params: &Value) -> CanvasRoute {
     let steps = params
         .get("commands")
@@ -147,25 +237,30 @@ fn route_batch(params: &Value) -> CanvasRoute {
         .map(Vec::as_slice)
         .unwrap_or_default();
     for (index, step) in steps.iter().enumerate() {
-        if route_execute(step) != CanvasRoute::Forward {
-            let command = step.get("command").and_then(Value::as_str).unwrap_or("?");
-            return CanvasRoute::Refuse(CanvasError::new(
-                CanvasErrorCode::UnsupportedInKiosk,
-                format!(
-                    "batch step {index} (`{command}`) saves or touches files; run it on its own \
-                     (save_file saves, export returns bytes or writes inside the project)"
-                ),
-            ));
-        }
+        let command = step.get("command").and_then(Value::as_str).unwrap_or("?");
+        let message = match route_execute(step) {
+            CanvasRoute::Forward => continue,
+            CanvasRoute::Refuse(error) if error.code == CanvasErrorCode::UnsupportedInKiosk => {
+                format!("batch step {index}: {}", error.message)
+            }
+            _ => format!(
+                "batch step {index} (`{command}`) saves or touches files; run it on its own \
+                 (save_file saves, export returns bytes or writes inside the project)"
+            ),
+        };
+        return CanvasRoute::Refuse(CanvasError::new(
+            CanvasErrorCode::UnsupportedInKiosk,
+            message,
+        ));
     }
     CanvasRoute::Forward
 }
 
-fn touches_files(args: &[FileArg], params: &Value) -> bool {
-    args.iter().any(|arg| match arg {
-        FileArg::Always => true,
-        FileArg::Path(name) => string_param(params, name).is_some(),
-        FileArg::VariablesPath => string_param(params, "variables")
+fn applies(when: &[When], params: &Value) -> bool {
+    when.iter().any(|when| match when {
+        When::Always => true,
+        When::Path(name) => string_param(params, name).is_some(),
+        When::VariablesPath => string_param(params, "variables")
             .is_some_and(|text| serde_json::from_str::<Value>(text).is_err()),
     })
 }
@@ -175,7 +270,8 @@ fn string_param<'a>(params: &'a Value, name: &str) -> Option<&'a str> {
 }
 
 /// The format the editor would read from `path`'s extension (figcraft
-/// `ExportFormat::from_ext`, plus `fig` for the whole file).
+/// `ExportFormat::from_ext`, plus `fig` for the whole file). `xml` is an
+/// Android Vector Drawable.
 fn export_format(path: &str) -> Option<&'static str> {
     let extension = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
     match extension.as_str() {
@@ -184,6 +280,7 @@ fn export_format(path: &str) -> Option<&'static str> {
         "svg" => Some("svg"),
         "webp" => Some("webp"),
         "pdf" => Some("pdf"),
+        "xml" | "vd" | "vectordrawable" => Some("xml"),
         "fig" => Some("fig"),
         _ => None,
     }
@@ -193,20 +290,46 @@ fn unknown_format(path: &str) -> CanvasError {
     CanvasError::new(
         CanvasErrorCode::EngineError,
         format!(
-            "export cannot tell the format of `{path}`: give it a png, jpg, svg, webp, pdf or \
-             fig extension, or pass `format`"
+            "export cannot tell the format of `{path}`: give it a png, jpg, svg, webp, pdf, xml \
+             or fig extension, or pass `format`"
         ),
     )
 }
 
-fn unsupported(name: &str) -> CanvasError {
-    CanvasError::new(
-        CanvasErrorCode::UnsupportedInKiosk,
-        format!(
-            "`{name}` reads or writes files, which the Termul canvas does not allow: save_file \
-             saves the project's document, and export returns bytes or writes inside the project"
+fn refusal(name: &str, why: Why) -> CanvasError {
+    let message = match why {
+        Why::Files { instead } => {
+            let refused = format!(
+                "`{name}` reads or writes files, which the Termul canvas does not allow: \
+                 save_file saves the project's document, and export returns bytes or writes \
+                 inside the project"
+            );
+            match instead {
+                Some(instead) => format!("{refused}. Instead, {instead}"),
+                None => refused,
+            }
+        }
+        Why::OtherDocument => format!(
+            "`{name}` opens, closes or switches documents, which the Termul canvas does not \
+             allow: it shows only the project's document, with no tabs to switch back, and \
+             Termul's save would write the document in front over the project's canvas file"
         ),
-    )
+        Why::SkipsSave => format!(
+            "`{name}` marks the document saved without saving it, which the Termul canvas does \
+             not allow: Termul saves the canvas while it has unsaved changes, so they would \
+             never be written. Save with save_file"
+        ),
+        Why::LeavesTermul => format!(
+            "`{name}` shares the document outside Termul, with a server or a live session, \
+             which the Termul canvas does not allow"
+        ),
+        Why::PluginCode => format!(
+            "`{name}` installs, updates or publishes plugin code, which isn't available from \
+             the agent canvas tools. A plugin that is already installed can still run with \
+             plugin.run"
+        ),
+    };
+    CanvasError::new(CanvasErrorCode::UnsupportedInKiosk, message)
 }
 
 /// A file inside the project an export may write.

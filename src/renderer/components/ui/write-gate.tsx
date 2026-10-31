@@ -1,6 +1,7 @@
 import type React from 'react'
 import { cn } from '@/lib/utils'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
+import { FOCUS_RING_CLASS } from './panel-styles'
 
 interface WriteGateProps {
   /** True when the control must render disabled with the read-only reason. */
@@ -26,10 +27,7 @@ export function WriteGate({ gated, focusable = true, className, children }: Writ
       data-write-gate="read-only"
       title={READ_ONLY_SERVER_REASON}
       tabIndex={focusable ? 0 : undefined}
-      className={cn(
-        'inline-flex rounded [&>*]:pointer-events-none focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
-        className
-      )}
+      className={cn('inline-flex rounded [&>*]:pointer-events-none', FOCUS_RING_CLASS, className)}
     >
       {children}
       {focusable ? <WriteGateReason /> : null}

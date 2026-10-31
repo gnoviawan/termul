@@ -112,7 +112,18 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, success: true, data: {} })
       return
     }
-    if (req.type === 'write' && FakeWebSocket.holdWrite) return
+    if (req.type === 'write') {
+      if (FakeWebSocket.holdWrite) return
+      if (writeReplyMode === 'reject') {
+        this.emitReply({
+          id: req.id,
+          success: false,
+          error: 'Write failed',
+          code: 'WRITE_FAILED'
+        })
+        return
+      }
+    }
     if (req.type === 'spawn') {
       // CAP-3: spawn is the only issuance path — the reply carries the claim.
       this.emitReply({ id: req.id, success: true, data: spawnReplyData })
@@ -191,6 +202,11 @@ let listPreservedEntries: Array<Record<string, unknown>> = []
 let attachReply: 'ok' | 'unauthorized' = 'ok'
 /** Test knob: record `attach` frames but never reply (lost/late attach reply). */
 let holdAttachReply = false
+
+/** Test knob: how the fake answers `write` frames — 'ok' answers success,
+ * 'reject' answers a definite host rejection (WRITE_FAILED). `holdWrite`
+ * records the frame but never replies (lost reply). */
+let writeReplyMode: 'ok' | 'reject' = 'ok'
 
 /** Test knob: the spawn reply data (CAP-3 issuance carries the claim). */
 let spawnReplyData: Record<string, unknown> = mockSpawnedTerminal({
@@ -1889,6 +1905,7 @@ describe('WebTerminalClient offline input buffering (Story 10, F9/F10)', () => {
   afterEach(() => {
     FakeWebSocket.autoOpen = true
     FakeWebSocket.holdWrite = false
+    writeReplyMode = 'ok'
     vi.useRealTimers()
   })
 
@@ -1899,6 +1916,144 @@ describe('WebTerminalClient offline input buffering (Story 10, F9/F10)', () => {
     )
     return { client, internals: client as unknown as ClientInternals }
   }
+
+  it('a definite host rejection on the flush retains the input and the delayed retry resends it under the SAME commandId', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    internals.socket.close()
+    await client.write('t1', 'abc')
+
+    // Reconnect + re-attach succeed, but the flush write is refused with a
+    // definite host rejection (WRITE_FAILED) — not a lost reply.
+    writeReplyMode = 'reject'
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    const sock = internals.socket
+    const firstFrame = findSentRequest(sock, 'write') as {
+      commandId?: string
+      payload: { data?: string }
+    }
+    expect(firstFrame.payload.data).toBe('abc')
+    // Retained: the failed chunk goes back to the unconfirmed set + buffer —
+    // the terminal is still live and claim-held, so nothing is dropped.
+    expect(internals.inputBuffers.get('t1')).toBe('abc')
+
+    // The delayed retry fires 1s later on the SAME attached socket and resends
+    // the chunk under the SAME commandId (never typed twice).
+    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(0)
+    const writes = sock.sent.filter((raw) => (JSON.parse(raw) as { type: string }).type === 'write')
+    expect(writes.length).toBe(2)
+    expect(JSON.parse(writes[1]).commandId).toBe(firstFrame.commandId)
+    expect(JSON.parse(writes[1]).payload.data).toBe('abc')
+
+    client.dispose()
+  })
+
+  it('drops the buffered input after REPLAY_MAX_FAILURES consecutive rejections (no infinite retry loop)', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    internals.socket.close()
+    await client.write('t1', 'abc')
+
+    writeReplyMode = 'reject'
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    // The initial flush + 3 retries = 4 recorded failures (under the cap);
+    // each retry schedules another. The 5th failure drops the buffers.
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(1_000)
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(internals.inputBuffers.get('t1')).toBe('abc')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(internals.inputBuffers.has('t1')).toBe(false)
+    expect(internals.unconfirmedChunks.has('t1')).toBe(false)
+    // The 5-failure drop is logged at error level.
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        source: 'WebTerminalClient.flushInputBuffer',
+        message: expect.stringContaining('consecutive times')
+      })
+    )
+    // The terminal unblocks — no more retry timers, no more write frames.
+    const writes = internals.socket.sent.filter(
+      (raw) => (JSON.parse(raw) as { type: string }).type === 'write'
+    )
+    expect(writes.length).toBe(5)
+    await vi.advanceTimersByTimeAsync(3_000)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(
+      internals.socket.sent.filter((raw) => (JSON.parse(raw) as { type: string }).type === 'write')
+        .length
+    ).toBe(5)
+
+    client.dispose()
+  })
+
+  it('an exit during a held flush drops the buffers when the write times out', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    internals.socket.close()
+    await client.write('t1', 'abc')
+
+    FakeWebSocket.holdWrite = true
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(internals.inputBuffers.has('t1')).toBe(false) // in flight
+
+    // The terminal exits while the write is held: the eventual timeout
+    // failure must drop the buffers, not re-buffer them.
+    internals.socket.emit({
+      type: 'event',
+      payload: { type: 'exit', terminal_id: 't1', exit_code: 0, signal: null }
+    })
+    await vi.advanceTimersByTimeAsync(15_000)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(internals.inputBuffers.has('t1')).toBe(false)
+    expect(internals.unconfirmedChunks.has('t1')).toBe(false)
+
+    client.dispose()
+  })
+
+  it('a flush already in flight refuses an overlapping trigger (single flush per terminal)', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    internals.socket.close()
+    await client.write('t1', 'abc')
+
+    FakeWebSocket.holdWrite = true
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(internals.inputBuffers.has('t1')).toBe(false) // in flight
+
+    // A keystroke lands behind the hold — it is buffered, not written direct.
+    await client.write('t1', 'Z')
+    expect(internals.inputBuffers.get('t1')).toBe('Z')
+
+    // An overlapping flush trigger (attach loop, delayed retry) must NOT start
+    // a second flush: the in-flight one drains the buffer after every awaited
+    // chunk. Only the one in-flight write frame exists.
+    ;(client as unknown as { flushInputBuffer(t: string): void }).flushInputBuffer('t1')
+    const writes = internals.socket.sent.filter(
+      (raw) => (JSON.parse(raw) as { type: string }).type === 'write'
+    )
+    expect(writes.length).toBe(1)
+    expect(JSON.parse(writes[0]).payload.data).toBe('abc')
+
+    client.dispose()
+  })
 
   it('buffers input while the socket is down and flushes it as one ordered write after re-attach', async () => {
     vi.useFakeTimers()
@@ -2683,4 +2838,71 @@ describe('ledgered terminal commands (AD-5)', () => {
       expect(framesOf('rotate_claim')).toHaveLength(1)
     })
   })
+})
+
+it('late attach replay mounts the editor from lifecycle events', async () => {
+  const { WebTerminalClient: ReplayClient } = await import('./web-terminal-api')
+  const { sessionStore } = await import('./command-lifecycle/session-store')
+  const { useTerminalStore } = await import('@/stores/terminal-store')
+  const { mockTerminal } = await import('@/lib/test-utils/terminal')
+  const client = new ReplayClient(
+    'ws://test/terminal/ws',
+    FakeWebSocket as unknown as typeof WebSocket
+  )
+  useTerminalStore.getState().setTerminals([mockTerminal({ id: 'late-editor', ptyId: 'pty-late' })])
+  try {
+    await client.connect()
+    const socket = (client as unknown as ClientInternals).socket
+    socket.emit({
+      type: 'replay',
+      terminalId: 'pty-late',
+      chunks: [],
+      gap: false,
+      latestSeq: 5,
+      snapshot: mockTerminalStateSnapshot({ cwd: '/repo' })
+    })
+    const payload = {
+      type: 'session_lifecycle',
+      terminal_id: 'pty-late',
+      session_id: 's-late',
+      nonce: 'n-late',
+      exit_code: null
+    }
+    socket.emit({
+      type: 'event',
+      payload: {
+        ...payload,
+        kind: 'InitShell',
+        prompt_generation: null,
+        cwd: null,
+        line_empty: false,
+        prompt_suppressed: false
+      }
+    })
+    socket.emit({
+      type: 'event',
+      payload: {
+        ...payload,
+        kind: 'PromptReady',
+        prompt_generation: 4,
+        cwd: '/repo',
+        line_empty: true,
+        prompt_suppressed: true
+      }
+    })
+    await import('@/stores/terminal-store')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(sessionStore.read('late-editor')).toMatchObject({
+      mode: 'Editor',
+      sessionId: 's-late',
+      nonce: 'n-late',
+      promptGeneration: 4,
+      cwd: '/repo'
+    })
+  } finally {
+    client.dispose()
+    sessionStore.reset()
+    useTerminalStore.getState().setTerminals([])
+  }
 })

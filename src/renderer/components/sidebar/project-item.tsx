@@ -6,7 +6,7 @@ import { RailTooltip } from '@/components/shell/rail-button'
 import { RAIL_ICON_BOX_CLASS, RAIL_ROW_INSET_CLASS } from '@/components/shell/rail-layout'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Kbd } from '@/components/ui/kbd'
-import { FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
+import { FIELD_FOCUS_CLASS, FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import type { Project } from '@/types/project'
 import { ProjectDiffStat } from '../shell/ProjectDiffStat'
@@ -90,7 +90,8 @@ export const ProjectItem = memo(function ProjectItem({
               'group flex h-8 w-full cursor-pointer select-none items-center pr-1.5 text-left text-xs',
               'rounded-lg',
               RAIL_ROW_INSET_CLASS,
-              'transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+              'transition-colors duration-150 ease-out focus-visible:ring-inset',
+              FOCUS_RING_CLASS,
               isActive ? 'keycap text-foreground' : 'hover:bg-row-hover focus-within:bg-row-hover'
             )}
             aria-current={isActive ? 'page' : undefined}
@@ -141,7 +142,7 @@ export const ProjectItem = memo(function ProjectItem({
                     // under the same conditions as the wash (hover and
                     // focus-within).
                     isActive
-                      ? 'from-[var(--rail-keycap)] from-60%'
+                      ? 'from-[var(--rail-keycap-fill)] from-60%'
                       : 'from-row-hover-solid from-60%'
                   )}
                   data-testid="project-row-actions"
@@ -153,7 +154,7 @@ export const ProjectItem = memo(function ProjectItem({
                         e.stopPropagation()
                         onSettingsClick()
                       }}
-                      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className={`inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground ${FOCUS_RING_CLASS}`}
                       aria-label={`Settings for ${project.name}`}
                     >
                       <Settings size={12} />

@@ -4,8 +4,10 @@ import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { BrowserAuthDialogHost } from '@/components/agents/BrowserAuthDialog'
 import { BrowserConsentCardHost } from '@/components/agents/BrowserConsentCardHost'
 import { ChatRoute } from '@/components/ChatRoute'
+import { useClaudeAutoSwitch } from '@/components/chat/claude-account/auto-switch'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Toaster } from '@/components/ui/sonner'
@@ -181,6 +183,9 @@ function AppEffects(): null {
   // waiting), gated on the user not already watching the chat. Mounted on
   // both renderer roots for parity.
   useChatNotifications()
+  // A Claude chat at its account's limit continues on another account, even
+  // off screen. Mounted on both renderer roots for parity.
+  useClaudeAutoSwitch()
   useAcpMcp()
   usePreventFileDropNavigation()
   // Suppress the native browser context menu app-wide (BUBBLE phase) for web
@@ -263,6 +268,7 @@ const App = () => {
           <ErrorBoundary context="App Root">
             <AppEffects />
             <Toaster />
+            <ExternalLinkConfirmHost />
             {/* Web/remote mode only: in-app directory picker registered with
                 dialogApi so NewProjectModal's Browse button works without a native
                 dialog.open (Story: Web/remote project creation). Desktop never

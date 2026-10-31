@@ -33,7 +33,7 @@ For a thin prompt, read `vague-prompts` first.
 ## 5. Build one section per call
 
 - Make each section a child frame with `sizingH: "fill"`, `sizingV: "hug"`, its own `layout`, `padding` and `gap`, and `"fills": []` unless it has its own background.
-- Build the whole section, from the frame down to its last text layer, in one `batch`. Give each frame that other layers go into a name with `"as"`, and point its children at it with `{"$name": "..."}`.
+- Build the whole section, from the frame down to its last text layer, in one `batch`. Give each frame that other layers go into a name with `"as"`, and point its children at it with `{"$ref": "..."}`.
 - Keep the `names` map from the result. It gives the id of every named layer, so you can check and fix the section without searching for ids.
 - Write the final copy now. Do not leave placeholder text to replace later.
 

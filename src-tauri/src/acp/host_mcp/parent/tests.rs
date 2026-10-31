@@ -136,6 +136,7 @@ fn bound_session_without_an_active_turn_is_rejected() {
         let reply = connect_and_send(port, &frame).await;
         assert_eq!(reply["ok"], false);
         assert_eq!(reply["error"], "no active turn");
+        assert_eq!(reply["code"], "NO_ACTIVE_TURN");
     });
 
     assert!(sink.events.lock().unwrap().is_empty());
@@ -210,6 +211,7 @@ fn ambiguous_stale_binding_is_rejected_instead_of_cross_routed() {
         let reply = connect_and_send(port, &frame).await;
         assert_eq!(reply["ok"], false);
         assert_eq!(reply["error"], "ambiguous active session");
+        assert_eq!(reply["code"], "AMBIGUOUS_SESSION");
     });
 
     assert!(sink.events.lock().unwrap().is_empty());

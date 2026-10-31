@@ -32,6 +32,7 @@ describe('editor-store saveFile', () => {
           {
             filePath: path,
             content: 'latest',
+            kind: 'text',
             originalContent: 'original',
             isDirty: true,
             language: 'typescript',

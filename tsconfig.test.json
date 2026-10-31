@@ -5,6 +5,7 @@
     "types": ["node"]
   },
   "include": [
+    "src/shared/**/*.ts",
     "src/renderer/**/*.test.ts",
     "src/renderer/**/*.test.tsx",
     "src/renderer/**/__tests__/**/*",
@@ -13,6 +14,12 @@
     "scripts/acp-reference.ts",
     "scripts/validate-pr-body.ts",
     "scripts/canvas-eval/checks.ts",
+    "scripts/canvas-eval/snapshot.ts",
     "scripts/canvas-eval/upstream.ts"
+  ],
+  "exclude": [
+    "src/renderer/**/*.test.ts",
+    "src/renderer/**/*.test.tsx",
+    "src/renderer/**/__tests__/**/*"
   ]
 }

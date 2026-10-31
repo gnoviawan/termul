@@ -108,6 +108,7 @@ fn an_export_without_a_format_takes_it_from_the_paths_extension() {
         ("thumb.webp", "webp"),
         ("shot.png", "png"),
         ("design.fig", "fig"),
+        ("res/drawable/ic_logo.XML", "xml"),
     ] {
         let (_, stripped) = export_to("file.export", json!({"path": requested}));
         assert_eq!(stripped["params"], json!({"format": format}), "{requested}");
@@ -200,6 +201,310 @@ fn commands_and_methods_that_name_files_are_unsupported_in_kiosk() {
     ];
     for (method, params) in cases {
         assert!(refused(&route(method, &params)), "{method} {params}");
+    }
+}
+
+fn refusal(method: &str, params: &Value) -> CanvasError {
+    match route(method, params) {
+        CanvasRoute::Refuse(error) if error.code == CanvasErrorCode::UnsupportedInKiosk => error,
+        other => panic!("{method} {params} is refused, not {other:?}"),
+    }
+}
+
+#[test]
+fn a_command_that_names_a_file_is_refused_and_its_inline_form_goes_to_the_editor() {
+    for (command, with_file, inline, instead) in [
+        (
+            "text.loadFont",
+            json!({"path": "fonts/Brand.ttf"}),
+            json!({"data": "AAAA"}),
+            "`data`",
+        ),
+        (
+            "data.fill",
+            json!({"id": 4, "rows": [], "dir": "out"}),
+            json!({"id": 4, "rows": []}),
+            "`dir`",
+        ),
+        (
+            "component.playground",
+            json!({"id": 4, "path": "preview.png"}),
+            json!({"id": 4}),
+            "`path`",
+        ),
+        (
+            "codeConnect.export",
+            json!({"path": "figcraft.connect.json"}),
+            json!({}),
+            "`path`",
+        ),
+        (
+            "codeConnect.import",
+            json!({"path": "figcraft.connect.json"}),
+            json!({"json": {"version": 1, "links": []}}),
+            "`json`",
+        ),
+    ] {
+        let error = refusal("engine.execute", &execute(command, with_file));
+        assert!(
+            error.message.contains("reads or writes files") && error.message.contains(instead),
+            "{command}: {}",
+            error.message
+        );
+        assert_eq!(
+            route("engine.execute", &execute(command, inline.clone())),
+            CanvasRoute::Forward,
+            "{command} {inline}"
+        );
+    }
+}
+
+#[test]
+fn a_command_that_opens_closes_or_switches_documents_is_refused() {
+    for command in [
+        "file.new",
+        "file.newBoard",
+        "file.newFromTemplate",
+        "file.duplicate",
+        "file.close",
+        "version.duplicate",
+        "branch.create",
+        "branch.open",
+        "doc.switch",
+        "doc.nextTab",
+        "doc.previousTab",
+        "collab.join",
+        "collab.openFile",
+        "collab.recoverFile",
+        "window.new",
+    ] {
+        let error = refusal("engine.execute", &execute(command, json!({"index": 0})));
+        assert!(
+            error.message.contains("switches documents"),
+            "{command}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn marking_the_document_saved_without_saving_is_refused() {
+    let error = refusal("engine.execute", &execute("file.markSaved", json!({})));
+    assert!(
+        error.message.contains("without saving") && error.message.contains("save_file"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn sending_the_document_outside_termul_is_refused() {
+    for command in [
+        "library.publishToServer",
+        "collab.host",
+        "collab.publish",
+        "collab.share",
+    ] {
+        let error = refusal("engine.execute", &execute(command, json!({})));
+        assert!(
+            error.message.contains("outside Termul"),
+            "{command}: {}",
+            error.message
+        );
+    }
+}
+
+/// Commands that install, update or publish plugin code. A plugin's code
+/// runs on this machine, so an agent may not bring new code in, whether from
+/// a plugin directory or as bytes it passes itself.
+const PLUGIN_CODE: &[(&str, &str)] = &[
+    (
+        "plugin.directory.install",
+        r#"{"id": "x.y", "confirm": true, "server": "ws://host:47900/"}"#,
+    ),
+    ("plugin.import", r#"{"manifest": {}, "wasm": "AAAA"}"#),
+    ("plugin.import", r#"{"path": "plugins/hello"}"#),
+    (
+        "plugin.directory.publish",
+        r#"{"plugin": "x.y", "server": "ws://host:47900/?key=k"}"#,
+    ),
+    (
+        "plugin.directory.unpublish",
+        r#"{"id": "x.y", "server": "ws://host:47900/?key=k"}"#,
+    ),
+];
+
+/// `plugin.*` and `plugins.*` commands that bring in no code: listing, and
+/// running, using or closing a plugin that is already installed.
+const PLUGIN_KEPT: &[(&str, &str)] = &[
+    ("plugin.list", "{}"),
+    ("plugin.directory.list", r#"{"server": "ws://host:47900/"}"#),
+    ("plugin.run", r#"{"id": "x.y"}"#),
+    ("plugin.ui", "{}"),
+    ("plugin.event", r#"{"id": "x.y", "control": "go"}"#),
+    ("plugin.close", r#"{"id": "x.y"}"#),
+    ("plugin.remove", r#"{"id": "x.y"}"#),
+    ("plugins.runLast", "{}"),
+    ("plugins.manage", "{}"),
+];
+
+#[test]
+fn installing_or_publishing_plugin_code_is_refused_and_installed_plugins_still_run() {
+    for (command, params) in PLUGIN_CODE {
+        let params: Value = serde_json::from_str(params).unwrap();
+        let error = refusal("engine.execute", &execute(command, params));
+        assert!(
+            error.message.contains("plugin code") && error.message.contains("agent canvas tools"),
+            "{command}: {}",
+            error.message
+        );
+    }
+    for (command, params) in PLUGIN_KEPT {
+        let params: Value = serde_json::from_str(params).unwrap();
+        assert_eq!(
+            route("engine.execute", &execute(command, params.clone())),
+            CanvasRoute::Forward,
+            "{command} {params}"
+        );
+    }
+}
+
+/// A plugin command the engine adds must be sorted into one of the lists
+/// above before it reaches the editor unchecked.
+#[test]
+fn every_plugin_command_the_pinned_engine_runs_is_refused_or_known_to_bring_in_no_code() {
+    use figcraft_mcp::Backend as _;
+    let listed = figcraft_mcp::Headless::new()
+        .call("engine.commands", json!({}))
+        .unwrap();
+    let mut engine: Vec<&str> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|command| command["id"].as_str())
+        .filter(|id| id.starts_with("plugin.") || id.starts_with("plugins."))
+        .collect();
+    engine.sort_unstable();
+    engine.dedup();
+    let mut sorted: Vec<&str> = PLUGIN_CODE
+        .iter()
+        .chain(PLUGIN_KEPT)
+        .map(|(command, _)| *command)
+        .collect();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(engine, sorted);
+}
+
+#[test]
+fn an_android_vector_drawable_export_is_written_by_termul_with_its_options() {
+    let (path, stripped) = export_to(
+        "file.export",
+        json!({"path": "res/drawable/ic_logo.xml", "vdCompat": "exact"}),
+    );
+    assert_eq!(path, "res/drawable/ic_logo.xml");
+    assert_eq!(
+        stripped["params"],
+        json!({"format": "xml", "vdCompat": "exact"})
+    );
+}
+
+#[test]
+fn layers_exported_as_one_zip_come_back_inline_and_a_folder_is_refused() {
+    assert_eq!(
+        route(
+            "engine.execute",
+            &execute(
+                "file.exportLayers",
+                json!({"zip": true, "vdCompat": "exact"})
+            )
+        ),
+        CanvasRoute::Forward
+    );
+    refusal(
+        "engine.execute",
+        &execute("file.exportLayers", json!({"zip": true, "dir": "out"})),
+    );
+}
+
+/// A command the policy names but the engine renamed would pass unchecked.
+#[test]
+fn every_command_the_policy_names_is_one_the_pinned_engine_runs() {
+    use figcraft_mcp::Backend as _;
+    let listed = figcraft_mcp::Headless::new()
+        .call("engine.commands", json!({}))
+        .unwrap();
+    let engine: std::collections::HashSet<&str> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|command| command["id"].as_str())
+        .collect();
+    let unknown: Vec<&str> = COMMANDS
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| !engine.contains(name))
+        .collect();
+    assert_eq!(unknown, Vec::<&str>::new());
+}
+
+/// An export path the policy gives a format to must be one the engine can
+/// write, or the agent gets an engine error for a path Termul accepted.
+#[test]
+fn every_format_an_export_path_names_is_one_the_pinned_engine_exports() {
+    use figcraft_mcp::Backend as _;
+    for path in [
+        "a.png", "a.jpg", "a.svg", "a.webp", "a.pdf", "a.xml", "a.fig",
+    ] {
+        let format = export_format(path).unwrap();
+        let mut engine = figcraft_mcp::Headless::new();
+        let rectangle = engine
+            .call(
+                "engine.execute",
+                json!({"command": "node.create", "params": {
+                    "type": "rectangle", "width": 10, "height": 10, "props": {"fill": "#336699"}
+                }}),
+            )
+            .unwrap();
+        let exported = engine.call(
+            "engine.execute",
+            json!({"command": "file.export", "params": {"ids": [rectangle["id"]], "format": format}}),
+        );
+        assert!(
+            exported
+                .as_ref()
+                .is_ok_and(|reply| reply["data"].is_string()),
+            "{format}: {exported:?}"
+        );
+    }
+}
+
+#[test]
+fn a_batch_step_refused_on_its_own_refuses_the_batch_for_the_same_reason() {
+    let batch = |step: Value| {
+        execute(
+            "command.batch",
+            json!({"commands": [{"command": "node.create", "params": {}}, step]}),
+        )
+    };
+    for (step, cause) in [
+        (json!({"command": "file.markSaved"}), "without saving"),
+        (json!({"command": "file.newBoard"}), "switches documents"),
+        (
+            json!({"command": "text.loadFont", "params": {"path": "a.ttf"}}),
+            "reads or writes files",
+        ),
+        (
+            json!({"command": "plugin.directory.install", "params": {"id": "x.y", "confirm": true}}),
+            "plugin code",
+        ),
+    ] {
+        let error = refusal("engine.execute", &batch(step.clone()));
+        assert!(
+            error.message.contains("step 1") && error.message.contains(cause),
+            "{step}: {}",
+            error.message
+        );
     }
 }
 

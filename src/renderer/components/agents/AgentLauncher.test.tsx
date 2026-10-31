@@ -4035,9 +4035,9 @@ describe('AgentLauncher Claude account chip', () => {
     renderLauncher()
 
     const chip = await screen.findByRole('button', {
-      name: 'Claude account: Personal, 37% of its limit used. Change account'
+      name: 'Claude account: Personal, 5-hour 37% used. Change account'
     })
-    expect(chip).toHaveTextContent('Personal37%')
+    expect(chip).toHaveTextContent('Personal5h 37%')
     expect(screen.getByRole('button', { name: 'Attach files' }).parentElement).toContainElement(
       chip
     )
@@ -4053,7 +4053,7 @@ describe('AgentLauncher Claude account chip', () => {
     await waitFor(() => expect(mockSwitchProjectClaudeAccount).toHaveBeenCalledWith('p1', 'ab12'))
     expect(
       await screen.findByRole('button', {
-        name: 'Claude account: Work, 5% of its limit used. Change account'
+        name: 'Claude account: Work, 5-hour 5% used. Change account'
       })
     ).toBeInTheDocument()
   })
@@ -4063,9 +4063,9 @@ describe('AgentLauncher Claude account chip', () => {
     renderLauncher()
 
     const chip = await screen.findByRole('button', {
-      name: 'Claude account: Personal, 37% of its limit used. Change account'
+      name: 'Claude account: Personal, 5-hour 37% used. Change account'
     })
-    expect(chip).toHaveTextContent(/^37%$/)
+    expect(chip).toHaveTextContent(/^5h 37%$/)
   })
 
   it('hides the chip when the user picks an agent other than Claude', async () => {

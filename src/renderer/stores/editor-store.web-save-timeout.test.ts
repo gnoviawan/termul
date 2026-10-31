@@ -56,6 +56,7 @@ function seedDirtyWebFile(): void {
         {
           filePath: path,
           content: 'edited',
+          kind: 'text',
           originalContent: 'on disk',
           isDirty: true,
           language: 'typescript',

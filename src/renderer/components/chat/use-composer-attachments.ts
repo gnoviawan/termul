@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { readAttachmentBytes } from '@/lib/attachment-api'
 import { deleteTempFile } from '@/lib/attachment-temp-cleanup'
 import {
   pickAttachmentFilesBrowser,
@@ -8,6 +7,7 @@ import {
   readClipboardRgbaImage,
   writeBytesToTempFile
 } from '@/lib/composer-attachments-io'
+import { readMediaBytes } from '@/lib/media-bytes-api'
 import { basename } from '@/lib/path-basename'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
@@ -70,13 +70,19 @@ function readTextAsAttachment(file: File): Promise<PendingAttachment> {
   })
 }
 
+async function readMediaFileBytes(path: string): Promise<Uint8Array> {
+  const result = await readMediaBytes(path)
+  if (!result.success) throw new Error(result.code)
+  return new Uint8Array(await result.data.arrayBuffer())
+}
+
 /** Read an image file by path into an inline base64 `image` attachment. */
 async function readImagePathAsAttachment(
   path: string,
   name: string,
   mimeType: string
 ): Promise<PendingAttachment> {
-  const bytes = await readAttachmentBytes(path)
+  const bytes = await readMediaFileBytes(path)
   if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error('Image too large')
   const base64 = uint8ToBase64(bytes)
   return {
@@ -96,7 +102,7 @@ async function readImagePathAsAttachment(
  */
 async function readThumbnail(path: string, mimeType: string): Promise<string | undefined> {
   try {
-    const bytes = await readAttachmentBytes(path)
+    const bytes = await readMediaFileBytes(path)
     if (bytes.byteLength > MAX_IMAGE_BYTES) return undefined
     return `data:${mimeType};base64,${uint8ToBase64(bytes)}`
   } catch {

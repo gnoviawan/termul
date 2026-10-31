@@ -3,6 +3,7 @@ import { ChevronRight, Code2, Eye, PanelRight, Save } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { FOCUS_RING_CLASS, SEGMENTED_TRACK_CLASS, segmentClass } from '@/components/ui/panel-styles'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { type EditorViewMode, textPreviewForPath } from '@/lib/editor-file-kind'
 import { requestSaveEditorFile } from '@/lib/editor-save'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
@@ -10,7 +11,7 @@ import { useTocIsVisible, useTocSettingsStore } from '@/stores/toc-settings-stor
 import { formatDocumentStats, getDocumentStats } from './outline/document-stats'
 
 interface EditorToolbarProps {
-  viewMode: 'code' | 'markdown'
+  viewMode: EditorViewMode
   onToggleViewMode: () => void
   filePath: string
 }
@@ -19,7 +20,7 @@ interface EditorToolbarProps {
 const TOUCH_TARGET_CLASS = "relative min-h-11 after:absolute after:-inset-1.5 after:content-['']"
 
 const VIEW_MODE_SEGMENTS = [
-  { mode: 'markdown', label: 'Preview', title: 'Switch to WYSIWYG mode', Icon: Eye },
+  { mode: 'preview', label: 'Preview', title: 'Switch to preview mode', Icon: Eye },
   { mode: 'code', label: 'Source', title: 'Switch to source mode', Icon: Code2 }
 ] as const
 
@@ -51,7 +52,8 @@ export function EditorToolbar({
   const isSaving = fileState?.operationStatus === 'saving'
   const [saveTapped, setSaveTapped] = useState(false)
 
-  const content = fileState?.language === 'markdown' ? fileState.content : undefined
+  const isMarkdown = textPreviewForPath(filePath) === 'markdown'
+  const content = isMarkdown && fileState?.kind === 'text' ? fileState.content : undefined
   const statsLabel = useMemo(
     () => (content === undefined ? null : formatDocumentStats(getDocumentStats(content))),
     [content]
@@ -133,25 +135,29 @@ export function EditorToolbar({
           })}
         </div>
 
-        {!isMobileWebShell && <span aria-hidden="true" className="h-4 w-px bg-border" />}
+        {isMarkdown && !isMobileWebShell && (
+          <span aria-hidden="true" className="h-4 w-px bg-border" />
+        )}
 
-        <button
-          type="button"
-          onClick={toggleTocVisibility}
-          title={isTocVisible ? 'Hide outline' : 'Show outline'}
-          aria-label="Outline"
-          aria-pressed={isTocVisible}
-          className={cn(
-            'flex items-center justify-center rounded-md transition-colors duration-150 ease-out',
-            FOCUS_RING_CLASS,
-            isMobileWebShell ? cn(TOUCH_TARGET_CLASS, 'min-w-11') : 'size-7',
-            isTocVisible
-              ? 'bg-foreground/[0.06] text-foreground'
-              : 'text-muted-foreground hover:bg-foreground/[0.03] hover:text-foreground'
-          )}
-        >
-          <PanelRight size={14} aria-hidden="true" />
-        </button>
+        {isMarkdown && (
+          <button
+            type="button"
+            onClick={toggleTocVisibility}
+            title={isTocVisible ? 'Hide outline' : 'Show outline'}
+            aria-label="Outline"
+            aria-pressed={isTocVisible}
+            className={cn(
+              'flex items-center justify-center rounded-md transition-colors duration-150 ease-out',
+              FOCUS_RING_CLASS,
+              isMobileWebShell ? cn(TOUCH_TARGET_CLASS, 'min-w-11') : 'size-7',
+              isTocVisible
+                ? 'bg-foreground/[0.06] text-foreground'
+                : 'text-muted-foreground hover:bg-foreground/[0.03] hover:text-foreground'
+            )}
+          >
+            <PanelRight size={14} aria-hidden="true" />
+          </button>
+        )}
 
         {isMobileWebShell && (
           <Button

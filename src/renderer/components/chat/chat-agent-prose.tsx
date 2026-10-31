@@ -1,50 +1,36 @@
 import { mermaid as mermaidPlugin } from '@streamdown/mermaid'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef } from 'react'
 import { toast } from 'sonner'
 import {
   type AllowedTags,
   type Components,
-  defaultComponents,
   defaultRemarkPlugins,
   type LinkSafetyConfig,
-  type LinkSafetyModalProps,
   Streamdown
 } from 'streamdown'
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle
-} from '@/components/ui/alert-dialog'
+import { ConfirmedExternalLink } from '@/components/external-link/ExternalLinkConfirm'
 import { useThrottledStreamingText } from '@/hooks/use-throttled-streaming-text'
-import { openerApi } from '@/lib/api'
-import { readAttachmentBytes } from '@/lib/attachment-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { syntaxShikiPair } from '@/lib/themes/syntax-shiki'
 import { cn } from '@/lib/utils'
 import { useColorTheme } from '@/stores/app-settings-store'
 import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
-import { guessMimeType, uint8ToBase64 } from './chat-attachments'
+import { ChatMedia, MediaAltChip } from './ChatMedia'
 import { chatCodePlugin } from './chat-code-plugin'
 import { ChatMarkdownCode } from './chat-markdown-code'
 import { remarkFilePathLinks } from './chat-markdown-file-links'
-import { remarkTermulImages, resolveLocalImagePath } from './chat-markdown-images'
+import { remarkTermulMedia } from './chat-markdown-images'
 import { ChatMarkdownTable } from './chat-markdown-table'
 import { ChatMarkdownSpan } from './chat-markdown-word'
+import { chatMediaFromMarkdown } from './chat-media-source'
 
-/** Always-on remark plugins: streamdown defaults plus the termul-image rewrite. */
-const IMAGE_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkTermulImages]
+const MEDIA_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkTermulMedia]
 /** Adds prose file-path linkification when a `filePathContext` exists. */
 const FILE_PATH_REMARK_PLUGINS = [
   ...Object.values(defaultRemarkPlugins),
-  remarkTermulImages,
+  remarkTermulMedia,
   remarkFilePathLinks
 ]
 
@@ -53,9 +39,14 @@ const FILE_PATH_REMARK_PLUGINS = [
  * property names (`data-path` -> `dataPath`); the tags themselves carry no
  * `href`/`src`, so `rehype-harden` never blocks them.
  */
-const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
+export const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
   'termul-file-path': ['dataPath'],
-  'termul-image': ['dataUrl', 'dataAlt']
+  'termul-media': ['dataUrl', 'dataAlt', 'dataLinkPreview']
+}
+
+function stringProp(props: Record<string, unknown>, name: string): string | undefined {
+  const value = props[name]
+  return typeof value === 'string' ? value : undefined
 }
 
 /**
@@ -105,54 +96,9 @@ const STREAMDOWN_ANIMATED = {
   stagger: 12
 } as const
 
-/**
- * Confirm external links, then hand off to the OS browser.
- *
- * `onLinkCheck` only decides whether to show the confirm UI (never opens).
- * Opening happens in the modal action so Streamdown's default `window.open`
- * path is not used and the dialog actually closes after confirm.
- */
-function StreamdownLinkSafetyModal({
-  isOpen,
-  onClose,
-  url
-}: LinkSafetyModalProps): React.JSX.Element {
-  return (
-    <AlertDialog
-      open={isOpen}
-      onOpenChange={(open) => {
-        if (!open) onClose()
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Open external link?</AlertDialogTitle>
-          <AlertDialogDescription className="break-all">{url}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={() => {
-              void openerApi.openUrlWithSystemBrowser(url)
-              onClose()
-            }}
-          >
-            Open
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  )
-}
-
-const LINK_SAFETY: LinkSafetyConfig = {
-  enabled: true,
-  // Always take the confirm path; never open from the check callback.
-  onLinkCheck: () => false,
-  renderModal: (props) => <StreamdownLinkSafetyModal {...props} />
-}
-
-const StreamdownLink = defaultComponents.a
+// Links are rendered by `ConfirmedExternalLink`; Streamdown's link safety would
+// add a second, competing confirm path that opens via `window.open`.
+const LINK_SAFETY_OFF: LinkSafetyConfig = { enabled: false }
 const LINK_CLASS = 'wrap-anywhere font-medium text-primary underline'
 
 function decodeFragment(href: string): string {
@@ -179,103 +125,26 @@ function scrollToFragment(messageRoot: HTMLElement | null, href: string): void {
   target.scrollIntoView({ block: 'start' })
 }
 
-/** Muted fallback for images we cannot render (web without Tauri, unreadable). */
-function TermulImageAltChip({ alt }: { alt: string }): React.JSX.Element {
-  return (
-    <span
-      data-testid="termul-image-alt"
-      title={alt}
-      className="inline-flex max-w-[16rem] items-center rounded border border-border/40 bg-muted/40 px-1.5 py-0.5 align-middle text-xs text-muted-foreground"
-    >
-      <span className="truncate">{alt || 'image'}</span>
-    </span>
-  )
-}
-
-/** What an async-resolved preview belongs to, so stale previews get dropped. */
-interface ResolvedImagePreview {
-  url: string
-  cwd?: string
-  src: string
-}
-
-/**
- * Renders a `<termul-image>` element emitted by `remarkTermulImages`.
- * `data:`/`blob:` URLs render directly; `file://` and relative URLs are
- * resolved against the chat cwd and read via the brokered
- * `readAttachmentBytes` command (Tauri only). On the web or any read failure
- * the muted alt-text chip renders instead. A preview that fails to decode
- * after render (`<img>` onError) also falls back to the chip.
- */
-export function TermulMarkdownImage({
+export function TermulMarkdownMedia({
   url,
   alt,
-  cwd
+  linkPreview,
+  filePathContext
 }: {
   url: string
   alt: string
-  cwd?: string
-}): React.JSX.Element {
-  const directUrl = url.startsWith('data:') || url.startsWith('blob:') ? url : null
-  const readablePath = directUrl ? null : resolveLocalImagePath(url, cwd)
-  const [resolved, setResolved] = useState<ResolvedImagePreview | null>(null)
-  const [failed, setFailed] = useState<{ url: string; cwd?: string } | null>(null)
-  if (resolved !== null && (resolved.url !== url || resolved.cwd !== cwd)) {
-    // The markdown re-parsed with a different URL or the project switched cwd:
-    // drop the stale preview so the new combination resolves from a clean slate.
-    setResolved(null)
-  }
-  if (failed !== null && (failed.url !== url || failed.cwd !== cwd)) {
-    setFailed(null)
-  }
-
-  useEffect(() => {
-    if (directUrl || !readablePath || !isTauriContext()) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const bytes = await readAttachmentBytes(readablePath)
-        if (cancelled) return
-        setResolved({
-          url,
-          cwd,
-          src: `data:${guessMimeType(readablePath)};base64,${uint8ToBase64(bytes)}`
-        })
-      } catch (error) {
-        if (cancelled) return
-        void logFrontendError({
-          level: 'warn',
-          source: 'ChatMessage.termulImage',
-          message: `Failed to read chat image '${url}': ${String(error)}`
-        })
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [directUrl, readablePath, url, cwd])
-
-  const failedNow = failed !== null && failed.url === url && failed.cwd === cwd
-  const src = directUrl ?? resolved?.src
-  if (src && !failedNow) {
-    return (
-      <img
-        src={src}
-        alt={alt}
-        className="max-h-96 max-w-full rounded-md"
-        onError={() => {
-          setFailed({ url, cwd })
-          setResolved(null)
-          void logFrontendError({
-            level: 'warn',
-            source: 'ChatMessage.termulImage',
-            message: `Failed to display chat image '${url}': image decode/load failed`
-          })
-        }}
-      />
-    )
-  }
-  return <TermulImageAltChip alt={alt} />
+  linkPreview: boolean
+  filePathContext?: FilePathResolutionContext
+}): React.JSX.Element | null {
+  const cwd = filePathContext?.cwd
+  const media = useMemo(() => chatMediaFromMarkdown(url, alt, cwd), [url, alt, cwd])
+  if (!linkPreview) return media ? <ChatMedia media={media} /> : <MediaAltChip alt={alt} />
+  if (!media) return null
+  return (
+    <div className="my-2">
+      <ChatMedia media={media} />
+    </div>
+  )
 }
 
 /**
@@ -328,12 +197,15 @@ export function AgentProse({
   text: rawText,
   streaming,
   reduced,
-  filePathContext
+  filePathContext,
+  linkScope = ''
 }: {
   text: string
   streaming: boolean
   reduced: boolean
   filePathContext?: FilePathResolutionContext
+  /** Stable key (the message id) so a link can be re-found after a remount. */
+  linkScope?: string
 }): React.JSX.Element {
   // While streaming, the store re-renders this component on every flush (up
   // to once per frame) and Streamdown re-parses the full tail markdown on
@@ -343,17 +215,19 @@ export function AgentProse({
   const text = useThrottledStreamingText(rawText, streaming)
   const colorTheme = useColorTheme()
   const shikiTheme = useMemo(() => syntaxShikiPair(colorTheme), [colorTheme])
-  const [externalUrl, setExternalUrl] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const components = useMemo<Components>(() => {
     const merged: Components = {
       ...STREAMDOWN_COMPONENTS,
-      'termul-image': (props: Record<string, unknown>) => {
-        const url = typeof props['data-url'] === 'string' ? props['data-url'] : ''
-        const alt = typeof props['data-alt'] === 'string' ? props['data-alt'] : ''
-        return <TermulMarkdownImage url={url} alt={alt} cwd={filePathContext?.cwd} />
-      },
-      a: ({ href, children, node, className, ...props }) => {
+      'termul-media': (props: Record<string, unknown>) => (
+        <TermulMarkdownMedia
+          url={stringProp(props, 'data-url') ?? ''}
+          alt={stringProp(props, 'data-alt') ?? ''}
+          linkPreview={stringProp(props, 'data-link-preview') === 'true'}
+          filePathContext={filePathContext}
+        />
+      ),
+      a: ({ href, children, node: _node, className, ...props }) => {
         if (href?.startsWith('#')) {
           const { target: _target, rel: _rel, ...anchorProps } = props
           return (
@@ -374,31 +248,19 @@ export function AgentProse({
             </a>
           )
         }
-        if (!filePathContext) {
-          return (
-            <StreamdownLink href={href} node={node} className={className} {...props}>
-              {children}
-            </StreamdownLink>
-          )
-        }
+        // Streamdown's own link safety is off (see `linkSafety` below): every
+        // external link, with or without a workspace, goes through the one
+        // confirm-then-open path.
+        const { target: _target, rel: _rel, ...anchorProps } = props
         return (
-          <a
+          <ConfirmedExternalLink
             href={href}
-            target="_blank"
-            rel="noreferrer"
-            {...props}
+            {...anchorProps}
             className={cn(LINK_CLASS, className)}
             data-streamdown="link"
-            onClick={(event) => {
-              event.preventDefault()
-              if (href) setExternalUrl(href)
-            }}
-            onAuxClick={(event) => {
-              event.preventDefault()
-            }}
           >
             {children}
-          </a>
+          </ConfirmedExternalLink>
         )
       }
     }
@@ -417,7 +279,11 @@ export function AgentProse({
   }, [filePathContext])
 
   return (
-    <div ref={rootRef} className="chat-streamdown min-w-0 text-sm leading-normal text-foreground">
+    <div
+      ref={rootRef}
+      className="chat-streamdown min-w-0 text-sm leading-normal text-foreground"
+      data-external-link-scope={linkScope}
+    >
       <Streamdown
         mode={streaming ? 'streaming' : 'static'}
         isAnimating={streaming}
@@ -429,24 +295,16 @@ export function AgentProse({
         // duplicate inline plan — the live sticky `PlanPanel` owns the
         // streaming turn.
         plugins={streaming ? STREAMDOWN_PLUGINS : STREAMDOWN_PLUGINS_WITH_PLAN}
-        remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : IMAGE_REMARK_PLUGINS}
+        remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : MEDIA_REMARK_PLUGINS}
         allowedTags={STREAMDOWN_ALLOWED_TAGS}
         controls={STREAMDOWN_CONTROLS}
         components={components}
         lineNumbers={false}
-        linkSafety={LINK_SAFETY}
+        linkSafety={LINK_SAFETY_OFF}
         shikiTheme={shikiTheme}
       >
         {text}
       </Streamdown>
-      {externalUrl && (
-        <StreamdownLinkSafetyModal
-          isOpen
-          url={externalUrl}
-          onClose={() => setExternalUrl(null)}
-          onConfirm={() => setExternalUrl(null)}
-        />
-      )}
     </div>
   )
 }

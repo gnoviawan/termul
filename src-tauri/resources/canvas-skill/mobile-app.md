@@ -37,13 +37,13 @@ This batch is a sign-in screen scaffold to start from:
   "label": "Sign in screen",
   "commands": [
     { "command": "frame.create", "as": "sign-in", "params": { "preset": "iPhone 16", "x": 0, "y": 0, "name": "Sign in", "props": { "layout": "vertical", "padding": [96, 24, 34, 24], "gap": 16, "fill": "#FAF8FF" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Wordmark", "parent": { "$name": "sign-in" }, "text": "Sekolahku", "props": { "fontSize": 22, "fontStyle": "Bold", "fill": "#6D4AE0" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Title", "parent": { "$name": "sign-in" }, "text": "Masuk ke akun orang tua", "props": { "fontSize": 30, "fontStyle": "Bold", "lineHeight": 38, "fill": "#241B3A", "sizingH": "fill", "textAutoResize": "height" } } },
-    { "command": "node.create", "as": "email-field", "params": { "type": "frame", "name": "Email field", "parent": { "$name": "sign-in" }, "props": { "layout": "horizontal", "sizingH": "fill", "sizingV": "hug", "padding": [14, 16, 14, 16], "cornerRadius": 18, "fill": "#FFFFFF", "stroke": "#E0D8F7", "strokeWeight": 1 } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Email placeholder", "parent": { "$name": "email-field" }, "text": "nama@email.com", "props": { "fontSize": 16, "fill": "#5E5577" } } },
-    { "command": "node.create", "params": { "type": "frame", "name": "Spacer", "parent": { "$name": "sign-in" }, "props": { "sizingH": "fill", "sizingV": "fill", "fills": [] } } },
-    { "command": "node.create", "as": "sign-in-button", "params": { "type": "frame", "name": "Sign in button", "parent": { "$name": "sign-in" }, "props": { "layout": "horizontal", "sizingH": "fill", "sizingV": "hug", "mainAlign": "center", "padding": [16, 24, 16, 24], "cornerRadius": 28, "fill": "#6D4AE0" } } },
-    { "command": "node.create", "params": { "type": "text", "name": "Sign in label", "parent": { "$name": "sign-in-button" }, "text": "Masuk", "props": { "fontSize": 17, "fontStyle": "Semi Bold", "fill": "#FFFFFF" } } }
+    { "command": "node.create", "params": { "type": "text", "name": "Wordmark", "parent": { "$ref": "sign-in" }, "text": "Sekolahku", "props": { "fontSize": 22, "fontStyle": "Bold", "fill": "#6D4AE0" } } },
+    { "command": "node.create", "params": { "type": "text", "name": "Title", "parent": { "$ref": "sign-in" }, "text": "Masuk ke akun orang tua", "props": { "fontSize": 30, "fontStyle": "Bold", "lineHeight": 38, "fill": "#241B3A", "sizingH": "fill", "textAutoResize": "height" } } },
+    { "command": "node.create", "as": "email-field", "params": { "type": "frame", "name": "Email field", "parent": { "$ref": "sign-in" }, "props": { "layout": "horizontal", "sizingH": "fill", "sizingV": "hug", "padding": [14, 16, 14, 16], "cornerRadius": 18, "fill": "#FFFFFF", "stroke": "#E0D8F7", "strokeWeight": 1 } } },
+    { "command": "node.create", "params": { "type": "text", "name": "Email placeholder", "parent": { "$ref": "email-field" }, "text": "nama@email.com", "props": { "fontSize": 16, "fill": "#5E5577" } } },
+    { "command": "node.create", "params": { "type": "frame", "name": "Spacer", "parent": { "$ref": "sign-in" }, "props": { "sizingH": "fill", "sizingV": "fill", "fills": [] } } },
+    { "command": "node.create", "as": "sign-in-button", "params": { "type": "frame", "name": "Sign in button", "parent": { "$ref": "sign-in" }, "props": { "layout": "horizontal", "sizingH": "fill", "sizingV": "hug", "mainAlign": "center", "padding": [16, 24, 16, 24], "cornerRadius": 28, "fill": "#6D4AE0" } } },
+    { "command": "node.create", "params": { "type": "text", "name": "Sign in label", "parent": { "$ref": "sign-in-button" }, "text": "Masuk", "props": { "fontSize": 17, "fontStyle": "Semi Bold", "fill": "#FFFFFF" } } }
   ]
 }
 ```

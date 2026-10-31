@@ -8,10 +8,14 @@
  */
 
 import { loadPersistedTerminals } from '@/hooks/useTerminalAutoSave'
-import { filesystemApi, persistenceApi } from '@/lib/api'
+import { persistenceApi } from '@/lib/api'
 import { emptyStagedProject, type StagedProject } from '@/lib/project-switch/types'
-import type { EditorFileState } from '@/stores/editor-store'
-import { detectLanguage, getDefaultViewMode, reconcileDraft } from '@/stores/editor-store'
+import {
+  type EditorFileState,
+  loadEditorFile,
+  type TextFileState
+} from '@/stores/editor-file-state'
+import { reconcileDraft } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import {
@@ -31,23 +35,9 @@ import {
 
 export type { StagedProject } from '@/lib/project-switch/types'
 
-/** Read one file into a staged editor state; a deleted/unreadable file yields null. */
 async function stageFile(filePath: string): Promise<EditorFileState | null> {
   try {
-    const result = await filesystemApi.readFile(filePath)
-    if (!result.success) return null
-    return {
-      filePath,
-      content: result.data.content,
-      originalContent: result.data.content,
-      isDirty: false,
-      language: detectLanguage(filePath),
-      lastModified: result.data.modifiedAt,
-      viewMode: getDefaultViewMode(filePath),
-      cursorPosition: { line: 1, col: 1 },
-      scrollTop: 0,
-      operationStatus: 'idle'
-    }
+    return await loadEditorFile(filePath)
   } catch {
     // File may have been deleted since last session.
     return null
@@ -58,10 +48,7 @@ async function stageFile(filePath: string): Promise<EditorFileState | null> {
  * Apply a persisted unsaved draft to the freshly read file: the draft wins when
  * the file on disk is not newer than the draft; a newer file shows a conflict.
  */
-function applyPersistedDraft(
-  file: EditorFileState,
-  persisted: PersistedEditorFile
-): EditorFileState {
+function applyPersistedDraft(file: TextFileState, persisted: PersistedEditorFile): TextFileState {
   if (!persisted.isDirty || !persisted.draftContent) return file
   return reconcileDraft(file, { content: persisted.draftContent, savedAt: persisted.lastModified })
 }
@@ -70,12 +57,13 @@ function applyPersistedViewState(
   file: EditorFileState,
   persisted: PersistedEditorFile
 ): EditorFileState {
+  if (file.kind !== 'text') return file
   return applyPersistedDraft(
     {
       ...file,
       cursorPosition: { line: persisted.cursorPosition.line, col: persisted.cursorPosition.col },
       scrollTop: persisted.scrollTop,
-      viewMode: persisted.viewMode !== 'code' ? persisted.viewMode : file.viewMode
+      viewMode: persisted.viewMode === 'code' ? file.viewMode : 'preview'
     },
     persisted
   )

@@ -22,6 +22,7 @@ mod exit_cleanup;
 mod host_perimeter;
 mod logging;
 pub mod mcp_catalog;
+mod media_bytes;
 mod migrations;
 mod path_validation;
 // Console-window hiding + Windows kill-on-close Job Objects for spawned processes.
@@ -1938,6 +1939,10 @@ pub fn run() {
             commands::terminal_rotate_claim,
             commands::terminal_revoke_claim,
             commands::terminal_write,
+            commands::command_editor_submit,
+            commands::command_editor_restore_prompt,
+            commands::command_editor_request_completion,
+            commands::command_editor_cancel_completion,
             commands::terminal_resize,
             commands::terminal_kill,
             commands::terminal_get_cwd,
@@ -1994,8 +1999,7 @@ pub fn run() {
             commands::search_content_cancel,
             commands::search_file_names_stream,
             commands::search_file_names_cancel,
-            // Attachment binary reads (brokered; fs:allow-read-file is not granted)
-            commands::read_attachment_bytes,
+            commands::read_media_bytes,
             // SSH commands
             commands::ssh_list_profiles,
             commands::ssh_save_profile,
@@ -2063,18 +2067,15 @@ pub fn run() {
             secure_storage::secure_storage_delete,
             // ACP host-local commands. Agent, session, prompt, permission,
             // catalog and install requests travel over the `/ws` channel carrier
-            // (`ws_channel_*`), not a per-domain command. Claude Account
-            // add, sign-in, rename and remove stay here; list and selection
-            // also travel over `/ws`.
+            // (`ws_channel_*`), not a per-domain command. The Claude browser
+            // login stays here; every other Claude Account operation also
+            // travels over `/ws`.
             acp::commands::claude_accounts_list,
             acp::commands::claude_accounts_usage,
-            acp::commands::claude_accounts_add,
             acp::commands::claude_accounts_login,
-            acp::commands::claude_accounts_login_cancel,
-            acp::commands::claude_accounts_rename,
-            acp::commands::claude_accounts_remove,
             acp::commands::claude_accounts_set_default,
             acp::commands::claude_accounts_set_project,
+            acp::commands::claude_accounts_set_auto_switch,
             acp::commands::acp_factory_key_status,
             acp::commands::acp_factory_key_save,
             acp::commands::codex_cli_auth_status,
@@ -2094,6 +2095,7 @@ pub fn run() {
             // Desktop updater: channel manifest fetch (CSP/CORS-free server-side
             // reqwest for the insider/nightly paths).
             updater_api::updater_fetch_channel_manifest,
+            updater_api::updater_check_channel,
             // Agent Skills (Zed-compatible SKILL.md packages)
             skills::commands::list_agent_skills_cmd,
             skills::commands::read_agent_skill_cmd,
@@ -2257,6 +2259,9 @@ pub fn run() {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod fs_watch_wire_tests;

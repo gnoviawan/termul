@@ -24,9 +24,9 @@ import { Textarea } from './textarea'
 window.HTMLElement.prototype.scrollIntoView = vi.fn()
 
 /**
- * Text fields show keyboard focus one way, in the neutral `ring` token
- * (docs/design/colors.md): a bordered field's hairline turns `ring`, a
- * borderless filled field gets a 1px `ring` edge, and a field inside a search
+ * Text fields show keyboard focus one way, in the `--focus-ring` token
+ * (component-tokens.ts): a bordered field's hairline turns `--focus-ring` with
+ * a 1px ring outside it, a borderless filled field gets a 2px ring, and a field inside a search
  * band leaves the edge to the band's hairline. Each uses `focus-visible` with
  * `outline-hidden`, so forced-colors mode still draws a system outline.
  */
@@ -34,16 +34,22 @@ const classes = (value: string | null): string[] => (value ?? '').split(/\s+/).f
 const classOf = (element: Element): string[] => classes(element.getAttribute('class'))
 
 describe('field focus constants', () => {
-  it('use the neutral ring token on focus-visible and keep a forced-colors outline', () => {
+  it('use the --focus-ring token on focus-visible and keep a forced-colors outline', () => {
     for (const value of [FIELD_FOCUS_CLASS, FOCUS_RING_CLASS, INNER_FIELD_FOCUS_CLASS]) {
       expect(classes(value)).toContain('focus-visible:outline-hidden')
       expect(value).not.toMatch(/primary|outline-none|(?<![\w-])focus:/)
     }
-    expect(classes(FIELD_FOCUS_CLASS)).toContain('focus-visible:border-ring')
-    expect(classes(FOCUS_RING_CLASS)).toEqual(
-      expect.arrayContaining(['focus-visible:ring-1', 'focus-visible:ring-ring'])
+    expect(classes(FIELD_FOCUS_CLASS)).toEqual(
+      expect.arrayContaining([
+        'focus-visible:border-focus-ring',
+        'focus-visible:ring-1',
+        'focus-visible:ring-focus-ring'
+      ])
     )
-    expect(classes(BAND_FOCUS_CLASS)).toEqual(['focus-within:border-ring'])
+    expect(classes(FOCUS_RING_CLASS)).toEqual(
+      expect.arrayContaining(['focus-visible:ring-2', 'focus-visible:ring-focus-ring'])
+    )
+    expect(classes(BAND_FOCUS_CLASS)).toEqual(['focus-within:border-focus-ring'])
   })
 
   it('panel field takes the bordered field focus', () => {

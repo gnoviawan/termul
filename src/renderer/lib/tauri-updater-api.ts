@@ -9,7 +9,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { relaunch } from '@tauri-apps/plugin-process'
-import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
+import { check, type DownloadEvent, Update } from '@tauri-apps/plugin-updater'
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
@@ -25,9 +25,11 @@ const AUR_UPDATE_CHECK_TIMEOUT_MS = 8000
  * Release channel selection for the desktop updater. The persisted preference
  * selects which per-channel manifest the facade consults. Stable reuses the
  * signed `@tauri-apps/plugin-updater` `check()` flow (the plugin's endpoint
- * resolves to the stable manifest alias); Insider/Nightly fetch their manifest
- * JSON directly and offer the update via manual download, because the Tauri
- * updater plugin cannot take a runtime endpoint URL from the renderer.
+ * resolves to the stable manifest alias). Nightly runs the same signed
+ * download/install flow against its own manifest through the
+ * `updater_check_channel` command, because the plugin's JS `check()` cannot
+ * take a runtime endpoint (the Rust `updater_builder().endpoints()` can).
+ * Insider fetches its manifest JSON directly and offers a manual download.
  */
 export type UpdateChannel = 'stable' | 'insider' | 'nightly'
 
@@ -56,6 +58,15 @@ export function getChannelReleasePageUrl(channel: UpdateChannel): string {
   return CHANNEL_RELEASE_PAGE_URLS[channel]
 }
 
+// Channels whose manifest is checked and installed in-app through the signed
+// updater flow. Must match `signed_channel_endpoint` in
+// src-tauri/src/updater_api.rs.
+const SIGNED_CHANNELS: ReadonlySet<UpdateChannel> = new Set<UpdateChannel>(['nightly'])
+
+export function supportsSignedChannelUpdate(channel: UpdateChannel): boolean {
+  return SIGNED_CHANNELS.has(channel)
+}
+
 export function normalizeUpdateChannel(value: string | null | undefined): UpdateChannel {
   if (value === 'insider' || value === 'nightly') return value
   return DEFAULT_UPDATE_CHANNEL
@@ -72,6 +83,26 @@ const UPDATE_MODE: UpdateMode = import.meta.env.VITE_TERMUL_UPDATE_MODE === 'aur
 
 let pendingTauriUpdate: Update | null = null
 let downloadedUpdate: Update | null = null
+// The handle a download is running on, so a re-check can't close it mid-flight.
+let downloadingUpdate: Update | null = null
+
+/**
+ * Close a signed-update handle once nothing refers to it. Each signed check
+ * registers a Rust resource that stays in the webview until it is closed.
+ */
+function closeIfUnused(handle: Update | null): void {
+  if (
+    !handle ||
+    handle === pendingTauriUpdate ||
+    handle === downloadedUpdate ||
+    handle === downloadingUpdate
+  ) {
+    return
+  }
+  Promise.resolve()
+    .then(() => handle.close())
+    .catch(() => {})
+}
 let pendingAurUpdate: UpdateInfo | null = null
 let manualUpdateInfo: UpdateInfo | null = null
 let autoUpdateEnabled = true
@@ -173,7 +204,8 @@ export function mapTauriUpdateToInfo(update: Update): UpdateInfo {
     version: update.version,
     releaseDate: update.date ?? new Date().toISOString(),
     releaseNotes: update.body ?? undefined,
-    isSecurityUpdate: false
+    isSecurityUpdate: false,
+    installMode: 'in-app'
   }
 }
 
@@ -390,15 +422,22 @@ async function fetchChannelManifest(channel: UpdateChannel): Promise<ChannelMani
 }
 
 /**
- * Insider/Nightly check: fetch the per-channel manifest, compare against the
- * current app version with SemVer prerelease precedence, and offer the update
- * via manual download. The Tauri updater plugin cannot take a runtime endpoint
- * URL from the renderer, so non-stable channels offer a manual download of the
- * channel's GitHub release page instead of the signed in-app install.
+ * Manual channel check: Insider always, and Nightly when its signed check
+ * fails. Fetch the per-channel manifest, compare against the current app
+ * version with SemVer prerelease precedence, and offer the channel's GitHub
+ * release page (`installMode: 'manual'`) instead of a signed in-app install.
  *
  * On manifest fetch failure (404 / network) the call throws so the store
  * surfaces the error and the periodic retry re-attempts next cycle.
  */
+/**
+ * A nightly manifest only ever offers nightly builds: a stable or rc version
+ * that lands there is ignored, matching the signed Rust check.
+ */
+function isVersionForChannel(version: string, channel: UpdateChannel): boolean {
+  return channel !== 'nightly' || /-nightly\./.test(version)
+}
+
 async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | null> {
   let manifest: ChannelManifest
   try {
@@ -411,7 +450,7 @@ async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | 
   const latestVersion = normalizeVersion(manifest.version ?? '')
   let updateInfo: UpdateInfo | null = null
 
-  if (latestVersion) {
+  if (latestVersion && isVersionForChannel(latestVersion, channel)) {
     const currentVersion = await getVersion()
     if (compareVersions(latestVersion, currentVersion) > 0) {
       updateInfo = {
@@ -422,7 +461,8 @@ async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | 
         releaseDate: manifest.pub_date,
         releaseNotes: manifest.notes ?? undefined,
         isSecurityUpdate: false,
-        downloadUrl: getChannelReleasePageUrl(channel)
+        downloadUrl: getChannelReleasePageUrl(channel),
+        installMode: 'manual'
       }
     }
   }
@@ -434,6 +474,51 @@ async function checkChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | 
   preparedUpdateVersion = null
   lastCheckedAt = new Date().toISOString()
   return updateInfo
+}
+
+/**
+ * Store a signed plugin `Update` (or its absence) as the pending update. The
+ * already-downloaded instance (and its in-memory bytes) survives a periodic
+ * re-check that returns the same version; otherwise it is dropped so a newer
+ * version is re-downloaded before install.
+ */
+function adoptSignedUpdate(update: Update | null): UpdateInfo | null {
+  const previousPending = pendingTauriUpdate
+  const previousDownloaded = downloadedUpdate
+  pendingTauriUpdate = update
+  isManualUpdateMode = false
+  manualUpdateInfo = null
+  downloadedVersion = update && downloadedVersion === update.version ? downloadedVersion : null
+  downloadedUpdate =
+    update && downloadedUpdate && downloadedUpdate.version === update.version
+      ? downloadedUpdate
+      : null
+  preparedUpdateVersion =
+    update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
+  lastCheckedAt = new Date().toISOString()
+  closeIfUnused(previousPending)
+  if (previousDownloaded !== previousPending) closeIfUnused(previousDownloaded)
+  return update ? mapTauriUpdateToInfo(update) : null
+}
+
+type SignedUpdateMetadata = ConstructorParameters<typeof Update>[0]
+
+/**
+ * Signed in-app check for a non-stable channel. The Rust command runs the
+ * updater plugin against the channel's own manifest (same pubkey) and
+ * registers the plugin `Update` resource, so download/install/relaunch reuse
+ * the exact stable path. Any check failure (missing or invalid manifest, no
+ * entry for this platform) falls back to the manual release-page flow.
+ */
+async function checkSignedChannelUpdate(channel: UpdateChannel): Promise<UpdateInfo | null> {
+  let metadata: SignedUpdateMetadata | null
+  try {
+    metadata = await invoke<SignedUpdateMetadata | null>('updater_check_channel', { channel })
+  } catch {
+    // Logged durably by the Rust command (`[updater] signed channel check failed`).
+    return checkChannelUpdate(channel)
+  }
+  return adoptSignedUpdate(metadata ? new Update(metadata) : null)
 }
 
 export async function checkForUpdates(
@@ -453,32 +538,18 @@ export async function checkForUpdates(
     }
   }
 
-  // Insider / Nightly consult their per-channel manifest and offer manual
-  // download (the signed `check()` flow is stable-only by plugin limitation).
+  // Nightly: signed in-app check against its own manifest; Insider: manual.
   if (channel !== DEFAULT_UPDATE_CHANNEL) {
-    return checkChannelUpdate(channel)
+    return supportsSignedChannelUpdate(channel)
+      ? checkSignedChannelUpdate(channel)
+      : checkChannelUpdate(channel)
   }
 
   // Stable: reuse the signed `@tauri-apps/plugin-updater` `check()` flow so the
   // existing signed download/install path and its backward compatibility are
   // preserved (the plugin endpoint resolves to the stable manifest alias).
   try {
-    const update = await check()
-    pendingTauriUpdate = update
-    isManualUpdateMode = false
-    manualUpdateInfo = null
-    downloadedVersion = update && downloadedVersion === update.version ? downloadedVersion : null
-    // Preserve the already-downloaded Update instance (and its in-memory bytes)
-    // when a periodic re-check returns the same version; otherwise drop it so a
-    // newer version is re-downloaded before install.
-    downloadedUpdate =
-      update && downloadedUpdate && downloadedUpdate.version === update.version
-        ? downloadedUpdate
-        : null
-    preparedUpdateVersion =
-      update && preparedUpdateVersion === update.version ? preparedUpdateVersion : null
-    lastCheckedAt = new Date().toISOString()
-    return update ? mapTauriUpdateToInfo(update) : null
+    return adoptSignedUpdate(await check())
   } catch (error) {
     lastCheckedAt = new Date().toISOString()
 
@@ -491,10 +562,11 @@ export async function checkForUpdates(
       try {
         const fallback = await checkGitHubFallback()
         if (fallback) {
+          const manualFallback: UpdateInfo = { ...fallback, installMode: 'manual' }
           isManualUpdateMode = true
-          manualUpdateInfo = fallback
+          manualUpdateInfo = manualFallback
           pendingTauriUpdate = null
-          return fallback
+          return manualFallback
         }
         return null
       } catch (fallbackError) {
@@ -574,6 +646,7 @@ export async function downloadUpdate(
   // can reassign the module-scoped pendingTauriUpdate mid-download, which would
   // otherwise make the post-await assignments point at the wrong Update.
   const updateHandle = pendingTauriUpdate
+  downloadingUpdate = updateHandle
 
   try {
     const updateVersion = updateHandle.version
@@ -617,6 +690,10 @@ export async function downloadUpdate(
       error: getErrorMessage(error, 'Failed to download update'),
       code: UpdaterErrorCodes.DOWNLOAD_FAILED
     }
+  } finally {
+    if (downloadingUpdate === updateHandle) downloadingUpdate = null
+    // A re-check may have superseded this handle while it downloaded.
+    closeIfUnused(updateHandle)
   }
 }
 
@@ -659,6 +736,22 @@ export async function installAndRestart(): Promise<IpcResult<void>> {
       code: UpdaterErrorCodes.INSTALL_FAILED
     }
   }
+}
+
+/**
+ * Whether `version` is the pending signed update and its package is already
+ * downloaded, so it can be installed without downloading again. A re-check that
+ * returns the same version keeps the downloaded package (see adoptSignedUpdate).
+ */
+export function isUpdateDownloaded(version: string): boolean {
+  return (
+    !isAurUpdateMode() &&
+    !isManualUpdateMode &&
+    pendingTauriUpdate !== null &&
+    pendingTauriUpdate.version === version &&
+    downloadedUpdate !== null &&
+    downloadedVersion === version
+  )
 }
 
 export async function getUpdaterState(): Promise<IpcResult<UpdateState>> {
@@ -722,6 +815,7 @@ export async function clearPendingUpdate(): Promise<void> {
 }
 
 export function _resetUpdaterStateForTesting(): void {
+  downloadingUpdate = null
   pendingTauriUpdate = null
   downloadedUpdate = null
   pendingAurUpdate = null

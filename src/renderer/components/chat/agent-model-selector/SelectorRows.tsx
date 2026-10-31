@@ -22,12 +22,20 @@ export function rowSize(touch: boolean): string {
   return touch ? 'min-h-11 py-2.5' : 'min-h-8 py-1.5'
 }
 
-export function TabGlyph({ tab }: { tab: AgentTab }): React.JSX.Element {
+export function TabGlyph({
+  tab,
+  colorClassName
+}: {
+  tab: AgentTab
+  /** Default: the glyph's own `text-foreground/80`. Tabs pass `text-current`. */
+  colorClassName?: string
+}): React.JSX.Element {
   return (
     <EntryGlyph
       config={tab.config}
       templateId={tab.entry?.agent.id ?? tab.config?.templateId}
       name={tab.name}
+      colorClassName={colorClassName}
     />
   )
 }
@@ -90,12 +98,15 @@ export function ModelRow({
 export function AgentRow({
   tab,
   badge,
+  highlighted = false,
   disabled,
   touch,
   onPick
 }: {
   tab: AgentTab
   badge: string | null
+  /** The first search result while typing (v2): Enter in search picks it. */
+  highlighted?: boolean
   disabled: boolean
   touch: boolean
   onPick: () => void
@@ -107,8 +118,9 @@ export function AgentRow({
       disabled={disabled}
       data-press-feedback="off"
       data-testid={`selector-agent-${tab.configId}`}
+      data-search-highlight={highlighted ? '' : undefined}
       onClick={onPick}
-      className={cn(ROW, rowSize(touch))}
+      className={cn(ROW, rowSize(touch), highlighted && 'bg-row-hover')}
     >
       <TabGlyph tab={tab} />
       <span className="min-w-0 flex-1 truncate">{tab.name}</span>

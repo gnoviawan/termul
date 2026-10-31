@@ -21,11 +21,14 @@ import {
 } from '@/components/ui/sheet'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { SessionConfigOption, SessionUsage } from '@/lib/acp-api'
+import { isModelPickerV2Enabled } from '@/lib/model-picker-flag'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { shouldShowSessionUsage } from '../context-usage-utils'
+import type { SelectorPanelProps } from './SelectorPanel'
 import { SelectorPanel } from './SelectorPanel'
+import { SelectorPanelV2, type SelectorPanelV2Props } from './SelectorPanelV2'
 import { type SelectorSource, useSessionSelectorSource } from './selector-source'
 import { useCurrentAgentConfigId } from './use-agent-switch'
 
@@ -70,6 +73,11 @@ interface AgentModelSelectorProps {
    * menu has fully closed — focusing earlier dismisses the popover.
    */
   onCloseAutoFocus?: (event: Event) => void
+  /**
+   * Design canvas only: always show the v2 panel, with these v2-only props
+   * (agent rail, favorites). The app leaves it unset and follows the flag.
+   */
+  v2PanelProps?: Partial<Omit<SelectorPanelV2Props, keyof SelectorPanelProps>>
 }
 
 /**
@@ -117,7 +125,8 @@ export function AgentModelSelector({
   genericOptions,
   onSetConfig,
   onSetModel,
-  onCloseAutoFocus
+  onCloseAutoFocus,
+  v2PanelProps
 }: AgentModelSelectorProps): React.JSX.Element | null {
   const isMobile = useMobileWebShell()
   const sessionAgent = useComposerAgentLabel(sessionId)
@@ -229,8 +238,11 @@ export function AgentModelSelector({
     ? `→ ${modelName ?? agent.armedName}`
     : (modelName ?? statusText ?? (agent.present ? agent.name : (effortName ?? 'Fast')))
 
+  // View-only v2 behind an opt-in flag (default off); same props and source.
+  const Panel = v2PanelProps || isModelPickerV2Enabled() ? SelectorPanelV2 : SelectorPanel
   const panel = (
-    <SelectorPanel
+    <Panel
+      {...v2PanelProps}
       key={generation}
       source={source}
       touch={isMobile}

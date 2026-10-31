@@ -11,6 +11,7 @@ import {
   ArrowUp02Icon,
   BellIcon,
   BotIcon,
+  BracesIcon,
   BrainIcon,
   Bug01Icon,
   Calendar01Icon,
@@ -123,6 +124,7 @@ import {
   SlidersHorizontalIcon,
   SparklesIcon,
   SquareTerminalIcon,
+  StarIcon,
   Tag01Icon,
   TerminalIcon,
   TriangleAlertIcon,
@@ -218,6 +220,7 @@ export const ArrowUp = hugeIcon('ArrowUp', ArrowUp02Icon)
 export const ArrowUpCircle = hugeIcon('ArrowUpCircle', CircleArrowUp02Icon)
 export const Bell = hugeIcon('Bell', BellIcon)
 export const Bot = hugeIcon('Bot', BotIcon)
+export const Braces = hugeIcon('Braces', BracesIcon)
 export const Brain = hugeIcon('Brain', BrainIcon)
 export const Bug = hugeIcon('Bug', Bug01Icon)
 export const Calendar = hugeIcon('Calendar', Calendar01Icon)
@@ -311,6 +314,7 @@ export const Scissors = hugeIcon('Scissors', ScissorsIcon)
 export const Server = hugeIcon('Server', ServerIcon)
 export const ShieldAlert = hugeIcon('ShieldAlert', ShieldAlertIcon)
 export const ShieldCheck = hugeIcon('ShieldCheck', ShieldCheckIcon)
+export const Star = hugeIcon('Star', StarIcon)
 export const Shuffle = hugeIcon('Shuffle', ShuffleIcon)
 export const Skull = hugeIcon('Skull', SkullIcon)
 export const Sparkles = hugeIcon('Sparkles', SparklesIcon)

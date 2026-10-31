@@ -19,6 +19,7 @@ import {
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { checkDocument, type InspectedDocument, type Issue } from './checks.ts'
+import { type CallRecord, lastSnapshotFailed } from './snapshot.ts'
 
 interface Prompt {
   id: string
@@ -39,6 +40,8 @@ interface RunResult {
   failedCalls: number
   /** Calls after which the router could not save the document, so design.figcraft may be stale. */
   failedSnapshots: number
+  /** The last snapshot failed, so `issues` describe an earlier state of the design. */
+  staleIssues: boolean
   issues: Issue[]
   png?: string
 }
@@ -125,9 +128,7 @@ function runOne(prompt: Prompt, mode: string, out: string): RunResult {
       }
     })
     .findLast((event) => event.type === 'result')
-  const calls = lines(join(dir, 'calls.jsonl')).map(
-    (line) => JSON.parse(line) as { isError: boolean; snapshotError?: string }
-  )
+  const calls = lines(join(dir, 'calls.jsonl')).map((line) => JSON.parse(line) as CallRecord)
 
   let png: string | undefined
   const design = join(dir, 'design.figcraft')
@@ -152,12 +153,13 @@ function runOne(prompt: Prompt, mode: string, out: string): RunResult {
     calls: calls.length,
     failedCalls: calls.filter((call) => call.isError).length,
     failedSnapshots: calls.filter((call) => call.snapshotError).length,
+    staleIssues: lastSnapshotFailed(calls),
     issues,
     png
   }
   writeFileSync(join(dir, 'result.json'), JSON.stringify(result, null, 2))
   process.stdout.write(
-    `${prompt.id} / ${mode}: ${calls.length} calls, ${issues.length} integrity issues, ${png ? 'rendered' : 'no image'}${result.failedSnapshots ? `, ${result.failedSnapshots} failed snapshots` : ''}\n`
+    `${prompt.id} / ${mode}: ${calls.length} calls, ${issues.length} integrity issues, ${png ? 'rendered' : 'no image'}${result.failedSnapshots ? `, ${result.failedSnapshots} failed snapshots` : ''}${result.staleIssues ? ' (the last one failed: the integrity issues are from an earlier state)' : ''}\n`
   )
   return result
 }
@@ -244,7 +246,9 @@ function report(out: string) {
     const items = JUDGED.map((item) => judged[item]).filter(
       (v): v is number => typeof v === 'number'
     )
-    const score = items.length === JUDGED.length ? median([integrity, ...items]) : undefined
+    // Integrity read from an earlier snapshot would score a design the agent moved past.
+    const score =
+      items.length === JUDGED.length && !run.staleIssues ? median([integrity, ...items]) : undefined
     return { run, integrity, score }
   })
   const table = [
@@ -254,14 +258,15 @@ function report(out: string) {
       .sort((a, b) => a.run.id.localeCompare(b.run.id) || a.run.mode.localeCompare(b.run.mode))
       .map(
         ({ run, score }) =>
-          `| ${run.id} | ${run.mode} | ${score ?? 'not judged'} | ${run.issues.length} | ${run.calls} | ${run.turns ?? '?'} | ${run.failedSnapshots ?? '?'} |`
+          `| ${run.id} | ${run.mode} | ${score ?? (run.staleIssues ? 'stale snapshot' : 'not judged')} | ${run.issues.length} | ${run.calls} | ${run.turns ?? '?'} | ${run.failedSnapshots ?? '?'}${run.staleIssues ? ', last one stale' : ''} |`
       )
   ]
   const summary = [...new Set(rows.map((row) => row.run.mode))].map((mode) => {
     const of = rows.filter((row) => row.run.mode === mode)
     const judged = of.flatMap((row) => (row.score === undefined ? [] : [row.score]))
-    const failing = of.filter((row) => row.run.issues.length > 0).length
-    return `- ${mode}: ${of.length} runs, ${judged.length} judged, median score ${judged.length ? median(judged) : 'n/a'}, ${failing} with integrity issues, median ${median(of.map((row) => row.run.calls))} calls`
+    const failing = of.filter((row) => row.run.issues.length > 0 && !row.run.staleIssues).length
+    const stale = of.filter((row) => row.run.staleIssues).length
+    return `- ${mode}: ${of.length} runs, ${judged.length} judged${stale ? ` (${stale} with a stale snapshot left out)` : ''}, median score ${judged.length ? median(judged) : 'n/a'}, ${failing} with integrity issues, median ${median(of.map((row) => row.run.calls))} calls`
   })
   const text = ['# Canvas eval report', '', ...summary, '', ...table, ''].join('\n')
   writeFileSync(join(out, 'report.md'), text)

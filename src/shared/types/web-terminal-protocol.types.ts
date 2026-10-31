@@ -11,6 +11,10 @@ export type WebTerminalRequestType =
   | 'authenticate'
   | 'spawn'
   | 'write'
+  | 'command_editor_submit'
+  | 'command_editor_request_completion'
+  | 'command_editor_cancel_completion'
+  | 'command_editor_restore_prompt'
   | 'resize'
   | 'kill'
   | 'attach'
@@ -106,7 +110,21 @@ export interface WebTerminalGapFrame {
   lastSeq: number
 }
 
+export interface SessionLifecyclePayload {
+  type: 'session_lifecycle'
+  terminal_id: string
+  session_id: string
+  kind: string
+  nonce: string | null
+  prompt_suppressed: boolean
+  line_empty: boolean
+  exit_code: number | null
+  prompt_generation: number | null
+  cwd: string | null
+}
+
 export type WebTerminalEventPayload =
+  | SessionLifecyclePayload
   | { type: 'exit'; terminal_id: string; exit_code: number | null; signal: number | null }
   | { type: 'cwd_changed'; terminal_id: string; cwd: string }
   | { type: 'git_branch_changed'; terminal_id: string; branch: string | null }

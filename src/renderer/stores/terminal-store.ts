@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { registerSessionTerminalStore } from '@/lib/command-lifecycle/session-adapter'
 import { randomUUID } from '@/lib/uuid'
 import type { GitStatus, Terminal, TerminalHealthStatus } from '@/types/project'
 import { useProjectStore } from './project-store'
@@ -735,44 +736,7 @@ export function useActiveTerminalId(): string {
   return useTerminalStore((state) => state.activeTerminalId)
 }
 
-export function useTerminalActions(): Pick<
-  TerminalState,
-  | 'selectTerminal'
-  | 'addTerminal'
-  | 'closeTerminal'
-  | 'renameTerminal'
-  | 'reorderTerminals'
-  | 'updateTerminalCwd'
-  | 'updateTerminalScrollback'
-  | 'appendTranscript'
-  | 'peekTranscript'
-  | 'consumeTranscript'
-  | 'appendDetachedOutput'
-  | 'consumeDetachedOutput'
-  | 'setRendererAttached'
-  | 'setTerminalPtyId'
-  | 'clearTerminalPtyId'
-> {
-  return useTerminalStore(
-    useShallow((state) => ({
-      selectTerminal: state.selectTerminal,
-      addTerminal: state.addTerminal,
-      closeTerminal: state.closeTerminal,
-      renameTerminal: state.renameTerminal,
-      reorderTerminals: state.reorderTerminals,
-      updateTerminalCwd: state.updateTerminalCwd,
-      updateTerminalScrollback: state.updateTerminalScrollback,
-      appendTranscript: state.appendTranscript,
-      peekTranscript: state.peekTranscript,
-      consumeTranscript: state.consumeTranscript,
-      appendDetachedOutput: state.appendDetachedOutput,
-      consumeDetachedOutput: state.consumeDetachedOutput,
-      setRendererAttached: state.setRendererAttached,
-      setTerminalPtyId: state.setTerminalPtyId,
-      clearTerminalPtyId: state.clearTerminalPtyId
-    }))
-  )
-}
+export { useTerminalActions } from './terminal-store-actions'
 
 /**
  * Optimized selector that returns a Set of project IDs with active terminal activity.
@@ -811,3 +775,5 @@ export function useProjectsWithErrors(): Set<string> {
     })
   )
 }
+
+registerSessionTerminalStore(useTerminalStore)

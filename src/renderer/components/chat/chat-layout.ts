@@ -120,7 +120,20 @@ export function useComposerToolbarMode(
 }
 
 /**
- * Lift for the question panel that replaces the composer, so it reads as
- * raised over the transcript. `data-flat-elevation` themes drop it.
+ * Card surface shared by the composer family: the chat composer, the agent
+ * launcher composer and the prompt panels that replace the composer.
  */
-export const QUESTION_PANEL_SHADOW = 'shadow-[0_12px_32px_oklch(0_0_0/0.45)]'
+export const COMPOSER_SURFACE_CLASS =
+  'rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]'
+
+/**
+ * Composer card at rest. Per-theme lift: `--composer-shadow`.
+ */
+export const COMPOSER_CARD_CLASS = `${COMPOSER_SURFACE_CLASS} shadow-composer`
+
+/**
+ * Prompt panel (AskUserQuestion, ElicitationPrompt) that replaces the
+ * composer: the composer surface, raised over the transcript.
+ * Per-theme lift: `--prompt-panel-shadow`.
+ */
+export const PROMPT_PANEL_CLASS = `${COMPOSER_SURFACE_CLASS} shadow-prompt-panel`

@@ -62,7 +62,8 @@ vi.mock('@/lib/tauri-updater-api', () => ({
 // flip it.
 const { tauriRef } = vi.hoisted(() => ({ tauriRef: { current: true as boolean } }))
 
-vi.mock('@/lib/tauri-runtime', () => ({
+vi.mock('@/lib/tauri-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tauri-runtime')>()),
   isTauriContext: () => tauriRef.current
 }))
 
@@ -80,6 +81,7 @@ vi.mock('@/stores/updater-store', () => ({
   }),
   useUpdaterActions: () => ({
     checkForUpdates: vi.fn(),
+    downloadUpdate: vi.fn(),
     installAndRestart: vi.fn(),
     setAutoUpdateEnabled: vi.fn(),
     setUpdateChannel: vi.fn()

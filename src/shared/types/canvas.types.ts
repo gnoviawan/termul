@@ -159,7 +159,9 @@ export const CANVAS_BRIDGE_ERROR_CODES = [
   'CANVAS_TIMEOUT',
   'UNSUPPORTED_IN_KIOSK',
   'UNKNOWN_METHOD',
-  'ENGINE_ERROR'
+  'ENGINE_ERROR',
+  'NO_ACTIVE_TURN',
+  'AMBIGUOUS_SESSION'
 ] as const
 
 export type CanvasBridgeErrorCode = (typeof CANVAS_BRIDGE_ERROR_CODES)[number]

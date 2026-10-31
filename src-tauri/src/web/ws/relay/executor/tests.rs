@@ -57,6 +57,20 @@ fn entity_keys_name_the_first_entity_and_never_collide_across_kinds() {
             "{answer} must not queue behind a long handler on its agent"
         );
     }
+    assert_eq!(
+        key("start_claude_link_login", json!({"accountId": "ab12"})).as_deref(),
+        Some("claude_login:ab12")
+    );
+    assert_eq!(
+        key("cancel_claude_login", json!({"accountId": "ab12"})),
+        key("start_claude_link_login", json!({"accountId": "ab12"})),
+        "a cancel queues behind the sign-in start it follows"
+    );
+    assert_eq!(
+        key("finish_claude_link_login", json!({"accountId": "ab12", "code": "c"})),
+        None,
+        "a code never holds up a cancel"
+    );
     assert_eq!(key("ping", json!({})), None);
     assert_eq!(key("list_agents", json!({})), None);
     assert_eq!(key("subscribe", json!({"sessionId": ""})), None, "an empty id names nothing");
@@ -79,6 +93,27 @@ async fn same_key_jobs_run_in_arrival_order_even_when_the_first_is_slow() {
         order.push(done_rx.recv().await.expect("job ran"));
     }
     assert_eq!(order, vec![0, 1, 2], "later jobs on one entity wait for earlier ones");
+}
+
+#[tokio::test]
+async fn a_cancel_sent_while_the_sign_in_starts_runs_once_the_start_is_done() {
+    let exec = KeyedExecutor::new(CancellationToken::new());
+    let (done_tx, mut done_rx) = mpsc::unbounded_channel();
+    let start = request("start_claude_link_login", json!({"accountId": "ab12"}));
+    let cancel = request("cancel_claude_login", json!({"accountId": "ab12"}));
+    let started = done_tx.clone();
+    exec.submit(entity_key(&start), async move {
+        // The Claude CLI takes a moment to print the sign-in link.
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let _ = started.send("start");
+    })
+    .expect("accepted");
+    exec.submit(entity_key(&cancel), async move {
+        let _ = done_tx.send("cancel");
+    })
+    .expect("accepted");
+    let order = [done_rx.recv().await.unwrap(), done_rx.recv().await.unwrap()];
+    assert_eq!(order, ["start", "cancel"]);
 }
 
 #[tokio::test]

@@ -108,14 +108,12 @@ A new worktree has only the files that Git tracks. Folders that Git ignores, lik
 To choose the linked folders:
 
 1. Right-click the project in the projects rail and click **Settings**.
-2. In the **Project Settings** window, click **Worktree Symlinks**.
-3. Click **Sync from .gitignore** to add the folders listed in your `.gitignore` that exist in the project. Or click **Add Directory** and type a folder name, for example `node_modules`.
+2. In the **Project settings** window, click **Worktree symlinks**.
+3. Click **Sync from .gitignore** to add the folders listed in your `.gitignore` that exist in the project. Or click **Add directory** and type a folder name, for example `node_modules`.
 4. To remove a folder, click the **X** next to it.
-5. Click **Save Changes**.
+5. Click **Save changes**.
 
-![The Worktree Symlinks settings with node_modules in the list](/screenshots/git-worktree-symlinks.png)
-
-Each entry must be one folder name at the top of the project, with no `/` in it. If the list is empty, Termul fills it from `.gitignore` when you open the page. Termul does not keep that list until you click **Save Changes**.
+Each entry must be one folder name at the top of the project, with no `/` in it. If the list is empty, Termul fills it from `.gitignore` when you open the page. Termul does not keep that list until you click **Save changes**.
 
 Termul links every folder in the list into every worktree. It checks every minute and adds links that are missing.
 

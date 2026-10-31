@@ -120,6 +120,7 @@ fn view_only_may_read_but_not_mutate() {
         "set_default_project",
         "set_default_claude_account",
         "set_project_claude_account",
+        "set_claude_auto_switch",
         "switch_project",
         "set_catalog_opt_in",
         "plan_mcp_install",

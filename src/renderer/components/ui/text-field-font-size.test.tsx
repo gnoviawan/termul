@@ -268,10 +268,6 @@ const DESKTOP_ONLY: ReadonlyArray<AllowRule & { file: string; reason: string }> 
     file: 'components/sidebar/project-list.tsx',
     reason: 'ProjectSidebar mounts only in the desktop return of WorkspaceLayout'
   },
-  {
-    file: 'components/sidebar/project-settings-dialog.tsx',
-    reason: 'reachable only from ProjectSidebar'
-  },
   { file: 'components/NewGroupModal.tsx', reason: 'reachable only from ProjectSidebar' },
   { file: 'components/NewWorktreeModal.tsx', reason: 'reachable only from ProjectSidebar' },
   {

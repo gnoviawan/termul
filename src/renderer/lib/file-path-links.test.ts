@@ -225,7 +225,7 @@ describe('file-path-links resolution', () => {
       .mockReset()
       .mockResolvedValue({ success: false, error: 'unreadable', code: 'READ_ERROR' })
     mocks.openFile.mockReset().mockImplementation(async (path: string) => {
-      mocks.openFiles.set(path, {})
+      mocks.openFiles.set(path, { kind: path.endsWith('.png') ? 'image' : 'text' })
     })
     mocks.updateCursorPosition.mockReset()
     mocks.addEditorTab.mockReset()
@@ -742,6 +742,28 @@ describe('file-path-links resolution', () => {
     expect(mocks.getFileInfo).toHaveBeenCalledWith('/repo/src/x.ts')
     expect(mocks.openFile).toHaveBeenCalledWith('/repo/src/x.ts')
     expect(mocks.updateCursorPosition).toHaveBeenCalledWith('/repo/src/x.ts', line, column)
+  })
+
+  it('opens an image link as a tab without a cursor position or a toast', async () => {
+    mocks.getFileInfo.mockResolvedValue({
+      success: true,
+      data: {
+        path: '/repo/out/shot.png',
+        size: 4_000_000,
+        modifiedAt: 1,
+        type: 'file',
+        isReadOnly: false,
+        isBinary: true
+      }
+    })
+
+    const opened = await openFilePathFromTerminal('out/shot.png:12', { cwd: '/repo' })
+
+    expect(opened).toEqual({ ok: true })
+    expect(mocks.openFile).toHaveBeenCalledWith('/repo/out/shot.png')
+    expect(mocks.addEditorTab).toHaveBeenCalledWith('/repo/out/shot.png')
+    expect(mocks.updateCursorPosition).not.toHaveBeenCalled()
+    expect(mocks.toastError).not.toHaveBeenCalled()
   })
 
   it('names the fragment-free path when a #L target is missing', async () => {
