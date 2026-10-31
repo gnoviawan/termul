@@ -44,8 +44,8 @@ Termul can notice when you keep asking for the same thing and offer to turn it i
 
 A suggestion shows up as a card titled **This looks repeatable**, with the request it noticed, how many days you asked it and the usual timing. The card appears in a chat right after you send a matching request (at most once per chat), and in the **Suggested** section at the top of the **Automations** tab.
 
-- **Create automation** starts a new chat on your default agent with a prompt that asks it to build the automation. The agent may ask you a few questions first, such as when it should run and where the results should go, and then sends it to you for review. If no default agent is ready, Termul opens the agent launcher so you can pick one.
-- **Not now** hides the suggestion on this device for 24 hours.
+- **Create automation** starts a new chat on your default agent with a prompt that asks it to build the automation. The agent may ask you a few questions first, such as when it should run and where the results should go, and then sends it to you for review. If no default agent is ready, Termul opens the agent launcher so you can pick one. If the chat cannot start, for example because the project has no folder, Termul shows an error and the suggestion stays so you can try again.
+- **Not now** hides the suggestion in this project on this device for 24 hours. It shows up again when the 24 hours are over, even on a screen you left open.
 - **Don't suggest this again** removes the suggestion for good.
 
 To turn suggestions off, open **Settings**, choose **Agent chats** and turn off **Suggest automations from repeated chats**. It is on by default.
@@ -65,7 +65,7 @@ If an AI step reads content from the web and a later step sends data out, the ca
 
 If the automation has problems, they are listed above the card under a heading such as **1 issue to fix before approval**, and you cannot approve it. Ask the agent that built it to fix them.
 
-When everything looks right, click **Approve and arm**. The automation turns **Armed** and runs on its schedule.
+When everything looks right, click **Approve and arm**. The automation turns **Armed** and runs on its schedule. If the automation is switched off, the button says **Approve** instead: approving does not turn it on, so it stays **Disabled** until you turn on **Enabled**.
 
 Below the card, **Diagram** shows the automation's steps and how they connect. A step can make a web request (HTTP), run an AI agent (Agent), reshape data (Transform), choose a path (Condition) or stop the run with an error (Fail).
 
