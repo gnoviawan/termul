@@ -88,8 +88,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 66 request types including warm-pool promotion, host-owned session delete and browser stop', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(66)
+  it('exports exactly 67 request types including warm-pool promotion, host-owned session delete and browser stop', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(67)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -134,6 +134,7 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'search_mcp_catalog',
       'get_mcp_catalog_status',
       'set_mcp_catalog_sync',
+      'get_mcp_catalog_icon',
       // CAP-6 / Story 9: host-owned verified-atomic ACP install.
       'install_acp_agent',
       // Issue #613: server-side generic key-value store.

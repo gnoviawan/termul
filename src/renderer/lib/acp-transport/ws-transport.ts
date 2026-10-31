@@ -15,6 +15,7 @@ import type {
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
 import type {
+  McpCatalogIconPayload,
   McpCatalogPage,
   McpCatalogSearchRequest,
   McpCatalogStatus
@@ -889,6 +890,10 @@ export class WsAcpTransport implements AcpTransport {
 
   async setMcpCatalogSync(enabled: boolean): Promise<McpCatalogStatus> {
     return this.request<McpCatalogStatus>('set_mcp_catalog_sync', { enabled })
+  }
+
+  async getMcpCatalogIcon(name: string): Promise<McpCatalogIconPayload> {
+    return this.request<McpCatalogIconPayload>('get_mcp_catalog_icon', { name })
   }
 
   /** `set_catalog_opt_in`: persist the host catalog opt-in. */

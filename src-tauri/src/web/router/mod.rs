@@ -322,6 +322,7 @@ pub fn router(
         .route("/mcp-catalog/search", get(mcp_catalog_api::search))
         .route("/mcp-catalog/status", get(mcp_catalog_api::status))
         .route("/mcp-catalog/sync", post(mcp_catalog_api::set_sync))
+        .route("/mcp-catalog/icon/{*name}", get(mcp_catalog_api::icon))
         // ACP install web route (CAP-6 / Story 9: verified-atomic install).
         // Mirrors the desktop `#[tauri::command] acp_install_agent` handler;
         // see `web/install_api.rs`. Registered AHEAD of the static fallback so
@@ -551,6 +552,7 @@ pub fn router_with_static(
         .route("/mcp-catalog/search", get(mcp_catalog_api::search))
         .route("/mcp-catalog/status", get(mcp_catalog_api::status))
         .route("/mcp-catalog/sync", post(mcp_catalog_api::set_sync))
+        .route("/mcp-catalog/icon/{*name}", get(mcp_catalog_api::icon))
         .route("/acp/install", post(install_api::install))
         .route("/worktree/list", post(worktree_api::list))
         .route("/worktree/create", post(worktree_api::create))

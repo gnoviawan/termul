@@ -26,11 +26,12 @@ const MAX_SERVER_BYTES: usize = 1024 * 1024;
 const MAX_CACHE_JSON_BYTES: u64 = 512 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_ATTEMPTS: u32 = 3;
-const CACHE_FORMAT_VERSION: u32 = 1;
+const CACHE_FORMAT_VERSION: u32 = 2;
 const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CACHE_FILE: &str = "registry-cache.json.gz";
 const CONFIG_FILE: &str = "config.json";
-const DROPPED_SERVER_FIELDS: [&str; 3] = ["$schema", "icons", "_meta"];
+const DROPPED_SERVER_FIELDS: [&str; 2] = ["$schema", "_meta"];
+const ICON_FIELDS: [&str; 4] = ["src", "mimeType", "sizes", "theme"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(
@@ -248,6 +249,7 @@ impl Row {
             for field in DROPPED_SERVER_FIELDS {
                 fields.remove(field);
             }
+            slim_icons(fields);
         }
         let status = match official["status"].as_str() {
             Some("deleted") => RowStatus::Deleted,
@@ -270,6 +272,27 @@ impl Row {
 
     fn browsable(self) -> Option<Box<RawValue>> {
         (self.latest && self.status != RowStatus::Deleted).then_some(self.slim)
+    }
+}
+
+fn slim_icons(server: &mut serde_json::Map<String, Value>) {
+    let icons: Vec<Value> = match server.remove("icons") {
+        Some(Value::Array(icons)) => icons
+            .into_iter()
+            .filter(|icon| icon["src"].is_string())
+            .map(|mut icon| {
+                Value::Object(
+                    ICON_FIELDS
+                        .iter()
+                        .filter_map(|field| Some((field.to_string(), icon.get_mut(field)?.take())))
+                        .collect(),
+                )
+            })
+            .collect(),
+        _ => return,
+    };
+    if !icons.is_empty() {
+        server.insert("icons".to_string(), Value::Array(icons));
     }
 }
 

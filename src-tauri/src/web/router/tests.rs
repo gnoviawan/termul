@@ -709,6 +709,7 @@ fn requires_token_covers_api_prefixes_and_public_paths() {
         "/mcp-catalog/search",
         "/mcp-catalog/status",
         "/mcp-catalog/sync",
+        "/mcp-catalog/icon/io.github.example%2Fserver",
         "/fs/ls",
         "/git/status",
         "/search/content",

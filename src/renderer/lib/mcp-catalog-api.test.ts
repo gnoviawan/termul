@@ -5,7 +5,8 @@ const { transport } = vi.hoisted(() => ({
   transport: {
     searchMcpCatalog: vi.fn(),
     getMcpCatalogStatus: vi.fn(),
-    setMcpCatalogSync: vi.fn()
+    setMcpCatalogSync: vi.fn(),
+    getMcpCatalogIcon: vi.fn()
   }
 }))
 
@@ -29,7 +30,8 @@ const page: McpCatalogPage = {
       state: 'needs-runtime',
       reason: { code: 'needs-runtime', runtime: 'npx' },
       defaultOption: { kind: 'package', index: 0 },
-      repositoryUrl: 'https://github.com/hooka/mcp'
+      repositoryUrl: 'https://github.com/hooka/mcp',
+      hasIcon: true
     }
   ],
   nextCursor: '1',
@@ -64,6 +66,7 @@ describe('MCP catalog facades', () => {
     transport.searchMcpCatalog.mockReset()
     transport.getMcpCatalogStatus.mockReset()
     transport.setMcpCatalogSync.mockReset()
+    transport.getMcpCatalogIcon.mockReset()
     fetchMock.mockReset()
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('window', { location: { origin: 'http://localhost:8080' } })
@@ -181,5 +184,61 @@ describe('MCP catalog facades', () => {
     )
 
     expect(await createDesktopMcpCatalogApi().setSync(true)).toEqual(forbidden)
+  })
+
+  it('both carriers turn the same host logo into the same data: URL', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"/>'
+    transport.getMcpCatalogIcon.mockResolvedValueOnce({
+      contentType: 'image/svg+xml',
+      base64: btoa(svg)
+    })
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      blob: async () => new Blob([svg], { type: 'image/svg+xml' })
+    })
+
+    const desktop = await createDesktopMcpCatalogApi().icon('io.example/a b')
+    const web = await webMcpCatalogApi.icon('io.example/a b')
+
+    expect(transport.getMcpCatalogIcon).toHaveBeenCalledWith('io.example/a b')
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8080/mcp-catalog/icon/io.example%2Fa%20b',
+      expect.objectContaining({})
+    )
+    const dataUrl =
+      'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4='
+    expect(desktop).toEqual({ success: true, data: dataUrl })
+    expect(web).toEqual({ success: true, data: dataUrl })
+  })
+
+  it('both carriers report a missing logo with the host code', async () => {
+    const unavailable = {
+      success: false,
+      error: 'the icon could not be loaded',
+      code: 'MCP_CATALOG_ICON_UNAVAILABLE'
+    }
+    transport.getMcpCatalogIcon.mockRejectedValueOnce(
+      new AcpTransportError(unavailable.code, unavailable.error)
+    )
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 404, json: async () => unavailable })
+
+    expect(await createDesktopMcpCatalogApi().icon('io.example/a')).toEqual(unavailable)
+    expect(await webMcpCatalogApi.icon('io.example/a')).toEqual(unavailable)
+  })
+
+  it('web icon maps a failed fetch or a body that is not an IpcBody to NETWORK_ERROR', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('offline'))
+    expect(await webMcpCatalogApi.icon('io.example/a')).toEqual({
+      success: false,
+      error: 'offline',
+      code: 'NETWORK_ERROR'
+    })
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 502, json: async () => 'bad gateway' })
+    expect(await webMcpCatalogApi.icon('io.example/a')).toEqual({
+      success: false,
+      error: 'HTTP 502',
+      code: 'NETWORK_ERROR'
+    })
   })
 })

@@ -239,6 +239,7 @@ pub fn ws_requirement(request_type: &str) -> Requirement {
         | "fetch_acp_registry_snapshot"
         | "search_mcp_catalog"
         | "get_mcp_catalog_status"
+        | "get_mcp_catalog_icon"
         | "list_claude_accounts"
         | "list_claude_usage"
         | "store_read"
