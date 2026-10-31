@@ -308,6 +308,30 @@ fn a_dismissed_suggestion_is_neither_listed_nor_matched() {
 }
 
 #[test]
+fn a_matched_prompt_tells_open_screens_to_list_suggestions_again() {
+    let service = suggesting_service(Arc::default());
+    let mut changes = service.subscribe();
+
+    service
+        .match_prompt("p1", "fix the flaky reconnect test", Some("UTC"))
+        .unwrap();
+    assert!(changes.try_recv().is_err());
+
+    service
+        .match_prompt("p1", "summarize the open PRs in termul", Some("UTC"))
+        .unwrap();
+    assert_eq!(
+        changes.try_recv().unwrap(),
+        AutomationChanged {
+            project_id: "p1".to_string(),
+            automation_id: None,
+            proposed: false,
+            proposed_by: None,
+        }
+    );
+}
+
+#[test]
 fn an_accepted_suggestion_is_not_offered_again() {
     let service = suggesting_service(Arc::default());
     let found = service.list_suggestions("p1", Some("UTC")).unwrap();

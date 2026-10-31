@@ -25,10 +25,10 @@ struct CachedSession {
 
 /// Reads each chat's log once per `last_seq`: an unchanged chat is served
 /// from memory. The cache keeps only the chats the last read of a project
-/// saw.
+/// saw; a chat whose log failed to read is read again next time.
 pub struct SessionHistory {
     persistence: Arc<SessionPersistence>,
-    cache: Mutex<HashMap<String, HashMap<String, CachedSession>>>,
+    cache: Mutex<HashMap<String, Arc<HashMap<String, CachedSession>>>>,
 }
 
 impl SessionHistory {
@@ -39,22 +39,24 @@ impl SessionHistory {
         }
     }
 
-    fn read(&self, session_id: &str) -> Vec<Prompt> {
+    fn read(&self, session_id: &str) -> Option<Vec<Prompt>> {
         match self.persistence.replay_after(session_id, 0) {
-            Ok(records) => records
-                .into_iter()
-                .filter(|record| record.type_ == "user_prompt")
-                .filter_map(|record| {
-                    let text = user_prompt_text(&record.payload)?;
-                    Some(Prompt {
-                        at_ms: i64::try_from(record.recorded_at).ok()?,
-                        text: truncate(text),
+            Ok(records) => Some(
+                records
+                    .into_iter()
+                    .filter(|record| record.type_ == "user_prompt")
+                    .filter_map(|record| {
+                        let text = user_prompt_text(&record.payload)?;
+                        Some(Prompt {
+                            at_ms: i64::try_from(record.recorded_at).ok()?,
+                            text: truncate(text),
+                        })
                     })
-                })
-                .collect(),
+                    .collect(),
+            ),
             Err(error) => {
                 log::warn!("[Automation] suggestions skipped a chat log: {error}");
-                Vec::new()
+                None
             }
         }
     }
@@ -73,7 +75,12 @@ impl PromptHistory for SessionHistory {
             .take(MAX_SESSIONS)
             .collect();
 
-        let previous = self.cache.lock().remove(project_id).unwrap_or_default();
+        let previous = self
+            .cache
+            .lock()
+            .get(project_id)
+            .cloned()
+            .unwrap_or_default();
         let mut next = HashMap::with_capacity(sessions.len());
         let mut reread = 0usize;
         for entry in sessions {
@@ -81,7 +88,10 @@ impl PromptHistory for SessionHistory {
                 Some(cached) if cached.last_seq == entry.last_seq => cached.prompts.clone(),
                 _ => {
                     reread += 1;
-                    Arc::new(self.read(&entry.session_id))
+                    let Some(prompts) = self.read(&entry.session_id) else {
+                        continue;
+                    };
+                    Arc::new(prompts)
                 }
             };
             next.insert(
@@ -101,7 +111,9 @@ impl PromptHistory for SessionHistory {
             next.len(),
             prompts.len()
         );
-        self.cache.lock().insert(project_id.to_string(), next);
+        self.cache
+            .lock()
+            .insert(project_id.to_string(), Arc::new(next));
         prompts
     }
 }
@@ -127,3 +139,7 @@ where
         self(project_id, since_ms)
     }
 }
+
+#[cfg(test)]
+#[path = "history_tests.rs"]
+mod tests;

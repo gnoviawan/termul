@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
   matchAutomationSuggestion: vi.fn(),
   onAutomationChanged: vi.fn(() => () => {})
 }))
-const launch = vi.hoisted(() => ({ launchSuggestionChat: vi.fn(async () => {}) }))
+const launch = vi.hoisted(() => ({ launchSuggestionChat: vi.fn(async () => true) }))
 vi.mock('@/lib/automation-api', () => api)
 vi.mock('@/lib/automation-suggestion-launch', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/automation-suggestion-launch')>()),
@@ -84,16 +84,32 @@ describe('the in-chat suggestion card', () => {
     )
   })
 
-  it('creates: accepts the suggestion, then opens the seeded chat', async () => {
+  it('creates: opens the seeded chat, then accepts the suggestion', async () => {
     render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
     sendInChat('s1', 'summarize the open PRs in termul')
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create automation' }))
 
-    await waitFor(() => expect(launch.launchSuggestionChat).toHaveBeenCalledTimes(1))
-    expect(api.acceptAutomationSuggestion).toHaveBeenCalledWith('p1', '3f1c9a0d5b7e2468')
+    await waitFor(() => expect(screen.queryByTestId('automation-suggestion-card')).toBeNull())
     expect(launch.launchSuggestionChat).toHaveBeenCalledWith('p1', SUGGESTION)
-    expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
+    expect(api.acceptAutomationSuggestion).toHaveBeenCalledWith('p1', '3f1c9a0d5b7e2468')
+  })
+
+  it('create: a launch that fails keeps the suggestion open and unanswered', async () => {
+    launch.launchSuggestionChat.mockResolvedValueOnce(false)
+    render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
+    sendInChat('s1', 'summarize the open PRs in termul')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create automation' }))
+
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('button', { name: 'Create automation' }) as HTMLButtonElement).disabled
+      ).toBe(false)
+    )
+    expect(launch.launchSuggestionChat).toHaveBeenCalledTimes(1)
+    expect(api.acceptAutomationSuggestion).not.toHaveBeenCalled()
+    expect(screen.getByText(COPY)).toBeTruthy()
   })
 
   it("don't suggest: dismisses it on the host", async () => {
@@ -115,7 +131,7 @@ describe('the in-chat suggestion card', () => {
 
     expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
     const stored = JSON.parse(localStorage.getItem('termul.automation-suggestion-snoozes') ?? '{}')
-    expect(stored['3f1c9a0d5b7e2468']).toBeGreaterThanOrEqual(before + SNOOZE_MS)
+    expect(stored['p1:3f1c9a0d5b7e2468']).toBeGreaterThanOrEqual(before + SNOOZE_MS)
     expect(api.dismissAutomationSuggestion).not.toHaveBeenCalled()
     expect(api.acceptAutomationSuggestion).not.toHaveBeenCalled()
   })
@@ -144,6 +160,26 @@ describe('the in-chat suggestion card', () => {
     await act(async () => {})
     expect(api.matchAutomationSuggestion).toHaveBeenCalledTimes(1)
     expect(screen.getByText(COPY)).toBeTruthy()
+  })
+
+  it('asks again for the real session id when the launch swaps it mid-match', async () => {
+    let answer: (value: { success: true; data: AutomationSuggestion }) => void = () => {}
+    api.matchAutomationSuggestion.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve
+        })
+    )
+    const { rerender } = render(<ChatAutomationSuggestion sessionId="placeholder" projectId="p1" />)
+    sendInChat('placeholder', 'summarize the open PRs in termul')
+    await waitFor(() => expect(api.matchAutomationSuggestion).toHaveBeenCalledTimes(1))
+
+    sendInChat('real', 'summarize the open PRs in termul')
+    rerender(<ChatAutomationSuggestion sessionId="real" projectId="p1" />)
+    await act(async () => answer({ success: true, data: SUGGESTION }))
+
+    expect(await screen.findByText(COPY)).toBeTruthy()
+    expect(api.matchAutomationSuggestion).toHaveBeenCalledTimes(2)
   })
 
   it('with the setting off, never asks the host and shows nothing', async () => {
@@ -196,11 +232,28 @@ describe('the Suggested section', () => {
   })
 
   it('hides a snoozed suggestion', async () => {
-    useSuggestionSnoozes.getState().snooze('3f1c9a0d5b7e2468')
+    useSuggestionSnoozes.getState().snooze('p1', '3f1c9a0d5b7e2468')
     render(<SuggestedAutomations projectId="p1" />)
 
     await waitFor(() => expect(api.listAutomationSuggestions).toHaveBeenCalledTimes(1))
     expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
+  })
+
+  it('a snooze in one project does not hide the same ask in another', async () => {
+    useSuggestionSnoozes.getState().snooze('p1', '3f1c9a0d5b7e2468')
+    render(<SuggestedAutomations projectId="p2" />)
+
+    expect(await screen.findByText(COPY)).toBeTruthy()
+  })
+
+  it('shows a snoozed suggestion again when the snooze ends with the panel open', async () => {
+    useSuggestionSnoozes.getState().snooze('p1', '3f1c9a0d5b7e2468', Date.now() - SNOOZE_MS + 100)
+    render(<SuggestedAutomations projectId="p1" />)
+    await waitFor(() => expect(api.listAutomationSuggestions).toHaveBeenCalledTimes(1))
+    expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
+
+    expect(await screen.findByText(COPY)).toBeTruthy()
+    expect(api.listAutomationSuggestions).toHaveBeenCalledTimes(1)
   })
 
   it('with the setting off, is not loaded or shown', async () => {

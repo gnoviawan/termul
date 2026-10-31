@@ -29,17 +29,36 @@ export function suggestionPrompt(suggestion: AutomationSuggestion): string {
 /**
  * Opens the chat and sends the prompt. Without a ready default agent the
  * launcher opens with the prompt as its draft, so the user picks one.
+ * `false` when the prompt reached neither, so the suggestion stays open.
  */
 export async function launchSuggestionChat(
   projectId: string,
   suggestion: AutomationSuggestion
-): Promise<void> {
+): Promise<boolean> {
   const text = suggestionPrompt(suggestion)
   const store = useAcpStore.getState()
   const cwd = getDefaultCwdForProject(projectId)
+  if (!cwd) {
+    toast.error('Could not create the automation: the project has no folder')
+    void logFrontendError({
+      level: 'warn',
+      source: SOURCE,
+      message: `suggestion=${suggestion.fingerprint} not launched: project ${projectId} has no folder`
+    })
+    return false
+  }
   const config = store.agentConfigs.find((c) => c.id === store.selectedAgentConfigId)
-  if (!config || !cwd) {
-    await persistenceApi.write(PersistenceKeys.lastLaunchDraft(projectId), text)
+  if (!config) {
+    const draft = await persistenceApi.write(PersistenceKeys.lastLaunchDraft(projectId), text)
+    if (!draft.success) {
+      toast.error('Could not open the launcher with the automation prompt')
+      void logFrontendError({
+        level: 'warn',
+        source: SOURCE,
+        message: `suggestion=${suggestion.fingerprint} launcher draft write failed: ${draft.error}`
+      })
+      return false
+    }
     const paneId = useWorkspaceStore.getState().activePaneId
     if (paneId) useWorkspaceStore.getState().showAgentLauncher(paneId)
     toast('Pick an agent to build the automation')
@@ -48,7 +67,7 @@ export async function launchSuggestionChat(
       source: SOURCE,
       message: `suggestion=${suggestion.fingerprint} opened the launcher: no default agent`
     })
-    return
+    return true
   }
 
   const blocks: ContentBlock[] = [{ type: 'text', text }]
@@ -74,6 +93,7 @@ export async function launchSuggestionChat(
       source: SOURCE,
       message: `suggestion=${suggestion.fingerprint} started chat ${sessionId}`
     })
+    return true
   } catch (err) {
     toast.error(err instanceof Error ? err.message : 'Failed to start the chat')
     void logFrontendError({
@@ -81,5 +101,6 @@ export async function launchSuggestionChat(
       source: SOURCE,
       message: `suggestion=${suggestion.fingerprint} chat launch failed`
     })
+    return false
   }
 }

@@ -375,6 +375,7 @@ export function parseSuggestionList(v: unknown): AutomationSuggestion[] {
 
 /** A match reply: the suggestion the prompt repeats, or `null`. */
 export function parseSuggestionMatch(v: unknown): AutomationSuggestion | null {
+  if (v === undefined) fail('match', 'a suggestion or null')
   return nullable(v, 'match', suggestion)
 }
 

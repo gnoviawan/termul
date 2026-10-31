@@ -176,27 +176,35 @@ fn an_agent_builds_fixes_and_proposes_an_automation_that_stays_unapproved() {
             );
 
             let proposed = agent.text("automation_propose", json!({ "id": id })).await;
+            assert_eq!(
+                proposed,
+                "Proposed \"Digest\" (revision 3) for review. Tell the user it is waiting in \
+the Automations tab: they review its run policy (schedule, agents, secrets, outbound hosts) and \
+approve it there. It does not run until they approve it. Any further edit creates a new revision \
+that needs approval again."
+            );
+            assert_eq!(approved_revision(&svc, &id), None);
+
+            svc.set_enabled(&AutomationId::from(id.clone()), false)
+                .unwrap();
+            let proposed = agent.text("automation_propose", json!({ "id": id })).await;
             assert!(
-                proposed.starts_with("Proposed \"Digest\" (revision 3) for review."),
+                proposed.contains(" It does not run until they approve and enable it. "),
                 "{proposed}"
             );
-            assert!(proposed.contains("the Automations tab"), "{proposed}");
-            assert_eq!(approved_revision(&svc, &id), None);
         }));
 
     let id = service.list("proj-1").unwrap()[0].id.clone();
     let proposals: Vec<AutomationChanged> = std::iter::from_fn(|| changes.try_recv().ok())
         .filter(|change| change.proposed)
         .collect();
-    assert_eq!(
-        proposals,
-        [AutomationChanged {
-            project_id: "proj-1".to_string(),
-            automation_id: Some(id.clone()),
-            proposed: true,
-            proposed_by: Some("Test agent".to_string()),
-        }]
-    );
+    let proposal = AutomationChanged {
+        project_id: "proj-1".to_string(),
+        automation_id: Some(id.clone()),
+        proposed: true,
+        proposed_by: Some("Test agent".to_string()),
+    };
+    assert_eq!(proposals, [proposal.clone(), proposal]);
     let stored = service.get(&id).unwrap().automation;
     assert_eq!((stored.revision, stored.approved_revision), (3, None));
     assert!(!stored.armed());
@@ -232,6 +240,37 @@ fn another_projects_automation_is_not_found() {
         }));
     let untouched = service.get(&foreign.id).unwrap().automation;
     assert_eq!((untouched.name.as_str(), untouched.revision), ("Theirs", 1));
+}
+
+#[test]
+fn a_token_authors_in_its_own_sessions_project_while_its_agent_has_another_turn() {
+    let (harness, configs) =
+        Harness::new(&[("sess-1", Some("proj-1")), ("sess-2", Some("proj-2"))]);
+    let service = service();
+    harness.server().use_automation_service(service.clone());
+    let theirs = service.create("proj-2", "Theirs").unwrap();
+    harness.server().begin_turn(&configs[0].agent_id, "sess-2");
+    harness
+        .runtime
+        .block_on(with_mcp_session(configs[0].clone(), |w, r| async move {
+            let mut agent = Agent::new(w, r);
+            let listed = agent.ok("automation_list", json!({})).await;
+            assert_eq!(listed, json!({ "automations": [] }));
+            let created = agent
+                .ok("automation_create", json!({ "name": "Mine" }))
+                .await;
+            assert_eq!(created["project_id"], "proj-1");
+        }));
+    let names = |project: &str| -> Vec<String> {
+        service
+            .list(project)
+            .unwrap()
+            .into_iter()
+            .map(|a| a.name)
+            .collect()
+    };
+    assert_eq!(names("proj-1"), ["Mine"]);
+    assert_eq!(names("proj-2"), [theirs.name]);
 }
 
 #[test]

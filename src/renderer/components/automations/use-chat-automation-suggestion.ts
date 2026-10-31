@@ -64,18 +64,26 @@ export function useChatAutomationSuggestion(
     const text = promptText(message)
     if (!text) return
     let current = true
+    let answered = false
     void matchAutomationSuggestion(projectId, text).then((result) => {
-      if (!current || !result.success || !result.data) return
-      if (isSnoozed(useSuggestionSnoozes.getState().until, result.data.fingerprint)) return
+      if (!current || !result.success) return
+      answered = true
+      if (!result.data) return
+      const { until } = useSuggestionSnoozes.getState()
+      if (isSnoozed(until, projectId, result.data.fingerprint)) return
       offered.current = true
       offeredChats.add(sessionId)
       setSuggestion(result.data)
     })
     return () => {
       current = false
+      // A match cut off (the launch swapped in the real session id) or failed
+      // is asked again on the next run.
+      if (!answered) matched.current = null
     }
   }, [enabled, projectId, sessionId, lastUserId])
 
-  if (!enabled || !suggestion || isSnoozed(snoozes, suggestion.fingerprint)) return null
+  if (!enabled || !projectId || !suggestion) return null
+  if (isSnoozed(snoozes, projectId, suggestion.fingerprint)) return null
   return { suggestion, ...actions }
 }

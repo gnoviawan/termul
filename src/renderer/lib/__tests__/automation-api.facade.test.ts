@@ -350,6 +350,17 @@ describe('automation facade transports', () => {
     })
   })
 
+  it('turns a match reply without data into INVALID_RESPONSE, not a miss', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockInvoke.mockResolvedValue({ success: true })
+
+    expect(await matchAutomationSuggestion('p1', 'fix the flaky test')).toEqual({
+      success: false,
+      error: 'match: expected a suggestion or null',
+      code: 'INVALID_RESPONSE'
+    })
+  })
+
   it('never logs the prompt it matches', async () => {
     mockIsTauriContext.mockReturnValue(true)
     mockInvoke.mockResolvedValue({ success: false, error: 'boom', code: 'internal' })

@@ -5,6 +5,7 @@ import { reportUnknownTabKind } from '@/lib/workspace-tab-kinds'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
 import {
+  automationsTabId,
   browserTabId,
   commitDiffTabId,
   diffTabId,
@@ -393,7 +394,13 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
               })
               return []
             }
-            return [{ type: 'automations', id: tab.id, projectId: tab.projectId }]
+            return [
+              {
+                type: 'automations',
+                id: automationsTabId(tab.projectId),
+                projectId: tab.projectId
+              }
+            ]
           case 'diff': {
             // Never coerce a malformed diff ref: drop it with one warn.
             if (
