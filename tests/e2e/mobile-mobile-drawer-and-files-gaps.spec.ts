@@ -26,8 +26,8 @@ import { openWorkspace } from './ui'
  * - L-20  the Files breadcrumb on a Windows-hosted termul-server, whose
  *         listings carry the verbatim `\\?\C:\...` prefix (no response shim).
  * - L-35  a fully clipped breadcrumb ancestor leaves the tab order.
- * - V-12  the drawer footer reads `Connected · {host}` (the StatusBar lamp keeps
- *         its own "Connected").
+ * - V-12  the drawer footer shows only the lamp when connected; "Connected" is
+ *         screen-reader text.
  * - V-13  the bottom project sheet's "Set as host default" control.
  * - V-14  the drawer search filters the Recents chat list only, and the
  *         Editors list has no search at all.
@@ -69,8 +69,8 @@ const AUTH_HEADERS = {
   'content-type': 'application/json'
 } as const
 
-/** The footer's healthy reading: the status and the host this client talks to (V-12). */
-const CONNECTED_TEXT = `Connected · ${new URL(E2E_BASE_URL).host}`
+/** The footer's healthy reading: screen-reader text beside the lamp (V-12). */
+const CONNECTED_TEXT = 'Connected'
 
 /** Server store key holding the web client's last selected project. */
 const ACTIVE_PROJECT_KEY = storeKey('active-project')
@@ -826,10 +826,10 @@ test.describe('without IntersectionObserver', () => {
 })
 
 // ---------------------------------------------------------------------------
-// V-12: the drawer footer names the host
+// V-12: the drawer footer shows only the lamp when connected
 // ---------------------------------------------------------------------------
 
-test('V-12: the drawer footer reads Connected · host, fully inside the drawer', async ({
+test('V-12: the drawer footer reads Connected for screen readers, fully inside the drawer', async ({
   page
 }) => {
   const project = await createProject()
@@ -847,7 +847,7 @@ test('V-12: the drawer footer reads Connected · host, fully inside the drawer',
   expect(await drawer.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0)
 })
 
-test('V-12: a degraded channel keeps its own text, with no host in it', async ({ page }) => {
+test('V-12: a degraded channel keeps its own visible text', async ({ page }) => {
   // Proxy the control socket so the test can drop it. While the channel is
   // "down" a reconnect is accepted but its handshake never answered, so the
   // client keeps reporting "reconnecting" instead of flapping back to "connected".
