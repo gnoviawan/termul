@@ -34,6 +34,8 @@ use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{Client, ConnectTo, LineDirection, Role};
 use futures::future::Either;
 
+mod bounded_lines;
+
 type DebugCallback = Arc<dyn Fn(&str, LineDirection) + Send + Sync + 'static>;
 
 const STDERR_CAPTURE_LIMIT: usize = 64 * 1024;
@@ -453,7 +455,7 @@ async fn connect(
     client: impl ConnectTo<<Client as Role>::Counterpart>,
 ) -> Result<(), agent_client_protocol::Error> {
     use futures::io::BufReader;
-    use futures::{AsyncBufReadExt as _, StreamExt as _};
+    use futures::StreamExt as _;
 
     let (child_stdin, child_stdout, child_stderr, guard) = process::spawn(&server)?;
     let pid = guard.pid;
@@ -466,16 +468,22 @@ async fn connect(
     });
     let child_wait = Box::pin(wait_for_child(guard, stderr_rx));
 
+    // Bounded so an agent that never ends a line cannot exhaust memory; an
+    // oversized line fails the connection (#1597).
+    let stdout_lines = bounded_lines::bounded_lines(
+        BufReader::new(child_stdout),
+        bounded_lines::MAX_AGENT_STDOUT_LINE_BYTES,
+    );
     let incoming_lines: std::pin::Pin<
         Box<dyn futures::Stream<Item = std::io::Result<String>> + Send>,
     > = if let Some(callback) = debug_callback.clone() {
-        Box::pin(BufReader::new(child_stdout).lines().inspect(move |result| {
+        Box::pin(stdout_lines.inspect(move |result| {
             if let Ok(line) = result {
                 callback(line, LineDirection::Stdout);
             }
         }))
     } else {
-        Box::pin(BufReader::new(child_stdout).lines())
+        Box::pin(stdout_lines)
     };
 
     // Signal physical stdout EOF so a final stdin write cannot hang on an
@@ -555,6 +563,9 @@ async fn connect(
         Either::Right(((), main_race)) => main_race.await,
     }
 }
+
+#[cfg(test)]
+mod bounded_lines_tests;
 
 #[cfg(all(test, windows))]
 mod tests;
