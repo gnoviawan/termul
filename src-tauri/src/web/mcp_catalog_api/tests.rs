@@ -109,6 +109,7 @@ fn state(allow_remote_writes: bool, shared_live_writes_denied: bool) -> AppState
         allow_remote_writes,
         shared_live_writes_denied,
         connections: Default::default(),
+        server_admin: None,
     }
 }
 
