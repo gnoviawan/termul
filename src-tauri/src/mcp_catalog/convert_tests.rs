@@ -90,7 +90,7 @@ fn nuget_runs_dotnet_dnx_with_the_pinned_package() {
         argv(package(
             json!({ "registryType": "nuget", "identifier": "TimeMcpServer", "version": "1.1.1" })
         )),
-        ["dotnet", "dnx", "TimeMcpServer@1.1.1", "--yes"]
+        ["dotnet", "dnx", "TimeMcpServer@1.1.1", "--yes", "--"]
     );
 }
 
@@ -334,7 +334,7 @@ fn package_grammar_rejects_url_path_vcs_and_alias_specs() {
         (
             "nuget",
             "Example.Mcp.Server",
-            vec!["dotnet", "dnx", "Example.Mcp.Server@1.0.0", "--yes"],
+            vec!["dotnet", "dnx", "Example.Mcp.Server@1.0.0", "--yes", "--"],
         ),
     ] {
         assert_eq!(

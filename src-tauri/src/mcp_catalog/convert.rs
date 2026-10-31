@@ -488,10 +488,13 @@ fn convert_package(package: &RegistryPackage) -> Result<Launch, McpCatalogReason
             vec!["-y".to_string(), format!("{id}@{version}")]
         }
         Runner::Uvx => vec![format!("{id}@{}", pinned(version, &PYPI_VERSION)?)],
+        // `dnx` parses options (and `@file` response files) anywhere before
+        // `--`, so the `--` keeps registry packageArguments away from it.
         Runner::Dotnet => vec![
             "dnx".to_string(),
             format!("{id}@{}", pinned(version, &NUGET_VERSION)?),
             "--yes".to_string(),
+            "--".to_string(),
         ],
         Runner::Docker => {
             let image = pinned_oci_image(id, version, registry)?;

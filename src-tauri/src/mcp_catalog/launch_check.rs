@@ -176,19 +176,20 @@ fn check_docker(args: &[String]) -> Result<(), McpCatalogReason> {
     Err(McpCatalogReason::InvalidPackage)
 }
 
-/// `dotnet dnx [--yes] <id>[@<version>] [--yes] args…`. `dnx` reads its own
-/// options after the package too, so a flag there must be allowlisted unless
-/// it follows `--`.
+/// `dotnet dnx [--yes] <id>[@<version>] [--yes] [-- args…]`, the AD-4 nuget
+/// shape. `dnx` reads options and `@file` response files anywhere before `--`,
+/// so every argument for the package must follow it.
 fn check_dotnet(args: &[String]) -> Result<(), McpCatalogReason> {
     match args.split_first() {
         Some((subcommand, rest)) if subcommand == "dnx" => {
             let after = take_package(Runner::Dotnet, rest)?;
-            for arg in after.iter().take_while(|arg| *arg != "--") {
-                if arg.starts_with('-') && !allowed_flag(Runner::Dotnet, arg) {
-                    return Err(unsupported("dotnet", arg));
-                }
+            match after
+                .iter()
+                .find(|arg| !allowed_flag(Runner::Dotnet, arg))
+            {
+                Some(arg) if arg != "--" => Err(unsupported("dotnet", arg)),
+                _ => Ok(()),
             }
-            Ok(())
         }
         Some((subcommand, _)) => Err(unsupported("dotnet", subcommand)),
         None => Err(McpCatalogReason::InvalidPackage),
