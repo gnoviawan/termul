@@ -1,6 +1,8 @@
 use super::*;
 use crate::mcp_catalog::{McpCatalogSearchRequest, McpCatalogService};
-use crate::web::mcp_catalog_api::SetMcpCatalogSyncRequest;
+use crate::web::mcp_catalog_api::{
+    McpCatalogIconPayload, McpCatalogIconRequest, SetMcpCatalogSyncRequest,
+};
 
 pub(super) async fn handle_search_mcp_catalog(id: String, payload: &Value) -> WsReply {
     let request: McpCatalogSearchRequest = match serde_json::from_value(payload.clone()) {
@@ -59,6 +61,27 @@ pub(super) async fn handle_set_mcp_catalog_sync(id: String, payload: &Value) -> 
         }
         Err(error) => {
             tracing::warn!(target: "termul::web::ws", code = error.code, "set_mcp_catalog_sync: rejected");
+            WsReply::err_with_code(id, error.code, error.message)
+        }
+    }
+}
+
+pub(super) async fn handle_get_mcp_catalog_icon(id: String, payload: &Value) -> WsReply {
+    let request: McpCatalogIconRequest = match serde_json::from_value(payload.clone()) {
+        Ok(request) => request,
+        Err(error) => {
+            tracing::warn!(target: "termul::web::ws", category = ?error.classify(), "get_mcp_catalog_icon: invalid request");
+            return WsReply::err_with_code(
+                id,
+                "VALIDATION_ERROR",
+                format!("invalid mcp catalog icon request: {error}"),
+            );
+        }
+    };
+    match McpCatalogService::shared().await.icon(&request.name).await {
+        Ok(icon) => ok_with_payload(id, &McpCatalogIconPayload::from(icon)),
+        Err(error) => {
+            tracing::debug!(target: "termul::web::ws", code = error.code, "get_mcp_catalog_icon: unavailable");
             WsReply::err_with_code(id, error.code, error.message)
         }
     }

@@ -45,6 +45,7 @@ import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
 import { useSessionDrivesBrowser } from '@/stores/browser-control-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useGitSheetStore } from '@/stores/git-sheet-store'
+import { hydrateGithubChatLinks } from '@/stores/github-chat-links-store'
 import { useProjectStore } from '@/stores/project-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
@@ -146,6 +147,12 @@ export function AgentChatPanel({
   // excluded from worktree symlinks, so resolve against the main project root
   // — not session.cwd which may be a worktree path with no .agents/skills/.
   const skillsProjectRoot = session ? getProjectRootPath(session.projectId) : undefined
+  // A chat started from a GitHub item may be read-only (CAP-6): load the
+  // project's chat links before the user can send, so its guard applies.
+  const sessionProjectId = session?.projectId
+  useEffect(() => {
+    if (sessionProjectId) void hydrateGithubChatLinks(sessionProjectId)
+  }, [sessionProjectId])
   const { skills: availableSkills } = useAgentSkills(skillsProjectRoot)
   const switching = session?.switching ?? null
   const switchToConfigId = switching?.toConfigId ?? null

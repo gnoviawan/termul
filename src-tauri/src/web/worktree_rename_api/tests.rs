@@ -72,6 +72,7 @@ fn test_state(root: &Path, acp: Arc<AcpManager>) -> AppState {
         allow_remote_writes: false,
         shared_live_writes_denied: false,
         connections: Default::default(),
+        server_admin: None,
     }
 }
 

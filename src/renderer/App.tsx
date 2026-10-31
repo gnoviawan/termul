@@ -9,6 +9,7 @@ import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ExternalLinkConfirmHost } from '@/components/external-link/ExternalLinkConfirm'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
+import { ServerSetupGate } from '@/components/setup/ServerSetupGate'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -54,7 +55,9 @@ function RouteFallback(): React.JSX.Element {
 
 import { isWindows } from '@/lib/platform'
 import { isTauriContext, primeServerCapability } from '@/lib/tauri-runtime'
+import { getWebAuthToken } from '@/lib/web-auth-token'
 import { ensureClientIdentity } from '@/lib/web-client-identity'
+import { checkWebSetupGate } from '@/lib/web-setup-gate'
 import { useUpdateToast } from './components/UpdateAvailableToast'
 import { useAcpAgents } from './hooks/use-acp-agents'
 import { useAcpHistory } from './hooks/use-acp-history'
@@ -216,6 +219,14 @@ function AppEffects(): null {
   return null
 }
 
+// gh-1105: a `#token=` fragment bootstraps web auth (the setup/reconfigure
+// restart lands the browser on `/#token=…`; operators can also paste it).
+// Resolve+strip it BEFORE `createHashRouter` evaluates — otherwise the
+// router claims `token=…` as a route and the app lands on the 404 page.
+// `getWebAuthToken` persists the token and removes it from the URL in one
+// call; the module-scope call must stay above the router creation below.
+getWebAuthToken()
+
 const router = createHashRouter(
   [
     {
@@ -264,35 +275,51 @@ const App = () => {
   // version skew. The gate lives inside `useWhatsNew` so hook order stays
   // stable on this root; TauriApp.tsx keeps the popup.
   const whatsNew = useWhatsNew()
+  // gh-1105: probe the public `/health` endpoint for `setupRequired` once at
+  // web boot. When the server is in setup mode the ServerSetupGate below
+  // swaps the whole app tree for the onboarding wizard, so AppEffects' hooks
+  // (which assume a configured server) never mount there. The gate's hook
+  // self-primes too — this explicit call keeps detection independent of the
+  // gate component's internals. Desktop (`TauriApp.tsx`) has no setup mode
+  // and stays untouched; `checkWebSetupGate` resolves `ok` there anyway.
+  useEffect(() => {
+    checkWebSetupGate()
+  }, [])
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={80} skipDelayDuration={300}>
         <GlobalContextMenu>
           <ErrorBoundary context="App Root">
-            <AppEffects />
+            {/* Web/remote mode only: while the setup gate reports 'setup'
+                the wizard replaces this subtree entirely — AppEffects and
+                the router (both assume a configured server) never mount.
+                Toaster stays outside so wizard errors can still toast. */}
+            <ServerSetupGate>
+              <AppEffects />
+              <ExternalLinkConfirmHost />
+              {/* Web/remote mode only: in-app directory picker registered with
+                  dialogApi so NewProjectModal's Browse button works without a native
+                  dialog.open (Story: Web/remote project creation). Desktop never
+                  mounts it. */}
+              {!isTauriContext() && <DirectoryPicker />}
+              {/* Headless ACP auth: global host for the browser-open paste-back
+                  dialog (spec-acp-terminal-auth) — auth can be triggered from a
+                  chat panel or warm pool, not just the launcher. */}
+              <BrowserAuthDialogHost />
+              {/* Agent browser-automation consent fallback (CAP-5) —
+                  desktop-only responder (the component no-ops on web; the host
+                  auto-denies). */}
+              <BrowserConsentCardHost />
+              <RouterProvider router={router} future={{ v7_startTransition: true }} />
+              <WhatsNewModal
+                isOpen={isTauriContext() && whatsNew.isOpen}
+                version={whatsNew.version}
+                notes={whatsNew.notes}
+                htmlUrl={whatsNew.htmlUrl}
+                onClose={whatsNew.close}
+              />
+            </ServerSetupGate>
             <Toaster />
-            <ExternalLinkConfirmHost />
-            {/* Web/remote mode only: in-app directory picker registered with
-                dialogApi so NewProjectModal's Browse button works without a native
-                dialog.open (Story: Web/remote project creation). Desktop never
-                mounts it. */}
-            {!isTauriContext() && <DirectoryPicker />}
-            {/* Headless ACP auth: global host for the browser-open paste-back
-                dialog (spec-acp-terminal-auth) — auth can be triggered from a
-                chat panel or warm pool, not just the launcher. */}
-            <BrowserAuthDialogHost />
-            {/* Agent browser-automation consent fallback (CAP-5) —
-                desktop-only responder (the component no-ops on web; the host
-                auto-denies). */}
-            <BrowserConsentCardHost />
-            <RouterProvider router={router} future={{ v7_startTransition: true }} />
-            <WhatsNewModal
-              isOpen={isTauriContext() && whatsNew.isOpen}
-              version={whatsNew.version}
-              notes={whatsNew.notes}
-              htmlUrl={whatsNew.htmlUrl}
-              onClose={whatsNew.close}
-            />
           </ErrorBoundary>
         </GlobalContextMenu>
       </TooltipProvider>

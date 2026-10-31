@@ -12,6 +12,7 @@ import type {
   ClaudeAccountUsage
 } from '@shared/types/claude-accounts.types'
 import type {
+  McpCatalogIconPayload,
   McpCatalogPage,
   McpCatalogSearchRequest,
   McpCatalogStatus
@@ -212,6 +213,7 @@ export interface AcpTransport {
   searchMcpCatalog(request: McpCatalogSearchRequest): Promise<McpCatalogPage>
   getMcpCatalogStatus(): Promise<McpCatalogStatus>
   setMcpCatalogSync(enabled: boolean): Promise<McpCatalogStatus>
+  getMcpCatalogIcon(name: string): Promise<McpCatalogIconPayload>
   probeRuntime(): Promise<AcpRuntimeAvailability>
   setTurnTimeout(secs: number | null): Promise<void>
   setTurnIdleTimeout(secs: number | null): Promise<void>

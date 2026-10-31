@@ -24,6 +24,15 @@ use crate::web::ws::AppState;
 /// reports `true` for it — matching what its `/worktree/*` writes would face.
 /// Desktop shared-live sets `shared_live_writes_denied`, so it reports `false`
 /// for every peer (writes are genuinely denied there).
+///
+/// `setupRequired` (gh-1105) is always `false` here: the normal-mode router
+/// registers no `/setup/*` routes, so advertising `true` would mount the
+/// onboarding wizard against endpoints that 404 — bricking the client for
+/// exactly the not-yet-persisted standalone installs the flag was meant to
+/// help (an explicit-argv install, or a config file deleted post-boot).
+/// Reconfiguration of a running server goes through `/server/config` and
+/// Settings → Server instead. Only the setup-mode router's own `/health`
+/// (`web::setup`) reports `true`.
 pub(super) async fn health_check(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -50,6 +59,7 @@ pub(super) async fn health_check(
             status: "ok",
             allow_remote_writes: allow,
             case_insensitive_paths: PATHS_CASE_INSENSITIVE_BY_TARGET,
+            setup_required: false,
         }),
     )
 }
@@ -65,6 +75,9 @@ struct HealthBody {
     status: &'static str,
     allow_remote_writes: bool,
     case_insensitive_paths: bool,
+    /// `true` only on the setup-mode router (`web::setup`); normal mode
+    /// always reports `false` — see [`health_check`].
+    setup_required: bool,
 }
 
 /// `GET /host/agent-idle-window` — the live idle-chat window. Same `IpcResult`

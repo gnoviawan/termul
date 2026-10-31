@@ -26,6 +26,7 @@ const DECLARED_SCOPES: Record<keyof typeof PersistenceKeys, KeyScope> = {
   commandHistory: 'device',
   lastLaunchDraft: 'device',
   chatDraft: 'device',
+  githubChatLinks: 'device',
   acpAgents: 'sharedLww',
   acpAuthMethods: 'sharedLww',
   acpMcpServers: 'sharedLww',

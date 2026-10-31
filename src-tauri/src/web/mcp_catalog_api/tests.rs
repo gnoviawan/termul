@@ -52,11 +52,11 @@ async fn search_returns_a_page_of_rows() {
 #[tokio::test]
 async fn search_pages_with_the_returned_cursor() {
     let first = http_search("limit=20").await;
-    assert_eq!(first["data"]["total"], 21);
+    assert_eq!(first["data"]["total"], 24);
     assert_eq!(first["data"]["items"].as_array().unwrap().len(), 20);
     assert_eq!(first["data"]["nextCursor"], "20");
     let second = http_search("limit=20&cursor=20").await;
-    assert_eq!(second["data"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(second["data"]["items"].as_array().unwrap().len(), 4);
     assert_eq!(second["data"]["nextCursor"], Value::Null);
 }
 
@@ -109,6 +109,7 @@ fn state(allow_remote_writes: bool, shared_live_writes_denied: bool) -> AppState
         allow_remote_writes,
         shared_live_writes_denied,
         connections: Default::default(),
+        server_admin: None,
     }
 }
 
@@ -139,8 +140,8 @@ async fn status_names_the_sample_catalog_and_its_size() {
     let body = http_status().await;
     assert_eq!(body["success"], true);
     assert_eq!(body["data"]["sample"], true);
-    assert_eq!(body["data"]["servers"], 21);
-    assert_eq!(body["data"]["updatedAt"], "2026-10-27T03:13:14.559Z");
+    assert_eq!(body["data"]["servers"], 24);
+    assert_eq!(body["data"]["updatedAt"], "2026-10-31T10:35:51.229Z");
     assert_eq!(body["data"]["sync"], json!({ "state": "disabled" }));
 }
 
@@ -168,4 +169,79 @@ async fn set_sync_validates_its_body_before_reaching_the_service() {
     assert_eq!(body["code"], "VALIDATION_ERROR");
     let body = http_set_sync(state(false, false), [127, 0, 0, 1], r#"{"enabled":true}"#).await;
     assert_eq!(body["code"], "MCP_CATALOG_SYNC_UNAVAILABLE");
+}
+
+pub(crate) const FIXED_ICON: &[u8] = b"\x89PNG\r\n\x1a\nfixture";
+
+pub(crate) async fn with_fixed_icons() {
+    let dir = tempfile::tempdir().expect("icon dir").keep();
+    crate::mcp_catalog::McpCatalogService::shared()
+        .await
+        .attach_fixed_icon(
+            dir,
+            crate::mcp_catalog::Icon {
+                content_type: crate::mcp_catalog::IconType::Png,
+                bytes: FIXED_ICON.into(),
+            },
+        );
+}
+
+pub(crate) async fn http_icon(encoded_name: &str) -> axum::response::Response {
+    with_fixed_icons().await;
+    axum::Router::new()
+        .route("/mcp-catalog/icon/{*name}", get(super::icon))
+        .oneshot(
+            Request::builder()
+                .uri(format!("/mcp-catalog/icon/{encoded_name}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response")
+}
+
+#[tokio::test]
+async fn rows_say_whether_the_host_has_a_logo_without_the_url() {
+    let body = http_search("query=abmeter").await;
+    let row = &body["data"]["items"][0];
+    assert_eq!(row["name"], "ai.abmeter/abmeter");
+    assert_eq!(row["hasIcon"], true);
+    assert!(!body.to_string().contains("abmeter.ai/"));
+    let hooka = http_search("query=hooka").await;
+    assert_eq!(hooka["data"]["items"][0]["hasIcon"], false);
+}
+
+#[tokio::test]
+async fn the_icon_route_serves_inert_image_bytes() {
+    let response = http_icon("ai.abmeter%2Fabmeter").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers().clone();
+    assert_eq!(headers["content-type"], "image/png");
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(
+        headers["content-security-policy"],
+        "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    );
+    assert_eq!(headers["cache-control"], "private, max-age=86400");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    assert_eq!(&bytes[..], FIXED_ICON);
+
+    let unescaped = http_icon("ai.abmeter/abmeter").await;
+    assert_eq!(unescaped.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn servers_without_a_logo_are_not_found() {
+    for name in ["to.hooka%2Fmcp", "io.example%2Fmissing"] {
+        let response = http_icon(name).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{name}");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let body: Value = serde_json::from_slice(&bytes).expect("IpcBody json");
+        assert_eq!(body["success"], false);
+        assert_eq!(body["code"], "NOT_FOUND");
+    }
 }

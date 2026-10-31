@@ -120,6 +120,7 @@ impl Host {
             acp_install: None,
             store: None,
             web_auth: None,
+            server_admin: None,
             allow_remote_writes: false,
             shared_live_writes_denied: false,
             pending_oauth_flows: Arc::new(parking_lot::RwLock::new(

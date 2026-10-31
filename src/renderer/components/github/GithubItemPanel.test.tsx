@@ -16,7 +16,9 @@ const api = vi.hoisted(() => ({
   getItem: vi.fn(),
   getChecks: vi.fn(),
   getCheckLog: vi.fn(),
-  merge: vi.fn()
+  merge: vi.fn(),
+  comment: vi.fn(),
+  checkoutPr: vi.fn()
 }))
 const writes = vi.hoisted(() => ({ admitted: true }))
 
@@ -323,6 +325,152 @@ describe('GithubItemPanel', () => {
 
     expect(await screen.findByText('Merged')).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Merge' })).toBeNull()
+  })
+
+  it('posts a comment with Ctrl+Enter and shows the comment GitHub returned', async () => {
+    api.getItem.mockResolvedValueOnce(ok(detail()))
+    // The re-read stays in flight, so what shows is the comment the post returned.
+    api.getItem.mockReturnValue(new Promise(() => {}))
+    api.comment.mockResolvedValue(
+      ok({
+        comment: {
+          id: 'c3',
+          author: 'me',
+          body: 'Posted on GitHub',
+          createdAt: '2026-10-31T11:00:00Z',
+          url: 'https://github.com/acme/app/pull/15#issuecomment-3'
+        }
+      })
+    )
+    renderPanel('issue')
+
+    const box = await screen.findByRole('textbox', { name: 'Add a comment' })
+    expect(screen.getByRole('button', { name: 'Comment' })).toBeDisabled()
+    fireEvent.change(box, { target: { value: 'Thanks, **merged**' } })
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
+
+    await waitFor(() =>
+      expect(api.comment).toHaveBeenCalledWith({
+        cwd: CWD,
+        repo: 'origin',
+        kind: 'issue',
+        number: 15,
+        target: { kind: 'conversation' },
+        body: 'Thanks, **merged**'
+      })
+    )
+    const markdown = await screen.findAllByTestId('markdown')
+    expect(markdown.map((el) => el.textContent)).toEqual([
+      'Fixes the crash on start.',
+      'Looks good',
+      'Ship it',
+      'Posted on GitHub'
+    ])
+    expect(box).toHaveValue('')
+    expect(api.getItem).toHaveBeenLastCalledWith({
+      cwd: CWD,
+      repo: 'origin',
+      kind: 'issue',
+      number: 15,
+      refresh: true
+    })
+  })
+
+  it('locks the comment text while the post is in flight', async () => {
+    api.getItem.mockResolvedValue(ok(detail()))
+    const post = deferred<{ success: false; code: string; error: string }>()
+    api.comment.mockReturnValue(post.promise)
+    renderPanel()
+
+    const box = await screen.findByRole('textbox', { name: 'Add a comment' })
+    fireEvent.change(box, { target: { value: 'First thought' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }))
+    expect(await screen.findByRole('button', { name: 'Posting…' })).toBeDisabled()
+    expect(box).toHaveAttribute('readonly')
+
+    await act(async () => post.resolve({ success: false, code: 'GH_FAILED', error: 'nope' }))
+    expect(box).not.toHaveAttribute('readonly')
+  })
+
+  it('keeps the text and shows the error when GitHub refuses the comment', async () => {
+    api.getItem.mockResolvedValue(ok(detail()))
+    api.comment.mockResolvedValue({
+      success: false,
+      code: 'GH_FAILED',
+      error: 'Resource not accessible by integration'
+    })
+    renderPanel()
+
+    const box = await screen.findByRole('textbox', { name: 'Add a comment' })
+    fireEvent.change(box, { target: { value: 'Draft reply' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Resource not accessible by integration'
+    )
+    expect(box).toHaveValue('Draft reply')
+    expect(screen.getAllByTestId('markdown')).toHaveLength(3)
+  })
+
+  it('replies inside a review thread', async () => {
+    const thread = {
+      id: 'PRRT_1',
+      path: 'src/app.ts',
+      line: 4,
+      isResolved: false,
+      isOutdated: false,
+      comments: [
+        { id: 'r1', author: 'rev', body: 'Rename this', createdAt: '2026-10-30T10:00:00Z', url: '' }
+      ]
+    }
+    api.getItem.mockResolvedValueOnce(ok(detail({ pr: pull({ reviewThreads: [thread] }) })))
+    api.getItem.mockReturnValue(new Promise(() => {}))
+    api.comment.mockResolvedValue(
+      ok({
+        comment: {
+          id: 'r2',
+          author: 'me',
+          body: 'Renamed',
+          createdAt: '2026-10-31T11:00:00Z',
+          url: ''
+        }
+      })
+    )
+    renderPanel()
+
+    const threads = await screen.findByRole('region', { name: /Review threads/ })
+    fireEvent.click(within(threads).getByRole('button', { name: 'Reply' }))
+    const reply = within(threads).getByRole('textbox', { name: 'Reply to this thread' })
+    fireEvent.change(reply, { target: { value: 'Renamed' } })
+    fireEvent.click(within(threads).getByRole('button', { name: 'Reply' }))
+
+    await waitFor(() =>
+      expect(api.comment).toHaveBeenCalledWith({
+        cwd: CWD,
+        repo: 'origin',
+        kind: 'pr',
+        number: 15,
+        target: { kind: 'review_thread', threadId: 'PRRT_1' },
+        body: 'Renamed'
+      })
+    )
+    await waitFor(() =>
+      expect(
+        within(threads)
+          .getAllByTestId('markdown')
+          .map((el) => el.textContent)
+      ).toEqual(['Rename this', 'Renamed'])
+    )
+    expect(within(threads).queryByRole('textbox')).toBeNull()
+  })
+
+  it('gates the comment box on a read-only server', async () => {
+    writes.admitted = false
+    api.getItem.mockResolvedValue(ok(detail()))
+    renderPanel()
+
+    expect(await screen.findByRole('textbox', { name: 'Add a comment' })).toBeDisabled()
+    expectWriteGated(screen.getByRole('button', { name: 'Comment' }))
   })
 })
 

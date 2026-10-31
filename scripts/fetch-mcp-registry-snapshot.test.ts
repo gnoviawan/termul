@@ -11,6 +11,7 @@ const {
   buildSnapshot,
   crawl,
   DROPPED_SERVER_FIELDS,
+  ICON_FIELDS,
   META_FILE,
   readBody,
   SNAPSHOT_FILE,
@@ -26,7 +27,10 @@ function row(name: string, version: string, status: string, isLatest: boolean) {
       name,
       version,
       description: 'd',
-      icons: [{ src: 'https://example.com/icon.png' }],
+      icons: [
+        { src: 'https://example.com/icon.png', sizes: ['64x64'], theme: 'light', extra: 1 },
+        { mimeType: 'image/png' }
+      ],
       _meta: { 'com.example/publisher': { stars: 1 } },
       remotes: [{ type: 'streamable-http', url: 'https://mcp.example.com/mcp' }]
     },
@@ -51,6 +55,7 @@ describe('buildSnapshot', () => {
             name: 'io.example/a',
             version: '1.1.0',
             description: 'd',
+            icons: [{ src: 'https://example.com/icon.png', sizes: ['64x64'], theme: 'light' }],
             remotes: [{ type: 'streamable-http', url: 'https://mcp.example.com/mcp' }]
           },
           _meta: {
@@ -62,6 +67,7 @@ describe('buildSnapshot', () => {
             name: 'io.example/b',
             version: '2.0.0',
             description: 'd',
+            icons: [{ src: 'https://example.com/icon.png', sizes: ['64x64'], theme: 'light' }],
             remotes: [{ type: 'streamable-http', url: 'https://mcp.example.com/mcp' }]
           },
           _meta: {
@@ -166,15 +172,19 @@ describe('verifySnapshot', () => {
   })
 })
 
-describe('DROPPED_SERVER_FIELDS', () => {
-  it('matches the fields host sync drops, so cached rows look like snapshot rows', () => {
-    const sync = readFileSync(
-      join(import.meta.dirname, '..', 'src-tauri', 'src', 'mcp_catalog', 'sync.rs'),
-      'utf8'
-    )
-    const rust = sync.match(/const DROPPED_SERVER_FIELDS: \[&str; \d+\] = \[([^\]]*)\]/)?.[1]
-    expect(rust?.match(/"[^"]+"/g)?.map((field) => JSON.parse(field))).toEqual([
-      ...DROPPED_SERVER_FIELDS
-    ])
+describe('slimmed fields', () => {
+  const sync = readFileSync(
+    join(import.meta.dirname, '..', 'src-tauri', 'src', 'mcp_catalog', 'sync.rs'),
+    'utf8'
+  )
+  const rustList = (constant: string) =>
+    sync
+      .match(new RegExp(`const ${constant}: \\[&str; \\d+\\] = \\[([^\\]]*)\\]`))?.[1]
+      ?.match(/"[^"]+"/g)
+      ?.map((field) => JSON.parse(field))
+
+  it('match what host sync keeps, so cached rows look like snapshot rows', () => {
+    expect(rustList('DROPPED_SERVER_FIELDS')).toEqual([...DROPPED_SERVER_FIELDS])
+    expect(rustList('ICON_FIELDS')).toEqual(ICON_FIELDS)
   })
 })
