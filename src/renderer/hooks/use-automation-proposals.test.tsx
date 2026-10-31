@@ -17,9 +17,7 @@ vi.mock('@/lib/automation-api', async (importOriginal) => {
   return {
     ...actual,
     listAutomations: vi.fn(() => ok([first, second])),
-    getAutomation: vi.fn((id: AutomationId) =>
-      ok(detailWith(id === 'auto-2' ? second : first))
-    ),
+    getAutomation: vi.fn((id: AutomationId) => ok(detailWith(id === 'auto-2' ? second : first))),
     listAutomationRuns: vi.fn(() => ok([])),
     markAutomationSeen: vi.fn(() => ok(undefined))
   }
