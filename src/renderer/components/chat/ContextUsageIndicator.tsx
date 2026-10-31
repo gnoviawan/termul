@@ -186,7 +186,7 @@ export function ContextUsageDetails({
       )}
       <div
         className={cn(
-          'flex items-center justify-between gap-2 border-t border-border/60 pt-2 text-2xs text-muted-foreground',
+          'flex flex-col border-t border-border/60 pt-2 text-2xs text-muted-foreground',
           STAGGER_ITEM
         )}
         style={stagger(5)}
@@ -194,10 +194,11 @@ export function ContextUsageDetails({
         <p className={cn(isWarning && 'text-warning')} data-testid="context-left">
           <RollingText text={isWarning ? `Nearing the limit · ${leftLabel}` : leftLabel} />
         </p>
-        {/* Always mounted, so screen readers announce the failure when it appears. */}
+        {/* Always mounted, so screen readers announce the failure when it appears.
+            Empty, it has no height; the gap lives on the message so the card does not jump. */}
         <p role="status">
           {compactPhase === 'failed' && (
-            <span className="animate-in fade-in-0 duration-150 text-destructive motion-reduce:animate-none">
+            <span className="mt-0.5 block animate-in fade-in-0 duration-150 text-destructive motion-reduce:animate-none">
               Compact didn't finish
             </span>
           )}
