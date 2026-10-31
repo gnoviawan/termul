@@ -1404,6 +1404,32 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessionUsage.s1).toBeUndefined()
   })
 
+  it('a turn that ends normally clears a rejected rate limit, a failed turn keeps it', async () => {
+    seedSession('s1', 'agent-1')
+    const limitHit = (): void =>
+      useAcpStore.getState()._onAgentError({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        message: "You've hit your 5-hour limit",
+        providerCode: 'provider_quota_exceeded'
+      })
+    limitHit()
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'error'
+    })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessionUsage.s1?.rateLimit?.status).toBe('rejected')
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessionUsage.s1?.rateLimit).toBeUndefined()
+  })
+
   it('_onUsageUpdate ignores zero cost placeholders', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onUsageUpdate({
