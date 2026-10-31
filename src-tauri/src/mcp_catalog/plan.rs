@@ -629,7 +629,6 @@ impl PlanStore {
         Ok((plan_id, expires_at))
     }
 
-    /// Drops every plan `caller` holds, as when its connection closes.
     pub(crate) fn forget_caller(&self, caller: &PlanCaller) -> usize {
         let mut plans = self.plans.lock();
         let before = plans.len();

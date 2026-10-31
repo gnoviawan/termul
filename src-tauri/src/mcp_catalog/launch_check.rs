@@ -14,7 +14,6 @@ use super::convert::{
     is_valid_identifier, McpCatalogReason, Runner,
 };
 
-/// The lowercase file name without a Windows executable extension.
 fn command_base(command: &str) -> String {
     let base = command
         .rsplit(['/', '\\'])
