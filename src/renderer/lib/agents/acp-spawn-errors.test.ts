@@ -87,6 +87,46 @@ describe('formatAcpSpawnError', () => {
     expect(result).not.toContain('Install Node.js')
   })
 
+  it('recognizes POSIX-sh "not found" wording for a missing npx child executable', () => {
+    // dash writes "sh: 1: <bin>: not found" where bash writes "command not
+    // found" — the same damaged npx cache, different shell.
+    const raw =
+      'agent failed to start: Internal error: {\n' +
+      '  "data": "Process exited with exit status: 127: sh: 1: codex-acp: not found\\n"\n' +
+      '}\nagent stderr:\nsh: 1: codex-acp: not found'
+    const result = classifySetupError(raw, { command: 'npx' })
+    expect(result).toMatchObject({ category: 'spawn', label: 'Agent unavailable' })
+    expect(result.detail).toContain('"codex-acp"')
+    expect(result.detail).toContain('npx cache')
+  })
+
+  it('explains an npx package missing an optional/platform dependency', () => {
+    // @agentclientprotocol/codex-acp spawns `codex app-server` via
+    // @openai/codex; a partial ~/.npm/_npx tree lacks the platform package and
+    // the vendor's own message sends users to a global install that does not
+    // repair the npx cache.
+    const raw =
+      'agent initialize failed: Codex process has exited with code 1:\n' +
+      'file:///root/.npm/_npx/c51fd8e4d04c136d/node_modules/@openai/codex/bin/codex.js:60\n' +
+      'Error: Missing optional dependency @openai/codex-linux-x64. ' +
+      'Reinstall Codex: npm install -g @openai/codex@latest\n' +
+      '    at findCodexExecutable'
+    const result = classifySetupError(raw, { command: 'npx' })
+    expect(result).toMatchObject({ category: 'spawn', label: 'Agent unavailable' })
+    expect(result.detail).toContain('@openai/codex-linux-x64')
+    expect(result.detail).toContain('npx cache')
+    expect(result.detail).not.toContain('npm install -g')
+  })
+
+  it('explains an npx package that cannot load a cached module', () => {
+    const raw = "Process exited with exit status: 1: Error: Cannot find module 'foo/dist/index.js'"
+    const result = classifySetupError(raw, { command: 'npx' })
+    expect(result.category).toBe('spawn')
+    expect(result.detail).toContain('npx cache')
+    // A non-npx launcher gets no npx-cache blame for the same wording.
+    expect(classifySetupError(raw, { command: 'node' }).category).not.toBe('spawn')
+  })
+
   it('does not blame the npx cache for other exit-127 or missing-command failures', () => {
     const other = 'Process exited with exit status: 127: sh: unrelated tool failed'
     expect(formatAcpSpawnError(other, { command: 'npx' })).toBe(other)
