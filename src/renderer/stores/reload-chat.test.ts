@@ -178,7 +178,7 @@ describe('background agents and reload', () => {
     useAcpStore.setState({ toolCalls: { s1: [backgroundAgent('a')] } })
     expect(blocked()).toBeNull()
     expect(switchBlockedReason(useAcpStore.getState(), 's1')).toBe(
-      'background subagents are still running — wait for them to finish before switching'
+      'background subagents are still running — switching would stop them'
     )
   })
 
