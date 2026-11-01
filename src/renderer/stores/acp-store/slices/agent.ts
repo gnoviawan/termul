@@ -185,8 +185,8 @@ export function forgetAuthMethodForConfig(configId: string): void {
  * Validated `browser_open_request` URLs received BEFORE the agent registers
  * (`ShimWatcher` starts before `agent_spawned` reaches the renderer — an
  * early browser call would otherwise be dropped and the OAuth URL lost).
- * Promoted into `pendingBrowserOpen` by `_onAgentSpawned`; cleared on
- * teardown via `clearPendingBrowserOpen`.
+ * Promoted into `pendingSignIn` by `_onAgentSpawned`; cleared on
+ * teardown via `clearPendingSignIn`.
  */
 const earlyBrowserOpen = new Map<AgentId, string>()
 
@@ -390,7 +390,7 @@ async function authenticateBeforeSession(get: () => AcpState, agentId: AgentId):
     // Auth succeeded — a pending browser-open request for this agent is
     // resolved; drop it so the dialog dismisses. Module-scope helper: the
     // store exists by the time any auth flow runs.
-    useAcpStore.getState().clearPendingBrowserOpen(agentId)
+    useAcpStore.getState().clearPendingSignIn(agentId)
     return true
   })()
   inFlightAuth.set(flightKey, task)
@@ -533,13 +533,14 @@ type AgentSliceState = Pick<
   AcpState,
   | 'agents'
   | 'agentStatus'
-  | 'pendingBrowserOpen'
+  | 'pendingSignIn'
   | 'autoOpenBrowserUrl'
   | 'pendingBrowserConsents'
   | 'pendingRestartVersions'
   | 'spawnAgent'
   | 'killAgent'
-  | 'clearPendingBrowserOpen'
+  | 'clearPendingSignIn'
+  | 'respondAgentSignIn'
   | 'completeBrowserAuth'
   | 'authenticateAgent'
   | 'logoutAgent'
@@ -548,6 +549,8 @@ type AgentSliceState = Pick<
   | '_onAgentCrashed'
   | '_onAgentDisconnected'
   | '_onBrowserOpenRequest'
+  | '_onAgentSignInRequest'
+  | '_onAgentSignInResolved'
   | '_onBrowserAgentTab'
   | '_onBrowserTabClosed'
   | '_onBrowserConsentTicket'
@@ -585,7 +588,7 @@ function endPromptTrackingForAgentFailure(
 export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> = (set, get) => ({
   agents: {},
   agentStatus: {},
-  pendingBrowserOpen: {},
+  pendingSignIn: {},
   autoOpenBrowserUrl: {},
   pendingBrowserConsents: {},
 
@@ -698,19 +701,42 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     })
     // A killed agent can never finish its browser-open flow — drop the
     // captured URL so the dialog dismisses.
-    get().clearPendingBrowserOpen(agentId)
+    get().clearPendingSignIn(agentId)
   },
 
-  clearPendingBrowserOpen: (agentId) => {
+  clearPendingSignIn: (agentId) => {
     earlyBrowserOpen.delete(agentId)
     set((s) => {
-      if (!(agentId in s.pendingBrowserOpen) && !(agentId in s.autoOpenBrowserUrl)) return {}
-      const pendingBrowserOpen = { ...s.pendingBrowserOpen }
+      if (!(agentId in s.pendingSignIn) && !(agentId in s.autoOpenBrowserUrl)) return {}
+      const pendingSignIn = { ...s.pendingSignIn }
       const autoOpenBrowserUrl = { ...s.autoOpenBrowserUrl }
-      delete pendingBrowserOpen[agentId]
+      delete pendingSignIn[agentId]
       delete autoOpenBrowserUrl[agentId]
-      return { pendingBrowserOpen, autoOpenBrowserUrl }
+      return { pendingSignIn, autoOpenBrowserUrl }
     })
+  },
+
+  respondAgentSignIn: async (agentId, action) => {
+    const prompt = get().pendingSignIn[agentId]
+    if (prompt?.kind !== 'elicitation') return
+    // An accepted prompt stays up: the user still needs its code until the
+    // host reports the sign-in finished. A cancelled one is over.
+    if (action === 'cancel') get().clearPendingSignIn(agentId)
+    void logFrontendError({
+      level: 'info',
+      message: `[acp] sign-in prompt ${action} (agentId=${agentId}, requestId=${prompt.requestId})`,
+      source: 'acp-store:respondAgentSignIn'
+    })
+    try {
+      await acpApi.respondElicitation(agentId, prompt.requestId, action)
+    } catch (err) {
+      void logFrontendError({
+        level: 'warn',
+        message: `[acp] sign-in prompt response failed (agentId=${agentId}, requestId=${prompt.requestId})`,
+        source: 'acp-store:respondAgentSignIn'
+      })
+      throw err
+    }
   },
 
   completeBrowserAuth: (agentId) => {
@@ -732,7 +758,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         rememberAuthMethodForConfig(configId, attempted)
       }
     }
-    get().clearPendingBrowserOpen(agentId)
+    get().clearPendingSignIn(agentId)
     // Re-prepare chats that failed on auth so their banners clear on their
     // own. `configToLiveAgent` keys are `configId\0cwd`; prepareChatError
     // keys append `\0mcpKey` (empty when no MCP selection), so a prefix
@@ -851,7 +877,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       }
       // Auth succeeded — a pending browser-open request for this agent is
       // resolved; drop it so the dialog dismisses.
-      get().clearPendingBrowserOpen(agentId)
+      get().clearPendingSignIn(agentId)
       return true
     })().finally(() => {
       // Identity guard (see `authenticateBeforeSession`): a late cleanup must
@@ -894,7 +920,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
           [e.agentId]: 'connected'
         },
         ...(early !== undefined
-          ? { pendingBrowserOpen: { ...s.pendingBrowserOpen, [e.agentId]: early } }
+          ? { pendingSignIn: { ...s.pendingSignIn, [e.agentId]: { kind: 'browser', url: early } } }
           : {})
       }
     }),
@@ -1215,7 +1241,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     })
     // A dead process can never finish its browser-open flow — drop the
     // captured URL so the dialog dismisses.
-    get().clearPendingBrowserOpen(e.agentId)
+    get().clearPendingSignIn(e.agentId)
     const endedAt = Date.now()
     set((s) => {
       const toolCalls = cancelRunningSubagents(s.toolCalls, goneSessionIds, endedAt)
@@ -1284,10 +1310,36 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       if (firstOfFlight) autoOpenBrowserUrl[e.agentId] = e.url
       else if (autoOpenBrowserUrl[e.agentId] !== e.url) delete autoOpenBrowserUrl[e.agentId]
       return {
-        pendingBrowserOpen: { ...s.pendingBrowserOpen, [e.agentId]: e.url },
+        pendingSignIn: { ...s.pendingSignIn, [e.agentId]: { kind: 'browser', url: e.url } },
         autoOpenBrowserUrl
       }
     })
+  },
+
+  _onAgentSignInRequest: (e) => {
+    // The host refuses a URL that is not safe to open remotely before it
+    // emits; this mirrors it so a malformed payload never reaches Open.
+    if (typeof e.agentId !== 'string' || !(e.agentId in get().agents)) return
+    if (typeof e.requestId !== 'string' || typeof e.message !== 'string') return
+    if (typeof e.url !== 'string' || !/^https:\/\//i.test(e.url)) return
+    void logFrontendError({
+      level: 'info',
+      message: `[acp] sign-in prompt received (agentId=${e.agentId}, requestId=${e.requestId})`,
+      source: 'acp-store:_onAgentSignInRequest'
+    })
+    set((s) => ({
+      pendingSignIn: {
+        ...s.pendingSignIn,
+        [e.agentId]: { kind: 'elicitation', requestId: e.requestId, url: e.url, message: e.message }
+      }
+    }))
+  },
+
+  _onAgentSignInResolved: (e) => {
+    const prompt = get().pendingSignIn[e.agentId]
+    if (prompt?.kind === 'elicitation' && prompt.requestId === e.requestId) {
+      get().clearPendingSignIn(e.agentId)
+    }
   },
 
   _onBrowserAgentTab: (e, eventSeq) => applyBrowserAgentTab(e, eventSeq),

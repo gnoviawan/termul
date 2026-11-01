@@ -29,10 +29,12 @@ use crate::acp::session_persistence::SessionRegistration;
 
 mod activity;
 mod commands;
+mod sign_in;
 mod subagents;
 pub(crate) use activity::ActivityClock;
-pub(crate) use subagents::ChildRoute;
 pub use activity::AgentActivity;
+pub(crate) use sign_in::{RequestElicitationRoute, SignInPrompt, SignInSlot};
+pub(crate) use subagents::ChildRoute;
 
 /// A permission request awaiting the user's decision.
 ///
@@ -147,6 +149,9 @@ pub(crate) struct DriverState {
     last_commands: commands::LastCommands,
     /// Native subagent child sessions and the chat each one belongs to.
     subagents: subagents::SubagentRoutes,
+    /// The agent-level sign-in prompt and the `authenticate` requests that
+    /// may raise one.
+    sign_in: SignInSlot,
 }
 
 /// State of one session's replay window: how many reopens are in flight and
@@ -262,6 +267,10 @@ pub(crate) struct TurnHandles {
 impl DriverState {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn sign_in(&mut self) -> &mut SignInSlot {
+        &mut self.sign_in
     }
 
     /// Register a pending permission request and return its globally-unique
@@ -812,7 +821,8 @@ impl DriverState {
             active_turns: self.active_turns.len(),
             pending_permissions: self.pending_permissions.len(),
             pending_questions: self.pending_questions.len(),
-            pending_elicitations: self.pending_elicitations.len(),
+            pending_elicitations: self.pending_elicitations.len()
+                + usize::from(self.sign_in.is_pending()),
             running_terminals,
             reopens_in_flight: self.reopen_reservations.values().sum::<usize>()
                 + self
@@ -830,3 +840,6 @@ mod tests;
 
 #[cfg(test)]
 mod subagents_tests;
+
+#[cfg(test)]
+mod sign_in_tests;

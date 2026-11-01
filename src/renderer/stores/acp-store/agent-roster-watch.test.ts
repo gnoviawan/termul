@@ -25,7 +25,9 @@ function setup(held: { agents?: string[]; connected?: string[] } = {}) {
     _onAgentCrashed: vi.fn(),
     _onAgentError: vi.fn(),
     _onAgentDisconnected: vi.fn(),
-    _onBrowserOpenRequest: vi.fn()
+    _onBrowserOpenRequest: vi.fn(),
+    _onAgentSignInRequest: vi.fn(),
+    _onAgentSignInResolved: vi.fn()
   }
   let handlers: WatchHandlers<WsAgentSummary[], AgentsWatchDelta> | null = null
   const watches = {
@@ -75,6 +77,28 @@ describe('attachAgentRosterWatch', () => {
     })
     expect(state._onAgentSpawned).not.toHaveBeenCalled()
     expect(state._onAgentDisconnected).not.toHaveBeenCalled()
+  })
+
+  it('routes sign-in prompt deltas to the sign-in reducers', () => {
+    const { state, handlers } = setup()
+    const request = {
+      agentId: 'a1',
+      requestId: 'signin-1',
+      url: 'https://auth.example/device',
+      message: 'Enter this code: ABCD-1234'
+    }
+    handlers().onDelta?.({ event: 'agent_sign_in_request', payload: request })
+    handlers().onDelta?.({
+      event: 'agent_sign_in_resolved',
+      payload: { agentId: 'a1', requestId: 'signin-1' }
+    })
+
+    expect(state._onAgentSignInRequest).toHaveBeenCalledWith(request)
+    expect(state._onAgentSignInResolved).toHaveBeenCalledWith({
+      agentId: 'a1',
+      requestId: 'signin-1'
+    })
+    expect(state._onAgentSpawned).not.toHaveBeenCalled()
   })
 
   it('hands a browser_policy_changed delta to the policy subscribers, not the roster', () => {

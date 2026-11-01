@@ -74,7 +74,7 @@ export function CodexCliAuthSync(): null {
         )
         const authBusy =
           isAnyAgentAuthInFlight() ||
-          liveAgentIds.some((agentId) => Boolean(live.pendingBrowserOpen[agentId]))
+          liveAgentIds.some((agentId) => Boolean(live.pendingSignIn[agentId]))
         const decision = codexAuthSyncDecision({
           previous: baselines.current.get(baselineKey) ?? null,
           next,

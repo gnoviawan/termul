@@ -17,6 +17,8 @@ import type {
   AgentCrashedEvent,
   AgentDisconnectedEvent,
   AgentErrorEvent,
+  AgentSignInRequestEvent,
+  AgentSignInResolvedEvent,
   AgentSpawnedEvent,
   BrowserOpenRequestEvent
 } from '@/lib/acp-api'
@@ -98,6 +100,12 @@ function applyRosterDelta(state: AcpState, delta: AgentsWatchDelta): void {
     case 'browser_open_request':
       // Not roster state: the host's browser-open shim captured an auth URL.
       state._onBrowserOpenRequest(delta.payload as BrowserOpenRequestEvent)
+      return
+    case 'agent_sign_in_request':
+      state._onAgentSignInRequest(delta.payload as AgentSignInRequestEvent)
+      return
+    case 'agent_sign_in_resolved':
+      state._onAgentSignInResolved(delta.payload as AgentSignInResolvedEvent)
       return
     default:
       void logFrontendError({
