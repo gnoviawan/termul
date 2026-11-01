@@ -27,7 +27,7 @@ node tools/reconnect-lab/run.mjs --from tools/reconnect-lab/out   # re-print a s
 | `--web-dir <dir>` | Serve the page from this `dist-web` instead of the server's built-in assets. |
 | `--server-bin <path>` | Use this server binary. |
 | `--hide <method>` | How the tab is hidden: `override+pause` (default), `override`, `pause` or `freeze`. |
-| `--rtt <ms>` | Add this delay to each proxied chunk. |
+| `--rtt <ms>` | Add this round-trip delay. The proxy holds each chunk for half of it in each direction. |
 | `--out <dir>` | Write results here instead of `out/`. |
 
 Each run writes `out/results.json` and one timeline per scenario, `out/<scenario>.run<N>.log`.
