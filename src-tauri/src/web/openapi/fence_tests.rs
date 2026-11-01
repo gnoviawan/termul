@@ -1,7 +1,8 @@
 //! Drift fence: every route the HTTP router registers has a row in
 //! [`ROUTES`], and every row is registered. Reads the router sources, starting
-//! at `router()` in `web/router/mod.rs` and following each
-//! `.merge(crate::web::<module>::<fn>(..))` into the sub-router.
+//! at `router()` in `web/router/mod.rs` and following each `.merge(..)` into
+//! the sub-router. The scan fails closed: router text it cannot resolve panics
+//! instead of dropping routes from both sides of the comparison.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -10,30 +11,130 @@ use super::{HttpMethod, ROUTES};
 
 const ROUTES_FILE: &str = "src-tauri/src/web/openapi/routes.rs";
 
+/// Method-router constructors and chained calls that add one method.
+const METHODS: &[(&str, HttpMethod)] = &[
+    ("get", HttpMethod::Get),
+    ("post", HttpMethod::Post),
+    ("put", HttpMethod::Put),
+    ("delete", HttpMethod::Delete),
+];
+
+/// The other `axum::routing` method-router constructors. Each needs a
+/// `HttpMethod` mapping before the scan can read it.
+const AXUM_CONSTRUCTORS: &[&str] = &["any", "connect", "head", "on", "options", "patch", "trace"];
+
+/// Chained `MethodRouter` calls that add no method.
+const MODIFIERS: &[&str] = &["layer", "route_layer", "with_state"];
+
+/// Routes registered with `any(..)`, and the methods their handler serves.
+/// The canvas bundle handler answers `GET` (and `HEAD`) only.
+const ANY_ROUTES: &[(&str, HttpMethod)] = &[("/canvas/{id}/{*rest}", HttpMethod::Get)];
+
+/// Router calls that register routes the scan cannot follow.
+const UNSUPPORTED_ROUTER_CALLS: &[&str] = &[".nest(", ".route_service(", ".nest_service("];
+
+struct Module {
+    file: String,
+    source: String,
+}
+
 fn web_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/web")
 }
 
-fn read_module(module: &str) -> String {
+/// The web module at `module` (`git_api`, `router/host_routes`), comments
+/// stripped.
+fn read_module(module: &str, referenced_from: &str) -> Module {
     let dir = web_dir();
-    let candidates = [
-        dir.join(format!("{module}.rs")),
-        dir.join(module).join("mod.rs"),
-    ];
-    candidates
-        .iter()
-        .find_map(|path| std::fs::read_to_string(path).ok())
-        .unwrap_or_else(|| panic!("no source file for web module `{module}`"))
+    [format!("{module}.rs"), format!("{module}/mod.rs")]
+        .into_iter()
+        .find_map(|relative| {
+            let source = std::fs::read_to_string(dir.join(&relative)).ok()?;
+            Some(Module {
+                file: format!("src-tauri/src/web/{relative}"),
+                source: strip_comments(&source),
+            })
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "drift fence: cannot resolve {referenced_from}: `{module}` is not a module under \
+                 src-tauri/src/web. Teach src-tauri/src/web/openapi/fence_tests.rs this form."
+            )
+        })
 }
 
-/// The source without `//` line comments, so commented-out or explanatory
-/// `.route(` text is not mistaken for a registration.
-fn strip_line_comments(source: &str) -> String {
-    source
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n")
+/// `source` without `//` and `/* */` comments, so commented-out or
+/// explanatory router text is not mistaken for a registration. String and
+/// char literals are kept intact.
+fn strip_comments(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut index = 0;
+    let mut kept_from = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                out.push_str(&source[kept_from..index]);
+                index += source[index..].find('\n').unwrap_or(source.len() - index);
+                kept_from = index;
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                out.push_str(&source[kept_from..index]);
+                let close = source[index + 2..]
+                    .find("*/")
+                    .expect("block comment closes");
+                index += close + 4;
+                out.push(' ');
+                kept_from = index;
+            }
+            b'"' => index = string_end(source, index),
+            b'r' if raw_string_start(source, index) => index = raw_string_end(source, index),
+            b'\'' => index = char_literal_end(source, index),
+            _ => index += 1,
+        }
+    }
+    out.push_str(&source[kept_from..]);
+    out
+}
+
+/// The index just past the `"..."` literal opening at `open`.
+fn string_end(source: &str, open: usize) -> usize {
+    let bytes = source.as_bytes();
+    let mut index = open + 1;
+    while bytes[index] != b'"' {
+        index += if bytes[index] == b'\\' { 2 } else { 1 };
+    }
+    index + 1
+}
+
+fn raw_string_start(source: &str, index: usize) -> bool {
+    let after_ident = index > 0 && {
+        let previous = source.as_bytes()[index - 1];
+        (previous.is_ascii_alphanumeric() || previous == b'_') && previous != b'b'
+    };
+    !after_ident && source[index + 1..].trim_start_matches('#').starts_with('"')
+}
+
+/// The index just past the `r#"..."#` literal opening at `open`.
+fn raw_string_end(source: &str, open: usize) -> usize {
+    let hashes = source[open + 1..].len() - source[open + 1..].trim_start_matches('#').len();
+    let body = open + 2 + hashes;
+    let terminator = format!("\"{}", "#".repeat(hashes));
+    body + source[body..].find(&terminator).expect("raw string closes") + terminator.len()
+}
+
+/// The index just past a char literal at `open`, or past the `'` of a
+/// lifetime.
+fn char_literal_end(source: &str, open: usize) -> usize {
+    let rest = &source[open + 1..];
+    if let Some(escaped) = rest.strip_prefix('\\') {
+        return open + 1 + escaped.find('\'').expect("char literal closes") + 2;
+    }
+    let mut chars = rest.char_indices();
+    match (chars.next(), chars.next()) {
+        (Some(_), Some((at, '\''))) => open + 1 + at + 1,
+        _ => open + 1,
+    }
 }
 
 /// The text between the parenthesis at `open` and its matching close.
@@ -57,27 +158,31 @@ fn balanced(source: &str, open: usize) -> &str {
     panic!("unbalanced source after byte {open}");
 }
 
-/// The body of `fn <name>` in `source`.
-fn fn_body<'a>(source: &'a str, name: &str) -> &'a str {
+/// The body of `fn <name>` in `module`.
+fn fn_body<'a>(module: &'a Module, name: &str) -> &'a str {
+    let source = &module.source;
     let start = source
         .find(&format!("fn {name}("))
         .or_else(|| source.find(&format!("fn {name}<")))
-        .unwrap_or_else(|| panic!("fn {name} not found"));
+        .unwrap_or_else(|| panic!("drift fence: fn `{name}` not found in {}", module.file));
     let open = start + source[start..].find('{').expect("fn has a body");
     balanced(source, open)
 }
 
-/// `"literal"` or a `const IDENT: &str = "literal";` declared in `source`.
-fn resolve_path(argument: &str, source: &str) -> String {
+/// `"literal"` or a `const IDENT: &str = "literal";` declared in `module`.
+fn resolve_path(argument: &str, module: &Module) -> String {
     let argument = argument.trim();
     if let Some(literal) = argument.strip_prefix('"') {
         return literal.trim_end_matches('"').to_string();
     }
+    let source = &module.source;
     let declaration = format!("const {argument}: &str = \"");
-    let start = source
-        .find(&declaration)
-        .unwrap_or_else(|| panic!("route path `{argument}` is neither a literal nor a &str const"))
-        + declaration.len();
+    let start = source.find(&declaration).unwrap_or_else(|| {
+        panic!(
+            "drift fence: route path `{argument}` in {} is neither a literal nor a &str const",
+            module.file
+        )
+    }) + declaration.len();
     source[start..start + source[start..].find('"').expect("const literal ends")].to_string()
 }
 
@@ -95,71 +200,162 @@ fn split_first_argument(arguments: &str) -> (&str, &str) {
     panic!("`.route({arguments})` has no method router");
 }
 
-/// The axum method-router constructors (`get(`, `.post(`, ...) in `text`.
-/// `any(` is the canvas bundle catch-all, whose handler serves `GET` (and
-/// `HEAD`) only.
-fn method_calls(text: &str) -> BTreeSet<HttpMethod> {
-    const CALLS: &[(&str, HttpMethod)] = &[
-        ("get(", HttpMethod::Get),
-        ("post(", HttpMethod::Post),
-        ("put(", HttpMethod::Put),
-        ("delete(", HttpMethod::Delete),
-        ("any(", HttpMethod::Get),
-    ];
-    let mut methods = BTreeSet::new();
-    for (call, method) in CALLS {
-        for (index, _) in text.match_indices(call) {
-            let preceded_by_ident = text[..index]
+/// A call chain `a::b(x).c(y)` as `[("a::b", "x"), ("c", "y")]`, or `None`
+/// when `expression` is not one.
+fn call_chain(expression: &str) -> Option<Vec<(&str, &str)>> {
+    let mut calls = Vec::new();
+    let mut rest = expression.trim();
+    loop {
+        let open = rest.find('(')?;
+        let callee = rest[..open].trim();
+        let is_path = !callee.is_empty()
+            && callee
                 .chars()
-                .next_back()
-                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == ':');
-            if !preceded_by_ident {
-                methods.insert(*method);
-            }
+                .all(|c| c.is_alphanumeric() || c == '_' || c == ':');
+        if !is_path {
+            return None;
         }
+        let arguments = balanced(rest, open);
+        calls.push((callee, arguments));
+        rest = rest[open + 1 + arguments.len() + 1..].trim_start();
+        if rest.is_empty() {
+            return Some(calls);
+        }
+        rest = rest.strip_prefix('.')?.trim_start();
+    }
+}
+
+/// The module and fn a call path such as `crate::web::git_api::stage` or
+/// `log_api::route` names, relative to the web module `current`.
+fn resolve_fn(callee: &str, current: &str) -> (String, String) {
+    let path = callee.strip_prefix("crate::web::").unwrap_or(callee);
+    match path.rsplit_once("::") {
+        Some((module, name)) => (module.replace("::", "/"), name.to_string()),
+        None => (current.to_string(), path.to_string()),
+    }
+}
+
+fn method_named(name: &str) -> Option<HttpMethod> {
+    METHODS
+        .iter()
+        .find(|(call, _)| *call == name)
+        .map(|(_, method)| *method)
+}
+
+/// The methods `expression` (a `.route(path, expression)` method router, or
+/// the body of a helper that returns one) registers for `path`.
+fn method_router_methods(
+    expression: &str,
+    path: &str,
+    module: &str,
+    file: &str,
+) -> BTreeSet<HttpMethod> {
+    let unresolved = |why: &str| -> ! {
+        panic!(
+            "drift fence: cannot resolve the methods of route `{path}` in {file}: {why}\n  \
+             text: `{}`\nTeach src-tauri/src/web/openapi/fence_tests.rs this form.",
+            expression.trim()
+        )
+    };
+    let calls = call_chain(expression).unwrap_or_else(|| unresolved("not a call chain"));
+    let mut methods = BTreeSet::new();
+    for (position, (callee, _)) in calls.iter().enumerate() {
+        let name = callee.rsplit("::").next().unwrap_or(callee);
+        if let Some(method) = method_named(name) {
+            methods.insert(method);
+            continue;
+        }
+        if position > 0 {
+            if !MODIFIERS.contains(&name) {
+                unresolved(&format!("unrecognized method-router call `.{name}(`"));
+            }
+            continue;
+        }
+        if name == "any" {
+            let (_, method) = ANY_ROUTES
+                .iter()
+                .find(|(any_path, _)| *any_path == path)
+                .unwrap_or_else(|| unresolved("`any(..)` on a path missing from ANY_ROUTES"));
+            methods.insert(*method);
+        } else if AXUM_CONSTRUCTORS.contains(&name) || name.ends_with("_service") {
+            unresolved(&format!("unrecognized method-router constructor `{name}(`"));
+        } else {
+            let (helper_module, helper) = resolve_fn(callee, module);
+            let source = read_module(&helper_module, &format!("`{callee}` in {file}"));
+            let body = fn_body(&source, &helper);
+            if body.contains(';') {
+                unresolved(&format!(
+                    "helper `{callee}` is not a single method-router expression"
+                ));
+            }
+            methods.extend(method_router_methods(
+                body,
+                path,
+                &helper_module,
+                &source.file,
+            ));
+        }
+    }
+    if methods.is_empty() {
+        unresolved("no HTTP method found");
     }
     methods
 }
 
-/// Methods of a route registered through a helper such as
-/// `log_api::route()`: the method calls inside that helper's body.
-fn helper_methods(expression: &str) -> BTreeSet<HttpMethod> {
-    let call = expression.trim();
-    let (module, rest) = call
-        .split_once("::")
-        .unwrap_or_else(|| panic!("cannot resolve the methods of `{call}`"));
-    let name = &rest[..rest.find('(').expect("helper is a call")];
-    method_calls(fn_body(&read_module(module), name))
-}
-
 /// Every `(method, path)` registered inside `fn <name>` of web module
 /// `module`, merged sub-routers included.
-fn registered_in(module: &str, name: &str, routes: &mut BTreeSet<(HttpMethod, String)>) {
-    let source = strip_line_comments(&read_module(module));
+fn registered_in(
+    module: &str,
+    name: &str,
+    referenced_from: &str,
+    routes: &mut BTreeSet<(HttpMethod, String)>,
+) {
+    let source = read_module(module, referenced_from);
     let body = fn_body(&source, name);
-    let body_start = body.as_ptr() as usize - source.as_ptr() as usize;
+    let body_start = body.as_ptr() as usize - source.source.as_ptr() as usize;
     for (index, _) in body.match_indices(".route(") {
         let open = body_start + index + ".route".len();
-        let (path, method_router) = split_first_argument(balanced(&source, open));
+        let (path, method_router) = split_first_argument(balanced(&source.source, open));
         let path = resolve_path(path, &source);
-        let mut methods = method_calls(method_router);
-        if methods.is_empty() {
-            methods = helper_methods(method_router);
-        }
-        assert!(!methods.is_empty(), "no HTTP method found for route {path}");
+        let method_router = method_router.trim().trim_end_matches(',');
+        let methods = method_router_methods(method_router, &path, module, &source.file);
         routes.extend(methods.into_iter().map(|method| (method, path.clone())));
     }
-    for (index, _) in body.match_indices(".merge(crate::web::") {
-        let target = &body[index + ".merge(crate::web::".len()..];
-        let target = &target[..target.find('(').expect("merge target is a call")];
-        let (sub_module, sub_fn) = target.split_once("::").expect("module::fn merge target");
-        registered_in(sub_module, sub_fn, routes);
+    for call in UNSUPPORTED_ROUTER_CALLS {
+        if let Some(index) = body.find(call) {
+            let arguments = balanced(&source.source, body_start + index + call.len() - 1);
+            panic!(
+                "drift fence: `{call}{arguments})` in fn {name} of {} registers routes the scan \
+                 cannot follow. Teach src-tauri/src/web/openapi/fence_tests.rs this form.",
+                source.file
+            );
+        }
+    }
+    for (index, _) in body.match_indices(".merge(") {
+        let arguments = balanced(&source.source, body_start + index + ".merge".len());
+        let target = call_chain(arguments)
+            .filter(|calls| calls.len() == 1)
+            .map(|calls| resolve_fn(calls[0].0, module));
+        let Some((sub_module, sub_fn)) = target else {
+            panic!(
+                "drift fence: cannot resolve `.merge({})` in fn {name} of {}. Merge a call to a \
+                 web-module router fn, or teach src-tauri/src/web/openapi/fence_tests.rs this form.",
+                arguments.trim(),
+                source.file
+            );
+        };
+        let merge = format!(
+            "`.merge({})` in fn {name} of {}",
+            arguments.trim(),
+            source.file
+        );
+        registered_in(&sub_module, &sub_fn, &merge, routes);
     }
 }
 
 fn registered_routes() -> BTreeSet<(HttpMethod, String)> {
     let mut routes = BTreeSet::new();
-    registered_in("router", "router", &mut routes);
+    registered_in("router", "router", "the router entry point", &mut routes);
     routes
 }
 
@@ -226,5 +422,26 @@ fn the_router_scan_reads_methods_from_chained_calls_and_helpers() {
     assert!(
         !routes.contains(&(HttpMethod::Get, "/log/frontend-error".to_string())),
         "a helper's single method must not widen to others"
+    );
+}
+
+#[test]
+#[should_panic(expected = "unrecognized method-router call `.patch(`")]
+fn the_router_scan_refuses_a_chained_method_it_cannot_map() {
+    method_router_methods("get(a).patch(b)", "/probe", "router", "probe.rs");
+}
+
+#[test]
+#[should_panic(expected = "unrecognized method-router constructor `on(`")]
+fn the_router_scan_refuses_an_unmapped_constructor() {
+    method_router_methods("on(MethodFilter::GET, a)", "/probe", "router", "probe.rs");
+}
+
+#[test]
+fn comment_stripping_keeps_literals_and_drops_trailing_and_block_comments() {
+    let source = "let url = \"http://x\"; // .route(\"/a\")\nlet c = '\"'; /* .merge(m::f()) */ let r = r#\"//\"#;";
+    assert_eq!(
+        strip_comments(source),
+        "let url = \"http://x\"; \nlet c = '\"';   let r = r#\"//\"#;"
     );
 }
