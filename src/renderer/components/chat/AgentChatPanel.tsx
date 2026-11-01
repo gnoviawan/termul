@@ -52,10 +52,10 @@ import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stor
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
 import { BrowserConsentCard } from './BrowserConsentCard'
-import { ChatChangedFilesPanel } from './ChatChangedFilesPanel'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
+import { ChatStatusPill } from './ChatStatusPill'
 import { CHAT_GUTTER_X } from './chat-layout'
 import { ChatStarters } from './chat-start'
 import { buildTimeline, consolidateThoughtGroups, spliceReloadMarker } from './chat-timeline'
@@ -68,7 +68,6 @@ import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
 import { PromptReconcileNotice } from './PromptReconcileNotice'
 import { ReloadChatConfirmDialog } from './ReloadChatConfirmDialog'
-import { SubagentPill } from './SubagentPill'
 import { useApprovalDock } from './use-approval-dock'
 import { AUTO_RESUME_FAILED_REASON, useIdleStopAutoResume } from './use-idle-stop-auto-resume'
 
@@ -187,10 +186,6 @@ export function AgentChatPanel({
   )
   const commands = useAcpStore((s) =>
     promptSessionId ? (s.commands[promptSessionId] ?? EMPTY_COMMANDS) : EMPTY_COMMANDS
-  )
-  const hasFileChanges = useMemo(
-    () => toolCalls.some((t) => t.kind === 'edit' || t.kind === 'delete' || t.kind === 'move'),
-    [toolCalls]
   )
   const plan = useAcpStore((s) => s.plans[sessionId] ?? EMPTY_PLAN)
   // The oldest pending permission for THIS session (resolve one to reveal the next).
@@ -661,7 +656,7 @@ export function AgentChatPanel({
   // Desktop + web parity: the open-in-editor chain is transport-agnostic —
   // where `/fs/info` is loopback-guarded on remote peers, resolution falls
   // back to the deliberately unguarded `/fs/read` open path (the same one
-  // ChatChangedFilesPanel uses).
+  // the changed-files list in ChatStatusPill uses).
   const projects = useProjectStore((state) => state.projects)
   const filePathContext = useMemo(
     () => ({
@@ -713,7 +708,7 @@ export function AgentChatPanel({
   // view (T2.2).
   const rootRef = useRef<HTMLDivElement>(null)
 
-  // Mobile dock around approvals: compact the plan / changed-files bars while
+  // Mobile dock around approvals: compact the plan bar while
   // the keyboard is up with an approval pending, and return focus to the
   // composer card when a prompt that held focus resolves. The ids mirror the
   // render gates below (a closed session renders no prompt). Above the early
@@ -728,7 +723,7 @@ export function AgentChatPanel({
     elicitationId: approvalsLive ? (pendingElicitation?.requestId ?? null) : null
   })
   const openGitSheet = useGitSheetStore((s) => s.openGitSheet)
-  // The mobile dock (prompts, or the changed-files bar plus the composer)
+  // The mobile dock (prompts, or the composer)
   // reports its top edge so the toast stack clears it. The wrapper is a plain
   // box on the mobile shell and `display: contents` on desktop, so desktop
   // layout (the starters' `flex-1`) is unchanged. The hook is also above the
@@ -948,11 +943,15 @@ export function AgentChatPanel({
         {/* Top-right status slot: floats over the transcript (clear of the
             scrollbar gutter) so status items take no layout height. */}
         <div className="pointer-events-none absolute right-4 top-3.5 z-20 flex items-center gap-1.5">
-          <SubagentPill
+          <ChatStatusPill
+            cwd={session.cwd}
             toolCalls={toolCalls}
             messages={messages}
             turnActive={session.activeTurn}
             filePathContext={filePathContext}
+            onOpenGitChanges={
+              isMobileShell ? (opener) => openGitSheet(session.cwd, opener) : undefined
+            }
             hidden={(isMobileShell && osk.isOskOpen) || showTransportOverlay}
             isVisible={isVisible}
           />
@@ -996,7 +995,7 @@ export function AgentChatPanel({
         <ChatAutomationSuggestion sessionId={sessionId} projectId={session.projectId} />
       )}
       {/* Any pending agent prompt morphs the composer into the question
-          dialog — the composer, changed-files strip, and queued prompts all
+          dialog — the composer and queued prompts all
           hide until the prompt resolves. */}
       {!isClosed && (pendingElicitation || pendingQuestion) ? (
         <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
@@ -1028,9 +1027,6 @@ export function AgentChatPanel({
         </div>
       ) : (
         <div ref={dockRef} data-chat-dock="true" className={dockClassName}>
-          {/* Above the changed-files panel: that panel's negative bottom margin
-              tucks it under the composer, so anything between the two is
-              painted over and loses its clicks. */}
           {!isClosed && (
             <div className={CHAT_GUTTER_X}>
               <div className="mx-auto w-full max-w-3xl">
@@ -1038,15 +1034,6 @@ export function AgentChatPanel({
               </div>
             </div>
           )}
-          <ChatChangedFilesPanel
-            cwd={session.cwd}
-            toolCalls={toolCalls}
-            turnActive={session.activeTurn}
-            forceCollapsed={compactDock}
-            onOpenGitChanges={
-              isMobileShell ? (opener) => openGitSheet(session.cwd, opener) : undefined
-            }
-          />
           <ChatInputBar
             session={composerSession ?? session}
             projectRoot={skillsProjectRoot}
@@ -1072,7 +1059,6 @@ export function AgentChatPanel({
             seedText={seed?.text}
             seedNonce={seed?.nonce}
             selectionContextInsert={contextInsert}
-            compactTop={hasFileChanges}
             isVisible={isVisible}
           />
           {/* Empty chat: starters under the composer. With the hero above

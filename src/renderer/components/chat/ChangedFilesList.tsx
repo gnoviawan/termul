@@ -20,8 +20,8 @@ export async function openChangedFile(fullPath: string): Promise<void> {
     toast.error('Could not open file')
     void logFrontendError({
       level: 'warn',
-      message: `ChatChangedFilesPanel: openFile failed for ${fullPath}: ${String(error)}`,
-      source: 'ChatChangedFilesPanel'
+      message: `ChangedFilesList: openFile failed for ${fullPath}: ${String(error)}`,
+      source: 'ChangedFilesList'
     })
   }
 }
@@ -105,17 +105,21 @@ function FileRow({
 export function ChangedFilesRows({
   files,
   rowBase,
-  onOpen
+  onOpen,
+  className
 }: {
   files: readonly ChangedFile[]
   rowBase: string
   onOpen: (path: string) => void
+  className?: string
 }): React.JSX.Element {
   return (
-    <div className="space-y-0.5 p-1">
-      {files.map((file) => (
-        <FileRow key={file.path} file={file} cwd={rowBase} onOpen={onOpen} />
-      ))}
+    <div className={cn('scroller-thin max-h-72 overflow-y-auto overscroll-contain', className)}>
+      <div className="space-y-0.5 p-1">
+        {files.map((file) => (
+          <FileRow key={file.path} file={file} cwd={rowBase} onOpen={onOpen} />
+        ))}
+      </div>
     </div>
   )
 }

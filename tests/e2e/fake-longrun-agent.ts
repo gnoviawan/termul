@@ -65,8 +65,8 @@
  * prompt is accepted; the turn then streams as usual:
  * - `[DOCK]` pushes a 5-entry plan (3 completed) and three completed edit
  *   tool calls (src/auth.ts +10, src/session.ts +4, src/token.ts +3 -2:
- *   +17 -2 in total): the content of the chat dock's plan and
- *   changed-files bars.
+ *   +17 -2 in total): the content of the chat dock's plan bar and the
+ *   status pill's changed files.
  * - `[ASK:permission]`, `[ASK:permission-none]` (a request with no
  *   options), `[ASK:question]` or `[ASK:elicitation]` sends the matching
  *   agent-to-client request. When the client answers, the agent streams one

@@ -353,7 +353,7 @@ async function worktreePathOf(project: Project): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Plan bar, changed-files bar and queue: compact by default
+// Plan bar, changed files and queue: compact by default
 // ---------------------------------------------------------------------------
 
 test('plan bar starts collapsed as "Plan 3/5" above the chat and expands in place', async ({
@@ -370,10 +370,10 @@ test('plan bar starts collapsed as "Plan 3/5" above the chat and expands in plac
   // height back as 43.99999…: round to the CSS pixel.
   expect(Math.round((await boxOf(plan)).height)).toBeGreaterThanOrEqual(44)
   await expect(entry).toBeHidden()
-  // Above the thread and the dock, not inside them.
-  const changed = page.getByRole('button', { name: 'Changed files 3 +17 −2', exact: true })
-  await expect(changed).toBeVisible()
-  expect((await boxOf(plan)).y).toBeLessThan((await boxOf(changed)).y)
+  // Above the thread, whose top-right corner holds the status pill.
+  const status = page.getByRole('button', { name: 'Session status: 3 changed files', exact: true })
+  await expect(status).toBeVisible()
+  expect((await boxOf(plan)).y).toBeLessThan((await boxOf(status)).y)
 
   await plan.tap()
   await expect(plan).toHaveAttribute('aria-expanded', 'true')
@@ -384,7 +384,7 @@ test('plan bar starts collapsed as "Plan 3/5" above the chat and expands in plac
   await expect(entry).toBeHidden()
 })
 
-test('changed-files bar is named by its text, starts collapsed and opens a row in the editor', async ({
+test('the status pill lists the changed files in a sheet and opens a row in the editor', async ({
   page
 }) => {
   await launchChat(page, `[DOCK] ${LONG} changed files`, {
@@ -392,22 +392,23 @@ test('changed-files bar is named by its text, starts collapsed and opens a row i
       files: { 'src/auth.ts': "export const authMarker = 'e2e-auth-file'" }
     })
   })
-  const bar = page.getByRole('button', { name: 'Changed files 3 +17 −2', exact: true })
+  const status = page.getByRole('button', { name: 'Session status: 3 changed files', exact: true })
+  const sheet = page.getByRole('dialog', { name: 'Changed files' })
 
-  await expect(bar).toBeVisible()
-  // The visible text names it: no overriding aria-label such as "Expand changed files".
-  await expect(bar).not.toHaveAttribute('aria-label', /.*/)
-  await expect(bar).toHaveAttribute('aria-expanded', 'false')
+  // The pill floats over the thread: the composer keeps its full height.
+  await expect(status).toBeVisible()
+  await expect(sheet).toBeHidden()
+
+  await status.tap()
+  await expect(sheet).toBeVisible()
+  await expect(sheet).toContainText('+17 −2')
   // Rows are labeled by basename; their accessible name is the resolved path.
-  await expect(page.getByRole('button', { name: /src\/auth\.ts/ })).toBeHidden()
+  await expect(sheet.getByRole('button', { name: /src\/session\.ts/ })).toBeVisible()
+  await expect(sheet.getByRole('button', { name: /src\/token\.ts/ })).toBeVisible()
 
-  await bar.tap()
-  await expect(bar).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.getByRole('button', { name: /src\/session\.ts/ })).toBeVisible()
-  await expect(page.getByRole('button', { name: /src\/token\.ts/ })).toBeVisible()
-
-  // A row still opens the file in an editor tab.
-  await page.getByRole('button', { name: /src\/auth\.ts/ }).tap()
+  // A row closes the sheet and opens the file in an editor tab.
+  await sheet.getByRole('button', { name: /src\/auth\.ts/ }).tap()
+  await expect(sheet).toBeHidden()
   await expect(page.getByText('e2e-auth-file')).toBeVisible()
   // The drawer opens on Editors (the file is the active tab) and lists it.
   await page.getByRole('button', { name: 'Open menu' }).tap()
@@ -416,26 +417,14 @@ test('changed-files bar is named by its text, starts collapsed and opens a row i
   ).toBeVisible()
 })
 
-test('the Git action reaches a 44px hit area with the bar collapsed and expanded', async ({
-  page
-}) => {
+test('the Git action in the changed-files sheet reaches a 44px hit area', async ({ page }) => {
   await launchChat(page, `[DOCK] ${LONG} git hit area`)
-  const bar = page.getByRole('button', { name: 'Changed files 3 +17 −2', exact: true })
-  const git = page.getByRole('button', { name: 'Open Git changes', exact: true })
+  await page.getByRole('button', { name: 'Session status: 3 changed files', exact: true }).tap()
+  const sheet = page.getByRole('dialog', { name: 'Changed files' })
+  const git = sheet.getByRole('button', { name: 'Open Git changes', exact: true })
   await expect(git).toBeVisible()
   await expect(git).toHaveText('Git')
-
-  // Collapsed is the state the bar starts in; part of its hit-slop sits under
-  // the composer and behind the card edge, so only a measurement tells.
-  await expect(bar).toHaveAttribute('aria-expanded', 'false')
   await expect.poll(async () => (await hitArea(git)).height).toBeGreaterThanOrEqual(44)
-
-  await bar.tap()
-  await expect(bar).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.getByRole('button', { name: /src\/auth\.ts/ })).toBeVisible()
-  await expect.poll(async () => (await hitArea(git)).height).toBeGreaterThanOrEqual(44)
-  // The Git action is its own control: tapping the header toggles, Git does not.
-  await expect(bar).toHaveAttribute('aria-expanded', 'true')
 })
 
 test('queue starts collapsed with a touch-height trigger and names each action by its row', async ({
@@ -833,30 +822,29 @@ test('an elicitation takes heading focus, shows an inline error beside its toast
 // Keyboard up with an approval pending
 // ---------------------------------------------------------------------------
 
-test('with the keyboard up and an approval pending the plan and changed-files bars collapse, then show the user state', async ({
+test('with the keyboard up and an approval pending the plan bar collapses, then shows the user state', async ({
   page
 }) => {
   await installFakeKeyboard(page)
   await launchChat(page, `[DOCK] [ASK:permission] ${LONG} keyboard`)
   const plan = page.getByRole('button', { name: /^Plan, 3 of 5 tasks/ })
-  const files = page.getByRole('button', { name: 'Changed files 3 +17 −2', exact: true })
+  const status = page.getByRole('button', { name: 'Session status: 3 changed files', exact: true })
   await expect(permissionPrompt(page)).toBeVisible()
+  await expect(status).toBeVisible()
 
-  // The user opens both bars, then the keyboard comes up.
+  // The user opens the plan, then the keyboard comes up.
   await plan.tap()
-  await files.tap()
   await expect(plan).toHaveAttribute('aria-expanded', 'true')
-  await expect(files).toHaveAttribute('aria-expanded', 'true')
   await setKeyboardHeight(page, 300)
 
-  // Approval pending + keyboard: both render collapsed.
+  // Approval pending + keyboard: the plan renders collapsed and the status
+  // pill steps out of the way of the keyboard.
   await expect(plan).toHaveAttribute('aria-expanded', 'false')
-  await expect(files).toHaveAttribute('aria-expanded', 'false')
+  await expect(status).toBeHidden()
 
   // A header tap during that window still flips the rendered state.
   await plan.tap()
   await expect(plan).toHaveAttribute('aria-expanded', 'true')
-  await expect(files).toHaveAttribute('aria-expanded', 'false')
 
   // The focused approval button scrolls into view, nearest edge only.
   await waitPastApprovalGuard(page)
@@ -867,9 +855,8 @@ test('with the keyboard up and an approval pending the plan and changed-files ba
   )
   expect(scrolled).toContainEqual(expect.objectContaining({ text: 'Allow once', block: 'nearest' }))
 
-  // Approval resolved: each bar shows the user's last own state again, with the keyboard still up.
+  // Approval resolved: the plan shows the user's last own state again, with the keyboard still up.
   await expect(plan).toHaveAttribute('aria-expanded', 'true')
-  await expect(files).toHaveAttribute('aria-expanded', 'true')
 })
 
 // ---------------------------------------------------------------------------
@@ -892,13 +879,15 @@ test.describe('desktop browser', () => {
     const sent = trackWsFrames(page)
     await launchChat(page, `[DOCK] [ASK:permission] ${LONG} desktop`, { mouse: true })
 
-    // Plan expanded from the start; changed-files header keeps its action names; no Git action.
+    // Plan expanded from the start; changed files in the status pill; no Git action.
     await expect(page.getByRole('button', { name: /^Plan, 3 of 5 tasks/ })).toHaveAttribute(
       'aria-expanded',
       'true'
     )
     await expect(page.getByText('Cover login with tests')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Expand changed files' })).toBeVisible()
+    await expect(
+      page.getByRole('button', { name: 'Session status: 3 changed files', exact: true })
+    ).toBeVisible()
     await expect(page.getByRole('button', { name: 'Open Git changes', exact: true })).toHaveCount(0)
 
     // Permission prompt: baseline size, live region and no focus move.
