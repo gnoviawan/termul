@@ -1223,13 +1223,15 @@ impl SessionPersistence {
         }
         self.inner.sessions.lock().remove(session_id);
         self.inner.last_commands.lock().remove(session_id);
-        self.inner.last_controls.lock().remove(session_id);
         let dir = self.session_dir(&metadata.storage_key)?;
         // Drop the catalog entry BEFORE touching the dir: a read-path
         // salvage serializes its rewrite on the catalog lock, so once the
         // entry is gone no in-flight or future salvage can stage a rewrite
         // that would resurrect the deleted dir via `create_dir_all`.
         self.remove_catalog_entry(session_id);
+        // After the catalog entry: a controls fold that starts now finds no
+        // metadata, so it cannot cache the deleted session's controls.
+        self.inner.last_controls.lock().remove(session_id);
         fs::remove_dir_all(&dir)?;
         self.persist_index().await?;
         log::info!(
@@ -1613,6 +1615,8 @@ impl SessionPersistence {
         // for; the next host start rescans and restamps.
         current.sweep_checkpoint = None;
         self.persist_metadata(&current)?;
+        // The rewrite may have dropped control records the cache folded in.
+        self.inner.last_controls.lock().remove(session_id);
         log::warn!(
             "[acp-history] salvaged seq-intruder records session_id={} \
              intruder_lines={} message_count={} tool_count={} last_seq={}",
