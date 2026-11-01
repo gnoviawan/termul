@@ -1742,7 +1742,7 @@ export function switchBlockedReason(
     | 'pendingPermissions'
     | 'pendingQuestions'
     | 'pendingElicitations'
-    | 'pendingBrowserOpen'
+    | 'pendingSignIn'
     | 'launchingSessionIds'
   >,
   sessionId: SessionId
@@ -1771,7 +1771,7 @@ export function switchBlockedReason(
     (item) => item.sessionId === sessionId
   )
   if (elicitation) return 'the agent is waiting for your input before switching'
-  if (session.agentId && state.pendingBrowserOpen[session.agentId]) {
+  if (session.agentId && state.pendingSignIn[session.agentId]) {
     return 'the agent is waiting for you to sign in before switching'
   }
   if (

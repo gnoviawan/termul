@@ -41,6 +41,8 @@ import {
   type AgentDisconnectedEvent,
   type AgentErrorEvent,
   type AgentId,
+  type AgentSignInRequestEvent,
+  type AgentSignInResolvedEvent,
   type AgentSpawnedEvent,
   type AgentSwitchEvent,
   type AskUserQuestionEvent,
@@ -666,6 +668,12 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<BrowserOpenRequestEvent>(ACP_EVENTS.browserOpenRequest, (e) =>
       useAcpStore.getState()._onBrowserOpenRequest(e)
+    ),
+    acpApi.onEvent<AgentSignInRequestEvent>(ACP_EVENTS.agentSignInRequest, (e) =>
+      useAcpStore.getState()._onAgentSignInRequest(e)
+    ),
+    acpApi.onEvent<AgentSignInResolvedEvent>(ACP_EVENTS.agentSignInResolved, (e) =>
+      useAcpStore.getState()._onAgentSignInResolved(e)
     ),
     acpApi.onEvent<BrowserAgentTabEvent>(ACP_EVENTS.browserAgentTab, (e, eventSeq) =>
       useAcpStore.getState()._onBrowserAgentTab(e, eventSeq)

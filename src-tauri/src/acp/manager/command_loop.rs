@@ -1331,6 +1331,9 @@ pub(super) async fn run_command_loop(
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
                 let log_agent_id = agent_id.clone();
+                let req_state = driver_state.clone();
+                let req_sinks = sinks.clone();
+                driver_state.lock().sign_in().begin_authenticate();
                 spawn_request(&cx, slot, async move {
                     log::info!("[acp] agent {log_agent_id} authenticating via '{method_id}'");
                     let mut request = AuthenticateRequest::new(method_id);
@@ -1343,6 +1346,15 @@ pub(super) async fn run_command_loop(
                         .await
                         .map(|_| ())
                         .map_err(|e| e.to_string());
+                    let raised = req_state.lock().sign_in().end_authenticate();
+                    if let Some(prompt) = raised {
+                        super::sign_in::settle_sign_in(
+                            &req_sinks,
+                            &log_agent_id,
+                            prompt,
+                            "authenticate ended",
+                        );
+                    }
                     send_reply(&task_slot, result);
                 });
             }
@@ -1411,17 +1423,31 @@ pub(super) async fn run_command_loop(
                 reply,
             } => {
                 let pending = driver_state.lock().take_elicitation(&request_id);
-                match pending {
-                    Some(elicitation) => {
-                        let response = elicitation_response(&action, content);
-                        let result = elicitation.responder.respond(response);
-                        let _ = reply.send(result.map_err(|e| e.to_string()));
-                    }
-                    None => {
-                        let _ =
-                            reply.send(Err(format!("unknown elicitation request: {request_id}")));
-                    }
+                if let Some(elicitation) = pending {
+                    let response = elicitation_response(&action, content);
+                    let result = elicitation.responder.respond(response);
+                    let _ = reply.send(result.map_err(|e| e.to_string()));
+                    continue;
                 }
+                let answered = driver_state
+                    .lock()
+                    .sign_in()
+                    .answer(&request_id, action == "accept");
+                let Some(answered) = answered else {
+                    let _ = reply.send(Err(format!("unknown elicitation request: {request_id}")));
+                    continue;
+                };
+                log::info!("[acp] agent {agent_id} sign-in prompt {request_id} answered: {action}");
+                let result = match answered.responder {
+                    Some(responder) => responder
+                        .respond(elicitation_response(&action, None))
+                        .map_err(|e| e.to_string()),
+                    None => Ok(()),
+                };
+                if answered.settled {
+                    super::sign_in::announce_sign_in_resolved(&sinks, &agent_id, request_id);
+                }
+                let _ = reply.send(result);
             }
         }
     }

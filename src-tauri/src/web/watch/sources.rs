@@ -16,7 +16,10 @@
 //!   harm.
 //!   The transient `browser_open_request` (`{agentId, url}`) belongs to no
 //!   session log either and rides the same delta shape; it is not part of the
-//!   roster state. So does `browser_policy_changed` (`{scope, projectId?,
+//!   roster state. So do `agent_sign_in_request` (`{agentId, requestId, url,
+//!   message}`) and `agent_sign_in_resolved` (`{agentId, requestId}`), an
+//!   agent-level sign-in prompt and its withdrawal. So does
+//!   `browser_policy_changed` (`{scope, projectId?,
 //!   revision}`): a hint to re-read one browser policy scope. And so does
 //!   `automation_changed` (`{project_id, automation_id}`, published by
 //!   `automation_api::forward_changes`): a hint to re-read one automation, or
@@ -62,7 +65,12 @@ pub const AGENT_ROSTER_EVENTS: &[&str] = &[
 /// Agent-level events that are not roster changes but still belong to no
 /// session log: they reach clients as `agents` deltas too (never as `seq = 0`
 /// events). A missed one is not repaired by the state, as before.
-pub const AGENT_TRANSIENT_EVENTS: &[&str] = &["browser_open_request", "browser_policy_changed"];
+pub const AGENT_TRANSIENT_EVENTS: &[&str] = &[
+    "browser_open_request",
+    "agent_sign_in_request",
+    "agent_sign_in_resolved",
+    "browser_policy_changed",
+];
 
 /// Full state of the `projects` watch.
 #[must_use]
