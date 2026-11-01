@@ -611,7 +611,7 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     client.dispose()
   })
 
-  it('visibility recovery reconnects but keeps climbing the backoff ladder (only 10 s stable resets it)', async () => {
+  it('visibility recovery reconnects but keeps climbing the backoff ladder (only 20 s stable resets it)', async () => {
     vi.useFakeTimers()
     const client = new WebTerminalClient(
       'ws://test/terminal/ws',
@@ -1364,7 +1364,7 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     client.dispose()
   })
 
-  it('clears the reconnect budget only after authenticate completes AND the connection stays stable for 10s', async () => {
+  it('clears the reconnect budget only after authenticate completes AND the connection stays stable for 20s', async () => {
     vi.useFakeTimers()
     window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
     const { client, internals } = newClient()
@@ -1387,14 +1387,14 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     expect(internals.reconnectTimer).not.toBeNull()
 
     // The gate accepts again: a fully authenticated reconnect does NOT clear
-    // the budget immediately — only 10 s of stable connection does.
+    // the budget immediately — only 20 s of stable connection does.
     authenticateMode = 'ok'
     await vi.advanceTimersByTimeAsync(1100)
     expect(internals.socket).not.toBeNull()
     expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
     expect(internals.reconnectTimer).toBeNull()
     expect(internals.reconnectAttempt).toBe(2)
-    await vi.advanceTimersByTimeAsync(8_000)
+    await vi.advanceTimersByTimeAsync(18_000)
     expect(internals.reconnectAttempt).toBe(2)
     await vi.advanceTimersByTimeAsync(2_000)
     expect(internals.reconnectAttempt).toBe(0)
@@ -1757,6 +1757,26 @@ describe('WebTerminalClient connect timeout (Story 10, F9)', () => {
         data: 'ls\n'
       })
       expect(internals.inputBuffers.get('t1')).toBeUndefined()
+    } finally {
+      holdAttachReply = false
+      client.dispose()
+    }
+  })
+
+  it('a re-attach that never answers exhausts the reconnect budget and surfaces disconnected (D8-F1)', async () => {
+    vi.useFakeTimers()
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    const internals = client as unknown as ClientInternals
+    holdAttachReply = true
+    try {
+      internals.socket.close()
+      await vi.advanceTimersByTimeAsync(600_000)
+      expect(client.getConnectionState()).toBe('disconnected')
     } finally {
       holdAttachReply = false
       client.dispose()
