@@ -10,9 +10,8 @@ on:
     paths:
       - 'website-docs/**'
       - '.github/workflows/deploy-docs.yml'
-  # Releases are published with GITHUB_TOKEN, which starts no `release`
-  # workflows, so a new release's openapi.yaml reaches the site through a
-  # manual run on `main` (or the next docs push).
+  # release.yml dispatches this after each stable release so the API
+  # reference page picks up the new openapi.yaml.
   workflow_dispatch:
 
 concurrency:

@@ -923,6 +923,27 @@ jobs:
         ${{ needs.changelog.outputs.normalized_version }}
         ${{ needs.changelog.outputs.is_prerelease != 'true' && 'latest' || '' }}
 
+  # Releases are published with GITHUB_TOKEN, which starts no other workflows
+  # except through workflow_dispatch, so dispatch the docs deploy to pick up
+  # this release's openapi.yaml for the API reference page.
+  refresh_docs:
+    name: Refresh the docs API reference
+    needs: [changelog, publish_release]
+    if: github.event_name == 'push' && needs.changelog.outputs.is_prerelease != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2
+        with:
+          egress-policy: audit
+
+      - name: Dispatch the docs deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-docs.yml --repo "$GITHUB_REPOSITORY" --ref main
+
   # Manual Insider→Stable promotion. Copies the moving-tag Insider manifest,
   # rewrites its version + asset URLs to a stable tag (whose release must
   # already exist from a normal `v*` tag push), and publishes `latest-stable.json`
