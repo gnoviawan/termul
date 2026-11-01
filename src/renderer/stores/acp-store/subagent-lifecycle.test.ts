@@ -117,10 +117,11 @@ describe('subagent lifecycle ingest (Claude)', () => {
       agentId: 'agent-abc',
       outputFile: '/tmp/agent-abc.output'
     })
-    expect(isSubagentRunning(call, true)).toBe(true)
+    expect(isSubagentRunning(call, 'active')).toBe(true)
     expect(subagentStatus(call, true)).toBe('running')
-    // Coarse end: the agent counts as done once the held parent turn ends.
-    expect(subagentStatus(call, false)).toBe('done')
+    // Nothing reports the end of this launch, so it outlives its turn.
+    expect(subagentStatus(call, false)).toBe('running')
+    expect(isSubagentRunning(call, 'superseded')).toBe(false)
     expect(logMock).toHaveBeenCalledWith(
       expect.objectContaining({ level: 'info', source: 'acp-store.subagentLifecycle' })
     )
@@ -134,7 +135,7 @@ describe('subagent lifecycle ingest (Claude)', () => {
       _meta: asyncReceipt
     })
     expect(stored('tc-2').subagentLifecycle?.background).toBe(true)
-    expect(isSubagentRunning(stored('tc-2'), true)).toBe(true)
+    expect(isSubagentRunning(stored('tc-2'), 'active')).toBe(true)
   })
 
   it('keeps a foreground agent done when its tool call completes', () => {
@@ -193,7 +194,7 @@ describe('subagent lifecycle ingest (Claude)', () => {
     const call = stored('cursor-1')
     expect(call.subagentLifecycle).toEqual({ background: true })
     expect(subagentStatus(call, true)).toBe('running')
-    expect(subagentStatus(call, false)).toBe('done')
+    expect(subagentStatus(call, false)).toBe('running')
   })
 
   it('keeps a Cursor foreground task done when its result arrives', () => {
@@ -375,7 +376,7 @@ describe('cancelRunningSubagents', () => {
       subagentLifecycle: { state: 'completed', endedAt: 5 }
     }
     const toolCalls = { s1: [running, done], s2: [running] }
-    const settled = cancelRunningSubagents(toolCalls, ['s1'], 20)
+    const settled = cancelRunningSubagents({ toolCalls, messages: {} }, ['s1'], 20)
     expect(settled).not.toBe(toolCalls)
     expect(settled.s1[0]?.subagentLifecycle).toEqual({
       state: 'cancelled',
@@ -384,6 +385,26 @@ describe('cancelRunningSubagents', () => {
     })
     expect(settled.s1[1]).toBe(done)
     expect(settled.s2).toBe(toolCalls.s2)
-    expect(cancelRunningSubagents(settled, ['s1'], 30)).toBe(settled)
+    expect(cancelRunningSubagents({ toolCalls: settled, messages: {} }, ['s1'], 30)).toBe(settled)
+  })
+
+  it('cancels a background launch of the latest turn that never reported an end', () => {
+    const launch = (toolCallId: string, seq: number): ToolCall => ({
+      toolCallId,
+      status: 'completed',
+      seq,
+      rawInput: { description: 'Run e2e', prompt: 'p', run_in_background: true },
+      subagentLifecycle: { background: true }
+    })
+    const earlier = launch('earlier', 2)
+    const toolCalls = { s1: [earlier, launch('latest', 6)] }
+    const messages = { s1: [{ id: 'u', role: 'user' as const, blocks: [], timestamp: 5, seq: 5 }] }
+    const settled = cancelRunningSubagents({ toolCalls, messages }, ['s1'], 20)
+    expect(settled.s1[0]).toBe(earlier)
+    expect(settled.s1[1]?.subagentLifecycle).toEqual({
+      background: true,
+      state: 'cancelled',
+      endedAt: 20
+    })
   })
 })

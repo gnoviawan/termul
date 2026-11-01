@@ -3,6 +3,7 @@ import type { ContentBlock, ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import type { ChatMessage } from '@/stores/acp-store'
 import {
+  activityParentTurn,
   buildTimeline,
   consolidateThoughtGroups,
   groupTurnActivity,
@@ -643,5 +644,42 @@ describe('spliceReloadMarker', () => {
     const items = buildTimeline([msg('h1', 'agent', 20), msg('h2', 'user', 40)], [])
     spliceReloadMarker(items, { afterMessageId: 'gone', afterSeq: null, reloadedAt: 30 }, 'r')
     expect(kinds(items)).toEqual(['h1', 'RELOAD', 'h2'])
+  })
+})
+
+describe('activityParentTurn', () => {
+  const turns = (active: boolean, messages: ChatMessage[]) => {
+    const grouped = groupTurnActivity(
+      buildTimeline(messages, [tool('first', 2_000, 2), tool('second', 5_000, 5)]),
+      active
+    )
+    return grouped.flatMap((item) =>
+      item.kind === 'activity' ? [activityParentTurn(grouped, item)] : []
+    )
+  }
+  const firstTurn = [msg('u1', 'user', 1_000, 1), msg('a1', 'agent', 3_000, 3)]
+
+  it('marks the running turn active and the turns before it superseded', () => {
+    expect(turns(true, [...firstTurn, msg('u2', 'user', 4_000, 4)])).toEqual([
+      'superseded',
+      'active'
+    ])
+  })
+
+  it('marks the latest turn ended once it stops', () => {
+    expect(
+      turns(false, [...firstTurn, msg('u2', 'user', 4_000, 4), msg('a2', 'agent', 6_000, 6)])
+    ).toEqual(['superseded', 'ended'])
+  })
+
+  it('supersedes every turn once a newer user message follows them', () => {
+    expect(
+      turns(false, [
+        ...firstTurn,
+        msg('u2', 'user', 4_000, 4),
+        msg('a2', 'agent', 6_000, 6),
+        msg('u3', 'user', 7_000, 7)
+      ])
+    ).toEqual(['superseded', 'superseded'])
   })
 })

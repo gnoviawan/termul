@@ -53,6 +53,7 @@ function renderSettledTurn(items: TimelineItem[]): void {
       <TurnActivity
         items={items}
         active={false}
+        parentTurn="ended"
         durationMs={5000}
         attentionRequired={false}
         hasFinalResponse
@@ -120,6 +121,7 @@ describe('TurnActivity work runs', () => {
         <TurnActivity
           items={items}
           active
+          parentTurn="active"
           durationMs={null}
           attentionRequired={false}
           hasFinalResponse={false}
