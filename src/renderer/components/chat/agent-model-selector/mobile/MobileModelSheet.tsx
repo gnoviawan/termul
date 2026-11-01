@@ -304,8 +304,8 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
       )
       break
     case 'error': {
-      // Chat: an agent that asks for credentials signs in on its setup screen.
-      const signInTab = view.needsSignIn && !sw.selectAgent ? state.viewTab : null
+      // An agent that asks for credentials signs in on its setup screen.
+      const { signInTab } = view
       list = view.status ? (
         <StatusActions title={view.title} detail={view.detail} status={view.status} touch />
       ) : (

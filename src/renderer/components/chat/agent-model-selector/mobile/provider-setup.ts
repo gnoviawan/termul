@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { type AgentSignIn, useAgentSignIn } from '@/components/agents/launcher/use-agent-sign-in'
+import type { AgentSignIn } from '@/components/agents/launcher/use-agent-sign-in'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import { logFrontendError } from '@/lib/log-api'
 import { useAcpStore } from '@/stores/acp-store'
 import { prepareChatKey } from '@/stores/acp-store/helpers'
-import { useProjectStore } from '@/stores/project-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { AgentTab } from '../selector-model'
 import { useKnownCatalogs } from '../use-model-catalog'
+import { useSelectorAgentSignIn } from '../use-selector-agent-sign-in'
 
 /** Saving the agent's config, the one step this screen owns itself. */
 export type SaveState = { kind: 'idle' } | { kind: 'saving' } | { kind: 'failed'; message: string }
@@ -150,18 +149,8 @@ export function useProviderSetup(
     prepare(true)
   }, [save.kind, stored, start, prepare])
 
-  const projectEnvVars = useProjectStore((s) => s.projects.find((p) => p.id === projectId)?.envVars)
-  const paneId = useWorkspaceStore((s) => s.activePaneId)
   const reprepare = useCallback(() => prepare(true), [prepare])
-  const signIn = useAgentSignIn({
-    registryAgentId: tab.entry?.id ?? null,
-    config,
-    cwd,
-    projectId,
-    projectEnvVars,
-    paneId,
-    onSignedIn: reprepare
-  })
+  const signIn = useSelectorAgentSignIn(tab, workspace, reprepare)
 
   return { phase, config, start, retry, signIn }
 }
