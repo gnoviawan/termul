@@ -4,6 +4,7 @@
  */
 
 import type { BugReportContext, BugReportSubmitRequest } from '@shared/types/bug-report.types'
+import type { McpInstallCommitResult } from '@shared/types/mcp-install.types'
 import type { PendingLauncherOptions } from '@/components/agents/pending-launcher-options'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type {
@@ -830,6 +831,10 @@ export interface AcpState {
    * writes, no partial prefix left behind to duplicate on retry.
    */
   importMcpServers: (servers: StoredMcpServer[]) => Promise<void>
+  saveCatalogInstall: (
+    result: McpInstallCommitResult,
+    projectId: string
+  ) => Promise<StoredMcpServer>
   setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
   deleteMcpServer: (id: string) => Promise<void>
   /**

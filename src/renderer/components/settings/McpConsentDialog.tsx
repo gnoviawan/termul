@@ -46,6 +46,7 @@ interface McpConsentDialogProps {
   onCancel: () => void
   busy?: boolean
   error?: string | null
+  notice?: React.ReactNode
 }
 
 export function McpConsentDialog({
@@ -54,7 +55,8 @@ export function McpConsentDialog({
   onApprove,
   onCancel,
   busy = false,
-  error = null
+  error = null,
+  notice = null
 }: McpConsentDialogProps): React.JSX.Element {
   const cancelRef = useRef<HTMLButtonElement>(null)
   const verb = plan?.source.kind === 'import' ? 'Import' : 'Install'
@@ -96,6 +98,8 @@ export function McpConsentDialog({
               Launch digest {plan.launchDigest}
             </p>
           </div>
+
+          {notice}
 
           {error !== null && (
             <SettingsNotice tone="danger" role="alert">

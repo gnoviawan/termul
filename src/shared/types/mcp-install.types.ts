@@ -88,6 +88,11 @@ export interface McpInstallProvenance {
   repositoryId: string | null
 }
 
+export interface McpEntryCatalogProvenance extends McpInstallProvenance {
+  source: 'mcp-registry'
+  launchDigest: string
+}
+
 export type McpConsentValueOrigin = 'registry' | 'user' | 'file'
 
 export interface McpConsentValue {

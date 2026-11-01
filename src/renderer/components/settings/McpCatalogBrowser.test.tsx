@@ -6,24 +6,48 @@ import type {
   McpCatalogSearchRequest,
   McpCatalogStatus
 } from '@shared/types/mcp-catalog.types'
+import type {
+  McpInstallCommitResult,
+  McpInstallFormReply,
+  McpInstallPlanReply
+} from '@shared/types/mcp-install.types'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { acpApi } from '@/lib/acp-api'
+import { useAcpStore } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 import { McpCatalogBrowser } from './McpCatalogBrowser'
 import { SettingsLayout, SettingsSection } from './SettingsLayout'
 
-const { search, status, setSync, icon, openUrl } = vi.hoisted(() => ({
+const { search, status, setSync, icon, openUrl, install, admitsWrites } = vi.hoisted(() => ({
   search: vi.fn<(request: McpCatalogSearchRequest) => Promise<IpcResult<McpCatalogPage>>>(),
   status: vi.fn<() => Promise<IpcResult<McpCatalogStatus>>>(),
   setSync: vi.fn<(enabled: boolean) => Promise<IpcResult<McpCatalogStatus>>>(),
   icon: vi.fn<(name: string) => Promise<IpcResult<McpCatalogIconUrl>>>(),
-  openUrl: vi.fn(async (_url: string) => ({ success: true as const, data: undefined }))
+  openUrl: vi.fn(async (_url: string) => ({ success: true as const, data: undefined })),
+  install: {
+    describeInstall: vi.fn<() => Promise<IpcResult<McpInstallFormReply>>>(),
+    planInstall: vi.fn<() => Promise<IpcResult<McpInstallPlanReply>>>(),
+    commitInstall: vi.fn<() => Promise<IpcResult<McpInstallCommitResult>>>(),
+    cancelInstall: vi.fn(async () => ({ success: true as const, data: {} }))
+  },
+  admitsWrites: vi.fn(() => true)
 }))
 
-vi.mock('@/lib/mcp-catalog-api', () => ({ mcpCatalogApi: { search, status, setSync, icon } }))
+vi.mock('@/lib/mcp-catalog-api', () => ({
+  mcpCatalogApi: { search, status, setSync, icon, ...install }
+}))
+vi.mock('@/hooks/use-server-admits-remote-writes', () => ({
+  useServerAdmitsRemoteWrites: admitsWrites
+}))
+vi.mock('@/lib/acp-mcp-persistence', async (orig) => ({
+  ...(await orig<typeof import('@/lib/acp-mcp-persistence')>()),
+  saveMcpServers: vi.fn(async () => {})
+}))
 vi.mock('@/lib/api', () => ({ openerApi: { openUrlWithSystemBrowser: openUrl } }))
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn(async () => {}) }))
-vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 // jsdom has no layout, so the real virtualizer renders no rows. Render every
 // row at a fixed height instead; the hook still runs for hook order.
@@ -119,6 +143,11 @@ function syncSwitch(): HTMLElement {
   return screen.getByRole('switch', { name: 'Keep the catalog up to date' })
 }
 
+async function findRow(name: string): Promise<HTMLElement> {
+  await screen.findByText(name)
+  return rowOf(name)
+}
+
 function rowOf(name: string): HTMLElement {
   const element = screen.getByText(name).closest<HTMLElement>('[data-index]')
   if (!element) throw new Error(`no row for ${name}`)
@@ -133,6 +162,9 @@ beforeEach(() => {
   openUrl.mockClear()
   vi.mocked(toast.error).mockClear()
   status.mockReturnValue(new Promise(() => {}))
+  admitsWrites.mockReturnValue(true)
+  useProjectStore.setState({ activeProjectId: 'p1' })
+  useAcpStore.setState({ mcpServers: [], mcpServersLoaded: true })
 })
 
 afterEach(() => {
@@ -140,7 +172,7 @@ afterEach(() => {
 })
 
 describe('McpCatalogBrowser', () => {
-  it('shows each state with its typed reason and a disabled install button', async () => {
+  it('shows each state with its typed reason and installs only an installable server', async () => {
     search.mockResolvedValue(page([installable, needsRuntime, unsupported, sourceOnly]))
     render(<McpCatalogBrowser />)
 
@@ -174,14 +206,12 @@ describe('McpCatalogBrowser', () => {
 
     const installs = screen.getAllByRole('button', { name: 'Install' })
     expect(installs.map((button) => (button as HTMLButtonElement).disabled)).toEqual([
-      true,
+      false,
       true,
       true,
       true
     ])
-    expect(installs[0]).toHaveAccessibleDescription(
-      'Installing from the catalog is coming soon. Until then, add servers by hand in the list above.'
-    )
+    expect(installs[1]).toHaveAccessibleDescription('Install uv (uvx) on this computer to run it.')
     expect(search.mock.calls).toEqual([[{ query: undefined, limit: 50 }]])
   })
 
@@ -468,11 +498,6 @@ describe('McpCatalogBrowser catalog source', () => {
 describe('McpCatalogBrowser logos', () => {
   const logoUrl: McpCatalogIconUrl = 'data:image/png;base64,iVBORw0KGgo='
 
-  async function findRow(name: string): Promise<HTMLElement> {
-    await screen.findByText(name)
-    return rowOf(name)
-  }
-
   const withLogo = row({ name: 'io.example/logo', title: 'Logo Server', hasIcon: true })
   const withoutLogo = row({ name: 'io.example/plain', title: 'plain tools' })
 
@@ -530,5 +555,219 @@ describe('McpCatalogBrowser logos', () => {
     const zeta = await findRow('io.example/zeta-server')
     expect(within(zeta).getByTestId('mcp-catalog-icon-placeholder')).toHaveTextContent('Z')
     expect(icon).not.toHaveBeenCalled()
+  })
+})
+
+describe('McpCatalogBrowser install', () => {
+  it('disables every install with the reason on a view-only connection', async () => {
+    admitsWrites.mockReturnValue(false)
+    search.mockResolvedValue(page([installable]))
+    render(<McpCatalogBrowser />)
+
+    const button = await within(await findRow('io.example/weather')).findByRole('button', {
+      name: 'Install'
+    })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAccessibleDescription(
+      "This connection can't make changes on the host, so it can't install servers."
+    )
+  })
+
+  it('keeps install off until the MCP server list has loaded', async () => {
+    useAcpStore.setState({ mcpServersLoaded: false })
+    search.mockResolvedValue(page([installable]))
+    render(<McpCatalogBrowser />)
+
+    const button = within(await findRow('io.example/weather')).getByRole('button', {
+      name: 'Install'
+    })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAccessibleDescription(
+      'Install is available once your MCP servers have loaded.'
+    )
+  })
+
+  it('shows Installed for a server already installed from the catalog', async () => {
+    useAcpStore.setState({
+      mcpServers: [
+        {
+          id: 'w',
+          type: 'http',
+          name: 'weather-tools',
+          url: 'https://weather.example/mcp',
+          enabled: true,
+          catalog: {
+            source: 'mcp-registry',
+            name: 'io.example/weather',
+            version: '1.0.0',
+            kind: 'remote',
+            index: 0,
+            repositoryId: null,
+            launchDigest: 'd'
+          }
+        }
+      ]
+    })
+    search.mockResolvedValue(page([installable, needsRuntime]))
+    render(<McpCatalogBrowser />)
+
+    const weather = within(await findRow('io.example/weather'))
+    expect(weather.getByText('Installed')).toBeInTheDocument()
+    expect(weather.queryByRole('button', { name: 'Install' })).toBeNull()
+    expect(
+      within(rowOf('io.example/pyserver')).getByRole('button', { name: 'Install' })
+    ).toBeDisabled()
+  })
+
+  it('shows Installed in place of the state and its reason', async () => {
+    const provenance = {
+      source: 'mcp-registry' as const,
+      name: 'io.example/pyserver',
+      version: '1.0.0',
+      kind: 'package' as const,
+      index: 0,
+      repositoryId: null,
+      launchDigest: 'd'
+    }
+    useAcpStore.setState({
+      mcpServers: [
+        {
+          id: 'w',
+          type: 'http',
+          name: 'weather-tools',
+          url: 'https://weather.example/mcp',
+          enabled: true,
+          catalog: { ...provenance, name: 'io.example/weather', kind: 'remote' }
+        },
+        {
+          id: 'py',
+          type: 'stdio',
+          name: 'pyserver',
+          command: 'uvx',
+          args: ['pyserver'],
+          enabled: true,
+          catalog: provenance
+        }
+      ]
+    })
+    search.mockResolvedValue(page([installable, needsRuntime]))
+    render(<McpCatalogBrowser />)
+
+    const weather = within(await findRow('io.example/weather'))
+    expect(weather.getAllByText('Installed')).toHaveLength(1)
+    expect(weather.queryByText('Installable')).toBeNull()
+
+    const python = within(rowOf('io.example/pyserver'))
+    expect(python.getAllByText('Installed')).toHaveLength(1)
+    expect(python.queryByText('Needs a runtime')).toBeNull()
+    expect(python.queryByText('Install uv (uvx) on this computer to run it.')).toBeNull()
+    expect(python.queryByRole('button', { name: 'Install' })).toBeNull()
+  })
+
+  it('installs a remote server through the form and the consent view', async () => {
+    search.mockResolvedValue(page([installable]))
+    const field = {
+      id: 'key',
+      label: 'API key',
+      target: { kind: 'header', name: 'Authorization' },
+      variable: 'key',
+      isRequired: true,
+      isSecret: true,
+      format: 'string',
+      choices: null,
+      default: null,
+      placeholder: null,
+      description: null
+    } as const
+    const source = { kind: 'catalog', name: 'io.example/weather', version: '1.0.0' } as const
+    const config = {
+      transport: 'http',
+      url: 'https://weather.example/mcp',
+      headers: [{ name: 'Authorization', isSecret: true }]
+    } as const
+    install.describeInstall.mockResolvedValue({
+      success: true,
+      data: {
+        outcome: 'form',
+        form: {
+          source,
+          choice: { kind: 'remote', index: 0 },
+          title: 'Weather Tools',
+          fields: [field]
+        }
+      }
+    })
+    install.planInstall.mockResolvedValue({
+      success: true,
+      data: {
+        outcome: 'plan',
+        plan: {
+          planId: 'p-1',
+          name: 'weather-tools',
+          source,
+          choice: { kind: 'remote', index: 0 },
+          expiresAt: '2026-11-01T00:10:00Z',
+          config,
+          form: [field],
+          consentView: {
+            transport: 'http',
+            command: null,
+            argv: [],
+            url: 'https://weather.example/mcp',
+            env: [],
+            headers: [
+              { name: 'Authorization', value: 'Bearer {key}', isSecret: true, origin: 'registry' }
+            ],
+            hostMounts: [],
+            warnings: ['sends-data-remote'],
+            provenance: null
+          },
+          launchDigest: 'digest-1'
+        }
+      }
+    })
+    install.commitInstall.mockResolvedValue({
+      success: true,
+      data: {
+        name: 'weather-tools',
+        config,
+        secrets: [{ slot: 'header', name: 'Authorization', value: 'Bearer sk-1' }],
+        provenance: {
+          name: 'io.example/weather',
+          version: '1.0.0',
+          kind: 'remote',
+          index: 0,
+          repositoryId: null
+        },
+        launchDigest: 'digest-1'
+      }
+    })
+    vi.spyOn(acpApi, 'probeMcpServer').mockResolvedValue({
+      status: 'connected',
+      tools: [{ name: 'forecast' }]
+    })
+    render(<McpCatalogBrowser />)
+
+    fireEvent.click(
+      within(await findRow('io.example/weather')).getByRole('button', { name: 'Install' })
+    )
+    fireEvent.change(await screen.findByLabelText('API key*'), { target: { value: 'sk-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }))
+    expect(await screen.findByText('https://weather.example/mcp')).toBeInTheDocument()
+    expect(screen.getByText('Bearer {key}')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+    expect(await screen.findByText('It responds and offers 1 tool.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Installed weather-tools' })).toBeInTheDocument()
+    expect(install.commitInstall.mock.calls).toEqual([
+      [{ planId: 'p-1', launchDigest: 'digest-1', secretValues: { key: 'sk-1' } }]
+    ])
+    expect(useAcpStore.getState().mcpServers.map((server) => server.name)).toEqual([
+      'weather-tools'
+    ])
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+    await waitFor(() =>
+      expect(within(rowOf('io.example/weather')).getByText('Installed')).toBeInTheDocument()
+    )
   })
 })
