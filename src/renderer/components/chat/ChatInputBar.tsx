@@ -45,7 +45,7 @@ import {
   resolveModelOption
 } from './chat-input-bar-config'
 import { CHAT_GUTTER_X, COMPOSER_CARD_CLASS, useComposerToolbarMode } from './chat-layout'
-import { ChatComposerEditor } from './composer/ChatComposerEditor'
+import { ChatComposerEditor, focusComposerFromRowPress } from './composer/ChatComposerEditor'
 import { ComposerAddSheet } from './composer/ComposerAddSheet'
 import { ComposerSendButton } from './composer/ComposerSendButton'
 import { blurComposerEditor, insertComposerTrigger } from './composer/insert-composer-trigger'
@@ -706,7 +706,12 @@ export function ChatInputBar({
               onRemove={removeAttachment}
               removeDisabled={disabled}
             />
-            <div data-composer-row className="flex items-start gap-1 px-4 pb-1.5 pt-3.5">
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only focus aid for the padding; the editor is the accessible target */}
+            <div
+              data-composer-row
+              className="flex items-start gap-1 px-4 pb-1.5 pt-3.5"
+              onMouseDown={(event) => focusComposerFromRowPress(event, editorRef.current)}
+            >
               {/* Tiptap rich-text editor — the skill "pill" is a real inline
                   DOM node (a Tiptap `NodeView`), so the caret sits flush
                   against the pill's right edge by construction. No transparent
