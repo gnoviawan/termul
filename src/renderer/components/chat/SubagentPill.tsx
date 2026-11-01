@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, CheckCircle2, ChevronDown, LoaderCircle, XCircle } from '@/components/icons'
+import { useCallback, useEffect, useState } from 'react'
+import { Bot, ChevronDown } from '@/components/icons'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
@@ -9,24 +9,15 @@ import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/stores/acp-store/types'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
-import { CHAT_ROW_MIN_H } from './chat-layout'
 import { CHAT_SPRING_SOFT } from './chat-motion'
-import { SubagentDetailsDialog } from './SubagentDetailsDialog'
 import {
-  countSubagents,
-  formatElapsed,
-  formatTokens,
-  isBackgroundSubagent,
-  type SubagentCounts,
-  type SubagentStatus,
-  selectCurrentTurnSubagents,
-  subagentChildCalls,
-  subagentDurationMs,
-  subagentMetrics,
-  subagentStatus,
-  subagentTitle,
-  subagentType
-} from './subagent-strip'
+  RunningIcon,
+  SubagentCountParts,
+  SubagentDetails,
+  SubagentRows,
+  subagentCountSummary
+} from './SubagentList'
+import { useCurrentTurnSubagents } from './use-current-turn-subagents'
 
 interface SubagentPillProps {
   toolCalls: readonly ToolCall[]
@@ -39,70 +30,6 @@ interface SubagentPillProps {
   /** False while the chat tab is hidden (tabs stay mounted); pauses the timer. */
   isVisible?: boolean
   className?: string
-}
-
-const STATUS_LABEL: Record<SubagentStatus, string> = {
-  running: 'running',
-  done: 'done',
-  failed: 'failed',
-  stopped: 'stopped'
-}
-
-const COUNT_KEYS = ['running', 'done', 'failed'] as const
-
-const COUNT_TONE: Record<(typeof COUNT_KEYS)[number], string> = {
-  running: 'text-warning',
-  done: 'text-success',
-  failed: 'text-destructive'
-}
-
-/** Solid spinning arc in the running tone, per the approved mockup. */
-function RunningIcon(): React.JSX.Element {
-  return (
-    <LoaderCircle
-      size={13}
-      strokeWidth={2}
-      className="shrink-0 animate-spin text-warning motion-reduce:animate-none"
-      aria-hidden="true"
-    />
-  )
-}
-
-function StatusIcon({ status }: { status: SubagentStatus }): React.JSX.Element {
-  if (status === 'running') return <RunningIcon />
-  if (status === 'failed') {
-    return <XCircle size={13} className="shrink-0 text-destructive" aria-hidden="true" />
-  }
-  if (status === 'stopped') {
-    return <XCircle size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />
-  }
-  return <CheckCircle2 size={13} className="shrink-0 text-success" aria-hidden="true" />
-}
-
-function lastUserBoundary(messages: readonly ChatMessage[]) {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') return messages[i]
-  }
-  return null
-}
-
-function CountParts({ counts }: { counts: SubagentCounts }): React.JSX.Element {
-  return (
-    <>
-      {COUNT_KEYS.filter((key) => counts[key] > 0).map((key, i) => (
-        <span key={key} className="flex items-center gap-1">
-          {i > 0 && (
-            <span aria-hidden="true" className="text-muted-foreground/40">
-              ·
-            </span>
-          )}
-          <span className={COUNT_TONE[key]}>
-            {counts[key]} {STATUS_LABEL[key]}
-          </span>
-        </span>
-      ))}
-    </>
-  )
 }
 
 /**
@@ -124,19 +51,7 @@ export function SubagentPill({
   const [open, setOpen] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  const lastUser = lastUserBoundary(messages)
-  const lastUserSeq = lastUser?.seq
-  const lastUserTimestamp = lastUser?.timestamp
-  const hasUser = lastUser !== null
-  const subagents = useMemo(
-    () =>
-      selectCurrentTurnSubagents(
-        toolCalls,
-        hasUser ? { seq: lastUserSeq, timestamp: lastUserTimestamp } : null
-      ),
-    [toolCalls, hasUser, lastUserSeq, lastUserTimestamp]
-  )
-  const counts = countSubagents(subagents, turnActive)
+  const { subagents, counts, endedAt } = useCurrentTurnSubagents(toolCalls, messages, turnActive)
   const shown = subagents.length > 0 && !hidden
 
   const close = useCallback(() => setOpen(false), [])
@@ -147,97 +62,19 @@ export function SubagentPill({
     if (!shown || !isVisible) setOpen(false)
   }, [shown, isVisible])
 
-  // One interval for every running row, only while the list is open on a
-  // visible tab. Resuming re-reads the clock, so elapsed jumps to the right value.
-  const [now, setNow] = useState(() => Date.now())
-  const ticking = counts.running > 0 && open && isVisible
-  useEffect(() => {
-    if (!ticking) return
-    setNow(Date.now())
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [ticking])
-
-  // Settle time is stamped only on an observed running -> settled transition,
-  // so history-loaded rows never show a bogus duration.
-  const [endedAt, setEndedAt] = useState<Record<string, number>>({})
-  const prevRunning = useRef(new Map<string, boolean>())
-  useEffect(() => {
-    const settled: string[] = []
-    for (const tc of subagents) {
-      const running = subagentStatus(tc, turnActive) === 'running'
-      if (prevRunning.current.get(tc.toolCallId) === true && !running) settled.push(tc.toolCallId)
-      prevRunning.current.set(tc.toolCallId, running)
-    }
-    if (settled.length === 0) return
-    const stamp = Date.now()
-    setEndedAt((prev) => {
-      const next = { ...prev }
-      for (const id of settled) next[id] ??= stamp
-      return next
-    })
-  }, [subagents, turnActive])
-
-  // Keep the last resolved call so the dialog can close itself normally when
-  // its call leaves the current turn (the live object wins while listed).
-  const lastSelected = useRef<ToolCall | null>(null)
-  const live = selectedId ? subagents.find((tc) => tc.toolCallId === selectedId) : undefined
-  useEffect(() => {
-    if (live) lastSelected.current = live
-  }, [live])
-  const selected = selectedId ? (live ?? lastSelected.current) : null
-  const selectedChildCalls = useMemo(
-    () => (selectedId ? subagentChildCalls(toolCalls, selectedId) : []),
-    [toolCalls, selectedId]
-  )
-  const liveSummary = COUNT_KEYS.filter((key) => counts[key] > 0)
-    .map((key) => `${counts[key]} ${STATUS_LABEL[key]}`)
-    .join(', ')
+  const liveSummary = subagentCountSummary(counts)
 
   const rows = (
-    <ul className="scroller-thin flex max-h-72 flex-col overflow-y-auto overscroll-contain">
-      {subagents.map((tc) => {
-        const status = subagentStatus(tc, turnActive)
-        const type = subagentType(tc)
-        const metrics = subagentMetrics(tc)
-        const durationMs = subagentDurationMs(tc, status, now, endedAt[tc.toolCallId])
-        return (
-          <li key={tc.toolCallId}>
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false)
-                setSelectedId(tc.toolCallId)
-              }}
-              className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-foreground/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                CHAT_ROW_MIN_H
-              )}
-            >
-              <span className="inline-flex shrink-0" aria-hidden="true">
-                <StatusIcon status={status} />
-              </span>
-              <span className="sr-only">{STATUS_LABEL[status]}</span>
-              <span className="min-w-0 flex-1 truncate text-foreground">
-                {subagentTitle(tc)}
-                {type && <span className="ml-1.5 text-muted-foreground">{type}</span>}
-              </span>
-              {isBackgroundSubagent(tc) && (
-                <span className="shrink-0 rounded-sm border border-border px-1 text-2xs text-muted-foreground">
-                  background
-                </span>
-              )}
-              <span className="shrink-0 tabular-nums text-muted-foreground">
-                {durationMs !== undefined && formatElapsed(durationMs)}
-                {status !== 'running' && metrics.totalTokens !== undefined && (
-                  <span className="ml-1.5">{formatTokens(metrics.totalTokens)}</span>
-                )}
-              </span>
-            </button>
-          </li>
-        )
-      })}
-    </ul>
+    <SubagentRows
+      subagents={subagents}
+      turnActive={turnActive}
+      endedAt={endedAt}
+      running={counts.running}
+      onSelect={(id) => {
+        setOpen(false)
+        setSelectedId(id)
+      }}
+    />
   )
 
   const trigger = (
@@ -256,7 +93,7 @@ export function SubagentPill({
       )}
       {!isMobile && (
         <span className="flex items-center gap-1 tabular-nums @max-[420px]:hidden">
-          <CountParts counts={counts} />
+          <SubagentCountParts counts={counts} />
         </span>
       )}
       <span
@@ -300,7 +137,7 @@ export function SubagentPill({
                   <SheetHeader className="space-y-0 px-2 py-2 pr-10 text-left">
                     <SheetTitle className="text-base">Subagents</SheetTitle>
                     <p className="flex items-center gap-1 text-xs tabular-nums">
-                      <CountParts counts={counts} />
+                      <SubagentCountParts counts={counts} />
                     </p>
                   </SheetHeader>
                   {rows}
@@ -326,18 +163,14 @@ export function SubagentPill({
           </motion.div>
         )}
       </AnimatePresence>
-      {selected && (
-        <SubagentDetailsDialog
-          toolCall={selected}
-          childToolCalls={selectedChildCalls}
-          parentTurnActive={turnActive}
-          filePathContext={filePathContext}
-          open
-          onOpenChange={(next) => {
-            if (!next) setSelectedId(null)
-          }}
-        />
-      )}
+      <SubagentDetails
+        toolCalls={toolCalls}
+        subagents={subagents}
+        selectedId={selectedId}
+        turnActive={turnActive}
+        filePathContext={filePathContext}
+        onClose={() => setSelectedId(null)}
+      />
     </>
   )
 }
