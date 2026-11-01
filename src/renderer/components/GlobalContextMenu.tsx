@@ -29,6 +29,11 @@
  * Select All are gated on a MUTABLE editable (not readOnly, not disabled).
  * P9: Select All is disabled when no mutable editable is focused (no
  * document-wide selectAll fallback).
+ *
+ * Touch-primary devices get no global menu: a long-press there must stay the
+ * OS's text selection. Radix would otherwise open this modal menu after 700ms
+ * (or on Android's long-press `contextmenu`), and its layer makes the whole
+ * page ignore pointers, so the selection handles cannot be dragged.
  */
 
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
@@ -41,6 +46,7 @@ import {
   ContextMenuShortcut,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
+import { useTouchPrimaryPointer } from '@/hooks/use-touch-primary-pointer'
 import { isMac } from '@/lib/platform'
 import {
   captureSelectionSnapshot,
@@ -131,6 +137,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
   const selectionAtActionRef = useRef<SelectionSnapshot>(null)
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<GlobalContextMenuState>(CLOSED_STATE)
+  const touchPrimary = useTouchPrimaryPointer()
 
   // P3: capture the state synchronously on the capture-phase `contextmenu`
   // event, BEFORE Radix moves focus to the first menu item. This fires on
@@ -183,7 +190,7 @@ export function GlobalContextMenu({ children }: GlobalContextMenuProps): React.J
 
   return (
     <ContextMenu open={open} onOpenChange={handleOpenChange}>
-      <ContextMenuTrigger asChild>
+      <ContextMenuTrigger asChild disabled={touchPrimary}>
         <div className="contents">{children}</div>
       </ContextMenuTrigger>
       <ContextMenuContent
