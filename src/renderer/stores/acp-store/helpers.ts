@@ -1722,7 +1722,7 @@ export function dropEphemeralSessionState(
 
 /** Checked last, so a caller can tell that nothing else blocks. */
 export const BACKGROUND_SUBAGENTS_BLOCK_REASON =
-  'background subagents are still running — wait for them to finish before switching'
+  'background subagents are still running — switching would stop them'
 
 /**
  * Story 3 (spec-in-chat-agent-switch): the busy gate for a switch. True when
