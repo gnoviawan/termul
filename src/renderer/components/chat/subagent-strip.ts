@@ -121,6 +121,19 @@ export function runningBackgroundSubagents(
   )
 }
 
+/**
+ * Pill rows: the current turn's subagents, then the running background
+ * launches they lack (older turns), so every subagent the chat waits on has a row.
+ */
+export function withRunningBackground(
+  current: ToolCall[],
+  background: readonly ToolCall[]
+): ToolCall[] {
+  const ids = new Set(current.map((tc) => tc.toolCallId))
+  const earlier = background.filter((tc) => !ids.has(tc.toolCallId))
+  return earlier.length === 0 ? current : [...current, ...earlier]
+}
+
 /** Status of a current-turn row; `turnActive` is the chat's `activeTurn`. */
 export function subagentStatus(toolCall: ToolCall, turnActive: boolean): SubagentStatus {
   if (isSubagentRunning(toolCall, turnActive ? 'active' : 'ended')) return 'running'

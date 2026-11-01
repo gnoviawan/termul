@@ -75,10 +75,11 @@ function plural(count: number, noun: string): string {
 
 /**
  * Floating top-right status pill for the chat: the current turn's subagents
- * and the files the chat changed. Takes no layout height. Opens one popover
- * (desktop) or bottom sheet (phone); with both kinds present its content has
- * a tab per kind, and switching tabs slides inside the open overlay. Narrow
- * panes collapse the pill to icons and totals via the chat `@container`.
+ * (and older ones still running in the background) and the files the chat
+ * changed. Takes no layout height. Opens one popover (desktop) or bottom sheet
+ * (phone); with both kinds present its content has a tab per kind, and
+ * switching tabs slides inside the open overlay. Narrow panes collapse the
+ * pill to icons and totals via the chat `@container`.
  */
 export function ChatStatusPill({
   sessionId,
@@ -104,8 +105,12 @@ export function ChatStatusPill({
   const handingOffFocus = useRef(false)
 
   const changes = useChatChangedFiles(cwd, toolCalls, turnActive)
-  const { subagents, counts, endedAt } = useCurrentTurnSubagents(toolCalls, messages, turnActive)
-  const waiting = useBackgroundWait(sessionId, toolCalls, messages, turnActive)
+  const { subagents, earlier, backgroundRunning, counts, endedAt } = useCurrentTurnSubagents(
+    toolCalls,
+    messages,
+    turnActive
+  )
+  const waiting = useBackgroundWait(sessionId, backgroundRunning, turnActive)
   const waitingLabel = waiting > 0 ? `Waiting on ${plural(waiting, 'background subagent')}` : null
   const fileCount = changes.files.length
   const tabs = STATUS_TABS.filter((tab) => (tab === 'files' ? fileCount > 0 : subagents.length > 0))
@@ -188,7 +193,7 @@ export function ChatStatusPill({
       title: 'Subagents',
       icon: <Bot size={13} className="shrink-0" aria-hidden="true" />,
       count: subagents.length,
-      caption: 'This turn',
+      caption: earlier > 0 ? 'This turn and earlier background' : 'This turn',
       meta: <SubagentCountParts counts={counts} />,
       rows: (
         <>
