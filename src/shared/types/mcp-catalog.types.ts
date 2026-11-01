@@ -3,6 +3,7 @@
  */
 
 import type { IpcResult } from './ipc.types'
+import type { McpInstallApi } from './mcp-install.types'
 
 export const MCP_REGISTRY_URL = 'https://registry.modelcontextprotocol.io'
 
@@ -36,6 +37,13 @@ export type McpCatalogReason =
   | { code: 'unpinned-version' }
   | { code: 'invalid-package' }
   | { code: 'unsupported-registry'; registry: string }
+  | { code: 'invalid-command' }
+  | { code: 'invalid-header-name'; name: string }
+  | { code: 'control-character'; field: string }
+  | { code: 'duplicate-name'; name: string }
+  | { code: 'cmd-metacharacter'; field: string }
+  | { code: 'unsupported-launch-argument'; command: string; argument: string }
+  | { code: 'unsupported-runner'; command: string }
 
 /** The option an install would use: an index into the row's `remotes` or `packages`. */
 export interface McpCatalogDefaultOption {
@@ -101,7 +109,7 @@ export interface McpCatalogIconPayload {
  */
 export type McpCatalogIconUrl = `data:${string}`
 
-export interface McpCatalogApi {
+export interface McpCatalogApi extends McpInstallApi {
   search(request: McpCatalogSearchRequest): Promise<IpcResult<McpCatalogPage>>
   status(): Promise<IpcResult<McpCatalogStatus>>
   setSync(enabled: boolean): Promise<IpcResult<McpCatalogStatus>>

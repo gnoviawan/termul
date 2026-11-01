@@ -196,6 +196,18 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "set_mcp_catalog_sync" => {
             mcp_catalog::handle_set_mcp_catalog_sync(id, &req.payload).await
         }
+        "describe_mcp_install" => {
+            mcp_catalog::handle_describe_mcp_install(id, &req.payload).await
+        }
+        "plan_mcp_install" => {
+            mcp_catalog::handle_plan_mcp_install(id, &req.payload, env).await
+        }
+        "commit_mcp_install" => {
+            mcp_catalog::handle_commit_mcp_install(id, &req.payload, env).await
+        }
+        "cancel_mcp_install" => {
+            mcp_catalog::handle_cancel_mcp_install(id, &req.payload, env).await
+        }
         "get_mcp_catalog_icon" => {
             mcp_catalog::handle_get_mcp_catalog_icon(id, &req.payload).await
         }

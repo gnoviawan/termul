@@ -171,6 +171,223 @@ async fn set_sync_validates_its_body_before_reaching_the_service() {
     assert_eq!(body["code"], "MCP_CATALOG_SYNC_UNAVAILABLE");
 }
 
+pub(crate) const LOOPBACK: ([u8; 4], u16) = ([127, 0, 0, 1], 54321);
+const REMOTE: ([u8; 4], u16) = ([203, 0, 113, 9], 40000);
+
+fn install_app(allow_remote_writes: bool, shared_live_writes_denied: bool) -> axum::Router {
+    axum::Router::new()
+        .route("/mcp-catalog/install/form", super::install_route(super::describe_install))
+        .route("/mcp-catalog/install/plan", super::install_route(super::plan_install))
+        .route("/mcp-catalog/install/commit", super::install_route(super::commit_install))
+        .route("/mcp-catalog/install/cancel", super::install_route(super::cancel_install))
+        .with_state(state(allow_remote_writes, shared_live_writes_denied))
+}
+
+pub(crate) async fn http_install(
+    route: &str,
+    body: &str,
+    peer: ([u8; 4], u16),
+    allow_remote_writes: bool,
+    shared_live_writes_denied: bool,
+) -> Value {
+    let response = install_app(allow_remote_writes, shared_live_writes_denied)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/mcp-catalog/install/{route}"))
+                .header("content-type", "application/json")
+                .extension(ConnectInfo(SocketAddr::from(peer)))
+                .body(Body::from(body.to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    serde_json::from_slice(&bytes).expect("IpcBody json")
+}
+
+pub(crate) async fn http_install_local(route: &str, body: &Value) -> Value {
+    http_install(route, &body.to_string(), LOOPBACK, false, false).await
+}
+
+pub(crate) fn import_plan_body(client: &str) -> Value {
+    json!({
+        "clientInstanceId": client,
+        "source": {
+            "kind": "import",
+            "json": r#"{"mcpServers":{"notes":{"command":"node","args":["srv.js"],"env":{"NOTES_TOKEN":"from-file"}}}}"#
+        },
+        "inputs": {}
+    })
+}
+
+#[tokio::test]
+async fn the_form_route_describes_a_catalog_remote_from_the_fixture() {
+    let body = http_install_local(
+        "form",
+        &json!({ "source": { "kind": "catalog", "name": "com.tre-app/tre", "version": "0.2.0" } }),
+    )
+    .await;
+    assert_eq!(body["success"], true, "{body}");
+    assert_eq!(body["data"]["outcome"], "form");
+    assert_eq!(body["data"]["form"]["title"], "com.tre-app/tre");
+    let fields = body["data"]["form"]["fields"].as_array().unwrap();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0]["id"], "header/Authorization");
+    assert_eq!(fields[0]["isSecret"], true);
+}
+
+#[tokio::test]
+async fn plan_commit_and_cancel_round_trip_over_http() {
+    let planned = http_install_local("plan", &import_plan_body("tab-a")).await;
+    assert_eq!(planned["success"], true, "{planned}");
+    assert_eq!(planned["data"]["outcome"], "plan");
+    let plan = &planned["data"]["plan"];
+    assert_eq!(plan["name"], "notes");
+    assert_eq!(plan["consentView"]["argv"], json!(["node", "srv.js"]));
+    assert_eq!(plan["consentView"]["env"][0]["value"], "from-file");
+    assert_eq!(plan["consentView"]["warnings"], json!(["runs-local-code", "from-file"]));
+
+    let committed = http_install_local(
+        "commit",
+        &json!({
+            "clientInstanceId": "tab-a",
+            "planId": plan["planId"],
+            "launchDigest": plan["launchDigest"],
+            "secretValues": {}
+        }),
+    )
+    .await;
+    assert_eq!(committed["success"], true, "{committed}");
+    assert_eq!(committed["data"]["launchDigest"], plan["launchDigest"]);
+    assert_eq!(
+        committed["data"]["secrets"],
+        json!([{ "slot": "env", "name": "NOTES_TOKEN", "value": "from-file" }])
+    );
+
+    let again = http_install_local(
+        "commit",
+        &json!({
+            "clientInstanceId": "tab-a",
+            "planId": plan["planId"],
+            "launchDigest": plan["launchDigest"],
+            "secretValues": {}
+        }),
+    )
+    .await;
+    assert_eq!(again["code"], "MCP_PLAN_CONSUMED");
+
+    let cancelled = http_install_local(
+        "cancel",
+        &json!({ "clientInstanceId": "tab-a", "planId": plan["planId"] }),
+    )
+    .await;
+    assert_eq!(cancelled, json!({ "success": true, "data": {} }));
+}
+
+#[tokio::test]
+async fn another_client_cannot_commit_or_cancel_the_plan() {
+    let planned = http_install_local("plan", &import_plan_body("tab-a")).await;
+    let plan = &planned["data"]["plan"];
+    let other = http_install_local(
+        "commit",
+        &json!({
+            "clientInstanceId": "tab-b",
+            "planId": plan["planId"],
+            "launchDigest": plan["launchDigest"],
+            "secretValues": {}
+        }),
+    )
+    .await;
+    assert_eq!(other["code"], "MCP_PLAN_WRONG_CALLER");
+    let cancel = http_install_local(
+        "cancel",
+        &json!({ "clientInstanceId": "tab-b", "planId": plan["planId"] }),
+    )
+    .await;
+    assert_eq!(cancel["code"], "MCP_PLAN_WRONG_CALLER");
+}
+
+#[tokio::test]
+async fn a_plan_mutation_without_a_client_id_is_a_validation_error() {
+    let mut body = import_plan_body("tab-a");
+    body.as_object_mut().unwrap().remove("clientInstanceId");
+    let planned = http_install_local("plan", &body).await;
+    assert_eq!(planned["success"], false);
+    assert_eq!(planned["code"], "VALIDATION_ERROR");
+}
+
+#[tokio::test]
+async fn install_mutations_carry_the_shared_write_guard() {
+    for route in ["plan", "commit", "cancel"] {
+        for (label, peer, allow_remote, shared_live) in [
+            ("remote", REMOTE, false, false),
+            ("shared-live-loopback", LOOPBACK, false, true),
+            ("shared-live-optin", REMOTE, true, true),
+        ] {
+            let body = http_install(route, "{not json", peer, allow_remote, shared_live).await;
+            assert_eq!(body["success"], false, "{route} {label}");
+            assert_eq!(body["code"], "FORBIDDEN", "{route} {label}");
+        }
+        let admitted = http_install(route, "{not json", REMOTE, true, false).await;
+        assert_eq!(admitted["code"], "VALIDATION_ERROR", "{route} remote-optin");
+    }
+    let form = http_install(
+        "form",
+        &json!({ "source": { "kind": "reapprove", "entryId": "e1" } }).to_string(),
+        LOOPBACK,
+        false,
+        true,
+    )
+    .await;
+    assert_eq!(form["code"], "MCP_PLAN_NOT_AVAILABLE", "the form stays a read in shared-live");
+}
+
+#[tokio::test]
+async fn a_client_id_must_be_a_short_id_without_control_characters() {
+    let message = "clientInstanceId must be a non-empty id of at most 128 bytes without control characters";
+    for client in [String::new(), "t".repeat(129), "tab\u{0007}".to_string()] {
+        for route in ["plan", "commit", "cancel"] {
+            let body = json!({
+                "clientInstanceId": client,
+                "source": { "kind": "import", "json": "{}" },
+                "planId": "p",
+                "launchDigest": "sha256:00",
+            });
+            let reply = http_install_local(route, &body).await;
+            assert_eq!(
+                (reply["code"].as_str(), reply["error"].as_str()),
+                (Some("VALIDATION_ERROR"), Some(message)),
+                "{route} {client:?}"
+            );
+        }
+    }
+    let longest = http_install_local("plan", &import_plan_body(&"t".repeat(128))).await;
+    assert_eq!(longest["success"], true, "{longest}");
+}
+
+#[tokio::test]
+async fn an_install_body_over_the_route_limit_is_refused_unread() {
+    let padding = "a".repeat(super::MAX_INSTALL_BODY_BYTES);
+    let body = json!({ "clientInstanceId": "tab", "source": { "kind": "import", "json": padding } });
+    let response = install_app(false, false)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/mcp-catalog/install/plan")
+                .header("content-type", "application/json")
+                .extension(ConnectInfo(SocketAddr::from(LOOPBACK)))
+                .body(Body::from(body.to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
 pub(crate) const FIXED_ICON: &[u8] = b"\x89PNG\r\n\x1a\nfixture";
 
 pub(crate) async fn with_fixed_icons() {
