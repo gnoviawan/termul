@@ -12,6 +12,7 @@ vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 // their cell.
 const FONT_DIR = 'src/renderer/assets/fonts/termul-symbols'
 
+/** Replace `document.fonts` for one test, so a load can fail or resolve on cue. */
 function stubFontLoads(load: (spec: string, text?: string) => Promise<FontFace[]>): void {
   Object.defineProperty(document, 'fonts', {
     configurable: true,
