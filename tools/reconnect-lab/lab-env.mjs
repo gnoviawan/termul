@@ -4,12 +4,12 @@
 // proxy in front of it, and one fresh Chromium context per scenario.
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { dirname, extname, join, resolve } from 'node:path'
+import { dirname, extname, join, resolve, sep } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 export const LAB_TOKEN = 'reconnect-lab-token'
@@ -287,13 +287,17 @@ export async function routeWebDir(context, origin, webDir) {
     const url = new URL(request.url())
     const rel = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname.slice(1))
     const file = resolve(webDir, rel)
-    if (!file.startsWith(resolve(webDir)) || !existsSync(file) || !statSync(file).isFile()) {
+    if (!file.startsWith(resolve(webDir) + sep)) return route.fallback()
+    let body
+    try {
+      body = readFileSync(file)
+    } catch {
       return route.fallback()
     }
     return route.fulfill({
       status: 200,
       headers: { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' },
-      body: readFileSync(file)
+      body
     })
   })
 }
