@@ -119,8 +119,6 @@ interface ChatInputBarProps {
   permission?: PendingPermission | null
   onRemoveQueued?: (queueId: string) => void
   onSendQueuedNow?: (queueId: string) => void
-  /** When true, removes top padding so the changed-files panel sits flush behind the chatbox. */
-  compactTop?: boolean
   /**
    * Whether the host chat panel's tab is the pane's active tab. While false,
    * the per-flush `useAcpMessages` re-render is frozen (same render gate as
@@ -163,7 +161,6 @@ export function ChatInputBar({
   permission,
   onRemoveQueued,
   onSendQueuedNow,
-  compactTop = false,
   isVisible = true,
   onDraftStart
 }: ChatInputBarProps): React.JSX.Element {
@@ -633,10 +630,10 @@ export function ChatInputBar({
       ref={rootRef}
       className={cn(
         CHAT_GUTTER_X,
-        compactTop ? 'pb-4 pt-0' : 'pb-6 pt-3',
+        'pb-6 pt-3',
         // The slash/mention menu overflows upward into the message list; lift
         // it above the list's jump-to-latest button (z-20).
-        slashOpen || mentionMenuOpen ? 'relative z-30' : compactTop && 'relative z-10'
+        (slashOpen || mentionMenuOpen) && 'relative z-30'
       )}
     >
       <div className="relative mx-auto w-full max-w-3xl">

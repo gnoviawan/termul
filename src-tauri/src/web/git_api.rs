@@ -150,6 +150,7 @@ pub struct GitBranchNameRequest {
 /// module does not depend on `commands.rs` (which is desktop-wired).
 #[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"One stash entry: its index, its name (`stash@{0}`), and its message."#)]
 pub struct GitStashInfoDto {
     pub index: usize,
     pub name: String,

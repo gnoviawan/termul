@@ -77,6 +77,7 @@ pub(crate) struct HealthBody {
     case_insensitive_paths: bool,
     /// `true` only on the setup-mode router (`web::setup`); normal mode
     /// always reports `false` — see [`health_check`].
+    #[schemars(description = r#"`true` only while the server runs in first-run setup mode; `false` once it is configured."#)]
     setup_required: bool,
 }
 

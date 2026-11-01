@@ -82,7 +82,7 @@ export function buildTimeline(
 
   const callIds = new Set(toolCalls.map((tool) => tool.toolCallId))
   toolCalls.forEach((tool, i) => {
-    // Restored durable file-change summaries feed the Changed files panel
+    // Restored durable file-change summaries feed the changed-files list
     // only — they never render as timeline cards, so a restored chat looks
     // exactly as it did before summaries were materialized.
     if (tool.restoredSummary === true) return

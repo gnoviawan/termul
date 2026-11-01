@@ -1480,7 +1480,7 @@ describe('phone Select model sheet', () => {
       },
       configToLiveAgent: {
         ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
-        [agentReuseKey(GEMINI.id, '/work')]: 'agent-gemini'
+        [agentReuseKey(GEMINI.id, '/work', 'p1')]: 'agent-gemini'
       },
       agents: {
         'agent-gemini': {
@@ -1548,7 +1548,7 @@ describe('phone Select model sheet', () => {
       },
       configToLiveAgent: {
         ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
-        [agentReuseKey(CLAUDE.id, '/work')]: 'agent-claude'
+        [agentReuseKey(CLAUDE.id, '/work', 'p1')]: 'agent-claude'
       },
       agents: {
         'agent-claude': { authMethods: [{ id: 'claude-login', name: 'Log in', type: 'agent' }] }
