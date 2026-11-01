@@ -25,7 +25,7 @@ import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
  * unsupported attachment (chat and launcher), a failed clipboard read (key
  * bar), an empty required elicitation field, or a saved file (editor tab).
  * The fake agent (fake-longrun-agent.ts) supplies the dock content through
- * prompt markers: `[ASK:permission]` and
+ * prompt markers: `[DOCK]` (plan and changed files), `[ASK:permission]` and
  * `[ASK:elicitation]` (approvals).
  *
  * Not automated here (unit tests own them, see the spec's matrix): a missing

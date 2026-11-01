@@ -11,7 +11,7 @@ export const GIT_STATUS_LABELS: Record<GitFileStatus, string> = {
   staged: 'Staged'
 }
 
-/** Status badge icon + label, shared by GitPanel and the chat changed-files list. */
+/** Status badge icon + label. */
 export function GitStatusBadge({ status }: { status: GitFileStatus }) {
   const label = GIT_STATUS_LABELS[status]
   let icon: React.ReactNode

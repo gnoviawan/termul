@@ -47,6 +47,23 @@ interface Drag {
   axis: 'x' | 'y' | null
 }
 
+function placeTrack(
+  indicator: HTMLElement | null,
+  track: HTMLElement | null,
+  index: number,
+  count: number,
+  dragPx: number,
+  width: number
+): void {
+  const position = Math.min(count - 1, Math.max(0, index - dragPx / width))
+  if (indicator) indicator.style.transform = `translateX(${position * 100}%)`
+  if (track) track.style.transform = `translateX(calc(${(-index * 100) / count}% + ${dragPx}px))`
+}
+
+function fitViewport(viewport: HTMLElement | null, panel: HTMLElement | null | undefined): void {
+  if (viewport && panel) viewport.style.height = `${panel.offsetHeight}px`
+}
+
 /**
  * Tabs whose panels sit side by side in one track. A switch slides the track,
  * the indicator and the viewport height without remounting either panel, so
@@ -79,34 +96,25 @@ export function SlidingTabs<T extends string>({
   const activeIndexRef = useRef(activeIndex)
   activeIndexRef.current = activeIndex
 
-  const place = (dragPx: number, width: number) => {
-    const index = activeIndexRef.current
-    const position = Math.min(count - 1, Math.max(0, index - dragPx / width))
-    if (indicatorRef.current)
-      indicatorRef.current.style.transform = `translateX(${position * 100}%)`
-    if (trackRef.current) {
-      trackRef.current.style.transform = `translateX(calc(${(-index * 100) / count}% + ${dragPx}px))`
-    }
-  }
+  const place = (dragPx: number, width: number) =>
+    placeTrack(indicatorRef.current, trackRef.current, activeIndexRef.current, count, dragPx, width)
 
-  const fitHeight = () => {
-    const panel = panelRefs.current[activeIndexRef.current]
-    if (panel && viewportRef.current) viewportRef.current.style.height = `${panel.offsetHeight}px`
-  }
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: place and fitHeight read refs only
   useLayoutEffect(() => {
-    place(0, 1)
+    placeTrack(indicatorRef.current, trackRef.current, activeIndex, count, 0, 1)
     panelRefs.current.forEach((panel, i) => {
       panel?.toggleAttribute('inert', i !== activeIndex)
     })
-    fitHeight()
+    fitViewport(viewportRef.current, panelRefs.current[activeIndex])
   }, [activeIndex, count])
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: fitHeight reads refs only
   useEffect(() => {
-    const observer = new ResizeObserver(() => fitHeight())
-    for (const panel of panelRefs.current) if (panel) observer.observe(panel)
+    const observer = new ResizeObserver(() =>
+      fitViewport(viewportRef.current, panelRefs.current[activeIndexRef.current])
+    )
+    for (let i = 0; i < count; i++) {
+      const panel = panelRefs.current[i]
+      if (panel) observer.observe(panel)
+    }
     return () => observer.disconnect()
   }, [count])
 

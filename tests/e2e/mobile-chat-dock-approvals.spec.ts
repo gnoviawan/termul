@@ -395,7 +395,7 @@ test('the status pill lists the changed files in a sheet and opens a row in the 
   const status = page.getByRole('button', { name: 'Session status: 3 changed files', exact: true })
   const sheet = page.getByRole('dialog', { name: 'Changed files' })
 
-  // The pill floats over the thread: the composer keeps its full height.
+  // The pill floats over the thread and its sheet starts closed.
   await expect(status).toBeVisible()
   await expect(sheet).toBeHidden()
 
