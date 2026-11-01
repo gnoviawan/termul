@@ -111,6 +111,20 @@
   src: url("./assets/fonts/paper-mono/PaperMono[wght].woff2") format("woff2");
 }
 
+/* Symbol fallback: the PUA icons Paper Mono has no glyphs for (Nerd Font,
+   Powerline, Font Awesome). Same 1000 upm and 606/1000 advance, so it is
+   metric-compatible and xterm's cell grid is unchanged.
+   Nerd Fonts Symbols-only subset. Licenses and per-set attributions are in
+   assets/fonts/termul-symbols/LICENSE.
+   Family name matches MONO_FONT_FAMILY in lib/font-stacks.ts. */
+@font-face {
+  font-family: "Termul Symbols";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("./assets/fonts/termul-symbols/TermulSymbols.woff2") format("woff2");
+}
+
 @layer base {
   :root {
     /* Color tokens are OKLCH "L C H" components, read as oklch(var(--token)).
