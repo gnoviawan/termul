@@ -44,7 +44,7 @@ pub(super) async fn run_command_loop(
     };
     let init_outcome =
         tokio::time::timeout(INIT_TIMEOUT, cx.send_request(init_message).block_task()).await;
-    let supports_session_close = match init_outcome {
+    let (supports_session_close, api_key_shapes) = match init_outcome {
         Ok(Ok(value)) => {
             let response: InitializeResponse = match serde_json::from_value(value) {
                 Ok(response) => response,
@@ -68,6 +68,10 @@ pub(super) async fn run_command_loop(
             // action and call `authenticate(methodId)` before `session/new`.
             // Every advertised method is forwarded; no agent-type filtering.
             let auth_methods = to_auth_method_infos(&response.auth_methods);
+            let api_key_shapes: HashMap<String, ApiKeyShape> = auth_methods
+                .iter()
+                .filter_map(|m| Some((m.id.clone(), m.api_key?)))
+                .collect();
             let auth_method_ids: Vec<&str> = auth_methods.iter().map(|m| m.id.as_str()).collect();
             let session_caps = &response.agent_capabilities.session_capabilities;
             let supports_session_close = session_caps.close.is_some();
@@ -87,7 +91,7 @@ pub(super) async fn run_command_loop(
                 capabilities: response.agent_capabilities,
                 auth_methods,
             }));
-            supports_session_close
+            (supports_session_close, api_key_shapes)
         }
         Ok(Err(e)) => {
             let _ = init_tx.send(Err(e.to_string()));
@@ -1324,25 +1328,55 @@ pub(super) async fn run_command_loop(
 
             AcpCommand::Authenticate {
                 method_id,
-                gateway,
+                credential,
                 reply,
             } => {
                 let slot = reply_slot(reply);
+                let meta = match &credential {
+                    None => None,
+                    Some(AuthCredential::Gateway(gateway)) => Some(gateway_auth_meta(gateway)),
+                    Some(AuthCredential::ApiKey(key)) => match api_key_shapes.get(&method_id) {
+                        Some(shape) => Some(api_key_auth_meta(*shape, key)),
+                        None => {
+                            log::warn!(
+                                "[acp] agent {agent_id}: refused an API key for '{method_id}', \
+                                 which does not take one"
+                            );
+                            send_reply(
+                                &slot,
+                                Err(format!(
+                                    "sign-in method '{method_id}' does not take an API key"
+                                )),
+                            );
+                            continue;
+                        }
+                    },
+                };
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
                 let log_agent_id = agent_id.clone();
                 spawn_request(&cx, slot, async move {
-                    log::info!("[acp] agent {log_agent_id} authenticating via '{method_id}'");
+                    let carrying = match &credential {
+                        None => "",
+                        Some(AuthCredential::Gateway(_)) => " with a gateway",
+                        Some(AuthCredential::ApiKey(_)) => " with a typed API key",
+                    };
+                    log::info!(
+                        "[acp] agent {log_agent_id} authenticating via '{method_id}'{carrying}"
+                    );
                     let mut request = AuthenticateRequest::new(method_id);
-                    if let Some(gateway) = gateway {
-                        request = request.meta(gateway_auth_meta(&gateway));
+                    if let Some(meta) = meta {
+                        request = request.meta(meta);
                     }
                     let result = req_cx
                         .send_request(request)
                         .block_task()
                         .await
                         .map(|_| ())
-                        .map_err(|e| e.to_string());
+                        .map_err(|e| match &credential {
+                            Some(credential) => credential.redact(e.to_string()),
+                            None => e.to_string(),
+                        });
                     send_reply(&task_slot, result);
                 });
             }
@@ -1501,6 +1535,14 @@ pub(super) fn initialize_message(
         auth.insert("gateway".to_string(), serde_json::json!({}));
     }
     UntypedMessage::new("initialize", &value).map_err(|error| error.to_string())
+}
+
+fn api_key_auth_meta(shape: ApiKeyShape, key: &ApiKey) -> Meta {
+    let value = match shape {
+        ApiKeyShape::Object => serde_json::json!({ "apiKey": key.secret() }),
+        ApiKeyShape::Text => serde_json::Value::String(key.secret().to_string()),
+    };
+    Meta::from_iter([("api-key".to_string(), value)])
 }
 
 fn gateway_auth_meta(gateway: &GatewayAuthInput) -> Meta {

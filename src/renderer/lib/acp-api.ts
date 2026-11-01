@@ -412,7 +412,21 @@ export interface AuthMethod {
   type?: 'agent' | 'terminal' | 'env_var'
   args?: string[]
   env?: Record<string, string>
+  /**
+   * The agent reads a key the user types from `authenticate` (it advertised
+   * `_meta["api-key"]` for a provider whose key shape the host knows).
+   * Signing in without one makes the agent read its own environment.
+   */
+  takesApiKey?: boolean
 }
+
+/**
+ * What a sign-in hands the agent beyond the method id. A key is held only
+ * for the call: never logged, persisted or remembered.
+ */
+export type AuthenticateInput =
+  | { gateway: { baseUrl: string; apiKey?: string } }
+  | { apiKey: string }
 
 export interface AgentSpawnedEvent {
   agentId: AgentId
@@ -1351,14 +1365,14 @@ export async function acpAnswerQuestion(
 export async function acpAuthenticate(
   agentId: AgentId,
   methodId: string,
-  gateway?: { baseUrl: string; apiKey?: string }
+  input?: AuthenticateInput
 ): Promise<void> {
-  // `fresh`: the request may carry a gateway key the id cannot name, so a
-  // later try is never mistaken for a resend of an earlier one.
+  // `fresh`: the request may carry a key the id cannot name, so a later try
+  // is never mistaken for a resend of an earlier one.
   await ledgered(
     'authenticate_agent',
     `${agentId}|${methodId}`,
-    (call) => getAcpTransport().authenticate(agentId, methodId, gateway, call),
+    (call) => getAcpTransport().authenticate(agentId, methodId, input, call),
     { fresh: true, acceptedWithoutResult: () => undefined }
   )
 }

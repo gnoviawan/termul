@@ -386,8 +386,8 @@ export function createInvokeAcpTransport(): AcpTransport {
     stopBrowserAgent: async (sessionId) => {
       await invoke('browser_stop', { sessionId })
     },
-    authenticate: (agentId, methodId, gateway, options) =>
-      invokeCommandVoid('acp_authenticate', { agentId, methodId, gateway }, options),
+    authenticate: (agentId, methodId, input, options) =>
+      invokeCommandVoid('acp_authenticate', { agentId, methodId, ...input }, options),
     deliverAuthRedirect: (agentId, url, options) =>
       invokeCommand<number>('acp_auth_deliver_redirect', { agentId, url }, options),
     onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {

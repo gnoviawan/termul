@@ -62,6 +62,7 @@ import type {
   AcpRegistrySnapshot,
   AgentConfig,
   AgentId,
+  AuthenticateInput,
   ContentBlock,
   InstallAcpRegistryBinaryOutcome,
   InstallAcpRegistryBinaryRequest,
@@ -1527,7 +1528,7 @@ export class WsAcpTransport implements AcpTransport {
   async authenticate(
     agentId: AgentId,
     methodId: string,
-    gateway?: { baseUrl: string; apiKey?: string },
+    input?: AuthenticateInput,
     options?: CommandCallOptions
   ): Promise<void> {
     // Await the authenticated relay socket before sending — `connect()`
@@ -1541,7 +1542,7 @@ export class WsAcpTransport implements AcpTransport {
     // process (the provider owns the login UX, often opening its own
     // browser); Termul never invents a redirect URL or stores credentials.
     await this.connect()
-    await this.request('authenticate_agent', { agentId, methodId, gateway }, undefined, options)
+    await this.request('authenticate_agent', { agentId, methodId, ...input }, undefined, options)
   }
 
   /**
