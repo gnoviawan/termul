@@ -176,7 +176,8 @@ describe('warm session pool', () => {
       messages: {},
       pendingPermissions: {},
       pendingQuestions: {},
-      pendingElicitations: {}
+      pendingElicitations: {},
+      mcpServers: []
     })
     _resetInFlightHistoryOpensForTesting()
     _resetEphemeralSessionIdsForTesting()
@@ -419,6 +420,35 @@ describe('warm session pool', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('startChat skips a warm session made before the MCP list changed', async () => {
+    await seedConnectedAgent('cfg-mcp', 'agent-mcp', '/work-mcp')
+    const sessionIds = ['sess-prep', 'sess-new']
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === 'acp_new_session' ? { sessionId: sessionIds.shift() } : undefined
+    )
+    useAcpStore.getState().prepareChat('cfg-mcp', '/work-mcp', undefined, 'p1')
+    const key = prepareChatKey('cfg-mcp', '/work-mcp', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep'))
+
+    useAcpStore.setState({
+      mcpServers: [{ id: 'fs', type: 'stdio', name: 'files', command: 'npx', enabled: true }]
+    })
+    const sessionId = await useAcpStore
+      .getState()
+      .startChat('cfg-mcp', '/work-mcp', undefined, 'p1')
+
+    expect(sessionId).toBe('sess-new')
+    const offered = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === 'acp_new_session')
+      .map(([, args]) => (args as { mcpServers: unknown }).mcpServers)
+    expect(offered).toEqual([
+      [],
+      [{ type: 'stdio', name: 'files', command: 'npx', args: [], env: [] }]
+    ])
+    useAcpStore.getState().cancelPreparedChat(key)
   })
 
   it('startChat refills a warm session for the pool target after consuming one', async () => {

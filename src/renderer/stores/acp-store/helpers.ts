@@ -1168,15 +1168,19 @@ export function discoveryKey(agentId: AgentId, cwd: string): string {
 }
 
 /** Stable key for prepare/start dedupe (MCP list order-independent). */
+export function mcpServersFingerprint(mcpServers: McpServer[]): string {
+  return mcpServers
+    .map((s) => JSON.stringify(s))
+    .sort()
+    .join('|')
+}
+
 export function prepareChatKey(
   configId: string,
   cwd: string,
   mcpServers: McpServer[] | undefined
 ): string {
-  const mcpKey = (mcpServers ?? [])
-    .map((s) => JSON.stringify(s))
-    .sort()
-    .join('|')
+  const mcpKey = mcpServersFingerprint(mcpServers ?? [])
   // Normalize cwd here so every producer (`prepareChat` trims; armed-switch
   // lookups pass the raw session cwd) agrees on the same key.
   return `${configId}\0${cwd.trim()}\0${mcpKey}`

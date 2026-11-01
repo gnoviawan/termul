@@ -111,6 +111,7 @@ import {
   persistSession,
   rebaseSeqCounter,
   rebaseUntitledCounter,
+  recordRegistryMcpServers,
   rejectBugReportCollector,
   rejectCommitMessageCollector,
   rejectTerminalAssistCollector,
@@ -1592,6 +1593,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         })
       )
       const sessionId = outcome.sessionId
+      if (mcpServers === undefined) recordRegistryMcpServers(sessionId, sessionMcpServers)
       // AD-5/AD-6: a RESEND answered by the host's entity lookup (`lookup`) is a
       // receipt for a session an earlier, reply-lost attempt created. It carries
       // no modes/models/options, so it resolves the COMMAND only: the entity is

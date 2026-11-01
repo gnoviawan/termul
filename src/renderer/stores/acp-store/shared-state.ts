@@ -8,13 +8,14 @@
 import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/persistence.types'
 import type { WsAgentSummary } from '@shared/types/web-protocol.types'
 import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
-import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
+import type { AgentId, McpServer, SessionId, ToolCall } from '@/lib/acp-api'
 import {
   deriveTitle,
   maxPayloadSeq,
   type SessionIndexEntry,
   type SessionPayload
 } from '@/lib/acp-history-persistence'
+import { selectMcpServersForAgent } from '@/lib/acp-mcp-persistence'
 import { getAcpTransport } from '@/lib/acp-transport'
 import {
   isClaudeAccountSignedOutError,
@@ -36,7 +37,12 @@ import {
   parseReuseKey
 } from '../acp-reuse-keys'
 import { ephemeralSessionIds } from './ephemeral-ids'
-import { isReusableStatus, SWITCH_SPLICE_ID_PREFIX, type SwitchMarkerFacts } from './helpers'
+import {
+  isReusableStatus,
+  mcpServersFingerprint,
+  SWITCH_SPLICE_ID_PREFIX,
+  type SwitchMarkerFacts
+} from './helpers'
 import type { AcpSession, AcpState, ChatMessage, CommitMessageCollector } from './types'
 
 export { ephemeralSessionIds }
@@ -349,6 +355,31 @@ const definiteSpawnRejections = new Map<string, string>()
 const liveAgentSignatures = new Map<AgentId, string>()
 
 /**
+ * The MCP servers a session took from the user's MCP list when it was
+ * created, by session id. A warm session made before the list changed must
+ * not become the next chat: it would run without the new servers.
+ */
+const registryMcpFingerprints = new Map<SessionId, string>()
+
+export function recordRegistryMcpServers(sessionId: SessionId, servers: McpServer[]): void {
+  registryMcpFingerprints.set(sessionId, mcpServersFingerprint(servers))
+}
+
+export function registryMcpServersAreCurrent(
+  state: Pick<AcpState, 'mcpServers' | 'agents'>,
+  sessionId: SessionId,
+  agentId: AgentId
+): boolean {
+  const recorded = registryMcpFingerprints.get(sessionId)
+  if (recorded === undefined) return true
+  const { servers } = selectMcpServersForAgent(
+    state.mcpServers,
+    state.agents[agentId]?.capabilities
+  )
+  return mcpServersFingerprint(servers) === recorded
+}
+
+/**
  * Credential epoch per `configId\0projectId`. The host binds a Claude account
  * to an agent process when it spawns it, so after a Project's account changes
  * every agent spawned before is on the old account: it may finish what it
@@ -395,6 +426,7 @@ function spawnSignature(
 export function _resetDefiniteSpawnRejectionsForTesting(): void {
   definiteSpawnRejections.clear()
   liveAgentSignatures.clear()
+  registryMcpFingerprints.clear()
   credentialEpochs.clear()
 }
 
