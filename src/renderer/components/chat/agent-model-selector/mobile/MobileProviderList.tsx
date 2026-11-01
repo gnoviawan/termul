@@ -3,6 +3,7 @@ import { SheetGroup, SheetRow, SheetSearchField } from '@/components/ui/mobile-s
 import { ListMessage, TabGlyph } from '../SelectorRows'
 import { type AgentTab, isInstalledTab } from '../selector-model'
 import { useKnownCatalogs } from '../use-model-catalog'
+import { setupRouteKey } from './MobileProviderSetup'
 
 type ProviderGroup = 'ready' | 'setup' | 'install'
 
@@ -21,8 +22,9 @@ const modelCount = (count: number): string => `${count} ${count === 1 ? 'model' 
 
 /**
  * Every agent, grouped by what a tap does: Ready shows its models, Needs setup
- * cannot be used from here (the chat cannot arm it), Install opens its install
- * view. The groups follow the selector's own statuses (`notSetUp`, `badgeOf`).
+ * opens its setup screen (the chat cannot arm it until its config is saved),
+ * Install opens its install view. The groups follow the selector's own
+ * statuses (`notSetUp`, `badgeOf`).
  */
 export function ProviderList({
   tabs,
@@ -101,7 +103,9 @@ export function ProviderList({
                     icon={icon}
                     title={tab.name}
                     value={badge}
-                    disabled
+                    accessory="chevron"
+                    subview={setupRouteKey(tab.configId)}
+                    disabled={disabled}
                     onSelect={() => onPick(tab)}
                   />
                 )

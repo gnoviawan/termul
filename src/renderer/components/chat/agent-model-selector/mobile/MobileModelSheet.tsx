@@ -41,6 +41,7 @@ import { editSections, restSections } from '../session-option-sections'
 import { useRejectedOptionValues } from '../use-option-values'
 import { useSelectorPanelState } from '../use-selector-panel-state'
 import { installRouteKey, PROVIDERS_ROUTE_KEY, ProviderList } from './MobileProviderList'
+import { ProviderSetupScreen, setupRouteKey } from './MobileProviderSetup'
 import {
   ChoiceList,
   type ModeControl,
@@ -56,6 +57,7 @@ const SEARCH_THRESHOLD = 12
 type SheetRoute =
   | { kind: 'providers' }
   | { kind: 'install'; configId: string }
+  | { kind: 'setup'; configId: string }
   | { kind: 'option'; id: string }
 
 function routeKey(route: SheetRoute): string {
@@ -64,6 +66,8 @@ function routeKey(route: SheetRoute): string {
       return PROVIDERS_ROUTE_KEY
     case 'install':
       return installRouteKey(route.configId)
+    case 'setup':
+      return setupRouteKey(route.configId)
     case 'option':
       return optionRouteKey(route.id)
   }
@@ -189,8 +193,8 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
         icon={<TabGlyph tab={tab} />}
         title={tab.name}
         value={state.badgeOf(tab) ?? undefined}
-        disabled={disabled || state.notSetUp(tab)}
-        onSelect={() => onPick(tab)}
+        disabled={disabled}
+        onSelect={() => (state.notSetUp(tab) ? openSetup(tab) : onPick(tab))}
       />
     ))
 
@@ -329,23 +333,42 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
   const allTabs = [...state.tabs.visible, ...state.tabs.overflow]
   const subOption = openOption?.kind === 'radio' ? openOption : null
   const installTab = top?.kind === 'install' ? tabOf(top.configId) : null
-  const { pop, reset } = nav
+  const setupTab = top?.kind === 'setup' ? tabOf(top.configId) : null
+  const { pop, replace, reset } = nav
   // The agent can drop the open option; leave its sub-view so back is not swallowed.
   useEffect(() => {
     if (top?.kind === 'option' && !subOption) pop()
   }, [top, subOption, pop])
-  // Installed: back to the list, which now shows that agent's models.
-  const installed = installTab ? isInstalledTab(installTab) : false
+  // Installed. Launcher: back to the list, which shows the selected agent's
+  // models and sign-in. Chat: on to its setup, which starts it and signs in.
+  const installedId = installTab && isInstalledTab(installTab) ? installTab.configId : null
+  const launcher = sw.selectAgent != null
   useEffect(() => {
-    if (installed) reset()
-  }, [installed, reset])
+    if (!installedId) return
+    if (launcher) reset()
+    else replace({ kind: 'setup', configId: installedId })
+  }, [installedId, launcher, reset, replace])
 
-  // Ready: show its models (the launcher also selects it). Not installed: its install view.
+  // Ready: show its models (the launcher also selects it). Not set up: its
+  // setup screen. Not installed: its install view.
+  const openSetup = (tab: AgentTab): void => {
+    state.setQuery('')
+    nav.push({ kind: 'setup', configId: tab.configId })
+  }
   const pickProvider = (tab: AgentTab): void => {
+    if (state.notSetUp(tab)) {
+      openSetup(tab)
+      return
+    }
     state.setQuery('')
     state.openAgent(tab)
     if (isInstalledTab(tab)) reset()
     else nav.push({ kind: 'install', configId: tab.configId })
+  }
+  // Set up: back to the list, which now shows that agent's models.
+  const showSetupModels = (tab: AgentTab): void => {
+    state.openAgent(tab)
+    reset()
   }
 
   const viewTab = state.viewTab
@@ -393,6 +416,17 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
   } else if (top?.kind === 'install') {
     title = installTab?.name ?? 'Install'
     body = list
+  } else if (top?.kind === 'setup') {
+    title = setupTab?.name ?? 'Set up'
+    body = setupTab ? (
+      <ProviderSetupScreen
+        key={setupTab.configId}
+        tab={setupTab}
+        workspace={sw.workspace}
+        disabled={disabled}
+        onReady={() => showSetupModels(setupTab)}
+      />
+    ) : null
   } else if (subOption) {
     title = subOption.label
     body = <ChoiceList option={subOption} disabled={disabled} onDone={nav.pop} />

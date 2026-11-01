@@ -293,6 +293,8 @@ export function useSheetStack<R>(
   stack: readonly R[]
   top: R | null
   push: (route: R) => void
+  /** Swap the top view for another at the same depth (it slides in as a push). */
+  replace: (route: R) => void
   reset: () => void
   onEscapeKeyDown: (event: KeyboardEvent) => void
 } {
@@ -304,6 +306,7 @@ export function useSheetStack<R>(
   }
   const push = useCallback((route: R) => setStack((s) => [...s, route]), [])
   const pop = useCallback(() => setStack((s) => s.slice(0, -1)), [])
+  const replace = useCallback((route: R) => setStack((s) => [...s.slice(0, -1), route]), [])
   const reset = useCallback(() => setStack([]), [])
   useLevelRegistrations(overlayId, sheetOpen ? stack.length : 0, pop)
   const depth = stack.length
@@ -318,7 +321,7 @@ export function useSheetStack<R>(
   const keyOfRef = useRef(keyOf)
   keyOfRef.current = keyOf
   const path = useMemo(() => stack.map((route) => keyOfRef.current(route)), [stack])
-  return { stack, top: stack.at(-1) ?? null, path, push, pop, reset, onEscapeKeyDown }
+  return { stack, top: stack.at(-1) ?? null, path, push, pop, replace, reset, onEscapeKeyDown }
 }
 
 /** One overlay entry per pushed level, so each system back pops one level. */
