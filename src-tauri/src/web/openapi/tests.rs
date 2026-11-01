@@ -303,3 +303,21 @@ fn descriptions_are_written_for_api_readers_not_rust_readers() {
         leaks.join("\n  ")
     );
 }
+
+#[test]
+fn no_schema_name_is_a_collision_numbered_copy_of_another() {
+    let doc = document();
+    let schemas = doc["components"]["schemas"].as_object().expect("schemas object");
+    let numbered: Vec<&String> = schemas
+        .keys()
+        .filter(|name| {
+            let base = name.trim_end_matches(|c: char| c.is_ascii_digit());
+            base.len() < name.len() && schemas.contains_key(base)
+        })
+        .collect();
+    assert!(
+        numbered.is_empty(),
+        "schemars numbered these schemas because two types share a name (often one generic \
+         at several type arguments). Name them with #[schemars(rename = \"..{{T}}..\")]: {numbered:?}"
+    );
+}
