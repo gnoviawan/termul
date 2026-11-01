@@ -22,6 +22,7 @@ import {
 import { ArrowLeft, Check, ChevronRight, X } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
+import { FOCUS_RING_CLASS } from './panel-styles'
 import { SheetClose, SheetContent, SheetTitle } from './sheet'
 import { Switch } from './switch'
 
@@ -147,7 +148,6 @@ interface MobileSheetContentProps
   title: string
   /** The sheet's view stack; without it the sheet has only its root. */
   nav?: SheetNav
-  toolbar?: ReactNode
   bodyClassName?: string
 }
 
@@ -162,7 +162,6 @@ const NO_PATH: readonly string[] = []
 export function MobileSheetContent({
   title,
   nav,
-  toolbar,
   className,
   bodyClassName,
   children,
@@ -269,11 +268,7 @@ export function MobileSheetContent({
           </AnimatePresence>
         </SheetTitle>
       </div>
-      {toolbar}
-      <div
-        ref={viewportCallbackRef}
-        className="relative flex min-h-0 flex-col overflow-hidden"
-      >
+      <div ref={viewportCallbackRef} className="relative flex min-h-0 flex-col overflow-hidden">
         <AnimatePresence initial={false} mode="popLayout" custom={direction}>
           <SheetLayer key={key} direction={direction} reduced={reduced} className={bodyClassName}>
             {children}
@@ -524,5 +519,35 @@ export function SheetSwitchRow({
         onCheckedChange={onCheckedChange}
       />
     </div>
+  )
+}
+
+/**
+ * A sheet's search field. It never takes focus on its own: a focused field
+ * raises the keyboard over the list.
+ */
+export function SheetSearchField({
+  value,
+  onChange,
+  placeholder,
+  label
+}: {
+  value: string
+  onChange: (value: string) => void
+  placeholder: string
+  label: string
+}): React.JSX.Element {
+  return (
+    <input
+      type="search"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      aria-label={label}
+      className={cn(
+        'h-11 w-full shrink-0 rounded-xl bg-foreground/[0.05] px-4 text-base text-foreground placeholder:text-muted-foreground',
+        FOCUS_RING_CLASS
+      )}
+    />
   )
 }

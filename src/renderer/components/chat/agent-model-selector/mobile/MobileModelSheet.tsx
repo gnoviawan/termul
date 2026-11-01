@@ -5,9 +5,9 @@ import {
   MobileSheetContent,
   SheetGroup,
   SheetRow,
+  SheetSearchField,
   useSheetStack
 } from '@/components/ui/mobile-sheet'
-import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { SheetDescription } from '@/components/ui/sheet'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
@@ -32,6 +32,7 @@ import {
   type AgentTab,
   type CatalogModel,
   entryDisableReason,
+  isInstalledTab,
   type ModelCatalog,
   rowAccessibleName,
   splitContextOption
@@ -39,7 +40,7 @@ import {
 import { editSections, restSections } from '../session-option-sections'
 import { useRejectedOptionValues } from '../use-option-values'
 import { useSelectorPanelState } from '../use-selector-panel-state'
-import { AgentChips } from './MobileAgentChips'
+import { installRouteKey, PROVIDERS_ROUTE_KEY, ProviderList } from './MobileProviderList'
 import {
   ChoiceList,
   type ModeControl,
@@ -51,9 +52,22 @@ import { type CompactControl, UsageCard } from './MobileUsageCard'
 
 const SEARCH_THRESHOLD = 12
 
-type SheetRoute = { kind: 'option'; id: string }
+/** The views pushed above the sheet's model list. */
+type SheetRoute =
+  | { kind: 'providers' }
+  | { kind: 'install'; configId: string }
+  | { kind: 'option'; id: string }
 
-const routeKey = (route: SheetRoute): string => optionRouteKey(route.id)
+function routeKey(route: SheetRoute): string {
+  switch (route.kind) {
+    case 'providers':
+      return PROVIDERS_ROUTE_KEY
+    case 'install':
+      return installRouteKey(route.configId)
+    case 'option':
+      return optionRouteKey(route.id)
+  }
+}
 
 export interface MobileModelSheetProps extends SelectorPanelProps {
   sessionId: string
@@ -199,9 +213,6 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
           </SheetGroup>
         )
       break
-    case 'more':
-      list = <SheetGroup>{agentRows(view.tabs, state.openAgent)}</SheetGroup>
-      break
     case 'install':
       list = (
         <InstallState
@@ -316,26 +327,118 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
 
   const allTabs = [...state.tabs.visible, ...state.tabs.overflow]
   const subOption = openOption?.kind === 'radio' ? openOption : null
+  const installTab = top?.kind === 'install' ? tabOf(top.configId) : null
+  const { pop, reset } = nav
   // The agent can drop the open option; leave its sub-view so back is not swallowed.
-  const { pop } = nav
   useEffect(() => {
     if (top?.kind === 'option' && !subOption) pop()
   }, [top, subOption, pop])
+  // Installed: back to the list, which now shows that agent's models.
+  const installed = installTab ? isInstalledTab(installTab) : false
+  useEffect(() => {
+    if (installed) reset()
+  }, [installed, reset])
+
+  // Ready: show its models (the launcher also selects it). Not installed: its install view.
+  const pickProvider = (tab: AgentTab): void => {
+    state.setQuery('')
+    state.openAgent(tab)
+    if (isInstalledTab(tab)) reset()
+    else nav.push({ kind: 'install', configId: tab.configId })
+  }
+
+  const viewTab = state.viewTab
+  const providerRow = viewTab ? (
+    <SheetGroup>
+      <SheetRow
+        icon={<TabGlyph tab={viewTab} />}
+        title={
+          <>
+            <span className="block text-xs text-muted-foreground">Provider</span> {viewTab.name}
+          </>
+        }
+        {...(allTabs.length > 1
+          ? {
+              value: `${allTabs.length} available`,
+              accessory: 'chevron' as const,
+              subview: PROVIDERS_ROUTE_KEY,
+              disabled,
+              onSelect: () => nav.push({ kind: 'providers' })
+            }
+          : {})}
+      />
+    </SheetGroup>
+  ) : null
+
+  let title = 'Select model'
+  let body: ReactNode
+  if (top?.kind === 'providers') {
+    title = 'Providers'
+    body = (
+      <ProviderList
+        tabs={allTabs}
+        viewId={state.viewId}
+        cwd={sw.workspace.cwd}
+        ownCatalog={{
+          configId: effectiveId,
+          count: state.effectiveCatalog?.options.length ?? null
+        }}
+        disabled={disabled}
+        badgeOf={state.badgeOf}
+        notSetUp={state.notSetUp}
+        onPick={pickProvider}
+      />
+    )
+  } else if (top?.kind === 'install') {
+    title = installTab?.name ?? 'Install'
+    body = list
+  } else if (subOption) {
+    title = subOption.label
+    body = <ChoiceList option={subOption} disabled={disabled} onDone={nav.pop} />
+  } else {
+    body = (
+      <>
+        {providerRow}
+        {state.searching || allTabs.length > 1 || modelCount > SEARCH_THRESHOLD ? (
+          <SheetSearchField
+            value={state.query}
+            onChange={state.setQuery}
+            placeholder="Search models…"
+            label="Search models and agents"
+          />
+        ) : null}
+        {list}
+        {state.ownFooter && !state.searching ? (
+          <OptionsCard
+            options={options}
+            disabled={disabled}
+            onOpen={(id) => nav.push({ kind: 'option', id })}
+          />
+        ) : null}
+        {state.otherHintTab ? (
+          <p className="px-3 text-xs text-muted-foreground">
+            {`Choose a model to set the options for ${state.otherHintTab.name}.`}
+          </p>
+        ) : null}
+        {state.searching ? null : (
+          <UsageCard
+            sessionId={props.sessionId}
+            usage={state.contextUsage}
+            compact={props.compact}
+            onManageAccounts={() => {
+              props.onClose()
+              useSettingsModalStore.getState().openApp('provider')
+            }}
+          />
+        )}
+      </>
+    )
+  }
+
   return (
     <MobileSheetContent
-      title={subOption ? subOption.label : 'Select model'}
+      title={title}
       nav={nav}
-      toolbar={
-        subOption || state.searching ? null : (
-          <AgentChips
-            tabs={allTabs}
-            viewId={state.viewId}
-            badgeOf={state.badgeOf}
-            disabled={disabled}
-            onOpen={state.openAgent}
-          />
-        )
-      }
       // Focus the sheet, not its first field. A focused search field raises the
       // keyboard, and the browser raises it again when the tab comes back.
       onOpenAutoFocus={(event) => {
@@ -350,49 +453,7 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
       <SheetDescription className="sr-only">
         Choose a model, an agent, and its options.
       </SheetDescription>
-      {subOption ? (
-        <ChoiceList option={subOption} disabled={disabled} onDone={nav.pop} />
-      ) : (
-        <>
-          {state.searching || allTabs.length > 1 || modelCount > SEARCH_THRESHOLD ? (
-            <input
-              type="search"
-              value={state.query}
-              onChange={(event) => state.setQuery(event.target.value)}
-              placeholder="Search models…"
-              aria-label="Search models and agents"
-              className={cn(
-                'h-11 w-full shrink-0 rounded-xl bg-foreground/[0.05] px-4 text-base text-foreground placeholder:text-muted-foreground',
-                FOCUS_RING_CLASS
-              )}
-            />
-          ) : null}
-          {list}
-          {state.ownFooter && !state.searching ? (
-            <OptionsCard
-              options={options}
-              disabled={disabled}
-              onOpen={(id) => nav.push({ kind: 'option', id })}
-            />
-          ) : null}
-          {state.otherHintTab ? (
-            <p className="px-3 text-xs text-muted-foreground">
-              {`Choose a model to set the options for ${state.otherHintTab.name}.`}
-            </p>
-          ) : null}
-          {state.searching ? null : (
-            <UsageCard
-              sessionId={props.sessionId}
-              usage={state.contextUsage}
-              compact={props.compact}
-              onManageAccounts={() => {
-                props.onClose()
-                useSettingsModalStore.getState().openApp('provider')
-              }}
-            />
-          )}
-        </>
-      )}
+      {body}
     </MobileSheetContent>
   )
 }

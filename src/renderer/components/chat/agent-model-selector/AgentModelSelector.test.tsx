@@ -15,6 +15,7 @@ import { AgentModelSelector, type PhoneSelectorControls } from './AgentModelSele
 import { createFavoritesStore, memoryFavoritesAdapter } from './favorite-models'
 
 import { SelectorFooter } from './SelectorFooter'
+import type { SelectorSource } from './selector-source'
 import { AUTO_LOAD_SETTLE_MS } from './use-model-catalog'
 
 // jsdom omits `document.elementFromPoint`; Radix/floating-ui call it while
@@ -1123,35 +1124,183 @@ describe('phone Select model sheet', () => {
     expect(within(favorites).getByRole('button', { name: 'Sonnet 5.5' })).toBeInTheDocument()
   })
 
-  it('shows every agent as a chip and arms another agent with the model picked there', async () => {
-    seed([readyEntry(CLAUDE)])
-    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
-    renderSelector()
-    open()
+  /** A ready registry agent with no stored config: the chat cannot arm it. */
+  const GEMINI_NOT_SET_UP: SupportedAcpAgentEntry = {
+    ...readyEntry({ ...CURSOR, id: 'acp-registry:gemini', configId: 'acp-registry:gemini' }),
+    agent: { id: 'gemini', name: 'Gemini CLI', version: '', description: '', distribution: {} },
+    config: null
+  }
 
-    const chips = within(sheet()).getByRole('tablist', { name: 'Agents' })
-    expect(within(chips).getByRole('tab', { name: 'Cursor' })).toHaveAttribute(
-      'aria-selected',
+  function seedProviders(): void {
+    seed([readyEntry(CLAUDE), GEMINI_NOT_SET_UP, installEntry()])
+    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
+  }
+
+  function openProviders(): HTMLElement {
+    open()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Provider Cursor 4 available' }))
+    return screen.getByRole('dialog', { name: 'Providers' })
+  }
+
+  it('lists the providers grouped by what a tap does, with the ready ones model counts', () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+
+    const ready = within(providers).getByRole('group', { name: 'Ready' })
+    const [claude, cursor] = within(ready).getAllByRole('button')
+    expect(claude).toHaveAccessibleName('Claude Agent')
+    expect(claude).toHaveAccessibleDescription('2 models')
+    expect(cursor).toHaveAccessibleName('Cursor')
+    expect(cursor).toHaveAccessibleDescription('2 models')
+    expect(within(ready).getByRole('button', { name: 'Cursor' })).toHaveAttribute(
+      'aria-pressed',
       'true'
     )
-    fireEvent.click(within(chips).getByRole('tab', { name: 'Claude Agent' }))
+    const setup = within(providers).getByRole('group', { name: 'Needs setup' })
+    expect(within(setup).getByRole('button', { name: 'Gemini CLI Not set up' })).toBeDisabled()
+    const install = within(providers).getByRole('group', { name: 'Install' })
+    expect(within(install).getByRole('button', { name: 'OpenCode Install' })).toBeEnabled()
+  })
+
+  it('filters the providers by name', () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+    const search = within(providers).getByRole('searchbox', { name: 'Search providers' })
+
+    fireEvent.change(search, { target: { value: 'open' } })
+    expect(within(providers).getAllByRole('button', { name: /Install|models/ })).toHaveLength(1)
+    expect(within(providers).getByRole('button', { name: 'OpenCode Install' })).toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: 'zzz' } })
+    expect(within(providers).getByText('No providers match.')).toBeInTheDocument()
+  })
+
+  it('picks a ready provider, comes back to its models and arms it with the model picked', async () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+
+    fireEvent.click(within(providers).getByRole('button', { name: 'Claude Agent' }))
+
+    expect(
+      within(sheet()).getByRole('button', { name: 'Provider Claude Agent 4 available' })
+    ).toBeInTheDocument()
     expect(
       within(sheet()).getByText('Switches to Claude Agent on the next send')
     ).toBeInTheDocument()
     expect(within(sheet()).queryByRole('button', { name: /^Effort/ })).toBeNull()
+    await waitFor(() =>
+      expect(
+        within(sheet()).getByRole('button', { name: 'Provider Claude Agent 4 available' })
+      ).toHaveFocus()
+    )
 
     fireEvent.click(within(sheet()).getByRole('button', { name: 'Claude Haiku' }))
-
     await waitFor(() => expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', CLAUDE.id))
     expect(sheet()).toBeInTheDocument()
   })
 
-  it('names an agent that needs installing on its chip', () => {
-    seed([installEntry()])
+  it('opens the install view of an agent that needs installing, and Escape goes back one level', async () => {
+    seedProviders()
     renderSelector()
-    open()
+    const providers = openProviders()
+    const ids = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
 
-    expect(within(sheet()).getByRole('tab', { name: 'OpenCode, Install' })).toBeInTheDocument()
+    fireEvent.click(within(providers).getByRole('button', { name: 'OpenCode Install' }))
+    const installView = screen.getByRole('dialog', { name: 'OpenCode' })
+    expect(within(installView).getByText('OpenCode is not installed')).toBeInTheDocument()
+    expect(ids()).toEqual([
+      expect.stringMatching(/^agent-model-selector:.+:subview:1$/),
+      expect.stringMatching(/^agent-model-selector:.+:subview:2$/)
+    ])
+
+    fireEvent.keyDown(installView, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: 'Providers' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('dialog', { name: 'Providers' })).getByRole('button', {
+          name: 'OpenCode Install'
+        })
+      ).toHaveFocus()
+    )
+
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Providers' }), { key: 'Escape' })
+    expect(sheet()).toBeInTheDocument()
+    fireEvent.keyDown(sheet(), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('selects the picked provider in the launcher and comes back to the model list', () => {
+    const selectAgent = vi.fn()
+    const source: SelectorSource = {
+      kind: 'draft',
+      key: 'launcher-test',
+      agentConfigs: [CURSOR, CLAUDE],
+      entries: [readyEntry(CURSOR), readyEntry(CLAUDE)],
+      currentConfigId: CURSOR.id,
+      armedConfigId: null,
+      blocked: false,
+      turnBusy: false,
+      installingConfigId: null,
+      install: vi.fn(),
+      workspace: { cwd: '/work', projectId: 'p1' },
+      liveCatalog: null,
+      pickCurrentModel: vi.fn(),
+      pickOtherModel: vi.fn(),
+      cancelThenSwitch: vi.fn(async () => {}),
+      selectAgent,
+      modelStatus: null,
+      updateAgentIds: null
+    }
+    renderSelector({ draft: { source, agentName: 'Cursor' } })
+    open()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Provider Cursor 2 available' }))
+
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Providers' })).getByRole('button', {
+        name: 'Claude Agent'
+      })
+    )
+
+    expect(selectAgent).toHaveBeenCalledWith(expect.objectContaining({ configId: CLAUDE.id }))
+    expect(sheet()).toBeInTheDocument()
+  })
+
+  it('goes back to the model list of an agent once its install finishes', () => {
+    seedProviders()
+    const { rerender } = renderSelector()
+    const providers = openProviders()
+    fireEvent.click(within(providers).getByRole('button', { name: 'OpenCode Install' }))
+    expect(screen.getByRole('dialog', { name: 'OpenCode' })).toBeInTheDocument()
+
+    const OPENCODE: StoredAgentConfig = {
+      ...CURSOR,
+      id: 'acp-registry:opencode',
+      configId: 'acp-registry:opencode',
+      name: 'OpenCode',
+      templateId: 'opencode'
+    }
+    seed([readyEntry(CLAUDE), GEMINI_NOT_SET_UP, readyEntry(OPENCODE)])
+    rerender(selector())
+
+    expect(
+      within(sheet()).getByRole('button', { name: 'Provider OpenCode 4 available' })
+    ).toBeInTheDocument()
+    expect(useOverlayStackStore.getState().stack).toEqual([])
+  })
+
+  it('installs from the install view', async () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+
+    fireEvent.click(within(providers).getByRole('button', { name: 'OpenCode Install' }))
+    fireEvent.click(screen.getByTestId('agent-install-acp-registry:opencode'))
+
+    await waitFor(() => expect(mockInstallAcpAgent).toHaveBeenCalledWith('opencode'))
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('OpenCode installed'))
   })
 
   it('opens Effort as a sub-view, sets the pick and comes back to the sheet', async () => {
