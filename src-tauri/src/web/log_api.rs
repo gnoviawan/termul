@@ -90,7 +90,7 @@ pub fn route() -> MethodRouter<AppState> {
 
 /// `POST /log/frontend-error` body. Mirrors the desktop
 /// `log_frontend_error` command parameters (camelCase for JSON parity).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendErrorRequest {
     pub level: Option<String>,

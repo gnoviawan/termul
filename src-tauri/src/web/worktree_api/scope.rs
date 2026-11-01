@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::worktree::GitWorktreeEntry;
 
 /// One `/worktree/list` row on the web wire: the git entry plus the outside-root flag.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WebWorktreeEntry {
     #[serde(flatten)]
