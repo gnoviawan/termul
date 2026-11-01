@@ -19,6 +19,8 @@ export interface McpInstallTarget {
   version: string
   title: string
   choice: McpCatalogDefaultOption
+  /** The project open when the install started; the web client saves into its list. */
+  projectId: string
 }
 
 export type McpInstallFailure =
@@ -65,6 +67,11 @@ export interface McpCatalogInstall {
 const IDLE: McpInstallFlow = { step: 'idle' }
 const LOG_SOURCE = 'settings.McpCatalogInstall'
 
+/** A version the catalog no longer lists fails the same way on every retry. */
+export function canStartOver(failure: McpInstallFailure): boolean {
+  return !(failure.kind === 'host' && failure.code === 'MCP_CATALOG_NOT_FOUND')
+}
+
 function hostFailure(code: string | undefined): McpInstallFailure {
   return { kind: 'host', code: code ?? 'unknown' }
 }
@@ -97,7 +104,8 @@ function targetOf(row: McpCatalogRow, choice: McpCatalogDefaultOption): McpInsta
     name: row.name,
     version: row.version,
     title: row.title ?? row.name.slice(row.name.lastIndexOf('/') + 1),
-    choice
+    choice,
+    projectId: useProjectStore.getState().activeProjectId
   }
 }
 
@@ -263,7 +271,7 @@ export function useMcpCatalogInstall(): McpCatalogInstall {
     if (!committed.success) return fail(target, 'commit', hostFailure(committed.code))
     let server: StoredMcpServer
     try {
-      server = await useAcpStore.getState().saveCatalogInstall(committed.data)
+      server = await useAcpStore.getState().saveCatalogInstall(committed.data, target.projectId)
     } catch {
       return fail(target, 'save', { kind: 'save' })
     }
@@ -294,7 +302,7 @@ export function useMcpCatalogInstall(): McpCatalogInstall {
 
   const startOver = useCallback(() => {
     const state = current.current
-    if (state.step !== 'failed') return
+    if (state.step !== 'failed' || !canStartOver(state.failure)) return
     void describe(state.target)
   }, [describe])
 

@@ -298,6 +298,7 @@ export function McpCatalogBrowser(): React.JSX.Element {
   const admitsWrites = useServerAdmitsRemoteWrites()
   const activeProjectId = useProjectStore((state) => state.activeProjectId)
   const mcpServers = useAcpStore((state) => state.mcpServers)
+  const mcpServersLoaded = useAcpStore((state) => state.mcpServersLoaded)
   const installed = useMemo(
     () => new Set(mcpServers.flatMap((server) => (server.catalog ? [server.catalog.name] : []))),
     [mcpServers]
@@ -306,7 +307,9 @@ export function McpCatalogBrowser(): React.JSX.Element {
     ? 'view-only'
     : !isTauriContext() && !activeProjectId
       ? 'no-project'
-      : null
+      : !mcpServersLoaded
+        ? 'loading'
+        : null
   const rowInstall: RowInstall = {
     installed,
     block: block && { reason: block, hintId },

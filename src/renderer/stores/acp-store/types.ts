@@ -831,7 +831,10 @@ export interface AcpState {
    * writes, no partial prefix left behind to duplicate on retry.
    */
   importMcpServers: (servers: StoredMcpServer[]) => Promise<void>
-  saveCatalogInstall: (result: McpInstallCommitResult) => Promise<StoredMcpServer>
+  saveCatalogInstall: (
+    result: McpInstallCommitResult,
+    projectId: string
+  ) => Promise<StoredMcpServer>
   setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
   deleteMcpServer: (id: string) => Promise<void>
   /**

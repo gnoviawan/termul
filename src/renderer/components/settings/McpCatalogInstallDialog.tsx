@@ -11,10 +11,11 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { Spinner } from '@/components/ui/spinner'
-import type {
-  McpCatalogInstall,
-  McpInstallFailure,
-  McpInstallProbe
+import {
+  canStartOver,
+  type McpCatalogInstall,
+  type McpInstallFailure,
+  type McpInstallProbe
 } from '@/hooks/use-mcp-catalog-install'
 import { mcpCatalogReasonText } from '@/lib/mcp-catalog-copy'
 import { useAcpStore } from '@/stores/acp-store'
@@ -140,7 +141,10 @@ export function McpCatalogInstallDialog({
     case 'describing':
       return (
         <StepDialog title={`Install ${flow.target.title}`} onClose={dismiss}>
-          <Pending>Loading what this server needs…</Pending>
+          <DialogDescription className="flex items-center gap-2 text-xs">
+            <Spinner size={13} decorative />
+            Loading what this server needs…
+          </DialogDescription>
           <DialogFooter>
             <Button type="button" variant="outline" size="sm" onClick={dismiss}>
               Cancel
@@ -172,6 +176,7 @@ export function McpCatalogInstallDialog({
     case 'failed':
       return (
         <StepDialog title={`Couldn't install ${flow.target.title}`} onClose={dismiss}>
+          <DialogDescription>Nothing was saved.</DialogDescription>
           <SettingsNotice tone="danger" role="alert">
             {mcpInstallFailureText(flow.failure)}
           </SettingsNotice>
@@ -179,9 +184,11 @@ export function McpCatalogInstallDialog({
             <Button type="button" variant="outline" size="sm" onClick={dismiss}>
               Close
             </Button>
-            <Button type="button" size="sm" onClick={startOver}>
-              Start over
-            </Button>
+            {canStartOver(flow.failure) && (
+              <Button type="button" size="sm" onClick={startOver}>
+                Start over
+              </Button>
+            )}
           </DialogFooter>
         </StepDialog>
       )

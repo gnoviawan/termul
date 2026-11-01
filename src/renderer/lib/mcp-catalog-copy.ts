@@ -127,9 +127,10 @@ export function mcpCatalogSyncErrorText(code: string): string {
     : "Couldn't change catalog sync. Try again."
 }
 
-export type McpInstallBlock = 'view-only' | 'no-project'
+export type McpInstallBlock = 'view-only' | 'no-project' | 'loading'
 
 export const MCP_INSTALL_BLOCK_TEXT: Record<McpInstallBlock, string> = {
   'view-only': "This connection can't make changes on the host, so it can't install servers.",
-  'no-project': 'Open a project to install servers. This server saves MCP servers per project.'
+  'no-project': 'Open a project to install servers. This server saves MCP servers per project.',
+  loading: 'Install is available once your MCP servers have loaded.'
 }

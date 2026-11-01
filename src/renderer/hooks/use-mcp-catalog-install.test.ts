@@ -40,6 +40,7 @@ vi.mock('@/lib/acp-mcp-persistence', async (orig) => ({
 import { invoke } from '@tauri-apps/api/core'
 import { acpApi } from '@/lib/acp-api'
 import { saveMcpServers } from '@/lib/acp-mcp-persistence'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useMcpCatalogInstall } from './use-mcp-catalog-install'
@@ -160,12 +161,14 @@ async function toConsent() {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.restoreAllMocks()
+  vi.mocked(isTauriContext).mockReturnValue(true)
   api.describeInstall.mockResolvedValue(formReply([KEY_FIELD, REGION_FIELD]))
   api.planInstall.mockResolvedValue({ success: true, data: { outcome: 'plan', plan: PLAN } })
   api.commitInstall.mockResolvedValue({ success: true, data: COMMITTED })
   useProjectStore.setState({ activeProjectId: 'p1' })
   useAcpStore.setState({
     mcpServers: [],
+    mcpServersLoaded: true,
     mcpProbeStatus: {},
     mcpTools: {},
     mcpToolsLoaded: {},
@@ -298,7 +301,8 @@ describe('useMcpCatalogInstall', () => {
           name: 'io.example/weather',
           version: '1.2.0',
           title: 'Weather Tools',
-          choice: { kind: 'remote', index: 0 }
+          choice: { kind: 'remote', index: 0 },
+          projectId: 'p1'
         },
         failure: { kind: 'unsupported', reason: { code: 'needs-runtime', runtime: 'npx' } }
       })
@@ -397,6 +401,48 @@ describe('useMcpCatalogInstall', () => {
       })
     )
     expect(api.cancelInstall.mock.calls).toEqual([[{ planId: 'plan-1234abcd' }]])
+  })
+
+  it('refuses to save before the MCP list has loaded, so the stored list is never replaced', async () => {
+    useAcpStore.setState({ mcpServersLoaded: false })
+    const hook = await toConsent()
+
+    act(() => hook.result.current.approve())
+
+    await waitFor(() =>
+      expect(hook.result.current.flow).toMatchObject({ step: 'failed', failure: { kind: 'save' } })
+    )
+    expect(vi.mocked(saveMcpServers).mock.calls).toEqual([])
+    expect(useAcpStore.getState().mcpServers).toEqual([])
+  })
+
+  it('refuses a web save into a project other than the one the install started in', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(false)
+    const hook = await toConsent()
+    useProjectStore.setState({ activeProjectId: 'p2' })
+
+    act(() => hook.result.current.approve())
+
+    await waitFor(() =>
+      expect(hook.result.current.flow).toMatchObject({ step: 'failed', failure: { kind: 'save' } })
+    )
+    expect(vi.mocked(saveMcpServers).mock.calls).toEqual([])
+  })
+
+  it('does not offer to start over when the catalog no longer lists the version', async () => {
+    api.describeInstall.mockResolvedValue({
+      success: false,
+      error: 'no such version',
+      code: 'MCP_CATALOG_NOT_FOUND'
+    })
+    const hook = renderHook(() => useMcpCatalogInstall())
+    act(() => hook.result.current.start(ROW))
+    await waitFor(() => expect(hook.result.current.flow.step).toBe('failed'))
+
+    act(() => hook.result.current.startOver())
+
+    expect(api.describeInstall).toHaveBeenCalledTimes(1)
+    expect(hook.result.current.flow.step).toBe('failed')
   })
 
   it('reports the save failure and keeps nothing when persisting fails', async () => {

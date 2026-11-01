@@ -164,7 +164,7 @@ beforeEach(() => {
   status.mockReturnValue(new Promise(() => {}))
   admitsWrites.mockReturnValue(true)
   useProjectStore.setState({ activeProjectId: 'p1' })
-  useAcpStore.setState({ mcpServers: [] })
+  useAcpStore.setState({ mcpServers: [], mcpServersLoaded: true })
 })
 
 afterEach(() => {
@@ -570,6 +570,20 @@ describe('McpCatalogBrowser install', () => {
     expect(button).toBeDisabled()
     expect(button).toHaveAccessibleDescription(
       "This connection can't make changes on the host, so it can't install servers."
+    )
+  })
+
+  it('keeps install off until the MCP server list has loaded', async () => {
+    useAcpStore.setState({ mcpServersLoaded: false })
+    search.mockResolvedValue(page([installable]))
+    render(<McpCatalogBrowser />)
+
+    const button = within(await findRow('io.example/weather')).getByRole('button', {
+      name: 'Install'
+    })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAccessibleDescription(
+      'Install is available once your MCP servers have loaded.'
     )
   })
 

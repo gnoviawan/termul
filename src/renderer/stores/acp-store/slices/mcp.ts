@@ -247,8 +247,12 @@ export const createMcpSlice: McpSliceCreator = (set, get) => ({
     })
   },
 
-  saveCatalogInstall: (result) =>
+  saveCatalogInstall: (result, projectId) =>
     runSerializedMcpRegistryMutation(async () => {
+      if (!get().mcpServersLoaded) throw new Error('The MCP server list has not loaded yet')
+      if (!isTauriContext() && activeProjectId() !== projectId) {
+        throw new Error('The open project changed during the install')
+      }
       const list = get().mcpServers
       const entry = catalogInstallEntry(
         result,
