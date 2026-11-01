@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Locator, Page } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
@@ -318,7 +318,10 @@ test.describe('Git sheet focus return', () => {
   test('closing the Git sheet opened from the status pill returns focus to the pill', async ({
     page
   }) => {
-    await bootShell(page, await registerProject({ git: true }))
+    const project = await registerProject({ git: true })
+    // The pill lists git's uncommitted files; the fake agent's edits write none.
+    await writeFile(join(project.path, 'uncommitted.txt'), 'not committed\n')
+    await bootShell(page, project)
     await chooseIsolation(page, 'Current checkout')
     await startChat(page, `[DOCK] ${LONG} git action`)
     const { pill, openGit } = statusPill(page)
@@ -355,7 +358,10 @@ test.describe('Git sheet focus return', () => {
   test('opened from ⋯ the Git sheet returns focus to ⋯, and each open records its own opener', async ({
     page
   }) => {
-    await bootShell(page, await registerProject({ git: true }))
+    const project = await registerProject({ git: true })
+    // The pill lists git's uncommitted files; the fake agent's edits write none.
+    await writeFile(join(project.path, 'uncommitted.txt'), 'not committed\n')
+    await bootShell(page, project)
     await chooseIsolation(page, 'Current checkout')
     await startChat(page, `[DOCK] ${LONG} git entries`)
     const { pill, openGit } = statusPill(page)
