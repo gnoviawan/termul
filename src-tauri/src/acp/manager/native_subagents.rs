@@ -2,7 +2,8 @@
 //! adapter runs each subagent in its own ACP session when the client
 //! advertises `clientCapabilities.subagents`. Versions 0.78-0.89 send the AIR
 //! draft form; 0.90 and newer send the RFD form to clients that are not AIR
-//! clients, which Termul is not.
+//! clients, which Termul is not. Termul advertises the capability only to
+//! 0.78 through 0.99, the versions whose wire was verified.
 //!
 //! In both forms the adapter does not send the `Agent`/`Task` tool call to the
 //! chat. It announces each subagent on its parent session, sends the
@@ -39,6 +40,9 @@ const TERMUL_SUBAGENT_META_KEY: &str = "termul/subagent";
 const CLAUDE_PACKAGE_NAME: &str = "@agentclientprotocol/claude-agent-acp";
 /// First adapter version verified to send native subagent sessions.
 const NATIVE_SUBAGENTS_MIN: (u64, u64, u64) = (0, 78, 0);
+/// First adapter version past the verified wire (0.78 through 0.99). A 1.0
+/// may change the RFD form, so it keeps the legacy behavior until verified.
+const NATIVE_SUBAGENTS_UNVERIFIED: (u64, u64, u64) = (1, 0, 0);
 const MAX_ID_CHARS: usize = 512;
 const MAX_NAME_CHARS: usize = 512;
 const MAX_TASK_CHARS: usize = 8_000;
@@ -97,10 +101,24 @@ pub(super) enum NativeRoute {
     Claimed(Vec<Value>),
 }
 
-/// True when `config` launches a Claude adapter version that sends native
-/// subagent sessions. Older versions keep the legacy behavior (no capability).
+/// True when `config` launches a Claude adapter version verified to send
+/// native subagent sessions. Other versions keep the legacy behavior (no
+/// capability).
 pub(super) fn uses_native_subagents(config: &AgentConfig) -> bool {
-    claude_adapter_version(config).is_some_and(|v| v >= NATIVE_SUBAGENTS_MIN)
+    let Some(version) = claude_adapter_version(config) else {
+        return false;
+    };
+    if version >= NATIVE_SUBAGENTS_UNVERIFIED {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let (major, minor, patch) = version;
+            log::info!(
+                "[acp] Claude adapter {major}.{minor}.{patch} is newer than the verified native subagent range (0.78-0.99); not advertising subagents"
+            );
+        });
+        return false;
+    }
+    version >= NATIVE_SUBAGENTS_MIN
 }
 
 /// Add `subagents: {}` to the serialized `initialize` client capabilities.
