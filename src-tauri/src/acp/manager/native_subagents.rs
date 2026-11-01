@@ -12,7 +12,7 @@
 //! - AIR: `subagent_spawned`, then `subagent_state_update` with an end state.
 //! - RFD: `subagent_update` with `state.state` `running` (the announce, and a
 //!   reused child starting again), `requires_action`, `idle` (with a
-//!   `stopReason`), or `unknown`. `session_message` records replace the
+//!   `stopReason`, or none for an unexplained end), or `unknown`. `session_message` records replace the
 //!   launch call: the prompt from parent to child, and the child's reply.
 //!
 //! The driver turns both into the shape the chat already renders: a
@@ -226,13 +226,14 @@ fn rfd_work(state: &Value) -> Option<RfdWork> {
     match state.get("state")?.as_str()? {
         "running" | "requires_action" => Some(RfdWork::Working),
         // An idle child is reusable: a later `running` starts its card again.
-        // Idle with no stop reason (the stream ended or was reset) is a quiet
-        // end, not a failure.
+        // Idle with no stop reason is an end the adapter could not explain
+        // (the stream ended, the Claude process died, a worker restarted):
+        // the card shows it stopped, neither a success nor a failure.
         "idle" => Some(RfdWork::Ended(
             match state.get("stopReason").and_then(Value::as_str) {
-                Some("cancelled") => SubagentEnd::Cancelled,
+                None | Some("cancelled") => SubagentEnd::Cancelled,
                 Some("error") => SubagentEnd::Failed,
-                _ => SubagentEnd::Completed,
+                Some(_) => SubagentEnd::Completed,
             },
         )),
         // The child can no longer be observed (AIR's `disconnected`).
