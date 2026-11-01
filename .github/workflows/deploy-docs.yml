@@ -10,6 +10,10 @@ on:
     paths:
       - 'website-docs/**'
       - '.github/workflows/deploy-docs.yml'
+  # Releases are published with GITHUB_TOKEN, which starts no `release`
+  # workflows, so a new release's openapi.yaml reaches the site through a
+  # manual run on `main` (or the next docs push).
+  workflow_dispatch:
 
 concurrency:
   group: deploy-docs-${{ github.ref }}
@@ -55,11 +59,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         # Releases before the spec shipped have no openapi.yaml; the API
-        # reference page then says so instead of failing the deploy.
+        # reference page then says so instead of failing the deploy. Any other
+        # failure fails the step.
         run: |
+          assets=$(gh release view --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          if ! grep -qxF openapi.yaml <<<"$assets"; then
+            echo "::notice::The latest release has no openapi.yaml yet"
+            exit 0
+          fi
           gh release download --repo "$GITHUB_REPOSITORY" --pattern openapi.yaml \
-            --dir website-docs/public --clobber \
-            || echo "::notice::The latest release has no openapi.yaml yet"
+            --dir website-docs/public --clobber
 
       - name: Build
         run: bun run build
