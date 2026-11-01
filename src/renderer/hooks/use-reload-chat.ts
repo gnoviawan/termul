@@ -1,11 +1,8 @@
 import { toast } from 'sonner'
+import { runningBackgroundSubagents } from '@/components/chat/subagent-strip'
 import { logFrontendError } from '@/lib/log-api'
 import { useAcpStore } from '@/stores/acp-store'
-import {
-  reloadAgentChat,
-  reloadChatBlockedReason,
-  runningBackgroundAgentCount
-} from '@/stores/reload-chat'
+import { reloadAgentChat, reloadChatBlockedReason } from '@/stores/reload-chat'
 import { useReloadConfirmStore } from '@/stores/reload-confirm-store'
 
 /** Reload `sessionId` now, with no confirm. */
@@ -33,7 +30,11 @@ export function useReloadChat(sessionId: string | null): {
   return {
     reload: () => {
       // A reload stops the old process and its background agents: ask first.
-      const backgroundAgents = runningBackgroundAgentCount(useAcpStore.getState(), sessionId)
+      const state = useAcpStore.getState()
+      const backgroundAgents = runningBackgroundSubagents(
+        state.toolCalls[sessionId],
+        state.messages[sessionId]
+      ).length
       if (backgroundAgents > 0) {
         void logFrontendError({
           level: 'info',
