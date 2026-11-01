@@ -24,7 +24,7 @@ use serde::Serialize;
 
 /// Resolved project icon, serialized to the renderer as a `data:` URI so the
 /// existing CSP (`img-src … data:`) applies unchanged on every surface.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectIcon {
     /// `data:<mime>;base64,<payload>` — rendered directly in `<img src>`.
@@ -37,7 +37,7 @@ pub struct ProjectIcon {
 }
 
 /// Provenance of a resolved [`ProjectIcon`]; serializes as `"file"`/`"remote"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ProjectIconSource {
     File,

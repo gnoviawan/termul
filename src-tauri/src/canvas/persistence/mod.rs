@@ -336,7 +336,7 @@ impl Mount {
 
 /// The projection the renderer's canvas store holds. Versions are u64 on the
 /// engine side and travel as decimal text so no JavaScript number rounds them.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistenceView {
     pub mount_seq: u64,
@@ -367,7 +367,7 @@ impl PersistenceView {
 }
 
 /// What a dirty notification resolved to once its debounce settled.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DirtyOutcome {
     /// A later notification (or an unmount) took over this one's timer.
@@ -380,7 +380,7 @@ pub enum DirtyOutcome {
 
 /// Result of a snapshot write. `mark_saved` is the version the editor must
 /// be told it is saved at; `None` when nothing was written.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteOutcome {
     pub view: PersistenceView,

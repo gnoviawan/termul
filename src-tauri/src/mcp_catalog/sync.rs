@@ -33,7 +33,7 @@ const CONFIG_FILE: &str = "config.json";
 const DROPPED_SERVER_FIELDS: [&str; 2] = ["$schema", "_meta"];
 const ICON_FIELDS: [&str; 4] = ["src", "mimeType", "sizes", "theme"];
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(
     tag = "state",
     rename_all = "lowercase",
@@ -51,7 +51,7 @@ pub enum SyncPhase {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum McpCatalogSync {
     Disabled,

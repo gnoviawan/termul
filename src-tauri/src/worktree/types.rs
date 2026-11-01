@@ -4,14 +4,14 @@ use serde::{Deserialize, Serialize};
 // Symlink Types
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitignoreDir {
     pub dir_name: String,
     pub exists: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SymlinkResult {
     pub path: String,
@@ -25,7 +25,7 @@ pub struct SymlinkResult {
 // Data Types
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitWorktreeEntry {
     pub name: String,
@@ -34,7 +34,7 @@ pub struct GitWorktreeEntry {
     pub head_commit: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BranchEntry {
     pub name: String,
@@ -45,7 +45,7 @@ pub struct BranchEntry {
     pub has_other_worktree: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DirtyStatus {
     pub modified: usize,
@@ -117,7 +117,7 @@ pub struct MergePreview {
 /// creation (CAP-2). `current_branch` is `None` when the repo is in detached
 /// HEAD — the launcher must then force a base-branch pick before allowing a
 /// worktree launch.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BaseBranchInfo {
     /// The branch `chat/{id}` should be created from: origin/HEAD → main →
@@ -132,7 +132,7 @@ pub struct BaseBranchInfo {
 
 /// Per-file skip reason for the `.worktree-include` carry-over (CAP-5).
 /// Surfaced to the renderer so the launcher can log per-file decisions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IncludeSkipReason {
     pub path: String,
@@ -143,7 +143,7 @@ pub struct IncludeSkipReason {
 /// patterns that matched at least one file; `copied` is files actually
 /// copied; `skipped` carries per-file reasons (symlink, path-escape,
 /// already-present).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct IncludeCopyResult {
     pub ran: usize,

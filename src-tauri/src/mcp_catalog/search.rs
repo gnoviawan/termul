@@ -34,7 +34,7 @@ impl RunnerAvailability {
 }
 
 /// Ranked best first: an item's state is its best option's state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum McpCatalogState {
     Installable,
@@ -43,13 +43,13 @@ pub enum McpCatalogState {
     SourceOnly,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct McpCatalogDefaultOption {
     pub kind: OptionKind,
     pub index: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct McpCatalogRow {
     pub name: String,
@@ -64,7 +64,7 @@ pub struct McpCatalogRow {
     pub has_icon: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct McpCatalogPage {
     pub items: Vec<McpCatalogRow>,
@@ -74,7 +74,7 @@ pub struct McpCatalogPage {
     pub source: McpCatalogSource,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct McpCatalogSearchRequest {
     pub query: Option<String>,

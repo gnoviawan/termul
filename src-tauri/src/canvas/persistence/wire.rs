@@ -25,7 +25,7 @@ fn invalid(what: &str, detail: impl std::fmt::Display) -> CanvasError {
 /// The document's bytes as base64, or `None` when the file does not exist
 /// yet (a new document: the editor starts empty and the first save creates
 /// the file).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentBytes {
     pub bytes: Option<String>,

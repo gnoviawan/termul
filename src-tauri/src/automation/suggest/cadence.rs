@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::automation::model::Schedule;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Cadence {
     pub schedule: Schedule,
     /// "weekdays at 09:00", "Mondays at 09:00", "daily at 09:00".
