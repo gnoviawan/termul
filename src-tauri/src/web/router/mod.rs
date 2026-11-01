@@ -37,6 +37,7 @@ use crate::web::log_api;
 use crate::web::mcp_oauth_api;
 use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
+use crate::web::openapi;
 use crate::web::host_allow::{self, HostAllowList};
 use crate::web::origin::{self, OriginPolicy};
 use crate::web::project_icon_api;
@@ -56,10 +57,11 @@ use crate::web::ws::{ws_upgrade, AppState, HistoryMode};
 use super::assets;
 
 mod gate;
-mod host_routes;
-mod server_config;
+pub(crate) mod host_routes;
+pub(crate) mod server_config;
 
 use gate::maybe_gate_api;
+pub(crate) use gate::requires_token;
 use host_routes::{agent_idle_window, health_check, set_agent_idle_window};
 use server_config::{server_config_get, server_config_post};
 
@@ -187,6 +189,8 @@ pub fn router(
 ) -> Router {
     let r = Router::new()
         .route("/health", get(health_check))
+        // This API's own OpenAPI 3.1 description (`web::openapi`).
+        .route("/openapi.json", get(openapi::serve_json))
         .route(
             "/host/agent-idle-window",
             get(agent_idle_window).post(set_agent_idle_window),
