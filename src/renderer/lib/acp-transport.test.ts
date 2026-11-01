@@ -3699,6 +3699,25 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     transport.dispose()
   })
 
+  it('a connection that served for 45s and then dropped reconnects at the base delay', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const internals = transport as unknown as TransportInternals
+    for (let drop = 1; drop <= 4; drop++) {
+      internals.socket.close()
+      expect(internals.reconnectAttempt).toBe(1)
+      await vi.advanceTimersByTimeAsync(700)
+      expect(internals.reconnectTimer).toBeNull()
+      expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+      await vi.advanceTimersByTimeAsync(45_000)
+    }
+    transport.dispose()
+  })
+
   for (const [randomValue, delayMs] of [
     [0, 375],
     [1, 625]
