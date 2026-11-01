@@ -411,15 +411,26 @@ fn announce(
     })])
 }
 
-/// Mark `child` ended and end its dispatch card.
+/// Mark `child` ended and end its dispatch card. A repeated end report (the
+/// adapter re-sends current states after `session/load`) changes nothing, so
+/// the card keeps its first `endedAt`.
 fn ended(state: &Mutex<DriverState>, child: &str, end: SubagentEnd, now_ms: u64) -> NativeRoute {
-    let Some(route) = state.lock().end_subagent(child) else {
-        log::warn!(
-            "[acp] native subagent {} ended before it was announced; dropped",
-            crate::logging::redact_session_id(child)
-        );
+    let mut state = state.lock();
+    let Some(route) = state.end_subagent(child) else {
+        if state.subagent_route(child).is_some() {
+            log::debug!(
+                "[acp] native subagent {} reported its end again; ignored",
+                crate::logging::redact_session_id(child)
+            );
+        } else {
+            log::warn!(
+                "[acp] native subagent {} ended before it was announced; dropped",
+                crate::logging::redact_session_id(child)
+            );
+        }
         return NativeRoute::Claimed(Vec::new());
     };
+    drop(state);
     log::info!(
         "[acp] native subagent {} ended: {}",
         crate::logging::redact_session_id(child),

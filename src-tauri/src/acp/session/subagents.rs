@@ -82,10 +82,11 @@ impl SubagentRoutes {
         Some(route)
     }
 
-    /// Mark `child` ended. Its route stays so a late request still reaches
-    /// the right chat. Returns the route when the child was known.
+    /// Mark a running `child` ended. Its route stays so a late request still
+    /// reaches the right chat. Returns the route when the child was known and
+    /// running; a repeated end report changes nothing.
     pub(super) fn mark_ended(&mut self, child: &str) -> Option<ChildRoute> {
-        let route = self.children.get_mut(child)?;
+        let route = self.children.get_mut(child).filter(|route| !route.ended)?;
         route.ended = true;
         Some(route.clone())
     }
@@ -139,7 +140,7 @@ impl super::DriverState {
         self.subagents.register(parent, child)
     }
 
-    /// Mark a native subagent session ended.
+    /// Mark a running native subagent session ended.
     pub(crate) fn end_subagent(&mut self, child: &str) -> Option<ChildRoute> {
         self.subagents.mark_ended(child)
     }
