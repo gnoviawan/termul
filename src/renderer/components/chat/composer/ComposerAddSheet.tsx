@@ -9,7 +9,7 @@ import {
   useSheetSubview
 } from '@/components/ui/mobile-sheet'
 import { Sheet, SheetTrigger } from '@/components/ui/sheet'
-import type { AttachmentPickOptions } from '@/lib/composer-attachments-io'
+import type { BrowserPickOptions } from '@/lib/composer-attachments-io'
 import { logFrontendError } from '@/lib/log-api'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { McpServerList, type McpServerListProps } from '../McpBadge'
@@ -22,10 +22,9 @@ import { McpServerList, type McpServerListProps } from '../McpBadge'
 export interface ComposerAddHandle {
   /** Whether attaching is allowed (false while the session is closed). */
   canPick: boolean
-  /** Whether a picked image can reach this agent (Camera and Photos). */
   canPickImages: boolean
   /** Open the file picker. Must be called synchronously from the tap handler. */
-  pickFiles: (options?: AttachmentPickOptions) => Promise<void>
+  pickFiles: (options?: BrowserPickOptions) => Promise<void>
   /** Append `@` / `/` to the draft; false when the editor is unavailable. */
   insertTrigger: (trigger: '@' | '/') => boolean
   /** Blur the editor synchronously (dismisses the on-screen keyboard). */
@@ -43,7 +42,7 @@ const LOG_SOURCE = 'composer-add-sheet'
 type AddSheetView = 'mcp'
 
 const TILE =
-  'flex h-24 flex-col items-center justify-center gap-2 rounded-2xl bg-foreground/[0.05] text-sm text-foreground transition-colors duration-150 ease-out enabled:active:bg-foreground/[0.1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-disabled-foreground'
+  'flex h-24 flex-col items-center justify-center gap-2 rounded-2xl bg-foreground/[0.05] text-sm text-foreground transition-colors duration-150 ease-out enabled:active:bg-foreground/[0.1] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:text-disabled-foreground'
 
 function AttachTile({
   icon,
@@ -70,12 +69,6 @@ function mcpSummary(servers: McpServerListProps['servers']): string {
   return `${on} of ${servers.length} on`
 }
 
-/**
- * Mobile composer "Add to chat" bottom sheet: the + button and its sheet.
- * Camera, Photos and Files attach; Mention a file and Commands start a token in
- * the draft; MCP servers opens a sub-view with the server switches. The agent,
- * model and chat options live in the model pill's own sheet.
- */
 export function ComposerAddSheet({
   handle,
   disabled,
@@ -112,7 +105,7 @@ export function ComposerAddSheet({
 
   // The picker has to open from this tap (browsers require user activation), so
   // call it before closing the sheet. Focus then returns to +.
-  const onAttach = (options?: AttachmentPickOptions): void => {
+  const onAttach = (options?: BrowserPickOptions): void => {
     if (!open) return
     Promise.resolve(handle.pickFiles(options)).catch((err: unknown) => {
       void logFrontendError({
@@ -130,7 +123,7 @@ export function ComposerAddSheet({
         <button
           type="button"
           aria-label="Add to chat"
-          className="relative inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-foreground/[0.06] text-foreground transition-colors duration-150 ease-out after:absolute after:-inset-0.5 after:content-[''] hover:bg-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="relative inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-foreground/[0.06] text-foreground transition-colors duration-150 ease-out after:absolute after:-inset-0.5 after:content-[''] hover:bg-foreground/10 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring"
           onClick={handle.blurEditor}
         >
           <Plus size={18} />

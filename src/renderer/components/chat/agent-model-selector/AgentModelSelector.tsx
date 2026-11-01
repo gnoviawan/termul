@@ -22,7 +22,16 @@ import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { shouldShowSessionUsage } from '../context-usage-utils'
 import { MobileModelPill } from './mobile/MobileModelPill'
 import { MobileModelSheet } from './mobile/MobileModelSheet'
+import type { ModeControl } from './mobile/MobileSheetOptions'
 import type { CompactControl } from './mobile/MobileUsageCard'
+
+/** What only the phone sheet uses: the chat's modes and the context ring's Compact. */
+export interface PhoneSelectorControls {
+  modes: SessionModeState | null
+  onSetMode: (modeId: string) => void | Promise<void>
+  compact: CompactControl
+}
+
 import type { SelectorPanelProps } from './SelectorPanel'
 import { SelectorPanel } from './SelectorPanel'
 import { SelectorPanelV2, type SelectorPanelV2Props } from './SelectorPanelV2'
@@ -72,14 +81,7 @@ interface AgentModelSelectorProps {
    * menu has fully closed — focusing earlier dismisses the popover.
    */
   onCloseAutoFocus?: (event: Event) => void
-  /**
-   * Phone only: the chat's modes and setter, for the sheet's Mode row and the
-   * pill's mode icon. Desktop keeps the separate mode chip.
-   */
-  modes?: SessionModeState | null
-  onSetMode?: (modeId: string) => void | Promise<void>
-  /** Phone only: the context ring's Compact, for the sheet's Context row. */
-  compact?: CompactControl
+  phone?: PhoneSelectorControls
   /**
    * Design canvas only: always show the v2 panel, with these v2-only props
    * (agent rail, favorites). The app leaves it unset and follows the flag.
@@ -133,9 +135,7 @@ export function AgentModelSelector({
   onSetConfig,
   onSetModel,
   onCloseAutoFocus,
-  modes = null,
-  onSetMode,
-  compact,
+  phone,
   v2PanelProps
 }: AgentModelSelectorProps): React.JSX.Element | null {
   const isMobile = useMobileWebShell()
@@ -191,7 +191,8 @@ export function AgentModelSelector({
     fastMode ? (storedConfigValue(fastMode) ?? undefined) : undefined,
     selectFast
   )
-  const modeSelect = useOptimisticSelect(modes?.currentModeId, onSetMode ?? NO_MODE_SET)
+  const modes = phone?.modes ?? null
+  const modeSelect = useOptimisticSelect(modes?.currentModeId, phone?.onSetMode ?? NO_MODE_SET)
 
   const modelName = modelOption
     ? flattenConfigOptionValues(modelOption).find(
@@ -317,16 +318,19 @@ export function AgentModelSelector({
   ) : null
 
   if (isMobile) {
-    const phoneModes = onSetMode && modes && modes.availableModes.length > 0 ? modes : null
-    // The first mode is the agent's default; any other stays visible on the pill.
-    const otherMode =
-      phoneModes && modeSelect.displayValue !== phoneModes.availableModes[0]?.id
-        ? phoneModes.availableModes.find((m) => m.id === modeSelect.displayValue)
+    const modeControl: ModeControl | null =
+      modes && modes.availableModes.length > 0
+        ? { modes, displayValue: modeSelect.displayValue, onPick: modeSelect.select }
+        : null
+    const defaultModeId = modeControl?.modes.availableModes[0]?.id
+    const nonDefaultMode =
+      modeControl && modeControl.displayValue !== defaultModeId
+        ? modeControl.modes.availableModes.find((m) => m.id === modeControl.displayValue)
         : undefined
     const phoneAria = [
       modelName ?? statusText,
       effortName,
-      otherMode ? `${otherMode.name} mode` : null,
+      nonDefaultMode ? `${nonDefaultMode.name} mode` : null,
       agent.present ? agent.aria : null
     ]
       .filter((part): part is string => Boolean(part))
@@ -341,7 +345,7 @@ export function AgentModelSelector({
               agentIcon={agentIcon}
               label={pillText}
               effort={modelName ? effortName : undefined}
-              modeId={otherMode?.id}
+              modeId={nonDefaultMode?.id}
               armed={armed}
               pending={pending || Boolean(modelStatus?.loading)}
               aria-label={phoneAria || 'Model and effort'}
@@ -354,12 +358,8 @@ export function AgentModelSelector({
             sessionId={sessionId}
             open={open}
             overlayId={overlayId}
-            mode={
-              phoneModes && onSetMode
-                ? { modes: phoneModes, value: modeSelect.displayValue, onPick: modeSelect.select }
-                : null
-            }
-            compact={compact ?? null}
+            mode={modeControl}
+            compact={phone?.compact ?? null}
             favoritesStore={v2PanelProps?.favoritesStore}
             onCloseAutoFocus={onCloseAutoFocus}
           />

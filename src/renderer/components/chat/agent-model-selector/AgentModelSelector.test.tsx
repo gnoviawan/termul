@@ -11,7 +11,7 @@ import {
   waitForSentinelDepth
 } from '@/lib/test-utils/overlay-back-stack'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
-import { AgentModelSelector } from './AgentModelSelector'
+import { AgentModelSelector, type PhoneSelectorControls } from './AgentModelSelector'
 import { createFavoritesStore, memoryFavoritesAdapter } from './favorite-models'
 
 import { SelectorFooter } from './SelectorFooter'
@@ -982,7 +982,6 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
   })
 })
 
-/** React and Radix ids depend on how many trees rendered before; the markup does not. */
 function stableMarkup(html: string): string {
   return html.replace(/:r[0-9a-z]+:/g, ':id:').replace(/radix-[:\w-]+/g, 'radix-id')
 }
@@ -1038,6 +1037,18 @@ describe('phone Select model sheet', () => {
 
   function sheet(): HTMLElement {
     return screen.getByRole('dialog', { name: 'Select model' })
+  }
+
+  function phone(overrides: Partial<PhoneSelectorControls>): PhoneSelectorControls {
+    return {
+      modes: null,
+      onSetMode: vi.fn(),
+      compact: {
+        onCompact: undefined,
+        signals: { connected: true, activeTurn: false, compaction: null }
+      },
+      ...overrides
+    }
   }
 
   it('lists the models with their descriptions and checks the chosen one', () => {
@@ -1161,7 +1172,7 @@ describe('phone Select model sheet', () => {
 
   it('sets the mode from the sheet and shows a non-default mode on the pill', () => {
     const onSetMode = vi.fn()
-    renderSelector({ modes: MODES, onSetMode })
+    renderSelector({ phone: phone({ modes: MODES, onSetMode }) })
     const pill = screen.getByTestId('agent-model-selector-trigger')
     expect(pill).toHaveAccessibleName('Opus 5.5. High. Switch agent. Currently Cursor')
     open()
@@ -1213,10 +1224,9 @@ describe('phone Select model sheet', () => {
     renderSelector({
       usage: USAGE,
       messages: [{ role: 'user' }],
-      compact: {
-        onCompact,
-        signals: { connected: true, activeTurn: false, compaction: null }
-      }
+      phone: phone({
+        compact: { onCompact, signals: { connected: true, activeTurn: false, compaction: null } }
+      })
     })
     open()
 
@@ -1231,10 +1241,12 @@ describe('phone Select model sheet', () => {
     renderSelector({
       usage: USAGE,
       messages: [{ role: 'user' }],
-      compact: {
-        onCompact: vi.fn(),
-        signals: { connected: true, activeTurn: true, compaction: null }
-      }
+      phone: phone({
+        compact: {
+          onCompact: vi.fn(),
+          signals: { connected: true, activeTurn: true, compaction: null }
+        }
+      })
     })
     open()
 

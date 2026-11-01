@@ -5,15 +5,12 @@ import type { SessionModeState } from '@/lib/acp-api'
 import type { ChoiceSection } from '../SelectorOptionRows'
 import { useOptimisticSwitch } from '../use-option-values'
 
-/** The chat's mode, set from the sheet like any other option (phone only). */
 export interface ModeControl {
   modes: SessionModeState
-  /** The shown mode: the agent's, or a pick still in flight. */
-  value: string | undefined
+  displayValue: string | undefined
   onPick: (modeId: string) => void
 }
 
-/** An option row of the sheet; `glyph` draws an icon beside a choice. */
 export type SheetOption = ChoiceSection & { glyph?: (value: string) => ReactNode }
 
 const PHONE_LABELS: Record<string, string> = {
@@ -24,10 +21,6 @@ const PHONE_LABELS: Record<string, string> = {
 
 const modeGlyph = (value: string): ReactNode => <ModeIcon modeId={value} size={16} />
 
-/**
- * The sheet's options, top to bottom: Effort, Mode, Fast, the context window,
- * then the agent's other options. Each shows only when the agent sends it.
- */
 export function sheetOptions(
   edit: readonly ChoiceSection[],
   rest: readonly ChoiceSection[],
@@ -40,7 +33,7 @@ export function sheetOptions(
           kind: 'radio',
           id: 'mode',
           label: 'Mode',
-          value: mode.value,
+          value: mode.displayValue,
           choices: mode.modes.availableModes.map((m) => ({
             value: m.id,
             name: m.name,
@@ -74,7 +67,6 @@ function ToggleRow({
   )
 }
 
-/** Effort ›, Mode ›, Fast and the rest. A › row opens its choices as a sub-view. */
 export function OptionsCard({
   options,
   disabled,
@@ -115,7 +107,6 @@ export function OptionsCard({
   )
 }
 
-/** One option's choices, as the sheet's sub-view. A pick returns to the sheet. */
 export function ChoiceList({
   option,
   disabled,

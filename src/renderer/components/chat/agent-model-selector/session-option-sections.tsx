@@ -28,11 +28,6 @@ function optionChoices(option: SessionConfigOption, isRejected?: IsRejected): Op
 /** A rejected set is already toasted, and its value marked unavailable. */
 const alreadyReported = (): void => {}
 
-/**
- * The active model's session options: Thinking (the effort option), Context,
- * Fast mode. Each shows only when the agent sends that option, with value
- * labels from the option data.
- */
 export function editSections(
   props: Pick<
     SelectorPanelProps,
@@ -85,7 +80,6 @@ export function editSections(
   return sections
 }
 
-/** The agent's other options (not model, effort, Fast, mode or context window). */
 export function restSections(
   rest: readonly SessionConfigOption[],
   isRejected: IsRejected,

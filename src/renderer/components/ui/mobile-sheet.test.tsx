@@ -33,7 +33,13 @@ function Harness({ onFast }: { onFast?: (on: boolean) => void }): React.JSX.Elem
         {sub.view === 'effort' ? (
           <div role="radiogroup" aria-label="Effort">
             <SheetGroup>
-              <SheetRow title="Low" accessory="check" role="radio" onSelect={sub.back} />
+              <SheetRow
+                title="Low"
+                accessory="check"
+                role="radio"
+                selected={false}
+                onSelect={sub.back}
+              />
               <SheetRow title="High" accessory="check" role="radio" selected onSelect={sub.back} />
             </SheetGroup>
           </div>

@@ -61,7 +61,6 @@ const sheetVariants = cva(
 interface SheetContentProps
   extends React.ComponentPropsWithoutRef<typeof SheetPrimitive.Content>,
     VariantProps<typeof sheetVariants> {
-  /** False when the sheet draws its own close control (`MobileSheetContent`). */
   closeButton?: boolean
 }
 

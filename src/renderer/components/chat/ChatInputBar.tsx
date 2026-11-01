@@ -256,6 +256,7 @@ export function ChatInputBar({
     clearAttachments,
     appOwnedTempPaths,
     canPick,
+    canPickImages,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled })
   // Drag feedback for the attachment drop zone (shared with AgentLauncher):
@@ -565,11 +566,15 @@ export function ChatInputBar({
       agentIcon={agentIcon}
       onSetConfig={onSetConfig}
       onSetModel={onSetModel}
-      {...(isMobileShell && {
-        modes: session.modes,
-        onSetMode,
-        compact: { onCompact, signals: compactSignals }
-      })}
+      phone={
+        isMobileShell
+          ? {
+              modes: session.modes,
+              onSetMode,
+              compact: { onCompact, signals: compactSignals }
+            }
+          : undefined
+      }
     />
   ) : null
 
@@ -606,13 +611,12 @@ export function ChatInputBar({
   const composerAddHandle = useMemo(
     () => ({
       canPick,
-      // The phone shell is the browser, where an image needs an image-capable agent.
-      canPickImages: canPick && imageCapable,
+      canPickImages,
       pickFiles,
       insertTrigger: (trigger: '@' | '/') => insertComposerTrigger(editorRef.current, trigger),
       blurEditor: () => blurComposerEditor(editorRef.current)
     }),
-    [canPick, imageCapable, pickFiles]
+    [canPick, canPickImages, pickFiles]
   )
   const sendButton = (
     <ComposerSendButton
@@ -750,7 +754,6 @@ export function ChatInputBar({
               data-composer-toolbar={toolbarMode}
             >
               {isMobileShell ? (
-                // The mode and the account usage live in the model pill's sheet.
                 <div
                   className="flex min-w-0 flex-1 items-center gap-2"
                   data-composer-toolbar-row="mobile"

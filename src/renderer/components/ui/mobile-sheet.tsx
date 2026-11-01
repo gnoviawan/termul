@@ -15,33 +15,24 @@ import { SheetClose, SheetContent, SheetTitle } from './sheet'
 import { Switch } from './switch'
 
 const HEADER_BUTTON =
-  'flex size-11 items-center justify-center rounded-full text-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+  'flex size-11 items-center justify-center rounded-full text-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.06] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring'
 
-/** A row's fill. The group's gaps show the sheet through, as hairlines. */
 const ROW_SURFACE = 'bg-foreground/[0.05]'
 
 const ROW_PRESS =
-  'transition-colors duration-150 ease-out enabled:active:bg-foreground/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-disabled-foreground'
+  'transition-colors duration-150 ease-out enabled:active:bg-foreground/[0.06] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:text-disabled-foreground'
 
-/** Trigger attribute: the row that opened a sub-view takes focus again on back. */
 export const SUBVIEW_TRIGGER_ATTR = 'data-sheet-subview-trigger'
 
 interface MobileSheetContentProps
   extends Omit<ComponentPropsWithoutRef<typeof SheetContent>, 'side' | 'title' | 'closeButton'> {
   title: string
-  /** Set while a sub-view is open: the left button goes back instead of closing. */
   onBack?: () => void
-  /** The open sub-view, or null. Moves focus to Back on entry and to its row on exit. */
   view?: string | null
-  /** Fixed content between the header and the scrolling body (a chip row). */
   toolbar?: ReactNode
   bodyClassName?: string
 }
 
-/**
- * Phone bottom sheet: a grabber, a close (or back) button on the left, a
- * centred title, and a scrolling body. The body holds `SheetGroup`s.
- */
 export function MobileSheetContent({
   title,
   onBack,
@@ -117,10 +108,6 @@ export function MobileSheetContent({
   )
 }
 
-/**
- * A sheet's sub-view (Effort, MCP servers). It sits on the overlay stack above
- * its sheet, so system back and Escape leave the sub-view before the sheet.
- */
 export function useSheetSubview<T extends string>(
   overlayId: string,
   sheetOpen: boolean
@@ -147,7 +134,6 @@ export function useSheetSubview<T extends string>(
   return { view, open: setView, back, onEscapeKeyDown }
 }
 
-/** Rounded card of rows; `label` names it above the card and for screen readers. */
 export function SheetGroup({
   label,
   className,
@@ -171,7 +157,6 @@ export function SheetGroup({
   )
 }
 
-/** Round well for a row's or tile's leading icon. */
 export function SheetIconWell({ children }: { children: ReactNode }): React.JSX.Element {
   return (
     <span
@@ -183,45 +168,35 @@ export function SheetIconWell({ children }: { children: ReactNode }): React.JSX.
   )
 }
 
-interface SheetRowProps {
+type SheetRowProps = {
   title: ReactNode
   subtitle?: ReactNode
   icon?: ReactNode
-  /** Muted text before the accessory (the current value). */
   value?: ReactNode
-  /** `chevron` opens a sub-view; `check` marks the chosen row of a list. */
-  accessory?: 'chevron' | 'check'
-  /** With `check`: whether this row is the chosen one. */
-  selected?: boolean
-  /** `radio` inside a `role="radiogroup"` list; else a pressed button. */
-  role?: 'radio'
-  /** Without it the row is static text. */
   onSelect?: () => void
   disabled?: boolean
-  /** A control beside the row's button (a star), outside it. */
   aside?: ReactNode
   'aria-label'?: string
-  /** Names the sub-view this row opens, so back returns focus to it. */
-  subview?: string
   testId?: string
-}
+} & (
+  | { accessory?: 'chevron'; subview?: string }
+  | { accessory: 'check'; selected: boolean; role?: 'radio' }
+)
 
-/** One row of a `SheetGroup`, at least 48px tall. */
-export function SheetRow({
-  title,
-  subtitle,
-  icon,
-  value,
-  accessory,
-  selected = false,
-  role,
-  onSelect,
-  disabled = false,
-  aside,
-  'aria-label': ariaLabel,
-  subview,
-  testId
-}: SheetRowProps): React.JSX.Element {
+export function SheetRow(props: SheetRowProps): React.JSX.Element {
+  const {
+    title,
+    subtitle,
+    icon,
+    value,
+    onSelect,
+    disabled = false,
+    aside,
+    'aria-label': ariaLabel,
+    testId
+  } = props
+  const check = props.accessory === 'check' ? props : null
+  const subview = props.accessory === 'check' ? undefined : props.subview
   const id = useId()
   const hasValue = value !== undefined && value !== null
   const inner = (
@@ -245,33 +220,31 @@ export function SheetRow({
           {value}
         </span>
       ) : null}
-      {accessory === 'chevron' ? (
+      {props.accessory === 'chevron' ? (
         <ChevronRight size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
       ) : null}
-      {accessory === 'check' ? (
+      {check ? (
         <Check
           size={18}
           aria-hidden="true"
-          className={cn('shrink-0 text-foreground', selected ? 'opacity-100' : 'opacity-0')}
+          className={cn('shrink-0 text-foreground', check.selected ? 'opacity-100' : 'opacity-0')}
         />
       ) : null}
     </>
   )
   const layout = 'flex min-h-12 min-w-0 flex-1 items-center gap-3 px-4 py-2.5 text-left'
-  const pressed =
-    accessory === 'check'
-      ? role === 'radio'
-        ? { 'aria-checked': selected }
-        : { 'aria-pressed': selected }
-      : {}
+  const pressed = check
+    ? check.role === 'radio'
+      ? { 'aria-checked': check.selected }
+      : { 'aria-pressed': check.selected }
+    : {}
   return (
     <div className={cn('flex min-w-0 items-stretch text-foreground', ROW_SURFACE)}>
       {onSelect ? (
         <button
           type="button"
-          role={role}
+          role={check?.role}
           aria-label={ariaLabel}
-          // Title and value as one name; the spans have no spaces between them.
           aria-labelledby={
             ariaLabel ? undefined : hasValue ? `${id}-title ${id}-value` : `${id}-title`
           }
@@ -295,7 +268,6 @@ export function SheetRow({
   )
 }
 
-/** A row whose control is a switch; the title labels it. */
 export function SheetSwitchRow({
   title,
   subtitle,

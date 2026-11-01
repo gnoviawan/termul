@@ -3,7 +3,6 @@ import { pickAttachmentFilesBrowser } from './composer-attachments-io'
 
 afterEach(() => vi.restoreAllMocks())
 
-/** Opens the picker and cancels it, returning the input the browser was shown. */
 async function shownInput(
   options?: Parameters<typeof pickAttachmentFilesBrowser>[0]
 ): Promise<HTMLInputElement> {

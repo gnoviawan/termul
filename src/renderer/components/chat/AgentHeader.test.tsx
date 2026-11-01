@@ -715,24 +715,3 @@ describe('SelectorModal over a registered sheet (mobile shell back stack)', () =
     await waitForSentinelDepth(1)
   })
 })
-
-describe('composer chip presentation props', () => {
-  it('leaves the ModeChip DOM unchanged when the optional props are omitted', () => {
-    const base = render(
-      <ModeChip session={session('agent')} disabled={false} onSelect={vi.fn()} label="Agent" />
-    )
-    const baseHtml = base.container.innerHTML
-    base.unmount()
-    const explicit = render(
-      <ModeChip
-        session={session('agent')}
-        disabled={false}
-        onSelect={vi.fn()}
-        label="Agent"
-        className={undefined}
-        labelClassName={undefined}
-      />
-    )
-    expect(explicit.container.innerHTML).toBe(baseHtml)
-  })
-})

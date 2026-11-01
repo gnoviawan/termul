@@ -12,11 +12,12 @@ import {
 } from '@/lib/claude-usage-format'
 import { cn } from '@/lib/utils'
 
-/** What the Context row's Compact needs; the same handler and signals as the ring. */
 export interface CompactControl {
   onCompact: (() => void) | undefined
   signals: Omit<CompactSignals, 'usageUpdatedAt'>
 }
+
+const IDLE: CompactControl['signals'] = { connected: false, activeTurn: false, compaction: null }
 
 const TONE_TEXT: Record<UsageTone, string> = {
   normal: 'text-muted-foreground',
@@ -30,7 +31,6 @@ const TONE_FILL: Record<UsageTone, string> = {
   critical: 'bg-destructive'
 }
 
-/** The Claude account's 5-hour window; null for a chat without a signed-in managed account. */
 function useClaudeUsage(sessionId: string): { reading: UsageReading; account: string } | null {
   const ctx = useChatClaudeAccount(sessionId)
   if (!ctx || accountReadiness(ctx.current.account, ctx.current.usage) !== 'ready') return null
@@ -80,7 +80,7 @@ function ContextRow({
             onClick={request.request}
             disabled={pending || blocked}
             aria-busy={pending || undefined}
-            className="my-2 mr-3 shrink-0 self-center rounded-full bg-foreground/[0.08] px-3 py-2 text-sm font-medium text-foreground transition-colors duration-150 ease-out enabled:active:bg-foreground/[0.14] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-disabled-foreground"
+            className="my-2 mr-3 shrink-0 self-center rounded-full bg-foreground/[0.08] px-3 py-2 text-sm font-medium text-foreground transition-colors duration-150 ease-out enabled:active:bg-foreground/[0.14] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:text-disabled-foreground"
           >
             {pending ? 'Compacting…' : 'Compact'}
           </button>
@@ -90,9 +90,6 @@ function ContextRow({
   )
 }
 
-const IDLE: CompactControl['signals'] = { connected: false, activeTurn: false, compaction: null }
-
-/** Account usage and the context window, each only when there is a reading. */
 export function UsageCard({
   sessionId,
   usage,

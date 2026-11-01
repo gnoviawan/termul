@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { deleteTempFile } from '@/lib/attachment-temp-cleanup'
 import {
-  type AttachmentPickOptions,
+  type BrowserPickOptions,
   pickAttachmentFilesBrowser,
   pickAttachmentPaths,
   readClipboardRgbaImage,
@@ -230,11 +230,8 @@ export interface ComposerAttachments {
   attachments: PendingAttachment[]
   /** Browser channel (drag/paste): File objects with no path. */
   addFiles: (files: FileList | File[]) => Promise<void>
-  /**
-   * Picker channel (OS file dialog): real filesystem paths. The options narrow
-   * the browser picker only; the desktop dialog ignores them.
-   */
-  pickFiles: (options?: AttachmentPickOptions) => Promise<void>
+  /** Picker channel (OS file dialog): real filesystem paths. */
+  pickFiles: (options?: BrowserPickOptions) => Promise<void>
   /** Paste handler for the composer — images from clipboard, incl. screenshots.
    *  Accepts the DOM `ClipboardEvent` the Tiptap editor's `handlePaste` editorProp
    *  passes (the pre-refactor textarea's React event was structurally compatible;
@@ -251,6 +248,8 @@ export interface ComposerAttachments {
   appOwnedTempPaths: () => string[]
   /** Whether the OS picker affordance should be shown (resource_link, always supported). */
   canPick: boolean
+  /** Whether a picked image can attach: inline when capable, else a desktop temp-file link. */
+  canPickImages: boolean
   /** Whether drag/paste can produce an accepted block for this agent. */
   canDropPaste: boolean
 }
@@ -336,7 +335,7 @@ export function useComposerAttachments(opts: {
   )
 
   const pickFiles = useCallback(
-    async (options?: AttachmentPickOptions) => {
+    async (options?: BrowserPickOptions) => {
       if (disabled) return
 
       // Web: no filesystem paths — use a DOM file picker and stage File objects.
@@ -484,6 +483,7 @@ export function useComposerAttachments(opts: {
     clearAttachments,
     appOwnedTempPaths,
     canPick: !disabled,
+    canPickImages: !disabled && (imageCapable || isTauriContext()),
     // Drag/paste is always accepted while enabled: images attach (inline or as
     // a temp-file link), and addFiles surfaces per-file capability issues.
     canDropPaste: !disabled

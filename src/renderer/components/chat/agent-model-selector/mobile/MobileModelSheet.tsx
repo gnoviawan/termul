@@ -7,6 +7,7 @@ import {
   SheetRow,
   useSheetSubview
 } from '@/components/ui/mobile-sheet'
+import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { SheetDescription } from '@/components/ui/sheet'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
@@ -41,14 +42,11 @@ import { AgentChips } from './MobileAgentChips'
 import { ChoiceList, type ModeControl, OptionsCard, sheetOptions } from './MobileSheetOptions'
 import { type CompactControl, UsageCard } from './MobileUsageCard'
 
-/** A long list gets a search field; a short one is quicker to scan. */
 const SEARCH_THRESHOLD = 12
 
 export interface MobileModelSheetProps extends SelectorPanelProps {
-  /** The chat; empty in the launcher, which has no usage to show. */
   sessionId: string
   open: boolean
-  /** Keys the sub-view's overlay entry above the sheet's own. */
   overlayId: string
   mode: ModeControl | null
   compact: CompactControl | null
@@ -73,7 +71,7 @@ function StarToggle({
       disabled={disabled}
       onClick={onToggle}
       className={cn(
-        'flex w-11 shrink-0 items-center justify-center transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed',
+        'flex w-11 shrink-0 items-center justify-center transition-colors duration-150 ease-out focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring disabled:cursor-not-allowed',
         on ? 'text-foreground' : 'text-muted-foreground/60'
       )}
     >
@@ -82,11 +80,6 @@ function StarToggle({
   )
 }
 
-/**
- * The phone's "Select model" sheet: agent chips, the viewed agent's models (with
- * Favorites first), then Effort, Mode, Fast and the other options, then usage.
- * State is `useSelectorPanelState`, as in the desktop panels.
- */
 export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Element {
   const { source: sw, disabled, modelValue, escapeRef } = props
   const appStore = useFavoritesStore()
@@ -131,17 +124,16 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
     catalog: ModelCatalog | null,
     models: readonly CatalogModel[],
     selectedValue: string | undefined,
-    /** Rows from several agents: each shows and names its own agent. */
-    mixed: boolean
+    showAgent: boolean
   ): ReactNode =>
     models.map((model) => {
       const tab = tabOf(configId)
       const key = configId ? { configId, modelId: model.value } : null
-      const agentName = mixed && configId !== effectiveId ? tab?.name : undefined
+      const agentName = showAgent && configId !== effectiveId ? tab?.name : undefined
       return (
         <SheetRow
           key={`${configId}\0${model.value}`}
-          icon={mixed && tab ? <TabGlyph tab={tab} /> : undefined}
+          icon={showAgent && tab ? <TabGlyph tab={tab} /> : undefined}
           title={model.name.trim()}
           subtitle={model.description || undefined}
           aria-label={agentName ? rowAccessibleName({ name: model.name, agentName }) : undefined}
@@ -352,7 +344,10 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
               onChange={(event) => state.setQuery(event.target.value)}
               placeholder="Search models…"
               aria-label="Search models and agents"
-              className="h-11 w-full shrink-0 rounded-xl bg-foreground/[0.05] px-4 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className={cn(
+                'h-11 w-full shrink-0 rounded-xl bg-foreground/[0.05] px-4 text-base text-foreground placeholder:text-muted-foreground',
+                FOCUS_RING_CLASS
+              )}
             />
           ) : null}
           {list}

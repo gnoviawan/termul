@@ -38,15 +38,14 @@ function pickAttachmentPathsBrowser(): Promise<string[] | null> {
   return Promise.resolve(null)
 }
 
-/** Narrows the browser picker: `image/*`, and the camera instead of the library. */
-export interface AttachmentPickOptions {
+export interface BrowserPickOptions {
   accept?: string
   capture?: 'environment' | 'user'
 }
 
 /** Pick files in the browser via a transient file input (no path strings). */
 export function pickAttachmentFilesBrowser(
-  options: AttachmentPickOptions = {}
+  options: BrowserPickOptions = {}
 ): Promise<File[] | null> {
   return new Promise((resolve) => {
     let settled = false

@@ -460,8 +460,6 @@ describe('mobile composer: one-row toolbar', () => {
   it('truncates the model label and keeps the other controls at full size', () => {
     renderBar()
 
-    // The pill can shrink and its model label truncates; the wrapper around
-    // the pill shrinks with it.
     const pill = screen.getByRole('button', { name: PILL_NAME })
     expect(pill).toHaveClass('min-w-0')
     const modelLabel = within(pill).getByText('Opus 5.5')
@@ -572,7 +570,6 @@ describe('mobile composer: one-row toolbar', () => {
   })
 })
 
-/** React and Radix ids depend on how many trees rendered before; the markup does not. */
 function stableMarkup(html: string): string {
   return html.replace(/:r[0-9a-z]+:/g, ':id:').replace(/radix-[:\w-]+/g, 'radix-id')
 }
