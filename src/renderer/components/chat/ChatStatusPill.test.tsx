@@ -151,6 +151,44 @@ describe('ChatStatusPill tabs', () => {
     expect(selectedTab()).toHaveTextContent('Subagents')
   })
 
+  it('keeps focus in the popover when a tab leaves it', () => {
+    const { rerender } = render(<Pill toolCalls={[subagent, ...EDITS]} />)
+    fireEvent.click(pill())
+    screen.getByRole('tab', { name: /Subagents/ }).focus()
+    rerender(<Pill toolCalls={[subagent]} />)
+    expect(screen.queryByRole('tab')).toBeNull()
+    expect(screen.getByRole('dialog', { name: 'Subagents' })).toContainElement(
+      document.activeElement as HTMLElement
+    )
+  })
+
+  it('changes tab on a released swipe and snaps back on a cancelled one', () => {
+    mobileRef.current = true
+    render(<Pill toolCalls={[subagent, ...EDITS]} />)
+    fireEvent.click(pill())
+    const viewport = document.querySelector('[data-tab-viewport]') as HTMLElement
+    const swipe = (end: 'pointerUp' | 'pointerCancel') => {
+      fireEvent.pointerDown(viewport, {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 300,
+        clientY: 10
+      })
+      fireEvent.pointerMove(viewport, {
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 100,
+        clientY: 12
+      })
+      fireEvent[end](viewport, { pointerId: 1, pointerType: 'touch', clientX: 100, clientY: 12 })
+    }
+
+    swipe('pointerCancel')
+    expect(selectedTab()).toHaveTextContent('Changed files')
+    swipe('pointerUp')
+    expect(selectedTab()).toHaveTextContent('Subagents')
+  })
+
   it('opens one bottom sheet with both tabs on the phone shell', () => {
     mobileRef.current = true
     render(<Pill toolCalls={[subagent, ...EDITS]} />)

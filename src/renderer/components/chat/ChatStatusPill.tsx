@@ -96,6 +96,7 @@ export function ChatStatusPill({
   const [pickedTab, setPickedTab] = useState<StatusTab | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
   // Set while focus is handed to the Git sheet, so closing this sheet does not
   // pull focus back to the pill underneath it.
   const handingOffFocus = useRef(false)
@@ -114,6 +115,17 @@ export function ChatStatusPill({
   useEffect(() => {
     if (!shown || !isVisible) setOpen(false)
   }, [shown, isVisible])
+
+  // A tab leaving the open popover unmounts the tab bar; keep focus inside it.
+  const tabCount = tabs.length
+  const prevTabCount = useRef(tabCount)
+  useEffect(() => {
+    const changed = prevTabCount.current !== tabCount
+    prevTabCount.current = tabCount
+    if (!changed || !open || isMobile || tabCount === 0) return
+    const popover = popoverRef.current
+    if (popover && !popover.contains(document.activeElement)) popover.focus()
+  }, [tabCount, open, isMobile])
 
   const subagentSummary = subagentCountSummary(counts)
   const hasTotals = changes.totalAdded > 0 || changes.totalRemoved > 0
@@ -345,6 +357,7 @@ export function ChatStatusPill({
               <Popover open={open} onOpenChange={setOpen}>
                 <PopoverTrigger asChild>{trigger}</PopoverTrigger>
                 <PopoverContent
+                  ref={popoverRef}
                   align="end"
                   sideOffset={6}
                   aria-label={overlayLabel}

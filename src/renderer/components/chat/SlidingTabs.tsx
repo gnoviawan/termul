@@ -167,6 +167,15 @@ export function SlidingTabs<T extends string>({
     place(current.dx, current.width)
   }
 
+  const onPointerCancel = (event: PointerEvent) => {
+    const current = drag.current
+    if (!current || event.pointerId !== current.pointerId) return
+    drag.current = null
+    if (current.axis !== 'x') return
+    rootRef.current?.removeAttribute('data-dragging')
+    place(0, 1)
+  }
+
   const onPointerEnd = (event: PointerEvent) => {
     const current = drag.current
     if (!current || event.pointerId !== current.pointerId) return
@@ -237,7 +246,7 @@ export function SlidingTabs<T extends string>({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerEnd}
-        onPointerCancel={onPointerEnd}
+        onPointerCancel={onPointerCancel}
         onClickCapture={(event) => {
           if (!suppressClick.current) return
           event.preventDefault()
