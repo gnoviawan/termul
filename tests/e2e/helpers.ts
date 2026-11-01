@@ -12,6 +12,7 @@ import type { WebSocket as WsSocket } from 'ws'
 import { WebSocket as WsSocketCtor } from 'ws'
 import { scopedKey, scopeOf } from '../../src/shared/types/persistence.types'
 import { WS_PROTOCOL_VERSION } from '../../src/shared/types/web-protocol.types'
+import { seededServerArgs } from './seeded-server-args'
 
 export const E2E_TOKEN = 'e2e-test-token-12345'
 export const E2E_PORT = Number(process.env.E2E_PORT ?? 8188)
@@ -88,30 +89,14 @@ export async function startSeededServer(opts: {
   fakeAgentScript: string
 }): Promise<SeededServer> {
   const stateDir = await mkdtemp(join(tmpdir(), 'termul-e2e-state-'))
-  const projectsFile = join(stateDir, 'projects.json')
-  const child = spawn(
-    opts.serverBinary,
-    [
-      '--host',
-      '127.0.0.1',
-      '--port',
-      String(E2E_PORT),
-      '--state-dir',
-      stateDir,
-      '--sessions-dir',
-      join(stateDir, 'sessions'),
-      '--projects-file',
-      projectsFile
-    ],
-    {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        TERMUL_WEB_AUTH_TOKEN: E2E_TOKEN,
-        RUST_LOG: 'termul_manager_lib=info'
-      }
+  const child = spawn(opts.serverBinary, seededServerArgs({ port: E2E_PORT, stateDir }), {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      TERMUL_WEB_AUTH_TOKEN: E2E_TOKEN,
+      RUST_LOG: 'termul_manager_lib=info'
     }
-  )
+  })
   child.stdout.pipe(process.stdout)
   child.stderr.pipe(process.stderr)
 
