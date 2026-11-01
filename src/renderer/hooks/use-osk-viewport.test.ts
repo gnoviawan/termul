@@ -31,6 +31,9 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolveOskState, useOskViewport } from './use-osk-viewport'
 
+const mockLog = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLog }))
+
 interface VvStub extends VisualViewport {
   height: number
   offsetTop: number
@@ -365,5 +368,60 @@ describe('useOskViewport', () => {
     })
     await waitFor(() => expect(result.current.isOskOpen).toBe(false))
     expect(document.documentElement.style.getPropertyValue('--termul-keyboard-height')).toBe('0px')
+  })
+
+  it('clears the spacer when only the layout viewport changes (no visualViewport event)', async () => {
+    setInnerHeight(800)
+    const vv = installVisualViewport({ height: 800, offsetTop: 0 })
+    const { result } = renderHook(() => useOskViewport())
+
+    await act(async () => {
+      vv.height = 500
+      vv.fireResize()
+    })
+    await waitFor(() => expect(result.current.keyboardHeight).toBe(300))
+
+    // The layout viewport shrinks onto the keyboard with no visualViewport event.
+    await act(async () => {
+      setInnerHeight(500)
+      window.dispatchEvent(new Event('resize'))
+    })
+    await waitFor(() => expect(result.current.keyboardHeight).toBe(0))
+    expect(result.current.isOskOpen).toBe(false)
+    expect(document.documentElement.style.getPropertyValue('--termul-keyboard-height')).toBe('0px')
+    restoreInnerHeight()
+  })
+
+  it('logs each open and close once, naming the event, and measures again after a close', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    setInnerHeight(800)
+    const vv = installVisualViewport({ height: 800, offsetTop: 0 })
+    renderHook(() => useOskViewport())
+    await act(async () => {})
+    mockLog.mockClear()
+
+    await act(async () => {
+      vv.height = 500
+      vv.fireResize()
+    })
+    await act(async () => {
+      vv.height = 800
+      vv.fireResize()
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+    await act(async () => {})
+
+    const messages = mockLog.mock.calls.map(([payload]) => payload.message as string)
+    expect(messages.map((m) => m.split(' ').slice(0, 2).join(' '))).toEqual([
+      'trigger=vv-resize open=true',
+      'trigger=vv-resize open=false',
+      'trigger=close-recheck open=false'
+    ])
+    expect(messages[0]).toContain('keyboard=300 inner=800 vv=500')
+    expect(mockLog.mock.calls[0][0]).toMatchObject({ level: 'info', source: 'osk-viewport' })
+    vi.useRealTimers()
+    restoreInnerHeight()
   })
 })

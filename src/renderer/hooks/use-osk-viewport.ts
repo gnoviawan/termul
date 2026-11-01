@@ -42,6 +42,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import { logFrontendError } from '@/lib/log-api'
 
 export interface OskState {
   /** Current visual-viewport height in CSS pixels. */
@@ -95,6 +96,47 @@ export function resolveOskState(layoutViewportHeight: number, vv: VisualViewport
   return { height, offsetTop, isOskOpen, keyboardHeight }
 }
 
+/** How long after a close to measure again: the layout can settle after the last viewport event. */
+const CLOSE_RECHECK_MS = 600
+
+type OskTrigger = 'mount' | 'vv-resize' | 'vv-scroll' | 'window-resize' | 'close-recheck'
+
+// Module-level so the hook's several consumers log each transition once.
+let lastLoggedOpen: boolean | null = null
+
+function describeViewport(state: OskState, trigger: OskTrigger): string {
+  const standalone =
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(display-mode: standalone)').matches
+  return [
+    `trigger=${trigger}`,
+    `open=${state.isOskOpen}`,
+    `keyboard=${Math.round(state.keyboardHeight)}`,
+    `inner=${window.innerHeight}`,
+    `vv=${Math.round(state.height)}`,
+    `vvTop=${Math.round(state.offsetTop)}`,
+    `client=${document.documentElement.clientHeight}`,
+    `screen=${window.screen?.height ?? 0}`,
+    `standalone=${standalone}`
+  ].join(' ')
+}
+
+/**
+ * Boundary log for keyboard open/close, so a layout stuck after the keyboard
+ * closes can be read from the server log: which event ended the open state
+ * and what the viewport measured then.
+ */
+function logOskTransition(state: OskState, trigger: OskTrigger): void {
+  const settled = trigger === 'close-recheck'
+  if (!settled && lastLoggedOpen === state.isOskOpen) return
+  if (!settled) lastLoggedOpen = state.isOskOpen
+  void logFrontendError({
+    level: 'info',
+    source: 'osk-viewport',
+    message: describeViewport(state, trigger)
+  })
+}
+
 function writeKeyboardHeightVar(keyboardHeight: number): void {
   if (typeof document === 'undefined' || !document.documentElement) return
   document.documentElement.style.setProperty('--termul-keyboard-height', `${keyboardHeight}px`)
@@ -123,9 +165,13 @@ export function useOskViewport(): OskState {
     if (typeof window === 'undefined' || !window.visualViewport) return
     const vv = window.visualViewport
     let rafId: number | null = null
+    let recheckId: ReturnType<typeof setTimeout> | null = null
+    let pendingTrigger: OskTrigger = 'mount'
+    let wasOpen: boolean | null = null
 
     const apply = (): void => {
       rafId = null
+      const trigger = pendingTrigger
       // #852: read `window.innerHeight` LIVE at apply time — no pre-OSK
       // baseline. On Android Chrome with `interactive-widget=resizes-content`
       // the layout viewport shrinks onto the keyboard together with the
@@ -138,26 +184,48 @@ export function useOskViewport(): OskState {
       const next = resolveOskState(window.innerHeight, vv)
       writeKeyboardHeightVar(next.keyboardHeight)
       setState(next)
+      if (trigger === 'close-recheck') {
+        logOskTransition(next, trigger)
+      } else if (wasOpen !== next.isOskOpen) {
+        logOskTransition(next, trigger)
+        if (wasOpen && !next.isOskOpen) {
+          if (recheckId !== null) clearTimeout(recheckId)
+          recheckId = setTimeout(() => {
+            recheckId = null
+            scheduleApply('close-recheck')
+          }, CLOSE_RECHECK_MS)
+        }
+      }
+      wasOpen = next.isOskOpen
     }
 
-    const scheduleApply = (): void => {
+    const scheduleApply = (trigger: OskTrigger): void => {
+      pendingTrigger = trigger
       if (rafId !== null) return
       rafId = requestAnimationFrame(apply)
     }
+    const onVvResize = (): void => scheduleApply('vv-resize')
+    const onVvScroll = (): void => scheduleApply('vv-scroll')
+    // The layout viewport can change without a visual-viewport event (the
+    // keyboard closing in an installed Android app), which left the spacer stale.
+    const onWindowResize = (): void => scheduleApply('window-resize')
 
     // Both `resize` and `scroll` are required for iOS Safari compatibility
     // (iOS scrolls the visual viewport upward; `resize` alone misses the
     // early scroll phase of the OSK-open transition).
-    vv.addEventListener('resize', scheduleApply)
-    vv.addEventListener('scroll', scheduleApply)
+    vv.addEventListener('resize', onVvResize)
+    vv.addEventListener('scroll', onVvScroll)
+    window.addEventListener('resize', onWindowResize)
 
     // Capture initial state in case the OSK was already open at mount.
-    scheduleApply()
+    scheduleApply('mount')
 
     return () => {
       if (rafId !== null) cancelAnimationFrame(rafId)
-      vv.removeEventListener('resize', scheduleApply)
-      vv.removeEventListener('scroll', scheduleApply)
+      if (recheckId !== null) clearTimeout(recheckId)
+      vv.removeEventListener('resize', onVvResize)
+      vv.removeEventListener('scroll', onVvScroll)
+      window.removeEventListener('resize', onWindowResize)
       // Reset the CSS var so it doesn't leak into non-OSK contexts.
       writeKeyboardHeightVar(0)
     }
