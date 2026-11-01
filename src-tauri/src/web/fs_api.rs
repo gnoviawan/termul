@@ -109,6 +109,7 @@ pub struct MkdirRequest {
 /// (`PRECONDITION_FAILED` otherwise; see [`precondition`]).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"`POST /fs/write` body. `expected` makes the write conditional on the file still being what the caller read: `{ "sha256": "<hex>" }` for its content hash, or `"absent"` when it must not exist yet. A mismatch is refused with `PRECONDITION_FAILED`."#)]
 pub struct WriteRequest {
     pub path: String,
     pub content: String,
@@ -181,6 +182,7 @@ pub struct DeleteRequest {
 /// `project_root` containment — intentional breadth per ADR-007).
 /// Loopback-guarded (`check_local_only`, `FORBIDDEN`).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(description = r#"`POST /fs/rename` body. Both paths are resolved on the host and may not contain `..`; they need not lie inside a registered project. Accepted from loopback peers only, unless the server runs with `--allow-remote-writes`."#)]
 pub struct RenameRequest {
     pub from: String,
     pub to: String,

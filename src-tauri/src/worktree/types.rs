@@ -119,6 +119,7 @@ pub struct MergePreview {
 /// worktree launch.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"The default base branch for a new worktree, and whether the repository is on a detached HEAD. `currentBranch` is absent on a detached HEAD: pick a base branch explicitly before creating a worktree."#)]
 pub struct BaseBranchInfo {
     /// The branch `chat/{id}` should be created from: origin/HEAD → main →
     /// master → current branch (last resort).
@@ -134,6 +135,7 @@ pub struct BaseBranchInfo {
 /// Surfaced to the renderer so the launcher can log per-file decisions.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"Why one `.worktree-include` file was not copied into the new worktree."#)]
 pub struct IncludeSkipReason {
     pub path: String,
     pub reason: String,
@@ -145,6 +147,7 @@ pub struct IncludeSkipReason {
 /// already-present).
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"Result of copying the `.worktree-include` files into a new worktree. `ran` is the number of patterns that matched at least one file, `copied` the number of files copied, and `skipped` the files left out with the reason (symlink, path escape, already present)."#)]
 pub struct IncludeCopyResult {
     pub ran: usize,
     pub copied: usize,

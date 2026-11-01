@@ -141,6 +141,7 @@ pub enum ProbeStatus {
     Disconnected,
     /// The server requires OAuth authentication. The renderer should show a
     /// "Connect" button that starts the OAuth flow (see `mcp_oauth.rs`).
+    #[schemars(description = r#"The server requires OAuth. Start the flow with `POST /mcp-servers/oauth/start`."#)]
     #[serde(rename = "authRequired")]
     AuthRequired,
 }
@@ -151,6 +152,7 @@ pub enum ProbeStatus {
 /// extract the `resource_metadata` URL and start the OAuth flow.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"Probe result. On `disconnected`, `error` carries a short message with no env or header values, tokens, or credentials. On `authRequired`, `wwwAuthenticateHeader` carries the server's raw `WWW-Authenticate` header, whose `resource_metadata` URL starts the OAuth flow."#)]
 pub struct ProbeResult {
     pub status: ProbeStatus,
     #[serde(default)]

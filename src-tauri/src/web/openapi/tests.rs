@@ -226,3 +226,80 @@ fn hand_parsed_request_fields_document_the_shape_the_server_parses() {
         json!({ "$ref": "#/components/schemas/ProjectOpWire" })
     );
 }
+
+/// Every `description` in the document, with its JSON pointer, and the
+/// `properties` names of the object it describes.
+fn descriptions<'a>(value: &'a Value, pointer: String, out: &mut Vec<(String, &'a str, BTreeSet<&'a str>)>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(description)) = map.get("description") {
+                let properties = map
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .map(|properties| properties.keys().map(String::as_str).collect())
+                    .unwrap_or_default();
+                out.push((pointer.clone(), description, properties));
+            }
+            for (key, child) in map {
+                descriptions(child, format!("{pointer}/{key}"), out);
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                descriptions(item, format!("{pointer}/{index}"), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn camel_case(snake: &str) -> String {
+    let mut parts = snake.split('_');
+    let mut camel = parts.next().unwrap_or_default().to_string();
+    for part in parts {
+        let mut chars = part.chars();
+        if let Some(first) = chars.next() {
+            camel.extend(first.to_uppercase());
+            camel.push_str(chars.as_str());
+        }
+    }
+    camel
+}
+
+#[test]
+fn descriptions_are_written_for_api_readers_not_rust_readers() {
+    let internal = [
+        (regex::Regex::new(r"\[`").unwrap(), "a rustdoc intra-doc link"),
+        (regex::Regex::new(r"crate::").unwrap(), "a crate path"),
+        (regex::Regex::new(r"\w\.rs\b").unwrap(), "a Rust source file"),
+        (regex::Regex::new(r"\b(CAP|AD|ADR)[- ]\d|\bEpic \d").unwrap(), "a planning tag"),
+    ];
+    let code_span = regex::Regex::new(r"`([a-z0-9]+(?:_[a-z0-9]+)+)`").unwrap();
+    let doc = document();
+    let mut found = Vec::new();
+    descriptions(&doc, String::new(), &mut found);
+    let leaks: Vec<String> = found
+        .iter()
+        .flat_map(|(pointer, description, properties)| {
+            let references = internal
+                .iter()
+                .filter(|(pattern, _)| pattern.is_match(description))
+                .map(|(_, what)| what.to_string());
+            let rust_fields = code_span
+                .captures_iter(description)
+                .map(|capture| capture[1].to_string())
+                .filter(|snake| properties.contains(camel_case(snake).as_str()))
+                .map(|snake| format!("the Rust field name `{snake}` (wire name `{}`)", camel_case(&snake)));
+            references
+                .chain(rust_fields)
+                .map(move |what| format!("{pointer}: {what}"))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(
+        leaks.is_empty(),
+        "Descriptions that reach the public spec name internals. Reword the doc comment or \
+         override it with #[schemars(description = \"..\")]:\n  {}",
+        leaks.join("\n  ")
+    );
+}
