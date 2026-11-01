@@ -885,6 +885,19 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockFinalizeChatLaunch).not.toHaveBeenCalled()
   })
 
+  it('focuses the prompt from a tap on the padding around it', async () => {
+    renderLauncher()
+    const prompt = await screen.findByLabelText('Agent prompt')
+    setComposerValue('hello')
+    act(() => prompt.blur())
+    const row = prompt.closest<HTMLElement>('[data-composer-row]')
+    if (!row) throw new Error('composer row not mounted')
+
+    expect(fireEvent.mouseDown(row)).toBe(false)
+
+    await waitFor(() => expect(document.activeElement).toBe(prompt))
+  })
+
   it('opens chat instantly via placeholder then finalizes ACP in the background', async () => {
     const defaultAgent = defaultReadyAgent()
     renderLauncher()

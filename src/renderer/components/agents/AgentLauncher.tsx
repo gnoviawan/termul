@@ -55,7 +55,10 @@ import {
 } from '@/components/chat/chat-input-bar-config'
 import { COMPOSER_CARD_CLASS, useComposerToolbarMode } from '@/components/chat/chat-layout'
 import { ChatStarters, ChatStartHero } from '@/components/chat/chat-start'
-import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEditor'
+import {
+  ChatComposerEditor,
+  focusComposerFromRowPress
+} from '@/components/chat/composer/ChatComposerEditor'
 import {
   FileMentionMenu,
   MENTION_EMPTY_LABEL,
@@ -1955,7 +1958,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               />
               {/* Same inner rhythm as the chat composer card (ChatInputBar):
                   editor row px-4 pb-1.5 pt-3.5, toolbar px-2 pb-2. */}
-              <div className="px-4 pb-1.5 pt-3.5">
+              {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only focus aid for the padding; the editor is the accessible target */}
+              <div
+                data-composer-row
+                className="px-4 pb-1.5 pt-3.5"
+                onMouseDown={(event) => focusComposerFromRowPress(event, editorRef.current)}
+              >
                 {/* Tiptap rich-text editor — the skill "pill" is a real inline
                    DOM node, so the caret sits flush against the pill's right
                    edge by construction. No transparent textarea + mirror
