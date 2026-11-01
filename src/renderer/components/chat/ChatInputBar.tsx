@@ -44,12 +44,7 @@ import {
   partitionConfigOptions,
   resolveModelOption
 } from './chat-input-bar-config'
-import {
-  CHAT_COMPACT_LABEL,
-  CHAT_GUTTER_X,
-  COMPOSER_CARD_CLASS,
-  useComposerToolbarMode
-} from './chat-layout'
+import { CHAT_GUTTER_X, COMPOSER_CARD_CLASS, useComposerToolbarMode } from './chat-layout'
 import { ChatComposerEditor } from './composer/ChatComposerEditor'
 import { ComposerAddSheet } from './composer/ComposerAddSheet'
 import { ComposerSendButton } from './composer/ComposerSendButton'
@@ -573,7 +568,7 @@ export function ChatInputBar({
     />
   ) : null
 
-  // Mobile one-row toolbar: the mode label goes icon-only on a narrow pane.
+  // Mobile one-row toolbar: the mode is its icon alone, leaving the room to the model name.
   const agentModeChip = (
     <ModeChip
       session={session}
@@ -582,7 +577,7 @@ export function ChatInputBar({
       label="Agent"
       agentName={modeAgentName}
       className={isMobileShell ? 'shrink-0' : undefined}
-      labelClassName={isMobileShell ? CHAT_COMPACT_LABEL : undefined}
+      labelClassName={isMobileShell ? 'sr-only' : undefined}
     />
   )
   // One set of MCP props for the desktop badge popover and the mobile + sheet.
@@ -752,7 +747,7 @@ export function ChatInputBar({
             >
               {isMobileShell ? (
                 <div
-                  className="flex min-w-0 flex-1 items-center gap-2"
+                  className="flex min-w-0 flex-1 items-center gap-1"
                   data-composer-toolbar-row="mobile"
                 >
                   <ComposerAddSheet

@@ -290,7 +290,10 @@ export function AgentModelSelector({
         className="shrink-0 text-muted-foreground"
       />
       <span className={cn('truncate', armed && 'text-foreground')}>{pillText}</span>
-      {!armed && modelName && effortName ? <span className="shrink-0">{effortName}</span> : null}
+      {/* The phone row has room for the model name only; the sheet shows the effort. */}
+      {!armed && !isMobile && modelName && effortName ? (
+        <span className="shrink-0">{effortName}</span>
+      ) : null}
     </ComposerPill>
   )
 
