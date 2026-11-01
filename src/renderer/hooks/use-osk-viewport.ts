@@ -103,6 +103,7 @@ type OskTrigger = 'mount' | 'vv-resize' | 'vv-scroll' | 'window-resize' | 'close
 
 // Module-level so the hook's several consumers log each transition once.
 let lastLoggedOpen: boolean | null = null
+let settledCloseLogPending = false
 
 function describeViewport(state: OskState, trigger: OskTrigger): string {
   const standalone =
@@ -127,9 +128,14 @@ function describeViewport(state: OskState, trigger: OskTrigger): string {
  * and what the viewport measured then.
  */
 function logOskTransition(state: OskState, trigger: OskTrigger): void {
-  const settled = trigger === 'close-recheck'
-  if (!settled && lastLoggedOpen === state.isOskOpen) return
-  if (!settled) lastLoggedOpen = state.isOskOpen
+  if (trigger === 'close-recheck') {
+    if (!settledCloseLogPending) return
+    settledCloseLogPending = false
+  } else {
+    if (lastLoggedOpen === state.isOskOpen) return
+    lastLoggedOpen = state.isOskOpen
+    settledCloseLogPending = !state.isOskOpen
+  }
   void logFrontendError({
     level: 'info',
     source: 'osk-viewport',
@@ -188,8 +194,11 @@ export function useOskViewport(): OskState {
         logOskTransition(next, trigger)
       } else if (wasOpen !== next.isOskOpen) {
         logOskTransition(next, trigger)
+        if (recheckId !== null) {
+          clearTimeout(recheckId)
+          recheckId = null
+        }
         if (wasOpen && !next.isOskOpen) {
-          if (recheckId !== null) clearTimeout(recheckId)
           recheckId = setTimeout(() => {
             recheckId = null
             scheduleApply('close-recheck')

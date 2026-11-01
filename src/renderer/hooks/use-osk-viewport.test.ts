@@ -424,4 +424,68 @@ describe('useOskViewport', () => {
     vi.useRealTimers()
     restoreInnerHeight()
   })
+
+  async function openThenClose(vv: VvStub): Promise<void> {
+    await act(async () => {
+      vv.height = 500
+      vv.fireResize()
+    })
+    await act(async () => {
+      vv.height = 800
+      vv.fireResize()
+    })
+  }
+
+  it('logs the settled close once across several hook consumers', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    setInnerHeight(800)
+    const vv = installVisualViewport({ height: 800, offsetTop: 0 })
+    renderHook(() => {
+      useOskViewport()
+      useOskViewport()
+      useOskViewport()
+    })
+    await act(async () => {})
+    mockLog.mockClear()
+
+    await openThenClose(vv)
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+    await act(async () => {})
+
+    const triggers = mockLog.mock.calls.map(([payload]) =>
+      (payload.message as string).split(' ').slice(0, 2).join(' ')
+    )
+    expect(triggers).toEqual([
+      'trigger=vv-resize open=true',
+      'trigger=vv-resize open=false',
+      'trigger=close-recheck open=false'
+    ])
+    vi.useRealTimers()
+    restoreInnerHeight()
+  })
+
+  it('drops the pending close re-check when the keyboard reopens within 600 ms', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    setInnerHeight(800)
+    const vv = installVisualViewport({ height: 800, offsetTop: 0 })
+    renderHook(() => useOskViewport())
+    await act(async () => {})
+
+    await openThenClose(vv)
+    await act(async () => {
+      vv.height = 500
+      vv.fireResize()
+    })
+    mockLog.mockClear()
+    await act(async () => {
+      vi.advanceTimersByTime(600)
+    })
+    await act(async () => {})
+
+    expect(mockLog).not.toHaveBeenCalled()
+    vi.useRealTimers()
+    restoreInnerHeight()
+  })
 })
