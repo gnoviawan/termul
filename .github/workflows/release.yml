@@ -700,10 +700,15 @@ jobs:
         shell: bash
         env:
           ASSET_NAME: ${{ matrix.asset_name }}
+          ARCH: ${{ matrix.arch }}
         run: |
           mkdir -p server-collected
           cp src-tauri/target/release/termul-server "server-collected/$ASSET_NAME"
           cp src-tauri/target/release/termul-server.sig "server-collected/$ASSET_NAME.sig"
+          # The API spec is the same on every arch; the x64 build emits it.
+          if [[ "$ARCH" == "x64" ]]; then
+            src-tauri/target/release/termul-server openapi > server-collected/openapi.yaml
+          fi
 
       - name: Upload termul-server workflow artifact
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
@@ -791,6 +796,13 @@ jobs:
             cp "$server_root/$server_asset.sig" "release-assets/$server_asset.sig"
             manifests+=("$server_root/server-manifest.json")
           done
+
+          spec="release-inputs/release-standalone-server-x64/openapi.yaml"
+          if [[ ! -s "$spec" ]]; then
+            echo "Missing openapi.yaml from the x64 standalone server build" >&2
+            exit 1
+          fi
+          cp "$spec" release-assets/openapi.yaml
 
           # Channel selection: stable (`v*` tag) vs Insider RC (`v*-rc.*` tag).
           # The merge validator derives the asset URL tag from the channel:
