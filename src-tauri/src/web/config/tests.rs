@@ -172,7 +172,7 @@ fn from_args_isolated<'a>(
         std::env::temp_dir().join(format!("termul-config-isolated-{}", std::process::id()));
     let mut argv = vec![
         "--state-dir".to_owned(),
-        state_dir.to_str().expect("temp dir is UTF-8").to_owned(),
+        state_dir.to_string_lossy().into_owned(),
     ];
     argv.extend(args.into_iter().map(str::to_owned));
     ServerConfig::from_args(argv)
