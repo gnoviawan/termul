@@ -461,8 +461,8 @@ pub(super) struct AgentRuntimeProfile {
     /// summarized thinking display. The chat already renders `agent_thought_chunk`
     /// as a Thought row.
     pub(super) summarize_thinking: bool,
-    /// Claude Agent ACP versions that send native subagent sessions in the
-    /// AIR draft form: advertise `subagents` so each subagent reports its
+    /// Claude Agent ACP versions that send native subagent sessions (AIR
+    /// draft or RFD form): advertise `subagents` so each subagent reports its
     /// real end (`native_subagents.rs`).
     pub(super) native_subagents: bool,
 }
@@ -503,7 +503,7 @@ impl AgentRuntimeProfile {
             mask_failure_details: factory_droid,
             summarize_thinking: requests_summarized_thinking(config),
             native_subagents: requests_summarized_thinking(config)
-                && super::native_subagents::uses_air_native_subagents(config),
+                && super::native_subagents::uses_native_subagents(config),
         }
     }
 }

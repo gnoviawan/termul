@@ -1,13 +1,23 @@
-//! Native subagent sessions for Claude Agent ACP (the AIR draft form that
-//! adapter versions 0.78–0.89 send when the client advertises
-//! `clientCapabilities.subagents`).
+//! Native subagent sessions for Claude Agent ACP. From version 0.78 the
+//! adapter runs each subagent in its own ACP session when the client
+//! advertises `clientCapabilities.subagents`. Versions 0.78-0.89 send the AIR
+//! draft form; 0.90 and newer send the RFD form to clients that are not AIR
+//! clients, which Termul is not.
 //!
-//! In that form the adapter does not send the `Agent`/`Task` tool call to the
-//! chat. It announces each subagent with `subagent_spawned`, sends the
-//! subagent's own traffic under the child session id, and reports the real
-//! end with `subagent_state_update`. The driver turns that into the shape the
-//! chat already renders: a synthesized dispatch card that stays running until
-//! the subagent ends, with the child's tool calls and text stamped with
+//! In both forms the adapter does not send the `Agent`/`Task` tool call to the
+//! chat. It announces each subagent on its parent session, sends the
+//! subagent's own traffic under the child session id, and reports when the
+//! subagent's work ends:
+//!
+//! - AIR: `subagent_spawned`, then `subagent_state_update` with an end state.
+//! - RFD: `subagent_update` with `state.state` `running` (the announce, and a
+//!   reused child starting again), `requires_action`, `idle` (with a
+//!   `stopReason`), or `unknown`. `session_message` records replace the
+//!   launch call: the prompt from parent to child, and the child's reply.
+//!
+//! The driver turns both into the shape the chat already renders: a
+//! synthesized dispatch card that stays running until the subagent ends, with
+//! the child's tool calls and text stamped with
 //! `_meta.claudeCode.parentToolUseId` so they group under it.
 
 use std::sync::Arc;
@@ -27,11 +37,8 @@ const SUBAGENTS_CAPABILITY_KEY: &str = "subagents";
 /// The renderer's host lifecycle marker (`subagent-lifecycle.ts`).
 const TERMUL_SUBAGENT_META_KEY: &str = "termul/subagent";
 const CLAUDE_PACKAGE_NAME: &str = "@agentclientprotocol/claude-agent-acp";
-/// First adapter version verified to send the AIR draft form.
-const AIR_FORM_MIN: (u64, u64, u64) = (0, 78, 0);
-/// From this version the adapter sends the RFD form (`subagent_update`,
-/// `session_message`) to clients that are not AIR clients.
-const RFD_FORM_MIN: (u64, u64, u64) = (0, 90, 0);
+/// First adapter version verified to send native subagent sessions.
+const NATIVE_SUBAGENTS_MIN: (u64, u64, u64) = (0, 78, 0);
 const MAX_ID_CHARS: usize = 512;
 const MAX_NAME_CHARS: usize = 512;
 const MAX_TASK_CHARS: usize = 8_000;
@@ -90,10 +97,10 @@ pub(super) enum NativeRoute {
     Claimed(Vec<Value>),
 }
 
-/// True when `config` launches a Claude adapter version that sends the AIR
-/// draft form. Other versions keep the legacy behavior (no capability).
-pub(super) fn uses_air_native_subagents(config: &AgentConfig) -> bool {
-    claude_adapter_version(config).is_some_and(|v| v >= AIR_FORM_MIN && v < RFD_FORM_MIN)
+/// True when `config` launches a Claude adapter version that sends native
+/// subagent sessions. Older versions keep the legacy behavior (no capability).
+pub(super) fn uses_native_subagents(config: &AgentConfig) -> bool {
+    claude_adapter_version(config).is_some_and(|v| v >= NATIVE_SUBAGENTS_MIN)
 }
 
 /// Add `subagents: {}` to the serialized `initialize` client capabilities.
@@ -157,12 +164,8 @@ pub(super) fn route_session_update(
     match kind {
         "subagent_spawned" => spawned(state, session_id, update),
         "subagent_state_update" => state_update(state, update, now_ms),
-        // RFD form: never advertised to such versions, so never expected.
-        // Drop instead of failing the typed parse.
-        "subagent_update" | "session_message" => {
-            log::debug!("[acp] dropped native subagent update {kind} (RFD form is not enabled)");
-            NativeRoute::Claimed(Vec::new())
-        }
+        "subagent_update" => rfd_update(state, session_id, update, now_ms),
+        "session_message" => rfd_message(state, session_id, update),
         _ => {
             let Some(route) = state.lock().subagent_route(session_id) else {
                 return NativeRoute::PassThrough;
@@ -175,17 +178,204 @@ pub(super) fn route_session_update(
     }
 }
 
+/// How a subagent's work ended, in the renderer's lifecycle terms.
+#[derive(Debug, Clone, Copy)]
+enum SubagentEnd {
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl SubagentEnd {
+    fn from_air(state: &str) -> Option<Self> {
+        match state {
+            "completed" => Some(Self::Completed),
+            "failed" | "disconnected" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+
+    fn lifecycle(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    /// A cancelled subagent is not an error, so its card does not show as
+    /// failed; the lifecycle marker carries the real end.
+    fn status(self) -> &'static str {
+        match self {
+            Self::Completed | Self::Cancelled => "completed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// An RFD `state` object: the child works, or its current work ended.
+enum RfdWork {
+    Working,
+    Ended(SubagentEnd),
+}
+
+/// `None` for a state the RFD form does not define.
+fn rfd_work(state: &Value) -> Option<RfdWork> {
+    let state = state.as_object()?;
+    match state.get("state")?.as_str()? {
+        "running" | "requires_action" => Some(RfdWork::Working),
+        // An idle child is reusable: a later `running` starts its card again.
+        // Idle with no stop reason (the stream ended or was reset) is a quiet
+        // end, not a failure.
+        "idle" => Some(RfdWork::Ended(
+            match state.get("stopReason").and_then(Value::as_str) {
+                Some("cancelled") => SubagentEnd::Cancelled,
+                Some("error") => SubagentEnd::Failed,
+                _ => SubagentEnd::Completed,
+            },
+        )),
+        // The child can no longer be observed (AIR's `disconnected`).
+        "unknown" => Some(RfdWork::Ended(SubagentEnd::Failed)),
+        _ => None,
+    }
+}
+
 fn spawned(state: &Mutex<DriverState>, parent: &str, update: &Map<String, Value>) -> NativeRoute {
     let Some(child) = bounded_id(update.get("subagentSessionId")) else {
         log::warn!("[acp] subagent_spawned has no usable subagentSessionId; dropped");
         return NativeRoute::Claimed(Vec::new());
     };
-    let Some(route) = state.lock().register_subagent(parent, child) else {
-        log::warn!("[acp] subagent_spawned names its own session as parent; dropped");
-        return NativeRoute::Claimed(Vec::new());
-    };
     let name = bounded_text(update.get("name"), MAX_NAME_CHARS).unwrap_or("Subagent");
     let task = bounded_text(update.get("task"), MAX_TASK_CHARS).unwrap_or(name);
+    announce(
+        state,
+        parent,
+        child,
+        name,
+        json!({ "description": name, "prompt": task }),
+    )
+}
+
+fn state_update(
+    state: &Mutex<DriverState>,
+    update: &Map<String, Value>,
+    now_ms: u64,
+) -> NativeRoute {
+    let Some(child) = bounded_id(update.get("subagentSessionId")) else {
+        log::warn!("[acp] subagent_state_update has no usable subagentSessionId; dropped");
+        return NativeRoute::Claimed(Vec::new());
+    };
+    let raw_state = update
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let Some(end) = SubagentEnd::from_air(raw_state) else {
+        log::warn!(
+            "[acp] native subagent {} sent an unknown state; dropped",
+            crate::logging::redact_session_id(child)
+        );
+        return NativeRoute::Claimed(Vec::new());
+    };
+    ended(state, child, end, now_ms)
+}
+
+/// RFD `subagent_update`: the announce, a change of work state, or the end
+/// of the child's current work.
+fn rfd_update(
+    state: &Mutex<DriverState>,
+    parent: &str,
+    update: &Map<String, Value>,
+    now_ms: u64,
+) -> NativeRoute {
+    let child = bounded_id(update.get("sessionId"));
+    let work = update.get("state").and_then(rfd_work);
+    let (Some(child), Some(work)) = (child, work) else {
+        log::warn!("[acp] subagent_update has no usable sessionId or state; dropped");
+        return NativeRoute::Claimed(Vec::new());
+    };
+    if let RfdWork::Ended(end) = work {
+        return ended(state, child, end, now_ms);
+    }
+    let known = state.lock().subagent_route(child).is_some();
+    if !known {
+        let role = bounded_text(update.get("description"), MAX_NAME_CHARS);
+        let title = bounded_text(update.get("title"), MAX_NAME_CHARS)
+            .or(role)
+            .unwrap_or("Subagent");
+        let input = match role {
+            Some(role) => json!({ "description": title, "subagent_type": role }),
+            None => json!({ "description": title, "prompt": title }),
+        };
+        return announce(state, parent, child, title, input);
+    }
+    let Some(route) = state.lock().resume_subagent(child) else {
+        return NativeRoute::Claimed(Vec::new());
+    };
+    log::info!(
+        "[acp] native subagent {} runs again",
+        crate::logging::redact_session_id(child)
+    );
+    NativeRoute::Claimed(vec![json!({
+        "sessionId": route.root_session_id,
+        "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": route.dispatch_id,
+            "status": "in_progress",
+            "_meta": { TERMUL_SUBAGENT_META_KEY: { "state": "running", "sessionId": child } },
+        }
+    })])
+}
+
+/// RFD `session_message`. Only a child's message to its own parent (the
+/// launch reply, or a hand-back report) reaches the chat, as the content of
+/// the child's card. A prompt to a child is dropped. Each linked message
+/// comes as two views; only the recipient's view counts.
+fn rfd_message(state: &Mutex<DriverState>, view: &str, update: &Map<String, Value>) -> NativeRoute {
+    let recipient = bounded_id(update.get("recipientSessionId"));
+    let content = update.get("content").and_then(Value::as_array);
+    let (Some(recipient), Some(content)) = (recipient, content) else {
+        log::warn!("[acp] session_message has no usable recipientSessionId or content; dropped");
+        return NativeRoute::Claimed(Vec::new());
+    };
+    let sender_route = bounded_id(update.get("senderSessionId"))
+        .and_then(|sender| state.lock().subagent_route(sender));
+    let Some(route) =
+        sender_route.filter(|route| recipient == view && route.parent_session_id == recipient)
+    else {
+        return NativeRoute::Claimed(Vec::new());
+    };
+    let content: Vec<Value> = content
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .map(|block| json!({ "type": "content", "content": block }))
+        .collect();
+    if content.is_empty() {
+        return NativeRoute::Claimed(Vec::new());
+    }
+    NativeRoute::Claimed(vec![json!({
+        "sessionId": route.root_session_id,
+        "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": route.dispatch_id,
+            "content": content,
+        }
+    })])
+}
+
+/// Register `child` under `parent` and synthesize its running dispatch card
+/// on the chat.
+fn announce(
+    state: &Mutex<DriverState>,
+    parent: &str,
+    child: &str,
+    title: &str,
+    raw_input: Value,
+) -> NativeRoute {
+    let Some(route) = state.lock().register_subagent(parent, child) else {
+        log::warn!("[acp] native subagent names its own session as parent; dropped");
+        return NativeRoute::Claimed(Vec::new());
+    };
     log::info!(
         "[acp] native subagent {} spawned in session {}{}",
         crate::logging::redact_session_id(child),
@@ -212,35 +402,17 @@ fn spawned(state: &Mutex<DriverState>, parent: &str, update: &Map<String, Value>
         "update": {
             "sessionUpdate": "tool_call",
             "toolCallId": route.dispatch_id,
-            "title": name,
+            "title": title,
             "kind": "think",
             "status": "in_progress",
-            "rawInput": { "description": name, "prompt": task },
+            "rawInput": raw_input,
             "_meta": meta,
         }
     })])
 }
 
-fn state_update(
-    state: &Mutex<DriverState>,
-    update: &Map<String, Value>,
-    now_ms: u64,
-) -> NativeRoute {
-    let Some(child) = bounded_id(update.get("subagentSessionId")) else {
-        log::warn!("[acp] subagent_state_update has no usable subagentSessionId; dropped");
-        return NativeRoute::Claimed(Vec::new());
-    };
-    let raw_state = update
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let Some((lifecycle, status)) = end_state(raw_state) else {
-        log::warn!(
-            "[acp] native subagent {} sent an unknown state; dropped",
-            crate::logging::redact_session_id(child)
-        );
-        return NativeRoute::Claimed(Vec::new());
-    };
+/// Mark `child` ended and end its dispatch card.
+fn ended(state: &Mutex<DriverState>, child: &str, end: SubagentEnd, now_ms: u64) -> NativeRoute {
     let Some(route) = state.lock().end_subagent(child) else {
         log::warn!(
             "[acp] native subagent {} ended before it was announced; dropped",
@@ -249,36 +421,25 @@ fn state_update(
         return NativeRoute::Claimed(Vec::new());
     };
     log::info!(
-        "[acp] native subagent {} ended: {raw_state}",
-        crate::logging::redact_session_id(child)
+        "[acp] native subagent {} ended: {}",
+        crate::logging::redact_session_id(child),
+        end.lifecycle()
     );
     NativeRoute::Claimed(vec![json!({
         "sessionId": route.root_session_id,
         "update": {
             "sessionUpdate": "tool_call_update",
             "toolCallId": route.dispatch_id,
-            "status": status,
+            "status": end.status(),
             "_meta": {
                 TERMUL_SUBAGENT_META_KEY: {
-                    "state": lifecycle,
+                    "state": end.lifecycle(),
                     "endedAt": now_ms,
                     "sessionId": child,
                 }
             },
         }
     })])
-}
-
-/// Lifecycle state and tool-call status for an AIR end state. A cancelled
-/// subagent is not an error, so its card does not show as failed; the
-/// lifecycle marker carries the real end.
-fn end_state(state: &str) -> Option<(&'static str, &'static str)> {
-    match state {
-        "completed" => Some(("completed", "completed")),
-        "failed" | "disconnected" => Some(("failed", "failed")),
-        "cancelled" => Some(("cancelled", "completed")),
-        _ => None,
-    }
 }
 
 /// A child update re-addressed to its chat, stamped with its dispatch.

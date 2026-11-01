@@ -17,6 +17,8 @@ const MAX_CHILD_ROUTES: usize = 1024;
 pub(crate) struct ChildRoute {
     /// The chat session the user sees (never itself a child session).
     pub root_session_id: String,
+    /// The session that spawned the child: the chat or another child.
+    pub parent_session_id: String,
     /// The synthesized dispatch tool call that represents the child.
     pub dispatch_id: String,
     /// The dispatch of the child that spawned this one (nested subagents).
@@ -69,6 +71,7 @@ impl SubagentRoutes {
         };
         let route = ChildRoute {
             root_session_id,
+            parent_session_id: parent.to_string(),
             dispatch_id: dispatch_id_for(child),
             parent_dispatch_id,
             ended: false,
@@ -84,6 +87,14 @@ impl SubagentRoutes {
     pub(super) fn mark_ended(&mut self, child: &str) -> Option<ChildRoute> {
         let route = self.children.get_mut(child)?;
         route.ended = true;
+        Some(route.clone())
+    }
+
+    /// Mark an ended `child` running again (the RFD form reuses an idle
+    /// child). Returns the route when the child was known and had ended.
+    pub(super) fn mark_running(&mut self, child: &str) -> Option<ChildRoute> {
+        let route = self.children.get_mut(child).filter(|route| route.ended)?;
+        route.ended = false;
         Some(route.clone())
     }
 
@@ -126,6 +137,11 @@ impl super::DriverState {
     /// Mark a native subagent session ended.
     pub(crate) fn end_subagent(&mut self, child: &str) -> Option<ChildRoute> {
         self.subagents.mark_ended(child)
+    }
+
+    /// Mark an ended native subagent session running again.
+    pub(crate) fn resume_subagent(&mut self, child: &str) -> Option<ChildRoute> {
+        self.subagents.mark_running(child)
     }
 
     /// The route of a native subagent session, `None` for a chat session.

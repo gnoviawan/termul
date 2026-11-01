@@ -18,6 +18,7 @@ fn a_nested_child_routes_to_the_root_chat_under_its_parent_dispatch() {
     routes.register("chat-1", "agent-a");
     let nested = routes.register("agent-a", "agent-b").expect("nested route");
     assert_eq!(nested.root_session_id, "chat-1");
+    assert_eq!(nested.parent_session_id, "agent-a");
     assert_eq!(
         nested.parent_dispatch_id.as_deref(),
         Some(dispatch_id_for("agent-a").as_str())
