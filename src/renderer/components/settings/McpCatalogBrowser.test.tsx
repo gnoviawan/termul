@@ -619,6 +619,51 @@ describe('McpCatalogBrowser install', () => {
     ).toBeDisabled()
   })
 
+  it('shows Installed in place of the state and its reason', async () => {
+    const provenance = {
+      source: 'mcp-registry' as const,
+      name: 'io.example/pyserver',
+      version: '1.0.0',
+      kind: 'package' as const,
+      index: 0,
+      repositoryId: null,
+      launchDigest: 'd'
+    }
+    useAcpStore.setState({
+      mcpServers: [
+        {
+          id: 'w',
+          type: 'http',
+          name: 'weather-tools',
+          url: 'https://weather.example/mcp',
+          enabled: true,
+          catalog: { ...provenance, name: 'io.example/weather', kind: 'remote' }
+        },
+        {
+          id: 'py',
+          type: 'stdio',
+          name: 'pyserver',
+          command: 'uvx',
+          args: ['pyserver'],
+          enabled: true,
+          catalog: provenance
+        }
+      ]
+    })
+    search.mockResolvedValue(page([installable, needsRuntime]))
+    render(<McpCatalogBrowser />)
+
+    const weather = within(await findRow('io.example/weather'))
+    expect(weather.getAllByText('Installed')).toHaveLength(1)
+    expect(weather.queryByText('Installable')).toBeNull()
+
+    const python = within(rowOf('io.example/pyserver'))
+    expect(python.getAllByText('Installed')).toHaveLength(1)
+    expect(python.queryByText('Needs a runtime')).toBeNull()
+    expect(python.queryByText('Install uv (uvx) on this computer to run it.')).toBeNull()
+    expect(python.queryByRole('button', { name: 'Install' })).toBeNull()
+  })
+
   it('installs a remote server through the form and the consent view', async () => {
     search.mockResolvedValue(page([installable]))
     const field = {

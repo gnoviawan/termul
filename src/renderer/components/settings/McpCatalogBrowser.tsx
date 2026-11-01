@@ -150,7 +150,8 @@ function CatalogRow({
 }): React.JSX.Element {
   const reasonId = useId()
   const displayName = row.title ?? row.name.slice(row.name.lastIndexOf('/') + 1)
-  const reason = row.reason && mcpCatalogReasonText(row.reason)
+  const installed = install.installed.has(row.name)
+  const reason = !installed && row.reason ? mcpCatalogReasonText(row.reason) : null
   return (
     <div className="flex flex-col gap-2 px-4 py-3 @lg:flex-row @lg:items-start @lg:gap-4">
       <div className="flex min-w-0 flex-1 items-start gap-3">
@@ -178,9 +179,13 @@ function CatalogRow({
             </p>
           )}
           <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <StatusWord tone={STATE_TONE[row.state]}>
-              {MCP_CATALOG_STATE_LABEL[row.state]}
-            </StatusWord>
+            {installed ? (
+              <StatusWord tone="success">Installed</StatusWord>
+            ) : (
+              <StatusWord tone={STATE_TONE[row.state]}>
+                {MCP_CATALOG_STATE_LABEL[row.state]}
+              </StatusWord>
+            )}
             {reason && (
               <span id={reasonId} className="text-xs text-muted-foreground">
                 {reason}
@@ -204,9 +209,7 @@ function CatalogRow({
             Repository
           </Button>
         )}
-        {install.installed.has(row.name) ? (
-          <StatusWord tone="success">Installed</StatusWord>
-        ) : (
+        {!installed && (
           <span
             title={
               install.block ? MCP_INSTALL_BLOCK_TEXT[install.block.reason] : (reason ?? undefined)
