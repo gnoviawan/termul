@@ -75,6 +75,7 @@ export interface MobileModelSheetProps extends SelectorPanelProps {
   overlayId: string
   mode: ModeControl | null
   compact: CompactControl | null
+  claudeProjectId: string | null
   favoritesStore?: FavoritesStore
   onCloseAutoFocus?: (event: Event) => void
 }
@@ -423,6 +424,7 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
         {state.searching ? null : (
           <UsageCard
             sessionId={props.sessionId}
+            claudeProjectId={props.claudeProjectId}
             usage={state.contextUsage}
             compact={props.compact}
             onManageAccounts={() => {

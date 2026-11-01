@@ -57,6 +57,10 @@ import { COMPOSER_CARD_CLASS, useComposerToolbarMode } from '@/components/chat/c
 import { ChatStarters, ChatStartHero } from '@/components/chat/chat-start'
 import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEditor'
 import {
+  blurComposerEditor,
+  insertComposerTrigger
+} from '@/components/chat/composer/insert-composer-trigger'
+import {
   FileMentionMenu,
   MENTION_EMPTY_LABEL,
   MENTION_SEARCHING_LABEL
@@ -483,8 +487,19 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     clearAttachments,
     appOwnedTempPaths,
     canPick,
+    canPickImages,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled: composerDisabled })
+  const addHandle = useMemo(
+    () => ({
+      canPick,
+      canPickImages,
+      pickFiles,
+      insertTrigger: (trigger: '@' | '/') => insertComposerTrigger(editorRef.current, trigger),
+      blurEditor: () => blurComposerEditor(editorRef.current)
+    }),
+    [canPick, canPickImages, pickFiles]
+  )
   // Drag feedback for the attachment drop zone (shared with ChatInputBar):
   // depth-counted dragenter/dragleave pairs; the overlay render stays local.
   const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
@@ -1988,8 +2003,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 </SkillFilesProvider>
               </div>
               <LauncherToolbar
-                pickFiles={pickFiles}
-                canPick={canPick}
+                addHandle={addHandle}
                 isMobileShell={isMobileShell}
                 mcpCount={mcpCount}
                 mcpServers={mcpServers}

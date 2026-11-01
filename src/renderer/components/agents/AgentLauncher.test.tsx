@@ -1684,6 +1684,60 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockSetConfigOption).not.toHaveBeenCalled()
   }, 10000)
 
+  it('sets the mode from the Select model sheet on the phone shell', async () => {
+    mockMobileShell.current = true
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    try {
+      renderLauncher()
+
+      fireEvent.click(await screen.findByRole('button', { name: /Currently Claude Agent/ }))
+      expect(screen.queryByRole('button', { name: /^Agent$/ })).toBeNull()
+      const sheet = await screen.findByRole('dialog', { name: 'Select model' })
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Mode Agent' }))
+      fireEvent.click(
+        within(screen.getByRole('dialog', { name: 'Mode' })).getByRole('radio', { name: 'Plan' })
+      )
+      expect(mockSetMode).toHaveBeenCalledWith('prepared-1', 'plan')
+    } finally {
+      mockMobileShell.current = null
+    }
+  }, 10000)
+
+  it('toggles an MCP server from the + sheet on the phone shell and re-prepares', async () => {
+    mockMobileShell.current = true
+    seedDefaultAgentConfigured()
+    const defaultAgent = defaultReadyAgent()
+    acpStateRef.current.mcpServers = [{ id: 's1', name: 'Files', enabled: true }]
+    try {
+      renderLauncher()
+      await waitFor(() =>
+        expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }))
+      const sheet = await screen.findByRole('dialog', { name: 'Add to chat' })
+      fireEvent.click(within(sheet).getByRole('button', { name: /MCP servers/ }))
+      fireEvent.click(
+        await within(screen.getByRole('dialog', { name: 'MCP servers' })).findByRole('switch', {
+          name: /Disable Files/i
+        })
+      )
+
+      await waitFor(() => expect(mockSetMcpServerEnabled).toHaveBeenCalledWith('s1', false))
+      expect(mockCancelPreparedChat).toHaveBeenCalledWith(`${defaultAgent.configId}\0/work\0`)
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+    } finally {
+      mockMobileShell.current = null
+    }
+  })
+
   it('persists an explicit model choice made on the prepared warm session', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     acpStateRef.current.agentConfigs = [ACP_CONFIG]
@@ -4058,14 +4112,22 @@ describe('AgentLauncher Claude account chip', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows only the status dot and usage on the phone shell', async () => {
+  it('keeps the phone row to add, model and launch, with the account usage in the model sheet', async () => {
     mockMobileShell.current = true
     renderLauncher()
 
-    const chip = await screen.findByRole('button', {
-      name: 'Claude account: Personal, 5-hour 37% used. Change account'
-    })
-    expect(chip).toHaveTextContent(/^5h 37%$/)
+    const pill = await screen.findByRole('button', { name: /Currently Claude Agent/ })
+    const row = pill.closest('[data-composer-toolbar-row="mobile"]') as HTMLElement
+    expect(
+      within(row)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+    ).toEqual(['Add to chat', pill.getAttribute('aria-label'), 'Start agent chat'])
+
+    fireEvent.click(pill)
+    const sheet = await screen.findByRole('dialog', { name: 'Select model' })
+    expect(await within(sheet).findByText('5-hour limit · Personal')).toBeInTheDocument()
+    expect(within(sheet).getByText('37%')).toBeInTheDocument()
   })
 
   it('hides the chip when the user picks an agent other than Claude', async () => {
