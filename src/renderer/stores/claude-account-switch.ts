@@ -9,6 +9,7 @@
  */
 
 import { toast } from 'sonner'
+import { runningBackgroundSubagents } from '@/components/chat/subagent-strip'
 import { resumeMissesSession } from '@/lib/acp-resume-policy'
 import { claudeAccountsApi } from '@/lib/claude-accounts-api'
 import { logFrontendError } from '@/lib/log-api'
@@ -155,6 +156,17 @@ export async function restartClaudeSession(
     const blocked = switchBlockedReason(store, sessionId)
     if (options.cancelTurn && blocked !== null && blocked !== BACKGROUND_SUBAGENTS_BLOCK_REASON) {
       await store.cancelPrompt(sessionId).catch(() => undefined)
+    }
+    if (!options.cancelTurn && blocked === BACKGROUND_SUBAGENTS_BLOCK_REASON) {
+      const count = runningBackgroundSubagents(
+        store.toolCalls[sessionId],
+        store.messages[sessionId]
+      ).length
+      void logFrontendError({
+        level: 'info',
+        source: 'claudeAccountSwitch.restart',
+        message: `Restart of chat ${sessionId} waits on ${count} background subagent${count === 1 ? '' : 's'}`
+      })
     }
     // A chat that hit a limit continues now: its background subagents run on
     // the same exhausted account.
