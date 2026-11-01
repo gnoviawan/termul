@@ -243,14 +243,18 @@ export type ParentTurn = 'active' | 'ended' | 'superseded'
  * before any status update). A cancelled or crashed turn can leave it pending
  * forever, so an ended turn never counts that as running. A background launch
  * completes its tool call at once and outlives its turn, but nothing reports
- * its end, so it counts as running until a newer user turn starts.
+ * its end, so it counts as running until a newer user turn starts. A launch
+ * stopped before its completed receipt never started, so it follows the
+ * foreground rule.
  */
 export function isSubagentRunning(toolCall: ToolCall, parentTurn: ParentTurn): boolean {
   const lifecycle = toolCall.subagentLifecycle
   if (lifecycle?.state !== undefined && lifecycle.state !== 'running') return false
   if (toolCall.status === 'failed') return false
   if (lifecycle?.state === 'running') return true
-  if (lifecycle?.background === true) return parentTurn !== 'superseded'
+  if (lifecycle?.background === true && toolCall.status === 'completed') {
+    return parentTurn !== 'superseded'
+  }
   return parentTurn === 'active' && (isToolCallRunning(toolCall) || toolCall.status == null)
 }
 
