@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useEffect } from 'react'
 import { toast } from 'sonner'
 import { Star } from '@/components/icons'
 import {
@@ -303,6 +303,11 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
 
   const allTabs = [...state.tabs.visible, ...state.tabs.overflow]
   const subOption = openOption?.kind === 'radio' ? openOption : null
+  // The agent can drop the open option; leave its sub-view so back is not swallowed.
+  const { view: subView, back: subBack } = sub
+  useEffect(() => {
+    if (subView !== null && !subOption) subBack()
+  }, [subView, subOption, subBack])
   return (
     <MobileSheetContent
       title={subOption ? subOption.label : 'Select model'}
@@ -337,7 +342,7 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
         <ChoiceList option={subOption} disabled={disabled} onDone={sub.back} />
       ) : (
         <>
-          {state.searching || modelCount > SEARCH_THRESHOLD ? (
+          {state.searching || allTabs.length > 1 || modelCount > SEARCH_THRESHOLD ? (
             <input
               type="search"
               value={state.query}

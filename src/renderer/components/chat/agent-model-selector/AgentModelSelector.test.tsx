@@ -226,10 +226,10 @@ function option(
   return { id, name, category, type: 'select', currentValue, options }
 }
 
-function renderSelector(
+function selector(
   overrides: Partial<Parameters<typeof AgentModelSelector>[0]> = {}
-): ReturnType<typeof render> {
-  return render(
+): React.JSX.Element {
+  return (
     <AgentModelSelector
       sessionId="session-1"
       disabled={false}
@@ -254,9 +254,14 @@ function renderSelector(
       onSetConfig={vi.fn()}
       onSetModel={vi.fn()}
       {...overrides}
-    />,
-    { wrapper: TooltipProvider }
+    />
   )
+}
+
+function renderSelector(
+  overrides: Partial<Parameters<typeof AgentModelSelector>[0]> = {}
+): ReturnType<typeof render> {
+  return render(selector(overrides), { wrapper: TooltipProvider })
 }
 
 function open(): void {
@@ -1079,7 +1084,19 @@ describe('phone Select model sheet', () => {
     expect(sheet()).toBeInTheDocument()
   })
 
-  it('shows a search field only when the agent has more than 12 models', () => {
+  it('shows a search field when several agents are set up, to find a model across them', () => {
+    seed([readyEntry(CLAUDE)])
+    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
+    renderSelector()
+    open()
+
+    const search = within(sheet()).getByRole('searchbox', { name: 'Search models and agents' })
+    expect(search).not.toHaveFocus()
+    fireEvent.change(search, { target: { value: 'Haiku' } })
+    expect(within(sheet()).getByRole('button', { name: /Claude Haiku/ })).toBeInTheDocument()
+  })
+
+  it('shows a search field for one agent with more than 12 models', () => {
     const many = Array.from({ length: 13 }, (_, i) => ({ value: `m${i}`, name: `Model ${i}` }))
     renderSelector({ modelOption: option('model', 'Model', 'model', 'm0', many) })
     open()
@@ -1156,6 +1173,19 @@ describe('phone Select model sheet', () => {
     await waitFor(() =>
       expect(within(sheet()).getByRole('button', { name: 'Effort Low' })).toHaveFocus()
     )
+  })
+
+  it('leaves a sub-view whose option the agent drops, so the next Escape closes the sheet', () => {
+    const { rerender } = renderSelector()
+    open()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Effort High' }))
+    expect(screen.getByRole('dialog', { name: 'Effort' })).toBeInTheDocument()
+
+    rerender(selector({ thoughtLevel: null }))
+    expect(within(sheet()).queryByRole('button', { name: /^Effort/ })).toBeNull()
+
+    fireEvent.keyDown(sheet(), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
   it('Escape leaves a sub-view before it closes the sheet', () => {
