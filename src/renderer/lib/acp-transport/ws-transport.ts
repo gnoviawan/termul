@@ -1828,8 +1828,8 @@ export class WsAcpTransport implements AcpTransport {
     // don't interfere. A pending timer, an in-flight `connect()` that hasn't
     // opened a socket yet, or a socket that is no longer OPEN in the
     // resubscribe phase (CLI-F3: the OS dropped it without `onclose`) are all
-    // safe to replace. The attempt counter is NOT reset here — only 60 s of
-    // stable connection resets it (no flap loop can defeat the backoff).
+    // safe to replace. The attempt counter is NOT reset here — only
+    // `RECONNECT_STABLE_MS` of stable connection resets it.
     if (this.reconnecting && !this.reconnectTimer && !this.connecting && this.isSocketLive()) return
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
