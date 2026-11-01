@@ -15,6 +15,7 @@ import {
   describeToolCall,
   firstString,
   isSubagentRunning,
+  type ParentTurn,
   readableOutput
 } from './tool-call-summary'
 
@@ -32,7 +33,7 @@ const LIFECYCLE_STATUS: Record<string, string> = {
 export function SubagentDetailsDialog({
   toolCall,
   childToolCalls = [],
-  parentTurnActive = false,
+  parentTurn = 'superseded',
   open,
   onOpenChange,
   filePathContext
@@ -40,7 +41,7 @@ export function SubagentDetailsDialog({
   toolCall: ToolCall
   /** Tool calls the subagent made (`parentToolCallId` = this dispatch). */
   childToolCalls?: readonly ToolCall[]
-  parentTurnActive?: boolean
+  parentTurn?: ParentTurn
   open: boolean
   onOpenChange: (open: boolean) => void
   filePathContext: FilePathResolutionContext | undefined
@@ -53,7 +54,7 @@ export function SubagentDetailsDialog({
   const taskPrompt = firstString(input, ['prompt'])
   const activityKind = firstString(input, ['activityKind', 'activity_kind'])
   const reduced = useReducedMotion() ?? false
-  const running = isSubagentRunning(toolCall, parentTurnActive)
+  const running = isSubagentRunning(toolCall, parentTurn)
   const lifecycle = toolCall.subagentLifecycle
   const background = lifecycle?.background === true
   const taskStatus = running
@@ -109,10 +110,7 @@ export function SubagentDetailsDialog({
             </section>
           )}
           {childToolCalls.length > 0 && (
-            <SubagentActivityList
-              childToolCalls={childToolCalls}
-              parentTurnActive={parentTurnActive}
-            />
+            <SubagentActivityList childToolCalls={childToolCalls} parentTurnActive={running} />
           )}
           {toolCall.subagentText && (
             <section className="space-y-1.5" data-testid="subagent-output">

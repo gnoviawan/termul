@@ -1095,7 +1095,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       .map(([id]) => id)
     if (e.sessionId && !crashedSessions.includes(e.sessionId)) crashedSessions.push(e.sessionId)
     set((s) => {
-      const toolCalls = cancelRunningSubagents(s.toolCalls, crashedSessions, endedAt)
+      const toolCalls = cancelRunningSubagents(s, crashedSessions, endedAt)
       return toolCalls === s.toolCalls ? {} : { toolCalls }
     })
     if (
@@ -1244,7 +1244,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     get().clearPendingSignIn(e.agentId)
     const endedAt = Date.now()
     set((s) => {
-      const toolCalls = cancelRunningSubagents(s.toolCalls, goneSessionIds, endedAt)
+      const toolCalls = cancelRunningSubagents(s, goneSessionIds, endedAt)
       return toolCalls === s.toolCalls ? {} : { toolCalls }
     })
     // Persist closed status + transcript while maps still hold content, then

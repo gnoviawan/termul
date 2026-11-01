@@ -471,6 +471,28 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagentLifecycle?.state).toBe('cancelled')
   })
 
+  it('agent_disconnected cancels a background launch that never reported its end', () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState({
+      messages: {
+        s1: [{ id: 'm1', role: 'user', blocks: [{ type: 'text', text: 'hi' }], timestamp: 1 }]
+      },
+      toolCalls: {
+        s1: [
+          {
+            toolCallId: 'toolu_bg',
+            status: 'completed',
+            timestamp: 2,
+            rawInput: { description: 'Run e2e', prompt: 'p', run_in_background: true },
+            subagentLifecycle: { background: true }
+          }
+        ]
+      }
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagentLifecycle?.state).toBe('cancelled')
+  })
+
   it('session close applies a buffered tool update before cancelling running subagents', () => {
     seedSession('s1', 'agent-1', false)
     workspaceStateRef.current.openChatSessionIds.add('s1')

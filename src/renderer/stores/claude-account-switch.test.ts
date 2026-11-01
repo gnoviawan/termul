@@ -169,6 +169,57 @@ describe('claude account switch', () => {
     expect(retryCrashedSession).toHaveBeenCalledWith('c2', { resend: false })
   })
 
+  describe('with a background subagent still running after the turn', () => {
+    const launch = (state?: 'completed') => ({
+      toolCallId: 'bg-1',
+      status: 'completed' as const,
+      seq: 2,
+      rawInput: { description: 'Run e2e', prompt: 'p', run_in_background: true },
+      subagentLifecycle: { background: true, ...(state ? { state } : {}) }
+    })
+    beforeEach(() => {
+      useAcpStore.setState({
+        messages: { c1: [{ id: 'u1', role: 'user', blocks: [], timestamp: 1, seq: 1 }] },
+        toolCalls: { c1: [launch()] }
+      } as never)
+    })
+
+    it('defers the restart until the subagent ends', async () => {
+      const restart = restartClaudeSession('c1')
+      await Promise.resolve()
+      expect(killAgent).not.toHaveBeenCalled()
+      useAcpStore.setState({ toolCalls: { c1: [launch('completed')] } } as never)
+      await expect(restart).resolves.toBe(true)
+      expect(killAgent).toHaveBeenCalledWith('agent-c1')
+      expect(retryCrashedSession).toHaveBeenCalledWith('c1', { resend: false })
+    })
+
+    it('logs that the restart waits on the background subagent', async () => {
+      const restart = restartClaudeSession('c1')
+      await Promise.resolve()
+      const deferred = vi
+        .mocked(logFrontendError)
+        .mock.calls.map(([entry]) => entry)
+        .filter((entry) => entry.message.includes('background'))
+      expect(deferred).toEqual([
+        {
+          level: 'info',
+          source: 'claudeAccountSwitch.restart',
+          message: 'Restart of chat c1 waits on 1 background subagent'
+        }
+      ])
+      useAcpStore.setState({ toolCalls: { c1: [launch('completed')] } } as never)
+      await restart
+    })
+
+    it('does not wait for it when continuing after a limit', async () => {
+      await expect(restartClaudeSession('c1', { resend: true, cancelTurn: true })).resolves.toBe(
+        true
+      )
+      expect(retryCrashedSession).toHaveBeenCalledWith('c1', { resend: true })
+    })
+  })
+
   it('cancels a held turn and resends when continuing after a limit', async () => {
     await restartClaudeSession('c2', { resend: true, cancelTurn: true })
     expect(cancelPrompt).toHaveBeenCalledWith('c2')

@@ -9,6 +9,7 @@ import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/pe
 import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
 import { flattenConfigOptionValues } from '@/components/chat/chat-input-bar-config'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
+import { runningBackgroundSubagents } from '@/components/chat/subagent-strip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
   type AgentId,
@@ -1719,16 +1720,24 @@ export function dropEphemeralSessionState(
   }
 }
 
+/** Checked last, so a caller can tell that nothing else blocks. */
+export const BACKGROUND_SUBAGENTS_BLOCK_REASON =
+  'background subagents are still running — switching would stop them'
+
 /**
  * Story 3 (spec-in-chat-agent-switch): the busy gate for a switch. True when
  * the old session has an active turn, an open turn, queued prompts, or a
  * pending permission/question — the "never kill a live turn" rule (CAP-4/CAP-6).
- * A pending browser-auth dialog also counts (the agent is waiting on the user).
+ * A pending browser-auth dialog also counts (the agent is waiting on the user),
+ * and so do background subagents that outlive the turn: a new agent process
+ * would kill them.
  */
 export function switchBlockedReason(
   state: Pick<
     AcpState,
     | 'sessions'
+    | 'toolCalls'
+    | 'messages'
     | 'promptQueues'
     | 'pendingPermissions'
     | 'pendingQuestions'
@@ -1764,6 +1773,11 @@ export function switchBlockedReason(
   if (elicitation) return 'the agent is waiting for your input before switching'
   if (session.agentId && state.pendingSignIn[session.agentId]) {
     return 'the agent is waiting for you to sign in before switching'
+  }
+  if (
+    runningBackgroundSubagents(state.toolCalls[sessionId], state.messages[sessionId]).length > 0
+  ) {
+    return BACKGROUND_SUBAGENTS_BLOCK_REASON
   }
   return null
 }

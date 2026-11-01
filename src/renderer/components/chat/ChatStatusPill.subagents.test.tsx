@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolCall } from '@/lib/acp-api'
+import { logFrontendError } from '@/lib/log-api'
 import type { ChatMessage } from '@/stores/acp-store/types'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { ChatStatusPill } from './ChatStatusPill'
@@ -39,7 +40,13 @@ function sub(partial: Partial<ToolCall>): ToolCall {
 }
 
 /** No cwd: no git status read and, without file edits, no changed files. */
-const base = { cwd: '', messages: [user], turnActive: true, filePathContext: undefined }
+const base = {
+  sessionId: 's1',
+  cwd: '',
+  messages: [user],
+  turnActive: true,
+  filePathContext: undefined
+}
 
 function renderPill(
   toolCalls: ToolCall[],
@@ -163,7 +170,7 @@ describe('ChatStatusPill subagents', () => {
 
   it('keeps the dialog mounted when its call leaves the current turn', () => {
     const call = sub({ status: 'completed' })
-    const props = { cwd: '', turnActive: false, filePathContext: undefined }
+    const props = { sessionId: 's1', cwd: '', turnActive: false, filePathContext: undefined }
     const { rerender } = render(<ChatStatusPill toolCalls={[call]} messages={[user]} {...props} />)
     fireEvent.click(pill())
     fireEvent.click(screen.getByRole('button', { name: /^done\s*Audit code/ }))
@@ -191,6 +198,56 @@ describe('ChatStatusPill subagents', () => {
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText('Running in background')).toBeInTheDocument()
     expect(within(dialog).getByText('Output file: /tmp/a1.output')).toBeInTheDocument()
+  })
+
+  it('says the chat waits on background subagents after the turn ends, and logs it once', () => {
+    vi.mocked(logFrontendError).mockClear()
+    const launched = sub({ status: 'completed', subagentLifecycle: { background: true } })
+    const done = sub({ toolCallId: 'b', status: 'completed' })
+    const { rerender } = renderPill([launched, done], { turnActive: false })
+    expect(pill()).toHaveAccessibleName(
+      'Session status: subagents 1 running, 1 done; waiting on 1 background subagent'
+    )
+    fireEvent.click(pill())
+    const popover = screen.getByRole('dialog', { name: 'Subagents' })
+    expect(within(popover).getByText('Waiting on 1 background subagent')).toBeInTheDocument()
+
+    const ended = {
+      ...launched,
+      subagentLifecycle: { background: true, state: 'completed' as const }
+    }
+    rerender(<ChatStatusPill toolCalls={[ended, done]} {...base} turnActive={false} />)
+    expect(pill()).toHaveAccessibleName('Session status: subagents 2 done')
+    expect(screen.queryByText(/^Waiting on/)).toBeNull()
+    expect(vi.mocked(logFrontendError).mock.calls.map(([entry]) => entry.message)).toEqual([
+      'Chat s1 waits on 1 background subagent after its turn ended',
+      'Chat s1 no longer waits on background subagents'
+    ])
+  })
+
+  it('lists an earlier turn subagent the host still runs, so the wait has a row', () => {
+    const earlier = sub({
+      seq: 0,
+      status: 'completed',
+      subagentLifecycle: { background: true, state: 'running' }
+    })
+    renderPill([earlier], { turnActive: false })
+    expect(pill()).toHaveAccessibleName(
+      'Session status: subagents 1 running; waiting on 1 background subagent'
+    )
+    fireEvent.click(pill())
+    const popover = screen.getByRole('dialog', { name: 'Subagents' })
+    expect(within(popover).getByText('Waiting on 1 background subagent')).toBeInTheDocument()
+    expect(within(popover).getAllByRole('button', { name: /Audit code/ })).toHaveLength(1)
+    expect(
+      within(popover).getByRole('button', { name: /^running\s*Audit code/ })
+    ).toBeInTheDocument()
+  })
+
+  it('does not say it waits while the turn is still running', () => {
+    const launched = sub({ status: 'completed', subagentLifecycle: { background: true } })
+    renderPill([launched])
+    expect(pill()).toHaveAccessibleName('Session status: subagents 1 running')
   })
 
   it('opens a bottom sheet on the phone shell and registers it for Back', () => {

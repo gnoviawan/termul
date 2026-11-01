@@ -31,6 +31,18 @@ export interface TurnBoundary {
   timestamp?: number
 }
 
+/** The latest user message as a turn boundary, or null when the chat has none. */
+export function lastUserBoundary(
+  messages: readonly (TurnBoundary & { role: string })[] | undefined
+): TurnBoundary | null {
+  if (!messages) return null
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message?.role === 'user') return { seq: message.seq, timestamp: message.timestamp }
+  }
+  return null
+}
+
 function isAfterBoundary(toolCall: ToolCall, boundary: TurnBoundary): boolean {
   if (typeof toolCall.seq === 'number' && typeof boundary.seq === 'number') {
     return toolCall.seq > boundary.seq
@@ -58,6 +70,10 @@ function isAgentRow(toolCall: ToolCall, spawnedThreads: ReadonlySet<string>): bo
   return !isSubagentControlCall(toolCall)
 }
 
+function spawnedThreadIds(toolCalls: readonly ToolCall[]): Set<string> {
+  return new Set(toolCalls.filter(isCodexSpawnCall).flatMap(codexThreadIds))
+}
+
 /**
  * Subagent calls of the current turn: those that arrived after the latest user
  * message (all of them when there is none). Restored summaries never count.
@@ -66,7 +82,7 @@ export function selectCurrentTurnSubagents(
   toolCalls: readonly ToolCall[],
   lastUserMessage: TurnBoundary | null
 ): ToolCall[] {
-  const spawnedThreads = new Set(toolCalls.filter(isCodexSpawnCall).flatMap(codexThreadIds))
+  const spawnedThreads = spawnedThreadIds(toolCalls)
   return toolCalls.filter(
     (tc) =>
       !tc.restoredSummary &&
@@ -75,8 +91,52 @@ export function selectCurrentTurnSubagents(
   )
 }
 
+const NO_SUBAGENTS: ToolCall[] = []
+
+/**
+ * Background subagents of a chat that have not ended: a launch the host still
+ * reports running (any turn), or a background launch of the latest turn with
+ * no terminal state. They outlive the turn, so a restart of the agent process
+ * would kill them.
+ */
+export function runningBackgroundSubagents(
+  toolCalls: readonly ToolCall[] | undefined,
+  messages: readonly (TurnBoundary & { role: string })[] | undefined
+): ToolCall[] {
+  if (!toolCalls) return NO_SUBAGENTS
+  const launches = toolCalls.filter(
+    (tc) => tc.subagentLifecycle?.background === true || tc.subagentLifecycle?.state === 'running'
+  )
+  if (launches.length === 0) return NO_SUBAGENTS
+  const boundary = lastUserBoundary(messages)
+  const spawnedThreads = spawnedThreadIds(toolCalls)
+  return launches.filter(
+    (tc) =>
+      !tc.restoredSummary &&
+      isAgentRow(tc, spawnedThreads) &&
+      isSubagentRunning(
+        tc,
+        boundary === null || isAfterBoundary(tc, boundary) ? 'ended' : 'superseded'
+      )
+  )
+}
+
+/**
+ * Pill rows: the current turn's subagents, then the running background
+ * launches they lack (older turns), so every subagent the chat waits on has a row.
+ */
+export function withRunningBackground(
+  current: ToolCall[],
+  background: readonly ToolCall[]
+): ToolCall[] {
+  const ids = new Set(current.map((tc) => tc.toolCallId))
+  const earlier = background.filter((tc) => !ids.has(tc.toolCallId))
+  return earlier.length === 0 ? current : [...current, ...earlier]
+}
+
+/** Status of a current-turn row; `turnActive` is the chat's `activeTurn`. */
 export function subagentStatus(toolCall: ToolCall, turnActive: boolean): SubagentStatus {
-  if (isSubagentRunning(toolCall, turnActive)) return 'running'
+  if (isSubagentRunning(toolCall, turnActive ? 'active' : 'ended')) return 'running'
   switch (toolCall.subagentLifecycle?.state) {
     case 'completed':
       return 'done'

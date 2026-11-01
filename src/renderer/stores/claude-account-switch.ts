@@ -9,11 +9,13 @@
  */
 
 import { toast } from 'sonner'
+import { runningBackgroundSubagents } from '@/components/chat/subagent-strip'
 import { resumeMissesSession } from '@/lib/acp-resume-policy'
 import { claudeAccountsApi } from '@/lib/claude-accounts-api'
 import { logFrontendError } from '@/lib/log-api'
 import {
   type AcpState,
+  BACKGROUND_SUBAGENTS_BLOCK_REASON,
   historyOpenInFlight,
   lastOwnUserPromptBlocks,
   renewAgentCredentials,
@@ -87,11 +89,17 @@ async function stopOldAgent(agentId: string, reason: string): Promise<void> {
     })
 }
 
-/** Resolves once the chat has no turn, replay, queue or pending request; `false` if it closed. */
-function waitUntilIdle(sessionId: string): Promise<boolean> {
+/**
+ * Resolves once the chat has no turn, replay, queue, pending request or
+ * running background subagent; `false` if it closed. `ignoreBackground` does
+ * not wait for background subagents.
+ */
+function waitUntilIdle(sessionId: string, ignoreBackground: boolean): Promise<boolean> {
   const check = (state: AcpState): boolean | null => {
     if (!isOpen(state, sessionId)) return false
-    return switchBlockedReason(state, sessionId) === null ? true : null
+    const reason = switchBlockedReason(state, sessionId)
+    if (reason === null) return true
+    return ignoreBackground && reason === BACKGROUND_SUBAGENTS_BLOCK_REASON ? true : null
   }
   const now = check(useAcpStore.getState())
   if (now !== null) return Promise.resolve(now)
@@ -145,10 +153,24 @@ export async function restartClaudeSession(
   try {
     const store = useAcpStore.getState()
     if (!isOpen(store, sessionId) || !isClaudeSession(store, sessionId)) return false
-    if (options.cancelTurn && switchBlockedReason(store, sessionId) !== null) {
+    const blocked = switchBlockedReason(store, sessionId)
+    if (options.cancelTurn && blocked !== null && blocked !== BACKGROUND_SUBAGENTS_BLOCK_REASON) {
       await store.cancelPrompt(sessionId).catch(() => undefined)
     }
-    if (!(await waitUntilIdle(sessionId))) return false
+    if (!options.cancelTurn && blocked === BACKGROUND_SUBAGENTS_BLOCK_REASON) {
+      const count = runningBackgroundSubagents(
+        store.toolCalls[sessionId],
+        store.messages[sessionId]
+      ).length
+      void logFrontendError({
+        level: 'info',
+        source: 'claudeAccountSwitch.restart',
+        message: `Restart of chat ${sessionId} waits on ${count} background subagent${count === 1 ? '' : 's'}`
+      })
+    }
+    // A chat that hit a limit continues now: its background subagents run on
+    // the same exhausted account.
+    if (!(await waitUntilIdle(sessionId, Boolean(options.cancelTurn)))) return false
     const oldAgentId = useAcpStore.getState().sessions[sessionId]?.agentId
     if (!openChatIds().has(sessionId)) {
       if (oldAgentId) await stopOldAgent(oldAgentId, `turn of unopened chat ${sessionId} ended`)

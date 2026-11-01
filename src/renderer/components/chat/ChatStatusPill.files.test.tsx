@@ -103,6 +103,7 @@ function Pill(props: {
 }) {
   return (
     <ChatStatusPill
+      sessionId="s1"
       messages={[]}
       filePathContext={undefined}
       {...props}
