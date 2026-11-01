@@ -994,7 +994,7 @@ describe('mobile composer: MCP servers in the sheet', () => {
       }
     ]) {
       const sheet = openMcp()
-      expect(overlayIds()).toEqual(['composer-add-sheet', 'composer-add-sheet:subview'])
+      expect(overlayIds()).toEqual(['composer-add-sheet', 'composer-add-sheet:subview:1'])
 
       leave(sheet)
 

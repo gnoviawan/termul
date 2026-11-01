@@ -5,7 +5,7 @@ import {
   MobileSheetContent,
   SheetGroup,
   SheetRow,
-  useSheetSubview
+  useSheetStack
 } from '@/components/ui/mobile-sheet'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { SheetDescription } from '@/components/ui/sheet'
@@ -40,10 +40,20 @@ import { editSections, restSections } from '../session-option-sections'
 import { useRejectedOptionValues } from '../use-option-values'
 import { useSelectorPanelState } from '../use-selector-panel-state'
 import { AgentChips } from './MobileAgentChips'
-import { ChoiceList, type ModeControl, OptionsCard, sheetOptions } from './MobileSheetOptions'
+import {
+  ChoiceList,
+  type ModeControl,
+  OptionsCard,
+  optionRouteKey,
+  sheetOptions
+} from './MobileSheetOptions'
 import { type CompactControl, UsageCard } from './MobileUsageCard'
 
 const SEARCH_THRESHOLD = 12
+
+type SheetRoute = { kind: 'option'; id: string }
+
+const routeKey = (route: SheetRoute): string => optionRouteKey(route.id)
 
 export interface MobileModelSheetProps extends SelectorPanelProps {
   sessionId: string
@@ -92,7 +102,7 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
     favorites
   })
   const { view, effectiveId, tabOf, nameOf } = state
-  const sub = useSheetSubview<string>(props.overlayId, props.open)
+  const nav = useSheetStack<SheetRoute>(props.overlayId, props.open, routeKey)
   const { isRejected, trySet } = useRejectedOptionValues(
     effectiveId,
     props.genericOptions,
@@ -104,7 +114,9 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
     restSections(rest, isRejected, trySet),
     props.mode
   )
-  const openOption = options.find((option) => option.id === sub.view)
+  const top = nav.top
+  const openOption =
+    top?.kind === 'option' ? options.find((option) => option.id === top.id) : undefined
 
   const starred = new Set(favorites.map(favoriteId))
   const toggleFavorite = (key: FavoriteKey): void => {
@@ -295,8 +307,8 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
   }
 
   const onEscapeKeyDown = (event: KeyboardEvent): void => {
-    if (sub.view !== null) {
-      sub.onEscapeKeyDown(event)
+    if (top) {
+      nav.onEscapeKeyDown(event)
       return
     }
     if (escapeRef.current?.()) event.preventDefault()
@@ -305,15 +317,14 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
   const allTabs = [...state.tabs.visible, ...state.tabs.overflow]
   const subOption = openOption?.kind === 'radio' ? openOption : null
   // The agent can drop the open option; leave its sub-view so back is not swallowed.
-  const { view: subView, back: subBack } = sub
+  const { pop } = nav
   useEffect(() => {
-    if (subView !== null && !subOption) subBack()
-  }, [subView, subOption, subBack])
+    if (top?.kind === 'option' && !subOption) pop()
+  }, [top, subOption, pop])
   return (
     <MobileSheetContent
       title={subOption ? subOption.label : 'Select model'}
-      onBack={subOption ? sub.back : undefined}
-      view={subOption ? subOption.id : null}
+      nav={nav}
       toolbar={
         subOption || state.searching ? null : (
           <AgentChips
@@ -340,7 +351,7 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
         Choose a model, an agent, and its options.
       </SheetDescription>
       {subOption ? (
-        <ChoiceList option={subOption} disabled={disabled} onDone={sub.back} />
+        <ChoiceList option={subOption} disabled={disabled} onDone={nav.pop} />
       ) : (
         <>
           {state.searching || allTabs.length > 1 || modelCount > SEARCH_THRESHOLD ? (
@@ -358,7 +369,11 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
           ) : null}
           {list}
           {state.ownFooter && !state.searching ? (
-            <OptionsCard options={options} disabled={disabled} onOpen={sub.open} />
+            <OptionsCard
+              options={options}
+              disabled={disabled}
+              onOpen={(id) => nav.push({ kind: 'option', id })}
+            />
           ) : null}
           {state.otherHintTab ? (
             <p className="px-3 text-xs text-muted-foreground">

@@ -1,16 +1,27 @@
 import {
+  AnimatePresence,
+  animate,
+  motion,
+  type Transition,
+  useIsPresent,
+  useReducedMotion,
+  type Variants
+} from 'framer-motion'
+import {
   type ComponentPropsWithoutRef,
+  forwardRef,
   type ReactNode,
   useCallback,
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState
 } from 'react'
 import { ArrowLeft, Check, ChevronRight, X } from '@/components/icons'
 import { cn } from '@/lib/utils'
-import { useOverlayRegistration } from '@/stores/overlay-stack-store'
+import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { SheetClose, SheetContent, SheetTitle } from './sheet'
 import { Switch } from './switch'
 
@@ -24,41 +35,201 @@ const ROW_PRESS =
 
 export const SUBVIEW_TRIGGER_ATTR = 'data-sheet-subview-trigger'
 
+/** Where a sheet is: the keys of the views pushed above its root, bottom first. */
+export interface SheetNav {
+  path: readonly string[]
+  pop: () => void
+}
+
+type Direction = 'push' | 'pop'
+
+const pathId = (path: readonly string[]): string => path.join('\n')
+
+const SLIDE: Transition = { duration: 0.42, ease: [0.32, 0.72, 0, 1] }
+const FADE: Transition = { duration: 0.15, ease: 'easeOut' }
+const DIM = 0.35
+
+// The view on top slides across the full width; the one beneath moves 30% and dims.
+const slide: Variants = {
+  enter: (dir: Direction) => (dir === 'push' ? { x: '100%', zIndex: 1 } : { x: '-30%', zIndex: 0 }),
+  center: { x: 0 },
+  exit: (dir: Direction) => (dir === 'push' ? { x: '-30%', zIndex: 0 } : { x: '100%', zIndex: 1 })
+}
+const dim: Variants = {
+  enter: (dir: Direction) => ({ opacity: dir === 'push' ? 0 : DIM }),
+  center: { opacity: 0 },
+  exit: (dir: Direction) => ({ opacity: dir === 'push' ? DIM : 0 })
+}
+const fade: Variants = { enter: { opacity: 0 }, center: { opacity: 1 }, exit: { opacity: 0 } }
+
+/**
+ * Which way the sheet moved, from the depth of the view it moves to. Derived
+ * in render (the stored-previous-value pattern), so the entering and leaving
+ * views read the same direction in the same commit.
+ */
+function useDirection(path: readonly string[]): Direction {
+  const key = pathId(path)
+  const [last, setLast] = useState({ key, depth: path.length, direction: 'push' as Direction })
+  if (last.key !== key) {
+    const next = {
+      key,
+      depth: path.length,
+      direction: (path.length < last.depth ? 'pop' : 'push') as Direction
+    }
+    setLast(next)
+    return next.direction
+  }
+  return last.direction
+}
+
+/**
+ * One view of the sheet. A leaving view keeps its last content for the
+ * transition but is inert, so focus, taps and screen readers only reach the
+ * view the sheet is moving to.
+ */
+const SheetLayer = forwardRef<
+  HTMLDivElement,
+  { direction: Direction; reduced: boolean; className?: string; children: ReactNode }
+>(function SheetLayer({ direction, reduced, className, children }, ref) {
+  const present = useIsPresent()
+  return (
+    <motion.div
+      ref={ref}
+      custom={direction}
+      variants={reduced ? fade : slide}
+      initial="enter"
+      animate="center"
+      exit="exit"
+      transition={reduced ? FADE : SLIDE}
+      aria-hidden={present ? undefined : true}
+      {...(present ? {} : { inert: '' })}
+      className="relative flex min-h-0 flex-1 flex-col bg-popover"
+    >
+      <div
+        className={cn(
+          'flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]',
+          className
+        )}
+      >
+        {children}
+      </div>
+      {reduced ? null : (
+        <motion.div
+          aria-hidden="true"
+          custom={direction}
+          variants={dim}
+          transition={SLIDE}
+          className="pointer-events-none absolute inset-0 bg-overlay"
+        />
+      )}
+    </motion.div>
+  )
+})
+
+function TitleText({ children }: { children: string }): React.JSX.Element {
+  const present = useIsPresent()
+  return (
+    <motion.span
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={FADE}
+      aria-hidden={present ? undefined : true}
+      className="min-w-0 truncate [grid-area:1/1]"
+    >
+      {children}
+    </motion.span>
+  )
+}
+
 interface MobileSheetContentProps
   extends Omit<ComponentPropsWithoutRef<typeof SheetContent>, 'side' | 'title' | 'closeButton'> {
   title: string
-  onBack?: () => void
-  view?: string | null
+  /** The sheet's view stack; without it the sheet has only its root. */
+  nav?: SheetNav
   toolbar?: ReactNode
   bodyClassName?: string
 }
 
+const NO_PATH: readonly string[] = []
+
+/**
+ * A bottom sheet with a header (Close at the root, Back above it) and one
+ * scrolling body per view. A push slides the new view in from the right over
+ * the dimmed old one; a pop reverses it; the sheet's height follows the view.
+ * Reduced motion swaps views with a short fade.
+ */
 export function MobileSheetContent({
   title,
-  onBack,
-  view = null,
+  nav,
   toolbar,
   className,
   bodyClassName,
   children,
   ...props
 }: MobileSheetContentProps): React.JSX.Element {
+  const path = nav?.path ?? NO_PATH
+  const key = path.at(-1) ?? ''
+  const depth = path.length
   const contentRef = useRef<HTMLDivElement>(null)
+  const viewportRef = useRef<HTMLDivElement | null>(null)
   const backRef = useRef<HTMLButtonElement>(null)
-  const previousView = useRef<string | null>(view)
+  const reduced = useReducedMotion() ?? false
+  const direction = useDirection(path)
+
+  // The viewport's height as last laid out. A ResizeObserver reports after the
+  // layout effects of a commit, so the route change below still reads the old one.
+  const heightRef = useRef<number | null>(null)
+  const observerRef = useRef<ResizeObserver | null>(null)
+  const viewportCallbackRef = useCallback((viewport: HTMLDivElement | null) => {
+    viewportRef.current = viewport
+    observerRef.current?.disconnect()
+    observerRef.current = null
+    if (!viewport) return
+    heightRef.current = viewport.offsetHeight
+    const observer = new ResizeObserver(() => {
+      heightRef.current = viewport.offsetHeight
+    })
+    observer.observe(viewport)
+    observerRef.current = observer
+  }, [])
+
+  const previousPath = useRef(path)
+  const heightAnimation = useRef<{ stop: () => void } | null>(null)
   useLayoutEffect(() => {
-    const previous = previousView.current
-    previousView.current = view
-    if (previous === view) return
-    if (view !== null) {
+    const previous = previousPath.current
+    previousPath.current = path
+    if (pathId(previous) === pathId(path)) return
+
+    const viewport = viewportRef.current
+    const from = heightRef.current
+    if (viewport && from !== null && !reduced) {
+      heightAnimation.current?.stop()
+      viewport.style.height = ''
+      const to = viewport.offsetHeight
+      if (to !== from) {
+        // The animation starts on the next frame; hold the old height until then.
+        viewport.style.height = `${from}px`
+        const controls = animate(viewport, { height: [from, to] }, SLIDE)
+        heightAnimation.current = controls
+        void controls.then(() => {
+          if (heightAnimation.current === controls) viewport.style.height = ''
+        })
+      }
+    }
+
+    if (path.length > previous.length) {
       backRef.current?.focus()
       return
     }
+    // Back on a view: focus the row that opened the view just left.
+    const left = previous[path.length]
     const trigger = Array.from(
       contentRef.current?.querySelectorAll<HTMLElement>(`[${SUBVIEW_TRIGGER_ATTR}]`) ?? []
-    ).find((el) => el.getAttribute(SUBVIEW_TRIGGER_ATTR) === previous)
-    trigger?.focus()
-  }, [view])
+    ).find((el) => el.getAttribute(SUBVIEW_TRIGGER_ATTR) === left && !el.closest('[inert]'))
+    if (trigger) trigger.focus()
+    else if (path.length > 0) backRef.current?.focus()
+  }, [path, reduced])
 
   return (
     <SheetContent
@@ -66,7 +237,7 @@ export function MobileSheetContent({
       side="bottom"
       closeButton={false}
       className={cn(
-        'flex max-h-[85dvh] flex-col gap-0 rounded-t-3xl border-border bg-popover p-0',
+        'flex max-h-[85dvh] flex-col gap-0 overflow-hidden rounded-t-3xl border-border bg-popover p-0',
         className
       )}
       {...props}
@@ -76,13 +247,13 @@ export function MobileSheetContent({
         className="mx-auto mt-2 h-1 w-9 shrink-0 rounded-full bg-foreground/20"
       />
       <div className="grid shrink-0 grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center px-2 pb-2 pt-1">
-        {onBack ? (
+        {nav && depth > 0 ? (
           <button
             ref={backRef}
             type="button"
             aria-label="Back"
             className={HEADER_BUTTON}
-            onClick={onBack}
+            onClick={nav.pop}
           >
             <ArrowLeft size={18} aria-hidden="true" />
           </button>
@@ -92,46 +263,94 @@ export function MobileSheetContent({
             <span className="sr-only">Close</span>
           </SheetClose>
         )}
-        <SheetTitle className="truncate text-center text-base font-semibold">{title}</SheetTitle>
+        <SheetTitle className="grid grid-cols-[minmax(0,1fr)] text-center text-base font-semibold">
+          <AnimatePresence initial={false}>
+            <TitleText key={key}>{title}</TitleText>
+          </AnimatePresence>
+        </SheetTitle>
       </div>
       {toolbar}
       <div
-        data-mobile-sheet-body=""
-        className={cn(
-          'flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]',
-          bodyClassName
-        )}
+        ref={viewportCallbackRef}
+        className="relative flex min-h-0 flex-col overflow-hidden"
       >
-        {children}
+        <AnimatePresence initial={false} mode="popLayout" custom={direction}>
+          <SheetLayer key={key} direction={direction} reduced={reduced} className={bodyClassName}>
+            {children}
+          </SheetLayer>
+        </AnimatePresence>
       </div>
     </SheetContent>
   )
 }
 
-export function useSheetSubview<T extends string>(
+/**
+ * A sheet's view stack. Routes are the caller's own union; `keyOf` names each
+ * one for focus return (`SheetRow`'s `subview`) and for the transition. Every
+ * level is its own overlay entry, so Escape and system back pop one level.
+ * A fresh open starts at the root.
+ */
+export function useSheetStack<R>(
   overlayId: string,
-  sheetOpen: boolean
-): {
-  view: T | null
-  open: (view: T) => void
-  back: () => void
+  sheetOpen: boolean,
+  keyOf: (route: R) => string
+): SheetNav & {
+  stack: readonly R[]
+  top: R | null
+  push: (route: R) => void
+  reset: () => void
   onEscapeKeyDown: (event: KeyboardEvent) => void
 } {
-  const [view, setView] = useState<T | null>(null)
-  const back = useCallback(() => setView(null), [])
-  useEffect(() => {
-    if (!sheetOpen) setView(null)
-  }, [sheetOpen])
-  useOverlayRegistration(`${overlayId}:subview`, sheetOpen && view !== null, back)
+  const [stack, setStack] = useState<readonly R[]>([])
+  const [wasOpen, setWasOpen] = useState(sheetOpen)
+  if (wasOpen !== sheetOpen) {
+    setWasOpen(sheetOpen)
+    if (sheetOpen && stack.length > 0) setStack([])
+  }
+  const push = useCallback((route: R) => setStack((s) => [...s, route]), [])
+  const pop = useCallback(() => setStack((s) => s.slice(0, -1)), [])
+  const reset = useCallback(() => setStack([]), [])
+  useLevelRegistrations(overlayId, sheetOpen ? stack.length : 0, pop)
+  const depth = stack.length
   const onEscapeKeyDown = useCallback(
     (event: KeyboardEvent) => {
-      if (view === null) return
+      if (depth === 0) return
       event.preventDefault()
-      setView(null)
+      pop()
     },
-    [view]
+    [depth, pop]
   )
-  return { view, open: setView, back, onEscapeKeyDown }
+  const keyOfRef = useRef(keyOf)
+  keyOfRef.current = keyOf
+  const path = useMemo(() => stack.map((route) => keyOfRef.current(route)), [stack])
+  return { stack, top: stack.at(-1) ?? null, path, push, pop, reset, onEscapeKeyDown }
+}
+
+/** One overlay entry per pushed level, so each system back pops one level. */
+function useLevelRegistrations(overlayId: string, depth: number, pop: () => void): void {
+  const popRef = useRef(pop)
+  popRef.current = pop
+  const registered = useRef(0)
+  useEffect(() => {
+    const store = useOverlayStackStore.getState()
+    while (registered.current < depth) {
+      registered.current += 1
+      store.registerOverlay(`${overlayId}:subview:${registered.current}`, () => popRef.current())
+    }
+    while (registered.current > depth) {
+      store.unregisterOverlay(`${overlayId}:subview:${registered.current}`)
+      registered.current -= 1
+    }
+  }, [overlayId, depth])
+  useEffect(
+    () => () => {
+      const store = useOverlayStackStore.getState()
+      for (; registered.current > 0; registered.current -= 1) {
+        store.unregisterOverlay(`${overlayId}:subview:${registered.current}`)
+      }
+    },
+    [overlayId]
+  )
 }
 
 export function SheetGroup({
