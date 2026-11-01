@@ -1,4 +1,6 @@
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -310,6 +312,34 @@ async fn the_hooka_form_masks_the_secret_and_labels_the_positional_argument() {
     );
     assert_eq!(form.fields[2].placeholder.as_deref(), Some("acme"));
     assert_eq!(form.fields[0].description.as_deref(), Some("Your key"));
+}
+
+#[tokio::test]
+async fn a_plan_rechecks_a_runner_the_cached_probe_still_lists() {
+    let npx = Arc::new(AtomicBool::new(true));
+    let probed = Arc::clone(&npx);
+    let service = McpCatalogService::with_runner_probe(fixture(), move || RunnerAvailability {
+        npx: probed.load(Ordering::SeqCst),
+        ..ALL_RUNNERS
+    });
+    let source = catalog_source("to.hooka/mcp", "0.1.2");
+    let form = service
+        .describe_install(&FormRequest {
+            source: source.clone(),
+            choice: None,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(form, FormReply::Form { .. }), "{form:?}");
+
+    npx.store(false, Ordering::SeqCst);
+
+    assert_eq!(
+        unsupported(&service, source).await,
+        McpCatalogReason::NeedsRuntime {
+            runtime: Runner::Npx
+        }
+    );
 }
 
 #[tokio::test]

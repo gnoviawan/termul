@@ -64,13 +64,14 @@ const MIN_DOTNET_SDK_MAJOR: u64 = 10;
 
 static SHARED: OnceCell<Arc<McpCatalogService>> = OnceCell::const_new();
 
+type RunnerProbe = Arc<dyn Fn() -> RunnerAvailability + Send + Sync>;
+
 pub struct McpCatalogService {
     catalog: RwLock<Arc<LoadedCatalog>>,
     phase: Mutex<SyncPhase>,
     sync: OnceLock<Arc<SyncHost>>,
     icons: OnceLock<Arc<IconCache>>,
-    /// Set by tests in place of probing the host's PATH.
-    fixed_runners: Option<RunnerAvailability>,
+    probe: RunnerProbe,
     runner_probe: Mutex<Option<(Instant, RunnerAvailability)>>,
     /// Held across a probe so concurrent cache misses share one.
     probe_gate: tokio::sync::Mutex<()>,
@@ -114,27 +115,23 @@ impl McpCatalogService {
                         log::error!("[mcp-catalog] snapshot load task failed: {error}");
                         LoadedCatalog::default()
                     });
-                Arc::new(Self::new(catalog, None))
+                Arc::new(Self::new(catalog, Arc::new(probe_runners)))
             })
             .await
             .clone()
     }
 
-    fn new(catalog: LoadedCatalog, fixed_runners: Option<RunnerAvailability>) -> Self {
-        Self::with_plan_ttl(catalog, fixed_runners, PLAN_TTL)
+    fn new(catalog: LoadedCatalog, probe: RunnerProbe) -> Self {
+        Self::with_plan_ttl(catalog, probe, PLAN_TTL)
     }
 
-    fn with_plan_ttl(
-        catalog: LoadedCatalog,
-        fixed_runners: Option<RunnerAvailability>,
-        ttl: Duration,
-    ) -> Self {
+    fn with_plan_ttl(catalog: LoadedCatalog, probe: RunnerProbe, ttl: Duration) -> Self {
         Self {
             catalog: RwLock::new(Arc::new(catalog)),
             phase: Mutex::new(SyncPhase::Idle),
             sync: OnceLock::new(),
             icons: OnceLock::new(),
-            fixed_runners,
+            probe,
             runner_probe: Mutex::new(None),
             probe_gate: tokio::sync::Mutex::new(()),
             plans: PlanStore::new(ttl),
@@ -143,7 +140,15 @@ impl McpCatalogService {
 
     #[cfg(test)]
     pub(crate) fn with_runners(catalog: LoadedCatalog, runners: RunnerAvailability) -> Self {
-        Self::new(catalog, Some(runners))
+        Self::new(catalog, Arc::new(move || runners))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_runner_probe(
+        catalog: LoadedCatalog,
+        probe: impl Fn() -> RunnerAvailability + Send + Sync + 'static,
+    ) -> Self {
+        Self::new(catalog, Arc::new(probe))
     }
 
     #[cfg(test)]
@@ -152,7 +157,7 @@ impl McpCatalogService {
         runners: RunnerAvailability,
         ttl: Duration,
     ) -> Self {
-        Self::with_plan_ttl(catalog, Some(runners), ttl)
+        Self::with_plan_ttl(catalog, Arc::new(move || runners), ttl)
     }
 
     pub async fn run(dir: PathBuf) {
@@ -281,12 +286,9 @@ impl McpCatalogService {
     }
 
     fn cached_runners(&self) -> Option<RunnerAvailability> {
-        let probe = *self.runner_probe.lock();
-        self.fixed_runners.or_else(|| {
-            probe
-                .filter(|(probed_at, _)| probed_at.elapsed() < RUNNER_PROBE_TTL)
-                .map(|(_, runners)| runners)
-        })
+        (*self.runner_probe.lock())
+            .filter(|(probed_at, _)| probed_at.elapsed() < RUNNER_PROBE_TTL)
+            .map(|(_, runners)| runners)
     }
 
     pub async fn describe_install(
@@ -302,7 +304,7 @@ impl McpCatalogService {
         request: &PlanRequest,
         caller: PlanCaller,
     ) -> Result<PlanReply, McpCatalogError> {
-        let runners = self.runners().await;
+        let runners = self.fresh_runners().await;
         plan::plan_install(&self.catalog(), runners, &self.plans, request, caller)
     }
 
@@ -349,7 +351,17 @@ impl McpCatalogService {
         if let Some(runners) = self.cached_runners() {
             return runners;
         }
-        let runners = tokio::task::spawn_blocking(probe_runners)
+        self.probe_and_cache().await
+    }
+
+    async fn fresh_runners(&self) -> RunnerAvailability {
+        let _probe_gate = self.probe_gate.lock().await;
+        self.probe_and_cache().await
+    }
+
+    async fn probe_and_cache(&self) -> RunnerAvailability {
+        let probe = Arc::clone(&self.probe);
+        let runners = tokio::task::spawn_blocking(move || probe())
             .await
             .unwrap_or_default();
         log::debug!("[mcp-catalog] runner probe {runners:?}");
