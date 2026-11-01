@@ -1,4 +1,12 @@
 {
   "title": "Git",
-  "pages": ["index", "changes", "stage-and-commit", "branches-and-stash", "history", "github", "worktrees"]
+  "pages": [
+    "index",
+    "changes",
+    "stage-and-commit",
+    "branches-and-stash",
+    "history",
+    "github",
+    "worktrees"
+  ]
 }
