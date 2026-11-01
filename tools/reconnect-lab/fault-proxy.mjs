@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs'
 /**
  * TCP fault proxy for the reconnect lab: forwards 127.0.0.1:<listen> to
  * 127.0.0.1:<target> and injects link faults on command.
@@ -282,6 +283,6 @@ async function main() {
   process.on('SIGTERM', shutdown)
 }
 
-if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(resolve(process.argv[1]))) {
   await main()
 }
