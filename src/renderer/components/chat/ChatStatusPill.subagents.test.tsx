@@ -225,6 +225,25 @@ describe('ChatStatusPill subagents', () => {
     ])
   })
 
+  it('lists an earlier turn subagent the host still runs, so the wait has a row', () => {
+    const earlier = sub({
+      seq: 0,
+      status: 'completed',
+      subagentLifecycle: { background: true, state: 'running' }
+    })
+    renderPill([earlier], { turnActive: false })
+    expect(pill()).toHaveAccessibleName(
+      'Session status: subagents 1 running; waiting on 1 background subagent'
+    )
+    fireEvent.click(pill())
+    const popover = screen.getByRole('dialog', { name: 'Subagents' })
+    expect(within(popover).getByText('Waiting on 1 background subagent')).toBeInTheDocument()
+    expect(within(popover).getAllByRole('button', { name: /Audit code/ })).toHaveLength(1)
+    expect(
+      within(popover).getByRole('button', { name: /^running\s*Audit code/ })
+    ).toBeInTheDocument()
+  })
+
   it('does not say it waits while the turn is still running', () => {
     const launched = sub({ status: 'completed', subagentLifecycle: { background: true } })
     renderPill([launched])
