@@ -13,7 +13,6 @@ import type { SessionConfigOption, SessionUsage } from '@/lib/acp-api'
 import type { AcpSession } from '@/stores/acp-store'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { ChatInputBar } from './ChatInputBar'
-import { CHAT_COMPACT_LABEL } from './chat-layout'
 import { getComposerValue, setComposerValue } from './composer/chat-composer-test-helpers'
 
 // jsdom omits `document.elementFromPoint`; ProseMirror's drop handler calls it.
@@ -415,7 +414,7 @@ describe('mobile composer: one-row toolbar', () => {
     const { container } = renderBar()
     const row = mobileRow(container)
 
-    expect(row.className).toContain('flex min-w-0 flex-1 items-center gap-2')
+    expect(row.className).toContain('flex min-w-0 flex-1 items-center gap-1')
     expect(row.closest('[data-chat-composer="true"]')).not.toBeNull()
     expect(within(row).getAllByRole('button').map(nameOf)).toEqual([
       'Add to chat',
@@ -430,15 +429,17 @@ describe('mobile composer: one-row toolbar', () => {
     expect(container.querySelector('[data-chat-composer-context-strip]')).toBeNull()
   })
 
-  it('keeps Attach and MCP out of the toolbar (they live in the sheet) and effort in the pill', () => {
+  it('keeps Attach and MCP out of the toolbar (they live in the sheet) and effort out of sight', () => {
     mockMcp.servers = [{ id: 'github', type: 'stdio', name: 'github', enabled: true }]
     renderBar({ configOptions: [THOUGHT] })
 
     expect(screen.queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /MCP servers/ })).not.toBeInTheDocument()
-    // The effort is part of the one selector pill, not a chip of its own.
+    // The effort is named by the selector pill but shown only in its sheet:
+    // the phone row keeps its room for the model name.
     expect(screen.queryByRole('button', { name: 'Medium' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^Opus 5\.5\. Medium\./ })).toBeInTheDocument()
+    const pill = screen.getByRole('button', { name: /^Opus 5\.5\. Medium\./ })
+    expect(pill).toHaveTextContent(/^Opus 5\.5$/)
   })
 
   it('shows the agent glyph and model name on the selector pill and names the agent for assistive tech', () => {
@@ -460,7 +461,7 @@ describe('mobile composer: one-row toolbar', () => {
     ).toBeInTheDocument()
   })
 
-  it('truncates the model label first and lets the mode label go icon-only at 360px', () => {
+  it('truncates the model label and keeps the mode chip icon-only', () => {
     renderBar()
 
     // The pill can shrink (`min-w-0` from ComposerPill) and its model label
@@ -475,8 +476,7 @@ describe('mobile composer: one-row toolbar', () => {
     const modeChip = screen.getByRole('button', { name: 'Agent' })
     expect(modeChip).toHaveClass('shrink-0')
     const modeLabel = within(modeChip).getByText('Agent')
-    expect(modeLabel).toHaveClass(CHAT_COMPACT_LABEL)
-    expect(CHAT_COMPACT_LABEL).toBe('@max-[361px]:sr-only')
+    expect(modeLabel).toHaveClass('sr-only')
 
     expect(plusButton()).toHaveClass('shrink-0')
     expect(screen.getByRole('button', { name: /^Context \d+%/ })).toHaveClass('shrink-0')

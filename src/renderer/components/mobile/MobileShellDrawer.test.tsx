@@ -2,7 +2,6 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { type ComponentProps, type MutableRefObject, useEffect, useRef, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AskUserQuestion } from '@/components/chat/AskUserQuestion'
-import { RECONNECT_GRACE_MS } from '@/hooks/use-delayed-flag'
 import { logFrontendError } from '@/lib/log-api'
 import { _resetSheetFocusReturnForTests, recordSheetOpener } from '@/lib/sheet-focus-return'
 import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
@@ -421,8 +420,7 @@ describe('MobileShellDrawer shell', () => {
       within(dialog).getByRole('button', { name: 'Settings' }),
       within(dialog).getByRole('button', { name: 'Snapshots' }),
       within(dialog).getByRole('button', { name: 'Git history' }),
-      within(dialog).getByRole('button', { name: 'New chat' }),
-      within(dialog).getByRole('status')
+      within(dialog).getByRole('button', { name: 'New chat' })
     ]
     for (let i = 1; i < inOrder.length; i++) {
       expect(
@@ -511,7 +509,7 @@ describe('MobileShellDrawer shell', () => {
     expect(within(dialog).queryByRole('button', { name: 'New project' })).not.toBeInTheDocument()
   })
 
-  it('keeps Settings and Snapshots on Tauri but drops the web-only rows and the connection indicator', async () => {
+  it('keeps Settings and Snapshots on Tauri but drops the web-only rows', async () => {
     tauriRef.current = true
     const { dialog } = await openDrawer({ onOpenGitHistory: vi.fn() })
 
@@ -554,7 +552,7 @@ describe('MobileShellDrawer section nav', () => {
       name
     })
 
-  it('shows Chats, Terminals, Editors and GitHub as one row of 44px tabs, the preselected one current', async () => {
+  it('shows Chats, Terminals, Editors and GitHub as one row of equal 44px icon tabs, the preselected one current', async () => {
     seedTabs([{ type: 'terminal', id: 'term-t1', terminalId: 't1' }], 'term-t1')
     terminalsRef.current = [{ id: 't1', name: 'zsh' }]
     const { dialog } = await openDrawer({ section: 'terminals', activeTabId: 'term-t1' })
@@ -571,10 +569,10 @@ describe('MobileShellDrawer section nav', () => {
       expect(row.parentElement).toBe(track)
       expect(row).toHaveClass('min-h-11', 'rounded-full')
       expect(row).toHaveAttribute('data-section-nav')
+      expect(row).toHaveClass('flex-1')
+      expect(row.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+      expect(within(row).getByText(row.textContent ?? '')).toHaveClass('sr-only')
     }
-    // The labelled tabs share the row; GitHub is a 44px mark.
-    for (const row of rows.slice(0, 3)) expect(row).toHaveClass('flex-1')
-    expect(rows[3]).toHaveClass('w-11', 'shrink-0')
     expect(navButton(dialog, 'Terminals')).toHaveAttribute('aria-current', 'true')
     expect(navButton(dialog, 'Terminals')).toHaveClass('bg-background')
     expect(navButton(dialog, 'Chats')).not.toHaveAttribute('aria-current')
@@ -659,9 +657,10 @@ describe('MobileShellDrawer section nav', () => {
 
     fireEvent.click(navButton(dialog, 'GitHub'))
     expect(navButton(dialog, 'GitHub')).toHaveAttribute('aria-current', 'true')
+    // The repository row heads the list; the section heading stays for screen readers.
     expect(
       within(dialog).getByRole('heading', { level: 2, name: 'Issues and pull requests' })
-    ).toBeInTheDocument()
+    ).toHaveClass('sr-only')
     const panel = await within(dialog).findByTestId('github-panel')
     expect(panel).toHaveAttribute('data-cwd', '/work')
     expect(panel).toHaveAttribute('data-project', 'p1')
@@ -876,45 +875,12 @@ describe('MobileShellDrawer footer', () => {
     expect(within(dialog).getByRole('button', { name: 'Git history' })).toBeDisabled()
   })
 
-  it('shows only the lamp in the footer when connected, with Connected for screen readers', async () => {
-    const { dialog } = await openDrawer()
-
-    const status = within(dialog).getByRole('status')
-    expect(status).toHaveTextContent(/^Connected$/)
-    expect(within(status).getByText('Connected')).toHaveClass('sr-only')
-    expect(status).toHaveClass('text-2xs', 'text-muted-foreground')
-    expect(status).not.toHaveAttribute('aria-label')
-    expect(status.querySelector('svg')?.getAttribute('class')).toContain('text-connection')
-  })
-
-  it('shows no connection status on Tauri, as before', async () => {
-    tauriRef.current = true
+  it('shows no connection status in the footer, even when the host is offline', async () => {
+    useConnectionStatusStore.setState({ controlChannel: 'host-offline' })
     const { dialog } = await openDrawer()
 
     expect(within(dialog).queryByRole('status')).not.toBeInTheDocument()
-    expect(within(dialog).queryByText(/Connected/)).not.toBeInTheDocument()
-  })
-
-  it('names the degraded channel and warns', async () => {
-    vi.useFakeTimers()
-    useConnectionStatusStore.setState({ controlChannel: 'reconnecting' })
-    vi.advanceTimersByTime(RECONNECT_GRACE_MS)
-    vi.useRealTimers()
-    const { dialog } = await openDrawer()
-
-    const status = within(dialog).getByRole('status')
-    expect(status).toHaveTextContent('Control channel: reconnecting')
-    expect(status).not.toHaveTextContent(window.location.host)
-    expect(status.querySelector('svg')?.getAttribute('class')).toContain('text-warning')
-  })
-
-  it('turns destructive when the terminal channel is disconnected', async () => {
-    useConnectionStatusStore.setState({ terminalChannel: 'disconnected' })
-    const { dialog } = await openDrawer()
-
-    const status = within(dialog).getByRole('status')
-    expect(status).toHaveTextContent('Terminal channel: disconnected')
-    expect(status.querySelector('svg')?.getAttribute('class')).toContain('text-destructive')
+    expect(within(dialog).queryByText(/Host offline|Connected/)).not.toBeInTheDocument()
   })
 })
 

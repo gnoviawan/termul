@@ -40,8 +40,12 @@ interface GithubFiltersProps {
 /** Kind (segmented), state (select) and the two "involves me" toggles. */
 export function GithubFilters({ filter, onChange }: GithubFiltersProps): React.JSX.Element {
   return (
-    <div className="flex shrink-0 flex-col gap-1.5 px-2 pb-2">
-      <div role="group" aria-label="Kind" className={cn(SEGMENTED_TRACK_CLASS, 'h-7')}>
+    <div className="flex shrink-0 flex-col gap-1.5 px-2 pb-2 pointer-coarse:gap-2">
+      <div
+        role="group"
+        aria-label="Kind"
+        className={cn(SEGMENTED_TRACK_CLASS, 'h-7 pointer-coarse:h-9')}
+      >
         {KIND_OPTIONS.map((option) => {
           const active = filter.kind === option.value
           return (

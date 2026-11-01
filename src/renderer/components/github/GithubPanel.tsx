@@ -151,7 +151,7 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-1 pl-3 pr-1.5">
+      <div className="flex h-8 shrink-0 items-center gap-1 pl-4 pr-1.5 pointer-coarse:h-11">
         {resolved.upstream ? (
           <Select
             value={filter.repo}
@@ -159,7 +159,7 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
           >
             <SelectTrigger
               aria-label="Repository"
-              className="h-7 min-w-0 flex-1 gap-1 rounded-md border-transparent bg-transparent px-1.5 text-xs font-medium [&>span]:truncate"
+              className="-ml-1.5 h-7 min-w-0 pointer-coarse:h-11 flex-1 gap-1 rounded-md border-transparent bg-transparent px-1.5 text-xs font-medium pointer-coarse:text-sm [&>span]:truncate"
             >
               <SelectValue />
             </SelectTrigger>
@@ -170,7 +170,7 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
           </Select>
         ) : (
           <span
-            className="min-w-0 flex-1 truncate text-xs font-medium text-foreground"
+            className="min-w-0 flex-1 truncate text-xs font-medium text-foreground pointer-coarse:text-sm"
             title={`${resolved.origin.host}/${repoName(resolved.origin)}`}
           >
             {repoName(resolved.origin)}
@@ -180,7 +180,7 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
           type="button"
           onClick={() => void loadList(cwd, { refresh: true })}
           disabled={refreshing}
-          className={PANEL_ICON_BUTTON_CLASS}
+          className={cn(PANEL_ICON_BUTTON_CLASS, 'pointer-coarse:size-11')}
           title="Refresh"
           aria-label="Refresh"
         >

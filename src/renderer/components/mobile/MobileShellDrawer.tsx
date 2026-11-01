@@ -1,6 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ConnectionStatusIndicator } from '@/components/ConnectionStatusIndicator'
 import { findVisibleQuestionFocusTarget } from '@/components/chat/use-approval-dock'
 import {
   Camera,
@@ -82,22 +81,16 @@ const resolveNavigationFocus = (): HTMLElement | null => {
   return document.getElementById(SHELL_TITLE_ID)
 }
 
-/**
- * The drawer's section nav rows, Claude-app style, at the top of the drawer.
- * GitHub is its mark alone (label for screen readers), and below 400px the
- * labelled tabs drop their icons: otherwise "Terminals" truncates on a
- * 360-375px phone.
- */
+/** The drawer's section tabs: four equal icon tabs, each labelled for screen readers. */
 const SECTION_NAV: ReadonlyArray<{
   section: MobileSection
   label: string
   Icon: TermulIcon
-  iconOnly?: boolean
 }> = [
   { section: 'chats', label: 'Chats', Icon: MessageSquare },
   { section: 'terminals', label: 'Terminals', Icon: TerminalSquare },
   { section: 'editors', label: 'Editors', Icon: FileCode },
-  { section: 'github', label: 'GitHub', Icon: Github, iconOnly: true }
+  { section: 'github', label: 'GitHub', Icon: Github }
 ]
 
 /**
@@ -220,7 +213,7 @@ function DrawerProjectRow({
  * without closing), project row, search, then one scrolling list for the chosen
  * section (Chats: Recents, open chats merged into history; Terminals; Editors;
  * the active tab's section is preselected on open) and a pinned footer
- * (Settings, Snapshots, Git history, connection status, and the section's
+ * (Settings, Snapshots, Git history, and the section's
  * primary pill: New chat, New terminal or Browse files). It owns where focus
  * lands when it opens and closes; the shell owns the open state and records
  * the opener.
@@ -360,7 +353,7 @@ export function MobileShellDrawer({
         {/* Section tabs, one line: switch the list below without closing the drawer. */}
         <nav aria-label="Sections" className="shrink-0 px-2 pb-2">
           <div className="flex items-center gap-0.5 rounded-full bg-secondary p-1">
-            {SECTION_NAV.map(({ section: item, label, Icon, iconOnly }) => {
+            {SECTION_NAV.map(({ section: item, label, Icon }) => {
               const isCurrent = listSection === item
               const badge = item === 'chats' && attentionCount > 0 ? attentionCount : 0
               return (
@@ -374,35 +367,32 @@ export function MobileShellDrawer({
                   }
                   onClick={() => setListSection(item)}
                   className={cn(
-                    'flex min-h-11 items-center justify-center gap-1.5 rounded-full text-sm outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                    iconOnly ? 'w-11 shrink-0' : 'min-w-0 flex-1 px-2',
+                    'flex min-h-11 min-w-0 flex-1 items-center justify-center rounded-full outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
                     isCurrent
-                      ? 'bg-background font-medium text-foreground shadow-sm'
+                      ? 'bg-background text-foreground shadow-sm'
                       : 'text-muted-foreground hover:text-foreground'
                   )}
                 >
-                  <Icon
-                    size={16}
-                    aria-hidden="true"
-                    className={cn('shrink-0', !iconOnly && 'max-[25rem]:hidden')}
-                  />
-                  <span className={iconOnly ? 'sr-only' : 'min-w-0 truncate'}>{label}</span>
-                  {badge > 0 && (
-                    <CountBadge
-                      count={badge}
-                      max={9}
-                      data-testid="drawer-attention-badge"
-                      className="h-4 min-w-4 shrink-0 text-3xs"
-                    />
-                  )}
+                  <span className="relative flex">
+                    <Icon size={18} aria-hidden="true" />
+                    {badge > 0 && (
+                      <CountBadge
+                        count={badge}
+                        max={9}
+                        data-testid="drawer-attention-badge"
+                        className="absolute -right-2.5 -top-2 h-4 min-w-4 text-3xs"
+                      />
+                    )}
+                  </span>
+                  <span className="sr-only">{label}</span>
                 </button>
               )
             })}
           </div>
         </nav>
 
-        <div className="flex shrink-0 flex-col gap-2 px-2 pb-2">
-          {listSection === 'chats' && (
+        {listSection === 'chats' && (
+          <div className="shrink-0 px-2 pb-2">
             <div className="relative">
               <label htmlFor={searchId} className="sr-only">
                 Search chats
@@ -419,14 +409,18 @@ export function MobileShellDrawer({
                 className={`min-h-11 w-full rounded-full bg-secondary py-1 pl-8 pr-3 text-base text-foreground placeholder:text-muted-foreground ${FOCUS_RING_CLASS}`}
               />
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <h2
             id={listHeadingId}
             tabIndex={-1}
-            className="px-4 pb-1 pt-2 text-sm font-medium text-muted-foreground outline-none"
+            className={cn(
+              'px-4 pb-1 pt-2 text-sm font-medium text-muted-foreground outline-none',
+              // The repository row under it already heads the GitHub list.
+              listSection === 'github' && 'sr-only'
+            )}
           >
             {SECTION_HEADINGS[listSection]}
           </h2>
@@ -561,9 +555,6 @@ export function MobileShellDrawer({
                 </Button>
               )}
             </div>
-          </div>
-          <div className="px-3 pb-1">
-            <ConnectionStatusIndicator showLabel />
           </div>
         </div>
       </SheetContent>

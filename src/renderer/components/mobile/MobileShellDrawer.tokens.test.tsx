@@ -163,7 +163,5 @@ describe('MobileShellDrawer token sweep', () => {
     expect(html).not.toMatch(
       /\b(?:bg|text|border|ring|fill|stroke)-(?:black|white|gray|slate|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)(?:-\d{2,3})?(?:\/\d+)?\b/
     )
-    // The status labels and connection text come from the token scale.
-    expect(html).toContain('text-2xs')
   })
 })
