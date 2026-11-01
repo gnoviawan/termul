@@ -81,7 +81,19 @@ To remove the sign-in, click **Disconnect**.
 
 ## Browse the MCP catalog
 
-Under your server list, the **MCP catalog** group lists the MCP servers in the public MCP registry. Termul ships with a copy of that list, and the line above it shows how many servers it has and the date of the copy.
+Under your server list, the **MCP catalog** group lists the MCP servers in the official MCP Registry. The box at the top says **From the official MCP Registry**, with a link that opens the registry in your browser, and when the catalog was last updated. The line above the list shows how many servers it has.
+
+### Keep the catalog up to date
+
+**Keep the catalog up to date** is on by default. Termul then downloads the official MCP Registry when it starts, checks it for changes every hour, and keeps the downloaded copy for the next start. The first download fetches the whole registry, which can take a minute or two, and later checks fetch only what changed. While it works, the status line shows its progress, then **Up to date.** If a check fails, the status line says why and when Termul tries again.
+
+Turn the switch off to stop it. The status line then says **Sync is off. No catalog request leaves this host.** The catalog keeps the copy it already has.
+
+If the box says the catalog is the small sample bundled with this build, Termul hasn't downloaded the full registry yet. Turn on sync, or wait for the download to finish.
+
+<Callout>With termul-server, the server does the downloading, and the switch changes it for everyone who uses that server. In a shared live session or a view-only connection you can't change it, and Termul shows **Only the host can change catalog sync.**</Callout>
+
+### Search and browse
 
 - Type in **Search the MCP catalog** to filter the list. Use 8 words or fewer.
 - Scroll to load more servers, or click **Load more**. If the list is still long, search to narrow it.
@@ -97,6 +109,8 @@ Each server shows a state, and a short reason when it can't be installed as is:
 | Source only | The registry lists only the source code, with no package or hosted URL to install. |
 
 Servers that the registry marks as deprecated have a **Deprecated** badge.
+
+Servers whose publisher lists a logo show it next to their name. A server with no logo, or whose logo can't load, shows the first letter of its name instead. Logos load whether or not sync is on. Only the Termul host downloads them from the publisher and keeps a copy for a few days, so a browser or phone connected to termul-server gets each logo from that server, never from the publisher's site.
 
 ### Install a server from the catalog
 
