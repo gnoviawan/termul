@@ -1955,7 +1955,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               />
               {/* Same inner rhythm as the chat composer card (ChatInputBar):
                   editor row px-4 pb-1.5 pt-3.5, toolbar px-2 pb-2. */}
-              <div className="px-4 pb-1.5 pt-3.5">
+              <div data-composer-row className="px-4 pb-1.5 pt-3.5">
                 {/* Tiptap rich-text editor — the skill "pill" is a real inline
                    DOM node, so the caret sits flush against the pill's right
                    edge by construction. No transparent textarea + mirror

@@ -706,7 +706,7 @@ export function ChatInputBar({
               onRemove={removeAttachment}
               removeDisabled={disabled}
             />
-            <div className="flex items-start gap-1 px-4 pb-1.5 pt-3.5">
+            <div data-composer-row className="flex items-start gap-1 px-4 pb-1.5 pt-3.5">
               {/* Tiptap rich-text editor — the skill "pill" is a real inline
                   DOM node (a Tiptap `NodeView`), so the caret sits flush
                   against the pill's right edge by construction. No transparent
