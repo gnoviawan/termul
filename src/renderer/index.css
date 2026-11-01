@@ -941,17 +941,25 @@
    via the `--composer-min-h` CSS variable set inline by ChatComposerEditor.
    This makes the full area clickable — the caret appears wherever the user
    clicks, eliminating the dead space below short/empty text that occurred
-   when min-height was on the outer wrapper. */
+   when min-height was on the outer wrapper.
+
+   The hint is one line, cut with an ellipsis. Out of flow it never moves the
+   caret, and clipped it adds no scroll height: a wrapped hint made the empty
+   editor scrollable, and a tap on the scrolled-off part focused nothing. */
 @layer components {
   [data-composer-editor="true"] {
+    position: relative;
     min-height: var(--composer-min-h, auto);
   }
   [data-composer-editor="true"] p.is-empty:first-child::before {
     content: attr(data-placeholder);
     color: oklch(var(--muted-foreground));
-    float: left;
+    position: absolute;
+    inset-inline: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     pointer-events: none;
-    height: 0;
   }
 }
 

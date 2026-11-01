@@ -29,7 +29,7 @@ const FIELD_SEP: char = '\0';
 
 /// One-letter status of a changed file. Serialized as the letter itself,
 /// matching the renderer's `GitCommitFileStatus`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub enum GitCommitFileStatus {
     #[serde(rename = "A")]
     Added,
@@ -60,7 +60,7 @@ impl GitCommitFileStatus {
 }
 
 /// One file changed by a commit.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommitFile {
     /// Path after the commit (the new path of a rename).
@@ -75,7 +75,7 @@ pub struct GitCommitFile {
 }
 
 /// Everything the detail pane shows that the log row does not carry.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommitDetail {
     /// Full hash: 40 hex characters, or 64 in a SHA-256 repository (the
@@ -92,7 +92,7 @@ pub struct GitCommitDetail {
 }
 
 /// One file's diff in a commit. `diff` is empty when `too_large` is set.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommitFileDiff {
     pub diff: String,

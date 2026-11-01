@@ -51,7 +51,7 @@ impl Conflict {
 }
 
 /// `canvas-store.conflict`: `diskHash` is `null` when the file was deleted.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConflictView {
     pub disk_hash: Option<String>,
@@ -59,7 +59,7 @@ pub struct ConflictView {
 }
 
 /// What a reported file change meant.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum DiskOutcome {
     /// The file is as Termul last read or wrote it.
@@ -77,7 +77,7 @@ pub enum DiskOutcome {
     Conflict { view: PersistenceView },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum ConflictChoice {
     /// Overwrite the disk with a fresh snapshot of the editor.
@@ -96,7 +96,7 @@ pub(super) enum Resolution {
 
 /// After a resolution: `reload` is the disk's bytes (base64) for
 /// `host.openDocument`; `copyPath` is the conflict copy written.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolveOutcome {
     pub view: PersistenceView,

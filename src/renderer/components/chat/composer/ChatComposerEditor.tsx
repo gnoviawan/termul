@@ -177,6 +177,31 @@ function createComposerKeymap(
   })
 }
 
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), max)
+
+/**
+ * `onMouseDown` for the host row that pads the editor. Chrome places no caret
+ * for a press outside a scrolled contenteditable, and on the phone the
+ * focusable card takes focus instead. A press on the row's own padding puts
+ * the caret at the visible text nearest the press, or at the end.
+ */
+export function focusComposerFromRowPress(
+  event: React.MouseEvent<HTMLElement>,
+  editor: Editor | null
+): void {
+  if (event.target !== event.currentTarget || !editor?.isEditable) return
+  event.preventDefault()
+  const visible = editor.view.dom.closest('[data-composer-scroll]')?.getBoundingClientRect()
+  const hit =
+    visible &&
+    editor.view.posAtCoords({
+      left: clamp(event.clientX, visible.left + 1, visible.right - 1),
+      top: clamp(event.clientY, visible.top + 1, visible.bottom - 1)
+    })
+  editor.commands.focus(hit ? hit.pos : 'end', { scrollIntoView: false })
+}
+
 /**
  * Tiptap rich-text editor wrapper for the modular chat composer. Replaces the
  * transparent-`<textarea>` + `SkillComposerOverlay` surface: the skill "pill"
@@ -472,6 +497,7 @@ export function ChatComposerEditor({
   return (
     <div className={cn('relative w-full overflow-hidden', disabled && 'opacity-60', className)}>
       <div
+        data-composer-scroll
         className="w-full overflow-y-auto overscroll-contain"
         style={
           {

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use super::{list_agent_skills, parse_skill_md, AgentSkillSummary};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillFileEntry {
     pub name: String,

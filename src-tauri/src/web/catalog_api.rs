@@ -33,7 +33,7 @@ use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::ws::AppState;
 
 /// `GET /acp/catalog?refresh=true` query params.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CatalogQuery {
     /// When `true`, force-refresh the probe cache (bypass the 60s TTL). When
     /// absent / `false`, serve the cached catalog if fresh.

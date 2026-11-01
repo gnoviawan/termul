@@ -10,11 +10,13 @@ import {
   pressSystemBack,
   waitForSentinelDepth
 } from '@/lib/test-utils/overlay-back-stack'
+import { agentReuseKey } from '@/stores/acp-reuse-keys'
+import { prepareChatKey } from '@/stores/acp-store/helpers'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { AgentModelSelector, type PhoneSelectorControls } from './AgentModelSelector'
 import { createFavoritesStore, memoryFavoritesAdapter } from './favorite-models'
-
 import { SelectorFooter } from './SelectorFooter'
+import type { SelectorSource } from './selector-source'
 import { AUTO_LOAD_SETTLE_MS } from './use-model-catalog'
 
 // jsdom omits `document.elementFromPoint`; Radix/floating-ui call it while
@@ -33,6 +35,8 @@ const {
   mockCancelAgentSwitch,
   mockCancelPrompt,
   mockPrepareChat,
+  mockCancelPreparedChat,
+  mockAuthenticateAgent,
   mockSaveAgentConfig,
   mockInstallAcpAgent,
   mockToastSuccess,
@@ -47,7 +51,9 @@ const {
   mockCancelAgentSwitch: vi.fn(),
   mockCancelPrompt: vi.fn(async () => {}),
   mockPrepareChat: vi.fn(),
-  mockSaveAgentConfig: vi.fn(async () => {}),
+  mockCancelPreparedChat: vi.fn(),
+  mockAuthenticateAgent: vi.fn(async () => {}),
+  mockSaveAgentConfig: vi.fn(async (_config: StoredAgentConfig) => {}),
   mockInstallAcpAgent: vi.fn(async () => ({ command: 'opencode', args: ['acp'] })),
   mockToastSuccess: vi.fn(),
   mockToastError: vi.fn(),
@@ -62,9 +68,13 @@ const {
 
 vi.mock('sonner', () => ({ toast: { success: mockToastSuccess, error: mockToastError } }))
 
-vi.mock('@/stores/acp-store', () => {
+vi.mock('@/stores/acp-store', async () => {
+  const { agentReuseKey } =
+    await vi.importActual<typeof import('@/stores/acp-reuse-keys')>('@/stores/acp-reuse-keys')
   const state = () => ({
     ...acpStateRef.current,
+    authenticateAgent: mockAuthenticateAgent,
+    cancelPreparedChat: mockCancelPreparedChat,
     armAgentSwitch: mockArmAgentSwitch,
     setSwitchPendingOption: mockSetSwitchPendingOption,
     cancelAgentSwitch: mockCancelAgentSwitch,
@@ -80,7 +90,7 @@ vi.mock('@/stores/acp-store', () => {
       subscribeListeners.current.delete(listener)
     }
   }
-  return { useAcpStore }
+  return { useAcpStore, agentReuseKey }
 })
 
 vi.mock('@/stores/acp-store/model-catalog', () => ({ readModelCatalog: async () => null }))
@@ -1127,35 +1137,423 @@ describe('phone Select model sheet', () => {
     expect(within(favorites).getByRole('button', { name: 'Sonnet 5.5' })).toBeInTheDocument()
   })
 
-  it('shows every agent as a chip and arms another agent with the model picked there', async () => {
-    seed([readyEntry(CLAUDE)])
-    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
-    renderSelector()
-    open()
+  /** A ready registry agent with no stored config: the chat cannot arm it. */
+  /** Ready on the host (npx), but its config is not stored: the chat cannot arm it yet. */
+  const GEMINI: StoredAgentConfig = {
+    id: 'acp-registry:gemini',
+    configId: 'acp-registry:gemini',
+    name: 'Gemini CLI',
+    command: 'npx',
+    args: ['@google/gemini-cli', '--experimental-acp'],
+    env: {},
+    allowTerminal: false,
+    templateId: 'gemini'
+  }
+  const GEMINI_NOT_SET_UP: SupportedAcpAgentEntry = {
+    ...readyEntry(GEMINI),
+    id: 'gemini',
+    agent: { id: 'gemini', name: 'Gemini CLI', version: '', description: '', distribution: {} }
+  }
 
-    const chips = within(sheet()).getByRole('tablist', { name: 'Agents' })
-    expect(within(chips).getByRole('tab', { name: 'Cursor' })).toHaveAttribute(
-      'aria-selected',
+  function seedProviders(): void {
+    seed([readyEntry(CLAUDE), GEMINI_NOT_SET_UP, installEntry()])
+    acpStateRef.current.agentConfigs = [CURSOR, CLAUDE]
+    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
+  }
+
+  const GEMINI_KEY = prepareChatKey(GEMINI.id, '/work', undefined)
+  const GEMINI_MODELS = {
+    ...CLAUDE_MODELS,
+    models: {
+      currentModelId: 'pro',
+      availableModels: [
+        { modelId: 'pro', name: 'Gemini Pro' },
+        { modelId: 'flash', name: 'Gemini Flash' }
+      ]
+    }
+  }
+
+  /** The store keeps what `saveAgentConfig` saves, as the real one does. */
+  function storeSavedConfigs(): void {
+    mockSaveAgentConfig.mockImplementation(async (config: StoredAgentConfig) => {
+      const configs = acpStateRef.current.agentConfigs as StoredAgentConfig[]
+      acpStateRef.current = { ...acpStateRef.current, agentConfigs: [...configs, config] }
+    })
+  }
+
+  function patchStore(patch: Record<string, unknown>): void {
+    acpStateRef.current = { ...acpStateRef.current, ...patch }
+  }
+
+  const overlayIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+  function openProviders(): HTMLElement {
+    open()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Provider Cursor 4 available' }))
+    return screen.getByRole('dialog', { name: 'Providers' })
+  }
+
+  it('lists the providers grouped by what a tap does, with the ready ones model counts', () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+
+    const ready = within(providers).getByRole('group', { name: 'Ready' })
+    const [claude, cursor] = within(ready).getAllByRole('button')
+    expect(claude).toHaveAccessibleName('Claude Agent')
+    expect(claude).toHaveAccessibleDescription('2 models')
+    expect(cursor).toHaveAccessibleName('Cursor')
+    expect(cursor).toHaveAccessibleDescription('2 models')
+    expect(within(ready).getByRole('button', { name: 'Cursor' })).toHaveAttribute(
+      'aria-pressed',
       'true'
     )
-    fireEvent.click(within(chips).getByRole('tab', { name: 'Claude Agent' }))
+    const setup = within(providers).getByRole('group', { name: 'Needs setup' })
+    expect(within(setup).getByRole('button', { name: 'Gemini CLI Not set up' })).toBeEnabled()
+    const install = within(providers).getByRole('group', { name: 'Install' })
+    expect(within(install).getByRole('button', { name: 'OpenCode Install' })).toBeEnabled()
+  })
+
+  it('filters the providers by name', () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+    const search = within(providers).getByRole('searchbox', { name: 'Search providers' })
+
+    fireEvent.change(search, { target: { value: 'open' } })
+    expect(within(providers).getAllByRole('button', { name: /Install|models/ })).toHaveLength(1)
+    expect(within(providers).getByRole('button', { name: 'OpenCode Install' })).toBeInTheDocument()
+
+    fireEvent.change(search, { target: { value: 'zzz' } })
+    expect(within(providers).getByText('No providers match.')).toBeInTheDocument()
+  })
+
+  it('picks a ready provider, comes back to its models and arms it with the model picked', async () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+
+    fireEvent.click(within(providers).getByRole('button', { name: 'Claude Agent' }))
+
+    expect(
+      within(sheet()).getByRole('button', { name: 'Provider Claude Agent 4 available' })
+    ).toBeInTheDocument()
     expect(
       within(sheet()).getByText('Switches to Claude Agent on the next send')
     ).toBeInTheDocument()
     expect(within(sheet()).queryByRole('button', { name: /^Effort/ })).toBeNull()
+    await waitFor(() =>
+      expect(
+        within(sheet()).getByRole('button', { name: 'Provider Claude Agent 4 available' })
+      ).toHaveFocus()
+    )
 
     fireEvent.click(within(sheet()).getByRole('button', { name: 'Claude Haiku' }))
-
     await waitFor(() => expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', CLAUDE.id))
     expect(sheet()).toBeInTheDocument()
   })
 
-  it('names an agent that needs installing on its chip', () => {
-    seed([installEntry()])
+  it('opens the install view of an agent that needs installing, and Escape goes back one level', async () => {
+    seedProviders()
     renderSelector()
-    open()
+    const providers = openProviders()
+    const ids = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
 
-    expect(within(sheet()).getByRole('tab', { name: 'OpenCode, Install' })).toBeInTheDocument()
+    fireEvent.click(within(providers).getByRole('button', { name: 'OpenCode Install' }))
+    const installView = screen.getByRole('dialog', { name: 'OpenCode' })
+    expect(within(installView).getByText('OpenCode is not installed')).toBeInTheDocument()
+    expect(ids()).toEqual([
+      expect.stringMatching(/^agent-model-selector:.+:subview:1$/),
+      expect.stringMatching(/^agent-model-selector:.+:subview:2$/)
+    ])
+
+    fireEvent.keyDown(installView, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: 'Providers' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('dialog', { name: 'Providers' })).getByRole('button', {
+          name: 'OpenCode Install'
+        })
+      ).toHaveFocus()
+    )
+
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Providers' }), { key: 'Escape' })
+    expect(sheet()).toBeInTheDocument()
+    fireEvent.keyDown(sheet(), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('selects the picked provider in the launcher and comes back to the model list', () => {
+    const selectAgent = vi.fn()
+    const source: SelectorSource = {
+      kind: 'draft',
+      key: 'launcher-test',
+      agentConfigs: [CURSOR, CLAUDE],
+      entries: [readyEntry(CURSOR), readyEntry(CLAUDE)],
+      currentConfigId: CURSOR.id,
+      armedConfigId: null,
+      blocked: false,
+      turnBusy: false,
+      installingConfigId: null,
+      install: vi.fn(),
+      workspace: { cwd: '/work', projectId: 'p1' },
+      liveCatalog: null,
+      pickCurrentModel: vi.fn(),
+      pickOtherModel: vi.fn(),
+      cancelThenSwitch: vi.fn(async () => {}),
+      selectAgent,
+      modelStatus: null,
+      updateAgentIds: null
+    }
+    renderSelector({ draft: { source, agentName: 'Cursor' } })
+    open()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Provider Cursor 2 available' }))
+
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Providers' })).getByRole('button', {
+        name: 'Claude Agent'
+      })
+    )
+
+    expect(selectAgent).toHaveBeenCalledWith(expect.objectContaining({ configId: CLAUDE.id }))
+    expect(sheet()).toBeInTheDocument()
+  })
+
+  it('starts an agent once its install finishes, then goes back to its models', () => {
+    seedProviders()
+    const { rerender } = renderSelector()
+    const providers = openProviders()
+    fireEvent.click(within(providers).getByRole('button', { name: 'OpenCode Install' }))
+    expect(screen.getByRole('dialog', { name: 'OpenCode' })).toBeInTheDocument()
+
+    const OPENCODE: StoredAgentConfig = {
+      ...CURSOR,
+      id: 'acp-registry:opencode',
+      configId: 'acp-registry:opencode',
+      name: 'OpenCode',
+      templateId: 'opencode'
+    }
+    seed([readyEntry(CLAUDE), GEMINI_NOT_SET_UP, readyEntry(OPENCODE)])
+    patchStore({ agentConfigs: [CURSOR, CLAUDE, OPENCODE] })
+    rerender(selector())
+
+    const setup = screen.getByRole('dialog', { name: 'OpenCode' })
+    expect(within(setup).getByRole('heading', { name: 'Starting OpenCode' })).toBeInTheDocument()
+    expect(mockPrepareChat).toHaveBeenCalledWith(OPENCODE.id, '/work', undefined, 'p1', {
+      silent: true
+    })
+    expect(overlayIds()).toHaveLength(2)
+
+    patchStore({ agentOptionsCache: { [CLAUDE.id]: CLAUDE_MODELS, [OPENCODE.id]: GEMINI_MODELS } })
+    rerender(selector())
+
+    expect(
+      within(sheet()).getByRole('button', { name: 'Provider OpenCode 4 available' })
+    ).toBeInTheDocument()
+    expect(useOverlayStackStore.getState().stack).toEqual([])
+  })
+
+  it('sets up a Needs setup provider in the sheet, signs in, then arms the model picked', async () => {
+    seedProviders()
+    storeSavedConfigs()
+    const { rerender } = renderSelector()
+    const providers = openProviders()
+
+    fireEvent.click(within(providers).getByRole('button', { name: 'Gemini CLI Not set up' }))
+    const setup = screen.getByRole('dialog', { name: 'Gemini CLI' })
+    expect(within(setup).getByRole('heading', { name: 'Set up Gemini CLI' })).toBeInTheDocument()
+    expect(within(setup).getByText('Runs with npx on this server.')).toBeInTheDocument()
+    expect(overlayIds()).toEqual([
+      expect.stringMatching(/^agent-model-selector:.+:subview:1$/),
+      expect.stringMatching(/^agent-model-selector:.+:subview:2$/)
+    ])
+
+    fireEvent.click(within(setup).getByRole('button', { name: 'Set up Gemini CLI' }))
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledWith(GEMINI))
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(GEMINI.id, '/work', undefined, 'p1', {
+        silent: true
+      })
+    )
+    expect(within(setup).getByRole('heading', { name: 'Starting Gemini CLI' })).toBeInTheDocument()
+
+    patchStore({
+      prepareChatErrors: {
+        [GEMINI_KEY]: {
+          category: 'auth',
+          label: 'Authentication required',
+          detail: 'Gemini needs you to sign in.'
+        }
+      },
+      configToLiveAgent: {
+        ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
+        [agentReuseKey(GEMINI.id, '/work')]: 'agent-gemini'
+      },
+      agents: {
+        'agent-gemini': {
+          authMethods: [
+            {
+              id: 'gemini-api-key',
+              name: 'Use a Gemini API key',
+              type: 'env_var',
+              description: 'Set GEMINI_API_KEY on the server.'
+            },
+            { id: 'oauth-personal', name: 'Log in with Google', type: 'agent' }
+          ]
+        }
+      }
+    })
+    rerender(selector())
+
+    expect(
+      within(setup).getByRole('heading', { name: 'Sign in to Gemini CLI' })
+    ).toBeInTheDocument()
+    expect(within(setup).getByText('Gemini needs you to sign in.')).toBeInTheDocument()
+    expect(within(setup).getByText('Set GEMINI_API_KEY on the server.')).toBeInTheDocument()
+    expect(
+      within(setup).getByText(
+        'Gemini CLI opens its sign-in page. Come back here when you are done.'
+      )
+    ).toBeInTheDocument()
+    fireEvent.click(within(setup).getByRole('button', { name: 'Log in with Google' }))
+
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-gemini', 'oauth-personal')
+    )
+    await waitFor(() => expect(mockCancelPreparedChat).toHaveBeenCalledWith(GEMINI_KEY))
+    expect(mockPrepareChat).toHaveBeenLastCalledWith(GEMINI.id, '/work', undefined, 'p1', {
+      silent: true
+    })
+
+    patchStore({
+      prepareChatErrors: {},
+      agentOptionsCache: { [CLAUDE.id]: CLAUDE_MODELS, [GEMINI.id]: GEMINI_MODELS }
+    })
+    rerender(selector())
+
+    expect(
+      within(sheet()).getByRole('button', { name: 'Provider Gemini CLI 4 available' })
+    ).toBeInTheDocument()
+    expect(overlayIds()).toEqual([])
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Gemini Flash' }))
+    await waitFor(() => expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', GEMINI.id))
+    await waitFor(() =>
+      expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('session-1', { modelId: 'flash' })
+    )
+  })
+
+  it('signs in to a ready provider whose models ask for credentials, from its setup screen', async () => {
+    seedProviders()
+    patchStore({
+      agentOptionsCache: {},
+      prepareChatErrors: {
+        [prepareChatKey(CLAUDE.id, '/work', undefined)]: {
+          category: 'auth',
+          label: 'Authentication required',
+          detail: 'Run /login.'
+        }
+      },
+      configToLiveAgent: {
+        ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
+        [agentReuseKey(CLAUDE.id, '/work')]: 'agent-claude'
+      },
+      agents: {
+        'agent-claude': { authMethods: [{ id: 'claude-login', name: 'Log in', type: 'agent' }] }
+      }
+    })
+    const { rerender } = renderSelector()
+    const providers = openProviders()
+    fireEvent.click(within(providers).getByRole('button', { name: 'Claude Agent' }))
+    expect(within(sheet()).getByText('Could not load Claude Agent models.')).toBeInTheDocument()
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Sign in to Claude Agent' }))
+    const setup = screen.getByRole('dialog', { name: 'Claude Agent' })
+    expect(
+      within(setup).getByRole('heading', { name: 'Sign in to Claude Agent' })
+    ).toBeInTheDocument()
+    fireEvent.click(within(setup).getByRole('button', { name: 'Log in' }))
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-claude', 'claude-login')
+    )
+
+    patchStore({ prepareChatErrors: {}, agentOptionsCache: { [CLAUDE.id]: CLAUDE_MODELS } })
+    rerender(selector())
+    expect(within(sheet()).getByRole('button', { name: 'Claude Haiku' })).toBeInTheDocument()
+    expect(overlayIds()).toEqual([])
+  })
+
+  it('Escape on the setup screen goes back to Providers without setting anything up', async () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+
+    fireEvent.click(within(providers).getByRole('button', { name: 'Gemini CLI Not set up' }))
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Gemini CLI' }), { key: 'Escape' })
+
+    const back = screen.getByRole('dialog', { name: 'Providers' })
+    await waitFor(() =>
+      expect(within(back).getByRole('button', { name: 'Gemini CLI Not set up' })).toHaveFocus()
+    )
+    expect(overlayIds()).toEqual([expect.stringMatching(/^agent-model-selector:.+:subview:1$/)])
+    expect(mockSaveAgentConfig).not.toHaveBeenCalled()
+    expect(mockPrepareChat).not.toHaveBeenCalled()
+  })
+
+  it('shows a failed save in the sheet, and Try again saves again', async () => {
+    seedProviders()
+    mockSaveAgentConfig.mockRejectedValueOnce(new Error('The server store is read-only.'))
+    renderSelector()
+    const providers = openProviders()
+    fireEvent.click(within(providers).getByRole('button', { name: 'Gemini CLI Not set up' }))
+    const setup = screen.getByRole('dialog', { name: 'Gemini CLI' })
+
+    fireEvent.click(within(setup).getByRole('button', { name: 'Set up Gemini CLI' }))
+
+    expect(await within(setup).findByRole('heading', { name: 'Setup failed' })).toBeInTheDocument()
+    expect(within(setup).getByText('The server store is read-only.')).toBeInTheDocument()
+    fireEvent.click(within(setup).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledTimes(2))
+  })
+
+  it('shows an agent that fails to start in the sheet, and Try again starts it again', async () => {
+    seedProviders()
+    storeSavedConfigs()
+    const { rerender } = renderSelector()
+    const providers = openProviders()
+    fireEvent.click(within(providers).getByRole('button', { name: 'Gemini CLI Not set up' }))
+    const setup = screen.getByRole('dialog', { name: 'Gemini CLI' })
+    fireEvent.click(within(setup).getByRole('button', { name: 'Set up Gemini CLI' }))
+    await waitFor(() => expect(mockPrepareChat).toHaveBeenCalledTimes(1))
+
+    patchStore({
+      prepareChatErrors: {
+        [GEMINI_KEY]: {
+          category: 'spawn',
+          label: 'Agent unavailable',
+          detail: 'npx was not found.'
+        }
+      }
+    })
+    rerender(selector())
+
+    expect(within(setup).getByRole('heading', { name: 'Agent unavailable' })).toBeInTheDocument()
+    expect(within(setup).getByText('npx was not found.')).toBeInTheDocument()
+    fireEvent.click(within(setup).getByRole('button', { name: 'Try again' }))
+    expect(mockCancelPreparedChat).toHaveBeenCalledWith(GEMINI_KEY)
+    expect(mockPrepareChat).toHaveBeenCalledTimes(2)
+    expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('installs from the install view', async () => {
+    seedProviders()
+    renderSelector()
+    const providers = openProviders()
+
+    fireEvent.click(within(providers).getByRole('button', { name: 'OpenCode Install' }))
+    fireEvent.click(screen.getByTestId('agent-install-acp-registry:opencode'))
+
+    await waitFor(() => expect(mockInstallAcpAgent).toHaveBeenCalledWith('opencode'))
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('OpenCode installed'))
   })
 
   it('opens Effort as a sub-view, sets the pick and comes back to the sheet', async () => {

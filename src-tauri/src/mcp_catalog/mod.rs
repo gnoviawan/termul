@@ -85,7 +85,7 @@ pub struct McpCatalogError {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct McpCatalogStatus {
     #[serde(flatten)]

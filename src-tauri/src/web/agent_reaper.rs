@@ -253,7 +253,7 @@ impl AgentReaperHandle {
 }
 
 /// The idle window the host is using right now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentIdleWindowStatus {
     pub secs: u64,

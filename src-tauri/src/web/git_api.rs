@@ -43,14 +43,14 @@ use crate::web::ws::AppState;
 
 /// `POST /git/status { cwd }` body. Mirrors the desktop `git_get_status`
 /// command shape.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCwdRequest {
     pub cwd: String,
 }
 
 /// `POST /git/diff { cwd, path, staged? }` body. `staged` defaults to `false`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffRequest {
     pub cwd: String,
@@ -60,7 +60,7 @@ pub struct GitDiffRequest {
 }
 
 /// `POST /git/stage | unstage | discard { cwd, path }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitPathRequest {
     pub cwd: String,
@@ -69,7 +69,7 @@ pub struct GitPathRequest {
 
 /// `POST /git/log { cwd, limit?, all? }` body. `limit` is clamped server-side
 /// (`GIT_LOG_DEFAULT_LIMIT`/`GIT_LOG_MAX_LIMIT`); `all` walks every ref.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitLogRequest {
     pub cwd: String,
@@ -79,7 +79,7 @@ pub struct GitLogRequest {
 }
 
 /// `POST /git/commit { cwd, summary, description?, amend? }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommitRequest {
     pub cwd: String,
@@ -95,7 +95,7 @@ pub struct GitCommitRequest {
 }
 
 /// `POST /git/checkout-branch { cwd, branch, isRemote? }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCheckoutBranchRequest {
     pub cwd: String,
@@ -105,7 +105,7 @@ pub struct GitCheckoutBranchRequest {
 }
 
 /// `POST /git/create-branch { cwd, branch, startRef? }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCreateBranchRequest {
     pub cwd: String,
@@ -114,7 +114,7 @@ pub struct GitCreateBranchRequest {
 }
 
 /// `POST /git/stash-save { cwd, message?, includeUntracked? }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitStashSaveRequest {
     pub cwd: String,
@@ -123,7 +123,7 @@ pub struct GitStashSaveRequest {
 }
 
 /// `POST /git/stash-apply | stash-pop | stash-drop { cwd, index }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitStashIndexRequest {
     pub cwd: String,
@@ -131,14 +131,14 @@ pub struct GitStashIndexRequest {
 }
 
 /// `GET /git/stash-list?cwd=...` / `GET /git/branch-list?cwd=...` query.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCwdQuery {
     pub cwd: String,
 }
 
 /// `POST /git/branch-switch { cwd, name }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitBranchNameRequest {
     pub cwd: String,
@@ -148,7 +148,7 @@ pub struct GitBranchNameRequest {
 /// Mirrors the shared TS `GitStashInfo` contract (`{ index, name, message }`)
 /// and the desktop `commands::GitStashInfo` struct. Local DTO so the web
 /// module does not depend on `commands.rs` (which is desktop-wired).
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitStashInfoDto {
     pub index: usize,
