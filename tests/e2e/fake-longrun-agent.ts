@@ -90,6 +90,12 @@
  * - With it (Claude 0.78 native form): `subagent_spawned` on the chat, the
  *   subagents' traffic under their own session ids, and a
  *   `subagent_state_update` when each one ends (the first at about 45 %).
+ *
+ * `[BG_TAIL:<seconds>]` with `[SUBAGENTS]` (legacy form only): the turn ends
+ * at `<seconds>` of `[SUBAGENTS:n]` while the two background subagents keep
+ * reporting for `<seconds>` more. Then each launch call gets the host's
+ * `_meta["termul/subagent"]` marker with `state: completed`, the end a host
+ * with native subagent support reports.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -513,6 +519,11 @@ const inFlightBySession = new Map<string, InFlight>()
 /** Set from `initialize`: the host asked for the native subagent form. */
 let nativeSubagents = false
 
+function backgroundTailSeconds(prompt: JsonValue | undefined): number {
+  const match = /\[BG_TAIL:(\d+(?:\.\d+)?)\]/.exec(promptText(prompt))
+  return match ? Number(match[1]) : 0
+}
+
 function subagentSeconds(prompt: JsonValue | undefined): number | null {
   const match = /\[SUBAGENTS(?::(\d+(?:\.\d+)?))?\]/.exec(promptText(prompt))
   if (!match) return null
@@ -528,8 +539,13 @@ const SUBAGENT_TASKS = [
   }
 ] as const
 
-/** `[SUBAGENTS]`: two subagents report activity until the turn ends. */
-function runSubagentTurn(id: number | string, sessionId: string, seconds: number): void {
+/** `[SUBAGENTS]`: two subagents report activity until the turn ends, or past it with `[BG_TAIL]`. */
+function runSubagentTurn(
+  id: number | string,
+  sessionId: string,
+  seconds: number,
+  tailSeconds: number
+): void {
   inFlightBySession.set(sessionId, {
     id,
     sessionId,
@@ -547,6 +563,7 @@ function runSubagentTurn(id: number | string, sessionId: string, seconds: number
       ...(meta ? { _meta: meta } : {})
     })
   const native = nativeSubagents
+  const tail = native ? 0 : tailSeconds
   const tag = randomUUID().slice(0, 6)
   const childSession = (key: string): string => `${sessionId}-sub-${key}-${tag}`
   const dispatchId = (key: string): string => `toolu_bg_${key}_${tag}`
@@ -608,22 +625,36 @@ function runSubagentTurn(id: number | string, sessionId: string, seconds: number
         subagentSessionId: childSession(key),
         state: 'completed'
       })
+    } else if (tail > 0) {
+      update(sessionId, {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: dispatchId(key),
+        _meta: { 'termul/subagent': { state: 'completed', endedAt: Date.now() } }
+      })
     }
   }
+  const startedAt = Date.now()
+  let turnOpen = true
   let step = 0
   const work = (): void => {
-    if (!live()) return
-    const elapsed =
-      (Date.now() - (inFlightBySession.get(sessionId)?.startedAt ?? Date.now())) / 1000
-    if (elapsed >= firstEndAt) endSubagent('a')
-    if (elapsed >= seconds) {
-      endSubagent('b')
+    if (turnOpen && !live()) return
+    const elapsed = (Date.now() - startedAt) / 1000
+    if (elapsed >= (tail > 0 ? seconds + tail : firstEndAt)) endSubagent('a')
+    if (turnOpen && elapsed >= seconds) {
+      turnOpen = false
+      if (tail === 0) endSubagent('b')
       text(
         sessionId,
-        'Both reviewers finished. The store has one stale selector; the host is clean.'
+        tail === 0
+          ? 'Both reviewers finished. The store has one stale selector; the host is clean.'
+          : 'The reviewers are still running in the background. I am waiting for them.'
       )
       respond(id, { stopReason: 'end_turn' })
       inFlightBySession.delete(sessionId)
+    }
+    if (ended.size === SUBAGENT_TASKS.length) return
+    if (tail > 0 && elapsed >= seconds + tail) {
+      endSubagent('b')
       return
     }
     const active = SUBAGENT_TASKS.filter((task) => !ended.has(task.key))
@@ -877,7 +908,7 @@ function handle(msg: JsonRpcMessage): void {
       }
       const subagentSec = subagentSeconds(p.prompt)
       if (subagentSec !== null && id !== undefined) {
-        runSubagentTurn(id, sessionId, subagentSec)
+        runSubagentTurn(id, sessionId, subagentSec, backgroundTailSeconds(p.prompt))
         return
       }
       const elicit = elicitationRequested(p.prompt)
