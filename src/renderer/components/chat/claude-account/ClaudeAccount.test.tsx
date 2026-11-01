@@ -263,24 +263,30 @@ describe('phone Select model sheet usage', () => {
   it('shows the project account and its 5-hour reading', async () => {
     api.usage.mockResolvedValue([read('default', 42), read('ab12', 4), read('cd34', 40)])
     seed()
-    render(<UsageCard sessionId="s1" usage={null} compact={null} />)
+    render(<UsageCard sessionId="s1" usage={null} compact={null} onManageAccounts={vi.fn()} />)
 
     expect(await screen.findByText('5-hour limit · Personal')).toBeInTheDocument()
     expect(screen.getByText('Usage')).toBeInTheDocument()
     expect(screen.getByText('42%')).toBeInTheDocument()
   })
 
-  it('shows nothing for a signed-out account and no context reading', async () => {
+  it('says a signed-out account is signed out and opens account settings from the row', async () => {
     api.list.mockResolvedValue({
       accounts: [{ id: 'default', name: 'Personal', builtin: true, signedIn: false }],
       defaultAccountId: 'default',
       projectAccounts: {}
     })
     seed()
-    const { container } = render(<UsageCard sessionId="s1" usage={null} compact={null} />)
+    const onManageAccounts = vi.fn()
+    render(
+      <UsageCard sessionId="s1" usage={null} compact={null} onManageAccounts={onManageAccounts} />
+    )
 
-    await waitFor(() => expect(api.list).toHaveBeenCalled())
-    expect(container).toBeEmptyDOMElement()
+    const row = await screen.findByRole('button', { name: /Claude account/ })
+    expect(row).toHaveTextContent('Signed out · Personal')
+    expect(row).toHaveTextContent('Sign in')
+    fireEvent.click(row)
+    expect(onManageAccounts).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -1,7 +1,7 @@
 import { useChatClaudeAccount } from '@/components/chat/claude-account/use-chat-claude-account'
 import { type CompactSignals, useCompactRequest } from '@/components/chat/compact-request'
 import { displayedUsagePercent } from '@/components/chat/context-usage-utils'
-import { accountReadiness } from '@/components/settings/provider/account-status'
+import { accountReadiness, NOT_READY_REASON } from '@/components/settings/provider/account-status'
 import { SheetGroup, SheetRow } from '@/components/ui/mobile-sheet'
 import type { SessionUsage } from '@/lib/acp-api'
 import {
@@ -31,11 +31,19 @@ const TONE_FILL: Record<UsageTone, string> = {
   critical: 'bg-destructive'
 }
 
-function useClaudeUsage(sessionId: string): { reading: UsageReading; account: string } | null {
+type ClaudeUsage =
+  | { kind: 'reading'; reading: UsageReading; account: string }
+  | { kind: 'not-ready'; reason: string; account: string }
+
+function useClaudeUsage(sessionId: string): ClaudeUsage | null {
   const ctx = useChatClaudeAccount(sessionId)
-  if (!ctx || accountReadiness(ctx.current.account, ctx.current.usage) !== 'ready') return null
+  if (!ctx) return null
+  const account = ctx.current.account.name
+  const readiness = accountReadiness(ctx.current.account, ctx.current.usage)
+  if (readiness !== 'ready')
+    return { kind: 'not-ready', reason: NOT_READY_REASON[readiness], account }
   const reading = fiveHourUsage(ctx.current.usage, ctx.rateLimit)?.main
-  return reading ? { reading, account: ctx.current.account.name } : null
+  return reading ? { kind: 'reading', reading, account } : null
 }
 
 function ContextRow({
@@ -93,17 +101,27 @@ function ContextRow({
 export function UsageCard({
   sessionId,
   usage,
-  compact
+  compact,
+  onManageAccounts
 }: {
   sessionId: string
   usage: SessionUsage | null
   compact: CompactControl | null
+  onManageAccounts: () => void
 }): React.JSX.Element | null {
   const claude = useClaudeUsage(sessionId)
   if (!claude && !usage) return null
   return (
     <SheetGroup>
-      {claude ? (
+      {claude?.kind === 'not-ready' ? (
+        <SheetRow
+          title="Claude account"
+          subtitle={`${claude.reason} · ${claude.account}`}
+          value={<span className="text-warning">Sign in</span>}
+          onSelect={onManageAccounts}
+        />
+      ) : null}
+      {claude?.kind === 'reading' ? (
         <SheetRow
           title="Usage"
           subtitle={`${claude.reading.label} limit · ${claude.account}`}

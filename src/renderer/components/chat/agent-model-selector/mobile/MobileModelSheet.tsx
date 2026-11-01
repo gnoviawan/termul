@@ -11,6 +11,7 @@ import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { SheetDescription } from '@/components/ui/sheet'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import {
   type FavoriteKey,
   type FavoritesStore,
@@ -369,6 +370,10 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
               sessionId={props.sessionId}
               usage={state.contextUsage}
               compact={props.compact}
+              onManageAccounts={() => {
+                props.onClose()
+                useSettingsModalStore.getState().openApp('provider')
+              }}
             />
           )}
         </>
