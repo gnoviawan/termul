@@ -321,3 +321,25 @@ fn no_schema_name_is_a_collision_numbered_copy_of_another() {
          at several type arguments). Name them with #[schemars(rename = \"..{{T}}..\")]: {numbered:?}"
     );
 }
+
+#[test]
+fn the_factory_key_routes_document_their_bare_refusals() {
+    let doc = document();
+    let statuses = |method: &str| -> Vec<String> {
+        let mut statuses: Vec<String> = doc["paths"]["/acp/factory-key"][method]["responses"]
+            .as_object()
+            .expect("responses object")
+            .keys()
+            .cloned()
+            .collect();
+        statuses.sort();
+        statuses
+    };
+    assert_eq!(statuses("get"), ["200", "401", "403"]);
+    assert_eq!(statuses("post"), ["200", "400", "401", "403"]);
+    assert_eq!(
+        doc["paths"]["/acp/factory-key"]["post"]["responses"]["400"]["content"]["application/json"]["schema"]
+            ["required"],
+        json!(["error"])
+    );
+}

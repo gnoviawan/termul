@@ -328,11 +328,16 @@ pub static ROUTES: &[ApiRoute] = &[
         .ipc::<InstallOutcome>(),
     ApiRoute::get("/acp/factory-key", Tag::Acp, "Whether a Factory API key is stored")
         .bare::<FactoryKeyStatus>()
-        .describe("Needs a verified bearer token even on loopback. A host without a token answers `403 { error }`."),
+        .errors(&[("403", "The host has no auth token configured.")])
+        .describe("Needs a verified bearer token even on loopback."),
     ApiRoute::post("/acp/factory-key", Tag::Acp, "Store the Factory API key")
         .json::<FactoryKeySave>()
         .bare::<FactoryKeyStatus>()
-        .describe("Needs a verified bearer token even on loopback. Failures answer `{ error }`."),
+        .errors(&[
+            ("400", "The body is not a valid request, or the key failed validation."),
+            ("403", "The host has no auth token configured, or the peer may not write (`code` says why)."),
+        ])
+        .describe("Needs a verified bearer token even on loopback."),
     // MCP servers
     ApiRoute::get("/mcp-servers", Tag::McpServers, "Read a project's MCP registry")
         .query::<McpProjectQuery>()

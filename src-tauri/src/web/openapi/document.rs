@@ -266,6 +266,21 @@ fn responses(route: &ApiRoute, generator: &mut SchemaGenerator) -> Map<String, V
             "101": { "description": "Switching Protocols: the connection becomes a WebSocket." },
         }),
     });
+    for (status, description) in route.errors {
+        let previous = responses.insert(
+            status.to_string(),
+            json!({
+                "description": description,
+                "content": { "application/json": { "schema": error_body_schema() } },
+            }),
+        );
+        assert!(
+            previous.is_none(),
+            "{} {} documents {status} twice",
+            route.method.as_str(),
+            route.path
+        );
+    }
     if route.requires_token() {
         responses.insert(
             "401".into(),
@@ -291,6 +306,17 @@ fn ipc_responses(data: Value) -> Value {
             },
         },
         "default": { "$ref": "#/components/responses/IpcError" },
+    })
+}
+
+fn error_body_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+            "error": { "type": "string", "description": "Human-readable reason." },
+            "code": { "type": "string", "description": "Machine-readable reason, when the refusal has one." },
+        },
     })
 }
 

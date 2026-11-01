@@ -96,6 +96,9 @@ pub struct ApiRoute {
     /// The JSON request body.
     pub body: Option<SchemaFn>,
     pub reply: Reply,
+    /// `(status, description)` of refusals answered with a bare `{ error }`
+    /// body instead of the envelope.
+    pub errors: &'static [(&'static str, &'static str)],
 }
 
 fn reference<T: JsonSchema>(generator: &mut SchemaGenerator) -> Schema {
@@ -117,6 +120,7 @@ impl ApiRoute {
             query: None,
             body: None,
             reply: Reply::IpcEmpty,
+            errors: &[],
         }
     }
 
@@ -158,6 +162,11 @@ impl ApiRoute {
 
     pub const fn reply(mut self, reply: Reply) -> Self {
         self.reply = reply;
+        self
+    }
+
+    pub const fn errors(mut self, errors: &'static [(&'static str, &'static str)]) -> Self {
+        self.errors = errors;
         self
     }
 
