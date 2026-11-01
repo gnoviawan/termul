@@ -11,6 +11,7 @@
     "automations",
     "ssh",
     "remote",
+    "server-api",
     "browser",
     "settings",
     "troubleshooting"

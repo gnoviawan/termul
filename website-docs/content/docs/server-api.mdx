@@ -1,0 +1,93 @@
+---
+title: Build your own client
+description: Use the termul-server HTTP API and its OpenAPI spec to write scripts, integrations, or your own interface.
+---
+
+`termul-server` serves the Termul app, and the app talks to the server through a plain HTTP and WebSocket API. You can use the same API from a script, a native app, or your own web interface. The HTTP part is described in an OpenAPI 3.1 file that the Termul repository generates from the server's own code.
+
+<Callout type="warn">The API is not versioned yet. Routes and fields can change between releases. Read the spec that matches the server version you run.</Callout>
+
+## Get the spec
+
+- Download [`openapi.yaml`](/openapi.yaml). The same file is at `website-docs/public/openapi.yaml` in the Termul repository, next to the code it describes.
+- Browse it in the [interactive API reference](/api-reference.html).
+- Import it into Postman, Insomnia, Bruno, or a code generator such as `openapi-generator` to get a typed client.
+
+The spec covers the HTTP routes. The WebSocket message protocol is described separately. See [Use the WebSockets](#use-the-websockets).
+
+## Send your first request
+
+The examples use `http://127.0.0.1:8080`. Replace it with your server's address.
+
+`/health` needs no token:
+
+```bash
+curl http://127.0.0.1:8080/health
+```
+
+```json
+{"status":"ok","allowRemoteWrites":false,"caseInsensitivePaths":false,"setupRequired":false}
+```
+
+Every other API route needs the access token when the server has one. Send it in the `Authorization` header:
+
+```bash
+TOKEN=$(cat ~/.local/state/termul/web-auth-token)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/projects
+```
+
+```json
+{"success":true,"data":{"projects":[{"id":"439bcfbd-…","name":"termul","color":"yellow","path":"/home/me/termul","isArchived":false,"isDefault":true}]}}
+```
+
+The server accepts the token only in the header. A `?token=` query parameter does not work. To find or set the token, see [The access token](/docs/remote/server-options#the-access-token).
+
+## Read the response envelope
+
+Most JSON routes wrap their result in the same envelope:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `success` | boolean | `true` when the request worked. |
+| `data` | any | The result. Present when `success` is `true`. |
+| `error` | string | A message for people. Present when `success` is `false`. |
+| `code` | string | A stable error code, such as `UNAUTHORIZED`, `FORBIDDEN`, or `OUTSIDE_PROJECT_ROOT`. Check this field in code, not `error`. |
+
+A missing or wrong token returns HTTP `401` with `{"success":false,"error":"Unauthorized","code":"UNAUTHORIZED"}`. Other failures can return HTTP `200` with `success: false`, so always check `success`.
+
+## Know what a client can change
+
+A client on the same machine as the server can use every route. A client on another device is view-only, unless the server runs with `--allow-remote-writes`. Routes that change files, git, projects, or settings return `FORBIDDEN` to a view-only client. `GET /health` reports the current setting in `allowRemoteWrites`. See [Allow changes from other devices](/docs/remote/server-options#allow-changes-from-other-devices).
+
+Routes that work on a path, such as `/git/*` and `/worktree/*`, accept only paths inside a registered project. Register a folder first with `POST /projects`.
+
+## Call it from a web page
+
+The server does not send CORS headers. A browser therefore blocks a page on another origin, such as `http://localhost:3000`, from calling the API. Scripts, servers, and native apps are not affected, because the browser is the one that enforces CORS.
+
+To run your own web interface against `termul-server`, serve it from the same origin as the server. One way is a reverse proxy that sends `/` to your interface and the API paths to `termul-server`. If the proxy changes the host name, list the public address with `--allowed-origins`. See [Put a reverse proxy in front](/docs/remote/server-options#put-a-reverse-proxy-in-front).
+
+## Use the WebSockets
+
+Chats, agents, and terminals run over two WebSocket endpoints:
+
+- `/ws` carries chat sessions, prompts, approvals, and live events.
+- `/terminal/ws` carries terminal input and output.
+
+The upgrade request itself needs no token. After the socket opens, send an `authenticate` request first. Put the token in its payload:
+
+```json
+{"id":"1","type":"authenticate","payload":{"protocolVersion":7,"deviceId":"my-client","clientInstanceId":"my-client-1","token":"<token>"}}
+```
+
+The server refuses an `authenticate` with a different `protocolVersion`. The current frames, request types, and version number are in [`src/shared/types/web-protocol.types.ts`](https://github.com/gnoviawan/termul/blob/dev/src/shared/types/web-protocol.types.ts) in the Termul repository. The Termul web app is the reference client, and its socket code is in `src/renderer/lib/`.
+
+## Keep the spec up to date
+
+If you change a server route, regenerate the spec from the repository root:
+
+```bash
+bun run openapi:update
+```
+
+The Rust tests fail when `openapi.yaml` no longer matches the code, or when a route has no entry in the spec's route table.

@@ -5,7 +5,9 @@
 
 ## Overview
 
-Termul Manager does not expose a public HTTP API. Its primary integration surface is an **internal IPC contract** between the React renderer and the Rust/Tauri runtime.
+This page covers the desktop app's **internal IPC contract** between the React renderer and the Rust/Tauri runtime.
+
+`termul-server` and the desktop shared-live host also expose an HTTP and WebSocket API. Its HTTP routes are described in [`website-docs/public/openapi.yaml`](../website-docs/public/openapi.yaml), generated from `src-tauri/src/web/openapi/` (regenerate with `bun run openapi:update`). The WebSocket protocol is defined in `src/shared/types/web-protocol.types.ts`. The user guide is `website-docs/content/docs/server-api.mdx`.
 
 This contract is implemented through:
 
