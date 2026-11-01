@@ -46,10 +46,7 @@ export function useCurrentTurnSubagents(
     () => runningBackgroundSubagents(toolCalls, messages),
     [toolCalls, messages]
   )
-  const subagents = useMemo(
-    () => withRunningBackground(current, background),
-    [current, background]
-  )
+  const subagents = useMemo(() => withRunningBackground(current, background), [current, background])
   const counts = countSubagents(subagents, turnActive)
 
   // Settle time is stamped only on an observed running -> settled transition,
