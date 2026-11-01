@@ -1095,3 +1095,115 @@ fn subagent_chunks_stay_out_of_the_main_reply_bubbles() {
     }
     assert_eq!(opened, payload.messages.len());
 }
+
+fn model_option(current: &str) -> Value {
+    json!({
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": current,
+        "options": [
+            {"value": "sonnet", "name": "Sonnet"},
+            {"value": "opus", "name": "Opus"}
+        ]
+    })
+}
+
+fn control_records() -> Vec<PersistedEventRecord> {
+    vec![
+        record(
+            1,
+            "session_created",
+            json!({
+                "agentId": "runtime-1",
+                "sessionId": "session-1",
+                "modes": {
+                    "currentModeId": "default",
+                    "availableModes": [
+                        {"id": "default", "name": "Default"},
+                        {"id": "plan", "name": "Plan"}
+                    ]
+                },
+                "models": {
+                    "currentModelId": "sonnet",
+                    "availableModels": [
+                        {"modelId": "sonnet", "name": "Sonnet"},
+                        {"modelId": "opus", "name": "Opus"}
+                    ]
+                },
+                "configOptions": [model_option("sonnet")]
+            }),
+        ),
+        user_prompt(2, Some("turn-1"), "hello"),
+        record(
+            3,
+            "config_options_update",
+            json!({
+                "agentId": "runtime-1",
+                "sessionId": "session-1",
+                "configOptions": [model_option("opus")]
+            }),
+        ),
+        record(
+            4,
+            "mode_update",
+            json!({"agentId": "runtime-1", "sessionId": "session-1", "currentModeId": "plan"}),
+        ),
+        chunk(5, "agent", "reply"),
+    ]
+}
+
+#[test]
+fn payload_carries_the_last_known_session_controls() {
+    let payload = materialize_session_payload(&metadata(), &control_records());
+
+    assert_eq!(
+        serde_json::to_value(&payload).unwrap()["controls"],
+        json!({
+            "modes": {
+                "currentModeId": "plan",
+                "availableModes": [
+                    {"id": "default", "name": "Default"},
+                    {"id": "plan", "name": "Plan"}
+                ]
+            },
+            "models": {
+                "currentModelId": "sonnet",
+                "availableModels": [
+                    {"modelId": "sonnet", "name": "Sonnet"},
+                    {"modelId": "opus", "name": "Opus"}
+                ]
+            },
+            "configOptions": [model_option("opus")]
+        })
+    );
+}
+
+#[test]
+fn payload_without_control_records_has_no_controls_key() {
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "hello"),
+        chunk(2, "agent", "reply"),
+        prompt_complete(3, "turn-1"),
+    ];
+    let payload = serde_json::to_value(materialize_session_payload(&metadata(), &records)).unwrap();
+
+    assert_eq!(payload.get("controls"), None);
+    assert_eq!(payload["messages"].as_array().map(Vec::len), Some(2));
+}
+
+#[test]
+fn mode_update_without_prior_modes_keeps_an_empty_mode_list() {
+    let records = vec![record(
+        1,
+        "mode_update",
+        json!({"agentId": "runtime-1", "sessionId": "session-1", "currentModeId": "plan"}),
+    )];
+    let payload = serde_json::to_value(materialize_session_payload(&metadata(), &records)).unwrap();
+
+    assert_eq!(
+        payload["controls"],
+        json!({"modes": {"currentModeId": "plan", "availableModes": []}})
+    );
+}

@@ -3976,3 +3976,146 @@ async fn session_payload_tail_reads_the_command_list_from_the_log_after_restart(
     assert_eq!(serde_json::to_value(&tail).unwrap()["commandsSeq"], json!(1));
     let _ = fs::remove_dir_all(root);
 }
+
+fn model_option(current: &str) -> Value {
+    json!({
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": current,
+        "options": [{"value": "sonnet", "name": "Sonnet"}, {"value": "opus", "name": "Opus"}]
+    })
+}
+
+fn enqueue_session_created(persistence: &SessionPersistence, seq: u64) {
+    persistence
+        .enqueue_event(payload_record(
+            seq,
+            "session_created",
+            json!({
+                "agentId": "runtime-1",
+                "sessionId": "session-1",
+                "modes": {"currentModeId": "default", "availableModes": [{"id": "default", "name": "Default"}]},
+                "configOptions": [model_option("sonnet")]
+            }),
+        ))
+        .unwrap();
+}
+
+fn enqueue_model_change(persistence: &SessionPersistence, seq: u64, model: &str) {
+    persistence
+        .enqueue_event(payload_record(
+            seq,
+            "config_options_update",
+            json!({"agentId": "runtime-1", "sessionId": "session-1", "configOptions": [model_option(model)]}),
+        ))
+        .unwrap();
+}
+
+#[tokio::test]
+async fn session_payload_tail_carries_the_session_controls_outside_its_window() {
+    let root = temp_dir("payload-tail-controls");
+    let (persistence, _) = registered(&root).await;
+    enqueue_session_created(&persistence, 1);
+    for i in 0..10u64 {
+        let seq = i * 3 + 2;
+        enqueue_turn(&persistence, seq, &format!("turn-{i}"), "prompt", "reply");
+    }
+
+    let tail = persistence
+        .session_payload_tail_async("session-1", 5)
+        .await
+        .unwrap();
+    assert_eq!(tail.messages.first().map(|message| message.seq), Some(24));
+    assert_eq!(
+        serde_json::to_value(&tail).unwrap()["controls"],
+        json!({
+            "modes": {"currentModeId": "default", "availableModes": [{"id": "default", "name": "Default"}]},
+            "configOptions": [model_option("sonnet")]
+        })
+    );
+
+    enqueue_model_change(&persistence, 32, "opus");
+    let tail = persistence
+        .session_payload_tail_async("session-1", 5)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&tail).unwrap()["controls"],
+        json!({
+            "modes": {"currentModeId": "default", "availableModes": [{"id": "default", "name": "Default"}]},
+            "configOptions": [model_option("opus")]
+        })
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn session_payload_tail_reads_the_session_controls_from_the_log_after_restart() {
+    let root = temp_dir("payload-tail-controls-restart");
+    let (persistence, _) = registered(&root).await;
+    enqueue_session_created(&persistence, 1);
+    enqueue_model_change(&persistence, 2, "opus");
+    for i in 0..10u64 {
+        let seq = i * 3 + 3;
+        enqueue_turn(&persistence, seq, &format!("turn-{i}"), "prompt", "reply");
+    }
+    persistence.shutdown().await.unwrap();
+
+    let reopened = open_with_authority(&root.join("store")).await;
+    let tail = reopened
+        .session_payload_tail_async("session-1", 4)
+        .await
+        .unwrap();
+    assert_eq!(tail.messages.first().map(|message| message.seq), Some(27));
+    assert_eq!(
+        serde_json::to_value(&tail).unwrap()["controls"],
+        json!({
+            "modes": {"currentModeId": "default", "availableModes": [{"id": "default", "name": "Default"}]},
+            "configOptions": [model_option("opus")]
+        })
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn session_payload_tail_drops_controls_a_salvage_removed() {
+    let root = temp_dir("payload-tail-controls-salvage");
+    let (persistence, metadata) = registered(&root).await;
+    enqueue_session_created(&persistence, 1);
+    enqueue_model_change(&persistence, 2, "opus");
+    for i in 0..10u64 {
+        let seq = i * 3 + 3;
+        enqueue_turn(&persistence, seq, &format!("turn-{i}"), "prompt", "reply");
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    append_raw_record(
+        &session_dir.join(MESSAGES_FILE),
+        &payload_record(
+            2,
+            "config_options_update",
+            json!({"agentId": "runtime-1", "sessionId": "session-1", "configOptions": [model_option("sonnet")]}),
+        ),
+    );
+
+    let reopened = open_with_authority(&root.join("store")).await;
+    let _ = reopened.session_payload_tail_async("session-1", 4).await;
+    reopened.replay_after("session-1", 0).unwrap();
+    let full = reopened.session_payload_async("session-1").await.unwrap();
+    let tail = reopened
+        .session_payload_tail_async("session-1", 4)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&full).unwrap()["controls"]["configOptions"],
+        json!([model_option("opus")])
+    );
+    assert_eq!(
+        serde_json::to_value(&tail).unwrap()["controls"],
+        serde_json::to_value(&full).unwrap()["controls"]
+    );
+    let _ = fs::remove_dir_all(root);
+}
