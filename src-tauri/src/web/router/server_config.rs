@@ -30,26 +30,26 @@ use crate::web::ws::AppState;
 /// `GET /server/config` success payload — `ServerConfigResponse` in the
 /// shared contract (`src/shared/types/server-setup.types.ts`): the running
 /// server's effective answers for the reconfigure form.
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct ServerConfigResponse {
+pub(crate) struct ServerConfigResponse {
     config: ServerSetupAnswers,
 }
 
 /// `POST /server/config` validation-failure body — the `{ok, fieldErrors}`
 /// `SetupValidateResponse` shape `POST /setup/apply` also returns at 400.
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct ServerConfigFieldErrors {
+pub(crate) struct ServerConfigFieldErrors {
     ok: bool,
     field_errors: SetupFieldErrors,
 }
 
 /// `POST /server/config` success payload — `SetupApplyResponse` in the
 /// shared contract (same shape `POST /setup/apply` replies with).
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct SetupApplyResponse {
+pub(crate) struct SetupApplyResponse {
     ok: bool,
     /// The effective bind the restarted server will listen on.
     host: String,

@@ -19,6 +19,9 @@ const PHONE_LABELS: Record<string, string> = {
   fast: 'Fast'
 }
 
+/** The sheet route key of an option's choices, as its row's `subview`. */
+export const optionRouteKey = (id: string): string => `option:${id}`
+
 const modeGlyph = (value: string): ReactNode => <ModeIcon modeId={value} size={16} />
 
 export function sheetOptions(
@@ -97,7 +100,7 @@ export function OptionsCard({
               ) : undefined
             }
             accessory="chevron"
-            subview={option.id}
+            subview={optionRouteKey(option.id)}
             disabled={disabled}
             onSelect={() => onOpen(option.id)}
           />

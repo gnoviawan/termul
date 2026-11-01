@@ -337,14 +337,14 @@ describe('ClaudeAccountChip', () => {
     expect(chip).toHaveTextContent(/^Personal$/)
   })
 
-  it('keeps only the 5-hour window below the warning level, and drops the name when compact', async () => {
+  it('keeps only the 5-hour window below the warning level', async () => {
     api.usage.mockResolvedValue([read('default', 42, 79), read('ab12', 4), read('cd34', 40)])
     seed()
-    render(<ClaudeAccountChip sessionId="s1" compact />)
+    render(<ClaudeAccountChip sessionId="s1" />)
     const chip = await screen.findByRole('button', {
       name: 'Claude account: Personal, 5-hour 42% used. Change account'
     })
-    expect(chip).toHaveTextContent(/^5h 42%$/)
+    expect(chip).toHaveTextContent(/^Personal5h 42%$/)
   })
 
   it('shows the live 5-hour reading and a live weekly one beside it', async () => {

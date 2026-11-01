@@ -59,6 +59,8 @@ export type PanelView =
       /** The composer agent's status, with its sign-in and retry actions. */
       status: SelectorModelStatus | null
       retry: (() => void) | null
+      /** Another agent's list failed because it asks for credentials. */
+      needsSignIn: boolean
     }
   | { kind: 'loading'; title: string }
 
@@ -372,7 +374,8 @@ export function useSelectorPanelState(
         title: status?.error?.label ?? '',
         detail: status?.error?.detail,
         status,
-        retry: null
+        retry: null,
+        needsSignIn: false
       }
     }
   } else if (viewKind === 'current') {
@@ -391,7 +394,8 @@ export function useSelectorPanelState(
       title: `Could not load ${nameOf(viewId)} models.`,
       detail: other.error.label,
       status: null,
-      retry: other.retry
+      retry: other.retry,
+      needsSignIn: other.error.category === 'auth' || other.error.category === 'multi-auth'
     }
   } else {
     body = { kind: 'loading', title: `Loading ${nameOf(viewId)} models…` }

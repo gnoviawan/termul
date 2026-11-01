@@ -26,14 +26,14 @@ use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::mcp_servers_api::project_root_or_not_found;
 use crate::web::ws::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthStartRequest {
     pub project_id: String,
     pub server_url: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthStartResponse {
     pub auth_url: String,
@@ -116,7 +116,7 @@ fn start_error_code(error: &mcp_oauth::McpOAuthError) -> &'static str {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct OAuthCallbackQuery {
     pub code: String,
     pub state: String,
@@ -194,14 +194,14 @@ fn urlencode(s: &str) -> String {
         .replace(' ', "%20")
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthStatusRequest {
     pub project_id: String,
     pub server_url: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OAuthStatusResponse {
     pub has_token: bool,

@@ -34,7 +34,6 @@ use axum::{
 use serde::Deserialize;
 use tracing::{error, info, warn};
 
-use self::scope::WebWorktreeEntry;
 use crate::web::fs_api::{check_local_only, resolve_request_path, IpcBody};
 use crate::web::git_api::ensure_within_project_boundary;
 use crate::web::ws::AppState;
@@ -47,17 +46,18 @@ mod ledgered;
 pub(crate) use ledgered::create_fingerprint;
 mod scope;
 mod symlinks;
-pub use symlinks::{create_symlinks, ensure_symlinks, parse_gitignore};
+pub use scope::WebWorktreeEntry;
+pub use symlinks::{create_symlinks, ensure_symlinks, parse_gitignore, WorktreeSymlinksRequest};
 
 /// `POST /worktree/list { projectPath }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeProjectPathRequest {
     pub project_path: String,
 }
 
 /// `POST /worktree/create { projectPath, name, branch, isNewBranch, startRef?, targetPath?, streamProgress? }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeCreateRequest {
     pub project_path: String,
@@ -79,7 +79,7 @@ pub struct WorktreeCreateRequest {
 }
 
 /// `POST /worktree/remove { projectPath, worktreePath, force }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeRemoveRequest {
     pub project_path: String,
@@ -88,21 +88,21 @@ pub struct WorktreeRemoveRequest {
 }
 
 /// `GET /worktree/branches?projectPath=...` query.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeProjectPathQuery {
     pub project_path: String,
 }
 
 /// `GET /worktree/check-dirty?worktreePath=...` query.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreePathQuery {
     pub worktree_path: String,
 }
 
 /// `POST /worktree/copy-include-files { projectPath, worktreePath }` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeCopyIncludeRequest {
     pub project_path: String,

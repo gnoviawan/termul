@@ -33,7 +33,7 @@ use crate::web::ws::AppState;
 
 /// `POST /git/stage-hunk | unstage-hunk { cwd, path, hunkPatch }` body.
 /// Mirrors the desktop command args (`cwd`, `path`, `hunkPatch`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHunkRequest {
     pub cwd: String,

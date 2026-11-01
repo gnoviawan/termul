@@ -230,77 +230,81 @@ fn admit(
     })
 }
 
-#[derive(Deserialize)]
-struct ProjectQuery {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct ProjectQuery {
     #[serde(default)]
     project_id: String,
 }
 
-#[derive(Deserialize)]
-struct RunsQuery {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct RunsQuery {
     limit: Option<usize>,
 }
 
-#[derive(Deserialize)]
-struct SecretQuery {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct SecretQuery {
     #[serde(default)]
     project_id: String,
     #[serde(default)]
     name: String,
 }
 
-#[derive(Deserialize)]
-struct CreateBody {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct CreateBody {
     project_id: String,
     name: String,
 }
 
-#[derive(Deserialize)]
-struct OpsBody {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct OpsBody {
     base_revision: u64,
+    // Parsed into `Vec<Op>` by the command; the spec documents that shape.
+    #[schemars(with = "Vec<crate::automation::model::Op>")]
     ops: Value,
 }
 
-#[derive(Deserialize)]
-struct EnabledBody {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct EnabledBody {
     enabled: bool,
 }
 
-#[derive(Deserialize)]
-struct ApproveBody {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct ApproveBody {
     revision: u64,
 }
 
-#[derive(Deserialize)]
-struct PreviewBody {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct PreviewBody {
+    // Parsed into a `Schedule` by the command; the spec documents that shape.
+    #[schemars(with = "crate::automation::model::Schedule")]
     schedule: Value,
 }
 
 /// No `Debug`: the value is a secret.
-#[derive(Deserialize)]
-struct SecretBody {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct SecretBody {
     project_id: String,
     name: String,
     value: String,
 }
 
-#[derive(Deserialize)]
-struct SuggestionsQuery {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct SuggestionsQuery {
     #[serde(default)]
     project_id: String,
     timezone: Option<String>,
 }
 
 /// No `Debug`: `text` is the user's prompt.
-#[derive(Deserialize)]
-struct MatchBody {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct MatchBody {
     project_id: String,
     text: String,
     timezone: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct SuggestionBody {
+#[derive(Deserialize, schemars::JsonSchema)]
+pub(crate) struct SuggestionBody {
     project_id: String,
     fingerprint: String,
 }

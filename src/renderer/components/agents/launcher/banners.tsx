@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { partitionAuthMethods } from '@/components/agents/launcher/auth-methods'
 import { Download, FolderOpen } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -38,16 +39,11 @@ export function AuthRequiredBanner({
   const [gatewayKey, setGatewayKey] = useState('')
   const signingInMethod = authMethods.find((m) => m.id === signingInMethodId)
   const actionableMethods = authMethods.filter((m) => m.id.trim().length > 0)
-  // Only 'agent' (and untyped — the pre-extension wire) and 'terminal'
-  // methods can be driven from here. 'env_var'/'unknown'/future variants are
-  // advertised for completeness but render disabled with guidance text.
-  const runnableMethods = actionableMethods.filter(
-    (m) => m.id !== 'gateway' && (m.type === 'agent' || m.type === 'terminal' || m.type == null)
-  )
-  const gatewayMethod = actionableMethods.find((m) => m.id === 'gateway')
-  const guidanceMethods = actionableMethods.filter(
-    (m) => !(m.type === 'agent' || m.type === 'terminal' || m.type == null)
-  )
+  const {
+    runnable: runnableMethods,
+    gateway: gatewayMethod,
+    guidance: guidanceMethods
+  } = partitionAuthMethods(authMethods)
 
   return (
     <div className="border-b border-border/60 px-5 py-3" data-auth-banner="stack">
