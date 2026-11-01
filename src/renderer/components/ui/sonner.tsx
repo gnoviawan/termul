@@ -10,7 +10,7 @@ type ToasterProps = React.ComponentProps<typeof Sonner>
 /**
  * Bottom offset of the toast stack on the mobile web shell: a 12px gap above the
  * highest dock edge. `useDockClearance` measures the chat dock (composer, open
- * approval, changed-files bar, queue) and the terminal key bar and publishes the
+ * approval, queue) and the terminal key bar and publishes the
  * distance from the viewport bottom to that edge as `--mobile-dock-height`;
  * sonner measures its offsets from the same bottom edge, so the dock's own
  * padding, the iOS keyboard spacer and the safe-area inset are already counted.

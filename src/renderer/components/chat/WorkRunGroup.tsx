@@ -12,7 +12,7 @@ import type { TimelineItem } from './chat-timeline'
 import { RowReveal } from './RowReveal'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
-import type { ToolActivitySummary } from './tool-call-summary'
+import type { ParentTurn, ToolActivitySummary } from './tool-call-summary'
 import type { EnterTracker } from './use-enter-tracker'
 
 /** One step of agent work between two narration messages. */
@@ -43,8 +43,8 @@ interface WorkRunGroupProps {
   items: WorkRunItem[]
   /** Categorized rollup on the trigger line — "Thought 2 times, ran 3 commands". */
   summary: ToolActivitySummary
-  /** The parent turn is still running. */
-  active: boolean
+  /** Where the parent turn stands. */
+  parentTurn: ParentTurn
   /** True while this run owns the turn's last timeline item: the label shimmers and its trailing thought streams. */
   isLiveTail: boolean
   /** A call failed: the trigger reads red. */
@@ -63,7 +63,7 @@ interface WorkRunGroupProps {
 function WorkRunGroupComponent({
   items,
   summary,
-  active,
+  parentTurn,
   isLiveTail,
   failed,
   enter,
@@ -127,7 +127,7 @@ function WorkRunGroupComponent({
                   <ToolCallCard
                     toolCall={item.tool}
                     filePathContext={filePathContext}
-                    parentTurnActive={active}
+                    parentTurn={parentTurn}
                     onOpenSubagent={onOpenSubagent}
                   />
                 </RowReveal>

@@ -17,6 +17,7 @@ import {
   StatusActions,
   TabGlyph
 } from './SelectorRows'
+import { OtherAgentSignIn } from './SignInActions'
 import {
   type AgentTab,
   type CatalogModel,
@@ -221,7 +222,16 @@ export function SelectorPanel(props: SelectorPanelProps): React.JSX.Element {
       ) : (
         <div className="flex flex-col gap-2">
           <ListMessage title={view.title} detail={view.detail} />
-          {view.retry ? (
+          {view.signInTab && view.retry ? (
+            <OtherAgentSignIn
+              key={view.signInTab.configId}
+              tab={view.signInTab}
+              workspace={sw.workspace}
+              retry={view.retry}
+              disabled={disabled}
+              touch={touch}
+            />
+          ) : view.retry ? (
             <SegmentedTrack
               id="retry-models"
               label="Retry"

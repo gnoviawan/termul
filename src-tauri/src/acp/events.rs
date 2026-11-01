@@ -155,6 +155,15 @@ pub const EVENT_QUESTION_REQUEST: &str = "acp:question_request";
 pub const EVENT_QUESTION_CANCELLED: &str = "acp:question_cancelled";
 /// Event name: the agent requested structured user input (elicitation).
 pub const EVENT_ELICITATION_REQUEST: &str = "acp:elicitation_request";
+/// Event name: the agent asked the user to sign in at a URL outside any chat
+/// (a request-scoped URL elicitation such as Codex's device-code sign-in).
+/// Agent-level (`sid = None`); the payload is [`AgentSignInRequestEvent`],
+/// answered through `respond_elicitation` by its `requestId`.
+pub const EVENT_AGENT_SIGN_IN_REQUEST: &str = "acp:agent_sign_in_request";
+/// Event name: the host no longer holds a sign-in prompt (completed,
+/// answered, replaced, or its `authenticate` ended). Agent-level; the payload
+/// is [`AgentSignInResolvedEvent`].
+pub const EVENT_AGENT_SIGN_IN_RESOLVED: &str = "acp:agent_sign_in_resolved";
 /// Event name: a prompt turn finished with a stop reason.
 pub const EVENT_PROMPT_COMPLETE: &str = "acp:prompt_complete";
 /// Event name: a non-fatal error occurred while talking to the agent.
@@ -234,6 +243,33 @@ pub struct AuthMethodInfo {
     /// Terminal-method env (present only when `type == "terminal"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<std::collections::HashMap<String, String>>,
+    /// The method takes a key the user types, sent in this shape. The wire
+    /// carries only `takesApiKey: true`; the shape stays on the host.
+    #[serde(
+        rename = "takesApiKey",
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_takes_api_key",
+        skip_deserializing
+    )]
+    pub api_key: Option<ApiKeyShape>,
+}
+
+/// How an agent reads a key typed into Termul from
+/// `authenticate._meta["api-key"]`. ACP leaves the shape to each agent, so
+/// the host tells them apart by the provider the method advertises.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiKeyShape {
+    /// codex-acp (`provider: "openai"`) reads `_meta["api-key"].apiKey`.
+    Object,
+    /// Gemini CLI (`provider: "google"`) reads `_meta["api-key"]` as the key.
+    Text,
+}
+
+fn serialize_takes_api_key<S: serde::Serializer>(
+    shape: &Option<ApiKeyShape>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_bool(shape.is_some())
 }
 
 /// `acp:browser_open_request` — the POSIX browser shim captured an agent's
@@ -421,6 +457,26 @@ pub struct ElicitationRequestEvent {
     /// as a non-option value (issue #935). Always serialized so the renderer
     /// sees a stable boolean.
     pub allow_other: bool,
+}
+
+/// `acp:agent_sign_in_request`
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSignInRequestEvent {
+    pub agent_id: AgentId,
+    pub request_id: String,
+    /// Safe to open on a remote device (`check_safe_url`, `Opener::Remote`).
+    pub url: String,
+    /// The agent's instruction; carries the device code, so it is never logged.
+    pub message: String,
+}
+
+/// `acp:agent_sign_in_resolved`
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSignInResolvedEvent {
+    pub agent_id: AgentId,
+    pub request_id: String,
 }
 
 /// One selectable option of an `enum`/`multi-enum` [`ElicitationField`].

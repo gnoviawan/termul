@@ -456,35 +456,64 @@ describe('toolCallPath', () => {
 })
 
 describe('isSubagentRunning', () => {
-  it('is running for pending and in_progress only while the parent turn is active', () => {
-    expect(isSubagentRunning(call({ status: 'pending' }), true)).toBe(true)
-    expect(isSubagentRunning(call({ status: 'in_progress' }), true)).toBe(true)
-    // A cancelled or crashed turn can leave the dispatch in flight forever.
-    expect(isSubagentRunning(call({ status: 'pending' }), false)).toBe(false)
-    expect(isSubagentRunning(call({ status: 'in_progress' }), false)).toBe(false)
-  })
+  const background = (partial: Partial<ToolCall> = {}) =>
+    call({ status: 'completed', subagentLifecycle: { background: true }, ...partial })
 
-  it('treats a missing status as running only while the parent turn is active', () => {
-    expect(isSubagentRunning(call({}), true)).toBe(true)
-    expect(isSubagentRunning(call({ status: undefined }), false)).toBe(false)
+  it('runs a foreground dispatch only while its turn is active', () => {
+    expect(isSubagentRunning(call({ status: 'pending' }), 'active')).toBe(true)
+    expect(isSubagentRunning(call({ status: 'in_progress' }), 'active')).toBe(true)
+    expect(isSubagentRunning(call({}), 'active')).toBe(true)
+    // A cancelled or crashed turn can leave the dispatch in flight forever.
+    expect(isSubagentRunning(call({ status: 'pending' }), 'ended')).toBe(false)
+    expect(isSubagentRunning(call({ status: 'in_progress' }), 'ended')).toBe(false)
+    expect(isSubagentRunning(call({ status: undefined }), 'ended')).toBe(false)
+    expect(isSubagentRunning(call({ status: 'in_progress' }), 'superseded')).toBe(false)
   })
 
   it('is not running once completed or failed, even in an active turn', () => {
-    expect(isSubagentRunning(call({ status: 'completed' }), true)).toBe(false)
-    expect(isSubagentRunning(call({ status: 'failed' }), true)).toBe(false)
+    expect(isSubagentRunning(call({ status: 'completed' }), 'active')).toBe(false)
+    expect(isSubagentRunning(call({ status: 'failed' }), 'active')).toBe(false)
   })
 
-  it('stays running after the turn when the host still reports running', () => {
+  it('keeps a background launch running after its turn ends, until a newer turn starts', () => {
+    expect(isSubagentRunning(background(), 'active')).toBe(true)
+    expect(isSubagentRunning(background(), 'ended')).toBe(true)
+    expect(isSubagentRunning(background(), 'superseded')).toBe(false)
+    expect(isSubagentRunning(background({ status: 'failed' }), 'ended')).toBe(false)
+  })
+
+  it('treats a background launch without a launch receipt as foreground', () => {
+    // Stop before the receipt leaves the launch pending with nothing to outlive the turn.
+    for (const status of ['pending', 'in_progress', undefined] as const) {
+      expect(isSubagentRunning(background({ status }), 'active')).toBe(true)
+      expect(isSubagentRunning(background({ status }), 'ended')).toBe(false)
+      expect(isSubagentRunning(background({ status }), 'superseded')).toBe(false)
+    }
+  })
+
+  it('ends a background launch on its terminal state', () => {
+    for (const state of ['completed', 'failed', 'cancelled'] as const) {
+      const ended = background({ subagentLifecycle: { background: true, state } })
+      expect(isSubagentRunning(ended, 'active')).toBe(false)
+      expect(isSubagentRunning(ended, 'ended')).toBe(false)
+    }
+  })
+
+  it('stays running in any turn while the host still reports running', () => {
     const live = call({ status: 'in_progress', subagentLifecycle: { state: 'running' } })
-    expect(isSubagentRunning(live, false)).toBe(true)
+    expect(isSubagentRunning(live, 'ended')).toBe(true)
+    expect(isSubagentRunning(live, 'superseded')).toBe(true)
     expect(
       isSubagentRunning(
         call({ status: 'in_progress', subagentLifecycle: { state: 'completed' } }),
-        true
+        'active'
       )
     ).toBe(false)
     expect(
-      isSubagentRunning(call({ status: 'failed', subagentLifecycle: { state: 'running' } }), false)
+      isSubagentRunning(
+        call({ status: 'failed', subagentLifecycle: { state: 'running' } }),
+        'superseded'
+      )
     ).toBe(false)
   })
 })

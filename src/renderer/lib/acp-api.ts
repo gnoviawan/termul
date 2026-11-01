@@ -206,7 +206,7 @@ export interface ToolCall {
    * live calls derive counts from `content` instead. */
   diffStat?: { added: number; removed: number }
   /** True for a restored durable file-change summary (payload `toolCalls`):
-   * feeds the Changed files panel but never renders as a timeline card. */
+   * feeds the changed-files list but never renders as a timeline card. */
   restoredSummary?: boolean
   /** Subagent usage scalars lifted from `_meta.claudeCode.toolResponse` at ingest
    * (the next update replaces `_meta`, so the store keeps just these). */
@@ -412,7 +412,21 @@ export interface AuthMethod {
   type?: 'agent' | 'terminal' | 'env_var'
   args?: string[]
   env?: Record<string, string>
+  /**
+   * The agent reads a key the user types from `authenticate` (it advertised
+   * `_meta["api-key"]` for a provider whose key shape the host knows).
+   * Signing in without one makes the agent read its own environment.
+   */
+  takesApiKey?: boolean
 }
+
+/**
+ * What a sign-in hands the agent beyond the method id. A key is held only
+ * for the call: never logged, persisted or remembered.
+ */
+export type AuthenticateInput =
+  | { gateway: { baseUrl: string; apiKey?: string } }
+  | { apiKey: string }
 
 export interface AgentSpawnedEvent {
   agentId: AgentId
@@ -442,6 +456,28 @@ export interface AgentSpawnedEvent {
 export interface BrowserOpenRequestEvent {
   agentId: AgentId
   url: string
+}
+
+/**
+ * `acp:agent_sign_in_request` payload: the agent asked the user to sign in
+ * at `url`, following `message` (it carries a device code). Agent-level (no
+ * session id). Answered through `respondElicitation` by `requestId`.
+ */
+export interface AgentSignInRequestEvent {
+  agentId: AgentId
+  requestId: string
+  url: string
+  message: string
+}
+
+/**
+ * `acp:agent_sign_in_resolved` payload: the host no longer holds sign-in
+ * prompt `requestId` (the sign-in completed, was answered, or `authenticate`
+ * ended), so every client drops its dialog.
+ */
+export interface AgentSignInResolvedEvent {
+  agentId: AgentId
+  requestId: string
 }
 
 /**
@@ -778,6 +814,8 @@ export const ACP_EVENTS = {
   agentSwitch: 'acp:agent_switch',
   usageUpdate: 'acp:usage_update',
   browserOpenRequest: 'acp:browser_open_request',
+  agentSignInRequest: 'acp:agent_sign_in_request',
+  agentSignInResolved: 'acp:agent_sign_in_resolved',
   browserAgentTab: 'acp:browser_agent_tab',
   browserTicketClosed: 'acp:browser_ticket_closed',
   browserStopChanged: 'acp:browser_stop_changed',
@@ -1351,14 +1389,14 @@ export async function acpAnswerQuestion(
 export async function acpAuthenticate(
   agentId: AgentId,
   methodId: string,
-  gateway?: { baseUrl: string; apiKey?: string }
+  input?: AuthenticateInput
 ): Promise<void> {
-  // `fresh`: the request may carry a gateway key the id cannot name, so a
-  // later try is never mistaken for a resend of an earlier one.
+  // `fresh`: the request may carry a key the id cannot name, so a later try
+  // is never mistaken for a resend of an earlier one.
   await ledgered(
     'authenticate_agent',
     `${agentId}|${methodId}`,
-    (call) => getAcpTransport().authenticate(agentId, methodId, gateway, call),
+    (call) => getAcpTransport().authenticate(agentId, methodId, input, call),
     { fresh: true, acceptedWithoutResult: () => undefined }
   )
 }

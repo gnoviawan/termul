@@ -2539,7 +2539,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     // cancel, so the flush below cannot restore the running state.
     flushCoalescedSync()
     set((s) => {
-      const toolCalls = cancelRunningSubagents(s.toolCalls, [e.sessionId], endedAt)
+      const toolCalls = cancelRunningSubagents(s, [e.sessionId], endedAt)
       return toolCalls === s.toolCalls ? {} : { toolCalls }
     })
     if (reloadInFlight.has(e.sessionId)) {

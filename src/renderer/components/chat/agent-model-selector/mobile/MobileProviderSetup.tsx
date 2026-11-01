@@ -1,11 +1,7 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react'
-import { partitionAuthMethods } from '@/components/agents/launcher/auth-methods'
-import { FactoryApiKeyForm } from '@/components/agents/launcher/FactoryApiKeyForm'
+import { type ReactNode, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Spinner } from '@/components/ui/spinner'
-import type { AuthMethod } from '@/lib/acp-api'
 import { TabGlyph } from '../SelectorRows'
+import { Busy, Note, SignInActions } from '../SignInActions'
 import type { AgentTab } from '../selector-model'
 import { type ProviderSetup, useProviderSetup } from './provider-setup'
 
@@ -31,112 +27,6 @@ function Hero({
         <p className="line-clamp-4 break-words text-sm text-muted-foreground">{detail}</p>
       ) : null}
     </div>
-  )
-}
-
-function Note({ children }: { children: ReactNode }): React.JSX.Element {
-  return <p className="px-4 text-center text-xs text-muted-foreground">{children}</p>
-}
-
-function Busy({ label }: { label: string }): React.JSX.Element {
-  return (
-    <Button type="button" size="touch" className="w-full" disabled>
-      <Spinner size={14} decorative className="mr-1.5" />
-      {label}
-    </Button>
-  )
-}
-
-/** Agent-run methods first: they finish in place; a terminal opens a tab. */
-const byInPlaceFirst = (a: AuthMethod, b: AuthMethod): number =>
-  Number(a.type === 'terminal') - Number(b.type === 'terminal')
-
-function SignInActions({
-  tab,
-  setup,
-  disabled
-}: {
-  tab: AgentTab
-  setup: ProviderSetup
-  disabled: boolean
-}): React.JSX.Element {
-  const { signIn } = setup
-  const [gatewayUrl, setGatewayUrl] = useState('')
-  const [gatewayKey, setGatewayKey] = useState('')
-  const { runnable, gateway, guidance } = partitionAuthMethods(signIn.authMethods)
-  const methods = [...runnable].sort(byInPlaceFirst)
-  const signingIn = signIn.authMethods.find((m) => m.id === signIn.signingInMethodId)
-
-  if (signingIn) return <Busy label={`Signing in with ${signingIn.name}…`} />
-  if (signIn.factoryKeyAuth.showKeyInput && signIn.inlineKeyMethodId) {
-    return <FactoryApiKeyForm auth={signIn.factoryKeyAuth} />
-  }
-  return (
-    <>
-      {methods.map((method, index) => (
-        <Button
-          key={method.id}
-          type="button"
-          size="touch"
-          variant={index === 0 ? 'default' : 'secondary'}
-          className="w-full"
-          disabled={disabled}
-          onClick={() => signIn.handleAuthMethod(method)}
-        >
-          {method.name}
-        </Button>
-      ))}
-      {gateway ? (
-        <form
-          className="flex flex-col gap-2"
-          onSubmit={(event) => {
-            event.preventDefault()
-            void signIn.runAuthenticate(gateway.id, {
-              baseUrl: gatewayUrl.trim(),
-              ...(gatewayKey.trim() ? { apiKey: gatewayKey.trim() } : {})
-            })
-          }}
-        >
-          <Input
-            value={gatewayUrl}
-            onChange={(event) => setGatewayUrl(event.target.value)}
-            placeholder="Gateway base URL"
-            aria-label="Gateway base URL"
-          />
-          <Input
-            value={gatewayKey}
-            onChange={(event) => setGatewayKey(event.target.value)}
-            placeholder="API key (optional)"
-            aria-label="Gateway API key"
-            type="password"
-          />
-          <Button
-            type="submit"
-            size="touch"
-            variant={methods.length === 0 ? 'default' : 'secondary'}
-            className="w-full"
-            disabled={disabled || !gatewayUrl.trim()}
-          >
-            {gateway.name}
-          </Button>
-        </form>
-      ) : null}
-      {methods.length === 0 && !gateway ? (
-        <Button type="button" size="touch" className="w-full" onClick={setup.retry}>
-          Try again
-        </Button>
-      ) : null}
-      {guidance.map((method) =>
-        method.description?.trim() ? <Note key={method.id}>{method.description.trim()}</Note> : null
-      )}
-      {methods[0] ? (
-        <Note>
-          {methods[0].type === 'terminal'
-            ? 'Opens a sign-in terminal on this server.'
-            : `${tab.name} opens its sign-in page. Come back here when you are done.`}
-        </Note>
-      ) : null}
-    </>
   )
 }
 
@@ -205,16 +95,24 @@ function ProviderSetupView({
       break
     case 'saving':
       hero = <Hero tab={tab} title={`Set up ${tab.name}`} />
-      actions = <Busy label="Setting up…" />
+      actions = <Busy label="Setting up…" touch />
       break
     case 'starting':
     case 'ready':
       hero = <Hero tab={tab} title={`Starting ${tab.name}`} detail="Reading its models." />
-      actions = <Busy label="Starting…" />
+      actions = <Busy label="Starting…" touch />
       break
     case 'sign-in':
       hero = <Hero tab={tab} title={`Sign in to ${tab.name}`} detail={phase.error.detail} />
-      actions = <SignInActions tab={tab} setup={setup} disabled={disabled} />
+      actions = (
+        <SignInActions
+          tab={tab}
+          signIn={setup.signIn}
+          retry={setup.retry}
+          disabled={disabled}
+          touch
+        />
+      )
       break
     case 'failed':
       hero = <Hero tab={tab} title={phase.title} detail={phase.detail} />

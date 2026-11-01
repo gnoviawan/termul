@@ -61,7 +61,7 @@ function Harness({ onOpenChange }: { onOpenChange?: (open: boolean) => void }): 
   return (
     <SubagentDetailsDialog
       toolCall={delegatedCall}
-      parentTurnActive
+      parentTurn="active"
       open={open}
       filePathContext={undefined}
       onOpenChange={(next) => {
@@ -210,7 +210,7 @@ describe('SubagentDetailsDialog subagent activity', () => {
       <SubagentDetailsDialog
         toolCall={{ ...delegatedCall, subagentText: 'Found 3 issues so far.' }}
         childToolCalls={[child('c1', 'completed', 'src/a.ts'), child('c2', 'failed', 'src/b.ts')]}
-        parentTurnActive
+        parentTurn="active"
         open
         onOpenChange={() => {}}
         filePathContext={undefined}

@@ -5,6 +5,7 @@ import {
   formatElapsed,
   formatTokens,
   isBackgroundSubagent,
+  runningBackgroundSubagents,
   selectCurrentTurnSubagents,
   subagentDurationMs,
   subagentMetrics,
@@ -163,9 +164,12 @@ describe('background subagents', () => {
   const background = (partial: Partial<ToolCall> = {}) =>
     sub({ status: 'completed', subagentLifecycle: { background: true }, ...partial })
 
-  it('runs while the turn is active even though the launch call completed', () => {
+  it('keeps running after the turn ends even though the launch call completed', () => {
     expect(subagentStatus(background(), true)).toBe('running')
-    expect(subagentStatus(background(), false)).toBe('done')
+    expect(subagentStatus(background(), false)).toBe('running')
+    expect(
+      countSubagents([background(), sub({ toolCallId: 'f', status: 'completed' })], false)
+    ).toEqual({ running: 1, done: 1, failed: 0 })
   })
 
   it('lets a known end state win over an active turn', () => {
@@ -205,6 +209,49 @@ describe('background subagents', () => {
   it('flags background rows', () => {
     expect(isBackgroundSubagent(background())).toBe(true)
     expect(isBackgroundSubagent(sub())).toBe(false)
+  })
+})
+
+describe('runningBackgroundSubagents', () => {
+  const user = (seq: number) => ({ role: 'user', seq, timestamp: seq })
+  const agentReply = { role: 'agent', seq: 9, timestamp: 9 }
+  const launch = (toolCallId: string, seq: number, lifecycle: ToolCall['subagentLifecycle']) =>
+    sub({ toolCallId, seq, status: 'completed', subagentLifecycle: lifecycle })
+  const ids = (calls: ToolCall[]) => calls.map((tc) => tc.toolCallId)
+
+  it('lists the background launches of the latest turn that have not ended', () => {
+    const calls = [
+      launch('earlier-launch', 2, { background: true }),
+      launch('earlier-host-running', 3, { background: true, state: 'running' }),
+      launch('launch', 6, { background: true }),
+      launch('host-running', 7, { state: 'running' }),
+      launch('completed', 7, { background: true, state: 'completed' }),
+      launch('cancelled', 7, { background: true, state: 'cancelled' }),
+      sub({
+        toolCallId: 'launch-failed',
+        seq: 7,
+        status: 'failed',
+        subagentLifecycle: { background: true }
+      }),
+      sub({ toolCallId: 'foreground', seq: 8, status: 'in_progress' })
+    ]
+    expect(ids(runningBackgroundSubagents(calls, [user(1), user(5), agentReply]))).toEqual([
+      'earlier-host-running',
+      'launch',
+      'host-running'
+    ])
+  })
+
+  it('counts every launch when the chat has no user message', () => {
+    const calls = [launch('a', 2, { background: true })]
+    expect(ids(runningBackgroundSubagents(calls, []))).toEqual(['a'])
+  })
+
+  it('is empty without tool calls', () => {
+    expect(runningBackgroundSubagents(undefined, [user(1)])).toEqual([])
+    expect(
+      ids(runningBackgroundSubagents([launch('a', 2, { background: true })], [user(1)]))
+    ).toEqual(['a'])
   })
 })
 

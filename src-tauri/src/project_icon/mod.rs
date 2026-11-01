@@ -39,6 +39,7 @@ pub struct ProjectIcon {
 /// Provenance of a resolved [`ProjectIcon`]; serializes as `"file"`/`"remote"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[schemars(description = r#"Where the icon came from: a `file` in the repository or a `remote` fetch."#)]
 pub enum ProjectIconSource {
     File,
     Remote,

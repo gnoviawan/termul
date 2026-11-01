@@ -169,6 +169,7 @@ fn parse_body<T: serde::de::DeserializeOwned, R>(route: &str, body: &Bytes) -> R
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(rename = "{T}WithClient")]
 pub(crate) struct WithClient<T> {
     client_instance_id: String,
     #[serde(flatten)]

@@ -48,6 +48,7 @@ pub(crate) mod log_capture;
 pub mod mcp_oauth_api;
 pub mod mcp_probe_api;
 pub mod mcp_servers_api;
+pub mod openapi;
 pub mod origin;
 pub mod permissions;
 pub mod presence;

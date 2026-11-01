@@ -116,6 +116,14 @@ vi.mock('@/lib/api', async (importActual) => {
   return { ...actual, persistenceApi: mockPersistenceApi }
 })
 
+const { mockLogFrontendError } = vi.hoisted(() => ({
+  mockLogFrontendError: vi.fn(async () => {})
+}))
+vi.mock('@/lib/log-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/log-api')>()),
+  logFrontendError: mockLogFrontendError
+}))
+
 vi.mock('@/hooks/use-mobile-web-shell', () => ({ useMobileWebShell: () => mockIsMobile.current }))
 
 const CURSOR: StoredAgentConfig = {
@@ -196,6 +204,17 @@ const CLAUDE_MODELS = {
   updatedAt: 1
 }
 
+const BACKGROUND_LAUNCH = {
+  'session-1': [
+    {
+      toolCallId: 'bg-1',
+      status: 'completed',
+      rawInput: { description: 'Run e2e', prompt: 'p', run_in_background: true },
+      subagentLifecycle: { background: true }
+    }
+  ]
+}
+
 function seed(
   entries: readonly SupportedAcpAgentEntry[] = [],
   session: Record<string, unknown> = {}
@@ -218,7 +237,7 @@ function seed(
     pendingPermissions: {},
     pendingQuestions: {},
     launchingSessionIds: {},
-    pendingBrowserOpen: {},
+    pendingSignIn: {},
     preparedSessions: {},
     preparingChatKeys: {},
     prepareChatErrors: {},
@@ -921,10 +940,20 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
   it.each([
     ['queued prompts', { promptQueues: { 'session-1': [{ id: 'q1' }] } }, {}],
     ['a launching chat', { launchingSessionIds: { 'session-1': true } }, {}],
-    ['a pending browser sign-in', { pendingBrowserOpen: { 'agent-1': 'https://x' } }, {}],
+    [
+      'a pending browser sign-in',
+      { pendingSignIn: { 'agent-1': { kind: 'browser', url: 'https://x' } } },
+      {}
+    ],
     [
       'an active turn with a queued prompt',
       { promptQueues: { 'session-1': [{ id: 'q1' }] } },
+      { activeTurn: true, openTurnId: 'turn-1' }
+    ],
+    ['a background subagent after the turn', { toolCalls: BACKGROUND_LAUNCH }, {}],
+    [
+      'an active turn with a background subagent',
+      { toolCalls: BACKGROUND_LAUNCH },
       { activeTurn: true, openTurnId: 'turn-1' }
     ]
   ])('wait-only busy (%s): only Wait, no cancel-then-switch', (_name, state, session) => {
@@ -1000,6 +1029,140 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
 function stableMarkup(html: string): string {
   return html.replace(/:r[0-9a-z]+:/g, ':id:').replace(/radix-[:\w-]+/g, 'radix-id')
 }
+
+describe('desktop: signing in to another agent from its tab', () => {
+  const CODEX: StoredAgentConfig = {
+    id: 'custom-codex',
+    configId: 'acp-registry:codex-acp',
+    name: 'Codex',
+    command: 'codex-acp',
+    args: [],
+    env: {},
+    allowTerminal: false
+  }
+  const CODEX_KEY = prepareChatKey(CODEX.id, '/work', undefined)
+
+  /** codex-acp signed out: three sign-in methods, so the silent read failed on multi-auth. */
+  function seedSignedOutCodex(): void {
+    seed([readyEntry(CODEX)])
+    acpStateRef.current.configToLiveAgent = {
+      ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
+      [agentReuseKey(CODEX.id, '/work', 'p1')]: 'agent-codex'
+    }
+    acpStateRef.current.agents = {
+      'agent-codex': {
+        id: 'agent-codex',
+        capabilities: {},
+        authMethods: [
+          { id: 'api-key', name: 'API key', type: 'agent' },
+          { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' },
+          { id: 'chat-gpt-device-code', name: 'ChatGPT (device code)', type: 'agent' }
+        ]
+      }
+    }
+    acpStateRef.current.prepareChatErrors = {
+      [CODEX_KEY]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'This agent advertises multiple sign-in methods.'
+      }
+    }
+  }
+
+  it.each([
+    ['v1', '0'],
+    ['v2', '1']
+  ])('%s: offers its sign-in methods, signs in with ChatGPT, then reads its models again', async (_variant, flag) => {
+    localStorage.setItem(MODEL_PICKER_V2_KEY, flag)
+    try {
+      seedSignedOutCodex()
+      let finishSignIn: () => void = () => {}
+      mockAuthenticateAgent.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishSignIn = resolve
+          })
+      )
+      renderSelector()
+      open()
+      fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
+
+      expect(screen.getByText('Could not load Codex models.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'API key' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'ChatGPT (device code)' })).toBeEnabled()
+      fireEvent.click(screen.getByRole('button', { name: 'ChatGPT' }))
+
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-codex', 'chat-gpt')
+      expect(await screen.findByRole('button', { name: 'Signing in with ChatGPT…' })).toBeDisabled()
+      expect(screen.queryByRole('button', { name: 'API key' })).toBeNull()
+      expect(mockPrepareChat).not.toHaveBeenCalled()
+
+      await act(async () => finishSignIn())
+      expect(mockCancelPreparedChat).toHaveBeenCalledWith(CODEX_KEY)
+      expect(mockPrepareChat).toHaveBeenCalledWith(CODEX.id, '/work', undefined, 'p1', {
+        silent: true
+      })
+    } finally {
+      localStorage.removeItem(MODEL_PICKER_V2_KEY)
+    }
+  })
+
+  it('keeps the methods and reads nothing again when the sign-in fails', async () => {
+    localStorage.setItem(MODEL_PICKER_V2_KEY, '1')
+    try {
+      seedSignedOutCodex()
+      mockAuthenticateAgent.mockRejectedValueOnce(new Error('Sign-in was cancelled'))
+      renderSelector()
+      open()
+      fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
+      fireEvent.click(screen.getByRole('button', { name: 'API key' }))
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Sign-in was cancelled'))
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-codex', 'api-key')
+      expect(screen.getByRole('button', { name: 'ChatGPT' })).toBeEnabled()
+      expect(mockPrepareChat).not.toHaveBeenCalled()
+    } finally {
+      localStorage.removeItem(MODEL_PICKER_V2_KEY)
+    }
+  })
+
+  it('signs in with a typed API key, then reads its models again, and never logs the key', async () => {
+    const apiKey = 'sk-termul-test-not-real'
+    localStorage.setItem(MODEL_PICKER_V2_KEY, '1')
+    try {
+      seedSignedOutCodex()
+      const agent = (acpStateRef.current.agents as Record<string, { authMethods: unknown[] }>)[
+        'agent-codex'
+      ]
+      agent.authMethods = [
+        { id: 'api-key', name: 'API key', type: 'agent', takesApiKey: true },
+        { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' }
+      ]
+      renderSelector()
+      open()
+      fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
+
+      const input = screen.getByLabelText('Key for API key')
+      expect(input).toHaveAttribute('type', 'password')
+      fireEvent.change(input, { target: { value: apiKey } })
+      fireEvent.click(screen.getByRole('button', { name: 'API key' }))
+
+      await waitFor(() =>
+        expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-codex', 'api-key', { apiKey })
+      )
+      await waitFor(() => expect(mockCancelPreparedChat).toHaveBeenCalledWith(CODEX_KEY))
+      expect(mockPrepareChat).toHaveBeenCalledWith(CODEX.id, '/work', undefined, 'p1', {
+        silent: true
+      })
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'agentSignIn.authenticate' })
+      )
+      expect(JSON.stringify(mockLogFrontendError.mock.calls)).not.toContain(apiKey)
+    } finally {
+      localStorage.removeItem(MODEL_PICKER_V2_KEY)
+    }
+  })
+})
 
 describe('AgentModelSelector desktop markup', () => {
   it.each([
@@ -1383,7 +1546,7 @@ describe('phone Select model sheet', () => {
       },
       configToLiveAgent: {
         ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
-        [agentReuseKey(GEMINI.id, '/work')]: 'agent-gemini'
+        [agentReuseKey(GEMINI.id, '/work', 'p1')]: 'agent-gemini'
       },
       agents: {
         'agent-gemini': {
@@ -1451,7 +1614,7 @@ describe('phone Select model sheet', () => {
       },
       configToLiveAgent: {
         ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
-        [agentReuseKey(CLAUDE.id, '/work')]: 'agent-claude'
+        [agentReuseKey(CLAUDE.id, '/work', 'p1')]: 'agent-claude'
       },
       agents: {
         'agent-claude': { authMethods: [{ id: 'claude-login', name: 'Log in', type: 'agent' }] }

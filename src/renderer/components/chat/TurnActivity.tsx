@@ -14,13 +14,19 @@ import { formatTurnDuration } from './format-turn-duration'
 import { RowReveal } from './RowReveal'
 import { ThinkingStatus } from './ThinkingStatus'
 import { ThoughtGroup } from './ThoughtGroup'
-import { summarizeToolActivity, type ToolActivitySummary } from './tool-call-summary'
+import {
+  type ParentTurn,
+  summarizeToolActivity,
+  type ToolActivitySummary
+} from './tool-call-summary'
 import type { EnterTracker } from './use-enter-tracker'
 import { DiffStat, WorkRunGroup, type WorkRunItem } from './WorkRunGroup'
 
 interface TurnActivityProps {
   items: TimelineItem[]
   active: boolean
+  /** Where this turn stands; the subagent cards inside show running from it. */
+  parentTurn: ParentTurn
   durationMs: number | null
   attentionRequired: boolean
   hasFinalResponse: boolean
@@ -36,6 +42,7 @@ interface TurnActivityProps {
 function TurnActivityComponent({
   items,
   active,
+  parentTurn,
   durationMs,
   attentionRequired,
   hasFinalResponse,
@@ -150,7 +157,7 @@ function TurnActivityComponent({
                     key={item.key}
                     items={run.items}
                     summary={run.summary}
-                    active={active}
+                    parentTurn={parentTurn}
                     // Lets a still-streaming thought inside the run keep streaming.
                     isLiveTail={active && run.items[run.items.length - 1] === lastItem}
                     failed={run.failed}

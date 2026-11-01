@@ -5,7 +5,9 @@
 
 ## Overview
 
-Termul Manager does not expose a public HTTP API. Its primary integration surface is an **internal IPC contract** between the React renderer and the Rust/Tauri runtime.
+This page covers the desktop app's **internal IPC contract** between the React renderer and the Rust/Tauri runtime.
+
+`termul-server` and the desktop shared-live host also expose an HTTP and WebSocket API. Its HTTP routes are described by an OpenAPI 3.1 spec that the server builds from the `ROUTES` table in `src-tauri/src/web/openapi/`. A running server serves it at `GET /openapi.json`, `termul-server openapi` prints it, and each release attaches it as `openapi.yaml`. The WebSocket protocol is defined in `src/shared/types/web-protocol.types.ts`. The user guide is `website-docs/content/docs/server-api.mdx`.
 
 This contract is implemented through:
 
@@ -625,6 +627,8 @@ A session log event has one of three delivery tiers (`tier_of` in `src-tauri/src
 | `acp:browser_tab_updated` | session | Session log event (reliable). The tab registry's view of one of the session's agent tabs, `{tabId, url, title, loading, agentControlled, epoch}`, after an engine navigation, title or load event. |
 | `acp:browser_tab_closed` | session | Session log event (reliable). The engine destroyed one of the session's agent tabs, `{tabId}`. |
 | `acp:browser_open_request` | agent | `agents` watch delta. A POSIX host captured a URL the agent tried to open, `{agentId, url}`. A delta lost to a gap is lost. |
+| `acp:agent_sign_in_request` | agent | `agents` watch delta. The host holds a request-scoped URL elicitation raised during `authenticate` (Codex device-code sign-in), `{agentId, requestId, url, message}`. `message` carries the device code and is never logged. Clients answer through `respond_elicitation` with the `requestId`. A delta lost to a gap is lost. |
+| `acp:agent_sign_in_resolved` | agent | `agents` watch delta. The host no longer holds that sign-in prompt (completed, answered, replaced, or its `authenticate` ended), `{agentId, requestId}`. |
 | `acp:worktree_branch_renamed` | agent | `chat_history` watch delta. The host renamed a worktree's branch. |
 | `acp:worktree_progress` | none | Plain Tauri event on the desktop only, `{progressId, line}`. The `worktree_create` command emits it while `git worktree add` runs. It never travels the relay. |
 

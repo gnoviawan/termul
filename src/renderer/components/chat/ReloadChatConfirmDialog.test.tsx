@@ -80,6 +80,18 @@ describe('reload with background agents', () => {
     expect(useReloadConfirmStore.getState().request).toBeNull()
   })
 
+  it('asks first for a background launch that never reported its end', () => {
+    seed({ background: true })
+    const { result } = renderHook(() => useReloadChat('s1'))
+    expect(result.current.disabled).toBe(false)
+    act(() => result.current.reload?.())
+    expect(reloadMock).not.toHaveBeenCalled()
+    expect(useReloadConfirmStore.getState().request).toEqual({
+      sessionId: 's1',
+      backgroundAgents: 1
+    })
+  })
+
   it('does not reload on cancel', () => {
     seed({ background: true, state: 'running' })
     useReloadConfirmStore.setState({ request: { sessionId: 's1', backgroundAgents: 2 } })

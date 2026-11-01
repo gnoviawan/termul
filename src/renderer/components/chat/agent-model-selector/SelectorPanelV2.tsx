@@ -48,6 +48,7 @@ import {
   StatusActions,
   TabGlyph
 } from './SelectorRows'
+import { OtherAgentSignIn } from './SignInActions'
 import { StarFlip, type StarPhase } from './StarFlip'
 import {
   AGENT_TRACK_CLASS,
@@ -950,7 +951,16 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       ) : (
         <div className="flex flex-col gap-1">
           <ListMessage title={view.title} detail={view.detail} />
-          {view.retry ? (
+          {view.signInTab && view.retry ? (
+            <OtherAgentSignIn
+              key={view.signInTab.configId}
+              tab={view.signInTab}
+              workspace={sw.workspace}
+              retry={view.retry}
+              disabled={disabled}
+              touch={touch}
+            />
+          ) : view.retry ? (
             <button
               type="button"
               onClick={view.retry}

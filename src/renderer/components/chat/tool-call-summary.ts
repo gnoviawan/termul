@@ -128,7 +128,7 @@ function firstDiffPath(content: ToolCallContent[]): string | undefined {
  * `describeToolCall` (it diffs full file contents). Cached on the content
  * array's identity: tool-call updates replace the array wholesale, so a
  * repeat look at an unchanged call is free and a changed call recomputes.
- * `ChatChangedFilesPanel` re-extracts files on every store commit — this
+ * `useChatChangedFiles` re-extracts files on every store commit — this
  * keeps that O(calls × file size) scan from repeating the diff itself.
  */
 const diffInfoCache = new WeakMap<
@@ -228,22 +228,34 @@ export function isToolCallRunning(toolCall: ToolCall): boolean {
 }
 
 /**
- * A subagent dispatch runs while its parent turn is active: it is
- * pending/in_progress, has no status yet (the adapter sends the dispatch
- * before any status update), or is a background agent whose launch call has
- * completed but whose agent has not ended. A cancelled or crashed turn can
- * leave a dispatch pending forever, so an ended turn never counts that as
- * running. A host lifecycle of `running` is different: the host reports the
- * real end later, and the subagent can outlive the turn. A known terminal
- * agent state always wins over the tool-call status.
+ * Where a subagent's parent turn stands: still running, ended with no user
+ * message after it, or followed by a newer user turn.
  */
-export function isSubagentRunning(toolCall: ToolCall, parentTurnActive: boolean): boolean {
+export type ParentTurn = 'active' | 'ended' | 'superseded'
+
+/**
+ * Whether a subagent is still running. A known terminal agent state always
+ * wins over the tool-call status, and a host state of `running` holds in any
+ * turn: the host reports the real end later.
+ *
+ * Without a host state, a foreground dispatch runs only while its turn is
+ * active: pending/in_progress or no status yet (the adapter sends the dispatch
+ * before any status update). A cancelled or crashed turn can leave it pending
+ * forever, so an ended turn never counts that as running. A background launch
+ * completes its tool call at once and outlives its turn, but nothing reports
+ * its end, so it counts as running until a newer user turn starts. A launch
+ * whose completed receipt never arrived (the turn was stopped first) follows
+ * the foreground rule.
+ */
+export function isSubagentRunning(toolCall: ToolCall, parentTurn: ParentTurn): boolean {
   const lifecycle = toolCall.subagentLifecycle
   if (lifecycle?.state !== undefined && lifecycle.state !== 'running') return false
   if (toolCall.status === 'failed') return false
   if (lifecycle?.state === 'running') return true
-  if (!parentTurnActive) return false
-  return isToolCallRunning(toolCall) || toolCall.status == null || lifecycle?.background === true
+  if (lifecycle?.background === true && toolCall.status === 'completed') {
+    return parentTurn !== 'superseded'
+  }
+  return parentTurn === 'active' && (isToolCallRunning(toolCall) || toolCall.status == null)
 }
 
 function runningVerbForKind(kind: ToolKind | undefined): string {

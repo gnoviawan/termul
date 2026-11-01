@@ -132,6 +132,7 @@ impl fmt::Display for NodeId {
 /// A string with `{{ path }}` holes; see `template.rs` for the grammar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
+#[schemars(description = r#"A string with `{{ path }}` holes, filled when the step runs. A path starts at `trigger.scheduled_for`, `trigger.kind`, `nodes.<id>.output[.field...]` or `secrets.<NAME>`."#)]
 pub struct Template(pub String);
 
 impl Template {

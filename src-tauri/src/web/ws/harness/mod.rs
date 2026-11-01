@@ -35,6 +35,8 @@ pub(crate) mod raw_client;
 pub(crate) mod wire;
 
 #[cfg(test)]
+mod agent_api_key_tests;
+#[cfg(test)]
 mod canvas_gateway_tests;
 #[cfg(test)]
 mod chat_reads_tests;

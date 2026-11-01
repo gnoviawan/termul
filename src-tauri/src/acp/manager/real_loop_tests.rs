@@ -29,13 +29,31 @@ def chunk(text):
                    "content": {"type": "text", "text": text}}}})
 
 hung = None
+auth = None
 for line in sys.stdin:
     line = line.strip()
     if not line:
         continue
     msg = json.loads(line)
     method, rid = msg.get("method"), msg.get("id")
-    if method == "initialize":
+    if method is None and rid == 950:
+        # Codex device-code sign-in: accept waits for the login, then
+        # completes the elicitation and resolves authenticate.
+        if msg.get("result", {}).get("action") == "accept":
+            send({"jsonrpc": "2.0", "method": "elicitation/complete",
+                  "params": {"elicitationId": "login-1"}})
+            send({"jsonrpc": "2.0", "id": auth, "result": {}})
+        else:
+            send({"jsonrpc": "2.0", "id": auth, "error": {
+                "code": -32800, "message": "device code sign-in was cancelled"}})
+        auth = None
+    elif method == "authenticate":
+        auth = rid
+        send({"jsonrpc": "2.0", "id": 950, "method": "elicitation/create", "params": {
+            "mode": "url", "requestId": rid, "elicitationId": "login-1",
+            "url": "https://auth.example.com/device",
+            "message": "Sign in and enter this code: ABCD-1234"}})
+    elif method == "initialize":
         send({"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": 1,
             "agentCapabilities": {"sessionCapabilities": {"close": {}}},
@@ -1171,3 +1189,6 @@ async fn idle_agent_driver_thread_stays_parked() {
         "the idle acp-agent thread used {used} of {ticks_per_second} clock ticks per second over 2 s"
     );
 }
+
+#[path = "real_loop_sign_in_tests.rs"]
+mod sign_in;

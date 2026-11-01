@@ -211,6 +211,7 @@ describe('acp provider authentication & recovery', () => {
       type?: 'agent' | 'terminal' | 'env_var'
       args?: string[]
       env?: Record<string, string>
+      takesApiKey?: boolean
     }>,
     capabilities: Record<string, unknown> | null = {}
   ): void {
@@ -660,6 +661,51 @@ describe('acp provider authentication & recovery', () => {
       methodId: 'chatgpt',
       commandId: expect.any(String)
     })
+  })
+
+  it('sends a typed API key once, never logs it and never remembers its method', async () => {
+    const apiKey = 'sk-termul-test-not-real'
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'api-key', name: 'API Key', type: 'agent', takesApiKey: true },
+      { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('cfg-1', '/work', 'p1')]: 'agent-9'
+      }
+    }))
+    vi.mocked(logFrontendError).mockClear()
+    mockPersistenceApi.write.mockClear()
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+
+    await useAcpStore.getState().authenticateAgent('agent-9', 'api-key', { apiKey })
+    await useAcpStore.getState().authenticateAgent('agent-9', 'chat-gpt')
+
+    const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
+    expect(authCalls.map(([, payload]) => payload)).toEqual([
+      { agentId: 'agent-9', methodId: 'api-key', apiKey, commandId: expect.any(String) },
+      { agentId: 'agent-9', methodId: 'chat-gpt', commandId: expect.any(String) }
+    ])
+    // Only the method that can run again without a key is remembered.
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'chat-gpt'
+      })
+    })
+    expect(
+      mockPersistenceApi.write.mock.calls.filter(
+        ([k, v]) => k === 'acp/auth-methods' && JSON.stringify(v).includes('api-key')
+      )
+    ).toEqual([])
+    expect(JSON.stringify(vi.mocked(logFrontendError).mock.calls)).not.toContain(apiKey)
+    expect(JSON.stringify(mockPersistenceApi.write.mock.calls)).not.toContain(apiKey)
   })
 
   it('keeps the multi-auth agent live and reusable after the prepare failure', async () => {
@@ -1152,7 +1198,7 @@ describe('acp provider authentication & recovery', () => {
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
   })
 
-  it('sets pendingBrowserOpen on browser_open_request and clears it on auth success', async () => {
+  it('sets pendingSignIn on browser_open_request and clears it on auth success', async () => {
     const listeners = new Map<string, (payload: unknown) => void>()
     const authenticate = vi.fn(async () => undefined)
     _setAcpTransportForTests({
@@ -1170,15 +1216,16 @@ describe('acp provider authentication & recovery', () => {
         agentId: 'agent-1',
         url: 'https://auth.example.com/login?state=abc'
       })
-      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBe(
-        'https://auth.example.com/login?state=abc'
-      )
+      expect(useAcpStore.getState().pendingSignIn['agent-1']).toEqual({
+        kind: 'browser',
+        url: 'https://auth.example.com/login?state=abc'
+      })
 
       // Malformed events are ignored — no empty-key/empty-url entries.
       listeners.get('acp:browser_open_request')?.({ agentId: '', url: 'https://x' })
       listeners.get('acp:browser_open_request')?.({ agentId: 'agent-2', url: '' })
-      expect(useAcpStore.getState().pendingBrowserOpen['']).toBeUndefined()
-      expect(useAcpStore.getState().pendingBrowserOpen['agent-2']).toBeUndefined()
+      expect(useAcpStore.getState().pendingSignIn['']).toBeUndefined()
+      expect(useAcpStore.getState().pendingSignIn['agent-2']).toBeUndefined()
 
       await useAcpStore.getState().authenticateAgent('agent-1', 'devin-browser')
       expect(authenticate).toHaveBeenCalledWith(
@@ -1187,7 +1234,70 @@ describe('acp provider authentication & recovery', () => {
         undefined,
         expect.objectContaining({ commandId: expect.any(String) })
       )
-      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+      expect(useAcpStore.getState().pendingSignIn['agent-1']).toBeUndefined()
+    } finally {
+      teardown()
+      _resetAcpTransportForTests()
+    }
+  })
+
+  it('holds a device-code sign-in prompt until the host resolves it, and answers it', async () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    const respondElicitation = vi.fn(async () => undefined)
+    _setAcpTransportForTests({
+      onEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
+        listeners.set(name, callback)
+        return () => listeners.delete(name)
+      }),
+      respondElicitation,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    const teardown = initAcpEventListeners()
+    const request = {
+      agentId: 'agent-1',
+      requestId: 'signin-1',
+      url: 'https://auth.openai.com/codex/device',
+      message: 'Sign in to ChatGPT and enter this code: ABCD-12345'
+    }
+    try {
+      seedLiveAgent('agent-1', [{ id: 'chat-gpt-device-code', name: 'Device code', type: 'agent' }])
+      listeners.get('acp:agent_sign_in_request')?.({ ...request, url: 'javascript:alert(1)' })
+      listeners.get('acp:agent_sign_in_request')?.({ ...request, agentId: 'agent-gone' })
+      expect(useAcpStore.getState().pendingSignIn).toEqual({})
+
+      listeners.get('acp:agent_sign_in_request')?.(request)
+      expect(useAcpStore.getState().pendingSignIn['agent-1']).toEqual({
+        kind: 'elicitation',
+        requestId: 'signin-1',
+        url: 'https://auth.openai.com/codex/device',
+        message: 'Sign in to ChatGPT and enter this code: ABCD-12345'
+      })
+
+      await useAcpStore.getState().respondAgentSignIn('agent-1', 'accept')
+      expect(respondElicitation).toHaveBeenCalledWith(
+        'agent-1',
+        'signin-1',
+        'accept',
+        undefined,
+        expect.objectContaining({ commandId: expect.any(String) })
+      )
+      expect(useAcpStore.getState().pendingSignIn['agent-1']?.kind).toBe('elicitation')
+
+      listeners.get('acp:agent_sign_in_resolved')?.({ agentId: 'agent-1', requestId: 'other' })
+      expect(useAcpStore.getState().pendingSignIn['agent-1']?.kind).toBe('elicitation')
+      listeners.get('acp:agent_sign_in_resolved')?.({ agentId: 'agent-1', requestId: 'signin-1' })
+      expect(useAcpStore.getState().pendingSignIn['agent-1']).toBeUndefined()
+
+      listeners.get('acp:agent_sign_in_request')?.({ ...request, requestId: 'signin-2' })
+      await useAcpStore.getState().respondAgentSignIn('agent-1', 'cancel')
+      expect(respondElicitation).toHaveBeenLastCalledWith(
+        'agent-1',
+        'signin-2',
+        'cancel',
+        undefined,
+        expect.objectContaining({ commandId: expect.any(String) })
+      )
+      expect(useAcpStore.getState().pendingSignIn['agent-1']).toBeUndefined()
     } finally {
       teardown()
       _resetAcpTransportForTests()
@@ -1218,7 +1328,10 @@ describe('acp provider authentication & recovery', () => {
         listeners.get('acp:browser_open_request')?.({ agentId: 'agent-1', url })
 
       capture('https://evil.example.com/')
-      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBe('https://evil.example.com/')
+      expect(useAcpStore.getState().pendingSignIn['agent-1']).toEqual({
+        kind: 'browser',
+        url: 'https://evil.example.com/'
+      })
       expect(useAcpStore.getState().autoOpenBrowserUrl['agent-1']).toBeUndefined()
 
       const signIn = useAcpStore.getState().authenticateAgent('agent-1', 'devin-browser')
@@ -1232,9 +1345,10 @@ describe('acp provider authentication & recovery', () => {
       expect(useAcpStore.getState().autoOpenBrowserUrl['agent-1']).toBeUndefined()
 
       capture('https://evil.example.com/after')
-      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBe(
-        'https://evil.example.com/after'
-      )
+      expect(useAcpStore.getState().pendingSignIn['agent-1']).toEqual({
+        kind: 'browser',
+        url: 'https://evil.example.com/after'
+      })
       expect(useAcpStore.getState().autoOpenBrowserUrl['agent-1']).toBeUndefined()
     } finally {
       teardown()
@@ -1272,9 +1386,10 @@ describe('acp provider authentication & recovery', () => {
       )
 
       capture('https://evil.example.com/second')
-      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBe(
-        'https://evil.example.com/second'
-      )
+      expect(useAcpStore.getState().pendingSignIn['agent-1']).toEqual({
+        kind: 'browser',
+        url: 'https://evil.example.com/second'
+      })
       expect(useAcpStore.getState().autoOpenBrowserUrl['agent-1']).toBeUndefined()
 
       capture('https://evil.example.com/third')
@@ -1299,48 +1414,66 @@ describe('acp provider authentication & recovery', () => {
   it('revokes the auto-open authorization when a later capture is not part of a sign-in', () => {
     seedLiveAgent('agent-1', [])
     useAcpStore.setState((s) => ({
-      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.x/ok' },
+      pendingSignIn: {
+        ...s.pendingSignIn,
+        'agent-1': { kind: 'browser', url: 'https://auth.x/ok' }
+      },
       autoOpenBrowserUrl: { ...s.autoOpenBrowserUrl, 'agent-1': 'https://auth.x/ok' }
     }))
     useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'https://evil.x/' })
-    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBe('https://evil.x/')
+    expect(useAcpStore.getState().pendingSignIn['agent-1']).toEqual({
+      kind: 'browser',
+      url: 'https://evil.x/'
+    })
     expect(useAcpStore.getState().autoOpenBrowserUrl['agent-1']).toBeUndefined()
   })
 
-  it('clears pendingBrowserOpen on killAgent and on agent disconnect', async () => {
+  it('clears pendingSignIn on killAgent and on agent disconnect', async () => {
     seedLiveAgent('agent-1', [])
     useAcpStore.setState((s) => ({
-      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' }
+      pendingSignIn: {
+        ...s.pendingSignIn,
+        'agent-1': { kind: 'browser', url: 'https://auth.example.com/x' }
+      }
     }))
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === 'acp_kill_agent') return undefined
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     await useAcpStore.getState().killAgent('agent-1')
-    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+    expect(useAcpStore.getState().pendingSignIn['agent-1']).toBeUndefined()
 
     // Disconnect path: a dead process must not leave a stale dialog URL.
     seedLiveAgent('agent-2', [])
     useAcpStore.setState((s) => ({
-      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-2': 'https://auth.example.com/y' }
+      pendingSignIn: {
+        ...s.pendingSignIn,
+        'agent-2': { kind: 'browser', url: 'https://auth.example.com/y' }
+      }
     }))
     useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-2', reason: 'crashed' })
-    expect(useAcpStore.getState().pendingBrowserOpen['agent-2']).toBeUndefined()
+    expect(useAcpStore.getState().pendingSignIn['agent-2']).toBeUndefined()
   })
 
-  it('clearPendingBrowserOpen dismisses the captured URL (dialog dismiss)', () => {
+  it('clearPendingSignIn dismisses the captured URL (dialog dismiss)', () => {
     useAcpStore.setState((s) => ({
-      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' }
+      pendingSignIn: {
+        ...s.pendingSignIn,
+        'agent-1': { kind: 'browser', url: 'https://auth.example.com/x' }
+      }
     }))
-    useAcpStore.getState().clearPendingBrowserOpen('agent-1')
-    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+    useAcpStore.getState().clearPendingSignIn('agent-1')
+    expect(useAcpStore.getState().pendingSignIn['agent-1']).toBeUndefined()
     // Idempotent: clearing an absent key is a no-op, not a crash.
-    useAcpStore.getState().clearPendingBrowserOpen('agent-1')
+    useAcpStore.getState().clearPendingSignIn('agent-1')
   })
-  it('authenticateBeforeSession clears pendingBrowserOpen on success', async () => {
+  it('authenticateBeforeSession clears pendingSignIn on success', async () => {
     seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor', type: 'agent' }])
     useAcpStore.setState((s) => ({
-      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' }
+      pendingSignIn: {
+        ...s.pendingSignIn,
+        'agent-1': { kind: 'browser', url: 'https://auth.example.com/x' }
+      }
     }))
     let newSessionCalls = 0
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
@@ -1353,7 +1486,7 @@ describe('acp provider authentication & recovery', () => {
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
-    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+    expect(useAcpStore.getState().pendingSignIn['agent-1']).toBeUndefined()
   })
 
   it('_onBrowserOpenRequest drops non-http URLs and buffers pre-registration events', () => {
@@ -1365,10 +1498,13 @@ describe('acp provider authentication & recovery', () => {
     // An event for an agent that is not yet registered is buffered, not
     // shown — the shim watcher can emit before agent_spawned arrives.
     useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'ghost', url: 'https://x' })
-    expect(useAcpStore.getState().pendingBrowserOpen).toEqual({})
+    expect(useAcpStore.getState().pendingSignIn).toEqual({})
     // A real http(s) URL for a live agent is recorded.
     useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'https://auth.x/y' })
-    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBe('https://auth.x/y')
+    expect(useAcpStore.getState().pendingSignIn['agent-1']).toEqual({
+      kind: 'browser',
+      url: 'https://auth.x/y'
+    })
   })
 
   it('_onAgentSpawned promotes a buffered browser-open request; teardown clears it', () => {
@@ -1377,21 +1513,24 @@ describe('acp provider authentication & recovery', () => {
     useAcpStore
       .getState()
       ._onBrowserOpenRequest({ agentId: 'agent-early', url: 'https://auth.x/early' })
-    expect(useAcpStore.getState().pendingBrowserOpen['agent-early']).toBeUndefined()
+    expect(useAcpStore.getState().pendingSignIn['agent-early']).toBeUndefined()
     useAcpStore
       .getState()
       ._onAgentSpawned({ agentId: 'agent-early', capabilities: {}, authMethods: [] })
-    expect(useAcpStore.getState().pendingBrowserOpen['agent-early']).toBe('https://auth.x/early')
+    expect(useAcpStore.getState().pendingSignIn['agent-early']).toEqual({
+      kind: 'browser',
+      url: 'https://auth.x/early'
+    })
     expect(useAcpStore.getState().autoOpenBrowserUrl['agent-early']).toBeUndefined()
     // Teardown clears a still-buffered request too.
     useAcpStore
       .getState()
       ._onBrowserOpenRequest({ agentId: 'agent-ghost', url: 'https://auth.x/ghost' })
-    useAcpStore.getState().clearPendingBrowserOpen('agent-ghost')
+    useAcpStore.getState().clearPendingSignIn('agent-ghost')
     useAcpStore
       .getState()
       ._onAgentSpawned({ agentId: 'agent-ghost', capabilities: {}, authMethods: [] })
-    expect(useAcpStore.getState().pendingBrowserOpen['agent-ghost']).toBeUndefined()
+    expect(useAcpStore.getState().pendingSignIn['agent-ghost']).toBeUndefined()
   })
 
   it('completeBrowserAuth marks the agent authenticated, clears the URL, and re-prepares auth-failed chats', async () => {
@@ -1407,7 +1546,10 @@ describe('acp provider authentication & recovery', () => {
         { id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} }
       ],
       configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: 'agent-1' },
-      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' },
+      pendingSignIn: {
+        ...s.pendingSignIn,
+        'agent-1': { kind: 'browser', url: 'https://auth.example.com/x' }
+      },
       prepareChatErrors: {
         ...s.prepareChatErrors,
         [errKey]: { category: 'auth', label: 'Authentication required', detail: 'sign in' }
@@ -1421,7 +1563,7 @@ describe('acp provider authentication & recovery', () => {
     useProjectStore.setState({ activeProjectId: 'p1' })
     try {
       useAcpStore.getState().completeBrowserAuth('agent-1')
-      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+      expect(useAcpStore.getState().pendingSignIn['agent-1']).toBeUndefined()
       // The re-prepare ran createSession — which skipped its own authenticate
       // because the agent is now marked authenticated.
       await vi.waitFor(() => {

@@ -164,9 +164,20 @@ pub(super) fn to_auth_method_infos(methods: &[AuthMethod]) -> Vec<AuthMethodInfo
                 r#type: r#type.to_string(),
                 args,
                 env,
+                api_key: api_key_shape(m.meta()),
             }
         })
         .collect()
+}
+
+/// The key shape an advertised `_meta["api-key"]` asks for, from the provider
+/// it names. An unknown provider gets none rather than a guessed shape.
+fn api_key_shape(meta: Option<&Meta>) -> Option<ApiKeyShape> {
+    match meta?.get("api-key")?.get("provider")?.as_str()? {
+        "openai" => Some(ApiKeyShape::Object),
+        "google" => Some(ApiKeyShape::Text),
+        _ => None,
+    }
 }
 
 /// Capability gate for `session/load`: requires the agent's `loadSession`
@@ -261,6 +272,56 @@ impl ConfigOptionValue {
             Value::Bool(flag) => Ok(Self::Bool(*flag)),
             Value::String(text) => Ok(Self::Text(text.clone())),
             _ => Err("config option value must be a string or a boolean".to_string()),
+        }
+    }
+}
+
+/// A key typed into Termul for an API-key sign-in. Its `Debug` never prints
+/// it, and it is never logged or stored.
+#[derive(Clone)]
+pub struct ApiKey(String);
+
+impl ApiKey {
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let key = raw.trim();
+        if key.is_empty() {
+            return Err("the API key is empty".to_string());
+        }
+        if key.chars().any(char::is_control) {
+            return Err("the API key contains a control character".to_string());
+        }
+        Ok(Self(key.to_string()))
+    }
+
+    pub(super) fn secret(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ApiKey(<redacted>)")
+    }
+}
+
+/// What a sign-in hands the agent beyond the method id.
+#[derive(Debug, Clone)]
+pub enum AuthCredential {
+    Gateway(GatewayAuthInput),
+    ApiKey(ApiKey),
+}
+
+impl AuthCredential {
+    /// `text` with every copy of the carried key replaced: an agent's error
+    /// may echo what it was given.
+    pub(super) fn redact(&self, text: String) -> String {
+        let secret = match self {
+            Self::Gateway(gateway) => gateway.api_key.as_deref(),
+            Self::ApiKey(key) => Some(key.secret()),
+        };
+        match secret.filter(|secret| !secret.is_empty()) {
+            Some(secret) => text.replace(secret, "<redacted>"),
+            None => text,
         }
     }
 }

@@ -822,6 +822,22 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/'spawn_agent'/)
       expect(content).toMatch(/agent_spawned/) // the event channel (reliability tier)
     })
+
+    it('an API-key sign-in carries its key on both transports to one host route', () => {
+      const types = readFileSync(AcpApi, 'utf-8')
+      expect(types).toMatch(/takesApiKey\?:\s*boolean/)
+      expect(types).toMatch(/\|\s*\{\s*apiKey:\s*string\s*\}/)
+      const ws = readFileSync(join(LIB_DIR, 'acp-transport', 'ws-transport.ts'), 'utf-8')
+      expect(ws).toMatch(/'authenticate_agent',\s*\{\s*agentId,\s*methodId,\s*\.\.\.input\s*\}/)
+      const desktop = readFileSync(join(LIB_DIR, 'acp-transport', 'desktop-transport.ts'), 'utf-8')
+      expect(desktop).toMatch(/class DesktopAcpTransport extends WsAcpTransport\b/)
+      const RustWs = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'ws')
+      expect(readFileSync(join(RustWs, 'agents.rs'), 'utf-8')).toMatch(/api_key:\s*Option<String>/)
+      expect(
+        readFileSync(join(RustWs, 'harness', 'agent_api_key_tests.rs'), 'utf-8'),
+        'the key route is exercised on the browser socket and the desktop Channel'
+      ).toContain('on_both_carriers!(an_api_key_sign_in_is_carried_and_checked);')
+    })
   })
 
   // Category E: cross-client host-authority composition. The host (Tauri

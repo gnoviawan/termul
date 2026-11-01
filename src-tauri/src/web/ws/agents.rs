@@ -2,6 +2,7 @@
 //! install, agent `authenticate`, and auth-redirect delivery.
 
 use super::*;
+use crate::acp::manager::{ApiKey, AuthCredential, GatewayAuthInput};
 
 // --- Story 1.8 ACP command handlers -----------------------------------------
 //
@@ -314,14 +315,29 @@ pub(super) async fn handle_install_acp_agent(
 /// from the WS connection `authenticate` token gate — this is the agent
 /// method, not the relay handshake. Calls `AcpManager::authenticate`. The provider owns
 /// the login UX (often opens its own browser); Termul never invents a
-/// redirect URL or stores credentials.
-#[derive(Debug, Deserialize)]
+/// redirect URL or stores credentials. `gateway` and `apiKey` are the two
+/// things a sign-in can carry; at most one may be sent.
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct AuthenticateAgentPayload {
     agent_id: crate::acp::AgentId,
     method_id: String,
     #[serde(default)]
-    gateway: Option<crate::acp::manager::GatewayAuthInput>,
+    gateway: Option<GatewayAuthInput>,
+    #[serde(default)]
+    api_key: Option<String>,
+}
+
+fn parse_auth_credential(
+    gateway: Option<GatewayAuthInput>,
+    api_key: Option<String>,
+) -> Result<Option<AuthCredential>, String> {
+    match (gateway, api_key) {
+        (Some(_), Some(_)) => Err("send a gateway or an API key, not both".to_string()),
+        (Some(gateway), None) => Ok(Some(AuthCredential::Gateway(gateway))),
+        (None, Some(key)) => ApiKey::parse(&key).map(|key| Some(AuthCredential::ApiKey(key))),
+        (None, None) => Ok(None),
+    }
 }
 
 pub(super) async fn handle_authenticate_agent(
@@ -339,18 +355,32 @@ pub(super) async fn handle_authenticate_agent(
             )
         }
     };
+    let credential = match parse_auth_credential(parsed.gateway, parsed.api_key) {
+        Ok(credential) => credential,
+        Err(reason) => {
+            warn!(
+                target: "termul::web::ws",
+                agent = %parsed.agent_id,
+                method = %parsed.method_id,
+                %reason,
+                "authenticate_agent: refused the sign-in input"
+            );
+            return WsReply::err_with_code(id, "VALIDATION_ERROR", reason);
+        }
+    };
     debug!(
         target: "termul::web::ws",
         agent = %parsed.agent_id,
         method = %parsed.method_id,
+        gateway = matches!(credential, Some(AuthCredential::Gateway(_))),
+        api_key = matches!(credential, Some(AuthCredential::ApiKey(_))),
         "authenticate_agent: invoking agent auth method"
     );
     // `AcpManager::authenticate` takes `method_id` by value, so keep a clone
     // for the failure log (the debug! above borrows before the move).
     let method_id = parsed.method_id.clone();
-    let gateway = parsed.gateway.clone();
     match acp
-        .authenticate(&parsed.agent_id, parsed.method_id, gateway)
+        .authenticate(&parsed.agent_id, parsed.method_id, credential)
         .await
     {
         Ok(()) => WsReply::ok(id, Some(json!({}))),

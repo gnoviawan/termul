@@ -46,7 +46,8 @@ const {
   oskRef,
   transportReconnectingRef,
   promptCommandStatesRef,
-  changedFilesPanelPropsRef,
+  changedFilesArgsRef,
+  changedFilePathsRef,
   discoveredContextRef,
   messagesRef,
   toolCallsRef,
@@ -138,14 +139,10 @@ const {
   oskRef: { current: { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 } },
   transportReconnectingRef: { current: false },
   promptCommandStatesRef: { current: {} as Record<string, unknown> },
-  changedFilesPanelPropsRef: {
-    current: [] as Array<{
-      cwd: string
-      toolCalls: unknown[]
-      forceCollapsed?: boolean
-      onOpenGitChanges?: (opener: HTMLElement) => void
-    }>
+  changedFilesArgsRef: {
+    current: [] as Array<{ cwd: string; toolCalls: unknown[]; turnActive: boolean }>
   },
+  changedFilePathsRef: { current: [] as string[] },
   discoveredContextRef: {
     current: {} as Record<string, { agentId: string; cwd: string; projectId: string }>
   },
@@ -372,17 +369,19 @@ vi.mock('./ChatErrorNotice', () => ({
     return null
   }
 }))
-vi.mock('./ChatChangedFilesPanel', () => ({
-  ChatChangedFilesPanel: (props: {
-    cwd: string
-    toolCalls: unknown[]
-    turnActive?: boolean
-    forceCollapsed?: boolean
-    onOpenGitChanges?: (opener: HTMLElement) => void
-  }) => {
-    changedFilesPanelPropsRef.current.push(props)
-    // A marker, so the dock tests can assert the bar sits inside the dock wrapper.
-    return <div data-testid="changed-files-stub" />
+// The status pill renders for real; only its changed-files read is stubbed
+// (no git), listing `changedFilePathsRef` as modified files.
+vi.mock('./use-chat-changed-files', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./use-chat-changed-files')>()),
+  useChatChangedFiles: (cwd: string, toolCalls: unknown[], turnActive: boolean) => {
+    changedFilesArgsRef.current.push({ cwd, toolCalls, turnActive })
+    const files = changedFilePathsRef.current.map((path) => ({
+      path,
+      status: 'modified' as const,
+      added: 1,
+      removed: 0
+    }))
+    return { files, rowBase: cwd, source: 'git', totalAdded: files.length, totalRemoved: 0 }
   }
 }))
 vi.mock('./claude-account/ClaudeLimitNotice', () => ({
@@ -1270,7 +1269,7 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
       }
       try {
         const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
-        const pill = screen.getByRole('button', { name: /^Subagents:/ })
+        const pill = screen.getByRole('button', { name: /^Session status:/ })
         // jsdom never finishes framer's exit spring, so read the pill's live
         // region, which follows whether the pill is shown.
         const liveRegion = pill.closest('.absolute')?.querySelector('[aria-live]')
@@ -1556,46 +1555,43 @@ describe('AgentChatPanel failed-launch retry (story 5)', () => {
   })
 })
 
-describe('AgentChatPanel ChatChangedFilesPanel mounting', () => {
+describe('AgentChatPanel changed files', () => {
   beforeEach(() => {
-    changedFilesPanelPropsRef.current = []
+    changedFilesArgsRef.current = []
   })
 
-  it('always mounts ChatChangedFilesPanel with cwd and toolCalls for an active session', () => {
+  it('reads the changed files of the session cwd and tool calls', () => {
     sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
-    render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
-    expect(changedFilesPanelPropsRef.current[0]).toMatchObject({ cwd: '/w' })
-    expect(Array.isArray(changedFilesPanelPropsRef.current[0].toolCalls)).toBe(true)
+    toolCallsRef.current = { s1: [{ id: 'tc1', kind: 'edit' }] }
+    try {
+      render(<AgentChatPanel sessionId="s1" isVisible />)
+      expect(changedFilesArgsRef.current.at(-1)).toEqual({
+        cwd: '/w',
+        toolCalls: [{ id: 'tc1', kind: 'edit' }],
+        turnActive: false
+      })
+    } finally {
+      toolCallsRef.current = {}
+    }
   })
 
   it('passes the agent turn state so a finished turn refreshes git changes', () => {
     sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w', activeTurn: true })
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(changedFilesPanelPropsRef.current.at(-1)).toMatchObject({ turnActive: true })
+    expect(changedFilesArgsRef.current.at(-1)).toMatchObject({ turnActive: true })
   })
 
-  it('mounts ChatChangedFilesPanel even for a closed session (renders null internally)', () => {
+  it('still reads changed files for a closed session', () => {
     sessionRef.current = mockAcpSession({ id: 's2', cwd: '/w', status: 'closed' })
     render(<AgentChatPanel sessionId="s2" isVisible />)
-    expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
-  })
-
-  // The panel's negative bottom margin tucks it under the composer, so a notice
-  // between the two is painted over and its "Switch to" button cannot be clicked.
-  it('renders the Claude limit notice above the changed-files panel', () => {
-    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
-    render(<AgentChatPanel sessionId="s1" isVisible />)
-    const notice = screen.getByTestId('claude-limit-notice-stub')
-    const panel = screen.getByTestId('changed-files-stub')
-    expect(notice.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(changedFilesArgsRef.current.at(-1)).toMatchObject({ cwd: '/w' })
   })
 })
 
 // Web/desktop parity: `filePathContext` drives the `termul-file-path`
 // open-in-editor links in agent markdown — the open chain (`/fs/info` →
 // `openFile` → `addEditorTab`) is transport-agnostic, so the context must be
-// built on web too (the ChatChangedFilesPanel file-open path is proof it works).
+// built on web too (the changed-files list's file-open path is proof it works).
 describe('AgentChatPanel filePathContext parity', () => {
   beforeEach(() => {
     chatMessageListPropsRef.current = null
@@ -1835,7 +1831,7 @@ describe('AgentChatPanel hidden-panel render gate (multi-project perf)', () => {
     expect(lastArgs?.messages[2]).toMatchObject({ id: 'm3' })
   })
 
-  it('tool calls recorded while hidden reach ChatChangedFilesPanel after restore', () => {
+  it('tool calls recorded while hidden reach the changed files after restore', () => {
     seedLiveSession('s1')
     messagesRef.current = [{ id: 'm1', role: 'user', blocks: [] }]
     const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
@@ -1846,11 +1842,11 @@ describe('AgentChatPanel hidden-panel render gate (multi-project perf)', () => {
     }
     rerender(<AgentChatPanel sessionId="s1" isVisible={false} />)
     // Hidden render: gate holds the OLD (empty) tool-call snapshot.
-    expect(changedFilesPanelPropsRef.current.at(-1)?.toolCalls).toHaveLength(0)
+    expect(changedFilesArgsRef.current.at(-1)?.toolCalls).toHaveLength(0)
 
-    // Restore: the new tool-call array flows to the changed-files panel.
+    // Restore: the new tool-call array flows to the changed files.
     rerender(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(changedFilesPanelPropsRef.current.at(-1)?.toolCalls).toEqual([
+    expect(changedFilesArgsRef.current.at(-1)?.toolCalls).toEqual([
       { id: 'tc1', kind: 'edit', cwd: '/w' }
     ])
   })
@@ -2300,7 +2296,6 @@ describe('AgentChatPanel mobile dock wiring', () => {
     }
   }
   const lastPlan = () => planPanelPropsRef.current.at(-1)
-  const lastChangedFiles = () => changedFilesPanelPropsRef.current.at(-1)
 
   beforeEach(() => {
     mobileRef.current = true
@@ -2317,7 +2312,7 @@ describe('AgentChatPanel mobile dock wiring', () => {
     pendingElicitationsRef.current = {}
     plansRef.current = {}
     planPanelPropsRef.current = []
-    changedFilesPanelPropsRef.current = []
+    changedFilePathsRef.current = []
     askQuestionPropsRef.current = []
     elicitationPropsRef.current = []
     chatInputBarPropsRef.current = []
@@ -2334,28 +2329,29 @@ describe('AgentChatPanel mobile dock wiring', () => {
 
   describe('plan bar and Git action', () => {
     it('starts the plan collapsed and wires the changed-files Git action to the chat cwd', () => {
+      changedFilePathsRef.current = ['/repo/.worktrees/a/src/a.ts']
       render(<AgentChatPanel sessionId="s1" isVisible />)
 
       expect(lastPlan()).toMatchObject({ defaultCollapsed: true, forceCollapsed: false })
-      expect(lastChangedFiles()).toMatchObject({ cwd: '/repo/.worktrees/a', forceCollapsed: false })
-      expect(typeof lastChangedFiles()?.onOpenGitChanges).toBe('function')
-
-      // The tapped Git button is forwarded, so the sheet can return focus to it.
-      const gitButton = document.createElement('button')
-      lastChangedFiles()?.onOpenGitChanges?.(gitButton)
+      const pill = screen.getByRole('button', { name: /^Session status:/ })
+      fireEvent.click(pill)
+      fireEvent.click(screen.getByRole('button', { name: 'Open Git changes' }))
+      // The pill is the opener, so the Git sheet returns focus to it.
       expect(openGitSheetRef.current).toHaveBeenCalledTimes(1)
-      expect(openGitSheetRef.current).toHaveBeenCalledWith('/repo/.worktrees/a', gitButton)
+      expect(openGitSheetRef.current).toHaveBeenCalledWith('/repo/.worktrees/a', pill)
     })
 
     it('keeps the baseline props on the desktop shell', () => {
       mobileRef.current = false
       oskRef.current = OSK_OPEN
       seedPermission()
+      changedFilePathsRef.current = ['/repo/.worktrees/a/src/a.ts']
       render(<AgentChatPanel sessionId="s1" isVisible />)
 
       expect(lastPlan()).toMatchObject({ defaultCollapsed: false, forceCollapsed: false })
-      expect(lastChangedFiles()?.forceCollapsed).toBe(false)
-      expect(lastChangedFiles()?.onOpenGitChanges).toBeUndefined()
+      fireEvent.click(screen.getByRole('button', { name: /^Session status:/ }))
+      expect(screen.getByRole('dialog', { name: 'Changed files' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Open Git changes' })).toBeNull()
     })
   })
 
@@ -2369,13 +2365,6 @@ describe('AgentChatPanel mobile dock wiring', () => {
       seed()
       render(<AgentChatPanel sessionId="s1" isVisible />)
       expect(lastPlan()?.forceCollapsed).toBe(true)
-    })
-
-    it('forces the changed-files bar collapsed too', () => {
-      oskRef.current = OSK_OPEN
-      seedPermission()
-      render(<AgentChatPanel sessionId="s1" isVisible />)
-      expect(lastChangedFiles()?.forceCollapsed).toBe(true)
     })
 
     it('does not collapse without the keyboard, without an approval, or for a closed session', () => {
@@ -2591,7 +2580,7 @@ describe('AgentChatPanel mobile dock wiring', () => {
     it('writes the distance to the composer dock top for a visible mobile chat', () => {
       const { container, unmount } = render(<AgentChatPanel sessionId="s1" isVisible />)
 
-      // The composer and the changed-files bar are the wrapper's children.
+      // The composer is the wrapper's child.
       expect(screen.getByTestId('composer-stub').parentElement).toBe(dockOf(container))
       expect(dockVar()).toBe('136px')
 
@@ -2614,12 +2603,11 @@ describe('AgentChatPanel mobile dock wiring', () => {
     // The wrapper's rect is only worth measuring if everything that sits on the
     // dock is inside it: a child outside would be uncounted and a toast could
     // cover it.
-    it('holds the changed-files bar and the composer in the composer branch', () => {
+    it('holds the composer in the composer branch', () => {
       const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
       const dock = dockOf(container)
 
       expect(dock).not.toBeNull()
-      expect(screen.getByTestId('changed-files-stub').closest('[data-chat-dock="true"]')).toBe(dock)
       expect(screen.getByTestId('composer-stub').closest('[data-chat-dock="true"]')).toBe(dock)
     })
 
