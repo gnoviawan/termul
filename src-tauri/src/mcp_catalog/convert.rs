@@ -747,9 +747,10 @@ static NPM_VERSION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$").expect("npm version regex")
 });
 /// npm reads a name or version ending in a tarball extension as a local file
-/// (`pkg@1.0.0-a.tgz` installs `./1.0.0-a.tgz`), as `npm-package-arg` does.
+/// (`pkg@1.0.0-a.tgz` installs `./1.0.0-a.tgz`). This is `npm-package-arg`'s
+/// `isFileType` verbatim: its `tar.gz` dot is unescaped, so `.tar-gz` is a file too.
 static NPM_FILE_SPEC: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\.(tgz|tar\.gz|tar)$").expect("npm file spec regex"));
+    LazyLock::new(|| Regex::new(r"(?i)\.(tgz|tar.gz|tar)$").expect("npm file spec regex"));
 static PYPI_VERSION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^v?\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?(\+[a-z0-9.]+)?$")
         .expect("pypi version regex")

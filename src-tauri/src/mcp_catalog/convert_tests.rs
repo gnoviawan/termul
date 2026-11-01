@@ -314,7 +314,13 @@ fn package_grammar_rejects_url_path_vcs_and_alias_specs() {
             "{registry_type} {identifier:?}"
         );
     }
-    for version in ["1.0.0-a.tgz", "1.0.0+b.TAR.GZ", "1.0.0-x.tar"] {
+    for version in [
+        "1.0.0-a.tgz",
+        "1.0.0+b.TAR.GZ",
+        "1.0.0-x.tar",
+        "1.0.0-a.tar-gz",
+        "1.0.0-a.tarxgz",
+    ] {
         assert_eq!(
             reason(package(
                 json!({ "registryType": "npm", "identifier": "server", "version": version })

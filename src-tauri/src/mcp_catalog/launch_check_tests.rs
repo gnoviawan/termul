@@ -195,7 +195,15 @@ fn every_docker_host_mount_is_named_and_root_home_and_socket_are_sensitive() {
 
 #[test]
 fn an_imported_npm_spec_naming_a_tarball_is_refused_as_in_the_catalog() {
-    for spec in ["ok@1.0.0-evil.tgz", "ok@1.0.0-a.TAR.GZ", "@scope/ok@2.0.0-x.tar"] {
+    for spec in [
+        "ok@1.0.0-evil.tgz",
+        "ok@1.0.0-a.TAR.GZ",
+        "@scope/ok@2.0.0-x.tar",
+        "ok@1.0.0-a.tar-gz",
+        "@s/ok@1.0.0-a.tar+gz",
+        "ok@1.0.0-a.TAR_GZ",
+        "ok.tar-gz",
+    ] {
         assert_eq!(
             check("npx", &["-y", spec]),
             Err(McpCatalogReason::InvalidPackage),
