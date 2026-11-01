@@ -20,7 +20,7 @@ use crate::web::fs_api::IpcBody;
 use crate::web::git_api::resolve_cwd;
 use crate::web::ws::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ProjectIconRequest {
     pub cwd: String,
 }

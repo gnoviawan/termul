@@ -30,7 +30,7 @@ pub(crate) fn registry_path(project_root: &Path) -> PathBuf {
 }
 
 /// The `?projectId=` query of `GET`/`PUT /mcp-servers`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct McpProjectQuery {
     #[serde(default)]

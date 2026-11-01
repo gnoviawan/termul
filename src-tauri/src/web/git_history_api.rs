@@ -22,7 +22,7 @@ use crate::web::git_api::{cwd_string, resolve_cwd};
 use crate::web::ws::AppState;
 
 /// `POST /git/commit-detail` body.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommitDetailRequest {
     pub cwd: String,
@@ -73,7 +73,7 @@ pub async fn get_commit_detail(
 }
 
 /// `POST /git/commit-file-diff` body. `oldPath` is a rename's source path.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommitFileDiffRequest {
     pub cwd: String,

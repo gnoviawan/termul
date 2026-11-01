@@ -35,7 +35,7 @@ use crate::web::ws::AppState;
 /// project `.agents/skills/` and project Claude settings are not read. User
 /// skills (`~/.agents/skills/`, `~/.claude/skills/`, and user-enabled plugins)
 /// are still listed.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillsQuery {
     pub project_root: Option<String>,

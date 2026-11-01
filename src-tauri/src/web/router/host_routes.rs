@@ -69,9 +69,9 @@ pub(super) async fn health_check(
 const PATHS_CASE_INSENSITIVE_BY_TARGET: bool = cfg!(any(windows, target_os = "macos"));
 
 /// `GET /health` response body.
-#[derive(Serialize)]
+#[derive(Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct HealthBody {
+pub(crate) struct HealthBody {
     status: &'static str,
     allow_remote_writes: bool,
     case_insensitive_paths: bool,
@@ -101,9 +101,9 @@ pub(super) async fn agent_idle_window() -> impl IntoResponse {
     (StatusCode::OK, Json(idle_window_ok(data)))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct SetAgentIdleWindowRequest {
+pub(crate) struct SetAgentIdleWindowRequest {
     secs: Option<u64>,
 }
 

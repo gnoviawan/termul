@@ -29,7 +29,7 @@ pub const SERVER_CONFIG_FILE_NAME: &str = "server-config.json";
 /// The persisted onboarding record. Field names are camelCase on disk so the
 /// file doubles as the wire shape for `ServerSetupAnswers` (the wizard and
 /// the file must never drift — AGENTS.md "can't drift" requirement).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerConfigFile {
     /// `127.0.0.1` or `0.0.0.0` (display form — same vocabulary as the CLI).
@@ -64,7 +64,7 @@ pub type ServerSetupAnswers = ServerConfigFile;
 
 /// Per-field validation errors returned by `POST /setup/validate`,
 /// `POST /setup/apply`, and `POST /server/config`. Absent field = no error.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupFieldErrors {
     #[serde(skip_serializing_if = "Option::is_none")]
