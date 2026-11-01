@@ -3657,7 +3657,7 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     transport.dispose()
   })
 
-  it('resets the backoff counter only after 60s of stable connection, not on connect', async () => {
+  it('resets the backoff counter only after 20s of stable connection, not on connect', async () => {
     vi.useFakeTimers()
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -3671,14 +3671,14 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     await vi.advanceTimersByTimeAsync(600) // reconnected
     expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
     expect(internals.reconnectAttempt).toBe(1) // connect alone does not reset
-    await vi.advanceTimersByTimeAsync(58_000)
+    await vi.advanceTimersByTimeAsync(18_000)
     expect(internals.reconnectAttempt).toBe(1)
     await vi.advanceTimersByTimeAsync(2_000)
-    expect(internals.reconnectAttempt).toBe(0) // 60s stable
+    expect(internals.reconnectAttempt).toBe(0) // 20s stable
     transport.dispose()
   })
 
-  it('a connection that drops before 60s keeps climbing the backoff ladder', async () => {
+  it('a connection that drops before 20s keeps climbing the backoff ladder', async () => {
     vi.useFakeTimers()
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -3688,7 +3688,7 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     const internals = transport as unknown as TransportInternals
     internals.socket.close() // attempt 0 → 1, 500ms
     await vi.advanceTimersByTimeAsync(600)
-    await vi.advanceTimersByTimeAsync(30_000) // up for only 30s
+    await vi.advanceTimersByTimeAsync(5_000) // up for only 5s
     internals.socket.close() // flap: attempt 1 → 2, 1000ms
     expect(internals.reconnectAttempt).toBe(2)
     await vi.advanceTimersByTimeAsync(900)
@@ -3696,6 +3696,25 @@ describe('WsAcpTransport visibility-triggered reconnect (web idle persist)', () 
     await vi.advanceTimersByTimeAsync(200)
     expect(internals.reconnectTimer).toBeNull()
     expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+    transport.dispose()
+  })
+
+  it('a connection that served for 45s and then dropped reconnects at the base delay', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const internals = transport as unknown as TransportInternals
+    for (let drop = 1; drop <= 4; drop++) {
+      internals.socket.close()
+      expect(internals.reconnectAttempt).toBe(1)
+      await vi.advanceTimersByTimeAsync(700)
+      expect(internals.reconnectTimer).toBeNull()
+      expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+      await vi.advanceTimersByTimeAsync(45_000)
+    }
     transport.dispose()
   })
 

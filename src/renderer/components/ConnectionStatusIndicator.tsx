@@ -23,20 +23,11 @@ export const HOST_OFFLINE_SUMMARY = 'Host offline'
 export const HOST_OFFLINE_RETRY_LABEL = 'Retry'
 export const HOST_OFFLINE_TOOLTIP = 'Host offline. Select to retry.'
 
-/**
- * The connected summary of the labelled (drawer footer) indicator: "Connected ·
- * host:port", naming the host this client talks to. An empty host (no
- * `window.location.host`) reads plain "Connected".
- */
-export function formatConnectedSummary(host: string): string {
-  const trimmed = host.trim()
-  return trimmed ? `Connected · ${trimmed}` : 'Connected'
-}
-
 interface ConnectionStatusIndicatorProps {
   /**
-   * Render the summary as visible text beside a decorative lamp (the mobile
-   * drawer footer, where the tooltip is unreachable by touch). The status
+   * Render a degraded summary as visible text beside a decorative lamp (the
+   * mobile drawer footer, where the tooltip is unreachable by touch). When
+   * connected the text is screen-reader only. The status
    * region's content is that text, so there is no `aria-label` and no tooltip
    * button. Default false keeps the StatusBar render unchanged.
    */
@@ -73,9 +64,6 @@ export function ConnectionStatusIndicator({
       : 'Connected'
 
   if (showLabel) {
-    // Degraded text is unchanged; only the connected reading names the host.
-    const labelSummary =
-      degraded.length > 0 ? summary : formatConnectedSummary(window.location.host)
     return (
       <span
         role="status"
@@ -89,7 +77,7 @@ export function ConnectionStatusIndicator({
           decorative
           size={8}
         />
-        <span className="min-w-0 break-words">{labelSummary}</span>
+        <span className={worst === 'connected' ? 'sr-only' : 'min-w-0 break-words'}>{summary}</span>
         {hostOffline && (
           <button
             type="button"

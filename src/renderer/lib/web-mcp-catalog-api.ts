@@ -7,8 +7,14 @@ import type {
   McpCatalogPage,
   McpCatalogStatus
 } from '@shared/types/mcp-catalog.types'
+import type {
+  McpInstallCommitResult,
+  McpInstallFormReply,
+  McpInstallPlanReply
+} from '@shared/types/mcp-install.types'
 import { bodyToResult, getJson, postJson, serverBase } from './ipc/http'
 import { authHeader } from './web-auth-token'
+import { getClientInstanceId } from './web-client-identity'
 
 function readAsDataUrl(blob: Blob): Promise<McpCatalogIconUrl> {
   return new Promise((resolve, reject) => {
@@ -50,5 +56,26 @@ export const webMcpCatalogApi: McpCatalogApi = {
   },
   status: () => getJson<McpCatalogStatus>('/mcp-catalog/status'),
   setSync: (enabled) => postJson<McpCatalogStatus>('/mcp-catalog/sync', { enabled }),
+  describeInstall(request) {
+    return postJson<McpInstallFormReply>('/mcp-catalog/install/form', request)
+  },
+  planInstall(request) {
+    return postJson<McpInstallPlanReply>('/mcp-catalog/install/plan', {
+      ...request,
+      clientInstanceId: getClientInstanceId()
+    })
+  },
+  commitInstall(request) {
+    return postJson<McpInstallCommitResult>('/mcp-catalog/install/commit', {
+      ...request,
+      clientInstanceId: getClientInstanceId()
+    })
+  },
+  cancelInstall(request) {
+    return postJson<Record<string, never>>('/mcp-catalog/install/cancel', {
+      ...request,
+      clientInstanceId: getClientInstanceId()
+    })
+  },
   icon
 }

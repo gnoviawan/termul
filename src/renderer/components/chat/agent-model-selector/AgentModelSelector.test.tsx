@@ -748,6 +748,15 @@ describe('AgentModelSelector panel', () => {
     expect(screen.getByRole('button', { name: 'Sonnet 5.5' })).toHaveClass('min-h-11')
   })
 
+  it('opens the mobile sheet without focusing search, so no keyboard comes up', () => {
+    mockIsMobile.current = true
+    renderSelector()
+    open()
+
+    expect(screen.getByLabelText('Search models and agents')).not.toHaveFocus()
+    expect(screen.getByRole('dialog')).toHaveFocus()
+  })
+
   it('renders without a crash against a partial store state', () => {
     acpStateRef.current = {}
     renderSelector()

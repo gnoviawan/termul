@@ -112,7 +112,18 @@ Servers that the registry marks as deprecated have a **Deprecated** badge.
 
 Servers whose publisher lists a logo show it next to their name. A server with no logo, or whose logo can't load, shows the first letter of its name instead. Logos load whether or not sync is on. Only the Termul host downloads them from the publisher and keeps a copy for a few days, so a browser or phone connected to termul-server gets each logo from that server, never from the publisher's site.
 
-<Callout>The catalog is read-only for now. The **Install** button stays off until installing from the catalog is ready. Until then, copy the server's config from its repository, if it has one, and [add it by hand](#add-mcp-servers).</Callout>
+### Install a server from the catalog
+
+1. Click **Install** on an installable server.
+2. If the server needs settings, such as an API key, fill in the form and click **Review**. Termul hides the values of secret fields.
+3. Read the review. It shows the exact command and arguments, or the URL, that Termul will save, with each environment variable and header. Click **Approve** to install, or **Cancel** to save nothing.
+4. Termul adds the server to your list, turned on, and checks that it responds. If the server asks you to sign in, click **Sign in** to open its sign-in page in your browser.
+
+A server you installed shows **Installed** in the catalog. **Install** stays off for servers that aren't installable, and on a connection that can only view. In the browser version, open a project first, because each project has its own list.
+
+If the review waits too long, or the server's details change before you approve, Termul saves nothing and offers **Start over**.
+
+<Callout type="warn">Termul saves the values you enter, API keys included, as plain text with the server's settings.</Callout>
 
 ## Global and per-project servers
 

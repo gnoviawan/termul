@@ -37,6 +37,7 @@ import {
 } from '../acp-reuse-keys'
 import { ephemeralSessionIds } from './ephemeral-ids'
 import { isReusableStatus, SWITCH_SPLICE_ID_PREFIX, type SwitchMarkerFacts } from './helpers'
+import { _resetRegistryMcpFingerprintsForTesting } from './registry-mcp-fingerprints'
 import type { AcpSession, AcpState, ChatMessage, CommitMessageCollector } from './types'
 
 export { ephemeralSessionIds }
@@ -395,6 +396,7 @@ function spawnSignature(
 export function _resetDefiniteSpawnRejectionsForTesting(): void {
   definiteSpawnRejections.clear()
   liveAgentSignatures.clear()
+  _resetRegistryMcpFingerprintsForTesting()
   credentialEpochs.clear()
 }
 

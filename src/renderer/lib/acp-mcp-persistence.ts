@@ -1,3 +1,8 @@
+import type {
+  McpEntryCatalogProvenance,
+  McpInstallCommitResult,
+  McpResolvedSecret
+} from '@shared/types/mcp-install.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { AgentCapabilities, McpServer, McpServerConfig } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
@@ -8,7 +13,11 @@ import { logFrontendError } from './log-api'
 
 export type McpTransport = 'stdio' | 'http' | 'sse'
 
-export type StoredMcpServer = McpServerConfig & { id: string; enabled?: boolean }
+export type StoredMcpServer = McpServerConfig & {
+  id: string
+  enabled?: boolean
+  catalog?: McpEntryCatalogProvenance
+}
 
 export interface McpValidation {
   valid: boolean
@@ -90,6 +99,22 @@ function stringPairs(value: unknown): Array<{ name: string; value: string }> | u
   return pairs.length === value.length ? pairs : undefined
 }
 
+function catalogProvenance(value: unknown): McpEntryCatalogProvenance | undefined {
+  if (!isRecord(value)) return undefined
+  const { name, version, kind, index, repositoryId, launchDigest } = value
+  if (
+    value.source !== 'mcp-registry' ||
+    typeof name !== 'string' ||
+    typeof version !== 'string' ||
+    (kind !== 'remote' && kind !== 'package') ||
+    typeof index !== 'number' ||
+    (repositoryId !== null && typeof repositoryId !== 'string') ||
+    typeof launchDigest !== 'string'
+  )
+    return undefined
+  return { source: 'mcp-registry', name, version, kind, index, repositoryId, launchDigest }
+}
+
 function normalizeStoredServer(value: unknown): StoredMcpServer | null {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.name !== 'string')
     return null
@@ -102,6 +127,7 @@ function normalizeStoredServer(value: unknown): StoredMcpServer | null {
     if (value.args !== undefined && args?.length !== value.args.length) return null
     const env = stringPairs(value.env)
     if (value.env !== undefined && env === undefined) return null
+    const catalog = catalogProvenance(value.catalog)
     const server: StoredMcpServer = {
       id: value.id,
       type: 'stdio',
@@ -109,20 +135,23 @@ function normalizeStoredServer(value: unknown): StoredMcpServer | null {
       command: value.command,
       ...(args ? { args } : {}),
       ...(env ? { env } : {}),
-      enabled: value.enabled ?? true
+      enabled: value.enabled ?? true,
+      ...(catalog ? { catalog } : {})
     }
     return validateMcpServer(server).valid ? server : null
   }
   if ((type === 'http' || type === 'sse') && typeof value.url === 'string') {
     const headers = stringPairs(value.headers)
     if (value.headers !== undefined && headers === undefined) return null
+    const catalog = catalogProvenance(value.catalog)
     const server: StoredMcpServer = {
       id: value.id,
       type,
       name: value.name,
       url: value.url,
       ...(headers ? { headers } : {}),
-      enabled: value.enabled ?? true
+      enabled: value.enabled ?? true,
+      ...(catalog ? { catalog } : {})
     }
     return validateMcpServer(server).valid ? server : null
   }
@@ -139,6 +168,80 @@ export function normalizeMcpRegistry(value: unknown): StoredMcpServer[] {
     console.warn(`[mcp] discarded ${value.length - normalized.length} malformed registry entries`)
   }
   return normalized
+}
+
+function uniqueName(proposed: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(proposed)) return proposed
+  let suffix = 2
+  while (taken.has(`${proposed}-${suffix}`)) suffix += 1
+  return `${proposed}-${suffix}`
+}
+
+function secretValue(
+  secrets: McpResolvedSecret[],
+  slot: McpResolvedSecret['slot'],
+  name: string
+): string {
+  const secret = secrets.find((entry) => entry.slot === slot && entry.name === name)
+  if (!secret) throw new Error(`The install result has no value for ${slot} ${name}`)
+  return secret.value
+}
+
+function launchShape(server: McpServerConfig): unknown[] {
+  const names = (pairs: { name: string }[] | undefined) => (pairs ?? []).map((pair) => pair.name)
+  return server.type === 'http' || server.type === 'sse'
+    ? [server.type, server.url, names(server.headers)]
+    : ['stdio', server.command, server.args ?? [], names(server.env)]
+}
+
+/**
+ * Whether two configs launch the same server: what a catalog install's launch
+ * digest covers. Names and env or header values may differ.
+ */
+export function sameLaunch(a: McpServerConfig, b: McpServerConfig): boolean {
+  return JSON.stringify(launchShape(a)) === JSON.stringify(launchShape(b))
+}
+
+export function catalogInstallEntry(
+  result: McpInstallCommitResult,
+  takenNames: ReadonlySet<string>,
+  id: string
+): StoredMcpServer {
+  if (!result.provenance) throw new Error('A catalog install result carries its provenance')
+  const name = uniqueName(result.name, takenNames)
+  const catalog: McpEntryCatalogProvenance = {
+    source: 'mcp-registry',
+    ...result.provenance,
+    launchDigest: result.launchDigest
+  }
+  const { config, secrets } = result
+  if (config.transport === 'stdio') {
+    return {
+      id,
+      type: 'stdio',
+      name,
+      command: config.command,
+      args: config.args,
+      env: config.env.map((slot) => ({
+        name: slot.name,
+        value: secretValue(secrets, 'env', slot.name)
+      })),
+      enabled: true,
+      catalog
+    }
+  }
+  return {
+    id,
+    type: config.transport,
+    name,
+    url: config.url,
+    headers: config.headers.map((slot) => ({
+      name: slot.name,
+      value: secretValue(secrets, 'header', slot.name)
+    })),
+    enabled: true,
+    catalog
+  }
 }
 
 export function buildMcpServers(registry: StoredMcpServer[], selectedIds: string[]): McpServer[] {

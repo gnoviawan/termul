@@ -27,6 +27,10 @@ import {
   reapOrphanPreparedSession
 } from '../helpers'
 import {
+  forgetRegistryMcpServers,
+  registryMcpServersAreCurrent
+} from '../registry-mcp-fingerprints'
+import {
   cancelledChatLaunches,
   ensureLiveAgent,
   ephemeralSessionIds,
@@ -174,14 +178,18 @@ function preparedSessionFitsProject(
 /**
  * Whether the warm session's agent runs the launch a new chat would get now.
  * After a Project's Claude account changes, a warm session spawned before is
- * on the old account and must not become the next chat.
+ * on the old account and must not become the next chat. The same holds once
+ * the user's MCP list changes after the warm session took it.
  */
 function preparedLaunchIsCurrent(state: AcpState, key: string, sessionId: SessionId): boolean {
   const session = state.sessions[sessionId]
   if (!session) return false
   // `key` is a prepareChatKey (`configId\0cwd\0mcpKey`).
   const [configId = '', cwd = ''] = key.split('\0')
-  return runsCurrentLaunch(state, session.agentId, configId, cwd, session.projectId)
+  return (
+    runsCurrentLaunch(state, session.agentId, configId, cwd, session.projectId) &&
+    registryMcpServersAreCurrent(state, sessionId, session.agentId)
+  )
 }
 
 /**
@@ -216,7 +224,7 @@ function reconcilePreparedSlot(
     level: 'info',
     source: 'acp.preparedSlot.stale',
     message: live
-      ? `Dropped warm session ${sessionId}: its agent ${get().sessions[sessionId]?.agentId} started with an outdated launch (env or Claude account)`
+      ? `Dropped warm session ${sessionId}: its agent ${get().sessions[sessionId]?.agentId} started with an outdated launch (env, Claude account or MCP servers)`
       : `Dropped stale prepared slot ${sessionId} (session ${get().sessions[sessionId]?.status ?? 'missing'})`
   })
   set((s) => ({
@@ -339,6 +347,7 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
         // session — drop it (createSession added it to `ephemeralSessionIds`) and
         // bail so the pool re-seeds lazily on the next chat (re-spawn + refill).
         if (get().agentStatus[agentId] !== 'connected') {
+          forgetRegistryMcpServers(sessionId)
           if (ephemeralSessionIds.has(sessionId)) {
             ephemeralSessionIds.delete(sessionId)
             set((s) => {

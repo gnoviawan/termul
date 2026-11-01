@@ -76,6 +76,7 @@ import {
 import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
 import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
 import { noteTurnEndSeq } from '@/lib/chat-read-sync'
+import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
 import { getAgentChatSessionIdsInAllTrees, useWorkspaceStore } from '@/stores/workspace-store'
@@ -291,9 +292,10 @@ async function installTransportRecovery(
       // ids double as backfill/dedup anchors against payload installs.
       const rawTurnId = payload.turnId
       const turnId = typeof rawTurnId === 'string' && rawTurnId.length > 0 ? rawTurnId : null
-      const rawTurnBlocks = Array.isArray(payload.content)
-        ? (payload.content as ContentBlock[])
-        : []
+      const guarded = splitReadOnlyGuard(
+        Array.isArray(payload.content) ? (payload.content as ContentBlock[]) : []
+      )
+      const rawTurnBlocks = guarded.blocks
       // spec-agent-switch-separator-redesign: a pre-fix handoff record stored
       // the wire framing (summary + `---` + draft); strip the preamble so the
       // replayed bubble shows only the draft. A summary-only record's first
@@ -327,7 +329,8 @@ async function installTransportRecovery(
         blocks,
         streaming: false,
         timestamp: Date.now(),
-        seq: event.seq
+        seq: event.seq,
+        ...(guarded.guard ? { readOnlyGuard: guarded.guard } : {})
       }
       messages.push(message)
     } else if (event.type === 'message_chunk') {

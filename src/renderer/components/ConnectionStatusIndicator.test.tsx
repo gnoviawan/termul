@@ -22,7 +22,7 @@ import {
   type ConnectionChannelState,
   useConnectionStatusStore
 } from '@/stores/connection-status-store'
-import { ConnectionStatusIndicator, formatConnectedSummary } from './ConnectionStatusIndicator'
+import { ConnectionStatusIndicator } from './ConnectionStatusIndicator'
 
 function renderIndicator(): ReturnType<typeof render> {
   return render(
@@ -214,9 +214,7 @@ describe('ConnectionStatusIndicator reconnect grace', () => {
 
     setChannel({ controlChannel: 'reconnecting' })
     advance(500)
-    expect(screen.getByRole('status')).toHaveTextContent(
-      formatConnectedSummary(window.location.host)
-    )
+    expect(screen.getByRole('status')).toHaveTextContent('Connected')
   })
 })
 
@@ -245,26 +243,16 @@ describe('ConnectionStatusIndicator labelled status mode', () => {
     expect(lampClass()).toContain('text-connection')
   })
 
-  it('shows the summary as visible text content of the status region', () => {
+  it('keeps Connected for screen readers only, without the host', () => {
     renderLabelled()
 
     const status = screen.getByRole('status')
-    expect(status).toHaveTextContent(`Connected · ${window.location.host}`)
+    expect(status).toHaveTextContent(/^Connected$/)
     expect(status).toHaveAttribute('aria-live', 'polite')
     // The state is the text, not a changing aria-label.
     expect(status).not.toHaveAttribute('aria-label')
-    const label = screen.getByText(`Connected · ${window.location.host}`)
-    expect(label).toHaveClass('min-w-0', 'break-words')
+    expect(screen.getByText('Connected')).toHaveClass('sr-only')
     expect(status).toHaveClass('text-2xs', 'text-muted-foreground')
-  })
-
-  it('names the host when both channels are connected, as one text node', () => {
-    renderLabelled()
-
-    const label = screen.getByText(`Connected · ${window.location.host}`)
-    expect(window.location.host).not.toBe('')
-    expect(label.childNodes).toHaveLength(1)
-    expect(label.firstChild?.nodeType).toBe(Node.TEXT_NODE)
   })
 
   it('leaves the StatusBar render without the host', () => {
@@ -298,7 +286,9 @@ describe('ConnectionStatusIndicator labelled status mode', () => {
 
     const status = screen.getByRole('status')
     expect(status).toHaveTextContent('Control channel: reconnecting')
-    // Degraded text is unchanged: no host.
+    const label = screen.getByText('Control channel: reconnecting')
+    expect(label).not.toHaveClass('sr-only')
+    expect(label).toHaveClass('min-w-0', 'break-words')
     expect(status).not.toHaveTextContent('Connected')
     expect(status).not.toHaveTextContent(window.location.host)
     expect(lampClass()).toContain('text-warning')
@@ -323,16 +313,5 @@ describe('ConnectionStatusIndicator labelled status mode', () => {
     mockIsTauriContext.mockReturnValue(true)
     const { container } = renderLabelled()
     expect(container).toBeEmptyDOMElement()
-  })
-})
-
-describe('formatConnectedSummary', () => {
-  it('names the host after the status', () => {
-    expect(formatConnectedSummary('127.0.0.1:8199')).toBe('Connected · 127.0.0.1:8199')
-    expect(formatConnectedSummary('termul.example.com')).toBe('Connected · termul.example.com')
-  })
-
-  it.each(['', '   '])('falls back to a plain Connected for the empty host %j', (host) => {
-    expect(formatConnectedSummary(host)).toBe('Connected')
   })
 })

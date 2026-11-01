@@ -20,6 +20,30 @@ describe('mcpCatalogReasonText', () => {
       mcpCatalogReasonText({ code: 'unsupported-registry', registry: 'ghcr.example.com' })
     ).toBe("Its package is hosted on ghcr.example.com, which Termul doesn't download from.")
   })
+
+  it('names the argument holding a cmd metacharacter', () => {
+    expect(mcpCatalogReasonText({ code: 'cmd-metacharacter', field: 'args[2]' })).toBe(
+      'Its args[2] holds a character Windows reads as a command operator (& | < > ^ % ! " ( or )).'
+    )
+  })
+
+  it('names the runner alias an import may not use', () => {
+    expect(mcpCatalogReasonText({ code: 'unsupported-runner', command: 'npm exec' })).toBe(
+      "It runs its package through npm exec, which Termul can't check. Use npx, uvx, docker or dotnet dnx instead."
+    )
+  })
+
+  it('names the launch argument an import may not pass its runner', () => {
+    expect(
+      mcpCatalogReasonText({
+        code: 'unsupported-launch-argument',
+        command: 'npx',
+        argument: '--registry'
+      })
+    ).toBe(
+      "It passes --registry to npx, which Termul doesn't allow because it can change what runs."
+    )
+  })
 })
 
 describe('mcpCatalogSyncText', () => {

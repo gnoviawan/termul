@@ -422,7 +422,7 @@ describe('MobileShellDrawer shell', () => {
       within(dialog).getByRole('button', { name: 'Snapshots' }),
       within(dialog).getByRole('button', { name: 'Git history' }),
       within(dialog).getByRole('button', { name: 'New chat' }),
-      within(dialog).getByText(`Connected · ${window.location.host}`)
+      within(dialog).getByRole('status')
     ]
     for (let i = 1; i < inOrder.length; i++) {
       expect(
@@ -876,23 +876,15 @@ describe('MobileShellDrawer footer', () => {
     expect(within(dialog).getByRole('button', { name: 'Git history' })).toBeDisabled()
   })
 
-  it('shows the connection summary as visible text in the footer', async () => {
+  it('shows only the lamp in the footer when connected, with Connected for screen readers', async () => {
     const { dialog } = await openDrawer()
 
     const status = within(dialog).getByRole('status')
-    expect(status).toHaveTextContent(`Connected · ${window.location.host}`)
+    expect(status).toHaveTextContent(/^Connected$/)
+    expect(within(status).getByText('Connected')).toHaveClass('sr-only')
     expect(status).toHaveClass('text-2xs', 'text-muted-foreground')
     expect(status).not.toHaveAttribute('aria-label')
     expect(status.querySelector('svg')?.getAttribute('class')).toContain('text-connection')
-  })
-
-  it('names the host this client talks to, one text node that may wrap', async () => {
-    const { dialog } = await openDrawer()
-
-    const label = within(dialog).getByText(`Connected · ${window.location.host}`)
-    expect(window.location.host).not.toBe('')
-    expect(label.childNodes).toHaveLength(1)
-    expect(label).toHaveClass('min-w-0', 'break-words')
   })
 
   it('shows no connection status on Tauri, as before', async () => {

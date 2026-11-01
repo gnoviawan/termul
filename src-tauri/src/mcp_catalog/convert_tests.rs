@@ -5,7 +5,7 @@ use super::convert::{
     OptionKind, RegistryServer, RemoteTransport, Runner,
 };
 use super::search::{item_status, McpCatalogDefaultOption, McpCatalogState, RunnerAvailability};
-use super::snapshot::{CatalogItem, RegistryStatus};
+use super::snapshot::{CatalogItem, ParsedItem, RegistryStatus};
 
 fn options(server: Value) -> Vec<CatalogOption> {
     let parsed: RegistryServer = serde_json::from_value(server).expect("server parses");
@@ -90,7 +90,7 @@ fn nuget_runs_dotnet_dnx_with_the_pinned_package() {
         argv(package(
             json!({ "registryType": "nuget", "identifier": "TimeMcpServer", "version": "1.1.1" })
         )),
-        ["dotnet", "dnx", "TimeMcpServer@1.1.1", "--yes"]
+        ["dotnet", "dnx", "TimeMcpServer@1.1.1", "--yes", "--"]
     );
 }
 
@@ -314,7 +314,13 @@ fn package_grammar_rejects_url_path_vcs_and_alias_specs() {
             "{registry_type} {identifier:?}"
         );
     }
-    for version in ["1.0.0-a.tgz", "1.0.0+b.TAR.GZ", "1.0.0-x.tar"] {
+    for version in [
+        "1.0.0-a.tgz",
+        "1.0.0+b.TAR.GZ",
+        "1.0.0-x.tar",
+        "1.0.0-a.tar-gz",
+        "1.0.0-a.tarxgz",
+    ] {
         assert_eq!(
             reason(package(
                 json!({ "registryType": "npm", "identifier": "server", "version": version })
@@ -334,7 +340,7 @@ fn package_grammar_rejects_url_path_vcs_and_alias_specs() {
         (
             "nuget",
             "Example.Mcp.Server",
-            vec!["dotnet", "dnx", "Example.Mcp.Server@1.0.0", "--yes"],
+            vec!["dotnet", "dnx", "Example.Mcp.Server@1.0.0", "--yes", "--"],
         ),
     ] {
         assert_eq!(
@@ -618,13 +624,16 @@ fn repository_links_leave_the_host_only_over_https() {
 fn item(server: Value) -> CatalogItem {
     let parsed: RegistryServer = serde_json::from_value(server).expect("server parses");
     CatalogItem {
-        options: Some(convert(&parsed)),
-        name: parsed.name,
-        title: parsed.title,
-        description: parsed.description,
-        version: parsed.version,
+        name: parsed.name.clone(),
+        title: parsed.title.clone(),
+        description: parsed.description.clone(),
+        version: parsed.version.clone(),
         status: RegistryStatus::Active,
         repository_url: None,
+        parsed: Some(ParsedItem {
+            options: convert(&parsed),
+            server: parsed,
+        }),
         icon: None,
     }
 }

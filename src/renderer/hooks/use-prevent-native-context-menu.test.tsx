@@ -1,5 +1,5 @@
 import { act, render } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { usePreventNativeContextMenu } from '@/hooks/use-prevent-native-context-menu'
 
@@ -48,5 +48,27 @@ describe('usePreventNativeContextMenu', () => {
     expect(event.defaultPrevented).toBe(true)
     // dispatchEvent returns false when the event was cancelled (preventDefault).
     expect(dispatched).toBe(false)
+  })
+
+  it('leaves the native menu to the OS on a touch-primary device, and suppresses it otherwise', () => {
+    function Harness() {
+      usePreventNativeContextMenu()
+      return <p>prose</p>
+    }
+    const { getByText } = render(<Harness />)
+    const longPress = (): boolean =>
+      getByText('prose').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+      )
+
+    expect(longPress()).toBe(false)
+
+    const coarse = vi
+      .spyOn(window, 'matchMedia')
+      .mockImplementation(
+        (query) => ({ matches: query === '(pointer: coarse)', media: query }) as MediaQueryList
+      )
+    onTestFinished(() => coarse.mockRestore())
+    expect(longPress()).toBe(true)
   })
 })

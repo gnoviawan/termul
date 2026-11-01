@@ -155,6 +155,7 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { dropEphemeralSessionState } from './helpers'
+import { _registryMcpFingerprintForTesting } from './registry-mcp-fingerprints'
 
 describe('warm session pool', () => {
   beforeEach(async () => {
@@ -176,7 +177,8 @@ describe('warm session pool', () => {
       messages: {},
       pendingPermissions: {},
       pendingQuestions: {},
-      pendingElicitations: {}
+      pendingElicitations: {},
+      mcpServers: []
     })
     _resetInFlightHistoryOpensForTesting()
     _resetEphemeralSessionIdsForTesting()
@@ -419,6 +421,78 @@ describe('warm session pool', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('startChat skips a warm session made before the MCP list changed', async () => {
+    await seedConnectedAgent('cfg-mcp', 'agent-mcp', '/work-mcp')
+    const sessionIds = ['sess-prep', 'sess-new']
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === 'acp_new_session' ? { sessionId: sessionIds.shift() } : undefined
+    )
+    useAcpStore.getState().prepareChat('cfg-mcp', '/work-mcp', undefined, 'p1')
+    const key = prepareChatKey('cfg-mcp', '/work-mcp', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep'))
+
+    useAcpStore.setState({
+      mcpServers: [{ id: 'fs', type: 'stdio', name: 'files', command: 'npx', enabled: true }]
+    })
+    const sessionId = await useAcpStore
+      .getState()
+      .startChat('cfg-mcp', '/work-mcp', undefined, 'p1')
+
+    expect(sessionId).toBe('sess-new')
+    const offered = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === 'acp_new_session')
+      .map(([, args]) => (args as { mcpServers: unknown }).mcpServers)
+    expect(offered).toEqual([
+      [],
+      [{ type: 'stdio', name: 'files', command: 'npx', args: [], env: [] }]
+    ])
+    useAcpStore.getState().cancelPreparedChat(key)
+  })
+
+  it('keeps only a hash of the MCP list a warm session took, and forgets it once reaped', async () => {
+    await seedConnectedAgent('cfg-hash', 'agent-hash', '/work-hash')
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === 'acp_new_session' ? { sessionId: 'sess-hash' } : undefined
+    )
+    useAcpStore.setState({
+      mcpServers: [
+        {
+          id: 'fs',
+          type: 'stdio',
+          name: 'files',
+          command: 'npx',
+          env: [{ name: 'TOKEN', value: 'sk-secret' }],
+          enabled: true
+        }
+      ]
+    })
+    useAcpStore.getState().prepareChat('cfg-hash', '/work-hash', undefined, 'p1')
+    const key = prepareChatKey('cfg-hash', '/work-hash', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-hash'))
+
+    expect(_registryMcpFingerprintForTesting('sess-hash')).toMatch(/^[0-9a-f]{64}$/)
+
+    useAcpStore.getState().cancelPreparedChat(key)
+    await vi.waitFor(() => expect(useAcpStore.getState().sessions['sess-hash']).toBeUndefined())
+    expect(_registryMcpFingerprintForTesting('sess-hash')).toBeUndefined()
+  })
+
+  it('forgets the MCP list hash of a warm session once it is closed', async () => {
+    await seedConnectedAgent('cfg-close', 'agent-close', '/work-close')
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === 'acp_new_session' ? { sessionId: 'sess-close' } : undefined
+    )
+    useAcpStore.getState().prepareChat('cfg-close', '/work-close', undefined, 'p1')
+    const key = prepareChatKey('cfg-close', '/work-close', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-close'))
+    expect(_registryMcpFingerprintForTesting('sess-close')).toMatch(/^[0-9a-f]{64}$/)
+
+    await useAcpStore.getState().closeSession('sess-close')
+
+    expect(_registryMcpFingerprintForTesting('sess-close')).toBeUndefined()
   })
 
   it('startChat refills a warm session for the pool target after consuming one', async () => {

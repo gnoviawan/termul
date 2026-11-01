@@ -63,6 +63,20 @@ export function mcpCatalogReasonText(reason: McpCatalogReason): string {
       return "Its package name or version isn't valid."
     case 'unsupported-registry':
       return `Its package is hosted on ${reason.registry}, which Termul doesn't download from.`
+    case 'invalid-command':
+      return 'Its command starts with "-", so it would be read as an option.'
+    case 'invalid-header-name':
+      return `It sends "${reason.name}", which isn't a valid HTTP header name.`
+    case 'control-character':
+      return `Its ${reason.field} holds a control character.`
+    case 'duplicate-name':
+      return `It lists "${reason.name}" more than once.`
+    case 'unsupported-launch-argument':
+      return `It passes ${reason.argument} to ${reason.command}, which Termul doesn't allow because it can change what runs.`
+    case 'unsupported-runner':
+      return `It runs its package through ${reason.command}, which Termul can't check. Use npx, uvx, docker or dotnet dnx instead.`
+    case 'cmd-metacharacter':
+      return `Its ${reason.field} holds a character Windows reads as a command operator (& | < > ^ % ! " ( or )).`
   }
 }
 
@@ -111,4 +125,12 @@ export function mcpCatalogSyncErrorText(code: string): string {
   return code === 'FORBIDDEN'
     ? 'Only the host can change catalog sync.'
     : "Couldn't change catalog sync. Try again."
+}
+
+export type McpInstallBlock = 'view-only' | 'no-project' | 'loading'
+
+export const MCP_INSTALL_BLOCK_TEXT: Record<McpInstallBlock, string> = {
+  'view-only': "This connection can't make changes on the host, so it can't install servers.",
+  'no-project': 'Open a project to install servers. This server saves MCP servers per project.',
+  loading: 'Install is available once your MCP servers have loaded.'
 }
