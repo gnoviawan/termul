@@ -627,6 +627,8 @@ A session log event has one of three delivery tiers (`tier_of` in `src-tauri/src
 | `acp:browser_tab_updated` | session | Session log event (reliable). The tab registry's view of one of the session's agent tabs, `{tabId, url, title, loading, agentControlled, epoch}`, after an engine navigation, title or load event. |
 | `acp:browser_tab_closed` | session | Session log event (reliable). The engine destroyed one of the session's agent tabs, `{tabId}`. |
 | `acp:browser_open_request` | agent | `agents` watch delta. A POSIX host captured a URL the agent tried to open, `{agentId, url}`. A delta lost to a gap is lost. |
+| `acp:agent_sign_in_request` | agent | `agents` watch delta. The host holds a request-scoped URL elicitation raised during `authenticate` (Codex device-code sign-in), `{agentId, requestId, url, message}`. `message` carries the device code and is never logged. Clients answer through `respond_elicitation` with the `requestId`. A delta lost to a gap is lost. |
+| `acp:agent_sign_in_resolved` | agent | `agents` watch delta. The host no longer holds that sign-in prompt (completed, answered, replaced, or its `authenticate` ended), `{agentId, requestId}`. |
 | `acp:worktree_branch_renamed` | agent | `chat_history` watch delta. The host renamed a worktree's branch. |
 | `acp:worktree_progress` | none | Plain Tauri event on the desktop only, `{progressId, line}`. The `worktree_create` command emits it while `git worktree add` runs. It never travels the relay. |
 
