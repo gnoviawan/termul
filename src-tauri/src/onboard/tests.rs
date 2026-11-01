@@ -333,25 +333,6 @@ fn systemd_unit_text_without_env_file_omits_environment_file() {
 }
 
 #[test]
-fn systemd_unit_text_keeps_the_server_up_when_a_child_is_oom_killed() {
-    for scope in [SystemdScope::System, SystemdScope::User] {
-        let unit = build_systemd_unit_text(
-            "/usr/local/bin/termul-server --host 127.0.0.1",
-            None,
-            scope,
-        );
-        let service = unit
-            .split("[Install]")
-            .next()
-            .expect("unit has a [Service] section");
-        assert!(
-            service.contains("\nOOMPolicy=continue\n"),
-            "the [Service] section must set OOMPolicy=continue, got:\n{unit}"
-        );
-    }
-}
-
-#[test]
 fn systemd_unit_text_user_scope_uses_default_target() {
     // BH#2: user-scope units must use `default.target`, not
     // `multi-user.target` (which doesn't exist in the user systemd

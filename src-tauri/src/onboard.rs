@@ -627,8 +627,6 @@ fn build_systemd_unit_text(
         s.push_str(&format!("EnvironmentFile={path}\n"));
     }
     s.push_str("Restart=on-failure\n");
-    // The default `stop` kills every chat when the kernel OOM-kills one agent child.
-    s.push_str("OOMPolicy=continue\n");
     s.push_str("RestartSec=2\n\n");
     s.push_str("[Install]\n");
     let wanted_by = match scope {
