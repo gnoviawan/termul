@@ -7,10 +7,11 @@ import {
   type McpCatalogSync
 } from '@shared/types/mcp-catalog.types'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ExternalLink, Search } from '@/components/icons'
 import { McpCatalogIcon } from '@/components/settings/McpCatalogIcon'
+import { McpCatalogInstallDialog } from '@/components/settings/McpCatalogInstallDialog'
 import { SettingsCard, SettingsGroup } from '@/components/settings/SettingsGroup'
 import { useSettingsSectionVisible } from '@/components/settings/SettingsLayout'
 import { SettingsNotice } from '@/components/settings/SettingsNotice'
@@ -19,22 +20,29 @@ import { type StatusTone, StatusWord } from '@/components/settings/StatusWord'
 import { Button } from '@/components/ui/button'
 import { PANEL_FIELD_CLASS, PANEL_FIELD_ICON_CLASS } from '@/components/ui/panel-styles'
 import { Spinner } from '@/components/ui/spinner'
+import { useMcpCatalogInstall } from '@/hooks/use-mcp-catalog-install'
 import { type McpCatalogResults, useMcpCatalogSearch } from '@/hooks/use-mcp-catalog-search'
 import {
   type McpCatalogStatusHandle,
   useMcpCatalogStatus,
   useSearchFollowsCatalog
 } from '@/hooks/use-mcp-catalog-status'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { openerApi } from '@/lib/api'
 import {
   MCP_CATALOG_STATE_LABEL,
+  MCP_INSTALL_BLOCK_TEXT,
+  type McpInstallBlock,
   mcpCatalogReasonText,
   mcpCatalogSampleText,
   mcpCatalogSyncErrorText,
   mcpCatalogSyncText,
   mcpCatalogUpdatedText
 } from '@/lib/mcp-catalog-copy'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
+import { useAcpStore } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 
 const STATE_TONE: Record<McpCatalogState, StatusTone> = {
   installable: 'success',
@@ -43,7 +51,6 @@ const STATE_TONE: Record<McpCatalogState, StatusTone> = {
   'source-only': 'muted'
 }
 
-const INSTALL_SOON = 'Installing from the catalog is coming soon.'
 const ESTIMATED_ROW_HEIGHT = 112
 /** Fetch the next page once the last rendered row is this close to the end. */
 const LOAD_AHEAD_ROWS = 8
@@ -128,8 +135,22 @@ function CatalogSource({ state, setSync }: McpCatalogStatusHandle): React.JSX.El
   )
 }
 
-function CatalogRow({ row, hintId }: { row: McpCatalogRow; hintId: string }): React.JSX.Element {
+interface RowInstall {
+  installed: ReadonlySet<string>
+  block: { reason: McpInstallBlock; hintId: string } | null
+  onInstall: (row: McpCatalogRow) => void
+}
+
+function CatalogRow({
+  row,
+  install
+}: {
+  row: McpCatalogRow
+  install: RowInstall
+}): React.JSX.Element {
+  const reasonId = useId()
   const displayName = row.title ?? row.name.slice(row.name.lastIndexOf('/') + 1)
+  const reason = row.reason && mcpCatalogReasonText(row.reason)
   return (
     <div className="flex flex-col gap-2 px-4 py-3 @lg:flex-row @lg:items-start @lg:gap-4">
       <div className="flex min-w-0 flex-1 items-start gap-3">
@@ -160,9 +181,9 @@ function CatalogRow({ row, hintId }: { row: McpCatalogRow; hintId: string }): Re
             <StatusWord tone={STATE_TONE[row.state]}>
               {MCP_CATALOG_STATE_LABEL[row.state]}
             </StatusWord>
-            {row.reason && (
-              <span className="text-xs text-muted-foreground">
-                {mcpCatalogReasonText(row.reason)}
+            {reason && (
+              <span id={reasonId} className="text-xs text-muted-foreground">
+                {reason}
               </span>
             )}
           </div>
@@ -183,11 +204,28 @@ function CatalogRow({ row, hintId }: { row: McpCatalogRow; hintId: string }): Re
             Repository
           </Button>
         )}
-        <span title={INSTALL_SOON}>
-          <Button type="button" size="xs" variant="outline" disabled aria-describedby={hintId}>
-            Install
-          </Button>
-        </span>
+        {install.installed.has(row.name) ? (
+          <StatusWord tone="success">Installed</StatusWord>
+        ) : (
+          <span
+            title={
+              install.block ? MCP_INSTALL_BLOCK_TEXT[install.block.reason] : (reason ?? undefined)
+            }
+          >
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={install.block !== null || row.state !== 'installable'}
+              aria-describedby={
+                install.block ? install.block.hintId : reason ? reasonId : undefined
+              }
+              onClick={() => install.onInstall(row)}
+            >
+              Install
+            </Button>
+          </span>
+        )}
       </div>
     </div>
   )
@@ -195,11 +233,11 @@ function CatalogRow({ row, hintId }: { row: McpCatalogRow; hintId: string }): Re
 
 function CatalogList({
   rows,
-  hintId,
+  install,
   onNearEnd
 }: {
   rows: McpCatalogRow[]
-  hintId: string
+  install: RowInstall
   /** Absent while a page is loading or the last one failed. */
   onNearEnd: (() => void) | undefined
 }): React.JSX.Element {
@@ -239,7 +277,7 @@ function CatalogList({
               )}
               style={{ transform: `translateY(${item.start}px)` }}
             >
-              <CatalogRow row={row} hintId={hintId} />
+              <CatalogRow row={row} install={install} />
             </div>
           )
         })}
@@ -256,6 +294,25 @@ export function McpCatalogBrowser(): React.JSX.Element {
   const status = useMcpCatalogStatus(visible)
   useSearchFollowsCatalog(status.state.status === 'ready' ? status.state.catalog : null, search)
   const hintId = useId()
+  const install = useMcpCatalogInstall()
+  const admitsWrites = useServerAdmitsRemoteWrites()
+  const activeProjectId = useProjectStore((state) => state.activeProjectId)
+  const mcpServers = useAcpStore((state) => state.mcpServers)
+  const installed = useMemo(
+    () => new Set(mcpServers.flatMap((server) => (server.catalog ? [server.catalog.name] : []))),
+    [mcpServers]
+  )
+  const block: McpInstallBlock | null = !admitsWrites
+    ? 'view-only'
+    : !isTauriContext() && !activeProjectId
+      ? 'no-project'
+      : null
+  const rowInstall: RowInstall = {
+    installed,
+    block: block && { reason: block, hintId },
+    onInstall: install.start
+  }
+  const syncOff = status.state.status === 'ready' && status.state.catalog.sync.state === 'disabled'
 
   const results =
     state.status === 'ready' ? state.results : state.status === 'loading' ? state.previous : null
@@ -264,9 +321,7 @@ export function McpCatalogBrowser(): React.JSX.Element {
   return (
     <SettingsGroup
       title="MCP catalog"
-      footnote={
-        <span id={hintId}>{INSTALL_SOON} Until then, add servers by hand in the list above.</span>
-      }
+      footnote={block && <span id={hintId}>{MCP_INSTALL_BLOCK_TEXT[block]}</span>}
     >
       <CatalogSource {...status} />
       <div className="relative">
@@ -329,7 +384,7 @@ export function McpCatalogBrowser(): React.JSX.Element {
             <SettingsCard aria-busy={state.status === 'loading'}>
               <CatalogList
                 rows={results.rows}
-                hintId={hintId}
+                install={rowInstall}
                 onNearEnd={canLoadMore && more === 'idle' ? loadMore : undefined}
               />
             </SettingsCard>
@@ -351,6 +406,18 @@ export function McpCatalogBrowser(): React.JSX.Element {
           )}
         </>
       )}
+      <McpCatalogInstallDialog
+        install={install}
+        onEnableSync={
+          syncOff
+            ? () => {
+                void status.setSync(true).then((result) => {
+                  if (!result.success) toast.error(mcpCatalogSyncErrorText(result.code))
+                })
+              }
+            : null
+        }
+      />
     </SettingsGroup>
   )
 }
