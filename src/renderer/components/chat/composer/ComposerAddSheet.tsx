@@ -6,7 +6,7 @@ import {
   SheetGroup,
   SheetIconWell,
   SheetRow,
-  useSheetSubview
+  useSheetStack
 } from '@/components/ui/mobile-sheet'
 import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import type { BrowserPickOptions } from '@/lib/composer-attachments-io'
@@ -80,7 +80,7 @@ export function ComposerAddSheet({
   const keepEditorFocusRef = useRef(false)
   const close = useCallback(() => setOpen(false), [])
   useOverlayRegistration('composer-add-sheet', open, close)
-  const sub = useSheetSubview<AddSheetView>('composer-add-sheet', open)
+  const nav = useSheetStack<AddSheetView>('composer-add-sheet', open, (view) => view)
   const onOpenChange = useCallback((next: boolean) => {
     // A fresh open never inherits a stale "keep focus in the editor" flag, so a
     // later Escape, ✕ or system-back dismissal always restores focus to +.
@@ -130,18 +130,17 @@ export function ComposerAddSheet({
         </button>
       </SheetTrigger>
       <MobileSheetContent
-        title={sub.view === 'mcp' ? 'MCP servers' : 'Add to chat'}
-        onBack={sub.view ? sub.back : undefined}
-        view={sub.view}
+        title={nav.top === 'mcp' ? 'MCP servers' : 'Add to chat'}
+        nav={nav}
         aria-describedby={undefined}
-        onEscapeKeyDown={sub.onEscapeKeyDown}
+        onEscapeKeyDown={nav.onEscapeKeyDown}
         onCloseAutoFocus={(event) => {
           if (!keepEditorFocusRef.current) return
           event.preventDefault()
           keepEditorFocusRef.current = false
         }}
       >
-        {sub.view === 'mcp' ? (
+        {nav.top === 'mcp' ? (
           <div className="rounded-2xl bg-foreground/[0.05] px-4 py-3 text-xs">
             {/* The sheet scrolls itself, so lift the popover's nested 300px scroller.
                 `max-h-fit` rather than `max-h-none`: tailwind-merge 2.x does not know
@@ -197,7 +196,7 @@ export function ComposerAddSheet({
                 subtitle={mcpSummary(mcp.servers)}
                 accessory="chevron"
                 subview="mcp"
-                onSelect={() => sub.open('mcp')}
+                onSelect={() => nav.push('mcp')}
               />
             </SheetGroup>
           </>

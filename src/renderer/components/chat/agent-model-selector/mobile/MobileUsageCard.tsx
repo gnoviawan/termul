@@ -1,4 +1,5 @@
 import { useChatClaudeAccount } from '@/components/chat/claude-account/use-chat-claude-account'
+import { useProjectClaudeAccount } from '@/components/chat/claude-account/use-project-claude-account'
 import { type CompactSignals, useCompactRequest } from '@/components/chat/compact-request'
 import { displayedUsagePercent } from '@/components/chat/context-usage-utils'
 import { accountReadiness, NOT_READY_REASON } from '@/components/settings/provider/account-status'
@@ -35,8 +36,10 @@ type ClaudeUsage =
   | { kind: 'reading'; reading: UsageReading; account: string }
   | { kind: 'not-ready'; reason: string; account: string }
 
-function useClaudeUsage(sessionId: string): ClaudeUsage | null {
-  const ctx = useChatClaudeAccount(sessionId)
+function useClaudeUsage(sessionId: string, claudeProjectId: string | null): ClaudeUsage | null {
+  const chat = useChatClaudeAccount(sessionId)
+  const project = useProjectClaudeAccount(claudeProjectId)
+  const ctx = chat ?? (project && { ...project, rateLimit: null })
   if (!ctx) return null
   const account = ctx.current.account.name
   const readiness = accountReadiness(ctx.current.account, ctx.current.usage)
@@ -100,16 +103,19 @@ function ContextRow({
 
 export function UsageCard({
   sessionId,
+  claudeProjectId = null,
   usage,
   compact,
   onManageAccounts
 }: {
   sessionId: string
+  /** Launcher: no session yet, so the Claude account comes from this project. */
+  claudeProjectId?: string | null
   usage: SessionUsage | null
   compact: CompactControl | null
   onManageAccounts: () => void
 }): React.JSX.Element | null {
-  const claude = useClaudeUsage(sessionId)
+  const claude = useClaudeUsage(sessionId, claudeProjectId)
   if (!claude && !usage) return null
   return (
     <SheetGroup>

@@ -25,11 +25,14 @@ import { MobileModelSheet } from './mobile/MobileModelSheet'
 import type { ModeControl } from './mobile/MobileSheetOptions'
 import type { CompactControl } from './mobile/MobileUsageCard'
 
-/** What only the phone sheet uses: the chat's modes and the context ring's Compact. */
+/** What only the phone sheet uses: the modes, Compact, and whose Claude account to show. */
 export interface PhoneSelectorControls {
   modes: SessionModeState | null
   onSetMode: (modeId: string) => void | Promise<void>
-  compact: CompactControl
+  /** The context ring's Compact; the launcher has no context to compact. */
+  compact: CompactControl | null
+  /** Launcher: the project whose Claude account the sheet shows (a chat reads its own). */
+  claudeProjectId?: string | null
 }
 
 import type { SelectorPanelProps } from './SelectorPanel'
@@ -360,6 +363,7 @@ export function AgentModelSelector({
             overlayId={overlayId}
             mode={modeControl}
             compact={phone?.compact ?? null}
+            claudeProjectId={phone?.claudeProjectId ?? null}
             favoritesStore={v2PanelProps?.favoritesStore}
             onCloseAutoFocus={onCloseAutoFocus}
           />
