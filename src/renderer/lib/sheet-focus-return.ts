@@ -4,7 +4,7 @@
  *
  * Radix returns focus on close only to a `Dialog.Trigger`. Our openers are
  * plain buttons that set state, and the opener and the sheet often live in
- * different components (the changed-files bar opens the Git sheet in
+ * different components (the chat status pill opens the Git sheet in
  * `WorkspaceLayout`), so focus fell to `<body>`. iOS Safari also does not focus
  * a tapped button, so reading `document.activeElement` at open time cannot
  * replace an explicit record.

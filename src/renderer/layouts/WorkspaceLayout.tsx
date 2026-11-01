@@ -55,8 +55,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [isCreateSnapshotModalOpen, setIsCreateSnapshotModalOpen] = useState(false)
   const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
   // Mobile-only full-width Sheet rendering GitPanel (single-column mobile
-  // branch). Open state + snapshotted cwd live in a store so the chat dock's
-  // changed-files bar can open it too.
+  // branch). Open state + snapshotted cwd live in a store so the chat
+  // status pill can open it too.
   const { open: gitSheetOpen, cwd: gitSheetCwd, projectId: gitSheetProjectId } = useGitSheetStore()
   const { openGitSheet, closeGitSheet } = useGitSheetStore.getState()
 
@@ -82,8 +82,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const ssh = useSSHWorkspace()
 
-  // The Git sheet's open state lives in `useGitSheetStore` (so the chat dock's
-  // changed-files bar can open it); the back stack only ever closes it.
+  // The Git sheet's open state lives in `useGitSheetStore` (so the chat
+  // status pill can open it); the back stack only ever closes it.
   const setGitSheetOpen = useCallback(
     (open: boolean) => {
       if (!open) closeGitSheet()
