@@ -414,7 +414,12 @@ fn rfd_states_map_to_the_lifecycle() {
             "completed",
             "completed",
         ),
-        (json!({ "state": "idle" }), "completed", "completed"),
+        (json!({ "state": "idle" }), "cancelled", "completed"),
+        (
+            json!({ "state": "idle", "stopReason": "max_tokens" }),
+            "completed",
+            "completed",
+        ),
         (
             json!({ "state": "idle", "stopReason": "cancelled" }),
             "cancelled",
