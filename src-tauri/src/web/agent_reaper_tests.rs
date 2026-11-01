@@ -115,12 +115,13 @@ async fn idle_durable_session_does_not_pin_the_agent() {
 #[tokio::test]
 async fn running_evidence_blocks_the_reap() {
     type Edit = fn(&mut crate::acp::AgentActivity);
-    let cases: [(&str, Edit); 6] = [
+    let cases: [(&str, Edit); 7] = [
         ("active turn", |a| a.active_turns = 1),
         ("pending approval", |a| a.pending_permissions = 1),
         ("pending question", |a| a.pending_questions = 1),
         ("pending elicitation", |a| a.pending_elicitations = 1),
         ("running agent terminal", |a| a.running_terminals = 1),
+        ("running native subagent", |a| a.running_subagents = 1),
         ("reopen in flight", |a| a.reopens_in_flight = 1),
     ];
     for (name, edit) in cases {

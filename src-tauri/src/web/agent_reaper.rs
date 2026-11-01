@@ -57,7 +57,23 @@ async fn is_quiet(
     window: Duration,
 ) -> bool {
     match acp.agent_activity(agent_id).await {
-        Ok(activity) => activity.is_reapable(now, window),
+        Ok(activity) => {
+            if activity.has_evidence() {
+                log::debug!(
+                    target: LOG_TARGET,
+                    "idle reaper: keeping agent {} (active turns {}, pending permissions {}, questions {}, elicitations {}, running terminals {}, running subagents {}, reopens {})",
+                    agent_id.0,
+                    activity.active_turns,
+                    activity.pending_permissions,
+                    activity.pending_questions,
+                    activity.pending_elicitations,
+                    activity.running_terminals,
+                    activity.running_subagents,
+                    activity.reopens_in_flight
+                );
+            }
+            activity.is_reapable(now, window)
+        }
         Err(error) => {
             log::debug!(target: LOG_TARGET, "idle reaper: probe of agent {} failed: {error}", agent_id.0);
             false

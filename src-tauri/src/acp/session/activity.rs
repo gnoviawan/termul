@@ -3,8 +3,9 @@
 //! The reap decision depends only on what the host itself can see on the
 //! agent's driver thread: running prompt turns, unanswered permission /
 //! question / elicitation tickets, reopens in flight, running agent-owned ACP
-//! terminals, and how long ago any of these (or a session update) last
-//! happened. Connections, subscriptions, presence and tabs never feed it.
+//! terminals, running native subagents, and how long ago any of these (or a
+//! session update) last happened. Connections, subscriptions, presence and
+//! tabs never feed it.
 
 use std::time::{Duration, Instant};
 
@@ -45,6 +46,9 @@ pub struct AgentActivity {
     /// Agent-owned ACP terminals whose command is still running ("reported
     /// background work").
     pub running_terminals: usize,
+    /// Native subagent sessions that have not reported an end. A background
+    /// subagent outlives the prompt turn that launched it.
+    pub running_subagents: usize,
     /// Session reopens (load/resume) in flight.
     pub reopens_in_flight: usize,
     /// When any of the above, a session update, or a prompt send last
@@ -62,6 +66,7 @@ impl AgentActivity {
             || self.pending_questions > 0
             || self.pending_elicitations > 0
             || self.running_terminals > 0
+            || self.running_subagents > 0
             || self.reopens_in_flight > 0
     }
 

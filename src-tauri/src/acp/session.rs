@@ -824,6 +824,7 @@ impl DriverState {
             pending_elicitations: self.pending_elicitations.len()
                 + usize::from(self.sign_in.is_pending()),
             running_terminals,
+            running_subagents: self.subagents.running_count(),
             reopens_in_flight: self.reopen_reservations.values().sum::<usize>()
                 + self
                     .replay_windows

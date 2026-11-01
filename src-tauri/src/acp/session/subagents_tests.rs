@@ -18,6 +18,7 @@ fn a_nested_child_routes_to_the_root_chat_under_its_parent_dispatch() {
     routes.register("chat-1", "agent-a");
     let nested = routes.register("agent-a", "agent-b").expect("nested route");
     assert_eq!(nested.root_session_id, "chat-1");
+    assert_eq!(nested.parent_session_id, "agent-a");
     assert_eq!(
         nested.parent_dispatch_id.as_deref(),
         Some(dispatch_id_for("agent-a").as_str())
@@ -56,6 +57,18 @@ fn an_ended_child_keeps_its_route() {
     assert!(ended.ended);
     assert_eq!(state.chat_session_for("agent-a"), "chat-1");
     assert!(state.end_subagent("unknown").is_none());
+}
+
+#[test]
+fn ending_an_ended_child_changes_nothing() {
+    let mut state = DriverState::default();
+    state.register_subagent("chat-1", "agent-a");
+    assert!(state.end_subagent("agent-a").is_some());
+    assert!(
+        state.end_subagent("agent-a").is_none(),
+        "a second end report is not a new end"
+    );
+    assert!(state.subagent_route("agent-a").is_some_and(|route| route.ended));
 }
 
 #[test]
