@@ -2,6 +2,7 @@ import { motion, useReducedMotion } from 'framer-motion'
 import { type KeyboardEvent, type MutableRefObject, type ReactNode, useRef } from 'react'
 import { MoreHorizontal, Search } from '@/components/icons'
 import { INNER_FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
+import { Spinner } from '@/components/ui/spinner'
 import type { AgentCapabilities, SessionConfigOption, SessionUsage } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { SegmentedTrack, type TrackItem } from './SegmentedTrack'
@@ -14,6 +15,7 @@ import {
   InstallState,
   ListMessage,
   ModelRow,
+  SignInNote,
   StatusActions,
   TabGlyph
 } from './SelectorRows'
@@ -221,6 +223,29 @@ export function SelectorPanel(props: SelectorPanelProps): React.JSX.Element {
       ) : (
         <div className="flex flex-col gap-2">
           <ListMessage title={view.title} detail={view.detail} />
+          {view.signIn && view.signIn.actions.length > 0 ? (
+            <SegmentedTrack
+              id="sign-in-methods"
+              label="Sign-in methods"
+              touch={touch}
+              columns={1}
+              items={view.signIn.actions.map((action) => ({
+                key: action.key,
+                label: action.busy ? (
+                  <>
+                    <Spinner size={12} decorative />
+                    {action.label}
+                  </>
+                ) : (
+                  action.label
+                ),
+                title: action.title,
+                disabled: action.disabled,
+                onSelect: action.onSelect
+              }))}
+            />
+          ) : null}
+          {view.signIn?.note ? <SignInNote>{view.signIn.note}</SignInNote> : null}
           {view.retry ? (
             <SegmentedTrack
               id="retry-models"

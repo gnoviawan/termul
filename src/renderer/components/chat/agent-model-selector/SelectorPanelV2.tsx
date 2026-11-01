@@ -12,6 +12,7 @@ import {
 import { toast } from 'sonner'
 import { Check, MoreHorizontal, Search, Star } from '@/components/icons'
 import { BAND_FOCUS_CLASS, INNER_FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
+import { Spinner } from '@/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
@@ -45,6 +46,7 @@ import {
   Hint,
   InstallState,
   ListMessage,
+  SignInNote,
   StatusActions,
   TabGlyph
 } from './SelectorRows'
@@ -950,6 +952,20 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       ) : (
         <div className="flex flex-col gap-1">
           <ListMessage title={view.title} detail={view.detail} />
+          {view.signIn?.actions.map((action) => (
+            <button
+              key={action.key}
+              type="button"
+              disabled={action.disabled}
+              title={action.title}
+              onClick={action.onSelect}
+              className={cn(DENSE_ROW, denseRowSize(touch))}
+            >
+              {action.busy ? <Spinner size={12} decorative /> : null}
+              {action.label}
+            </button>
+          ))}
+          {view.signIn?.note ? <SignInNote>{view.signIn.note}</SignInNote> : null}
           {view.retry ? (
             <button
               type="button"

@@ -20,6 +20,7 @@ import {
 import type { SelectorModelStatus } from './selector-source'
 import type { SwitchModelPick } from './use-agent-switch'
 import { loadPersistedCatalog, useKnownCatalogs, useOtherAgentCatalog } from './use-model-catalog'
+import { type SelectorSignIn, useOtherAgentSignIn } from './use-other-agent-sign-in'
 
 const NO_IDS: readonly string[] = []
 const NO_FAVORITES: readonly FavoriteModel[] = []
@@ -58,6 +59,8 @@ export type PanelView =
       detail: string | undefined
       /** The composer agent's status, with its sign-in and retry actions. */
       status: SelectorModelStatus | null
+      /** Another agent is signed out: its sign-in methods, run in place. */
+      signIn: SelectorSignIn | null
       retry: (() => void) | null
     }
   | { kind: 'loading'; title: string }
@@ -196,11 +199,9 @@ export function useSelectorPanelState(
     viewId === effectiveId ? 'effective' : viewId === sw.currentConfigId ? 'current' : 'other'
   const viewEntry = viewTab?.entry ?? null
   const viewReady = viewEntry ? viewEntry.status === 'ready' : Boolean(viewTab?.config)
-  const other = useOtherAgentCatalog(
-    sw.workspace,
-    !searching && viewKind === 'other' && viewReady ? viewId : null,
-    true
-  )
+  const otherTab = !searching && viewKind === 'other' && viewReady ? viewTab : null
+  const other = useOtherAgentCatalog(sw.workspace, otherTab?.configId ?? null, true)
+  const signIn = useOtherAgentSignIn(sw, otherTab, other.error, other.retry)
 
   // Other agents' known lists: every tab while searching, starred agents on
   // the effective view.
@@ -372,6 +373,7 @@ export function useSelectorPanelState(
         title: status?.error?.label ?? '',
         detail: status?.error?.detail,
         status,
+        signIn: null,
         retry: null
       }
     }
@@ -391,6 +393,7 @@ export function useSelectorPanelState(
       title: `Could not load ${nameOf(viewId)} models.`,
       detail: other.error.label,
       status: null,
+      signIn,
       retry: other.retry
     }
   } else {

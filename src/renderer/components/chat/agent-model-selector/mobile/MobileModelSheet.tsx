@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/mobile-sheet'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { SheetDescription } from '@/components/ui/sheet'
+import { Spinner } from '@/components/ui/spinner'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
@@ -25,6 +26,7 @@ import {
   Hint,
   InstallState,
   ListMessage,
+  SignInNote,
   StatusActions,
   TabGlyph
 } from '../SelectorRows'
@@ -281,6 +283,20 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
       ) : (
         <>
           <ListMessage title={view.title} detail={view.detail} />
+          {view.signIn && view.signIn.actions.length > 0 ? (
+            <SheetGroup>
+              {view.signIn.actions.map((action) => (
+                <SheetRow
+                  key={action.key}
+                  title={action.label}
+                  icon={action.busy ? <Spinner size={14} decorative /> : undefined}
+                  disabled={action.disabled}
+                  onSelect={action.onSelect}
+                />
+              ))}
+            </SheetGroup>
+          ) : null}
+          {view.signIn?.note ? <SignInNote>{view.signIn.note}</SignInNote> : null}
           {view.retry ? (
             <SheetGroup>
               <SheetRow title="Try again" onSelect={view.retry} />
