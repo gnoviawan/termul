@@ -1005,6 +1005,103 @@ function stableMarkup(html: string): string {
   return html.replace(/:r[0-9a-z]+:/g, ':id:').replace(/radix-[:\w-]+/g, 'radix-id')
 }
 
+describe('desktop: signing in to another agent from its tab', () => {
+  const CODEX: StoredAgentConfig = {
+    id: 'custom-codex',
+    configId: 'acp-registry:codex-acp',
+    name: 'Codex',
+    command: 'codex-acp',
+    args: [],
+    env: {},
+    allowTerminal: false
+  }
+  const CODEX_KEY = prepareChatKey(CODEX.id, '/work', undefined)
+
+  /** codex-acp signed out: three sign-in methods, so the silent read failed on multi-auth. */
+  function seedSignedOutCodex(): void {
+    seed([readyEntry(CODEX)])
+    acpStateRef.current.configToLiveAgent = {
+      ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
+      [agentReuseKey(CODEX.id, '/work', 'p1')]: 'agent-codex'
+    }
+    acpStateRef.current.agents = {
+      'agent-codex': {
+        id: 'agent-codex',
+        capabilities: {},
+        authMethods: [
+          { id: 'api-key', name: 'API key', type: 'agent' },
+          { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' },
+          { id: 'chat-gpt-device-code', name: 'ChatGPT (device code)', type: 'agent' }
+        ]
+      }
+    }
+    acpStateRef.current.prepareChatErrors = {
+      [CODEX_KEY]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'This agent advertises multiple sign-in methods.'
+      }
+    }
+  }
+
+  it.each([
+    ['v1', '0'],
+    ['v2', '1']
+  ])('%s: offers its sign-in methods, signs in with ChatGPT, then reads its models again', async (_variant, flag) => {
+    localStorage.setItem(MODEL_PICKER_V2_KEY, flag)
+    try {
+      seedSignedOutCodex()
+      let finishSignIn: () => void = () => {}
+      mockAuthenticateAgent.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishSignIn = resolve
+          })
+      )
+      renderSelector()
+      open()
+      fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
+
+      expect(screen.getByText('Could not load Codex models.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'API key' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: 'ChatGPT (device code)' })).toBeEnabled()
+      fireEvent.click(screen.getByRole('button', { name: 'ChatGPT' }))
+
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-codex', 'chat-gpt')
+      expect(await screen.findByRole('button', { name: 'Signing in with ChatGPT…' })).toBeDisabled()
+      expect(screen.queryByRole('button', { name: 'API key' })).toBeNull()
+      expect(mockPrepareChat).not.toHaveBeenCalled()
+
+      await act(async () => finishSignIn())
+      expect(mockCancelPreparedChat).toHaveBeenCalledWith(CODEX_KEY)
+      expect(mockPrepareChat).toHaveBeenCalledWith(CODEX.id, '/work', undefined, 'p1', {
+        silent: true
+      })
+    } finally {
+      localStorage.removeItem(MODEL_PICKER_V2_KEY)
+    }
+  })
+
+  it('keeps the methods and reads nothing again when the sign-in fails', async () => {
+    localStorage.setItem(MODEL_PICKER_V2_KEY, '1')
+    try {
+      seedSignedOutCodex()
+      mockAuthenticateAgent.mockRejectedValueOnce(new Error('Sign-in was cancelled'))
+      renderSelector()
+      open()
+      fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
+      fireEvent.click(screen.getByRole('button', { name: 'API key' }))
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Sign-in was cancelled'))
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-codex', 'api-key')
+      expect(screen.getByRole('button', { name: 'ChatGPT' })).toBeEnabled()
+      expect(mockPrepareChat).not.toHaveBeenCalled()
+    } finally {
+      localStorage.removeItem(MODEL_PICKER_V2_KEY)
+    }
+  })
+})
+
 describe('AgentModelSelector desktop markup', () => {
   it.each([
     ['v1', '0'],

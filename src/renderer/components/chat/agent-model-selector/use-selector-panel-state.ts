@@ -59,8 +59,8 @@ export type PanelView =
       /** The composer agent's status, with its sign-in and retry actions. */
       status: SelectorModelStatus | null
       retry: (() => void) | null
-      /** Another agent's list failed because it asks for credentials. */
-      needsSignIn: boolean
+      /** In a chat, the agent whose list failed because it asks for credentials. */
+      signInTab: AgentTab | null
     }
   | { kind: 'loading'; title: string }
 
@@ -375,7 +375,7 @@ export function useSelectorPanelState(
         detail: status?.error?.detail,
         status,
         retry: null,
-        needsSignIn: false
+        signInTab: null
       }
     }
   } else if (viewKind === 'current') {
@@ -395,7 +395,11 @@ export function useSelectorPanelState(
       detail: other.error.label,
       status: null,
       retry: other.retry,
-      needsSignIn: other.error.category === 'auth' || other.error.category === 'multi-auth'
+      signInTab:
+        (other.error.category === 'auth' || other.error.category === 'multi-auth') &&
+        !sw.selectAgent
+          ? viewTab
+          : null
     }
   } else {
     body = { kind: 'loading', title: `Loading ${nameOf(viewId)} models…` }
