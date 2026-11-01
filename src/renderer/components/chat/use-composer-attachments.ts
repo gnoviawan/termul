@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { deleteTempFile } from '@/lib/attachment-temp-cleanup'
 import {
+  type BrowserPickOptions,
   pickAttachmentFilesBrowser,
   pickAttachmentPaths,
   readClipboardRgbaImage,
@@ -230,7 +231,7 @@ export interface ComposerAttachments {
   /** Browser channel (drag/paste): File objects with no path. */
   addFiles: (files: FileList | File[]) => Promise<void>
   /** Picker channel (OS file dialog): real filesystem paths. */
-  pickFiles: () => Promise<void>
+  pickFiles: (options?: BrowserPickOptions) => Promise<void>
   /** Paste handler for the composer — images from clipboard, incl. screenshots.
    *  Accepts the DOM `ClipboardEvent` the Tiptap editor's `handlePaste` editorProp
    *  passes (the pre-refactor textarea's React event was structurally compatible;
@@ -247,6 +248,8 @@ export interface ComposerAttachments {
   appOwnedTempPaths: () => string[]
   /** Whether the OS picker affordance should be shown (resource_link, always supported). */
   canPick: boolean
+  /** Whether a picked image can attach: inline when capable, else a desktop temp-file link. */
+  canPickImages: boolean
   /** Whether drag/paste can produce an accepted block for this agent. */
   canDropPaste: boolean
 }
@@ -331,57 +334,60 @@ export function useComposerAttachments(opts: {
     [imageCapable, embedCapable]
   )
 
-  const pickFiles = useCallback(async () => {
-    if (disabled) return
+  const pickFiles = useCallback(
+    async (options?: BrowserPickOptions) => {
+      if (disabled) return
 
-    // Web: no filesystem paths — use a DOM file picker and stage File objects.
-    if (!isTauriContext()) {
+      // Web: no filesystem paths — use a DOM file picker and stage File objects.
+      if (!isTauriContext()) {
+        try {
+          const files = await pickAttachmentFilesBrowser(options)
+          if (files && files.length > 0) await addFiles(files)
+        } catch {
+          toast.error('Failed to open file picker')
+        }
+        return
+      }
+
+      let paths: string[] | null
       try {
-        const files = await pickAttachmentFilesBrowser()
-        if (files && files.length > 0) await addFiles(files)
+        paths = await pickAttachmentPaths()
       } catch {
         toast.error('Failed to open file picker')
+        return
       }
-      return
-    }
-
-    let paths: string[] | null
-    try {
-      paths = await pickAttachmentPaths()
-    } catch {
-      toast.error('Failed to open file picker')
-      return
-    }
-    if (!paths) return
-    const next: PendingAttachment[] = []
-    let unsupported = 0
-    let readFell = 0
-    for (const path of paths) {
-      const name = basename(path)
-      const mimeType = guessMimeType(name)
-      if (isImageMime(mimeType)) {
-        if (imageCapable) {
-          try {
-            next.push(await readImagePathAsAttachment(path, name, mimeType))
-          } catch {
-            readFell++
-            next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path })
+      if (!paths) return
+      const next: PendingAttachment[] = []
+      let unsupported = 0
+      let readFell = 0
+      for (const path of paths) {
+        const name = basename(path)
+        const mimeType = guessMimeType(name)
+        if (isImageMime(mimeType)) {
+          if (imageCapable) {
+            try {
+              next.push(await readImagePathAsAttachment(path, name, mimeType))
+            } catch {
+              readFell++
+              next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path })
+            }
+          } else {
+            // Link the path, but read the bytes for a thumbnail preview.
+            const previewUrl = await readThumbnail(path, mimeType)
+            next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path, previewUrl })
           }
+        } else if (isTextLike(name)) {
+          next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path })
         } else {
-          // Link the path, but read the bytes for a thumbnail preview.
-          const previewUrl = await readThumbnail(path, mimeType)
-          next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path, previewUrl })
+          unsupported++
         }
-      } else if (isTextLike(name)) {
-        next.push({ kind: 'file-ref', id: attachmentId(), name, mimeType, path })
-      } else {
-        unsupported++
       }
-    }
-    if (next.length > 0) setAttachments((prev) => [...prev, ...next])
-    if (readFell > 0) toast.error('Could not read image inline — linked by path instead')
-    if (unsupported > 0) toast.error('Unsupported file type (text or image only)')
-  }, [disabled, imageCapable, addFiles])
+      if (next.length > 0) setAttachments((prev) => [...prev, ...next])
+      if (readFell > 0) toast.error('Could not read image inline — linked by path instead')
+      if (unsupported > 0) toast.error('Unsupported file type (text or image only)')
+    },
+    [disabled, imageCapable, addFiles]
+  )
 
   const handlePaste = useCallback(
     (e: ClipboardEvent) => {
@@ -477,6 +483,7 @@ export function useComposerAttachments(opts: {
     clearAttachments,
     appOwnedTempPaths,
     canPick: !disabled,
+    canPickImages: !disabled && (imageCapable || isTauriContext()),
     // Drag/paste is always accepted while enabled: images attach (inline or as
     // a temp-file link), and addFiles surfaces per-file capability issues.
     canDropPaste: !disabled

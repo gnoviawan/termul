@@ -12,20 +12,26 @@ import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
 import { X } from '@/components/icons'
 import { AnimatedMenuContent } from '@/components/ui/animated-menu-content'
 import { Popover, PopoverTrigger } from '@/components/ui/popover'
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetTitle,
-  SheetTrigger
-} from '@/components/ui/sheet'
+import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
-import type { SessionConfigOption, SessionUsage } from '@/lib/acp-api'
+import type { SessionConfigOption, SessionModeState, SessionUsage } from '@/lib/acp-api'
 import { isModelPickerV2Enabled } from '@/lib/model-picker-flag'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { shouldShowSessionUsage } from '../context-usage-utils'
+import { MobileModelPill } from './mobile/MobileModelPill'
+import { MobileModelSheet } from './mobile/MobileModelSheet'
+import type { ModeControl } from './mobile/MobileSheetOptions'
+import type { CompactControl } from './mobile/MobileUsageCard'
+
+/** What only the phone sheet uses: the chat's modes and the context ring's Compact. */
+export interface PhoneSelectorControls {
+  modes: SessionModeState | null
+  onSetMode: (modeId: string) => void | Promise<void>
+  compact: CompactControl
+}
+
 import type { SelectorPanelProps } from './SelectorPanel'
 import { SelectorPanel } from './SelectorPanel'
 import { SelectorPanelV2, type SelectorPanelV2Props } from './SelectorPanelV2'
@@ -35,6 +41,8 @@ import { useCurrentAgentConfigId } from './use-agent-switch'
 const PRESS = 'duration-150 ease-out enabled:active:scale-[0.96] motion-reduce:active:scale-100'
 
 const NO_MESSAGES: ReadonlyArray<{ role: string }> = []
+
+const NO_MODE_SET = (): void => {}
 
 /** Booleans make `currentValue` non-string; the pill labels want strings. */
 function selectValue(value: string | boolean | undefined): string | undefined {
@@ -73,6 +81,7 @@ interface AgentModelSelectorProps {
    * menu has fully closed — focusing earlier dismisses the popover.
    */
   onCloseAutoFocus?: (event: Event) => void
+  phone?: PhoneSelectorControls
   /**
    * Design canvas only: always show the v2 panel, with these v2-only props
    * (agent rail, favorites). The app leaves it unset and follows the flag.
@@ -126,6 +135,7 @@ export function AgentModelSelector({
   onSetConfig,
   onSetModel,
   onCloseAutoFocus,
+  phone,
   v2PanelProps
 }: AgentModelSelectorProps): React.JSX.Element | null {
   const isMobile = useMobileWebShell()
@@ -181,6 +191,8 @@ export function AgentModelSelector({
     fastMode ? (storedConfigValue(fastMode) ?? undefined) : undefined,
     selectFast
   )
+  const modes = phone?.modes ?? null
+  const modeSelect = useOptimisticSelect(modes?.currentModeId, phone?.onSetMode ?? NO_MODE_SET)
 
   const modelName = modelOption
     ? flattenConfigOptionValues(modelOption).find(
@@ -232,7 +244,8 @@ export function AgentModelSelector({
     (part): part is string => Boolean(part)
   )
   const pillAria = ariaParts.join('. ') || 'Model and effort'
-  const pending = modelSelect.pending || effortSelect.pending || fastSelect.pending
+  const pending =
+    modelSelect.pending || effortSelect.pending || fastSelect.pending || modeSelect.pending
   const armed = Boolean(agent.armedName)
   const pillText = armed
     ? `→ ${modelName ?? agent.armedName}`
@@ -240,38 +253,34 @@ export function AgentModelSelector({
 
   // View-only v2 behind an opt-in flag (default off); same props and source.
   const Panel = v2PanelProps || isModelPickerV2Enabled() ? SelectorPanelV2 : SelectorPanel
-  const panel = (
-    <Panel
-      {...v2PanelProps}
-      key={generation}
-      source={source}
-      touch={isMobile}
-      disabled={disabled}
-      modelOption={modelOption}
-      modelValue={modelSelect.displayValue}
-      onPickModel={(value) => modelSelect.select(value)}
-      thoughtLevel={thoughtLevel}
-      effortValue={effortSelect.displayValue}
-      onEffort={(value) => effortSelect.select(value)}
-      fastMode={fastMode}
-      fastOn={fastOn}
-      onToggleFast={fastNext ? () => fastSelect.select(fastNext) : null}
-      genericOptions={genericOptions}
-      agentConfigId={source.currentConfigId}
-      onSetConfig={(configId, valueId) =>
-        // Return the setter's promise so a switch waits for the real outcome.
-        // Rejections propagate to the footer, which both marks the value
-        // unavailable (#1480) and swallows the already-toasted failure — so
-        // nothing surfaces as an unhandled rejection here.
-        Promise.resolve(onSetConfig(configId, valueId))
-      }
-      usage={usage}
-      messages={messages}
-      capabilities={capabilities}
-      onClose={close}
-      escapeRef={escapeRef}
-    />
-  )
+  const panelProps: SelectorPanelProps = {
+    source,
+    touch: isMobile,
+    disabled,
+    modelOption,
+    modelValue: modelSelect.displayValue,
+    onPickModel: (value) => modelSelect.select(value),
+    thoughtLevel,
+    effortValue: effortSelect.displayValue,
+    onEffort: (value) => effortSelect.select(value),
+    fastMode,
+    fastOn,
+    onToggleFast: fastNext ? () => fastSelect.select(fastNext) : null,
+    genericOptions,
+    agentConfigId: source.currentConfigId,
+    // Return the setter's promise so a switch waits for the real outcome.
+    // Rejections propagate to the footer, which both marks the value
+    // unavailable (#1480) and swallows the already-toasted failure — so
+    // nothing surfaces as an unhandled rejection here.
+    onSetConfig: (configId, valueId) => Promise.resolve(onSetConfig(configId, valueId)),
+    usage,
+    messages,
+    capabilities,
+    onClose: close,
+    escapeRef
+  }
+
+  const panel = <Panel {...v2PanelProps} key={generation} {...panelProps} />
 
   const trigger = (
     <ComposerPill
@@ -281,7 +290,7 @@ export function AgentModelSelector({
       chevronDirection="up"
       aria-label={pillAria}
       data-testid="agent-model-selector-trigger"
-      className={cn('max-w-[240px]', PRESS, isMobile && 'min-h-11 py-2')}
+      className={cn('max-w-[240px]', PRESS)}
     >
       <AgentGlyph
         templateId={agentTemplateId}
@@ -290,10 +299,7 @@ export function AgentModelSelector({
         className="shrink-0 text-muted-foreground"
       />
       <span className={cn('truncate', armed && 'text-foreground')}>{pillText}</span>
-      {/* The phone row has room for the model name only; the sheet shows the effort. */}
-      {!armed && !isMobile && modelName && effortName ? (
-        <span className="shrink-0">{effortName}</span>
-      ) : null}
+      {!armed && modelName && effortName ? <span className="shrink-0">{effortName}</span> : null}
     </ComposerPill>
   )
 
@@ -311,37 +317,59 @@ export function AgentModelSelector({
     </button>
   ) : null
 
-  const shell = isMobile ? (
-    <Sheet open={open} onOpenChange={handleOpenChange}>
-      <SheetTrigger asChild disabled={disabled}>
-        {trigger}
-      </SheetTrigger>
-      <SheetContent
-        side="bottom"
-        // Focus the sheet, not its first field. A focused search field raises the
-        // keyboard, and the browser raises it again when the tab comes back.
-        onOpenAutoFocus={(event) => {
-          event.preventDefault()
-          ;(event.currentTarget as HTMLElement).focus()
-        }}
-        onEscapeKeyDown={onEscapeKeyDown}
-        onCloseAutoFocus={onCloseAutoFocus}
-        // The sheet's built-in close button is the last child; the grabber
-        // and a tap on the scrim close this sheet.
-        className="flex max-h-[85dvh] flex-col gap-0 border-border bg-popover p-0 pb-[env(safe-area-inset-bottom)] pt-2 [&>button:last-child]:hidden"
-      >
-        <div
-          aria-hidden="true"
-          className="mx-auto mb-1.5 h-1 w-9 shrink-0 rounded-full bg-foreground/20"
-        />
-        <SheetTitle className="sr-only">Model and agent</SheetTitle>
-        <SheetDescription className="sr-only">
-          Choose a model, an agent, and its options.
-        </SheetDescription>
-        {panel}
-      </SheetContent>
-    </Sheet>
-  ) : (
+  if (isMobile) {
+    const modeControl: ModeControl | null =
+      modes && modes.availableModes.length > 0
+        ? { modes, displayValue: modeSelect.displayValue, onPick: modeSelect.select }
+        : null
+    const defaultModeId = modeControl?.modes.availableModes[0]?.id
+    const nonDefaultMode =
+      modeControl && modeControl.displayValue !== defaultModeId
+        ? modeControl.modes.availableModes.find((m) => m.id === modeControl.displayValue)
+        : undefined
+    const phoneAria = [
+      modelName ?? statusText,
+      effortName,
+      nonDefaultMode ? `${nonDefaultMode.name} mode` : null,
+      agent.present ? agent.aria : null
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join('. ')
+    return (
+      <span className="inline-flex min-w-0 items-center gap-0.5">
+        <Sheet open={open} onOpenChange={handleOpenChange}>
+          <SheetTrigger asChild disabled={disabled}>
+            <MobileModelPill
+              disabled={disabled}
+              agentTemplateId={agentTemplateId}
+              agentIcon={agentIcon}
+              label={pillText}
+              effort={modelName ? effortName : undefined}
+              modeId={nonDefaultMode?.id}
+              armed={armed}
+              pending={pending || Boolean(modelStatus?.loading)}
+              aria-label={phoneAria || 'Model and effort'}
+              data-testid="agent-model-selector-trigger"
+            />
+          </SheetTrigger>
+          <MobileModelSheet
+            key={generation}
+            {...panelProps}
+            sessionId={sessionId}
+            open={open}
+            overlayId={overlayId}
+            mode={modeControl}
+            compact={phone?.compact ?? null}
+            favoritesStore={v2PanelProps?.favoritesStore}
+            onCloseAutoFocus={onCloseAutoFocus}
+          />
+        </Sheet>
+        {cancel}
+      </span>
+    )
+  }
+
+  const shell = (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild disabled={disabled}>
         {trigger}

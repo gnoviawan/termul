@@ -10,13 +10,11 @@ import {
   useState
 } from 'react'
 import { toast } from 'sonner'
-import { Check, MoreHorizontal, Search, Star, Zap } from '@/components/icons'
+import { Check, MoreHorizontal, Search, Star } from '@/components/icons'
 import { BAND_FOCUS_CLASS, INNER_FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import type { SessionConfigOption } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
-import { flattenConfigOptionValues } from '../chat-input-bar-config'
 import {
   type FavoriteKey,
   type FavoritesStore,
@@ -33,7 +31,6 @@ import {
   type EditRowHandle,
   ExitingEdit,
   moveFocus,
-  type OptionChoice,
   OptionRow,
   OptionSwitchRow,
   ROW_FOCUS,
@@ -73,6 +70,7 @@ import {
   PICKER_ROW_SELECTED,
   PICKER_ROW_SELECTED_BOX
 } from './selector-tokens'
+import { editSections, restSections } from './session-option-sections'
 import { useRejectedOptionValues } from './use-option-values'
 import { useSelectorPanelState } from './use-selector-panel-state'
 
@@ -581,10 +579,6 @@ function useTouchStripWidth(
   return active ? width : null
 }
 
-/** A select option's value, or undefined when the agent sent none (or a non-string). */
-const selectValue = (option: SessionConfigOption): string | undefined =>
-  typeof option.currentValue === 'string' ? option.currentValue : undefined
-
 /**
  * Scroll the chosen model into view, then round the scroll up to a whole row so
  * the top row is never cut in half. Rows and section labels share one height,
@@ -603,156 +597,21 @@ function revealChosenRow(list: HTMLElement): void {
   }
 }
 
-type IsRejected = (optionId: string, value: string) => boolean
-type TrySet = (optionId: string, value: string | boolean) => Promise<void>
-
-/**
- * A select option's choices, labelled from the option data. A value the agent
- * rejected is dropped, or kept disabled while it is still the current one.
- */
-function optionChoices(option: SessionConfigOption, isRejected?: IsRejected): OptionChoice[] {
-  const current = selectValue(option)
-  return flattenConfigOptionValues(option).flatMap(({ value, name, description }) => {
-    const unavailable = isRejected?.(option.id, value) ?? false
-    if (unavailable && value !== current) return []
-    return [{ value, name, description: description ?? undefined, unavailable }]
-  })
-}
-
-/** A rejected set is already toasted, and its value marked unavailable. */
-const alreadyReported = (): void => {}
-
-/**
- * The active model's session options: Thinking (the effort option), Context,
- * Fast mode. Each shows only when the agent sends that option, with value
- * labels from the option data. They sit in the active row's Edit flyout, or
- * in the footer when no active row is on screen.
- */
-function editSections(
-  props: SelectorPanelV2Props,
-  context: SessionConfigOption | null,
-  isRejected: IsRejected,
-  trySet: TrySet
-): ChoiceSection[] {
-  const sections: ChoiceSection[] = []
-  const thinking = props.thoughtLevel ? optionChoices(props.thoughtLevel) : []
-  if (thinking.length > 0) {
-    sections.push({
-      kind: 'radio',
-      id: 'thinking',
-      label: 'Thinking',
-      value: props.effortValue,
-      choices: thinking,
-      onPick: props.onEffort
-    })
-  }
-  const windows = context ? optionChoices(context, isRejected) : []
-  if (context && windows.length > 0) {
-    sections.push({
-      kind: 'radio',
-      id: 'context',
-      label: 'Context',
-      value: selectValue(context),
-      choices: windows,
-      onPick: (value) => void trySet(context.id, value).catch(alreadyReported)
-    })
-  }
-  const { onToggleFast } = props
-  if (props.fastMode && onToggleFast) {
-    sections.push({
-      kind: 'toggle',
-      id: 'fast',
-      label: 'Fast mode',
-      icon: (
-        <Zap
-          size={PICKER_ICON.glyph}
-          aria-hidden="true"
-          className="shrink-0 text-muted-foreground"
-        />
-      ),
-      checked: props.fastOn,
-      onToggle: () => onToggleFast()
-    })
-  }
-  return sections
-}
-
 /**
  * The footer's session option rows: the agent's other options, after the
  * active model's own ones when no active row holds them.
  */
 function SessionOptions({
   sections,
-  rest,
-  isRejected,
-  trySet,
   disabled,
   touch
 }: {
   sections: ChoiceSection[]
-  rest: SessionConfigOption[]
-  isRejected: IsRejected
-  trySet: TrySet
   disabled: boolean
   touch: boolean
 }): React.JSX.Element | null {
   const ref = useRef<HTMLFieldSetElement>(null)
-  const rows: ReactNode[] = sections.map((section) =>
-    section.kind === 'toggle' ? (
-      <OptionSwitchRow
-        key={section.id}
-        id={section.id}
-        label={section.label}
-        icon={section.icon}
-        checked={section.checked}
-        disabled={disabled}
-        touch={touch}
-        onToggle={section.onToggle}
-      />
-    ) : (
-      <OptionRow
-        key={section.id}
-        id={section.id}
-        label={section.label}
-        value={section.value}
-        choices={section.choices}
-        disabled={disabled}
-        touch={touch}
-        onSelect={section.onPick}
-      />
-    )
-  )
-  for (const option of rest) {
-    if (option.type === 'boolean') {
-      rows.push(
-        <OptionSwitchRow
-          key={option.id}
-          id={option.id}
-          label={option.name}
-          checked={option.currentValue === true}
-          disabled={disabled}
-          touch={touch}
-          onToggle={(value) => trySet(option.id, value)}
-        />
-      )
-      continue
-    }
-    const choices = optionChoices(option, isRejected)
-    if (choices.length === 0) continue
-    rows.push(
-      <OptionRow
-        key={option.id}
-        id={option.id}
-        label={option.name}
-        value={selectValue(option)}
-        choices={choices}
-        disabled={disabled}
-        touch={touch}
-        onSelect={(value) => void trySet(option.id, value).catch(alreadyReported)}
-      />
-    )
-  }
-  if (rows.length === 0) return null
+  if (sections.length === 0) return null
   return (
     <fieldset
       ref={ref}
@@ -763,7 +622,31 @@ function SessionOptions({
       }}
       className={cn('flex min-w-0 flex-col border-t border-border', touch ? 'px-3 py-1.5' : 'p-1')}
     >
-      {rows}
+      {sections.map((section) =>
+        section.kind === 'toggle' ? (
+          <OptionSwitchRow
+            key={section.id}
+            id={section.id}
+            label={section.label}
+            icon={section.icon}
+            checked={section.checked}
+            disabled={disabled}
+            touch={touch}
+            onToggle={section.onToggle}
+          />
+        ) : (
+          <OptionRow
+            key={section.id}
+            id={section.id}
+            label={section.label}
+            value={section.value}
+            choices={section.choices}
+            disabled={disabled}
+            touch={touch}
+            onSelect={section.onPick}
+          />
+        )
+      )}
     </fieldset>
   )
 }
@@ -1251,10 +1134,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       ) : null}
       {state.ownFooter ? (
         <SessionOptions
-          sections={activeShown ? [] : edit}
-          rest={rest}
-          isRejected={isRejected}
-          trySet={trySet}
+          sections={[...(activeShown ? [] : edit), ...restSections(rest, isRejected, trySet)]}
           disabled={disabled}
           touch={touch}
         />

@@ -256,6 +256,7 @@ export function ChatInputBar({
     clearAttachments,
     appOwnedTempPaths,
     canPick,
+    canPickImages,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled })
   // Drag feedback for the attachment drop zone (shared with AgentLauncher):
@@ -565,10 +566,18 @@ export function ChatInputBar({
       agentIcon={agentIcon}
       onSetConfig={onSetConfig}
       onSetModel={onSetModel}
+      phone={
+        isMobileShell
+          ? {
+              modes: session.modes,
+              onSetMode,
+              compact: { onCompact, signals: compactSignals }
+            }
+          : undefined
+      }
     />
   ) : null
 
-  // Mobile one-row toolbar: the mode is its icon alone, leaving the room to the model name.
   const agentModeChip = (
     <ModeChip
       session={session}
@@ -576,8 +585,6 @@ export function ChatInputBar({
       onSelect={onSetMode}
       label="Agent"
       agentName={modeAgentName}
-      className={isMobileShell ? 'shrink-0' : undefined}
-      labelClassName={isMobileShell ? 'sr-only' : undefined}
     />
   )
   // One set of MCP props for the desktop badge popover and the mobile + sheet.
@@ -604,11 +611,12 @@ export function ChatInputBar({
   const composerAddHandle = useMemo(
     () => ({
       canPick,
+      canPickImages,
       pickFiles,
       insertTrigger: (trigger: '@' | '/') => insertComposerTrigger(editorRef.current, trigger),
       blurEditor: () => blurComposerEditor(editorRef.current)
     }),
-    [canPick, pickFiles]
+    [canPick, canPickImages, pickFiles]
   )
   const sendButton = (
     <ComposerSendButton
@@ -747,7 +755,7 @@ export function ChatInputBar({
             >
               {isMobileShell ? (
                 <div
-                  className="flex min-w-0 flex-1 items-center gap-1"
+                  className="flex min-w-0 flex-1 items-center gap-2"
                   data-composer-toolbar-row="mobile"
                 >
                   <ComposerAddSheet
@@ -756,9 +764,7 @@ export function ChatInputBar({
                     {...mcpListProps}
                   />
                   {modelSelector}
-                  {agentModeChip}
                   <div className="flex-1" />
-                  <ClaudeAccountChip sessionId={session.id} compact />
                   <ContextUsageIndicator
                     usage={sessionUsage}
                     messages={messages}
