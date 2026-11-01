@@ -481,6 +481,9 @@ test('the Git action opens the sheet on the chat worktree, not the project root'
   const worktree = await worktreePathOf(project)
   await writeFile(join(worktree, 'worktree-only.txt'), 'only in the worktree\n')
 
+  // The Git action lives in the status pill's changed-files sheet.
+  const status = page.getByRole('button', { name: /^Session status: .*changed file/ })
+  await status.tap()
   await page.getByRole('button', { name: 'Open Git changes', exact: true }).tap()
 
   const sheet = page.getByRole('dialog', { name: 'Git changes' })
@@ -494,10 +497,10 @@ test('the Git action opens the sheet on the chat worktree, not the project root'
     .poll(() => logs().some((message) => message.includes('Git sheet opened from explicit cwd')))
     .toBe(true)
 
-  // Escape closes it again; the dock is still there.
+  // Escape closes it again; the status pill is still there.
   await page.keyboard.press('Escape')
   await expect(sheet).toBeHidden()
-  await expect(page.getByRole('button', { name: 'Open Git changes', exact: true })).toBeVisible()
+  await expect(status).toBeVisible()
 })
 
 test('the header Git changes button opens the same worktree from the active chat', async ({
