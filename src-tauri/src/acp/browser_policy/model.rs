@@ -14,7 +14,7 @@ pub const MAX_ALLOW_LIST: usize = 256;
 pub const MAX_PREAPPROVALS: usize = 512;
 
 /// Requested agent identity for a project's sessions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ProfileMode {
     Global,
@@ -34,7 +34,7 @@ impl ProfileMode {
 }
 
 /// Closed set of actions a consent ticket or a pre-approval names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionClass {
     /// First navigation to an unlisted origin in a session.

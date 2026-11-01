@@ -2,14 +2,14 @@ use serde::{Deserialize, Serialize};
 
 use super::convert::OptionKind;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ValueSlot {
     pub name: String,
     pub is_secret: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "transport", rename_all = "lowercase")]
 pub enum ResolvedConfig {
     Stdio {
@@ -27,7 +27,7 @@ pub enum ResolvedConfig {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Provenance {
     pub name: String,

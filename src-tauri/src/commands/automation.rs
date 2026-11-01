@@ -30,7 +30,7 @@ const UNAVAILABLE_MESSAGE: &str = "automations are unavailable on this host";
 
 /// `previewSchedule` reply: an invalid schedule is an answer, not a failure,
 /// so the editor can show why while the user types.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct SchedulePreview {
     pub next_runs: Vec<i64>,
     pub error: Option<String>,

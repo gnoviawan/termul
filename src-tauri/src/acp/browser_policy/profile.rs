@@ -11,7 +11,7 @@ use serde::Serialize;
 
 /// What clearing the global profile closes: global-bound agent tabs, counted
 /// as the sessions and projects that lose them.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct ClearImpact {
     pub sessions: u32,
     pub projects: u32,

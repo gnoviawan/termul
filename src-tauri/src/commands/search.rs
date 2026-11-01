@@ -12,21 +12,21 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchMatch {
     pub line_number: usize,
     pub line_text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchResult {
     pub file_path: String,
     pub matches: Vec<FileSearchMatch>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSearchResponse {
     pub results: Vec<FileSearchResult>,
@@ -35,7 +35,7 @@ pub struct FileSearchResponse {
     pub failed_files: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchContentRequest {
     pub scope_root: String,
@@ -52,7 +52,7 @@ pub struct SearchContentStreamRequest {
     pub search_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchContentCancelRequest {
     pub search_id: String,
@@ -109,7 +109,7 @@ pub struct SearchFileNamesStreamRequest {
 /// omitted from the wire for files (absent = file), so file payloads are
 /// unchanged. Every `path` is root-relative with forward slashes; dir hit
 /// paths have no trailing slash.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchFileHit {
     pub path: String,
@@ -145,7 +145,7 @@ pub struct SearchFileNamesDoneEvent {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RgInfoResponse {
     pub sidecar_binary_name: String,

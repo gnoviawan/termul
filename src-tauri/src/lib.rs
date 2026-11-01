@@ -216,7 +216,7 @@ pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use web::{PermissionRendezvous, ProjectRegistry, QuestionRendezvous, WsRelaySink};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ShellInfo {
     pub name: String,
@@ -226,7 +226,7 @@ pub struct ShellInfo {
     pub args: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DetectedShells {
     pub available: Vec<ShellInfo>,
     pub default: Option<ShellInfo>,

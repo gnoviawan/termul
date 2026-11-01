@@ -125,7 +125,7 @@ impl From<SecretError> for ServiceError {
 pub type ServiceResult<T> = Result<T, ServiceError>;
 
 /// An automation with what its editor and approval card need.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct AutomationDetail {
     pub automation: Automation,
     pub issues: Vec<Issue>,

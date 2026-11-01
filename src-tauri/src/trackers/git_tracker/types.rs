@@ -12,7 +12,7 @@ pub struct GitStatus {
     pub has_changes: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitStatusDetail {
     pub path: String,
@@ -25,7 +25,7 @@ pub struct GitStatusDetail {
 /// `parents` holds full parent SHAs in order (first parent first); a merge has
 /// two or more. `refs` is the raw `%D` decoration list split on ", " with empty
 /// entries dropped (e.g. `HEAD -> main`, `tag: v1.0`, `origin/main`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommit {
     /// Full 40-char commit hash.
@@ -67,7 +67,7 @@ impl Default for GitStatus {
 /// Context the commit footer needs to render: current branch, whether an
 /// upstream is configured, ahead/behind counts, how many entries are staged,
 /// and the last commit's subject/body (used to prefill an amend).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCommitContext {
     /// Current branch name, or `None` in a detached HEAD / no-branch state.

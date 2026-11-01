@@ -37,7 +37,7 @@ pub struct Prompt {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Suggestion {
     /// Stable id of the repeated ask; dismissals and acceptances key on it.
     pub fingerprint: String,
