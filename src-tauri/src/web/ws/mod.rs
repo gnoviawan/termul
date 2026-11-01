@@ -812,6 +812,8 @@ pub(super) fn ok_with_payload<T: serde::Serialize>(id: String, value: &T) -> WsR
 }
 
 #[cfg(test)]
+mod authenticate_agent_tests;
+#[cfg(test)]
 mod canvas_tests;
 #[cfg(test)]
 mod capability_tests;

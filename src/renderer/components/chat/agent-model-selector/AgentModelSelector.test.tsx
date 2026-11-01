@@ -116,6 +116,14 @@ vi.mock('@/lib/api', async (importActual) => {
   return { ...actual, persistenceApi: mockPersistenceApi }
 })
 
+const { mockLogFrontendError } = vi.hoisted(() => ({
+  mockLogFrontendError: vi.fn(async () => {})
+}))
+vi.mock('@/lib/log-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/log-api')>()),
+  logFrontendError: mockLogFrontendError
+}))
+
 vi.mock('@/hooks/use-mobile-web-shell', () => ({ useMobileWebShell: () => mockIsMobile.current }))
 
 const CURSOR: StoredAgentConfig = {
@@ -1092,6 +1100,43 @@ describe('desktop: signing in to another agent from its tab', () => {
       expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-codex', 'api-key')
       expect(screen.getByRole('button', { name: 'ChatGPT' })).toBeEnabled()
       expect(mockPrepareChat).not.toHaveBeenCalled()
+    } finally {
+      localStorage.removeItem(MODEL_PICKER_V2_KEY)
+    }
+  })
+
+  it('signs in with a typed API key, then reads its models again, and never logs the key', async () => {
+    const apiKey = 'sk-termul-test-not-real'
+    localStorage.setItem(MODEL_PICKER_V2_KEY, '1')
+    try {
+      seedSignedOutCodex()
+      const agent = (acpStateRef.current.agents as Record<string, { authMethods: unknown[] }>)[
+        'agent-codex'
+      ]
+      agent.authMethods = [
+        { id: 'api-key', name: 'API key', type: 'agent', takesApiKey: true },
+        { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' }
+      ]
+      renderSelector()
+      open()
+      fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
+
+      const input = screen.getByLabelText('Key for API key')
+      expect(input).toHaveAttribute('type', 'password')
+      fireEvent.change(input, { target: { value: apiKey } })
+      fireEvent.click(screen.getByRole('button', { name: 'API key' }))
+
+      await waitFor(() =>
+        expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-codex', 'api-key', { apiKey })
+      )
+      await waitFor(() => expect(mockCancelPreparedChat).toHaveBeenCalledWith(CODEX_KEY))
+      expect(mockPrepareChat).toHaveBeenCalledWith(CODEX.id, '/work', undefined, 'p1', {
+        silent: true
+      })
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'agentSignIn.authenticate' })
+      )
+      expect(JSON.stringify(mockLogFrontendError.mock.calls)).not.toContain(apiKey)
     } finally {
       localStorage.removeItem(MODEL_PICKER_V2_KEY)
     }

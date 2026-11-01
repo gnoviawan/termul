@@ -561,6 +561,39 @@ fn to_auth_method_infos_maps_full_metadata() {
     assert_eq!(infos[1].description, None);
 }
 
+/// `_meta["api-key"]` as codex-acp 2.5.0 and Gemini CLI 0.62.0 advertise it
+/// maps to `takesApiKey: true`; a provider whose key shape is unknown, a
+/// gateway method and a plain method carry no flag.
+#[test]
+fn to_auth_method_infos_flags_api_key_methods() {
+    let methods: Vec<AuthMethod> = serde_json::from_value(serde_json::json!([
+        { "id": "api-key", "name": "API Key", "_meta": { "api-key": { "provider": "openai" } } },
+        { "id": "gemini-api-key", "name": "Gemini API key",
+          "_meta": { "api-key": { "provider": "google" } } },
+        { "id": "byok", "name": "BYOK", "_meta": { "api-key": { "provider": "somebody-new" } } },
+        { "id": "gateway", "name": "Gateway", "_meta": { "gateway": { "protocol": "openai" } } },
+        { "id": "chat-gpt", "name": "ChatGPT" },
+    ]))
+    .unwrap();
+    let wire: Vec<(String, Option<serde_json::Value>)> = to_auth_method_infos(&methods)
+        .iter()
+        .map(|info| {
+            let json = serde_json::to_value(info).unwrap();
+            (info.id.clone(), json.get("takesApiKey").cloned())
+        })
+        .collect();
+    assert_eq!(
+        wire,
+        [
+            ("api-key".to_string(), Some(serde_json::json!(true))),
+            ("gemini-api-key".to_string(), Some(serde_json::json!(true))),
+            ("byok".to_string(), None),
+            ("gateway".to_string(), None),
+            ("chat-gpt".to_string(), None),
+        ]
+    );
+}
+
 /// An agent that advertises no auth methods maps to an empty vec (the
 /// renderer treats this as a no-auth agent).
 #[test]
