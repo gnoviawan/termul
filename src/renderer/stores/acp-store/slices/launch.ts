@@ -27,6 +27,10 @@ import {
   reapOrphanPreparedSession
 } from '../helpers'
 import {
+  forgetRegistryMcpServers,
+  registryMcpServersAreCurrent
+} from '../registry-mcp-fingerprints'
+import {
   cancelledChatLaunches,
   ensureLiveAgent,
   ephemeralSessionIds,
@@ -34,7 +38,6 @@ import {
   inFlightPromotions,
   nextSeq,
   persistSession,
-  registryMcpServersAreCurrent,
   releaseWarmAgent,
   runsCurrentLaunch
 } from '../shared-state'
@@ -344,6 +347,7 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
         // session — drop it (createSession added it to `ephemeralSessionIds`) and
         // bail so the pool re-seeds lazily on the next chat (re-spawn + refill).
         if (get().agentStatus[agentId] !== 'connected') {
+          forgetRegistryMcpServers(sessionId)
           if (ephemeralSessionIds.has(sessionId)) {
             ephemeralSessionIds.delete(sessionId)
             set((s) => {

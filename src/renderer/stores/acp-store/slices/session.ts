@@ -94,6 +94,7 @@ import {
   selectLaunchRecoverySessions,
   takeDroppedLaunchPlaceholders
 } from '../live-turn'
+import { recordRegistryMcpServers } from '../registry-mcp-fingerprints'
 import { liveSiblingCount, reloadInFlight } from '../reload-guard'
 import {
   adoptHostOwnedAgent,
@@ -111,7 +112,6 @@ import {
   persistSession,
   rebaseSeqCounter,
   rebaseUntitledCounter,
-  recordRegistryMcpServers,
   rejectBugReportCollector,
   rejectCommitMessageCollector,
   rejectTerminalAssistCollector,

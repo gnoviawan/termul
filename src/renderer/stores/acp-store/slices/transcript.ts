@@ -51,6 +51,7 @@ import {
 } from '../helpers'
 import { useAcpStore } from '../index'
 import { withRateLimit } from '../rate-limit'
+import { forgetRegistryMcpServers } from '../registry-mcp-fingerprints'
 import {
   activeWirePromptTurns,
   bugReportCollectors,
@@ -728,6 +729,7 @@ export function dropSessionBookkeeping(
   historySeqWatermarks.delete(sessionId)
   inFlightDurabilityProbes.delete(sessionId)
   untrimmableSessions.delete(sessionId)
+  forgetRegistryMcpServers(sessionId)
   // A close that keeps the transcript for an open tab keeps the links too: a
   // later history reopen re-splices the pre-switch conversation through them.
   if (opts.keepLiveSwitchLinks) return

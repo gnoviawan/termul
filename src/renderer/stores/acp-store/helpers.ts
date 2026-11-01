@@ -72,6 +72,7 @@ import {
 import { ephemeralSessionIds, stoppingAgentIds } from './ephemeral-ids'
 import { isIndexedRealSession } from './live-turn'
 import { modelCatalogFromOptions, persistModelCatalog } from './model-catalog'
+import { forgetRegistryMcpServers, mcpServersFingerprint } from './registry-mcp-fingerprints'
 
 // Re-export so the transcript/session slices can consult turn-busy state via
 // the shared helpers surface they already import (issue #838/#846 wiring).
@@ -1168,13 +1169,6 @@ export function discoveryKey(agentId: AgentId, cwd: string): string {
 }
 
 /** Stable key for prepare/start dedupe (MCP list order-independent). */
-export function mcpServersFingerprint(mcpServers: McpServer[]): string {
-  return mcpServers
-    .map((s) => JSON.stringify(s))
-    .sort()
-    .join('|')
-}
-
 export function prepareChatKey(
   configId: string,
   cwd: string,
@@ -1597,6 +1591,7 @@ export function reapOrphanPreparedSession(
     .then(() => get().deleteHistorySession(sessionId))
     .finally(() => {
       ephemeralSessionIds.delete(sessionId)
+      forgetRegistryMcpServers(sessionId)
       set((s) => (s.sessions[sessionId] ? dropEphemeralSessionState(s, sessionId) : s))
     })
 }
