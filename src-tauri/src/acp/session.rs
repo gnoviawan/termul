@@ -814,6 +814,7 @@ impl DriverState {
             pending_questions: self.pending_questions.len(),
             pending_elicitations: self.pending_elicitations.len(),
             running_terminals,
+            running_subagents: self.subagents.running_count(),
             reopens_in_flight: self.reopen_reservations.values().sum::<usize>()
                 + self
                     .replay_windows

@@ -432,6 +432,27 @@ fn reopens_and_running_terminals_are_evidence() {
 }
 
 #[test]
+fn a_running_native_subagent_is_evidence_until_it_ends() {
+    let mut state = DriverState::new();
+    state.register_subagent("chat-1", "agent-a");
+    let running = state.activity(0);
+    assert_eq!(running.running_subagents, 1);
+    assert!(running.has_evidence());
+
+    state.end_subagent("agent-a");
+    assert_eq!(state.activity(0).running_subagents, 0);
+    assert!(!state.activity(0).has_evidence());
+
+    state.resume_subagent("agent-a");
+    assert_eq!(state.activity(0).running_subagents, 1);
+    state.remove_session_root("chat-1");
+    assert!(
+        !state.activity(0).has_evidence(),
+        "closing the chat forgets its subagents"
+    );
+}
+
+#[test]
 fn reapable_needs_no_evidence_and_a_whole_quiet_window() {
     use std::time::{Duration, Instant};
     let state = DriverState::new();

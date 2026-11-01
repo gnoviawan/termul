@@ -98,6 +98,11 @@ impl SubagentRoutes {
         Some(route.clone())
     }
 
+    /// Children that have not reported an end.
+    pub(super) fn running_count(&self) -> usize {
+        self.children.values().filter(|route| !route.ended).count()
+    }
+
     /// Drop every child of `root` (the chat session closed or reloaded).
     pub(super) fn forget_root(&mut self, root: &str) {
         self.children

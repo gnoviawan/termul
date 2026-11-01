@@ -1977,6 +1977,7 @@ impl AcpManager {
                 pending_questions: 0,
                 pending_elicitations: 0,
                 running_terminals: 0,
+                running_subagents: 0,
                 reopens_in_flight: 0,
                 last_active_at: std::time::Instant::now(),
             }),
