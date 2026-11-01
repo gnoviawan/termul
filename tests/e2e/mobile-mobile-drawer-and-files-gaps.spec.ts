@@ -838,6 +838,7 @@ test('V-12: the drawer footer reads Connected for screen readers, fully inside t
   const drawer = await openDrawer(page)
   const status = drawer.getByRole('status')
   await expect(status).toHaveText(CONNECTED_TEXT)
+  await expect(status.getByText(CONNECTED_TEXT, { exact: true })).toHaveClass(/\bsr-only\b/)
   const drawerBox = await drawer.boundingBox()
   const statusBox = await status.boundingBox()
   if (!drawerBox || !statusBox) throw new Error('missing layout box')
