@@ -11,6 +11,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, extname, join, resolve, sep } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { fileURLToPath } from 'node:url'
 
 export const LAB_TOKEN = 'reconnect-lab-token'
 export const LAB_DEVICE_ID = 'reconnect-lab-device'
@@ -18,7 +19,7 @@ export const LAB_DEVICE_ID = 'reconnect-lab-device'
 const WS_PROTOCOL_VERSION = 7
 
 export function repoRoot() {
-  return resolve(dirname(new URL(import.meta.url).pathname), '..', '..')
+  return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 }
 
 /** `playwright` from this checkout's node_modules, else from the main checkout's. */
@@ -76,12 +77,15 @@ export function defaultServerBinary() {
  * long-running agent. `onLine(line)` receives every server log line.
  */
 export async function startLabServer({ binary, port, onLine }) {
+  if (!existsSync(binary)) throw new Error(`termul-server binary missing at ${binary}`)
+  const bunPath = execFileSync('bash', ['-lc', 'command -v bun'], { encoding: 'utf8' })
+    .trim()
+    .split('\n')
+    .at(-1)
+  const bunDir = dirname(bunPath)
   const stateDir = await mkdtemp(join(tmpdir(), 'reconnect-lab-state-'))
   const workspaceRoot = join(stateDir, 'workspace')
   await mkdir(workspaceRoot, { recursive: true })
-  const bunDir = dirname(
-    execFileSync('bash', ['-lc', 'command -v bun'], { encoding: 'utf8' }).trim()
-  )
   const child = spawn(
     binary,
     [
@@ -94,7 +98,9 @@ export async function startLabServer({ binary, port, onLine }) {
       '--sessions-dir',
       join(stateDir, 'sessions'),
       '--projects-file',
-      join(stateDir, 'projects.json')
+      join(stateDir, 'projects.json'),
+      '--store-file',
+      join(stateDir, 'store.json')
     ],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -107,6 +113,7 @@ export async function startLabServer({ binary, port, onLine }) {
       }
     }
   )
+  child.once('error', (error) => onLine?.(`[lab] server spawn failed: ${error.message}`))
   const baseUrl = `http://127.0.0.1:${port}`
   let listening = false
   for (const stream of [child.stdout, child.stderr]) {

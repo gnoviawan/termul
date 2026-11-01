@@ -64,13 +64,17 @@ function parseArgs(argv) {
     else if (flag === '--headed') args.headed = true
     else throw new Error(`unknown flag ${flag}`)
   }
+  const hideParts = args.hide.split('+')
+  if (hideParts.some((part) => !['override', 'pause'].includes(part))) {
+    throw new Error(`--hide takes override, pause or override+pause, not ${args.hide}`)
+  }
   if (!args.from) args.serverBin ??= defaultServerBinary()
   return args
 }
 
 const args = parseArgs(process.argv.slice(2))
 const outDir = args.out ?? join(LAB_DIR, 'out')
-mkdirSync(outDir, { recursive: true })
+if (!args.from) mkdirSync(outDir, { recursive: true })
 const scenarios = SCENARIOS.filter(
   (s) => !args.only || args.only.includes(s.id) || args.only.includes(s.name)
 )

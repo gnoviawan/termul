@@ -23,6 +23,8 @@
  */
 import { createServer as createHttpServer } from 'node:http'
 import { createConnection, createServer } from 'node:net'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /** @typedef {{ kind: 'pass' } | { kind: 'blackhole' } | { kind: 'stall-downstream' } | { kind: 'down' }} Fault */
 
@@ -280,6 +282,6 @@ async function main() {
   process.on('SIGTERM', shutdown)
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   await main()
 }

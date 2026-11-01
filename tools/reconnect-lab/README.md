@@ -17,20 +17,22 @@ The lab binds only to `127.0.0.1` on free ports and uses a temporary state direc
 ```sh
 node tools/reconnect-lab/run.mjs                       # every scenario, once
 node tools/reconnect-lab/run.mjs --only s1,s7 --repeat 2
-node tools/reconnect-lab/run.mjs --from tools/reconnect-lab/out   # re-print a saved run
+node tools/reconnect-lab/run.mjs --from tools/reconnect-lab/out   # re-analyse a saved run
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--only <ids>` | Run only these scenarios, by id or name. |
 | `--repeat <n>` | Run the set `n` times. |
-| `--web-dir <dir>` | Serve the page from this `dist-web` instead of the server's built-in assets. |
+| `--web-dir <dir>` | Serve the page from this `dist-web`. Without it, the server serves the `dist-web` of the checkout it was built from, if that directory exists, so a fresh `bun run build:web` there changes what you measure. |
 | `--server-bin <path>` | Use this server binary. |
-| `--hide <method>` | How the tab is hidden: `override+pause` (default), `override`, `pause` or `freeze`. |
+| `--hide <method>` | How the tab is hidden: `override+pause` (default), `override` or `pause`. `override` flips `document.visibilityState`, and `pause` stops the page's JavaScript like a frozen tab. |
 | `--rtt <ms>` | Add this round-trip delay. The proxy holds each chunk for half of it in each direction. |
 | `--out <dir>` | Write results here instead of `out/`. |
+| `--from <dir>` | Recompute the tables and timelines of a saved run. It rewrites the saved `.log` files. |
+| `--headed` | Show the browser window. |
 
-Each run writes `out/results.json` and one timeline per scenario, `out/<scenario>.run<N>.log`.
+Each scenario writes its timeline to `out/<scenario>.run<N>.log` as it finishes. `out/results.json` and `out/server.log` are written after all runs finish.
 
 ## Scenarios
 
@@ -49,4 +51,4 @@ Each run writes `out/results.json` and one timeline per scenario, `out/<scenario
 
 ## Compare two clients
 
-Build each client into its own `dist-web`, then run the same scenarios against each with `--web-dir`. Both runs must use the same server binary. Each timeline records the host load average and the time the page's main thread was busy. Check both before you trust an outlier.
+Build each client into its own `dist-web`, then run the same scenarios against each with `--web-dir`. Both runs must use the same server binary. Each timeline records the host load average and the page's main-thread busy time, counted from long tasks of 200 ms or more. Check both before you trust an outlier.
