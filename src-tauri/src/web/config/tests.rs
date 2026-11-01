@@ -302,6 +302,7 @@ fn from_args_removed_permission_flags_parse_and_warn_once_each() {
     // Everything else is unaffected.
     assert_eq!(cfg.host, "127.0.0.1");
     assert_eq!(cfg.port, 8080);
+    assert_eq!(cfg.sessions_dir.as_deref(), Some(Path::new(SESSIONS_DIR_ARG)));
 }
 
 #[test]
@@ -317,6 +318,7 @@ fn from_args_removed_permission_flags_tolerate_invalid_values() {
         let warnings = removed_flag_warnings(&cfg);
         assert_eq!(warnings.len(), 1, "{flag} {value}");
         assert!(warnings[0].contains(flag));
+        assert_eq!(cfg.sessions_dir.as_deref(), Some(Path::new(SESSIONS_DIR_ARG)));
     }
 }
 
