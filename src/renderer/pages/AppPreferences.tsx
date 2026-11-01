@@ -173,7 +173,9 @@ export function AppPreferencesModal(): React.JSX.Element {
     void logFrontendError({
       level: 'info',
       source: 'AppPreferences.automaticCompletionRefresh',
-      message: `Automatic completion refresh ${enabled ? 'enabled' : 'disabled'}; applies to new terminals only`
+      // The scheduler reads the setting live (see bind-session.ts), so the
+      // flip is immediate — unlike xterm options, which need a new terminal.
+      message: `Automatic completion refresh ${enabled ? 'enabled' : 'disabled'}; applies immediately`
     })
   }
 

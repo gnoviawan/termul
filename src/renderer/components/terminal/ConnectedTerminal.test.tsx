@@ -4,6 +4,7 @@ import { act, useState } from 'react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sessionStore } from '@/lib/command-lifecycle/session-store'
+import { __resetServerCapabilityCache, primeServerCapability } from '@/lib/tauri-runtime'
 import * as appSettingsStore from '@/stores/app-settings-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 
@@ -404,6 +405,25 @@ describe('ConnectedTerminal', () => {
   let screenReaderModeSpy: ReturnType<typeof vi.spyOn>
   let getBoundingClientRectSpy: ReturnType<typeof vi.spyOn>
 
+  // Drive the REAL server-capability cache through its admitted flip the way
+  // the web boot `/health` fetch would: the render path subscribes via
+  // `useServerAdmitsRemoteWrites`, while the mocked `serverAdmitsRemoteWrites`
+  // keeps the action-time call sites in sync. Call `__resetServerCapabilityCache`
+  // BEFORE rendering — resetting later would drop the component's subscription.
+  async function admitWebWrites(): Promise<void> {
+    mockServerAdmitsRemoteWrites.mockReturnValue(true)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ status: 'ok', allowRemoteWrites: true })
+      }))
+    )
+    await act(async () => {
+      primeServerCapability()
+    })
+  }
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockIsTauriContext.mockReturnValue(false)
@@ -504,6 +524,10 @@ describe('ConnectedTerminal', () => {
     getBoundingClientRectSpy.mockRestore()
     rendererPreferenceSpy.mockRestore()
     screenReaderModeSpy.mockRestore()
+    // The server-capability cache is module state: a primed "admitted" must
+    // never leak into another test's fail-closed assertions.
+    __resetServerCapabilityCache()
+    vi.unstubAllGlobals()
     // The Ctrl+R app-owned test pins a custom commandHistory binding
     // (#858): restore the context-aware defaults between tests so later
     // assertions see the real (web-unbound) state.
@@ -734,6 +758,7 @@ describe('ConnectedTerminal', () => {
       }
     }
     mockServerAdmitsRemoteWrites.mockReturnValue(true)
+    await admitWebWrites()
     initialize('pane-session-a', 'session-a', true)
     initialize('pane-session-b', 'session-b', false)
     expect(sessionStore.read('pane-session-a').mode).toBe('Editor')
@@ -815,6 +840,94 @@ describe('ConnectedTerminal', () => {
     } finally {
       unmount()
       mockServerAdmitsRemoteWrites.mockReturnValue(false)
+      sessionStore.reset()
+      geometry.forEach((name, index) => {
+        const original = originalGeometry[index]
+        if (original) Object.defineProperty(Range.prototype, name, original)
+        else delete Range.prototype[name]
+      })
+    }
+  })
+
+  it('mounts the command editor when web write admission flips from pending to admitted', async () => {
+    const initialize = (id: string, sessionId: string) => {
+      sessionStore.apply(id, { type: 'InitShell', session_id: sessionId, nonce: 'nonce' })
+      sessionStore.apply(id, {
+        type: 'PromptReady',
+        session_id: sessionId,
+        nonce: 'nonce',
+        prompt_generation: 1,
+        cwd: '/repo',
+        line_empty: true,
+        prompt_suppressed: true
+      })
+    }
+    initialize('admit-web', 'session-admit')
+    expect(sessionStore.read('admit-web').mode).toBe('Editor')
+
+    // jsdom has no layout; CodeMirror's async measure needs the Range
+    // geometry API (same stub pattern as the split-pane focus test).
+    const geometry = ['getClientRects', 'getBoundingClientRect'] as const
+    const originalGeometry = geometry.map((name) =>
+      Object.getOwnPropertyDescriptor(Range.prototype, name)
+    )
+    Object.defineProperty(Range.prototype, 'getClientRects', {
+      configurable: true,
+      value: () => []
+    })
+    Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => new DOMRect()
+    })
+
+    // A deferred /health response: the probe stays genuinely in-flight while
+    // the component is mounted, so the pending (fail-closed) state is real.
+    let resolveHealth: (response: unknown) => void = () => {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveHealth = resolve
+          })
+      )
+    )
+    let unmount = () => {}
+
+    try {
+      // Fresh cache BEFORE render so the fail-closed first paint is the real
+      // pending state (and the component's subscription survives the prime).
+      __resetServerCapabilityCache()
+      const mounted = render(
+        <ConnectedTerminal terminalId="pty-admit" storeTerminalId="admit-web" autoSpawn={false} />
+      )
+      unmount = mounted.unmount
+      const { container } = mounted
+
+      // Fail-closed pending state: the boot fetch has not resolved, so the
+      // editor surface must not exist yet.
+      expect(container.querySelector('[data-slot="command-editor-block"]')).toBeNull()
+
+      await act(async () => {
+        primeServerCapability()
+      })
+      // Still in-flight: nothing may appear while the probe is unresolved.
+      expect(container.querySelector('[data-slot="command-editor-block"]')).toBeNull()
+
+      await act(async () => {
+        resolveHealth({
+          ok: true,
+          json: async () => ({ status: 'ok', allowRemoteWrites: true })
+        })
+      })
+
+      // The subscription hook re-rendered on the cache flip alone — no other
+      // state change occurred between the two assertions.
+      expect(container.querySelector('[data-slot="command-editor-block"]')).not.toBeNull()
+    } finally {
+      // Unmount FIRST (even on failed assertions) so CodeMirror's async
+      // measure never runs against the restored jsdom Range stubs.
+      unmount()
       sessionStore.reset()
       geometry.forEach((name, index) => {
         const original = originalGeometry[index]

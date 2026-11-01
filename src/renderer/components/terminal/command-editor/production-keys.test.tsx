@@ -141,6 +141,83 @@ it('production Ctrl+C without selection clears the draft without PTY writes', ()
   expect(terminalApi.write).not.toHaveBeenCalled()
 })
 
+it('production Ctrl+Z undoes typing and redo restores it', () => {
+  const { view } = mountKeys()
+  act(() => view.dispatch({ changes: { from: 0, insert: 'git status' }, userEvent: 'input.type' }))
+  expect(view.state.doc.toString()).toBe('git status')
+
+  fireEvent.keyDown(view.contentDOM, { key: 'z', ctrlKey: !isMac, metaKey: isMac })
+  expect(view.state.doc.toString()).toBe('')
+
+  fireEvent.keyDown(view.contentDOM, redoKeydown())
+  expect(view.state.doc.toString()).toBe('git status')
+})
+
+// jsdom reports no navigator.platform, so CodeMirror matches only base `key`
+// bindings in tests (redo = Ctrl+Y above). The macOS (Cmd+Shift+Z) and Linux
+// (Ctrl+Shift+Z) overrides are pinned by the source assertion in
+// editor-keys.test.ts ('maps undo/redo to the platform key choices').
+
+it('production Ctrl+Z restores a draft cleared by Ctrl+U', () => {
+  const { view } = mountKeys('git status')
+  fireEvent.keyDown(view.contentDOM, { key: 'u', ctrlKey: true })
+  expect(view.state.doc.toString()).toBe('')
+
+  fireEvent.keyDown(view.contentDOM, { key: 'z', ctrlKey: !isMac, metaKey: isMac })
+  expect(view.state.doc.toString()).toBe('git status')
+})
+
+it('production Ctrl+Z stays an app shortcut and preserves undo history', () => {
+  useKeyboardShortcutsStore.getState().setShortcuts({
+    commandPalette: {
+      id: 'commandPalette',
+      label: 'Command Palette',
+      description: 'Open command palette',
+      defaultKey: 'alt+j',
+      customKey: 'ctrl+z'
+    }
+  })
+  // A real undoable edit first: with an empty history, a missing app-owned
+  // guard would be masked by undo() simply returning false.
+  const { view, opened } = mountKeys()
+  act(() => view.dispatch({ changes: { from: 0, insert: 'git status' }, userEvent: 'input.type' }))
+
+  fireEvent.keyDown(view.contentDOM, { key: 'z', ctrlKey: !isMac, metaKey: isMac })
+  expect(opened).toEqual(['commandPalette'])
+  expect(view.state.doc.toString()).toBe('git status')
+
+  // The app-owned event must not consume history either.
+  useKeyboardShortcutsStore.getState().resetAllShortcuts()
+  fireEvent.keyDown(view.contentDOM, { key: 'z', ctrlKey: !isMac, metaKey: isMac })
+  expect(view.state.doc.toString()).toBe('')
+})
+
+// Redo event for the running platform: Cmd+Shift+Z on macOS, Ctrl+Y
+// elsewhere (CodeMirror matches base `key` bindings in jsdom, which reports
+// no navigator.platform).
+function redoKeydown(): { key: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean } {
+  return isMac ? { key: 'z', metaKey: true, shiftKey: true } : { key: 'y', ctrlKey: true }
+}
+
+it('production Ctrl+C clear is isolated in history: undo restores, redo re-clears', () => {
+  const { view } = mountKeys()
+  act(() => view.dispatch({ changes: { from: 0, insert: 'git status' }, userEvent: 'input.type' }))
+
+  // Ctrl+C with no selection wipes the draft (replaceBuffer, no userEvent).
+  fireEvent.keyDown(view.contentDOM, { key: 'c', ctrlKey: true })
+  expect(view.state.doc.toString()).toBe('')
+  expect(commandDraftStore.read('keys-live')).toBe('')
+
+  // The clear must not merge into the typing group: undo restores the draft.
+  fireEvent.keyDown(view.contentDOM, { key: 'z', ctrlKey: !isMac, metaKey: isMac })
+  expect(view.state.doc.toString()).toBe('git status')
+  expect(commandDraftStore.read('keys-live')).toBe('git status')
+
+  // Redo re-applies the clear.
+  fireEvent.keyDown(view.contentDOM, redoKeydown())
+  expect(view.state.doc.toString()).toBe('')
+})
+
 it('production Ctrl+D keeps the editor usable until the shell actually exits', () => {
   const { view, viewRef } = mountKeys()
   act(() => {

@@ -1,7 +1,9 @@
+import { history } from '@codemirror/commands'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { type MutableRefObject, useEffect, useLayoutEffect, useRef } from 'react'
 import { termulCaretThemeSpec } from '@/components/editor/codemirror-theme'
+import { TERMINAL_LINE_HEIGHT } from '@/components/terminal/terminal-config'
 import { INNER_FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import type { BoundSessionClient } from '@/lib/command-lifecycle/bind-session'
 import type { CompletionScheduler } from '@/lib/command-lifecycle/completion'
@@ -21,7 +23,11 @@ const defaultCompletionSource: CompletionViewSource = { rows: () => [], request:
 
 export const commandEditorChromeTheme = EditorView.theme({
   '&.cm-focused': { outline: 'none' },
-  ...termulCaretThemeSpec
+  ...termulCaretThemeSpec,
+  // The base theme pins .cm-scroller { line-height: 1.4 }, which blocks
+  // inheritance from the container — restate the terminal's line height here
+  // so the editor's vertical rhythm matches the terminal surface it sits on.
+  '.cm-scroller': { lineHeight: String(TERMINAL_LINE_HEIGHT) }
 })
 
 export interface CommandEditorProps {
@@ -48,6 +54,7 @@ function buildEditorExtensions(
   return [
     commandEditorChromeTheme,
     EditorView.lineWrapping,
+    history(),
     EditorView.clipboardInputFilter.of(sanitizeEditorPaste),
     completionView(
       new Proxy(defaultCompletionSource, {

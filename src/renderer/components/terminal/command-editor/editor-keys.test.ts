@@ -417,6 +417,86 @@ describe('editorKeymap', () => {
     expect(event.cancelBubble).toBe(false)
   })
 
+  it('Ctrl+Z undoes typing and Ctrl+Y redoes it', () => {
+    const view = mountEditor('', { history: () => [], submit: () => {} })
+    view.dispatch({ changes: { from: 0, insert: 'git status' }, userEvent: 'input.type' })
+    expect(view.state.doc.toString()).toBe('git status')
+
+    expect(press(view, 'z', { ctrlKey: true })).toBe(true)
+    expect(view.state.doc.toString()).toBe('')
+
+    expect(press(view, 'y', { ctrlKey: true })).toBe(true)
+    expect(view.state.doc.toString()).toBe('git status')
+  })
+
+  it('Ctrl+Z restores a draft cleared by Ctrl+U', () => {
+    const view = mountEditor('git status', { history: () => [], submit: () => {} })
+
+    expect(press(view, 'u', { ctrlKey: true })).toBe(true)
+    expect(view.state.doc.toString()).toBe('')
+
+    expect(press(view, 'z', { ctrlKey: true })).toBe(true)
+    expect(view.state.doc.toString()).toBe('git status')
+  })
+
+  it('Ctrl+Z stays an app shortcut and preserves undo history', () => {
+    const reported: KeyboardEvent[] = []
+    let shortcuts:
+      | Record<
+          string,
+          { id: string; label: string; description: string; defaultKey: string; customKey: string }
+        >
+      | undefined = {
+      commandPalette: {
+        id: 'commandPalette',
+        label: 'Command palette',
+        description: 'Open command palette',
+        defaultKey: 'alt+j',
+        customKey: 'ctrl+z'
+      }
+    }
+    const view = mountEditor('', {
+      history: () => [],
+      submit: () => {},
+      shortcuts: () => shortcuts,
+      reportAppShortcut: (event) => reported.push(event)
+    })
+    // A real undoable edit first: with an empty history, undo() returning
+    // false would mask a missing app-owned guard.
+    view.dispatch({ changes: { from: 0, insert: 'git status' }, userEvent: 'input.type' })
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'z',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true
+    })
+
+    expect(isAppOwnedTerminalShortcut(event, shortcuts)).toBe(true)
+    expect(runScopeHandlers(view, event, 'editor')).toBe(false)
+    expect(reported).toEqual([event])
+    expect(view.state.doc.toString()).toBe('git status')
+    expect(event.defaultPrevented).toBe(false)
+
+    // The app-owned event must not consume history either: with the shortcut
+    // out of the way, undo still works on the same document.
+    shortcuts = undefined
+    expect(press(view, 'z', { ctrlKey: true })).toBe(true)
+    expect(view.state.doc.toString()).toBe('')
+  })
+
+  it('maps undo/redo to the platform key choices', () => {
+    // jsdom reports no platform, so CodeMirror matches only base `key`
+    // bindings there — pin the mac/linux overrides via source instead.
+    const source = readFileSync(
+      'src/renderer/components/terminal/command-editor/editor-keys.ts',
+      'utf8'
+    )
+    expect(source).toMatch(/key: 'Mod-z', run: guarded\(undo\)/)
+    expect(source).toMatch(/key: 'Mod-y', mac: 'Mod-Shift-z', run: guarded\(redo\)/)
+    expect(source).toMatch(/linux: 'Ctrl-Shift-z', run: guarded\(redo\)/)
+  })
+
   it('Up and Down move between multiline rows', () => {
     const view = mountEditor(
       'git\nstatus',

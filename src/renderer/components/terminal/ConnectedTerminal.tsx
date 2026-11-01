@@ -30,6 +30,7 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
 import { useTerminalColorTheme } from '@/hooks/use-terminal-color-theme'
 import { flushDetachedOutputNow } from '@/hooks/use-terminal-detached-output'
@@ -227,6 +228,10 @@ function ConnectedTerminalComponent({
   // terminal never gets `options.screenReaderMode` toggled, so a flip applies
   // to new terminals only.
   const screenReaderMode = useTerminalScreenReaderMode()
+  // Reactive subscription (not a render-time direct read): the web client's
+  // boot `/health` fetch resolves AFTER the first render, so the editor must
+  // re-render on the cache flip without waiting for some other state change.
+  const remoteWritesAdmitted = useServerAdmitsRemoteWrites()
   // Story 2 mobile stopgap: on the mobile web shell (browser, viewport
   // <= MOBILE_WEB_SHELL_MAX_PX) the 'auto' renderer default resolves to the
   // DOM renderer — WebGL paints zero pixels at DPR >= 3 (QA repro). Explicit
@@ -1934,7 +1939,7 @@ function ConnectedTerminalComponent({
       <ContextMenuTrigger asChild>
         <div className="relative w-full h-full group overflow-hidden">
           <TerminalInputSurface
-            allowWrite={serverAdmitsRemoteWrites()}
+            allowWrite={remoteWritesAdmitted}
             keymapDeps={{ selection: () => terminalRef.current?.getSelection() ?? '' }}
             focusTerminal={focusPaneInput}
             cwd={cwd}

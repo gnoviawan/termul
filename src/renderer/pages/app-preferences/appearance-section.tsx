@@ -129,7 +129,10 @@ export function AppearanceSection({
             id={rowId('terminal-automatic-completion-refresh')}
             htmlFor="terminal-automatic-completion-refresh"
             label="Automatic completion refresh"
-            description="Updates command suggestions while you type. When off, press Tab to ask for suggestions. Changes apply to new terminals."
+            /* The scheduler reads this setting live per request (bind-session
+               passes a getter over the store), so flips take effect at once —
+               unlike xterm options, which only apply to new terminals. */
+            description="Updates command suggestions while you type. When off, press Tab to ask for suggestions. Applies immediately."
             layout="inline"
           >
             <Switch

@@ -6,7 +6,10 @@ import {
   deleteCharForward,
   deleteGroupBackward,
   deleteToLineEnd,
-  deleteToLineStart
+  deleteToLineStart,
+  isolateHistory,
+  redo,
+  undo
 } from '@codemirror/commands'
 import { Annotation, EditorState, type Extension, Prec, Transaction } from '@codemirror/state'
 import { EditorView, type KeyBinding, keymap } from '@codemirror/view'
@@ -68,7 +71,14 @@ function replaceBuffer(view: EditorView, text: string) {
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: text },
     selection: { anchor: text.length },
-    annotations: recallChange.of(true)
+    annotations: [
+      recallChange.of(true),
+      // Whole-buffer replacements (Ctrl+C wipe, history recall, popup fill)
+      // carry no userEvent, so without this they merge into an adjacent
+      // typing group and one Ctrl+Z rewinds the typing AND the clear
+      // together. Isolate each replacement as its own history entry.
+      isolateHistory.of('full')
+    ]
   })
 }
 
@@ -171,6 +181,22 @@ function readlineBindings({ appOwnedEvents }: KeymapContext): KeyBinding[] {
   }))
 }
 
+// Draft undo/redo, mirroring the historyKeymap key choices minus the
+// selection-undo bindings (Mod-u/Alt-u): Ctrl-u is readline
+// kill-to-line-start in this keymap. Declared inside the highest-precedence
+// keymap so eventBinding's app-owned prefilter seeds their run lists — a
+// user shortcut customized onto Mod-z still reaches the workspace handler,
+// and the Submitting any-handler still swallows these keys.
+function undoRedoBindings({ appOwnedEvents }: KeymapContext): KeyBinding[] {
+  const guarded = (command: (view: EditorView) => boolean) => (view: EditorView) =>
+    !appOwnedEvents.has(view) && command(view)
+  return [
+    { key: 'Mod-z', run: guarded(undo) },
+    { key: 'Mod-y', mac: 'Mod-Shift-z', run: guarded(redo) },
+    { linux: 'Ctrl-Shift-z', run: guarded(redo) }
+  ]
+}
+
 function enterBindings({ deps, recalls, composingEvents }: KeymapContext): KeyBinding[] {
   const isComposing = (view: EditorView) =>
     deps.composition?.().open ?? (view.composing || composingEvents.get(view) === true)
@@ -253,6 +279,7 @@ export function editorKeymap(deps: EditorKeymapDeps): Extension {
           }
         },
         ...ctrlBindings(context),
+        ...undoRedoBindings(context),
         ...readlineBindings(context),
         { key: 'ArrowUp', run: (view) => recallHandler(context, view, -1) },
         { key: 'ArrowDown', run: (view) => recallHandler(context, view, 1) }

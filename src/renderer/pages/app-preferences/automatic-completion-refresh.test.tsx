@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { type CompletionContext, CompletionScheduler } from '@/lib/command-lifecycle/completion'
 import { DEFAULT_APP_SETTINGS } from '@/types/settings'
@@ -10,6 +10,31 @@ afterEach(() => {
 
 it('refresh defaults on', () => {
   expect(DEFAULT_APP_SETTINGS.automaticCompletionRefresh).toBe(true)
+})
+
+it('describes an immediate effect, not a new-terminal-only one', () => {
+  // The scheduler reads the setting live per request (bind-session passes a
+  // getter over the store), so the copy must not claim new-terminals-only.
+  render(
+    <AppearanceSection
+      fontSize={14}
+      bufferSize={10000}
+      terminalRenderer="auto"
+      screenReaderMode={false}
+      terminalUrlOpenMode="system"
+      handleFontSizeChange={vi.fn()}
+      handleBufferSizeChange={vi.fn()}
+      handleRendererChange={vi.fn()}
+      handleScreenReaderModeChange={vi.fn()}
+      handleTerminalUrlOpenModeChange={vi.fn()}
+      automaticCompletionRefresh={true}
+      handleAutomaticCompletionRefreshChange={vi.fn()}
+    />
+  )
+
+  const row = within(document.getElementById('terminal-automatic-completion-refresh-description')!)
+  expect(row.getByText(/Applies immediately/)).toBeTruthy()
+  expect(row.queryByText(/new terminals/)).toBeNull()
 })
 
 it('appearance switch renders on', () => {

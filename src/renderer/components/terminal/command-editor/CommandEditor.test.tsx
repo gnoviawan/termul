@@ -7,11 +7,13 @@ import type {
   TerminalApi
 } from '@shared/types/ipc.types'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { CompletionScheduler } from '@/lib/command-lifecycle/completion'
 import { createCommandDraftStore } from '@/lib/command-lifecycle/draft-store'
 import { sessionStore } from '@/lib/command-lifecycle/session-store'
-import { CommandEditor } from './CommandEditor'
+import { useAppSettingsStore } from '@/stores/app-settings-store'
+import { findThemeRuleValue } from '@/test-utils/codemirror-cssom'
+import { CommandEditor, commandEditorFontSize } from './CommandEditor'
 import { ghostText } from './completion-view'
 
 afterEach(() => {
@@ -265,4 +267,193 @@ it('a cursor-only move bumps the buffer revision', async () => {
     promptGeneration: 2,
     cwd: '/repo'
   })
+})
+
+it('syncs the container typography with the terminal font size and line height', () => {
+  const viewRef: { current: EditorView | null } = { current: null }
+  const draftStore = createCommandDraftStore()
+  const props = {
+    terminalId: 'font-sync',
+    focused: false,
+    viewRef,
+    draftStore,
+    keymapDeps: { history: () => [], submit: () => {} }
+  }
+  const { container } = render(<CommandEditor {...props} />)
+  const surface = container.querySelector('[data-terminal-id="font-sync"]') as HTMLElement
+  // The real store default (terminalFontSize: 14) with the terminal's 1.2 line
+  // height — no static text-sm rem sizing.
+  expect(surface.style.fontSize).toBe('14px')
+  expect(surface.style.lineHeight).toBe('1.2')
+
+  // The size reaches the actual editing surface: nothing between the wrapper
+  // and .cm-content may set its own font-size, or the inherited inline px
+  // value would be blocked (jsdom cannot compute inherited font-size, so we
+  // assert the absence of overriding rules instead).
+  const view = viewRef.current!
+  expect(findThemeRuleValue(view, '.cm-content', 'font-size')).toBeNull()
+  expect(findThemeRuleValue(view, '.cm-scroller', 'font-size')).toBeNull()
+})
+
+it('applies the terminal line height through the editor theme, not just the wrapper', () => {
+  // The CodeMirror base theme pins .cm-scroller { line-height: 1.4 }, which
+  // blocks inheritance from the wrapper — assert the effective theme rule.
+  const viewRef: { current: EditorView | null } = { current: null }
+  const { container } = render(
+    <CommandEditor
+      terminalId="line-height"
+      focused={false}
+      viewRef={viewRef}
+      draftStore={createCommandDraftStore()}
+      keymapDeps={{ history: () => [], submit: () => {} }}
+    />
+  )
+  expect(container.querySelector('.cm-content')).toBeTruthy()
+  expect(findThemeRuleValue(viewRef.current!, '.cm-scroller', 'line-height')).toBe('1.2')
+})
+
+it('resyncs a mounted editor when the terminal font size changes', () => {
+  const viewRef: { current: EditorView | null } = { current: null }
+  const draftStore = createCommandDraftStore()
+  draftStore.offer('font-resync', 'Editor', 'git status')
+  const props = {
+    terminalId: 'font-resync',
+    focused: false,
+    viewRef,
+    draftStore,
+    keymapDeps: { history: () => [], submit: () => {} }
+  }
+  const { container } = render(<CommandEditor {...props} />)
+  const view = viewRef.current!
+  const requestMeasure = vi.spyOn(view, 'requestMeasure')
+  const surface = container.querySelector('[data-terminal-id="font-resync"]') as HTMLElement
+  expect(surface.style.fontSize).toBe('14px')
+
+  // A nontrivial selection the resize must not disturb.
+  act(() => view.dispatch({ selection: { anchor: 0, head: 3 } }))
+
+  const initialFontSize = useAppSettingsStore.getState().settings.terminalFontSize
+  try {
+    act(() => {
+      useAppSettingsStore.setState((state) => ({
+        settings: { ...state.settings, terminalFontSize: 18 }
+      }))
+    })
+
+    // Same view instance (no remount), draft and selection intact, remeasure
+    // scheduled.
+    expect(surface.style.fontSize).toBe('18px')
+    expect(viewRef.current).toBe(view)
+    expect(view.state.doc.toString()).toBe('git status')
+    expect(view.state.selection.main.from).toBe(0)
+    expect(view.state.selection.main.to).toBe(3)
+    expect(requestMeasure).toHaveBeenCalled()
+  } finally {
+    act(() => {
+      useAppSettingsStore.setState((state) => ({
+        settings: { ...state.settings, terminalFontSize: initialFontSize }
+      }))
+    })
+  }
+  expect(surface.style.fontSize).toBe(`${initialFontSize}px`)
+})
+
+it('reacts to coarse-pointer changes and cleans up the media query listener', () => {
+  const changeListeners: Array<(event: { matches: boolean }) => void> = []
+  const removed: unknown[] = []
+  const mediaQuery = (matches: boolean) => ({
+    matches,
+    media: '',
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: (_type: string, callback: (event: { matches: boolean }) => void) => {
+      changeListeners.push(callback)
+    },
+    removeEventListener: (_type: string, callback: unknown) => {
+      removed.push(callback)
+    },
+    dispatchEvent: () => false
+  })
+  vi.stubGlobal(
+    'matchMedia',
+    // Start fine-pointer: the initial mount must use the exact terminal size;
+    // the flips below drive the subscription.
+    vi.fn((_query: string) => mediaQuery(false))
+  )
+  let unmount = () => {}
+  try {
+    const viewRef: { current: EditorView | null } = { current: null }
+    const mounted = render(
+      <CommandEditor
+        terminalId="pointer-live"
+        focused={false}
+        viewRef={viewRef}
+        draftStore={createCommandDraftStore()}
+        keymapDeps={{ history: () => [], submit: () => {} }}
+      />
+    )
+    unmount = mounted.unmount
+    const { container } = mounted
+    const surface = container.querySelector('[data-terminal-id="pointer-live"]') as HTMLElement
+    expect(surface.style.fontSize).toBe('14px')
+
+    // The pointer flips to coarse (tablet mode): the floor applies live.
+    act(() => {
+      for (const listener of changeListeners) listener({ matches: true })
+    })
+    expect(surface.style.fontSize).toBe('16px')
+
+    // ...and back: the exact terminal size is restored.
+    act(() => {
+      for (const listener of changeListeners) listener({ matches: false })
+    })
+    expect(surface.style.fontSize).toBe('14px')
+  } finally {
+    // Unmount before restoring the stubs, even on failed assertions.
+    unmount()
+    vi.unstubAllGlobals()
+  }
+  // The change listener is gone after unmount — no leaked subscriptions.
+  expect(removed).toHaveLength(changeListeners.length)
+})
+
+it('floors the editor font at 16px on coarse-pointer devices', () => {
+  expect(commandEditorFontSize(14, true)).toBe(16)
+  expect(commandEditorFontSize(18, true)).toBe(18)
+  expect(commandEditorFontSize(14, false)).toBe(14)
+
+  // End-to-end through the component's default detection. The stub keeps the
+  // full MediaQueryList contract — CodeMirror's DOMObserver calls
+  // matchMedia('print').addListener on mount.
+  const mediaQuery = (matches: boolean) => ({
+    matches,
+    media: '',
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false
+  })
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => mediaQuery(query === '(pointer: coarse)'))
+  )
+  try {
+    const viewRef: { current: EditorView | null } = { current: null }
+    const { container } = render(
+      <CommandEditor
+        terminalId="font-touch"
+        focused={false}
+        viewRef={viewRef}
+        draftStore={createCommandDraftStore()}
+        keymapDeps={{ history: () => [], submit: () => {} }}
+      />
+    )
+    const surface = container.querySelector('[data-terminal-id="font-touch"]') as HTMLElement
+    expect(surface.style.fontSize).toBe('16px')
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })
