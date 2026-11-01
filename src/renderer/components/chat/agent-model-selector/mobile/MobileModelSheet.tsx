@@ -303,20 +303,32 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
         </>
       )
       break
-    case 'error':
+    case 'error': {
+      // Chat: an agent that asks for credentials signs in on its setup screen.
+      const signInTab = view.needsSignIn && !sw.selectAgent ? state.viewTab : null
       list = view.status ? (
         <StatusActions title={view.title} detail={view.detail} status={view.status} touch />
       ) : (
         <>
           <ListMessage title={view.title} detail={view.detail} />
-          {view.retry ? (
+          {signInTab || view.retry ? (
             <SheetGroup>
-              <SheetRow title="Try again" onSelect={view.retry} />
+              {signInTab ? (
+                <SheetRow
+                  title={`Sign in to ${signInTab.name}`}
+                  accessory="chevron"
+                  subview={setupRouteKey(signInTab.configId)}
+                  disabled={disabled}
+                  onSelect={() => openSetup(signInTab)}
+                />
+              ) : null}
+              {view.retry ? <SheetRow title="Try again" onSelect={view.retry} /> : null}
             </SheetGroup>
           ) : null}
         </>
       )
       break
+    }
     case 'loading':
       list = <ListMessage loading title={view.title} />
       break

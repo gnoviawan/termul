@@ -1438,6 +1438,46 @@ describe('phone Select model sheet', () => {
     )
   })
 
+  it('signs in to a ready provider whose models ask for credentials, from its setup screen', async () => {
+    seedProviders()
+    patchStore({
+      agentOptionsCache: {},
+      prepareChatErrors: {
+        [prepareChatKey(CLAUDE.id, '/work', undefined)]: {
+          category: 'auth',
+          label: 'Authentication required',
+          detail: 'Run /login.'
+        }
+      },
+      configToLiveAgent: {
+        ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
+        [agentReuseKey(CLAUDE.id, '/work')]: 'agent-claude'
+      },
+      agents: {
+        'agent-claude': { authMethods: [{ id: 'claude-login', name: 'Log in', type: 'agent' }] }
+      }
+    })
+    const { rerender } = renderSelector()
+    const providers = openProviders()
+    fireEvent.click(within(providers).getByRole('button', { name: 'Claude Agent' }))
+    expect(within(sheet()).getByText('Could not load Claude Agent models.')).toBeInTheDocument()
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Sign in to Claude Agent' }))
+    const setup = screen.getByRole('dialog', { name: 'Claude Agent' })
+    expect(
+      within(setup).getByRole('heading', { name: 'Sign in to Claude Agent' })
+    ).toBeInTheDocument()
+    fireEvent.click(within(setup).getByRole('button', { name: 'Log in' }))
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-claude', 'claude-login')
+    )
+
+    patchStore({ prepareChatErrors: {}, agentOptionsCache: { [CLAUDE.id]: CLAUDE_MODELS } })
+    rerender(selector())
+    expect(within(sheet()).getByRole('button', { name: 'Claude Haiku' })).toBeInTheDocument()
+    expect(overlayIds()).toEqual([])
+  })
+
   it('Escape on the setup screen goes back to Providers without setting anything up', async () => {
     seedProviders()
     renderSelector()
