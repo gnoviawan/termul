@@ -15,6 +15,7 @@
  * cards), so {@link applyCodexThreadStates} patches it onto the spawn calls.
  */
 
+import { runningBackgroundSubagents } from '@/components/chat/subagent-strip'
 import {
   asRecord,
   BACKGROUND_INPUT_KEYS,
@@ -26,6 +27,7 @@ import {
 } from '@/components/chat/tool-call-summary'
 import type { SubagentLifecycle, SubagentLifecycleState, ToolCall } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
+import type { AcpState } from './types'
 
 export const TERMUL_SUBAGENT_META_KEY = 'termul/subagent'
 
@@ -143,29 +145,32 @@ export function mergeSubagentLifecycle(
 }
 
 /**
- * The agent process is gone, so a subagent still marked `running` will never
- * receive its end. Marks those calls `cancelled`. Returns the same map when
+ * The agent process is gone, so a running subagent will never receive its
+ * end: one the host still marks `running`, or a background launch that never
+ * reported one. Marks those calls `cancelled`. Returns the same map when
  * nothing was running.
  */
 export function cancelRunningSubagents(
-  toolCalls: Record<string, ToolCall[]>,
+  state: Pick<AcpState, 'toolCalls' | 'messages'>,
   sessionIds: readonly string[],
   endedAt: number
 ): Record<string, ToolCall[]> {
+  const { toolCalls } = state
   let next: Record<string, ToolCall[]> | null = null
   for (const sessionId of sessionIds) {
     const calls = toolCalls[sessionId]
     if (!calls) continue
+    const background = new Set(runningBackgroundSubagents(calls, state.messages[sessionId]))
     let count = 0
     const settled = calls.map((call) => {
-      if (call.subagentLifecycle?.state !== 'running') return call
+      if (call.subagentLifecycle?.state !== 'running' && !background.has(call)) return call
       count += 1
       return {
         ...call,
         subagentLifecycle: {
           ...call.subagentLifecycle,
           state: 'cancelled' as const,
-          endedAt: call.subagentLifecycle.endedAt ?? endedAt
+          endedAt: call.subagentLifecycle?.endedAt ?? endedAt
         }
       }
     })

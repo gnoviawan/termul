@@ -1,6 +1,7 @@
 import type { ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import type { AgentReloadMark, ChatMessage } from '@/stores/acp-store'
+import type { ParentTurn } from './tool-call-summary'
 
 export type TimelineItem =
   | {
@@ -500,6 +501,23 @@ function sameItem(a: TurnTimelineItem, b: TurnTimelineItem): boolean {
     )
   }
   return samePayload(a, b as TimelineItem)
+}
+
+/**
+ * Where a turn's activity group stands: `active` while its turn runs, `ended`
+ * for the latest turn (no user message after it), else `superseded`.
+ */
+export function activityParentTurn(
+  items: readonly TurnTimelineItem[],
+  group: TurnActivityItem
+): ParentTurn {
+  if (group.active) return 'active'
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]
+    if (item?.kind === 'activity') return item.key === group.key ? 'ended' : 'superseded'
+    if (item?.kind === 'message' && item.message.role === 'user') return 'superseded'
+  }
+  return 'superseded'
 }
 
 /**

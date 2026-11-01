@@ -38,6 +38,7 @@ import {
   isSubagentCall,
   isSubagentRunning,
   isToolCallRunning,
+  type ParentTurn,
   READABLE_TEXT_KEYS,
   readableOutput,
   toolCallPath
@@ -209,8 +210,8 @@ interface ToolCallCardProps {
   toolCall: ToolCall
   /** Filesystem roots used to resolve an "Open file" action on file tool calls. */
   filePathContext?: FilePathResolutionContext
-  /** The parent agent turn is still running. */
-  parentTurnActive?: boolean
+  /** Where this call's turn stands; a subagent card shows running from it. */
+  parentTurn?: ParentTurn
   /** Open the delegation details dialog. The chat LIST owns the dialog so it
    *  survives virtualized row removal — the card only reports the request. */
   onOpenSubagent: (toolCall: ToolCall) => void
@@ -234,7 +235,7 @@ function toolCallFilePath(toolCall: ToolCall): string | undefined {
 function ToolCallCardComponent({
   toolCall,
   filePathContext,
-  parentTurnActive = false,
+  parentTurn = 'superseded',
   onOpenSubagent
 }: ToolCallCardProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
@@ -267,9 +268,7 @@ function ToolCallCardComponent({
   // cards never show a bogus duration.
   const [open, setOpen] = useState(false)
   const [endedAt, setEndedAt] = useState<number | null>(null)
-  const running = isSubagent
-    ? isSubagentRunning(toolCall, parentTurnActive)
-    : isToolCallRunning(toolCall)
+  const running = isSubagent ? isSubagentRunning(toolCall, parentTurn) : isToolCallRunning(toolCall)
   // A background subagent completes its launch call early, so a subagent card
   // settles when the agent stops running, not when its tool call completes.
   const settled = isSubagent ? !running : status === 'completed' || status === 'failed'

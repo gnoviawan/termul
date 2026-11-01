@@ -21,6 +21,7 @@ import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
 import { CHAT_GUTTER_X } from './chat-layout'
 import {
+  activityParentTurn,
   groupTurnActivity,
   stabilizedTimeline,
   type TimelineItem,
@@ -188,6 +189,7 @@ function VirtualizedTimeline({
         <TurnActivity
           items={item.items}
           active={item.active}
+          parentTurn={activityParentTurn(groupedItems, item)}
           durationMs={item.durationMs}
           attentionRequired={item.attentionRequired}
           hasFinalResponse={item.hasFinalResponse}
@@ -205,7 +207,7 @@ function VirtualizedTimeline({
           <ToolCallCard
             toolCall={item.tool}
             filePathContext={filePathContext}
-            parentTurnActive={parentTurnActive}
+            parentTurn={parentTurnActive ? 'active' : 'superseded'}
             onOpenSubagent={onOpenSubagent}
           />
         </RowReveal>
@@ -360,6 +362,19 @@ export function ChatMessageList({
         : selection.toolCall
       : null
   const selectedToolId = selectedTool?.toolCallId
+  const selectedGroup = selectedToolId
+    ? stableItems.find(
+        (item) =>
+          item.kind === 'activity' &&
+          item.items.some((row) => row.kind === 'tool' && row.tool.toolCallId === selectedToolId)
+      )
+    : undefined
+  const selectedParentTurn =
+    selectedGroup?.kind === 'activity'
+      ? activityParentTurn(stableItems, selectedGroup)
+      : showRunningIndicator
+        ? 'active'
+        : 'superseded'
   const selectedChildCalls = useAcpStore(
     useShallow((s) =>
       selectedToolId ? subagentChildCalls(s.toolCalls[sessionId], selectedToolId) : NO_CALLS
@@ -401,7 +416,7 @@ export function ChatMessageList({
         <SubagentDetailsDialog
           toolCall={selectedTool}
           childToolCalls={selectedChildCalls}
-          parentTurnActive={showRunningIndicator}
+          parentTurn={selectedParentTurn}
           filePathContext={filePathContext}
           open
           onOpenChange={(open) => {

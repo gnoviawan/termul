@@ -22,7 +22,7 @@ import {
   subagentCountSummary
 } from './SubagentList'
 import { useChatChangedFiles } from './use-chat-changed-files'
-import { useCurrentTurnSubagents } from './use-current-turn-subagents'
+import { useBackgroundWait, useCurrentTurnSubagents } from './use-current-turn-subagents'
 
 export type StatusTab = 'files' | 'subagents'
 
@@ -30,6 +30,7 @@ export type StatusTab = 'files' | 'subagents'
 const STATUS_TABS: readonly StatusTab[] = ['files', 'subagents']
 
 interface ChatStatusPillProps {
+  sessionId: string
   cwd: string
   toolCalls: ToolCall[]
   messages: readonly ChatMessage[]
@@ -80,6 +81,7 @@ function plural(count: number, noun: string): string {
  * panes collapse the pill to icons and totals via the chat `@container`.
  */
 export function ChatStatusPill({
+  sessionId,
   cwd,
   toolCalls,
   messages,
@@ -103,6 +105,8 @@ export function ChatStatusPill({
 
   const changes = useChatChangedFiles(cwd, toolCalls, turnActive)
   const { subagents, counts, endedAt } = useCurrentTurnSubagents(toolCalls, messages, turnActive)
+  const waiting = useBackgroundWait(sessionId, toolCalls, messages, turnActive)
+  const waitingLabel = waiting > 0 ? `Waiting on ${plural(waiting, 'background subagent')}` : null
   const fileCount = changes.files.length
   const tabs = STATUS_TABS.filter((tab) => (tab === 'files' ? fileCount > 0 : subagents.length > 0))
   const activeTab = pickedTab && tabs.includes(pickedTab) ? pickedTab : tabs[0]
@@ -187,17 +191,22 @@ export function ChatStatusPill({
       caption: 'This turn',
       meta: <SubagentCountParts counts={counts} />,
       rows: (
-        <SubagentRows
-          subagents={subagents}
-          turnActive={turnActive}
-          endedAt={endedAt}
-          running={counts.running}
-          className={listClassName}
-          onSelect={(id) => {
-            setOpen(false)
-            setSelectedId(id)
-          }}
-        />
+        <>
+          {waitingLabel && (
+            <p className="px-2.5 pb-1 text-2xs text-muted-foreground">{waitingLabel}</p>
+          )}
+          <SubagentRows
+            subagents={subagents}
+            turnActive={turnActive}
+            endedAt={endedAt}
+            running={counts.running}
+            className={listClassName}
+            onSelect={(id) => {
+              setOpen(false)
+              setSelectedId(id)
+            }}
+          />
+        </>
       )
     }
   }
@@ -266,6 +275,7 @@ export function ChatStatusPill({
 
   const triggerLabel = [
     subagents.length > 0 && `subagents ${subagentSummary}`,
+    waitingLabel?.toLowerCase(),
     fileCount > 0 && plural(fileCount, 'changed file')
   ]
     .filter(Boolean)
@@ -276,6 +286,7 @@ export function ChatStatusPill({
       ref={triggerRef}
       type="button"
       aria-label={`Session status: ${triggerLabel}`}
+      title={waitingLabel ?? undefined}
       className={cn(
         'pointer-events-auto relative flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-popover/90 px-2.5 text-2xs font-medium shadow-pill backdrop-blur-md transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted',
         "after:absolute after:-inset-2 after:content-[''] pointer-coarse:after:-inset-y-2.5"
@@ -325,7 +336,7 @@ export function ChatStatusPill({
   return (
     <>
       <span aria-live="polite" className="sr-only">
-        {shown && subagents.length > 0 ? `Subagents: ${subagentSummary}` : ''}
+        {shown && subagents.length > 0 ? (waitingLabel ?? `Subagents: ${subagentSummary}`) : ''}
       </span>
       <AnimatePresence initial={false}>
         {shown && (

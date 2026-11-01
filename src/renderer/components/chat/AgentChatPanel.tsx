@@ -944,6 +944,7 @@ export function AgentChatPanel({
             scrollbar gutter) so status items take no layout height. */}
         <div className="pointer-events-none absolute right-4 top-3.5 z-20 flex items-center gap-1.5">
           <ChatStatusPill
+            sessionId={session.id}
             cwd={session.cwd}
             toolCalls={toolCalls}
             messages={messages}

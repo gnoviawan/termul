@@ -197,7 +197,7 @@ export function SubagentDetails({
     <SubagentDetailsDialog
       toolCall={selected}
       childToolCalls={childCalls}
-      parentTurnActive={turnActive}
+      parentTurn={turnActive ? 'active' : 'ended'}
       filePathContext={filePathContext}
       open
       onOpenChange={(next) => {

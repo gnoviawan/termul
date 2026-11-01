@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ToolCall } from '@/lib/acp-api'
+import { logFrontendError } from '@/lib/log-api'
 import type { ChatMessage } from '@/stores/acp-store/types'
 import {
   countSubagents,
+  lastUserBoundary,
+  runningBackgroundSubagents,
   type SubagentCounts,
   selectCurrentTurnSubagents,
   subagentStatus
@@ -13,13 +16,6 @@ export interface CurrentTurnSubagents {
   counts: SubagentCounts
   /** Settle time per subagent id, stamped on an observed running -> settled transition. */
   endedAt: Readonly<Record<string, number>>
-}
-
-function lastUserBoundary(messages: readonly ChatMessage[]) {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') return messages[i]
-  }
-  return null
 }
 
 /** The current turn's subagents, their status counts and their settle times. */
@@ -63,4 +59,36 @@ export function useCurrentTurnSubagents(
   }, [subagents, turnActive])
 
   return { subagents, counts, endedAt }
+}
+
+/**
+ * Background subagents the chat waits on after its turn ended (0 while the
+ * turn runs). Logs when the chat starts and stops waiting.
+ */
+export function useBackgroundWait(
+  sessionId: string,
+  toolCalls: readonly ToolCall[],
+  messages: readonly ChatMessage[],
+  turnActive: boolean
+): number {
+  const running = useMemo(
+    () => runningBackgroundSubagents(toolCalls, messages).length,
+    [toolCalls, messages]
+  )
+  const waiting = turnActive ? 0 : running
+  const wasWaiting = useRef(false)
+  useEffect(() => {
+    const isWaiting = waiting > 0
+    if (isWaiting === wasWaiting.current) return
+    wasWaiting.current = isWaiting
+    void logFrontendError({
+      level: 'info',
+      source: 'chat.backgroundSubagents',
+      message:
+        waiting > 0
+          ? `Chat ${sessionId} waits on ${waiting} background subagent${waiting === 1 ? '' : 's'} after its turn ended`
+          : `Chat ${sessionId} no longer waits on background subagents`
+    })
+  }, [sessionId, waiting])
+  return waiting
 }
