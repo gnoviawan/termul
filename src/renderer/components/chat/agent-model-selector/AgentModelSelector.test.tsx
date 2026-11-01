@@ -12,6 +12,7 @@ import {
 } from '@/lib/test-utils/overlay-back-stack'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { AgentModelSelector } from './AgentModelSelector'
+import { createFavoritesStore, memoryFavoritesAdapter } from './favorite-models'
 
 import { SelectorFooter } from './SelectorFooter'
 import { AUTO_LOAD_SETTLE_MS } from './use-model-catalog'
@@ -740,20 +741,27 @@ describe('AgentModelSelector panel', () => {
     expect(screen.getByRole('dialog')).toHaveClass('max-h-[85dvh]')
   })
 
-  it('renders in a bottom sheet on mobile web', () => {
+  it('renders the Select model bottom sheet on mobile web', () => {
     mockIsMobile.current = true
     renderSelector()
     open()
-    expect(screen.getByRole('dialog')).toHaveTextContent('Model and agent')
-    expect(screen.getByRole('button', { name: 'Sonnet 5.5' })).toHaveClass('min-h-11')
+
+    const sheet = screen.getByRole('dialog', { name: 'Select model' })
+    expect(within(sheet).getByRole('button', { name: 'Opus 5.5' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(within(sheet).getByRole('button', { name: 'Sonnet 5.5' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
   })
 
-  it('opens the mobile sheet without focusing search, so no keyboard comes up', () => {
+  it('opens the mobile sheet with focus on the sheet, so no keyboard comes up', () => {
     mockIsMobile.current = true
     renderSelector()
     open()
 
-    expect(screen.getByLabelText('Search models and agents')).not.toHaveFocus()
     expect(screen.getByRole('dialog')).toHaveFocus()
   })
 
@@ -1008,6 +1016,232 @@ describe('AgentModelSelector desktop markup', () => {
   })
 })
 
+describe('phone Select model sheet', () => {
+  const MODES = {
+    currentModeId: 'default',
+    availableModes: [
+      { id: 'default', name: 'Manual' },
+      { id: 'plan', name: 'Plan', description: 'Plan before editing' }
+    ]
+  }
+  const USAGE = {
+    used: 50_000,
+    size: 200_000,
+    baselineUsed: 10_000,
+    updatedAt: 1,
+    source: 'reported' as const
+  }
+
+  beforeEach(() => {
+    mockIsMobile.current = true
+  })
+
+  function sheet(): HTMLElement {
+    return screen.getByRole('dialog', { name: 'Select model' })
+  }
+
+  it('lists the models with their descriptions and checks the chosen one', () => {
+    const onSetConfig = vi.fn()
+    renderSelector({
+      onSetConfig,
+      modelOption: {
+        ...option('model', 'Model', 'model', 'opus', []),
+        options: [
+          { value: 'opus', name: 'Opus 5.5', description: 'For complex work' },
+          { value: 'haiku', name: 'Haiku 5.5', description: 'Fastest for quick answers' }
+        ]
+      }
+    })
+    open()
+
+    const haiku = within(sheet()).getByRole('button', { name: 'Haiku 5.5' })
+    expect(haiku).toHaveAccessibleDescription('Fastest for quick answers')
+    expect(haiku).toHaveAttribute('aria-pressed', 'false')
+    expect(within(sheet()).getByRole('button', { name: 'Opus 5.5' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    expect(within(sheet()).queryByRole('searchbox')).toBeNull()
+
+    fireEvent.click(haiku)
+    expect(onSetConfig).toHaveBeenCalledWith('model', 'haiku')
+    expect(sheet()).toBeInTheDocument()
+  })
+
+  it('shows a search field only when the agent has more than 12 models', () => {
+    const many = Array.from({ length: 13 }, (_, i) => ({ value: `m${i}`, name: `Model ${i}` }))
+    renderSelector({ modelOption: option('model', 'Model', 'model', 'm0', many) })
+    open()
+
+    const search = within(sheet()).getByRole('searchbox', { name: 'Search models and agents' })
+    expect(search).not.toHaveFocus()
+    fireEvent.change(search, { target: { value: 'Model 12' } })
+    expect(within(sheet()).getByRole('button', { name: 'Model 12' })).toBeInTheDocument()
+    expect(within(sheet()).queryByRole('button', { name: 'Model 3' })).toBeNull()
+  })
+
+  it('puts starred models in a Favorites group first', async () => {
+    const favoritesStore = createFavoritesStore(memoryFavoritesAdapter())
+    renderSelector({ v2PanelProps: { favoritesStore } })
+    open()
+    expect(within(sheet()).queryByRole('group', { name: 'Favorites' })).toBeNull()
+
+    const sonnetStar = within(sheet())
+      .getAllByRole('button', { name: 'Add to favorites' })
+      .at(1) as HTMLElement
+    fireEvent.click(sonnetStar)
+
+    const favorites = await within(sheet()).findByRole('group', { name: 'Favorites' })
+    expect(within(favorites).getByRole('button', { name: 'Sonnet 5.5' })).toBeInTheDocument()
+  })
+
+  it('shows every agent as a chip and arms another agent with the model picked there', async () => {
+    seed([readyEntry(CLAUDE)])
+    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
+    renderSelector()
+    open()
+
+    const chips = within(sheet()).getByRole('tablist', { name: 'Agents' })
+    expect(within(chips).getByRole('tab', { name: 'Cursor' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+    fireEvent.click(within(chips).getByRole('tab', { name: 'Claude Agent' }))
+    expect(
+      within(sheet()).getByText('Switches to Claude Agent on the next send')
+    ).toBeInTheDocument()
+    expect(within(sheet()).queryByRole('button', { name: /^Effort/ })).toBeNull()
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Claude Haiku' }))
+
+    await waitFor(() => expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', CLAUDE.id))
+    expect(sheet()).toBeInTheDocument()
+  })
+
+  it('names an agent that needs installing on its chip', () => {
+    seed([installEntry()])
+    renderSelector()
+    open()
+
+    expect(within(sheet()).getByRole('tab', { name: 'OpenCode, Install' })).toBeInTheDocument()
+  })
+
+  it('opens Effort as a sub-view, sets the pick and comes back to the sheet', async () => {
+    const onSetConfig = vi.fn()
+    renderSelector({ onSetConfig })
+    open()
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Effort High' }))
+    const effort = screen.getByRole('dialog', { name: 'Effort' })
+    expect(within(effort).getByRole('radio', { name: 'High' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+
+    fireEvent.click(within(effort).getByRole('radio', { name: 'Low' }))
+
+    expect(onSetConfig).toHaveBeenCalledWith('reasoning', 'low')
+    expect(within(sheet()).getByRole('button', { name: 'Effort Low' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(within(sheet()).getByRole('button', { name: 'Effort Low' })).toHaveFocus()
+    )
+  })
+
+  it('Escape leaves a sub-view before it closes the sheet', () => {
+    renderSelector()
+    open()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Effort High' }))
+
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Effort' }), { key: 'Escape' })
+    expect(sheet()).toBeInTheDocument()
+
+    fireEvent.keyDown(sheet(), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('sets the mode from the sheet and shows a non-default mode on the pill', () => {
+    const onSetMode = vi.fn()
+    renderSelector({ modes: MODES, onSetMode })
+    const pill = screen.getByTestId('agent-model-selector-trigger')
+    expect(pill).toHaveAccessibleName('Opus 5.5. High. Switch agent. Currently Cursor')
+    open()
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Mode Manual' }))
+    const modes = screen.getByRole('dialog', { name: 'Mode' })
+    const plan = within(modes).getByRole('radio', { name: 'Plan' })
+    expect(plan).toHaveAccessibleDescription('Plan before editing')
+    fireEvent.click(plan)
+
+    expect(onSetMode).toHaveBeenCalledWith('plan')
+    expect(within(sheet()).getByRole('button', { name: 'Mode Plan' })).toBeInTheDocument()
+    expect(pill).toHaveAccessibleName('Opus 5.5. High. Plan mode. Switch agent. Currently Cursor')
+  })
+
+  it('toggles Fast and the agent options from the sheet', () => {
+    const onSetConfig = vi.fn()
+    renderSelector({
+      onSetConfig,
+      genericOptions: [
+        { id: 'web_search', name: 'Web search', type: 'boolean', currentValue: false },
+        option('agent', 'Agent', 'other', 'default', [
+          { value: 'default', name: 'Default' },
+          { value: 'review', name: 'Review' }
+        ])
+      ]
+    })
+    open()
+
+    expect(
+      within(sheet())
+        .getAllByRole('switch')
+        .map((toggle) => toggle.getAttribute('aria-checked'))
+    ).toEqual(['false', 'false'])
+    fireEvent.click(within(sheet()).getByRole('switch', { name: 'Fast' }))
+    expect(onSetConfig).toHaveBeenCalledWith('fast_mode', 'on')
+    fireEvent.click(within(sheet()).getByRole('switch', { name: 'Web search' }))
+    expect(onSetConfig).toHaveBeenCalledWith('web_search', true)
+
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Agent Default' }))
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Agent' })).getByRole('radio', { name: 'Review' })
+    )
+    expect(onSetConfig).toHaveBeenCalledWith('agent', 'review')
+  })
+
+  it('shows the context used with a Compact action', () => {
+    const onCompact = vi.fn()
+    renderSelector({
+      usage: USAGE,
+      messages: [{ role: 'user' }],
+      compact: {
+        onCompact,
+        signals: { connected: true, activeTurn: false, compaction: null }
+      }
+    })
+    open()
+
+    expect(within(sheet()).getByText('Context')).toBeInTheDocument()
+    expect(within(sheet()).getByText('25%')).toBeInTheDocument()
+    fireEvent.click(within(sheet()).getByRole('button', { name: 'Compact' }))
+    expect(onCompact).toHaveBeenCalledTimes(1)
+    expect(within(sheet()).getByRole('button', { name: 'Compacting…' })).toBeDisabled()
+  })
+
+  it('keeps Compact off while a turn runs', () => {
+    renderSelector({
+      usage: USAGE,
+      messages: [{ role: 'user' }],
+      compact: {
+        onCompact: vi.fn(),
+        signals: { connected: true, activeTurn: true, compaction: null }
+      }
+    })
+    open()
+
+    expect(within(sheet()).getByRole('button', { name: 'Compact' })).toBeDisabled()
+  })
+})
+
 describe('AgentModelSelector on the mobile overlay back stack', () => {
   let detach: () => void
   const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
@@ -1025,7 +1259,7 @@ describe('AgentModelSelector on the mobile overlay back stack', () => {
   it('system back closes the sheet and consumes its history entry', async () => {
     renderSelector()
     open()
-    expect(screen.getByRole('dialog')).toHaveTextContent('Model and agent')
+    expect(screen.getByRole('dialog', { name: 'Select model' })).toBeInTheDocument()
     await waitForSentinelDepth(1)
     expect(stackIds()).toHaveLength(1)
 

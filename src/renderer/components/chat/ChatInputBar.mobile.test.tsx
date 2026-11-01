@@ -429,17 +429,15 @@ describe('mobile composer: one-row toolbar', () => {
     expect(container.querySelector('[data-chat-composer-context-strip]')).toBeNull()
   })
 
-  it('keeps Attach and MCP out of the toolbar (they live in the sheet) and effort out of sight', () => {
+  it('keeps Attach and MCP out of the toolbar (they live in the sheet) and shows the effort on the pill', () => {
     mockMcp.servers = [{ id: 'github', type: 'stdio', name: 'github', enabled: true }]
     renderBar({ configOptions: [THOUGHT] })
 
     expect(screen.queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /MCP servers/ })).not.toBeInTheDocument()
-    // The effort is named by the selector pill but shown only in its sheet:
-    // the phone row keeps its room for the model name.
-    expect(screen.queryByRole('button', { name: 'Medium' })).not.toBeInTheDocument()
     const pill = screen.getByRole('button', { name: /^Opus 5\.5\. Medium\./ })
-    expect(pill).toHaveTextContent(/^Opus 5\.5$/)
+    expect(within(pill).getByText('Opus 5.5')).toBeInTheDocument()
+    expect(within(pill).getByText('Medium')).toHaveClass('text-muted-foreground')
   })
 
   it('shows the agent glyph and model name on the selector pill and names the agent for assistive tech', () => {
@@ -489,7 +487,7 @@ describe('mobile composer: one-row toolbar', () => {
     renderBar()
 
     fireEvent.click(screen.getByRole('button', { name: PILL_NAME }))
-    const sheet = await screen.findByRole('dialog', { name: 'Model and agent' })
+    const sheet = await screen.findByRole('dialog', { name: 'Select model' })
     expect(sheet).toHaveAttribute('data-sheet')
     expect(within(sheet).getByText('Sonnet 5.5')).toBeInTheDocument()
   })

@@ -565,6 +565,11 @@ export function ChatInputBar({
       agentIcon={agentIcon}
       onSetConfig={onSetConfig}
       onSetModel={onSetModel}
+      {...(isMobileShell && {
+        modes: session.modes,
+        onSetMode,
+        compact: { onCompact, signals: compactSignals }
+      })}
     />
   ) : null
 
