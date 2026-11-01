@@ -61,7 +61,7 @@ use crate::acp_registry_snapshot::{
 /// kebab-case to match the TS union
 /// `'ready' | 'install-required' | 'needs-runtime' | 'manual-install' |
 /// 'unavailable'`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum SupportedAcpAgentStatus {
     Ready,
@@ -73,7 +73,7 @@ pub enum SupportedAcpAgentStatus {
 
 /// Runtime availability on the host. Extends the existing `AcpRuntimeProbe`
 /// (`config.rs:141-154`) to cover `node`/`bun`/`python3` + named binary probes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogRuntimeAvailability {
     pub npx: bool,
@@ -96,7 +96,7 @@ pub struct CatalogRuntimeAvailability {
 /// Host capability block: OS + arch + runtime availability. The host is the
 /// single source of truth — web clients never probe `@tauri-apps/plugin-os` or
 /// PATH locally.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HostCapability {
     pub os: String,
@@ -105,7 +105,7 @@ pub struct HostCapability {
 }
 
 /// A platform target pair (e.g. `{ os: "linux", arch: "x86_64" }`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PlatformTarget {
     pub os: String,
@@ -114,7 +114,7 @@ pub struct PlatformTarget {
 
 /// Whether a catalog entry came from the trusted bundled baseline or the
 /// explicitly-approved CDN registry augmentation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum CatalogSource {
     Bundled,
@@ -126,7 +126,7 @@ pub enum CatalogSource {
 /// (which has no renderer persistence) can build a spawn config from the
 /// host-resolved absolute `command`/`args` without re-deriving it locally.
 /// Carries NO env/API keys — the renderer pulls env from the distribution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledCatalogInfo {
     pub command: String,
@@ -141,7 +141,7 @@ pub struct InstalledCatalogInfo {
 /// optional `installed` block carries the host-resolved absolute
 /// `command`/`args` for an already-installed agent (populated by
 /// `overlay_installed`); it carries NO `AgentConfig.env` (API keys).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogAgent {
     pub id: String,
@@ -158,7 +158,7 @@ pub struct CatalogAgent {
 }
 
 /// The resolved catalog payload served across all three transports.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpCatalog {
     pub host: HostCapability,
@@ -169,7 +169,7 @@ pub struct AcpCatalog {
 /// `deny_unknown_fields` rejects an over-serialized payload (e.g.
 /// `{ enabled: true, extra: "junk" }`) loudly at the host boundary — maps to
 /// `VALIDATION_ERROR`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetCatalogOptInRequest {
     pub enabled: bool,

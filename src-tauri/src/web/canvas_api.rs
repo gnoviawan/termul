@@ -75,9 +75,9 @@ pub(crate) fn check_canvas_write<T>(
 /// `POST /canvas/open` body: `{ "docPath": "...", "projectId": "...",
 /// "clientInstanceId": "...", "autosaveMs"?: n, "autosaveMaxMs"?: n, "leaseGraceMs"?: n,
 /// "maxMounted"?: n, "crashTimeouts"?: n }`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct CanvasOpenRequest {
+pub(crate) struct CanvasOpenRequest {
     doc_path: String,
     project_id: String,
     #[serde(flatten)]
@@ -86,9 +86,9 @@ struct CanvasOpenRequest {
 
 /// `POST /canvas/close` body: `{ "projectId": "...", "mountSeq": n,
 /// "discard"?: bool }`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct CanvasCloseRequest {
+pub(crate) struct CanvasCloseRequest {
     project_id: String,
     mount_seq: u64,
     #[serde(default)]

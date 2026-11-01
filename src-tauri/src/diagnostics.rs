@@ -47,7 +47,7 @@ const GH_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// Diagnostics bundle collected when the bug-report dialog opens. Nothing in
 /// this struct is secret: `log_tail` is already redacted. camelCase wire
 /// shape mirrors `src/shared/types/bug-report.types.ts`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BugReportContext {
     /// `env!("CARGO_PKG_VERSION")` of the host build.
@@ -71,7 +71,7 @@ pub struct BugReportContext {
 }
 
 /// Report fields the user previews/edits before anything leaves the host.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BugReportSubmitRequest {
     pub title: String,
@@ -82,7 +82,7 @@ pub struct BugReportSubmitRequest {
 /// the process could not spawn) sends the caller down the clipboard +
 /// prefilled-URL fallback; `Failed` is a real submission error worth
 /// surfacing. `kind` is the serde tag.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",

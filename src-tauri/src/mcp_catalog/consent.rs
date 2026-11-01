@@ -7,7 +7,7 @@ use super::form::{Origin, Shown};
 use super::launch_check::{host_mounts, runs_inline_code};
 use super::resolved::ResolvedConfig;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConsentWarning {
     RunsLocalCode,
@@ -20,7 +20,7 @@ pub enum ConsentWarning {
     FromFile,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Namespace {
     Github { account: String },
@@ -41,7 +41,7 @@ impl Namespace {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsentProvenance {
     pub namespace: Namespace,
@@ -70,7 +70,7 @@ impl ConsentProvenance {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsentValue {
     pub name: String,
@@ -81,14 +81,14 @@ pub struct ConsentValue {
 
 /// A host path a docker launch mounts into the container. `sensitive` marks
 /// the filesystem root, a home directory, or the docker socket.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HostMount {
     pub host_path: String,
     pub sensitive: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsentView {
     pub transport: &'static str,

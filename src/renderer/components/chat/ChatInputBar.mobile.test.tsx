@@ -624,6 +624,21 @@ describe('mobile composer: Send, Queue and Stop (AC9)', () => {
   })
 })
 
+describe('mobile composer: a tap around the editor', () => {
+  it('focuses the editor with the caret at the end instead of focusing the card', async () => {
+    renderBar()
+    setComposerValue('hello')
+    const row = editorEl().closest<HTMLElement>('[data-composer-row]')
+    if (!row) throw new Error('composer row not mounted')
+
+    expect(fireEvent.mouseDown(row)).toBe(false)
+
+    await waitFor(() => expect(document.activeElement).toBe(editorEl()))
+    expect(editor().state.selection.from).toBe(6)
+    expect(getComposerValue()).toBe('hello')
+  })
+})
+
 describe('mobile composer: Add to chat sheet', () => {
   it('opens a bottom sheet, blurs the editor and registers the overlay', () => {
     renderBar()
@@ -994,7 +1009,7 @@ describe('mobile composer: MCP servers in the sheet', () => {
       }
     ]) {
       const sheet = openMcp()
-      expect(overlayIds()).toEqual(['composer-add-sheet', 'composer-add-sheet:subview'])
+      expect(overlayIds()).toEqual(['composer-add-sheet', 'composer-add-sheet:subview:1'])
 
       leave(sheet)
 

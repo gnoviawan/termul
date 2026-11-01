@@ -88,7 +88,7 @@ pub const SEEDED_PROJECT_ID: &str = "default";
 /// Mirrors `src/shared/types/web-projects.types.ts` `ProjectSummary` one-to-one
 /// (camelCase wire). Carries NO env-var values — redact-by-omission (frozen
 /// constraint). Only the identity/display fields a project switcher needs.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummary {
     /// Stable project id (matches the desktop `Project.id`).
@@ -111,7 +111,7 @@ pub struct ProjectSummary {
 /// `GET /projects` response payload (wrapped in `IpcResult<T>` by the handler).
 ///
 /// Mirrors `src/shared/types/web-projects.types.ts` `ProjectListPayload`.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectListPayload {
     /// Non-archived + archived summaries (the web list shows both, archived greyed).

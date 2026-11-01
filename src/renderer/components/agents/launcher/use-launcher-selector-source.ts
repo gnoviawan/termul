@@ -69,7 +69,6 @@ export function useLauncherSelectorSource({
       installingConfigId,
       install: onInstall,
       workspace: { cwd, projectId },
-      signInPaneId: () => paneKey,
       liveCatalog: null,
       pickCurrentModel: noop,
       pickOtherModel: (configId, pick) => {

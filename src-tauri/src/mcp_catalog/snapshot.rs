@@ -26,7 +26,7 @@ const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 const MAX_SNAPSHOT_JSON_BYTES: u64 = 256 * 1024 * 1024;
 pub(super) const OFFICIAL_META: &str = "io.modelcontextprotocol.registry/official";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RegistryStatus {
     Active,
@@ -54,7 +54,7 @@ pub(crate) struct ParsedItem {
     pub options: Vec<CatalogOption>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct McpCatalogSource {
     pub updated_at: Option<String>,

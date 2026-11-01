@@ -46,25 +46,17 @@ const spoken = (r: UsageReading): string =>
   `${r.label.charAt(0).toLowerCase()}${r.label.slice(1)} ${r.percent}% used`
 
 /** Composer chip for a Claude chat. */
-export function ClaudeAccountChip({
-  sessionId,
-  compact = false
-}: {
-  sessionId: string
-  compact?: boolean
-}): React.JSX.Element | null {
-  return <AccountChip ctx={useChatClaudeAccount(sessionId)} compact={compact} />
+export function ClaudeAccountChip({ sessionId }: { sessionId: string }): React.JSX.Element | null {
+  return <AccountChip ctx={useChatClaudeAccount(sessionId)} />
 }
 
 /** The same chip before a chat exists (the agent launcher). */
 export function ProjectClaudeAccountChip({
-  projectId,
-  compact = false
+  projectId
 }: {
   projectId: string
-  compact?: boolean
 }): React.JSX.Element | null {
-  return <AccountChip ctx={useProjectClaudeAccount(projectId)} compact={compact} />
+  return <AccountChip ctx={useProjectClaudeAccount(projectId)} />
 }
 
 /**
@@ -73,11 +65,9 @@ export function ProjectClaudeAccountChip({
  * Account; open Claude chats of the Project restart on it.
  */
 function AccountChip({
-  ctx,
-  compact
+  ctx
 }: {
   ctx: (ProjectClaudeAccount & Partial<Pick<ChatClaudeAccount, 'rateLimit'>>) | null
-  compact: boolean
 }): React.JSX.Element | null {
   const openAppSettings = useSettingsModalStore((s) => s.openApp)
   const [switching, setSwitching] = useState(false)
@@ -178,7 +168,7 @@ function AccountChip({
           ) : (
             <StatusDot tone={signedOut ? 'signed-out' : DOT_TONE[tone]} />
           )}
-          {!compact && <span className="max-w-24 truncate">{name}</span>}
+          <span className="max-w-24 truncate">{name}</span>
           {segments.map((segment, i) => (
             <span key={segment.short} className="flex items-center gap-1.5 tabular-nums">
               {i > 0 && <span aria-hidden>·</span>}

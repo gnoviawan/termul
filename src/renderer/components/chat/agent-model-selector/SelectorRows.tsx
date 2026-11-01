@@ -142,11 +142,6 @@ export function Hint({ children }: { children: ReactNode }): React.JSX.Element {
   )
 }
 
-/** Why some sign-in methods are not offered here, and where to use them. */
-export function SignInNote({ children }: { children: ReactNode }): React.JSX.Element {
-  return <p className="px-2 pt-1 text-xs text-muted-foreground">{children}</p>
-}
-
 /** A short message sized like two rows, so the panel does not jump. */
 export function ListMessage({
   title,

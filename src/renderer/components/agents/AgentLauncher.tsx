@@ -7,7 +7,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useSelectedAgentUpdate } from '@/components/agents/launcher/AgentUpdateCta'
 import {
-  EMPTY_AUTH_METHODS,
   EMPTY_COMMANDS,
   EMPTY_MCP_SERVERS,
   EMPTY_MCP_TOOLS,
@@ -16,7 +15,6 @@ import {
   EMPTY_WORKTREES
 } from '@/components/agents/launcher/constants'
 import { LauncherContextStrip } from '@/components/agents/launcher/context-strip'
-import { useFactoryKeyAuth } from '@/components/agents/launcher/FactoryApiKeyForm'
 import { type LaunchCheckout, launchChat } from '@/components/agents/launcher/launch-chat'
 import {
   LAUNCHER_DISMISS_MS,
@@ -31,7 +29,7 @@ import {
 } from '@/components/agents/launcher/prepare-launch-worktree'
 import { LauncherStatusBanners } from '@/components/agents/launcher/status-banners'
 import { LauncherToolbar } from '@/components/agents/launcher/toolbar'
-import { authMethodRoute, useAgentSignIn } from '@/components/agents/launcher/use-agent-sign-in'
+import { useAgentSignIn } from '@/components/agents/launcher/use-agent-sign-in'
 import { useLaunchWorkspace } from '@/components/agents/launcher/use-launch-workspace'
 import { useLauncherExitAnim } from '@/components/agents/launcher/use-launcher-exit-anim'
 import { useLauncherSelectorSource } from '@/components/agents/launcher/use-launcher-selector-source'
@@ -55,7 +53,14 @@ import {
 } from '@/components/chat/chat-input-bar-config'
 import { COMPOSER_CARD_CLASS, useComposerToolbarMode } from '@/components/chat/chat-layout'
 import { ChatStarters, ChatStartHero } from '@/components/chat/chat-start'
-import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEditor'
+import {
+  ChatComposerEditor,
+  focusComposerFromRowPress
+} from '@/components/chat/composer/ChatComposerEditor'
+import {
+  blurComposerEditor,
+  insertComposerTrigger
+} from '@/components/chat/composer/insert-composer-trigger'
 import {
   FileMentionMenu,
   MENTION_EMPTY_LABEL,
@@ -81,8 +86,7 @@ import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
 import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
-import { type AuthMethod, acpApi, type ContentBlock } from '@/lib/acp-api'
-import { agentPolicy } from '@/lib/agents/acp-registry'
+import { acpApi, type ContentBlock } from '@/lib/acp-api'
 import { deriveAgentUpdates, deriveSpawnBasis } from '@/lib/agents/agent-update-utils'
 import {
   installedBinaryConfig,
@@ -103,7 +107,6 @@ import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-cont
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
 import {
   type AcpSession,
-  agentReuseKey,
   hasModelRelevantOptionsCache,
   persistComposerOptions,
   prepareChatKey,
@@ -441,18 +444,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const prepareError = useAcpStore((s) =>
     preparedKey ? (s.prepareChatErrors[preparedKey] ?? null) : null
   )
-  // Resolve the live agent for this config+cwd so an auth failure can offer a
-  // Sign-in action driven by the agent's advertised method metadata. A Sign-in
-  // button is only meaningful when exactly one method is advertised (P6).
-  const reuseKey = activeConfigId && projectRoot ? agentReuseKey(activeConfigId, projectRoot) : null
-  const liveAgentId = useAcpStore((s) =>
-    reuseKey ? (s.configToLiveAgent?.[reuseKey] ?? null) : null
-  )
-  const authMethods = useAcpStore((s) =>
-    liveAgentId ? (s.agents?.[liveAgentId]?.authMethods ?? EMPTY_AUTH_METHODS) : EMPTY_AUTH_METHODS
-  )
-  const signInMethod =
-    authMethods.length === 1 && authMethods[0]?.id !== 'gateway' ? authMethods[0] : null
   // Headless ACP auth (spec-acp-terminal-auth): the URL the live agent tried
   // to open via the host's browser-open shim is surfaced globally by
   // BrowserAuthDialogHost (mounted in both app roots) — the launcher no
@@ -479,8 +470,19 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     clearAttachments,
     appOwnedTempPaths,
     canPick,
+    canPickImages,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled: composerDisabled })
+  const addHandle = useMemo(
+    () => ({
+      canPick,
+      canPickImages,
+      pickFiles,
+      insertTrigger: (trigger: '@' | '/') => insertComposerTrigger(editorRef.current, trigger),
+      blurEditor: () => blurComposerEditor(editorRef.current)
+    }),
+    [canPick, canPickImages, pickFiles]
+  )
   // Drag feedback for the attachment drop zone (shared with ChatInputBar):
   // depth-counted dragenter/dragleave pairs; the overlay render stays local.
   const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
@@ -1178,7 +1180,24 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // Factory inline-key auth (AgentAuthPolicy.inlineKeyFormMethodId): the key
   // is stored on the host and the chat re-prepares on save. The special case
   // inside `handleAuthMethod` collapses to this hook's exposed callback.
-  const factoryKeyAuth = useFactoryKeyAuth(selectedConfig, projectRoot, handleRetryPrepare)
+  const {
+    authMethods,
+    signInMethod,
+    signingInMethodId,
+    factoryKeyAuth,
+    inlineKeyMethodId,
+    handleAuthMethod,
+    runAuthenticate,
+    handleSignIn
+  } = useAgentSignIn({
+    registryAgentId: selectedEntry?.id ?? null,
+    config: selectedConfig,
+    cwd: projectRoot,
+    projectId: activeProjectId,
+    projectEnvVars: activeProject?.envVars,
+    paneId,
+    onSignedIn: handleRetryPrepare
+  })
 
   const handleSelectAgent = useCallback(
     (entry: SupportedAcpAgentEntry) => {
@@ -1236,60 +1255,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     },
     [handleSelectAgent]
   )
-
-  const resolveLauncherPane = useCallback(() => paneId, [paneId])
-  const { signingInMethodId, runAuthenticate, runTerminalAuth } = useAgentSignIn(
-    {
-      agentId: liveAgentId,
-      config: selectedConfig,
-      cwd: projectRoot,
-      projectId: activeProjectId || null,
-      resolvePaneId: resolveLauncherPane,
-      logSource: 'launcher.signIn'
-    },
-    handleRetryPrepare
-  )
-
-  // The inline-key method from the selected agent's auth policy (replaces the
-  // former `'factory-droid'` / `'factory-api-key'` magic-string comparisons):
-  // when the chosen method matches, the launcher shows its inline key form.
-  const selectedAuthPolicy = selectedEntry ? agentPolicy(selectedEntry.id).auth : null
-  const inlineKeyMethodId =
-    selectedAuthPolicy?.mode === 'acp' ? selectedAuthPolicy.inlineKeyFormMethodId : undefined
-
-  // Dispatch an auth method by its route (see `authMethodRoute`). The
-  // inline-key form method (AgentAuthPolicy.inlineKeyFormMethodId) routes to
-  // the Factory key form instead of an ACP authenticate round-trip.
-  const handleAuthMethod = useCallback(
-    (method: AuthMethod) => {
-      switch (authMethodRoute(method, inlineKeyMethodId)) {
-        case 'inline-key':
-          factoryKeyAuth.requestKeyInput()
-          break
-        case 'terminal':
-          void runTerminalAuth(method)
-          break
-        case 'gateway':
-          toast.error('Enter the gateway URL in the sign-in banner.')
-          break
-        case 'agent':
-          void runAuthenticate(method.id)
-          break
-        case 'unsupported':
-          toast.error('This sign-in method is not supported yet.')
-          break
-      }
-    },
-    [runTerminalAuth, runAuthenticate, inlineKeyMethodId, factoryKeyAuth]
-  )
-
-  const handleSignIn = useCallback(() => {
-    if (!signInMethod) {
-      toast.error('No sign-in method is available for this agent yet.')
-      return
-    }
-    handleAuthMethod(signInMethod)
-  }, [signInMethod, handleAuthMethod])
 
   // If prepare finishes while the launcher is still open, flush queued selections.
   useEffect(() => {
@@ -1814,7 +1779,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               />
               {/* Same inner rhythm as the chat composer card (ChatInputBar):
                   editor row px-4 pb-1.5 pt-3.5, toolbar px-2 pb-2. */}
-              <div className="px-4 pb-1.5 pt-3.5">
+              {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only focus aid for the padding; the editor is the accessible target */}
+              <div
+                data-composer-row
+                className="px-4 pb-1.5 pt-3.5"
+                onMouseDown={(event) => focusComposerFromRowPress(event, editorRef.current)}
+              >
                 {/* Tiptap rich-text editor — the skill "pill" is a real inline
                    DOM node, so the caret sits flush against the pill's right
                    edge by construction. No transparent textarea + mirror
@@ -1847,8 +1817,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 </SkillFilesProvider>
               </div>
               <LauncherToolbar
-                pickFiles={pickFiles}
-                canPick={canPick}
+                addHandle={addHandle}
                 isMobileShell={isMobileShell}
                 mcpCount={mcpCount}
                 mcpServers={mcpServers}

@@ -4,7 +4,6 @@ import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { useAcpStore } from '@/stores/acp-store'
-import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 import { type AgentTab, catalogFromSessionState, type ModelCatalog } from './selector-model'
 import { type SwitchModelPick, useAgentSwitch } from './use-agent-switch'
 
@@ -43,8 +42,6 @@ export interface SelectorSource {
   install: (entry: SupportedAcpAgentEntry) => void
   /** Where other agents' model lists are read or prepared. */
   workspace: { cwd: string; projectId: string }
-  /** The pane that hosts this chat or launcher, read when a sign-in terminal opens there. */
-  signInPaneId: () => string | null
   /** The chat agent's own list while a switch is armed (chat only). */
   liveCatalog: ModelCatalog | null
   /** A model of the chat's own agent while a switch is armed (chat only). */
@@ -83,9 +80,6 @@ export function useSessionSelectorSource(sessionId: string): SelectorSource {
       installingConfigId: sw.installingConfigId,
       install: sw.install,
       workspace: { cwd, projectId },
-      signInPaneId: () =>
-        findPaneContainingTab(useWorkspaceStore.getState().root, agentChatTabId(sessionId))?.id ??
-        null,
       liveCatalog: catalogFromSessionState(liveModels, liveOptions),
       pickCurrentModel: (catalog, value) => {
         // Back to the chat's own agent: drop the armed switch, set the model.

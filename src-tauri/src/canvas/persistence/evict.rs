@@ -38,7 +38,7 @@ pub fn mount_cap(requested: Option<u64>) -> usize {
 }
 
 /// A canvas the cap unmounted after saving it.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Eviction {
     pub project_id: String,

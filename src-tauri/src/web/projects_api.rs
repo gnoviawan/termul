@@ -78,7 +78,7 @@ impl<T> IpcBody<T> {
 
 /// `POST /projects/default` request body — the explicit host-default change
 /// (Epic 7). Mirrors the `set_default_project` WS request payload.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SetDefaultProjectRequest {
     pub project_id: String,
@@ -87,7 +87,7 @@ pub struct SetDefaultProjectRequest {
 /// `POST /projects` request body — register a project. `id` is client-minted;
 /// the host canonicalizes + validates the path. Mirrors the `add_project` WS
 /// request payload.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpsertProjectRequest {
     pub id: String,
@@ -103,7 +103,7 @@ pub struct UpsertProjectRequest {
 /// optional (partial update). `cascade: true` lets an archive or a root move
 /// stop the project's live sessions and terminals instead of being refused
 /// `PROJECT_BUSY`. Mirrors the `update_project` WS request.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateProjectRequest {
     pub name: Option<String>,
@@ -116,7 +116,7 @@ pub struct UpdateProjectRequest {
 
 /// `DELETE /projects/{id}` query — `?cascade=true` stops the project's live
 /// sessions and terminals instead of refusing `PROJECT_BUSY`.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveProjectQuery {
     #[serde(default)]

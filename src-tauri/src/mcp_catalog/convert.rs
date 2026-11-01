@@ -143,7 +143,7 @@ impl RegistryInput {
 // ---------------------------------------------------------------------------
 
 /// The four fixed runner templates. Each needs its executable on the host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Runner {
     Npx,
@@ -214,7 +214,7 @@ pub enum Launch {
     Stdio { runner: Runner, argv: Vec<String> },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum OptionKind {
     Remote,
@@ -230,7 +230,7 @@ pub struct CatalogOption {
 }
 
 /// Why an item or option is not installable. Wire shape: `{ code, ...detail }`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "code", rename_all = "kebab-case")]
 pub enum McpCatalogReason {
     NeedsRuntime {

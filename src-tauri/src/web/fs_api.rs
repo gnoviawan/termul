@@ -83,7 +83,7 @@ impl<T> IpcBody<T> {
 /// A directory entry returned by `/fs/ls` and `/fs/browse`. Mirrors the shared
 /// TS `DirectoryEntry` interface (`src/shared/types/filesystem.types.ts`):
 /// `{ name, path, type, extension, size, modifiedAt, ignored? }`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DirectoryEntryDto {
     pub name: String,
@@ -97,7 +97,7 @@ pub struct DirectoryEntryDto {
 }
 
 /// `POST /fs/mkdir` body: `{ "path": "C:/proj/foo" }`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MkdirRequest {
     pub path: String,
@@ -107,7 +107,7 @@ pub struct MkdirRequest {
 /// "expected"?: { "sha256": "<hex>" } | "absent" }`. `expected` makes the
 /// write conditional on the file still being what the caller read
 /// (`PRECONDITION_FAILED` otherwise; see [`precondition`]).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteRequest {
     pub path: String,
@@ -117,13 +117,13 @@ pub struct WriteRequest {
 }
 
 /// `GET /fs/ls?path=...` and `GET /fs/browse?path=...` query.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct PathQuery {
     pub path: String,
 }
 
 /// `POST /git/init` body: `{ "cwd": "..." }`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GitInitRequest {
     pub cwd: String,
@@ -139,7 +139,7 @@ const MAX_FILE_SIZE: u64 = 1024 * 1024;
 /// contentHash }`) used by the renderer's `filesystemApi.readFile` / editor
 /// store. `contentHash` is the sha256 hex of the bytes read: the value a later
 /// `/fs/write` names in `expected.sha256`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileContentDto {
     pub content: String,
@@ -155,7 +155,7 @@ pub struct FileContentDto {
 /// `"directory"` (serialized as-is, matching the `r#type` field name). The
 /// desktop facade sets `isReadOnly: false` (Tauri plugin-fs does not expose
 /// it); the web route reports the real `metadata.permissions().readonly()`.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FileInfoDto {
     pub path: String,
@@ -169,7 +169,7 @@ pub struct FileInfoDto {
 /// `POST /fs/delete` body: `{ "path": "...", "recursive": true? }`.
 /// `recursive` defaults to `false`; directories require it to be `true`
 /// (mirrors `@tauri-apps/plugin-fs` `remove` semantics).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteRequest {
     pub path: String,
@@ -180,7 +180,7 @@ pub struct DeleteRequest {
 /// are resolved via `resolve_request_path` (rejects `..`, canonicalizes; no
 /// `project_root` containment — intentional breadth per ADR-007).
 /// Loopback-guarded (`check_local_only`, `FORBIDDEN`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RenameRequest {
     pub from: String,
     pub to: String,
@@ -189,7 +189,7 @@ pub struct RenameRequest {
 /// `POST /fs/copy` body: `{ "from": "...", "to": "..." }`. Copies a single
 /// file (matches the desktop `copyFile` which uses `@tauri-apps/plugin-fs`
 /// `copyFile` — directories error with `COPY_ERROR`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CopyRequest {
     pub from: String,
     pub to: String,

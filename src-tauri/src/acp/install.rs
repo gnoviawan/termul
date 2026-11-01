@@ -79,7 +79,7 @@ use crate::acp_registry_snapshot::is_safe_agent_id;
 /// carries ONLY `{ agentId }`; the host resolves everything (archive URL, cmd,
 /// args, env, sha256) from the trusted catalog — never accepts browser-supplied
 /// URLs, commands, executable paths, or args.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstallRequest {
     pub agent_id: String,
@@ -89,7 +89,7 @@ pub struct InstallRequest {
 /// `AgentConfig` via `installedBinaryConfig`). `command` is the absolute path
 /// to the resolved executable under the install root; `args` is the catalog
 /// target's `args` (or empty).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallOutcome {
     pub command: String,

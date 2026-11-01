@@ -170,7 +170,6 @@ function source(over: Partial<SelectorSource> = {}): SelectorSource {
     installingConfigId: null,
     install: () => {},
     workspace: { cwd: '/p', projectId: 'p' },
-    signInPaneId: () => null,
     liveCatalog: null,
     pickCurrentModel: () => {},
     pickOtherModel: vi.fn(),

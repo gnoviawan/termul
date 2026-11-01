@@ -39,7 +39,7 @@ pub const PLAN_WRONG_CALLER: &str = "MCP_PLAN_WRONG_CALLER";
 pub const PLAN_LIMIT: &str = "MCP_PLAN_LIMIT";
 pub const VALIDATION_ERROR: &str = "VALIDATION_ERROR";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum PlanSource {
     Catalog {
@@ -73,13 +73,13 @@ impl PlanSource {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PlanChoice {
     pub kind: OptionKind,
     pub index: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FormRequest {
     pub source: PlanSource,
@@ -87,7 +87,7 @@ pub struct FormRequest {
     pub choice: Option<PlanChoice>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanRequest {
     pub source: PlanSource,
@@ -97,7 +97,7 @@ pub struct PlanRequest {
     pub inputs: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitRequest {
     pub plan_id: String,
@@ -106,13 +106,13 @@ pub struct CommitRequest {
     pub secret_values: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelRequest {
     pub plan_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallForm {
     pub source: PlanSource,
@@ -121,14 +121,14 @@ pub struct InstallForm {
     pub fields: Vec<Field>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "outcome", rename_all = "lowercase")]
 pub enum FormReply {
     Form { form: InstallForm },
     Unsupported { reason: McpCatalogReason },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallPlan {
     pub plan_id: String,
@@ -142,21 +142,21 @@ pub struct InstallPlan {
     pub launch_digest: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(tag = "outcome", rename_all = "lowercase")]
 pub enum PlanReply {
     Plan { plan: Box<InstallPlan> },
     Unsupported { reason: McpCatalogReason },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum SecretSlot {
     Env,
     Header,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedSecret {
     pub slot: SecretSlot,
@@ -174,7 +174,7 @@ impl std::fmt::Debug for ResolvedSecret {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitResult {
     pub name: String,

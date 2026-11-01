@@ -1,36 +1,52 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
+import { framerMotionTestState, resetFramerMotionTestState } from '@/test-utils/mock-framer-motion'
 import {
   MobileSheetContent,
   SheetGroup,
   SheetRow,
   SheetSwitchRow,
-  useSheetSubview
+  useSheetStack
 } from './mobile-sheet'
 import { Sheet, SheetTrigger } from './sheet'
+
+vi.mock('framer-motion', async (importOriginal) => {
+  const { installFramerMotionMock } = await import('@/test-utils/mock-framer-motion')
+  return installFramerMotionMock(importOriginal)
+})
+
+beforeEach(() => resetFramerMotionTestState())
 
 afterEach(() => {
   cleanup()
   useOverlayStackStore.setState({ stack: [] })
 })
 
+type Route = { kind: 'effort' } | { kind: 'level'; name: string }
+
+const keyOf = (route: Route): string => (route.kind === 'effort' ? 'effort' : `level:${route.name}`)
+
 function Harness({ onFast }: { onFast?: (on: boolean) => void }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [fast, setFast] = useState(false)
-  const sub = useSheetSubview<'effort'>('harness', open)
+  const nav = useSheetStack<Route>('harness', open, keyOf)
+  const top = nav.top
+  const title =
+    top?.kind === 'effort' ? 'Effort' : top?.kind === 'level' ? top.name : 'Select model'
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger>Open</SheetTrigger>
       <MobileSheetContent
-        title={sub.view === 'effort' ? 'Effort' : 'Select model'}
-        onBack={sub.view ? sub.back : undefined}
-        view={sub.view}
+        title={title}
+        nav={nav}
         aria-describedby={undefined}
-        onEscapeKeyDown={sub.onEscapeKeyDown}
+        onEscapeKeyDown={nav.onEscapeKeyDown}
       >
-        {sub.view === 'effort' ? (
+        {top?.kind === 'level' ? (
+          <p>{`About ${top.name}`}</p>
+        ) : top?.kind === 'effort' ? (
           <div role="radiogroup" aria-label="Effort">
             <SheetGroup>
               <SheetRow
@@ -38,9 +54,15 @@ function Harness({ onFast }: { onFast?: (on: boolean) => void }): React.JSX.Elem
                 accessory="check"
                 role="radio"
                 selected={false}
-                onSelect={sub.back}
+                onSelect={nav.pop}
               />
-              <SheetRow title="High" accessory="check" role="radio" selected onSelect={sub.back} />
+              <SheetRow title="High" accessory="check" role="radio" selected onSelect={nav.pop} />
+              <SheetRow
+                title="About High"
+                accessory="chevron"
+                subview="level:High"
+                onSelect={() => nav.push({ kind: 'level', name: 'High' })}
+              />
             </SheetGroup>
           </div>
         ) : (
@@ -50,7 +72,7 @@ function Harness({ onFast }: { onFast?: (on: boolean) => void }): React.JSX.Elem
               value="High"
               accessory="chevron"
               subview="effort"
-              onSelect={() => sub.open('effort')}
+              onSelect={() => nav.push({ kind: 'effort' })}
             />
             <SheetSwitchRow
               title="Fast"
@@ -136,7 +158,7 @@ describe('MobileSheetContent', () => {
     const sheet = openSheet()
     fireEvent.click(within(sheet).getByRole('button', { name: 'Effort High' }))
     expect(useOverlayStackStore.getState().stack.map((entry) => entry.id)).toEqual([
-      'harness:subview'
+      'harness:subview:1'
     ])
 
     act(() => {
@@ -145,5 +167,72 @@ describe('MobileSheetContent', () => {
 
     expect(screen.getByRole('dialog', { name: 'Select model' })).toBeInTheDocument()
     expect(useOverlayStackStore.getState().stack).toEqual([])
+  })
+
+  it('pushes two levels and pops one per Escape, system back, or Back', async () => {
+    render(<Harness />)
+    const sheet = openSheet()
+    const ids = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Effort High' }))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'About High' }))
+    expect(within(sheet).getByRole('heading', { name: 'High' })).toBeInTheDocument()
+    expect(ids()).toEqual(['harness:subview:1', 'harness:subview:2'])
+
+    fireEvent.keyDown(sheet, { key: 'Escape' })
+    expect(within(sheet).getByRole('heading', { name: 'Effort' })).toBeInTheDocument()
+    expect(ids()).toEqual(['harness:subview:1'])
+    await waitFor(() =>
+      expect(within(sheet).getByRole('button', { name: 'About High' })).toHaveFocus()
+    )
+
+    fireEvent.click(within(sheet).getByRole('button', { name: 'About High' }))
+    act(() => {
+      useOverlayStackStore.getState().closeTopmostOverlay()
+    })
+    expect(within(sheet).getByRole('heading', { name: 'Effort' })).toBeInTheDocument()
+
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Back' }))
+    expect(within(sheet).getByRole('heading', { name: 'Select model' })).toBeInTheDocument()
+    expect(ids()).toEqual([])
+  })
+
+  it('keeps the view it leaves on screen, inert, until the slide ends', async () => {
+    render(<Harness />)
+    const sheet = openSheet()
+
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Effort High' }))
+    const leaving = within(sheet).getByText('Fast').closest('[inert]')
+    expect(leaving).toHaveAttribute('aria-hidden', 'true')
+    expect(within(sheet).queryByRole('switch', { name: 'Fast' })).toBeNull()
+    await waitFor(() => expect(within(sheet).queryByText('Fast')).toBeNull())
+  })
+
+  it('slides a pushed view in from the right and a popped one back from 30% left', async () => {
+    render(<Harness />)
+    const sheet = openSheet()
+
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Effort High' }))
+    const pushed = within(sheet).getByRole('radiogroup', { name: 'Effort' }).parentElement
+      ?.parentElement as HTMLElement
+    expect(pushed.style.transform).toBe('translateX(100%)')
+    await waitFor(() => expect(within(sheet).queryByText('Fast')).toBeNull())
+
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Back' }))
+    const root = within(sheet).getByRole('group', { name: 'Options' }).parentElement
+      ?.parentElement as HTMLElement
+    expect(root.style.transform).toBe('translateX(-30%)')
+  })
+
+  it('fades views instead of sliding them under reduced motion', () => {
+    framerMotionTestState.reducedMotion.current = true
+    render(<Harness />)
+    const sheet = openSheet()
+
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Effort High' }))
+    const pushed = within(sheet).getByRole('radiogroup', { name: 'Effort' }).parentElement
+      ?.parentElement as HTMLElement
+    expect(pushed.style.transform).toBe('')
+    expect(pushed.style.opacity).toBe('0')
   })
 })

@@ -20,7 +20,7 @@ use crate::mcp_catalog::{
 use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::ws::{AppState, MAX_CLIENT_ID_LEN};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetMcpCatalogSyncRequest {
     pub enabled: bool,
@@ -167,9 +167,9 @@ fn parse_body<T: serde::de::DeserializeOwned, R>(route: &str, body: &Bytes) -> R
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct WithClient<T> {
+pub(crate) struct WithClient<T> {
     client_instance_id: String,
     #[serde(flatten)]
     request: T,

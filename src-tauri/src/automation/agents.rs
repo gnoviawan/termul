@@ -15,7 +15,7 @@ use crate::acp::config::AgentConfig;
 pub const FILE_NAME: &str = "automation-agents.json";
 const SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct KnownAgent {
     pub agent_id: String,
     pub name: String,

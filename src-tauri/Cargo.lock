@@ -7797,6 +7797,7 @@ dependencies = [
  "russh-sftp",
  "rust-embed",
  "rustix",
+ "schemars 1.2.2",
  "semver",
  "serde",
  "serde_json",

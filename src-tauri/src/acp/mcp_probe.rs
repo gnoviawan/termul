@@ -60,7 +60,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// header values frequently carry secrets). A derived `Debug` would print the
 /// raw value to any tracing/log macro that formats the struct — defense-in-
 /// depth so a future `?`/`%` log call cannot leak credentials.
-#[derive(Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Deserialize, schemars::JsonSchema)]
 pub struct McpNameValuePair {
     pub name: String,
     pub value: String,
@@ -87,7 +87,7 @@ impl std::fmt::Debug for McpNameValuePair {
 /// fields carry secrets — see `McpNameValuePair`). Identifying fields the
 /// boundary log already surfaces (`name`/`command`/`url`/`type`/`args`) stay
 /// visible for diagnostics.
-#[derive(Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerConfig {
     #[serde(default, rename = "type")]
@@ -125,7 +125,7 @@ impl McpServerConfig {
 
 /// A tool exposed by the probed server (`tools/list` output, trimmed to the
 /// fields the UI surfaces).
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolInfo {
     pub name: String,
@@ -133,7 +133,7 @@ pub struct McpToolInfo {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 pub enum ProbeStatus {
     #[serde(rename = "connected")]
     Connected,
@@ -149,7 +149,7 @@ pub enum ProbeStatus {
 /// (no env/header values, tokens, or credentials). On `AuthRequired`, the
 /// `www_authenticate_header` carries the raw header so the renderer can
 /// extract the `resource_metadata` URL and start the OAuth flow.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeResult {
     pub status: ProbeStatus,
