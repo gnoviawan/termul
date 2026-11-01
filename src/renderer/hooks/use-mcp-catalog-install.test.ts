@@ -429,6 +429,31 @@ describe('useMcpCatalogInstall', () => {
     expect(vi.mocked(saveMcpServers).mock.calls).toEqual([])
   })
 
+  it('starts over in the project now open after a web save failed on a project switch', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(false)
+    probeReturns({ status: 'connected', tools: [] })
+    const hook = await toConsent()
+    useProjectStore.setState({ activeProjectId: 'p2' })
+    act(() => hook.result.current.approve())
+    await waitFor(() =>
+      expect(hook.result.current.flow).toMatchObject({ step: 'failed', failure: { kind: 'save' } })
+    )
+
+    act(() => hook.result.current.startOver())
+    await waitFor(() => expect(hook.result.current.flow.step).toBe('form'))
+    act(() => hook.result.current.change(KEY_FIELD.id, 'sk-live'))
+    act(() => hook.result.current.submit())
+    await waitFor(() => expect(hook.result.current.flow.step).toBe('consent'))
+    act(() => hook.result.current.approve())
+
+    await waitFor(() => expect(hook.result.current.flow.step).toBe('done'))
+    expect(
+      vi
+        .mocked(saveMcpServers)
+        .mock.calls.map(([servers, projectId]) => [servers.map((server) => server.name), projectId])
+    ).toEqual([[['weather-tools'], 'p2']])
+  })
+
   it('does not offer to start over when the catalog no longer lists the version', async () => {
     api.describeInstall.mockResolvedValue({
       success: false,

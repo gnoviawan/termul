@@ -19,7 +19,7 @@ export interface McpInstallTarget {
   version: string
   title: string
   choice: McpCatalogDefaultOption
-  /** The project open when the install started; the web client saves into its list. */
+  /** The project open when the install started or started over; the web client saves into its list. */
   projectId: string
 }
 
@@ -303,7 +303,7 @@ export function useMcpCatalogInstall(): McpCatalogInstall {
   const startOver = useCallback(() => {
     const state = current.current
     if (state.step !== 'failed' || !canStartOver(state.failure)) return
-    void describe(state.target)
+    void describe({ ...state.target, projectId: useProjectStore.getState().activeProjectId })
   }, [describe])
 
   return {
