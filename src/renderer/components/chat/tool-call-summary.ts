@@ -244,8 +244,8 @@ export type ParentTurn = 'active' | 'ended' | 'superseded'
  * forever, so an ended turn never counts that as running. A background launch
  * completes its tool call at once and outlives its turn, but nothing reports
  * its end, so it counts as running until a newer user turn starts. A launch
- * stopped before its completed receipt never started, so it follows the
- * foreground rule.
+ * whose completed receipt never arrived (the turn was stopped first) follows
+ * the foreground rule.
  */
 export function isSubagentRunning(toolCall: ToolCall, parentTurn: ParentTurn): boolean {
   const lifecycle = toolCall.subagentLifecycle
