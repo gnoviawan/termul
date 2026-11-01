@@ -111,6 +111,7 @@ pub struct SearchFileNamesStreamRequest {
 /// paths have no trailing slash.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"One filename-search hit. `ignored` is set when the path runs through a commonly ignored directory or a hidden segment, so a picker can dim it; it is `false` for every hit unless the request set `includeIgnored`. `kind` is `"dir"` for a folder and absent for a file. Every `path` is relative to the search root, with forward slashes; folder paths have no trailing slash."#)]
 pub struct SearchFileHit {
     pub path: String,
     pub ignored: bool,

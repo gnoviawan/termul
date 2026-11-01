@@ -382,6 +382,7 @@ pub enum DirtyOutcome {
 /// be told it is saved at; `None` when nothing was written.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"Result of a snapshot write. `markSaved` is the version to mark the editor saved at; `null` when nothing was written."#)]
 pub struct WriteOutcome {
     pub view: PersistenceView,
     pub mark_saved: Option<String>,

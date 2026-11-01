@@ -88,15 +88,18 @@ pub struct GitCommitDetail {
     pub parents: Vec<String>,
     pub files: Vec<GitCommitFile>,
     /// More than [`MAX_COMMIT_FILES`] files changed; `files` holds the first ones.
+    #[schemars(description = r#"More than 1000 files changed; `files` holds the first 1000."#)]
     pub files_truncated: bool,
 }
 
 /// One file's diff in a commit. `diff` is empty when `too_large` is set.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"One file's diff in a commit. `diff` is empty when `tooLarge` is set."#)]
 pub struct GitCommitFileDiff {
     pub diff: String,
     /// The diff is over [`MAX_FILE_DIFF_BYTES`] and was not returned.
+    #[schemars(description = r#"The diff is over 2 MiB and was not returned."#)]
     pub too_large: bool,
 }
 

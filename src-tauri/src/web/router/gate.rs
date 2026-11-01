@@ -51,6 +51,8 @@ const GATED_PREFIXES: &[&str] = &[
     "/shells",
     "/acp/",
     "/worktree/",
+    // The OpenAPI description of these routes.
+    "/openapi.json",
     // Automations and their runs, agents and secrets.
     "/api/automation",
     // gh-1105: `/server/config` host-administration reconfigure routes —
@@ -64,7 +66,7 @@ const GATED_PREFIXES: &[&str] = &[
 
 
 /// Whether `path` is a gated API route. Pure decision fn (unit-testable).
-pub(super) fn requires_token(path: &str) -> bool {
+pub(crate) fn requires_token(path: &str) -> bool {
     if PUBLIC_PATHS.contains(&path) {
         return false;
     }

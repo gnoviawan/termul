@@ -80,6 +80,7 @@ impl<T> IpcBody<T> {
 /// (Epic 7). Mirrors the `set_default_project` WS request payload.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"`POST /projects/default` body: the project to make the host's default."#)]
 pub struct SetDefaultProjectRequest {
     pub project_id: String,
 }
