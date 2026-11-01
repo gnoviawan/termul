@@ -482,6 +482,15 @@ describe('isSubagentRunning', () => {
     expect(isSubagentRunning(background({ status: 'failed' }), 'ended')).toBe(false)
   })
 
+  it('treats a background launch without a launch receipt as foreground', () => {
+    // Stop before the receipt leaves the launch pending with nothing to outlive the turn.
+    for (const status of ['pending', 'in_progress', undefined] as const) {
+      expect(isSubagentRunning(background({ status }), 'active')).toBe(true)
+      expect(isSubagentRunning(background({ status }), 'ended')).toBe(false)
+      expect(isSubagentRunning(background({ status }), 'superseded')).toBe(false)
+    }
+  })
+
   it('ends a background launch on its terminal state', () => {
     for (const state of ['completed', 'failed', 'cancelled'] as const) {
       const ended = background({ subagentLifecycle: { background: true, state } })
