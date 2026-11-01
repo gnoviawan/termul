@@ -6,7 +6,7 @@
  * Design rules (ARCHITECTURE-SPINE Conventions › Reconnect):
  * - every socket has its own ~10 s handshake timeout (upgrade + authenticate);
  * - reconnect backoff is exponential with ±25 % jitter and the attempt counter
- *   resets only after the connection has been stable for 10 s;
+ *   resets only after the connection has been stable for 20 s;
  * - request timers are per request type and never shorter than the host's own
  *   bound for that type.
  */
@@ -25,10 +25,11 @@ export const RECONNECT_JITTER_RATIO = 0.25
 /**
  * The attempt counter resets only after the connection stayed up this long.
  * Short enough that a link the network cuts every ~47 s (a phone behind a
- * Cloudflare tunnel) reconnects at the base delay after each cut; long enough
- * that a host which accepts and drops at once still climbs the ladder.
+ * Cloudflare tunnel) reconnects at the base delay after each cut. Longer than
+ * any request timer that recycles the socket (the terminal re-attach waits
+ * 15 s), so a connection that never serves still exhausts its budget.
  */
-export const RECONNECT_STABLE_MS = 10_000
+export const RECONNECT_STABLE_MS = 20_000
 /** Minimum spacing between wake-triggered early reconnect attempts. */
 export const RECONNECT_EXPEDITE_MIN_INTERVAL_MS = 1_000
 
