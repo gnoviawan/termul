@@ -226,7 +226,7 @@ function seed(
     pendingPermissions: {},
     pendingQuestions: {},
     launchingSessionIds: {},
-    pendingBrowserOpen: {},
+    pendingSignIn: {},
     preparedSessions: {},
     preparingChatKeys: {},
     prepareChatErrors: {},
@@ -929,7 +929,11 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
   it.each([
     ['queued prompts', { promptQueues: { 'session-1': [{ id: 'q1' }] } }, {}],
     ['a launching chat', { launchingSessionIds: { 'session-1': true } }, {}],
-    ['a pending browser sign-in', { pendingBrowserOpen: { 'agent-1': 'https://x' } }, {}],
+    [
+      'a pending browser sign-in',
+      { pendingSignIn: { 'agent-1': { kind: 'browser', url: 'https://x' } } },
+      {}
+    ],
     [
       'an active turn with a queued prompt',
       { promptQueues: { 'session-1': [{ id: 'q1' }] } },
@@ -1525,7 +1529,7 @@ describe('phone Select model sheet', () => {
       },
       configToLiveAgent: {
         ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
-        [agentReuseKey(GEMINI.id, '/work')]: 'agent-gemini'
+        [agentReuseKey(GEMINI.id, '/work', 'p1')]: 'agent-gemini'
       },
       agents: {
         'agent-gemini': {
@@ -1593,7 +1597,7 @@ describe('phone Select model sheet', () => {
       },
       configToLiveAgent: {
         ...(acpStateRef.current.configToLiveAgent as Record<string, string>),
-        [agentReuseKey(CLAUDE.id, '/work')]: 'agent-claude'
+        [agentReuseKey(CLAUDE.id, '/work', 'p1')]: 'agent-claude'
       },
       agents: {
         'agent-claude': { authMethods: [{ id: 'claude-login', name: 'Log in', type: 'agent' }] }

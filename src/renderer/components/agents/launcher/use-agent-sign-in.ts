@@ -58,7 +58,8 @@ export function useAgentSignIn({
   // Resolve the live agent for this config+cwd so an auth failure can offer a
   // Sign-in action driven by the agent's advertised method metadata. A Sign-in
   // button is only meaningful when exactly one method is advertised (P6).
-  const reuseKey = configId && cwd ? agentReuseKey(configId, cwd) : null
+  // prepareChat registers the agent under the Project-scoped key.
+  const reuseKey = configId && cwd ? agentReuseKey(configId, cwd, projectId) : null
   const liveAgentId = useAcpStore((s) =>
     reuseKey ? (s.configToLiveAgent?.[reuseKey] ?? null) : null
   )

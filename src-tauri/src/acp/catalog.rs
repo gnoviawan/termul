@@ -75,6 +75,7 @@ pub enum SupportedAcpAgentStatus {
 /// (`config.rs:141-154`) to cover `node`/`bun`/`python3` + named binary probes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"Which agent runtimes the host can run: the `npx`, `uvx`, `npm`, `node`, `bun` and `python3` commands and the Claude CLI."#)]
 pub struct CatalogRuntimeAvailability {
     pub npx: bool,
     pub uvx: bool,

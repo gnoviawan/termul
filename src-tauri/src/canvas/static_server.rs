@@ -132,8 +132,10 @@ pub struct CanvasOpenInfo {
     pub mount_seq: u64,
     /// Canvases this open unloaded to stay under `canvas.max_mounted` (AD-26),
     /// each saved first. The renderer shows them as unloaded.
+    #[schemars(description = r#"Canvases this open unloaded to stay under the `canvas.max_mounted` limit, each saved first. Show them as unloaded."#)]
     pub evicted: Vec<Eviction>,
     /// [`CanvasBundleBase::fallback_fonts`].
+    #[schemars(description = r#"Font URLs, relative to the bundle page, for `host.fallbackFonts`. Only the desktop app serves any; elsewhere the list is empty."#)]
     pub fallback_fonts: Vec<String>,
 }
 

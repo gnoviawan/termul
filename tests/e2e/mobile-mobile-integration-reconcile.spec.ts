@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Locator, Page } from 'playwright/test'
 import { expect, request, test } from 'playwright/test'
@@ -32,8 +32,8 @@ import { E2E_BASE_URL, E2E_TOKEN, storeKey, wsRequest } from './helpers'
  * existing terminal's drawer row and the ⋯ Close terminal row instead.
  *
  * The fake agent (fake-longrun-agent.ts) supplies the content through prompt
- * markers: `[DOCK]` (a plan and three edits: the changed-files bar and its Git
- * action), `[ASK:question]` and `[ASK:elicitation]` (a pending prompt that
+ * markers: `[DOCK]` (a plan and three edits: the status pill's changed files
+ * and their Git action), `[ASK:question]` and `[ASK:elicitation]` (a pending prompt that
  * replaces the composer) and `[PERMISSION]` (a pending approval that makes the
  * chat "need you"). Every test registers its own project (fresh chat state,
  * nothing shared with other suites).
@@ -298,47 +298,59 @@ async function describeFocus(page: Page): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// The changed-files bar's Git action records itself as the Git sheet's opener
+// The status pill's Git action records the pill as the Git sheet's opener
 // ---------------------------------------------------------------------------
 
+/** The chat status pill, and a helper that opens the Git sheet through its Changed files sheet. */
+function statusPill(page: Page): { pill: Locator; openGit: () => Promise<void> } {
+  const pill = page.getByRole('button', { name: /^Session status:/ })
+  return {
+    pill,
+    openGit: async () => {
+      await pill.tap()
+      await page.getByRole('button', { name: 'Open Git changes', exact: true }).tap()
+      await expect(page.getByRole('dialog', { name: 'Git changes' })).toBeVisible()
+    }
+  }
+}
+
 test.describe('Git sheet focus return', () => {
-  test('closing the Git sheet opened from the changed-files bar returns focus to its Git action', async ({
+  test('closing the Git sheet opened from the status pill returns focus to the pill', async ({
     page
   }) => {
-    await bootShell(page, await registerProject({ git: true }))
+    const project = await registerProject({ git: true })
+    // The pill lists git's uncommitted files; the fake agent's edits write none.
+    await writeFile(join(project.path, 'uncommitted.txt'), 'not committed\n')
+    await bootShell(page, project)
     await chooseIsolation(page, 'Current checkout')
     await startChat(page, `[DOCK] ${LONG} git action`)
-    const git = page.getByRole('button', { name: 'Open Git changes', exact: true })
+    const { pill, openGit } = statusPill(page)
     const sheet = page.getByRole('dialog', { name: 'Git changes' })
-    await expect(git).toBeVisible()
+    await expect(pill).toBeVisible()
 
     // Escape.
-    await git.tap()
-    await expect(sheet).toBeVisible()
+    await openGit()
     await page.keyboard.press('Escape')
     await expect(sheet).toBeHidden()
-    await expect(git).toBeFocused()
+    await expect(pill).toBeFocused()
 
     // The sheet's own close button.
-    await git.tap()
-    await expect(sheet).toBeVisible()
+    await openGit()
     await sheet.getByRole('button', { name: 'Close', exact: true }).tap()
     await expect(sheet).toBeHidden()
-    await expect(git).toBeFocused()
+    await expect(pill).toBeFocused()
 
     // The scrim: the sheet is 90vh tall, so a tap in the strip above it lands on it.
-    await git.tap()
-    await expect(sheet).toBeVisible()
+    await openGit()
     await page.touchscreen.tap(195, 30)
     await expect(sheet).toBeHidden()
-    await expect(git).toBeFocused()
+    await expect(pill).toBeFocused()
 
     // The hardware back button closes the topmost overlay.
-    await git.tap()
-    await expect(sheet).toBeVisible()
+    await openGit()
     await page.goBack()
     await expect(sheet).toBeHidden()
-    await expect(git).toBeFocused()
+    await expect(pill).toBeFocused()
     // Never the ⋯ of the other entry, and never the page.
     await expect(moreButton(page)).not.toBeFocused()
   })
@@ -346,10 +358,13 @@ test.describe('Git sheet focus return', () => {
   test('opened from ⋯ the Git sheet returns focus to ⋯, and each open records its own opener', async ({
     page
   }) => {
-    await bootShell(page, await registerProject({ git: true }))
+    const project = await registerProject({ git: true })
+    // The pill lists git's uncommitted files; the fake agent's edits write none.
+    await writeFile(join(project.path, 'uncommitted.txt'), 'not committed\n')
+    await bootShell(page, project)
     await chooseIsolation(page, 'Current checkout')
     await startChat(page, `[DOCK] ${LONG} git entries`)
-    const git = page.getByRole('button', { name: 'Open Git changes', exact: true })
+    const { pill, openGit } = statusPill(page)
     const more = moreButton(page)
     const sheet = page.getByRole('dialog', { name: 'Git changes' })
     const viaMore = async (): Promise<void> => {
@@ -366,12 +381,11 @@ test.describe('Git sheet focus return', () => {
     await expect(sheet).toBeHidden()
     await expect(more).toBeFocused()
 
-    // The Git action replaces the ⋯ record: it does not fall back to ⋯.
-    await git.tap()
-    await expect(sheet).toBeVisible()
+    // The pill's Git action replaces the ⋯ record: it does not fall back to ⋯.
+    await openGit()
     await page.keyboard.press('Escape')
     await expect(sheet).toBeHidden()
-    await expect(git).toBeFocused()
+    await expect(pill).toBeFocused()
 
     // And ⋯ replaces the Git action's record in turn.
     await viaMore()
@@ -807,11 +821,11 @@ test.describe('toast offset', () => {
         .toBe(20)
     })
 
-    test('the changed-files bar renders no Git action', async ({ page }) => {
+    test('the changed-files popover renders no Git action', async ({ page }) => {
       await startDesktopChat(page, `[DOCK] ${LONG} desktop bar`)
-      // The bar keeps its desktop header (named by its action, not by its text)
-      // and has no Git action: only the mobile shell wires `onOpenGitChanges`.
-      await expect(page.getByRole('button', { name: 'Expand changed files' })).toBeVisible()
+      // Only the mobile shell wires `onOpenGitChanges`.
+      await page.getByRole('button', { name: /^Session status:/ }).click()
+      await expect(page.getByRole('dialog', { name: 'Changed files' })).toBeVisible()
       await expect(page.getByRole('button', { name: 'Open Git changes', exact: true })).toHaveCount(
         0
       )

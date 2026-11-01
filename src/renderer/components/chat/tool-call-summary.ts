@@ -128,7 +128,7 @@ function firstDiffPath(content: ToolCallContent[]): string | undefined {
  * `describeToolCall` (it diffs full file contents). Cached on the content
  * array's identity: tool-call updates replace the array wholesale, so a
  * repeat look at an unchanged call is free and a changed call recomputes.
- * `ChatChangedFilesPanel` re-extracts files on every store commit — this
+ * `useChatChangedFiles` re-extracts files on every store commit — this
  * keeps that O(calls × file size) scan from repeating the diff itself.
  */
 const diffInfoCache = new WeakMap<

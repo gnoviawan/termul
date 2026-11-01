@@ -14,6 +14,8 @@ import type {
   AgentDisconnectedEvent,
   AgentErrorEvent,
   AgentId,
+  AgentSignInRequestEvent,
+  AgentSignInResolvedEvent,
   AgentSpawnedEvent,
   AgentSwitchEvent,
   AskUserQuestionEvent,
@@ -73,6 +75,21 @@ import type { QueuedPrompt } from '../prompt-queue-orchestration'
 export type PromptCommandState = CommandState
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
+
+/** A sign-in step an agent is waiting on the user for. */
+export type AgentSignInPrompt =
+  /**
+   * The host's browser-open shim captured the URL the agent tried to open
+   * (spec-acp-terminal-auth). The user signs in on their own device and
+   * pastes the failed localhost redirect back.
+   */
+  | { kind: 'browser'; url: string }
+  /**
+   * The agent asked the user to visit `url` and follow `message`, which
+   * carries a device code (Codex "ChatGPT (device code)"). The host holds the
+   * request until the user accepts or cancels it.
+   */
+  | { kind: 'elicitation'; requestId: string; url: string; message: string }
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
 
 /** Live OpenCode 2 status for the active turn. `null` fields are cleared. */
@@ -393,21 +410,20 @@ export interface AcpState {
   >
   agentStatus: Record<AgentId, AgentStatus>
   /**
-   * Headless ACP auth (spec-acp-terminal-auth): the URL an agent tried to
-   * open via the host's browser-open shim, keyed by agentId. Set by the
-   * `acp:browser_open_request` event; drives the BrowserAuthDialog in the
-   * launcher. Cleared on auth success, agent kill, transport eviction, and
-   * disconnect — a stale URL must never outlive the flow that produced it.
+   * The sign-in step an agent is waiting on the user for, keyed by agentId;
+   * drives the global sign-in dialog. Cleared on auth success, agent kill,
+   * transport eviction, and disconnect: a stale prompt must never outlive
+   * the flow that produced it.
    */
-  pendingBrowserOpen: Record<AgentId, string>
+  pendingSignIn: Record<AgentId, AgentSignInPrompt>
   /**
-   * The `pendingBrowserOpen` URL the user's own sign-in asked for: the host
+   * The browser `pendingSignIn` URL the user's own sign-in asked for: the host
    * may open the system browser for it without a click. Set only for the
    * first capture of an `authenticate` flight for that agent; a different
    * later capture in the same flight revokes it. The shim shadows
    * `open`/`xdg-open` for the agent and its children, so any other capture
    * (a prompt-injected `open https://evil`) stays show-and-click. Cleared
-   * with `pendingBrowserOpen`.
+   * with `pendingSignIn`.
    */
   autoOpenBrowserUrl: Record<AgentId, string>
   /**
@@ -583,11 +599,16 @@ export interface AcpState {
   ) => Promise<AgentId>
   killAgent: (agentId: AgentId) => Promise<void>
   /**
-   * Headless ACP auth (spec-acp-terminal-auth): dismiss the BrowserAuthDialog
-   * for an agent — drops its captured browser-open URL. The agent may re-emit
-   * `browser_open_request` if it retries the open.
+   * Drop an agent's sign-in prompt locally (dialog dismissed, auth settled).
+   * The agent may re-emit `browser_open_request` if it retries the open.
    */
-  clearPendingBrowserOpen: (agentId: AgentId) => void
+  clearPendingSignIn: (agentId: AgentId) => void
+  /**
+   * Answer an `elicitation` sign-in prompt: `accept` once the user opened
+   * the URL (the prompt stays up until the host resolves it), `cancel` when
+   * they dismissed it (the agent abandons the sign-in).
+   */
+  respondAgentSignIn: (agentId: AgentId, action: 'accept' | 'cancel') => Promise<void>
   /**
    * Headless ACP auth (spec-acp-terminal-auth): the user pasted back the
    * loopback redirect and the host's replay succeeded — the agent IS
@@ -988,6 +1009,10 @@ export interface AcpState {
    * tried to open so the launcher can show the BrowserAuthDialog.
    */
   _onBrowserOpenRequest: (e: BrowserOpenRequestEvent) => void
+  /** The agent asked the user to sign in at a URL (a device code). */
+  _onAgentSignInRequest: (e: AgentSignInRequestEvent) => void
+  /** The host settled a sign-in prompt (completed, answered, auth ended). */
+  _onAgentSignInResolved: (e: AgentSignInResolvedEvent) => void
   /**
    * Agent browser automation (`browser` tool): host asks the renderer to
    * open/close a visible agent-controlled browser tab.

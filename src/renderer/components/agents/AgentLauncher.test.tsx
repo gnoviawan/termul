@@ -26,6 +26,7 @@ import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
+import { agentReuseKey } from '@/stores/acp-reuse-keys'
 import type { AcpSession } from '@/stores/acp-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useShellLayoutStore } from '@/stores/shell-layout-store'
@@ -202,7 +203,7 @@ const {
       configToLiveAgent: {} as Record<string, string>,
       pendingRestartVersions: {} as Record<string, string>,
       agents: {} as Record<string, { id: string; capabilities: unknown; authMethods?: unknown[] }>,
-      pendingBrowserOpen: {} as Record<string, string>,
+      pendingSignIn: {} as Record<string, string>,
       mcpServers: [] as Array<{ id: string; name: string; enabled?: boolean }>,
       mcpProbeStatus: {} as Record<string, string>,
       mcpTools: {} as Record<string, unknown[]>
@@ -611,7 +612,9 @@ vi.mock('@/components/chat/AgentChatPanel', () => ({
   AgentChatPanel: () => null
 }))
 
-vi.mock('@/stores/acp-store', () => {
+vi.mock('@/stores/acp-store', async () => {
+  const { agentReuseKey } =
+    await vi.importActual<typeof import('@/stores/acp-reuse-keys')>('@/stores/acp-reuse-keys')
   const getState = () => ({
     startChat: mockStartChat,
     prepareChat: mockPrepareChat,
@@ -633,7 +636,7 @@ vi.mock('@/stores/acp-store', () => {
     setModel: mockSetModel,
     authenticateAgent: mockAuthenticateAgent,
     detachAgentForNewCredentials: mockDetachAgentForNewCredentials,
-    clearPendingBrowserOpen: mockClearPendingBrowserOpen,
+    clearPendingSignIn: mockClearPendingBrowserOpen,
     retargetWarmPool: mockRetargetWarmPool,
     setSelectedAgentConfigId: mockSetSelectedAgentConfigId
   })
@@ -669,7 +672,6 @@ vi.mock('@/stores/acp-store', () => {
   const useAcpSession = (sessionId: string | null) =>
     sessionId ? (acpStateRef.current.sessions[sessionId] ?? null) : null
   const prepareChatKey = (configId: string, cwd: string) => `${configId}\0${cwd}\0`
-  const agentReuseKey = (configId: string, cwd: string) => `${configId}\0${cwd.trim()}`
   const hasModelRelevantOptionsCache = (
     entry:
       | {
@@ -802,7 +804,7 @@ beforeEach(() => {
     configToLiveAgent: {},
     pendingRestartVersions: {},
     agents: {},
-    pendingBrowserOpen: {},
+    pendingSignIn: {},
     mcpServers: [],
     mcpProbeStatus: {},
     mcpTools: {}
@@ -1120,7 +1122,7 @@ describe('AgentLauncher ACP new thread', () => {
     seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'auth',
@@ -1157,7 +1159,7 @@ describe('AgentLauncher ACP new thread', () => {
     seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'multi-auth',
@@ -1199,7 +1201,9 @@ describe('AgentLauncher ACP new thread', () => {
         detail: 'This agent advertises multiple sign-in methods (API Key, ChatGPT).'
       }
     }
-    acpStateRef.current.configToLiveAgent = { [`${defaultAgent.configId}\0/work`]: 'agent-live' }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(defaultAgent.configId, '/work', 'p1')]: 'agent-live'
+    }
     acpStateRef.current.agents = {
       'agent-live': {
         id: 'agent-live',
@@ -1243,7 +1247,9 @@ describe('AgentLauncher ACP new thread', () => {
         detail: 'This agent advertises multiple sign-in methods (API Key, ChatGPT).'
       }
     }
-    acpStateRef.current.configToLiveAgent = { [`${defaultAgent.configId}\0/work`]: 'agent-live' }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(defaultAgent.configId, '/work', 'p1')]: 'agent-live'
+    }
     acpStateRef.current.agents = {
       'agent-live': {
         id: 'agent-live',
@@ -1265,7 +1271,7 @@ describe('AgentLauncher ACP new thread', () => {
     seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'multi-auth',
@@ -1329,7 +1335,9 @@ describe('AgentLauncher ACP new thread', () => {
         detail: 'Choose Login or Factory API Key'
       }
     }
-    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(factory.configId, '/work', 'p1')]: 'factory-live'
+    }
     acpStateRef.current.agents = {
       'factory-live': {
         id: 'factory-live',
@@ -1370,7 +1378,9 @@ describe('AgentLauncher ACP new thread', () => {
         detail: 'Choose Login or Factory API Key'
       }
     }
-    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(factory.configId, '/work', 'p1')]: 'factory-live'
+    }
     acpStateRef.current.agents = {
       'factory-live': {
         id: 'factory-live',
@@ -1393,7 +1403,9 @@ describe('AgentLauncher ACP new thread', () => {
       (entry) => entry.id === 'factory-droid'
     )!
     mockResolvedAgentsOverride.current = [factory]
-    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(factory.configId, '/work', 'p1')]: 'factory-live'
+    }
     acpStateRef.current.agents = {
       'factory-live': {
         id: 'factory-live',
@@ -1416,7 +1428,9 @@ describe('AgentLauncher ACP new thread', () => {
       (entry) => entry.id === 'factory-droid'
     )!
     mockResolvedAgentsOverride.current = [factory]
-    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(factory.configId, '/work', 'p1')]: 'factory-live'
+    }
     acpStateRef.current.agents = {
       'factory-live': {
         id: 'factory-live',
@@ -1447,7 +1461,7 @@ describe('AgentLauncher ACP new thread', () => {
     // `authenticate` + re-prepares.
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'auth',
@@ -1514,7 +1528,7 @@ describe('AgentLauncher ACP new thread', () => {
     seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'auth',
@@ -1566,7 +1580,7 @@ describe('AgentLauncher ACP new thread', () => {
     // driven — disabled entry, never sent to authenticate.
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: {
         category: 'auth',
@@ -1610,7 +1624,7 @@ describe('AgentLauncher ACP new thread', () => {
       envVars: [{ key: 'PROJECT_TOKEN', value: 'proj-secret' }]
     }
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: { category: 'auth', label: 'Authentication required', detail: 'Sign in' }
     }
@@ -1656,7 +1670,7 @@ describe('AgentLauncher ACP new thread', () => {
     seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
-    const reuseKey = `${defaultAgent.configId}\0/work`
+    const reuseKey = agentReuseKey(defaultAgent.configId, '/work', 'p1')
     acpStateRef.current.prepareChatErrors = {
       [key]: { category: 'auth', label: 'Authentication required', detail: 'Sign in' }
     }

@@ -49,24 +49,31 @@ const GH_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// shape mirrors `src/shared/types/bug-report.types.ts`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
+#[schemars(description = r#"Diagnostics collected when the bug-report dialog opens. Nothing here is secret: `logTail` is already redacted."#)]
 pub struct BugReportContext {
     /// `env!("CARGO_PKG_VERSION")` of the host build.
+    #[schemars(description = r#"The host build's version."#)]
     pub app_version: String,
     /// `std::env::consts::OS`.
+    #[schemars(description = r#"The host operating system (`linux`, `macos`, `windows`)."#)]
     pub os: String,
     /// `std::env::consts::ARCH`.
+    #[schemars(description = r#"The host CPU architecture (`x86_64`, `aarch64`)."#)]
     pub arch: String,
     /// Build channel: `debug` or `release`.
     pub channel: String,
     /// Per-run host correlation id ([`crate::logging::run_id`]).
+    #[schemars(description = r#"Correlation id of the host's current run, as printed in its startup log banner."#)]
     pub run_id: String,
     /// RFC 3339 timestamp of the collect.
     pub collected_at: String,
     /// False when the log file was missing/unreadable — a note, not an error.
     pub log_available: bool,
     /// True when the tail was cut to [`LOG_TAIL_BYTES`] and the start dropped.
+    #[schemars(description = r#"True when the log was over 64 KiB and `logTail` holds only its last 64 KiB."#)]
     pub log_truncated: bool,
     /// Bounded redacted log tail; empty when `log_available` is false.
+    #[schemars(description = r#"The end of the host log, redacted. Empty when `logAvailable` is false."#)]
     pub log_tail: String,
 }
 

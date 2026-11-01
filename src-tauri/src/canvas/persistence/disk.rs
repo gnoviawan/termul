@@ -69,6 +69,7 @@ pub enum DiskOutcome {
     /// since holds edits the reload would drop: the renderer then reports
     /// [`CanvasPersistence::reload_failed`] instead. Nothing is written until
     /// the editor loaded it (`document_loaded`).
+    #[schemars(description = r#"The editor was clean at `view.contentVersion`: load `bytes` (base64) with `host.openDocument`. An editor that has moved past that version since holds edits the reload would drop: send `POST /canvas/disk-changed` with `reloadFailed: true` instead. Nothing is written until the editor has loaded it (`POST /canvas/document-loaded`)."#)]
     Reload {
         view: PersistenceView,
         bytes: String,

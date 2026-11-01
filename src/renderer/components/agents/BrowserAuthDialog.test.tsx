@@ -1,12 +1,13 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentSignInPrompt } from '@/stores/acp-store/types'
 
 const {
   mockDeliverAuthRedirect,
   mockOpenUrl,
   mockToastError,
   mockCompleteBrowserAuth,
-  mockClearPendingBrowserOpen,
+  mockClearPendingSignIn,
   mockIsTauriContext,
   dialogStoreState
 } = vi.hoisted(() => ({
@@ -14,10 +15,10 @@ const {
   mockOpenUrl: vi.fn(async () => ({ success: true as const, data: undefined })),
   mockToastError: vi.fn(),
   mockCompleteBrowserAuth: vi.fn(),
-  mockClearPendingBrowserOpen: vi.fn(),
+  mockClearPendingSignIn: vi.fn(),
   mockIsTauriContext: vi.fn(() => false),
   dialogStoreState: {
-    pendingBrowserOpen: {} as Record<string, string>,
+    pendingSignIn: {} as Record<string, AgentSignInPrompt>,
     autoOpenBrowserUrl: {} as Record<string, string>,
     configToLiveAgent: {} as Record<string, string>,
     agentConfigs: [] as Array<{ id: string; name: string }>
@@ -48,7 +49,7 @@ vi.mock('@/stores/acp-store', () => {
   // Build state lazily so tests can reassign dialogStoreState fields.
   const state = () => ({
     ...dialogStoreState,
-    clearPendingBrowserOpen: mockClearPendingBrowserOpen,
+    clearPendingSignIn: mockClearPendingSignIn,
     completeBrowserAuth: mockCompleteBrowserAuth
   })
   const useAcpStore = (sel?: (s: ReturnType<typeof state>) => unknown) =>
@@ -108,9 +109,9 @@ describe('BrowserAuthDialog', () => {
     mockOpenUrl.mockClear()
     mockToastError.mockClear()
     mockCompleteBrowserAuth.mockClear()
-    mockClearPendingBrowserOpen.mockClear()
+    mockClearPendingSignIn.mockClear()
     mockIsTauriContext.mockReturnValue(false)
-    dialogStoreState.pendingBrowserOpen = {}
+    dialogStoreState.pendingSignIn = {}
     dialogStoreState.configToLiveAgent = {}
     dialogStoreState.agentConfigs = []
   })
@@ -223,9 +224,9 @@ describe('BrowserAuthDialog', () => {
 describe('BrowserAuthDialogHost', () => {
   beforeEach(() => {
     mockOpenUrl.mockClear()
-    mockClearPendingBrowserOpen.mockClear()
+    mockClearPendingSignIn.mockClear()
     mockIsTauriContext.mockReturnValue(false)
-    dialogStoreState.pendingBrowserOpen = {}
+    dialogStoreState.pendingSignIn = {}
     dialogStoreState.autoOpenBrowserUrl = {}
     dialogStoreState.configToLiveAgent = {}
     dialogStoreState.agentConfigs = []
@@ -236,7 +237,7 @@ describe('BrowserAuthDialogHost', () => {
   })
 
   it('opens Factory login even before the registry config is saved', async () => {
-    dialogStoreState.pendingBrowserOpen = { 'factory-agent': AUTH_URL }
+    dialogStoreState.pendingSignIn = { 'factory-agent': { kind: 'browser', url: AUTH_URL } }
     dialogStoreState.autoOpenBrowserUrl = { 'factory-agent': AUTH_URL }
     dialogStoreState.configToLiveAgent = {
       'acp-registry:factory-droid\0/work': 'factory-agent'
@@ -247,8 +248,8 @@ describe('BrowserAuthDialogHost', () => {
     expect(screen.getByText('Finish signing in to Factory Droid')).toBeInTheDocument()
   })
 
-  it('renders a dialog per pendingBrowserOpen entry with the config name', () => {
-    dialogStoreState.pendingBrowserOpen = { 'agent-1': AUTH_URL }
+  it('renders a dialog per pendingSignIn entry with the config name', () => {
+    dialogStoreState.pendingSignIn = { 'agent-1': { kind: 'browser', url: AUTH_URL } }
     dialogStoreState.configToLiveAgent = { 'cfg-1\0/work': 'agent-1' }
     dialogStoreState.agentConfigs = [{ id: 'cfg-1', name: 'Devin' }]
     render(<BrowserAuthDialogHost />)
@@ -258,7 +259,7 @@ describe('BrowserAuthDialogHost', () => {
 
   it('auto-opens the system browser for every agent on desktop', async () => {
     mockIsTauriContext.mockReturnValue(true)
-    dialogStoreState.pendingBrowserOpen = { 'agent-1': AUTH_URL }
+    dialogStoreState.pendingSignIn = { 'agent-1': { kind: 'browser', url: AUTH_URL } }
     dialogStoreState.autoOpenBrowserUrl = { 'agent-1': AUTH_URL }
     dialogStoreState.configToLiveAgent = { 'cfg-1\0/work': 'agent-1' }
     dialogStoreState.agentConfigs = [{ id: 'cfg-1', name: 'Google Antigravity' }]
@@ -270,9 +271,9 @@ describe('BrowserAuthDialogHost', () => {
 
   it('does not auto-open a capture that no sign-in requested, on desktop or for Factory Droid', () => {
     mockIsTauriContext.mockReturnValue(true)
-    dialogStoreState.pendingBrowserOpen = {
-      'agent-1': AUTH_URL,
-      'factory-agent': 'https://evil.example.com/'
+    dialogStoreState.pendingSignIn = {
+      'agent-1': { kind: 'browser', url: AUTH_URL },
+      'factory-agent': { kind: 'browser', url: 'https://evil.example.com/' }
     }
     dialogStoreState.configToLiveAgent = {
       'cfg-1\0/work': 'agent-1',
@@ -287,7 +288,9 @@ describe('BrowserAuthDialogHost', () => {
 
   it('does not auto-open a URL other than the one the sign-in authorized', () => {
     mockIsTauriContext.mockReturnValue(true)
-    dialogStoreState.pendingBrowserOpen = { 'agent-1': 'https://evil.example.com/' }
+    dialogStoreState.pendingSignIn = {
+      'agent-1': { kind: 'browser', url: 'https://evil.example.com/' }
+    }
     dialogStoreState.autoOpenBrowserUrl = { 'agent-1': AUTH_URL }
     dialogStoreState.configToLiveAgent = { 'cfg-1\0/work': 'agent-1' }
     dialogStoreState.agentConfigs = [{ id: 'cfg-1', name: 'Google Antigravity' }]
@@ -296,7 +299,7 @@ describe('BrowserAuthDialogHost', () => {
   })
 
   it('keeps paste-back copy for other agents on the web client', () => {
-    dialogStoreState.pendingBrowserOpen = { 'agent-1': AUTH_URL }
+    dialogStoreState.pendingSignIn = { 'agent-1': { kind: 'browser', url: AUTH_URL } }
     dialogStoreState.configToLiveAgent = { 'cfg-1\0/work': 'agent-1' }
     dialogStoreState.agentConfigs = [{ id: 'cfg-1', name: 'Google Antigravity' }]
     render(<BrowserAuthDialogHost />)
@@ -305,10 +308,10 @@ describe('BrowserAuthDialogHost', () => {
   })
 
   it('falls back to a generic name and clears the entry on dismiss', () => {
-    dialogStoreState.pendingBrowserOpen = { 'agent-9': AUTH_URL }
+    dialogStoreState.pendingSignIn = { 'agent-9': { kind: 'browser', url: AUTH_URL } }
     render(<BrowserAuthDialogHost />)
     expect(screen.getByText('Finish signing in to Agent')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
-    expect(mockClearPendingBrowserOpen).toHaveBeenCalledWith('agent-9')
+    expect(mockClearPendingSignIn).toHaveBeenCalledWith('agent-9')
   })
 })

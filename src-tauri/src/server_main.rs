@@ -76,6 +76,12 @@ fn main() -> ExitCode {
         return ExitCode::from(termul_manager_lib::host_mcp::child::run() as u8);
     }
 
+    // Hidden `openapi`: prints the API spec. Needs no state dir or config, so
+    // it runs before the server parser and before tracing starts.
+    if raw_args.first().is_some_and(|arg| arg == "openapi") {
+        return termul_manager_lib::web::openapi::cli::run(&raw_args[1..]);
+    }
+
     // Local-only Claude setup commands. They run before the server binds a
     // socket, so API-key provisioning is never exposed through HTTP or WS.
     // The admin CLI lives in the lib (`claude_admin`, re-exported from

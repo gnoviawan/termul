@@ -81,7 +81,7 @@ export function reloadChatBlockedReason(state: AcpState, sessionId: SessionId): 
       pendingPermissions: state.pendingPermissions ?? {},
       pendingQuestions: state.pendingQuestions ?? {},
       pendingElicitations: state.pendingElicitations ?? {},
-      pendingBrowserOpen: state.pendingBrowserOpen ?? {},
+      pendingSignIn: state.pendingSignIn ?? {},
       launchingSessionIds: state.launchingSessionIds ?? {}
     },
     sessionId

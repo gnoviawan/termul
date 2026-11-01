@@ -74,6 +74,7 @@ mod history;
 mod native_subagents;
 mod project_binding;
 mod reopen;
+mod sign_in;
 mod spawn_error;
 pub(crate) mod stderr_ring;
 mod timeouts;
