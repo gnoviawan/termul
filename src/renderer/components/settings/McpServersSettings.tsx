@@ -31,7 +31,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { isMcpServerAutoProbed } from '@/hooks/use-acp-mcp'
 import { MCP_UNSAFE_URL, McpOAuthError } from '@/lib/acp-api'
-import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
+import { type StoredMcpServer, sameLaunch, transportOf } from '@/lib/acp-mcp-persistence'
 import { logFrontendError } from '@/lib/log-api'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
 import { cn } from '@/lib/utils'
@@ -252,7 +252,7 @@ export function McpServersSettings(): React.JSX.Element {
         ...parsed,
         id: target.id,
         enabled: explicitEnabled ?? target.enabled ?? true,
-        ...(target.catalog ? { catalog: target.catalog } : {})
+        ...(target.catalog && sameLaunch(target, parsed) ? { catalog: target.catalog } : {})
       })
       toast.success('MCP server updated')
       closeDialog()

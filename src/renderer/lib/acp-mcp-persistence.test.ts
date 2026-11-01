@@ -25,6 +25,7 @@ import {
   loadMcpServers,
   normalizeMcpRegistry,
   type StoredMcpServer,
+  sameLaunch,
   saveMcpServers,
   selectMcpServersForAgent,
   transportOf,
@@ -205,6 +206,28 @@ describe('catalog install entries', () => {
         env: [{ name: 'FILES_ROOT', value: '/srv/data' }]
       }
     ])
+  })
+})
+
+describe('sameLaunch', () => {
+  const remote = {
+    type: 'http' as const,
+    name: 'weather',
+    url: 'https://weather.example/mcp',
+    headers: [{ name: 'Authorization', value: 'Bearer old' }]
+  }
+
+  it('ignores the name and header values but not the url or header names', () => {
+    expect(
+      sameLaunch(remote, {
+        ...remote,
+        name: 'renamed',
+        headers: [{ name: 'Authorization', value: 'Bearer new' }]
+      })
+    ).toBe(true)
+    expect(sameLaunch(remote, { ...remote, url: 'https://other.example/mcp' })).toBe(false)
+    expect(sameLaunch(remote, { ...remote, headers: [{ name: 'X-Key', value: 'k' }] })).toBe(false)
+    expect(sameLaunch(remote, { ...remote, type: 'sse' })).toBe(false)
   })
 })
 

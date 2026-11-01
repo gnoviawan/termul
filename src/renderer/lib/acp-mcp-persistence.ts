@@ -187,6 +187,21 @@ function secretValue(
   return secret.value
 }
 
+function launchShape(server: McpServerConfig): unknown[] {
+  const names = (pairs: { name: string }[] | undefined) => (pairs ?? []).map((pair) => pair.name)
+  return server.type === 'http' || server.type === 'sse'
+    ? [server.type, server.url, names(server.headers)]
+    : ['stdio', server.command, server.args ?? [], names(server.env)]
+}
+
+/**
+ * Whether two configs launch the same server: what a catalog install's launch
+ * digest covers. Names and env or header values may differ.
+ */
+export function sameLaunch(a: McpServerConfig, b: McpServerConfig): boolean {
+  return JSON.stringify(launchShape(a)) === JSON.stringify(launchShape(b))
+}
+
 export function catalogInstallEntry(
   result: McpInstallCommitResult,
   takenNames: ReadonlySet<string>,
