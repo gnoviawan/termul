@@ -4,13 +4,14 @@ import { Download, FolderOpen } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
-import type { AuthMethod } from '@/lib/acp-api'
+import type { AuthenticateInput, AuthMethod } from '@/lib/acp-api'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import type {
   SupportedAcpAgentEntry,
   SupportedAcpAgentManualInstall
 } from '@/lib/agents/supported-acp-agents'
 import { openerApi } from '@/lib/api'
+import { ApiKeyForm } from './ApiKeyForm'
 
 const RUNTIME_HELP_URLS = {
   npx: 'https://nodejs.org/en/download',
@@ -24,7 +25,7 @@ export function AuthRequiredBanner({
   authMethods,
   signingInMethodId,
   onAuthenticate,
-  onGatewayAuth,
+  onAuthenticateWith,
   onRetry
 }: {
   agentName: string
@@ -32,7 +33,7 @@ export function AuthRequiredBanner({
   authMethods: AuthMethod[]
   signingInMethodId: string | null
   onAuthenticate: (method: AuthMethod) => void
-  onGatewayAuth: (method: AuthMethod, gateway: { baseUrl: string; apiKey?: string }) => void
+  onAuthenticateWith: (method: AuthMethod, input: AuthenticateInput) => void
   onRetry: () => void
 }): React.JSX.Element {
   const [gatewayUrl, setGatewayUrl] = useState('')
@@ -41,6 +42,7 @@ export function AuthRequiredBanner({
   const actionableMethods = authMethods.filter((m) => m.id.trim().length > 0)
   const {
     runnable: runnableMethods,
+    apiKey: apiKeyMethods,
     gateway: gatewayMethod,
     guidance: guidanceMethods
   } = partitionAuthMethods(authMethods)
@@ -103,9 +105,11 @@ export function AuthRequiredBanner({
                     size="sm"
                     disabled={!gatewayUrl.trim()}
                     onClick={() =>
-                      onGatewayAuth(gatewayMethod, {
-                        baseUrl: gatewayUrl.trim(),
-                        ...(gatewayKey.trim() ? { apiKey: gatewayKey.trim() } : {})
+                      onAuthenticateWith(gatewayMethod, {
+                        gateway: {
+                          baseUrl: gatewayUrl.trim(),
+                          ...(gatewayKey.trim() ? { apiKey: gatewayKey.trim() } : {})
+                        }
                       })
                     }
                   >
@@ -113,6 +117,18 @@ export function AuthRequiredBanner({
                   </Button>
                 </div>
               ) : null}
+              {apiKeyMethods.map((method) => (
+                <ApiKeyForm
+                  key={method.id}
+                  method={method}
+                  layout="row"
+                  size="sm"
+                  variant="outline"
+                  onSubmit={(apiKey) =>
+                    apiKey ? onAuthenticateWith(method, { apiKey }) : onAuthenticate(method)
+                  }
+                />
+              ))}
               {runnableMethods.map((method, index) => (
                 <Button
                   key={method.id}

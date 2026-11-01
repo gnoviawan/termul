@@ -243,6 +243,33 @@ pub struct AuthMethodInfo {
     /// Terminal-method env (present only when `type == "terminal"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<std::collections::HashMap<String, String>>,
+    /// The method takes a key the user types, sent in this shape. The wire
+    /// carries only `takesApiKey: true`; the shape stays on the host.
+    #[serde(
+        rename = "takesApiKey",
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_takes_api_key",
+        skip_deserializing
+    )]
+    pub api_key: Option<ApiKeyShape>,
+}
+
+/// How an agent reads a key typed into Termul from
+/// `authenticate._meta["api-key"]`. ACP leaves the shape to each agent, so
+/// the host tells them apart by the provider the method advertises.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiKeyShape {
+    /// codex-acp (`provider: "openai"`) reads `_meta["api-key"].apiKey`.
+    Object,
+    /// Gemini CLI (`provider: "google"`) reads `_meta["api-key"]` as the key.
+    Text,
+}
+
+fn serialize_takes_api_key<S: serde::Serializer>(
+    shape: &Option<ApiKeyShape>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_bool(shape.is_some())
 }
 
 /// `acp:browser_open_request` — the POSIX browser shim captured an agent's

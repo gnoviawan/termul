@@ -803,7 +803,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     authenticatedAgents.delete(agentId)
   },
 
-  authenticateAgent: async (agentId, methodId, gateway) => {
+  authenticateAgent: async (agentId, methodId, input) => {
     // Normalize and validate BEFORE the dedup check (P5 parity with
     // `authenticateBeforeSession`): an empty/whitespace method id is unusable
     // and must be rejected up front instead of being sent to the agent, and an
@@ -843,7 +843,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         // redirect lands out-of-band without an authenticate reply) can
         // persist the winning method id per config.
         lastAuthAttempt.set(agentId, normalizedMethodId)
-        if (gateway) await acpApi.authenticate(agentId, normalizedMethodId, gateway)
+        if (input) await acpApi.authenticate(agentId, normalizedMethodId, input)
         else await acpApi.authenticate(agentId, normalizedMethodId)
       } catch (err) {
         // Redacted (see `authenticateBeforeSession`): no method id, no raw
@@ -863,13 +863,15 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       // method can auto-run again: a terminal/env_var login is interactive-
       // only and remembering it would wedge auto-auth on a dead pick. A
       // method missing from the advertised list carries no type → treated as
-      // untyped legacy → eligible.
+      // untyped legacy → eligible. A sign-in that carried a gateway or a key
+      // cannot run again without it.
       const configId = configIdForAgentId(get(), agentId)
       const method = (get().agents[agentId]?.authMethods ?? []).find(
         (m) => m.id.trim() === normalizedMethodId
       )
       if (
         configId &&
+        !input &&
         normalizedMethodId !== 'gateway' &&
         (method?.type === 'agent' || method?.type == null)
       ) {

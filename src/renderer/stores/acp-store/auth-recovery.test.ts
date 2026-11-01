@@ -211,6 +211,7 @@ describe('acp provider authentication & recovery', () => {
       type?: 'agent' | 'terminal' | 'env_var'
       args?: string[]
       env?: Record<string, string>
+      takesApiKey?: boolean
     }>,
     capabilities: Record<string, unknown> | null = {}
   ): void {
@@ -660,6 +661,51 @@ describe('acp provider authentication & recovery', () => {
       methodId: 'chatgpt',
       commandId: expect.any(String)
     })
+  })
+
+  it('sends a typed API key once, never logs it and never remembers its method', async () => {
+    const apiKey = 'sk-termul-test-not-real'
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'api-key', name: 'API Key', type: 'agent', takesApiKey: true },
+      { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('cfg-1', '/work', 'p1')]: 'agent-9'
+      }
+    }))
+    vi.mocked(logFrontendError).mockClear()
+    mockPersistenceApi.write.mockClear()
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+
+    await useAcpStore.getState().authenticateAgent('agent-9', 'api-key', { apiKey })
+    await useAcpStore.getState().authenticateAgent('agent-9', 'chat-gpt')
+
+    const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
+    expect(authCalls.map(([, payload]) => payload)).toEqual([
+      { agentId: 'agent-9', methodId: 'api-key', apiKey, commandId: expect.any(String) },
+      { agentId: 'agent-9', methodId: 'chat-gpt', commandId: expect.any(String) }
+    ])
+    // Only the method that can run again without a key is remembered.
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'chat-gpt'
+      })
+    })
+    expect(
+      mockPersistenceApi.write.mock.calls.filter(
+        ([k, v]) => k === 'acp/auth-methods' && JSON.stringify(v).includes('api-key')
+      )
+    ).toEqual([])
+    expect(JSON.stringify(vi.mocked(logFrontendError).mock.calls)).not.toContain(apiKey)
+    expect(JSON.stringify(mockPersistenceApi.write.mock.calls)).not.toContain(apiKey)
   })
 
   it('keeps the multi-auth agent live and reusable after the prepare failure', async () => {

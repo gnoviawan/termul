@@ -1767,7 +1767,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 authMethods={authMethods}
                 signingInMethodId={signingInMethodId}
                 handleAuthMethod={handleAuthMethod}
-                handleGatewayAuth={(method, gateway) => void runAuthenticate(method.id, gateway)}
+                handleAuthenticateWith={(method, input) => void runAuthenticate(method.id, input)}
                 handleRetryPrepare={handleRetryPrepare}
                 factoryKeyAuth={factoryKeyAuth}
                 inlineKeyMethodId={inlineKeyMethodId}

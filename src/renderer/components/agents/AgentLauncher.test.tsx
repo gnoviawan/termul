@@ -328,6 +328,15 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
+const { mockLogFrontendError } = vi.hoisted(() => ({
+  mockLogFrontendError: vi.fn(async () => {})
+}))
+
+vi.mock('@/lib/log-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/log-api')>()),
+  logFrontendError: mockLogFrontendError
+}))
+
 vi.mock('@/lib/dialog-api', () => ({
   dialogApi: {
     selectFile: vi.fn(async () => ({ success: true, data: 'C:/tools/legacy.exe' }))
@@ -1179,6 +1188,83 @@ describe('AgentLauncher ACP new thread', () => {
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'API key' }))
     await waitFor(() => expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api_key'))
+  })
+
+  it('signs in with a typed API key from the banner and never logs the key', async () => {
+    const apiKey = 'sk-termul-test-not-real'
+    seedDefaultAgentConfigured()
+    const defaultAgent = defaultReadyAgent()
+    acpStateRef.current.prepareChatErrors = {
+      [`${defaultAgent.configId}\0/work\0`]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'This agent advertises multiple sign-in methods (API Key, ChatGPT).'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(defaultAgent.configId, '/work', 'p1')]: 'agent-live'
+    }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'api-key', name: 'API Key', type: 'agent', takesApiKey: true },
+          { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' }
+        ]
+      }
+    }
+    renderLauncher()
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+
+    const input = screen.getByLabelText('Key for API Key')
+    expect(input).toHaveAttribute('type', 'password')
+    fireEvent.change(input, { target: { value: `  ${apiKey}  ` } })
+    fireEvent.click(screen.getByRole('button', { name: 'API Key' }))
+
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api-key', { apiKey })
+    )
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+    )
+    expect(screen.getByLabelText('Key for API Key')).toHaveValue('')
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'agentSignIn.authenticate' })
+    )
+    expect(JSON.stringify(mockLogFrontendError.mock.calls)).not.toContain(apiKey)
+  })
+
+  it('runs an API-key method left empty without a key, so the agent reads its own environment', async () => {
+    seedDefaultAgentConfigured()
+    const defaultAgent = defaultReadyAgent()
+    acpStateRef.current.prepareChatErrors = {
+      [`${defaultAgent.configId}\0/work\0`]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'This agent advertises multiple sign-in methods (API Key, ChatGPT).'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = {
+      [agentReuseKey(defaultAgent.configId, '/work', 'p1')]: 'agent-live'
+    }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'api-key', name: 'API Key', type: 'agent', takesApiKey: true },
+          { id: 'chat-gpt', name: 'ChatGPT', type: 'agent' }
+        ]
+      }
+    }
+    renderLauncher()
+
+    expect(screen.getByLabelText('Key for API Key')).toHaveAttribute('type', 'password')
+    fireEvent.click(screen.getByRole('button', { name: 'API Key' }))
+    await waitFor(() => expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api-key'))
   })
 
   it('stacks four sign-in actions under the copy and above the prompt', async () => {

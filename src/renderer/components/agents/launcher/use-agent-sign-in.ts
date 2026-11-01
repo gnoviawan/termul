@@ -7,10 +7,11 @@ import {
 } from '@/components/agents/launcher/FactoryApiKeyForm'
 import { spawnAcpLoginTerminal } from '@/components/agents/launcher/spawn-acp-login-terminal'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
-import type { AuthMethod } from '@/lib/acp-api'
+import type { AuthenticateInput, AuthMethod } from '@/lib/acp-api'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import { agentPolicy } from '@/lib/agents/acp-registry'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { logFrontendError } from '@/lib/log-api'
 import { terminalApi } from '@/lib/terminal-api'
 import { agentReuseKey, useAcpStore } from '@/stores/acp-store'
 import type { EnvVariable } from '@/types/project'
@@ -25,10 +26,7 @@ export interface AgentSignIn {
   /** The method the agent's auth policy shows as an inline key form. */
   inlineKeyMethodId: string | undefined
   handleAuthMethod: (method: AuthMethod) => void
-  runAuthenticate: (
-    methodId: string,
-    gateway?: { baseUrl: string; apiKey?: string }
-  ) => Promise<void>
+  runAuthenticate: (methodId: string, input?: AuthenticateInput) => Promise<void>
   handleSignIn: () => void
 }
 
@@ -80,16 +78,22 @@ export function useAgentSignIn({
   // invents a redirect URL or stores credentials. Mirrors Zed's
   // ThreadState::Unauthenticated → authenticate → reset flow.
   const runAuthenticate = useCallback(
-    async (methodId: string, gateway?: { baseUrl: string; apiKey?: string }) => {
+    async (methodId: string, input?: AuthenticateInput) => {
       if (!liveAgentId) {
         toast.error('Agent is not connected. Use Retry to reconnect, then sign in again.')
         return
       }
       if (signingInMethodId) return
       setSigningInMethodId(methodId)
+      const carrying = !input ? '' : 'apiKey' in input ? ' with a typed API key' : ' via a gateway'
+      void logFrontendError({
+        level: 'info',
+        source: 'agentSignIn.authenticate',
+        message: `Signing in to ${liveAgentId} with method '${methodId}'${carrying}`
+      })
       try {
         const store = useAcpStore.getState()
-        if (gateway) await store.authenticateAgent(liveAgentId, methodId, gateway)
+        if (input) await store.authenticateAgent(liveAgentId, methodId, input)
         else await store.authenticateAgent(liveAgentId, methodId)
         onSignedIn()
       } catch (err) {

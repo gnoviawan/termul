@@ -52,7 +52,7 @@ use crate::acp::client;
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
     self, AgentDisconnectedEvent, AgentExitReason, AgentSpawnedEvent, AgentSwitchEvent,
-    AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent,
+    ApiKeyShape, AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent,
     SessionCreatedEvent, SessionInfoUpdateEvent, SessionModelState,
 };
 use crate::acp::session::{DriverState, ReopenReservation, ReplayWindowGuard};
@@ -69,7 +69,7 @@ mod gates;
 mod activity;
 mod close;
 mod exit;
-pub(crate) use gates::{ConfigOptionValue, GatewayAuthInput};
+pub(crate) use gates::{ApiKey, AuthCredential, ConfigOptionValue, GatewayAuthInput};
 mod history;
 mod native_subagents;
 mod project_binding;
@@ -323,7 +323,7 @@ enum AcpCommand {
     /// Run the ACP `authenticate` method with the given method id.
     Authenticate {
         method_id: String,
-        gateway: Option<GatewayAuthInput>,
+        credential: Option<AuthCredential>,
         reply: oneshot::Sender<Result<(), String>>,
     },
     Logout {
@@ -1651,12 +1651,12 @@ impl AcpManager {
         &self,
         agent_id: &AgentId,
         method_id: String,
-        gateway: Option<GatewayAuthInput>,
+        credential: Option<AuthCredential>,
     ) -> Result<(), String> {
         let tx = self.command_tx(agent_id)?;
         send_command(&tx, |reply| AcpCommand::Authenticate {
             method_id,
-            gateway,
+            credential,
             reply,
         })
         .await

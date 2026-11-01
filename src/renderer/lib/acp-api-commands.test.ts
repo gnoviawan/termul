@@ -190,9 +190,15 @@ describe('acp-api ledgered commands', () => {
 
   it('credential-bearing commands never reuse an earlier id for different content', async () => {
     sent.mockRejectedValue(new AcpTransportError('closed', 'ipc dropped'))
-    await exhaustLadder(acpAuthenticate('a1', 'api_key', { baseUrl: 'https://one', apiKey: 'k1' }))
-    await exhaustLadder(acpAuthenticate('a1', 'api_key', { baseUrl: 'https://two', apiKey: 'k2' }))
-    expect(new Set(commandIds('authenticate_agent')).size).toBe(2)
+    await exhaustLadder(
+      acpAuthenticate('a1', 'gateway', { gateway: { baseUrl: 'https://one', apiKey: 'k1' } })
+    )
+    await exhaustLadder(
+      acpAuthenticate('a1', 'gateway', { gateway: { baseUrl: 'https://two', apiKey: 'k2' } })
+    )
+    await exhaustLadder(acpAuthenticate('a1', 'api-key', { apiKey: 'k3' }))
+    await exhaustLadder(acpAuthenticate('a1', 'api-key', { apiKey: 'k4' }))
+    expect(new Set(commandIds('authenticate_agent')).size).toBe(4)
 
     await exhaustLadder(acpDeliverAuthRedirect('a1', 'http://localhost:1/cb?code=one'))
     await exhaustLadder(acpDeliverAuthRedirect('a1', 'http://localhost:1/cb?code=two'))

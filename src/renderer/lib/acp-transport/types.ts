@@ -41,6 +41,7 @@ import type {
   AcpRegistrySnapshot,
   AgentConfig,
   AgentId,
+  AuthenticateInput,
   ContentBlock,
   InstallAcpRegistryBinaryOutcome,
   InstallAcpRegistryBinaryRequest,
@@ -473,7 +474,7 @@ export interface AcpTransport {
   authenticate(
     agentId: AgentId,
     methodId: string,
-    gateway?: { baseUrl: string; apiKey?: string },
+    input?: AuthenticateInput,
     options?: CommandCallOptions
   ): Promise<void>
   /**

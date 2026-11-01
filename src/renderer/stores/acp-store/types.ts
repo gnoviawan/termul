@@ -19,6 +19,7 @@ import type {
   AgentSpawnedEvent,
   AgentSwitchEvent,
   AskUserQuestionEvent,
+  AuthenticateInput,
   AuthMethod,
   AvailableCommand,
   acpApi,
@@ -628,7 +629,7 @@ export interface AcpState {
   authenticateAgent: (
     agentId: AgentId,
     methodId: string,
-    gateway?: { baseUrl: string; apiKey?: string }
+    input?: AuthenticateInput
   ) => Promise<void>
   createSession: (
     agentId: AgentId,
