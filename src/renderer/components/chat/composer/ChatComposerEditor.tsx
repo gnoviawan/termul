@@ -199,7 +199,7 @@ export function focusComposerFromRowPress(
       left: clamp(event.clientX, visible.left + 1, visible.right - 1),
       top: clamp(event.clientY, visible.top + 1, visible.bottom - 1)
     })
-  editor.commands.focus(hit ? hit.pos : 'end')
+  editor.commands.focus(hit ? hit.pos : 'end', { scrollIntoView: false })
 }
 
 /**
