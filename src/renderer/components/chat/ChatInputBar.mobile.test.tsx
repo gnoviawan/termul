@@ -410,16 +410,14 @@ function holdClosingSheetMounted(): () => void {
 }
 
 describe('mobile composer: one-row toolbar', () => {
-  it('renders exactly one row: Add to chat, model, mode, context ring, send', () => {
+  it('renders exactly one row: Add to chat, model, context ring, send', () => {
     const { container } = renderBar()
     const row = mobileRow(container)
 
-    expect(row.className).toContain('flex min-w-0 flex-1 items-center gap-1')
     expect(row.closest('[data-chat-composer="true"]')).not.toBeNull()
     expect(within(row).getAllByRole('button').map(nameOf)).toEqual([
       'Add to chat',
       PILL_NAME,
-      'Agent',
       'Context 25%, 50K of 200K tokens',
       'Send message'
     ])
@@ -459,22 +457,16 @@ describe('mobile composer: one-row toolbar', () => {
     ).toBeInTheDocument()
   })
 
-  it('truncates the model label and keeps the mode chip icon-only', () => {
+  it('truncates the model label and keeps the other controls at full size', () => {
     renderBar()
 
-    // The pill can shrink (`min-w-0` from ComposerPill) and its model label
-    // truncates; the wrapper around the pill shrinks with it.
+    // The pill can shrink and its model label truncates; the wrapper around
+    // the pill shrinks with it.
     const pill = screen.getByRole('button', { name: PILL_NAME })
     expect(pill).toHaveClass('min-w-0')
     const modelLabel = within(pill).getByText('Opus 5.5')
-    expect(modelLabel.tagName).toBe('SPAN')
     expect(modelLabel).toHaveClass('truncate')
     expect(pill.parentElement).toHaveClass('min-w-0')
-
-    const modeChip = screen.getByRole('button', { name: 'Agent' })
-    expect(modeChip).toHaveClass('shrink-0')
-    const modeLabel = within(modeChip).getByText('Agent')
-    expect(modeLabel).toHaveClass('sr-only')
 
     expect(plusButton()).toHaveClass('shrink-0')
     expect(screen.getByRole('button', { name: /^Context \d+%/ })).toHaveClass('shrink-0')
@@ -492,24 +484,45 @@ describe('mobile composer: one-row toolbar', () => {
     expect(within(sheet).getByText('Sonnet 5.5')).toBeInTheDocument()
   })
 
-  it('opens the Agent SelectorModal from the mode chip', () => {
+  it('sets the mode from the Select model sheet and keeps Plan visible on the pill', async () => {
     renderBar()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    const dialog = screen.getByRole('dialog', { name: 'Agent' })
-    expect(within(dialog).getByText('Plan')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: PILL_NAME }))
+    const sheet = await screen.findByRole('dialog', { name: 'Select model' })
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Mode Agent' }))
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Mode' })).getByRole('radio', { name: 'Plan' })
+    )
 
-    fireEvent.click(within(dialog).getByText('Plan'))
     expect(mockSetMode).toHaveBeenCalledWith('plan')
+    expect(
+      screen.getByRole('button', {
+        name: 'Opus 5.5. Plan mode. Switch agent. Currently Claude Code',
+        hidden: true
+      })
+    ).toBeInTheDocument()
   })
 
-  it('caps the mode SelectorModal at 80dvh', () => {
-    renderBar()
+  it('shows a non-default mode icon on the pill and none for the first mode', () => {
+    const { unmount } = renderBar()
+    expect(screen.getByRole('button', { name: PILL_NAME }).querySelectorAll('svg')).toHaveLength(1)
+    unmount()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
-    const modal = screen.getByRole('dialog', { name: 'Agent' })
-    expect(modal.className).toContain('max-h-[80dvh]')
-    expect(modal.className).not.toContain('max-h-[80vh]')
+    renderBar({
+      session: session({
+        modes: {
+          currentModeId: 'plan',
+          availableModes: [
+            { id: 'agent', name: 'Agent' },
+            { id: 'plan', name: 'Plan' }
+          ]
+        }
+      })
+    })
+    const pill = screen.getByRole('button', {
+      name: 'Opus 5.5. Plan mode. Switch agent. Currently Claude Code'
+    })
+    expect(pill.querySelectorAll('svg')).toHaveLength(2)
   })
 
   it('hides the context ring when usage is missing, bootstrap-only or under 1%', () => {

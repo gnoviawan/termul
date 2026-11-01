@@ -291,9 +291,7 @@ export function ModeChip({
   disabled,
   onSelect,
   label = 'Mode',
-  agentName,
-  className,
-  labelClassName
+  agentName
 }: {
   session: AcpSession
   disabled: boolean
@@ -301,10 +299,6 @@ export function ModeChip({
   label?: string
   /** Names the "Let <agent> act" group. */
   agentName?: string
-  /** Merged onto the `ComposerPill` trigger. */
-  className?: string
-  /** When set, the visible label renders in a `<span>` carrying these classes (e.g. sr-only). */
-  labelClassName?: string
 }): React.JSX.Element | null {
   const modes = session.modes
   const [open, setOpen] = useState(false)
@@ -324,9 +318,9 @@ export function ModeChip({
 
   const modeLabel = current?.name ?? label
   const trigger = (
-    <ComposerPill disabled={disabled} chevron pending={pending} className={className}>
+    <ComposerPill disabled={disabled} chevron pending={pending}>
       <ModeIcon modeId={current?.id} />
-      {labelClassName ? <span className={labelClassName}>{modeLabel}</span> : modeLabel}
+      {modeLabel}
     </ComposerPill>
   )
 

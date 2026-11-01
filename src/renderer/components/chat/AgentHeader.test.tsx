@@ -735,23 +735,4 @@ describe('composer chip presentation props', () => {
     )
     expect(explicit.container.innerHTML).toBe(baseHtml)
   })
-
-  it('merges className and wraps the ModeChip label so it can go sr-only', () => {
-    render(
-      <ModeChip
-        session={session('plan')}
-        disabled={false}
-        onSelect={vi.fn()}
-        label="Agent"
-        className="shrink-0"
-        labelClassName="@max-[361px]:sr-only"
-      />
-    )
-    // The accessible name keeps the label even when it is visually hidden.
-    const button = screen.getByRole('button', { name: 'Plan' })
-    expect(button).toHaveClass('shrink-0', 'min-w-0')
-    const label = within(button).getByText('Plan')
-    expect(label.tagName).toBe('SPAN')
-    expect(label).toHaveClass('@max-[361px]:sr-only')
-  })
 })

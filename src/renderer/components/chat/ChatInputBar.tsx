@@ -573,7 +573,6 @@ export function ChatInputBar({
     />
   ) : null
 
-  // Mobile one-row toolbar: the mode is its icon alone, leaving the room to the model name.
   const agentModeChip = (
     <ModeChip
       session={session}
@@ -581,8 +580,6 @@ export function ChatInputBar({
       onSelect={onSetMode}
       label="Agent"
       agentName={modeAgentName}
-      className={isMobileShell ? 'shrink-0' : undefined}
-      labelClassName={isMobileShell ? 'sr-only' : undefined}
     />
   )
   // One set of MCP props for the desktop badge popover and the mobile + sheet.
@@ -753,8 +750,9 @@ export function ChatInputBar({
               data-composer-toolbar={toolbarMode}
             >
               {isMobileShell ? (
+                // The mode and the account usage live in the model pill's sheet.
                 <div
-                  className="flex min-w-0 flex-1 items-center gap-1"
+                  className="flex min-w-0 flex-1 items-center gap-2"
                   data-composer-toolbar-row="mobile"
                 >
                   <ComposerAddSheet
@@ -763,9 +761,7 @@ export function ChatInputBar({
                     {...mcpListProps}
                   />
                   {modelSelector}
-                  {agentModeChip}
                   <div className="flex-1" />
-                  <ClaudeAccountChip sessionId={session.id} compact />
                   <ContextUsageIndicator
                     usage={sessionUsage}
                     messages={messages}
