@@ -186,6 +186,17 @@ const CLAUDE_MODELS = {
   updatedAt: 1
 }
 
+const BACKGROUND_LAUNCH = {
+  'session-1': [
+    {
+      toolCallId: 'bg-1',
+      status: 'completed',
+      rawInput: { description: 'Run e2e', prompt: 'p', run_in_background: true },
+      subagentLifecycle: { background: true }
+    }
+  ]
+}
+
 function seed(
   entries: readonly SupportedAcpAgentEntry[] = [],
   session: Record<string, unknown> = {}
@@ -915,6 +926,12 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
     [
       'an active turn with a queued prompt',
       { promptQueues: { 'session-1': [{ id: 'q1' }] } },
+      { activeTurn: true, openTurnId: 'turn-1' }
+    ],
+    ['a background subagent after the turn', { toolCalls: BACKGROUND_LAUNCH }, {}],
+    [
+      'an active turn with a background subagent',
+      { toolCalls: BACKGROUND_LAUNCH },
       { activeTurn: true, openTurnId: 'turn-1' }
     ]
   ])('wait-only busy (%s): only Wait, no cancel-then-switch', (_name, state, session) => {

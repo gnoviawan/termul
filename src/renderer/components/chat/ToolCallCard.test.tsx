@@ -72,7 +72,7 @@ describe('ToolCallCard', () => {
     render(
       <SubagentDetailsDialog
         toolCall={onOpenSubagent.mock.calls[0][0]}
-        parentTurnActive
+        parentTurn="active"
         open
         onOpenChange={() => {}}
         filePathContext={undefined}
@@ -98,7 +98,7 @@ describe('ToolCallCard', () => {
     render(
       <SubagentDetailsDialog
         toolCall={delegatedCall}
-        parentTurnActive
+        parentTurn="active"
         open
         onOpenChange={() => {}}
         filePathContext={undefined}

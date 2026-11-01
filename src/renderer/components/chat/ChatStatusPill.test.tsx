@@ -46,6 +46,7 @@ const EDITS = [edit('e1', 'src/a.ts'), edit('e2', 'src/b.ts')]
 function Pill({ toolCalls, hidden }: { toolCalls: ToolCall[]; hidden?: boolean }) {
   return (
     <ChatStatusPill
+      sessionId="s1"
       cwd=""
       toolCalls={toolCalls}
       messages={[user]}
