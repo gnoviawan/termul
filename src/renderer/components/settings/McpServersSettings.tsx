@@ -45,7 +45,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function oauthFailureMessage(error: unknown): string {
+export function oauthFailureMessage(error: unknown): string {
   if (error instanceof McpOAuthError && error.code === MCP_UNSAFE_URL) {
     return "This server's sign-in link isn't a secure https link, so Termul didn't open it."
   }
@@ -251,7 +251,8 @@ export function McpServersSettings(): React.JSX.Element {
       await saveMcpServer({
         ...parsed,
         id: target.id,
-        enabled: explicitEnabled ?? target.enabled ?? true
+        enabled: explicitEnabled ?? target.enabled ?? true,
+        ...(target.catalog ? { catalog: target.catalog } : {})
       })
       toast.success('MCP server updated')
       closeDialog()

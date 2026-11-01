@@ -21,6 +21,7 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpServers } from '@/lib/web-server-api'
 import {
   buildMcpServers,
+  catalogInstallEntry,
   loadMcpServers,
   normalizeMcpRegistry,
   type StoredMcpServer,
@@ -115,6 +116,94 @@ describe('MCP registry helpers', () => {
       { type: 'http', name: 'HTTP API', url: 'https://example.com/mcp', headers: [] },
       { type: 'stdio', name: 'Files', command: 'npx', args: [], env: [] },
       { type: 'sse', name: 'Events', url: 'https://example.com/sse', headers: [] }
+    ])
+  })
+})
+
+const NPX_PROVENANCE = {
+  source: 'mcp-registry',
+  name: 'io.github.example/files',
+  version: '2.0.1',
+  kind: 'package',
+  index: 0,
+  repositoryId: null,
+  launchDigest: 'abc123'
+} as const
+
+describe('catalog install entries', () => {
+  const committed = {
+    name: 'files',
+    config: {
+      transport: 'stdio' as const,
+      command: 'npx',
+      args: ['-y', '@example/files@2.0.1'],
+      env: [{ name: 'FILES_ROOT', isSecret: false }]
+    },
+    secrets: [{ slot: 'env' as const, name: 'FILES_ROOT', value: '/srv/data' }],
+    provenance: {
+      name: 'io.github.example/files',
+      version: '2.0.1',
+      kind: 'package' as const,
+      index: 0,
+      repositoryId: null
+    },
+    launchDigest: 'abc123'
+  }
+
+  it('builds an enabled global entry with inline values and its provenance', () => {
+    expect(catalogInstallEntry(committed, new Set(['github']), 'id-1')).toEqual({
+      id: 'id-1',
+      type: 'stdio',
+      name: 'files',
+      command: 'npx',
+      args: ['-y', '@example/files@2.0.1'],
+      env: [{ name: 'FILES_ROOT', value: '/srv/data' }],
+      enabled: true,
+      catalog: NPX_PROVENANCE
+    })
+  })
+
+  it('makes the proposed name unique against the names already in the list', () => {
+    expect(catalogInstallEntry(committed, new Set(['files', 'files-2']), 'id-1').name).toBe(
+      'files-3'
+    )
+  })
+
+  it('refuses a result missing a value the config names', () => {
+    expect(() => catalogInstallEntry({ ...committed, secrets: [] }, new Set(), 'id-1')).toThrow(
+      'The install result has no value for env FILES_ROOT'
+    )
+  })
+
+  it('keeps catalog provenance through a load and drops a malformed one', () => {
+    expect(
+      normalizeMcpRegistry([
+        { id: 'a', name: 'files', command: 'npx', catalog: NPX_PROVENANCE },
+        { id: 'b', name: 'other', command: 'npx', catalog: { ...NPX_PROVENANCE, index: '0' } }
+      ])
+    ).toEqual([
+      {
+        id: 'a',
+        type: 'stdio',
+        name: 'files',
+        command: 'npx',
+        enabled: true,
+        catalog: NPX_PROVENANCE
+      },
+      { id: 'b', type: 'stdio', name: 'other', command: 'npx', enabled: true }
+    ])
+  })
+
+  it('leaves provenance out of what reaches an agent', () => {
+    const entry = catalogInstallEntry(committed, new Set(), 'id-1')
+    expect(buildMcpServers([entry], ['id-1'])).toEqual([
+      {
+        type: 'stdio',
+        name: 'files',
+        command: 'npx',
+        args: ['-y', '@example/files@2.0.1'],
+        env: [{ name: 'FILES_ROOT', value: '/srv/data' }]
+      }
     ])
   })
 })
