@@ -1,3 +1,99 @@
+Termul Symbols
+==============
+
+TermulSymbols.woff2 in this directory is a modified copy of the Symbols-only
+font shipped with Nerd Fonts 3.5.1 (SymbolsNerdFontMono-Regular.ttf). Nerd Fonts
+aggregates glyphs from several icon projects, each under its own license, so the
+licenses and attribution notices that apply to the bundled file are collected
+here.
+
+Changes made for Termul
+-----------------------
+
+* Subset to the code points in the table below. Glyphs outside them were removed.
+* Glyphs from the Font Logos set (U+F300 to U+F384) were removed. Nerd Fonts
+  records that set as Unlicensed in its license-audit.md, so Termul does not
+  redistribute it.
+* U+EFCF and U+F385 were removed as well: no upstream glyph set claims either
+  code point.
+* Units per em changed from 2048 to 1000, advance width from 2048 to 606,
+  hhea ascender and descender set to 955 and -245, OS/2 usWinAscent and
+  usWinDescent set to 975 and 265. That makes the face metric compatible with
+  Paper Mono, which the terminal renders text with.
+* Family renamed from "Symbols Nerd Font Mono" to "Termul Symbols", so no
+  upstream Reserved Font Name is reused.
+
+The font name table carries the notice "Copyright (c) 2016, Ryan McIntyre",
+which is the notice recorded in the upstream Symbols-only font.
+
+Glyph sets included
+-------------------
+
+Code point ranges follow the Nerd Fonts wiki page "Glyph Sets and Code Points"
+(v3.5.0). Licenses follow the Nerd Fonts license-audit.md glyph and icon source
+table, which is the authority upstream publishes for these sets.
+
+  Set                        Code points                  License
+  IEC Power Symbols          23FB-23FE, 2B58              MIT
+  Powerline Extra            2630, E0A3, E0B4-E0C8, E0CA, MIT
+                             E0CC-E0D2, E0D4, E0D6-E0D7
+  Octicons                   2665, 26A1, F400-F533        MIT
+  Heavy Angle Brackets       276C-2771                    Nerd Fonts project
+  Pomicons                   E000-E00A                    SIL OFL 1.1
+  Powerline                  E0A0-E0A2, E0B0-E0B3         MIT
+  Font Awesome Extension     E200-E2A9                    MIT
+  Weather Icons              E300-E3E3                    SIL OFL 1.1
+  Seti-UI + Custom           E5FA-E6BB                    MIT
+  Devicons                   E700-E958                    MIT
+  Codicons                   EA60-EA88, EA8A-EA8C,        CC BY 4.0
+                             EA8F-EAC7, EAC9, EACC-EB09,
+                             EB0B-EB4E, EB50-EC5E,
+                             EC60-EC84
+  Progress                   EE00-EE0B                    Nerd Fonts project
+  Font Awesome (icons)       ED00-EDFF, EE0C-EFCE,        CC BY 4.0
+                             F000-F2FF
+
+The file contains 3593 mapped code points, all of them inside the ranges above.
+Sets that upstream records only as Nerd Fonts project glyphs (Heavy Angle
+Brackets and Progress) have no separate upstream license entry.
+
+Creative Commons Attribution 4.0 notices
+----------------------------------------
+
+Both sets below are licensed under Creative Commons Attribution 4.0
+International (CC BY 4.0), https://creativecommons.org/licenses/by/4.0/.
+Termul modified them by recoding the glyphs to the Nerd Fonts private use
+areas, subsetting them, and rescaling the outlines to Paper Mono's metrics.
+
+  Codicons, Microsoft Corporation.
+  https://github.com/microsoft/vscode-codicons
+  Recoded to U+EA60 to U+EC84.
+
+  Font Awesome icons, Fonticons, Inc.
+  https://fontawesome.com
+  Recoded to U+ED00 to U+EFCE and U+F000 to U+F2FF. The icon artwork is CC BY
+  4.0; the Nerd Fonts license audit notes that only the icons are used here.
+
+MIT licensed sets
+-----------------
+
+The following sets are licensed under the MIT License, which is reproduced
+below. The copyright notice recorded for each set is listed with it.
+
+  IEC Power Symbols, https://unicodepowersymbol.com
+  Octicons, Copyright (c) 2023 GitHub Inc., https://github.com/primer/octicons
+  Powerline Extra Symbols, Copyright (c) 2016 Ryan L McIntyre,
+  https://github.com/ryanoasis/powerline-extra-symbols
+  Powerline Symbols, Copyright 2013 Kim Silkebaekken and other contributors,
+  https://github.com/powerline/powerline
+  Seti-UI and the Nerd Fonts file type glyphs,
+  https://github.com/jesseweed/seti-ui
+  Font Awesome Extension, https://github.com/AndreLZGava/font-awesome-extension
+  Devicons, https://github.com/vorillaz/devicons
+
+MIT License text
+----------------
+
 The MIT License (MIT)
 
 Copyright (c) 2014 Ryan L McIntyre
@@ -19,3 +115,126 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+SIL Open Font License 1.1
+-------------------------
+
+The font software in this directory is a Modified Version of font software
+released under the SIL Open Font License, Version 1.1, and it is distributed
+under that license. The OFL text follows.
+
+Copyright notices for the OFL licensed glyph sources included here:
+
+  Nerd Fonts and its patched and symbols fonts,
+  Copyright (c) 2014, Ryan L McIntyre, https://ryanlmcintyre.com
+  Pomicons, Copyright (c) 2021, Gabriele Lana, with Reserved Font Name
+  "Pomicons", https://github.com/gabrielelana/pomicons
+  Weather Icons, https://github.com/erikflowers/weather-icons. Upstream ships
+  its OFL text with unfilled copyright fields, and Nerd Fonts records the set
+  as SIL OFL 1.1 in its license-audit.md.
+
+The family name of the bundled font is "Termul Symbols", which is not a Reserved
+Font Name of any upstream project.
+
+Copyright (c) 2014, Ryan L McIntyre (https://ryanlmcintyre.com).
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded, 
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+
+Upstream sources
+----------------
+
+  Nerd Fonts, https://github.com/ryanoasis/nerd-fonts
+  Nerd Fonts LICENSE, https://github.com/ryanoasis/nerd-fonts/blob/master/LICENSE
+  Nerd Fonts license audit,
+  https://github.com/ryanoasis/nerd-fonts/blob/master/license-audit.md
+  Nerd Fonts glyph sets and code points,
+  https://github.com/ryanoasis/nerd-fonts/wiki/Glyph-Sets-and-Code-Points

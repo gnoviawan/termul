@@ -114,7 +114,8 @@
 /* Symbol fallback: the PUA icons Paper Mono has no glyphs for (Nerd Font,
    Powerline, Font Awesome). Same 1000 upm and 606/1000 advance, so it is
    metric-compatible and xterm's cell grid is unchanged.
-   SIL OFL 1.1 — see assets/fonts/termul-symbols/LICENSE.
+   Nerd Fonts Symbols-only subset. Licenses and per-set attributions are in
+   assets/fonts/termul-symbols/LICENSE.
    Family name matches MONO_FONT_FAMILY in lib/font-stacks.ts. */
 @font-face {
   font-family: "Termul Symbols";

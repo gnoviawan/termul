@@ -1,4 +1,5 @@
 import { MONO_FONT_FAMILY, SYMBOLS_FONT_FAMILY } from '@/lib/font-stacks'
+import { logFrontendError } from '@/lib/log-api'
 
 /** Stop waiting so a stuck FontFaceSet.load cannot block the terminal. */
 export const MONO_FONT_LOAD_TIMEOUT_MS = 3000
@@ -26,11 +27,25 @@ export function isMonoFontReady(fontSizePx: number): boolean {
   }
 }
 
-/** Load Paper Mono and its symbol fallback before xterm measures glyph width. */
+/**
+ * Load Paper Mono and its symbol fallback before xterm measures glyph width.
+ * Both loads are awaited even when one fails: a fast symbol failure must not end
+ * the wait while Paper Mono is still loading, or the terminal measures the
+ * monospace fallback and never re-measures. Only a Paper Mono failure is fatal.
+ */
 export async function ensureMonoFontLoaded(fontSizePx: number): Promise<void> {
   if (typeof document === 'undefined' || typeof document.fonts?.load !== 'function') return
-  await Promise.all([
+  const [mono, symbols] = await Promise.allSettled([
     document.fonts.load(monoFontLoadSpec(fontSizePx)),
     document.fonts.load(SYMBOLS_PROBE_SPEC, '\ue0b0')
   ])
+  if (symbols.status === 'rejected') {
+    const detail = symbols.reason instanceof Error ? symbols.reason.message : String(symbols.reason)
+    void logFrontendError({
+      level: 'warn',
+      source: 'mono-font.symbols',
+      message: `Termul Symbols failed to load — PUA icons may render as blank boxes (${detail})`
+    })
+  }
+  if (mono.status === 'rejected') throw mono.reason
 }
