@@ -18,25 +18,25 @@ curl http://127.0.0.1:8080/health
 ```
 
 ```json
-{"status":"ok","allowRemoteWrites":false,"caseInsensitivePaths":false,"setupRequired":false}
+{"status":"ok","allowRemoteWrites":true,"caseInsensitivePaths":false,"setupRequired":false}
 ```
 
 Every other API route needs the access token when the server has one. Send it in the `Authorization` header:
 
 ```bash
-TOKEN=$(cat ~/.local/state/termul/web-auth-token)
+TOKEN=$(cat ~/.local/state/termul/web-auth-token)  # the default location
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/projects
 ```
 
 ```json
-{"success":true,"data":{"projects":[{"id":"439bcfbd-…","name":"termul","color":"yellow","path":"/home/me/termul","isArchived":false,"isDefault":true}]}}
+{"success":true,"data":{"projects":[{"id":"439bcfbd-…","name":"termul","color":"yellow","path":"/home/me/termul","isArchived":false,"isDefault":true}],"defaultProjectId":"439bcfbd-…"}}
 ```
 
 The server accepts the token only in the header. A `?token=` query parameter does not work. To find or set the token, see [The access token](/docs/remote/server-options#the-access-token).
 
 ## Get the spec
 
-Each server serves the spec for its own version at `/openapi.json`. That route needs the token, like the other API routes:
+A running server serves the spec for its own version at `/openapi.json`. A server that still shows its setup page does not. That route needs the token, like the other API routes:
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/openapi.json
@@ -46,7 +46,7 @@ You can also get the spec without a running server:
 
 - Download `openapi.yaml` from the [latest release](https://github.com/gnoviawan/termul/releases/latest). Each stable and nightly release has its own copy.
 - Run `termul-server openapi` to print the spec of the binary you have. Add `--format json` for JSON.
-- Browse the latest stable spec in the [interactive API reference](/api-reference.html).
+- Browse the spec in the <a href="/api-reference.html">interactive API reference</a>. It shows the latest stable release that ships the spec, as of the last docs deploy.
 
 Import the spec into Postman, Insomnia, Bruno, or a code generator such as `openapi-generator` to get a typed client.
 
@@ -67,7 +67,7 @@ A missing or wrong token returns HTTP `401` with `{"success":false,"error":"Unau
 
 ## Know what a client can change
 
-A client on the same machine as the server can use every route. A client on another device is view-only, unless the server runs with `--allow-remote-writes`. Routes that change files, git, projects, or settings return `FORBIDDEN` to a view-only client. `GET /health` reports the current setting in `allowRemoteWrites`. See [Allow changes from other devices](/docs/remote/server-options#allow-changes-from-other-devices).
+A client on the same machine as the server can make changes. A client on another device is view-only, unless the server runs with `--allow-remote-writes`. Routes that change files, git, projects, or settings return `FORBIDDEN` to a view-only client. `GET /health` tells the calling client whether it may make changes, in `allowRemoteWrites`. A client on the same machine always gets `true`. See [Allow changes from other devices](/docs/remote/server-options#allow-changes-from-other-devices).
 
 Routes that work on a path, such as `/git/*` and `/worktree/*`, accept only paths inside a registered project. Register a folder first with `POST /projects`.
 
