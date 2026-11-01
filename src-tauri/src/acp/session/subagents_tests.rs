@@ -60,6 +60,18 @@ fn an_ended_child_keeps_its_route() {
 }
 
 #[test]
+fn ending_an_ended_child_changes_nothing() {
+    let mut state = DriverState::default();
+    state.register_subagent("chat-1", "agent-a");
+    assert!(state.end_subagent("agent-a").is_some());
+    assert!(
+        state.end_subagent("agent-a").is_none(),
+        "a second end report is not a new end"
+    );
+    assert!(state.subagent_route("agent-a").is_some_and(|route| route.ended));
+}
+
+#[test]
 fn a_full_table_evicts_an_ended_route_first() {
     let mut routes = SubagentRoutes::default();
     for i in 0..1024 {

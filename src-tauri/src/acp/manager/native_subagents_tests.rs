@@ -476,6 +476,61 @@ fn an_idle_rfd_child_runs_again_when_reused() {
 }
 
 #[test]
+fn a_repeated_end_report_ends_the_card_once() {
+    let state = Mutex::new(DriverState::new());
+    claimed(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
+    let idle = rfd_state(
+        ROOT,
+        CHILD,
+        json!({ "state": "idle", "stopReason": "end_turn" }),
+    );
+    let end = single(route_session_update(&state, &idle, 2));
+    assert_eq!(end["update"]["_meta"]["termul/subagent"]["endedAt"], 2);
+    assert!(
+        claimed(route_session_update(&state, &idle, 9)).is_empty(),
+        "a replayed idle must not end the card again with a new endedAt"
+    );
+    assert!(
+        claimed(route_session_update(&state, &ended(CHILD, "completed"), 10)).is_empty(),
+        "the AIR form ends once too"
+    );
+
+    let running = rfd_state(ROOT, CHILD, json!({ "state": "running" }));
+    single(route_session_update(&state, &running, 11));
+    let again = single(route_session_update(&state, &idle, 12));
+    assert_eq!(
+        again["update"]["_meta"]["termul/subagent"]["endedAt"], 12,
+        "a reused child ends its new work"
+    );
+}
+
+#[tokio::test]
+async fn idle_twice_fans_out_one_end_event() {
+    let state = Arc::new(Mutex::new(DriverState::new()));
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+    let agent_id = AgentId::new();
+    let idle = rfd_state(
+        ROOT,
+        CHILD,
+        json!({ "state": "idle", "stopReason": "end_turn" }),
+    );
+    for raw in [rfd_announce(ROOT, CHILD), idle.clone(), idle] {
+        assert!(deliver_native_update(&state, None, &sinks, &agent_id, &raw)
+            .await
+            .expect("fan out"));
+    }
+    let kinds: Vec<_> = sink.seen.lock().iter().map(|event| event.type_).collect();
+    assert_eq!(
+        kinds,
+        [
+            crate::acp::events::EVENT_TOOL_CALL,
+            crate::acp::events::EVENT_TOOL_CALL_UPDATE,
+        ]
+    );
+}
+
+#[test]
 fn a_nested_rfd_reply_lands_on_the_nested_card() {
     let state = Mutex::new(DriverState::new());
     claimed(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
