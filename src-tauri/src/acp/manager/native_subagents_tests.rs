@@ -627,7 +627,14 @@ fn native_form_is_gated_on_the_claude_adapter_version() {
     assert!(advertised(&pinned("0.89.9")));
     assert!(advertised(&pinned("0.90.0")));
     assert!(advertised(&pinned("0.99.1")));
+    assert!(advertised(&pinned("0.99.99")));
     assert!(!advertised(&pinned("0.77.3")));
+    assert!(
+        !advertised(&pinned("1.0.0")),
+        "1.0 is past the verified wire"
+    );
+    assert!(!advertised(&pinned("1.0.0-beta.1")));
+    assert!(!advertised(&pinned("2.3.0")));
 
     let other = AgentConfig {
         config_id: Some("acp-registry:codex".to_string()),
