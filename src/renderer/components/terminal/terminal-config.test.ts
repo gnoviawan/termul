@@ -1,6 +1,10 @@
 import { Terminal } from '@xterm/xterm'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_TERMINAL_OPTIONS, getTerminalOptions } from './terminal-config'
+import {
+  DEFAULT_TERMINAL_OPTIONS,
+  getTerminalOptions,
+  TERMINAL_LINE_HEIGHT
+} from './terminal-config'
 
 describe('getTerminalOptions', () => {
   it('should return windowsPty config for Windows platform', () => {
@@ -53,6 +57,15 @@ describe('DEFAULT_TERMINAL_OPTIONS', () => {
 
   it('should disable screenReaderMode to avoid duplicate PTY input (#267)', () => {
     expect(DEFAULT_TERMINAL_OPTIONS.screenReaderMode).toBe(false)
+  })
+
+  it('should use TERMINAL_LINE_HEIGHT of 1.2', () => {
+    expect(TERMINAL_LINE_HEIGHT).toBe(1.2)
+    expect(DEFAULT_TERMINAL_OPTIONS.lineHeight).toBe(TERMINAL_LINE_HEIGHT)
+  })
+
+  it('should keep inactive terminal cursors visible in background panes', () => {
+    expect(DEFAULT_TERMINAL_OPTIONS.cursorInactiveStyle).toBe('outline')
   })
 })
 

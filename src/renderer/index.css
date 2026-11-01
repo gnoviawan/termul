@@ -572,6 +572,18 @@
     background: oklch(var(--foreground) / var(--terminal-scrollbar-hover-alpha));
   }
 
+  /* Thin separator line between commands (OSC 133;A + xterm decoration) */
+  .xterm .termul-command-separator {
+    /* biome-ignore lint/complexity/noImportantStyles: override xterm inline decoration geometry */
+    height: 0 !important;
+    border-top: 1px solid oklch(var(--border));
+    /* biome-ignore lint/complexity/noImportantStyles: override xterm inline decoration geometry */
+    width: 100% !important;
+    /* biome-ignore lint/complexity/noImportantStyles: override xterm inline decoration geometry */
+    left: 0 !important;
+    pointer-events: none;
+  }
+
   /* ------------------------------------------------------------
    * Radix popovers, tooltips, dropdowns, selects, menubars,
    * context menus, hover cards: origin-aware scale + custom
@@ -720,6 +732,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .animate-tooltip-in {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over tooltip transition styles */
       transition: none !important;
     }
 
@@ -1172,6 +1185,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .t-shimmer::before {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over shimmer animation styles */
       animation: none !important;
     }
   }
@@ -1312,16 +1326,21 @@
     color: inherit;
   }
   .t-think.is-settled .t-think-text::before {
+    /* biome-ignore lint/complexity/noImportantStyles: settled labels must suppress the live shimmer pseudo-element */
     display: none !important;
   }
 
   @media (prefers-reduced-motion: reduce) {
     .t-think-text {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over status text animations */
       transition: none !important;
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over status text animations */
       transform: none !important;
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over status text animations */
       filter: none !important;
     }
     .t-think-text::before {
+      /* biome-ignore lint/complexity/noImportantStyles: enforce reduced motion over the status shimmer pseudo-element */
       display: none !important;
     }
   }
@@ -1661,6 +1680,7 @@
 }
 
 .markdown-editor .bn-editor .bn-block-content[data-content-type="table"] table {
+  /* biome-ignore lint/complexity/noImportantStyles: preserve intrinsic table width within the scrolling wrapper */
   width: max-content !important;
   min-width: 100%;
   border-collapse: collapse;

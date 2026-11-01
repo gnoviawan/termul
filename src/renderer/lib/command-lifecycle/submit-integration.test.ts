@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs'
+import type { EditorView } from '@codemirror/view'
 import type { SessionRpcResult } from '@shared/types/command-session'
 import type { TerminalApi } from '@shared/types/ipc.types'
 import type { SessionLifecyclePayload } from '@shared/types/web-terminal-protocol.types'
 import { listen } from '@tauri-apps/api/event'
-import { cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { createElement, useEffect } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { CommandEditor } from '@/components/terminal/command-editor/CommandEditor'
 import { createWebCommandEditorTransport } from '@/lib/command-editor-transport'
 import { createTauriTerminalApi } from '@/lib/tauri-terminal-api'
 import { mockTerminal } from '@/lib/test-utils/terminal'
@@ -256,6 +258,57 @@ it('a partial result stays down across the binder', async () => {
   expect(history).toEqual([])
   expect(sessionStore.read('t1').mode).not.toBe('Editor')
   expect(sessionStore.read('t1').committedSubmit).toBe(false)
+})
+
+it('a pre-write result restores the draft across the binder', async () => {
+  FakeWebSocket.submitReply = 'PreWrite'
+  const id = 't1'
+  sessionStore.apply(id, { type: 'InitShell', session_id: 's1', nonce: 'n1' })
+  sessionStore.apply(id, {
+    type: 'PromptReady',
+    session_id: 's1',
+    nonce: 'n1',
+    prompt_generation: 1,
+    cwd: '/repo',
+    line_empty: true,
+    prompt_suppressed: true
+  })
+  expect(sessionStore.read(id).mode).toBe('Editor')
+  const trustedBefore = sessionStore.read(id).trusted
+  commandDraftStore.offer(id, 'Editor', 'make test')
+  const firstViewRef: { current: EditorView | null } = { current: null }
+  const firstMount = render(
+    createElement(CommandEditor, { terminalId: id, focused: false, viewRef: firstViewRef })
+  )
+  expect(firstViewRef.current?.state.doc.toString()).toBe('make test')
+  firstMount.unmount()
+
+  const { transport } = await createConnectedWebTransport()
+  const history: Array<[string, string, string, string]> = []
+  const binder = bindSessionClient({
+    host: transport,
+    terminalId: id,
+    ptyId: () => 'pty-9',
+    terminalName: 'local',
+    projectId: 'p1',
+    addCommand: async (command, terminalName, terminalId, projectId) => {
+      history.push([command, terminalName, terminalId, projectId])
+    }
+  })
+
+  const outcome = await binder.submit('make test')
+
+  expect(sessionStore.read(id).mode).toBe('Editor')
+  expect(sessionStore.read(id).trusted).toBe(trustedBefore)
+  expect(commandDraftStore.read(id)).toBe('make test')
+  const remountedViewRef: { current: EditorView | null } = { current: null }
+  render(
+    createElement(CommandEditor, { terminalId: id, focused: false, viewRef: remountedViewRef })
+  )
+  expect(remountedViewRef.current?.state.doc.toString()).toBe('make test')
+  expect(history).toEqual([])
+  expect(outcome.committedSubmit).toBe(false)
+  expect(sessionStore.read(id).committedSubmit).toBe(false)
 })
 
 it('an accepted submit records the committed flag', async () => {
@@ -634,6 +687,131 @@ it('completion carries the prompt context', async () => {
   }
 })
 
+it('an accepted submit clears the stored draft', async () => {
+  const id = 't1'
+  const { transport } = await createConnectedWebTransport()
+  const history: Array<[string, string, string, string]> = []
+  const binder = bindSessionClient({
+    host: transport,
+    terminalId: id,
+    ptyId: () => 'pty-9',
+    terminalName: 'local',
+    projectId: 'p1',
+    addCommand: async (command, terminalName, terminalId, projectId) => {
+      history.push([command, terminalName, terminalId, projectId])
+    }
+  })
+
+  // 1. Accepted clears the stored draft and remounted editor document is ""
+  FakeWebSocket.submitReply = 'Accepted'
+  sessionStore.apply(id, { type: 'InitShell', session_id: 's1', nonce: 'n1' })
+  sessionStore.apply(id, {
+    type: 'PromptReady',
+    session_id: 's1',
+    nonce: 'n1',
+    prompt_generation: 1,
+    cwd: '/repo',
+    line_empty: true,
+    prompt_suppressed: true
+  })
+  commandDraftStore.submitAccepted(id)
+  const firstViewRef: { current: EditorView | null } = { current: null }
+  const firstMount = render(
+    createElement(CommandEditor, { terminalId: id, focused: false, viewRef: firstViewRef })
+  )
+  act(() => {
+    firstViewRef.current!.dispatch({
+      changes: { from: 0, to: 0, insert: 'git status' },
+      selection: { anchor: 10 },
+      userEvent: 'input.type'
+    })
+  })
+  expect(commandDraftStore.read(id)).toBe('git status')
+
+  await binder.submit('git status')
+  sessionStore.apply(id, { type: 'CommandStarted', session_id: 's1', nonce: 'n1' })
+  firstMount.unmount()
+
+  expect(commandDraftStore.read(id)).toBe('')
+
+  sessionStore.apply(id, {
+    type: 'PromptReady',
+    session_id: 's1',
+    nonce: 'n1',
+    prompt_generation: 2,
+    cwd: '/repo',
+    line_empty: true,
+    prompt_suppressed: true
+  })
+  expect(sessionStore.read(id).mode).toBe('Editor')
+  const secondViewRef: { current: EditorView | null } = { current: null }
+  const secondMount = render(
+    createElement(CommandEditor, { terminalId: id, focused: false, viewRef: secondViewRef })
+  )
+  expect(secondViewRef.current?.state.doc.toString()).toBe('')
+
+  // 2. Partial also clears the stored draft and keeps the editor unmounted
+  FakeWebSocket.submitReply = 'Partial'
+  act(() => {
+    secondViewRef.current!.dispatch({
+      changes: { from: 0, to: 0, insert: 'git status' },
+      selection: { anchor: 10 },
+      userEvent: 'input.type'
+    })
+  })
+  expect(commandDraftStore.read(id)).toBe('git status')
+
+  await binder.submit('git status')
+  secondMount.unmount()
+
+  expect(commandDraftStore.read(id)).toBe('')
+  expect(sessionStore.read(id).mode).not.toBe('Editor')
+
+  // 3. Pending composition flush queued by draft-persistence before Enter does not write old text back after unmount
+  FakeWebSocket.submitReply = 'Accepted'
+  sessionStore.apply(id, {
+    type: 'PromptReady',
+    session_id: 's1',
+    nonce: 'n1',
+    prompt_generation: 3,
+    cwd: '/repo',
+    line_empty: true,
+    prompt_suppressed: true
+  })
+  expect(sessionStore.read(id).mode).toBe('Editor')
+  const rafCallbacks: FrameRequestCallback[] = []
+  const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+    rafCallbacks.push(cb)
+    return rafCallbacks.length
+  })
+  const cancelSpy = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
+  try {
+    const thirdViewRef: { current: EditorView | null } = { current: null }
+    const thirdMount = render(
+      createElement(CommandEditor, { terminalId: id, focused: false, viewRef: thirdViewRef })
+    )
+    fireEvent.compositionStart(thirdViewRef.current!.contentDOM)
+    act(() => {
+      thirdViewRef.current!.dispatch({
+        changes: { from: 0, to: 0, insert: 'git status' },
+        selection: { anchor: 10 },
+        userEvent: 'input.type.compose'
+      })
+    })
+    fireEvent.compositionEnd(thirdViewRef.current!.contentDOM, { data: 'git status' })
+    await Promise.resolve()
+
+    await binder.submit('git status')
+    thirdMount.unmount()
+
+    for (const cb of rafCallbacks) cb(performance.now())
+    expect(commandDraftStore.read(id)).toBe('')
+  } finally {
+    rafSpy.mockRestore()
+    cancelSpy.mockRestore()
+  }
+})
+
 function openTrustedSession(sessionId = 's1', nonce = 'n1') {
   sessionStore.apply('t1', { type: 'InitShell', session_id: sessionId, nonce })
   sessionStore.apply('t1', {
@@ -905,5 +1083,74 @@ it('new draft typed before a late reply survives', async () => {
   expect(commandDraftStore.read('t1')).toBe('new draft')
   expect(sessionStore.read('t1').mode).toBe('Editor')
   expect(sessionStore.read('t1').phase).toBe('AtPrompt')
+  expect(history).toEqual(['git status'])
+})
+
+it('newer prompt while submitting opens an empty editor', async () => {
+  const history: string[] = []
+  const { pending, reply } = await pendingSubmit(async () => {
+    history.push('git status')
+  })
+  sessionStore.apply('t1', {
+    type: 'PromptReady',
+    session_id: 's1',
+    nonce: 'n1',
+    prompt_generation: 1,
+    cwd: '/repo',
+    line_empty: true,
+    prompt_suppressed: true
+  })
+  expect(sessionStore.read('t1').mode).toBe('PTY')
+  expect(sessionStore.read('t1').phase).toBe('Submitting')
+  expect(commandDraftStore.read('t1')).toBe('git status')
+
+  sessionStore.apply('t1', {
+    type: 'PromptReady',
+    session_id: 's1',
+    nonce: 'n1',
+    prompt_generation: 2,
+    cwd: '/repo',
+    line_empty: true,
+    prompt_suppressed: true
+  })
+  expect(sessionStore.read('t1').mode).toBe('Editor')
+  expect(sessionStore.read('t1').phase).toBe('AtPrompt')
+  expect(commandDraftStore.read('t1')).toBe('')
+  const viewRef: { current: EditorView | null } = { current: null }
+  render(createElement(CommandEditor, { terminalId: 't1', focused: false, viewRef }))
+  expect(viewRef.current?.state.doc.toString()).toBe('')
+
+  await reply('Accepted')
+  await pending
+  expect(history).toEqual(['git status'])
+  expect(commandDraftStore.read('t1')).toBe('')
+})
+
+it('accepted submit followed by prompt ready without command started remounts an empty editor and keeps history', async () => {
+  const history: string[] = []
+  const { pending, reply } = await pendingSubmit(async () => {
+    history.push('git status')
+  })
+  await reply('Accepted')
+  await pending
+  expect(sessionStore.read('t1').phase).toBe('Submitting')
+  expect(sessionStore.read('t1').committedSubmit).toBe(true)
+
+  sessionStore.apply('t1', {
+    type: 'PromptReady',
+    session_id: 's1',
+    nonce: 'n1',
+    prompt_generation: 2,
+    cwd: '/repo',
+    line_empty: true,
+    prompt_suppressed: true
+  })
+
+  expect(sessionStore.read('t1').mode).toBe('Editor')
+  expect(sessionStore.read('t1').phase).toBe('AtPrompt')
+  expect(commandDraftStore.read('t1')).toBe('')
+  const viewRef: { current: EditorView | null } = { current: null }
+  render(createElement(CommandEditor, { terminalId: 't1', focused: false, viewRef }))
+  expect(viewRef.current?.state.doc.toString()).toBe('')
   expect(history).toEqual(['git status'])
 })

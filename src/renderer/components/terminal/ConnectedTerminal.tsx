@@ -1,9 +1,19 @@
+import type { EditorView } from '@codemirror/view'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
 import type { IDisposable } from '@xterm/xterm'
 import { Terminal } from '@xterm/xterm'
-import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
 import { toast } from 'sonner'
 import { AlertTriangle, RefreshCcw } from '@/components/icons'
 import { Button } from '@/components/ui/button'
@@ -20,6 +30,7 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
 import { useTerminalColorTheme } from '@/hooks/use-terminal-color-theme'
 import { flushDetachedOutputNow } from '@/hooks/use-terminal-detached-output'
@@ -27,13 +38,15 @@ import { useTerminalResizeV2 } from '@/hooks/use-terminal-resize-v2'
 import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 import { terminalApi } from '@/lib/api'
 import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
+import { canTerminalWriteToPty } from '@/lib/command-lifecycle/input-guard'
 import { publishScreenMode } from '@/lib/command-lifecycle/session-adapter'
+import { sessionStore } from '@/lib/command-lifecycle/session-store'
 import { buildTerminalPathLinks, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { MONO_STACK } from '@/lib/font-stacks'
 import { logFrontendError } from '@/lib/log-api'
 import { ensureMonoFontLoaded, isMonoFontReady, MONO_FONT_LOAD_TIMEOUT_MS } from '@/lib/mono-font'
 import { isMac } from '@/lib/platform'
-import { isTauriContext } from '@/lib/tauri-runtime'
+import { isTauriContext, serverAdmitsRemoteWrites } from '@/lib/tauri-runtime'
 import {
   getOrCreateProjectContinuityCorrelation,
   recordTerminalContinuityEvent
@@ -59,12 +72,16 @@ import {
   buildRehydrateSequences,
   captureScrollPosition,
   clearScrollPosition,
+  getTerminalModes,
   registerTerminal,
   restoreScrollback,
   restoreScrollPosition,
   unregisterTerminal
 } from '../../utils/terminal-registry'
 import { handleTerminalClipboardKey } from './clipboard'
+import { handleTerminalImagePaste, handleTerminalPaste } from './command-editor/editor-keys'
+import { registerEditorInputTarget, routeForeignInsert } from './command-editor/foreign-insert'
+import { TerminalInputSurface } from './command-editor/TerminalInputSurface'
 import { getInstrumentationProjectId, PARTIAL_RESTORE_NOTE } from './instrumentation'
 import { isAppOwnedTerminalShortcut, SHORTCUT_MOD, trapTerminalTabFocusNavigation } from './keymap'
 import { TerminalAssistPanel, type TerminalAssistPanelState } from './TerminalAssistPanel'
@@ -101,6 +118,7 @@ export interface ConnectedTerminalProps {
   onCommand?: (command: string) => void
   className?: string
   autoFocus?: boolean
+  isActivePane?: boolean
   initialScrollback?: string[]
   /**
    * R3: captured DEC private-mode snapshot to replay before `initialScrollback`
@@ -152,6 +170,7 @@ function ConnectedTerminalComponent({
   onBoundToStoreTerminal,
   className = '',
   autoFocus = true,
+  isActivePane = true,
   initialScrollback,
   initialModes,
   searchRef,
@@ -162,17 +181,42 @@ function ConnectedTerminalComponent({
   function publishReplayedModes(modes: TerminalModes | null | undefined): void {
     publishScreenMode(targetId, modes)
   }
+  const targetIdRef = useRef(targetId)
+  targetIdRef.current = targetId
+  const inputMode = useSyncExternalStore(
+    sessionStore.subscribe,
+    () => sessionStore.read(targetId ?? '').mode
+  )
+  const inputModeRef = useRef(inputMode)
+  inputModeRef.current = inputMode
+  const commandEditorViewRef = useRef<EditorView | null>(null)
+  const followScreenMode = useCallback(
+    (id: string) => {
+      if (!targetId) return
+      const previous = sessionStore.read(targetId)
+      const next = sessionStore.applyScreen(targetId, getTerminalModes(id))
+      if (next.mode !== previous.mode) {
+        inputModeRef.current = next.mode
+      }
+    },
+    [targetId]
+  )
 
   // 2. STORE HOOKS (Must be at the top)
-  const { healthStatus, restartTerminal } = useTerminalStore(
-    useShallow((state) => {
-      const term = state.terminals.find((t) => t.id === targetId)
-      return {
-        healthStatus: term?.healthStatus || 'running',
-        restartTerminal: state.restartTerminal
-      }
-    })
-  )
+  const { healthStatus, restartTerminal, cwd, gitBranch, terminalName, terminalProjectId } =
+    useTerminalStore(
+      useShallow((state) => {
+        const term = state.terminals.find((t) => t.id === targetId)
+        return {
+          healthStatus: term?.healthStatus || 'running',
+          cwd: term?.cwd,
+          gitBranch: term?.gitBranch,
+          restartTerminal: state.restartTerminal,
+          terminalName: term?.name,
+          terminalProjectId: term?.projectId
+        }
+      })
+    )
 
   const fontSize = useTerminalFontSize()
   // Stay false until Paper Mono can be measured, so the first xterm fit uses
@@ -184,6 +228,10 @@ function ConnectedTerminalComponent({
   // terminal never gets `options.screenReaderMode` toggled, so a flip applies
   // to new terminals only.
   const screenReaderMode = useTerminalScreenReaderMode()
+  // Reactive subscription (not a render-time direct read): the web client's
+  // boot `/health` fetch resolves AFTER the first render, so the editor must
+  // re-render on the cache flip without waiting for some other state change.
+  const remoteWritesAdmitted = useServerAdmitsRemoteWrites()
   // Story 2 mobile stopgap: on the mobile web shell (browser, viewport
   // <= MOBILE_WEB_SHELL_MAX_PX) the 'auto' renderer default resolves to the
   // DOM renderer — WebGL paints zero pixels at DPR >= 3 (QA repro). Explicit
@@ -222,6 +270,8 @@ function ConnectedTerminalComponent({
   // Ref avoids stale closures in event listeners referencing isVisible directly.
   const isVisibleRef = useRef(isVisible)
   isVisibleRef.current = isVisible
+  const isActivePaneRef = useRef(isActivePane)
+  isActivePaneRef.current = isActivePane
   // Story 2: the ref tracks the EFFECTIVE preference (mobile 'auto'→'dom'
   // flip applied), so every guard — init, addon load, recovery, visibility
   // restore — honors the mobile stopgap without per-site changes.
@@ -347,35 +397,53 @@ function ConnectedTerminalComponent({
   // 5. CALLBACKS & EFFECTS
   const { copySelection, pasteFromClipboard, hasSelection } = useTerminalClipboard({
     terminal: terminalInstance,
-    pasteText: async (text: string) => {
-      const ptyId = ptyIdRef.current
-      if (!ptyId) return
-      try {
-        const result = await terminalApi.write(ptyId, text)
-        if (!result.success) {
-          reportWriteFailure(result.code, result.error)
-        } else if (useConnectionStatusStore.getState().terminalChannel === 'connected') {
-          // Reset the toast episode only on a write the server could actually
-          // have received — a buffered offline write's local success must not
-          // start a new dedup episode (the outage is still in progress).
-          lastWriteFailureToastRef.current = null
+    pasteText: async (text: string, normalizedText?: string) => {
+      const writePaste = async (data: string) => {
+        const ptyId = ptyIdRef.current
+        if (!ptyId) return
+        if (!canTerminalWriteToPty(targetIdRef.current ?? ptyId, data, inputModeRef.current)) return
+        try {
+          const result = await terminalApi.write(ptyId, data)
+          if (!result.success) {
+            reportWriteFailure(result.code, result.error)
+          } else if (useConnectionStatusStore.getState().terminalChannel === 'connected') {
+            // Reset the toast episode only on a write the server could actually
+            // have received — a buffered offline write's local success must not
+            // start a new dedup episode (the outage is still in progress).
+            lastWriteFailureToastRef.current = null
+          }
+        } catch (err) {
+          reportWriteFailure(undefined, err instanceof Error ? err.message : 'Paste write failed')
         }
-      } catch (err) {
-        reportWriteFailure(undefined, err instanceof Error ? err.message : 'Paste write failed')
       }
+      return handleTerminalPaste(
+        () => inputModeRef.current,
+        commandEditorViewRef.current,
+        text,
+        writePaste,
+        normalizedText
+      )
     },
     onImagePaste: async () => {
-      const ptyId = ptyIdRef.current
-      if (!ptyId) return
-      // Send Ctrl+V byte to PTY - CLI apps like OpenCode read the OS clipboard directly
-      try {
-        const result = await terminalApi.write(ptyId, '\x16')
-        if (!result.success) {
-          reportWriteFailure(result.code, result.error)
+      return handleTerminalImagePaste(
+        () => inputModeRef.current,
+        commandEditorViewRef.current,
+        async (data) => {
+          const ptyId = ptyIdRef.current
+          if (!ptyId) return
+          if (!canTerminalWriteToPty(targetIdRef.current ?? ptyId, data, inputModeRef.current))
+            return
+          // Send Ctrl+V byte to PTY - CLI apps like OpenCode read the OS clipboard directly
+          try {
+            const result = await terminalApi.write(ptyId, data)
+            if (!result.success) {
+              reportWriteFailure(result.code, result.error)
+            }
+          } catch (err) {
+            reportWriteFailure(undefined, err instanceof Error ? err.message : 'Image paste failed')
+          }
         }
-      } catch (err) {
-        reportWriteFailure(undefined, err instanceof Error ? err.message : 'Image paste failed')
-      }
+      )
     }
   })
   const copySelectionRef = useRef(copySelection)
@@ -413,33 +481,65 @@ function ConnectedTerminalComponent({
     [terminalInstance]
   )
 
+  const editorInputTarget = useMemo(
+    () => ({
+      ptyId: () => ptyIdRef.current,
+      mode: () => inputModeRef.current,
+      view: () => commandEditorViewRef.current,
+      terminalId: targetId ?? '',
+      allowWrite: serverAdmitsRemoteWrites,
+      scrollPages: (pages: number) => terminalRef.current?.scrollPages(pages)
+    }),
+    [targetId]
+  )
+
+  useEffect(() => registerEditorInputTarget(editorInputTarget), [editorInputTarget])
+
   // #259: insertion only — the suggested command lands at the prompt for
   // review and is never executed automatically (no trailing newline).
   // Defense in depth: anything carrying a newline/control character is
   // refused outright — `terminalApi.write` feeds the PTY directly.
-  const insertAssistCommand = useCallback(async (command: string) => {
-    const ptyId = ptyIdRef.current
-    if (!ptyId) return
-    for (const ch of command) {
-      const code = ch.charCodeAt(0)
-      if (code < 0x20 || code === 0x7f) {
-        if (onErrorRef.current) {
-          onErrorRef.current('Refused to insert a command containing control characters')
-        }
+  const insertAssistCommand = useCallback(
+    async (command: string) => {
+      const ptyId = ptyIdRef.current
+      if (!ptyId || !serverAdmitsRemoteWrites()) return
+      if (inputModeRef.current === 'Editor') {
+        return routeForeignInsert(
+          editorInputTarget,
+          'assist',
+          command,
+          async (text) => {
+            if (!canTerminalWriteToPty(targetIdRef.current ?? ptyId, text, inputModeRef.current))
+              return
+            await terminalApi.write(ptyId, text)
+          },
+          (message) => onErrorRef.current?.(message)
+        )
+      }
+      if (!canTerminalWriteToPty(targetIdRef.current ?? ptyId, command, inputModeRef.current))
         return
+      for (const ch of command) {
+        const code = ch.charCodeAt(0)
+        if (code < 0x20 || code === 0x7f) {
+          if (onErrorRef.current) {
+            onErrorRef.current('Refused to insert a command containing control characters')
+          }
+          return
+        }
       }
-    }
-    try {
-      const result = await terminalApi.write(ptyId, command)
-      if (!result.success && onErrorRef.current) {
-        onErrorRef.current(result.error)
+      try {
+        const result = await terminalApi.write(ptyId, command)
+        if (!result.success && onErrorRef.current) {
+          onErrorRef.current(result.error)
+        }
+      } catch (err) {
+        if (onErrorRef.current) {
+          onErrorRef.current(err instanceof Error ? err.message : 'Insert failed')
+        }
       }
-    } catch (err) {
-      if (onErrorRef.current) {
-        onErrorRef.current(err instanceof Error ? err.message : 'Insert failed')
-      }
-    }
-  }, [])
+    },
+    [editorInputTarget]
+  )
   const pasteFromClipboardRef = useRef(pasteFromClipboard)
   pasteFromClipboardRef.current = pasteFromClipboard
 
@@ -487,6 +587,7 @@ function ConnectedTerminalComponent({
     async (data: string): Promise<void> => {
       const ptyId = ptyIdRef.current
       if (!ptyId) return
+      if (!canTerminalWriteToPty(targetIdRef.current ?? ptyId, data, inputModeRef.current)) return
 
       // Track command input for history
       if (data === '\r' || data === '\n') {
@@ -856,7 +957,7 @@ function ConnectedTerminalComponent({
       performFit(true)
     })
 
-    if (autoFocus) {
+    if (autoFocus && isActivePaneRef.current && isVisibleRef.current) {
       terminal.focus()
     }
 
@@ -870,7 +971,7 @@ function ConnectedTerminalComponent({
     let cachedTerminalId: string | null = null
     cleanupDataListenerRef.current = terminalApi.onData((id: string, data: Uint8Array) => {
       if (id === ptyIdRef.current && terminalRef.current) {
-        terminalRef.current.write(data)
+        terminalRef.current.write(data, () => followScreenMode(id))
         // Resolve terminal record ID (cached to avoid linear scan)
         if (!cachedTerminalId) {
           const terminalRecord = useTerminalStore.getState().findTerminalByPtyId(id)
@@ -886,8 +987,9 @@ function ConnectedTerminalComponent({
 
     cleanupExitListenerRef.current = terminalApi.onExit(
       (id: string, exitCode: number, signal?: number) => {
-        if (id === ptyIdRef.current && onExitRef.current) {
-          onExitRef.current(exitCode, signal)
+        if (id === ptyIdRef.current) {
+          if (targetId) sessionStore.processExited(targetId)
+          if (onExitRef.current) onExitRef.current(exitCode, signal)
         }
       }
     )
@@ -1493,9 +1595,23 @@ function ConnectedTerminalComponent({
     forceResizeFit
   })
 
-  const handleContainerClick = useCallback((): void => {
+  const focusPaneInput = useCallback((): void => {
+    if (
+      inputModeRef.current === 'Editor' &&
+      serverAdmitsRemoteWrites() &&
+      commandEditorViewRef.current
+    ) {
+      if (!terminalRef.current?.hasSelection()) {
+        commandEditorViewRef.current.focus()
+      }
+      return
+    }
     terminalRef.current?.focus()
   }, [])
+
+  const handleContainerClick = useCallback((): void => {
+    focusPaneInput()
+  }, [focusPaneInput])
 
   const handleSelectAll = useCallback((): void => {
     terminalRef.current?.selectAll()
@@ -1513,7 +1629,10 @@ function ConnectedTerminalComponent({
         }) ?? false,
       clearDecorations: () => searchAddonRef.current?.clearDecorations(),
       writeText: (text: string) => {
-        if (ptyIdRef.current) terminalApi.write(ptyIdRef.current, text)
+        const ptyId = ptyIdRef.current
+        if (!ptyId) return
+        if (!canTerminalWriteToPty(targetIdRef.current ?? ptyId, text, inputModeRef.current)) return
+        terminalApi.write(ptyId, text)
       }
     }
   }, [])
@@ -1637,14 +1756,14 @@ function ConnectedTerminalComponent({
       loadWebglAddon(terminal)
     loadWebglAddonRef.current = loadWebglAddon
     requestAnimationFrame(() => performFit(true))
-    if (autoFocus) terminal.focus()
+    if (autoFocus && isActivePaneRef.current && isVisibleRef.current) terminal.focus()
     const resizeObserver = new ResizeObserver(() => requestAnimationFrame(() => performFit()))
     resizeObserver.observe(containerRef.current)
     const dataDisposable = terminal.onData(handleTerminalData)
     const resizeDisposable = terminal.onResize(({ cols, rows }) => handlePtyResize(cols, rows))
     cleanupDataListenerRef.current = terminalApi.onData((id: string, data: Uint8Array) => {
       if (id === ptyIdRef.current && terminalRef.current) {
-        terminalRef.current.write(data)
+        terminalRef.current.write(data, () => followScreenMode(id))
         const terminalRecord = useTerminalStore.getState().findTerminalByPtyId(id)
         if (terminalRecord) {
           noteTerminalActivity(terminalRecord.id)
@@ -1654,8 +1773,10 @@ function ConnectedTerminalComponent({
     cleanupExitListenerRef.current = terminalApi.onExit(
       (pId: string, exitCode: number, signal?: number) => {
         if (pId === ptyIdRef.current) {
-          if (targetId)
+          if (targetId) {
+            sessionStore.processExited(targetId)
             useTerminalStore.getState().setTerminalHealthStatus(targetId, 'disconnected')
+          }
           if (onExitRef.current) onExitRef.current(exitCode, signal)
         }
       }
@@ -1817,22 +1938,37 @@ function ConnectedTerminalComponent({
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div className="relative w-full h-full group overflow-hidden">
-          <div
-            className={`w-full h-full bg-terminal-bg py-0.5 pb-1 ${
-              isMobileWebShell ? 'px-1.5' : 'px-4'
-            } ${className}`}
-            onClick={handleContainerClick}
-            onMouseDown={(e) => {
-              // Prevent event from bubbling to window/parent handlers
-              // that might steal focus back or interfere with UI
-              e.stopPropagation()
-              if (terminalRef.current) {
-                terminalRef.current.focus()
-              }
-            }}
+          <TerminalInputSurface
+            allowWrite={remoteWritesAdmitted}
+            keymapDeps={{ selection: () => terminalRef.current?.getSelection() ?? '' }}
+            focusTerminal={focusPaneInput}
+            cwd={cwd}
+            gitBranch={gitBranch ?? undefined}
+            mode={inputMode}
+            viewRef={commandEditorViewRef}
+            focused={autoFocus && isActivePane && isVisible}
+            terminalId={targetId ?? ''}
+            ptyId={() => ptyIdRef.current}
+            terminalName={terminalName}
+            projectId={terminalProjectId ?? hostProjectId}
           >
-            <div ref={containerRef} className="w-full h-full" />
-          </div>
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer clicks focus xterm; keyboard input is handled by xterm's textarea */}
+            {/* biome-ignore lint/a11y/useKeyWithClickEvents: this surface focuses xterm and is not an independent keyboard control */}
+            <div
+              className={`w-full h-full bg-terminal-bg py-0.5 pb-1 ${
+                isMobileWebShell ? 'px-1.5' : 'px-4'
+              } ${className}`}
+              onClick={handleContainerClick}
+              onMouseDown={(e) => {
+                // Prevent event from bubbling to window/parent handlers
+                // that might steal focus back or interfere with UI
+                e.stopPropagation()
+                focusPaneInput()
+              }}
+            >
+              <div ref={containerRef} className="w-full h-full" />
+            </div>
+          </TerminalInputSurface>
           {isCrashed && (
             <div className="absolute inset-0 bg-background/40 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
               <div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-6 bg-card/95 border border-border/50 p-8 rounded-2xl shadow-2xl max-w-2xl w-full border-t-4 border-t-destructive">
