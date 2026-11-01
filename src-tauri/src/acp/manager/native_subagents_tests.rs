@@ -563,6 +563,108 @@ fn a_nested_rfd_reply_lands_on_the_nested_card() {
     );
 }
 
+/// A SubagentHandback report as the adapter's `linkedSessionMessages` sends
+/// it: the sender's own copy first, then the recipient's.
+fn handback_views(tool_use_id: &str, sender: &str, recipient: &str, text: &str) -> [Value; 2] {
+    let message = |view: &str, link: &str| {
+        update(
+            view,
+            json!({
+                "sessionUpdate": "session_message",
+                "messageId": tool_use_id,
+                "senderSessionId": sender,
+                "recipientSessionId": recipient,
+                "content": [{ "type": "text", "text": text }],
+                (link): tool_use_id,
+            }),
+        )
+    };
+    [
+        message(sender, "recipientMessageId"),
+        message(recipient, "senderMessageId"),
+    ]
+}
+
+fn report_on(dispatch_id: &str, text: &str) -> Value {
+    json!({
+        "sessionId": ROOT,
+        "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": dispatch_id,
+            "content": [{ "type": "content", "content": { "type": "text", "text": text } }],
+        },
+    })
+}
+
+#[test]
+fn a_handback_report_lands_once_from_its_two_views() {
+    let state = Mutex::new(DriverState::new());
+    claimed(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
+    let routed: Vec<Value> = handback_views("toolu_handback", CHILD, ROOT, "Found 3 call sites.")
+        .iter()
+        .flat_map(|view| claimed(route_session_update(&state, view, 2)))
+        .collect();
+    assert_eq!(
+        routed,
+        [report_on(
+            "termul-subagent:sess-child",
+            "Found 3 call sites."
+        )],
+        "only the recipient's copy reaches the card"
+    );
+}
+
+#[test]
+fn requires_action_restarts_an_ended_child() {
+    let state = Mutex::new(DriverState::new());
+    claimed(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
+    let idle = rfd_state(
+        ROOT,
+        CHILD,
+        json!({ "state": "idle", "stopReason": "end_turn" }),
+    );
+    single(route_session_update(&state, &idle, 2));
+
+    let waiting = rfd_state(ROOT, CHILD, json!({ "state": "requires_action" }));
+    assert_eq!(
+        claimed(route_session_update(&state, &waiting, 3)),
+        [json!({
+            "sessionId": ROOT,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "termul-subagent:sess-child",
+                "status": "in_progress",
+                "_meta": { "termul/subagent": { "state": "running", "sessionId": CHILD } },
+            },
+        })]
+    );
+    assert_eq!(
+        state.lock().subagent_route(CHILD).map(|route| route.ended),
+        Some(false)
+    );
+}
+
+#[test]
+fn a_nested_handback_lands_once_on_the_nested_card() {
+    let state = Mutex::new(DriverState::new());
+    claimed(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
+    claimed(route_session_update(
+        &state,
+        &rfd_announce(CHILD, GRANDCHILD),
+        2,
+    ));
+    let routed: Vec<Value> =
+        handback_views("toolu_inner_handback", GRANDCHILD, CHILD, "inner done")
+            .iter()
+            .flat_map(|view| claimed(route_session_update(&state, view, 3)))
+            .collect();
+    assert_eq!(
+        routed,
+        [report_on("termul-subagent:sess-grandchild", "inner done")],
+        "the report reaches the grandchild's card once and never the child's"
+    );
+}
+
 #[test]
 fn malformed_or_unannounced_rfd_records_are_dropped() {
     let state = Mutex::new(DriverState::new());
