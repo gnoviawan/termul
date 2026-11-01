@@ -773,6 +773,28 @@ async fn browser_open_request_reaches_the_agents_watch_only() {
     assert_eq!(deltas[0]["payload"]["agentId"], "a-1");
 }
 
+/// An agent sign-in prompt and its withdrawal are `agents` deltas, never
+/// session events.
+#[tokio::test]
+async fn agent_sign_in_events_reach_the_agents_watch_only() {
+    let relay = Arc::new(WsRelaySink::new());
+    relay.seed_session_for_test("sess-1");
+    let (_client, mut rx, _replay, _) = relay.subscribe("sess-1", None, None, &CancellationToken::new()).await;
+    let (_out, mut watch_rx) = watch_connection(&relay, crate::web::watch::WatchKind::Agents);
+    for type_ in ["acp:agent_sign_in_request", "acp:agent_sign_in_resolved"] {
+        relay.emit(&AcpEvent {
+            sid: None,
+            type_,
+            payload: json!({"agentId": "a-1", "requestId": "signin-1"}),
+        });
+    }
+    assert!(drain_rx(&mut rx).is_empty(), "no session event leaves the relay");
+    let deltas = watch_deltas(&mut watch_rx);
+    let events: Vec<&str> = deltas.iter().filter_map(|d| d["event"].as_str()).collect();
+    assert_eq!(events, ["agent_sign_in_request", "agent_sign_in_resolved"]);
+    assert_eq!(deltas[1]["payload"]["requestId"], "signin-1");
+}
+
 /// CAP-2: with host persistence attached, session lifecycle events publish a
 /// `chat_history` delta so connected sidebars refetch the host-owned index
 /// (browser-origin sessions never flow through a desktop renderer save).

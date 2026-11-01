@@ -445,6 +445,28 @@ export interface BrowserOpenRequestEvent {
 }
 
 /**
+ * `acp:agent_sign_in_request` payload: the agent asked the user to sign in
+ * at `url`, following `message` (it carries a device code). Agent-level (no
+ * session id). Answered through `respondElicitation` by `requestId`.
+ */
+export interface AgentSignInRequestEvent {
+  agentId: AgentId
+  requestId: string
+  url: string
+  message: string
+}
+
+/**
+ * `acp:agent_sign_in_resolved` payload: the host no longer holds sign-in
+ * prompt `requestId` (the sign-in completed, was answered, or `authenticate`
+ * ended), so every client drops its dialog.
+ */
+export interface AgentSignInResolvedEvent {
+  agentId: AgentId
+  requestId: string
+}
+
+/**
  * Authoritative spawn result returned by the `spawn_agent` WS request — the
  * single contract for every carrier (CAP-4: the spawn response — not the async
  * `acp:agent_spawned` event — is the source of truth). The renderer populates `capabilities` + `authMethods` synchronously
@@ -778,6 +800,8 @@ export const ACP_EVENTS = {
   agentSwitch: 'acp:agent_switch',
   usageUpdate: 'acp:usage_update',
   browserOpenRequest: 'acp:browser_open_request',
+  agentSignInRequest: 'acp:agent_sign_in_request',
+  agentSignInResolved: 'acp:agent_sign_in_resolved',
   browserAgentTab: 'acp:browser_agent_tab',
   browserTicketClosed: 'acp:browser_ticket_closed',
   browserStopChanged: 'acp:browser_stop_changed',

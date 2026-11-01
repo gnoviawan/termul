@@ -56,7 +56,7 @@ export function useSwitchGate(sessionId: string): { blocked: boolean; turnBusy: 
       return true
     }
     if (Object.values(s.pendingQuestions ?? {}).some((q) => q.sessionId === sessionId)) return true
-    return Boolean(session.agentId && s.pendingBrowserOpen?.[session.agentId])
+    return Boolean(session.agentId && s.pendingSignIn?.[session.agentId])
   })
   const turnBusy = useAcpStore((s) => {
     const session = s.sessions?.[sessionId]
@@ -69,7 +69,7 @@ export function useSwitchGate(sessionId: string): { blocked: boolean; turnBusy: 
       return false
     }
     if (s.launchingSessionIds?.[sessionId] || session.replaying) return false
-    return !(session.agentId && s.pendingBrowserOpen?.[session.agentId])
+    return !(session.agentId && s.pendingSignIn?.[session.agentId])
   })
   return { blocked, turnBusy }
 }

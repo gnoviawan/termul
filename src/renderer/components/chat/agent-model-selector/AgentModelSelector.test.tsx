@@ -208,7 +208,7 @@ function seed(
     pendingPermissions: {},
     pendingQuestions: {},
     launchingSessionIds: {},
-    pendingBrowserOpen: {},
+    pendingSignIn: {},
     preparedSessions: {},
     preparingChatKeys: {},
     prepareChatErrors: {},
@@ -911,7 +911,11 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
   it.each([
     ['queued prompts', { promptQueues: { 'session-1': [{ id: 'q1' }] } }, {}],
     ['a launching chat', { launchingSessionIds: { 'session-1': true } }, {}],
-    ['a pending browser sign-in', { pendingBrowserOpen: { 'agent-1': 'https://x' } }, {}],
+    [
+      'a pending browser sign-in',
+      { pendingSignIn: { 'agent-1': { kind: 'browser', url: 'https://x' } } },
+      {}
+    ],
     [
       'an active turn with a queued prompt',
       { promptQueues: { 'session-1': [{ id: 'q1' }] } },

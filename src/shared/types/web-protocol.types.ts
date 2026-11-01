@@ -1138,6 +1138,12 @@ export interface AgentsWatchDelta {
     // The host's browser-open shim captured an agent's auth URL; the payload is
     // `{ agentId, url }`. Not part of the roster state: a missed delta is lost.
     | 'browser_open_request'
+    // The agent asked the user to sign in at a URL (a device code); the
+    // payload is `{ agentId, requestId, url, message }`, answered through
+    // `respond_elicitation`. `agent_sign_in_resolved` (`{ agentId,
+    // requestId }`) withdraws it. Not roster state: a missed delta is lost.
+    | 'agent_sign_in_request'
+    | 'agent_sign_in_resolved'
     // One browser policy scope changed; the payload is `{ scope, projectId?,
     // revision }` and clients re-read that scope. Not roster state either.
     | 'browser_policy_changed'

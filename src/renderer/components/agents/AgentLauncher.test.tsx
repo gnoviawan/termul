@@ -202,7 +202,7 @@ const {
       configToLiveAgent: {} as Record<string, string>,
       pendingRestartVersions: {} as Record<string, string>,
       agents: {} as Record<string, { id: string; capabilities: unknown; authMethods?: unknown[] }>,
-      pendingBrowserOpen: {} as Record<string, string>,
+      pendingSignIn: {} as Record<string, string>,
       mcpServers: [] as Array<{ id: string; name: string; enabled?: boolean }>,
       mcpProbeStatus: {} as Record<string, string>,
       mcpTools: {} as Record<string, unknown[]>
@@ -624,7 +624,7 @@ vi.mock('@/stores/acp-store', () => {
     setModel: mockSetModel,
     authenticateAgent: mockAuthenticateAgent,
     detachAgentForNewCredentials: mockDetachAgentForNewCredentials,
-    clearPendingBrowserOpen: mockClearPendingBrowserOpen,
+    clearPendingSignIn: mockClearPendingBrowserOpen,
     retargetWarmPool: mockRetargetWarmPool,
     setSelectedAgentConfigId: mockSetSelectedAgentConfigId
   })
@@ -793,7 +793,7 @@ beforeEach(() => {
     configToLiveAgent: {},
     pendingRestartVersions: {},
     agents: {},
-    pendingBrowserOpen: {},
+    pendingSignIn: {},
     mcpServers: [],
     mcpProbeStatus: {},
     mcpTools: {}

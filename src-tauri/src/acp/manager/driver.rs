@@ -1,6 +1,7 @@
 use super::exit::announced_reason;
 use super::*;
 use crate::acp::agent_process::TreeKillAgent;
+use crate::acp::session::RequestElicitationRoute;
 
 /// Entry point for an agent's dedicated driver thread.
 ///
@@ -513,6 +514,9 @@ pub(super) async fn drive_connection(
     let elicit_sinks = sinks.clone();
     let elicit_agent_id = agent_id.clone();
     let elicit_state = driver_state.clone();
+    let complete_sinks = sinks.clone();
+    let complete_agent_id = agent_id.clone();
+    let complete_state = driver_state.clone();
     let read_state = driver_state.clone();
     let write_state = driver_state.clone();
 
@@ -579,6 +583,19 @@ pub(super) async fn drive_connection(
                     notification,
                 )
                 .await
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_notification(
+            async move |notification: agent_client_protocol::schema::v1::CompleteElicitationNotification,
+                        _cx| {
+                super::sign_in::complete_sign_in(
+                    &complete_state,
+                    &complete_sinks,
+                    &complete_agent_id,
+                    &notification,
+                );
+                Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
         )
@@ -693,16 +710,38 @@ pub(super) async fn drive_connection(
                         elicit_state.lock().chat_session_for(session.session_id.0.as_ref())
                     }
                     ElicitationScope::Request(_) => {
-                        let Some(session_id) = elicit_state.lock().sole_active_turn_session() else {
-                            log::warn!(
-                                "[acp] request-scoped elicitation is not tied to one active turn; cancelling"
-                            );
-                            let _ = responder.respond(CreateElicitationResponse::new(
-                                ElicitationAction::Cancel,
-                            ));
-                            return Ok(());
+                        let url_mode = match &request.mode {
+                            ElicitationMode::Url(url_mode) => Some(url_mode),
+                            _ => None,
                         };
-                        session_id
+                        let route = {
+                            let mut state = elicit_state.lock();
+                            let sole_turn = state.sole_active_turn_session();
+                            state.sign_in().route(url_mode.is_some(), sole_turn)
+                        };
+                        match (route, url_mode) {
+                            (RequestElicitationRoute::SignIn, Some(url_mode)) => {
+                                super::sign_in::hold_sign_in(
+                                    &elicit_state,
+                                    &elicit_sinks,
+                                    &elicit_agent_id,
+                                    url_mode,
+                                    request.message.clone(),
+                                    responder,
+                                );
+                                return Ok(());
+                            }
+                            (RequestElicitationRoute::Session(session_id), _) => session_id,
+                            _ => {
+                                log::warn!(
+                                    "[acp] request-scoped elicitation is not tied to one active turn; cancelling"
+                                );
+                                let _ = responder.respond(CreateElicitationResponse::new(
+                                    ElicitationAction::Cancel,
+                                ));
+                                return Ok(());
+                            }
+                        }
                     }
                     _ => {
                         log::warn!("[acp] elicitation scope is unsupported; cancelling");
