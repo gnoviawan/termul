@@ -1,0 +1,83 @@
+---
+title: GitHub issues and pull requests
+description: Browse the issues and pull requests of your GitHub repository, comment on them, hand them to an agent chat, and merge a pull request.
+---
+
+The **GitHub** tab lists the issues and pull requests of the project's GitHub repository. Open one to read it, see its checks, comment on it, hand it to an agent chat, and merge a pull request, without leaving Termul.
+
+## Before you start
+
+Termul talks to GitHub through the GitHub CLI (`gh`) on the computer that runs Termul. It uses your `gh` login and never stores a token.
+
+When the tab can't show the list yet, it tells you what to fix:
+
+- **GitHub CLI not installed**: install `gh` from [cli.github.com](https://cli.github.com), then select **Retry**.
+- **This project isn't a GitHub repository**: the project's Git remote is missing or points to a host the GitHub CLI doesn't know.
+- **Sign in to** a host: select **Sign in**. Termul opens a terminal that runs the `gh auth login` command shown above the button. Finish the login there, then select **Retry**.
+
+If your login is missing a scope, or `GH_TOKEN` or `GITHUB_TOKEN` is set and overrides your `gh` login, a yellow note appears above the list with the command that fixes it. Select the copy button next to the command and run it in a terminal.
+
+## Open the GitHub tab
+
+Select the **GitHub** icon in the side panel. It is the fourth tab, after **Changes**. The list takes the place of the file list.
+
+On a phone, open the side menu and tap the **GitHub** icon. See [Use Termul on a phone](/docs/remote/phone).
+
+## Filter the list
+
+- The repository menu at the top switches between your repository and its upstream, when the project is a fork.
+- **All**, **Issues** and **PRs** pick the kind of item.
+- The state menu picks **Open**, **Closed**, **Merged**, **Draft** or **All states**.
+- **Assigned to me** and **Review requested** narrow the list to items that need you.
+
+The list refreshes on its own every two minutes while Termul is visible. Select **Refresh** to update it now. If a refresh fails, the last list stays on screen.
+
+Each filter is kept per working copy, so a [worktree](/docs/git/worktrees) can show a different list from the project folder.
+
+## Read an issue or pull request
+
+Select an item to open it in a tab in the main area. The tab shows:
+
+- The description and the **Comments**.
+- For a pull request, the **Review threads** and the **Checks**. A failed check has a log button that shows the last lines of its job log.
+- **Open on GitHub** opens the item in your web browser.
+
+The tab stays open when you restart Termul, like other tabs.
+
+## Comment and reply
+
+- To comment on an issue or pull request, type in the **Leave a comment (Markdown)** box under the **Comments** and select **Comment**. You can also press Ctrl+Enter (Cmd+Enter on macOS).
+- To answer a review thread, select **Reply** under the thread, type your reply, and select **Reply** again.
+
+The comment is posted on GitHub with your `gh` login, and the tab shows it as GitHub saved it. If GitHub refuses the comment, the error appears under the box and your text stays there so you can try again. On a `termul-server` that is read-only for remote clients, the comment and reply boxes are off.
+
+## Merge a pull request
+
+The **Merge** section of a pull request has a merge method menu with **Merge commit**, **Squash and merge** and **Rebase and merge**.
+
+- The merge button is on when GitHub says the pull request can merge now. Termul asks you to confirm before it merges, and the merge happens on GitHub.
+- When the pull request can't merge yet, for example because checks are still running, select **Enable auto-merge**. GitHub then merges it when its requirements pass. Select **Disable auto-merge** to turn it off.
+
+When you connect to a `termul-server` that is read-only for remote clients, the merge controls are off and show **This server is read-only for remote clients.**
+
+## Hand an issue or pull request to an agent
+
+The buttons in the item's header start an [agent chat](/docs/agents/start-a-chat) with the issue or pull request already in the prompt. The chat uses the agent you picked last in the new chat launcher. If you haven't set up an agent yet, Termul shows **Set up an agent first** and opens the launcher.
+
+For an issue:
+
+- **Start** creates a new [worktree](/docs/git/worktrees) from the project's default branch and opens a chat there with the issue as a prompt. The prompt is not sent yet, so you can edit it first.
+- **Ask** opens a read-only chat where you can ask an agent about the issue. Every message in the chat tells the agent not to change files, commit or push.
+
+For a pull request:
+
+- **Review** opens a read-only chat where an agent reviews the pull request.
+- **Ask** opens a read-only chat about the pull request.
+- **Fix CI** appears when a check failed. It creates a new worktree with the pull request checked out and hands the failing checks, with the last lines of their logs, to an agent.
+- **Resolve comments** appears when a review thread is unresolved. Pick the threads to hand off, then select **Hand off**. The agent works on them in a new worktree with the pull request checked out and can push there. You resolve the threads on GitHub yourself.
+
+**Fix CI** and **Resolve comments** only appear on open and draft pull requests. When Termul can't let the agent push to the pull request's branch, for example a fork that doesn't allow edits from maintainers, the chat isn't started and a message says why.
+
+Selecting **Ask** or **Review** again reopens the same chat. The **Linked chats** list on the item shows every chat started from it; select one to open it.
+
+Buttons that create a worktree are off when the project isn't a Git repository, and when you connect to a `termul-server` that is read-only for remote clients.
