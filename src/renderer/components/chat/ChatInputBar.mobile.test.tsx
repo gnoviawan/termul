@@ -561,6 +561,22 @@ describe('mobile composer: one-row toolbar', () => {
   })
 })
 
+/** React and Radix ids depend on how many trees rendered before; the markup does not. */
+function stableMarkup(html: string): string {
+  return html.replace(/:r[0-9a-z]+:/g, ':id:').replace(/radix-[:\w-]+/g, 'radix-id')
+}
+
+describe('desktop composer markup', () => {
+  it('keeps the desktop composer card unchanged', () => {
+    mockShell.current = false
+    mockMcp.servers = [{ id: 'github', type: 'stdio', name: 'github', enabled: true }]
+    const { container } = renderBar({ configOptions: [THOUGHT] })
+
+    const card = container.querySelector('[data-chat-composer="true"]')
+    expect(stableMarkup(card?.outerHTML ?? '')).toMatchSnapshot()
+  })
+})
+
 describe('mobile composer: Send, Queue and Stop (AC9)', () => {
   it('sends the draft from the row when idle', async () => {
     const onSend = vi.fn()

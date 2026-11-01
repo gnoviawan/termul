@@ -974,6 +974,40 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
   })
 })
 
+/** React and Radix ids depend on how many trees rendered before; the markup does not. */
+function stableMarkup(html: string): string {
+  return html.replace(/:r[0-9a-z]+:/g, ':id:').replace(/radix-[:\w-]+/g, 'radix-id')
+}
+
+describe('AgentModelSelector desktop markup', () => {
+  it.each([
+    ['v1', '0'],
+    ['v2', '1']
+  ])('keeps the desktop pill and %s popover markup unchanged', (_variant, flag) => {
+    localStorage.setItem(MODEL_PICKER_V2_KEY, flag)
+    try {
+      renderSelector({
+        genericOptions: [
+          { id: 'web_search', name: 'Web search', type: 'boolean', currentValue: true },
+          option('agent', 'Agent', 'other', 'default', [
+            { value: 'default', name: 'Default' },
+            { value: 'review', name: 'Review' }
+          ])
+        ]
+      })
+      expect(
+        stableMarkup(screen.getByTestId('agent-model-selector-trigger').outerHTML)
+      ).toMatchSnapshot()
+      open()
+      expect(
+        stableMarkup(screen.getByTestId('agent-model-selector-panel').outerHTML)
+      ).toMatchSnapshot()
+    } finally {
+      localStorage.setItem(MODEL_PICKER_V2_KEY, '0')
+    }
+  })
+})
+
 describe('AgentModelSelector on the mobile overlay back stack', () => {
   let detach: () => void
   const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
