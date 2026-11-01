@@ -279,7 +279,7 @@ export class WebTerminalClient {
     }
   }
 
-  /** Arm the 60 s stability timer: only a connection that survives it resets the backoff counter. */
+  /** Arm the `RECONNECT_STABLE_MS` stability timer: only a connection that survives it resets the backoff counter. */
   private startStableTimer(): void {
     this.clearStableTimer()
     this.stableTimer = setTimeout(() => {
@@ -1460,7 +1460,7 @@ export class WebTerminalClient {
     const hiddenFor = Date.now() - hiddenAt
     const socketDown = this.socket?.readyState !== this.WebSocketImpl.OPEN
     if (hiddenFor > VISIBILITY_STALE_THRESHOLD_MS || socketDown) {
-      // `resetBackoff=false`: only 60 s of stable connection resets the ladder
+      // `resetBackoff=false`: only `RECONNECT_STABLE_MS` of stable connection resets the ladder
       // (a flapping host must not be hammered at the base delay by every
       // focus). The terminal protocol has no ping/round-trip request, so a
       // held socket cannot be probed first — the forced reconnect stays.
@@ -1477,7 +1477,7 @@ export class WebTerminalClient {
    * handlers so its eventual close does not double-fire `scheduleReconnect`),
    * resets `reconnectAttempt` (unless `resetBackoff` is false — the re-attach
    * and visibility-return paths must keep climbing the backoff ladder; only
-   * the 60 s stability timer resets it), clears any pending reconnect timer, then reuses `scheduleReconnect`
+   * the stability timer resets it), clears any pending reconnect timer, then reuses `scheduleReconnect`
    * so the existing backoff + `onopen` re-attach machinery runs unchanged.
    */
   private forceReconnect(reason: string, resetBackoff = true): void {
