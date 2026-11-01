@@ -346,7 +346,7 @@ export class WsAcpTransport implements AcpTransport {
    * after a token fix) so normal reconnect behavior resumes immediately.
    */
   private tokenHalted = false
-  /** Fires after 60 s of stable connection to reset the backoff attempt counter. */
+  /** Fires after `RECONNECT_STABLE_MS` of stable connection to reset the backoff attempt counter. */
   private stableTimer: ReturnType<typeof setTimeout> | null = null
   /** Epoch-ms of the last reconnect attempt start (rate-limits wake expedites). */
   private lastReconnectAttemptAt = 0
@@ -1867,7 +1867,7 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   /**
-   * Arm the 60 s stability timer for the connection that just authenticated.
+   * Arm the stability timer for the connection that just authenticated.
    * Only when it fires (the connection survived that long) does the backoff
    * attempt counter reset — a connect that dies seconds later keeps climbing
    * the backoff ladder instead of hammering the host at the base delay.
@@ -1974,7 +1974,7 @@ export class WsAcpTransport implements AcpTransport {
     if (this.tokenHalted || this.protocolHalted || this.hostOffline) return
     if (this.disposed || this.reconnectTimer) return
     // Exponential backoff with ±25 % jitter. The attempt counter is reset only
-    // by `stableTimer` (60 s of stable connection), never merely on connect.
+    // by `stableTimer` (`RECONNECT_STABLE_MS` of stable connection), never merely on connect.
     const delay = jitteredBackoffMs(this.reconnectAttempt)
     this.reconnectAttempt += 1
     // Story 5.3 (AC3): fire the reconnect listener BEFORE setting the timer so
@@ -1998,7 +1998,7 @@ export class WsAcpTransport implements AcpTransport {
   /**
    * Wake/online/visibility/focus signal during a pending backoff: run the
    * reconnect attempt now instead of waiting out the delay. Does NOT reset the
-   * attempt counter (the 60 s stability rule owns that) and is rate-limited so
+   * attempt counter (the stability rule owns that) and is rate-limited so
    * a burst of focus events cannot turn into a connect storm. Returns whether
    * a backoff was pending.
    */
@@ -2093,7 +2093,7 @@ export class WsAcpTransport implements AcpTransport {
       // session was either re-subscribed or handed to its own retry so the
       // overlay stays visible for the full reconnect window (drop → backoff →
       // reopen → resubscribe). The attempt counter is NOT reset here: only
-      // `stableTimer` resets it after 60 s of stable connection.
+      // `stableTimer` resets it after `RECONNECT_STABLE_MS` of stable connection.
       this.reconnecting = false
       // Story 10: the reconnect cycle is fully recovered — socket open,
       // authed, and every required session re-subscribed or retrying. Only NOW

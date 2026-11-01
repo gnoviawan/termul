@@ -611,7 +611,7 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     client.dispose()
   })
 
-  it('visibility recovery reconnects but keeps climbing the backoff ladder (only 60 s stable resets it)', async () => {
+  it('visibility recovery reconnects but keeps climbing the backoff ladder (only 10 s stable resets it)', async () => {
     vi.useFakeTimers()
     const client = new WebTerminalClient(
       'ws://test/terminal/ws',
@@ -622,14 +622,13 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
     await client.attach('t1', 'claim-t1')
     const oldSocket = internals.socket
 
-    // A flapping host: the ladder has climbed and the connection has not been
-    // stable for 60 s (the stability timer would have reset it).
-    internals.reconnectAttempt = 3
-    internals.reconnectTimer = null
-
-    // Long hide → return → visibility recovery path.
+    // Long hide → return → visibility recovery path. The ladder is climbed
+    // at the moment of return (set after the hide, which outlasts the
+    // stability window and would otherwise have reset it).
     dispatchVisibility('hidden')
     await vi.advanceTimersByTimeAsync(31_000)
+    internals.reconnectAttempt = 3
+    internals.reconnectTimer = null
     dispatchVisibility('visible')
     await Promise.resolve()
 
@@ -1365,7 +1364,7 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     client.dispose()
   })
 
-  it('clears the reconnect budget only after authenticate completes AND the connection stays stable for 60s', async () => {
+  it('clears the reconnect budget only after authenticate completes AND the connection stays stable for 10s', async () => {
     vi.useFakeTimers()
     window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
     const { client, internals } = newClient()
@@ -1388,14 +1387,14 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     expect(internals.reconnectTimer).not.toBeNull()
 
     // The gate accepts again: a fully authenticated reconnect does NOT clear
-    // the budget immediately — only 60 s of stable connection does.
+    // the budget immediately — only 10 s of stable connection does.
     authenticateMode = 'ok'
     await vi.advanceTimersByTimeAsync(1100)
     expect(internals.socket).not.toBeNull()
     expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
     expect(internals.reconnectTimer).toBeNull()
     expect(internals.reconnectAttempt).toBe(2)
-    await vi.advanceTimersByTimeAsync(58_000)
+    await vi.advanceTimersByTimeAsync(8_000)
     expect(internals.reconnectAttempt).toBe(2)
     await vi.advanceTimersByTimeAsync(2_000)
     expect(internals.reconnectAttempt).toBe(0)
