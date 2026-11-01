@@ -51,6 +51,16 @@ jobs:
         run: bun run types:check
         working-directory: website-docs
 
+      - name: Fetch the API spec from the latest stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Releases before the spec shipped have no openapi.yaml; the API
+        # reference page then says so instead of failing the deploy.
+        run: |
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern openapi.yaml \
+            --dir website-docs/public --clobber \
+            || echo "::notice::The latest release has no openapi.yaml yet"
+
       - name: Build
         run: bun run build
         working-directory: website-docs
