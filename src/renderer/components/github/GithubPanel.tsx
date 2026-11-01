@@ -159,7 +159,7 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
           >
             <SelectTrigger
               aria-label="Repository"
-              className="-ml-1.5 h-7 min-w-0 flex-1 gap-1 rounded-md border-transparent bg-transparent px-1.5 text-xs font-medium pointer-coarse:text-sm [&>span]:truncate"
+              className="-ml-1.5 h-7 min-w-0 pointer-coarse:h-11 flex-1 gap-1 rounded-md border-transparent bg-transparent px-1.5 text-xs font-medium pointer-coarse:text-sm [&>span]:truncate"
             >
               <SelectValue />
             </SelectTrigger>

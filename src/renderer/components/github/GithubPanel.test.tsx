@@ -207,6 +207,15 @@ describe('GithubPanel list', () => {
     )
   })
 
+  it('gives the repository selector and Refresh the 44px touch row height', async () => {
+    api.listItems.mockResolvedValue(ok(list(ISSUE)))
+    renderPanel()
+    await screen.findByRole('button', { name: /#12/ })
+
+    expect(screen.getByRole('combobox', { name: 'Repository' })).toHaveClass('pointer-coarse:h-11')
+    expect(screen.getByRole('button', { name: 'Refresh' })).toHaveClass('pointer-coarse:size-11')
+  })
+
   it('refreshes past the host cache from the refresh button', async () => {
     api.listItems.mockResolvedValue(ok(list(ISSUE)))
     renderPanel()
