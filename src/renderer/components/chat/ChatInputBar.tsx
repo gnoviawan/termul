@@ -604,11 +604,13 @@ export function ChatInputBar({
   const composerAddHandle = useMemo(
     () => ({
       canPick,
+      // The phone shell is the browser, where an image needs an image-capable agent.
+      canPickImages: canPick && imageCapable,
       pickFiles,
       insertTrigger: (trigger: '@' | '/') => insertComposerTrigger(editorRef.current, trigger),
       blurEditor: () => blurComposerEditor(editorRef.current)
     }),
-    [canPick, pickFiles]
+    [canPick, imageCapable, pickFiles]
   )
   const sendButton = (
     <ComposerSendButton

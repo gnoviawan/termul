@@ -626,21 +626,25 @@ describe('mobile composer: Add to chat sheet', () => {
 
     expect(sheet).toHaveAttribute('data-sheet')
     expect(sheet.className).toContain('max-h-[85dvh]')
-    expect(sheet.className).toContain('overflow-y-auto')
-    expect(sheet.className).toContain('overscroll-contain')
-    expect(sheet.className).toContain('pb-[max(0.5rem,env(safe-area-inset-bottom))]')
     expect(editorEl()).not.toHaveFocus()
     expect(overlayIds()).toEqual(['composer-add-sheet'])
 
-    expect(within(sheet).getByRole('heading', { level: 2, name: 'Add to chat' })).toHaveClass(
-      'text-base'
-    )
-    expect(within(sheet).getByRole('button', { name: 'Attach files' })).toBeInTheDocument()
-    expect(within(sheet).getByRole('button', { name: 'Mention file' })).toBeInTheDocument()
-    expect(within(sheet).getByRole('button', { name: 'Commands' })).toBeInTheDocument()
     expect(
-      within(sheet).getByRole('heading', { level: 3, name: 'MCP servers' })
+      within(sheet).getByRole('heading', { level: 2, name: 'Add to chat' })
     ).toBeInTheDocument()
+    expect(
+      within(sheet)
+        .getAllByRole('button')
+        .map((button) => button.textContent?.trim())
+    ).toEqual([
+      'Close',
+      'Camera',
+      'Photos',
+      'Files',
+      '@Mention a fileAttach project files as context',
+      '/CommandsAgent commands and skills',
+      'MCP serversNone added'
+    ])
   })
 
   it('does not describe itself with a second string', () => {
@@ -690,7 +694,7 @@ describe('mobile composer: Mention file and Commands', () => {
     renderBar()
     openSheet()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Mention file' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
 
     // Focus lands in the same tap, before the sheet's own focus restore runs.
     expect(screen.queryByRole('dialog', { name: 'Add to chat' })).not.toBeInTheDocument()
@@ -710,7 +714,7 @@ describe('mobile composer: Mention file and Commands', () => {
       renderBar()
       openSheet()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Mention file' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
 
       // Still mounted and closing, yet the editor already owns focus.
       const closing = document.querySelector('[data-sheet]')
@@ -734,7 +738,7 @@ describe('mobile composer: Mention file and Commands', () => {
   })
 
   it.each([
-    ['Mention file', '@'],
+    ['Mention a file', '@'],
     ['Commands', '/']
   ] as const)('a second %s tap on the still-closing sheet does not insert the trigger twice', async (name, trigger) => {
     const restore = holdClosingSheetMounted()
@@ -761,7 +765,7 @@ describe('mobile composer: Mention file and Commands', () => {
     renderBar()
     const plus = plusButton()
     openSheet()
-    fireEvent.click(screen.getByRole('button', { name: 'Mention file' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
     await settle()
     expect(editorEl()).toHaveFocus()
 
@@ -779,7 +783,7 @@ describe('mobile composer: Mention file and Commands', () => {
     setComposerValue('fix the bug')
     openSheet()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Mention file' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
 
     expect(getComposerValue()).toBe('fix the bug @')
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
@@ -790,7 +794,7 @@ describe('mobile composer: Mention file and Commands', () => {
     setComposerValue('fix ')
     openSheet()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Mention file' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
 
     expect(getComposerValue()).toBe('fix @')
   })
@@ -829,7 +833,7 @@ describe('mobile composer: Mention file and Commands', () => {
     })
 
     expect(() =>
-      fireEvent.click(screen.getByRole('button', { name: 'Mention file' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
     ).not.toThrow()
 
     expect(screen.queryByRole('dialog', { name: 'Add to chat' })).not.toBeInTheDocument()
@@ -847,7 +851,7 @@ describe('mobile composer: Mention file and Commands', () => {
   })
 })
 
-describe('mobile composer: Attach files', () => {
+describe('mobile composer: Camera, Photos and Files', () => {
   it('opens the picker synchronously from the tap, closes the sheet and previews the file', async () => {
     let sheetOpenAtPick: boolean | null = null
     mockPickFiles.mockImplementationOnce(async () => {
@@ -858,22 +862,45 @@ describe('mobile composer: Attach files', () => {
     const plus = plusButton()
     openSheet()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Attach files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }))
 
     // Called inside the tap handler, while the sheet was still mounted.
     expect(mockPickFiles).toHaveBeenCalledTimes(1)
+    expect(mockPickFiles).toHaveBeenCalledWith(undefined)
     expect(sheetOpenAtPick).toBe(true)
     expect(screen.queryByRole('dialog', { name: 'Add to chat' })).not.toBeInTheDocument()
     expect(await screen.findByText('notes.txt')).toBeInTheDocument()
     await waitFor(() => expect(plus).toHaveFocus())
   })
 
-  it('a second Attach files tap on the still-closing sheet opens no second picker', async () => {
+  it.each([
+    ['Camera', { accept: 'image/*', capture: 'environment' }],
+    ['Photos', { accept: 'image/*' }]
+  ])('%s opens an image picker for an image-capable agent', (name, options) => {
+    renderBar({ imageCapable: true })
+    openSheet()
+
+    fireEvent.click(screen.getByRole('button', { name }))
+
+    expect(mockPickFiles).toHaveBeenCalledWith(options)
+    expect(screen.queryByRole('dialog', { name: 'Add to chat' })).not.toBeInTheDocument()
+  })
+
+  it('disables Camera and Photos when the agent cannot take images, and keeps Files', () => {
+    renderBar({ imageCapable: false })
+    const sheet = openSheet()
+
+    expect(within(sheet).getByRole('button', { name: 'Camera' })).toBeDisabled()
+    expect(within(sheet).getByRole('button', { name: 'Photos' })).toBeDisabled()
+    expect(within(sheet).getByRole('button', { name: 'Files' })).toBeEnabled()
+  })
+
+  it('a second Files tap on the still-closing sheet opens no second picker', async () => {
     const restore = holdClosingSheetMounted()
     try {
       renderBar()
       openSheet()
-      const row = screen.getByRole('button', { name: 'Attach files', hidden: true })
+      const row = screen.getByRole('button', { name: 'Files', hidden: true })
 
       fireEvent.click(row)
       expect(document.querySelector('[data-sheet]')).toHaveAttribute('data-state', 'closed')
@@ -890,43 +917,53 @@ describe('mobile composer: Attach files', () => {
     renderBar()
     openSheet()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Attach files' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }))
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Failed to open file picker'))
   })
 })
 
 describe('mobile composer: closed session', () => {
-  it('keeps + enabled, drops Attach, disables Mention, Commands and the selector pill, keeps MCP switches usable', () => {
+  it('keeps + enabled, disables the tiles, Mention, Commands and the selector pill, keeps MCP switches usable', () => {
     mockMcp.servers = [{ id: 'github', type: 'stdio', name: 'github', enabled: true }]
-    renderBar({ disabled: true, configOptions: [THOUGHT] })
+    renderBar({ disabled: true, imageCapable: true, configOptions: [THOUGHT] })
 
     expect(plusButton()).toBeEnabled()
     expect(screen.getByTestId('agent-model-selector-trigger')).toBeDisabled()
     const sheet = openSheet()
 
-    expect(within(sheet).queryByRole('button', { name: 'Attach files' })).not.toBeInTheDocument()
-    expect(within(sheet).getByRole('button', { name: 'Mention file' })).toBeDisabled()
-    expect(within(sheet).getByRole('button', { name: 'Commands' })).toBeDisabled()
+    for (const name of ['Camera', 'Photos', 'Files', 'Mention a file', 'Commands']) {
+      expect(within(sheet).getByRole('button', { name })).toBeDisabled()
+    }
+    fireEvent.click(within(sheet).getByRole('button', { name: 'MCP servers' }))
     expect(within(sheet).getByRole('switch', { name: 'Disable github' })).toBeEnabled()
   })
 })
 
 describe('mobile composer: MCP servers in the sheet', () => {
-  it('lists each server with its status and a switch, then the next-chat footnote', () => {
+  function openMcp(): HTMLElement {
+    const sheet = openSheet()
+    fireEvent.click(within(sheet).getByRole('button', { name: 'MCP servers' }))
+    return screen.getByRole('dialog', { name: 'MCP servers' })
+  }
+
+  it('summarises how many servers are on, then lists each with its status and a switch', () => {
     mockMcp.servers = [
       { id: 'github', type: 'stdio', name: 'github', enabled: true },
-      { id: 'playwright', type: 'stdio', name: 'playwright', enabled: true }
+      { id: 'playwright', type: 'stdio', name: 'playwright', enabled: false }
     ]
     mockMcp.probeStatus = { github: 'connected', playwright: 'disconnected' }
     renderBar()
-    const sheet = openSheet()
+    expect(
+      within(openSheet()).getByRole('button', { name: 'MCP servers' })
+    ).toHaveAccessibleDescription('1 of 2 on')
+    fireEvent.click(screen.getByRole('button', { name: 'MCP servers' }))
+    const sheet = screen.getByRole('dialog', { name: 'MCP servers' })
 
     expect(within(sheet).getByText('2 attached to this session.')).toBeInTheDocument()
     expect(within(sheet).getByText('Connected')).toBeInTheDocument()
-    expect(within(sheet).getByText('Disconnected')).toBeInTheDocument()
     expect(within(sheet).getByRole('switch', { name: 'Disable github' })).toBeInTheDocument()
-    expect(within(sheet).getByRole('switch', { name: 'Disable playwright' })).toBeInTheDocument()
+    expect(within(sheet).getByRole('switch', { name: 'Enable playwright' })).toBeInTheDocument()
     expect(
       within(sheet).getByText('This chat still uses the previous servers.')
     ).toBeInTheDocument()
@@ -937,10 +974,35 @@ describe('mobile composer: MCP servers in the sheet', () => {
     expect(list).not.toHaveClass('overflow-y-auto')
   })
 
+  it('Back, Escape and system back return to Add to chat with focus on the MCP row', async () => {
+    renderBar()
+    for (const leave of [
+      (sheet: HTMLElement) => fireEvent.click(within(sheet).getByRole('button', { name: 'Back' })),
+      (sheet: HTMLElement) => fireEvent.keyDown(sheet, { key: 'Escape' }),
+      () => {
+        act(() => {
+          expect(useOverlayStackStore.getState().closeTopmostOverlay()).toBe(true)
+        })
+      }
+    ]) {
+      const sheet = openMcp()
+      expect(overlayIds()).toEqual(['composer-add-sheet', 'composer-add-sheet:subview'])
+
+      leave(sheet)
+
+      const main = screen.getByRole('dialog', { name: 'Add to chat' })
+      expect(overlayIds()).toEqual(['composer-add-sheet'])
+      await waitFor(() =>
+        expect(within(main).getByRole('button', { name: 'MCP servers' })).toHaveFocus()
+      )
+      fireEvent.click(within(main).getByRole('button', { name: 'Close' }))
+    }
+  })
+
   it('toggles a server through the store action', () => {
     mockMcp.servers = [{ id: 'github', type: 'stdio', name: 'github', enabled: true }]
     renderBar()
-    const sheet = openSheet()
+    const sheet = openMcp()
 
     fireEvent.click(within(sheet).getByRole('switch', { name: 'Disable github' }))
 
@@ -951,7 +1013,7 @@ describe('mobile composer: MCP servers in the sheet', () => {
     mockMcp.servers = [{ id: 'github', type: 'stdio', name: 'github', enabled: true }]
     mockSetMcpServerEnabled.mockRejectedValueOnce(new Error('nope'))
     renderBar()
-    const sheet = openSheet()
+    const sheet = openMcp()
 
     fireEvent.click(within(sheet).getByRole('switch', { name: 'Disable github' }))
 
@@ -962,9 +1024,9 @@ describe('mobile composer: MCP servers in the sheet', () => {
     )
   })
 
-  it('shows the heading and the empty line, with no rows and no footnote, when none are attached', () => {
+  it('shows the empty line, with no rows and no footnote, when none are attached', () => {
     renderBar()
-    const sheet = openSheet()
+    const sheet = openMcp()
 
     expect(within(sheet).getByRole('heading', { name: 'MCP servers' })).toBeInTheDocument()
     expect(within(sheet).getByText('No servers attached yet.')).toBeInTheDocument()

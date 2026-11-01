@@ -1,12 +1,17 @@
-import { useCallback, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import { Paperclip, Plus } from '@/components/icons'
-import { MENU_LABEL_CLASS } from '@/components/ui/menu-styles'
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+import { Camera, FileText, ImageIcon, Plus, Server } from '@/components/icons'
+import {
+  MobileSheetContent,
+  SheetGroup,
+  SheetIconWell,
+  SheetRow,
+  useSheetSubview
+} from '@/components/ui/mobile-sheet'
+import { Sheet, SheetTrigger } from '@/components/ui/sheet'
+import type { AttachmentPickOptions } from '@/lib/composer-attachments-io'
 import { logFrontendError } from '@/lib/log-api'
-import { cn } from '@/lib/utils'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
-import { CHAT_HIT_ICON } from '../chat-layout'
 import { McpServerList, type McpServerListProps } from '../McpBadge'
 
 /**
@@ -17,8 +22,10 @@ import { McpServerList, type McpServerListProps } from '../McpBadge'
 export interface ComposerAddHandle {
   /** Whether attaching is allowed (false while the session is closed). */
   canPick: boolean
+  /** Whether a picked image can reach this agent (Camera and Photos). */
+  canPickImages: boolean
   /** Open the file picker. Must be called synchronously from the tap handler. */
-  pickFiles: () => Promise<void>
+  pickFiles: (options?: AttachmentPickOptions) => Promise<void>
   /** Append `@` / `/` to the draft; false when the editor is unavailable. */
   insertTrigger: (trigger: '@' | '/') => boolean
   /** Blur the editor synchronously (dismisses the on-screen keyboard). */
@@ -33,28 +40,41 @@ interface ComposerAddSheetProps extends Omit<McpServerListProps, 'listClassName'
 
 const LOG_SOURCE = 'composer-add-sheet'
 
-/** `MobileFileExplorer` action-row pattern; `min-h-11` holds the 44px touch floor. */
-const ACTION_ROW =
-  'flex min-h-11 w-full items-center gap-2 rounded-md px-2 text-left text-sm hover:bg-accent disabled:cursor-not-allowed disabled:text-disabled-foreground disabled:hover:bg-transparent'
+type AddSheetView = 'mcp'
 
-/** `@` and `/` are text glyphs: the icon set has no AtSign or Slash. */
-function TriggerGlyph({ children }: { children: string }): React.JSX.Element {
+const TILE =
+  'flex h-24 flex-col items-center justify-center gap-2 rounded-2xl bg-foreground/[0.05] text-sm text-foreground transition-colors duration-150 ease-out enabled:active:bg-foreground/[0.1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:text-disabled-foreground'
+
+function AttachTile({
+  icon,
+  label,
+  disabled,
+  onClick
+}: {
+  icon: ReactNode
+  label: string
+  disabled: boolean
+  onClick: () => void
+}): React.JSX.Element {
   return (
-    <span
-      aria-hidden="true"
-      className="inline-flex size-4 shrink-0 items-center justify-center text-sm font-medium"
-    >
-      {children}
-    </span>
+    <button type="button" className={TILE} disabled={disabled} onClick={onClick}>
+      <SheetIconWell>{icon}</SheetIconWell>
+      {label}
+    </button>
   )
 }
 
+function mcpSummary(servers: McpServerListProps['servers']): string {
+  if (servers.length === 0) return 'None added'
+  const on = servers.filter((server) => server.enabled).length
+  return `${on} of ${servers.length} on`
+}
+
 /**
- * Mobile composer "Add to chat" bottom sheet: the + button and its sheet. Holds
- * the actions that no longer fit the one-row toolbar: attach files, mention a
- * file, run a command, and the MCP servers. The agent, model, effort and the
- * other chat options live in the model selector pill next to it, which opens
- * its own bottom sheet on the mobile shell.
+ * Mobile composer "Add to chat" bottom sheet: the + button and its sheet.
+ * Camera, Photos and Files attach; Mention a file and Commands start a token in
+ * the draft; MCP servers opens a sub-view with the server switches. The agent,
+ * model and chat options live in the model pill's own sheet.
  */
 export function ComposerAddSheet({
   handle,
@@ -67,6 +87,7 @@ export function ComposerAddSheet({
   const keepEditorFocusRef = useRef(false)
   const close = useCallback(() => setOpen(false), [])
   useOverlayRegistration('composer-add-sheet', open, close)
+  const sub = useSheetSubview<AddSheetView>('composer-add-sheet', open)
   const onOpenChange = useCallback((next: boolean) => {
     // A fresh open never inherits a stale "keep focus in the editor" flag, so a
     // later Escape, ✕ or system-back dismissal always restores focus to +.
@@ -91,9 +112,9 @@ export function ComposerAddSheet({
 
   // The picker has to open from this tap (browsers require user activation), so
   // call it before closing the sheet. Focus then returns to +.
-  const onAttach = (): void => {
+  const onAttach = (options?: AttachmentPickOptions): void => {
     if (!open) return
-    Promise.resolve(handle.pickFiles()).catch((err: unknown) => {
+    Promise.resolve(handle.pickFiles(options)).catch((err: unknown) => {
       void logFrontendError({
         level: 'warn',
         source: LOG_SOURCE,
@@ -109,57 +130,86 @@ export function ComposerAddSheet({
         <button
           type="button"
           aria-label="Add to chat"
-          className={cn(
-            CHAT_HIT_ICON,
-            'rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-          )}
+          className="relative inline-flex size-10 shrink-0 items-center justify-center rounded-full bg-foreground/[0.06] text-foreground transition-colors duration-150 ease-out after:absolute after:-inset-0.5 after:content-[''] hover:bg-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={handle.blurEditor}
         >
           <Plus size={18} />
         </button>
       </SheetTrigger>
-      <SheetContent
-        side="bottom"
+      <MobileSheetContent
+        title={sub.view === 'mcp' ? 'MCP servers' : 'Add to chat'}
+        onBack={sub.view ? sub.back : undefined}
+        view={sub.view}
         aria-describedby={undefined}
-        className="flex max-h-[85dvh] flex-col gap-0 overflow-y-auto overscroll-contain p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+        onEscapeKeyDown={sub.onEscapeKeyDown}
         onCloseAutoFocus={(event) => {
           if (!keepEditorFocusRef.current) return
           event.preventDefault()
           keepEditorFocusRef.current = false
         }}
       >
-        <SheetHeader className="space-y-0 px-2 py-2 pr-10 text-left">
-          <SheetTitle className="text-base">Add to chat</SheetTitle>
-        </SheetHeader>
-        {handle.canPick && (
-          <button type="button" className={ACTION_ROW} onClick={onAttach}>
-            <Paperclip size={16} /> Attach files
-          </button>
+        {sub.view === 'mcp' ? (
+          <div className="rounded-2xl bg-foreground/[0.05] px-4 py-3 text-xs">
+            {/* The sheet scrolls itself, so lift the popover's nested 300px scroller.
+                `max-h-fit` rather than `max-h-none`: tailwind-merge 2.x does not know
+                `max-h-none`, so it would leave `max-h-[300px]` in place. */}
+            <McpServerList {...mcp} listClassName="max-h-fit overflow-visible pr-0" />
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-3 gap-2">
+              <AttachTile
+                icon={<Camera size={18} />}
+                label="Camera"
+                disabled={!handle.canPickImages}
+                onClick={() => onAttach({ accept: 'image/*', capture: 'environment' })}
+              />
+              <AttachTile
+                icon={<ImageIcon size={18} />}
+                label="Photos"
+                disabled={!handle.canPickImages}
+                onClick={() => onAttach({ accept: 'image/*' })}
+              />
+              <AttachTile
+                icon={<FileText size={18} />}
+                label="Files"
+                disabled={!handle.canPick}
+                onClick={() => onAttach()}
+              />
+            </div>
+            <SheetGroup>
+              <SheetRow
+                icon={<SheetIconWell>@</SheetIconWell>}
+                title="Mention a file"
+                subtitle="Attach project files as context"
+                disabled={disabled}
+                onSelect={() => onTrigger('@')}
+              />
+              <SheetRow
+                icon={<SheetIconWell>/</SheetIconWell>}
+                title="Commands"
+                subtitle="Agent commands and skills"
+                disabled={disabled}
+                onSelect={() => onTrigger('/')}
+              />
+            </SheetGroup>
+            <SheetGroup>
+              <SheetRow
+                icon={
+                  <SheetIconWell>
+                    <Server size={16} />
+                  </SheetIconWell>
+                }
+                title="MCP servers"
+                subtitle={mcpSummary(mcp.servers)}
+                accessory="chevron"
+                subview="mcp"
+                onSelect={() => sub.open('mcp')}
+              />
+            </SheetGroup>
+          </>
         )}
-        <button
-          type="button"
-          className={ACTION_ROW}
-          disabled={disabled}
-          onClick={() => onTrigger('@')}
-        >
-          <TriggerGlyph>@</TriggerGlyph> Mention file
-        </button>
-        <button
-          type="button"
-          className={ACTION_ROW}
-          disabled={disabled}
-          onClick={() => onTrigger('/')}
-        >
-          <TriggerGlyph>/</TriggerGlyph> Commands
-        </button>
-        <h3 className={cn(MENU_LABEL_CLASS, 'mt-1')}>MCP servers</h3>
-        <div className="px-2 pb-2 text-xs">
-          {/* The sheet scrolls itself, so lift the popover's nested 300px scroller.
-              `max-h-fit` rather than `max-h-none`: tailwind-merge 2.x does not know
-              `max-h-none`, so it would leave `max-h-[300px]` in place. */}
-          <McpServerList {...mcp} listClassName="max-h-fit overflow-visible pr-0" />
-        </div>
-      </SheetContent>
+      </MobileSheetContent>
     </Sheet>
   )
 }

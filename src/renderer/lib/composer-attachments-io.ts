@@ -38,13 +38,23 @@ function pickAttachmentPathsBrowser(): Promise<string[] | null> {
   return Promise.resolve(null)
 }
 
+/** Narrows the browser picker: `image/*`, and the camera instead of the library. */
+export interface AttachmentPickOptions {
+  accept?: string
+  capture?: 'environment' | 'user'
+}
+
 /** Pick files in the browser via a transient file input (no path strings). */
-export function pickAttachmentFilesBrowser(): Promise<File[] | null> {
+export function pickAttachmentFilesBrowser(
+  options: AttachmentPickOptions = {}
+): Promise<File[] | null> {
   return new Promise((resolve) => {
     let settled = false
     const input = document.createElement('input')
     input.type = 'file'
-    input.multiple = true
+    input.multiple = !options.capture
+    if (options.accept) input.accept = options.accept
+    if (options.capture) input.setAttribute('capture', options.capture)
     input.style.display = 'none'
     const cleanup = () => {
       input.remove()
