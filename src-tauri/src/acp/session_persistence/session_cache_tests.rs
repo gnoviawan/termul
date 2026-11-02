@@ -479,6 +479,112 @@ async fn a_commands_read_that_keeps_losing_scans_under_the_session_lock() {
     assert_a_read_that_keeps_losing_scans_under_the_session_lock(Cached::Commands).await;
 }
 
+/// Whether `cached` holds an entry that serves the session.
+fn is_cached(persistence: &SessionPersistence, cached: Cached) -> bool {
+    match cached {
+        Cached::Commands => persistence.inner.last_commands.lookup("session-1").is_ok(),
+        Cached::Controls => persistence.inner.last_controls.lookup("session-1").is_ok(),
+    }
+}
+
+/// The locked last resort clones the catalog entry, then a delete removes
+/// the session and forgets it before the scan takes its ticket. The log is
+/// still on disk (the delete removes it last), so the scan reads it: the
+/// read must report the session gone and leave nothing cached.
+async fn assert_a_locked_scan_overtaken_by_a_delete_leaves_nothing_cached(cached: Cached) {
+    let root = temp_dir(&format!("locked-delete-{cached:?}"));
+    let (persistence, _) = reopened(&root, false).await;
+    let forget = {
+        let persistence = Arc::downgrade(&persistence);
+        Arc::new(move || {
+            if let Some(persistence) = persistence.upgrade() {
+                persistence.forget_log_derived("session-1");
+            }
+        })
+    };
+    persistence.set_cache_scan_test_callback(forget);
+    let delete = {
+        let persistence = Arc::downgrade(&persistence);
+        Arc::new(move || {
+            if let Some(persistence) = persistence.upgrade() {
+                // `delete_session`'s order: the catalog entry, then the caches.
+                persistence.remove_catalog_entry("session-1");
+                persistence.forget_log_derived("session-1");
+            }
+        })
+    };
+    persistence.set_locked_scan_test_callback(delete);
+
+    let result = match cached {
+        Cached::Commands => persistence.last_commands_async("session-1").await.map(drop),
+        Cached::Controls => persistence.last_controls_async("session-1").await.map(drop),
+    };
+    assert!(
+        matches!(result, Err(SessionPersistenceError::SessionNotFound)),
+        "{cached:?}: the read must report the deleted session gone, got {result:?}"
+    );
+    assert!(
+        !is_cached(&persistence, cached),
+        "{cached:?}: the deleted session's log must not stay cached"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_controls_locked_scan_overtaken_by_a_delete_leaves_nothing_cached() {
+    assert_a_locked_scan_overtaken_by_a_delete_leaves_nothing_cached(Cached::Controls).await;
+}
+
+#[tokio::test]
+async fn a_commands_locked_scan_overtaken_by_a_delete_leaves_nothing_cached() {
+    assert_a_locked_scan_overtaken_by_a_delete_leaves_nothing_cached(Cached::Commands).await;
+}
+
+/// The writer applies an append to the caches before it releases the
+/// session's entry lock, so a salvage cannot rewrite the log and forget the
+/// session between the write and the apply.
+async fn assert_the_writer_applies_an_append_under_the_entry_lock(cached: Cached) {
+    let root = temp_dir(&format!("apply-locked-{cached:?}"));
+    let (persistence, _) = reopened(&root, false).await;
+    persistence.reopen_writer("session-1").await.unwrap();
+    let entry = persistence
+        .inner
+        .catalog
+        .lock()
+        .get("session-1")
+        .cloned()
+        .unwrap();
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let callback = {
+        let observed = Arc::clone(&observed);
+        Arc::new(move || observed.lock().push(entry.is_locked()))
+    };
+    persistence.set_cache_apply_test_callback(callback);
+
+    let (record, expected) = appended(cached);
+    persistence.enqueue_event(record).unwrap();
+    persistence.flush_session("session-1").await.unwrap();
+
+    assert_eq!(
+        *observed.lock(),
+        vec![true],
+        "{cached:?}: the append was applied once, under the entry lock"
+    );
+    assert_eq!(read(&persistence, cached).await, expected);
+    persistence.shutdown().await.unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_writer_applies_a_controls_append_under_the_entry_lock() {
+    assert_the_writer_applies_an_append_under_the_entry_lock(Cached::Controls).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_writer_applies_a_commands_append_under_the_entry_lock() {
+    assert_the_writer_applies_an_append_under_the_entry_lock(Cached::Commands).await;
+}
+
 fn command_list(name: &str, seq: u64) -> Option<CommandList> {
     CommandList::of_record(&commands_update(seq, name))
 }

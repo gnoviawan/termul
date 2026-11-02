@@ -143,11 +143,18 @@ impl AppendedLogDerived {
         })
     }
 
-    /// Called by the writer once the record is on disk, never before: a
-    /// salvage that runs between the enqueue and the write forgets the
-    /// session, and a scan after that forget reads a log without the record.
-    /// Applied after the write, the record always lands on top of that scan.
+    /// Called by the writer once the record is on disk, never before, and
+    /// while it still holds the session's entry lock. A salvage that runs
+    /// between the enqueue and the write forgets the session, and a scan
+    /// after that forget reads a log without the record; applied after the
+    /// write, the record always lands on top of that scan. A salvage cannot
+    /// run between the write and the apply, so its forget can never be
+    /// followed by a record its rewrite dropped.
     pub(super) fn apply(self, inner: &Inner) {
+        #[cfg(test)]
+        if let Some(hook) = inner.cache_apply_hook.lock().clone() {
+            hook();
+        }
         inner.last_controls.note(&self.session_id, self.controls);
         if let Some(commands) = self.commands {
             inner
@@ -211,6 +218,13 @@ impl SessionPersistence {
     /// Only `delete_session` forgets without it, and then the session is
     /// gone. The scan holds up the session's writer and `persist_index`, which
     /// is why it is not the first resort.
+    ///
+    /// A delete can remove the catalog entry and forget the session after
+    /// the entry is cloned here but before the ticket is taken under its
+    /// lock; the ticket is then current and the seed holds the deleted log.
+    /// So once the seed lands, the entry must still be the catalog's: a
+    /// delete removes it before it forgets, so while it is, that forget is
+    /// still to come and drops the seed. Otherwise this read drops it.
     async fn read_through_locked<V: LogDerived>(
         self: &Arc<Self>,
         session_id: &str,
@@ -222,9 +236,49 @@ impl SessionPersistence {
             .get(session_id)
             .cloned()
             .ok_or(SessionPersistenceError::SessionNotFound)?;
+        let value = self
+            .scan_under_entry_lock::<V>(session_id, Arc::clone(&entry))
+            .await?;
+        // Checked without the entry lock: the catalog lock is taken before
+        // an entry lock everywhere else.
+        let registered = match self.inner.catalog.lock().get(session_id) {
+            Some(current) if Arc::ptr_eq(current, &entry) => return Ok(value),
+            Some(_) => true,
+            None => false,
+        };
+        V::cache(&self.inner).forget(session_id);
+        log::warn!(
+            "[acp-history] {} locked scan raced a delete or re-registration; dropped its seed \
+             session_id={} registered={registered}",
+            V::NAME,
+            crate::logging::redact_session_id(session_id)
+        );
+        if registered {
+            // The entry was replaced (a writer reopen, or a delete and a new
+            // registration of the id) while the read ran. Returning the scan
+            // is no worse than a read that finished just before; only a
+            // cached copy could have outlived the replacement.
+            Ok(value)
+        } else {
+            Err(SessionPersistenceError::SessionNotFound)
+        }
+    }
+
+    /// Scan the log and seed the cache under the session's catalog `entry`.
+    async fn scan_under_entry_lock<V: LogDerived>(
+        self: &Arc<Self>,
+        session_id: &str,
+        entry: Arc<Mutex<SessionMetadata>>,
+    ) -> Result<V::Value> {
         let persistence = Arc::clone(self);
         let id = session_id.to_string();
+        #[cfg(test)]
+        let hook = self.locked_scan_hook.lock().clone();
         tokio::task::spawn_blocking(move || {
+            #[cfg(test)]
+            if let Some(hook) = hook {
+                hook();
+            }
             let metadata = entry.lock();
             let cache = V::cache(&persistence.inner);
             let ticket = match cache.lookup(&id) {
@@ -268,6 +322,20 @@ impl SessionPersistence {
     #[cfg(test)]
     pub(crate) fn set_cache_scan_test_callback(&self, callback: CacheScanTestCallback) {
         *self.cache_scan_hook.lock() = Some(callback);
+    }
+
+    /// Test seam: `callback` runs in the locked last resort after it clones
+    /// the catalog entry and before it takes the entry lock.
+    #[cfg(test)]
+    pub(crate) fn set_locked_scan_test_callback(&self, callback: CacheScanTestCallback) {
+        *self.locked_scan_hook.lock() = Some(callback);
+    }
+
+    /// Test seam: `callback` runs as the writer applies an append to the
+    /// caches.
+    #[cfg(test)]
+    pub(crate) fn set_cache_apply_test_callback(&self, callback: CacheScanTestCallback) {
+        *self.inner.cache_apply_hook.lock() = Some(callback);
     }
 }
 

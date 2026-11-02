@@ -166,6 +166,9 @@ struct Inner {
     /// queue deterministically.
     #[cfg(test)]
     writer_gate_hook: Mutex<Option<Arc<ReplayTestHook>>>,
+    /// Test seam: runs as the writer applies an append to the caches.
+    #[cfg(test)]
+    cache_apply_hook: Mutex<Option<session_cache::CacheScanTestCallback>>,
 }
 
 pub struct SessionPersistence {
@@ -176,6 +179,8 @@ pub struct SessionPersistence {
     salvage_hook: Mutex<Option<Arc<ReplayTestHook>>>,
     #[cfg(test)]
     cache_scan_hook: Mutex<Option<session_cache::CacheScanTestCallback>>,
+    #[cfg(test)]
+    locked_scan_hook: Mutex<Option<session_cache::CacheScanTestCallback>>,
 }
 
 #[cfg(test)]
@@ -352,6 +357,8 @@ impl SessionPersistence {
                 writer_gate_hook: Mutex::new(None),
                 #[cfg(test)]
                 writer_gate: Mutex::new(None),
+                #[cfg(test)]
+                cache_apply_hook: Mutex::new(None),
             }),
             #[cfg(test)]
             replay_hook: Mutex::new(None),
@@ -359,6 +366,8 @@ impl SessionPersistence {
             salvage_hook: Mutex::new(None),
             #[cfg(test)]
             cache_scan_hook: Mutex::new(None),
+            #[cfg(test)]
+            locked_scan_hook: Mutex::new(None),
         });
         service.recover().await?;
         Ok(service)
@@ -1220,13 +1229,16 @@ impl SessionPersistence {
             }
         }
         self.inner.sessions.lock().remove(session_id);
-        self.forget_log_derived(session_id);
         let dir = self.session_dir(&metadata.storage_key)?;
         // Drop the catalog entry BEFORE touching the dir: a read-path
         // salvage serializes its rewrite on the catalog lock, so once the
         // entry is gone no in-flight or future salvage can stage a rewrite
         // that would resurrect the deleted dir via `create_dir_all`.
         self.remove_catalog_entry(session_id);
+        // Forget only once the entry is gone: a cache scan that takes its
+        // ticket after this forget then cannot find the session (see
+        // `session_cache`), and one that took it before is rejected.
+        self.forget_log_derived(session_id);
         fs::remove_dir_all(&dir)?;
         self.persist_index().await?;
         log::info!(

@@ -42,11 +42,13 @@ pub(super) fn writer_loop(
         let result = match command {
             WriterCommand::Append(record) => {
                 let derived = session_cache::AppendedLogDerived::of(&record);
-                let appended = append_record(&inner.root, &metadata, &mut tails, record);
-                if let (Ok(()), Some(derived)) = (&appended, derived) {
-                    derived.apply(&inner);
-                }
-                appended
+                // Applied under the entry lock: a salvage cannot rewrite the
+                // log and forget the caches between the write and the apply.
+                append_record_then(&inner.root, &metadata, &mut tails, record, || {
+                    if let Some(derived) = derived {
+                        derived.apply(&inner);
+                    }
+                })
             }
             WriterCommand::Flush(reply) => {
                 let result = sync_session_files(&inner.root, &metadata);
@@ -287,6 +289,18 @@ pub(super) fn append_record(
     tails: &mut TailState,
     record: PersistedEventRecord,
 ) -> Result<()> {
+    append_record_then(root, metadata, tails, record, || {})
+}
+
+/// [`append_record`], running `on_written` once the record is on disk and
+/// before the session's entry lock is released.
+fn append_record_then(
+    root: &Path,
+    metadata: &Arc<Mutex<SessionMetadata>>,
+    tails: &mut TailState,
+    record: PersistedEventRecord,
+    on_written: impl FnOnce(),
+) -> Result<()> {
     let mut current = metadata.lock();
     if record.session_id != current.session_id
         || record.schema_version != SESSION_SCHEMA_VERSION
@@ -446,6 +460,7 @@ pub(super) fn append_record(
             crate::logging::redact_session_id(&record.session_id)
         );
     }
+    on_written();
     Ok(())
 }
 
