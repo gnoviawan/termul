@@ -10,7 +10,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { createWriteStream, existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { Page } from 'playwright'
@@ -92,6 +92,68 @@ function sumAgentStats(statsDir: string): { updates: number; textChars: number }
   return { updates, textChars }
 }
 
+/**
+ * Chromium memory-infra dump of the renderer: where its private bytes sit
+ * (v8, blink_gc, partition_alloc, malloc, cc, skia, ...), per top-level
+ * allocator, in bytes. Returns null when tracing is unavailable.
+ */
+async function rendererAllocatorBreakdown(page: Page): Promise<Record<string, number> | null> {
+  const browser = page.context().browser()
+  if (!browser) return null
+  const session = await browser.newBrowserCDPSession()
+  const events: Array<{
+    ph?: string
+    pid?: number
+    args?: {
+      dumps?: { allocators?: Record<string, { attrs?: Record<string, { value?: string }> }> }
+    }
+  }> = []
+  session.on('Tracing.dataCollected', (payload: { value: typeof events }) => {
+    events.push(...payload.value)
+  })
+  const complete = new Promise<void>((resolve) =>
+    session.once('Tracing.tracingComplete', () => resolve())
+  )
+  await session.send('Tracing.start', {
+    traceConfig: { includedCategories: ['disabled-by-default-memory-infra'] },
+    transferMode: 'ReportEvents'
+  })
+  await session.send('Tracing.requestMemoryDump', {
+    deterministic: true,
+    levelOfDetail: 'detailed'
+  })
+  await session.send('Tracing.end')
+  await complete
+  await session.detach()
+  const totals = new Map<number, Record<string, number>>()
+  for (const event of events) {
+    const allocators = event.ph === 'v' ? event.args?.dumps?.allocators : undefined
+    if (!allocators || event.pid === undefined) continue
+    const perPid = totals.get(event.pid) ?? {}
+    for (const [name, dump] of Object.entries(allocators)) {
+      if (name.includes('/')) continue
+      const size = dump.attrs?.size?.value
+      if (size) perPid[name] = (perPid[name] ?? 0) + Number.parseInt(size, 16)
+    }
+    totals.set(event.pid, perPid)
+  }
+  // The renderer is the process whose dump carries blink_gc.
+  for (const perPid of totals.values()) if ('blink_gc' in perPid) return perPid
+  return null
+}
+
+/** Write a V8 heap snapshot of the page to `file` (for retainer analysis). */
+export async function writeHeapSnapshot(page: Page, file: string): Promise<void> {
+  const cdp = await page.context().newCDPSession(page)
+  const out = createWriteStream(file)
+  cdp.on('HeapProfiler.addHeapSnapshotChunk', (payload: { chunk: string }) => {
+    out.write(payload.chunk)
+  })
+  await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false })
+  await new Promise<void>((resolve) => out.end(resolve))
+  await cdp.detach()
+}
+
 export async function captureEndSnapshot(
   page: Page,
   rootPid: number,
@@ -134,6 +196,61 @@ export async function captureEndSnapshot(
     await cdp.detach()
   } catch (err) {
     gaps.push(`heap/DOM snapshot failed: ${String(err)}`)
+  }
+
+  try {
+    snapshot.domCensus = await page.evaluate<Array<{ key: string; count: number }>>(`(() => {
+      const counts = new Map()
+      const bump = (key) => counts.set(key, (counts.get(key) ?? 0) + 1)
+      for (const el of document.querySelectorAll('*')) {
+        bump('tag:' + el.tagName.toLowerCase())
+        if (el.hasAttribute('data-sd-animate')) bump('attr:data-sd-animate')
+        const tab = el.closest('[data-chat-tab-state]')
+        bump(tab ? 'chat-tab:' + tab.getAttribute('data-chat-tab-state') : 'outside-chat-tabs')
+      }
+      bump('chat-tabs:' + document.querySelectorAll('[data-chat-tab-state]').length)
+      return [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 20)
+        .map(([key, count]) => ({ key, count }))
+    })()`)
+  } catch (err) {
+    gaps.push(`DOM census failed: ${String(err)}`)
+  }
+
+  try {
+    snapshot.pageState = await page.evaluate<Record<string, string | number>>(`(() => {
+      const state = { visibility: document.visibilityState, focused: String(document.hasFocus()) }
+      for (const el of document.querySelectorAll('[data-row-reveal]')) {
+        const key = 'rowReveal:' + el.getAttribute('data-row-reveal')
+        state[key] = (state[key] ?? 0) + 1
+      }
+      const items = document.querySelectorAll('[data-slot="message-scroller-item"]')
+      state.scrollerItems = items.length
+      let maxRows = 0
+      for (const item of items) {
+        maxRows = Math.max(maxRows, item.querySelectorAll('[data-row-reveal]').length)
+      }
+      state.maxRowsInOneItem = maxRows
+      for (const entry of performance.getEntriesByType('resource')) {
+        const file = entry.name.split('/').pop() ?? ''
+        if (/^(AgentChatPanel|tauri-index)-/.test(file)) state['chunk:' + file] = 1
+      }
+      for (const animation of document.getAnimations()) {
+        const key = 'animation:' + animation.playState
+        state[key] = (state[key] ?? 0) + 1
+      }
+      return state
+    })()`)
+  } catch (err) {
+    gaps.push(`page state failed: ${String(err)}`)
+  }
+
+  try {
+    snapshot.rendererAllocators = (await rendererAllocatorBreakdown(page)) ?? undefined
+    if (!snapshot.rendererAllocators) gaps.push('memory-infra dump had no renderer process')
+  } catch (err) {
+    gaps.push(`memory-infra dump failed: ${String(err)}`)
   }
 
   // Let the OS counters settle after the forced GC returned memory.

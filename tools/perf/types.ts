@@ -166,6 +166,12 @@ export interface EndSnapshot {
   domNodes: number | null
   domDocuments: number | null
   jsEventListeners: number | null
+  /** Most common elements by tag and by chat-tab visibility. */
+  domCensus?: Array<{ key: string; count: number }>
+  /** Visibility, row-reveal states and live animation play states. */
+  pageState?: Record<string, string | number>
+  /** Renderer bytes per top-level Chromium allocator (memory-infra dump). */
+  rendererAllocators?: Record<string, number>
   privateBytesByRole: Record<ProcessRole, number>
   /** Every process in the app tree except the fake agents the harness supplies. */
   appPrivateBytes: number

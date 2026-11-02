@@ -19,7 +19,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { createCollector } from '../metrics/cdp-collector.ts'
-import { captureEndSnapshot } from '../metrics/end-snapshot.ts'
+import { captureEndSnapshot, writeHeapSnapshot } from '../metrics/end-snapshot.ts'
 import { createProcessCollector } from '../metrics/process-collector.ts'
 import { renderReport } from '../report/html-report.ts'
 
@@ -202,6 +202,7 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
       runId,
       exe: typeof flags.exe === 'string' ? flags.exe : undefined,
       keepState: flags['keep-state'] === true,
+      frontendDist: typeof flags['frontend-dist'] === 'string' ? flags['frontend-dist'] : undefined,
       preseedStore: Object.keys(preseedStore).length > 0 ? preseedStore : undefined
     })
     // The name the launcher's agent pill must show before a chat is sent.
@@ -294,6 +295,9 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
 
     await scenario.drive(ctx)
     endSnapshot = await captureEndSnapshot(page, handle.rootPid, agentStatsDir)
+    if (flags['heap-snapshot'] === true) {
+      await writeHeapSnapshot(page, path.join(runDir, 'end.heapsnapshot'))
+    }
   } catch (err) {
     failure = err instanceof Error ? err.message : String(err)
   } finally {

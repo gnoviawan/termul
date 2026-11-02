@@ -70,8 +70,13 @@ async function ensureAgentSelected(page: Page, expectedName: string): Promise<vo
   const trigger = page.locator(AGENT_PICKER_TRIGGER).first()
   await trigger.waitFor({ state: 'visible', timeout: 10_000 })
   const want = expectedName.trim().toLowerCase()
-  const label = (await trigger.getAttribute('aria-label').catch(() => null)) ?? ''
-  if (currentAgentFromAria(label).toLowerCase().includes(want)) return
+  // The pill shows the default until the saved agent's config has loaded.
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const label = (await trigger.getAttribute('aria-label').catch(() => null)) ?? ''
+    if (currentAgentFromAria(label).toLowerCase().includes(want)) return
+    await sleep(250)
+  }
   await trigger.click({ timeout: 5000 })
   const tab = page
     .locator(`[data-testid^="agent-tab-"][aria-label="${expectedName.replace(/"/g, '\\"')}" i]`)

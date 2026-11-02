@@ -87,6 +87,39 @@ fake agents emitted. Its `summary` keys start with `end` (plus
 counts before trusting a run: errors mean the app rejected part of the
 workload, and a low update count means the scenario did not stream.
 
+## Interleaved A/B runner
+
+```bash
+node tools/perf/ab.ts --a <exeA> --b <exeB> --runs 5 -- stream-storm --seed 42
+node tools/perf/ab.ts --a <exe> --a-dist <distA> --b <exe> --b-dist <distB> --runs 5 -- stream-storm
+```
+
+Alternates A, B, A, B so drift favors neither side, then prints median and
+range per end metric with the error and work counts. Keep a copy of each exe
+(and its `rg.exe`) outside `target-perf` so a rebuild does not replace a side.
+
+`--frontend-dist <dir>` serves `http://tauri.localhost/*` from a built
+`dist-tauri` copy and reloads once, so two frontends compare on one exe
+without a Rust rebuild. The page then runs without Tauri's CSP header, on
+both sides alike; confirm a win on real builds before reporting it. The end
+snapshot's `pageState` lists the `tauri-index-*` / `AgentChatPanel-*`
+chunks that loaded, which proves which frontend ran.
+
+## Finding what keeps memory alive
+
+`--heap-snapshot` writes `end.heapsnapshot` (about 150 MB) into the run
+directory after the end snapshot. Then:
+
+```bash
+node --max-old-space-size=8192 tools/perf/heap-retainers.ts <run>/end.heapsnapshot
+```
+
+prints detached DOM by class and, for each chain from the GC roots into the
+detached set, how many detached nodes it keeps alive with one sample path.
+The end snapshot's `rendererAllocators` (a Chromium memory-infra dump) says
+whether renderer bytes sit in `blink_gc` (DOM), `v8`, `partition_alloc` or
+`malloc` before you reach for a heap snapshot.
+
 ## A/B compare (CAP-5)
 
 ```bash
