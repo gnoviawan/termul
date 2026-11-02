@@ -11,6 +11,7 @@ import type {
 } from '@/lib/acp-api'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { hasSelectionContexts, serializeSelectionContexts } from '@/lib/composer/selection-context'
+import { conversationWireLabel } from '@/lib/conversation-envelope'
 import {
   type ConversationContexts,
   resolveConversationContexts
@@ -433,9 +434,11 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
       const valueDefiled = replaceConversationTokensInline(
         replaceFileTokensInline(valueWithCommandText),
         (title, sessionId) =>
-          contexts === undefined || contexts.unavailable.has(sessionId)
-            ? `(conversation: ${title}, transcript unavailable)`
-            : `(conversation: ${title})`
+          conversationWireLabel(
+            title,
+            sessionId,
+            contexts !== undefined && !contexts.unavailable.has(sessionId)
+          )
       )
       const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDefiled)
       // Display keeps every pill token where the user typed it. Wire text is

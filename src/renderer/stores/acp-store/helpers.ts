@@ -46,13 +46,12 @@ import {
 } from '@/lib/agents/acp-spawn-errors'
 import { persistenceApi } from '@/lib/api'
 import { serializeSelectionContexts } from '@/lib/composer/selection-context'
-import { stripConversationEnvelopes } from '@/lib/conversation-envelope'
+import { restoreConversationLabels, stripConversationEnvelopes } from '@/lib/conversation-envelope'
 import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
 import {
   isFolderTokenPath,
   parseFileSegments,
-  replaceConversationTokensInline,
   replaceFileTokensInline,
   SKILL_PAD_END,
   SKILL_PAD_START
@@ -311,11 +310,9 @@ export function canonicalTwinText(message: ChatMessage): string {
   // Selection contexts compare in prompt form: the restore cannot recover the
   // spacing after a leading command pill, and typed text in the exact prompt
   // shape restores as chips.
-  return replaceConversationTokensInline(
-    replaceFileTokensInline(
-      serializeSelectionContexts(
-        stripConversationEnvelopes(display).replace(SKILL_PAD_BLOCK_RE, '')
-      )
+  return replaceFileTokensInline(
+    serializeSelectionContexts(
+      restoreConversationLabels(stripConversationEnvelopes(display)).replace(SKILL_PAD_BLOCK_RE, '')
     )
   ).trim()
 }

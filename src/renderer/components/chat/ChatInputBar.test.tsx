@@ -2409,7 +2409,7 @@ describe('ChatInputBar conversation mentions', () => {
     await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
     expect(onSendBlocks).toHaveBeenCalledWith(
       [
-        { type: 'text', text: 'compare (conversation: Fix web reconnect)' },
+        { type: 'text', text: 'compare (conversation: Fix web reconnect [termul-chat:chat-2])' },
         {
           type: 'text',
           text:
@@ -2434,7 +2434,12 @@ describe('ChatInputBar conversation mentions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
     await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
     expect(onSendBlocks).toHaveBeenCalledWith(
-      [{ type: 'text', text: 'see (conversation: Old chat, transcript unavailable)' }],
+      [
+        {
+          type: 'text',
+          text: 'see (conversation: Old chat, transcript unavailable [termul-chat:gone])'
+        }
+      ],
       [{ type: 'text', text: `see ${token} ` }]
     )
     expect(onSend).not.toHaveBeenCalled()

@@ -1,9 +1,10 @@
 import { selectionContextToken, serializeSelectionContexts } from '@/lib/composer/selection-context'
-import { conversationEnvelope } from '@/lib/conversation-envelope'
+import { conversationEnvelope, conversationWireLabel } from '@/lib/conversation-envelope'
 import {
   commandToken,
   conversationToken,
   fileToken,
+  replaceConversationTokensInline,
   SKILL_TOKEN_END,
   SKILL_TOKEN_START,
   skillToken
@@ -276,27 +277,52 @@ describe('wireTextToDisplay with selection contexts', () => {
 })
 
 describe('wireBlocksToDisplay with conversation envelopes', () => {
-  it('drops the transcript envelope and restores the conversation pill', () => {
-    const envelope = conversationEnvelope(
-      'sess-1',
-      'Fix "web" <reconnect>',
-      'User: hi\nAgent: hello'
+  const wireOf = (display: string, available = true) =>
+    replaceConversationTokensInline(display, (title, sessionId) =>
+      conversationWireLabel(title, sessionId, available)
     )
-    const display = wireBlocksToDisplay([
-      { type: 'text', text: 'compare (conversation: Fix "web" <reconnect>) with this' },
-      { type: 'text', text: envelope }
-    ])
-    expect(display).toEqual([
-      {
-        type: 'text',
-        text: `compare ${conversationToken('Fix "web" <reconnect>', 'sess-1')} with this`
-      }
+
+  it('drops the transcript envelope and restores the conversation pill', () => {
+    const display = `compare ${conversationToken('Fix "web" <reconnect>', 'sess-1')} with this`
+    const envelope = conversationEnvelope('sess-1', 'Fix "web" <reconnect>', 'User: hi')
+    expect(wireOf(display)).toBe(
+      'compare (conversation: Fix "web" <reconnect> [termul-chat:sess-1]) with this'
+    )
+    expect(
+      wireBlocksToDisplay([
+        { type: 'text', text: wireOf(display) },
+        { type: 'text', text: envelope }
+      ])
+    ).toEqual([{ type: 'text', text: display }])
+  })
+
+  it('restores two same-title chats to their own sessions', () => {
+    const display = `${conversationToken('Bug', 'id-1')} vs ${conversationToken('Bug', 'id-2')}`
+    expect(
+      wireBlocksToDisplay([
+        { type: 'text', text: wireOf(display) },
+        { type: 'text', text: conversationEnvelope('id-1', 'Bug', 'User: one') },
+        { type: 'text', text: conversationEnvelope('id-2', 'Bug', 'User: two') }
+      ])
+    ).toEqual([{ type: 'text', text: display }])
+  })
+
+  it('restores the pill of a chat whose transcript was unavailable (no envelope)', () => {
+    const display = `see ${conversationToken('Old chat', 'gone')} `
+    expect(wireOf(display, false)).toBe(
+      'see (conversation: Old chat, transcript unavailable [termul-chat:gone]) '
+    )
+    expect(wireBlocksToDisplay([{ type: 'text', text: wireOf(display, false) }])).toEqual([
+      { type: 'text', text: display }
     ])
   })
 
-  it('leaves a transcript-unavailable mention as text (it carried no envelope)', () => {
-    const blocks = [{ type: 'text', text: 'see (conversation: Old chat, transcript unavailable)' }]
-    expect(wireBlocksToDisplay(blocks)).toBe(blocks)
+  it('keeps typed conversation-like text as plain text', () => {
+    const blocks = [
+      { type: 'text', text: 'what is (conversation: Foo) and (conversation: Bar) [termul-chat:x]' },
+      { type: 'text', text: conversationEnvelope('foo-id', 'Foo', 'User: hi') }
+    ]
+    expect(wireBlocksToDisplay(blocks)).toEqual([blocks[0]])
   })
 
   it('does not treat a user message that merely quotes the tag as an envelope', () => {

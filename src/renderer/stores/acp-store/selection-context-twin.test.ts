@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { selectionContextToken, serializeSelectionContexts } from '@/lib/composer/selection-context'
-import { commandToken, replaceCommandTokensInline } from '@/lib/skill-tokens'
+import { conversationWireLabel } from '@/lib/conversation-envelope'
+import {
+  commandToken,
+  conversationToken,
+  replaceCommandTokensInline,
+  replaceConversationTokensInline
+} from '@/lib/skill-tokens'
 import { isPersistedTwin } from './helpers'
 import type { ChatMessage } from './index'
 
@@ -35,5 +41,26 @@ describe('persisted/live twin with selection contexts', () => {
     expect(
       isPersistedTwin(user('p', wireOf(`Explain ${ctx}`)), user('l', `Explain ${other}`), false)
     ).toBe(false)
+  })
+})
+
+describe('persisted/live twin with conversation pills', () => {
+  const live = (sessionId: string) => user('l', `compare ${conversationToken('Bug', sessionId)}`)
+  const persistedWire = (sessionId: string) =>
+    user(
+      'p',
+      replaceConversationTokensInline(`compare ${conversationToken('Bug', sessionId)}`, (t, id) =>
+        conversationWireLabel(t, id, true)
+      )
+    )
+
+  it('matches the live pill with its persisted display or wire prompt', () => {
+    expect(isPersistedTwin(live('id-1'), live('id-1'), false)).toBe(true)
+    expect(isPersistedTwin(persistedWire('id-1'), live('id-1'), false)).toBe(true)
+  })
+
+  it('tells same-title chats with different sessions apart', () => {
+    expect(isPersistedTwin(live('id-2'), live('id-1'), false)).toBe(false)
+    expect(isPersistedTwin(persistedWire('id-2'), live('id-1'), false)).toBe(false)
   })
 })

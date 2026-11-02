@@ -1,3 +1,5 @@
+import { conversationToken } from '@/lib/skill-tokens'
+
 const CLOSE_TAG = '</termul-conversation>'
 const OPEN_RE = /^<termul-conversation id="([^"]*)" title="([^"]*)">\n/
 const ENVELOPE_RE =
@@ -35,11 +37,35 @@ export function stripConversationEnvelopes(text: string): string {
   return text.includes('<termul-conversation ') ? text.replace(ENVELOPE_RE, '') : text
 }
 
-export function hasConversationEnvelope(
+// The `[termul-chat:<id>]` suffix ties the inline label to one session, so a
+// restore never matches typed text or a same-title chat. The tempered title
+// stops a typed `(conversation: ` earlier on the line from swallowing a label.
+const LABEL_RE =
+  /\(conversation: ((?:(?!\(conversation: )[^\n])+?)(, transcript unavailable)? \[termul-chat:([^\]\s]+)\]\)/g
+
+export function conversationWireLabel(
+  title: string,
+  sessionId: string,
+  transcriptAvailable: boolean
+): string {
+  const note = transcriptAvailable ? '' : ', transcript unavailable'
+  return `(conversation: ${title}${note} [termul-chat:${sessionId}])`
+}
+
+export function restoreConversationLabels(text: string): string {
+  if (!text.includes('[termul-chat:')) return text
+  return text.replace(LABEL_RE, (_label, title: string, _note, sessionId: string) =>
+    conversationToken(title, sessionId)
+  )
+}
+
+export function hasConversationWire(
   blocks: ReadonlyArray<{ type: string; text?: unknown }>
 ): boolean {
   return blocks.some(
     (b) =>
-      b.type === 'text' && typeof b.text === 'string' && parseConversationEnvelope(b.text) !== null
+      b.type === 'text' &&
+      typeof b.text === 'string' &&
+      (parseConversationEnvelope(b.text) !== null || restoreConversationLabels(b.text) !== b.text)
   )
 }

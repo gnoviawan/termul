@@ -31,7 +31,7 @@ import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { type CommandRun, runCommand } from '@/lib/command-engine'
 import { keyDigest } from '@/lib/command-journal'
 import { waitUntilVisible } from '@/lib/command-visibility'
-import { hasConversationEnvelope } from '@/lib/conversation-envelope'
+import { hasConversationWire } from '@/lib/conversation-envelope'
 import { invokeIpc } from '@/lib/ipc/tauri'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
@@ -1327,7 +1327,7 @@ export async function acpSendPromptBlocks(
   displayContent?: ContentBlock[]
 ): Promise<PromptDispatchResult> {
   const display =
-    displayContent ?? (hasConversationEnvelope(content) ? wireBlocksToDisplay(content) : undefined)
+    displayContent ?? (hasConversationWire(content) ? wireBlocksToDisplay(content) : undefined)
   return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId, display)
 }
 

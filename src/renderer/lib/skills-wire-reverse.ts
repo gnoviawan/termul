@@ -18,11 +18,8 @@
  */
 import { fileUrlToPath } from '@/components/chat/chat-attachments'
 import { selectionContextsToDisplay } from '@/lib/composer/selection-context'
-import {
-  type ConversationEnvelopeRef,
-  parseConversationEnvelope
-} from '@/lib/conversation-envelope'
-import { commandToken, conversationToken, fileToken, skillToken } from '@/lib/skill-tokens'
+import { parseConversationEnvelope, restoreConversationLabels } from '@/lib/conversation-envelope'
+import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 
 /** Literal header emitted by `formatPromptWithSkills`. */
 const SKILLS_HEADER = '# Agent Skills'
@@ -195,33 +192,20 @@ function restoreFileTokens(text: string, paths: Map<string, string>): string {
   })
 }
 
-function restoreConversationTokens(text: string, refs: ConversationEnvelopeRef[]): string {
-  let out = text
-  for (const ref of refs) {
-    out = out.replaceAll(
-      `(conversation: ${ref.title})`,
-      conversationToken(ref.title, ref.sessionId)
-    )
-  }
-  return out
-}
-
 export function wireBlocksToDisplay<T extends WireBlock>(blocks: T[] | null | undefined): T[] {
   if (!Array.isArray(blocks)) return blocks ?? []
   const filePaths = unambiguousFilePaths(blocks)
-  const conversations: ConversationEnvelopeRef[] = []
-  const kept = blocks.filter((block) => {
-    if (block?.type !== 'text' || typeof block.text !== 'string') return true
-    const ref = parseConversationEnvelope(block.text)
-    if (ref) conversations.push(ref)
-    return ref === null
-  })
+  const kept = blocks.filter(
+    (block) =>
+      block?.type !== 'text' ||
+      typeof block.text !== 'string' ||
+      parseConversationEnvelope(block.text) === null
+  )
   let changed = kept.length !== blocks.length
   const next = kept.map((block) => {
     if (block?.type !== 'text' || typeof block.text !== 'string') return block
-    const text = restoreConversationTokens(
-      restoreFileTokens(wireTextToDisplay(block.text), filePaths),
-      conversations
+    const text = restoreConversationLabels(
+      restoreFileTokens(wireTextToDisplay(block.text), filePaths)
     )
     if (text === block.text) return block
     changed = true
