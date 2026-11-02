@@ -365,7 +365,8 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
   useEffect(() => {
     if (explorerDir === null) return
     const dir = explorerDir
-    const gen = listingGenRef.current
+    // A later read (another folder, or this one revisited) or a close supersedes this one.
+    const gen = ++listingGenRef.current
     const store = (listing: DirListing) => {
       if (gen !== listingGenRef.current) return
       listingsRef.current = { ...listingsRef.current, [dir]: listing }

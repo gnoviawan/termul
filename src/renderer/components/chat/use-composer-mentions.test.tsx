@@ -662,6 +662,31 @@ describe('useComposerMentions', () => {
       ])
     })
 
+    it('keeps the newer listing when an earlier read of the same folder finishes last', async () => {
+      let finishFirst!: (res: unknown) => void
+      mockApi.readDirectory.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishFirst = resolve
+          })
+      )
+      const { result } = renderMentions()
+      const state = { value: '@', caret: 1 }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'explorer' })
+      pick(result, state, {
+        kind: 'dir',
+        match: { relPath: 'src', absPath: '/work/src/', name: 'src', ignored: false, kind: 'dir' }
+      })
+      await advance(0)
+      act(() => result.current.back())
+      await advance(0)
+      expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
+
+      await act(async () => finishFirst({ success: true, data: [entry('OLD.md', 'file')] }))
+      expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
+    })
+
     it('retries a folder that failed instead of showing the cached failure', async () => {
       const { result } = renderMentions()
       const state = { value: '@', caret: 1 }
