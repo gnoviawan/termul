@@ -57,3 +57,35 @@ describe('buildConversationContext', () => {
     )
   })
 })
+
+describe('buildConversationContext budget edges', () => {
+  it('caps a long agent name in the intro', () => {
+    const text = buildConversationContext({
+      title: 'Named',
+      agentName: 'n'.repeat(2000),
+      toolCalls: [],
+      messages: []
+    })
+    expect(text).toBe(
+      `Transcript of the Termul chat "Named" with ${'n'.repeat(1500)}…, attached by the user as context.\n\n(This chat has no messages yet.)`
+    )
+  })
+
+  it('keeps the final reply when long pinned lines leave no room for it whole', () => {
+    const messages: ChatMessage[] = []
+    for (let turn = 0; turn < 14; turn++) {
+      messages.push(msg(`u${turn}`, 'user', turn * 2 + 1, `${turn}`.padEnd(2000, 'q')))
+      messages.push(msg(`a${turn}`, 'agent', turn * 2 + 2, `answer ${turn}`))
+    }
+    messages.push(msg('u-final', 'user', 100, 'last question'))
+    messages.push(msg('a-final', 'agent', 101, 'f'.repeat(9500)))
+    const lines = buildConversationContext({
+      title: 'Pinned',
+      agentName: null,
+      toolCalls: [],
+      messages
+    }).split('\n')
+    expect(lines.at(-2)).toBe('User: last question')
+    expect(lines.at(-1)).toBe(`Agent: ${'f'.repeat(1500)}…`)
+  })
+})

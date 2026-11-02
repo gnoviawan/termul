@@ -340,7 +340,11 @@ function partitionTurns(items: HandoffItem[], budget: TranscriptBudget): Handoff
     }
   }
 
-  const finalRoom = budget.maxBodyChars - maxFragmentChars - 64
+  // fitBodyBudget pins up to two `User:` fragments (the intent anchor and the
+  // first kept turn), the omission note, and the truncation marker ahead of
+  // the tail, so the whole final reply must fit beside all of them.
+  const pinnedRoom = 2 * (maxFragmentChars + 'User: …'.length) + 128
+  const finalRoom = budget.maxBodyChars - pinnedRoom
   if (budget.keepFinalAgentMessage && lastAgent && lastAgent.full.length <= finalRoom) {
     lastAgent.lines[lastAgent.index] = lastAgent.full
   }
@@ -467,7 +471,11 @@ export interface ConversationContextInput {
 
 export function buildConversationContext(input: ConversationContextInput): string {
   const body = buildTranscriptBody(input.messages, input.toolCalls, CONVERSATION_CONTEXT_BUDGET)
-  const agent = sanitizeFragment(input.agentName ?? '').trim() || 'an agent'
+  const agent =
+    truncateFragment(
+      sanitizeFragment(input.agentName ?? '').trim(),
+      CONVERSATION_CONTEXT_BUDGET.maxFragmentChars
+    ) || 'an agent'
   const title = sanitizeFragment(input.title).trim()
   const intro = `Transcript of the Termul chat "${title}" with ${agent}, attached by the user as context.`
   return body.length > 0 ? `${intro}\n\n${body}` : `${intro}\n\n(This chat has no messages yet.)`
