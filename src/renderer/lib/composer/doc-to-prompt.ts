@@ -33,6 +33,7 @@ import type { Node as PmNode } from '@tiptap/pm/model'
 import {
   CMD_TOKEN_END,
   CMD_TOKEN_START,
+  conversationToken,
   FILE_TOKEN_END,
   FILE_TOKEN_SEP,
   FILE_TOKEN_START,
@@ -73,7 +74,10 @@ export const FILE_PILL_NODE = 'filePill'
  */
 export const CONTEXT_PILL_NODE = 'contextPill'
 
-type PillKind = 'pill' | 'commandPill' | 'filePill' | 'contextPill'
+/** The conversation pill node type name; its token is `conversationToken`. */
+export const CONVERSATION_PILL_NODE = 'conversationPill'
+
+type PillKind = 'pill' | 'commandPill' | 'filePill' | 'contextPill' | 'conversationPill'
 
 function isPillKind(kind: DocSegment['kind']): kind is PillKind {
   return kind !== 'text'
@@ -167,6 +171,13 @@ export function walkDocSegments(doc: PmNode): DocSegment[] {
         } else if (node.type.name === CONTEXT_PILL_NODE) {
           displayText = selectionContextToken(contextFromAttrs(node.attrs))
           kind = 'contextPill'
+          blockEndedInHardBreak = false
+        } else if (node.type.name === CONVERSATION_PILL_NODE) {
+          displayText = conversationToken(
+            String(node.attrs.title ?? ''),
+            String(node.attrs.sessionId ?? '')
+          )
+          kind = 'conversationPill'
           blockEndedInHardBreak = false
         } else if (node.type.name === 'hardBreak') {
           displayText = '\n'

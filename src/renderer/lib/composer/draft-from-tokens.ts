@@ -16,13 +16,21 @@
 import {
   CMD_TOKEN_END,
   CMD_TOKEN_START,
+  type ConversationSegment,
   FILE_TOKEN_END,
   FILE_TOKEN_SEP,
   FILE_TOKEN_START,
+  parseConversationSegments,
   parseSkillSegments,
   type SkillSegment
 } from '@/lib/skill-tokens'
-import { CMD_PILL_NODE, CONTEXT_PILL_NODE, FILE_PILL_NODE, SKILL_PILL_NODE } from './doc-to-prompt'
+import {
+  CMD_PILL_NODE,
+  CONTEXT_PILL_NODE,
+  CONVERSATION_PILL_NODE,
+  FILE_PILL_NODE,
+  SKILL_PILL_NODE
+} from './doc-to-prompt'
 import {
   contextToAttrs,
   parseSelectionContextSegments,
@@ -56,6 +64,7 @@ type ComposerSegment =
   | { kind: 'command'; name: string }
   | { kind: 'file'; display: string; absPath: string }
   | { kind: 'context'; context: SelectionContext }
+  | { kind: 'conversation'; title: string; sessionId: string }
 
 /**
  * Split a composer value into ordered text/skill/command segments. Delegates
@@ -77,13 +86,17 @@ function parseComposerSegments(value: string): ComposerSegment[] {
     (seg): Array<SkillSegment | SelectionContextSegment> =>
       seg.kind === 'skill' ? [seg] : parseSelectionContextSegments(seg.text)
   )
+  const pillSegments = skillSegments.flatMap(
+    (seg): Array<SkillSegment | SelectionContextSegment | ConversationSegment> =>
+      seg.kind === 'text' ? parseConversationSegments(seg.text) : [seg]
+  )
   const segments: ComposerSegment[] = []
-  for (const seg of skillSegments) {
+  for (const seg of pillSegments) {
     if (seg.kind === 'skill') {
       segments.push({ kind: 'skill', name: seg.name })
       continue
     }
-    if (seg.kind === 'context') {
+    if (seg.kind === 'context' || seg.kind === 'conversation') {
       segments.push(seg)
       continue
     }
@@ -197,6 +210,13 @@ export function draftFromTokens(
     }
     if (seg.kind === 'context') {
       paragraphs.at(-1)!.push({ type: CONTEXT_PILL_NODE, attrs: contextToAttrs(seg.context) })
+      continue
+    }
+    if (seg.kind === 'conversation') {
+      paragraphs.at(-1)!.push({
+        type: CONVERSATION_PILL_NODE,
+        attrs: { title: seg.title, sessionId: seg.sessionId }
+      })
       continue
     }
     // Text segment: split on `\n` to open new paragraphs.

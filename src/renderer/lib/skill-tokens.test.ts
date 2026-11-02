@@ -3,20 +3,26 @@ import {
   CMD_TOKEN_END,
   CMD_TOKEN_START,
   commandToken,
+  conversationToken,
+  extractConversationRefs,
   extractSkillNames,
   FILE_TOKEN_END,
   FILE_TOKEN_SEP,
   FILE_TOKEN_START,
   fileToken,
+  insertConversationToken,
   insertFileToken,
   insertSkillToken,
+  isComposerTriggerBoundary,
   isFolderTokenPath,
   parseCommandSegments,
+  parseConversationSegments,
   parseFileSegments,
   parseSkillSegments,
   removeFileTokenBeforeCaret,
   removeSkillTokenBeforeCaret,
   replaceCommandTokensInline,
+  replaceConversationTokensInline,
   replaceFileTokensInline,
   replaceSkillTokensInline,
   SKILL_PAD_CHAR,
@@ -639,5 +645,53 @@ describe('fileToken', () => {
     expect(fileToken('auth.ts', '/work/src/auth.ts')).toBe(
       `${FILE_TOKEN_START}auth.ts${FILE_TOKEN_SEP}/work/src/auth.ts${FILE_TOKEN_END}`
     )
+  })
+})
+
+describe('conversation tokens', () => {
+  const C = (title: string, id: string) => `\uE00A${title}\u001F${id}\uE00B`
+
+  it('builds a token with sentinels, separators, and line breaks stripped from the title', () => {
+    expect(conversationToken('Fix\nweb \uE007reconnect\u001F', 'sess-1')).toBe(
+      C('Fix web reconnect', 'sess-1')
+    )
+    expect(conversationToken('\uE000', 'sess-1')).toBe(C('Untitled chat', 'sess-1'))
+  })
+
+  it('parses tokens between text and keeps malformed ones as text', () => {
+    expect(parseConversationSegments(`a ${C('One', 'id-1')} b \uE00Abroken\uE00B`)).toEqual([
+      { kind: 'text', text: 'a ' },
+      { kind: 'conversation', title: 'One', sessionId: 'id-1' },
+      { kind: 'text', text: ' b \uE00Abroken\uE00B' }
+    ])
+  })
+
+  it('splices a token over the @query and puts the caret after a trailing space', () => {
+    expect(insertConversationToken('see @fix now', 8, 'Fix it', 'id-9', 4)).toEqual({
+      value: `see ${C('Fix it', 'id-9')}  now`,
+      caret: 4 + C('Fix it', 'id-9').length + 1
+    })
+  })
+
+  it('reads as (conversation: title) in wire text, titles, and copies', () => {
+    const value = `compare ${C('One', 'id-1')} with ${fileToken('a.ts', '/w/a.ts')}`
+    expect(replaceConversationTokensInline(value)).toBe(
+      `compare (conversation: One) with ${fileToken('a.ts', '/w/a.ts')}`
+    )
+    expect(sanitizeDisplayText(value)).toBe('compare (conversation: One) with (a.ts)')
+  })
+
+  it('lists each mentioned conversation once, in mention order', () => {
+    expect(
+      extractConversationRefs(`${C('B', 'id-b')} ${C('A', 'id-a')} ${C('B', 'id-b')}`)
+    ).toEqual([
+      { title: 'B', sessionId: 'id-b' },
+      { title: 'A', sessionId: 'id-a' }
+    ])
+  })
+
+  it('treats the end of a conversation pill as an @ and / trigger boundary', () => {
+    const value = `${C('One', 'id-1')}@`
+    expect(isComposerTriggerBoundary(value, value.length - 1)).toBe(true)
   })
 })
