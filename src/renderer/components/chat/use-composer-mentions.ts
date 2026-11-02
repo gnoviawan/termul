@@ -49,6 +49,12 @@ function normalizeRoot(root: string | null | undefined): string {
   return root?.replace(/\\/g, '/').replace(/\/$/, '') ?? ''
 }
 
+/** `normalizeRoot` turns `/` into `` and `C:/` into `C:` (drive-relative); list the real root. */
+function listingPath(dir: string): string {
+  if (dir === '') return '/'
+  return /^[A-Za-z]:$/.test(dir) ? `${dir}/` : dir
+}
+
 /**
  * Cancel an in-flight filename search stream and surface failures. The facade
  * resolves `{ success: false }` on cancel failure (and may reject on a
@@ -374,7 +380,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
     }
     if (listingsRef.current[dir]?.status !== 'ready') store({ status: 'loading' })
     void filesystemApi
-      .readDirectory(dir)
+      .readDirectory(listingPath(dir))
       .then((res) => {
         if (res.success) {
           store({ status: 'ready', entries: res.data.map((e) => toListingMatch(e, dir, root)) })

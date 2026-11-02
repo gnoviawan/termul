@@ -332,7 +332,7 @@ export function ChatInputBar({
     scheduleRestoreCaret
   })
   const slashOpen = composerSlashOpen
-  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
+  const mentionMenuOpen = mentions.menuOpen && !disabled && !sending && !slashOpen
 
   const { handleValueChange, handleComposerPaste } = useComposerDraftStart({
     draftEmpty: value.length === 0 && attachments.length === 0,

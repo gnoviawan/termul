@@ -796,7 +796,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     mentions,
     scheduleRestoreCaret
   })
-  const mentionMenuOpen = mentions.menuOpen && !composerDisabled && !slashOpen
+  const mentionMenuOpen = mentions.menuOpen && !composerLocked && !slashOpen
 
   // Restore persisted composer selections for the current agent on mount and
   // on agent change. Seeds `pendingOptions` (model/mode/config) +

@@ -623,6 +623,20 @@ describe('useComposerMentions', () => {
       expect(state.value).toBe('see @')
     })
 
+    it('lists a project rooted at the filesystem root', async () => {
+      mockApi.readDirectory.mockResolvedValue({ success: true, data: [entry('etc', 'directory')] })
+      const { result } = renderMentions({ rootPath: '/' })
+      const state = { value: '@', caret: 1 }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'explorer' })
+      await advance(0)
+      expect(mockApi.readDirectory).toHaveBeenCalledWith('/')
+      expect(result.current.sections[0].items[0].row).toEqual({
+        kind: 'dir',
+        match: { relPath: 'etc', absPath: '/etc/', name: 'etc', ignored: false, kind: 'dir' }
+      })
+    })
+
     it('moves the caret with ArrowLeft while a query is typed instead of going back', async () => {
       const { result } = renderMentions()
       const state = { value: '@', caret: 1 }

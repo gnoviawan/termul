@@ -2465,6 +2465,20 @@ describe('ChatInputBar conversation mentions', () => {
     expect(getComposerValue()).toBe('')
   })
 
+  it('closes the @ menu while the mentioned chat transcript loads', async () => {
+    const finishRead = deferTranscriptRead()
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    setComposerValue(`see ${conversationToken('Old chat', 'gone')} @`)
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(screen.queryByRole('listbox')).not.toBeInTheDocument())
+
+    await finishRead()
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+  })
+
   it('registers only the sent screenshots for cleanup when one finishes reading mid-send', async () => {
     mockIsTauri.mockReturnValue(true)
     const finishRead = deferTranscriptRead()
