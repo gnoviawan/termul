@@ -803,6 +803,16 @@ describe('MobileShellDrawer New chat', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
   })
 
+  it('gives way on a narrow drawer: the pill shrinks and truncates, the icons keep 44px', async () => {
+    const { dialog } = await openDrawer({ section: 'editors', onOpenFiles: vi.fn() })
+
+    const pill = within(dialog).getByRole('button', { name: 'Browse files' })
+    expect(pill).toHaveClass('min-w-0')
+    expect(pill).not.toHaveClass('shrink-0')
+    expect(within(pill).getByText('Browse files')).toHaveClass('truncate')
+    expect(within(dialog).getByRole('button', { name: 'Settings' })).toHaveClass('min-w-11')
+  })
+
   it('is disabled when a chat cannot be started', async () => {
     const onNewChat = vi.fn()
     const { dialog } = await openDrawer({ canNewChat: false, onNewChat })
