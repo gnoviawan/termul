@@ -323,7 +323,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
         const root = normalizeRoot(rootPath)
         setLoading(true)
         void filesystemApi
-          .searchFileNamesStreamStart(sid, root, root, f, false)
+          .searchFileNamesStreamStart(sid, root, root, f, true)
           .then((res) => {
             if (res.success) return
             // Failed start: no stream will emit done — drop loading now and

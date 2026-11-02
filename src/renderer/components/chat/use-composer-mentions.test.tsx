@@ -141,7 +141,7 @@ describe('useComposerMentions', () => {
       '/work',
       '/work',
       'rea',
-      false
+      true
     )
     expect(result.current.loading).toBe(true)
 
@@ -300,7 +300,7 @@ describe('useComposerMentions', () => {
       '/work',
       '/work',
       'r',
-      false
+      true
     )
 
     act(() => result.current.update('@re', 3))
@@ -313,7 +313,7 @@ describe('useComposerMentions', () => {
       '/work',
       '/work',
       're',
-      false
+      true
     )
 
     act(() => result.current.update('@rea', 4))
@@ -325,7 +325,7 @@ describe('useComposerMentions', () => {
       '/work',
       '/work',
       'rea',
-      false
+      true
     )
 
     // Stale batch from the cancelled second search must be ignored.
@@ -383,7 +383,7 @@ describe('useComposerMentions', () => {
       '/work',
       '/work',
       'rea',
-      false
+      true
     )
     expect(result.current.loading).toBe(true)
     emitBatch({
