@@ -586,7 +586,10 @@ export function FloatingPreview() {
         </Popover>
       </Row>
       <Row label="Lightbox">
-        <ImageLightbox src={robotIcon} alt="Robot agent icon">
+        <ImageLightbox
+          image={{ src: robotIcon, alt: 'Robot agent icon', fileName: 'robot-agent-icon.png' }}
+          onDownload={() => {}}
+        >
           <img
             src={robotIcon}
             alt="Robot agent icon thumbnail"
