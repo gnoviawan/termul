@@ -19,7 +19,13 @@
 import { fileUrlToPath } from '@/components/chat/chat-attachments'
 import { selectionContextsToDisplay } from '@/lib/composer/selection-context'
 import { parseConversationEnvelope, restoreConversationLabels } from '@/lib/conversation-envelope'
-import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
+import {
+  commandToken,
+  conversationToken,
+  fileToken,
+  parseConversationSegments,
+  skillToken
+} from '@/lib/skill-tokens'
 
 /** Literal header emitted by `formatPromptWithSkills`. */
 const SKILLS_HEADER = '# Agent Skills'
@@ -204,9 +210,14 @@ export function wireBlocksToDisplay<T extends WireBlock>(blocks: T[] | null | un
   let changed = kept.length !== blocks.length
   const next = kept.map((block) => {
     if (block?.type !== 'text' || typeof block.text !== 'string') return block
-    const text = restoreConversationLabels(
-      restoreFileTokens(wireTextToDisplay(block.text), filePaths)
-    )
+    // File markers inside a chat title stay title text.
+    const text = parseConversationSegments(restoreConversationLabels(wireTextToDisplay(block.text)))
+      .map((s) =>
+        s.kind === 'conversation'
+          ? conversationToken(s.title, s.sessionId)
+          : restoreFileTokens(s.text, filePaths)
+      )
+      .join('')
     if (text === block.text) return block
     changed = true
     return { ...block, text }

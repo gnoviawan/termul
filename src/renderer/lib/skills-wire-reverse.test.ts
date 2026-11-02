@@ -331,6 +331,14 @@ describe('wireBlocksToDisplay with conversation envelopes', () => {
     ])
   })
 
+  it('keeps a file marker inside a chat title as title text', () => {
+    const link = { type: 'resource_link', uri: 'file:///w/auth.ts', name: 'auth.ts' }
+    const display = `see ${conversationToken('Fix (auth.ts) crash', 's1')} and `
+    expect(
+      wireBlocksToDisplay([{ type: 'text', text: `${wireOf(display)}(auth.ts)` }, link])
+    ).toEqual([{ type: 'text', text: `${display}${fileToken('auth.ts', '/w/auth.ts')}` }, link])
+  })
+
   it('keeps typed conversation-like text as plain text', () => {
     const blocks = [
       { type: 'text', text: 'what is (conversation: Foo) and (conversation: Bar) [termul-chat:x]' },
