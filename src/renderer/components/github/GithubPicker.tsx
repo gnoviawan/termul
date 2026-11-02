@@ -1,5 +1,13 @@
 import type { GithubRepoLabel } from '@shared/types/github.types'
-import { type ReactElement, type ReactNode, useCallback, useId, useMemo, useState } from 'react'
+import {
+  type ReactElement,
+  type ReactNode,
+  useCallback,
+  useId,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { Check, Plus } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
@@ -80,8 +88,12 @@ interface GithubPickerProps {
   toolbar?: ReactNode
   /** The apply button's text for the current selection. */
   applyLabel: (selected: readonly string[]) => string
-  /** Apply the selection; resolve `true` to close the picker. */
-  onApply: (selected: string[]) => Promise<boolean> | boolean
+  /**
+   * Apply the selection; resolve `true` to close the picker. `opened` is the
+   * selection the picker opened with: diff against it, not the live value, so
+   * a refresh while the picker is open is never undone.
+   */
+  onApply: (selected: string[], opened: readonly string[]) => Promise<boolean> | boolean
   /** Offer "Clear" in the header (filters only). */
   clearable?: boolean
   /** Draw a selected value in the phone's "Selected" strip. */
@@ -103,6 +115,11 @@ export function GithubPicker(props: GithubPickerProps): React.JSX.Element {
   const isMobile = useMobileWebShell()
   // The draft lives here, not in the body: the phone sheet remounts its body on every push and pop.
   const [selected, setSelected] = useState<string[]>(() => [...props.initial])
+  const [opened, setOpened] = useState<readonly string[]>(props.initial)
+  // Bumped per open: an apply that resolves after a close and reopen leaves the new session open.
+  const [session, setSession] = useState(0)
+  const sessionRef = useRef(session)
+  sessionRef.current = session
   const [query, setQuery] = useState('')
   const overlayId = `github-picker:${useId()}`
   const close = useCallback(() => onOpenChange(false), [onOpenChange])
@@ -117,9 +134,17 @@ export function GithubPicker(props: GithubPickerProps): React.JSX.Element {
     setWasOpen(open)
     if (open) {
       setSelected([...props.initial])
+      setOpened(props.initial)
+      setSession((n) => n + 1)
       setQuery('')
       setDesktopCreate(null)
     }
+  }
+
+  const apply = async (): Promise<void> => {
+    const started = session
+    const ok = await props.onApply(selected, opened)
+    if (ok && sessionRef.current === started) onOpenChange(false)
   }
 
   if (isMobile) {
@@ -134,7 +159,7 @@ export function GithubPicker(props: GithubPickerProps): React.JSX.Element {
           onEscapeKeyDown={nav.onEscapeKeyDown}
         >
           <PickerBody
-            draft={{ selected, setSelected, query, setQuery }}
+            draft={{ selected, setSelected, query, setQuery, apply }}
             {...props}
             touch
             creating={creating}
@@ -154,7 +179,7 @@ export function GithubPicker(props: GithubPickerProps): React.JSX.Element {
         className="flex max-h-[var(--radix-popper-available-height,70vh)] w-80 flex-col overflow-hidden rounded-xl p-0"
       >
         <PickerBody
-          draft={{ selected, setSelected, query, setQuery }}
+          draft={{ selected, setSelected, query, setQuery, apply }}
           {...props}
           touch={false}
           creating={desktopCreate}
@@ -170,6 +195,7 @@ interface PickerDraft {
   setSelected: React.Dispatch<React.SetStateAction<string[]>>
   query: string
   setQuery: (query: string) => void
+  apply: () => Promise<void>
 }
 
 interface PickerBodyProps extends GithubPickerProps {
@@ -182,7 +208,8 @@ interface PickerBodyProps extends GithubPickerProps {
 
 function PickerBody(props: PickerBodyProps): React.JSX.Element {
   const { initial, options, creating, onCreating, create } = props
-  const { selected, setSelected, query, setQuery } = props.draft
+  const { draft } = props
+  const { selected, setSelected, query, setQuery } = draft
   const [applying, setApplying] = useState(false)
 
   // Selected-at-open first, then the rest in GitHub's order; values GitHub no
@@ -215,7 +242,7 @@ function PickerBody(props: PickerBodyProps): React.JSX.Element {
   const apply = async (): Promise<void> => {
     setApplying(true)
     try {
-      if (await props.onApply(selected)) props.onOpenChange(false)
+      await draft.apply()
     } finally {
       setApplying(false)
     }

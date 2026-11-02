@@ -103,21 +103,23 @@ export function GithubChoiceMenu<T extends string>({
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>{chip}</SheetTrigger>
         <MobileSheetContent title={title} aria-describedby={undefined}>
-          <SheetGroup>
-            {options.map((option) => (
-              <SheetRow
-                key={option.value}
-                title={option.label}
-                accessory="check"
-                role="radio"
-                selected={option.value === value}
-                onSelect={() => {
-                  onChange(option.value)
-                  setOpen(false)
-                }}
-              />
-            ))}
-          </SheetGroup>
+          <div role="radiogroup" aria-label={title}>
+            <SheetGroup>
+              {options.map((option) => (
+                <SheetRow
+                  key={option.value}
+                  title={option.label}
+                  accessory="check"
+                  role="radio"
+                  selected={option.value === value}
+                  onSelect={() => {
+                    onChange(option.value)
+                    setOpen(false)
+                  }}
+                />
+              ))}
+            </SheetGroup>
+          </div>
         </MobileSheetContent>
       </Sheet>
     )

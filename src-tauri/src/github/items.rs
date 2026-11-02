@@ -29,6 +29,18 @@ pub(super) fn search_query(
     repo: &GithubRepoRef,
     filter: &GithubListFilter,
 ) -> Result<Option<String>, GithubError> {
+    // Checked first: a filter that lists nothing must still refuse a bad login.
+    if let GithubAssigneeFilter::User { login } = &filter.assignee {
+        if login.is_empty()
+            || !login
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(GithubError::Refused(format!(
+                "\"{login}\" is not a GitHub login"
+            )));
+        }
+    }
     let pr_only = filter.review_requested
         || matches!(
             filter.state,
@@ -66,18 +78,7 @@ pub(super) fn search_query(
         GithubAssigneeFilter::Anyone => {}
         GithubAssigneeFilter::Me => terms.push("assignee:@me".to_string()),
         GithubAssigneeFilter::Unassigned => terms.push("no:assignee".to_string()),
-        GithubAssigneeFilter::User { login } => {
-            if login.is_empty()
-                || !login
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            {
-                return Err(GithubError::Refused(format!(
-                    "\"{login}\" is not a GitHub login"
-                )));
-            }
-            terms.push(format!("assignee:{login}"));
-        }
+        GithubAssigneeFilter::User { login } => terms.push(format!("assignee:{login}")),
     }
     if filter.review_requested {
         terms.push("review-requested:@me".to_string());

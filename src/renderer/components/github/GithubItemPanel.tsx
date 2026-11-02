@@ -105,7 +105,8 @@ export function GithubItemPanel({
     void store.loadItem(itemRef)
     if (isPr) void store.loadChecks(itemRef)
     // Labels, assignable people and the viewer: "Assign yourself" needs the viewer up front.
-    if (!store.repoMeta[githubRepoMetaKey(cwd, repo)]?.data) void store.loadRepoMeta(cwd, repo)
+    const meta = store.repoMeta[githubRepoMetaKey(cwd, repo)]
+    if (!meta?.data && meta?.status !== 'loading') void store.loadRepoMeta(cwd, repo)
   }, [itemRef, isPr, isVisible, cwd, repo])
 
   const refresh = (): void => {

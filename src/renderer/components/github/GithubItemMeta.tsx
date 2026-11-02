@@ -101,10 +101,10 @@ export function GithubItemMeta({
       initial={labelNames}
       gated={actions.gated}
       applyLabel={(selected) => doneLabel(selected, labelNames, 'label')}
-      onApply={(selected) =>
+      onApply={(selected, opened) =>
         applyEdit('update the labels', {
-          addLabels: added(selected, labelNames),
-          removeLabels: added(labelNames, selected)
+          addLabels: added(selected, opened),
+          removeLabels: added(opened, selected)
         })
       }
       renderSelected={(name, remove) => {
@@ -148,10 +148,10 @@ export function GithubItemMeta({
       initial={item.assignees}
       gated={actions.gated}
       applyLabel={(selected) => doneLabel(selected, item.assignees, 'assignee')}
-      onApply={(selected) =>
+      onApply={(selected, opened) =>
         applyEdit('update the assignees', {
-          addAssignees: added(selected, item.assignees),
-          removeAssignees: added(item.assignees, selected)
+          addAssignees: added(selected, opened),
+          removeAssignees: added(opened, selected)
         })
       }
     />

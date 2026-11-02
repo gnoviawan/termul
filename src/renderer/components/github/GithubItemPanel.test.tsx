@@ -611,6 +611,50 @@ describe('GithubItemPanel labels, assignees and state', () => {
     expect(labels).not.toHaveTextContent('bug')
   })
 
+  it('removes only the labels the user cleared when a refresh lands while the picker is open', async () => {
+    api.getItem.mockResolvedValue(
+      ok(detail({ item: { ...detail().item, labels: [{ name: 'bug', color: 'd73a4a' }] } }))
+    )
+    api.editItem.mockResolvedValue(ok({ number: 15 }))
+    renderPanel()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit labels' }))
+    const picker = await screen.findByRole('dialog')
+    fireEvent.click(await within(picker).findByRole('option', { name: /^bug/ }))
+
+    // A poll re-read while the picker is open: someone else added `ai` on GitHub.
+    api.getItem.mockResolvedValue(
+      ok(
+        detail({
+          item: {
+            ...detail().item,
+            labels: [
+              { name: 'bug', color: 'd73a4a' },
+              { name: 'ai', color: '1d76db' }
+            ]
+          }
+        })
+      )
+    )
+    await act(async () => {
+      await useGithubStore
+        .getState()
+        .loadItem({ cwd: CWD, repo: 'origin', kind: 'pr', number: 15 }, { refresh: true })
+    })
+
+    fireEvent.click(within(picker).getByRole('button', { name: /^Done/ }))
+    await waitFor(() =>
+      expect(api.editItem).toHaveBeenCalledWith({
+        cwd: CWD,
+        repo: 'origin',
+        kind: 'pr',
+        number: 15,
+        addLabels: [],
+        removeLabels: ['bug']
+      })
+    )
+  })
+
   it('toasts a refused label edit and keeps the picker and chips as GitHub reports them', async () => {
     api.getItem.mockResolvedValue(
       ok(detail({ item: { ...detail().item, labels: [{ name: 'bug', color: 'd73a4a' }] } }))

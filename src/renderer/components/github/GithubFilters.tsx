@@ -94,7 +94,8 @@ export function GithubFilters({
 
   return (
     <div className="flex shrink-0 flex-col gap-2 px-2 pt-1 pb-2">
-      <SearchField value={filter.search} onCommit={(search) => onChange({ search })} />
+      {/* Keyed by working copy: a pending search never commits to the next one. */}
+      <SearchField key={cwd} value={filter.search} onCommit={(search) => onChange({ search })} />
       <div className="flex min-w-0 items-center gap-1">
         <div
           role="group"

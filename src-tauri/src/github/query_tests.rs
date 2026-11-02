@@ -167,6 +167,18 @@ fn an_assignee_login_with_search_syntax_is_refused() {
             format!("\"{login}\" is not a GitHub login")
         );
     }
+    // A filter that lists nothing (issues that are merged) still refuses it.
+    let mut filter = open_with(|f| {
+        f.assignee = GithubAssigneeFilter::User {
+            login: "a:b".into(),
+        }
+    });
+    filter.kind = GithubKindFilter::Issue;
+    filter.state = GithubStateFilter::Merged;
+    assert_eq!(
+        search_query(&repo(), &filter).unwrap_err().code(),
+        "GH_FAILED"
+    );
 }
 
 /// Trimmed `search` response from gnoviawan/termul (2026-10-30).
