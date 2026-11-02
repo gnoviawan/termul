@@ -29,6 +29,9 @@ import type { WorkspaceTab } from '@/stores/workspace-store'
 /** Inline row actions (close, rename) hold the 44px touch floor. */
 const INLINE_ACTION_BUTTON = 'size-11 shrink-0 rounded-full'
 
+/** An empty section's message, centred in the drawer's free height. */
+const EMPTY_MESSAGE_CLASS = 'my-auto px-4 py-6 text-center text-sm text-muted-foreground'
+
 /**
  * Claude-style row select button: borderless 16px label, the active row a
  * full-width pill. `min-w-0` lets the button shrink below its content width —
@@ -295,9 +298,9 @@ export function MobileDrawerSectionList({
 
   if (section === 'terminals') {
     return (
-      <div ref={rootRef} tabIndex={-1} className="px-2 pb-2 outline-none">
+      <div ref={rootRef} tabIndex={-1} className="flex flex-1 flex-col px-2 pb-2 outline-none">
         {terminalTabs.length === 0 ? (
-          <p className="px-4 py-2 text-sm text-muted-foreground">No open terminals</p>
+          <p className={EMPTY_MESSAGE_CLASS}>No open terminals</p>
         ) : (
           <div role="group" aria-labelledby={headingId} className="flex flex-col gap-0.5">
             {terminalTabs.map(({ tab, paneId }) => {
@@ -379,9 +382,14 @@ export function MobileDrawerSectionList({
   if (section === 'github' && editorTabs.length === 0) return null
 
   return (
-    <div ref={rootRef} tabIndex={-1} className="px-2 pb-2 outline-none">
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      // On GitHub these rows sit above the list: they keep their own height.
+      className={cn('flex flex-col px-2 pb-2 outline-none', section !== 'github' && 'flex-1')}
+    >
       {editorTabs.length === 0 ? (
-        <p className="px-4 py-2 text-sm text-muted-foreground">No open editors</p>
+        <p className={EMPTY_MESSAGE_CLASS}>No open editors</p>
       ) : (
         <div role="group" aria-labelledby={headingId} className="flex flex-col gap-0.5">
           {editorTabs.map(({ tab, paneId }) => {

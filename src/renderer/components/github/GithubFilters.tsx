@@ -1,4 +1,5 @@
 import type { GithubListFilter } from '@shared/types/github.types'
+import type { ReactNode } from 'react'
 import {
   pressedToggleClass,
   SEGMENTED_TRACK_CLASS,
@@ -35,31 +36,36 @@ const TOGGLES: ReadonlyArray<{ key: 'assignedToMe' | 'reviewRequested'; label: s
 interface GithubFiltersProps {
   filter: GithubListFilter
   onChange: (patch: Partial<GithubListFilter>) => void
+  /** Sits at the end of the kind row (the panel's Refresh). */
+  action?: ReactNode
 }
 
-/** Kind (segmented), state (select) and the two "involves me" toggles. */
-export function GithubFilters({ filter, onChange }: GithubFiltersProps): React.JSX.Element {
+/** Kind (segmented) with the panel's action beside it, state (select) and the two "involves me" toggles. */
+export function GithubFilters({ filter, onChange, action }: GithubFiltersProps): React.JSX.Element {
   return (
-    <div className="flex shrink-0 flex-col gap-1.5 px-2 pb-2 pointer-coarse:gap-2">
-      <div
-        role="group"
-        aria-label="Kind"
-        className={cn(SEGMENTED_TRACK_CLASS, 'h-7 pointer-coarse:h-9')}
-      >
-        {KIND_OPTIONS.map((option) => {
-          const active = filter.kind === option.value
-          return (
-            <button
-              key={option.value}
-              type="button"
-              aria-pressed={active}
-              onClick={() => onChange({ kind: option.value })}
-              className={cn(segmentClass(active), 'h-full flex-1 justify-center')}
-            >
-              {option.label}
-            </button>
-          )
-        })}
+    <div className="flex shrink-0 flex-col gap-1.5 px-2 pt-1 pb-2 pointer-coarse:gap-2">
+      <div className="flex min-w-0 items-center gap-1">
+        <div
+          role="group"
+          aria-label="Kind"
+          className={cn(SEGMENTED_TRACK_CLASS, 'h-7 min-w-0 flex-1 pointer-coarse:h-9')}
+        >
+          {KIND_OPTIONS.map((option) => {
+            const active = filter.kind === option.value
+            return (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => onChange({ kind: option.value })}
+                className={cn(segmentClass(active), 'h-full flex-1 justify-center')}
+              >
+                {option.label}
+              </button>
+            )
+          })}
+        </div>
+        {action}
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-1">
         <Select

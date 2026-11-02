@@ -140,14 +140,14 @@ describe('MobileShellDrawer token sweep', () => {
     expect(drawer.querySelector('.border-b')).toBeNull()
   })
 
-  it('shows one Recents heading below the search, above the merged chat list', () => {
+  it('names the merged chat list with a screen-reader-only Recents heading', () => {
     const drawer = renderDrawer()
 
     const headings = Array.from(drawer.querySelectorAll('h2')).map((el) => el.textContent)
     expect(headings).toEqual(['Termul', 'Recents'])
     const search = screen.getByRole('textbox', { name: 'Search chats' })
     const recents = screen.getByRole('heading', { level: 2, name: 'Recents' })
-    expect(recents).toHaveClass('text-muted-foreground')
+    expect(recents).toHaveClass('sr-only')
     const row = screen.getByRole('button', { name: /^Hello chat(,|$)/ })
     const follows = (a: Node | null | undefined, b: Node | null | undefined): boolean =>
       Boolean(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)

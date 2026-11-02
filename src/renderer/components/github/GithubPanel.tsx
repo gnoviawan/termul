@@ -151,15 +151,15 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-1 pl-4 pr-1.5 pointer-coarse:h-11">
-        {resolved.upstream ? (
+      {resolved.upstream && (
+        <div className="flex h-8 shrink-0 items-center px-2.5 pointer-coarse:h-11">
           <Select
             value={filter.repo}
             onValueChange={(value) => setFilter(cwd, { repo: value as 'origin' | 'upstream' })}
           >
             <SelectTrigger
               aria-label="Repository"
-              className="-ml-1.5 h-7 min-w-0 pointer-coarse:h-11 flex-1 gap-1 rounded-md border-transparent bg-transparent px-1.5 text-xs font-medium pointer-coarse:text-sm [&>span]:truncate"
+              className="h-7 min-w-0 pointer-coarse:h-11 flex-1 gap-1 rounded-md border-transparent bg-transparent px-1.5 text-xs font-medium pointer-coarse:text-sm [&>span]:truncate"
             >
               <SelectValue />
             </SelectTrigger>
@@ -168,28 +168,26 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
               <SelectItem value="upstream">{repoName(resolved.upstream)} (upstream)</SelectItem>
             </SelectContent>
           </Select>
-        ) : (
-          <span
-            className="min-w-0 flex-1 truncate text-xs font-medium text-foreground pointer-coarse:text-sm"
-            title={`${resolved.origin.host}/${repoName(resolved.origin)}`}
-          >
-            {repoName(resolved.origin)}
-          </span>
-        )}
-        <button
-          type="button"
-          onClick={() => void loadList(cwd, { refresh: true })}
-          disabled={refreshing}
-          className={cn(PANEL_ICON_BUTTON_CLASS, 'pointer-coarse:size-11')}
-          title="Refresh"
-          aria-label="Refresh"
-        >
-          <RefreshCw size={14} aria-hidden="true" className={cn(refreshing && 'animate-spin')} />
-        </button>
-      </div>
+        </div>
+      )}
 
       {auth.state === 'connected' && <GithubAuthWarning auth={auth} />}
-      <GithubFilters filter={filter} onChange={(patch) => setFilter(cwd, patch)} />
+      <GithubFilters
+        filter={filter}
+        onChange={(patch) => setFilter(cwd, patch)}
+        action={
+          <button
+            type="button"
+            onClick={() => void loadList(cwd, { refresh: true })}
+            disabled={refreshing}
+            className={cn(PANEL_ICON_BUTTON_CLASS, 'shrink-0 pointer-coarse:size-11')}
+            title="Refresh"
+            aria-label="Refresh"
+          >
+            <RefreshCw size={14} aria-hidden="true" className={cn(refreshing && 'animate-spin')} />
+          </button>
+        }
+      />
 
       {list.status === 'error' && listData && (
         <p
@@ -221,7 +219,7 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
           <ListSkeleton />
         )
       ) : items.length === 0 ? (
-        <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+        <p className="my-auto px-4 py-6 text-center text-xs text-muted-foreground">
           Nothing matches these filters.
         </p>
       ) : (

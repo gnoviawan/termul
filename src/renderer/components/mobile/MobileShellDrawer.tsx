@@ -93,19 +93,31 @@ const SECTION_NAV: ReadonlyArray<{
   { section: 'github', label: 'GitHub', Icon: Github }
 ]
 
+/** The footer's icon buttons share the row's width evenly (never under 44px), so the row has no dead gap. */
+const FOOTER_ICON_CLASS = 'h-11 min-w-11 flex-1 rounded-lg'
+
 /**
  * The footer's primary pill (New chat / New terminal / Browse files): a
- * compact 36px pill, its ::after hit-slop keeping the tappable area at 44px.
+ * compact 36px pill at the row's end, its ::after hit-slop keeping the
+ * tappable area at 44px. On a narrow drawer (or enlarged text) it is what
+ * gives way: it shrinks and truncates its label, the icons keep 44px.
  */
 const FOOTER_PILL_CLASS =
-  "relative min-w-0 gap-1.5 rounded-full px-3.5 text-sm after:absolute after:-inset-1 after:content-['']"
+  "relative ml-1 min-w-0 gap-1.5 rounded-full px-3.5 text-sm after:absolute after:-inset-1 after:content-['']"
 
-/** The drawer's list heading for each section. */
+/** The list's accessible name per section; on screen the selected section tab marks the list. */
 const SECTION_HEADINGS: Record<MobileSection, string> = {
   chats: 'Recents',
   terminals: 'Terminals',
   editors: 'Editors',
   github: 'Issues and pull requests'
+}
+
+interface FooterAction {
+  label: string
+  Icon: TermulIcon
+  disabled: boolean
+  onClick: () => void
 }
 
 interface MobileShellDrawerProps {
@@ -212,9 +224,9 @@ function DrawerProjectRow({
  * (Chats with the attention badge, Terminals, Editors; a tap switches the list
  * without closing), project row, search, then one scrolling list for the chosen
  * section (Chats: Recents, open chats merged into history; Terminals; Editors;
- * the active tab's section is preselected on open) and a pinned footer
- * (Settings, Snapshots, Git history, and the section's
- * primary pill: New chat, New terminal or Browse files). It owns where focus
+ * the active tab's section is preselected on open) and a pinned footer row
+ * (Settings, Snapshots, Git history and Automations spread evenly, then the
+ * section's primary pill: New chat, New terminal or Browse files). It owns where focus
  * lands when it opens and closes; the shell owns the open state and records
  * the opener.
  */
@@ -286,6 +298,40 @@ export function MobileShellDrawer({
     cancelFocusReturnRef.current?.()
     cancelFocusReturnRef.current = returnFocusAfterConfirm(restoreFocus)
   }
+
+  // The section's primary pill at the footer's end; the GitHub section has none.
+  const primaryAction: FooterAction | null =
+    listSection === 'chats'
+      ? {
+          label: 'New chat',
+          Icon: Plus,
+          disabled: !canNewChat,
+          onClick: () => {
+            closeForHandoff()
+            onNewChat()
+          }
+        }
+      : listSection === 'terminals'
+        ? {
+            label: 'New terminal',
+            Icon: Plus,
+            disabled: !onNewTerminal,
+            onClick: () => {
+              closeForNavigation()
+              onNewTerminal?.()
+            }
+          }
+        : listSection === 'editors'
+          ? {
+              label: 'Browse files',
+              Icon: FolderTree,
+              disabled: !onOpenFiles,
+              onClick: () => {
+                closeForHandoff()
+                onOpenFiles?.()
+              }
+            }
+          : null
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -412,16 +458,12 @@ export function MobileShellDrawer({
           </div>
         )}
 
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <h2
-            id={listHeadingId}
-            tabIndex={-1}
-            className={cn(
-              'px-4 pb-1 pt-2 text-sm font-medium text-muted-foreground outline-none',
-              // The repository row under it already heads the GitHub list.
-              listSection === 'github' && 'sr-only'
-            )}
-          >
+        {/* A column, so a section's empty message can take the free height and centre in it. */}
+        <div
+          ref={scrollRef}
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain"
+        >
+          <h2 id={listHeadingId} tabIndex={-1} className="sr-only">
             {SECTION_HEADINGS[listSection]}
           </h2>
           {listSection === 'chats' ? (
@@ -449,40 +491,40 @@ export function MobileShellDrawer({
           )}
         </div>
 
-        <div className="shrink-0 border-t border-border/60 px-2 pt-2.5 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-          <div className="flex min-w-0 items-center gap-1">
+        <div className="shrink-0 border-t border-border/60 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <div className="flex min-w-0 items-center">
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="size-11 shrink-0"
+              className={FOOTER_ICON_CLASS}
               aria-label="Settings"
               onClick={() => {
                 closeForHandoff()
                 useSettingsModalStore.getState().openApp()
               }}
             >
-              <Settings size={16} />
+              <Settings size={18} />
             </Button>
             <Button
               type="button"
               variant="ghost"
               size="icon"
-              className="size-11 shrink-0"
+              className={FOOTER_ICON_CLASS}
               aria-label="Snapshots"
               onClick={() => {
                 closeForNavigation()
                 navigate('/snapshots')
               }}
             >
-              <Camera size={16} />
+              <Camera size={18} />
             </Button>
             {!isTauriContext() && onOpenGitHistory && (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="size-11 shrink-0"
+                className={FOOTER_ICON_CLASS}
                 aria-label="Git history"
                 disabled={!activeProject?.path}
                 onClick={() => {
@@ -490,7 +532,7 @@ export function MobileShellDrawer({
                   onOpenGitHistory()
                 }}
               >
-                <History size={16} />
+                <History size={18} />
               </Button>
             )}
             {onOpenAutomations && (
@@ -498,63 +540,28 @@ export function MobileShellDrawer({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="size-11 shrink-0"
+                className={FOOTER_ICON_CLASS}
                 aria-label="Automations"
                 onClick={() => {
                   closeForNavigation()
                   onOpenAutomations()
                 }}
               >
-                <Workflow size={16} />
+                <Workflow size={18} />
               </Button>
             )}
-            <div className="ml-auto flex min-w-0 shrink items-center">
-              {listSection === 'chats' && (
-                <Button
-                  type="button"
-                  size="sm"
-                  className={FOOTER_PILL_CLASS}
-                  disabled={!canNewChat}
-                  onClick={() => {
-                    closeForHandoff()
-                    onNewChat()
-                  }}
-                >
-                  <Plus size={14} />
-                  New chat
-                </Button>
-              )}
-              {listSection === 'terminals' && (
-                <Button
-                  type="button"
-                  size="sm"
-                  className={FOOTER_PILL_CLASS}
-                  disabled={!onNewTerminal}
-                  onClick={() => {
-                    closeForNavigation()
-                    onNewTerminal?.()
-                  }}
-                >
-                  <Plus size={14} />
-                  New terminal
-                </Button>
-              )}
-              {listSection === 'editors' && (
-                <Button
-                  type="button"
-                  size="sm"
-                  className={FOOTER_PILL_CLASS}
-                  disabled={!onOpenFiles}
-                  onClick={() => {
-                    closeForHandoff()
-                    onOpenFiles?.()
-                  }}
-                >
-                  <FolderTree size={14} />
-                  Browse files
-                </Button>
-              )}
-            </div>
+            {primaryAction && (
+              <Button
+                type="button"
+                size="sm"
+                className={FOOTER_PILL_CLASS}
+                disabled={primaryAction.disabled}
+                onClick={primaryAction.onClick}
+              >
+                <primaryAction.Icon size={14} />
+                <span className="truncate">{primaryAction.label}</span>
+              </Button>
+            )}
           </div>
         </div>
       </SheetContent>
