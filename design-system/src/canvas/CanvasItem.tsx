@@ -132,7 +132,7 @@ export const CanvasItem = memo(function CanvasItem({
           className={cn(
             'grid size-7 shrink-0 cursor-default touch-none place-items-center rounded-md text-muted-foreground',
             'transition-colors duration-[var(--duration-quick)] hover:bg-row-hover hover:text-foreground',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
           )}
           onPointerDown={onHandlePointerDown}
           onPointerMove={onHandlePointerMove}
@@ -148,7 +148,7 @@ export const CanvasItem = memo(function CanvasItem({
           className={cn(
             'group/name flex min-w-0 max-w-[75%] shrink-0 cursor-default items-center gap-2 rounded-md px-1.5 py-1 font-medium text-foreground',
             'transition-colors duration-[var(--duration-quick)] hover:bg-row-hover',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
           )}
           onClick={copyName}
           aria-label={`${entry.name}. Copy name`}

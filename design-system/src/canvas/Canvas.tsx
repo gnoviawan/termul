@@ -505,7 +505,7 @@ export function Canvas({
         tabIndex={0}
         className={cn(
           'absolute inset-0 cursor-default overflow-hidden outline-none',
-          'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+          'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring',
           '[&[data-panning]_*]:select-none'
         )}
         onPointerDownCapture={onPointerDownCapture}

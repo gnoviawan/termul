@@ -51,7 +51,7 @@ export function GithubListRow({ item, isActive, onOpen }: GithubListRowProps): R
         title={item.title}
         className={cn(
           'flex w-full min-w-0 items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors duration-150 ease-out',
-          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring',
           isActive ? 'keycap' : 'hover:bg-foreground/[0.03]'
         )}
       >
