@@ -2706,6 +2706,30 @@ describe('AgentLauncher conversation pill launch', () => {
     expect(editor).toHaveAttribute('contenteditable', 'true')
     expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
   })
+
+  it('ignores a starter pick while the launch holds the composer', async () => {
+    let finishRead!: (contexts: ConversationContexts) => void
+    conversationContextsOverride.current = () =>
+      new Promise((resolve) => {
+        finishRead = resolve
+      })
+    renderLauncher()
+    const editor = await screen.findByLabelText('Agent prompt')
+    const draft = `see ${conversationToken('Old chat', 'chat-9')} `
+    setComposerValue(draft)
+
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
+    fireEvent.click(screen.getByRole('button', { name: 'Find a bug' }))
+    expect(getComposerValue()).toBe(draft)
+
+    await act(async () => finishRead({ blocks: [], gaps: new Map([['chat-9', 'unavailable']]) }))
+    await waitFor(() =>
+      expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+        expect.objectContaining({ initialUserBlocks: [{ type: 'text', text: draft }] })
+      )
+    )
+  })
 })
 
 describe('AgentLauncher composer drag-drop', () => {

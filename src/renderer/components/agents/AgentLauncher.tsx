@@ -1862,6 +1862,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             <ChatStarters
               isExiting={isExiting}
               onPick={(text) => {
+                if (launchLocked) return
                 setPrompt(text)
                 editorRef.current?.commands.focus('end', { scrollIntoView: false })
               }}
