@@ -240,13 +240,6 @@ export interface ComposerAttachments {
   removeAttachment: (id: string) => void
   /** Drops `sent` (every attachment when omitted). One that finished reading mid-send stays. */
   clearAttachments: (sent?: readonly PendingAttachment[]) => void
-  /**
-   * Paths of currently-staged app-owned temp `file-ref` attachments (e.g.
-   * pasted screenshots). Callers register these with the session before sending
-   * so they can be deleted when the session closes; the agent reads them by
-   * path during the turn, so they must not be deleted on send.
-   */
-  appOwnedTempPaths: () => string[]
   /** Whether the OS picker affordance should be shown (resource_link, always supported). */
   canPick: boolean
   /** Whether a picked image can attach: inline when capable, else a desktop temp-file link. */
@@ -458,7 +451,7 @@ export function useComposerAttachments(opts: {
 
   // Send-path reset: drops React state WITHOUT deleting app-owned temp files,
   // because the agent reads them by path during the turn. Callers register the
-  // paths via `appOwnedTempPaths()` before calling this so they are deleted
+  // paths via `appOwnedTempPaths(sent)` before calling this so they are deleted
   // when the session closes. Clear the ref immediately so unmount cleanup
   // cannot see attachments that are already being sent.
   const clearAttachments = useCallback((sent?: readonly PendingAttachment[]) => {
@@ -468,15 +461,6 @@ export function useComposerAttachments(opts: {
     setAttachments(keep)
   }, [])
 
-  const appOwnedTempPaths = useCallback(
-    () =>
-      attachmentsRef.current
-        .filter((a): a is Extract<PendingAttachment, { kind: 'file-ref' }> => a.kind === 'file-ref')
-        .filter((a) => a.appOwnedTemp)
-        .map((a) => a.path),
-    []
-  )
-
   return {
     attachments,
     addFiles,
@@ -484,7 +468,6 @@ export function useComposerAttachments(opts: {
     handlePaste,
     removeAttachment,
     clearAttachments,
-    appOwnedTempPaths,
     canPick: !disabled,
     canPickImages: !disabled && (imageCapable || isTauriContext()),
     // Drag/paste is always accepted while enabled: images attach (inline or as

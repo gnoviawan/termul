@@ -354,7 +354,19 @@ vi.mock('@/lib/acp-transport', async (importOriginal) => ({
   getAcpTransport: () => mockTransport.current
 }))
 
-const { mockLogFrontendError } = vi.hoisted(() => ({ mockLogFrontendError: vi.fn() }))
+const { mockLogFrontendError, mockWriteTempFile, mockRegisterTempFiles } = vi.hoisted(() => ({
+  mockLogFrontendError: vi.fn(),
+  mockWriteTempFile: vi.fn(async (_bytes: Uint8Array, name: string) => `/tmp/${name}`),
+  mockRegisterTempFiles: vi.fn()
+}))
+vi.mock('@/lib/composer-attachments-io', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/composer-attachments-io')>()),
+  writeBytesToTempFile: mockWriteTempFile
+}))
+vi.mock('@/lib/attachment-temp-cleanup', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/attachment-temp-cleanup')>()),
+  registerSessionTempFiles: mockRegisterTempFiles
+}))
 vi.mock('@/lib/log-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/log-api')>()),
   logFrontendError: mockLogFrontendError
@@ -2416,6 +2428,7 @@ describe('ChatInputBar conversation mentions', () => {
     mockSessionIndex.current = []
     mockMessages.current = {}
     mockTransport.current = { historyMode: () => 'live_only' }
+    mockIsTauri.mockReturnValue(false)
   })
 
   function deferTranscriptRead(): () => Promise<void> {
@@ -2450,6 +2463,43 @@ describe('ChatInputBar conversation mentions', () => {
     expect(editor).toHaveAttribute('contenteditable', 'true')
     expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
     expect(getComposerValue()).toBe('')
+  })
+
+  it('registers only the sent screenshots for cleanup when one finishes reading mid-send', async () => {
+    mockIsTauri.mockReturnValue(true)
+    const finishRead = deferTranscriptRead()
+    let finishLateWrite!: () => void
+    mockWriteTempFile.mockImplementationOnce(async (_bytes, name) => `/tmp/${name}`)
+    mockWriteTempFile.mockImplementationOnce(
+      (_bytes, name) =>
+        new Promise((resolve) => {
+          finishLateWrite = () => resolve(`/tmp/${name}`)
+        })
+    )
+    const drop = (name: string) => {
+      // jsdom's File has no arrayBuffer().
+      const file = Object.assign(new File(['png'], name, { type: 'image/png' }), {
+        arrayBuffer: async () => new ArrayBuffer(3)
+      })
+      const dataTransfer = { files: [file], items: [] } as unknown as DataTransfer
+      fireEvent.drop(screen.getByRole('textbox'), { dataTransfer })
+    }
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    drop('sent.png')
+    await screen.findByRole('button', { name: 'sent.png' })
+    drop('late.png')
+    setComposerValue(`see ${conversationToken('Old chat', 'gone')} `)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(finishLateWrite).toBeTypeOf('function'))
+    await act(async () => finishLateWrite())
+    await screen.findByRole('button', { name: 'late.png' })
+    await finishRead()
+
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    expect(mockRegisterTempFiles).toHaveBeenLastCalledWith('session-1', ['/tmp/sent.png'])
+    expect(screen.getByRole('button', { name: 'late.png' })).toBeInTheDocument()
   })
 
   it('sends to the submitting chat and keeps the next chat draft when the tab remaps mid-read', async () => {

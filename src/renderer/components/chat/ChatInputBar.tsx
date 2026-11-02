@@ -36,6 +36,7 @@ import { useCurrentAgentConfigId } from './agent-model-selector/use-agent-switch
 import { ChatContextStrip } from './ChatContextStrip'
 import { ComposerBeamShell } from './ComposerBeamShell'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
+import { appOwnedTempPaths } from './chat-attachments'
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
@@ -251,7 +252,6 @@ export function ChatInputBar({
     handlePaste,
     removeAttachment,
     clearAttachments,
-    appOwnedTempPaths,
     canPick,
     canPickImages,
     canDropPaste
@@ -362,7 +362,7 @@ export function ChatInputBar({
       // Register app-owned temp files (pasted screenshots) with the session so
       // they are deleted when the session closes; clearAttachments drops state
       // without deleting because the agent reads them by path during the turn.
-      registerSessionTempFiles(session.id, appOwnedTempPaths())
+      registerSessionTempFiles(session.id, appOwnedTempPaths(attachments))
       // A remap to another chat mid-await hydrates that chat's draft; keep it.
       setValue((current) => (current === value ? '' : current))
       skillPathsRef.current = {}
@@ -379,7 +379,6 @@ export function ChatInputBar({
     disabled,
     sending,
     clearAttachments,
-    appOwnedTempPaths,
     onSend,
     onSendBlocks,
     resetMentions,

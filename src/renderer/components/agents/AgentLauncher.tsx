@@ -41,7 +41,7 @@ import {
   type PendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
-import { dedupeAttachmentBlocks } from '@/components/chat/chat-attachments'
+import { appOwnedTempPaths, dedupeAttachmentBlocks } from '@/components/chat/chat-attachments'
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
@@ -467,7 +467,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     handlePaste,
     removeAttachment,
     clearAttachments,
-    appOwnedTempPaths,
     canPick,
     canPickImages,
     canDropPaste
@@ -1286,7 +1285,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
     launchInFlightRef.current = true
     const attachmentsSnapshot = [...attachments]
-    const appOwnedPaths = appOwnedTempPaths()
+    const appOwnedPaths = appOwnedTempPaths(attachmentsSnapshot)
     const modelsSnapshot = effectiveModels
     const modesSnapshot = effectiveModes
     const configOptionsSnapshot = effectiveConfigOptions
@@ -1494,7 +1493,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     paneId,
     attachments,
     clearAttachments,
-    appOwnedTempPaths,
     holdComposer,
     resetMentions,
     pendingOptions,
