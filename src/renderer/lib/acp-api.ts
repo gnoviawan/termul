@@ -31,8 +31,10 @@ import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { type CommandRun, runCommand } from '@/lib/command-engine'
 import { keyDigest } from '@/lib/command-journal'
 import { waitUntilVisible } from '@/lib/command-visibility'
+import { hasConversationEnvelope } from '@/lib/conversation-envelope'
 import { invokeIpc } from '@/lib/ipc/tauri'
 import { logFrontendError } from '@/lib/log-api'
+import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpOAuth } from '@/lib/web-server-api'
 
@@ -1324,7 +1326,11 @@ export async function acpSendPromptBlocks(
   turnId?: string,
   displayContent?: ContentBlock[]
 ): Promise<PromptDispatchResult> {
-  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId, displayContent)
+  // A mentioned conversation's transcript is for the agent only. Persisting
+  // the pill instead keeps it out of this chat's saved history and title.
+  const display =
+    displayContent ?? (hasConversationEnvelope(content) ? wireBlocksToDisplay(content) : undefined)
+  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId, display)
 }
 
 export async function acpCancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {

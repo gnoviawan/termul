@@ -1,6 +1,8 @@
 import { selectionContextToken, serializeSelectionContexts } from '@/lib/composer/selection-context'
+import { conversationEnvelope } from '@/lib/conversation-envelope'
 import {
   commandToken,
+  conversationToken,
   fileToken,
   SKILL_TOKEN_END,
   SKILL_TOKEN_START,
@@ -270,5 +272,37 @@ describe('wireTextToDisplay with selection contexts', () => {
     )
     expect(wire.startsWith('# Agent Skills')).toBe(true)
     expect(wireTextToDisplay(wire)).toBe(display)
+  })
+})
+
+describe('wireBlocksToDisplay with conversation envelopes', () => {
+  it('drops the transcript envelope and restores the conversation pill', () => {
+    const envelope = conversationEnvelope(
+      'sess-1',
+      'Fix "web" <reconnect>',
+      'User: hi\nAgent: hello'
+    )
+    const display = wireBlocksToDisplay([
+      { type: 'text', text: 'compare (conversation: Fix "web" <reconnect>) with this' },
+      { type: 'text', text: envelope }
+    ])
+    expect(display).toEqual([
+      {
+        type: 'text',
+        text: `compare ${conversationToken('Fix "web" <reconnect>', 'sess-1')} with this`
+      }
+    ])
+  })
+
+  it('leaves a transcript-unavailable mention as text (it carried no envelope)', () => {
+    const blocks = [{ type: 'text', text: 'see (conversation: Old chat, transcript unavailable)' }]
+    expect(wireBlocksToDisplay(blocks)).toBe(blocks)
+  })
+
+  it('does not treat a user message that merely quotes the tag as an envelope', () => {
+    const blocks = [
+      { type: 'text', text: 'what does <termul-conversation id="x" title="y"> mean?' }
+    ]
+    expect(wireBlocksToDisplay(blocks)).toBe(blocks)
   })
 })
