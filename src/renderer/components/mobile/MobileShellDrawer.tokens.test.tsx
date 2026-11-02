@@ -148,7 +148,7 @@ describe('MobileShellDrawer token sweep', () => {
     const search = screen.getByRole('textbox', { name: 'Search chats' })
     const recents = screen.getByRole('heading', { level: 2, name: 'Recents' })
     expect(recents).toHaveClass('text-muted-foreground')
-    const row = screen.getByRole('button', { name: 'Hello chat' })
+    const row = screen.getByRole('button', { name: /^Hello chat(,|$)/ })
     const follows = (a: Node | null | undefined, b: Node | null | undefined): boolean =>
       Boolean(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
     expect(follows(search, recents)).toBe(true)

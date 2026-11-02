@@ -414,8 +414,8 @@ describe('MobileShellDrawer shell', () => {
       within(nav).getByRole('button', { name: 'Editors' }),
       within(dialog).getByRole('textbox', { name: 'Search chats' }),
       within(dialog).getByRole('heading', { level: 2, name: 'Recents' }),
-      within(dialog).getByRole('heading', { level: 3, name: 'Today' }),
-      within(dialog).getByRole('button', { name: 'Chat one' }),
+      within(dialog).getByRole('heading', { level: 3, name: 'Active' }),
+      within(dialog).getByRole('button', { name: /^Chat one(,|$)/ }),
       within(dialog).getByRole('button', { name: /^Past chat/ }),
       within(dialog).getByRole('button', { name: 'Settings' }),
       within(dialog).getByRole('button', { name: 'Snapshots' }),
@@ -446,7 +446,7 @@ describe('MobileShellDrawer shell', () => {
 
     const recents = within(dialog).getByRole('heading', { level: 2, name: 'Recents' })
     expect(recents).toHaveAttribute('tabindex', '-1')
-    expect(within(dialog).getByRole('group', { name: 'Today' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('group', { name: 'Active' })).toBeInTheDocument()
     for (const name of ['Open', 'Terminals', 'Tabs', 'History']) {
       expect(within(dialog).queryByRole('heading', { name }), name).not.toBeInTheDocument()
     }
@@ -739,7 +739,7 @@ describe('MobileShellDrawer search', () => {
     seedHistory(['alpha plan', 'beta plan'])
     const { dialog } = await openDrawer({ activeTabId: 'tab-1', activeSessionId: 's1' })
     expect(within(dialog).getByText('alpha plan')).toBeInTheDocument()
-    expect(within(dialog).getByRole('button', { name: 'Open chat' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: /^Open chat(,|$)/ })).toBeInTheDocument()
 
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Search chats' }), {
       target: { value: 'alpha' }
@@ -747,7 +747,9 @@ describe('MobileShellDrawer search', () => {
 
     expect(within(dialog).getByText('alpha plan')).toBeInTheDocument()
     expect(within(dialog).queryByText('beta plan')).not.toBeInTheDocument()
-    expect(within(dialog).queryByRole('button', { name: 'Open chat' })).not.toBeInTheDocument()
+    expect(
+      within(dialog).queryByRole('button', { name: /^Open chat(,|$)/ })
+    ).not.toBeInTheDocument()
 
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Search chats' }), {
       target: { value: 'zzz' }
@@ -1159,9 +1161,9 @@ describe('MobileShellDrawer unread rows', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
     const dialog = await screen.findByRole('dialog', { name: 'Termul' })
     expect(
-      within(dialog).getByRole('button', { name: 'Chat two, New activity' })
+      within(dialog).getByRole('button', { name: /^Chat two, New activity(,|$)/ })
     ).toBeInTheDocument()
-    expect(within(dialog).getByRole('button', { name: 'Chat one' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: /^Chat one(,|$)/ })).toBeInTheDocument()
   })
 
   it('does not bank New activity itself when a turn finishes (no drawer-mounted tracker)', () => {
@@ -1305,7 +1307,7 @@ describe('MobileShellDrawer focus', () => {
     it('lands on the active Recents row, not the search', async () => {
       const { dialog } = await openDrawer({ activeTabId: 'tab-1', activeSessionId: 's1' })
 
-      const row = within(dialog).getByRole('button', { name: 'Chat one' })
+      const row = within(dialog).getByRole('button', { name: /^Chat one(,|$)/ })
       expect(row).toHaveAttribute('aria-current', 'page')
       await waitFor(() => expect(row).toHaveFocus())
       expect(within(dialog).getByRole('textbox', { name: 'Search chats' })).not.toHaveFocus()
@@ -1406,7 +1408,7 @@ describe('MobileShellDrawer focus', () => {
       [
         'an open chat row',
         'chats',
-        (d) => fireEvent.click(within(d).getByRole('button', { name: 'Chat one' }))
+        (d) => fireEvent.click(within(d).getByRole('button', { name: /^Chat one(,|$)/ }))
       ],
       [
         'a history row',
@@ -1474,7 +1476,7 @@ describe('MobileShellDrawer focus', () => {
 
   describe('after a navigation close with a chat pane behind the drawer', () => {
     const tapChatRow = (dialog: HTMLElement): void => {
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Chat one' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Chat one(,|$)/ }))
     }
     const drawerClosed = (): Promise<void> =>
       waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
@@ -1702,7 +1704,7 @@ describe('MobileShellDrawer opened from the real header', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
     const dialog = await screen.findByRole('dialog', { name: 'Termul' })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Chat one' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Chat one(,|$)/ }))
 
     await drawerClosed()
     const title = screen.getByRole('heading', { level: 1, name: 'Chat one' })
