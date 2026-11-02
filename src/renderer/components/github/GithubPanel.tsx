@@ -173,6 +173,7 @@ export function GithubPanel({ projectId, cwd, onNavigate }: GithubPanelProps): R
 
       {auth.state === 'connected' && <GithubAuthWarning auth={auth} />}
       <GithubFilters
+        cwd={cwd}
         filter={filter}
         onChange={(patch) => setFilter(cwd, patch)}
         action={

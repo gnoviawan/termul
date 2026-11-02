@@ -16,10 +16,13 @@ import {
   GitPullRequestClosed,
   GitPullRequestDraft,
   type TermulIcon,
+  X,
   XCircle
 } from '@/components/icons'
+import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { formatRelativeTime } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
+import { labelColors, useSurfaceHex } from './label-color'
 
 interface StatusLook {
   label: string
@@ -121,10 +124,13 @@ export function ItemStateIcon({
 
 export function ItemStatePill({
   kind,
-  state
+  state,
+  label
 }: {
   kind: GithubItemKind
   state: GithubItemState
+  /** Replaces the state word ("Closed as not planned"). */
+  label?: string
 }): React.JSX.Element {
   const look = itemStateLook(kind, state)
   return (
@@ -135,7 +141,7 @@ export function ItemStatePill({
       )}
     >
       <look.Icon size={14} aria-hidden="true" />
-      {look.label}
+      {label ?? look.label}
     </span>
   )
 }
@@ -183,22 +189,107 @@ export function CheckRollupIcon({ rollup }: { rollup: GithubCheckRollup }): Reac
   return <CheckStatusIcon status={rollup} label={ROLLUP_LABEL[rollup]} />
 }
 
-const HEX_COLOR = /^[0-9a-f]{6}$/i
-
 /**
- * A label chip in theme ink. GitHub's label colour shows only as the dot: raw
- * label colours are often unreadable as text on a dark or light theme.
+ * A label chip tinted with its GitHub colour through {@link labelColors}: the
+ * ink is contrast-checked against the washed chip on `surface`, so a dark
+ * label on a dark theme stays readable. A colour that is not six hex digits
+ * (or a theme not applied yet) leaves the chip neutral.
  */
-export function LabelChip({ label }: { label: GithubLabel }): React.JSX.Element {
-  const color = HEX_COLOR.test(label.color) ? `#${label.color}` : undefined
+export function LabelChip({
+  label,
+  size = 'sm',
+  surface = '--background',
+  onRemove,
+  removeDisabled
+}: {
+  label: GithubLabel
+  /** `sm` in list rows, `md` on the item page and in pickers. */
+  size?: 'sm' | 'md'
+  surface?: '--background' | '--popover'
+  /** Adds an x that calls this (active filter chips, picker selections). */
+  onRemove?: () => void
+  removeDisabled?: boolean
+}): React.JSX.Element {
+  const colors = labelColors(label.color, useSurfaceHex(surface))
   return (
-    <span className="inline-flex h-5 min-w-0 max-w-full items-center gap-1 rounded-full border border-border px-1.5 text-3xs text-muted-foreground">
+    <span
+      className={cn(
+        'inline-flex min-w-0 max-w-full shrink-0 items-center gap-1 rounded-full border',
+        size === 'sm' ? 'h-5 px-1.5 text-3xs' : 'h-6 px-2 text-xs',
+        colors ? null : 'border-border text-muted-foreground',
+        onRemove && 'pr-0.5'
+      )}
+      style={
+        colors
+          ? { color: colors.ink, backgroundColor: colors.wash, borderColor: colors.edge }
+          : undefined
+      }
+    >
       <span
         aria-hidden="true"
-        className="size-2 shrink-0 rounded-full bg-muted-foreground"
-        style={color ? { backgroundColor: color } : undefined}
+        className={cn('size-2 shrink-0 rounded-full', colors ? null : 'bg-muted-foreground')}
+        style={colors ? { backgroundColor: colors.ink } : undefined}
       />
       <span className="truncate">{label.name}</span>
+      {onRemove && (
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={removeDisabled}
+          aria-label={`Remove ${label.name}`}
+          className={cn(
+            'relative inline-flex size-4 shrink-0 items-center justify-center rounded-full opacity-80 hover:opacity-100 disabled:opacity-40',
+            "after:absolute after:-inset-2 after:content-['']",
+            FOCUS_RING_CLASS
+          )}
+        >
+          <X size={12} aria-hidden="true" />
+        </button>
+      )}
+    </span>
+  )
+}
+
+/** A label's colour as a dot (picker rows), contrast-checked like {@link LabelChip}. */
+export function LabelDot({
+  color,
+  surface = '--popover'
+}: {
+  color: string
+  surface?: '--background' | '--popover'
+}): React.JSX.Element {
+  const colors = labelColors(color, useSurfaceHex(surface))
+  return (
+    <span
+      aria-hidden="true"
+      className={cn('size-2.5 shrink-0 rounded-full', colors ? null : 'bg-muted-foreground')}
+      style={colors ? { backgroundColor: colors.ink } : undefined}
+    />
+  )
+}
+
+/** A login's initials in a circle. Avatars are never fetched. */
+export function GithubAvatar({
+  login,
+  size = 'md'
+}: {
+  login: string
+  size?: 'sm' | 'md'
+}): React.JSX.Element {
+  const initial =
+    login
+      .replace(/[^A-Za-z0-9]/g, '')
+      .charAt(0)
+      .toUpperCase() || '?'
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        'flex shrink-0 select-none items-center justify-center rounded-full bg-foreground/10 font-medium text-foreground',
+        size === 'sm' ? 'size-5 text-3xs' : 'size-8 text-xs'
+      )}
+    >
+      {initial}
     </span>
   )
 }

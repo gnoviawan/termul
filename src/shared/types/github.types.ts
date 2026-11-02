@@ -76,12 +76,31 @@ export interface GithubListItem {
   checks: GithubCheckRollup | null
 }
 
+/** How the list's label filter combines its labels: at least one, every one, or none of them. */
+export type GithubLabelMode = 'any' | 'all' | 'exclude'
+
+/** Whose items the list shows. */
+export type GithubAssigneeFilter =
+  | { kind: 'anyone' }
+  | { kind: 'me' }
+  | { kind: 'unassigned' }
+  | { kind: 'user'; login: string }
+
+/** List order, newest first. */
+export type GithubSort = 'updated' | 'created' | 'comments'
+
 export interface GithubListFilter {
   repo: GithubRepoSlot
   kind: 'all' | GithubItemKind
   state: 'all' | GithubItemState
-  assignedToMe: boolean
+  /** Free text matched against titles and bodies; empty adds nothing. */
+  search: string
+  /** Label names; empty adds nothing. */
+  labels: string[]
+  labelMode: GithubLabelMode
+  assignee: GithubAssigneeFilter
   reviewRequested: boolean
+  sort: GithubSort
 }
 
 export interface GithubListRequest {
@@ -109,6 +128,8 @@ export interface GithubItemRequest {
 export interface GithubComment {
   id: string
   author: string
+  /** The author is a GitHub App or bot account. */
+  isBot: boolean
   body: string
   createdAt: string
   url: string
@@ -141,6 +162,32 @@ export interface GithubPullDetail {
   reviewThreads: GithubReviewThread[]
 }
 
+/** Why an issue was closed. */
+export type GithubCloseReason = 'completed' | 'not_planned'
+
+export type GithubTimelineEventKind =
+  | 'labeled'
+  | 'unlabeled'
+  | 'assigned'
+  | 'unassigned'
+  | 'closed'
+  | 'reopened'
+  /** PRs only. */
+  | 'merged'
+
+/** A non-comment event on the item's timeline. */
+export interface GithubTimelineEvent {
+  id: string
+  kind: GithubTimelineEventKind
+  /** Who did it; empty when GitHub no longer knows (deleted account). */
+  actor: string
+  createdAt: string
+  /** Labeled / unlabeled. */
+  label: GithubLabel | null
+  /** Assigned / unassigned. */
+  assignee: string | null
+}
+
 export interface GithubItemDetail {
   repo: GithubRepoRef
   item: GithubListItem
@@ -148,6 +195,10 @@ export interface GithubItemDetail {
   createdAt: string
   /** Issue/PR conversation comments, oldest first. */
   comments: GithubComment[]
+  /** Label, assignee and open/closed events, oldest first (the latest 50). */
+  timeline: GithubTimelineEvent[]
+  /** Issues only: why a closed issue was closed. */
+  stateReason: GithubCloseReason | null
   /** Present when `item.kind === 'pr'`. */
   pr: GithubPullDetail | null
   fetchedAt: string
@@ -253,6 +304,77 @@ export interface GithubCheckoutPrResult {
   headRefName: string
   /** The exact command that pushes this worktree's commits to the PR head branch. */
   pushCommand: string
+}
+
+export interface GithubRepoMetaRequest {
+  cwd: string
+  repo: GithubRepoSlot
+  refresh?: boolean
+}
+
+export interface GithubRepoLabel {
+  name: string
+  /** Six hex digits, no `#`. */
+  color: string
+  description: string | null
+}
+
+/** What the label and assignee pickers offer for one repository. */
+export interface GithubRepoMeta {
+  repo: GithubRepoRef
+  /** The repository's labels (first 100). */
+  labels: GithubRepoLabel[]
+  /** Logins that can be assigned (first 100). */
+  assignableUsers: string[]
+  /** The signed-in account's login. */
+  viewer: string
+  fetchedAt: string
+}
+
+export interface GithubCreateLabelRequest {
+  cwd: string
+  repo: GithubRepoSlot
+  name: string
+  /** Six hex digits, no `#`. */
+  color: string
+  description?: string | null
+}
+
+export interface GithubCreateLabelResult {
+  label: GithubRepoLabel
+}
+
+/** Add and remove labels and assignees on one issue or PR, by name/login. */
+export interface GithubEditItemRequest {
+  cwd: string
+  repo: GithubRepoSlot
+  kind: GithubItemKind
+  number: number
+  addLabels?: string[]
+  removeLabels?: string[]
+  addAssignees?: string[]
+  removeAssignees?: string[]
+}
+
+export interface GithubEditItemResult {
+  number: number
+}
+
+/** `reason` applies to issues; a PR close ignores it. */
+export type GithubItemStateAction =
+  | { kind: 'close'; reason: GithubCloseReason }
+  | { kind: 'reopen' }
+
+export interface GithubSetItemStateRequest {
+  cwd: string
+  repo: GithubRepoSlot
+  kind: GithubItemKind
+  number: number
+  action: GithubItemStateAction
+}
+
+export interface GithubSetItemStateResult {
+  number: number
 }
 
 /**

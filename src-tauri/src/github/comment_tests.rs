@@ -64,6 +64,7 @@ fn created() -> GithubComment {
     GithubComment {
         id: "IC_9".into(),
         author: "octo".into(),
+        is_bot: false,
         body: "hi".into(),
         created_at: "2026-10-31T06:00:00Z".into(),
         url: "https://github.com/me/termul/issues/7#issuecomment-9".into(),
@@ -77,8 +78,12 @@ fn list(cwd: String) -> GithubListRequest {
             repo: GithubRepoSlot::Origin,
             kind: GithubKindFilter::All,
             state: GithubStateFilter::Open,
-            assigned_to_me: false,
+            search: String::new(),
+            labels: Vec::new(),
+            label_mode: GithubLabelMode::Any,
+            assignee: GithubAssigneeFilter::Anyone,
             review_requested: false,
+            sort: GithubSort::Updated,
         },
         refresh: false,
     }

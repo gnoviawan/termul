@@ -12,6 +12,7 @@ mod checkout;
 mod checks;
 mod comment;
 mod detail;
+mod edit;
 mod error;
 mod graphql;
 mod items;
@@ -34,6 +35,8 @@ mod checks_tests;
 mod comment_tests;
 #[cfg(test)]
 mod detail_tests;
+#[cfg(test)]
+mod edit_tests;
 #[cfg(test)]
 mod fake_gh;
 #[cfg(test)]

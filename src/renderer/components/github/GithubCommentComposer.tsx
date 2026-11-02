@@ -1,5 +1,6 @@
 import type { IpcResult } from '@shared/types/ipc.types'
-import { useId, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
+import { ArrowUp } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -19,7 +20,15 @@ interface GithubCommentComposerProps {
   onCancel?: () => void
   autoFocus?: boolean
   className?: string
+  /**
+   * The phone's pinned bar (mockup D): a one-line field that grows with the
+   * text, and a round send button. Enter adds a line; the button posts.
+   */
+  pinned?: boolean
 }
+
+/** Tallest the pinned field grows before it scrolls. */
+const PINNED_MAX_HEIGHT_PX = 160
 
 /**
  * Markdown box that posts to GitHub (CAP-11 comments, PR review-thread
@@ -34,7 +43,8 @@ export function GithubCommentComposer({
   onSubmit,
   onCancel,
   autoFocus,
-  className
+  className,
+  pinned = false
 }: GithubCommentComposerProps): React.JSX.Element {
   const id = useId()
   const gated = !useServerAdmitsRemoteWrites()
@@ -43,6 +53,16 @@ export function GithubCommentComposer({
   const [posting, setPosting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const canSubmit = !gated && !posting && body.trim().length > 0
+  const fieldRef = useRef<HTMLTextAreaElement>(null)
+
+  // iOS Safari has no `field-sizing: content`: size the pinned field to its text.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `body` is the trigger; the size is read from the DOM.
+  useLayoutEffect(() => {
+    const field = fieldRef.current
+    if (!pinned || !field) return
+    field.style.height = 'auto'
+    field.style.height = `${Math.min(field.scrollHeight, PINNED_MAX_HEIGHT_PX)}px`
+  }, [pinned, body])
 
   const submit = async (): Promise<void> => {
     if (!canSubmit) return
@@ -58,6 +78,57 @@ export function GithubCommentComposer({
     }
   }
 
+  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      void submit()
+    } else if (event.key === 'Escape' && onCancel && !posting) {
+      event.preventDefault()
+      onCancel()
+    }
+  }
+
+  if (pinned) {
+    return (
+      <div className={cn('flex min-w-0 flex-col gap-1.5', className)}>
+        {error && (
+          <p id={`${id}-error`} role="alert" className="px-2 text-xs text-destructive">
+            {error}
+          </p>
+        )}
+        <div className="flex min-w-0 items-end gap-2">
+          <Label htmlFor={id} className="sr-only">
+            {label}
+          </Label>
+          <Textarea
+            ref={fieldRef}
+            id={id}
+            rows={1}
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder={placeholder}
+            disabled={gated}
+            readOnly={posting}
+            aria-describedby={error ? `${id}-error` : undefined}
+            className="min-h-11 flex-1 resize-none rounded-3xl px-4 py-2.5"
+          />
+          <WriteGate gated={gated}>
+            <Button
+              size="icon"
+              aria-label={posting ? 'Posting…' : submitLabel}
+              className="size-11 shrink-0 rounded-full"
+              disabled={!canSubmit}
+              onClick={() => void submit()}
+            >
+              <ArrowUp size={18} aria-hidden="true" />
+            </Button>
+          </WriteGate>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className={cn('flex min-w-0 flex-col gap-2', className)}>
       <Label htmlFor={id} className={showLabel ? 'text-sm font-medium' : 'sr-only'}>
@@ -67,15 +138,7 @@ export function GithubCommentComposer({
         id={id}
         value={body}
         onChange={(event) => setBody(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault()
-            void submit()
-          } else if (event.key === 'Escape' && onCancel && !posting) {
-            event.preventDefault()
-            onCancel()
-          }
-        }}
+        onKeyDown={onKeyDown}
         placeholder={placeholder}
         disabled={gated}
         // Text typed during the post would be cleared with the sent text.

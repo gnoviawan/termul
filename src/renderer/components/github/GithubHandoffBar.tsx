@@ -48,8 +48,8 @@ interface GithubHandoffBarProps {
 }
 
 /**
- * Agent hand-offs for the open item (CAP-5 to CAP-8), as a row of small
- * buttons in the item header. Actions that make a worktree sit behind
+ * Agent hand-offs for the open item (CAP-5 to CAP-8), as one horizontally
+ * scrolling row of buttons in the item header. Actions that make a worktree sit behind
  * `WriteGate`; a blocked action stays visible with its reason.
  */
 export function GithubHandoffBar({
@@ -91,7 +91,8 @@ export function GithubHandoffBar({
       <div
         role="toolbar"
         aria-label="Agent actions"
-        className="flex flex-wrap items-center gap-1.5"
+        // One row that scrolls sideways: on a phone the actions never push the page down.
+        className="-mx-4 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 sm:px-0"
       >
         {actions.map(({ action, label, writes, blockedReason }) => {
           const Icon = ICONS[action]
@@ -101,7 +102,7 @@ export function GithubHandoffBar({
               <Button
                 variant="outline"
                 size={isMobileShell ? 'touch' : 'xs'}
-                className={isMobileShell ? 'px-3' : undefined}
+                className={isMobileShell ? 'shrink-0 px-3' : 'shrink-0'}
                 disabled={gated || blockedReason !== null || running !== null}
                 title={blockedReason ?? HINTS[action]}
                 onClick={() => onAction(action)}

@@ -4,13 +4,20 @@ import type {
   GithubCommentResult,
   GithubCommentTarget,
   GithubContext,
+  GithubCreateLabelRequest,
+  GithubCreateLabelResult,
+  GithubEditItemRequest,
+  GithubEditItemResult,
   GithubItemDetail,
   GithubItemKind,
+  GithubItemStateAction,
   GithubListFilter,
   GithubListResult,
   GithubMergeAction,
   GithubMergeResult,
-  GithubRepoSlot
+  GithubRepoMeta,
+  GithubRepoSlot,
+  GithubSetItemStateResult
 } from '@shared/types/github.types'
 import type { IpcResult } from '@shared/types/ipc.types'
 import { create } from 'zustand'
@@ -35,9 +42,19 @@ export const DEFAULT_GITHUB_FILTER: GithubListFilter = {
   repo: 'origin',
   kind: 'all',
   state: 'open',
-  assignedToMe: false,
-  reviewRequested: false
+  search: '',
+  labels: [],
+  labelMode: 'any',
+  assignee: { kind: 'anyone' },
+  reviewRequested: false,
+  sort: 'updated'
 }
+
+/** Labels and assignees to add or remove on one item. */
+export type GithubItemEdit = Pick<
+  GithubEditItemRequest,
+  'addLabels' | 'removeLabels' | 'addAssignees' | 'removeAssignees'
+>
 
 /** Errors that mean the cached context is stale: `gh` vanished, logged out, or the remote changed. */
 const CONTEXT_ERROR_CODES = new Set(['GH_CLI_MISSING', 'GH_UNAUTHENTICATED', 'GH_NOT_GITHUB_REPO'])
@@ -49,6 +66,7 @@ interface GithubResourceData {
   items: GithubItemDetail
   checks: GithubChecksResult
   logs: GithubCheckLog
+  repoMeta: GithubRepoMeta
 }
 
 type ResourceSlice = keyof GithubResourceData
@@ -89,6 +107,28 @@ export interface GithubState extends GithubResources {
     target: GithubCommentTarget,
     body: string
   ) => Promise<IpcResult<GithubCommentResult>>
+  /** The repository's labels and assignable users, for the pickers. */
+  loadRepoMeta: (
+    cwd: string,
+    repo: GithubRepoSlot,
+    options?: { refresh?: boolean }
+  ) => Promise<void>
+  /** Create a label, then re-read the repository's labels. */
+  createLabel: (
+    cwd: string,
+    repo: GithubRepoSlot,
+    label: Pick<GithubCreateLabelRequest, 'name' | 'color' | 'description'>
+  ) => Promise<IpcResult<GithubCreateLabelResult>>
+  /**
+   * Add and remove labels/assignees, then re-read the item and the list past
+   * the host cache. Resolves once both re-reads land.
+   */
+  editItem: (ref: GithubItemRef, edit: GithubItemEdit) => Promise<IpcResult<GithubEditItemResult>>
+  /** Close or reopen, then re-read the item and the list like {@link editItem}. */
+  setItemState: (
+    ref: GithubItemRef,
+    action: GithubItemStateAction
+  ) => Promise<IpcResult<GithubSetItemStateResult>>
 }
 
 const SEP = '\u0000'
@@ -99,9 +139,17 @@ export function githubListKey(cwd: string, filter: GithubListFilter): string {
     filter.repo,
     filter.kind,
     filter.state,
-    filter.assignedToMe ? 'me' : '',
-    filter.reviewRequested ? 'review' : ''
+    filter.search.trim(),
+    filter.labelMode,
+    JSON.stringify(filter.labels),
+    filter.assignee.kind === 'user' ? `user:${filter.assignee.login}` : filter.assignee.kind,
+    filter.reviewRequested ? 'review' : '',
+    filter.sort
   ].join(SEP)
+}
+
+export function githubRepoMetaKey(cwd: string, repo: GithubRepoSlot): string {
+  return [cwd, repo].join(SEP)
 }
 
 export function githubItemKey(cwd: string, repo: GithubRepoSlot, number: number): string {
@@ -164,6 +212,7 @@ export const useGithubStore = create<GithubState>((set, get) => {
     items: {},
     checks: {},
     logs: {},
+    repoMeta: {},
     filters: {},
 
     loadContext: async (cwd) => {
@@ -259,6 +308,50 @@ export const useGithubStore = create<GithubState>((set, get) => {
         return { items: { ...state.items, [key]: { ...resource, data: next } } }
       })
       void get().loadItem(ref, { refresh: true })
+      return result
+    },
+
+    loadRepoMeta: async (cwd, repo, options) => {
+      const result = await track('repoMeta', githubRepoMetaKey(cwd, repo), () =>
+        githubApi.getRepoMeta({ cwd, repo, refresh: options?.refresh })
+      )
+      recheckContext(cwd, result)
+    },
+
+    createLabel: async (cwd, repo, label) => {
+      const result = await githubApi.createLabel({ cwd, repo, ...label })
+      await get().loadRepoMeta(cwd, repo, { refresh: true })
+      return result
+    },
+
+    editItem: async (ref, edit) => {
+      const result = await githubApi.editItem({
+        cwd: ref.cwd,
+        repo: ref.repo,
+        kind: ref.kind,
+        number: ref.number,
+        ...edit
+      })
+      // A failed edit may have applied part of the change; show what GitHub now reports.
+      await Promise.all([
+        get().loadList(ref.cwd, { refresh: true }),
+        get().loadItem(ref, { refresh: true })
+      ])
+      return result
+    },
+
+    setItemState: async (ref, action) => {
+      const result = await githubApi.setItemState({
+        cwd: ref.cwd,
+        repo: ref.repo,
+        kind: ref.kind,
+        number: ref.number,
+        action
+      })
+      await Promise.all([
+        get().loadList(ref.cwd, { refresh: true }),
+        get().loadItem(ref, { refresh: true })
+      ])
       return result
     }
   }

@@ -296,6 +296,10 @@ pub fn router(
         .route("/github/merge", post(github_api::merge))
         .route("/github/comment", post(github_api::comment))
         .route("/github/checkout-pr", post(github_api::checkout_pr))
+        .route("/github/repo-meta", post(github_api::repo_meta))
+        .route("/github/create-label", post(github_api::create_label))
+        .route("/github/edit-item", post(github_api::edit_item))
+        .route("/github/item-state", post(github_api::set_item_state))
         // Project icon resolution (spec-project-icon). Mirrors the desktop
         // `project_icon_resolve` command — same shared resolver, read-route
         // posture (boundary check, no write guard).
@@ -570,6 +574,10 @@ pub fn router_with_static(
         .route("/github/merge", post(github_api::merge))
         .route("/github/comment", post(github_api::comment))
         .route("/github/checkout-pr", post(github_api::checkout_pr))
+        .route("/github/repo-meta", post(github_api::repo_meta))
+        .route("/github/create-label", post(github_api::create_label))
+        .route("/github/edit-item", post(github_api::edit_item))
+        .route("/github/item-state", post(github_api::set_item_state))
         .route("/project/icon", post(project_icon_api::resolve_icon))
         .route("/search/rg-info", get(search_api::rg_info))
         .route("/search/content", post(search_api::content))

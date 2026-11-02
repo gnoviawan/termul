@@ -1,8 +1,10 @@
 //! The issue/PR list (CAP-2): one GraphQL `search` per filter.
 
+use super::error::GithubError;
 use super::graphql::{ItemNode, ITEM_FIELDS, PR_ROLLUP_FIELDS, RATE_LIMIT_FIELDS};
 use super::types::{
-    GithubKindFilter, GithubListFilter, GithubListItem, GithubRepoRef, GithubStateFilter,
+    GithubAssigneeFilter, GithubKindFilter, GithubLabelMode, GithubListFilter, GithubListItem,
+    GithubRepoRef, GithubSort, GithubStateFilter,
 };
 
 pub(super) const PAGE_SIZE: u64 = 50;
@@ -19,21 +21,42 @@ pub(super) fn search_graphql() -> String {
 
 /// The GitHub search string for `filter`, or `None` when the filter cannot
 /// match anything (issues filtered by a PR-only state or review request).
+/// A user login that is not a GitHub login is refused.
 ///
 /// Search ORs repeated `is:` type qualifiers (`is:issue is:pr` matches both),
 /// so exactly one type qualifier is ever emitted.
-pub(super) fn search_query(repo: &GithubRepoRef, filter: &GithubListFilter) -> Option<String> {
+pub(super) fn search_query(
+    repo: &GithubRepoRef,
+    filter: &GithubListFilter,
+) -> Result<Option<String>, GithubError> {
+    // Checked first: a filter that lists nothing must still refuse a bad login.
+    if let GithubAssigneeFilter::User { login } = &filter.assignee {
+        if login.is_empty()
+            || !login
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(GithubError::Refused(format!(
+                "\"{login}\" is not a GitHub login"
+            )));
+        }
+    }
     let pr_only = filter.review_requested
         || matches!(
             filter.state,
             GithubStateFilter::Merged | GithubStateFilter::Draft
         );
+    let sort = match filter.sort {
+        GithubSort::Updated => "updated",
+        GithubSort::Created => "created",
+        GithubSort::Comments => "comments",
+    };
     let mut terms = vec![
         format!("repo:{}/{}", repo.owner, repo.name),
-        "sort:updated-desc".to_string(),
+        format!("sort:{sort}-desc"),
     ];
     match (filter.kind, pr_only) {
-        (GithubKindFilter::Issue, true) => return None,
+        (GithubKindFilter::Issue, true) => return Ok(None),
         (GithubKindFilter::Issue, false) => terms.push("is:issue".to_string()),
         (GithubKindFilter::Pr, _) | (GithubKindFilter::All, true) => {
             terms.push("is:pr".to_string())
@@ -50,13 +73,58 @@ pub(super) fn search_query(repo: &GithubRepoRef, filter: &GithubListFilter) -> O
         GithubStateFilter::Merged => terms.push("is:merged".to_string()),
         GithubStateFilter::Draft => terms.extend(["is:open".to_string(), "draft:true".to_string()]),
     }
-    if filter.assigned_to_me {
-        terms.push("assignee:@me".to_string());
+    terms.extend(label_terms(&filter.labels, filter.label_mode));
+    match &filter.assignee {
+        GithubAssigneeFilter::Anyone => {}
+        GithubAssigneeFilter::Me => terms.push("assignee:@me".to_string()),
+        GithubAssigneeFilter::Unassigned => terms.push("no:assignee".to_string()),
+        GithubAssigneeFilter::User { login } => terms.push(format!("assignee:{login}")),
     }
     if filter.review_requested {
         terms.push("review-requested:@me".to_string());
     }
-    Some(terms.join(" "))
+    terms.extend(text_terms(&filter.search));
+    Ok(Some(terms.join(" ")))
+}
+
+fn label_terms(labels: &[String], mode: GithubLabelMode) -> Vec<String> {
+    let quoted: Vec<String> = labels
+        .iter()
+        .map(|label| label.replace('"', ""))
+        .filter(|label| !label.trim().is_empty())
+        .map(|label| format!("\"{label}\""))
+        .collect();
+    if quoted.is_empty() {
+        return Vec::new();
+    }
+    match mode {
+        GithubLabelMode::Any => vec![format!("label:{}", quoted.join(","))],
+        GithubLabelMode::All => quoted.iter().map(|l| format!("label:{l}")).collect(),
+        GithubLabelMode::Exclude => quoted.iter().map(|l| format!("-label:{l}")).collect(),
+    }
+}
+
+/// The free text as plain words: no quotes, parentheses, `OR`/`AND`/`NOT`
+/// or `name:value` qualifiers, so it never overrides the filter's own terms.
+fn text_terms(search: &str) -> Vec<String> {
+    search
+        .replace('"', "")
+        .replace(['(', ')'], " ")
+        .split_whitespace()
+        .filter(|word| !matches!(*word, "OR" | "AND" | "NOT") && !is_qualifier(word))
+        .map(str::to_string)
+        .collect()
+}
+
+fn is_qualifier(word: &str) -> bool {
+    word.trim_start_matches('-')
+        .split_once(':')
+        .is_some_and(|(name, _)| {
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphabetic() || c == '_' || c == '-')
+        })
 }
 
 /// Items from a search response's `data`; nodes of other types are skipped.

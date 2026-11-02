@@ -31,8 +31,13 @@ const api = vi.hoisted(() => ({
   getCheckLog: vi.fn(),
   merge: vi.fn(),
   comment: vi.fn(),
-  checkoutPr: vi.fn()
+  checkoutPr: vi.fn(),
+  getRepoMeta: vi.fn(async () => ({
+    success: true as const,
+    data: { repo: REPO_REF, labels: [], assignableUsers: [], viewer: 'me', fetchedAt: '' }
+  }))
 }))
+const REPO_REF = vi.hoisted(() => ({ host: 'github.com', owner: 'acme', name: 'app' }))
 const launch = vi.hoisted(() => ({
   requests: [] as ChatLaunchRequest[],
   launchChat: vi.fn()
@@ -117,6 +122,8 @@ function detail(kind: 'issue' | 'pr', pr: GithubPullDetail | null = null): Githu
     createdAt: '2026-10-29T10:00:00Z',
     comments: [],
     pr,
+    timeline: [],
+    stateReason: null,
     fetchedAt: '2026-10-31T10:00:00Z'
   }
 }
@@ -135,7 +142,14 @@ const THREAD: GithubReviewThread = {
   isResolved: false,
   isOutdated: false,
   comments: [
-    { id: 'r1', author: 'rev', body: 'Rename this', createdAt: '2026-10-30T10:00:00Z', url: '' }
+    {
+      id: 'r1',
+      author: 'rev',
+      isBot: false,
+      body: 'Rename this',
+      createdAt: '2026-10-30T10:00:00Z',
+      url: ''
+    }
   ]
 }
 

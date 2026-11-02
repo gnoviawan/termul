@@ -10,10 +10,35 @@ use super::graphql::{
     CommentNode, ItemNode, Nodes, PageInfo, ReviewThreadNode, ITEM_FIELDS, PR_ROLLUP_FIELDS,
     RATE_LIMIT_FIELDS,
 };
-use super::types::{GithubItemKind, GithubMergeable, GithubPullDetail, GithubReviewThread};
+use super::types::{
+    GithubCloseReason, GithubItemKind, GithubMergeable, GithubPullDetail, GithubReviewThread,
+    GithubTimelineEvent,
+};
 
-pub(super) const COMMENT_FIELDS: &str = "id body createdAt url author { login }";
+pub(super) const COMMENT_FIELDS: &str = "id body createdAt url author { login __typename }";
 const PAGE_INFO: &str = "pageInfo { hasNextPage endCursor }";
+
+/// The latest 50 label, assignee and open/closed events; a PR's include its
+/// merge (`MERGED_EVENT` is not an issue timeline type).
+fn timeline_fields(kind: GithubItemKind) -> String {
+    let (merged_type, merged_node) = match kind {
+        GithubItemKind::Issue => ("", ""),
+        GithubItemKind::Pr => (
+            ", MERGED_EVENT",
+            " ... on MergedEvent { id createdAt actor { login } }",
+        ),
+    };
+    format!(
+        "timelineItems(last: 50, itemTypes: [LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, \
+         UNASSIGNED_EVENT, CLOSED_EVENT, REOPENED_EVENT{merged_type}]) {{ nodes {{ __typename \
+         ... on LabeledEvent {{ id createdAt actor {{ login }} label {{ name color }} }} \
+         ... on UnlabeledEvent {{ id createdAt actor {{ login }} label {{ name color }} }} \
+         ... on AssignedEvent {{ id createdAt actor {{ login }} assignee {{ ... on Actor {{ login }} }} }} \
+         ... on UnassignedEvent {{ id createdAt actor {{ login }} assignee {{ ... on Actor {{ login }} }} }} \
+         ... on ClosedEvent {{ id createdAt actor {{ login }} }} \
+         ... on ReopenedEvent {{ id createdAt actor {{ login }} }}{merged_node} }} }}"
+    )
+}
 /// Most conversation comments, review threads, and comments per thread one
 /// detail read loads; paging past the first page stops at these.
 const MAX_COMMENTS: usize = 500;
@@ -35,16 +60,18 @@ pub(super) fn detail_graphql() -> String {
     format!(
         "query($owner: String!, $name: String!, $number: Int!) {{ {RATE_LIMIT_FIELDS} \
          repository(owner: $owner, name: $name) {{ issueOrPullRequest(number: $number) {{ __typename \
-         ... on Issue {{ {ITEM_FIELDS} body createdAt \
+         ... on Issue {{ {ITEM_FIELDS} body createdAt stateReason {issue_timeline} \
            comments(first: 100) {{ totalCount {PAGE_INFO} nodes {{ {COMMENT_FIELDS} }} }} }} \
-         ... on PullRequest {{ {ITEM_FIELDS} body createdAt {PR_ROLLUP_FIELDS} \
+         ... on PullRequest {{ {ITEM_FIELDS} body createdAt {pr_timeline} {PR_ROLLUP_FIELDS} \
            comments(first: 100) {{ totalCount {PAGE_INFO} nodes {{ {COMMENT_FIELDS} }} }} \
            headRefName headRefOid baseRefName isCrossRepository maintainerCanModify \
            mergeable mergeStateStatus autoMergeRequest {{ enabledAt }} \
            additions deletions changedFiles \
            reviewThreads(first: 100) {{ {PAGE_INFO} nodes {{ {threads} }} }} \
          }} }} }} }}",
-        threads = thread_fields()
+        threads = thread_fields(),
+        issue_timeline = timeline_fields(GithubItemKind::Issue),
+        pr_timeline = timeline_fields(GithubItemKind::Pr),
     )
 }
 
@@ -335,5 +362,25 @@ pub(super) fn pull_detail(node: &ItemNode) -> GithubPullDetail {
         deletions: node.deletions.unwrap_or(0),
         changed_files: node.changed_files.unwrap_or(0),
         review_threads,
+    }
+}
+
+/// The node's label, assignee and open/closed events, oldest first.
+pub(super) fn timeline(node: &ItemNode) -> Vec<GithubTimelineEvent> {
+    node.timeline_items
+        .as_ref()
+        .map(|items| items.iter().filter_map(|item| item.to_event()).collect())
+        .unwrap_or_default()
+}
+
+/// Why a closed issue was closed; GitHub's duplicate reason reads as not planned.
+pub(super) fn close_reason(node: &ItemNode) -> Option<GithubCloseReason> {
+    if node.kind() != Some(GithubItemKind::Issue) || node.state != "CLOSED" {
+        return None;
+    }
+    match node.state_reason.as_deref()? {
+        "COMPLETED" => Some(GithubCloseReason::Completed),
+        "NOT_PLANNED" | "DUPLICATE" => Some(GithubCloseReason::NotPlanned),
+        _ => None,
     }
 }

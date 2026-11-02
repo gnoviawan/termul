@@ -265,6 +265,18 @@ pub static ROUTES: &[ApiRoute] = &[
     ApiRoute::post("/github/checkout-pr", Tag::Github, "Check out a pull request locally")
         .json::<GithubCheckoutPrRequest>()
         .ipc::<GithubCheckoutPrResult>(),
+    ApiRoute::post("/github/repo-meta", Tag::Github, "A repository's labels and assignable users")
+        .json::<GithubRepoMetaRequest>()
+        .ipc::<GithubRepoMeta>(),
+    ApiRoute::post("/github/create-label", Tag::Github, "Create a label")
+        .json::<GithubCreateLabelRequest>()
+        .ipc::<GithubCreateLabelResult>(),
+    ApiRoute::post("/github/edit-item", Tag::Github, "Add or remove labels and assignees")
+        .json::<GithubEditItemRequest>()
+        .ipc::<GithubEditItemResult>(),
+    ApiRoute::post("/github/item-state", Tag::Github, "Close or reopen an issue or pull request")
+        .json::<GithubSetItemStateRequest>()
+        .ipc::<GithubSetItemStateResult>(),
     // Worktrees
     ApiRoute::post("/worktree/list", Tag::Worktrees, "List a project's worktrees")
         .json::<WorktreeProjectPathRequest>()

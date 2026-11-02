@@ -113,3 +113,47 @@ pub async fn github_checkout_pr(
     })
     .await
 }
+
+#[tauri::command]
+pub async fn github_repo_meta(
+    request: GithubRepoMetaRequest,
+) -> Result<IpcResult<GithubRepoMeta>, String> {
+    let cwd = request.cwd.clone();
+    run("github_repo_meta", &cwd, move |service, cwd| {
+        service.repo_meta(&GithubRepoMetaRequest { cwd, ..request })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn github_create_label(
+    request: GithubCreateLabelRequest,
+) -> Result<IpcResult<GithubCreateLabelResult>, String> {
+    let cwd = request.cwd.clone();
+    run("github_create_label", &cwd, move |service, cwd| {
+        service.create_label(&GithubCreateLabelRequest { cwd, ..request })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn github_edit_item(
+    request: GithubEditItemRequest,
+) -> Result<IpcResult<GithubEditItemResult>, String> {
+    let cwd = request.cwd.clone();
+    run("github_edit_item", &cwd, move |service, cwd| {
+        service.edit_item(&GithubEditItemRequest { cwd, ..request })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn github_set_item_state(
+    request: GithubSetItemStateRequest,
+) -> Result<IpcResult<GithubSetItemStateResult>, String> {
+    let cwd = request.cwd.clone();
+    run("github_set_item_state", &cwd, move |service, cwd| {
+        service.set_item_state(&GithubSetItemStateRequest { cwd, ..request })
+    })
+    .await
+}

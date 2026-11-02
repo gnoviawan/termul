@@ -9,6 +9,7 @@ use super::error::GithubError;
 use super::runner::{GhCall, GhRunner};
 use super::types::{
     GithubCheckRollup, GithubComment, GithubItemKind, GithubItemState, GithubLabel, GithubListItem,
+    GithubTimelineEvent, GithubTimelineEventKind,
 };
 
 /// Fields every list and detail query selects for an issue or PR.
@@ -120,11 +121,16 @@ pub(super) struct Login {
     pub login: String,
 }
 
-fn login_or_ghost(author: &Option<Login>) -> String {
-    author
-        .as_ref()
-        .map(|a| a.login.clone())
-        .unwrap_or_else(|| "ghost".to_string())
+/// A comment author: a user, or a GitHub App when `__typename` is `Bot`.
+#[derive(Debug, Deserialize)]
+pub(super) struct Author {
+    pub login: String,
+    #[serde(rename = "__typename", default)]
+    pub typename: String,
+}
+
+fn login_or_ghost(login: Option<&str>) -> String {
+    login.unwrap_or("ghost").to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,14 +141,15 @@ pub(super) struct CommentNode {
     pub body: String,
     pub created_at: String,
     pub url: String,
-    pub author: Option<Login>,
+    pub author: Option<Author>,
 }
 
 impl CommentNode {
     pub fn to_comment(&self) -> GithubComment {
         GithubComment {
             id: self.id.clone(),
-            author: login_or_ghost(&self.author),
+            author: login_or_ghost(self.author.as_ref().map(|a| a.login.as_str())),
+            is_bot: self.author.as_ref().is_some_and(|a| a.typename == "Bot"),
             body: self.body.clone(),
             created_at: self.created_at.clone(),
             url: self.url.clone(),
@@ -188,6 +195,49 @@ pub(super) struct ReviewThreadNode {
     pub comments: Nodes<CommentNode>,
 }
 
+/// One `timelineItems` node. Fields stay optional so an event type the
+/// query did not ask for is skipped instead of failing the whole item.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TimelineNode {
+    #[serde(rename = "__typename")]
+    pub typename: String,
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub created_at: String,
+    pub actor: Option<Login>,
+    pub label: Option<GithubLabel>,
+    pub assignee: Option<Login>,
+}
+
+impl TimelineNode {
+    pub fn to_event(&self) -> Option<GithubTimelineEvent> {
+        let kind = match self.typename.as_str() {
+            "LabeledEvent" => GithubTimelineEventKind::Labeled,
+            "UnlabeledEvent" => GithubTimelineEventKind::Unlabeled,
+            "AssignedEvent" => GithubTimelineEventKind::Assigned,
+            "UnassignedEvent" => GithubTimelineEventKind::Unassigned,
+            "ClosedEvent" => GithubTimelineEventKind::Closed,
+            "ReopenedEvent" => GithubTimelineEventKind::Reopened,
+            "MergedEvent" => GithubTimelineEventKind::Merged,
+            _ => return None,
+        };
+        Some(GithubTimelineEvent {
+            id: self.id.clone(),
+            kind,
+            actor: self
+                .actor
+                .as_ref()
+                .map(|a| a.login.clone())
+                .unwrap_or_default(),
+            created_at: self.created_at.clone(),
+            label: self.label.clone(),
+            assignee: self.assignee.as_ref().map(|a| a.login.clone()),
+        })
+    }
+}
+
 /// An `Issue` or `PullRequest` node. List queries leave the detail fields out.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -211,6 +261,8 @@ pub(super) struct ItemNode {
     // Detail-only fields.
     pub body: Option<String>,
     pub created_at: Option<String>,
+    pub timeline_items: Option<Nodes<TimelineNode>>,
+    pub state_reason: Option<String>,
     pub head_ref_name: Option<String>,
     pub head_ref_oid: Option<String>,
     pub base_ref_name: Option<String>,
@@ -270,7 +322,7 @@ impl ItemNode {
             number: self.number,
             title: self.title.clone(),
             state: self.item_state(kind),
-            author: login_or_ghost(&self.author),
+            author: login_or_ghost(self.author.as_ref().map(|a| a.login.as_str())),
             labels: self
                 .labels
                 .as_ref()

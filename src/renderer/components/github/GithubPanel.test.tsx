@@ -1,7 +1,7 @@
 import type { GithubContext, GithubListItem, GithubListResult } from '@shared/types/github.types'
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_GITHUB_FILTER, useGithubStore } from '@/stores/github-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { GithubPanel } from './GithubPanel'
@@ -12,7 +12,8 @@ const api = vi.hoisted(() => ({
   getItem: vi.fn(),
   getChecks: vi.fn(),
   getCheckLog: vi.fn(),
-  merge: vi.fn()
+  merge: vi.fn(),
+  getRepoMeta: vi.fn()
 }))
 const signIn = vi.hoisted(() => ({ openGithubSignInTerminal: vi.fn() }))
 
@@ -80,7 +81,28 @@ function renderPanel() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  useGithubStore.setState({ contexts: {}, lists: {}, items: {}, checks: {}, logs: {}, filters: {} })
+  useGithubStore.setState({
+    contexts: {},
+    lists: {},
+    items: {},
+    checks: {},
+    logs: {},
+    repoMeta: {},
+    filters: {}
+  })
+  api.getRepoMeta.mockResolvedValue(
+    ok({
+      repo: ORIGIN,
+      labels: [
+        { name: 'bug', color: 'd73a4a', description: "Something isn't working" },
+        { name: 'ai', color: '1d76db', description: null },
+        { name: 'docs', color: '0075ca', description: null }
+      ],
+      assignableUsers: ['ana', 'me'],
+      viewer: 'me',
+      fetchedAt: '2026-10-31T10:00:00Z'
+    })
+  )
   useWorkspaceStore.setState({
     root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
     activePaneId: 'pane-1',
@@ -159,6 +181,11 @@ describe('GithubPanel status states', () => {
 })
 
 describe('GithubPanel list', () => {
+  beforeAll(() => {
+    // cmdk scrolls the highlighted option into view; jsdom has no layout.
+    Element.prototype.scrollIntoView ??= () => {}
+  })
+
   beforeEach(() => {
     api.getContext.mockResolvedValue(ok(connected()))
   })
@@ -184,7 +211,7 @@ describe('GithubPanel list', () => {
     })
   })
 
-  it('narrows the list through the kind and involvement filters', async () => {
+  it('narrows the list through the kind and assignee filters', async () => {
     api.listItems.mockResolvedValue(ok(list(ISSUE)))
     renderPanel()
     await screen.findByRole('button', { name: /#12/ })
@@ -195,16 +222,126 @@ describe('GithubPanel list', () => {
       filter: { ...DEFAULT_GITHUB_FILTER, kind: 'pr' },
       refresh: undefined
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Review requested' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Assignee: Anyone' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Review requested' }))
     expect(api.listItems).toHaveBeenLastCalledWith({
       cwd: CWD,
       filter: { ...DEFAULT_GITHUB_FILTER, kind: 'pr', reviewRequested: true },
       refresh: undefined
     })
-    expect(screen.getByRole('button', { name: 'Review requested' })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    )
+    expect(screen.getByRole('button', { name: 'Assignee: Review requested' })).toBeInTheDocument()
+
+    // Review requests are PR-only: Issues drops the filter.
+    fireEvent.click(screen.getByRole('button', { name: 'Issues' }))
+    expect(api.listItems).toHaveBeenLastCalledWith({
+      cwd: CWD,
+      filter: { ...DEFAULT_GITHUB_FILTER, kind: 'issue' },
+      refresh: undefined
+    })
+  })
+
+  it('searches the typed text once after a pause, and once on Enter', async () => {
+    api.listItems.mockResolvedValue(ok(list(ISSUE)))
+    renderPanel()
+    await screen.findByRole('button', { name: /#12/ })
+    vi.useFakeTimers()
+    try {
+      const searches = () =>
+        api.listItems.mock.calls.filter(([request]) => request.filter.search !== '').length
+      const search = screen.getByRole('searchbox', { name: 'Search issues and pull requests' })
+
+      fireEvent.change(search, { target: { value: 'reopen' } })
+      act(() => vi.advanceTimersByTime(349))
+      expect(searches()).toBe(0)
+      act(() => vi.advanceTimersByTime(1))
+      expect(api.listItems).toHaveBeenLastCalledWith({
+        cwd: CWD,
+        filter: { ...DEFAULT_GITHUB_FILTER, search: 'reopen' },
+        refresh: undefined
+      })
+      expect(searches()).toBe(1)
+
+      fireEvent.change(search, { target: { value: 'reopen composer' } })
+      fireEvent.keyDown(search, { key: 'Enter' })
+      expect(api.listItems).toHaveBeenLastCalledWith({
+        cwd: CWD,
+        filter: { ...DEFAULT_GITHUB_FILTER, search: 'reopen composer' },
+        refresh: undefined
+      })
+      act(() => vi.advanceTimersByTime(1000))
+      expect(searches()).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("narrows to one person's items from the assignee menu", async () => {
+    api.listItems.mockResolvedValue(ok(list(ISSUE)))
+    renderPanel()
+    await screen.findByRole('button', { name: /#12/ })
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Assignee: Anyone' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Assigned to ana' }))
+    expect(api.listItems).toHaveBeenLastCalledWith({
+      cwd: CWD,
+      filter: { ...DEFAULT_GITHUB_FILTER, assignee: { kind: 'user', login: 'ana' } },
+      refresh: undefined
+    })
+    expect(screen.getByRole('button', { name: 'Assignee: Assigned to ana' })).toBeInTheDocument()
+    // The signed-in account is "Assigned to me", not a second entry.
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Assignee: Assigned to ana' }), {
+      button: 0,
+      ctrlKey: false
+    })
+    await screen.findByRole('menuitemradio', { name: 'Assigned to ana' })
+    expect(screen.queryByRole('menuitemradio', { name: 'Assigned to me' })).toBeInTheDocument()
+    expect(screen.queryAllByRole('menuitemradio', { name: /^Assigned to / })).toHaveLength(2)
+  })
+
+  it('filters by the labels picked in the label picker and shows them as removable chips', async () => {
+    api.listItems.mockResolvedValue(ok(list(ISSUE, PR)))
+    renderPanel()
+    await screen.findByRole('button', { name: /#15/ })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Labels' }))
+    const picker = await screen.findByRole('dialog')
+    fireEvent.click(await within(picker).findByRole('option', { name: /^bug/ }))
+    fireEvent.click(within(picker).getByRole('option', { name: /^ai/ }))
+    fireEvent.click(within(picker).getByRole('button', { name: 'Match all' }))
+    api.listItems.mockResolvedValue(ok(list(ISSUE)))
+    fireEvent.click(within(picker).getByRole('button', { name: 'Show results · 2 labels' }))
+
+    expect(api.listItems).toHaveBeenLastCalledWith({
+      cwd: CWD,
+      filter: { ...DEFAULT_GITHUB_FILTER, labels: ['bug', 'ai'], labelMode: 'all' },
+      refresh: undefined
+    })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('button', { name: /#15/ })).toBeNull())
+    expect(screen.getByRole('button', { name: /#12/ })).toBeInTheDocument()
+    const active = screen.getByRole('group', { name: 'Active label filters' })
+    expect(active).toHaveTextContent('All of')
+    expect(screen.getByRole('button', { name: 'Labels: bug, ai' })).toBeInTheDocument()
+
+    fireEvent.click(within(active).getByRole('button', { name: 'Remove bug' }))
+    expect(api.listItems).toHaveBeenLastCalledWith({
+      cwd: CWD,
+      filter: { ...DEFAULT_GITHUB_FILTER, labels: ['ai'], labelMode: 'all' },
+      refresh: undefined
+    })
+    fireEvent.click(within(active).getByRole('button', { name: 'Clear all' }))
+    expect(api.listItems).toHaveBeenLastCalledWith({
+      cwd: CWD,
+      filter: DEFAULT_GITHUB_FILTER,
+      refresh: undefined
+    })
+    expect(screen.queryByRole('group', { name: 'Active label filters' })).toBeNull()
   })
 
   it('gives the repository selector and Refresh the 44px touch row height', async () => {
