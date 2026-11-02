@@ -112,10 +112,12 @@ export function useComposerToolbarMode(
 
 /**
  * Card surface shared by the composer family: the chat composer, the agent
- * launcher composer and the prompt panels that replace the composer.
+ * launcher composer and the prompt panels that replace the composer. No
+ * focus edge: the card holds the editor, so a ring here lit up on every tap
+ * or click into it. The caret and the controls' own rings show focus.
  */
 export const COMPOSER_SURFACE_CLASS =
-  'rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]'
+  'rounded-2xl border border-border/60 bg-card transition-[border-color]'
 
 /**
  * Composer card at rest. Per-theme lift: `--composer-shadow`.

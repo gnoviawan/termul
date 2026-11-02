@@ -386,7 +386,12 @@ auth banner spawns an ordinary termul terminal tab (`kind:'shell'`, titled
 `Sign in — <agent>`) running the agent binary with the method's `args`/`env` in the
 session cwd. Exit code 0 → `authenticate(methodId)` runs and session creation
 proceeds; non-zero → toast and the banner stays. No live PTY is killed or
-recreated — the login terminal is an extra tab.
+recreated — the login terminal is an extra tab. The renderer watches the exit in
+`login-terminal-sign-in-store` (one running sign-in per live agent, keyed by
+agent id with its PTY id), not in the surface that was pressed, so the
+authenticate and the re-prepare that rereads the models still run after the
+model selector popover or the phone setup sheet closes. Reopening either shows
+the sign-in as running until the login terminal exits.
 
 **2b. Browser auth handoff (headless servers).** On POSIX the host injects a
 browser-open shim into the agent's PATH (`xdg-open` et al. append the URL to a

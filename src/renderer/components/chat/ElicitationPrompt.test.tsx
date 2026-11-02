@@ -60,6 +60,12 @@ describe('ElicitationPrompt', () => {
   })
 
   describe('desktop baseline', () => {
+    it('draws no focus edge around the prompt card', () => {
+      render(<ElicitationPrompt request={request(FORM)} />)
+      const card = screen.getByTestId('elicitation-prompt').querySelector('section')
+      expect(card?.className).not.toMatch(/focus-within:|has-\[/)
+    })
+
     it('renders the message as plain text, keeps the heading unfocusable and never moves focus', () => {
       render(<ElicitationPrompt request={request(FORM)} autoFocusHeading />)
 

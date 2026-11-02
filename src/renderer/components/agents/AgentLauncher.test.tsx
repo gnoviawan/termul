@@ -28,6 +28,7 @@ import { mockAcpSession } from '@/lib/test-utils/acp'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
 import { agentReuseKey } from '@/stores/acp-reuse-keys'
 import type { AcpSession } from '@/stores/acp-store'
+import { useLoginTerminalSignInStore } from '@/stores/login-terminal-sign-in-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useShellLayoutStore } from '@/stores/shell-layout-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -786,6 +787,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.restoreAllMocks()
   __resetLauncherSelectionCache()
+  // Login terminals outlive the launcher; a test's unexited one must not
+  // block the next test's sign-in.
+  useLoginTerminalSignInStore.setState({ byAgent: {} })
   // Start each test from a clean skill slate (web/no-skills default). Skill
   // tests override mockSkills.current.
   mockSkills.current = []
@@ -2632,6 +2636,14 @@ describe('AgentLauncher composer drag-drop', () => {
     expect(screen.getByText('Drop files to attach')).toBeInTheDocument()
     fireEvent.dragLeave(composer as Element)
     expect(screen.queryByText('Drop files to attach')).not.toBeInTheDocument()
+  })
+})
+
+describe('AgentLauncher composer card', () => {
+  it('draws no focus edge around the composer card', () => {
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer]')
+    expect(composer?.className).not.toMatch(/focus-within:|has-\[/)
   })
 })
 

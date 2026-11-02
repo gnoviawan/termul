@@ -5,7 +5,6 @@ import { toast } from 'sonner'
 import { ClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
 import { ClaudeLimitWarning } from '@/components/chat/claude-account/ClaudeLimitWarning'
 import { Paperclip } from '@/components/icons'
-import { COMPOSER_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
@@ -680,7 +679,6 @@ export function ChatInputBar({
             className={cn(
               'relative',
               COMPOSER_CARD_CLASS,
-              COMPOSER_FOCUS_CLASS,
               dragActive && 'border-primary/70',
               isMobileShell && 'outline-none'
             )}
