@@ -672,7 +672,7 @@ export function ChatInputBar({
                       ? 'Composer unavailable'
                       : hasCommandToken
                         ? 'Add a message (optional)…'
-                        : 'Ask anything… (/ for commands, @ for files)'
+                        : 'Ask anything… (/ for commands, @ for files and chats)'
                   }
                 />
               </SkillFilesProvider>

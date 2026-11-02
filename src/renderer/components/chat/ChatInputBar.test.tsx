@@ -848,7 +848,7 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything… (/ for commands, @ for files)'
+        'Ask anything… (/ for commands, @ for files and chats)'
       )
     })
   })
@@ -1008,7 +1008,7 @@ describe('ChatInputBar placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything… (/ for commands, @ for files)'
+        'Ask anything… (/ for commands, @ for files and chats)'
       )
     })
   })

@@ -1807,7 +1807,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                         ? 'Composer unavailable'
                         : hasCommandToken
                           ? 'Add a message (optional)…'
-                          : 'Ask anything… (/ for commands, @ for files)'
+                          : 'Ask anything… (/ for commands, @ for files and chats)'
                     }
                     ariaLabel="Agent prompt"
                     autoFocus
