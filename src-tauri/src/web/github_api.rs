@@ -1,12 +1,14 @@
-//! `POST /github/{context,items,item,checks,check-log,merge,comment,checkout-pr}`:
+//! `POST /github/{context,items,item,checks,check-log,merge,comment,checkout-pr,
+//! repo-meta,create-label,edit-item,item-state}`:
 //! web transport for the shared [`GithubService`] (desktop twins: the
 //! `github_*` Tauri commands). The body is the request object
 //! `lib/github-api.ts` sends.
 //!
 //! Every route resolves `cwd` with `resolve_cwd(.., None, false)` (canonical
-//! cwd inside a registered project). `merge`, `comment` and `checkout-pr` are
-//! writes: the remote-write guard runs first, so a LAN peer cannot change
-//! GitHub or a worktree without `--allow-remote-writes`.
+//! cwd inside a registered project). `merge`, `comment`, `checkout-pr`,
+//! `create-label`, `edit-item` and `item-state` are writes: the remote-write
+//! guard runs first, so a LAN peer cannot change GitHub or a worktree without
+//! `--allow-remote-writes`.
 //!
 //! Replies are `IpcBody<T>` with the service's `GH_*` codes. Logs carry the
 //! op, cwd and code, never bodies or `gh` output.
@@ -110,6 +112,17 @@ pub async fn get_check_log(
     .await
 }
 
+pub async fn repo_meta(
+    State(state): State<AppState>,
+    Json(req): Json<GithubRepoMetaRequest>,
+) -> Reply<GithubRepoMeta> {
+    let cwd = req.cwd.clone();
+    run(&state, "repo_meta", &cwd, move |service, cwd| {
+        service.repo_meta(&GithubRepoMetaRequest { cwd, ..req })
+    })
+    .await
+}
+
 /// The reply refusing a write from a peer the remote-write guard rejects.
 fn write_refused<T>(state: &AppState, peer: SocketAddr, route: &str) -> Option<Reply<T>> {
     check_local_only::<T>(
@@ -163,6 +176,51 @@ pub async fn checkout_pr(
     let cwd = req.cwd.clone();
     run(&state, "checkout_pr", &cwd, move |service, cwd| {
         service.checkout_pr(&GithubCheckoutPrRequest { cwd, ..req })
+    })
+    .await
+}
+
+pub async fn create_label(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<GithubCreateLabelRequest>,
+) -> Reply<GithubCreateLabelResult> {
+    if let Some(refused) = write_refused(&state, peer, "/github/create-label") {
+        return refused;
+    }
+    let cwd = req.cwd.clone();
+    run(&state, "create_label", &cwd, move |service, cwd| {
+        service.create_label(&GithubCreateLabelRequest { cwd, ..req })
+    })
+    .await
+}
+
+pub async fn edit_item(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<GithubEditItemRequest>,
+) -> Reply<GithubEditItemResult> {
+    if let Some(refused) = write_refused(&state, peer, "/github/edit-item") {
+        return refused;
+    }
+    let cwd = req.cwd.clone();
+    run(&state, "edit_item", &cwd, move |service, cwd| {
+        service.edit_item(&GithubEditItemRequest { cwd, ..req })
+    })
+    .await
+}
+
+pub async fn set_item_state(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(req): Json<GithubSetItemStateRequest>,
+) -> Reply<GithubSetItemStateResult> {
+    if let Some(refused) = write_refused(&state, peer, "/github/item-state") {
+        return refused;
+    }
+    let cwd = req.cwd.clone();
+    run(&state, "set_item_state", &cwd, move |service, cwd| {
+        service.set_item_state(&GithubSetItemStateRequest { cwd, ..req })
     })
     .await
 }

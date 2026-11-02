@@ -17,12 +17,20 @@ import type {
   GithubCommentRequest,
   GithubCommentResult,
   GithubContext,
+  GithubCreateLabelRequest,
+  GithubCreateLabelResult,
+  GithubEditItemRequest,
+  GithubEditItemResult,
   GithubItemDetail,
   GithubItemRequest,
   GithubListRequest,
   GithubListResult,
   GithubMergeRequest,
-  GithubMergeResult
+  GithubMergeResult,
+  GithubRepoMeta,
+  GithubRepoMetaRequest,
+  GithubSetItemStateRequest,
+  GithubSetItemStateResult
 } from '@shared/types/github.types'
 import type { IpcResult } from '@shared/types/ipc.types'
 import { postJson } from './ipc/http'
@@ -75,5 +83,21 @@ export const githubApi = {
 
   checkoutPr(request: GithubCheckoutPrRequest): Promise<IpcResult<GithubCheckoutPrResult>> {
     return call('github_checkout_pr', '/github/checkout-pr', request)
+  },
+
+  getRepoMeta(request: GithubRepoMetaRequest): Promise<IpcResult<GithubRepoMeta>> {
+    return call('github_repo_meta', '/github/repo-meta', request)
+  },
+
+  createLabel(request: GithubCreateLabelRequest): Promise<IpcResult<GithubCreateLabelResult>> {
+    return call('github_create_label', '/github/create-label', request)
+  },
+
+  editItem(request: GithubEditItemRequest): Promise<IpcResult<GithubEditItemResult>> {
+    return call('github_edit_item', '/github/edit-item', request)
+  },
+
+  setItemState(request: GithubSetItemStateRequest): Promise<IpcResult<GithubSetItemStateResult>> {
+    return call('github_set_item_state', '/github/item-state', request)
   }
 }

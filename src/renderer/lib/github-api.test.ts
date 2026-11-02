@@ -3,9 +3,13 @@ import type {
   GithubCheckoutPrRequest,
   GithubChecksRequest,
   GithubCommentRequest,
+  GithubCreateLabelRequest,
+  GithubEditItemRequest,
   GithubItemRequest,
   GithubListRequest,
-  GithubMergeRequest
+  GithubMergeRequest,
+  GithubRepoMetaRequest,
+  GithubSetItemStateRequest
 } from '@shared/types/github.types'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -28,8 +32,12 @@ const listRequest: GithubListRequest = {
     repo: 'upstream',
     kind: 'pr',
     state: 'open',
-    assignedToMe: false,
-    reviewRequested: true
+    search: 'reopen composer',
+    labels: ['bug', 'ai'],
+    labelMode: 'all',
+    assignee: { kind: 'user', login: 'octo' },
+    reviewRequested: true,
+    sort: 'comments'
   },
   refresh: true
 }
@@ -55,6 +63,29 @@ const checkoutRequest: GithubCheckoutPrRequest = {
   cwd: `${cwd}/.termul/worktrees/abc`,
   repo: 'upstream',
   number: 42
+}
+const repoMetaRequest: GithubRepoMetaRequest = { cwd, repo: 'origin', refresh: true }
+const createLabelRequest: GithubCreateLabelRequest = {
+  cwd,
+  repo: 'origin',
+  name: 'needs-repro',
+  color: 'fbca04',
+  description: 'Waiting on steps'
+}
+const editItemRequest: GithubEditItemRequest = {
+  cwd,
+  repo: 'origin',
+  kind: 'issue',
+  number: 42,
+  addLabels: ['bug'],
+  removeAssignees: ['octo']
+}
+const setItemStateRequest: GithubSetItemStateRequest = {
+  cwd,
+  repo: 'origin',
+  kind: 'issue',
+  number: 42,
+  action: { kind: 'close', reason: 'not_planned' }
 }
 
 const cases = [
@@ -105,6 +136,30 @@ const cases = [
     command: 'github_checkout_pr',
     route: '/github/checkout-pr',
     request: checkoutRequest
+  },
+  {
+    call: () => githubApi.getRepoMeta(repoMetaRequest),
+    command: 'github_repo_meta',
+    route: '/github/repo-meta',
+    request: repoMetaRequest
+  },
+  {
+    call: () => githubApi.createLabel(createLabelRequest),
+    command: 'github_create_label',
+    route: '/github/create-label',
+    request: createLabelRequest
+  },
+  {
+    call: () => githubApi.editItem(editItemRequest),
+    command: 'github_edit_item',
+    route: '/github/edit-item',
+    request: editItemRequest
+  },
+  {
+    call: () => githubApi.setItemState(setItemStateRequest),
+    command: 'github_set_item_state',
+    route: '/github/item-state',
+    request: setItemStateRequest
   }
 ]
 

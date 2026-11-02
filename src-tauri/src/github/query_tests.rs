@@ -1,4 +1,4 @@
-use super::detail::{parse_item_node, pull_detail};
+use super::detail::{close_reason, detail_graphql, parse_item_node, pull_detail, timeline};
 use super::error::{classify_failure, GithubError};
 use super::items::{parse_search, search_query};
 use super::repo::{host_allowed, parse_parent, route_remote, RemoteRoute};
@@ -23,9 +23,23 @@ fn filter(
         repo: GithubRepoSlot::Origin,
         kind,
         state,
-        assigned_to_me,
+        search: String::new(),
+        labels: Vec::new(),
+        label_mode: GithubLabelMode::Any,
+        assignee: if assigned_to_me {
+            GithubAssigneeFilter::Me
+        } else {
+            GithubAssigneeFilter::Anyone
+        },
         review_requested,
+        sort: GithubSort::Updated,
     }
+}
+
+fn open_with(change: impl FnOnce(&mut GithubListFilter)) -> GithubListFilter {
+    let mut filter = filter(GithubKindFilter::All, GithubStateFilter::Open, false, false);
+    change(&mut filter);
+    filter
 }
 
 #[test]
@@ -67,7 +81,91 @@ fn search_query_per_filter() {
         (filter(K::Issue, S::All, false, true), None),
     ];
     for (filter, expected) in cases {
-        assert_eq!(search_query(&repo(), &filter), expected, "{filter:?}");
+        assert_eq!(search_query(&repo(), &filter), Ok(expected), "{filter:?}");
+    }
+}
+
+#[test]
+fn search_query_adds_labels_assignee_text_and_sort() {
+    let labels = || vec!["bug".to_string(), "ai".to_string()];
+    let cases = [
+        (
+            open_with(|f| f.labels = labels()),
+            r#"repo:gnoviawan/termul sort:updated-desc is:open label:"bug","ai""#,
+        ),
+        (
+            open_with(|f| {
+                f.labels = labels();
+                f.label_mode = GithubLabelMode::All;
+            }),
+            r#"repo:gnoviawan/termul sort:updated-desc is:open label:"bug" label:"ai""#,
+        ),
+        (
+            open_with(|f| {
+                f.labels = vec!["good \"first\" issue".into(), " ".into()];
+                f.label_mode = GithubLabelMode::Exclude;
+            }),
+            r#"repo:gnoviawan/termul sort:updated-desc is:open -label:"good first issue""#,
+        ),
+        (
+            open_with(|f| f.assignee = GithubAssigneeFilter::Unassigned),
+            "repo:gnoviawan/termul sort:updated-desc is:open no:assignee",
+        ),
+        (
+            open_with(|f| {
+                f.assignee = GithubAssigneeFilter::User {
+                    login: "julian-romli_corp".into(),
+                }
+            }),
+            "repo:gnoviawan/termul sort:updated-desc is:open assignee:julian-romli_corp",
+        ),
+        (
+            open_with(|f| f.sort = GithubSort::Comments),
+            "repo:gnoviawan/termul sort:comments-desc is:open",
+        ),
+        (
+            open_with(|f| {
+                f.sort = GithubSort::Created;
+                f.search = "\"reopen   composer\"".into();
+            }),
+            "repo:gnoviawan/termul sort:created-desc is:open reopen composer",
+        ),
+        (
+            open_with(|f| {
+                f.search = "crash repo:other/x -ORG:evil user:me is:pr OR (sort:created-asc \
+                            -label:bug) review-requested:x AND NOT on start"
+                    .into()
+            }),
+            "repo:gnoviawan/termul sort:updated-desc is:open crash on start",
+        ),
+        (
+            open_with(|f| f.search = "  ".into()),
+            "repo:gnoviawan/termul sort:updated-desc is:open",
+        ),
+    ];
+    for (filter, expected) in cases {
+        assert_eq!(
+            search_query(&repo(), &filter),
+            Ok(Some(expected.to_string())),
+            "{filter:?}"
+        );
+    }
+}
+
+#[test]
+fn an_assignee_login_with_search_syntax_is_refused() {
+    for login in ["", "me is:closed", "a:b", "x\"y"] {
+        let filter = open_with(|f| {
+            f.assignee = GithubAssigneeFilter::User {
+                login: login.into(),
+            }
+        });
+        let error = search_query(&repo(), &filter).unwrap_err();
+        assert_eq!(error.code(), "GH_FAILED", "{login:?}");
+        assert_eq!(
+            error.to_string(),
+            format!("\"{login}\" is not a GitHub login")
+        );
     }
 }
 
@@ -147,14 +245,22 @@ const PR_DETAIL_DATA: &str = r#"{"rateLimit":{"limit":5000,"remaining":4822,"res
 "url":"https://github.com/gnoviawan/termul/pull/1579","updatedAt":"2026-10-30T17:51:34Z","createdAt":"2026-10-30T17:30:10Z",
 "body":"Fixes #1508.","author":{"login":"davidgrldo"},"labels":{"nodes":[]},"assignees":{"nodes":[]},
 "comments":{"totalCount":2,"nodes":[
- {"id":"IC_1","body":"first","createdAt":"2026-10-30T17:30:28Z","url":"https://github.com/gnoviawan/termul/pull/1579#issuecomment-1","author":{"login":"coderabbitai"}},
+ {"id":"IC_1","body":"first","createdAt":"2026-10-30T17:30:28Z","url":"https://github.com/gnoviawan/termul/pull/1579#issuecomment-1","author":{"login":"coderabbitai","__typename":"Bot"}},
  {"id":"IC_2","body":"second","createdAt":"2026-10-30T17:39:59Z","url":"https://github.com/gnoviawan/termul/pull/1579#issuecomment-2","author":null}]},
 "headRefName":"ci/nightly-prune-assets-1508","headRefOid":"8f1ec978ddffdf581c36068d2abde9458d7a4266","baseRefName":"dev",
 "isCrossRepository":true,"maintainerCanModify":true,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","autoMergeRequest":null,
 "additions":27,"deletions":0,"changedFiles":1,
 "commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]},
 "reviewThreads":{"nodes":[{"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":".github/workflows/nightly.yml","line":492,
- "comments":{"nodes":[{"id":"PRRC_1","body":"nit","createdAt":"2026-10-30T17:51:27Z","url":"https://github.com/gnoviawan/termul/pull/1579#discussion_r1","author":{"login":"coderabbitai"}}]}}]}
+ "comments":{"nodes":[{"id":"PRRC_1","body":"nit","createdAt":"2026-10-30T17:51:27Z","url":"https://github.com/gnoviawan/termul/pull/1579#discussion_r1","author":{"login":"gnoviawan","__typename":"User"}}]}}]},
+"timelineItems":{"nodes":[
+ {"__typename":"LabeledEvent","id":"LE_1","createdAt":"2026-10-30T17:31:00Z","actor":{"login":"gnoviawan"},"label":{"name":"ci","color":"0e8a16"}},
+ {"__typename":"AssignedEvent","id":"AE_1","createdAt":"2026-10-30T17:32:00Z","actor":{"login":"gnoviawan"},"assignee":{"login":"davidgrldo"}},
+ {"__typename":"ClosedEvent","id":"CE_1","createdAt":"2026-10-30T17:40:00Z","actor":null},
+ {"__typename":"ReopenedEvent","id":"RE_1","createdAt":"2026-10-30T17:41:00Z","actor":{"login":"davidgrldo"}},
+ {"__typename":"CrossReferencedEvent"},
+ {"__typename":"UnassignedEvent","id":"UE_1","createdAt":"2026-10-30T17:50:00Z","actor":{"login":"gnoviawan"},"assignee":null},
+ {"__typename":"MergedEvent","id":"ME_1","createdAt":"2026-10-30T18:00:00Z","actor":{"login":"gnoviawan"}}]}
 }}}"#;
 
 #[test]
@@ -183,7 +289,8 @@ fn pr_detail_maps_merge_state_threads_and_comments() {
                 is_outdated: false,
                 comments: vec![GithubComment {
                     id: "PRRC_1".into(),
-                    author: "coderabbitai".into(),
+                    author: "gnoviawan".into(),
+                    is_bot: false,
                     body: "nit".into(),
                     created_at: "2026-10-30T17:51:27Z".into(),
                     url: "https://github.com/gnoviawan/termul/pull/1579#discussion_r1".into(),
@@ -199,15 +306,76 @@ fn pr_detail_maps_merge_state_threads_and_comments() {
         .iter()
         .flatten()
         .map(|c| c.to_comment())
-        .map(|c| (c.id, c.author))
+        .map(|c| (c.id, c.author, c.is_bot))
         .collect();
     assert_eq!(
         comments,
         vec![
-            ("IC_1".into(), "coderabbitai".into()),
-            ("IC_2".into(), "ghost".into())
+            ("IC_1".into(), "coderabbitai".into(), true),
+            ("IC_2".into(), "ghost".into(), false)
         ]
     );
+}
+
+#[test]
+fn timeline_events_map_oldest_first_and_skip_unknown_types() {
+    let data: serde_json::Value = serde_json::from_str(PR_DETAIL_DATA).unwrap();
+    let node = parse_item_node(&data, GithubItemKind::Pr, 1579).expect("pr node");
+    let event = |id: &str, kind, actor: &str, at: &str| GithubTimelineEvent {
+        id: id.into(),
+        kind,
+        actor: actor.into(),
+        created_at: at.into(),
+        label: None,
+        assignee: None,
+    };
+    use GithubTimelineEventKind as K;
+    assert_eq!(
+        timeline(&node),
+        vec![
+            GithubTimelineEvent {
+                label: Some(GithubLabel {
+                    name: "ci".into(),
+                    color: "0e8a16".into()
+                }),
+                ..event("LE_1", K::Labeled, "gnoviawan", "2026-10-30T17:31:00Z")
+            },
+            GithubTimelineEvent {
+                assignee: Some("davidgrldo".into()),
+                ..event("AE_1", K::Assigned, "gnoviawan", "2026-10-30T17:32:00Z")
+            },
+            event("CE_1", K::Closed, "", "2026-10-30T17:40:00Z"),
+            event("RE_1", K::Reopened, "davidgrldo", "2026-10-30T17:41:00Z"),
+            event("UE_1", K::Unassigned, "gnoviawan", "2026-10-30T17:50:00Z"),
+            event("ME_1", K::Merged, "gnoviawan", "2026-10-30T18:00:00Z"),
+        ]
+    );
+    assert_eq!(close_reason(&node), None, "a PR has no close reason");
+}
+
+#[test]
+fn close_reason_is_read_only_for_closed_issues() {
+    let issue = |state: &str, reason: serde_json::Value| {
+        let data = serde_json::json!({ "repository": { "issueOrPullRequest": {
+            "__typename": "Issue", "number": 3, "title": "t", "state": state, "url": "u",
+            "updatedAt": "t", "author": null, "stateReason": reason
+        } } });
+        close_reason(&parse_item_node(&data, GithubItemKind::Issue, 3).unwrap())
+    };
+    assert_eq!(
+        issue("CLOSED", "COMPLETED".into()),
+        Some(GithubCloseReason::Completed)
+    );
+    assert_eq!(
+        issue("CLOSED", "NOT_PLANNED".into()),
+        Some(GithubCloseReason::NotPlanned)
+    );
+    assert_eq!(
+        issue("CLOSED", "DUPLICATE".into()),
+        Some(GithubCloseReason::NotPlanned)
+    );
+    assert_eq!(issue("CLOSED", serde_json::Value::Null), None);
+    assert_eq!(issue("OPEN", "REOPENED".into()), None);
 }
 
 #[test]
@@ -310,7 +478,7 @@ fn gh_stderr_classifies_to_contract_codes() {
 fn requests_deserialize_from_the_ts_shapes() {
     let list: GithubListRequest = serde_json::from_value(serde_json::json!({
         "cwd": "/p",
-        "filter": { "repo": "upstream", "kind": "all", "state": "draft", "assignedToMe": true, "reviewRequested": false }
+        "filter": { "repo": "upstream", "kind": "all", "state": "draft", "assignee": { "kind": "me" }, "reviewRequested": false }
     }))
     .unwrap();
     assert_eq!(
@@ -322,6 +490,49 @@ fn requests_deserialize_from_the_ts_shapes() {
                 ..filter(GithubKindFilter::All, GithubStateFilter::Draft, true, false)
             },
             refresh: false,
+        }
+    );
+    let full: GithubListFilter = serde_json::from_value(serde_json::json!({
+        "repo": "origin", "kind": "issue", "state": "open", "search": "crash",
+        "labels": ["bug"], "labelMode": "exclude", "assignee": { "kind": "user", "login": "octo" },
+        "reviewRequested": false, "sort": "comments"
+    }))
+    .unwrap();
+    assert_eq!(
+        full,
+        GithubListFilter {
+            search: "crash".into(),
+            labels: vec!["bug".into()],
+            label_mode: GithubLabelMode::Exclude,
+            assignee: GithubAssigneeFilter::User {
+                login: "octo".into()
+            },
+            sort: GithubSort::Comments,
+            ..filter(
+                GithubKindFilter::Issue,
+                GithubStateFilter::Open,
+                false,
+                false
+            )
+        }
+    );
+    let edit: GithubEditItemRequest = serde_json::from_value(serde_json::json!({
+        "cwd": "/p", "repo": "origin", "kind": "pr", "number": 7, "addLabels": ["bug"]
+    }))
+    .unwrap();
+    assert_eq!(
+        (edit.add_labels, edit.remove_labels, edit.add_assignees),
+        (vec!["bug".to_string()], vec![], vec![])
+    );
+    let close: GithubSetItemStateRequest = serde_json::from_value(serde_json::json!({
+        "cwd": "/p", "repo": "origin", "kind": "issue", "number": 7,
+        "action": { "kind": "close", "reason": "not_planned" }
+    }))
+    .unwrap();
+    assert_eq!(
+        close.action,
+        GithubItemStateAction::Close {
+            reason: GithubCloseReason::NotPlanned
         }
     );
     let merge: GithubMergeRequest = serde_json::from_value(serde_json::json!({
@@ -343,4 +554,13 @@ fn requests_deserialize_from_the_ts_shapes() {
         serde_json::to_value(GithubRepoResolution::NotGithub).unwrap(),
         serde_json::json!({ "kind": "not_github" })
     );
+}
+
+#[test]
+fn only_the_pull_request_branch_asks_for_merge_events() {
+    let query = detail_graphql();
+    let pr_branch = query.find("... on PullRequest").unwrap();
+    assert_eq!(query.matches("MERGED_EVENT").count(), 1);
+    assert!(query.find("MERGED_EVENT").unwrap() > pr_branch, "{query}");
+    assert!(query.contains("... on MergedEvent { id createdAt actor { login } }"));
 }

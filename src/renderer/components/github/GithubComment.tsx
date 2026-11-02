@@ -11,7 +11,15 @@ export function GithubMarkdown({
   /** Stable key for the external-link confirm (the comment id). */
   scope: string
 }): React.JSX.Element {
-  return <AgentProse text={text} streaming={false} reduced linkScope={scope} />
+  return (
+    <AgentProse
+      text={text}
+      streaming={false}
+      reduced
+      linkScope={scope}
+      className="github-prose text-base leading-relaxed"
+    />
+  )
 }
 
 /** One conversation or review comment: author and time, then the markdown body. */

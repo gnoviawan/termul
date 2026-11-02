@@ -70,8 +70,12 @@ fn list_request(cwd: String, slot: GithubRepoSlot, refresh: bool) -> GithubListR
             repo: slot,
             kind: GithubKindFilter::All,
             state: GithubStateFilter::Open,
-            assigned_to_me: false,
+            search: String::new(),
+            labels: Vec::new(),
+            label_mode: GithubLabelMode::Any,
+            assignee: GithubAssigneeFilter::Anyone,
             review_requested: false,
+            sort: GithubSort::Updated,
         },
         refresh,
     }

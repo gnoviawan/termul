@@ -3193,9 +3193,40 @@ describe('GitHub parity (spec-github-integration)', () => {
       command: 'github_checkout_pr',
       route: '/github/checkout-pr',
       handler: 'checkout_pr'
+    },
+    {
+      method: 'getRepoMeta',
+      command: 'github_repo_meta',
+      route: '/github/repo-meta',
+      handler: 'repo_meta'
+    },
+    {
+      method: 'createLabel',
+      command: 'github_create_label',
+      route: '/github/create-label',
+      handler: 'create_label'
+    },
+    {
+      method: 'editItem',
+      command: 'github_edit_item',
+      route: '/github/edit-item',
+      handler: 'edit_item'
+    },
+    {
+      method: 'setItemState',
+      command: 'github_set_item_state',
+      route: '/github/item-state',
+      handler: 'set_item_state'
     }
   ]
-  const writeHandlers = new Set(['merge', 'comment', 'checkout_pr'])
+  const writeHandlers = new Set([
+    'merge',
+    'comment',
+    'checkout_pr',
+    'create_label',
+    'edit_item',
+    'set_item_state'
+  ])
 
   it('the facade branches on isTauriContext() between invokeIpc({ request }) and postJson', () => {
     expect(facade).toMatch(/isTauriContext\(\)\s*\?\s*await invokeIpc<T>\(command, \{ request \}\)/)

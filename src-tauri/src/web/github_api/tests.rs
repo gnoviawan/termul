@@ -45,6 +45,10 @@ fn app(state: AppState) -> axum::Router {
         .route("/github/merge", post(merge))
         .route("/github/comment", post(comment))
         .route("/github/checkout-pr", post(checkout_pr))
+        .route("/github/repo-meta", post(repo_meta))
+        .route("/github/create-label", post(create_label))
+        .route("/github/edit-item", post(edit_item))
+        .route("/github/item-state", post(set_item_state))
         .with_state(state)
 }
 
@@ -80,7 +84,7 @@ fn loopback() -> SocketAddr {
 fn list_body(cwd: &std::path::Path) -> serde_json::Value {
     serde_json::json!({
         "cwd": cwd.to_string_lossy(),
-        "filter": { "repo": "origin", "kind": "all", "state": "open", "assignedToMe": false, "reviewRequested": false }
+        "filter": { "repo": "origin", "kind": "all", "state": "open", "reviewRequested": false }
     })
 }
 
@@ -156,6 +160,57 @@ async fn comment_and_checkout_from_a_lan_peer_are_refused_before_any_gh_call() {
     )
     .await;
     assert_eq!(checkout.code.as_deref(), Some("FORBIDDEN"));
+}
+
+#[tokio::test]
+async fn label_assignee_and_state_writes_from_a_lan_peer_are_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let cwd = root.path().to_string_lossy();
+    let lan = SocketAddr::from(([192, 168, 1, 20], 40000));
+    let label: IpcBody<GithubCreateLabelResult> = post_json(
+        test_state(root.path()),
+        "/github/create-label",
+        serde_json::json!({ "cwd": cwd, "repo": "origin", "name": "bug", "color": "d73a4a" }),
+        lan,
+    )
+    .await;
+    assert_eq!(label.code.as_deref(), Some("FORBIDDEN"));
+    let edit: IpcBody<GithubEditItemResult> = post_json(
+        test_state(root.path()),
+        "/github/edit-item",
+        serde_json::json!({
+            "cwd": cwd, "repo": "origin", "kind": "issue", "number": 1, "addLabels": ["bug"]
+        }),
+        lan,
+    )
+    .await;
+    assert_eq!(edit.code.as_deref(), Some("FORBIDDEN"));
+    let state: IpcBody<GithubSetItemStateResult> = post_json(
+        test_state(root.path()),
+        "/github/item-state",
+        serde_json::json!({
+            "cwd": cwd, "repo": "origin", "kind": "issue", "number": 1,
+            "action": { "kind": "close", "reason": "completed" }
+        }),
+        lan,
+    )
+    .await;
+    assert_eq!(state.code.as_deref(), Some("FORBIDDEN"));
+}
+
+#[tokio::test]
+async fn repo_meta_is_a_read_a_lan_peer_reaches() {
+    let root = tempfile::tempdir().unwrap();
+    let init = GitTracker::run_git_command(root.path().to_str().unwrap(), &["init", "-q"]);
+    assert!(init.expect("git runs").status.success());
+    let body: IpcBody<GithubRepoMeta> = post_json(
+        test_state(root.path()),
+        "/github/repo-meta",
+        serde_json::json!({ "cwd": root.path().to_string_lossy(), "repo": "origin" }),
+        SocketAddr::from(([192, 168, 1, 20], 40000)),
+    )
+    .await;
+    assert_eq!(body.code.as_deref(), Some("GH_NOT_GITHUB_REPO"));
 }
 
 #[tokio::test]

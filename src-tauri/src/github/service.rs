@@ -15,6 +15,7 @@ use super::checkout;
 use super::checks::{self, CHECK_FIELDS, LOG_READ_BYTES};
 use super::comment;
 use super::detail::{self, MergeState};
+use super::edit;
 use super::error::GithubError;
 use super::graphql::{self, GraphqlVar};
 use super::items;
@@ -211,6 +212,24 @@ impl GithubService {
         Ok(data)
     }
 
+    /// A label, assignee or state mutation. The repository's cached reads
+    /// are dropped even when it fails, since GitHub may have applied it.
+    fn mutate(
+        &self,
+        repo: &GithubRepoRef,
+        mutation: &str,
+        variables: serde_json::Value,
+    ) -> Result<(), GithubError> {
+        let result = self
+            .graphql_stdin(repo, mutation, variables, GH_TIMEOUT)
+            .map_err(|error| match error {
+                GithubError::Timeout => edit::maybe_applied("gh did not respond in time"),
+                other => other,
+            });
+        self.cache.invalidate_repo(repo);
+        result.map(drop)
+    }
+
     fn merge_state(&self, repo: &GithubRepoRef, number: u64) -> Result<MergeState, GithubError> {
         let data = self.graphql(
             repo,
@@ -307,7 +326,7 @@ impl GithubService {
         request: &GithubListRequest,
     ) -> Result<GithubListResult, GithubError> {
         self.run_op("list_items", &request.cwd, request.filter.repo, |repo| {
-            let Some(query) = items::search_query(repo, &request.filter) else {
+            let Some(query) = items::search_query(repo, &request.filter)? else {
                 return Ok(GithubListResult {
                     repo: repo.clone(),
                     items: Vec::new(),
@@ -369,6 +388,8 @@ impl GithubService {
                         .as_ref()
                         .map(|c| c.nodes.iter().flatten().map(|n| n.to_comment()).collect())
                         .unwrap_or_default(),
+                    timeline: detail::timeline(&node),
+                    state_reason: detail::close_reason(&node),
                     item,
                     fetched_at: now_iso(),
                 })
@@ -552,6 +573,101 @@ impl GithubService {
             self.cache.invalidate_repo(repo);
             result.map(|comment| GithubCommentResult { comment })
         })
+    }
+
+    pub(crate) fn repo_meta(
+        &self,
+        request: &GithubRepoMetaRequest,
+    ) -> Result<GithubRepoMeta, GithubError> {
+        self.run_op("repo_meta", &request.cwd, request.repo, |repo| {
+            self.read(repo, "meta".to_string(), request.refresh, || {
+                let data = self.graphql(
+                    repo,
+                    &edit::repo_meta_graphql(),
+                    &[
+                        ("owner", GraphqlVar::Str(&repo.owner)),
+                        ("name", GraphqlVar::Str(&repo.name)),
+                    ],
+                )?;
+                edit::parse_repo_meta(&data, repo, now_iso())
+            })
+        })
+    }
+
+    pub(crate) fn create_label(
+        &self,
+        request: &GithubCreateLabelRequest,
+    ) -> Result<GithubCreateLabelResult, GithubError> {
+        let label = edit::checked_label(request).inspect_err(|error| {
+            log::warn!("[github] create_label refused code={}", error.code());
+        })?;
+        self.run_op("create_label", &request.cwd, request.repo, |repo| {
+            let call = GhCall::new(Some(&repo.host), edit::create_label_args(repo, &label));
+            let result = self.runner.stdout(&call).map_err(|error| match error {
+                GithubError::Timeout => edit::maybe_applied("gh did not respond in time"),
+                other => other,
+            });
+            self.cache.invalidate_repo(repo);
+            result.map(|_| GithubCreateLabelResult { label })
+        })
+    }
+
+    /// Add and remove labels and assignees by name, resolved to ids from a
+    /// fresh read of the item and the repository.
+    pub(crate) fn edit_item(
+        &self,
+        request: &GithubEditItemRequest,
+    ) -> Result<GithubEditItemResult, GithubError> {
+        let number = request.number;
+        self.run_op(
+            &format!("edit_item #{number}"),
+            &request.cwd,
+            request.repo,
+            |repo| {
+                if edit::is_empty_edit(request) {
+                    return Ok(GithubEditItemResult { number });
+                }
+                let data = self.graphql(
+                    repo,
+                    &edit::edit_target_graphql(),
+                    &[
+                        ("owner", GraphqlVar::Str(&repo.owner)),
+                        ("name", GraphqlVar::Str(&repo.name)),
+                        ("number", GraphqlVar::Int(number)),
+                    ],
+                )?;
+                let (mutation, variables) = edit::edit_mutation(&data, request)?;
+                self.mutate(repo, &mutation, variables)
+                    .map(|()| GithubEditItemResult { number })
+            },
+        )
+    }
+
+    pub(crate) fn set_item_state(
+        &self,
+        request: &GithubSetItemStateRequest,
+    ) -> Result<GithubSetItemStateResult, GithubError> {
+        let number = request.number;
+        self.run_op(
+            &format!("set_item_state #{number}"),
+            &request.cwd,
+            request.repo,
+            |repo| {
+                let data = self.graphql(
+                    repo,
+                    &comment::subject_graphql(),
+                    &[
+                        ("owner", GraphqlVar::Str(&repo.owner)),
+                        ("name", GraphqlVar::Str(&repo.name)),
+                        ("number", GraphqlVar::Int(number)),
+                    ],
+                )?;
+                let id = comment::parse_subject(&data, request.kind, number)?;
+                let (mutation, variables) = edit::state_mutation(request.kind, request.action, &id);
+                self.mutate(repo, &mutation, variables)
+                    .map(|()| GithubSetItemStateResult { number })
+            },
+        )
     }
 
     /// Move a chat worktree's branch to PR `number`'s head, after checking an

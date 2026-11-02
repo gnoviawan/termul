@@ -6,7 +6,7 @@ import type {
 } from '@shared/types/github.types'
 import { useState } from 'react'
 import { ConfirmedExternalLink } from '@/components/external-link/ExternalLinkConfirm'
-import { ChevronRight, ExternalLink } from '@/components/icons'
+import { ChevronDown, ChevronRight, ExternalLink } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
@@ -28,13 +28,34 @@ const STATUS_ORDER: Record<GithubCheckStatus, number> = {
   skipped: 5
 }
 
-function summarize(checks: GithubCheck[]): string {
-  const counts = new Map<string, number>()
-  for (const check of checks) {
-    const word = checkLook(check.status).label.toLowerCase()
-    counts.set(word, (counts.get(word) ?? 0) + 1)
-  }
-  return [...counts].map(([word, n]) => `${n} ${word}`).join(', ')
+/**
+ * What still needs a look stays open: failed, running, and cancelled (a
+ * cancelled required check blocks the merge). Passed, skipped and neutral fold.
+ */
+const NEEDS_ATTENTION = new Set<GithubCheckStatus>(['failure', 'pending', 'cancelled'])
+
+function counts(checks: GithubCheck[]): Array<{ status: GithubCheckStatus; n: number }> {
+  const byStatus = new Map<GithubCheckStatus, number>()
+  for (const check of checks) byStatus.set(check.status, (byStatus.get(check.status) ?? 0) + 1)
+  return [...byStatus].map(([status, n]) => ({ status, n }))
+}
+
+function joinWords(words: string[]): string {
+  return words.length < 2
+    ? (words[0] ?? '')
+    : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
+}
+
+/** "passed and skipped" for the folded rows. */
+function foldedWords(rows: GithubCheck[]): string {
+  return joinWords(counts(rows).map(({ status }) => checkLook(status).label.toLowerCase()))
+}
+
+function checkKey(check: GithubCheck, index: number): string {
+  // A workflow that runs on both push and pull_request repeats a job name.
+  return check.jobId !== null
+    ? `job-${check.jobId}`
+    : `${check.workflow ?? ''}/${check.name}#${index}`
 }
 
 interface GithubChecksListProps {
@@ -43,19 +64,37 @@ interface GithubChecksListProps {
   checks: GithubResource<GithubChecksResult>
 }
 
-/** CAP-4 checks: status, name and workflow; a failed Actions job unfolds to its log tail. */
+/**
+ * CAP-4 checks: a count per status, then the failed, running and cancelled
+ * checks; the rest fold behind "Show N passed and skipped". A failed Actions job unfolds
+ * to its log tail.
+ */
 export function GithubChecksList({ cwd, repo, checks }: GithubChecksListProps): React.JSX.Element {
+  const [showAll, setShowAll] = useState(false)
   const rows = [...(checks.data?.checks ?? [])].sort(
     (a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
   )
+  const attention = rows.filter((check) => NEEDS_ATTENTION.has(check.status))
+  const folded = rows.filter((check) => !NEEDS_ATTENTION.has(check.status))
+  const shown = showAll ? rows : attention
   return (
-    <section aria-labelledby="github-checks" className="flex flex-col gap-1.5">
-      <h2 id="github-checks" className="text-sm font-medium text-foreground">
-        Checks{' '}
-        {rows.length > 0 && (
-          <span className="font-normal tabular-nums text-muted-foreground">{summarize(rows)}</span>
-        )}
+    <section aria-labelledby="github-checks" className="flex flex-col gap-2">
+      <h2 id="github-checks" className="sr-only">
+        Checks
       </h2>
+      {rows.length > 0 && (
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          {counts(rows).map(({ status, n }) => {
+            const look = checkLook(status)
+            return (
+              <span key={status} className={cn('inline-flex items-center gap-1', look.text)}>
+                <look.Icon size={14} aria-hidden="true" />
+                <span className="tabular-nums">{n}</span> {look.label.toLowerCase()}
+              </span>
+            )
+          })}
+        </p>
+      )}
       {checks.status === 'error' && (
         <p className="text-xs text-destructive">
           Couldn't {checks.data ? 'refresh' : 'load'} checks
@@ -67,21 +106,32 @@ export function GithubChecksList({ cwd, repo, checks }: GithubChecksListProps): 
         <p className="text-xs text-muted-foreground">This pull request has no checks.</p>
       )}
       {rows.length > 0 && (
-        <ul className="flex flex-col divide-y divide-border rounded-lg border border-border">
-          {rows.map((check, index) => (
-            <CheckRow
-              // A workflow that runs on both push and pull_request repeats a job name.
-              key={
-                check.jobId !== null
-                  ? `job-${check.jobId}`
-                  : `${check.workflow ?? ''}/${check.name}#${index}`
-              }
-              cwd={cwd}
-              repo={repo}
-              check={check}
-            />
-          ))}
-        </ul>
+        <div className="flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border">
+          {shown.length > 0 && (
+            <ul className="flex flex-col divide-y divide-border">
+              {shown.map((check, index) => (
+                <CheckRow key={checkKey(check, index)} cwd={cwd} repo={repo} check={check} />
+              ))}
+            </ul>
+          )}
+          {folded.length > 0 && (
+            <button
+              type="button"
+              aria-expanded={showAll}
+              onClick={() => setShowAll(!showAll)}
+              className="flex min-h-10 items-center justify-center gap-1.5 px-3 text-xs text-muted-foreground hover:bg-foreground/[0.03] hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+            >
+              {showAll
+                ? `Hide ${foldedWords(folded)}`
+                : `Show ${folded.length} ${foldedWords(folded)}`}
+              <ChevronDown
+                size={14}
+                aria-hidden="true"
+                className={cn('transition-transform duration-150', showAll && 'rotate-180')}
+              />
+            </button>
+          )}
+        </div>
       )}
     </section>
   )

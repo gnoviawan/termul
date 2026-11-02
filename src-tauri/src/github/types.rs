@@ -148,14 +148,72 @@ pub enum GithubStateFilter {
     Draft,
 }
 
+/// How the list's label filter combines its labels.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum GithubLabelMode {
+    /// Items with at least one of the labels.
+    #[default]
+    Any,
+    /// Items with every label.
+    All,
+    /// Items with none of the labels.
+    Exclude,
+}
+
+/// Whose items the list shows.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum GithubAssigneeFilter {
+    #[default]
+    Anyone,
+    Me,
+    /// No assignee.
+    Unassigned,
+    User {
+        login: String,
+    },
+}
+
+/// List order, newest first.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum GithubSort {
+    #[default]
+    Updated,
+    Created,
+    Comments,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GithubListFilter {
     pub repo: GithubRepoSlot,
     pub kind: GithubKindFilter,
     pub state: GithubStateFilter,
-    pub assigned_to_me: bool,
+    /// Free text matched against titles and bodies; empty adds nothing.
+    #[serde(default)]
+    pub search: String,
+    /// Label names; empty adds nothing.
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub label_mode: GithubLabelMode,
+    #[serde(default)]
+    pub assignee: GithubAssigneeFilter,
     pub review_requested: bool,
+    #[serde(default)]
+    pub sort: GithubSort,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -191,9 +249,48 @@ pub struct GithubItemRequest {
 pub struct GithubComment {
     pub id: String,
     pub author: String,
+    /// The author is a GitHub App or bot account (`__typename: Bot`).
+    #[serde(default)]
+    pub is_bot: bool,
     pub body: String,
     pub created_at: String,
     pub url: String,
+}
+
+/// Why an issue was closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GithubCloseReason {
+    Completed,
+    NotPlanned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GithubTimelineEventKind {
+    Labeled,
+    Unlabeled,
+    Assigned,
+    Unassigned,
+    Closed,
+    Reopened,
+    /// PRs only.
+    Merged,
+}
+
+/// A non-comment event on the item's timeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubTimelineEvent {
+    pub id: String,
+    pub kind: GithubTimelineEventKind,
+    /// Who did it; empty when GitHub no longer knows (deleted account).
+    pub actor: String,
+    pub created_at: String,
+    /// Labeled / unlabeled.
+    pub label: Option<GithubLabel>,
+    /// Assigned / unassigned.
+    pub assignee: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -240,6 +337,12 @@ pub struct GithubItemDetail {
     pub body: String,
     pub created_at: String,
     pub comments: Vec<GithubComment>,
+    /// Label, assignee and open/closed events, oldest first (the latest 50).
+    #[serde(default)]
+    pub timeline: Vec<GithubTimelineEvent>,
+    /// Issues only: why a closed issue was closed.
+    #[serde(default)]
+    pub state_reason: Option<GithubCloseReason>,
     pub pr: Option<GithubPullDetail>,
     pub fetched_at: String,
 }
@@ -381,4 +484,101 @@ pub struct GithubCheckoutPrResult {
     pub head_sha: String,
     pub head_ref_name: String,
     pub push_command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubRepoMetaRequest {
+    pub cwd: String,
+    pub repo: GithubRepoSlot,
+    #[serde(default)]
+    pub refresh: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubRepoLabel {
+    pub name: String,
+    /// Six hex digits, no `#`.
+    pub color: String,
+    pub description: Option<String>,
+}
+
+/// What the label and assignee pickers offer for one repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubRepoMeta {
+    pub repo: GithubRepoRef,
+    /// The repository's labels by name (first 100).
+    pub labels: Vec<GithubRepoLabel>,
+    /// Logins that can be assigned (first 100).
+    pub assignable_users: Vec<String>,
+    /// The signed-in account's login.
+    pub viewer: String,
+    pub fetched_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubCreateLabelRequest {
+    pub cwd: String,
+    pub repo: GithubRepoSlot,
+    pub name: String,
+    /// Six hex digits, no `#`.
+    pub color: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GithubCreateLabelResult {
+    pub label: GithubRepoLabel,
+}
+
+/// Add and remove labels and assignees on one issue or PR, by name/login.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubEditItemRequest {
+    pub cwd: String,
+    pub repo: GithubRepoSlot,
+    pub kind: GithubItemKind,
+    pub number: u64,
+    #[serde(default)]
+    pub add_labels: Vec<String>,
+    #[serde(default)]
+    pub remove_labels: Vec<String>,
+    #[serde(default)]
+    pub add_assignees: Vec<String>,
+    #[serde(default)]
+    pub remove_assignees: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GithubEditItemResult {
+    pub number: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GithubItemStateAction {
+    /// `reason` applies to issues; a PR close ignores it.
+    Close {
+        reason: GithubCloseReason,
+    },
+    Reopen,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubSetItemStateRequest {
+    pub cwd: String,
+    pub repo: GithubRepoSlot,
+    pub kind: GithubItemKind,
+    pub number: u64,
+    pub action: GithubItemStateAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GithubSetItemStateResult {
+    pub number: u64,
 }

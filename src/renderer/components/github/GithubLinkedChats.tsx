@@ -20,18 +20,18 @@ const ACTION_LABEL: Record<GithubHandoffAction, string> = {
 
 const NO_LINKS: GithubChatLink[] = []
 
-/** Chats started from this item (newest first); each opens its chat. Chats that were deleted drop out. */
-export function GithubLinkedChats({
-  projectId,
-  itemId
-}: {
-  projectId: string
-  itemId: string
-}): React.JSX.Element | null {
+export interface LinkedChat {
+  link: GithubChatLink
+  /** The chat's title; empty when it has none yet. */
+  title: string
+}
+
+/** Chats started from this item (newest first). Chats that were deleted drop out. */
+export function useGithubLinkedChats(projectId: string | null, itemId: string): LinkedChat[] {
   useEffect(() => {
-    void hydrateGithubChatLinks(projectId)
+    if (projectId) void hydrateGithubChatLinks(projectId)
   }, [projectId])
-  const links = useGithubChatLinksStore((s) => s.byProject[projectId] ?? NO_LINKS)
+  const links = useGithubChatLinksStore((s) => (projectId && s.byProject[projectId]) || NO_LINKS)
   const itemLinks = useMemo(
     () => links.filter((l) => l.itemId === itemId).reverse(),
     [links, itemId]
@@ -46,11 +46,21 @@ export function GithubLinkedChats({
       })
     )
   )
-  const chats = itemLinks
-    .map((link, i) => ({ link, title: titles[i] }))
-    .filter((chat) => chat.title !== undefined)
+  return itemLinks.flatMap((link, i) => {
+    const title = titles[i]
+    return title === undefined ? [] : [{ link, title }]
+  })
+}
 
-  if (chats.length === 0) return null
+/** The linked chats as rows; each opens its chat. Renders `empty` (or nothing) without any. */
+export function GithubLinkedChats({
+  chats,
+  empty = null
+}: {
+  chats: LinkedChat[]
+  empty?: React.ReactNode
+}): React.JSX.Element | null {
+  if (chats.length === 0) return <>{empty}</>
   return (
     <section aria-labelledby="github-linked-chats" className="flex flex-col gap-1.5">
       <h2 id="github-linked-chats" className="text-sm font-medium text-foreground">
@@ -62,7 +72,7 @@ export function GithubLinkedChats({
             <button
               type="button"
               onClick={() => openAgentChatInOwnProject(link.sessionId, 'github.linkedChats')}
-              className="flex min-h-9 w-full min-w-0 items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-left text-xs hover:bg-foreground/[0.03] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring"
+              className="flex min-h-9 w-full min-w-0 items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-left text-xs hover:bg-foreground/[0.03] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring pointer-coarse:min-h-11"
             >
               <Bot size={14} aria-hidden="true" className="shrink-0 text-muted-foreground" />
               <span className="shrink-0 font-medium text-foreground">

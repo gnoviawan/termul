@@ -17,8 +17,12 @@ fn list(service: &GithubService, cwd: &str, kind: GithubKindFilter) -> GithubLis
                 repo: GithubRepoSlot::Origin,
                 kind,
                 state: GithubStateFilter::Open,
-                assigned_to_me: false,
+                search: String::new(),
+                labels: Vec::new(),
+                label_mode: GithubLabelMode::Any,
+                assignee: GithubAssigneeFilter::Anyone,
                 review_requested: false,
+                sort: GithubSort::Updated,
             },
             refresh: false,
         })
@@ -185,4 +189,86 @@ fn live_gh_walkthrough() {
         long.item.comment_count.min(500),
         "paging loads the whole conversation up to the cap"
     );
+}
+
+#[test]
+#[ignore = "uses the machine's gh login and the network"]
+fn live_filters_repo_meta_and_timeline() {
+    let cwd = std::env::var("TERMUL_GH_LIVE_CWD")
+        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/..").to_string());
+    let cwd = std::fs::canonicalize(cwd)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let service = GithubService::shared();
+
+    let meta = service
+        .repo_meta(&GithubRepoMetaRequest {
+            cwd: cwd.clone(),
+            repo: GithubRepoSlot::Origin,
+            refresh: true,
+        })
+        .expect("repo meta");
+    println!(
+        "meta: viewer={} labels={} (first {:?}) assignable={}",
+        meta.viewer,
+        meta.labels.len(),
+        meta.labels.first().map(|l| (&l.name, &l.color)),
+        meta.assignable_users.len()
+    );
+    let label = meta.labels.first().expect("a label").name.clone();
+
+    let closed = service
+        .list_items(&GithubListRequest {
+            cwd: cwd.clone(),
+            filter: GithubListFilter {
+                repo: GithubRepoSlot::Origin,
+                kind: GithubKindFilter::Issue,
+                state: GithubStateFilter::Closed,
+                search: String::new(),
+                labels: vec![label.clone()],
+                label_mode: GithubLabelMode::Any,
+                assignee: GithubAssigneeFilter::Anyone,
+                review_requested: false,
+                sort: GithubSort::Comments,
+            },
+            refresh: true,
+        })
+        .expect("label-filtered list");
+    println!("closed issues labelled {label}: {}", closed.items.len());
+    assert!(closed.items.iter().all(|item| item
+        .labels
+        .iter()
+        .any(|l| l.name.eq_ignore_ascii_case(&label))));
+
+    let Some(issue) = closed.items.first() else {
+        return;
+    };
+    let detail = service
+        .get_item(&GithubItemRequest {
+            cwd: cwd.clone(),
+            repo: GithubRepoSlot::Origin,
+            kind: GithubItemKind::Issue,
+            number: issue.number,
+            refresh: true,
+        })
+        .expect("issue detail");
+    println!(
+        "issue #{} stateReason={:?} comments={} bots={} timeline={}",
+        issue.number,
+        detail.state_reason,
+        detail.comments.len(),
+        detail.comments.iter().filter(|c| c.is_bot).count(),
+        detail.timeline.len()
+    );
+    for event in &detail.timeline {
+        println!(
+            "  {:?} by {:?} label={:?} assignee={:?} at {}",
+            event.kind,
+            event.actor,
+            event.label.as_ref().map(|l| &l.name),
+            event.assignee,
+            event.created_at
+        );
+    }
 }
