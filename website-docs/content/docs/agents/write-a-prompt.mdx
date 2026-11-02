@@ -1,6 +1,6 @@
 ---
 title: Write a prompt
-description: Choose a model and a mode, use slash commands and file mentions, attach files, and watch how much context is left.
+description: Choose a model and a mode, use slash commands and mentions of files and other chats, attach files, and watch how much context is left.
 ---
 
 The message box at the bottom of a chat is where you talk to the agent. Besides text, it holds the controls for the model, how much the agent may do on its own, and what you send along with your words. The launcher uses the same box, so everything on this page works there too.
@@ -62,13 +62,25 @@ Use the arrow keys to move and `Enter` or `Tab` to pick. A skill or a command be
   Pressing `Esc` while the slash menu is open closes the menu and also clears everything in the box.
 </Callout>
 
-## Mention a file
+## Mention a file or another chat
 
-Type `@` and part of a file or folder name. A menu lists matching **Files** and **Folders** in the chat's folder. A bare `@` lists the files you mentioned **Recent**ly in this project.
+Type `@` to open the mention menu. A bare `@` shows two entries:
+
+- **Conversations** lists the other chats in this project, newest first. A chat that is still working shows a spinner.
+- **Explorer** lists the files and folders in the chat's folder, with the files you mentioned **Recent**ly at the top.
+
+Pick an entry to open its panel. In **Explorer**, pick a folder to look inside it, or pick **Use this folder** to mention the folder itself. To go back, press the left arrow key, press `Backspace` while the search is empty, or click the panel's title at the top of the menu (it has a back arrow).
+
+To search instead, type part of a name after `@`. The menu lists matching **Files** and **Folders**, plus any **Conversations** whose title matches.
 
 ![The file menu after typing "@cart" shows src/cart.ts under Files.](/screenshots/agents-file-mention.png)
 
-Pick an entry to add it as a pill. When you send, the agent gets the file's path, so it can open the file itself. Press `Esc` to close the menu and keep what you typed.
+Pick a file, a folder, or a chat to add it as a pill. When you send:
+
+- For a file or a folder, the agent gets its path, so it can open it itself.
+- For a chat, the agent gets the latest turns of that chat as context. Very long chats are cut to their most recent part. Your own chat history keeps only the pill, not the copied text.
+
+Press `Esc` to close the menu and keep what you typed.
 
 ## Attach files and images
 
