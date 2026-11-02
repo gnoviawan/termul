@@ -41,14 +41,22 @@ export function stripConversationEnvelopes(text: string): string {
 // restore never matches typed text or a same-title chat. The tempered title
 // stops a typed `(conversation: ` earlier on the line from swallowing a label.
 const LABEL_RE =
-  /\(conversation: ((?:(?!\(conversation: )[^\n])+?)(, transcript unavailable)? \[termul-chat:([^\]\s]+)\]\)/g
+  /\(conversation: ((?:(?!\(conversation: )[^\n])+?)(, transcript (?:unavailable|omitted: context limit))? \[termul-chat:([^\]\s]+)\]\)/g
+
+const TRANSCRIPT_GAP_NOTES = {
+  unavailable: ', transcript unavailable',
+  omitted: ', transcript omitted: context limit'
+} as const
+
+/** Why a mentioned chat's transcript is not in the send. */
+export type TranscriptGap = keyof typeof TRANSCRIPT_GAP_NOTES
 
 export function conversationWireLabel(
   title: string,
   sessionId: string,
-  transcriptAvailable: boolean
+  gap: TranscriptGap | null
 ): string {
-  const note = transcriptAvailable ? '' : ', transcript unavailable'
+  const note = gap ? TRANSCRIPT_GAP_NOTES[gap] : ''
   return `(conversation: ${title}${note} [termul-chat:${sessionId}])`
 }
 

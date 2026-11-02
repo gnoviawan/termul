@@ -437,7 +437,7 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
           conversationWireLabel(
             title,
             sessionId,
-            contexts !== undefined && !contexts.unavailable.has(sessionId)
+            contexts === undefined ? 'unavailable' : (contexts.gaps.get(sessionId) ?? null)
           )
       )
       const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDefiled)

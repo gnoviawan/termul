@@ -1,5 +1,9 @@
 import { selectionContextToken, serializeSelectionContexts } from '@/lib/composer/selection-context'
-import { conversationEnvelope, conversationWireLabel } from '@/lib/conversation-envelope'
+import {
+  conversationEnvelope,
+  conversationWireLabel,
+  type TranscriptGap
+} from '@/lib/conversation-envelope'
 import {
   commandToken,
   conversationToken,
@@ -277,9 +281,9 @@ describe('wireTextToDisplay with selection contexts', () => {
 })
 
 describe('wireBlocksToDisplay with conversation envelopes', () => {
-  const wireOf = (display: string, available = true) =>
+  const wireOf = (display: string, gap: TranscriptGap | null = null) =>
     replaceConversationTokensInline(display, (title, sessionId) =>
-      conversationWireLabel(title, sessionId, available)
+      conversationWireLabel(title, sessionId, gap)
     )
 
   it('drops the transcript envelope and restores the conversation pill', () => {
@@ -309,10 +313,20 @@ describe('wireBlocksToDisplay with conversation envelopes', () => {
 
   it('restores the pill of a chat whose transcript was unavailable (no envelope)', () => {
     const display = `see ${conversationToken('Old chat', 'gone')} `
-    expect(wireOf(display, false)).toBe(
+    expect(wireOf(display, 'unavailable')).toBe(
       'see (conversation: Old chat, transcript unavailable [termul-chat:gone]) '
     )
-    expect(wireBlocksToDisplay([{ type: 'text', text: wireOf(display, false) }])).toEqual([
+    expect(wireBlocksToDisplay([{ type: 'text', text: wireOf(display, 'unavailable') }])).toEqual([
+      { type: 'text', text: display }
+    ])
+  })
+
+  it('restores the pill of a chat whose transcript hit the context limit (no envelope)', () => {
+    const display = `see ${conversationToken('Big chat', 'big')} `
+    expect(wireOf(display, 'omitted')).toBe(
+      'see (conversation: Big chat, transcript omitted: context limit [termul-chat:big]) '
+    )
+    expect(wireBlocksToDisplay([{ type: 'text', text: wireOf(display, 'omitted') }])).toEqual([
       { type: 'text', text: display }
     ])
   })

@@ -50,7 +50,7 @@ describe('persisted/live twin with conversation pills', () => {
     user(
       'p',
       replaceConversationTokensInline(`compare ${conversationToken('Bug', sessionId)}`, (t, id) =>
-        conversationWireLabel(t, id, true)
+        conversationWireLabel(t, id, null)
       )
     )
 

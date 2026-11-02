@@ -9,6 +9,7 @@ import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { selectionContextToken } from '@/lib/composer/selection-context'
+import { parseConversationEnvelope } from '@/lib/conversation-envelope'
 import { commandToken, conversationToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { useProjectStore } from '@/stores/project-store'
 import { ChatInputBar } from './ChatInputBar'
@@ -351,6 +352,12 @@ const { mockTransport } = vi.hoisted(() => ({
 vi.mock('@/lib/acp-transport', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/acp-transport')>()),
   getAcpTransport: () => mockTransport.current
+}))
+
+const { mockLogFrontendError } = vi.hoisted(() => ({ mockLogFrontendError: vi.fn() }))
+vi.mock('@/lib/log-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/log-api')>()),
+  logFrontendError: mockLogFrontendError
 }))
 
 vi.mock('@/lib/acp-api', () => ({
@@ -2545,6 +2552,43 @@ describe('ChatInputBar conversation mentions', () => {
       ],
       [{ type: 'text', text: `see ${token} ` }]
     )
+  })
+
+  it('omits the transcripts past the per-send context limit and keeps their pills', async () => {
+    const longChat = Array.from({ length: 12 }, (_, i) => [
+      { id: `u${i}`, role: 'user', blocks: [{ type: 'text', text: 'q'.repeat(1500) }], seq: 2 * i },
+      {
+        id: `a${i}`,
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'a'.repeat(1500) }],
+        seq: 2 * i + 1
+      }
+    ]).flat()
+    mockMessages.current = { big1: longChat, big2: longChat, big3: longChat }
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    const display = `compare ${['big1', 'big2', 'big3'].map((id) => conversationToken(`Chat ${id}`, id)).join(' ')} `
+    setComposerValue(display)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    const [wire, displayBlocks] = onSendBlocks.mock.calls[0] as [Array<{ text: string }>, unknown]
+    expect(wire[0]).toEqual({
+      type: 'text',
+      text:
+        'compare (conversation: Chat big1 [termul-chat:big1]) (conversation: Chat big2 [termul-chat:big2]) ' +
+        '(conversation: Chat big3, transcript omitted: context limit [termul-chat:big3])'
+    })
+    expect(wire.slice(1).map((b) => parseConversationEnvelope(b.text)?.sessionId)).toEqual([
+      'big1',
+      'big2'
+    ])
+    expect(displayBlocks).toEqual([{ type: 'text', text: display }])
+    expect(mockLogFrontendError).toHaveBeenCalledWith({
+      level: 'warn',
+      source: 'conversationTranscript',
+      message: 'Omitted 1 of 3 mentioned chat transcripts: over the 30000-character context limit'
+    })
   })
 
   it('says the transcript is unavailable when the chat has no readable history', async () => {

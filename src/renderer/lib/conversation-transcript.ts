@@ -2,11 +2,13 @@ import { buildConversationContext, capContextFragment } from '@/components/chat/
 import type { ContentBlock, ToolCall } from '@/lib/acp-api'
 import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
-import { conversationEnvelope } from '@/lib/conversation-envelope'
+import { conversationEnvelope, type TranscriptGap } from '@/lib/conversation-envelope'
 import { logFrontendError } from '@/lib/log-api'
 import { type ChatMessage, useAcpStore } from '@/stores/acp-store'
 
 const TRANSCRIPT_TAIL_LIMIT = 200
+// Total transcript characters one send carries across all of its chat pills.
+const CONVERSATION_CONTEXT_CHARS = 30_000
 
 interface Transcript {
   messages: ChatMessage[]
@@ -37,15 +39,23 @@ function agentNameOf(sessionId: string): string | null {
 
 export interface ConversationContexts {
   blocks: ContentBlock[]
-  unavailable: ReadonlySet<string>
+  gaps: ReadonlyMap<string, TranscriptGap>
 }
 
 export async function resolveConversationContexts(
   refs: ReadonlyArray<{ title: string; sessionId: string }>
 ): Promise<ConversationContexts> {
   const blocks: ContentBlock[] = []
-  const unavailable = new Set<string>()
+  const gaps = new Map<string, TranscriptGap>()
+  let contextChars = 0
+  let omitted = 0
   for (const { title, sessionId } of refs) {
+    // Once one transcript misses the limit, the later ones are not read at all.
+    if (omitted > 0) {
+      gaps.set(sessionId, 'omitted')
+      omitted++
+      continue
+    }
     const transcript = await readConversationTranscript(sessionId).catch((err: unknown) => {
       void logFrontendError({
         level: 'warn',
@@ -62,7 +72,7 @@ export async function resolveConversationContexts(
       })
     }
     if (!transcript) {
-      unavailable.add(sessionId)
+      gaps.set(sessionId, 'unavailable')
       continue
     }
     const contextTitle = capContextFragment(title)
@@ -72,7 +82,21 @@ export async function resolveConversationContexts(
       toolCalls: transcript.toolCalls,
       agentName: agentNameOf(sessionId)
     })
-    blocks.push({ type: 'text', text: conversationEnvelope(sessionId, contextTitle, body) })
+    const text = conversationEnvelope(sessionId, contextTitle, body)
+    if (contextChars + text.length > CONVERSATION_CONTEXT_CHARS) {
+      gaps.set(sessionId, 'omitted')
+      omitted++
+      continue
+    }
+    contextChars += text.length
+    blocks.push({ type: 'text', text })
   }
-  return { blocks, unavailable }
+  if (omitted > 0) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'conversationTranscript',
+      message: `Omitted ${omitted} of ${refs.length} mentioned chat transcripts: over the ${CONVERSATION_CONTEXT_CHARS}-character context limit`
+    })
+  }
+  return { blocks, gaps }
 }

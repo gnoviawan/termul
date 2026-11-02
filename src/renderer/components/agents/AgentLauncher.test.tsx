@@ -2693,7 +2693,7 @@ describe('AgentLauncher conversation pill launch', () => {
     expect(screen.getByRole('button', { name: 'Attach files' })).toBeDisabled()
     expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
 
-    await act(async () => finishRead({ blocks: [], unavailable: new Set(['chat-9']) }))
+    await act(async () => finishRead({ blocks: [], gaps: new Map([['chat-9', 'unavailable']]) }))
     await waitFor(() =>
       expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
         expect.objectContaining({
