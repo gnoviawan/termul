@@ -36,7 +36,12 @@ import {
   parseReuseKey
 } from '../acp-reuse-keys'
 import { ephemeralSessionIds } from './ephemeral-ids'
-import { isReusableStatus, SWITCH_SPLICE_ID_PREFIX, type SwitchMarkerFacts } from './helpers'
+import {
+  isReusableStatus,
+  keepCreatedAt,
+  SWITCH_SPLICE_ID_PREFIX,
+  type SwitchMarkerFacts
+} from './helpers'
 import { _resetRegistryMcpFingerprintsForTesting } from './registry-mcp-fingerprints'
 import type { AcpSession, AcpState, ChatMessage, CommitMessageCollector } from './types'
 
@@ -224,7 +229,7 @@ export function persistSession(
     title: session.title ?? deriveTitle(liveMessages, fallbackTitle),
     cwd: session.cwd,
     projectId: session.projectId,
-    createdAt: session.createdAt,
+    createdAt: keepCreatedAt(existingEntry?.createdAt, session.createdAt),
     lastActivityAt: Date.now(),
     messageCount: ownMessages.length,
     lastSeq: ownMessages.reduce(

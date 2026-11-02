@@ -984,6 +984,17 @@ export function recoverPromptToQueue(
   })
 }
 
+/**
+ * A chat's creation time is first-write-wins: keep `recorded` once it holds a
+ * real timestamp, so reopening or resuming a chat (which stamps a fresh
+ * `Date.now()` on the live session) never moves it.
+ */
+export function keepCreatedAt(recorded: number | undefined, candidate: number): number {
+  return typeof recorded === 'number' && Number.isFinite(recorded) && recorded > 0
+    ? recorded
+    : candidate
+}
+
 /** Keep a known live turn when the other side never sent the flag. */
 function mergeTurnActive(
   local: boolean | undefined,
@@ -1031,7 +1042,10 @@ export function mergeSessionIndexEntries(
             ...entry,
             messageCount: Math.max(entry.messageCount ?? 0, hostEntry.messageCount ?? 0),
             lastSeq: Math.max(entry.lastSeq ?? 0, hostEntry.lastSeq ?? 0),
-            turnActive: mergeTurnActive(entry.turnActive, hostEntry.turnActive, true)
+            turnActive: mergeTurnActive(entry.turnActive, hostEntry.turnActive, true),
+            // The host stamps `created_at` once at registration; a local
+            // projection re-stamped by a reopen must not override it.
+            createdAt: keepCreatedAt(hostEntry.createdAt, entry.createdAt)
           }
         }
       } else {
