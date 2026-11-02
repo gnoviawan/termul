@@ -216,6 +216,22 @@ describe('GithubPanel list', () => {
     expect(screen.getByRole('button', { name: 'Refresh' })).toHaveClass('pointer-coarse:size-11')
   })
 
+  it('shows no repository name and puts Refresh at the end of the kind row', async () => {
+    api.getContext.mockResolvedValue(
+      ok({ ...connected(), repo: { kind: 'resolved', origin: ORIGIN, upstream: null } })
+    )
+    api.listItems.mockResolvedValue(ok(list(ISSUE)))
+    renderPanel()
+    await screen.findByRole('button', { name: /#12/ })
+
+    expect(screen.queryByText('me/app')).toBeNull()
+    expect(screen.queryByRole('combobox', { name: 'Repository' })).toBeNull()
+    const kind = screen.getByRole('group', { name: 'Kind' })
+    const refresh = screen.getByRole('button', { name: 'Refresh' })
+    expect(kind.parentElement).toBe(refresh.parentElement)
+    expect(kind.nextElementSibling).toBe(refresh)
+  })
+
   it('refreshes past the host cache from the refresh button', async () => {
     api.listItems.mockResolvedValue(ok(list(ISSUE)))
     renderPanel()

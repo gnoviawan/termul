@@ -450,13 +450,13 @@ export function MobileRecentsList({
   const now = Date.now()
 
   return (
-    <div ref={rootRef} tabIndex={-1} className="flex flex-col px-2 pb-2 outline-none">
+    <div ref={rootRef} tabIndex={-1} className="flex flex-1 flex-col px-2 pb-2 outline-none">
       {mergedEntries.length === 0 ? (
-        <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+        <p className="my-auto px-4 py-6 text-center text-sm text-muted-foreground">
           No chats yet. Start one with the New chat button.
         </p>
       ) : filtered.length === 0 ? (
-        <p className="px-4 py-4 text-center text-sm text-muted-foreground">
+        <p className="my-auto px-4 py-6 text-center text-sm text-muted-foreground">
           No chats match this search.
         </p>
       ) : (

@@ -657,7 +657,7 @@ describe('MobileShellDrawer section nav', () => {
 
     fireEvent.click(navButton(dialog, 'GitHub'))
     expect(navButton(dialog, 'GitHub')).toHaveAttribute('aria-current', 'true')
-    // The repository row heads the list; the section heading stays for screen readers.
+    // Every section heading is screen-reader only; the selected section tab marks the list.
     expect(
       within(dialog).getByRole('heading', { level: 2, name: 'Issues and pull requests' })
     ).toHaveClass('sr-only')
@@ -667,6 +667,20 @@ describe('MobileShellDrawer section nav', () => {
 
     fireEvent.click(within(panel).getByRole('button', { name: 'Open issue' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Termul' })).toBeNull())
+  })
+
+  it('gives the GitHub section no primary pill, so the footer icons fill the row', async () => {
+    const { dialog } = await openDrawer({
+      section: 'github',
+      onNewTerminal: vi.fn(),
+      onOpenFiles: vi.fn()
+    })
+
+    for (const name of ['New chat', 'New terminal', 'Browse files']) {
+      expect(within(dialog).queryByRole('button', { name }), name).toBeNull()
+    }
+    const settings = within(dialog).getByRole('button', { name: 'Settings' })
+    expect(settings.parentElement?.lastElementChild).toHaveClass('flex-1')
   })
 
   it('keeps open GitHub tabs reachable and closable above the list', async () => {
@@ -801,13 +815,14 @@ describe('MobileShellDrawer New chat', () => {
 })
 
 describe('MobileShellDrawer footer', () => {
-  it('has 44px Settings, Snapshots and Git history buttons', async () => {
+  it('spreads 44px Settings, Snapshots and Git history buttons evenly over the footer row', async () => {
     const { dialog } = await openDrawer({ onOpenGitHistory: vi.fn() })
 
+    const settings = within(dialog).getByRole('button', { name: 'Settings' })
     for (const name of ['Settings', 'Snapshots', 'Git history']) {
       const button = within(dialog).getByRole('button', { name })
-      expect(button, name).toHaveClass('size-11')
-      expect(button.className, name).not.toMatch(/\bsize-9\b/)
+      expect(button, name).toHaveClass('h-11', 'min-w-11', 'flex-1')
+      expect(button.parentElement, name).toBe(settings.parentElement)
     }
   })
 

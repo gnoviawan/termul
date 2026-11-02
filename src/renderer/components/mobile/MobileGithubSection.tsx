@@ -16,14 +16,19 @@ export function MobileGithubSection({ onNavigate }: { onNavigate: () => void }):
   const { cwd } = useColumnWorkingCopy(activeProject)
   if (!activeProject || !cwd) {
     return (
-      <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+      <p className="my-auto px-4 py-6 text-center text-sm text-muted-foreground">
         Open a project to see its issues and pull requests.
       </p>
     )
   }
   return (
-    <Suspense fallback={null}>
-      <GithubPanel projectId={activeProject.id} cwd={cwd} onNavigate={onNavigate} />
-    </Suspense>
+    // Grows to the drawer's free height (an empty list centres its message) and
+    // never shrinks below the list (basis auto, no shrink), so the list scrolls
+    // with the drawer instead of inside a second scroller.
+    <div className="flex shrink-0 grow flex-col">
+      <Suspense fallback={null}>
+        <GithubPanel projectId={activeProject.id} cwd={cwd} onNavigate={onNavigate} />
+      </Suspense>
+    </div>
   )
 }
