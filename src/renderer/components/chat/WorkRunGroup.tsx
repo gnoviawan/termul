@@ -78,7 +78,7 @@ function WorkRunGroupComponent({
       <CollapsibleTrigger
         data-press-feedback="off"
         className={cn(
-          'flex w-full cursor-pointer items-center gap-1.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          'flex w-full cursor-pointer items-center gap-1.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
           CHAT_ROW_MIN_H,
           failed && 'text-destructive'
         )}

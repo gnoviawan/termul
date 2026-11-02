@@ -93,7 +93,7 @@ function FileRow({
         'group/row cursor-pointer transition-[background-color,color] duration-150 ease-out motion-reduce:transition-none',
         'hover:bg-secondary/60 hover:text-foreground',
         'active:bg-secondary/80',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring'
       )}
     >
       {content}

@@ -177,7 +177,7 @@ describe('ChatMessage on the mobile shell: focus-revealed row', () => {
       'outline-none',
       'focus-visible:ring-2',
       'focus-visible:ring-inset',
-      'focus-visible:ring-ring',
+      'focus-visible:ring-focus-ring',
       'pointer-coarse:select-none'
     )
     // The trigger owns the long-press, so Radix's iOS callout opt-out applies.
@@ -205,7 +205,7 @@ describe('ChatMessage on the mobile shell: focus-revealed row', () => {
       'outline-none',
       'focus-visible:ring-2',
       'focus-visible:ring-inset',
-      'focus-visible:ring-ring',
+      'focus-visible:ring-focus-ring',
       'pointer-coarse:select-none'
     )
     expect(actionsRow()).toHaveClass('opacity-0', 'pointer-events-none')

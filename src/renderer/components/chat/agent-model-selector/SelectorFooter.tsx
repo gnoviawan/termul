@@ -153,7 +153,7 @@ function FastToggle({
         className={cn(
           'relative flex items-center justify-center self-stretch rounded-md',
           'transition-[color,background-color,transform] duration-150 ease-out',
-          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring',
+          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring',
           'enabled:active:scale-[0.96] motion-reduce:active:scale-100',
           'disabled:cursor-not-allowed disabled:opacity-40',
           touch ? 'min-h-11 w-11' : 'min-h-7 w-7',
