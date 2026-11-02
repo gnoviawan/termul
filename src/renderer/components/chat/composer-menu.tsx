@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  type ReactNode,
   type RefObject,
   useEffect,
   useId,
@@ -8,7 +9,7 @@ import {
   useRef,
   useState
 } from 'react'
-import { Check, type TermulIcon } from '@/components/icons'
+import { Check, ChevronRight, type TermulIcon } from '@/components/icons'
 import {
   MENU_ACTIVE_ROW_CLASS,
   MENU_LABEL_CLASS,
@@ -30,14 +31,27 @@ export interface ComposerMenuItem {
   dimmed?: boolean
   /** Wrap long labels/descriptions instead of truncating (used by skill rows). */
   wrap?: boolean
+  /** Draw the icon on a tile (mention-menu category rows). */
+  iconTile?: boolean
+  /** Opens a sub-panel: draws a trailing chevron and answers ArrowRight. */
+  drill?: boolean
   /** Opaque payload round-tripped to `onSelect` (SlashItem, MentionMatch, …). */
   payload: unknown
 }
 
 export interface ComposerMenuSection {
   id: string
-  heading: string
+  heading?: string
+  /** Muted status line under the heading (e.g. a folder listing in flight). */
+  notice?: string
   items: ComposerMenuItem[]
+}
+
+/** Panel chrome for drill-down menus; the slash menu passes none. */
+export interface ComposerMenuPanel {
+  header?: ReactNode
+  /** Slide direction when this panel mounts. */
+  enter: 'forward' | 'back' | 'none'
 }
 
 export interface ComposerMenuHandle {
@@ -45,6 +59,8 @@ export interface ComposerMenuHandle {
   move: (delta: 1 | -1) => void
   /** Select the highlighted item. Returns true if an item was selected. */
   selectHighlighted: () => boolean
+  /** Select the highlighted item only if it drills. Returns true if it did. */
+  drillHighlighted?: () => boolean
 }
 
 interface ComposerMenuProps {
@@ -57,6 +73,11 @@ interface ComposerMenuProps {
    * the highlighted option while keyboard focus stays in the textarea.
    */
   inputRef?: RefObject<HTMLElement | null>
+  /**
+   * Render as a drill-down panel: the header stays put above a scrolling list
+   * that slides in on mount. Callers key the menu by panel so highlight resets.
+   */
+  panel?: ComposerMenuPanel
 }
 
 interface FlatRow {
@@ -67,6 +88,14 @@ interface FlatRow {
 /** Popover shell above the composer: 12px radius, 4px padding (rows are 8px). */
 const COMPOSER_MENU_SHELL_CLASS =
   'absolute bottom-full left-2 right-2 mb-1 rounded-xl border bg-popover p-1 text-popover-foreground shadow-md'
+
+const PANEL_ENTER_CLASS: Record<ComposerMenuPanel['enter'], string | null> = {
+  forward: 'animate-panel-forward motion-reduce:animate-none',
+  back: 'animate-panel-back motion-reduce:animate-none',
+  none: null
+}
+
+const EMPTY_LABEL_CLASS = 'px-2 py-1.5 text-xs text-muted-foreground'
 
 /** Flatten sections to a single ordered list for highlight indexing. */
 function flatten(sections: ComposerMenuSection[]): FlatRow[] {
@@ -80,7 +109,7 @@ function flatten(sections: ComposerMenuSection[]): FlatRow[] {
  * menu and the @-file mention menu. See ADR 0003.
  */
 export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
-  ({ sections, onSelect, emptyLabel, inputRef }, ref) => {
+  ({ sections, onSelect, emptyLabel, inputRef, panel }, ref) => {
     const flat = useMemo(() => flatten(sections), [sections])
     const [highlight, setHighlight] = useState(0)
     const listRef = useRef<HTMLDivElement>(null)
@@ -133,22 +162,138 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
           if (!row) return false
           onSelect(row.sectionId, row.item)
           return true
+        },
+        drillHighlighted: () => {
+          const row = flat[Math.min(highlight, flat.length - 1)]
+          if (!row?.item.drill) return false
+          onSelect(row.sectionId, row.item)
+          return true
         }
       }),
       [flat, highlight, onSelect]
     )
 
-    if (flat.length === 0) {
+    const isEmpty = flat.length === 0 && !sections.some((s) => s.notice)
+    const empty = (
+      <div className={EMPTY_LABEL_CLASS}>{emptyLabel ?? 'Nothing matches. Try another name.'}</div>
+    )
+
+    let idx = -1
+    const rows = sections.map((section) => (
+      <div key={section.id}>
+        {section.heading !== undefined && <div className={MENU_LABEL_CLASS}>{section.heading}</div>}
+        {section.notice && <div className={EMPTY_LABEL_CLASS}>{section.notice}</div>}
+        {section.items.map((item) => {
+          idx += 1
+          const isHighlighted = idx === highlight
+          const rowIdx = idx
+          const Icon = item.icon
+          const icon = Icon && (
+            <Icon
+              size={14}
+              className={cn(
+                'shrink-0 text-muted-foreground',
+                item.iconTile && 'text-foreground',
+                item.iconClassName
+              )}
+            />
+          )
+          return (
+            <button
+              key={item.key}
+              id={`${listboxId}-opt-${rowIdx}`}
+              type="button"
+              role="option"
+              aria-selected={isHighlighted}
+              tabIndex={-1}
+              data-idx={rowIdx}
+              // Story 5.3 (T4.2): iOS may fire `mousedown` after
+              // `touchend`, or both for one tap; `tapSelect` selects on
+              // `touchend` and drops the synthesized click.
+              // `onMouseDown` keeps `preventDefault` so the editor does
+              // not blur on the mouse path; select happens on click so a
+              // drag can cancel.
+              {...tapSelect(() => onSelect(section.id, item))}
+              onMouseDown={(e) => e.preventDefault()}
+              onMouseEnter={() => setHighlight(rowIdx)}
+              className={cn(
+                // Story 5.3 (T4.1): raise the touch hit-target height on
+                // narrow panes (mobile) to ≥44px. The `@[400px]:` variant
+                // restores `py-1.5` on wider panes (desktop
+                // non-regression). Pure CSS variant — no JS two-branch
+                // render (Story 5.1 threshold-remount lesson).
+                // Rows are rounded-lg (8px), concentric with the
+                // rounded-xl (12px) shell and its 4px padding.
+                MENU_OPTION_ROW_CLASS,
+                'min-h-11 py-2.5 @[400px]:min-h-8 @[400px]:py-1.5',
+                item.wrap ? 'flex-wrap items-start' : 'items-center',
+                isHighlighted && MENU_ACTIVE_ROW_CLASS,
+                item.dimmed && 'text-disabled-foreground'
+              )}
+            >
+              {item.iconTile ? (
+                <span className="grid size-6 shrink-0 place-items-center rounded-md bg-muted">
+                  {icon}
+                </span>
+              ) : (
+                icon
+              )}
+              <span className={cn('font-medium', item.wrap ? 'break-words' : 'min-w-0 truncate')}>
+                {item.label}
+              </span>
+              {item.hint && (
+                <span className="min-w-0 truncate text-muted-foreground">{item.hint}</span>
+              )}
+              {item.description && (
+                <span
+                  className={cn(
+                    'min-w-0 flex-1 truncate text-2xs text-muted-foreground',
+                    item.wrap && 'whitespace-normal break-words'
+                  )}
+                >
+                  {item.description}
+                </span>
+              )}
+              {item.selected && <Check size={14} className="ml-auto shrink-0 text-foreground" />}
+              {item.drill && (
+                <ChevronRight size={14} className="ml-auto shrink-0 text-muted-foreground" />
+              )}
+            </button>
+          )
+        })}
+      </div>
+    ))
+
+    if (panel) {
       return (
-        <div id={listboxId} className={COMPOSER_MENU_SHELL_CLASS}>
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">
-            {emptyLabel ?? 'Nothing matches. Try another name.'}
+        <div className={cn(COMPOSER_MENU_SHELL_CLASS, 'overflow-hidden')}>
+          {panel.header}
+          <div className={cn(PANEL_ENTER_CLASS[panel.enter])}>
+            {isEmpty ? (
+              <div id={listboxId}>{empty}</div>
+            ) : (
+              <div
+                ref={listRef}
+                id={listboxId}
+                role="listbox"
+                className="max-h-[40vh] overflow-y-auto @[400px]:max-h-64"
+              >
+                {rows}
+              </div>
+            )}
           </div>
         </div>
       )
     }
 
-    let idx = -1
+    if (isEmpty) {
+      return (
+        <div id={listboxId} className={COMPOSER_MENU_SHELL_CLASS}>
+          {empty}
+        </div>
+      )
+    }
+
     return (
       <div
         ref={listRef}
@@ -161,79 +306,7 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
         // restores `max-h-64` on wider panes (desktop non-regression).
         className={cn(COMPOSER_MENU_SHELL_CLASS, 'max-h-[40vh] overflow-y-auto @[400px]:max-h-64')}
       >
-        {sections.map((section) => (
-          <div key={section.id}>
-            <div className={MENU_LABEL_CLASS}>{section.heading}</div>
-            {section.items.map((item) => {
-              idx += 1
-              const isHighlighted = idx === highlight
-              const rowIdx = idx
-              const Icon = item.icon
-              return (
-                <button
-                  key={item.key}
-                  id={`${listboxId}-opt-${rowIdx}`}
-                  type="button"
-                  role="option"
-                  aria-selected={isHighlighted}
-                  tabIndex={-1}
-                  data-idx={rowIdx}
-                  // Story 5.3 (T4.2): iOS may fire `mousedown` after
-                  // `touchend`, or both for one tap; `tapSelect` selects on
-                  // `touchend` and drops the synthesized click.
-                  // `onMouseDown` keeps `preventDefault` so the editor does
-                  // not blur on the mouse path; select happens on click so a
-                  // drag can cancel.
-                  {...tapSelect(() => onSelect(section.id, item))}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onMouseEnter={() => setHighlight(rowIdx)}
-                  className={cn(
-                    // Story 5.3 (T4.1): raise the touch hit-target height on
-                    // narrow panes (mobile) to ≥44px. The `@[400px]:` variant
-                    // restores `py-1.5` on wider panes (desktop
-                    // non-regression). Pure CSS variant — no JS two-branch
-                    // render (Story 5.1 threshold-remount lesson).
-                    // Rows are rounded-lg (8px), concentric with the
-                    // rounded-xl (12px) shell and its 4px padding.
-                    MENU_OPTION_ROW_CLASS,
-                    'min-h-11 py-2.5 @[400px]:min-h-8 @[400px]:py-1.5',
-                    item.wrap ? 'flex-wrap items-start' : 'items-center',
-                    isHighlighted && MENU_ACTIVE_ROW_CLASS,
-                    item.dimmed && 'text-disabled-foreground'
-                  )}
-                >
-                  {Icon && (
-                    <Icon
-                      size={14}
-                      className={cn('shrink-0 text-muted-foreground', item.iconClassName)}
-                    />
-                  )}
-                  <span
-                    className={cn('font-medium', item.wrap ? 'break-words' : 'min-w-0 truncate')}
-                  >
-                    {item.label}
-                  </span>
-                  {item.hint && (
-                    <span className="min-w-0 truncate text-muted-foreground">{item.hint}</span>
-                  )}
-                  {item.description && (
-                    <span
-                      className={cn(
-                        'min-w-0 flex-1 truncate text-2xs text-muted-foreground',
-                        item.wrap && 'whitespace-normal break-words'
-                      )}
-                    >
-                      {item.description}
-                    </span>
-                  )}
-                  {item.selected && (
-                    <Check size={14} className="ml-auto shrink-0 text-foreground" />
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        ))}
+        {rows}
       </div>
     )
   }
