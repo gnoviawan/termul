@@ -13,6 +13,8 @@
   --animate-accordion-up: accordion-up 250ms cubic-bezier(0.22, 1, 0.36, 1);
   --animate-fade-in: fade-in 200ms cubic-bezier(0.23, 1, 0.32, 1);
   --animate-slide-in: slide-in 180ms cubic-bezier(0.23, 1, 0.32, 1);
+  --animate-panel-forward: panel-forward 250ms cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-panel-back: panel-back 250ms cubic-bezier(0.32, 0.72, 0, 1);
   /* Tab bar live-turn edge: opacity-only fade-in so the 2px gradient edge
      appears without a transform. Reduced motion renders it instantly via
      motion-reduce:animate-none. */
@@ -49,6 +51,20 @@
       transform: translateY(0);
     }
   }
+  @keyframes panel-forward {
+    from {
+      opacity: 0;
+      transform: translateX(28%);
+    }
+  }
+
+  @keyframes panel-back {
+    from {
+      opacity: 0;
+      transform: translateX(-28%);
+    }
+  }
+
   @keyframes slide-in {
     from {
       opacity: 0;

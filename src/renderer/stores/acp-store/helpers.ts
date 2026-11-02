@@ -46,6 +46,7 @@ import {
 } from '@/lib/agents/acp-spawn-errors'
 import { persistenceApi } from '@/lib/api'
 import { serializeSelectionContexts } from '@/lib/composer/selection-context'
+import { restoreConversationLabels, stripConversationEnvelopes } from '@/lib/conversation-envelope'
 import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
 import {
@@ -310,7 +311,9 @@ export function canonicalTwinText(message: ChatMessage): string {
   // spacing after a leading command pill, and typed text in the exact prompt
   // shape restores as chips.
   return replaceFileTokensInline(
-    serializeSelectionContexts(display.replace(SKILL_PAD_BLOCK_RE, ''))
+    serializeSelectionContexts(
+      restoreConversationLabels(stripConversationEnvelopes(display)).replace(SKILL_PAD_BLOCK_RE, '')
+    )
   ).trim()
 }
 

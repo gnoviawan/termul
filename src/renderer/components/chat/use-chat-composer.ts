@@ -11,15 +11,22 @@ import type {
 } from '@/lib/acp-api'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { hasSelectionContexts, serializeSelectionContexts } from '@/lib/composer/selection-context'
+import { conversationWireLabel } from '@/lib/conversation-envelope'
+import {
+  type ConversationContexts,
+  resolveConversationContexts
+} from '@/lib/conversation-transcript'
 import { logFrontendError } from '@/lib/log-api'
 import {
   extractCommandNames,
+  extractConversationRefs,
   extractSkillNames,
   insertCommandToken,
   insertSkillToken,
   isFolderTokenPath,
   parseFileSegments,
   replaceCommandTokensInline,
+  replaceConversationTokensInline,
   replaceFileTokensInline,
   SKILL_TOKEN_START
 } from '@/lib/skill-tokens'
@@ -149,6 +156,8 @@ export interface ChatPromptParts {
    * the timeline renders inline file pills). Deduped by path.
    */
   fileBlocks: ContentBlock[]
+  hasConversations: boolean
+  contextBlocks: ContentBlock[]
 }
 
 export interface UseChatComposerResult {
@@ -172,13 +181,8 @@ export interface UseChatComposerResult {
    * (the editor skips its default handling for that key).
    */
   onSlashOrMentionKeyDown: (event: KeyboardEvent) => boolean
-  /**
-   * Build the wire/display prompt text parts from the current value, resolved
-   * skill paths, and inline command token. Throws `Error("Skill '<name>' is
-   * missing a path")` when a selected skill has no resolvable path (the
-   * canonical `ChatInputBar` Block If — surfaces catch and toast).
-   */
-  buildPromptParts: () => ChatPromptParts
+  buildPromptParts: (contexts?: ConversationContexts) => ChatPromptParts
+  conversationContexts: () => Promise<ConversationContexts> | null
 }
 
 /**
@@ -355,6 +359,9 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
           menuOpen: mentions.menuOpen && !disabled && !slashOpen,
           sectionsLength: mentions.sections.length,
           menuRef: mentions.menuRef,
+          filter: mentions.filter,
+          canGoBack: mentions.canGoBack,
+          onBack: mentions.back,
           onReset: mentions.reset
         })
       ) {
@@ -365,79 +372,98 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     [slashOpen, slashSections.length, slashMenuRef, mentions, disabled, setValue, editorRef]
   )
 
-  const buildPromptParts = useCallback((): ChatPromptParts => {
-    // Command tokens stay where the user typed them. The wire replaces each
-    // token with `/<name>` in place so no sentinel leaks. A pasted second
-    // token is kept in its sentence position too (insert still rejects a
-    // second pick).
-    const commandNames = extractCommandNames(value)
-    const commandName = commandNames[0] ?? null
-    // Selection contexts become the leading quote blocks + `[Context N]`
-    // markers first, while a leading command token is still recognizable.
-    const valueWithCommandText = replaceCommandTokensInline(serializeSelectionContexts(value))
-    // Extract the inline skill tokens and resolve each name to its SKILL.md
-    // path. Paths come from `skillPathsRef` (captured at pick time) first,
-    // then fall back to the currently-available skills list — so editing +
-    // re-sending a chip message (where the ref is empty because paths aren't
-    // persisted with the message) still resolves paths from the live skills
-    // list. A skill surfaced without a path in either blocks the send.
-    const skillNames = extractSkillNames(value)
-    const resolvedSkills = skillNames.map((name) => ({
-      name,
-      path: skillPathsRef.current[name] ?? skills.find((s) => s.name === name)?.path ?? ''
-    }))
-    const missingPath = resolvedSkills.find((s) => !s.path)
-    if (missingPath) {
-      throw new Error(`Skill '${missingPath.name}' is missing a path`)
-    }
-    const hasSkills = resolvedSkills.length > 0
-    // Extract inline file-mention tokens and build a `resource_link` block for
-    // each unique file (by absPath). The display text keeps the raw tokens so
-    // the timeline renders inline file pills; the wire text replaces each
-    // token with `(display)` so the agent sees a readable reference alongside
-    // the `resource_link` block carrying the real path.
-    const fileSegments = parseFileSegments(valueWithCommandText)
-    const fileBlocks: ContentBlock[] = []
-    const seenPaths = new Set<string>()
-    for (const seg of fileSegments) {
-      // Folder tokens ride as plain relative-path text (no `resource_link`).
-      if (seg.kind === 'file' && !isFolderTokenPath(seg.absPath) && !seenPaths.has(seg.absPath)) {
-        seenPaths.add(seg.absPath)
-        fileBlocks.push(
-          attachmentToBlock({
-            kind: 'file-ref',
-            id: seg.absPath,
-            name: seg.display,
-            mimeType: guessMimeType(seg.display),
-            path: seg.absPath
-          })
-        )
+  const conversationContexts = useCallback((): Promise<ConversationContexts> | null => {
+    const refs = extractConversationRefs(value)
+    return refs.length > 0 ? resolveConversationContexts(refs) : null
+  }, [value])
+
+  const buildPromptParts = useCallback(
+    (contexts?: ConversationContexts): ChatPromptParts => {
+      const conversationRefs = extractConversationRefs(value)
+      // Command tokens stay where the user typed them. The wire replaces each
+      // token with `/<name>` in place so no sentinel leaks. A pasted second
+      // token is kept in its sentence position too (insert still rejects a
+      // second pick).
+      const commandNames = extractCommandNames(value)
+      const commandName = commandNames[0] ?? null
+      // Selection contexts become the leading quote blocks + `[Context N]`
+      // markers first, while a leading command token is still recognizable.
+      const valueWithCommandText = replaceCommandTokensInline(serializeSelectionContexts(value))
+      // Extract the inline skill tokens and resolve each name to its SKILL.md
+      // path. Paths come from `skillPathsRef` (captured at pick time) first,
+      // then fall back to the currently-available skills list — so editing +
+      // re-sending a chip message (where the ref is empty because paths aren't
+      // persisted with the message) still resolves paths from the live skills
+      // list. A skill surfaced without a path in either blocks the send.
+      const skillNames = extractSkillNames(value)
+      const resolvedSkills = skillNames.map((name) => ({
+        name,
+        path: skillPathsRef.current[name] ?? skills.find((s) => s.name === name)?.path ?? ''
+      }))
+      const missingPath = resolvedSkills.find((s) => !s.path)
+      if (missingPath) {
+        throw new Error(`Skill '${missingPath.name}' is missing a path`)
       }
-    }
-    // Replace file tokens with `(display)` for the wire user-text portion
-    // (mirrors `replaceSkillTokensInline` for skills). Applied BEFORE the
-    // skill framer so the skill framing header wraps the de-filed text.
-    const valueDefiled = replaceFileTokensInline(valueWithCommandText)
-    const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDefiled)
-    // Display keeps every pill token where the user typed it. Wire text is
-    // the same sentence with command tokens already replaced by `/<name>`.
-    const displayText = value
-    const wireWithCommand = wireText
-    const displayWithCommand = displayText
-    return {
-      skills: resolvedSkills,
-      hasSkills,
-      hasCommand: commandName !== null,
-      hasSelectionContexts: hasSelectionContexts(value),
-      wireText,
-      displayText,
-      wireWithCommand,
-      displayWithCommand,
-      wireTrimmed: wireWithCommand.trim(),
-      displayTrimmed: displayWithCommand.trim(),
-      fileBlocks
-    }
-  }, [value, skills])
+      const hasSkills = resolvedSkills.length > 0
+      // Extract inline file-mention tokens and build a `resource_link` block for
+      // each unique file (by absPath). The display text keeps the raw tokens so
+      // the timeline renders inline file pills; the wire text replaces each
+      // token with `(display)` so the agent sees a readable reference alongside
+      // the `resource_link` block carrying the real path.
+      const fileSegments = parseFileSegments(valueWithCommandText)
+      const fileBlocks: ContentBlock[] = []
+      const seenPaths = new Set<string>()
+      for (const seg of fileSegments) {
+        // Folder tokens ride as plain relative-path text (no `resource_link`).
+        if (seg.kind === 'file' && !isFolderTokenPath(seg.absPath) && !seenPaths.has(seg.absPath)) {
+          seenPaths.add(seg.absPath)
+          fileBlocks.push(
+            attachmentToBlock({
+              kind: 'file-ref',
+              id: seg.absPath,
+              name: seg.display,
+              mimeType: guessMimeType(seg.display),
+              path: seg.absPath
+            })
+          )
+        }
+      }
+      // Replace file tokens with `(display)` for the wire user-text portion
+      // (mirrors `replaceSkillTokensInline` for skills). Applied BEFORE the
+      // skill framer so the skill framing header wraps the de-filed text.
+      const valueDefiled = replaceConversationTokensInline(
+        replaceFileTokensInline(valueWithCommandText),
+        (title, sessionId) =>
+          conversationWireLabel(
+            title,
+            sessionId,
+            contexts === undefined ? 'unavailable' : (contexts.gaps.get(sessionId) ?? null)
+          )
+      )
+      const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDefiled)
+      // Display keeps every pill token where the user typed it. Wire text is
+      // the same sentence with command tokens already replaced by `/<name>`.
+      const displayText = value
+      const wireWithCommand = wireText
+      const displayWithCommand = displayText
+      return {
+        skills: resolvedSkills,
+        hasSkills,
+        hasCommand: commandName !== null,
+        hasSelectionContexts: hasSelectionContexts(value),
+        wireText,
+        displayText,
+        wireWithCommand,
+        displayWithCommand,
+        wireTrimmed: wireWithCommand.trim(),
+        displayTrimmed: displayWithCommand.trim(),
+        fileBlocks,
+        hasConversations: conversationRefs.length > 0,
+        contextBlocks: contexts?.blocks ?? []
+      }
+    },
+    [value, skills]
+  )
 
   return {
     slashOpen,
@@ -447,7 +473,8 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     hasSkillToken,
     handleSelect,
     onSlashOrMentionKeyDown,
-    buildPromptParts
+    buildPromptParts,
+    conversationContexts
   }
 }
 

@@ -664,7 +664,7 @@ describe('mobile composer: Add to chat sheet', () => {
       'Camera',
       'Photos',
       'Files',
-      '@Mention a fileAttach project files as context',
+      '@Mention a file or conversationAttach project files or another chat as context',
       '/CommandsAgent commands and skills',
       'MCP serversNone added'
     ])
@@ -717,7 +717,7 @@ describe('mobile composer: Mention file and Commands', () => {
     renderBar()
     openSheet()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mention a file or conversation' }))
 
     // Focus lands in the same tap, before the sheet's own focus restore runs.
     expect(screen.queryByRole('dialog', { name: 'Add to chat' })).not.toBeInTheDocument()
@@ -737,7 +737,7 @@ describe('mobile composer: Mention file and Commands', () => {
       renderBar()
       openSheet()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Mention a file or conversation' }))
 
       // Still mounted and closing, yet the editor already owns focus.
       const closing = document.querySelector('[data-sheet]')
@@ -761,7 +761,7 @@ describe('mobile composer: Mention file and Commands', () => {
   })
 
   it.each([
-    ['Mention a file', '@'],
+    ['Mention a file or conversation', '@'],
     ['Commands', '/']
   ] as const)('a second %s tap on the still-closing sheet does not insert the trigger twice', async (name, trigger) => {
     const restore = holdClosingSheetMounted()
@@ -788,7 +788,7 @@ describe('mobile composer: Mention file and Commands', () => {
     renderBar()
     const plus = plusButton()
     openSheet()
-    fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mention a file or conversation' }))
     await settle()
     expect(editorEl()).toHaveFocus()
 
@@ -806,7 +806,7 @@ describe('mobile composer: Mention file and Commands', () => {
     setComposerValue('fix the bug')
     openSheet()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mention a file or conversation' }))
 
     expect(getComposerValue()).toBe('fix the bug @')
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
@@ -817,7 +817,7 @@ describe('mobile composer: Mention file and Commands', () => {
     setComposerValue('fix ')
     openSheet()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mention a file or conversation' }))
 
     expect(getComposerValue()).toBe('fix @')
   })
@@ -856,7 +856,7 @@ describe('mobile composer: Mention file and Commands', () => {
     })
 
     expect(() =>
-      fireEvent.click(screen.getByRole('button', { name: 'Mention a file' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Mention a file or conversation' }))
     ).not.toThrow()
 
     expect(screen.queryByRole('dialog', { name: 'Add to chat' })).not.toBeInTheDocument()
@@ -955,7 +955,13 @@ describe('mobile composer: closed session', () => {
     expect(screen.getByTestId('agent-model-selector-trigger')).toBeDisabled()
     const sheet = openSheet()
 
-    for (const name of ['Camera', 'Photos', 'Files', 'Mention a file', 'Commands']) {
+    for (const name of [
+      'Camera',
+      'Photos',
+      'Files',
+      'Mention a file or conversation',
+      'Commands'
+    ]) {
       expect(within(sheet).getByRole('button', { name })).toBeDisabled()
     }
     fireEvent.click(within(sheet).getByRole('button', { name: 'MCP servers' }))

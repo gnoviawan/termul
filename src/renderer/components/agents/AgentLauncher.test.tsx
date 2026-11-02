@@ -22,7 +22,8 @@ import {
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
-import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
+import type { ConversationContexts } from '@/lib/conversation-transcript'
+import { commandToken, conversationToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
@@ -325,9 +326,46 @@ vi.mock('@/lib/api', () => ({
     searchFileNamesStreamStart: vi.fn(async () => ({ success: true as const })),
     searchFileNamesStreamCancel: vi.fn(async () => ({ success: true as const })),
     onSearchFileNamesBatch: vi.fn(() => () => {}),
-    onSearchFileNamesDone: vi.fn(() => () => {})
+    onSearchFileNamesDone: vi.fn(() => () => {}),
+    readDirectory: vi.fn(async (dir: string) => ({
+      success: true as const,
+      data:
+        dir === '/work'
+          ? [
+              {
+                name: 'src',
+                path: '/work/src',
+                type: 'directory',
+                extension: null,
+                size: 0,
+                modifiedAt: 0
+              },
+              {
+                name: 'README.md',
+                path: '/work/README.md',
+                type: 'file',
+                extension: 'md',
+                size: 0,
+                modifiedAt: 0
+              }
+            ]
+          : []
+    }))
   }
 }))
+
+const { conversationContextsOverride } = vi.hoisted(() => ({
+  conversationContextsOverride: { current: null as null | (() => Promise<ConversationContexts>) }
+}))
+
+vi.mock('@/lib/conversation-transcript', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/conversation-transcript')>()
+  return {
+    ...actual,
+    resolveConversationContexts: (refs: Parameters<typeof actual.resolveConversationContexts>[0]) =>
+      conversationContextsOverride.current?.() ?? actual.resolveConversationContexts(refs)
+  }
+})
 
 const { mockLogFrontendError } = vi.hoisted(() => ({
   mockLogFrontendError: vi.fn(async () => {})
@@ -797,6 +835,7 @@ beforeEach(() => {
   // derivation).
   mockResolvedAgentsOverride.current = null
   acpStateRef.current = {
+    sessionIndex: [],
     agentConfigs: [],
     preparedSessions: {},
     preparingChatKeys: {},
@@ -1306,7 +1345,7 @@ describe('AgentLauncher ACP new thread', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything… (/ for commands, @ for files)'
+        'Ask anything… (/ for commands, @ for files and chats)'
       )
     })
     const actions = document.querySelector('[data-auth-actions="wrap"]')
@@ -2599,6 +2638,100 @@ describe('AgentLauncher file pills (inline tokens)', () => {
   })
 })
 
+describe('AgentLauncher @ menu', () => {
+  it('opens on the categories for a bare @ and lists the project folder in Explorer', async () => {
+    acpStateRef.current.sessionIndex = [
+      {
+        id: 'chat-1',
+        agentId: 'a',
+        title: 'Earlier chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 0,
+        lastActivityAt: 1,
+        messageCount: 2,
+        status: 'idle'
+      }
+    ]
+    renderLauncher()
+    await screen.findByLabelText('Agent prompt')
+
+    setComposerValue('@')
+    const categories = await screen.findAllByRole('option')
+    expect(categories.map((o) => o.textContent)).toEqual([
+      'Conversations1 in this project',
+      'ExplorerFiles and folders in work/'
+    ])
+
+    fireEvent.click(categories[1])
+    await waitFor(() =>
+      expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['src', 'README.md'])
+    )
+    expect(screen.getByRole('button', { name: 'Back from Explorer' })).toBeInTheDocument()
+    expect(getComposerValue()).toBe('@')
+  })
+})
+
+describe('AgentLauncher conversation pill launch', () => {
+  afterEach(() => {
+    conversationContextsOverride.current = null
+  })
+
+  it('keeps the composer read-only while the mentioned chat transcript loads', async () => {
+    let finishRead!: (contexts: ConversationContexts) => void
+    conversationContextsOverride.current = () =>
+      new Promise((resolve) => {
+        finishRead = resolve
+      })
+    renderLauncher()
+    const editor = await screen.findByLabelText('Agent prompt')
+    setComposerValue(`see ${conversationToken('Old chat', 'chat-9')} `)
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
+
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeDisabled()
+    expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
+
+    await act(async () => finishRead({ blocks: [], gaps: new Map([['chat-9', 'unavailable']]) }))
+    await waitFor(() =>
+      expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialUserBlocks: [
+            { type: 'text', text: `see ${conversationToken('Old chat', 'chat-9')} ` }
+          ]
+        })
+      )
+    )
+    expect(editor).toHaveAttribute('contenteditable', 'true')
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
+  })
+
+  it('ignores a starter pick while the launch holds the composer', async () => {
+    let finishRead!: (contexts: ConversationContexts) => void
+    conversationContextsOverride.current = () =>
+      new Promise((resolve) => {
+        finishRead = resolve
+      })
+    renderLauncher()
+    const editor = await screen.findByLabelText('Agent prompt')
+    const draft = `see ${conversationToken('Old chat', 'chat-9')} `
+    setComposerValue(draft)
+
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
+    fireEvent.click(screen.getByRole('button', { name: 'Find a bug' }))
+    expect(getComposerValue()).toBe(draft)
+
+    await act(async () => finishRead({ blocks: [], gaps: new Map([['chat-9', 'unavailable']]) }))
+    await waitFor(() =>
+      expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+        expect.objectContaining({ initialUserBlocks: [{ type: 'text', text: draft }] })
+      )
+    )
+  })
+})
+
 describe('AgentLauncher composer drag-drop', () => {
   it('stages a dropped image as an attachment on the launcher composer', async () => {
     const defaultAgent = defaultReadyAgent()
@@ -3513,7 +3646,7 @@ describe('AgentLauncher placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything… (/ for commands, @ for files)'
+        'Ask anything… (/ for commands, @ for files and chats)'
       )
     })
   })

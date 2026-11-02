@@ -184,6 +184,15 @@ export function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+/**
+ * Paths of the app-owned temp `file-ref` attachments (e.g. pasted screenshots)
+ * in `attachments`. Callers register the sent ones with the session so they are
+ * deleted when it closes; the agent reads them by path during the turn.
+ */
+export function appOwnedTempPaths(attachments: readonly PendingAttachment[]): string[] {
+  return attachments.flatMap((a) => (a.kind === 'file-ref' && a.appOwnedTemp ? [a.path] : []))
+}
+
 /** Map a staged attachment to its ACP content block. */
 export function attachmentToBlock(a: PendingAttachment): ContentBlock {
   switch (a.kind) {

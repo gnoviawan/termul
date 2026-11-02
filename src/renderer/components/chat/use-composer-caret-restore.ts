@@ -1,6 +1,6 @@
 import type { Editor } from '@tiptap/core'
 import { useCallback, useEffect, useRef } from 'react'
-import type { MentionMatch } from '@/components/chat/mention-menu-model'
+import type { MentionRow } from '@/components/chat/mention-menu-model'
 import type { ComposerMentions } from '@/components/chat/use-composer-mentions'
 import { displayOffsetToDocOffset, docOffsetToDisplayOffset } from '@/lib/composer/doc-to-prompt'
 import { logFrontendError } from '@/lib/log-api'
@@ -84,14 +84,14 @@ export function useComposerMentionSelect({
   editorRef,
   mentions,
   scheduleRestoreCaret
-}: UseComposerMentionSelectOptions): (match: MentionMatch) => void {
+}: UseComposerMentionSelectOptions): (row: MentionRow) => void {
   return useCallback(
-    (match: MentionMatch) => {
+    (row: MentionRow) => {
       const editor = editorRef.current
       const caret = editor
         ? docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.head)
         : value.length
-      const outcome = mentions.select(value, caret, match)
+      const outcome = mentions.select(value, caret, row)
       if (!outcome) return
       setValue(outcome.value)
       mentions.update(outcome.value, outcome.caret)

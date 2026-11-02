@@ -41,7 +41,7 @@ import {
   type PendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
-import { attachmentToBlock, dedupeAttachmentBlocks } from '@/components/chat/chat-attachments'
+import { appOwnedTempPaths, dedupeAttachmentBlocks } from '@/components/chat/chat-attachments'
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
@@ -61,11 +61,8 @@ import {
   blurComposerEditor,
   insertComposerTrigger
 } from '@/components/chat/composer/insert-composer-trigger'
-import {
-  FileMentionMenu,
-  MENTION_EMPTY_LABEL,
-  MENTION_SEARCHING_LABEL
-} from '@/components/chat/FileMentionMenu'
+import { textWithAttachmentBlocks } from '@/components/chat/composer-send-blocks'
+import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
 import { SkillFilesProvider } from '@/components/chat/skill-file-links'
 import { useChatComposer } from '@/components/chat/use-chat-composer'
@@ -75,6 +72,7 @@ import {
   useComposerMentionSelect
 } from '@/components/chat/use-composer-caret-restore'
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
+import { useComposerSendLock } from '@/components/chat/use-composer-send-lock'
 import { Paperclip } from '@/components/icons'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
@@ -460,6 +458,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const embedCapable = Boolean(promptCaps?.embeddedContext)
   const composerDisabled =
     Boolean(installingConfigId) || savingManualPath || selectedEntry?.status !== 'ready'
+  const { locked: launchLocked, hold: holdComposer } = useComposerSendLock()
+  const composerLocked = composerDisabled || launchLocked
   const {
     attachments,
     addFiles,
@@ -467,11 +467,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     handlePaste,
     removeAttachment,
     clearAttachments,
-    appOwnedTempPaths,
     canPick,
     canPickImages,
     canDropPaste
-  } = useComposerAttachments({ imageCapable, embedCapable, disabled: composerDisabled })
+  } = useComposerAttachments({ imageCapable, embedCapable, disabled: composerLocked })
   const addHandle = useMemo(
     () => ({
       canPick,
@@ -491,6 +490,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
   const mentions = useComposerMentions({
     rootPath: projectRoot,
+    projectId: activeProjectId,
     disabled: composerDisabled,
     recents: mentionRecents,
     onStageFileRef: (m) => {
@@ -759,9 +759,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // textarea is gone; the editor's `onCaretChange` feeds `mentions.update` on
   // natural typing, and `handleSelect`/`onMentionSelect` feed it on
   // programmatic splices).
-  const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? MENTION_SEARCHING_LABEL : MENTION_EMPTY_LABEL
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value: prompt,
@@ -778,7 +776,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     hasCommandToken,
     handleSelect,
     onSlashOrMentionKeyDown,
-    buildPromptParts
+    buildPromptParts,
+    conversationContexts
   } = useChatComposer({
     value: prompt,
     setValue: setPrompt,
@@ -797,7 +796,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     mentions,
     scheduleRestoreCaret
   })
-  const mentionMenuOpen = mentions.menuOpen && !composerDisabled && !slashOpen
+  const mentionMenuOpen = mentions.menuOpen && !composerLocked && !slashOpen
 
   // Restore persisted composer selections for the current agent on mount and
   // on agent change. Seeds `pendingOptions` (model/mode/config) +
@@ -1286,7 +1285,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
     launchInFlightRef.current = true
     const attachmentsSnapshot = [...attachments]
-    const appOwnedPaths = appOwnedTempPaths()
+    const appOwnedPaths = appOwnedTempPaths(attachmentsSnapshot)
     const modelsSnapshot = effectiveModels
     const modesSnapshot = effectiveModes
     const configOptionsSnapshot = effectiveConfigOptions
@@ -1318,13 +1317,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // flag before any session is claimed/created.
     let parts: ReturnType<typeof buildPromptParts>
     try {
-      parts = buildPromptParts()
+      const contexts = conversationContexts()
+      parts = buildPromptParts(contexts ? await holdComposer(() => contexts) : undefined)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
       launchInFlightRef.current = false
       return
     }
-    const { wireWithCommand, displayWithCommand, fileBlocks } = parts
+    const { wireWithCommand, displayWithCommand, fileBlocks, contextBlocks } = parts
 
     // CAP-3 ordering: the chat placeholder opens BEFORE the worktree prepare
     // (`launchChat`) so `git worktree add`'s stderr lines stream into the
@@ -1337,12 +1337,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // a stale worktree toasts and returns with nothing to roll back.
     if (isolationMode === 'existing') {
       try {
-        checkout = await prepareLaunchWorktree({
-          isolationMode,
-          projectRoot: projectRootSnapshot,
-          projectId: projectIdSnapshot,
-          existingWorktreeId
-        })
+        checkout = await holdComposer(() =>
+          prepareLaunchWorktree({
+            isolationMode,
+            projectRoot: projectRootSnapshot,
+            projectId: projectIdSnapshot,
+            existingWorktreeId
+          })
+        )
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'That worktree is no longer available.')
         launchInFlightRef.current = false
@@ -1353,20 +1355,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // Sync first-turn content so the chat can paint like a normal send. The
     // optimistic syncBlocks carry the DISPLAY (token) text so the timeline
     // renders inline chips; the real send dispatches the WIRE text.
-    const syncTrimmed = displayWithCommand.trim()
-    const syncBlocks: ContentBlock[] = []
-    if (attachmentsSnapshot.length > 0) {
-      if (syncTrimmed) syncBlocks.push({ type: 'text', text: displayWithCommand })
-      for (const a of attachmentsSnapshot) syncBlocks.push(attachmentToBlock(a))
-    } else if (syncTrimmed.length > 0) {
-      syncBlocks.push({ type: 'text', text: displayWithCommand })
-    }
+    const syncBlocks = textWithAttachmentBlocks(displayWithCommand, attachmentsSnapshot)
 
     const resetComposer = (): void => {
       useWorkspaceStore.getState().hideAgentLauncher()
       setPendingOptions(emptyPendingLauncherOptions())
       skillPathsRef.current = {}
-      clearAttachments()
+      clearAttachments(attachmentsSnapshot)
       resetMentions()
       setPrompt('')
     }
@@ -1397,18 +1392,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         isolationMode: persistedIsolationMode(isolationMode),
         baseBranch: isolationMode === 'worktree' ? baseBranch : null
       })
-      const wireTrimmed = wireWithCommand.trim()
-      const blocks: ContentBlock[] = []
-      if (attachmentsSnapshot.length > 0) {
-        if (wireTrimmed) blocks.push({ type: 'text', text: wireWithCommand })
-        for (const a of attachmentsSnapshot) blocks.push(attachmentToBlock(a))
-      } else if (wireTrimmed.length > 0) {
-        blocks.push({ type: 'text', text: wireWithCommand })
-      }
+      const blocks = textWithAttachmentBlocks(wireWithCommand, attachmentsSnapshot)
       // File-mention `resource_link` blocks append to the wire only — the
       // display keeps the raw token text so the timeline renders inline
       // file pills. Dedupe by path (matching `dedupeAttachmentBlocks`).
-      blocks.push(...fileBlocks)
+      blocks.push(...fileBlocks, ...contextBlocks)
       return {
         wireBlocks: dedupeAttachmentBlocks(blocks),
         pendingPayload: hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null
@@ -1505,7 +1493,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     paneId,
     attachments,
     clearAttachments,
-    appOwnedTempPaths,
+    holdComposer,
     resetMentions,
     pendingOptions,
     preparedKey,
@@ -1513,6 +1501,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     effectiveModes,
     effectiveConfigOptions,
     buildPromptParts,
+    conversationContexts,
     skillPathsRef,
     isolationMode,
     canUseWorktree,
@@ -1709,7 +1698,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 : undefined
             }
           >
-            {slashOpen && (
+            {slashOpen && !composerLocked && (
               <SlashCommandMenu
                 ref={menuRef}
                 sections={slashSections}
@@ -1720,9 +1709,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             {mentionMenuOpen && (
               <FileMentionMenu
                 ref={mentionMenuRef}
-                sections={mentionSections}
+                menu={mentions.view}
                 onSelect={onMentionSelect}
-                emptyLabel={emptyLabel}
+                onBack={mentions.back}
                 inputRef={composerInputRef}
               />
             )}
@@ -1771,7 +1760,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               <AttachmentPreviewGroup
                 attachments={attachments}
                 onRemove={removeAttachment}
-                removeDisabled={composerDisabled}
+                removeDisabled={composerLocked}
               />
               {/* Same inner rhythm as the chat composer card (ChatInputBar):
                   editor row px-4 pb-1.5 pt-3.5, toolbar px-2 pb-2. */}
@@ -1797,7 +1786,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                     getSkillPaths={() => skillPathsRef.current}
                     editorRef={editorRef}
                     inputRef={composerInputRef}
-                    disabled={composerDisabled}
+                    disabled={composerLocked}
                     minHeight={76}
                     maxHeight={160}
                     placeholder={
@@ -1805,7 +1794,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                         ? 'Composer unavailable'
                         : hasCommandToken
                           ? 'Add a message (optional)…'
-                          : 'Ask anything… (/ for commands, @ for files)'
+                          : 'Ask anything… (/ for commands, @ for files and chats)'
                     }
                     ariaLabel="Agent prompt"
                     autoFocus
@@ -1873,6 +1862,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             <ChatStarters
               isExiting={isExiting}
               onPick={(text) => {
+                if (launchLocked) return
                 setPrompt(text)
                 editorRef.current?.commands.focus('end', { scrollIntoView: false })
               }}

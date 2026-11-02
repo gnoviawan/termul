@@ -16,6 +16,7 @@ import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import {
   isFolderTokenPath,
   parseCommandSegments,
+  parseConversationSegments,
   parseFileSegments,
   parseSkillSegments,
   type SkillSegment,
@@ -25,6 +26,7 @@ import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { ChatMedia } from './ChatMedia'
+import { ConversationChip } from './ConversationChip'
 import { AgentProse } from './chat-agent-prose'
 import { blockDisplayName, blockResource, blockToAttachmentData } from './chat-attachments'
 import { chatMediaFromBlock } from './chat-media-source'
@@ -53,24 +55,6 @@ function blocksToText(blocks: ContentBlock[]): string {
     .join('')
 }
 
-/**
- * Render a user message's text, swapping inline skill, file, AND command
- * tokens for read-only `SkillChip`/`CommandChip`/`FileChip` pills. Skill
- * (`\uE000..\uE001`), command (`\uE004..\uE005`), and file (`\uE006..\uE007`)
- * tokens use distinct sentinel pairs, so each walk leaves the other tokens in
- * its text segments. We parse skill segments first, then walk each text
- * segment for command tokens, then each command text segment for file tokens
- * — all pill types render at their correct positions when inline together. A
- * command token renders as a `CommandChip` (terminal icon, muted `/name`),
- * the same chip as the composer's `CommandPill`. Skill chips and skill-backed
- * command chips open their `SKILL.md` on click (see `skill-file-links`).
- * Plain text (no tokens)
- * renders verbatim with `whitespace-pre-wrap` to preserve the original
- * spacing. `MessageActions` still receives the sanitized copy text (tokens →
- * readable text) while edit keeps the raw token text so the composer
- * re-seeds with chips inline. Selection contexts (`\uE008..\uE009`) are
- * split out first and render as numbered `SelectionContextChip`s.
- */
 function UserMessageText({ text }: { text: string }): React.JSX.Element {
   // Flatten: selection contexts → skill segments → command tokens → file tokens (innermost).
   type FlatSeg =
@@ -79,14 +63,24 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
     | { kind: 'file'; display: string; dir: boolean }
     | { kind: 'command'; name: string }
     | { kind: 'context'; context: SelectionContext; index: number }
+    | { kind: 'conversation'; title: string }
   const flat: FlatSeg[] = []
   let hasPills = false
   let contextCount = 0
+  const pushText = (segmentText: string): void => {
+    for (const cseg of parseConversationSegments(segmentText)) {
+      if (cseg.kind === 'conversation') {
+        flat.push({ kind: 'conversation', title: cseg.title })
+        hasPills = true
+      } else {
+        flat.push({ kind: 'text', text: cseg.text })
+      }
+    }
+  }
   const pushFileSegments = (segmentText: string): void => {
     const fileSegs = parseFileSegments(segmentText)
     if (fileSegs.length === 1 && fileSegs[0].kind === 'text') {
-      // No file tokens in this text segment — keep it as one text span.
-      flat.push({ kind: 'text', text: segmentText })
+      pushText(segmentText)
       return
     }
     for (const fseg of fileSegs) {
@@ -98,7 +92,7 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
         })
         hasPills = true
       } else {
-        flat.push({ kind: 'text', text: fseg.text })
+        pushText(fseg.text)
       }
     }
   }
@@ -147,6 +141,8 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
               <CommandChipLink key={`command-${i}`} name={seg.name} surface="bubble" />
             ) : seg.kind === 'file' ? (
               <FileChip key={`file-${i}`} name={seg.display} kind={seg.dir ? 'dir' : 'file'} />
+            ) : seg.kind === 'conversation' ? (
+              <ConversationChip key={`conversation-${i}`} title={seg.title} />
             ) : seg.kind === 'context' ? (
               <SelectionContextChip
                 key={`context-${i}`}

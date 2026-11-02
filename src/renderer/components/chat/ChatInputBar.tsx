@@ -1,6 +1,6 @@
 import type { Editor } from '@tiptap/core'
 import { useReducedMotion } from 'framer-motion'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { toast } from 'sonner'
 import { ClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
 import { ClaudeLimitWarning } from '@/components/chat/claude-account/ClaudeLimitWarning'
@@ -36,7 +36,7 @@ import { useCurrentAgentConfigId } from './agent-model-selector/use-agent-switch
 import { ChatContextStrip } from './ChatContextStrip'
 import { ComposerBeamShell } from './ComposerBeamShell'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
-import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
+import { appOwnedTempPaths } from './chat-attachments'
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
@@ -52,7 +52,8 @@ import {
   type SelectionContextInsertRequest,
   useSelectionContextInsertRequest
 } from './composer/insert-selection-context'
-import { FileMentionMenu, MENTION_EMPTY_LABEL, MENTION_SEARCHING_LABEL } from './FileMentionMenu'
+import { buildComposerSend } from './composer-send-blocks'
+import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PromptQueuePanel } from './PromptQueuePanel'
@@ -64,6 +65,7 @@ import { useComposerCaretRestore, useComposerMentionSelect } from './use-compose
 import { useComposerDraft } from './use-composer-draft'
 import { useComposerDraftStart } from './use-composer-draft-start'
 import { useComposerMentions } from './use-composer-mentions'
+import { useComposerSendLock } from './use-composer-send-lock'
 
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */
@@ -232,7 +234,7 @@ export function ChatInputBar({
     sessionId: session.id,
     seedNonce
   })
-  const [sending, setSending] = useState(false)
+  const { locked: sending, hold: holdComposer } = useComposerSendLock()
   const reduced = useReducedMotion() ?? false
   // Story 5.3: OSK awareness on mobile web. On Tauri desktop, the hook returns
   // a no-OSK default (no `visualViewport` thrash — desktop non-regression).
@@ -250,11 +252,10 @@ export function ChatInputBar({
     handlePaste,
     removeAttachment,
     clearAttachments,
-    appOwnedTempPaths,
     canPick,
     canPickImages,
     canDropPaste
-  } = useComposerAttachments({ imageCapable, embedCapable, disabled })
+  } = useComposerAttachments({ imageCapable, embedCapable, disabled: disabled || sending })
   // Drag feedback for the attachment drop zone (shared with AgentLauncher):
   // depth-counted dragenter/dragleave pairs; the overlay stays local.
   const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
@@ -270,6 +271,8 @@ export function ChatInputBar({
   )
   const mentions = useComposerMentions({
     rootPath: session.cwd,
+    projectId: session.projectId,
+    currentSessionId: session.id,
     disabled,
     recents: mentionRecents,
     onStageFileRef: (m) => {
@@ -291,9 +294,7 @@ export function ChatInputBar({
   const updateMentionsStable = useCallback((v: string, c: number) => {
     mentionsRef.current.update(v, c)
   }, [])
-  const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? MENTION_SEARCHING_LABEL : MENTION_EMPTY_LABEL
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value,
@@ -310,7 +311,8 @@ export function ChatInputBar({
     skillPathsRef,
     handleSelect,
     onSlashOrMentionKeyDown,
-    buildPromptParts
+    buildPromptParts,
+    conversationContexts
   } = useChatComposer({
     value,
     setValue,
@@ -329,8 +331,8 @@ export function ChatInputBar({
     mentions,
     scheduleRestoreCaret
   })
-  const slashOpen = composerSlashOpen
-  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
+  const slashOpen = composerSlashOpen && !sending
+  const mentionMenuOpen = mentions.menuOpen && !disabled && !sending && !slashOpen
 
   const { handleValueChange, handleComposerPaste } = useComposerDraftStart({
     draftEmpty: value.length === 0 && attachments.length === 0,
@@ -347,113 +349,45 @@ export function ChatInputBar({
     const hasText = value.trim().length > 0
     if ((!hasText && !hasAttachments) || disabled || sending) return
 
-    setSending(true)
-    try {
-      // Build the wire/display text parts from the current value, resolved
-      // skill paths, and inline command token. Throws `Skill '<name>' is
-      // missing a path` when a selected skill has no resolvable path (Block If)
-      // — caught below.
-      const {
-        hasSkills,
-        hasCommand,
-        hasSelectionContexts,
-        wireWithCommand,
-        displayWithCommand,
-        wireTrimmed,
-        displayTrimmed,
-        fileBlocks
-      } = buildPromptParts()
-      const hasFileRefs = fileBlocks.length > 0
-      if (!wireTrimmed && !hasAttachments && !hasFileRefs) return
-
-      if (hasAttachments) {
-        const wireBlocks: ContentBlock[] = []
-        if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireWithCommand })
-        for (const a of attachments) wireBlocks.push(attachmentToBlock(a))
-        wireBlocks.push(...fileBlocks)
-        const wire = dedupeAttachmentBlocks(wireBlocks)
-        // Split display from wire when skills, file-mention pills, OR a
-        // command token are present: skills carry framing tokens, file
-        // mentions carry inline pill tokens, commands carry the
-        // `\uE004<name>\uE005` token — all need the display to keep the raw
-        // token text so the timeline renders inline chips. Without either,
-        // display == wire.
-        if (hasSkills || hasFileRefs || hasCommand || hasSelectionContexts) {
-          const displayBlocks: ContentBlock[] = []
-          if (displayTrimmed) displayBlocks.push({ type: 'text', text: displayWithCommand })
-          for (const a of attachments) displayBlocks.push(attachmentToBlock(a))
-          const display = dedupeAttachmentBlocks(displayBlocks)
-          onSendBlocks(wire, display)
-        } else {
-          onSendBlocks(wire)
-        }
-      } else if (hasSkills) {
-        // Skills (tokens) present: split display (tokens) from wire (framing).
-        // File-mention `resource_link` blocks append to the wire only — the
-        // display keeps the raw token text so the timeline renders inline
-        // file pills.
-        const wireBlocks: ContentBlock[] = wireTrimmed
-          ? [{ type: 'text', text: wireWithCommand }]
-          : []
-        wireBlocks.push(...fileBlocks)
-        onSendBlocks(
-          dedupeAttachmentBlocks(wireBlocks),
-          displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
-        )
-      } else if (hasFileRefs) {
-        // File-mention pills present (no skills, no attachments): the wire
-        // carries the text (tokens → `(display)`) + `resource_link` blocks for
-        // each unique file. Display keeps the token text so the timeline
-        // renders inline file pills.
-        const wireBlocks: ContentBlock[] = wireTrimmed
-          ? [{ type: 'text', text: wireWithCommand }]
-          : []
-        wireBlocks.push(...fileBlocks)
-        onSendBlocks(
-          dedupeAttachmentBlocks(wireBlocks),
-          displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
-        )
-      } else if (hasCommand || hasSelectionContexts) {
-        // Command or selection-context pill present (no skills, files, or
-        // attachments): the wire has `/<name>` / the context quote blocks, and
-        // the display keeps the raw tokens so the timeline renders the chips.
-        onSendBlocks(
-          wireTrimmed ? [{ type: 'text', text: wireTrimmed }] : [],
-          displayTrimmed ? [{ type: 'text', text: displayTrimmed }] : []
-        )
-      } else {
-        // Plain text-only path: display == wire (no separate display blocks).
-        onSend(wireTrimmed)
-      }
+    await holdComposer(async () => {
+      const contexts = conversationContexts()
+      const send = buildComposerSend(
+        buildPromptParts(contexts ? await contexts : undefined),
+        attachments
+      )
+      if (!send) return
+      if (send.kind === 'text') onSend(send.text)
+      else if (send.display) onSendBlocks(send.wire, send.display)
+      else onSendBlocks(send.wire)
       // Register app-owned temp files (pasted screenshots) with the session so
       // they are deleted when the session closes; clearAttachments drops state
       // without deleting because the agent reads them by path during the turn.
-      registerSessionTempFiles(session.id, appOwnedTempPaths())
-      setValue('')
+      registerSessionTempFiles(session.id, appOwnedTempPaths(attachments))
+      // A remap to another chat mid-await hydrates that chat's draft; keep it.
+      setValue((current) => (current === value ? '' : current))
       skillPathsRef.current = {}
-      clearAttachments()
+      clearAttachments(attachments)
       resetMentions()
-    } catch (err) {
+    }).catch((err: unknown) => {
       // Skill path resolution throws a specific user-facing message — keep it.
       const msg = err instanceof Error ? err.message : ''
       toast.error(msg.includes('missing a path') ? msg : 'Could not send your message. Try again.')
-    } finally {
-      setSending(false)
-    }
+    })
   }, [
     value,
     attachments,
     disabled,
     sending,
     clearAttachments,
-    appOwnedTempPaths,
     onSend,
     onSendBlocks,
     resetMentions,
     session.id,
     buildPromptParts,
+    conversationContexts,
     skillPathsRef,
-    setValue
+    setValue,
+    holdComposer
   ])
 
   const handleKeyDown = useCallback(
@@ -663,9 +597,9 @@ export function ChatInputBar({
         {mentionMenuOpen && (
           <FileMentionMenu
             ref={mentionMenuRef}
-            sections={mentionSections}
+            menu={mentions.view}
             onSelect={onMentionSelect}
-            emptyLabel={emptyLabel}
+            onBack={mentions.back}
             inputRef={composerInputRef}
           />
         )}
@@ -699,7 +633,7 @@ export function ChatInputBar({
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}
-              removeDisabled={disabled}
+              removeDisabled={disabled || sending}
             />
             {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only focus aid for the padding; the editor is the accessible target */}
             <div
@@ -733,7 +667,7 @@ export function ChatInputBar({
                       ? 'Composer unavailable'
                       : hasCommandToken
                         ? 'Add a message (optional)…'
-                        : 'Ask anything… (/ for commands, @ for files)'
+                        : 'Ask anything… (/ for commands, @ for files and chats)'
                   }
                 />
               </SkillFilesProvider>
@@ -760,7 +694,7 @@ export function ChatInputBar({
                 >
                   <ComposerAddSheet
                     handle={composerAddHandle}
-                    disabled={disabled}
+                    disabled={disabled || sending}
                     {...mcpListProps}
                   />
                   {modelSelector}

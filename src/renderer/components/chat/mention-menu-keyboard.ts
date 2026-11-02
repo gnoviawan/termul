@@ -6,17 +6,41 @@ export interface MentionMenuKeyboardOptions {
   menuOpen: boolean
   sectionsLength: number
   menuRef: RefObject<FileMentionMenuHandle | null>
+  filter: string
+  canGoBack: boolean
+  onBack: () => void
   /** Escape closes the picker but leaves the `@tok` text in place (ADR 0003). */
   onReset: () => void
 }
 
-/** Route ↑/↓/Tab/Enter/Escape to the @-mention menu when it is open. Returns true if handled. */
 export function tryHandleMentionMenuKeyDown(
   e: ComposerKeyboardEvent,
   options: MentionMenuKeyboardOptions
 ): boolean {
-  const { menuOpen, sectionsLength, menuRef, onReset } = options
-  if (!menuOpen || sectionsLength === 0) return false
+  const { menuOpen, sectionsLength, menuRef, filter, canGoBack, onBack, onReset } = options
+  if (!menuOpen) return false
+
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    onReset()
+    return true
+  }
+  const noModifier = !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey
+  if (
+    canGoBack &&
+    noModifier &&
+    filter === '' &&
+    (e.key === 'ArrowLeft' || e.key === 'Backspace')
+  ) {
+    e.preventDefault()
+    onBack()
+    return true
+  }
+  if (e.key === 'ArrowRight' && noModifier && menuRef.current?.drillHighlighted()) {
+    e.preventDefault()
+    return true
+  }
+  if (sectionsLength === 0 && !canGoBack) return false
 
   if (e.key === 'ArrowDown') {
     e.preventDefault()
@@ -36,11 +60,6 @@ export function tryHandleMentionMenuKeyDown(
   if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
     e.preventDefault()
     menuRef.current?.selectHighlighted()
-    return true
-  }
-  if (e.key === 'Escape') {
-    e.preventDefault()
-    onReset()
     return true
   }
 
