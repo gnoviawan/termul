@@ -85,10 +85,12 @@ export function beginLoginTerminalSignIn(opts: {
     entry = next
     useLoginTerminalSignInStore.setState((s) => ({ byAgent: { ...s.byAgent, [agentId]: next } }))
   }
-  const finish = (): void => {
+  const stopWatching = (): void => {
     done = true
     unlisten()
     earlyExits.clear()
+  }
+  const release = (): void => {
     useLoginTerminalSignInStore.setState((s) => {
       // Only drop this sign-in's own record.
       if (s.byAgent[agentId] !== entry) return s
@@ -100,13 +102,14 @@ export function beginLoginTerminalSignIn(opts: {
   // exit: handle it once.
   function handleExit(exitCode: number): void {
     if (done) return
-    finish()
+    stopWatching()
     void logFrontendError({
       level: exitCode === 0 ? 'info' : 'warn',
       source: SOURCE,
       message: `Login terminal ${entry.ptyId} for ${agentId} ('${methodId}') exited with code ${exitCode}`
     })
     if (exitCode !== 0) {
+      release()
       toast.error(`${agentName} sign-in exited with code ${exitCode}.`)
       return
     }
@@ -114,7 +117,9 @@ export function beginLoginTerminalSignIn(opts: {
     // returns at once; it also covers agents that gate on the explicit call.
     // `authenticateAgent` shares the in-flight dedup and marks the agent
     // authenticated so `createSession` skips its own authenticate. Re-prepare
-    // whatever its outcome: the credentials are already written.
+    // whatever its outcome: the credentials are already written. The record
+    // stays until `authenticate` settles, so a press in that window does not
+    // open a second login terminal.
     void useAcpStore
       .getState()
       .authenticateAgent(agentId, methodId)
@@ -127,7 +132,10 @@ export function beginLoginTerminalSignIn(opts: {
         })
         toast.error(err instanceof Error ? err.message : 'Sign-in failed')
       })
-      .finally(() => onSignedIn())
+      .finally(() => {
+        release()
+        onSignedIn()
+      })
   }
 
   put(entry)
@@ -152,7 +160,8 @@ export function beginLoginTerminalSignIn(opts: {
     },
     abandon: () => {
       if (done) return
-      finish()
+      stopWatching()
+      release()
       void logFrontendError({
         level: 'warn',
         source: SOURCE,

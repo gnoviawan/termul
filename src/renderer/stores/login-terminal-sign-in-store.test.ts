@@ -106,6 +106,28 @@ describe('beginLoginTerminalSignIn', () => {
     expect(exitListeners).toHaveLength(0)
   })
 
+  it('keeps the sign-in busy until authenticate settles after exit 0', async () => {
+    let settle: () => void = () => {}
+    authenticateAgent.mockReturnValue(
+      new Promise<void>((resolve) => {
+        settle = resolve
+      })
+    )
+    const onSignedIn = vi.fn()
+    await begin(onSignedIn)?.attach('pty-1')
+
+    emitExit('pty-1', 0)
+    expect(authenticateAgent).toHaveBeenCalledTimes(1)
+    expect(exitListeners).toHaveLength(0)
+    expect(useLoginTerminalSignInStore.getState().byAgent['agent-live']).toBeDefined()
+    expect(begin()).toBeNull()
+
+    settle()
+    await vi.waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
+    expect(useLoginTerminalSignInStore.getState().byAgent).toEqual({})
+    expect(begin()).not.toBeNull()
+  })
+
   it('re-prepares and toasts when authenticate fails after exit 0, without logging the error', async () => {
     authenticateAgent.mockRejectedValue(new Error('authenticate refused: token sk-secret'))
     const onSignedIn = vi.fn()
