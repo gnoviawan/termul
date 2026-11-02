@@ -1,5 +1,14 @@
 import { forwardRef, type RefObject } from 'react'
-import { ChevronLeft, File, Folder, FolderTree, type TermulIcon } from '@/components/icons'
+import {
+  ChevronLeft,
+  File,
+  Folder,
+  FolderTree,
+  MessageSquare,
+  type TermulIcon
+} from '@/components/icons'
+import { Spinner } from '@/components/ui/spinner'
+import { formatRelativeTimeFromMs } from '@/lib/relative-time'
 import { ComposerMenu, type ComposerMenuItem, type ComposerMenuSection } from './composer-menu'
 import type { MentionItem, MentionMenuView, MentionRow } from './mention-menu-model'
 import { useTapSelect } from './use-tap-select'
@@ -23,11 +32,33 @@ interface FileMentionMenuProps {
   inputRef?: RefObject<HTMLElement | null>
 }
 
-const ROW_ICON: Record<MentionRow['kind'], TermulIcon> = {
-  category: FolderTree,
-  'use-folder': Folder,
-  file: File,
-  dir: Folder
+function rowIcon(row: MentionRow): TermulIcon {
+  switch (row.kind) {
+    case 'category':
+      return row.target === 'conversations' ? MessageSquare : FolderTree
+    case 'conversation':
+      return MessageSquare
+    case 'file':
+      return File
+    case 'dir':
+    case 'use-folder':
+      return Folder
+  }
+}
+
+function conversationMeta(row: MentionRow): React.ReactNode {
+  if (row.kind !== 'conversation') return undefined
+  const { agentName, lastActivityAt, running } = row.conversation
+  return (
+    <>
+      {running && (
+        <span className="flex items-center text-primary">
+          <Spinner size={12} label="Running" />
+        </span>
+      )}
+      <span>{`${agentName ?? 'Agent'} · ${formatRelativeTimeFromMs(lastActivityAt)}`}</span>
+    </>
+  )
 }
 
 function toComposerItem(item: MentionItem): ComposerMenuItem {
@@ -36,7 +67,8 @@ function toComposerItem(item: MentionItem): ComposerMenuItem {
     key: item.key,
     label: item.label,
     description: item.description,
-    icon: ROW_ICON[row.kind],
+    trailing: conversationMeta(row),
+    icon: rowIcon(row),
     iconTile: row.kind === 'category',
     drill: row.kind === 'category' || row.kind === 'dir',
     dimmed: item.ignored,

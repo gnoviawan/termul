@@ -817,6 +817,7 @@ beforeEach(() => {
   // derivation).
   mockResolvedAgentsOverride.current = null
   acpStateRef.current = {
+    sessionIndex: [],
     agentConfigs: [],
     preparedSessions: {},
     preparingChatKeys: {},
@@ -2621,14 +2622,30 @@ describe('AgentLauncher file pills (inline tokens)', () => {
 
 describe('AgentLauncher @ menu', () => {
   it('opens on the categories for a bare @ and lists the project folder in Explorer', async () => {
+    acpStateRef.current.sessionIndex = [
+      {
+        id: 'chat-1',
+        agentId: 'a',
+        title: 'Earlier chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 0,
+        lastActivityAt: 1,
+        messageCount: 2,
+        status: 'idle'
+      }
+    ]
     renderLauncher()
     await screen.findByLabelText('Agent prompt')
 
     setComposerValue('@')
     const categories = await screen.findAllByRole('option')
-    expect(categories.map((o) => o.textContent)).toEqual(['ExplorerFiles and folders in work/'])
+    expect(categories.map((o) => o.textContent)).toEqual([
+      'Conversations1 in this project',
+      'ExplorerFiles and folders in work/'
+    ])
 
-    fireEvent.click(categories[0])
+    fireEvent.click(categories[1])
     await waitFor(() =>
       expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['src', 'README.md'])
     )

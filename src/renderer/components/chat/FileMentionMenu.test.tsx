@@ -36,6 +36,7 @@ function view(input: Partial<MentionMenuInput>, extra: Partial<MentionMenuView> 
       filter: 'a',
       matches: [],
       recents: [],
+      conversations: [],
       ...input
     }),
     ...extra
@@ -67,8 +68,9 @@ describe('FileMentionMenu', () => {
     render(
       <FileMentionMenu ref={ref} menu={view({ filter: '' })} onSelect={onSelect} onBack={vi.fn()} />
     )
-    const [option] = screen.getAllByRole('option')
+    const [, option] = screen.getAllByRole('option')
     expect(option).toHaveTextContent('ExplorerFiles and folders in root/')
+    fireEvent.mouseEnter(option)
     expect(option.querySelector('[data-termul-icon="ChevronRight"]')).not.toBeNull()
     expect(ref.current?.drillHighlighted()).toBe(true)
     expect(onSelect).toHaveBeenCalledWith({ kind: 'category', target: 'explorer' })
@@ -110,6 +112,31 @@ describe('FileMentionMenu', () => {
     expect(screen.getByText("Couldn't list this folder")).toBeInTheDocument()
     fireEvent.click(back)
     expect(onBack).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the agent, a running spinner, and the chat icon on conversation rows', () => {
+    const onSelect = vi.fn()
+    const conversation = {
+      sessionId: 's1',
+      title: 'Fix web reconnect',
+      agentName: 'Claude',
+      lastActivityAt: Date.now(),
+      running: true
+    }
+    render(
+      <FileMentionMenu
+        menu={view({ panel: { kind: 'conversations' }, filter: '', conversations: [conversation] })}
+        onSelect={onSelect}
+        onBack={vi.fn()}
+      />
+    )
+    const [option] = screen.getAllByRole('option')
+    expect(option).toHaveTextContent('Fix web reconnect')
+    expect(option).toHaveTextContent('Claude · now')
+    expect(option.querySelector('[data-termul-icon="MessageSquare"]')).not.toBeNull()
+    expect(screen.getByLabelText('Running')).toBeInTheDocument()
+    fireEvent.click(option)
+    expect(onSelect).toHaveBeenCalledWith({ kind: 'conversation', conversation })
   })
 
   it('renders the empty label when there are no sections', () => {

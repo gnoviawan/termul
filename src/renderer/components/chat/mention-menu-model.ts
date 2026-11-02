@@ -82,14 +82,27 @@ export function isFolderMatch(m: MentionMatch): boolean {
 // ----- Panels --------------------------------------------------------------
 
 /** One level of the drill-down menu. `dir` is absolute, forward-slash, no trailing slash. */
-export type MentionPanel = { kind: 'root' } | { kind: 'explorer'; dir: string }
+export type MentionPanel =
+  | { kind: 'root' }
+  | { kind: 'conversations' }
+  | { kind: 'explorer'; dir: string }
+
+/** Another chat in the project, as the Conversations panel lists it. */
+export interface ConversationMatch {
+  sessionId: string
+  title: string
+  agentName: string | null
+  lastActivityAt: number
+  running: boolean
+}
 
 /** What a menu row does when picked. */
 export type MentionRow =
-  | { kind: 'category'; target: 'explorer' }
+  | { kind: 'category'; target: 'conversations' | 'explorer' }
   | { kind: 'use-folder'; match: MentionMatch }
   | { kind: 'file'; match: MentionMatch }
   | { kind: 'dir'; match: MentionMatch }
+  | { kind: 'conversation'; conversation: ConversationMatch }
 
 export type DirListing =
   | { status: 'loading' }
@@ -119,9 +132,17 @@ export interface MentionMenuInput {
   filter: string
   matches: MentionMatch[]
   recents: MentionMatch[]
+  /** Other chats in the project, newest first. */
+  conversations: ConversationMatch[]
   /** Listing for the explorer panel's `dir`, when that panel is on top. */
   listing?: DirListing
 }
+
+/** Conversations shown above the file results when searching from the root. */
+export const MAX_ROOT_CONVERSATION_RESULTS = 5
+
+export const CONVERSATIONS_EMPTY_LABEL = 'No other chats in this project yet.'
+export const CONVERSATIONS_NO_MATCH_LABEL = 'No chats match. Try another title.'
 
 export const LISTING_LOADING_LABEL = 'Loading…'
 export const LISTING_ERROR_LABEL = "Couldn't list this folder"
@@ -220,6 +241,50 @@ function explorerSections(
   ]
 }
 
+function conversationItem(c: ConversationMatch): MentionItem {
+  return {
+    key: `conversation:${c.sessionId}`,
+    label: c.title,
+    description: null,
+    ignored: false,
+    row: { kind: 'conversation', conversation: c }
+  }
+}
+
+/** Case-insensitive match on the chat title or its agent name. */
+export function filterConversations(
+  conversations: ConversationMatch[],
+  filter: string
+): ConversationMatch[] {
+  const q = filter.trim().toLowerCase()
+  if (q === '') return conversations
+  return conversations.filter(
+    (c) => c.title.toLowerCase().includes(q) || (c.agentName?.toLowerCase().includes(q) ?? false)
+  )
+}
+
+function categorySection(root: string, conversationCount: number): MentionSection {
+  return {
+    id: 'categories',
+    items: [
+      {
+        key: 'category:conversations',
+        label: 'Conversations',
+        description: `${conversationCount} in this project`,
+        ignored: false,
+        row: { kind: 'category', target: 'conversations' }
+      },
+      {
+        key: 'category:explorer',
+        label: 'Explorer',
+        description: `Files and folders in ${basename(root)}/`,
+        ignored: false,
+        row: { kind: 'category', target: 'explorer' }
+      }
+    ]
+  }
+}
+
 /**
  * Build the rows for the top panel. A bare `@` at the root shows the category
  * rows (never empty, so Enter never falls through to send). A query searches
@@ -227,23 +292,24 @@ function explorerSections(
  * its `dir` directly, so a fresh device with no recents still sees files.
  */
 export function buildMentionSections(input: MentionMenuInput): MentionSection[] {
-  const { panel, root, filter, matches, recents, listing } = input
-  if (filter.trim() !== '') return searchSections(matches)
+  const { panel, root, filter, matches, recents, conversations, listing } = input
+  const searching = filter.trim() !== ''
+  if (panel.kind === 'conversations') {
+    const items = filterConversations(conversations, filter).map(conversationItem)
+    return items.length > 0 ? [{ id: 'conversations', items }] : []
+  }
+  if (searching && panel.kind === 'root') {
+    const hits = filterConversations(conversations, filter)
+      .slice(0, MAX_ROOT_CONVERSATION_RESULTS)
+      .map(conversationItem)
+    const files = searchSections(matches)
+    return hits.length > 0
+      ? [{ id: 'conversations', heading: 'Conversations', items: hits }, ...files]
+      : files
+  }
+  if (searching) return searchSections(matches)
   if (panel.kind === 'explorer') return explorerSections(panel.dir, root, recents, listing)
-  return [
-    {
-      id: 'categories',
-      items: [
-        {
-          key: 'category:explorer',
-          label: 'Explorer',
-          description: `Files and folders in ${basename(root)}/`,
-          ignored: false,
-          row: { kind: 'category', target: 'explorer' }
-        }
-      ]
-    }
-  ]
+  return [categorySection(root, conversations.length)]
 }
 
 /** Header for a sub-panel: back chevron + title + the explorer's directory crumb. */
@@ -252,6 +318,7 @@ export function mentionPanelHeader(
   root: string
 ): { title: string; crumb: string } | null {
   if (panel.kind === 'root') return null
+  if (panel.kind === 'conversations') return { title: 'Conversations', crumb: '' }
   return { title: 'Explorer', crumb: relativeDir(root, panel.dir) }
 }
 

@@ -8,7 +8,7 @@ import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { selectionContextToken } from '@/lib/composer/selection-context'
-import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
+import { commandToken, conversationToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { useProjectStore } from '@/stores/project-store'
 import { ChatInputBar } from './ChatInputBar'
 import {
@@ -70,6 +70,8 @@ const {
   mockCancelAgentSwitch,
   mockCancelPrompt,
   mockSaveAgentConfig,
+  mockSessionIndex,
+  mockMessages,
   batchCb,
   doneCb
 } = vi.hoisted(() => {
@@ -160,7 +162,11 @@ const {
     mockAgentOptionsCache: { current: {} as Record<string, unknown> },
     mockCancelAgentSwitch: vi.fn(),
     mockCancelPrompt: vi.fn(async () => {}),
-    mockSaveAgentConfig: vi.fn(async () => {})
+    mockSaveAgentConfig: vi.fn(async () => {}),
+    // Other chats in the project (the @ menu's Conversations panel) and the
+    // transcripts the send path reads for a mentioned conversation.
+    mockSessionIndex: { current: [] as Array<Record<string, unknown>> },
+    mockMessages: { current: {} as Record<string, unknown[]> }
   }
 })
 
@@ -240,7 +246,9 @@ vi.mock('@/stores/acp-store', () => {
       }
     },
     configToLiveAgent: { 'acp-registry:cursor\0/work': 'agent-1' },
-    sessionIndex: []
+    sessionIndex: mockSessionIndex.current,
+    messages: mockMessages.current,
+    toolCalls: {}
   })
   const listeners = new Set<() => void>()
   const useAcpStore = (selector: (s: Record<string, unknown>) => unknown) => selector(state())
@@ -331,6 +339,13 @@ vi.mock('@/hooks/use-resolved-supported-acp-agents', async () => {
       mockResolvedAgents.current ?? actual.buildSupportedAcpAgents(configs, 'linux-x86_64')
   }
 })
+
+// No host history in these tests: a mentioned chat that is not loaded in the
+// store has no readable transcript.
+vi.mock('@/lib/acp-transport', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/acp-transport')>()),
+  getAcpTransport: () => ({ historyMode: () => 'live_only' })
+}))
 
 vi.mock('@/lib/acp-api', () => ({
   acpApi: {
@@ -2337,5 +2352,95 @@ describe('ChatInputBar selection contexts', () => {
     await waitFor(() =>
       expect(screen.getByRole('note', { name: 'Context 1: when ready' })).toBeInTheDocument()
     )
+  })
+})
+
+describe('ChatInputBar conversation mentions', () => {
+  const chat = (id: string, title: string) => ({
+    id,
+    agentId: 'agent-2',
+    title,
+    cwd: '/work',
+    projectId: 'p1',
+    createdAt: 0,
+    lastActivityAt: 5,
+    messageCount: 2,
+    status: 'idle'
+  })
+
+  beforeEach(() => {
+    mockSessionIndex.current = [chat('chat-2', 'Fix web reconnect'), chat('gone', 'Old chat')]
+    mockMessages.current = {
+      'chat-2': [
+        {
+          id: 'u1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'why does it drop?' }],
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'a1',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'Backoff resets too early.' }],
+          timestamp: 2,
+          seq: 2
+        }
+      ]
+    }
+  })
+
+  afterEach(() => {
+    mockSessionIndex.current = []
+    mockMessages.current = {}
+  })
+
+  it('pills a picked chat and sends its transcript on the wire while the bubble keeps the pill', async () => {
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+
+    setComposerValue('compare @')
+    fireEvent.click(await screen.findByRole('option', { name: /^Conversations/ }))
+    fireEvent.click(await screen.findByRole('option', { name: /Fix web reconnect/ }))
+
+    const token = conversationToken('Fix web reconnect', 'chat-2')
+    await waitFor(() => expect(getComposerValue()).toBe(`compare ${token} `))
+    expect(document.querySelector('[data-conversation-pill]')).toHaveTextContent(
+      'Fix web reconnect'
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    expect(onSendBlocks).toHaveBeenCalledWith(
+      [
+        { type: 'text', text: 'compare (conversation: Fix web reconnect)' },
+        {
+          type: 'text',
+          text:
+            '<termul-conversation id="chat-2" title="Fix web reconnect">\n' +
+            'Transcript of the Termul chat "Fix web reconnect" with an agent, attached by the user as context.\n\n' +
+            'User: why does it drop?\n' +
+            'Agent: Backoff resets too early.\n' +
+            '</termul-conversation>'
+        }
+      ],
+      [{ type: 'text', text: `compare ${token} ` }]
+    )
+  })
+
+  it('says the transcript is unavailable when the chat has no readable history', async () => {
+    const onSendBlocks = vi.fn()
+    const onSend = vi.fn()
+    renderInputBar({ onSendBlocks, onSend })
+    const token = conversationToken('Old chat', 'gone')
+    setComposerValue(`see ${token} `)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    expect(onSendBlocks).toHaveBeenCalledWith(
+      [{ type: 'text', text: 'see (conversation: Old chat, transcript unavailable)' }],
+      [{ type: 'text', text: `see ${token} ` }]
+    )
+    expect(onSend).not.toHaveBeenCalled()
   })
 })

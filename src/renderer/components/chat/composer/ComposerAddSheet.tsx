@@ -172,8 +172,8 @@ export function ComposerAddSheet({
             <SheetGroup>
               <SheetRow
                 icon={<SheetIconWell>@</SheetIconWell>}
-                title="Mention a file"
-                subtitle="Attach project files as context"
+                title="Mention a file or conversation"
+                subtitle="Attach project files or another chat as context"
                 disabled={disabled}
                 onSelect={() => onTrigger('@')}
               />

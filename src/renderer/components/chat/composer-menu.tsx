@@ -35,6 +35,8 @@ export interface ComposerMenuItem {
   iconTile?: boolean
   /** Opens a sub-panel: draws a trailing chevron and answers ArrowRight. */
   drill?: boolean
+  /** Right-aligned meta (a conversation row's running dot, agent, and time). */
+  trailing?: ReactNode
   /** Opaque payload round-tripped to `onSelect` (SlashItem, MentionMatch, …). */
   payload: unknown
 }
@@ -252,6 +254,11 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                   )}
                 >
                   {item.description}
+                </span>
+              )}
+              {item.trailing && (
+                <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-2xs text-muted-foreground">
+                  {item.trailing}
                 </span>
               )}
               {item.selected && <Check size={14} className="ml-auto shrink-0 text-foreground" />}

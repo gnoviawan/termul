@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { filesystemApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { basename } from '@/lib/path-basename'
-import { insertFileToken } from '@/lib/skill-tokens'
+import { insertConversationToken, insertFileToken } from '@/lib/skill-tokens'
 import { randomUUID } from '@/lib/uuid'
 import {
   type FileMentionMenuHandle,
@@ -15,6 +15,8 @@ import {
 import {
   activeMentionToken,
   buildMentionSections,
+  CONVERSATIONS_EMPTY_LABEL,
+  CONVERSATIONS_NO_MATCH_LABEL,
   type DirListing,
   folderDir,
   isFolderMatch,
@@ -28,6 +30,7 @@ import {
   mentionPanelHeader,
   relativeDir
 } from './mention-menu-model'
+import { useMentionConversations } from './use-mention-conversations'
 
 const MAX_RESULTS = 100
 
@@ -126,6 +129,13 @@ function panelKey(depth: number, panel: MentionPanel): string {
   return panel.kind === 'explorer' ? `${depth}:explorer:${panel.dir}` : `${depth}:${panel.kind}`
 }
 
+function mentionEmptyLabel(panel: MentionPanel, filter: string, loading: boolean): string {
+  if (panel.kind === 'conversations') {
+    return filter.trim() === '' ? CONVERSATIONS_EMPTY_LABEL : CONVERSATIONS_NO_MATCH_LABEL
+  }
+  return loading ? MENTION_SEARCHING_LABEL : MENTION_EMPTY_LABEL
+}
+
 /** Delete the typed query after `@` so a drilled-into panel shows its full list. */
 function clearQuery(value: string, token: MentionToken): { value: string; caret: number } {
   return { value: value.slice(0, token.at + 1) + value.slice(token.end), caret: token.at + 1 }
@@ -156,6 +166,10 @@ export interface UseComposerMentionsOptions {
   recents: MentionMatch[]
   /** Stage a `file-ref` attachment for the picked match. */
   onStageFileRef: (match: MentionMatch) => void
+  /** Project whose chats the Conversations panel lists. */
+  projectId: string | null | undefined
+  /** The composer's own chat, left out of the Conversations panel. */
+  currentSessionId?: string | null
 }
 
 export interface ComposerMentions {
@@ -182,8 +196,9 @@ export interface ComposerMentions {
 }
 
 export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerMentions {
-  const { rootPath, disabled, recents, onStageFileRef } = opts
+  const { rootPath, disabled, recents, onStageFileRef, projectId, currentSessionId } = opts
   const [menuOpen, setMenuOpen] = useState(false)
+  const conversations = useMentionConversations(menuOpen && !disabled, projectId, currentSessionId)
   const [filter, setFilter] = useState('')
   const [matches, setMatches] = useState<MentionMatch[]>([])
   const [loading, setLoading] = useState(false)
@@ -194,6 +209,10 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
   const [listings, setListings] = useState(listingsRef.current)
   // Bumped on close so a listing that resolves after the menu closed is dropped.
   const listingGenRef = useRef(0)
+  const root = normalizeRoot(rootPath)
+  const depth = panels.stack.length
+  const panel = panels.stack[depth - 1] ?? ROOT_STACK.stack[0]
+  const searchesFiles = panel.kind !== 'conversations'
   const onStageRef = useRef(onStageFileRef)
   onStageRef.current = onStageFileRef
 
@@ -279,7 +298,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
       cancelSearchStream(prevSid)
     }
 
-    if (!menuOpen || disabled || !rootPath) {
+    if (!menuOpen || disabled || !rootPath || !searchesFiles) {
       accumRef.current = []
       setMatches([])
       setLoading(false)
@@ -348,11 +367,8 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
         timerRef.current = null
       }
     }
-  }, [menuOpen, filter, rootPath, disabled])
+  }, [menuOpen, filter, rootPath, disabled, searchesFiles])
 
-  const root = normalizeRoot(rootPath)
-  const depth = panels.stack.length
-  const panel = panels.stack[depth - 1] ?? ROOT_STACK.stack[0]
   const explorerDir = menuOpen && !disabled && panel.kind === 'explorer' ? panel.dir : null
 
   useEffect(() => {
@@ -420,8 +436,20 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
       const token = activeMentionToken(value, caret)
       if (!token) return null
       if (row.kind === 'category') {
-        push({ kind: 'explorer', dir: root })
+        push(
+          row.target === 'explorer' ? { kind: 'explorer', dir: root } : { kind: 'conversations' }
+        )
         return clearQuery(value, token)
+      }
+      if (row.kind === 'conversation') {
+        close()
+        return insertConversationToken(
+          value,
+          token.end,
+          row.conversation.title,
+          row.conversation.sessionId,
+          token.end - token.at
+        )
       }
       if (row.kind === 'dir') {
         push({ kind: 'explorer', dir: folderDir(row.match) })
@@ -457,6 +485,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
     filter,
     matches,
     recents,
+    conversations,
     listing: panel.kind === 'explorer' ? listings[panel.dir] : undefined
   })
   const view: MentionMenuView = {
@@ -464,7 +493,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
     header: mentionPanelHeader(panel, root),
     enter: panels.enter,
     sections,
-    emptyLabel: loading ? MENTION_SEARCHING_LABEL : MENTION_EMPTY_LABEL
+    emptyLabel: mentionEmptyLabel(panel, filter, loading)
   }
 
   return {

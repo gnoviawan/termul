@@ -152,9 +152,18 @@ function sections(input: Partial<MentionMenuInput>) {
     filter: '',
     matches: [],
     recents: [],
+    conversations: [],
     ...input
   })
 }
+
+const conversation = (sessionId: string, title: string, agentName: string | null = 'Claude') => ({
+  sessionId,
+  title,
+  agentName,
+  lastActivityAt: 0,
+  running: false
+})
 
 /** Section ids and row labels, the way the menu shows them. */
 function shown(input: Partial<MentionMenuInput>) {
@@ -167,9 +176,19 @@ function shown(input: Partial<MentionMenuInput>) {
 }
 
 describe('buildMentionSections: root panel', () => {
-  it('shows the Explorer category on a bare @, even with recents', () => {
-    const [section] = sections({ recents: [match('README.md')] })
+  it('shows the Conversations and Explorer categories on a bare @, even with recents', () => {
+    const [section] = sections({
+      recents: [match('README.md')],
+      conversations: [conversation('a', 'One'), conversation('b', 'Two')]
+    })
     expect(section.items).toEqual([
+      {
+        key: 'category:conversations',
+        label: 'Conversations',
+        description: '2 in this project',
+        ignored: false,
+        row: { kind: 'category', target: 'conversations' }
+      },
       {
         key: 'category:explorer',
         label: 'Explorer',
@@ -186,6 +205,25 @@ describe('buildMentionSections: root panel', () => {
     ).toEqual([
       { id: 'files', heading: 'Files', notice: undefined, rows: ['file:comp.ts'] },
       { id: 'folders', heading: 'Folders', notice: undefined, rows: ['dir:components'] }
+    ])
+  })
+
+  it('lists matching conversations (at most 5) above Files and Folders for a query', () => {
+    const conversations = Array.from({ length: 7 }, (_, i) => conversation(`c${i}`, `comp ${i}`))
+    expect(
+      shown({
+        filter: 'comp',
+        conversations: [conversation('x', 'unrelated'), ...conversations],
+        matches: [match('src/comp.ts')]
+      })
+    ).toEqual([
+      {
+        id: 'conversations',
+        heading: 'Conversations',
+        notice: undefined,
+        rows: [0, 1, 2, 3, 4].map((i) => `conversation:comp ${i}`)
+      },
+      { id: 'files', heading: 'Files', notice: undefined, rows: ['file:comp.ts'] }
     ])
   })
 
@@ -285,9 +323,46 @@ describe('buildMentionSections: explorer panel', () => {
   })
 })
 
+describe('buildMentionSections: conversations panel', () => {
+  const conversations = [
+    conversation('a', 'Fix web reconnect'),
+    conversation('b', 'GPUIX parity', 'Gemini'),
+    conversation('c', 'Status pill tabs', null)
+  ]
+
+  it('lists every conversation with no query and never searches files', () => {
+    expect(
+      shown({ panel: { kind: 'conversations' }, conversations, matches: [match('a.ts')] })
+    ).toEqual([
+      {
+        id: 'conversations',
+        heading: undefined,
+        notice: undefined,
+        rows: [
+          'conversation:Fix web reconnect',
+          'conversation:GPUIX parity',
+          'conversation:Status pill tabs'
+        ]
+      }
+    ])
+  })
+
+  it('filters by title or agent name', () => {
+    const rows = (filter: string) =>
+      shown({ panel: { kind: 'conversations' }, conversations, filter }).flatMap((s) => s.rows)
+    expect(rows('pill')).toEqual(['conversation:Status pill tabs'])
+    expect(rows('gemini')).toEqual(['conversation:GPUIX parity'])
+    expect(rows('zzz')).toEqual([])
+  })
+})
+
 describe('mentionPanelHeader / relativeDir', () => {
   it('has no header at the root and a crumb below the explorer root', () => {
     expect(mentionPanelHeader(ROOT_PANEL, ROOT)).toBeNull()
+    expect(mentionPanelHeader({ kind: 'conversations' }, ROOT)).toEqual({
+      title: 'Conversations',
+      crumb: ''
+    })
     expect(mentionPanelHeader(explorer(ROOT), ROOT)).toEqual({ title: 'Explorer', crumb: '' })
     expect(mentionPanelHeader(explorer(`${ROOT}/src/lib`), ROOT)).toEqual({
       title: 'Explorer',

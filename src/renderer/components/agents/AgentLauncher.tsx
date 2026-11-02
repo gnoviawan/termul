@@ -488,6 +488,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
   const mentions = useComposerMentions({
     rootPath: projectRoot,
+    projectId: activeProjectId,
     disabled: composerDisabled,
     recents: mentionRecents,
     onStageFileRef: (m) => {
@@ -773,7 +774,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     hasCommandToken,
     handleSelect,
     onSlashOrMentionKeyDown,
-    buildPromptParts
+    buildPromptParts,
+    conversationContexts
   } = useChatComposer({
     value: prompt,
     setValue: setPrompt,
@@ -1313,13 +1315,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // flag before any session is claimed/created.
     let parts: ReturnType<typeof buildPromptParts>
     try {
-      parts = buildPromptParts()
+      const contexts = conversationContexts()
+      parts = buildPromptParts(contexts ? await contexts : undefined)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
       launchInFlightRef.current = false
       return
     }
-    const { wireWithCommand, displayWithCommand, fileBlocks } = parts
+    const { wireWithCommand, displayWithCommand, fileBlocks, contextBlocks } = parts
 
     // CAP-3 ordering: the chat placeholder opens BEFORE the worktree prepare
     // (`launchChat`) so `git worktree add`'s stderr lines stream into the
@@ -1403,7 +1406,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       // File-mention `resource_link` blocks append to the wire only — the
       // display keeps the raw token text so the timeline renders inline
       // file pills. Dedupe by path (matching `dedupeAttachmentBlocks`).
-      blocks.push(...fileBlocks)
+      blocks.push(...fileBlocks, ...contextBlocks)
       return {
         wireBlocks: dedupeAttachmentBlocks(blocks),
         pendingPayload: hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null
@@ -1508,6 +1511,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     effectiveModes,
     effectiveConfigOptions,
     buildPromptParts,
+    conversationContexts,
     skillPathsRef,
     isolationMode,
     canUseWorktree,

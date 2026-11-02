@@ -37,7 +37,6 @@ import { useCurrentAgentConfigId } from './agent-model-selector/use-agent-switch
 import { ChatContextStrip } from './ChatContextStrip'
 import { ComposerBeamShell } from './ComposerBeamShell'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
-import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
@@ -53,6 +52,7 @@ import {
   type SelectionContextInsertRequest,
   useSelectionContextInsertRequest
 } from './composer/insert-selection-context'
+import { buildComposerSend } from './composer-send-blocks'
 import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
 import { PermissionPrompt } from './PermissionPrompt'
@@ -271,6 +271,8 @@ export function ChatInputBar({
   )
   const mentions = useComposerMentions({
     rootPath: session.cwd,
+    projectId: session.projectId,
+    currentSessionId: session.id,
     disabled,
     recents: mentionRecents,
     onStageFileRef: (m) => {
@@ -309,7 +311,8 @@ export function ChatInputBar({
     skillPathsRef,
     handleSelect,
     onSlashOrMentionKeyDown,
-    buildPromptParts
+    buildPromptParts,
+    conversationContexts
   } = useChatComposer({
     value,
     setValue,
@@ -348,82 +351,17 @@ export function ChatInputBar({
 
     setSending(true)
     try {
-      // Build the wire/display text parts from the current value, resolved
-      // skill paths, and inline command token. Throws `Skill '<name>' is
-      // missing a path` when a selected skill has no resolvable path (Block If)
-      // — caught below.
-      const {
-        hasSkills,
-        hasCommand,
-        hasSelectionContexts,
-        wireWithCommand,
-        displayWithCommand,
-        wireTrimmed,
-        displayTrimmed,
-        fileBlocks
-      } = buildPromptParts()
-      const hasFileRefs = fileBlocks.length > 0
-      if (!wireTrimmed && !hasAttachments && !hasFileRefs) return
-
-      if (hasAttachments) {
-        const wireBlocks: ContentBlock[] = []
-        if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireWithCommand })
-        for (const a of attachments) wireBlocks.push(attachmentToBlock(a))
-        wireBlocks.push(...fileBlocks)
-        const wire = dedupeAttachmentBlocks(wireBlocks)
-        // Split display from wire when skills, file-mention pills, OR a
-        // command token are present: skills carry framing tokens, file
-        // mentions carry inline pill tokens, commands carry the
-        // `\uE004<name>\uE005` token — all need the display to keep the raw
-        // token text so the timeline renders inline chips. Without either,
-        // display == wire.
-        if (hasSkills || hasFileRefs || hasCommand || hasSelectionContexts) {
-          const displayBlocks: ContentBlock[] = []
-          if (displayTrimmed) displayBlocks.push({ type: 'text', text: displayWithCommand })
-          for (const a of attachments) displayBlocks.push(attachmentToBlock(a))
-          const display = dedupeAttachmentBlocks(displayBlocks)
-          onSendBlocks(wire, display)
-        } else {
-          onSendBlocks(wire)
-        }
-      } else if (hasSkills) {
-        // Skills (tokens) present: split display (tokens) from wire (framing).
-        // File-mention `resource_link` blocks append to the wire only — the
-        // display keeps the raw token text so the timeline renders inline
-        // file pills.
-        const wireBlocks: ContentBlock[] = wireTrimmed
-          ? [{ type: 'text', text: wireWithCommand }]
-          : []
-        wireBlocks.push(...fileBlocks)
-        onSendBlocks(
-          dedupeAttachmentBlocks(wireBlocks),
-          displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
-        )
-      } else if (hasFileRefs) {
-        // File-mention pills present (no skills, no attachments): the wire
-        // carries the text (tokens → `(display)`) + `resource_link` blocks for
-        // each unique file. Display keeps the token text so the timeline
-        // renders inline file pills.
-        const wireBlocks: ContentBlock[] = wireTrimmed
-          ? [{ type: 'text', text: wireWithCommand }]
-          : []
-        wireBlocks.push(...fileBlocks)
-        onSendBlocks(
-          dedupeAttachmentBlocks(wireBlocks),
-          displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
-        )
-      } else if (hasCommand || hasSelectionContexts) {
-        // Command or selection-context pill present (no skills, files, or
-        // attachments): the wire has `/<name>` / the context quote blocks, and
-        // the display keeps the raw tokens so the timeline renders the chips.
-        onSendBlocks(
-          wireTrimmed ? [{ type: 'text', text: wireTrimmed }] : [],
-          displayTrimmed ? [{ type: 'text', text: displayTrimmed }] : []
-        )
-      } else {
-        // Plain text-only path: display == wire (no separate display blocks).
-        onSend(wireTrimmed)
-      }
+      // Throws `Skill '<name>' is missing a path` when a selected skill has
+      // no resolvable path (Block If) — caught below.
+      const contexts = conversationContexts()
+      const send = buildComposerSend(
+        buildPromptParts(contexts ? await contexts : undefined),
+        attachments
+      )
+      if (!send) return
+      if (send.kind === 'text') onSend(send.text)
+      else if (send.display) onSendBlocks(send.wire, send.display)
+      else onSendBlocks(send.wire)
       // Register app-owned temp files (pasted screenshots) with the session so
       // they are deleted when the session closes; clearAttachments drops state
       // without deleting because the agent reads them by path during the turn.
@@ -451,6 +389,7 @@ export function ChatInputBar({
     resetMentions,
     session.id,
     buildPromptParts,
+    conversationContexts,
     skillPathsRef,
     setValue
   ])

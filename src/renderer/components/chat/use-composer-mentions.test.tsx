@@ -1,5 +1,7 @@
 import { act, renderHook } from '@testing-library/react'
-import { fileToken } from '@/lib/skill-tokens'
+import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
+import { conversationToken, fileToken } from '@/lib/skill-tokens'
+import { useAcpStore } from '@/stores/acp-store'
 import { tryHandleMentionMenuKeyDown } from './mention-menu-keyboard'
 import type { MentionMatch, MentionRow } from './mention-menu-model'
 import type { ComposerKeyboardEvent } from './slash-menu-keyboard'
@@ -79,6 +81,8 @@ function renderMentions(overrides: Partial<Parameters<typeof useComposerMentions
   const result = renderHook(() =>
     useComposerMentions({
       rootPath: '/work',
+      projectId: 'proj',
+      currentSessionId: 'self',
       disabled: false,
       recents: [],
       onStageFileRef,
@@ -584,7 +588,7 @@ describe('useComposerMentions', () => {
       const { result } = renderMentions()
       const state = { value: 'see @', caret: 5 }
       act(() => result.current.update(state.value, state.caret))
-      expect(rows(result)).toEqual(['category:Explorer'])
+      expect(rows(result)).toEqual(['category:Conversations', 'category:Explorer'])
       expect(result.current.view.header).toBeNull()
 
       pick(result, state, { kind: 'category', target: 'explorer' })
@@ -637,7 +641,7 @@ describe('useComposerMentions', () => {
       expect(rows(result)).toEqual(['use-folder:Use this folder', 'file:main.ts'])
 
       expect(key(result, 'Backspace')).toBe(true)
-      expect(rows(result)).toEqual(['category:Explorer'])
+      expect(rows(result)).toEqual(['category:Conversations', 'category:Explorer'])
       expect(result.current.canGoBack).toBe(false)
       // At the root, Backspace deletes the `@` as usual.
       expect(key(result, 'Backspace')).toBe(false)
@@ -682,7 +686,98 @@ describe('useComposerMentions', () => {
       act(() => result.current.update('@ ', 2))
       expect(result.current.menuOpen).toBe(false)
       act(() => result.current.update('@ @', 3))
-      expect(rows(result)).toEqual(['category:Explorer'])
+      expect(rows(result)).toEqual(['category:Conversations', 'category:Explorer'])
+    })
+  })
+
+  describe('Conversations panel', () => {
+    const entry = (
+      id: string,
+      title: string,
+      lastActivityAt: number,
+      extra: Partial<SessionIndexEntry> = {}
+    ): SessionIndexEntry => ({
+      id,
+      agentId: 'agent',
+      agentConfigId: 'claude-config',
+      title,
+      cwd: '/work',
+      projectId: 'proj',
+      createdAt: 0,
+      lastActivityAt,
+      messageCount: 1,
+      status: 'idle',
+      ...extra
+    })
+
+    beforeEach(() => {
+      useAcpStore.setState({
+        sessionIndex: [
+          entry('old', 'Older chat', 10),
+          entry('self', 'This chat', 50),
+          entry('new', 'Fix web reconnect', 40),
+          entry('other-project', 'Elsewhere', 60, { projectId: 'other' }),
+          entry('found', 'Discovered', 70, { discovered: true })
+        ],
+        agentConfigs: [
+          {
+            id: 'claude-config',
+            templateId: 'claude',
+            name: 'Claude',
+            command: 'claude',
+            args: [],
+            env: {}
+          }
+        ]
+      })
+    })
+
+    const rows = (result: { current: ComposerMentions }) =>
+      result.current.sections.flatMap((s) => s.items.map((i) => `${i.row.kind}:${i.label}`))
+
+    it('counts project chats on the root, lists them newest first, and pills the pick', () => {
+      const { result } = renderMentions()
+      act(() => result.current.update('ask @', 5))
+      expect(result.current.sections[0].items[0].description).toBe('2 in this project')
+
+      let out: { value: string; caret: number } | null = null
+      act(() => {
+        out = result.current.select('ask @', 5, { kind: 'category', target: 'conversations' })
+        if (out) result.current.update(out.value, out.caret)
+      })
+      expect(result.current.view.header).toEqual({ title: 'Conversations', crumb: '' })
+      expect(rows(result)).toEqual(['conversation:Fix web reconnect', 'conversation:Older chat'])
+      expect(result.current.sections[0].items[0].row).toEqual({
+        kind: 'conversation',
+        conversation: {
+          sessionId: 'new',
+          title: 'Fix web reconnect',
+          agentName: 'Claude',
+          lastActivityAt: 40,
+          running: false
+        }
+      })
+
+      act(() => result.current.update('ask @fix', 8))
+      expect(rows(result)).toEqual(['conversation:Fix web reconnect'])
+      expect(mockApi.searchFileNamesStreamStart).not.toHaveBeenCalled()
+
+      const pick = result.current.sections[0].items[0].row
+      act(() => {
+        out = result.current.select('ask @fix', 8, pick)
+      })
+      const token = conversationToken('Fix web reconnect', 'new')
+      expect(out).toEqual({ value: `ask ${token} `, caret: 4 + token.length + 1 })
+      expect(result.current.menuOpen).toBe(false)
+    })
+
+    it('shows matching chats above file results when typing at the root', async () => {
+      const { result } = renderMentions()
+      act(() => result.current.update('@older', 6))
+      expect(rows(result)).toEqual(['conversation:Older chat'])
+      await advance(90)
+      emitBatch({ searchId: 'search-inst-1', files: [{ path: 'older.ts', ignored: false }] })
+      expect(result.current.sections.map((s) => s.heading)).toEqual(['Conversations', 'Files'])
     })
   })
 })
