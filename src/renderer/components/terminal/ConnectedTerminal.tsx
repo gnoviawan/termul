@@ -1441,7 +1441,7 @@ function ConnectedTerminalComponent({
         void logFrontendError({
           level: 'warn',
           source: 'ConnectedTerminal.font',
-          message: 'Paper Mono load timed out — terminal uses the monospace fallback'
+          message: 'Font load timed out — terminal may render with the monospace fallback'
         })
       }
       apply()
