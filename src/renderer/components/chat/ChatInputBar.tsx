@@ -53,7 +53,7 @@ import {
   type SelectionContextInsertRequest,
   useSelectionContextInsertRequest
 } from './composer/insert-selection-context'
-import { FileMentionMenu, MENTION_EMPTY_LABEL, MENTION_SEARCHING_LABEL } from './FileMentionMenu'
+import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PromptQueuePanel } from './PromptQueuePanel'
@@ -292,9 +292,7 @@ export function ChatInputBar({
   const updateMentionsStable = useCallback((v: string, c: number) => {
     mentionsRef.current.update(v, c)
   }, [])
-  const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? MENTION_SEARCHING_LABEL : MENTION_EMPTY_LABEL
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value,
@@ -664,9 +662,9 @@ export function ChatInputBar({
         {mentionMenuOpen && (
           <FileMentionMenu
             ref={mentionMenuRef}
-            sections={mentionSections}
+            menu={mentions.view}
             onSelect={onMentionSelect}
-            emptyLabel={emptyLabel}
+            onBack={mentions.back}
             inputRef={composerInputRef}
           />
         )}

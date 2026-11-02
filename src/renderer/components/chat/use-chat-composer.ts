@@ -355,6 +355,9 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
           menuOpen: mentions.menuOpen && !disabled && !slashOpen,
           sectionsLength: mentions.sections.length,
           menuRef: mentions.menuRef,
+          filter: mentions.filter,
+          canGoBack: mentions.canGoBack,
+          onBack: mentions.back,
           onReset: mentions.reset
         })
       ) {

@@ -7,6 +7,7 @@
  * token is "active" while the caret sits within `(at, end]`. See ADR 0003.
  */
 
+import { basename } from '@/lib/path-basename'
 import { isComposerTriggerBoundary } from '@/lib/skill-tokens'
 
 export interface MentionToken {
@@ -78,29 +79,72 @@ export function isFolderMatch(m: MentionMatch): boolean {
   return m.kind === 'dir'
 }
 
+// ----- Panels --------------------------------------------------------------
+
+/** One level of the drill-down menu. `dir` is absolute, forward-slash, no trailing slash. */
+export type MentionPanel = { kind: 'root' } | { kind: 'explorer'; dir: string }
+
+/** What a menu row does when picked. */
+export type MentionRow =
+  | { kind: 'category'; target: 'explorer' }
+  | { kind: 'use-folder'; match: MentionMatch }
+  | { kind: 'file'; match: MentionMatch }
+  | { kind: 'dir'; match: MentionMatch }
+
+export type DirListing =
+  | { status: 'loading' }
+  | { status: 'ready'; entries: MentionMatch[] }
+  | { status: 'error' }
+
 export interface MentionItem {
   key: string
   label: string
-  description: string
+  description: string | null
   ignored: boolean
-  kind: 'file' | 'dir'
-  payload: MentionMatch
+  row: MentionRow
 }
 
 export interface MentionSection {
   id: string
-  heading: string
+  heading?: string
+  /** Status line shown in place of rows (listing in flight, failed, or empty). */
+  notice?: string
   items: MentionItem[]
 }
 
-function toMentionItem(m: MentionMatch): MentionItem {
+export interface MentionMenuInput {
+  panel: MentionPanel
+  /** Explorer root: absolute, forward-slash, no trailing slash. */
+  root: string
+  filter: string
+  matches: MentionMatch[]
+  recents: MentionMatch[]
+  /** Listing for the explorer panel's `dir`, when that panel is on top. */
+  listing?: DirListing
+}
+
+export const LISTING_LOADING_LABEL = 'Loading…'
+export const LISTING_ERROR_LABEL = "Couldn't list this folder"
+export const LISTING_EMPTY_LABEL = 'This folder is empty'
+
+/** `dir` relative to `root` with a trailing `/`, or `''` for the root itself. */
+export function relativeDir(root: string, dir: string): string {
+  if (dir === root || !dir.startsWith(`${root}/`)) return ''
+  return `${dir.slice(root.length + 1)}/`
+}
+
+/** The explorer `dir` a folder match drills into. */
+export function folderDir(m: MentionMatch): string {
+  return m.absPath.replace(/\/$/, '')
+}
+
+function matchItem(m: MentionMatch, description: string | null): MentionItem {
   return {
     key: m.absPath,
     label: m.name,
-    description: m.relPath,
+    description,
     ignored: m.ignored,
-    kind: isFolderMatch(m) ? 'dir' : 'file',
-    payload: m
+    row: isFolderMatch(m) ? { kind: 'dir', match: m } : { kind: 'file', match: m }
   }
 }
 
@@ -115,29 +159,108 @@ function dedupByPath(matches: MentionMatch[]): MentionMatch[] {
   return out
 }
 
-/**
- * Build picker sections from live matches + recents. Per ADR 0003: an empty
- * query shows Recents (files and folders mixed); a non-empty query shows Files
- * (the ripgrep results, already ranked non-ignored-first by the backend)
- * followed by Folders (gh-896, capped at {@link MAX_FOLDER_RESULTS}). Returns no sections when
- * there is nothing to show so the menu can render its empty state.
- */
-export function buildMentionSections(input: {
-  matches: MentionMatch[]
-  recents: MentionMatch[]
-  filter: string
-}): MentionSection[] {
-  const { matches, recents, filter } = input
-  if (filter.trim() === '') {
-    const items = recents.map(toMentionItem)
-    if (items.length === 0) return []
-    return [{ id: 'recents', heading: 'Recent', items }]
-  }
+/** Files (ripgrep order, non-ignored first) then Folders capped at {@link MAX_FOLDER_RESULTS}. */
+function searchSections(matches: MentionMatch[]): MentionSection[] {
   const deduped = dedupByPath(matches)
-  const files = deduped.filter((m) => !isFolderMatch(m)).map(toMentionItem)
-  const folders = deduped.filter(isFolderMatch).slice(0, MAX_FOLDER_RESULTS).map(toMentionItem)
+  const files = deduped.filter((m) => !isFolderMatch(m)).map((m) => matchItem(m, m.relPath))
+  const folders = deduped
+    .filter(isFolderMatch)
+    .slice(0, MAX_FOLDER_RESULTS)
+    .map((m) => matchItem(m, m.relPath))
   const sections: MentionSection[] = []
   if (files.length > 0) sections.push({ id: 'files', heading: 'Files', items: files })
   if (folders.length > 0) sections.push({ id: 'folders', heading: 'Folders', items: folders })
   return sections
+}
+
+function listingNotice(listing: DirListing | undefined): string | undefined {
+  if (!listing || listing.status === 'loading') return LISTING_LOADING_LABEL
+  if (listing.status === 'error') return LISTING_ERROR_LABEL
+  return listing.entries.length === 0 ? LISTING_EMPTY_LABEL : undefined
+}
+
+function explorerSections(
+  dir: string,
+  root: string,
+  recents: MentionMatch[],
+  listing: DirListing | undefined
+): MentionSection[] {
+  const entries = listing?.status === 'ready' ? listing.entries.map((m) => matchItem(m, null)) : []
+  const notice = listingNotice(listing)
+  if (dir === root) {
+    const sections: MentionSection[] = []
+    if (recents.length > 0) {
+      sections.push({
+        id: 'recents',
+        heading: 'Recent',
+        items: recents.map((m) => matchItem(m, m.relPath))
+      })
+    }
+    sections.push({ id: 'listing', heading: `${basename(root)}/`, notice, items: entries })
+    return sections
+  }
+  const rel = relativeDir(root, dir)
+  const folder: MentionMatch = {
+    relPath: rel.replace(/\/$/, ''),
+    absPath: `${dir}/`,
+    name: basename(dir),
+    ignored: false,
+    kind: 'dir'
+  }
+  const useFolder: MentionItem = {
+    key: `use:${folder.absPath}`,
+    label: 'Use this folder',
+    description: rel,
+    ignored: false,
+    row: { kind: 'use-folder', match: folder }
+  }
+  return [
+    { id: 'this-folder', items: [useFolder] },
+    { id: 'listing', notice, items: entries }
+  ]
+}
+
+/**
+ * Build the rows for the top panel. A bare `@` at the root shows the category
+ * rows (never empty, so Enter never falls through to send). A query searches
+ * file and folder names from any panel; the explorer without a query lists
+ * its `dir` directly, so a fresh device with no recents still sees files.
+ */
+export function buildMentionSections(input: MentionMenuInput): MentionSection[] {
+  const { panel, root, filter, matches, recents, listing } = input
+  if (filter.trim() !== '') return searchSections(matches)
+  if (panel.kind === 'explorer') return explorerSections(panel.dir, root, recents, listing)
+  return [
+    {
+      id: 'categories',
+      items: [
+        {
+          key: 'category:explorer',
+          label: 'Explorer',
+          description: `Files and folders in ${basename(root)}/`,
+          ignored: false,
+          row: { kind: 'category', target: 'explorer' }
+        }
+      ]
+    }
+  ]
+}
+
+/** Header for a sub-panel: back chevron + title + the explorer's directory crumb. */
+export function mentionPanelHeader(
+  panel: MentionPanel,
+  root: string
+): { title: string; crumb: string } | null {
+  if (panel.kind === 'root') return null
+  return { title: 'Explorer', crumb: relativeDir(root, panel.dir) }
+}
+
+/** Everything the menu renders for the top panel. */
+export interface MentionMenuView {
+  /** Changes whenever the top panel changes, so the menu remounts and slides. */
+  panelKey: string
+  header: { title: string; crumb: string } | null
+  enter: 'forward' | 'back' | 'none'
+  sections: MentionSection[]
+  emptyLabel: string
 }

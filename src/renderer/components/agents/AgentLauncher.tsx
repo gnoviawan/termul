@@ -61,11 +61,7 @@ import {
   blurComposerEditor,
   insertComposerTrigger
 } from '@/components/chat/composer/insert-composer-trigger'
-import {
-  FileMentionMenu,
-  MENTION_EMPTY_LABEL,
-  MENTION_SEARCHING_LABEL
-} from '@/components/chat/FileMentionMenu'
+import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
 import { SkillFilesProvider } from '@/components/chat/skill-file-links'
 import { useChatComposer } from '@/components/chat/use-chat-composer'
@@ -760,9 +756,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // textarea is gone; the editor's `onCaretChange` feeds `mentions.update` on
   // natural typing, and `handleSelect`/`onMentionSelect` feed it on
   // programmatic splices).
-  const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? MENTION_SEARCHING_LABEL : MENTION_EMPTY_LABEL
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value: prompt,
@@ -1721,9 +1715,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             {mentionMenuOpen && (
               <FileMentionMenu
                 ref={mentionMenuRef}
-                sections={mentionSections}
+                menu={mentions.view}
                 onSelect={onMentionSelect}
-                emptyLabel={emptyLabel}
+                onBack={mentions.back}
                 inputRef={composerInputRef}
               />
             )}

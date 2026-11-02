@@ -324,7 +324,31 @@ vi.mock('@/lib/api', () => ({
     searchFileNamesStreamStart: vi.fn(async () => ({ success: true as const })),
     searchFileNamesStreamCancel: vi.fn(async () => ({ success: true as const })),
     onSearchFileNamesBatch: vi.fn(() => () => {}),
-    onSearchFileNamesDone: vi.fn(() => () => {})
+    onSearchFileNamesDone: vi.fn(() => () => {}),
+    readDirectory: vi.fn(async (dir: string) => ({
+      success: true as const,
+      data:
+        dir === '/work'
+          ? [
+              {
+                name: 'src',
+                path: '/work/src',
+                type: 'directory',
+                extension: null,
+                size: 0,
+                modifiedAt: 0
+              },
+              {
+                name: 'README.md',
+                path: '/work/README.md',
+                type: 'file',
+                extension: 'md',
+                size: 0,
+                modifiedAt: 0
+              }
+            ]
+          : []
+    }))
   }
 }))
 
@@ -2592,6 +2616,24 @@ describe('AgentLauncher file pills (inline tokens)', () => {
         }
       ])
     })
+  })
+})
+
+describe('AgentLauncher @ menu', () => {
+  it('opens on the categories for a bare @ and lists the project folder in Explorer', async () => {
+    renderLauncher()
+    await screen.findByLabelText('Agent prompt')
+
+    setComposerValue('@')
+    const categories = await screen.findAllByRole('option')
+    expect(categories.map((o) => o.textContent)).toEqual(['ExplorerFiles and folders in work/'])
+
+    fireEvent.click(categories[0])
+    await waitFor(() =>
+      expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['src', 'README.md'])
+    )
+    expect(screen.getByRole('button', { name: 'Back from Explorer' })).toBeInTheDocument()
+    expect(getComposerValue()).toBe('@')
   })
 })
 

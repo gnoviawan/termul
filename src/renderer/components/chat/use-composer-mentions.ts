@@ -1,3 +1,4 @@
+import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import type { SearchFileHit } from '@shared/types/ipc.types'
 import type { RefObject } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -6,14 +7,26 @@ import { logFrontendError } from '@/lib/log-api'
 import { basename } from '@/lib/path-basename'
 import { insertFileToken } from '@/lib/skill-tokens'
 import { randomUUID } from '@/lib/uuid'
-import type { FileMentionMenuHandle } from './FileMentionMenu'
+import {
+  type FileMentionMenuHandle,
+  MENTION_EMPTY_LABEL,
+  MENTION_SEARCHING_LABEL
+} from './FileMentionMenu'
 import {
   activeMentionToken,
   buildMentionSections,
+  type DirListing,
+  folderDir,
   isFolderMatch,
   MAX_FOLDER_RESULTS,
   type MentionMatch,
-  type MentionSection
+  type MentionMenuView,
+  type MentionPanel,
+  type MentionRow,
+  type MentionSection,
+  type MentionToken,
+  mentionPanelHeader,
+  relativeDir
 } from './mention-menu-model'
 
 const MAX_RESULTS = 100
@@ -81,6 +94,44 @@ function toMentionMatch(hit: SearchFileHit, root: string): MentionMatch {
 }
 
 /**
+ * Build a {@link MentionMatch} from a listing entry. Paths come from the
+ * requested `dir`, never `entry.path`: the web server canonicalizes symlinks
+ * and Windows may return `\\?\` paths, either of which would break the token.
+ */
+function toListingMatch(entry: DirectoryEntry, dir: string, root: string): MentionMatch {
+  const relPath = `${relativeDir(root, dir)}${entry.name}`
+  const ignored = entry.ignored ?? false
+  if (entry.type === 'directory') {
+    return { relPath, absPath: `${dir}/${entry.name}/`, name: entry.name, ignored, kind: 'dir' }
+  }
+  return { relPath, absPath: `${dir}/${entry.name}`, name: entry.name, ignored }
+}
+
+function logListingFailure(dir: string, detail: string): void {
+  logFrontendError({
+    level: 'warn',
+    message: `composer mention folder listing failed: dir=${dir} ${detail}`,
+    source: 'useComposerMentions'
+  })
+}
+
+interface PanelStack {
+  stack: MentionPanel[]
+  enter: MentionMenuView['enter']
+}
+
+const ROOT_STACK: PanelStack = { stack: [{ kind: 'root' }], enter: 'none' }
+
+function panelKey(depth: number, panel: MentionPanel): string {
+  return panel.kind === 'explorer' ? `${depth}:explorer:${panel.dir}` : `${depth}:${panel.kind}`
+}
+
+/** Delete the typed query after `@` so a drilled-into panel shows its full list. */
+function clearQuery(value: string, token: MentionToken): { value: string; caret: number } {
+  return { value: value.slice(0, token.at + 1) + value.slice(token.end), caret: token.at + 1 }
+}
+
+/**
  * Cap files at {@link MAX_RESULTS} and folders at {@link MAX_FOLDER_RESULTS}
  * independently, so a full page of file hits can never crowd folders out.
  */
@@ -112,17 +163,20 @@ export interface ComposerMentions {
   /** The active @token query (empty for a bare `@`). */
   filter: string
   sections: MentionSection[]
+  view: MentionMenuView
+  /** True when a sub-panel is open (ArrowLeft / Backspace on an empty query go back). */
+  canGoBack: boolean
+  back: () => void
   /** True while a filename-search stream is in flight for the current query. */
   loading: boolean
   menuRef: RefObject<FileMentionMenuHandle>
   /** Call on textarea input + selection change. */
   update: (value: string, caret: number) => void
-  /** Select a match: returns new { value, caret } to apply; stages the file-ref. */
-  select: (
-    value: string,
-    caret: number,
-    match: MentionMatch
-  ) => { value: string; caret: number } | null
+  /**
+   * Pick a row: returns the { value, caret } to apply. A pill row splices its
+   * token and closes the menu; a drill row opens its panel and clears the query.
+   */
+  select: (value: string, caret: number, row: MentionRow) => { value: string; caret: number } | null
   /** Close the menu + drop matches (e.g. on send / blur). */
   reset: () => void
 }
@@ -134,6 +188,12 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
   const [matches, setMatches] = useState<MentionMatch[]>([])
   const [loading, setLoading] = useState(false)
   const menuRef = useRef<FileMentionMenuHandle>(null)
+  const [panels, setPanels] = useState<PanelStack>(ROOT_STACK)
+  const tokenAtRef = useRef<number | null>(null)
+  const listingsRef = useRef<Record<string, DirListing>>({})
+  const [listings, setListings] = useState(listingsRef.current)
+  // Bumped on close so a listing that resolves after the menu closed is dropped.
+  const listingGenRef = useRef(0)
   const onStageRef = useRef(onStageFileRef)
   onStageRef.current = onStageFileRef
 
@@ -290,21 +350,84 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
     }
   }, [menuOpen, filter, rootPath, disabled])
 
-  const update = useCallback((value: string, caret: number) => {
-    const token = activeMentionToken(value, caret)
-    setMenuOpen(token !== null)
-    setFilter(token?.query ?? '')
-    if (token === null) setMatches([])
+  const root = normalizeRoot(rootPath)
+  const depth = panels.stack.length
+  const panel = panels.stack[depth - 1] ?? ROOT_STACK.stack[0]
+  const explorerDir = menuOpen && !disabled && panel.kind === 'explorer' ? panel.dir : null
+
+  useEffect(() => {
+    if (explorerDir === null || listingsRef.current[explorerDir]) return
+    const dir = explorerDir
+    const gen = listingGenRef.current
+    const store = (listing: DirListing) => {
+      if (gen !== listingGenRef.current) return
+      listingsRef.current = { ...listingsRef.current, [dir]: listing }
+      setListings(listingsRef.current)
+    }
+    store({ status: 'loading' })
+    void filesystemApi
+      .readDirectory(dir)
+      .then((res) => {
+        if (res.success) {
+          store({ status: 'ready', entries: res.data.map((e) => toListingMatch(e, dir, root)) })
+          return
+        }
+        logListingFailure(dir, `code=${res.code ?? 'n/a'} error=${res.error ?? 'n/a'}`)
+        store({ status: 'error' })
+      })
+      .catch((err) => {
+        logListingFailure(dir, `rejected: ${err instanceof Error ? err.message : String(err)}`)
+        store({ status: 'error' })
+      })
+  }, [explorerDir, root])
+
+  const close = useCallback(() => {
+    setMenuOpen(false)
+    setFilter('')
+    setMatches([])
+    setPanels(ROOT_STACK)
+    tokenAtRef.current = null
+    listingGenRef.current += 1
+    listingsRef.current = {}
+    setListings(listingsRef.current)
+  }, [])
+
+  const update = useCallback(
+    (value: string, caret: number) => {
+      const token = activeMentionToken(value, caret)
+      if (token === null) {
+        if (tokenAtRef.current !== null) close()
+        return
+      }
+      if (token.at !== tokenAtRef.current) setPanels(ROOT_STACK)
+      tokenAtRef.current = token.at
+      setMenuOpen(true)
+      setFilter(token.query)
+    },
+    [close]
+  )
+
+  const push = useCallback((next: MentionPanel) => {
+    setPanels((p) => ({ stack: [...p.stack, next], enter: 'forward' }))
+  }, [])
+
+  const back = useCallback(() => {
+    setPanels((p) => (p.stack.length > 1 ? { stack: p.stack.slice(0, -1), enter: 'back' } : p))
   }, [])
 
   const select = useCallback(
-    (
-      value: string,
-      caret: number,
-      match: MentionMatch
-    ): { value: string; caret: number } | null => {
+    (value: string, caret: number, row: MentionRow): { value: string; caret: number } | null => {
       const token = activeMentionToken(value, caret)
       if (!token) return null
+      if (row.kind === 'category') {
+        push({ kind: 'explorer', dir: root })
+        return clearQuery(value, token)
+      }
+      if (row.kind === 'dir') {
+        push({ kind: 'explorer', dir: folderDir(row.match) })
+        return clearQuery(value, token)
+      }
+      const { match } = row
       // A folder pick reuses the file token: display is the relative path with a
       // trailing `/`, `absPath` keeps its trailing `/` as the dir marker, and the
       // wire builder turns it into plain text (no resource_link).
@@ -321,22 +444,40 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
         match.absPath,
         token.end - token.at
       )
-      setMenuOpen(false)
-      setFilter('')
-      setMatches([])
+      close()
       onStageRef.current(match)
       return { value: nextValue, caret: nextCaret }
     },
-    []
+    [close, push, root]
   )
 
-  const reset = useCallback(() => {
-    setMenuOpen(false)
-    setFilter('')
-    setMatches([])
-  }, [])
+  const sections = buildMentionSections({
+    panel,
+    root,
+    filter,
+    matches,
+    recents,
+    listing: panel.kind === 'explorer' ? listings[panel.dir] : undefined
+  })
+  const view: MentionMenuView = {
+    panelKey: panelKey(depth, panel),
+    header: mentionPanelHeader(panel, root),
+    enter: panels.enter,
+    sections,
+    emptyLabel: loading ? MENTION_SEARCHING_LABEL : MENTION_EMPTY_LABEL
+  }
 
-  const sections = buildMentionSections({ matches, recents, filter })
-
-  return { menuOpen, filter, sections, loading, menuRef, update, select, reset }
+  return {
+    menuOpen,
+    filter,
+    sections,
+    view,
+    canGoBack: depth > 1,
+    back,
+    loading,
+    menuRef,
+    update,
+    select,
+    reset: close
+  }
 }
