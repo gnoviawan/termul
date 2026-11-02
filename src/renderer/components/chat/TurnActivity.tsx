@@ -26,6 +26,13 @@ import { DiffStat, WorkRunGroup, type WorkRunItem } from './WorkRunGroup'
 const TURN_STEP_WINDOW = 40
 const TURN_STEP_PAGE = 50
 
+/**
+ * How far each turn was expanded, by its first item's key. A tab switch
+ * unmounts the chat, and the earlier steps a user asked for must still be
+ * there when they come back.
+ */
+const expandedStepLimits = new Map<string, number>()
+
 interface TurnActivityProps {
   items: TimelineItem[]
   active: boolean
@@ -118,7 +125,15 @@ function TurnActivityComponent({
   }, [items])
   // A long agent turn renders only its latest steps: every step stays mounted
   // while the turn is open, and hundreds of them cost hundreds of MB of DOM.
-  const [stepLimit, setStepLimit] = useState(TURN_STEP_WINDOW)
+  const turnKey = items[0]?.key ?? ''
+  const [stepLimit, setStepLimit] = useState(
+    () => expandedStepLimits.get(turnKey) ?? TURN_STEP_WINDOW
+  )
+  const showEarlierSteps = (): void => {
+    const next = stepLimit + TURN_STEP_PAGE
+    expandedStepLimits.set(turnKey, next)
+    setStepLimit(next)
+  }
   const { hiddenSteps, hiddenKeys } = useMemo(() => {
     const stepKeys = items
       .filter((item) => {
@@ -167,7 +182,7 @@ function TurnActivityComponent({
             {hiddenSteps > 0 ? (
               <button
                 type="button"
-                onClick={() => setStepLimit((limit) => limit + TURN_STEP_PAGE)}
+                onClick={showEarlierSteps}
                 className={cn(
                   'flex w-full cursor-pointer items-center text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                   CHAT_ROW_MIN_H

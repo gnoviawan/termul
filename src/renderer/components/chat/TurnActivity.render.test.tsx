@@ -105,6 +105,32 @@ describe('TurnActivity long turns', () => {
     expect(screen.queryByRole('button', { name: /earlier step/ })).toBeNull()
   })
 
+  it('keeps the earlier steps a user opened when the chat remounts', () => {
+    const items = Array.from({ length: 60 }, (_, i) => narration(`remount${i}`, `Remount ${i}`))
+    const ui = (): React.JSX.Element => (
+      <TooltipProvider>
+        <TurnActivity
+          items={items}
+          active
+          parentTurn="active"
+          durationMs={null}
+          attentionRequired={false}
+          hasFinalResponse={false}
+          enter={enter}
+          onOpenSubagent={vi.fn()}
+        />
+      </TooltipProvider>
+    )
+    const first = render(ui())
+    fireEvent.click(screen.getByRole('button', { name: 'Show 20 earlier steps' }))
+    expect(screen.getByText('Remount 0')).toBeTruthy()
+    first.unmount()
+
+    render(ui())
+    expect(screen.getByText('Remount 0')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /earlier step/ })).toBeNull()
+  })
+
   it('shows a short turn whole', () => {
     renderActiveTurn(steps(40))
     expect(screen.getByText('Step 0')).toBeTruthy()
