@@ -529,10 +529,14 @@ struct RespondElicitationPayload {
     content: Option<serde_json::Map<String, Value>>,
 }
 
+/// Forward an elicitation answer to its agent. Once the agent took it, or
+/// no longer holds the request, the relay drops its ticket so a later
+/// subscribe does not list the elicitation again.
 pub(super) async fn handle_respond_elicitation(
     id: String,
     payload: &Value,
     acp: &Arc<AcpManager>,
+    relay: &WsRelaySink,
 ) -> WsReply {
     let parsed: RespondElicitationPayload = match serde_json::from_value(payload.clone()) {
         Ok(parsed) => parsed,
@@ -544,19 +548,19 @@ pub(super) async fn handle_respond_elicitation(
             );
         }
     };
-    match acp
+    let result = acp
         .respond_elicitation(
             &parsed.agent_id,
-            parsed.request_id,
+            parsed.request_id.clone(),
             parsed.action,
             parsed.content,
         )
-        .await
-    {
-        Ok(()) => WsReply::ok(id, Some(json!({}))),
-        Err(error) if error.starts_with("unknown elicitation request") => {
-            WsReply::ok(id, Some(json!({})))
-        }
-        Err(error) => WsReply::err_with_code(id, "ELICITATION_FAILED", error),
+        .await;
+    match result {
+        Ok(()) => {}
+        Err(error) if error.starts_with("unknown elicitation request") => {}
+        Err(error) => return WsReply::err_with_code(id, "ELICITATION_FAILED", error),
     }
+    relay.elicitations().settle(&parsed.request_id);
+    WsReply::ok(id, Some(json!({})))
 }

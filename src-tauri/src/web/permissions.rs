@@ -66,6 +66,7 @@
 //! `RequestPermissionOutcome::Cancelled`, which the agent treats as denial (the
 //! tool call does not execute).
 
+mod elicitations;
 mod questions;
 mod tombstones;
 mod turn_watermark;
@@ -82,6 +83,7 @@ use crate::acp::{AcpManager, AgentId};
 use crate::browser_automation::core::ports::ConsentOption;
 use crate::web::sink::ClientId;
 
+pub use elicitations::ElicitationTickets;
 pub use questions::{QuestionRendezvous, QuestionRespondError, QuestionRespondOutcome};
 pub use tombstones::RESOLVED_TOMBSTONE_CAPACITY;
 pub use turn_watermark::{TurnClaim, TurnWatermark};

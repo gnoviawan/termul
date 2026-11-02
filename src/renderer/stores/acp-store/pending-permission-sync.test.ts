@@ -1,26 +1,40 @@
 /**
- * Issue #1595: the host's pending-approval list a (re)subscribe carries is
- * installed into the store — a missing approval comes back (with the
- * history watermark unable to hide it), an answered one is dropped, and an
- * answer still on its way is not undone.
+ * Issue #1595: the host's pending approval, question and elicitation lists a
+ * (re)subscribe carries are installed into the store — a missing request comes
+ * back (with the history watermark unable to hide it), an answered one is
+ * dropped, and an answer still on its way is not undone.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { respondPermissionMock } = vi.hoisted(() => ({ respondPermissionMock: vi.fn() }))
+const { respondPermissionMock, answerQuestionMock, respondElicitationMock } = vi.hoisted(() => ({
+  respondPermissionMock: vi.fn(),
+  answerQuestionMock: vi.fn(),
+  respondElicitationMock: vi.fn()
+}))
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('@/lib/acp-api', async (importActual) => {
   const actual = await importActual<typeof import('@/lib/acp-api')>()
   return {
     ...actual,
-    acpApi: { ...actual.acpApi, respondPermission: respondPermissionMock }
+    acpApi: {
+      ...actual.acpApi,
+      respondPermission: respondPermissionMock,
+      answerQuestion: answerQuestionMock,
+      respondElicitation: respondElicitationMock
+    }
   }
 })
 
-import type { PermissionRequestEvent } from '@/lib/acp-api'
+import type {
+  AskUserQuestionEvent,
+  ElicitationRequestEvent,
+  PermissionRequestEvent
+} from '@/lib/acp-api'
+import type { PendingPrompts } from '@/lib/acp-transport/pending-permissions'
 import { useAcpStore } from '@/stores/acp-store'
-import { syncPendingPermissions } from './pending-permission-sync'
+import { syncPendingPrompts } from './pending-permission-sync'
 import { historySeqWatermarks } from './shared-state'
 import { FRESH } from './testkit'
 
@@ -36,18 +50,51 @@ function request(requestId: string, sessionId = SID): PermissionRequestEvent {
   }
 }
 
-const sync = (sessionId: string, requests: PermissionRequestEvent[]) =>
-  syncPendingPermissions(useAcpStore.getState, useAcpStore.setState, sessionId, requests)
+function question(questionId: string, sessionId = SID): AskUserQuestionEvent {
+  return {
+    agentId: 'agent-1',
+    sessionId,
+    questionId,
+    question: 'Which branch?',
+    options: [{ value: 'main', label: 'main' }]
+  }
+}
 
-const pendingIds = () => Object.keys(useAcpStore.getState().pendingPermissions).sort()
+function elicitation(requestId: string, sessionId = SID): ElicitationRequestEvent {
+  return {
+    agentId: 'agent-1',
+    sessionId,
+    requestId,
+    mode: 'form',
+    message: 'Pick a plan',
+    fields: [{ name: 'plan', kind: 'string', required: true, options: [] }]
+  }
+}
 
-describe('syncPendingPermissions', () => {
-  beforeEach(() => {
-    useAcpStore.setState(FRESH)
-    historySeqWatermarks.clear()
-    respondPermissionMock.mockReset()
+const syncPrompts = (sessionId: string, prompts: Partial<PendingPrompts>) =>
+  syncPendingPrompts(useAcpStore.getState, useAcpStore.setState, sessionId, {
+    permissions: null,
+    questions: null,
+    elicitations: null,
+    ...prompts
   })
 
+const sync = (sessionId: string, requests: PermissionRequestEvent[]) =>
+  syncPrompts(sessionId, { permissions: requests })
+
+const pendingIds = () => Object.keys(useAcpStore.getState().pendingPermissions).sort()
+const questionIds = () => Object.keys(useAcpStore.getState().pendingQuestions).sort()
+const elicitationIds = () => Object.keys(useAcpStore.getState().pendingElicitations).sort()
+
+beforeEach(() => {
+  useAcpStore.setState(FRESH)
+  historySeqWatermarks.clear()
+  respondPermissionMock.mockReset()
+  answerQuestionMock.mockReset()
+  respondElicitationMock.mockReset()
+})
+
+describe('syncPendingPrompts: approvals', () => {
   it('restores an approval the reconnect lost, even below the history watermark', () => {
     // The installed payload covers seqs up to 40: a replayed request at seq 12
     // is dropped as history, and the snapshot never holds the request.
@@ -92,5 +139,102 @@ describe('syncPendingPermissions', () => {
     finish()
     await answering
     expect(pendingIds()).toEqual([])
+  })
+})
+
+describe('syncPendingPrompts: questions and elicitations', () => {
+  it('restores an elicitation the reopen dropped as history', () => {
+    // Reopen mid-elicitation: the payload watermark (210) covers the request
+    // persisted at seq 209 while no client was connected.
+    historySeqWatermarks.set(SID, 210)
+    useAcpStore.getState()._onElicitationRequest(elicitation('el-1'), 209)
+    expect(elicitationIds()).toEqual([])
+
+    syncPrompts(SID, { elicitations: [elicitation('el-1')] })
+    expect(useAcpStore.getState().pendingElicitations['el-1']).toMatchObject({
+      requestId: 'el-1',
+      sessionId: SID,
+      agentId: 'agent-1',
+      mode: 'form',
+      message: 'Pick a plan'
+    })
+  })
+
+  it('restores a Termul ask_user question the reopen dropped as history', () => {
+    historySeqWatermarks.set(SID, 40)
+    useAcpStore.getState()._onQuestionRequest(question('q-1'), 30)
+    expect(questionIds()).toEqual([])
+
+    syncPrompts(SID, { questions: [question('q-1')] })
+    expect(useAcpStore.getState().pendingQuestions['q-1']).toMatchObject({
+      questionId: 'q-1',
+      sessionId: SID,
+      question: 'Which branch?'
+    })
+  })
+
+  it('renders only the elicitation still pending when an earlier one of the turn was answered', () => {
+    historySeqWatermarks.set(SID, 210)
+    useAcpStore.getState()._onElicitationRequest(elicitation('el-a'), 200)
+    useAcpStore.getState()._onElicitationRequest(elicitation('el-b'), 209)
+
+    syncPrompts(SID, { elicitations: [elicitation('el-b')] })
+    expect(elicitationIds()).toEqual(['el-b'])
+  })
+
+  it('drops prompts another device answered and keeps other sessions', () => {
+    useAcpStore.getState()._onQuestionRequest(question('q-a'))
+    useAcpStore.getState()._onQuestionRequest(question('q-other', 'sess-2'))
+    useAcpStore.getState()._onElicitationRequest(elicitation('el-a'))
+    useAcpStore.getState()._onElicitationRequest(elicitation('el-other', 'sess-2'))
+
+    syncPrompts(SID, { questions: [], elicitations: [] })
+    expect(questionIds()).toEqual(['q-other'])
+    expect(elicitationIds()).toEqual(['el-other'])
+  })
+
+  it('leaves a kind alone when the reply carried no list for it', () => {
+    useAcpStore.getState()._onPermissionRequest(request('perm-1'))
+    useAcpStore.getState()._onQuestionRequest(question('q-1'))
+    useAcpStore.getState()._onElicitationRequest(elicitation('el-1'))
+
+    syncPrompts(SID, { permissions: [] })
+    expect(pendingIds()).toEqual([])
+    expect(questionIds()).toEqual(['q-1'])
+    expect(elicitationIds()).toEqual(['el-1'])
+  })
+
+  it('does not bring back a question whose answer is still on its way', async () => {
+    useAcpStore.getState()._onQuestionRequest(question('q-1'))
+    let finish: () => void = () => {}
+    answerQuestionMock.mockImplementation(() => new Promise<void>((resolve) => (finish = resolve)))
+    const answering = useAcpStore.getState().answerQuestion('q-1', ['main'])
+    syncPrompts(SID, { questions: [question('q-1')] })
+    expect(questionIds()).toEqual([])
+    finish()
+    await answering
+    expect(questionIds()).toEqual([])
+  })
+
+  it('does not bring back an elicitation whose answer is still on its way', async () => {
+    useAcpStore.getState()._onElicitationRequest(elicitation('el-1'))
+    let finish: () => void = () => {}
+    respondElicitationMock.mockImplementation(
+      () => new Promise<void>((resolve) => (finish = resolve))
+    )
+    const answering = useAcpStore.getState().respondElicitation('el-1', 'accept', { plan: 'pro' })
+    syncPrompts(SID, { elicitations: [elicitation('el-1')] })
+    expect(elicitationIds()).toEqual([])
+    finish()
+    await answering
+    expect(elicitationIds()).toEqual([])
+  })
+
+  it('restores an elicitation once its answer has settled and the host still lists it', async () => {
+    useAcpStore.getState()._onElicitationRequest(elicitation('el-1'))
+    respondElicitationMock.mockResolvedValue(undefined)
+    await useAcpStore.getState().respondElicitation('el-1', 'accept', { plan: 'pro' })
+    syncPrompts(SID, { elicitations: [elicitation('el-1')] })
+    expect(elicitationIds()).toEqual(['el-1'])
   })
 })

@@ -97,9 +97,10 @@ import { toWsEventType } from './event-names'
 import { HOST_GOING_AWAY_CLOSE_CODE, HostOfflineMonitor } from './host-offline'
 import { HOST_SILENCE_LIMIT_MS, HostLiveness } from './liveness'
 import {
-  PendingPermissionCoverage,
-  type PendingPermissionsHandler,
-  readPendingPermissions
+  PendingPromptCoverage,
+  type PendingPromptsHandler,
+  pendingPromptCounts,
+  readPendingPrompts
 } from './pending-permissions'
 import {
   type AcpConnectionState,
@@ -315,10 +316,10 @@ export class WsAcpTransport implements AcpTransport {
   private eventTail: Promise<void> = Promise.resolve()
   private recoveryGenerationProvider?: (sessionId: SessionId) => number
   private reconnectPriorityProvider?: () => SessionId[]
-  /** Installs the host's pending approvals a subscribe/snapshot reply carries. */
-  private pendingPermissionsHandler?: PendingPermissionsHandler
-  /** Per session, the head below which that list settles replayed approvals. */
-  private readonly pendingCoverage = new PendingPermissionCoverage()
+  /** Installs the host's pending prompts a subscribe/snapshot reply carries. */
+  private pendingPromptsHandler?: PendingPromptsHandler
+  /** Per session and kind, the head below which those lists settle replayed requests. */
+  private readonly pendingCoverage = new PendingPromptCoverage()
   private readonly wsUrl: string
   private readonly webSocketCtor: typeof WebSocket
   /**
@@ -443,42 +444,42 @@ export class WsAcpTransport implements AcpTransport {
     this.reconnectPriorityProvider = provider
   }
 
-  setPendingPermissionsHandler(handler: PendingPermissionsHandler): void {
-    this.pendingPermissionsHandler = handler
+  setPendingPromptsHandler(handler: PendingPromptsHandler): void {
+    this.pendingPromptsHandler = handler
   }
 
   /**
    * Issue #1595: a `permission_request` is not in the durable log, so neither a
    * snapshot nor a replay from a cursor past it brings it back after a
-   * reconnect. The reply's pending list does: hand it to the store and let it
-   * settle every approval at or below the reply's head.
+   * reconnect. A question or elicitation is in the log, but the history
+   * watermark drops its replay and nothing marks it answered. The reply's
+   * pending lists are the host's truth for all three: hand them to the store
+   * and let them settle every request of a listed kind at or below the head.
    */
-  private installPendingPermissions(
-    sessionId: string,
-    reply: { headSeq?: number; pendingPermissions?: unknown[] } | undefined
-  ): void {
-    const requests = readPendingPermissions(sessionId, reply)
-    this.pendingCoverage.note(sessionId, reply?.headSeq, requests !== null)
-    if (requests === null) return
-    if (requests.length > 0) {
+  private installPendingPrompts(sessionId: string, reply: { headSeq?: number } | undefined): void {
+    const prompts = readPendingPrompts(sessionId, reply)
+    this.pendingCoverage.note(sessionId, reply?.headSeq, prompts)
+    if (!prompts.permissions && !prompts.questions && !prompts.elicitations) return
+    const restored = pendingPromptCounts(prompts)
+    if (restored) {
       void logFrontendError({
         level: 'info',
-        source: 'WsAcpTransport.pendingPermissions',
-        message: `Session ${sessionId} restores ${requests.length} pending permission request(s) from the host`
+        source: 'WsAcpTransport.pendingPrompts',
+        message: `Session ${sessionId} restores pending requests from the host: ${restored}`
       })
     }
-    this.pendingPermissionsHandler?.(sessionId, requests)
+    this.pendingPromptsHandler?.(sessionId, prompts)
   }
 
   /**
-   * The recovery path's install of a reply's pending approvals, gated like the
+   * The recovery path's install of a reply's pending prompts, gated like the
    * transcript install: a close/delete/reopen during the round-trip makes the
-   * reply stale, and it must not restore approvals into the replaced session.
+   * reply stale, and it must not restore prompts into the replaced session.
    * A stale reply also covers no replay (the next subscribe records its own).
    */
-  private installRecoveredPendingPermissions(
+  private installRecoveredPendingPrompts(
     sessionId: SessionId,
-    reply: { headSeq?: number; pendingPermissions?: unknown[] } | undefined,
+    reply: { headSeq?: number } | undefined,
     reopenGeneration: number | undefined
   ): void {
     if (
@@ -488,12 +489,12 @@ export class WsAcpTransport implements AcpTransport {
       this.pendingCoverage.forget(sessionId)
       void logFrontendError({
         level: 'info',
-        source: 'WsAcpTransport.pendingPermissions',
-        message: `Session ${sessionId} was reopened during recovery; its stale pending approvals are not restored`
+        source: 'WsAcpTransport.pendingPrompts',
+        message: `Session ${sessionId} was reopened during recovery; its stale pending requests are not restored`
       })
       return
     }
-    this.installPendingPermissions(sessionId, reply)
+    this.installPendingPrompts(sessionId, reply)
   }
 
   getSessionCursor(sessionId: SessionId): SessionCursor | null {
@@ -669,7 +670,7 @@ export class WsAcpTransport implements AcpTransport {
       }
       throw err
     }
-    this.installRecoveredPendingPermissions(sessionId, reply, reopenGeneration)
+    this.installRecoveredPendingPrompts(sessionId, reply, reopenGeneration)
     const replyEpoch = reply?.logEpoch
     if (!replyEpoch) return
     if (epoch && epoch !== replyEpoch && this.lastSeq.has(sessionId)) {
@@ -724,7 +725,7 @@ export class WsAcpTransport implements AcpTransport {
         else this.logEpochs.delete(sessionId)
         this.seenTurnIds.delete(sessionId)
         await this.recoveryHandler?.(recovery, reopenGeneration)
-        this.installRecoveredPendingPermissions(sessionId, recovery, reopenGeneration)
+        this.installRecoveredPendingPrompts(sessionId, recovery, reopenGeneration)
         // handle_recover_session_snapshot server-side re-registers the
         // subscription for continued live delivery — no separate subscribe
         // call needed here.
@@ -738,7 +739,7 @@ export class WsAcpTransport implements AcpTransport {
         )
         if (typeof reply?.headSeq === 'number') this.headSeqs.set(sessionId, reply.headSeq)
         if (reply?.logEpoch) this.logEpochs.set(sessionId, reply.logEpoch)
-        this.installRecoveredPendingPermissions(sessionId, reply, reopenGeneration)
+        this.installRecoveredPendingPrompts(sessionId, reply, reopenGeneration)
         await this.recoveryHandler?.({ sessionId, degraded: true }, reopenGeneration)
       }
       completed = true

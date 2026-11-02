@@ -785,6 +785,54 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  // The session payload carries the session's latest controls so a reopen
+  // mid-turn restores the model picker. Both transports share one
+  // materializer, so the Rust struct and the TS payload type must agree on
+  // every key, and the reopen install must read them.
+  describe('Session payload controls parity', () => {
+    const PayloadRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'acp',
+      'session_payload'
+    )
+    const HistoryPersistence = join(LIB_DIR, 'acp-history-persistence.ts')
+    const SessionSlice = join(LIB_DIR, '..', 'stores', 'acp-store', 'slices', 'session.ts')
+    const rust = (): string =>
+      [`${PayloadRust}.rs`, ...readdirSync(PayloadRust).map((f) => join(PayloadRust, f))]
+        .filter((f) => f.endsWith('.rs'))
+        .map((f) => readFileSync(f, 'utf-8'))
+        .join('\n')
+    const tsPayloadBody = (): string =>
+      readFileSync(HistoryPersistence, 'utf-8').match(
+        /export interface SessionPayload \{([\s\S]*?)\n\}/
+      )?.[1] ?? ''
+
+    it('the materialized payload flattens an optional SessionControls', () => {
+      expect(rust()).toMatch(/#\[serde\(flatten\)\]\s*pub controls: Option<SessionControls>/)
+    })
+
+    it('every serialized SessionControls field is an optional key on the TS SessionPayload', () => {
+      const body = rust().match(/pub struct SessionControls \{([\s\S]*?)\n\}/)?.[1] ?? ''
+      const fields = [...body.matchAll(/pub (\w+):/g)].map(([, name]) =>
+        name.replace(/_(\w)/g, (_, c: string) => c.toUpperCase())
+      )
+      expect(fields.sort()).toEqual(['configOptions', 'controlsSeq', 'models', 'modes'])
+      const ts = tsPayloadBody()
+      for (const field of fields) expect(ts).toMatch(new RegExp(`\\n\\s*${field}\\?: `))
+    })
+
+    it('the history reopen installs the payload controls', () => {
+      expect(readFileSync(SessionSlice, 'utf-8')).toMatch(
+        /resolveReopenControls\(\s*id,\s*captureReopenControlBaseline\(get\(\)\.sessions, id\),\s*payload\s*\)/
+      )
+    })
+  })
+
   // CAP-4: Agent spawn metadata parity. The spawn RESPONSE (not the async
   // `agent_spawned` event) is the single source of truth for the agent's
   // negotiated capabilities + auth methods + stable namespace — the renderer

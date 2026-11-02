@@ -56,7 +56,7 @@ import {
   writeAgentOptionsCache
 } from '../helpers'
 import { useAcpStore } from '../index'
-import { forgetAnsweringPermission, noteAnsweringPermission } from '../pending-permission-sync'
+import { forgetAnswering, noteAnswering } from '../pending-permission-sync'
 import { withoutRejectedRateLimit } from '../rate-limit'
 import {
   activeWirePromptTurns,
@@ -1021,7 +1021,7 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       return { pendingPermissions }
     })
     // A resubscribe racing the answer must not restore the card (#1595).
-    noteAnsweringPermission(requestId)
+    noteAnswering('permissions', requestId)
     try {
       await acpApi.respondPermission(pending.agentId, requestId, optionId)
     } catch (err) {
@@ -1033,7 +1033,7 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       set((s) => ({ pendingPermissions: { ...s.pendingPermissions, [requestId]: pending } }))
       throw err
     } finally {
-      forgetAnsweringPermission(requestId)
+      forgetAnswering('permissions', requestId)
     }
   },
 
@@ -1047,6 +1047,8 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       delete pendingQuestions[questionId]
       return { pendingQuestions }
     })
+    // A resubscribe racing the answer must not restore the question.
+    noteAnswering('questions', questionId)
     try {
       await acpApi.answerQuestion(pending.agentId, questionId, values)
     } catch (err) {
@@ -1055,6 +1057,8 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       // Restore the entry so the user can retry.
       set((s) => ({ pendingQuestions: { ...s.pendingQuestions, [questionId]: pending } }))
       throw err
+    } finally {
+      forgetAnswering('questions', questionId)
     }
   },
 
@@ -1111,6 +1115,8 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       delete pendingElicitations[requestId]
       return { pendingElicitations }
     })
+    // A resubscribe racing the answer must not restore the panel.
+    noteAnswering('elicitations', requestId)
     try {
       await acpApi.respondElicitation(pending.agentId, requestId, action, content)
     } catch (error) {
@@ -1121,6 +1127,8 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
         message: `Elicitation response failed for ${requestId}: ${error instanceof Error ? error.message : String(error)}`
       })
       throw error
+    } finally {
+      forgetAnswering('elicitations', requestId)
     }
   },
 

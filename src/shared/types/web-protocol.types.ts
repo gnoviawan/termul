@@ -823,6 +823,10 @@ export interface SessionSnapshotEvent {
   events: WsEvent[]
   /** The session's still-pending approvals (see `SessionSubscribeReply`). */
   pendingPermissions?: unknown[]
+  /** The session's still-pending questions (see `SessionSubscribeReply`). */
+  pendingQuestions?: unknown[]
+  /** The session's still-pending elicitations, always present (see `SessionSubscribeReply`). */
+  pendingElicitations?: unknown[]
 }
 
 /**
@@ -845,6 +849,18 @@ export interface SessionSubscribeReply {
    * approval tickets.
    */
   pendingPermissions?: unknown[]
+  /**
+   * The session's still-pending questions (`question_request` payloads),
+   * authoritative like `pendingPermissions`. Absent when the host keeps no
+   * question tickets.
+   */
+  pendingQuestions?: unknown[]
+  /**
+   * The session's still-pending elicitations (`elicitation_request`
+   * payloads), authoritative like `pendingPermissions`. Always present
+   * (possibly empty): every relay keeps elicitation tickets.
+   */
+  pendingElicitations?: unknown[]
 }
 
 /**

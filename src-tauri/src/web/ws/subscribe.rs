@@ -1,5 +1,5 @@
-//! `subscribe` wiring + permission/question rendezvous WS handlers
-//! (`respond_permission`, `answer_question`).
+//! `subscribe` wiring (with the session's pending prompts) + permission/question
+//! rendezvous WS handlers (`respond_permission`, `answer_question`).
 
 use super::*;
 
@@ -36,27 +36,41 @@ pub(super) fn spawn_event_forwarder(mut stream: EventStream, out_tx: OutboundSen
     });
 }
 
-/// Add the session's still-pending permission requests to a subscribe or
-/// snapshot reply (`pendingPermissions`, in queue order). Read AFTER the
-/// subscription registered: a request published later is delivered live, and
-/// its ticket is registered before the publish, so none falls in between. The
-/// request event is not in the durable log, so this list is the only way a
-/// client whose snapshot or cursor already passed it can render it again
-/// (issue #1595). Without a rendezvous nothing is added and the client keeps
-/// what it has.
-pub(super) fn attach_pending_permissions(reply: &mut Value, relay: &WsRelaySink, session_id: &str) {
-    let Some(rdz) = relay.rendezvous() else {
-        return;
-    };
-    let pending = rdz.pending_requests(session_id);
-    if !pending.is_empty() {
+/// Add the session's still-pending prompts to a subscribe or snapshot reply:
+/// `pendingPermissions` (queue order), `pendingQuestions` and
+/// `pendingElicitations` (registration order), each the request payloads as
+/// published. Read AFTER the subscription registered: a request published
+/// later is delivered live, and its ticket is registered before the publish,
+/// so none falls in between. A replay cannot restore these: a permission
+/// request is not in the durable log (issue #1595), and a question or
+/// elicitation the client's history already covers is dropped, since no event
+/// says it was answered. A list is present only when the host keeps its
+/// tickets; without one the client keeps what it has.
+pub(super) fn attach_pending_prompts(reply: &mut Value, relay: &WsRelaySink, session_id: &str) {
+    let permissions = relay
+        .rendezvous()
+        .map(|rdz| rdz.pending_requests(session_id));
+    let questions = relay
+        .question_rendezvous()
+        .map(|rdz| rdz.pending_requests(session_id));
+    let elicitations = relay.elicitations().pending_requests(session_id);
+    let count = |list: &Option<Vec<Value>>| list.as_ref().map_or(0, Vec::len);
+    if count(&permissions) + count(&questions) + elicitations.len() > 0 {
         log::info!(
-            "[ws] subscription restores {} pending permission request(s) for session_id={}",
-            pending.len(),
+            "[ws] subscription restores pending prompts permissions={} questions={} elicitations={} session_id={}",
+            count(&permissions),
+            count(&questions),
+            elicitations.len(),
             crate::logging::redact_session_id(session_id)
         );
     }
-    reply["pendingPermissions"] = Value::Array(pending);
+    if let Some(permissions) = permissions {
+        reply["pendingPermissions"] = Value::Array(permissions);
+    }
+    if let Some(questions) = questions {
+        reply["pendingQuestions"] = Value::Array(questions);
+    }
+    reply["pendingElicitations"] = Value::Array(elicitations);
 }
 
 /// Wire `subscribe` → [`WsRelaySink::subscribe`] + forward replay/live to this connection.
@@ -144,7 +158,7 @@ pub(super) async fn handle_subscribe(
                 reply["logEpoch"] = json!(head.log_epoch);
                 reply["headSeq"] = json!(head.head_seq);
             }
-            attach_pending_permissions(&mut reply, relay, &parsed.session_id);
+            attach_pending_prompts(&mut reply, relay, &parsed.session_id);
             WsReply::ok(id, Some(reply))
         }
     }

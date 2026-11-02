@@ -96,6 +96,7 @@ import {
 } from '../live-turn'
 import { recordRegistryMcpServers } from '../registry-mcp-fingerprints'
 import { liveSiblingCount, reloadInFlight } from '../reload-guard'
+import { resolveReopenControls } from '../session-controls'
 import {
   adoptHostOwnedAgent,
   beginSessionReopen,
@@ -777,9 +778,11 @@ async function openHistorySessionInner(
     return true
   }
 
-  // Preserve controls already held by a cached closed session. Persisted
-  // history does not contain them, and optional reopen fields may be omitted.
-  const existingControls = captureReopenControlBaseline(get().sessions, id)
+  const controls = resolveReopenControls(
+    id,
+    captureReopenControlBaseline(get().sessions, id),
+    payload
+  )
 
   // Register the session record + local transcript BEFORE any agent work, so
   // the pane shows the conversation instantly; the (possibly ~30s cold-spawn)
@@ -822,9 +825,7 @@ async function openHistorySessionInner(
         // connected to keep it running (dead turn).
         activeTurn: turnLive,
         openTurnId: turnLive ? openTurn : null,
-        modes: existingControls?.modes ?? null,
-        models: existingControls?.models ?? null,
-        configOptions: existingControls?.configOptions ?? [],
+        ...controls,
         ...restoredTurnError,
         createdAt: meta.createdAt,
         replaying: null,

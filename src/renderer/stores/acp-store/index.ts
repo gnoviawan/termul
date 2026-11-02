@@ -98,7 +98,7 @@ import {
   withCommands
 } from './helpers'
 import { setLaunchPlaceholderNotedListener, setLiveLaunchSessionLookup } from './live-turn'
-import { syncPendingPermissions } from './pending-permission-sync'
+import { syncPendingPrompts } from './pending-permission-sync'
 import {
   historySeqWatermarks,
   isCurrentRecoveryGeneration,
@@ -565,8 +565,8 @@ export function initAcpEventListeners(): () => void {
         )
       )
     ],
-    installPendingPermissions: (sessionId, requests) =>
-      syncPendingPermissions(useAcpStore.getState, useAcpStore.setState, sessionId, requests),
+    installPendingPrompts: (sessionId, prompts) =>
+      syncPendingPrompts(useAcpStore.getState, useAcpStore.setState, sessionId, prompts),
     setReconnecting: (reconnecting, recovered) => {
       useAcpStore.setState({ transportReconnecting: reconnecting })
       if (!reconnecting) {

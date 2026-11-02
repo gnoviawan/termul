@@ -60,7 +60,7 @@ import type {
 import type { SessionPayload } from '@/lib/acp-history-persistence'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import type { CanvasGatewayClient } from './canvas-gateway-client'
-import type { PendingPermissionsHandler } from './pending-permissions'
+import type { PendingPromptsHandler } from './pending-permissions'
 import type { WatchClient } from './watch-client'
 
 /**
@@ -602,9 +602,10 @@ export interface AcpTransport {
   setReconnectPriorityProvider?(provider: () => SessionId[]): void
   /**
    * Issue #1595: register the installer for the host's still-pending
-   * approvals a `subscribe` / snapshot reply carries (authoritative for the
-   * session: an approval not listed was answered or released).
+   * approvals, questions and elicitations a `subscribe` / snapshot reply
+   * carries (each list authoritative for the session: a request not listed
+   * was answered or released).
    */
-  setPendingPermissionsHandler?(handler: PendingPermissionsHandler): void
+  setPendingPromptsHandler?(handler: PendingPromptsHandler): void
   dispose(): void
 }

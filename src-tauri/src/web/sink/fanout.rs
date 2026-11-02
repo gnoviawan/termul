@@ -391,10 +391,23 @@ impl EventSink for WsRelaySink {
         // session ends. Registered BEFORE the event is published, so a client
         // that subscribes after the publish always finds the ticket among the
         // session's pending requests (issue #1595).
-        if type_ == "permission_request" {
-            if let Some(rdz) = self.rendezvous() {
-                rdz.register_event(&event.payload);
+        // Questions (issue #411) and session-scoped elicitations register the
+        // same way, so a subscribe reply lists every pending prompt.
+        match type_ {
+            "permission_request" => {
+                if let Some(rdz) = self.rendezvous() {
+                    rdz.register_event(&event.payload);
+                }
             }
+            "question_request" => {
+                if let Some(rdz) = self.question_rendezvous() {
+                    rdz.register_event(&event.payload);
+                }
+            }
+            "elicitation_request" if event.sid.is_some() => {
+                self.elicitations.register_event(&event.payload);
+            }
+            _ => {}
         }
 
         match &event.sid {
@@ -466,49 +479,6 @@ impl EventSink for WsRelaySink {
                     warn!(
                         "[relay] dropped agent-level event `{type_}`: no watch carries it and the relay sends no seq = 0 event"
                     );
-                }
-            }
-        }
-
-        // Issue #411: snapshot `question_request` events into the server-side
-        // question rendezvous (if attached). The ticket holds the immutable
-        // args (the `options` array) for TOCTOU re-validation. Like a
-        // permission ticket it has no timeout.
-        if type_ == "question_request" {
-            if let Some(rdz) = self.question_rendezvous() {
-                let payload = &event.payload;
-                let question_id = payload
-                    .get("questionId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                if question_id.is_empty() {
-                    warn!(
-                        "[questions] dropping question_request with no questionId (dispatcher bug?)"
-                    );
-                } else {
-                    let agent_id = payload
-                        .get("agentId")
-                        .and_then(Value::as_str)
-                        .map(|s| crate::acp::AgentId(s.to_string()))
-                        .unwrap_or_else(|| crate::acp::AgentId("unknown".to_string()));
-                    let session_id = payload
-                        .get("sessionId")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let options = payload
-                        .get("options")
-                        .cloned()
-                        .unwrap_or(Value::Array(vec![]));
-                    let allow_free_text = payload
-                        .get("allowFreeText")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    rdz.register(question_id.clone(), agent_id, session_id, options);
-                    if allow_free_text {
-                        rdz.allow_free_text(&question_id);
-                    }
                 }
             }
         }
