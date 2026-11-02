@@ -165,6 +165,8 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
+import { agentReuseKey } from '../acp-reuse-keys'
+import { selectAgentIdentity } from './helpers'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
 
 describe('acp-store', () => {
@@ -553,6 +555,35 @@ describe('acp-store', () => {
     useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason })
     expect(useAcpStore.getState().agentStatus['agent-1']).toBeUndefined()
     expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
+  })
+
+  it('an idle-reaped chat keeps its agent config so the list keeps the agent icon', () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState({
+      agents: { 'agent-1': {} as never },
+      agentStatus: { 'agent-1': 'connected' },
+      agentConfigs: [{ id: 'cfg-claude', name: 'Claude', templateId: 'claude-acp' } as never],
+      configToLiveAgent: { [agentReuseKey('cfg-claude', '/work', 'p1')]: 'agent-1' },
+      sessionIndex: [
+        {
+          id: 's1',
+          agentId: 'agent-1',
+          agentConfigId: 'cfg-claude',
+          title: 'Chat',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 1,
+          messageCount: 0,
+          status: 'active'
+        }
+      ]
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'reaped' })
+    const state = useAcpStore.getState()
+    expect(state.configToLiveAgent).toEqual({})
+    expect(state.sessionIndex[0]).toMatchObject({ status: 'closed', agentConfigId: 'cfg-claude' })
+    expect(selectAgentIdentity(state, 'agent-1').templateId).toBe('claude-acp')
   })
 
   it.each([

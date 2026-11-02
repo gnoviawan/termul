@@ -210,8 +210,11 @@ export function persistSession(
   const reuseKey = Object.keys(state.configToLiveAgent).find(
     (k) => state.configToLiveAgent[k] === session.agentId
   )
-  const agentConfigId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
   const existingEntry = state.sessionIndex.find((e) => e.id === sessionId)
+  // Once the agent leaves the live map (idle reap, kill, close) the
+  // chat still ran with the same config: keep the row's attribution so the
+  // list keeps its agent icon instead of falling back to Bot.
+  const agentConfigId = reuseKey ? configIdFromReuseKey(reuseKey) : existingEntry?.agentConfigId
   // Keep a placeholder stable once assigned: reuse the existing index title
   // (including a prior `Untitled Chat N`) instead of regenerating one on every
   // persist. `rebaseUntitledCounter` keeps fresh numbers from colliding.

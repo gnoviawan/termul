@@ -1045,6 +1045,9 @@ export function mergeSessionIndexEntries(
             ...entry,
             messageCount: Math.max(entry.messageCount ?? 0, hostEntry.messageCount ?? 0),
             lastSeq: Math.max(entry.lastSeq ?? 0, hostEntry.lastSeq ?? 0),
+            // A projection made after the agent left the live map has no
+            // config; the host's durable attribution must survive the spread.
+            agentConfigId: entry.agentConfigId ?? hostEntry.agentConfigId,
             turnActive: mergeTurnActive(entry.turnActive, hostEntry.turnActive, true),
             // The host stamps `created_at` once at registration; a local
             // projection re-stamped by a reopen must not override it.
