@@ -2,11 +2,22 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ContentBlock } from '@/lib/acp-api'
 
-const { invokeMock, fetchMock, isTauriContextMock } = vi.hoisted(() => ({
-  invokeMock: vi.fn(),
-  fetchMock: vi.fn(),
-  isTauriContextMock: vi.fn(() => false)
+const { invokeMock, fetchMock, isTauriContextMock, downloadImageMock, toastErrorMock } = vi.hoisted(
+  () => ({
+    invokeMock: vi.fn(),
+    fetchMock: vi.fn(),
+    isTauriContextMock: vi.fn(() => false),
+    downloadImageMock: vi.fn(() => Promise.resolve('saved')),
+    toastErrorMock: vi.fn()
+  })
+)
+
+vi.mock('@/lib/image-download', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/image-download')>()),
+  downloadImage: (...args: unknown[]) => downloadImageMock(...args)
 }))
+
+vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => toastErrorMock(...args) } }))
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => invokeMock(...args)
@@ -19,7 +30,7 @@ vi.mock('@/lib/tauri-runtime', async (importOriginal) => {
   return { ...actual, isTauriContext: () => isTauriContextMock() }
 })
 
-import { ChatMedia } from './ChatMedia'
+import { ChatImageGallery, ChatMedia, mediaFileName } from './ChatMedia'
 import { MediaBlocks } from './ChatMessage'
 
 const ABC = new Uint8Array([65, 66, 67])
@@ -262,5 +273,168 @@ describe('MediaBlocks inline media', () => {
     expect(await screen.findByText("voice.wav couldn't be read")).toBeInTheDocument()
     expect(await screen.findByText("clip.webm couldn't be read")).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Play video: clip.webm' })).toBeNull()
+  })
+})
+
+describe('chat image viewer', () => {
+  beforeEach(() => {
+    downloadImageMock.mockReset()
+    downloadImageMock.mockResolvedValue('saved')
+    toastErrorMock.mockReset()
+  })
+
+  const remote = (name: string): ContentBlock => ({
+    type: 'image',
+    data: '',
+    mimeType: 'image/png',
+    uri: `https://example.com/${name}`
+  })
+
+  function counter(): string | null {
+    return screen.queryByText(/^\d+ of \d+$/)?.textContent ?? null
+  }
+
+  it('shares one viewer across the attachment tiles of a message', () => {
+    renderBlocks(remote('a.png'), remote('b.png'), remote('c.png'))
+
+    expect(screen.getByAltText('b.png')).toHaveAttribute('width', '96')
+    fireEvent.click(screen.getByRole('button', { name: 'Open image: b.png' }))
+
+    expect(counter()).toBe('2 of 3')
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+  })
+
+  it('leaves a broken attachment tile out of the viewer and shows its file card', async () => {
+    renderBlocks(remote('a.png'), remote('broken.png'), remote('c.png'))
+
+    fireEvent.error(screen.getByAltText('broken.png'))
+
+    await waitFor(() => expect(screen.queryByAltText('broken.png')).toBeNull())
+    expect(screen.getByTitle('broken.png')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open image: c.png' }))
+    expect(counter()).toBe('2 of 2')
+  })
+
+  it('renders a markdown gallery as 112px tiles and leaves a broken one out of the viewer', async () => {
+    render(
+      <ChatImageGallery
+        items={['a', 'b', 'c', 'd'].map((name) => ({
+          alt: name,
+          media: {
+            kind: 'image' as const,
+            name,
+            src: { from: 'url' as const, url: `https://example.com/${name}.png` }
+          }
+        }))}
+      />
+    )
+    const strip = screen.getByRole('group', { name: '4 images' })
+    expect(strip).toHaveClass('overflow-x-auto')
+    expect(screen.getAllByRole('img').map((img) => img.getAttribute('width'))).toEqual([
+      '112',
+      '112',
+      '112',
+      '112'
+    ])
+
+    fireEvent.error(screen.getByAltText('b'))
+    await waitFor(() => expect(screen.getByTestId('chat-media-alt')).toHaveTextContent('b'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open image: c' }))
+
+    expect(counter()).toBe('2 of 3')
+  })
+
+  it('shows an unresolvable markdown image as an alt tile outside the viewer', () => {
+    render(
+      <ChatImageGallery
+        items={[
+          { alt: 'gone', media: null },
+          {
+            alt: 'kept',
+            media: {
+              kind: 'image',
+              name: 'kept',
+              src: { from: 'url', url: 'https://x.test/k.png' }
+            }
+          }
+        ]}
+      />
+    )
+
+    expect(screen.getByTestId('chat-media-alt')).toHaveTextContent('gone')
+    fireEvent.click(screen.getByRole('button', { name: 'Open image: kept' }))
+    expect(counter()).toBeNull()
+  })
+
+  it('downloads the image on screen and says so when the download fails', async () => {
+    downloadImageMock.mockRejectedValueOnce(new Error('disk full'))
+    render(
+      <ChatMedia
+        media={{ kind: 'image', name: 'chart', src: { from: 'url', url: 'https://x.test/c.png' } }}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Open image: chart' }))
+    expect(counter()).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download c.png' }))
+
+    expect(downloadImageMock).toHaveBeenCalledWith(
+      { from: 'url', url: 'https://x.test/c.png' },
+      'c.png'
+    )
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith('Failed to download image'))
+  })
+
+  it('downloads an attachment from its source bytes, not its object URL', () => {
+    mutableURL.createObjectURL = () => 'blob:termul/1'
+    mutableURL.revokeObjectURL = vi.fn()
+    renderBlocks({ type: 'image', data: 'QUJD', mimeType: 'image/png' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open image: Image' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Download Image.png' }))
+
+    expect(downloadImageMock).toHaveBeenCalledWith(
+      { from: 'bytes', base64: 'QUJD', mime: 'image/png' },
+      'Image.png'
+    )
+    delete mutableURL.createObjectURL
+    delete mutableURL.revokeObjectURL
+  })
+
+  it('returns focus to the tile that opened the viewer', async () => {
+    renderBlocks(remote('a.png'), remote('b.png'))
+    const tile = screen.getByRole('button', { name: 'Open image: b.png' })
+
+    fireEvent.click(tile)
+    fireEvent.click(screen.getByRole('button', { name: 'Close image' }))
+
+    await waitFor(() => expect(document.activeElement).toBe(tile))
+  })
+
+  it('stays quiet when the save dialog is cancelled', async () => {
+    downloadImageMock.mockResolvedValueOnce('cancelled')
+    render(
+      <ChatMedia
+        media={{ kind: 'image', name: 'chart', src: { from: 'url', url: 'https://x.test/c.png' } }}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Open image: chart' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Download c.png' }))
+
+    await waitFor(() => expect(downloadImageMock).toHaveBeenCalledTimes(1))
+    expect(toastErrorMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [{ from: 'path' as const, path: '/tmp/out/chart.webp' }, 'shot', 'chart.webp'],
+    [{ from: 'url' as const, url: 'https://x.test/a/my%20plot.jpg?v=2' }, 'plot', 'my plot.jpg'],
+    [{ from: 'url' as const, url: 'https://x.test/render?id=3' }, 'diagram', 'diagram.png'],
+    [{ from: 'url' as const, url: 'data:image/png;base64,QUJD' }, '', 'image.png'],
+    [{ from: 'url' as const, url: 'data:image/jpeg;base64,QUJD' }, 'photo', 'photo.jpg'],
+    [{ from: 'bytes' as const, base64: 'QUJD', mime: 'image/webp' }, 'Image', 'Image.webp'],
+    [{ from: 'bytes' as const, base64: 'QUJD', mime: 'image/png' }, 'pasted.png', 'pasted.png'],
+    [{ from: 'url' as const, url: 'blob:termul/1' }, 'a/b: c', 'a_b_ c.png']
+  ])('names the download after the file: %o', (src, name, expected) => {
+    expect(mediaFileName({ kind: 'image', name, src })).toBe(expected)
   })
 })

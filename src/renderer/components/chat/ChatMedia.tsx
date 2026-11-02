@@ -1,12 +1,15 @@
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { VideoIcon } from '@/components/icons'
+import { ImageGalleryLightbox } from '@/components/ui/image-gallery-lightbox'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { type MediaObjectUrlState, useMediaObjectUrlState } from '@/hooks/use-media-object-url'
+import { dataUrlMime, downloadImage, imageFileName } from '@/lib/image-download'
 import { logFrontendError } from '@/lib/log-api'
+import { mediaKindForPath } from '@/lib/media-kind'
+import { basename } from '@/lib/path-basename'
 import { formatSize } from '@/lib/sftp-format'
 import type { BytesSource, ChatMedia as ChatMediaModel } from './chat-media-source'
-
-export type ChatMediaLayout = 'inline' | 'tile'
 
 type ReadFailure = Extract<MediaObjectUrlState, { status: 'error' }>
 
@@ -86,45 +89,237 @@ export function MediaAltChip({ alt, title }: { alt: string; title?: string }): R
   )
 }
 
-function ChatImage({
-  media,
-  layout,
-  fallback
-}: {
-  media: ChatMediaModel
-  layout: ChatMediaLayout
-  fallback?: ReactNode
-}): React.JSX.Element {
+interface ImageSource {
+  /** The displayable URL, or null while loading or after a read or decode failure. */
+  src: string | null
+  failureText?: string
+  onError: () => void
+}
+
+function useImageSource(media: ChatMediaModel): ImageSource {
   const state = useChatMediaState(media, true)
-  const src = state.status === 'ready' ? state.url : null
+  const loaded = state.status === 'ready' ? state.url : null
   const [failedSrc, setFailedSrc] = useState<string | null>(null)
-  if (!src || failedSrc === src) {
-    const reason = state.status === 'error' ? readFailureText(media.name, 'show', state) : undefined
-    return <>{fallback ?? <MediaAltChip alt={media.name} title={reason} />}</>
+  return {
+    src: loaded !== null && loaded !== failedSrc ? loaded : null,
+    failureText: state.status === 'error' ? readFailureText(media.name, 'show', state) : undefined,
+    onError: () => {
+      setFailedSrc(loaded)
+      void logFrontendError({
+        level: 'warn',
+        source: 'ChatMedia.image',
+        message: `Failed to display chat image '${media.name}': image decode/load failed`
+      })
+    }
   }
+}
+
+function sourceBaseName(src: ChatMediaModel['src']): string {
+  if (src.from === 'path') return basename(src.path)
+  if (src.from !== 'url' || !/^https?:/i.test(src.url)) return ''
+  try {
+    return decodeURIComponent(basename(new URL(src.url).pathname))
+  } catch {
+    return ''
+  }
+}
+
+/** The download name: the file's own image name, else the image's name, with an image extension. */
+export function mediaFileName(media: ChatMediaModel): string {
+  const base = sourceBaseName(media.src)
+  const mime =
+    media.src.from === 'bytes'
+      ? media.src.mime
+      : dataUrlMime(media.src.from === 'url' ? media.src.url : '')
+  return imageFileName(mediaKindForPath(base) === 'image' ? base : media.name || base, mime)
+}
+
+function saveChatImage(media: ChatMediaModel, fileName: string): void {
+  downloadImage(media.src, fileName).catch((error: unknown) => {
+    void logFrontendError({
+      level: 'warn',
+      source: 'ChatMedia.download',
+      message: `Failed to save chat image '${fileName}': ${String(error)}`
+    })
+    toast.error('Failed to download image')
+  })
+}
+
+function ChatImage({ media }: { media: ChatMediaModel }): React.JSX.Element {
+  const { src, failureText, onError } = useImageSource(media)
+  if (!src) return <MediaAltChip alt={media.name} title={failureText} />
+  const fileName = mediaFileName(media)
   return (
-    <ImageLightbox src={src} alt={media.name}>
+    <ImageLightbox
+      image={{ src, alt: media.name, fileName }}
+      onDownload={() => saveChatImage(media, fileName)}
+    >
       <img
         src={src}
         alt={media.name}
         title={media.name}
-        className={
-          layout === 'tile'
-            ? 'size-24 rounded-lg bg-muted object-cover'
-            : 'max-h-96 max-w-full rounded-md'
-        }
-        width={layout === 'tile' ? 96 : undefined}
-        height={layout === 'tile' ? 96 : undefined}
-        onError={() => {
-          setFailedSrc(src)
-          void logFrontendError({
-            level: 'warn',
-            source: 'ChatMedia.image',
-            message: `Failed to display chat image '${media.name}': image decode/load failed`
-          })
-        }}
+        className="max-h-96 max-w-full rounded-md"
+        onError={onError}
       />
     </ImageLightbox>
+  )
+}
+
+/** An image in a set of tiles that share one viewer; `key` is unique within the set. */
+export interface ChatImageEntry {
+  key: string
+  media: ChatMediaModel
+}
+
+export interface ChatImageViewer {
+  /** A tile reports its displayable URL, or null when it cannot show. */
+  onReady: (key: string, src: string | null) => void
+  /** `opener` gets focus back when the viewer closes. */
+  onOpen: (key: string, opener: HTMLElement) => void
+  /** The shared viewer element; render it once next to the tiles. */
+  lightbox: React.JSX.Element
+}
+
+/**
+ * One viewer across a set of image tiles. Tiles report the object URLs they
+ * already resolved, so the viewer never reads the bytes again, and a tile that
+ * fails to load is left out of it.
+ */
+export function useChatImageViewer(entries: readonly ChatImageEntry[]): ChatImageViewer {
+  const [srcs, setSrcs] = useState<Readonly<Record<string, string | null>>>({})
+  const [open, setOpen] = useState<{ key: string; opener: HTMLElement } | null>(null)
+  const onReady = useCallback((key: string, src: string | null) => {
+    setSrcs((prev) => (prev[key] === src ? prev : { ...prev, [key]: src }))
+  }, [])
+  const ready = entries.flatMap(({ key, media }) => {
+    const src = srcs[key]
+    return src
+      ? [{ key, media, image: { src, alt: media.name, fileName: mediaFileName(media) } }]
+      : []
+  })
+  const openIndex = ready.findIndex((entry) => entry.key === open?.key)
+  const onOpen = useCallback((key: string, opener: HTMLElement) => setOpen({ key, opener }), [])
+  return {
+    onReady,
+    onOpen,
+    lightbox: (
+      <ImageGalleryLightbox
+        images={ready.map((entry) => entry.image)}
+        openIndex={openIndex === -1 ? null : openIndex}
+        opener={open?.opener ?? null}
+        onClose={() => setOpen(null)}
+        onDownload={(image) => {
+          const entry = ready.find((candidate) => candidate.image === image)
+          if (entry) saveChatImage(entry.media, image.fileName)
+        }}
+      />
+    )
+  }
+}
+
+export type ChatImageTileSize = 'attachment' | 'gallery'
+
+const TILE_STYLES: Readonly<
+  Record<ChatImageTileSize, { px: number; button: string; image: string }>
+> = {
+  attachment: {
+    px: 96,
+    button: 'inline-flex cursor-zoom-in items-center rounded-lg bg-transparent p-0',
+    image: 'size-24 rounded-lg bg-muted object-cover'
+  },
+  gallery: {
+    px: 112,
+    button: 'shrink-0 snap-start cursor-zoom-in rounded-xl bg-transparent p-0',
+    image: 'size-28 rounded-xl bg-muted object-cover'
+  }
+}
+
+export function ChatImageTile({
+  entry,
+  size,
+  viewer,
+  fallback
+}: {
+  entry: ChatImageEntry
+  size: ChatImageTileSize
+  viewer: Pick<ChatImageViewer, 'onReady' | 'onOpen'>
+  /** Shown while the image loads and in its place when it cannot show. */
+  fallback: (failureText: string | undefined) => ReactNode
+}): React.JSX.Element {
+  const { key, media } = entry
+  const { src, failureText, onError } = useImageSource(media)
+  const { onReady, onOpen } = viewer
+  useEffect(() => onReady(key, src), [onReady, key, src])
+  if (!src) return <>{fallback(failureText)}</>
+  const style = TILE_STYLES[size]
+  return (
+    <button
+      type="button"
+      aria-label={`Open image: ${media.name}`}
+      className={style.button}
+      onClick={(event) => onOpen(key, event.currentTarget)}
+    >
+      <img
+        src={src}
+        alt={media.name}
+        title={media.name}
+        width={style.px}
+        height={style.px}
+        className={style.image}
+        onError={onError}
+      />
+    </button>
+  )
+}
+
+function GalleryAltTile({ alt, title }: { alt: string; title?: string }): React.JSX.Element {
+  return (
+    <div className="flex size-28 shrink-0 items-center justify-center rounded-xl bg-muted/50 p-2">
+      <MediaAltChip alt={alt} title={title} />
+    </div>
+  )
+}
+
+/** A markdown image in a gallery strip; null media cannot render and shows its alt text. */
+export interface ChatGalleryItem {
+  alt: string
+  media: ChatMediaModel | null
+}
+
+/** Several consecutive markdown images: one horizontal strip of square tiles. */
+export function ChatImageGallery({
+  items
+}: {
+  items: readonly ChatGalleryItem[]
+}): React.JSX.Element {
+  const keyed = items.map((item, index) => ({ ...item, key: String(index) }))
+  const viewer = useChatImageViewer(
+    keyed.flatMap(({ key, media }) => (media ? [{ key, media }] : []))
+  )
+  return (
+    <>
+      <div
+        role="group"
+        aria-label={`${items.length} images`}
+        data-testid="chat-image-gallery"
+        className="my-2 flex snap-x gap-2 overflow-x-auto pb-1 [scrollbar-width:thin] pointer-coarse:[scrollbar-width:none] pointer-coarse:[&::-webkit-scrollbar]:hidden"
+      >
+        {keyed.map(({ key, alt, media }) =>
+          media ? (
+            <ChatImageTile
+              key={key}
+              entry={{ key, media }}
+              size="gallery"
+              viewer={viewer}
+              fallback={(failureText) => <GalleryAltTile alt={alt} title={failureText} />}
+            />
+          ) : (
+            <GalleryAltTile key={key} alt={alt} />
+          )
+        )}
+      </div>
+      {viewer.lightbox}
+    </>
   )
 }
 
@@ -205,18 +400,10 @@ function ChatAudio({ media }: { media: ChatMediaModel }): React.JSX.Element | nu
   )
 }
 
-export function ChatMedia({
-  media,
-  layout = 'inline',
-  fallback
-}: {
-  media: ChatMediaModel
-  layout?: ChatMediaLayout
-  fallback?: ReactNode
-}): React.JSX.Element | null {
+export function ChatMedia({ media }: { media: ChatMediaModel }): React.JSX.Element | null {
   switch (media.kind) {
     case 'image':
-      return <ChatImage media={media} layout={layout} fallback={fallback} />
+      return <ChatImage media={media} />
     case 'video':
       return <ChatVideo media={media} />
     case 'audio':

@@ -25,7 +25,7 @@ import {
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
-import { ChatMedia } from './ChatMedia'
+import { ChatImageTile, ChatMedia, useChatImageViewer } from './ChatMedia'
 import { ConversationChip } from './ConversationChip'
 import { AgentProse } from './chat-agent-prose'
 import { blockDisplayName, blockResource, blockToAttachmentData } from './chat-attachments'
@@ -191,6 +191,10 @@ export function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.E
       media: chatMediaFromBlock(block),
       text: blockResource(block)?.text
     }))
+  const images = items.flatMap(({ id, media }) =>
+    media?.kind === 'image' ? [{ key: id, media }] : []
+  )
+  const viewer = useChatImageViewer(images)
   if (items.length === 0) return null
   const tiles = items.filter(
     (item) => item.media?.kind === 'image' || (!item.media && typeof item.text !== 'string')
@@ -200,12 +204,13 @@ export function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.E
       {tiles.length > 0 && (
         <Attachments variant="grid" className="ml-0 w-fit py-0.5">
           {tiles.map(({ block, id, media }) =>
-            media ? (
-              <ChatMedia
+            media?.kind === 'image' ? (
+              <ChatImageTile
                 key={id}
-                media={media}
-                layout="tile"
-                fallback={<FileCard block={block} id={id} />}
+                entry={{ key: id, media }}
+                size="attachment"
+                viewer={viewer}
+                fallback={() => <FileCard block={block} id={id} />}
               />
             ) : (
               <FileCard key={id} block={block} id={id} />
@@ -213,6 +218,7 @@ export function MediaBlocks({ blocks }: { blocks: ContentBlock[] }): React.JSX.E
           )}
         </Attachments>
       )}
+      {images.length > 0 && viewer.lightbox}
       {items.flatMap(({ id, media }) =>
         media && media.kind !== 'image' ? [<ChatMedia key={id} media={media} />] : []
       )}
