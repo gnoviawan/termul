@@ -1,4 +1,4 @@
-import { buildConversationContext } from '@/components/chat/handoff-summary'
+import { buildConversationContext, capContextFragment } from '@/components/chat/handoff-summary'
 import type { ContentBlock, ToolCall } from '@/lib/acp-api'
 import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
@@ -65,13 +65,14 @@ export async function resolveConversationContexts(
       unavailable.add(sessionId)
       continue
     }
+    const contextTitle = capContextFragment(title)
     const body = buildConversationContext({
-      title,
+      title: contextTitle,
       messages: transcript.messages,
       toolCalls: transcript.toolCalls,
       agentName: agentNameOf(sessionId)
     })
-    blocks.push({ type: 'text', text: conversationEnvelope(sessionId, title, body) })
+    blocks.push({ type: 'text', text: conversationEnvelope(sessionId, contextTitle, body) })
   }
   return { blocks, unavailable }
 }

@@ -2519,6 +2519,34 @@ describe('ChatInputBar conversation mentions', () => {
     )
   })
 
+  it('caps a long chat title in the transcript block and keeps it whole in the pill', async () => {
+    const title = 'Long '.padEnd(2000, 't')
+    const capped = `${title.slice(0, 1500)}…`
+    mockMessages.current = { long: mockMessages.current['chat-2'] ?? [] }
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    const token = conversationToken(title, 'long')
+    setComposerValue(`see ${token} `)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    expect(onSendBlocks).toHaveBeenCalledWith(
+      [
+        { type: 'text', text: `see (conversation: ${title} [termul-chat:long])` },
+        {
+          type: 'text',
+          text:
+            `<termul-conversation id="long" title="${capped}">\n` +
+            `Transcript of the Termul chat "${capped}" with an agent, attached by the user as context.\n\n` +
+            'User: why does it drop?\n' +
+            'Agent: Backoff resets too early.\n' +
+            '</termul-conversation>'
+        }
+      ],
+      [{ type: 'text', text: `see ${token} ` }]
+    )
+  })
+
   it('says the transcript is unavailable when the chat has no readable history', async () => {
     const onSendBlocks = vi.fn()
     const onSend = vi.fn()

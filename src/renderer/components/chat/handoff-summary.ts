@@ -477,14 +477,14 @@ export interface ConversationContextInput {
   agentName: string | null
 }
 
+/** One line of a context block's header (chat title, agent name), capped. */
+export const capContextFragment = (value: string): string =>
+  truncateFragment(sanitizeFragment(value).trim(), CONVERSATION_CONTEXT_BUDGET.maxFragmentChars)
+
 export function buildConversationContext(input: ConversationContextInput): string {
   const body = buildTranscriptBody(input.messages, input.toolCalls, CONVERSATION_CONTEXT_BUDGET)
-  const agent =
-    truncateFragment(
-      sanitizeFragment(input.agentName ?? '').trim(),
-      CONVERSATION_CONTEXT_BUDGET.maxFragmentChars
-    ) || 'an agent'
-  const title = sanitizeFragment(input.title).trim()
+  const agent = capContextFragment(input.agentName ?? '') || 'an agent'
+  const title = capContextFragment(input.title)
   const intro = `Transcript of the Termul chat "${title}" with ${agent}, attached by the user as context.`
   return body.length > 0 ? `${intro}\n\n${body}` : `${intro}\n\n(This chat has no messages yet.)`
 }
