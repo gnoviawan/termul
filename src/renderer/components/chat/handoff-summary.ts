@@ -237,36 +237,54 @@ function sanitizeFragment(value: string): string {
   return sanitizeWireText(value).replace(/\s+/g, ' ')
 }
 
-/** Max characters of one summary fragment (message text or tool one-liner). */
-const MAX_FRAGMENT_CHARS = 200
-
 /**
- * Clamp one summary fragment to `MAX_FRAGMENT_CHARS` so a single huge turn
- * (a 4000-char command, a pasted log) cannot blow the summary budget — the
- * turn cap bounds turn count, not line length.
+ * Size limits for a serialized transcript. `maxFragmentChars` clamps one
+ * message or tool one-liner so a single huge turn (a 4000-char command, a
+ * pasted log) cannot blow the body budget; the turn cap bounds turn count,
+ * not line length.
  */
-function truncateFragment(value: string): string {
-  if (value.length <= MAX_FRAGMENT_CHARS) return value
-  return `${value.slice(0, MAX_FRAGMENT_CHARS)}…`
+interface TranscriptBudget {
+  maxTurns: number
+  maxBodyChars: number
+  maxFragmentChars: number
+  /** Keep the last agent message untruncated when it fits the body budget. */
+  keepFinalAgentMessage: boolean
 }
 
-/** Sanitized, collapsed, truncated text of a message's text blocks. */
+const HANDOFF_BUDGET: Omit<TranscriptBudget, 'maxTurns'> = {
+  maxBodyChars: 4000,
+  maxFragmentChars: 200,
+  keepFinalAgentMessage: false
+}
+
+/** Budget for a conversation attached with an @ pill: more room, final answer kept whole. */
+const CONVERSATION_CONTEXT_BUDGET: TranscriptBudget = {
+  maxTurns: 12,
+  maxBodyChars: 12000,
+  maxFragmentChars: 1500,
+  keepFinalAgentMessage: true
+}
+
+function truncateFragment(value: string, max: number): string {
+  if (value.length <= max) return value
+  return `${value.slice(0, max)}…`
+}
+
+/** Sanitized, collapsed text of a message's text blocks. */
 function messageText(message: ChatMessage): string {
-  return truncateFragment(
-    sanitizeFragment(
-      message.blocks
-        .filter((b) => b.type === 'text')
-        .map((b) => b.text ?? '')
-        .join('')
-    ).trim()
-  )
+  return sanitizeFragment(
+    message.blocks
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text ?? '')
+      .join('')
+  ).trim()
 }
 
 /** Compact tool one-liner via `describeToolCall`, e.g. "Read auth.ts L1-40". */
-function toolOneLiner(tc: ToolCall): string {
+function toolOneLiner(tc: ToolCall, maxFragmentChars: number): string {
   const { verb, primary, detail } = describeToolCall(tc)
   const parts = [verb, primary, detail].filter((p) => p != null && p.trim().length > 0)
-  return truncateFragment(sanitizeFragment(parts.join(' ')).trim())
+  return truncateFragment(sanitizeFragment(parts.join(' ')).trim(), maxFragmentChars)
 }
 
 /** One user-to-user conversation turn as the summary renders it. */
@@ -283,7 +301,9 @@ interface HandoffTurn {
 
 const hasUserText = (t: HandoffTurn): t is HandoffTurn & { userText: string } => t.userText != null
 
-function partitionTurns(items: HandoffItem[]): HandoffTurn[] {
+function partitionTurns(items: HandoffItem[], budget: TranscriptBudget): HandoffTurn[] {
+  const { maxFragmentChars } = budget
+  let lastAgent: { lines: string[]; index: number; full: string } | null = null
   const turns: HandoffTurn[] = []
   let current: HandoffTurn | null = null
 
@@ -301,7 +321,7 @@ function partitionTurns(items: HandoffItem[]): HandoffTurn[] {
       // the same content the `thought` message role excludes. Never a
       // one-liner: reasoning is not conversation.
       if (it.tool.kind === 'think') continue
-      const oneLiner = toolOneLiner(it.tool)
+      const oneLiner = toolOneLiner(it.tool, maxFragmentChars)
       if (oneLiner.length > 0) openTurn().lines.push(`- ${oneLiner}`)
       continue
     }
@@ -310,7 +330,8 @@ function partitionTurns(items: HandoffItem[]): HandoffTurn[] {
     // In-flight text is not settled conversation: a message still marked
     // streaming contributes nothing to the summary.
     if (message.streaming) continue
-    const text = messageText(message)
+    const fullText = messageText(message)
+    const text = truncateFragment(fullText, maxFragmentChars)
     if (message.role === 'user') {
       // An attachment-only user turn (no text blocks) still counts: the
       // attachment is conversation content, so emit a placeholder rather
@@ -322,8 +343,16 @@ function partitionTurns(items: HandoffItem[]): HandoffTurn[] {
       }
       turns.push(current)
     } else if (text.length > 0) {
-      openTurn().lines.push(`Agent: ${text}`)
+      const turn = openTurn()
+      turn.lines.push(`Agent: ${text}`)
+      lastAgent = { lines: turn.lines, index: turn.lines.length - 1, full: `Agent: ${fullText}` }
     }
+  }
+
+  // Room left for the pinned first user line and the truncation marker.
+  const finalRoom = budget.maxBodyChars - maxFragmentChars - 64
+  if (budget.keepFinalAgentMessage && lastAgent && lastAgent.full.length <= finalRoom) {
+    lastAgent.lines[lastAgent.index] = lastAgent.full
   }
 
   // Skip turns with no substantive content (trailing empty/streaming tails).
@@ -342,23 +371,25 @@ function resolveMaxTurns(options: HandoffSummaryOptions | undefined): number {
   return Math.floor(raw)
 }
 
-/** Total character budget for the summary body (header/preamble excluded). */
-const MAX_SUMMARY_BODY_CHARS = 4000
 const SUMMARY_TRUNCATED_MARKER = '[… summary truncated …]'
 
 /**
- * Fit the assembled body to `MAX_SUMMARY_BODY_CHARS`. `maxTurns` bounds turn
+ * Fit the assembled body to `maxBodyChars`. `maxTurns` bounds turn
  * count, not total size: one turn can hold many tool calls and agent
- * messages (each up to `MAX_FRAGMENT_CHARS`), so the body needs its own
+ * messages (each up to `maxFragmentChars`), so the body needs its own
  * budget. When the budget is hit, the oldest turn lines are dropped — every
  * line is self-labeled (`User:`/`Agent:`/`- `), so line-level truncation
  * preserves meaning — while the front matter (anchor + omission lines) and
  * the first user line stay pinned, and an explicit truncation marker marks
  * the cut.
  */
-function fitBodyBudget(frontMatter: string[], turnSections: string[]): string {
+function fitBodyBudget(
+  frontMatter: string[],
+  turnSections: string[],
+  maxBodyChars: number
+): string {
   const sections = [...frontMatter, ...turnSections]
-  if (sections.join('\n\n').length <= MAX_SUMMARY_BODY_CHARS) return sections.join('\n\n')
+  if (sections.join('\n\n').length <= maxBodyChars) return sections.join('\n\n')
 
   const turnLines = turnSections.flatMap((section) => section.split('\n'))
   const firstUserIdx = turnLines.findIndex((line) => line.startsWith('User: '))
@@ -368,7 +399,7 @@ function fitBodyBudget(frontMatter: string[], turnSections: string[]): string {
   const kept: string[] = []
   for (const line of [...rest].reverse()) {
     const candidate = [...pinned, SUMMARY_TRUNCATED_MARKER, line, ...kept].join('\n')
-    if (candidate.length > MAX_SUMMARY_BODY_CHARS) break
+    if (candidate.length > maxBodyChars) break
     kept.unshift(line)
   }
   const droppedAny = kept.length < rest.length
@@ -376,13 +407,18 @@ function fitBodyBudget(frontMatter: string[], turnSections: string[]): string {
 }
 
 /**
- * Build the handoff summary/wire/display triple from the old session's
- * transcript. Pure and deterministic: identical inputs yield byte-identical
- * outputs.
+ * Serialize a transcript as `User:`/`Agent:`/tool lines under `budget`: the
+ * last `maxTurns` turns, the first user message pinned as the intent anchor,
+ * and explicit markers wherever turns or lines were dropped. Pure and
+ * deterministic.
  */
-export function buildHandoffSummary(input: HandoffSummaryInput): HandoffSummaryResult {
-  const maxTurns = resolveMaxTurns(input.options)
-  const turns = partitionTurns(mergeByArrival(input.messages, input.toolCalls))
+function buildTranscriptBody(
+  messages: ChatMessage[],
+  toolCalls: ToolCall[],
+  budget: TranscriptBudget
+): string {
+  const { maxTurns } = budget
+  const turns = partitionTurns(mergeByArrival(messages, toolCalls), budget)
 
   const capped = turns.length > maxTurns ? turns.slice(turns.length - maxTurns) : turns
 
@@ -406,14 +442,26 @@ export function buildHandoffSummary(input: HandoffSummaryInput): HandoffSummaryR
   }
 
   // `maxTurns` bounds turn count, not total size: one turn can hold many
-  // tool calls and agent messages (each up to MAX_FRAGMENT_CHARS). Cap the
-  // total body budget too, dropping from the oldest retained content while
-  // keeping the header, preamble, first-user anchor, and the most recent
-  // turns; mark the cut explicitly when hit.
-  const body = fitBodyBudget(
+  // tool calls and agent messages. Cap the total body budget too, dropping
+  // from the oldest retained content while keeping the first-user anchor and
+  // the most recent turns; mark the cut explicitly when hit.
+  return fitBodyBudget(
     [anchorLine, omissionLine].filter((s): s is string => s != null && s.length > 0),
-    capped.map(turnSection)
+    capped.map(turnSection),
+    budget.maxBodyChars
   )
+}
+
+/**
+ * Build the handoff summary/wire/display triple from the old session's
+ * transcript. Pure and deterministic: identical inputs yield byte-identical
+ * outputs.
+ */
+export function buildHandoffSummary(input: HandoffSummaryInput): HandoffSummaryResult {
+  const body = buildTranscriptBody(input.messages, input.toolCalls, {
+    ...HANDOFF_BUDGET,
+    maxTurns: resolveMaxTurns(input.options)
+  })
 
   // The label sits in the one-line preamble: collapse whitespace so a
   // newline in the name cannot break the preamble line.
@@ -438,4 +486,24 @@ export function buildHandoffSummary(input: HandoffSummaryInput): HandoffSummaryR
     wireBlocks: wireText.length > 0 ? [{ type: 'text', text: wireText }] : [],
     displayBlocks: pendingDisplay.length > 0 ? [{ type: 'text', text: pendingDisplay }] : []
   }
+}
+
+export interface ConversationContextInput {
+  title: string
+  messages: ChatMessage[]
+  toolCalls: ToolCall[]
+  agentName: string | null
+}
+
+/**
+ * The body of a conversation attached with an @ pill. Never starts with the
+ * handoff header: the renderer and the host both treat that prefix as a
+ * handoff and would hide or rewrite the prompt.
+ */
+export function buildConversationContext(input: ConversationContextInput): string {
+  const body = buildTranscriptBody(input.messages, input.toolCalls, CONVERSATION_CONTEXT_BUDGET)
+  const agent = sanitizeFragment(input.agentName ?? '').trim() || 'an agent'
+  const title = sanitizeFragment(input.title).trim()
+  const intro = `Transcript of the Termul chat "${title}" with ${agent}, attached by the user as context.`
+  return body.length > 0 ? `${intro}\n\n${body}` : `${intro}\n\n(This chat has no messages yet.)`
 }
