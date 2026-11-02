@@ -157,9 +157,29 @@ export interface RunMeta {
   failure?: string
 }
 
+export type ProcessRole = 'renderer' | 'gpu' | 'webviewOther' | 'host' | 'fakeAgent' | 'otherChild'
+
+/** Retained state after the scenario, before teardown (see metrics/end-snapshot.ts). */
+export interface EndSnapshot {
+  heapUsedAfterGcBytes: number | null
+  heapTotalAfterGcBytes: number | null
+  domNodes: number | null
+  domDocuments: number | null
+  jsEventListeners: number | null
+  privateBytesByRole: Record<ProcessRole, number>
+  /** Every process in the app tree except the fake agents the harness supplies. */
+  appPrivateBytes: number
+  otherChildren: Array<{ name: string; privateBytes: number; commandLine: string }>
+  appLogErrorLines: number | null
+  agentUpdatesEmitted: number | null
+  agentTextCharsEmitted: number | null
+  gaps: string[]
+}
+
 export interface PerfRunResult {
   meta: RunMeta
   phases: PhaseResult[]
+  end?: EndSnapshot
   /** Aggregate view across phases (the compare input). */
   summary: Record<string, number>
 }
@@ -325,5 +345,17 @@ export function summarize(result: PerfRunResult): Record<string, number> {
   out.cdpNodes = cdpNodes
   out.cdpLayoutCount = cdpLayoutCount
   out.cdpJsHeapUsed = cdpJsHeap
+  const end = result.end
+  if (end) {
+    if (end.heapUsedAfterGcBytes !== null) out.endHeapAfterGcBytes = end.heapUsedAfterGcBytes
+    if (end.domNodes !== null) out.endDomNodes = end.domNodes
+    out.endAppPrivateBytes = end.appPrivateBytes
+    out.endRendererPrivateBytes = end.privateBytesByRole.renderer
+    out.endGpuPrivateBytes = end.privateBytesByRole.gpu
+    out.endHostPrivateBytes = end.privateBytesByRole.host
+    out.endOtherChildPrivateBytes = end.privateBytesByRole.otherChild
+    if (end.appLogErrorLines !== null) out.appLogErrorLines = end.appLogErrorLines
+    if (end.agentUpdatesEmitted !== null) out.agentUpdatesEmitted = end.agentUpdatesEmitted
+  }
   return out
 }

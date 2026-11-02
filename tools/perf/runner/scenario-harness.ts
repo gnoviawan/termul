@@ -14,18 +14,22 @@
  */
 
 import { execFile } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { createCollector } from '../metrics/cdp-collector.ts'
+import { captureEndSnapshot } from '../metrics/end-snapshot.ts'
 import { createProcessCollector } from '../metrics/process-collector.ts'
 import { renderReport } from '../report/html-report.ts'
 
-import { type PerfRunResult, type PhaseResult, summarize } from '../types.ts'
+import { type EndSnapshot, type PerfRunResult, type PhaseResult, summarize } from '../types.ts'
 import {
   buildFakeAgentConfig,
+  fakeAgentPreseed,
   installAndSelectCatalogAgent,
-  registerFakeAgent,
+  type PerfProjectSeed,
+  perfProjectsPreseed,
   reloadRenderer,
   seedComposerModel
 } from './agent-config.ts'
@@ -69,6 +73,11 @@ export interface ScenarioDef {
   drive(ctx: ScenarioContext): Promise<void>
   /** Whether this scenario spawns the fake agent at all. */
   needsFakeAgent?: boolean
+  /**
+   * Projects to seed before launch; the first one boots active. The host
+   * imports seeded state only at startup, so this cannot happen in drive().
+   */
+  preseedProjects?(flags: ScenarioFlags): PerfProjectSeed[]
 }
 
 /** Parse `--key value` / `--flag` args into a flags object. */
@@ -162,20 +171,39 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
   let processCollector: ReturnType<typeof createProcessCollector> | null = null
   let collector: Awaited<ReturnType<typeof createCollector>> | null = null
   let failure: string | undefined
+  let endSnapshot: EndSnapshot | undefined
+  // Fixed location behind a short flag: the app refuses to persist agent env
+  // values that look like secrets, so a long path in the config env would
+  // change what the app does under test.
+  const agentStatsDir = path.join(os.tmpdir(), 'termul-perf-agent-stats')
+  rmSync(agentStatsDir, { recursive: true, force: true })
+  mkdirSync(agentStatsDir, { recursive: true })
 
   // Phase assembly shared by PhaseClock.end().
   const phaseGaps: string[] = []
 
   try {
-    handle = await launchApp({
-      runId,
-      exe: typeof flags.exe === 'string' ? flags.exe : undefined,
-      keepState: flags['keep-state'] === true
-    })
     const realAgentId =
       typeof flags['use-real-agent'] === 'string' && flags['use-real-agent'].length > 0
         ? flags['use-real-agent']
         : null
+    const fakeAgentConfig =
+      !realAgentId && scenario.needsFakeAgent !== false
+        ? buildFakeAgentConfig(REPO_ROOT, fakeAgentEnv(flags, { PERF_AGENT_STATS: '1' }))
+        : null
+    // The host imports seeded state only at startup, so the fake agent and
+    // the scenario's projects are written before the app spawns.
+    const projectSeeds = scenario.preseedProjects?.(flags) ?? []
+    const preseedStore = {
+      ...(fakeAgentConfig ? fakeAgentPreseed(fakeAgentConfig) : {}),
+      ...(projectSeeds.length > 0 ? perfProjectsPreseed(projectSeeds) : {})
+    }
+    handle = await launchApp({
+      runId,
+      exe: typeof flags.exe === 'string' ? flags.exe : undefined,
+      keepState: flags['keep-state'] === true,
+      preseedStore: Object.keys(preseedStore).length > 0 ? preseedStore : undefined
+    })
     // The name the launcher's agent pill must show before a chat is sent.
     // Fake lane = the config's display name ('Perf Stub Agent'); real lane =
     // the catalog id capitalized the way registerFakeAgent derives it.
@@ -196,12 +224,8 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
       // built-in *-free tier — so session/new doesn't land on a gated model.
       await seedComposerModel(handle, configId, model)
       await reloadRenderer(handle)
-    } else if (scenario.needsFakeAgent !== false) {
-      const agentEnv = fakeAgentEnv(flags, {})
-      const config = buildFakeAgentConfig(REPO_ROOT, agentEnv)
-      await registerFakeAgent(handle, config)
-      expectedAgentName = config.name
-      await reloadRenderer(handle)
+    } else if (fakeAgentConfig) {
+      expectedAgentName = fakeAgentConfig.name
     }
     const page = await handle.page()
     collector = await createCollector(page)
@@ -269,6 +293,7 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
     }
 
     await scenario.drive(ctx)
+    endSnapshot = await captureEndSnapshot(page, handle.rootPid, agentStatsDir)
   } catch (err) {
     failure = err instanceof Error ? err.message : String(err)
   } finally {
@@ -301,6 +326,7 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
       failure
     },
     phases,
+    end: endSnapshot,
     summary: {}
   }
   result.summary = summarize(result)

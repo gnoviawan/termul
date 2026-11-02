@@ -18,10 +18,8 @@
  * long frames, heap slope? Reproduces the multi-agent slowness as numbers.
  */
 
-import { mkdirSync } from 'node:fs'
-import path from 'node:path'
 import type { Page } from 'playwright'
-import { reloadRenderer, seedPerfProject } from '../runner/agent-config.ts'
+import { singlePerfProject } from '../runner/agent-config.ts'
 import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts'
 import { launchChatViaUI, openLauncher, sleep, waitForLauncher } from '../runner/scenario-ui.ts'
 
@@ -93,20 +91,10 @@ async function drive(ctx: ScenarioContext): Promise<void> {
     await chatComposer.press('Enter', { timeout: 3000 }).catch(() => undefined)
   }
 
-  // --- setup: seed a project + wait for the launcher -----------------------
-  // Fresh scratch profiles start with zero projects; the launcher mounts
-  // only once a project is selected, so seed one first and reload so the
-  // boot sequence activates it.
-  const seed = await ctx.beginPhase('seed-project')
-  const projectDir = path.join(process.env.TEMP ?? 'C:\\temp', 'termul-perf-project')
-  mkdirSync(projectDir, { recursive: true })
-  await seedPerfProject(handle, projectDir)
-  await reloadRenderer(handle)
-  await seed.end()
-
+  // --- setup: wait for the launcher ----------------------------------------
+  // The harness seeds the perf project before launch (`preseedProjects`).
   // The launcher's composer mounts only on an empty pane with a selected
-  // project — wait for it to become visible (fresh scratch profile = no
-  // tabs, so the launcher is the default surface after reload).
+  // project, so wait for it to become visible.
   await waitForLauncher(page)
 
   // --- warmup phase --------------------------------------------------------
@@ -185,5 +173,6 @@ export const streamStormScenario: ScenarioDef = {
     measure: 20,
     'switch-every-ms': 5000
   },
+  preseedProjects: () => [singlePerfProject()],
   drive
 }

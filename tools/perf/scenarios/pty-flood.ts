@@ -13,9 +13,7 @@
  * flood; isolates terminal-bound vs React-bound jank.
  */
 
-import { mkdirSync } from 'node:fs'
-import path from 'node:path'
-import { reloadRenderer, seedPerfProject } from '../runner/agent-config.ts'
+import { singlePerfProject } from '../runner/agent-config.ts'
 import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts'
 import { launchChatViaUI, sleep, spawnFloodTerminal } from '../runner/scenario-ui.ts'
 
@@ -26,13 +24,8 @@ async function drive(ctx: ScenarioContext): Promise<void> {
   const floodSec = Math.max(1, Number(flags.sustain ?? 30))
   const measureSec = Math.max(1, Number(flags.measure ?? 15))
   const withAgentStream = flags['with-agent-stream'] === true
-  // --- setup: seed a project (terminals need a live project context) -----
-  const seed = await ctx.beginPhase('seed-project')
-  const projectDir = path.join(process.env.TEMP ?? 'C:\\temp', 'termul-perf-project')
-  mkdirSync(projectDir, { recursive: true })
-  await seedPerfProject(ctx.handle, projectDir)
-  await reloadRenderer(ctx.handle)
-  await seed.end()
+  // Terminals need a live project context; the harness seeds the perf
+  // project before launch (`preseedProjects`).
 
   // --- warmup: one terminal up first (renderer attach, xterm mount) -------
   const warmup = await ctx.beginPhase('warmup')
@@ -76,5 +69,6 @@ export const ptyFloodScenario: ScenarioDef = {
     sustain: 30,
     measure: 15
   },
+  preseedProjects: () => [singlePerfProject()],
   drive
 }
