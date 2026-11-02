@@ -2635,6 +2635,14 @@ describe('AgentLauncher composer drag-drop', () => {
   })
 })
 
+describe('AgentLauncher composer card', () => {
+  it('draws no focus edge around the composer card', () => {
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer]')
+    expect(composer?.className).not.toMatch(/focus-within:|has-\[/)
+  })
+})
+
 describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
   const SKILL = {
     name: 'git-worktree',

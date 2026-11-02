@@ -16,7 +16,6 @@ import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEdito
 import { ComposerSendButton } from '@/components/chat/composer/ComposerSendButton'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { Message, MessageContent } from '@/components/ui/message'
-import { COMPOSER_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { cn } from '@/lib/utils'
 import { Caption } from './kit'
 import {
@@ -241,10 +240,7 @@ export function ModelSelectorV2Composer() {
       <div className={cn(CHAT_GUTTER_X, 'pb-6 pt-3')}>
         <div className="relative mx-auto w-full max-w-3xl">
           <ComposerBeamShell busy={false} reduced={reduced}>
-            <div
-              data-chat-composer="true"
-              className={cn('relative', COMPOSER_CARD_CLASS, COMPOSER_FOCUS_CLASS)}
-            >
+            <div data-chat-composer="true" className={cn('relative', COMPOSER_CARD_CLASS)}>
               <div className="flex items-start gap-1 px-4 pb-1.5 pt-3.5">
                 <ChatComposerEditor
                   className="min-w-0 flex-1"

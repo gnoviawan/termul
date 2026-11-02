@@ -1,15 +1,11 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { cn } from '@/lib/utils'
 import {
-  COMPOSER_FOCUS_CLASS,
   FOCUS_RING_CLASS,
   FOCUS_RING_OVERLAY_CLASS,
   PANEL_FIELD_CLASS,
   PANEL_HEADER_CLASS,
   PANEL_ICON_BUTTON_CLASS,
-  PROMPT_CARD_FOCUS_CLASS,
   pressedToggleClass,
   QUIET_ICON_BUTTON_CLASS,
   SEGMENTED_TRACK_CLASS,
@@ -89,17 +85,7 @@ describe('panel-styles', () => {
     )
   })
 
-  it('focus styles all paint the --focus-ring token', () => {
-    expect(classes(COMPOSER_FOCUS_CLASS)).toEqual([
-      'focus-within:border-focus-ring',
-      'focus-within:ring-1',
-      'focus-within:ring-focus-ring'
-    ])
-    expect(classes(PROMPT_CARD_FOCUS_CLASS)).toEqual([
-      'has-[:focus-visible]:border-focus-ring',
-      'has-[:focus-visible]:ring-1',
-      'has-[:focus-visible]:ring-focus-ring'
-    ])
+  it('the focus overlay paints the --focus-ring token inset', () => {
     expect(classes(FOCUS_RING_OVERLAY_CLASS)).toEqual(
       expect.arrayContaining([
         'focus-visible:outline-hidden',
@@ -108,16 +94,5 @@ describe('panel-styles', () => {
         'focus-visible:after:ring-focus-ring'
       ])
     )
-  })
-
-  it.each([
-    ['components/chat/ChatInputBar.tsx', 'COMPOSER_FOCUS_CLASS'],
-    ['components/agents/AgentLauncher.tsx', 'COMPOSER_FOCUS_CLASS'],
-    ['components/chat/AskUserQuestion.tsx', 'PROMPT_CARD_FOCUS_CLASS'],
-    ['components/chat/ElicitationPrompt.tsx', 'COMPOSER_FOCUS_CLASS']
-  ])('%s takes the shared %s, not a faint one-off ring', (file, focusClass) => {
-    const source = readFileSync(join(__dirname, '../..', file), 'utf8')
-    expect(source).toContain(focusClass)
-    expect(source).not.toMatch(/focus-within:ring-foreground\//)
   })
 })
