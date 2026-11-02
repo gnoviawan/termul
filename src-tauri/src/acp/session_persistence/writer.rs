@@ -46,7 +46,7 @@ pub(super) fn writer_loop(
                 // log and forget the caches between the write and the apply.
                 append_record_then(&inner.root, &metadata, &mut tails, record, || {
                     if let Some(derived) = derived {
-                        derived.apply(&inner);
+                        derived.apply(&inner, &metadata);
                     }
                 })
             }

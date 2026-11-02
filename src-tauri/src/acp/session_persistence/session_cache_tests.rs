@@ -11,19 +11,23 @@ fn temp_dir(label: &str) -> PathBuf {
     path
 }
 
-async fn registered(root: &Path) -> Arc<SessionPersistence> {
+fn registration(root: &Path) -> SessionRegistration {
     let cwd = root.join("cwd");
     fs::create_dir_all(&cwd).unwrap();
+    SessionRegistration {
+        session_id: "session-1".to_string(),
+        stable_agent_namespace: Some("config:one".to_string()),
+        runtime_agent_id: Some("runtime-1".to_string()),
+        project_id: Some("project-1".to_string()),
+        cwd,
+        ..Default::default()
+    }
+}
+
+async fn registered(root: &Path) -> Arc<SessionPersistence> {
     let persistence = SessionPersistence::open(root.join("store")).await.unwrap();
     persistence
-        .register_session(SessionRegistration {
-            session_id: "session-1".to_string(),
-            stable_agent_namespace: Some("config:one".to_string()),
-            runtime_agent_id: Some("runtime-1".to_string()),
-            project_id: Some("project-1".to_string()),
-            cwd,
-            ..Default::default()
-        })
+        .register_session(registration(root))
         .await
         .unwrap();
     persistence
@@ -585,52 +589,247 @@ async fn the_writer_applies_a_commands_append_under_the_entry_lock() {
     assert_the_writer_applies_an_append_under_the_entry_lock(Cached::Commands).await;
 }
 
+/// A delete drops the catalog entry before anything else; a registration
+/// of the same id can land right after. The remove itself must drop the
+/// cached values, or the new session would read the deleted one's.
+async fn assert_a_new_registration_of_a_removed_id_reads_its_own_log(cached: Cached) {
+    let root = temp_dir(&format!("reregister-{cached:?}"));
+    let (persistence, _) = reopened(&root, false).await;
+    assert_eq!(read(&persistence, cached).await, kept(cached));
+    assert!(is_cached(&persistence, cached));
+
+    // `delete_session`'s first step; the rest of the delete has not run.
+    persistence.remove_catalog_entry("session-1");
+    assert!(
+        !is_cached(&persistence, cached),
+        "{cached:?}: the catalog remove drops the cached value"
+    );
+    persistence
+        .register_session(registration(&root))
+        .await
+        .unwrap();
+    assert_eq!(
+        read(&persistence, cached).await,
+        Value::Null,
+        "{cached:?}: the new session's log holds no value"
+    );
+    persistence.shutdown().await.unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_new_controls_registration_of_a_removed_id_reads_its_own_log() {
+    assert_a_new_registration_of_a_removed_id_reads_its_own_log(Cached::Controls).await;
+}
+
+#[tokio::test]
+async fn a_new_commands_registration_of_a_removed_id_reads_its_own_log() {
+    assert_a_new_registration_of_a_removed_id_reads_its_own_log(Cached::Commands).await;
+}
+
+/// The locked last resort clones the catalog entry, then a delete and a new
+/// registration of the id land before the scan takes its ticket, so the
+/// ticket is current but the scan reads the deleted session's log. The read
+/// may return that scan, but it must never be cached for the new session.
+async fn assert_a_locked_scan_overtaken_by_a_reregistration_never_seeds(cached: Cached) {
+    let root = temp_dir(&format!("locked-reregister-{cached:?}"));
+    let (persistence, _) = reopened(&root, false).await;
+    let forget = {
+        let persistence = Arc::downgrade(&persistence);
+        Arc::new(move || {
+            if let Some(persistence) = persistence.upgrade() {
+                persistence.forget_log_derived("session-1");
+            }
+        })
+    };
+    persistence.set_cache_scan_test_callback(forget);
+    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reregister = {
+        let persistence = Arc::downgrade(&persistence);
+        let fired = Arc::clone(&fired);
+        Arc::new(move || {
+            let Some(persistence) = persistence.upgrade() else {
+                return;
+            };
+            if fired.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            let mut fresh = persistence.metadata("session-1").unwrap();
+            fresh.storage_key = Uuid::new_v4().to_string();
+            persistence.remove_catalog_entry("session-1");
+            persistence.install_catalog_entry(fresh);
+        })
+    };
+    persistence.set_locked_scan_test_callback(reregister);
+
+    assert_eq!(
+        read(&persistence, cached).await,
+        kept(cached),
+        "{cached:?}: the read returns the scan it made"
+    );
+    assert!(fired.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        !is_cached(&persistence, cached),
+        "{cached:?}: the deleted session's log must not seed the new registration"
+    );
+    persistence.set_cache_scan_test_callback(Arc::new(|| {}));
+    assert_eq!(
+        read(&persistence, cached).await,
+        Value::Null,
+        "{cached:?}: the new registration reads its own (empty) log"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_controls_locked_scan_overtaken_by_a_reregistration_never_seeds() {
+    assert_a_locked_scan_overtaken_by_a_reregistration_never_seeds(Cached::Controls).await;
+}
+
+#[tokio::test]
+async fn a_commands_locked_scan_overtaken_by_a_reregistration_never_seeds() {
+    assert_a_locked_scan_overtaken_by_a_reregistration_never_seeds(Cached::Commands).await;
+}
+
 fn command_list(name: &str, seq: u64) -> Option<CommandList> {
     CommandList::of_record(&commands_update(seq, name))
 }
 
+/// A cache with `session_id` registered under a fresh catalog entry.
+fn registered_cache(session_id: &str) -> (SessionCache<Option<CommandList>>, CatalogEntry) {
+    let cache = SessionCache::default();
+    let entry = test_catalog_entry(session_id);
+    cache.register(session_id, &entry);
+    (cache, entry)
+}
+
 #[test]
 fn a_seed_from_before_a_forget_is_rejected() {
-    let cache = SessionCache::<Option<CommandList>>::default();
+    let (cache, entry) = registered_cache("session-1");
     let ticket = cache.lookup("session-1").unwrap_err();
     cache.forget("session-1");
     assert_eq!(
-        cache.seed("session-1", ticket, command_list("stale", 3)),
+        cache
+            .seed("session-1", &entry, ticket, command_list("stale", 3))
+            .ok(),
         None
     );
     let fresh = cache.lookup("session-1").unwrap_err();
     assert_ne!(fresh, ticket, "a forget moves the generation on");
     assert_eq!(
-        cache.seed("session-1", fresh, command_list("kept", 3)),
+        cache
+            .seed("session-1", &entry, fresh, command_list("kept", 3))
+            .ok(),
         Some(command_list("kept", 3))
     );
 }
 
 #[test]
 fn a_seed_keeps_a_list_appended_while_it_scanned() {
-    let cache = SessionCache::<Option<CommandList>>::default();
+    let (cache, entry) = registered_cache("session-1");
     cache.forget("session-1");
     let ticket = cache.lookup("session-1").unwrap_err();
-    cache.update("session-1", |entry| *entry = command_list("appended", 40));
+    cache.update("session-1", &entry, |value| {
+        *value = command_list("appended", 40);
+    });
     assert_eq!(
-        cache.seed("session-1", ticket, command_list("kept", 3)),
+        cache
+            .seed("session-1", &entry, ticket, command_list("kept", 3))
+            .ok(),
         Some(command_list("appended", 40))
     );
 }
 
 #[test]
 fn a_forget_rejects_only_its_own_sessions_scans() {
-    let cache = SessionCache::<Option<CommandList>>::default();
+    let (cache, entry) = registered_cache("session-1");
+    let other_entry = test_catalog_entry("session-2");
+    cache.register("session-2", &other_entry);
     let ticket = cache.lookup("session-1").unwrap_err();
     let other = cache.lookup("session-2").unwrap_err();
     cache.forget("session-2");
     assert_eq!(
-        cache.seed("session-1", ticket, command_list("kept", 3)),
+        cache
+            .seed("session-1", &entry, ticket, command_list("kept", 3))
+            .ok(),
         Some(command_list("kept", 3)),
         "another session's forget leaves the ticket valid"
     );
     assert_eq!(
-        cache.seed("session-2", other, command_list("stale", 3)),
+        cache
+            .seed("session-2", &other_entry, other, command_list("stale", 3))
+            .ok(),
         None
     );
+}
+
+/// A scan of a removed entry's log whose ticket is current (taken after the
+/// remove and a new registration of the id) still may not seed.
+#[test]
+fn a_seed_for_a_catalog_entry_no_longer_registered_is_rejected() {
+    let (cache, deleted) = registered_cache("session-1");
+    cache.unregister("session-1");
+    let ticket = cache.lookup("session-1").unwrap_err();
+    assert_eq!(
+        cache
+            .seed("session-1", &deleted, ticket, command_list("deleted", 3))
+            .ok(),
+        None,
+        "no registration: the removed entry may not seed"
+    );
+
+    let current = test_catalog_entry("session-1");
+    cache.register("session-1", &current);
+    let ticket = cache.lookup("session-1").unwrap_err();
+    assert_eq!(
+        cache
+            .seed("session-1", &deleted, ticket, command_list("deleted", 3))
+            .ok(),
+        None,
+        "a new registration of the id: the removed entry may not seed"
+    );
+    assert!(cache.lookup("session-1").is_err(), "nothing was cached");
+    assert_eq!(
+        cache
+            .seed("session-1", &current, ticket, command_list("current", 3))
+            .ok(),
+        Some(command_list("current", 3))
+    );
+}
+
+#[test]
+fn a_registration_drops_the_values_of_the_one_it_replaces() {
+    let (cache, entry) = registered_cache("session-1");
+    let ticket = cache.lookup("session-1").unwrap_err();
+    assert!(cache
+        .seed("session-1", &entry, ticket, command_list("old", 3))
+        .is_ok());
+    assert!(cache.lookup("session-1").is_ok());
+
+    cache.register("session-1", &test_catalog_entry("session-1"));
+    assert!(
+        cache.lookup("session-1").is_err(),
+        "the new registration starts unseeded"
+    );
+}
+
+/// A straggling writer of a replaced entry cannot tell whether its record
+/// is in the log the current registration reads: it forgets the session.
+#[test]
+fn an_append_from_a_replaced_entry_forgets_the_session() {
+    let (cache, replaced) = registered_cache("session-1");
+    let current = test_catalog_entry("session-1");
+    cache.register("session-1", &current);
+    let ticket = cache.lookup("session-1").unwrap_err();
+    assert!(cache
+        .seed("session-1", &current, ticket, command_list("current", 3))
+        .is_ok());
+
+    cache.update("session-1", &replaced, |value| {
+        *value = command_list("straggler", 40);
+    });
+    let after = cache
+        .lookup("session-1")
+        .expect_err("the straggler's append dropped the entry");
+    assert_ne!(after, ticket, "and rejected scans in flight");
 }

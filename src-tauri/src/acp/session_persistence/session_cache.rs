@@ -6,16 +6,27 @@
 //! entry follows the durable order of the log. The first payload read of a
 //! session the cache lacks scans the log on the blocking pool, without a
 //! lock, and merges the result. A seq-intruder salvage rewrites the log and
-//! a delete removes it; both forget the session, but a scan that read the
-//! old log can still finish afterwards. So every forget bumps the session's
+//! forgets the session, but a scan that read the old log can still finish
+//! afterwards. So every forget bumps the session's
 //! generation, a scan carries the generation it started at, and a seed from
 //! an older one is rejected: the read scans again, against the current log.
 //! Generations are per session, so a forget never rejects another
 //! session's scan. A read that keeps losing to rewrites scans one last time
 //! under the session's catalog entry lock, which a salvage holds across its
 //! rewrite and forget.
+//!
+//! Entries also belong to one registration of a session id: a delete
+//! removes the log, and the id can be registered again with a new one. Each
+//! cache mirrors which catalog entry the id is registered under, updated
+//! under the catalog lock by every catalog insert and remove, which also
+//! drop the id's entry. A seed or an append names the catalog entry it read
+//! or wrote through and lands only while that entry is still the registered
+//! one, so a scan of a deleted (or replaced) session's log can never seed
+//! values a new registration of the id would read, however its ticket was
+//! taken.
 
 use std::collections::hash_map::Entry;
+use std::sync::Weak;
 
 use super::*;
 
@@ -40,7 +51,17 @@ pub(super) trait LogDerived: Default + Send + 'static {
     /// Merge a scan of the log into the session's entry, keeping anything
     /// newer an append already put there.
     fn seed(entry: Entry<'_, String, Self>, scanned: Self::Scan) -> Self::Value;
+
+    /// The value a scan alone yields, for a read whose scan may not seed.
+    fn unseeded(scanned: Self::Scan) -> Self::Value {
+        let mut scratch = HashMap::new();
+        Self::seed(scratch.entry(String::new()), scanned)
+    }
 }
+
+/// A session's catalog entry. Its identity (the allocation, not the value)
+/// is the registration a cache entry belongs to.
+pub(super) type CatalogEntry = Arc<Mutex<SessionMetadata>>;
 
 /// The session generation a scan started at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,11 +77,28 @@ struct CacheState<V> {
     /// entry, so a scan started before the forget stays rejected; the map
     /// keeps one integer per session forgotten in this process.
     generations: HashMap<String, u64>,
+    /// The catalog entry each session id is registered under, kept in step
+    /// with the catalog under its lock. Weak: the catalog owns the entries,
+    /// and a weak reference keeps its allocation, so no other entry can
+    /// reuse the address it compares by.
+    registered: HashMap<String, Weak<Mutex<SessionMetadata>>>,
 }
 
 impl<V> CacheState<V> {
     fn ticket(&self, session_id: &str) -> ScanTicket {
         ScanTicket(self.generations.get(session_id).copied().unwrap_or(0))
+    }
+
+    /// `entry` is the catalog entry `session_id` is registered under.
+    fn is_registered(&self, session_id: &str, entry: &CatalogEntry) -> bool {
+        self.registered
+            .get(session_id)
+            .is_some_and(|current| std::ptr::eq(current.as_ptr(), Arc::as_ptr(entry)))
+    }
+
+    fn forget(&mut self, session_id: &str) {
+        *self.generations.entry(session_id.to_string()).or_default() += 1;
+        self.entries.remove(session_id);
     }
 }
 
@@ -70,20 +108,55 @@ impl<V> Default for SessionCache<V> {
             state: Mutex::new(CacheState {
                 entries: HashMap::new(),
                 generations: HashMap::new(),
+                registered: HashMap::new(),
             }),
         }
     }
 }
 
 impl<V: LogDerived> SessionCache<V> {
-    /// Apply an append to the session's entry, creating it if missing.
-    pub(super) fn update(&self, session_id: &str, apply: impl FnOnce(&mut V)) {
-        apply(
-            self.state
-                .lock()
-                .entries
-                .entry(session_id.to_string())
-                .or_default(),
+    /// Record that `session_id` is now registered under the catalog `entry`,
+    /// dropping whatever was cached for an earlier registration. Called under
+    /// the catalog lock, with the catalog insert.
+    pub(super) fn register(&self, session_id: &str, entry: &CatalogEntry) {
+        let mut state = self.state.lock();
+        state
+            .registered
+            .insert(session_id.to_string(), Arc::downgrade(entry));
+        state.entries.remove(session_id);
+    }
+
+    /// Record that `session_id` has no catalog entry, dropping its cached
+    /// value. Called under the catalog lock, with the catalog remove.
+    pub(super) fn unregister(&self, session_id: &str) {
+        let mut state = self.state.lock();
+        state.registered.remove(session_id);
+        state.entries.remove(session_id);
+    }
+
+    /// Apply an append the writer of the catalog `entry` wrote to the
+    /// session's entry, creating it if missing. A writer whose entry is no
+    /// longer the registered one (a straggler of a replaced registration)
+    /// cannot tell whether its record is in a log the current registration
+    /// reads, so it forgets the session instead.
+    pub(super) fn update(
+        &self,
+        session_id: &str,
+        entry: &CatalogEntry,
+        apply: impl FnOnce(&mut V),
+    ) {
+        let mut state = self.state.lock();
+        if state.is_registered(session_id, entry) {
+            apply(state.entries.entry(session_id.to_string()).or_default());
+            return;
+        }
+        state.forget(session_id);
+        drop(state);
+        log::warn!(
+            "[acp-history] {} append from a writer whose catalog entry is gone; forgot the \
+             session session_id={}",
+            V::NAME,
+            crate::logging::redact_session_id(session_id)
         );
     }
 
@@ -97,20 +170,23 @@ impl<V: LogDerived> SessionCache<V> {
             .ok_or_else(|| state.ticket(session_id))
     }
 
-    /// Merge a scan into the session's entry. `None`: a forget of the
-    /// session ran since the scan started, so it may have read a log that no
-    /// longer exists.
+    /// Merge a scan of the log of the catalog `entry` into the session's
+    /// entry. `Err` hands the scan back when it may not seed: a forget of
+    /// the session ran since the scan started, so it may have read a log
+    /// that no longer exists, or `entry` is no longer the session's catalog
+    /// entry (deleted, or replaced by a new registration of the id).
     pub(super) fn seed(
         &self,
         session_id: &str,
+        entry: &CatalogEntry,
         ticket: ScanTicket,
         scanned: V::Scan,
-    ) -> Option<V::Value> {
+    ) -> std::result::Result<V::Value, V::Scan> {
         let mut state = self.state.lock();
-        if ticket != state.ticket(session_id) {
-            return None;
+        if ticket != state.ticket(session_id) || !state.is_registered(session_id, entry) {
+            return Err(scanned);
         }
-        Some(V::seed(
+        Ok(V::seed(
             state.entries.entry(session_id.to_string()),
             scanned,
         ))
@@ -118,9 +194,7 @@ impl<V: LogDerived> SessionCache<V> {
 
     /// Drop the session's entry and reject its scans already in flight.
     pub(super) fn forget(&self, session_id: &str) {
-        let mut state = self.state.lock();
-        *state.generations.entry(session_id.to_string()).or_default() += 1;
-        state.entries.remove(session_id);
+        self.state.lock().forget(session_id);
     }
 }
 
@@ -150,16 +224,18 @@ impl AppendedLogDerived {
     /// write, the record always lands on top of that scan. A salvage cannot
     /// run between the write and the apply, so its forget can never be
     /// followed by a record its rewrite dropped.
-    pub(super) fn apply(self, inner: &Inner) {
+    pub(super) fn apply(self, inner: &Inner, writer_entry: &CatalogEntry) {
         #[cfg(test)]
         if let Some(hook) = inner.cache_apply_hook.lock().clone() {
             hook();
         }
-        inner.last_controls.note(&self.session_id, self.controls);
+        inner
+            .last_controls
+            .note(&self.session_id, writer_entry, self.controls);
         if let Some(commands) = self.commands {
             inner
                 .last_commands
-                .update(&self.session_id, |entry| *entry = commands);
+                .update(&self.session_id, writer_entry, |entry| *entry = commands);
         }
     }
 }
@@ -177,8 +253,11 @@ impl SessionPersistence {
                 Ok(known) => return Ok(known),
                 Err(ticket) => ticket,
             };
-            let metadata = self.metadata(session_id)?;
-            let path = self.session_dir(&metadata.storage_key)?.join(MESSAGES_FILE);
+            // The catalog entry is read after the ticket is taken, and the
+            // seed is bound to it: see `SessionCache::seed`.
+            let entry = self.catalog_entry(session_id)?;
+            let storage_key = entry.lock().storage_key.clone();
+            let path = self.session_dir(&storage_key)?.join(MESSAGES_FILE);
             let id = session_id.to_string();
             #[cfg(test)]
             let hook = self.cache_scan_hook.lock().clone();
@@ -192,12 +271,12 @@ impl SessionPersistence {
             })
             .await
             .map_err(|error| SessionPersistenceError::PersistenceUnhealthy(error.to_string()))??;
-            if let Some(value) = cache.seed(session_id, ticket, scanned) {
+            if let Ok(value) = cache.seed(session_id, &entry, ticket, scanned) {
                 return Ok(value);
             }
             log::info!(
-                "[acp-history] {} scan overtaken by a log rewrite; rescanning session_id={} \
-                 attempt={attempt}",
+                "[acp-history] {} scan overtaken by a log rewrite or a catalog change; \
+                 rescanning session_id={} attempt={attempt}",
                 V::NAME,
                 crate::logging::redact_session_id(session_id)
             );
@@ -215,61 +294,49 @@ impl SessionPersistence {
     /// The last resort of [`Self::read_through`]: scan and seed under the
     /// session's catalog entry lock. A salvage rewrites the log and forgets
     /// the session while holding that lock, so it cannot overtake this scan.
-    /// Only `delete_session` forgets without it, and then the session is
-    /// gone. The scan holds up the session's writer and `persist_index`, which
+    /// The scan holds up the session's writer and `persist_index`, which
     /// is why it is not the first resort.
     ///
-    /// A delete can remove the catalog entry and forget the session after
-    /// the entry is cloned here but before the ticket is taken under its
-    /// lock; the ticket is then current and the seed holds the deleted log.
-    /// So once the seed lands, the entry must still be the catalog's: a
-    /// delete removes it before it forgets, so while it is, that forget is
-    /// still to come and drops the seed. Otherwise this read drops it.
+    /// A delete can remove the catalog entry after it is cloned here but
+    /// before the ticket is taken under its lock; the ticket is then current
+    /// but the scan reads the deleted log. The seed is bound to the cloned
+    /// entry: it lands only while that entry is still registered, and the
+    /// catalog remove or insert that unregisters it later drops it.
     async fn read_through_locked<V: LogDerived>(
         self: &Arc<Self>,
         session_id: &str,
     ) -> Result<V::Value> {
-        let entry = self
-            .inner
-            .catalog
-            .lock()
-            .get(session_id)
-            .cloned()
-            .ok_or(SessionPersistenceError::SessionNotFound)?;
-        let value = self
-            .scan_under_entry_lock::<V>(session_id, Arc::clone(&entry))
-            .await?;
-        // Checked without the entry lock: the catalog lock is taken before
-        // an entry lock everywhere else.
-        let registered = match self.inner.catalog.lock().get(session_id) {
-            Some(current) if Arc::ptr_eq(current, &entry) => return Ok(value),
-            Some(_) => true,
-            None => false,
+        let entry = self.catalog_entry(session_id)?;
+        let scanned = match self.scan_under_entry_lock::<V>(session_id, entry).await? {
+            Ok(value) => return Ok(value),
+            Err(scanned) => scanned,
         };
-        V::cache(&self.inner).forget(session_id);
+        let registered = self.inner.catalog.lock().contains_key(session_id);
         log::warn!(
-            "[acp-history] {} locked scan raced a delete or re-registration; dropped its seed \
+            "[acp-history] {} locked scan raced a delete or re-registration; did not seed \
              session_id={} registered={registered}",
             V::NAME,
             crate::logging::redact_session_id(session_id)
         );
         if registered {
             // The entry was replaced (a writer reopen, or a delete and a new
-            // registration of the id) while the read ran. Returning the scan
-            // is no worse than a read that finished just before; only a
-            // cached copy could have outlived the replacement.
-            Ok(value)
+            // registration of the id) while the read ran, or a straggling
+            // writer of an older entry forgot the session. Returning the scan
+            // is no worse than a read that finished just before; it is never
+            // cached, so it cannot outlive the replacement.
+            Ok(V::unseeded(scanned))
         } else {
             Err(SessionPersistenceError::SessionNotFound)
         }
     }
 
     /// Scan the log and seed the cache under the session's catalog `entry`.
+    /// The inner `Err` is a scan that may not seed (see `SessionCache::seed`).
     async fn scan_under_entry_lock<V: LogDerived>(
         self: &Arc<Self>,
         session_id: &str,
-        entry: Arc<Mutex<SessionMetadata>>,
-    ) -> Result<V::Value> {
+        entry: CatalogEntry,
+    ) -> Result<std::result::Result<V::Value, V::Scan>> {
         let persistence = Arc::clone(self);
         let id = session_id.to_string();
         #[cfg(test)]
@@ -282,31 +349,48 @@ impl SessionPersistence {
             let metadata = entry.lock();
             let cache = V::cache(&persistence.inner);
             let ticket = match cache.lookup(&id) {
-                Ok(known) => return Ok(known),
+                Ok(known) => return Ok(Ok(known)),
                 Err(ticket) => ticket,
             };
             let path = persistence
                 .session_dir(&metadata.storage_key)?
                 .join(MESSAGES_FILE);
             let scanned = V::scan(&path, &id)?;
-            cache.seed(&id, ticket, scanned).ok_or_else(|| {
-                log::warn!(
-                    "[acp-history] {} locked scan overtaken by a delete session_id={}",
-                    V::NAME,
-                    crate::logging::redact_session_id(&id)
-                );
-                SessionPersistenceError::SessionNotFound
-            })
+            Ok(cache.seed(&id, &entry, ticket, scanned))
         })
         .await
         .map_err(|error| SessionPersistenceError::PersistenceUnhealthy(error.to_string()))?
     }
 
     /// Forget every cached value folded from the session's log, after the
-    /// log was rewritten or removed.
+    /// log was rewritten.
     pub(super) fn forget_log_derived(&self, session_id: &str) {
         self.inner.last_commands.forget(session_id);
         self.inner.last_controls.forget(session_id);
+    }
+
+    /// Bind the log-derived caches of `session_id` to its new catalog
+    /// `entry`. The caller holds the catalog lock and inserts `entry`.
+    pub(super) fn register_log_derived(&self, session_id: &str, entry: &CatalogEntry) {
+        self.inner.last_commands.register(session_id, entry);
+        self.inner.last_controls.register(session_id, entry);
+    }
+
+    /// Unbind the log-derived caches of `session_id` from its removed
+    /// catalog entry. The caller holds the catalog lock.
+    pub(super) fn unregister_log_derived(&self, session_id: &str) {
+        self.inner.last_commands.unregister(session_id);
+        self.inner.last_controls.unregister(session_id);
+    }
+
+    /// The session's catalog entry.
+    fn catalog_entry(&self, session_id: &str) -> Result<CatalogEntry> {
+        self.inner
+            .catalog
+            .lock()
+            .get(session_id)
+            .cloned()
+            .ok_or(SessionPersistenceError::SessionNotFound)
     }
 
     /// Test seam: every lock-free read-through scan pauses after reading the
@@ -337,6 +421,26 @@ impl SessionPersistence {
     pub(crate) fn set_cache_apply_test_callback(&self, callback: CacheScanTestCallback) {
         *self.inner.cache_apply_hook.lock() = Some(callback);
     }
+}
+
+/// A catalog entry for `session_id` that no catalog holds, for tests that
+/// drive a [`SessionCache`] directly.
+#[cfg(test)]
+pub(super) fn test_catalog_entry(session_id: &str) -> CatalogEntry {
+    let metadata = serde_json::from_value(serde_json::json!({
+        "schemaVersion": SESSION_SCHEMA_VERSION,
+        "storageKey": Uuid::new_v4().to_string(),
+        "sessionId": session_id,
+        "cwd": "/",
+        "createdAt": 0,
+        "lastActivityAt": 0,
+        "status": "active",
+        "messageCount": 0,
+        "toolCount": 0,
+        "lastSeq": 0,
+    }))
+    .expect("test catalog entry");
+    Arc::new(Mutex::new(metadata))
 }
 
 #[cfg(test)]

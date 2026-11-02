@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 
 use memchr::memmem;
 
-use super::session_cache::{LogDerived, SessionCache};
+use super::session_cache::{CatalogEntry, LogDerived, SessionCache};
 use super::*;
 use crate::acp::session_payload::{ControlsFold, SessionControls, CONTROLS_RECORD_TYPES};
 
@@ -55,10 +55,16 @@ impl LogDerived for CachedControls {
 pub(super) type ControlsCache = SessionCache<CachedControls>;
 
 impl ControlsCache {
-    /// Merge the fold of an appended record into its session's entry.
-    pub(super) fn note(&self, session_id: &str, appended: ControlsFold) {
+    /// Merge the fold of an appended record into its session's entry, when
+    /// `writer_entry` is still the session's catalog entry.
+    pub(super) fn note(
+        &self,
+        session_id: &str,
+        writer_entry: &CatalogEntry,
+        appended: ControlsFold,
+    ) {
         if appended != ControlsFold::default() {
-            self.update(session_id, |entry| entry.fold.merge(appended));
+            self.update(session_id, writer_entry, |entry| entry.fold.merge(appended));
         }
     }
 }

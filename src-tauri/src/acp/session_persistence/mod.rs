@@ -151,9 +151,10 @@ struct Inner {
     /// so a tail payload whose window starts after the session's
     /// `commands_update` still carries it. The writer replaces an entry as it
     /// writes each list; a tail payload seeds a missing one from the log.
-    /// Only a log rewrite (salvage) or `delete_session` removes one, and that
-    /// rejects the session's scans already in flight (see `session_cache`): a
-    /// seed racing an append can then never fill a hole with the older list.
+    /// Only a log rewrite (salvage) or a catalog insert or remove of the id
+    /// removes one, and that rejects the session's scans already in flight
+    /// (see `session_cache`): a seed racing an append can then never fill a
+    /// hole with the older list.
     last_commands: session_cache::SessionCache<Option<CommandList>>,
     /// The session-controls twin of `last_commands` (see `controls`).
     last_controls: controls::ControlsCache,
@@ -1234,11 +1235,11 @@ impl SessionPersistence {
         // salvage serializes its rewrite on the catalog lock, so once the
         // entry is gone no in-flight or future salvage can stage a rewrite
         // that would resurrect the deleted dir via `create_dir_all`.
+        // The remove also drops the session's cached commands and controls,
+        // atomically with the entry: a new registration of the id can never
+        // read them, and a scan of this log can no longer seed them (see
+        // `session_cache`).
         self.remove_catalog_entry(session_id);
-        // Forget only once the entry is gone: a cache scan that takes its
-        // ticket after this forget then cannot find the session (see
-        // `session_cache`), and one that took it before is rejected.
-        self.forget_log_derived(session_id);
         fs::remove_dir_all(&dir)?;
         self.persist_index().await?;
         log::info!(
@@ -2217,7 +2218,10 @@ impl SessionPersistence {
         self.insert_catalog_entry(metadata.session_id.clone(), Arc::new(Mutex::new(metadata)));
     }
 
-    /// The single catalog insert: keeps the `commandId` index in step.
+    /// The single catalog insert: keeps the `commandId` index and the
+    /// log-derived caches in step. The caches are rebound under the catalog
+    /// lock, so no reader finds the new entry while values cached for the
+    /// one it replaces are still served (see `session_cache`).
     fn insert_catalog_entry(&self, session_id: String, metadata: Arc<Mutex<SessionMetadata>>) {
         if let Some(command_id) = metadata.lock().command_id.clone() {
             self.inner
@@ -2225,16 +2229,26 @@ impl SessionPersistence {
                 .lock()
                 .insert(command_id, session_id.clone());
         }
-        self.inner.catalog.lock().insert(session_id, metadata);
+        let mut catalog = self.inner.catalog.lock();
+        self.register_log_derived(&session_id, &metadata);
+        catalog.insert(session_id, metadata);
     }
 
-    /// The single catalog remove: drops the session's `commandId` index entry.
+    /// The single catalog remove: drops the session's `commandId` index entry
+    /// and, under the catalog lock, its log-derived cache values.
     fn remove_catalog_entry(&self, session_id: &str) {
         self.inner
             .unsalvageable_log_stamps
             .lock()
             .remove(session_id);
-        let removed = self.inner.catalog.lock().remove(session_id);
+        let removed = {
+            let mut catalog = self.inner.catalog.lock();
+            let removed = catalog.remove(session_id);
+            if removed.is_some() {
+                self.unregister_log_derived(session_id);
+            }
+            removed
+        };
         if let Some(command_id) = removed.and_then(|metadata| metadata.lock().command_id.clone()) {
             let mut index = self.inner.command_index.lock();
             if index.get(&command_id).is_some_and(|sid| sid == session_id) {
