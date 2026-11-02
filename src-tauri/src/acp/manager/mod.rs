@@ -1932,6 +1932,9 @@ impl AcpManager {
                         let _ = reply.send(Ok(()));
                     }
                     AcpCommand::Authenticate { reply, .. } => driver.authenticate(reply),
+                    AcpCommand::RespondElicitation { reply, .. } => {
+                        let _ = reply.send(Ok(()));
+                    }
                     // Unhandled commands are silently dropped (same behavior
                     // as the prior `if let`). A reply-bearing variant dropped
                     // here will cause the caller to hang — future tests that
@@ -2104,8 +2107,8 @@ impl AcpManager {
     }
 
     /// Fixture for the "agent already resolved it" race: the fake driver
-    /// answers every permission response / question answer with the driver's
-    /// `unknown … request` error (no outstanding `Responder`).
+    /// answers every permission response / question / elicitation answer with
+    /// the driver's `unknown … request` error (no outstanding `Responder`).
     #[cfg(test)]
     pub(crate) fn install_test_agent_without_responders(&self, agent_id: AgentId) {
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
@@ -2122,6 +2125,12 @@ impl AcpManager {
                         question_id, reply, ..
                     } => {
                         let _ = reply.send(Err(format!("unknown question request: {question_id}")));
+                    }
+                    AcpCommand::RespondElicitation {
+                        request_id, reply, ..
+                    } => {
+                        let _ =
+                            reply.send(Err(format!("unknown elicitation request: {request_id}")));
                     }
                     _ => {}
                 }

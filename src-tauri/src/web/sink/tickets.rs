@@ -1,4 +1,4 @@
-//! Lifecycle release of approval and question tickets.
+//! Lifecycle release of approval, question and elicitation tickets.
 //!
 //! Tickets have no timeout, so the relay must tell the rendezvous when a ticket
 //! can no longer be answered: the turn ended, the session closed, or the agent
@@ -9,7 +9,7 @@ use super::WsRelaySink;
 use crate::acp::AgentId;
 
 impl WsRelaySink {
-    /// Release every pending permission and question of `session_id`.
+    /// Release every pending permission, question and elicitation of `session_id`.
     pub fn release_session_tickets(&self, session_id: &str) {
         let permissions = self
             .rendezvous()
@@ -17,19 +17,22 @@ impl WsRelaySink {
         let questions = self
             .question_rendezvous()
             .map_or(0, |rendezvous| rendezvous.release_session(session_id));
-        if permissions + questions > 0 {
+        let elicitations = self.elicitations.release_session(session_id);
+        if permissions + questions + elicitations > 0 {
             tracing::info!(
                 session_id,
                 permissions,
                 questions,
+                elicitations,
                 "released pending approvals after the session ended"
             );
         }
     }
 
-    /// Release every pending permission and question of `session_id` whose
-    /// turn `turn_id` ended. The permission side also remembers the turn, so a
-    /// request of it whose registration lands after this release is dropped.
+    /// Release every pending permission, question and elicitation of
+    /// `session_id` whose turn `turn_id` ended. The permission side also
+    /// remembers the turn, so a request of it whose registration lands after
+    /// this release is dropped.
     pub fn release_turn_tickets(&self, session_id: &str, turn_id: &str) {
         let permissions = self
             .rendezvous()
@@ -37,11 +40,13 @@ impl WsRelaySink {
         let questions = self
             .question_rendezvous()
             .map_or(0, |rendezvous| rendezvous.release_session(session_id));
-        if permissions + questions > 0 {
+        let elicitations = self.elicitations.release_session(session_id);
+        if permissions + questions + elicitations > 0 {
             tracing::info!(
                 session_id = %crate::logging::redact_session_id(session_id),
                 permissions,
                 questions,
+                elicitations,
                 "released pending approvals after the turn ended"
             );
         }
@@ -56,7 +61,7 @@ impl WsRelaySink {
         }
     }
 
-    /// Release every pending permission and question of `agent_id`.
+    /// Release every pending permission, question and elicitation of `agent_id`.
     pub fn release_agent_tickets(&self, agent_id: &AgentId) {
         let permissions = self
             .rendezvous()
@@ -64,11 +69,13 @@ impl WsRelaySink {
         let questions = self
             .question_rendezvous()
             .map_or(0, |rendezvous| rendezvous.release_agent(agent_id));
-        if permissions + questions > 0 {
+        let elicitations = self.elicitations.release_agent(agent_id);
+        if permissions + questions + elicitations > 0 {
             tracing::info!(
                 agent_id = %agent_id,
                 permissions,
                 questions,
+                elicitations,
                 "released pending approvals after the agent ended"
             );
         }

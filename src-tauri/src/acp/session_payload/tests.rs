@@ -1095,3 +1095,154 @@ fn subagent_chunks_stay_out_of_the_main_reply_bubbles() {
     }
     assert_eq!(opened, payload.messages.len());
 }
+
+// --- reopen restores the session's model controls ----------------------------
+
+fn model_select(current: &str) -> Value {
+    json!({
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": current,
+        "options": [
+            {"value": "sonnet", "name": "Sonnet"},
+            {"value": "opus", "name": "Opus"},
+        ],
+    })
+}
+
+fn effort_select(current: &str) -> Value {
+    json!({
+        "id": "effort",
+        "name": "Effort",
+        "type": "select",
+        "currentValue": current,
+        "options": [
+            {"value": "low", "name": "Low"},
+            {"value": "high", "name": "High"},
+        ],
+    })
+}
+
+fn models(current: &str) -> Value {
+    json!({
+        "currentModelId": current,
+        "availableModels": [
+            {"modelId": "sonnet", "name": "Sonnet"},
+            {"modelId": "opus", "name": "Opus"},
+        ],
+    })
+}
+
+fn plan_and_default_modes() -> Value {
+    json!([
+        {"id": "default", "name": "Default"},
+        {"id": "plan", "name": "Plan"},
+    ])
+}
+
+fn session_created(seq: u64) -> PersistedEventRecord {
+    record(
+        seq,
+        "session_created",
+        json!({
+            "agentId": "runtime-1",
+            "sessionId": "session-1",
+            "modes": {"currentModeId": "default", "availableModes": plan_and_default_modes()},
+            "models": models("sonnet"),
+            "configOptions": [model_select("sonnet"), effort_select("low")],
+        }),
+    )
+}
+
+fn config_options_update(seq: u64, options: Value) -> PersistedEventRecord {
+    record(
+        seq,
+        "config_options_update",
+        json!({"agentId": "runtime-1", "sessionId": "session-1", "configOptions": options}),
+    )
+}
+
+fn mode_update(seq: u64, mode: &str) -> PersistedEventRecord {
+    record(
+        seq,
+        "mode_update",
+        json!({"agentId": "runtime-1", "sessionId": "session-1", "currentModeId": mode}),
+    )
+}
+
+fn wire_payload(records: &[PersistedEventRecord]) -> serde_json::Map<String, Value> {
+    match serde_json::to_value(materialize_session_payload(&metadata(), records)).unwrap() {
+        Value::Object(map) => map,
+        other => panic!("payload serializes to an object, got {other}"),
+    }
+}
+
+#[test]
+fn a_session_without_controls_records_omits_every_controls_key() {
+    let payload = wire_payload(&[
+        user_prompt(1, Some("t1"), "hi"),
+        chunk(2, "agent", "hello"),
+        prompt_complete(3, "t1"),
+    ]);
+    for key in ["configOptions", "modes", "models", "controlsSeq"] {
+        assert!(
+            !payload.contains_key(key),
+            "legacy payload must not carry {key}"
+        );
+    }
+}
+
+#[test]
+fn the_payload_carries_the_newest_controls_over_session_created() {
+    let payload = wire_payload(&[
+        session_created(1),
+        user_prompt(2, Some("t1"), "hi"),
+        config_options_update(3, json!([model_select("opus"), effort_select("high")])),
+        chunk(4, "agent", "hello"),
+        mode_update(5, "plan"),
+        prompt_complete(6, "t1"),
+    ]);
+    assert_eq!(
+        payload["configOptions"],
+        json!([model_select("opus"), effort_select("high")])
+    );
+    assert_eq!(payload["models"], models("opus"));
+    assert_eq!(
+        payload["modes"],
+        json!({"currentModeId": "plan", "availableModes": plan_and_default_modes()}),
+        "a mode_update without availableModes keeps the advertised list"
+    );
+    assert_eq!(payload["controlsSeq"], json!(5));
+}
+
+#[test]
+fn an_update_without_a_model_selector_keeps_the_created_models() {
+    let payload = wire_payload(&[
+        record(
+            1,
+            "session_created",
+            json!({"sessionId": "session-1", "models": models("sonnet")}),
+        ),
+        config_options_update(2, json!([effort_select("high")])),
+    ]);
+    assert_eq!(payload["configOptions"], json!([effort_select("high")]));
+    assert_eq!(payload["models"], models("sonnet"));
+    assert!(!payload.contains_key("modes"), "no record advertised modes");
+    assert_eq!(payload["controlsSeq"], json!(2));
+}
+
+#[test]
+fn controls_come_from_config_updates_when_the_log_has_no_session_created() {
+    // A pooled session promoted to durable persisted no `session_created`.
+    let payload = wire_payload(&[
+        config_options_update(3, json!([model_select("sonnet")])),
+        config_options_update(6, json!([model_select("opus")])),
+        user_prompt(7, Some("t1"), "hi"),
+    ]);
+    assert_eq!(payload["configOptions"], json!([model_select("opus")]));
+    assert_eq!(payload["models"], models("opus"));
+    assert!(!payload.contains_key("modes"));
+    assert_eq!(payload["controlsSeq"], json!(6));
+}

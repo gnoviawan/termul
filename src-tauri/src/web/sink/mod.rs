@@ -148,6 +148,9 @@ pub struct WsRelaySink {
     /// one at startup. When set, `emit` snapshots `acp:question_request`
     /// events into a relay-side ticket table (first-wins, TOCTOU, timeout).
     question_rendezvous: Mutex<Option<Arc<crate::web::permissions::QuestionRendezvous>>>,
+    /// Pending elicitations of every session (always present: answering one
+    /// needs no rendezvous policy, only the list a reconnecting client reads).
+    elicitations: crate::web::permissions::ElicitationTickets,
     /// Server-side turn-id watermark (Story 1.7 T7.2 — FR13/FR11 plumbing).
     /// Always present (cheap to construct; no external handle). 1.8's
     /// `prompt_complete` / `send_prompt` handlers read this via
@@ -242,6 +245,7 @@ impl WsRelaySink {
             client_queue_capacity: client_queue_capacity.max(1),
             rendezvous: Mutex::new(None),
             question_rendezvous: Mutex::new(None),
+            elicitations: crate::web::permissions::ElicitationTickets::default(),
             turn_watermark: crate::web::permissions::TurnWatermark::new(),
             pre_registration_events: Mutex::new(HashMap::new()),
             pre_registration_capacity: DEFAULT_PRE_REGISTRATION_CAPACITY,
@@ -398,6 +402,11 @@ impl WsRelaySink {
     #[must_use]
     pub fn question_rendezvous(&self) -> Option<Arc<crate::web::permissions::QuestionRendezvous>> {
         self.question_rendezvous.lock().clone()
+    }
+
+    /// The session-scoped elicitations still waiting for an answer.
+    pub fn elicitations(&self) -> &crate::web::permissions::ElicitationTickets {
+        &self.elicitations
     }
 
     /// Number of clients currently subscribed to `session_id`.

@@ -1114,10 +1114,31 @@ pub(super) async fn run_command_loop(
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
+                let req_sinks = sinks.clone();
+                let req_agent_id = agent_id.clone();
                 spawn_request(&cx, slot, async move {
-                    let request = SetSessionModeRequest::new(&session_id, mode_id);
-                    let result = req_cx.send_request(request).block_task().await;
-                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                    let mode_id = agent_client_protocol::schema::v1::SessionModeId::new(mode_id);
+                    let request = SetSessionModeRequest::new(&session_id, mode_id.clone());
+                    match req_cx.send_request(request).block_task().await {
+                        Ok(_) => {
+                            // The durable log learns the switch here: the
+                            // agent need not echo a `current_mode_update`.
+                            let event = events::ModeUpdateEvent {
+                                agent_id: req_agent_id,
+                                session_id,
+                                current_mode_id: mode_id,
+                                available_modes: Vec::new(),
+                            };
+                            events::fan_out(
+                                &req_sinks,
+                                Some(event.session_id.0.as_str()),
+                                events::EVENT_MODE_UPDATE,
+                                &event,
+                            );
+                            send_reply(&task_slot, Ok(()));
+                        }
+                        Err(e) => send_reply(&task_slot, Err(e.to_string())),
+                    }
                 });
             }
 

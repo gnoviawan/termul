@@ -78,12 +78,13 @@ async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
         "session-cleanup".to_string(),
         json!([]),
     );
-    questions.register(
-        "question-cleanup".to_string(),
-        AgentId("agent-cleanup".to_string()),
-        "session-cleanup".to_string(),
-        json!([]),
-    );
+    questions.register_event(&json!({
+        "agentId": "agent-cleanup",
+        "sessionId": "session-cleanup",
+        "questionId": "question-cleanup",
+        "question": "Which plan?",
+        "options": [],
+    }));
     let subscribed = subscriptions_with("session-cleanup", client_id);
     assert_eq!(relay.session_subscriber_count("session-cleanup"), 1);
 

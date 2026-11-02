@@ -8,6 +8,7 @@
 //! ended, the session closed or the agent died.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -75,6 +76,11 @@ struct QuestionTicket {
     /// `true` when the agent offered a free-text answer (issue #784 `ask_user`).
     /// One value that is not an option label is then a valid answer.
     allow_free_text: bool,
+    /// The original `question_request` payload, re-delivered to a client that
+    /// subscribes while the question is pending.
+    request: Value,
+    /// Registration order, so pending questions list oldest first.
+    order: u64,
     /// `Some(client)` once a client has won the ticket (first-response-wins).
     resolved_by: Option<ClientId>,
 }
@@ -93,6 +99,7 @@ pub struct QuestionRendezvous {
     acp: Arc<AcpManager>,
     /// Bounded memory of resolved question ids (`already_resolved` replies).
     resolved: Mutex<Tombstones>,
+    next_order: AtomicU64,
 }
 
 impl QuestionRendezvous {
@@ -103,6 +110,7 @@ impl QuestionRendezvous {
             tickets: Mutex::new(HashMap::new()),
             acp,
             resolved: Mutex::new(Tombstones::new()),
+            next_order: AtomicU64::new(0),
         }
     }
 
@@ -130,19 +138,21 @@ impl QuestionRendezvous {
         self.tickets.lock().contains_key(question_id)
     }
 
-    /// Snapshot a `question_request` event into a ticket.
-    ///
-    /// Called by [`WsRelaySink::emit`] when it sees `acp:question_request`.
-    /// `options` is the `Value` of the event's `options` field (array of
-    /// `{value, label, description?, cardinality?}`) — the immutable-args
-    /// snapshot for TOCTOU re-validation.
-    pub fn register(
-        &self,
-        question_id: String,
-        agent_id: AgentId,
-        session_id: String,
-        options: Value,
-    ) {
+    /// Snapshot a published `question_request` payload into a ticket: the
+    /// `options` array is the immutable-args snapshot for TOCTOU
+    /// re-validation, `allowFreeText` admits one free-text answer (issue #784),
+    /// and the payload itself is kept for [`Self::pending_requests`].
+    pub fn register_event(&self, payload: &Value) {
+        let field = |name: &str| payload.get(name).and_then(Value::as_str);
+        let question_id = field("questionId").unwrap_or_default();
+        if question_id.is_empty() {
+            warn!("[questions] dropping question_request with no questionId (dispatcher bug?)");
+            return;
+        }
+        let options = payload
+            .get("options")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
         let multi = options.as_array().is_some_and(|arr| {
             arr.iter().any(|opt| {
                 opt.get("cardinality")
@@ -151,14 +161,35 @@ impl QuestionRendezvous {
             })
         });
         let ticket = QuestionTicket {
-            agent_id,
-            session_id,
+            agent_id: AgentId(field("agentId").unwrap_or("unknown").to_string()),
+            session_id: field("sessionId").unwrap_or_default().to_string(),
             options,
             multi,
-            allow_free_text: false,
+            allow_free_text: payload
+                .get("allowFreeText")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            request: payload.clone(),
+            order: self.next_order.fetch_add(1, Ordering::Relaxed),
             resolved_by: None,
         };
-        self.tickets.lock().insert(question_id, ticket);
+        self.tickets.lock().insert(question_id.to_string(), ticket);
+    }
+
+    /// The `question_request` payloads of `session_id` still waiting for an
+    /// answer, oldest first. A question a client already won is left out.
+    #[must_use]
+    pub fn pending_requests(&self, session_id: &str) -> Vec<Value> {
+        let tickets = self.tickets.lock();
+        let mut pending: Vec<&QuestionTicket> = tickets
+            .values()
+            .filter(|ticket| ticket.session_id == session_id && ticket.resolved_by.is_none())
+            .collect();
+        pending.sort_by_key(|ticket| ticket.order);
+        pending
+            .into_iter()
+            .map(|ticket| ticket.request.clone())
+            .collect()
     }
 
     /// The rejection for a `question_id` with no outstanding ticket: a recently
@@ -168,15 +199,6 @@ impl QuestionRendezvous {
             QuestionRespondError::AlreadyResolved
         } else {
             QuestionRespondError::NotFound
-        }
-    }
-
-    /// Mark a registered question as accepting one free-text answer (issue #784).
-    /// Called right after [`Self::register`] for an `acp:question_request` whose
-    /// payload sets `allowFreeText`. Unknown ids are ignored.
-    pub fn allow_free_text(&self, question_id: &str) {
-        if let Some(ticket) = self.tickets.lock().get_mut(question_id) {
-            ticket.allow_free_text = true;
         }
     }
 

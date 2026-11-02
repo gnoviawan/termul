@@ -442,8 +442,9 @@ pub(super) async fn handle_recover_session_snapshot(
         "logEpoch": head.log_epoch,
         "events": events,
     });
-    // The snapshot holds durable events only: pending approvals ride beside it.
-    attach_pending_permissions(&mut reply, relay, &parsed.session_id);
+    // Pending prompts ride beside the snapshot: an approval is not durable, and
+    // the client drops a question or elicitation the snapshot already covers.
+    attach_pending_prompts(&mut reply, relay, &parsed.session_id);
     WsReply::ok(id, Some(reply))
 }
 

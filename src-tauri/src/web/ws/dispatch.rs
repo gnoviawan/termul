@@ -242,7 +242,9 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "authenticate_agent" => handle_authenticate_agent(id, &req.payload, acp).await,
         "logout_agent" => handle_logout_agent(id, &req.payload, acp).await,
         "delete_agent_session" => handle_delete_agent_session(id, &req.payload, acp).await,
-        "respond_elicitation" => handle_respond_elicitation(id, &req.payload, acp).await,
+        "respond_elicitation" => {
+            handle_respond_elicitation(id, &req.payload, acp, relay).await
+        }
         // Paste-back half of the headless browser-auth flow
         // (spec-acp-terminal-auth): the client delivers the failed loopback
         // redirect URL; the host validates loopback-only then replays it.
