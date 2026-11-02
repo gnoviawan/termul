@@ -22,7 +22,8 @@ import {
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
-import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
+import type { ConversationContexts } from '@/lib/conversation-transcript'
+import { commandToken, conversationToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
@@ -351,6 +352,19 @@ vi.mock('@/lib/api', () => ({
     }))
   }
 }))
+
+const { conversationContextsOverride } = vi.hoisted(() => ({
+  conversationContextsOverride: { current: null as null | (() => Promise<ConversationContexts>) }
+}))
+
+vi.mock('@/lib/conversation-transcript', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/conversation-transcript')>()
+  return {
+    ...actual,
+    resolveConversationContexts: (refs: Parameters<typeof actual.resolveConversationContexts>[0]) =>
+      conversationContextsOverride.current?.() ?? actual.resolveConversationContexts(refs)
+  }
+})
 
 const { mockLogFrontendError } = vi.hoisted(() => ({
   mockLogFrontendError: vi.fn(async () => {})
@@ -2651,6 +2665,42 @@ describe('AgentLauncher @ menu', () => {
     )
     expect(screen.getByRole('button', { name: 'Back from Explorer' })).toBeInTheDocument()
     expect(getComposerValue()).toBe('@')
+  })
+})
+
+describe('AgentLauncher conversation pill launch', () => {
+  afterEach(() => {
+    conversationContextsOverride.current = null
+  })
+
+  it('keeps the composer read-only while the mentioned chat transcript loads', async () => {
+    let finishRead!: (contexts: ConversationContexts) => void
+    conversationContextsOverride.current = () =>
+      new Promise((resolve) => {
+        finishRead = resolve
+      })
+    renderLauncher()
+    const editor = await screen.findByLabelText('Agent prompt')
+    setComposerValue(`see ${conversationToken('Old chat', 'chat-9')} `)
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
+
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeDisabled()
+    expect(mockCreateLaunchPlaceholder).not.toHaveBeenCalled()
+
+    await act(async () => finishRead({ blocks: [], unavailable: new Set(['chat-9']) }))
+    await waitFor(() =>
+      expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialUserBlocks: [
+            { type: 'text', text: `see ${conversationToken('Old chat', 'chat-9')} ` }
+          ]
+        })
+      )
+    )
+    expect(editor).toHaveAttribute('contenteditable', 'true')
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
   })
 })
 

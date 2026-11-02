@@ -1,3 +1,4 @@
+import { PersistenceKeys } from '@shared/types/persistence.types'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -338,9 +339,18 @@ vi.mock('@/hooks/use-resolved-supported-acp-agents', async () => {
   }
 })
 
+const { mockTransport } = vi.hoisted(() => ({
+  mockTransport: {
+    current: { historyMode: () => 'live_only' } as {
+      historyMode: () => string
+      getSessionPayloadTail?: (id: string, limit: number) => Promise<unknown>
+    }
+  }
+}))
+
 vi.mock('@/lib/acp-transport', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/acp-transport')>()),
-  getAcpTransport: () => ({ historyMode: () => 'live_only' })
+  getAcpTransport: () => mockTransport.current
 }))
 
 vi.mock('@/lib/acp-api', () => ({
@@ -2389,6 +2399,82 @@ describe('ChatInputBar conversation mentions', () => {
   afterEach(() => {
     mockSessionIndex.current = []
     mockMessages.current = {}
+    mockTransport.current = { historyMode: () => 'live_only' }
+  })
+
+  function deferTranscriptRead(): () => Promise<void> {
+    let finish!: (payload: null) => void
+    mockTransport.current = {
+      historyMode: () => 'server',
+      getSessionPayloadTail: () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    }
+    return () => act(async () => finish(null))
+  }
+
+  it('keeps the composer read-only while the mentioned chat transcript loads', async () => {
+    const finishRead = deferTranscriptRead()
+    const onSendBlocks = vi.fn()
+    renderInputBar({ onSendBlocks })
+    const token = conversationToken('Old chat', 'gone')
+    setComposerValue(`see ${token} `)
+    const editor = document.querySelector('[data-composer-editor="true"]') as HTMLElement
+    expect(editor).toHaveAttribute('contenteditable', 'true')
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+    await waitFor(() => expect(editor).toHaveAttribute('contenteditable', 'false'))
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeDisabled()
+    expect(onSendBlocks).not.toHaveBeenCalled()
+
+    await finishRead()
+    await waitFor(() => expect(onSendBlocks).toHaveBeenCalledTimes(1))
+    expect(editor).toHaveAttribute('contenteditable', 'true')
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled()
+    expect(getComposerValue()).toBe('')
+  })
+
+  it('sends to the submitting chat and keeps the next chat draft when the tab remaps mid-read', async () => {
+    const finishRead = deferTranscriptRead()
+    persistenceStore.set(PersistenceKeys.chatDraft('p1', 'session-2'), 'draft for the next chat')
+    const sendFromFirst = vi.fn()
+    const sendFromSecond = vi.fn()
+    const props = (id: string, onSendBlocks: typeof sendFromFirst) => ({
+      session: { ...session(), id },
+      busy: false,
+      disabled: false,
+      onSend: vi.fn(),
+      onSendBlocks,
+      onCancel: vi.fn(),
+      commands: [],
+      configOptions: [],
+      modes: session().modes,
+      onSetConfig: mockSetConfig,
+      onSetMode: mockSetMode,
+      onSetModel: mockSetModel
+    })
+    const { rerender } = render(
+      <TooltipProvider>
+        <ChatInputBar {...props('session-1', sendFromFirst)} />
+      </TooltipProvider>
+    )
+    const token = conversationToken('Old chat', 'gone')
+    setComposerValue(`see ${token} `)
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    rerender(
+      <TooltipProvider>
+        <ChatInputBar {...props('session-2', sendFromSecond)} />
+      </TooltipProvider>
+    )
+    await waitFor(() => expect(getComposerValue()).toBe('draft for the next chat'))
+
+    await finishRead()
+    await waitFor(() => expect(sendFromFirst).toHaveBeenCalledTimes(1))
+    expect(sendFromSecond).not.toHaveBeenCalled()
+    expect(getComposerValue()).toBe('draft for the next chat')
   })
 
   it('pills a picked chat and sends its transcript on the wire while the bubble keeps the pill', async () => {

@@ -238,7 +238,8 @@ export interface ComposerAttachments {
    *  only `clipboardData` + `preventDefault()` are read, both native). */
   handlePaste: (e: ClipboardEvent) => void
   removeAttachment: (id: string) => void
-  clearAttachments: () => void
+  /** Drops `sent` (every attachment when omitted). One that finished reading mid-send stays. */
+  clearAttachments: (sent?: readonly PendingAttachment[]) => void
   /**
    * Paths of currently-staged app-owned temp `file-ref` attachments (e.g.
    * pasted screenshots). Callers register these with the session before sending
@@ -460,9 +461,11 @@ export function useComposerAttachments(opts: {
   // paths via `appOwnedTempPaths()` before calling this so they are deleted
   // when the session closes. Clear the ref immediately so unmount cleanup
   // cannot see attachments that are already being sent.
-  const clearAttachments = useCallback(() => {
-    attachmentsRef.current = []
-    setAttachments([])
+  const clearAttachments = useCallback((sent?: readonly PendingAttachment[]) => {
+    const sentIds = new Set(sent?.map((a) => a.id))
+    const keep = (list: PendingAttachment[]) => (sent ? list.filter((a) => !sentIds.has(a.id)) : [])
+    attachmentsRef.current = keep(attachmentsRef.current)
+    setAttachments(keep)
   }, [])
 
   const appOwnedTempPaths = useCallback(

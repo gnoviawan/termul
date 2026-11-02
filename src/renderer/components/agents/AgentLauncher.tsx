@@ -41,7 +41,7 @@ import {
   type PendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
-import { attachmentToBlock, dedupeAttachmentBlocks } from '@/components/chat/chat-attachments'
+import { dedupeAttachmentBlocks } from '@/components/chat/chat-attachments'
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
@@ -61,6 +61,7 @@ import {
   blurComposerEditor,
   insertComposerTrigger
 } from '@/components/chat/composer/insert-composer-trigger'
+import { textWithAttachmentBlocks } from '@/components/chat/composer-send-blocks'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
 import { SkillFilesProvider } from '@/components/chat/skill-file-links'
@@ -71,6 +72,7 @@ import {
   useComposerMentionSelect
 } from '@/components/chat/use-composer-caret-restore'
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
+import { useComposerSendLock } from '@/components/chat/use-composer-send-lock'
 import { Paperclip } from '@/components/icons'
 import { COMPOSER_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
@@ -457,6 +459,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const embedCapable = Boolean(promptCaps?.embeddedContext)
   const composerDisabled =
     Boolean(installingConfigId) || savingManualPath || selectedEntry?.status !== 'ready'
+  const { locked: launchLocked, hold: holdComposer } = useComposerSendLock()
+  const composerLocked = composerDisabled || launchLocked
   const {
     attachments,
     addFiles,
@@ -468,7 +472,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     canPick,
     canPickImages,
     canDropPaste
-  } = useComposerAttachments({ imageCapable, embedCapable, disabled: composerDisabled })
+  } = useComposerAttachments({ imageCapable, embedCapable, disabled: composerLocked })
   const addHandle = useMemo(
     () => ({
       canPick,
@@ -1316,7 +1320,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     let parts: ReturnType<typeof buildPromptParts>
     try {
       const contexts = conversationContexts()
-      parts = buildPromptParts(contexts ? await contexts : undefined)
+      parts = buildPromptParts(contexts ? await holdComposer(() => contexts) : undefined)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
       launchInFlightRef.current = false
@@ -1335,12 +1339,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // a stale worktree toasts and returns with nothing to roll back.
     if (isolationMode === 'existing') {
       try {
-        checkout = await prepareLaunchWorktree({
-          isolationMode,
-          projectRoot: projectRootSnapshot,
-          projectId: projectIdSnapshot,
-          existingWorktreeId
-        })
+        checkout = await holdComposer(() =>
+          prepareLaunchWorktree({
+            isolationMode,
+            projectRoot: projectRootSnapshot,
+            projectId: projectIdSnapshot,
+            existingWorktreeId
+          })
+        )
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'That worktree is no longer available.')
         launchInFlightRef.current = false
@@ -1351,20 +1357,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // Sync first-turn content so the chat can paint like a normal send. The
     // optimistic syncBlocks carry the DISPLAY (token) text so the timeline
     // renders inline chips; the real send dispatches the WIRE text.
-    const syncTrimmed = displayWithCommand.trim()
-    const syncBlocks: ContentBlock[] = []
-    if (attachmentsSnapshot.length > 0) {
-      if (syncTrimmed) syncBlocks.push({ type: 'text', text: displayWithCommand })
-      for (const a of attachmentsSnapshot) syncBlocks.push(attachmentToBlock(a))
-    } else if (syncTrimmed.length > 0) {
-      syncBlocks.push({ type: 'text', text: displayWithCommand })
-    }
+    const syncBlocks = textWithAttachmentBlocks(displayWithCommand, attachmentsSnapshot)
 
     const resetComposer = (): void => {
       useWorkspaceStore.getState().hideAgentLauncher()
       setPendingOptions(emptyPendingLauncherOptions())
       skillPathsRef.current = {}
-      clearAttachments()
+      clearAttachments(attachmentsSnapshot)
       resetMentions()
       setPrompt('')
     }
@@ -1395,14 +1394,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         isolationMode: persistedIsolationMode(isolationMode),
         baseBranch: isolationMode === 'worktree' ? baseBranch : null
       })
-      const wireTrimmed = wireWithCommand.trim()
-      const blocks: ContentBlock[] = []
-      if (attachmentsSnapshot.length > 0) {
-        if (wireTrimmed) blocks.push({ type: 'text', text: wireWithCommand })
-        for (const a of attachmentsSnapshot) blocks.push(attachmentToBlock(a))
-      } else if (wireTrimmed.length > 0) {
-        blocks.push({ type: 'text', text: wireWithCommand })
-      }
+      const blocks = textWithAttachmentBlocks(wireWithCommand, attachmentsSnapshot)
       // File-mention `resource_link` blocks append to the wire only — the
       // display keeps the raw token text so the timeline renders inline
       // file pills. Dedupe by path (matching `dedupeAttachmentBlocks`).
@@ -1504,6 +1496,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     attachments,
     clearAttachments,
     appOwnedTempPaths,
+    holdComposer,
     resetMentions,
     pendingOptions,
     preparedKey,
@@ -1773,7 +1766,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               <AttachmentPreviewGroup
                 attachments={attachments}
                 onRemove={removeAttachment}
-                removeDisabled={composerDisabled}
+                removeDisabled={composerLocked}
               />
               {/* Same inner rhythm as the chat composer card (ChatInputBar):
                   editor row px-4 pb-1.5 pt-3.5, toolbar px-2 pb-2. */}
@@ -1799,7 +1792,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                     getSkillPaths={() => skillPathsRef.current}
                     editorRef={editorRef}
                     inputRef={composerInputRef}
-                    disabled={composerDisabled}
+                    disabled={composerLocked}
                     minHeight={76}
                     maxHeight={160}
                     placeholder={

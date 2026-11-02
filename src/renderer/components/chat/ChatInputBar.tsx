@@ -1,6 +1,6 @@
 import type { Editor } from '@tiptap/core'
 import { useReducedMotion } from 'framer-motion'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { toast } from 'sonner'
 import { ClaudeAccountChip } from '@/components/chat/claude-account/ClaudeAccountChip'
 import { ClaudeLimitWarning } from '@/components/chat/claude-account/ClaudeLimitWarning'
@@ -65,6 +65,7 @@ import { useComposerCaretRestore, useComposerMentionSelect } from './use-compose
 import { useComposerDraft } from './use-composer-draft'
 import { useComposerDraftStart } from './use-composer-draft-start'
 import { useComposerMentions } from './use-composer-mentions'
+import { useComposerSendLock } from './use-composer-send-lock'
 
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */
@@ -233,7 +234,7 @@ export function ChatInputBar({
     sessionId: session.id,
     seedNonce
   })
-  const [sending, setSending] = useState(false)
+  const { locked: sending, hold: holdComposer } = useComposerSendLock()
   const reduced = useReducedMotion() ?? false
   // Story 5.3: OSK awareness on mobile web. On Tauri desktop, the hook returns
   // a no-OSK default (no `visualViewport` thrash — desktop non-regression).
@@ -255,7 +256,7 @@ export function ChatInputBar({
     canPick,
     canPickImages,
     canDropPaste
-  } = useComposerAttachments({ imageCapable, embedCapable, disabled })
+  } = useComposerAttachments({ imageCapable, embedCapable, disabled: disabled || sending })
   // Drag feedback for the attachment drop zone (shared with AgentLauncher):
   // depth-counted dragenter/dragleave pairs; the overlay stays local.
   const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
@@ -349,8 +350,7 @@ export function ChatInputBar({
     const hasText = value.trim().length > 0
     if ((!hasText && !hasAttachments) || disabled || sending) return
 
-    setSending(true)
-    try {
+    await holdComposer(async () => {
       const contexts = conversationContexts()
       const send = buildComposerSend(
         buildPromptParts(contexts ? await contexts : undefined),
@@ -364,17 +364,16 @@ export function ChatInputBar({
       // they are deleted when the session closes; clearAttachments drops state
       // without deleting because the agent reads them by path during the turn.
       registerSessionTempFiles(session.id, appOwnedTempPaths())
-      setValue('')
+      // A remap to another chat mid-await hydrates that chat's draft; keep it.
+      setValue((current) => (current === value ? '' : current))
       skillPathsRef.current = {}
-      clearAttachments()
+      clearAttachments(attachments)
       resetMentions()
-    } catch (err) {
+    }).catch((err: unknown) => {
       // Skill path resolution throws a specific user-facing message — keep it.
       const msg = err instanceof Error ? err.message : ''
       toast.error(msg.includes('missing a path') ? msg : 'Could not send your message. Try again.')
-    } finally {
-      setSending(false)
-    }
+    })
   }, [
     value,
     attachments,
@@ -389,7 +388,8 @@ export function ChatInputBar({
     buildPromptParts,
     conversationContexts,
     skillPathsRef,
-    setValue
+    setValue,
+    holdComposer
   ])
 
   const handleKeyDown = useCallback(
@@ -636,7 +636,7 @@ export function ChatInputBar({
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}
-              removeDisabled={disabled}
+              removeDisabled={disabled || sending}
             />
             {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only focus aid for the padding; the editor is the accessible target */}
             <div
@@ -697,7 +697,7 @@ export function ChatInputBar({
                 >
                   <ComposerAddSheet
                     handle={composerAddHandle}
-                    disabled={disabled}
+                    disabled={disabled || sending}
                     {...mcpListProps}
                   />
                   {modelSelector}
