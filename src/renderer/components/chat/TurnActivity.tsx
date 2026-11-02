@@ -22,6 +22,10 @@ import {
 import type { EnterTracker } from './use-enter-tracker'
 import { DiffStat, WorkRunGroup, type WorkRunItem } from './WorkRunGroup'
 
+/** Steps a turn shows at first, and how many each "Show earlier" adds. */
+const TURN_STEP_WINDOW = 40
+const TURN_STEP_PAGE = 50
+
 interface TurnActivityProps {
   items: TimelineItem[]
   active: boolean
@@ -112,6 +116,20 @@ function TurnActivityComponent({
     flush()
     return { summary: summarizeToolActivity(allCalls), workRuns: runs }
   }, [items])
+  // A long agent turn renders only its latest steps: every step stays mounted
+  // while the turn is open, and hundreds of them cost hundreds of MB of DOM.
+  const [stepLimit, setStepLimit] = useState(TURN_STEP_WINDOW)
+  const { hiddenSteps, hiddenKeys } = useMemo(() => {
+    const stepKeys = items
+      .filter((item) => {
+        const run = workRuns.get(item.key)
+        if (run) return run.items[0] === item
+        return item.kind === 'thought-group' || item.kind === 'message'
+      })
+      .map((item) => item.key)
+    const hidden = Math.max(0, stepKeys.length - stepLimit)
+    return { hiddenSteps: hidden, hiddenKeys: new Set(stepKeys.slice(0, hidden)) }
+  }, [items, workRuns, stepLimit])
   const label =
     active && statusLine
       ? statusLine
@@ -146,7 +164,20 @@ function TurnActivityComponent({
       <CollapsibleContent forceMount>
         <CollapseExpandMotion open={open} motion="chat">
           <div className="min-w-0 pb-1 pl-4">
+            {hiddenSteps > 0 ? (
+              <button
+                type="button"
+                onClick={() => setStepLimit((limit) => limit + TURN_STEP_PAGE)}
+                className={cn(
+                  'flex w-full cursor-pointer items-center text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                  CHAT_ROW_MIN_H
+                )}
+              >
+                Show {hiddenSteps} earlier {hiddenSteps === 1 ? 'step' : 'steps'}
+              </button>
+            ) : null}
             {items.map((item, index) => {
+              if (hiddenKeys.has(item.key)) return null
               const run = workRuns.get(item.key)
               if (run) {
                 // Only a run's first item renders — as the group's disclosure;
