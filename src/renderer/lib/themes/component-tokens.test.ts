@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { applyColorTheme } from './apply-color-theme'
 import { BUNDLED_COLOR_THEMES } from './bundled-themes'
+import { contrastRatio, FOCUS_CONTRAST_MIN, oklchComponentsToHex } from './color-utils'
 import { COMPONENT_TOKEN_DEFAULTS } from './component-tokens'
 import { CONTAINER, S_DEFAULT } from './termul-light-chrome'
 
@@ -62,9 +63,21 @@ describe('component tokens', () => {
     })
   }
 
-  it('emits the --focus-ring token in every bundled theme', () => {
-    for (const id of Object.keys(BUNDLED_COLOR_THEMES)) {
-      expect(emittedVars(id)['--focus-ring'], id).toBe(COMPONENT_TOKEN_DEFAULTS['--focus-ring'])
-    }
-  })
+  for (const id of Object.keys(BUNDLED_COLOR_THEMES)) {
+    it(`${id} paints focus dimmer than the ink and brighter than the field edge`, () => {
+      const vars = emittedVars(id)
+      const hex = (name: string) => oklchComponentsToHex(vars[name])
+      const focus = oklchComponentsToHex(vars['--focus-ring'].replace(/^oklch\((.*)\)$/, '$1'))
+      for (const surface of ['--card', '--background', '--popover']) {
+        const onSurface = contrastRatio(focus, hex(surface))
+        expect(onSurface, `${id} on ${surface}`).toBeGreaterThanOrEqual(FOCUS_CONTRAST_MIN)
+        expect(onSurface, `${id} on ${surface}`).toBeLessThan(
+          contrastRatio(hex('--ring'), hex(surface))
+        )
+      }
+      expect(contrastRatio(focus, hex('--card')), id).toBeGreaterThan(
+        contrastRatio(hex('--field-border'), hex('--card'))
+      )
+    })
+  }
 })

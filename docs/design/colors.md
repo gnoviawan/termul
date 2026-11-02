@@ -25,7 +25,8 @@ The default dark theme (`termul`) paints neutrals from an explicit ramp. Other t
 | `foreground` | Primary copy | Bone `#e5e5e6` |
 | `secondary-foreground` | Secondary labels | Mist `#d0d6e0` |
 | `muted-foreground` | Muted copy | Fog `#8a8f98` |
-| `ring` | Focus | Bone |
+| `ring` | Theme ink (keycap highlight, not focus) | Bone |
+| `focus-ring` | Keyboard focus edge | A tint of `ring` lifted until it reaches 4:1 on card, background and popover |
 
 The default light theme (`termul-light`) uses Interfere neutrals. The page is `#fcfcfc`, and cards and popovers are white `#ffffff`, so raised panes separate by elevation (`--elevation-*`, Interfere s-default / s-large / s-extra-large) as well as `border-border`. Brand is the same blue family as Termul dark: fill `#0d74ce` with white text, hover `#0e6abe`, pressed `#0e60ae`. `--primary` text resolves to `#026ec6`: the AA solver darkens `#0d74ce` so it also clears 4.5:1 on the `secondary` wash (`#0d74ce` on `#f0f0f0` is about 4.3:1). `--accent` is the brand fill, not maroon. Status hues stay. Other families keep derived surfaces.
 
@@ -65,7 +66,7 @@ Terminal ANSI colors and selection do not follow `--primary`. Termul pins them i
 | Rail row hover (hover and focus-within) | `bg-row-hover`; a fade that ends in it uses `from-row-hover-solid` | n/a |
 | Selected / you are here | `.keycap` (index.css) | `Check` icon, no fill |
 | Active segment in a track | `.keycap` | `bg-foreground/10` |
-| Focus | neutral `ring` | neutral `ring` |
+| Focus | `focus-ring` (dim, 4:1) | `focus-ring` (dim, 4:1) |
 
 The Rail paints `bg-sidebar`. Keycaps inside it (`[data-rail-surface]`) fill with `--rail-keycap`: `muted` in dark themes, `muted` plus 6% `foreground` in light themes. `--row-hover-solid` is flattened over `--sidebar-background`.
 
