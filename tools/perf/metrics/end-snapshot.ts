@@ -30,7 +30,11 @@ interface TreeProcess {
 async function sampleTreeWithCommandLines(rootPid: number): Promise<TreeProcess[]> {
   const script = [
     '$ErrorActionPreference = "SilentlyContinue"',
-    '$all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine',
+    '$all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate',
+    // A child is created after the app root; an older process whose parent
+    // PID was recycled onto a PID in this tree is not part of the app.
+    `$rootStart = ($all | Where-Object { $_.ProcessId -eq ${rootPid} }).CreationDate`,
+    '$all = @($all | Where-Object { $_.CreationDate -ge $rootStart })',
     `$seen = @{}; $seen[${rootPid}] = $true; $changed = $true`,
     'while ($changed) { $changed = $false; foreach ($p in $all) { if ($seen.ContainsKey([int]$p.ParentProcessId) -and -not $seen.ContainsKey([int]$p.ProcessId)) { $seen[[int]$p.ProcessId] = $true; $changed = $true } } }',
     '$out = @()',
