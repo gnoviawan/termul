@@ -4,11 +4,6 @@ import { conversationToken } from '@/lib/skill-tokens'
 import { cn } from '@/lib/utils'
 import { ConversationChip } from '../ConversationChip'
 
-/**
- * Inline atomic node for a conversation @-mention. Like `FilePill`, it is
- * never parsed from clipboard HTML (`parseHTML` returns `[]`); pills only
- * re-enter through the `\uE00A` sentinel in `text/plain`.
- */
 export const ConversationPill = Node.create({
   name: 'conversationPill',
   group: 'inline',

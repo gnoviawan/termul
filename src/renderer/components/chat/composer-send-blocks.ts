@@ -6,18 +6,10 @@ import {
 } from './chat-attachments'
 import type { ChatPromptParts } from './use-chat-composer'
 
-/** What the running-chat composer dispatches for one send. */
 export type ComposerSend =
   | { kind: 'text'; text: string }
   | { kind: 'blocks'; wire: ContentBlock[]; display?: ContentBlock[] }
 
-/**
- * Assemble the wire and display blocks for a send, or null when there is
- * nothing to send. Any pill (skill, file, command, selection context,
- * conversation) splits display from wire: the display keeps the raw tokens so
- * the timeline renders chips, and only the wire carries `resource_link` and
- * conversation transcript blocks.
- */
 export function buildComposerSend(
   parts: ChatPromptParts,
   attachments: readonly PendingAttachment[]

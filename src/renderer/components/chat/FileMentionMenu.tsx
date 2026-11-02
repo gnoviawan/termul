@@ -28,7 +28,6 @@ interface FileMentionMenuProps {
   menu: MentionMenuView
   onSelect: (row: MentionRow) => void
   onBack: () => void
-  /** The composer editor that owns this listbox (for aria-controls/activedescendant). */
   inputRef?: RefObject<HTMLElement | null>
 }
 
@@ -76,10 +75,6 @@ function toComposerItem(item: MentionItem): ComposerMenuItem {
   }
 }
 
-/**
- * Inline @ picker rendered above the chat composer: a drill-down stack of
- * panels over the shared {@link ComposerMenu} shell. See ADR 0003.
- */
 export const FileMentionMenu = forwardRef<FileMentionMenuHandle, FileMentionMenuProps>(
   ({ menu, onSelect, onBack, inputRef }, ref) => {
     const tapSelect = useTapSelect()

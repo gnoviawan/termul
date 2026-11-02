@@ -206,12 +206,6 @@ function restoreConversationTokens(text: string, refs: ConversationEnvelopeRef[]
   return out
 }
 
-/**
- * Apply {@link wireTextToDisplay} to every `text` block and rebuild file
- * pills from the `resource_link` blocks, which stay in place. Conversation
- * envelope blocks are dropped and their `(conversation: <title>)` markers
- * become pills again, so a replayed prompt never shows the attached transcript.
- */
 export function wireBlocksToDisplay<T extends WireBlock>(blocks: T[] | null | undefined): T[] {
   if (!Array.isArray(blocks)) return blocks ?? []
   const filePaths = unambiguousFilePaths(blocks)

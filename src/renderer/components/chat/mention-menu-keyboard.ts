@@ -6,7 +6,6 @@ export interface MentionMenuKeyboardOptions {
   menuOpen: boolean
   sectionsLength: number
   menuRef: RefObject<FileMentionMenuHandle | null>
-  /** The text typed after `@`; Backspace on an empty query goes back a panel. */
   filter: string
   canGoBack: boolean
   onBack: () => void
@@ -14,11 +13,6 @@ export interface MentionMenuKeyboardOptions {
   onReset: () => void
 }
 
-/**
- * Route menu keys to the @ menu when it is open. Returns true if handled.
- * Escape and going back work even in an empty or loading sub-panel, and a
- * sub-panel swallows Enter so it never sends the draft.
- */
 export function tryHandleMentionMenuKeyDown(
   e: ComposerKeyboardEvent,
   options: MentionMenuKeyboardOptions

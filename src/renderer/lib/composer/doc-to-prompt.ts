@@ -74,7 +74,6 @@ export const FILE_PILL_NODE = 'filePill'
  */
 export const CONTEXT_PILL_NODE = 'contextPill'
 
-/** The conversation pill node type name; its token is `conversationToken`. */
 export const CONVERSATION_PILL_NODE = 'conversationPill'
 
 type PillKind = 'pill' | 'commandPill' | 'filePill' | 'contextPill' | 'conversationPill'

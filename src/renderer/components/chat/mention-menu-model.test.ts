@@ -165,7 +165,6 @@ const conversation = (sessionId: string, title: string, agentName: string | null
   running: false
 })
 
-/** Section ids and row labels, the way the menu shows them. */
 function shown(input: Partial<MentionMenuInput>) {
   return sections(input).map((s) => ({
     id: s.id,

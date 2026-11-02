@@ -509,7 +509,6 @@ describe('useComposerMentions', () => {
   describe('drill-down panels (web: no recents, no query)', () => {
     const entry = (name: string, type: 'file' | 'directory', ignored?: boolean) => ({
       name,
-      // The web server may canonicalize symlinks; tokens must not use this path.
       path: `/canonical/${name}`,
       type,
       extension: null,
@@ -536,7 +535,6 @@ describe('useComposerMentions', () => {
       })
     })
 
-    /** Pick a row the way the host does: apply the returned value + caret, then update. */
     function pick(
       result: { current: ComposerMentions },
       state: { value: string; caret: number },
@@ -622,7 +620,6 @@ describe('useComposerMentions', () => {
       expect(key(result, 'ArrowLeft')).toBe(true)
       expect(result.current.view.enter).toBe('back')
       expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
-      // The cached listing is reused when going back.
       expect(mockApi.readDirectory).toHaveBeenCalledTimes(2)
       expect(state.value).toBe('see @')
     })
@@ -643,7 +640,6 @@ describe('useComposerMentions', () => {
       expect(key(result, 'Backspace')).toBe(true)
       expect(rows(result)).toEqual(['category:Conversations', 'category:Explorer'])
       expect(result.current.canGoBack).toBe(false)
-      // At the root, Backspace deletes the `@` as usual.
       expect(key(result, 'Backspace')).toBe(false)
     })
 
@@ -673,7 +669,6 @@ describe('useComposerMentions', () => {
           'composer mention folder listing failed: dir=/work/secret code=FS_ERROR error=EACCES: permission denied',
         source: 'useComposerMentions'
       })
-      // Escape still closes the menu from an empty sub-panel.
       expect(key(result, 'Escape')).toBe(true)
       expect(result.current.menuOpen).toBe(false)
     })

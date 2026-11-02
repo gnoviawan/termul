@@ -311,7 +311,6 @@ export function canonicalTwinText(message: ChatMessage): string {
   // Selection contexts compare in prompt form: the restore cannot recover the
   // spacing after a leading command pill, and typed text in the exact prompt
   // shape restores as chips.
-  // Conversation pills compare in wire form, with the transcript envelope dropped.
   return replaceConversationTokensInline(
     replaceFileTokensInline(
       serializeSelectionContexts(

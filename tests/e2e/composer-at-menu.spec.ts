@@ -5,13 +5,6 @@ import { type APIRequestContext, expect, type Page, test } from 'playwright/test
 import { E2E_BASE_URL, E2E_TOKEN } from './helpers'
 import { launchChat, openWorkspace, selectProject } from './ui'
 
-/**
- * The composer @ menu in a real browser against termul-server: a bare `@`
- * opens Conversations and Explorer, Explorer lists the project with no query
- * (it used to show nothing on web), folders drill in and back, and a picked
- * conversation becomes a pill that the sent prompt keeps as a chip.
- */
-
 test.setTimeout(120_000)
 
 const createdProjectIds: string[] = []

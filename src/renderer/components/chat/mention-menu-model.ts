@@ -79,15 +79,11 @@ export function isFolderMatch(m: MentionMatch): boolean {
   return m.kind === 'dir'
 }
 
-// ----- Panels --------------------------------------------------------------
-
-/** One level of the drill-down menu. `dir` is absolute, forward-slash, no trailing slash. */
 export type MentionPanel =
   | { kind: 'root' }
   | { kind: 'conversations' }
   | { kind: 'explorer'; dir: string }
 
-/** Another chat in the project, as the Conversations panel lists it. */
 export interface ConversationMatch {
   sessionId: string
   title: string
@@ -96,7 +92,6 @@ export interface ConversationMatch {
   running: boolean
 }
 
-/** What a menu row does when picked. */
 export type MentionRow =
   | { kind: 'category'; target: 'conversations' | 'explorer' }
   | { kind: 'use-folder'; match: MentionMatch }
@@ -120,25 +115,20 @@ export interface MentionItem {
 export interface MentionSection {
   id: string
   heading?: string
-  /** Status line shown in place of rows (listing in flight, failed, or empty). */
   notice?: string
   items: MentionItem[]
 }
 
 export interface MentionMenuInput {
   panel: MentionPanel
-  /** Explorer root: absolute, forward-slash, no trailing slash. */
   root: string
   filter: string
   matches: MentionMatch[]
   recents: MentionMatch[]
-  /** Other chats in the project, newest first. */
   conversations: ConversationMatch[]
-  /** Listing for the explorer panel's `dir`, when that panel is on top. */
   listing?: DirListing
 }
 
-/** Conversations shown above the file results when searching from the root. */
 export const MAX_ROOT_CONVERSATION_RESULTS = 5
 
 export const CONVERSATIONS_EMPTY_LABEL = 'No other chats in this project yet.'
@@ -148,13 +138,11 @@ export const LISTING_LOADING_LABEL = 'Loading…'
 export const LISTING_ERROR_LABEL = "Couldn't list this folder"
 export const LISTING_EMPTY_LABEL = 'This folder is empty'
 
-/** `dir` relative to `root` with a trailing `/`, or `''` for the root itself. */
 export function relativeDir(root: string, dir: string): string {
   if (dir === root || !dir.startsWith(`${root}/`)) return ''
   return `${dir.slice(root.length + 1)}/`
 }
 
-/** The explorer `dir` a folder match drills into. */
 export function folderDir(m: MentionMatch): string {
   return m.absPath.replace(/\/$/, '')
 }
@@ -180,7 +168,6 @@ function dedupByPath(matches: MentionMatch[]): MentionMatch[] {
   return out
 }
 
-/** Files (ripgrep order, non-ignored first) then Folders capped at {@link MAX_FOLDER_RESULTS}. */
 function searchSections(matches: MentionMatch[]): MentionSection[] {
   const deduped = dedupByPath(matches)
   const files = deduped.filter((m) => !isFolderMatch(m)).map((m) => matchItem(m, m.relPath))
@@ -251,7 +238,6 @@ function conversationItem(c: ConversationMatch): MentionItem {
   }
 }
 
-/** Case-insensitive match on the chat title or its agent name. */
 export function filterConversations(
   conversations: ConversationMatch[],
   filter: string
@@ -285,12 +271,6 @@ function categorySection(root: string, conversationCount: number): MentionSectio
   }
 }
 
-/**
- * Build the rows for the top panel. A bare `@` at the root shows the category
- * rows (never empty, so Enter never falls through to send). A query searches
- * file and folder names from any panel; the explorer without a query lists
- * its `dir` directly, so a fresh device with no recents still sees files.
- */
 export function buildMentionSections(input: MentionMenuInput): MentionSection[] {
   const { panel, root, filter, matches, recents, conversations, listing } = input
   const searching = filter.trim() !== ''
@@ -312,7 +292,6 @@ export function buildMentionSections(input: MentionMenuInput): MentionSection[] 
   return [categorySection(root, conversations.length)]
 }
 
-/** Header for a sub-panel: back chevron + title + the explorer's directory crumb. */
 export function mentionPanelHeader(
   panel: MentionPanel,
   root: string
@@ -322,9 +301,7 @@ export function mentionPanelHeader(
   return { title: 'Explorer', crumb: relativeDir(root, panel.dir) }
 }
 
-/** Everything the menu renders for the top panel. */
 export interface MentionMenuView {
-  /** Changes whenever the top panel changes, so the menu remounts and slides. */
   panelKey: string
   header: { title: string; crumb: string } | null
   enter: 'forward' | 'back' | 'none'

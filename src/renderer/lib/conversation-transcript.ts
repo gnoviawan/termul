@@ -6,7 +6,6 @@ import { conversationEnvelope } from '@/lib/conversation-envelope'
 import { logFrontendError } from '@/lib/log-api'
 import { type ChatMessage, useAcpStore } from '@/stores/acp-store'
 
-/** Enough messages to cover the context budget's 12 turns with tool-heavy replies. */
 const TRANSCRIPT_TAIL_LIMIT = 200
 
 interface Transcript {
@@ -14,12 +13,6 @@ interface Transcript {
   toolCalls: ToolCall[]
 }
 
-/**
- * Read a chat's recent transcript without side effects. A loaded, settled
- * session is read from the store; otherwise the host tail. This deliberately
- * avoids `loadSessionPayloadTail`, which unpins the session's cached payload,
- * and the desktop full-payload cache, which can be stale.
- */
 export async function readConversationTranscript(sessionId: string): Promise<Transcript | null> {
   const state = useAcpStore.getState()
   const loaded = state.messages[sessionId]
@@ -43,13 +36,10 @@ function agentNameOf(sessionId: string): string | null {
 }
 
 export interface ConversationContexts {
-  /** One envelope `text` block per conversation whose transcript was read. */
   blocks: ContentBlock[]
-  /** Session ids whose transcript could not be read; the wire says so inline. */
   unavailable: ReadonlySet<string>
 }
 
-/** Read and serialize each mentioned conversation for the wire. Never throws. */
 export async function resolveConversationContexts(
   refs: ReadonlyArray<{ title: string; sessionId: string }>
 ): Promise<ConversationContexts> {

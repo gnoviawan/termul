@@ -31,11 +31,8 @@ export interface ComposerMenuItem {
   dimmed?: boolean
   /** Wrap long labels/descriptions instead of truncating (used by skill rows). */
   wrap?: boolean
-  /** Draw the icon on a tile (mention-menu category rows). */
   iconTile?: boolean
-  /** Opens a sub-panel: draws a trailing chevron and answers ArrowRight. */
   drill?: boolean
-  /** Right-aligned meta (a conversation row's running dot, agent, and time). */
   trailing?: ReactNode
   /** Opaque payload round-tripped to `onSelect` (SlashItem, MentionMatch, …). */
   payload: unknown
@@ -44,15 +41,12 @@ export interface ComposerMenuItem {
 export interface ComposerMenuSection {
   id: string
   heading?: string
-  /** Muted status line under the heading (e.g. a folder listing in flight). */
   notice?: string
   items: ComposerMenuItem[]
 }
 
-/** Panel chrome for drill-down menus; the slash menu passes none. */
 export interface ComposerMenuPanel {
   header?: ReactNode
-  /** Slide direction when this panel mounts. */
   enter: 'forward' | 'back' | 'none'
 }
 
@@ -61,7 +55,6 @@ export interface ComposerMenuHandle {
   move: (delta: 1 | -1) => void
   /** Select the highlighted item. Returns true if an item was selected. */
   selectHighlighted: () => boolean
-  /** Select the highlighted item only if it drills. Returns true if it did. */
   drillHighlighted?: () => boolean
 }
 
@@ -75,10 +68,6 @@ interface ComposerMenuProps {
    * the highlighted option while keyboard focus stays in the textarea.
    */
   inputRef?: RefObject<HTMLElement | null>
-  /**
-   * Render as a drill-down panel: the header stays put above a scrolling list
-   * that slides in on mount. Callers key the menu by panel so highlight resets.
-   */
   panel?: ComposerMenuPanel
 }
 

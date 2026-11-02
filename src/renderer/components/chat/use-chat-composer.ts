@@ -155,9 +155,7 @@ export interface ChatPromptParts {
    * the timeline renders inline file pills). Deduped by path.
    */
   fileBlocks: ContentBlock[]
-  /** True when the value carries conversation pills (display keeps the tokens). */
   hasConversations: boolean
-  /** One transcript envelope `text` block per mentioned conversation, wire only. */
   contextBlocks: ContentBlock[]
 }
 
@@ -182,19 +180,7 @@ export interface UseChatComposerResult {
    * (the editor skips its default handling for that key).
    */
   onSlashOrMentionKeyDown: (event: KeyboardEvent) => boolean
-  /**
-   * Build the wire/display prompt text parts from the current value, resolved
-   * skill paths, inline command token, and the mentioned conversations'
-   * transcripts (from {@link conversationContexts}). Throws `Error("Skill
-   * '<name>' is missing a path")` when a selected skill has no resolvable
-   * path (the canonical `ChatInputBar` Block If — surfaces catch and toast).
-   */
   buildPromptParts: (contexts?: ConversationContexts) => ChatPromptParts
-  /**
-   * Read the transcripts of the conversations the draft mentions, or null
-   * when it mentions none, so a draft without conversation pills still sends
-   * synchronously.
-   */
   conversationContexts: () => Promise<ConversationContexts> | null
 }
 

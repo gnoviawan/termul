@@ -163,8 +163,6 @@ const {
     mockCancelAgentSwitch: vi.fn(),
     mockCancelPrompt: vi.fn(async () => {}),
     mockSaveAgentConfig: vi.fn(async () => {}),
-    // Other chats in the project (the @ menu's Conversations panel) and the
-    // transcripts the send path reads for a mentioned conversation.
     mockSessionIndex: { current: [] as Array<Record<string, unknown>> },
     mockMessages: { current: {} as Record<string, unknown[]> }
   }
@@ -340,8 +338,6 @@ vi.mock('@/hooks/use-resolved-supported-acp-agents', async () => {
   }
 })
 
-// No host history in these tests: a mentioned chat that is not loaded in the
-// store has no readable transcript.
 vi.mock('@/lib/acp-transport', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/acp-transport')>()),
   getAcpTransport: () => ({ historyMode: () => 'live_only' })

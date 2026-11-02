@@ -237,17 +237,10 @@ function sanitizeFragment(value: string): string {
   return sanitizeWireText(value).replace(/\s+/g, ' ')
 }
 
-/**
- * Size limits for a serialized transcript. `maxFragmentChars` clamps one
- * message or tool one-liner so a single huge turn (a 4000-char command, a
- * pasted log) cannot blow the body budget; the turn cap bounds turn count,
- * not line length.
- */
 interface TranscriptBudget {
   maxTurns: number
   maxBodyChars: number
   maxFragmentChars: number
-  /** Keep the last agent message untruncated when it fits the body budget. */
   keepFinalAgentMessage: boolean
 }
 
@@ -257,7 +250,6 @@ const HANDOFF_BUDGET: Omit<TranscriptBudget, 'maxTurns'> = {
   keepFinalAgentMessage: false
 }
 
-/** Budget for a conversation attached with an @ pill: more room, final answer kept whole. */
 const CONVERSATION_CONTEXT_BUDGET: TranscriptBudget = {
   maxTurns: 12,
   maxBodyChars: 12000,
@@ -270,7 +262,6 @@ function truncateFragment(value: string, max: number): string {
   return `${value.slice(0, max)}…`
 }
 
-/** Sanitized, collapsed text of a message's text blocks. */
 function messageText(message: ChatMessage): string {
   return sanitizeFragment(
     message.blocks
@@ -349,7 +340,6 @@ function partitionTurns(items: HandoffItem[], budget: TranscriptBudget): Handoff
     }
   }
 
-  // Room left for the pinned first user line and the truncation marker.
   const finalRoom = budget.maxBodyChars - maxFragmentChars - 64
   if (budget.keepFinalAgentMessage && lastAgent && lastAgent.full.length <= finalRoom) {
     lastAgent.lines[lastAgent.index] = lastAgent.full
@@ -373,16 +363,6 @@ function resolveMaxTurns(options: HandoffSummaryOptions | undefined): number {
 
 const SUMMARY_TRUNCATED_MARKER = '[… summary truncated …]'
 
-/**
- * Fit the assembled body to `maxBodyChars`. `maxTurns` bounds turn
- * count, not total size: one turn can hold many tool calls and agent
- * messages (each up to `maxFragmentChars`), so the body needs its own
- * budget. When the budget is hit, the oldest turn lines are dropped — every
- * line is self-labeled (`User:`/`Agent:`/`- `), so line-level truncation
- * preserves meaning — while the front matter (anchor + omission lines) and
- * the first user line stay pinned, and an explicit truncation marker marks
- * the cut.
- */
 function fitBodyBudget(
   frontMatter: string[],
   turnSections: string[],
@@ -406,12 +386,6 @@ function fitBodyBudget(
   return [pinned.join('\n'), ...(droppedAny ? [SUMMARY_TRUNCATED_MARKER] : []), ...kept].join('\n')
 }
 
-/**
- * Serialize a transcript as `User:`/`Agent:`/tool lines under `budget`: the
- * last `maxTurns` turns, the first user message pinned as the intent anchor,
- * and explicit markers wherever turns or lines were dropped. Pure and
- * deterministic.
- */
 function buildTranscriptBody(
   messages: ChatMessage[],
   toolCalls: ToolCall[],
@@ -441,10 +415,6 @@ function buildTranscriptBody(
     }
   }
 
-  // `maxTurns` bounds turn count, not total size: one turn can hold many
-  // tool calls and agent messages. Cap the total body budget too, dropping
-  // from the oldest retained content while keeping the first-user anchor and
-  // the most recent turns; mark the cut explicitly when hit.
   return fitBodyBudget(
     [anchorLine, omissionLine].filter((s): s is string => s != null && s.length > 0),
     capped.map(turnSection),
@@ -495,11 +465,6 @@ export interface ConversationContextInput {
   agentName: string | null
 }
 
-/**
- * The body of a conversation attached with an @ pill. Never starts with the
- * handoff header: the renderer and the host both treat that prefix as a
- * handoff and would hide or rewrite the prompt.
- */
 export function buildConversationContext(input: ConversationContextInput): string {
   const body = buildTranscriptBody(input.messages, input.toolCalls, CONVERSATION_CONTEXT_BUDGET)
   const agent = sanitizeFragment(input.agentName ?? '').trim() || 'an agent'

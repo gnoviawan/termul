@@ -454,17 +454,6 @@ export function replaceCommandTokensInline(value: string): string {
     .replaceAll(CMD_TOKEN_END, '')
 }
 
-/**
- * Display → readable-text conversion for any surface that must never show
- * private-use sentinels: command tokens become `/name`, skill tokens become
- * `(name)`, file tokens become `(display)`, conversation tokens become
- * `(conversation: <title>)`. Used by history titles
- * (`deriveTitle`), queue-row previews (`previewQueuedPrompt`), clipboard copy
- * (`MessageActions`), and degraded wire paths (retry re-dispatch) that start
- * from stored display text. For a full fresh-send wire framing use
- * `buildPromptParts` instead — this helper only guarantees sentinel-free
- * readable text.
- */
 export function sanitizeDisplayText(value: string): string {
   return replaceConversationTokensInline(
     replaceFileTokensInline(replaceSkillTokensInline(replaceCommandTokensInline(value)))
@@ -547,16 +536,6 @@ export const CONTEXT_TOKEN_START = '\uE008'
 export const CONTEXT_TOKEN_END = '\uE009'
 export const CONTEXT_TOKEN_SEP = '\u001F'
 
-/**
- * True when a `/` or `@` at `index` is a trigger, not part of a word.
- *
- * The character before `index` is a boundary at the start of the text, on
- * whitespace, or at the end of a pill (`\uE001`, `\uE003`, `\uE005`, `\uE007`,
- * `\uE009`, `\uE00B`).
- * The figure space inside a skill padding block is not a boundary: the scanner
- * stops on the sentinel that closes the pill, so a trigger glued to a pill
- * still opens the menu.
- */
 export function isComposerTriggerBoundary(value: string, index: number): boolean {
   if (index <= 0) return true
   const prev = value[index - 1]
@@ -731,15 +710,6 @@ export function replaceFileTokensInline(value: string): string {
     .join('')
 }
 
-// ============================================================================
-// Inline conversation pill token model
-// ============================================================================
-
-/**
- * Conversation pill sentinels: `\uE00A<title>\u001F<sessionId>\uE00B`. The
- * title is what the pill shows; the session id picks the transcript at send
- * time. Distinct from the other pill sentinels so their walks never see it.
- */
 export const CONV_TOKEN_START = '\uE00A'
 export const CONV_TOKEN_END = '\uE00B'
 export const CONV_TOKEN_SEP = '\u001F'
@@ -750,7 +720,6 @@ export type ConversationSegment =
   | { kind: 'text'; text: string }
   | { kind: 'conversation'; title: string; sessionId: string }
 
-/** A title safe to embed in a token: no sentinels, separators, or line breaks. */
 export function conversationTitleText(title: string): string {
   return title.replace(PILL_CONTROL_CHARS_RE, '').replace(/\s+/g, ' ').trim()
 }
@@ -761,10 +730,6 @@ export function conversationToken(title: string, sessionId: string): string {
   return `${CONV_TOKEN_START}${safeTitle}${CONV_TOKEN_SEP}${safeId}${CONV_TOKEN_END}`
 }
 
-/**
- * Split a value into text and conversation tokens. Malformed tokens (no
- * closing sentinel, no separator, empty title or id) stay plain text.
- */
 export function parseConversationSegments(value: string): ConversationSegment[] {
   const segments: ConversationSegment[] = []
   let text = ''
@@ -793,7 +758,6 @@ export function parseConversationSegments(value: string): ConversationSegment[] 
   return segments
 }
 
-/** Splice a conversation token at `caret`, replacing the `deleteBefore` chars before it. */
 export function insertConversationToken(
   value: string,
   caret: number,
@@ -811,10 +775,6 @@ export function insertConversationToken(
   }
 }
 
-/**
- * Replace each conversation token with readable text, `(conversation: <title>)`
- * by default. `label` lets the send path mark a transcript it could not read.
- */
 export function replaceConversationTokensInline(
   value: string,
   label: (title: string, sessionId: string) => string = (title) => `(conversation: ${title})`
@@ -824,7 +784,6 @@ export function replaceConversationTokensInline(
     .join('')
 }
 
-/** The distinct conversations a value mentions, in first-mention order. */
 export function extractConversationRefs(
   value: string
 ): Array<{ title: string; sessionId: string }> {

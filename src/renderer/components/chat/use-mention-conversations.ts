@@ -12,12 +12,6 @@ interface ProjectConversationsInput {
   runningIds: ReadonlySet<string>
 }
 
-/**
- * Every chat in the project, newest first, the way the Chats list orders
- * them but without its worktree narrowing. Discovered (not Termul-owned)
- * chats and the composer's own chat are left out. The web index spans all
- * projects, so the project filter matters there.
- */
 export function projectConversations({
   sessionIndex,
   projectId,
@@ -41,17 +35,14 @@ export function projectConversations({
 const NO_ENTRIES: SessionIndexEntry[] = []
 const NO_CONFIGS: ReturnType<typeof useAcpStore.getState>['agentConfigs'] = []
 
-/** Running ids as one string so the selector only re-renders when the set changes. */
 function selectRunningKey(state: ReturnType<typeof useAcpStore.getState>): string {
   const ids: string[] = []
   for (const [id, session] of Object.entries(state.sessions)) {
-    // Desktop index rows never carry `turnActive`; the live session does.
     if (session?.activeTurn || session?.openTurnId) ids.push(id)
   }
   return ids.sort().join('\n')
 }
 
-/** Subscribes only while `enabled` (the menu is open), so a closed composer never re-renders on index churn. */
 export function useMentionConversations(
   enabled: boolean,
   projectId: string | null | undefined,

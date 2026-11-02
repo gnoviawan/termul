@@ -1326,8 +1326,6 @@ export async function acpSendPromptBlocks(
   turnId?: string,
   displayContent?: ContentBlock[]
 ): Promise<PromptDispatchResult> {
-  // A mentioned conversation's transcript is for the agent only. Persisting
-  // the pill instead keeps it out of this chat's saved history and title.
   const display =
     displayContent ?? (hasConversationEnvelope(content) ? wireBlocksToDisplay(content) : undefined)
   return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId, display)

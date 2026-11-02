@@ -6,11 +6,6 @@ interface ConversationChipProps {
   className?: string
 }
 
-/**
- * Inline chip for a conversation @-mention, shared by the composer pill and
- * the timeline bubble. Same line-box metrics as `FileChip`/`SkillChip` so it
- * sits flush with the text around it; the primary tint tells it apart.
- */
 export function ConversationChip({ title, className }: ConversationChipProps): React.JSX.Element {
   return (
     <span

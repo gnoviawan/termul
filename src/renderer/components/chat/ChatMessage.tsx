@@ -55,25 +55,6 @@ function blocksToText(blocks: ContentBlock[]): string {
     .join('')
 }
 
-/**
- * Render a user message's text, swapping inline skill, file, AND command
- * tokens for read-only `SkillChip`/`CommandChip`/`FileChip` pills, and
- * conversation tokens (`\uE00A..\uE00B`) for `ConversationChip`s. Skill
- * (`\uE000..\uE001`), command (`\uE004..\uE005`), and file (`\uE006..\uE007`)
- * tokens use distinct sentinel pairs, so each walk leaves the other tokens in
- * its text segments. We parse skill segments first, then walk each text
- * segment for command tokens, then each command text segment for file tokens
- * — all pill types render at their correct positions when inline together. A
- * command token renders as a `CommandChip` (terminal icon, muted `/name`),
- * the same chip as the composer's `CommandPill`. Skill chips and skill-backed
- * command chips open their `SKILL.md` on click (see `skill-file-links`).
- * Plain text (no tokens)
- * renders verbatim with `whitespace-pre-wrap` to preserve the original
- * spacing. `MessageActions` still receives the sanitized copy text (tokens →
- * readable text) while edit keeps the raw token text so the composer
- * re-seeds with chips inline. Selection contexts (`\uE008..\uE009`) are
- * split out first and render as numbered `SelectionContextChip`s.
- */
 function UserMessageText({ text }: { text: string }): React.JSX.Element {
   // Flatten: selection contexts → skill segments → command tokens → file tokens (innermost).
   type FlatSeg =

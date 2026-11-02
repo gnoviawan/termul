@@ -351,8 +351,6 @@ export function ChatInputBar({
 
     setSending(true)
     try {
-      // Throws `Skill '<name>' is missing a path` when a selected skill has
-      // no resolvable path (Block If) — caught below.
       const contexts = conversationContexts()
       const send = buildComposerSend(
         buildPromptParts(contexts ? await contexts : undefined),

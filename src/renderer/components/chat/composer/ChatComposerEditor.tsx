@@ -336,14 +336,6 @@ export function ChatComposerEditor({
           onPasteAttachmentsRef.current?.(event as ClipboardEvent)
           if (event.defaultPrevented) return true
           const text = event.clipboardData?.getData('text/plain') ?? ''
-          // 2) ONLY parse pill nodes from the sentinel chars in `text/plain`.
-          // Never parse pills from HTML (SkillPill/CommandPill.parseHTML return
-          // []), so a malicious clipboard carrying `<span data-skill-pill>` or
-          // `<span data-command-pill>` cannot inject pill nodes. Plain-text
-          // paste (no sentinel) falls through to ProseMirror's default (text
-          // nodes). The skill `\uE000`, command `\uE004`, file `\uE006`,
-          // selection-context `\uE008`, and conversation `\uE00A` sentinels
-          // trigger the pill-paste path.
           if (!/[\uE000\uE004\uE006\uE008\uE00A]/.test(text)) return false
           event.preventDefault()
           try {

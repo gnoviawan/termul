@@ -136,7 +136,6 @@ function mentionEmptyLabel(panel: MentionPanel, filter: string, loading: boolean
   return loading ? MENTION_SEARCHING_LABEL : MENTION_EMPTY_LABEL
 }
 
-/** Delete the typed query after `@` so a drilled-into panel shows its full list. */
 function clearQuery(value: string, token: MentionToken): { value: string; caret: number } {
   return { value: value.slice(0, token.at + 1) + value.slice(token.end), caret: token.at + 1 }
 }
@@ -166,9 +165,7 @@ export interface UseComposerMentionsOptions {
   recents: MentionMatch[]
   /** Stage a `file-ref` attachment for the picked match. */
   onStageFileRef: (match: MentionMatch) => void
-  /** Project whose chats the Conversations panel lists. */
   projectId: string | null | undefined
-  /** The composer's own chat, left out of the Conversations panel. */
   currentSessionId?: string | null
 }
 
@@ -178,7 +175,6 @@ export interface ComposerMentions {
   filter: string
   sections: MentionSection[]
   view: MentionMenuView
-  /** True when a sub-panel is open (ArrowLeft / Backspace on an empty query go back). */
   canGoBack: boolean
   back: () => void
   /** True while a filename-search stream is in flight for the current query. */
@@ -186,10 +182,6 @@ export interface ComposerMentions {
   menuRef: RefObject<FileMentionMenuHandle>
   /** Call on textarea input + selection change. */
   update: (value: string, caret: number) => void
-  /**
-   * Pick a row: returns the { value, caret } to apply. A pill row splices its
-   * token and closes the menu; a drill row opens its panel and clears the query.
-   */
   select: (value: string, caret: number, row: MentionRow) => { value: string; caret: number } | null
   /** Close the menu + drop matches (e.g. on send / blur). */
   reset: () => void
@@ -207,7 +199,6 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
   const tokenAtRef = useRef<number | null>(null)
   const listingsRef = useRef<Record<string, DirListing>>({})
   const [listings, setListings] = useState(listingsRef.current)
-  // Bumped on close so a listing that resolves after the menu closed is dropped.
   const listingGenRef = useRef(0)
   const root = normalizeRoot(rootPath)
   const depth = panels.stack.length

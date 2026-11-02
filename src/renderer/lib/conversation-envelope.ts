@@ -1,9 +1,3 @@
-/**
- * Wire envelope for a conversation mentioned with an @ pill. Each mentioned
- * chat rides as its own `text` block so the replay path can find it, drop the
- * transcript, and restore the pill.
- */
-
 const CLOSE_TAG = '</termul-conversation>'
 const OPEN_RE = /^<termul-conversation id="([^"]*)" title="([^"]*)">\n/
 const ENVELOPE_RE =
@@ -24,12 +18,10 @@ export interface ConversationEnvelopeRef {
 }
 
 export function conversationEnvelope(sessionId: string, title: string, body: string): string {
-  // A transcript that quotes the close tag would end the envelope early.
   const safeBody = body.replaceAll(CLOSE_TAG, '<\\/termul-conversation>')
   return `<termul-conversation id="${escapeAttr(sessionId)}" title="${escapeAttr(title)}">\n${safeBody}\n${CLOSE_TAG}`
 }
 
-/** The conversation an envelope block carries, or null when `text` is not exactly one envelope. */
 export function parseConversationEnvelope(text: string): ConversationEnvelopeRef | null {
   const open = OPEN_RE.exec(text)
   if (!open || !text.endsWith(`\n${CLOSE_TAG}`)) return null
@@ -39,7 +31,6 @@ export function parseConversationEnvelope(text: string): ConversationEnvelopeRef
   return { sessionId, title }
 }
 
-/** Remove every envelope from text that concatenates several blocks. */
 export function stripConversationEnvelopes(text: string): string {
   return text.includes('<termul-conversation ') ? text.replace(ENVELOPE_RE, '') : text
 }
