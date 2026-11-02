@@ -37,7 +37,7 @@ export function ClaudeLimitWarning({
         <button
           type="button"
           onClick={() => void switchTo(best)}
-          className="shrink-0 font-medium underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+          className="shrink-0 font-medium underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-focus-ring"
         >
           Switch to {best.account.name}
         </button>
@@ -46,7 +46,7 @@ export function ClaudeLimitWarning({
         type="button"
         onClick={dismiss}
         aria-label="Dismiss"
-        className="shrink-0 rounded text-warning/80 hover:text-warning focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+        className="shrink-0 rounded text-warning/80 hover:text-warning focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-focus-ring"
       >
         <X size={12} />
       </button>

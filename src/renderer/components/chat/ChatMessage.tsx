@@ -280,7 +280,7 @@ interface ChatMessageProps {
 
 /** The same inset focus ring as `ToolCallCard`, for a focusable message. */
 const MOBILE_ACTIONS_RING_CLASS =
-  'rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+  'rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring'
 
 /**
  * Classes for a message that owns mobile actions: the focus ring in every
