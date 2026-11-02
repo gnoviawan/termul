@@ -351,7 +351,7 @@ function WorkspaceRowView({
               'relative inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground',
               "after:absolute after:-inset-1.5 after:content-['']",
               'transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground',
-              'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+              'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring',
               'pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 focus-visible:opacity-100',
               highlighted && 'pointer-fine:opacity-100',
               disabled && 'cursor-not-allowed'

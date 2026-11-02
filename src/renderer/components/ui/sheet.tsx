@@ -89,7 +89,7 @@ const SheetContent = React.forwardRef<
           className={cn(
             'absolute right-2.5 top-2.5 flex items-center justify-center pointer-coarse:right-0.5 pointer-coarse:top-0.5',
             CHAT_ROW_ICON,
-            'rounded-sm opacity-70 ring-offset-background transition-opacity data-[state=open]:bg-secondary hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 pointer-coarse:focus:ring-offset-0 disabled:pointer-events-none'
+            'rounded-sm opacity-70 ring-offset-background transition-opacity data-[state=open]:bg-secondary hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-focus-ring focus:ring-offset-2 pointer-coarse:focus:ring-offset-0 disabled:pointer-events-none'
           )}
         >
           <X className="h-4 w-4" />

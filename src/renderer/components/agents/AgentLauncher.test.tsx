@@ -2933,7 +2933,7 @@ describe('AgentLauncher worktree isolation', () => {
     for (const name of ['Workspace', 'Base branch']) {
       expect(screen.getByRole('combobox', { name })).toHaveClass(
         'focus-visible:ring-2',
-        'focus-visible:ring-ring',
+        'focus-visible:ring-focus-ring',
         'focus-visible:ring-offset-2',
         // Slim 28px row with the standard pseudo hit-extension (40px effective).
         'after:-inset-1.5'

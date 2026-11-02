@@ -27,7 +27,7 @@ export function NeedsYouButton({
           event.stopPropagation()
           onOpen?.()
         }}
-        className="inline-flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-full bg-warning/10 px-1.5 text-3xs font-semibold tabular-nums text-warning transition-[transform,background-color] duration-150 ease-out hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
+        className="inline-flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-full bg-warning/10 px-1.5 text-3xs font-semibold tabular-nums text-warning transition-[transform,background-color] duration-150 ease-out hover:bg-warning/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
       >
         <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-warning" />
         <span>{count}</span>
