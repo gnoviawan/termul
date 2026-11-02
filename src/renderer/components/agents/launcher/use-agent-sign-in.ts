@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
 import { EMPTY_AUTH_METHODS } from '@/components/agents/launcher/constants'
 import {
@@ -12,8 +12,11 @@ import { resolveAgentEnv } from '@/lib/agent-launch'
 import { agentPolicy } from '@/lib/agents/acp-registry'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
-import { terminalApi } from '@/lib/terminal-api'
 import { agentReuseKey, useAcpStore } from '@/stores/acp-store'
+import {
+  beginLoginTerminalSignIn,
+  useLoginTerminalSignInStore
+} from '@/stores/login-terminal-sign-in-store'
 import type { EnvVariable } from '@/types/project'
 
 export interface AgentSignIn {
@@ -68,7 +71,13 @@ export function useAgentSignIn({
   )
   const signInMethod =
     authMethods.length === 1 && authMethods[0]?.id !== 'gateway' ? authMethods[0] : null
-  const [signingInMethodId, setSigningInMethodId] = useState<string | null>(null)
+  const [authenticatingMethodId, setAuthenticatingMethodId] = useState<string | null>(null)
+  // A login terminal this agent has open, possibly pressed from a surface that
+  // has since closed: it shows here as running until its process exits.
+  const loginTerminalMethodId = useLoginTerminalSignInStore((s) =>
+    liveAgentId ? (s.byAgent[liveAgentId]?.methodId ?? null) : null
+  )
+  const signingInMethodId = authenticatingMethodId ?? loginTerminalMethodId
 
   const factoryKeyAuth = useFactoryKeyAuth(config, cwd, onSignedIn)
 
@@ -84,7 +93,7 @@ export function useAgentSignIn({
         return
       }
       if (signingInMethodId) return
-      setSigningInMethodId(methodId)
+      setAuthenticatingMethodId(methodId)
       const carrying = !input ? '' : 'apiKey' in input ? ' with a typed API key' : ' via a gateway'
       void logFrontendError({
         level: 'info',
@@ -99,7 +108,7 @@ export function useAgentSignIn({
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Sign-in failed')
       } finally {
-        setSigningInMethodId(null)
+        setAuthenticatingMethodId(null)
       }
     },
     [liveAgentId, signingInMethodId, onSignedIn]
@@ -107,71 +116,27 @@ export function useAgentSignIn({
 
   // Terminal auth methods (spec-acp-terminal-auth): spawn the agent binary
   // with the method's args/env in a real terminal tab so its login TUI runs
-  // interactively. Exit code 0 → run the ACP `authenticate` + re-prepare;
-  // non-zero → toast and the banner stays (the user can retry). The login
-  // terminal is an ordinary extra tab — never killed or recreated.
-  const loginAuthInFlightRef = useRef(false)
-  const loginExitUnlistenRef = useRef<(() => void) | null>(null)
-  // Detach a pending login-exit listener on unmount — the terminal outlives
-  // the caller, but the callback must not fire into a dead component.
-  useEffect(
-    () => () => {
-      loginExitUnlistenRef.current?.()
-      loginExitUnlistenRef.current = null
-    },
-    []
-  )
+  // interactively. The login-terminal store watches its exit — 0 → ACP
+  // `authenticate` + `onSignedIn`; non-zero → toast, the banner stays — even
+  // after this component unmounts (issue #1648). The login terminal is an
+  // ordinary extra tab — never killed or recreated.
   const runTerminalAuth = useCallback(
     async (method: AuthMethod) => {
       if (!liveAgentId || !config || !cwd || !projectId) {
         toast.error('Agent is not connected. Use Retry to reconnect, then sign in again.')
         return
       }
-      // Ref guard: `signingInMethodId` state races a fast double-click and
-      // would spawn duplicate login terminals.
-      if (loginAuthInFlightRef.current) return
-      loginAuthInFlightRef.current = true
-      const agentId = liveAgentId
+      // The store's per-agent record (set synchronously here) guards a fast
+      // double-click, or a press from another surface, against a second
+      // login terminal.
       const agentName = config.name
-      setSigningInMethodId(method.id)
-      let ptyId: string | null = null
-      // The listener and the post-spawn getExitCode poll can both observe the
-      // same exit — handle it once.
-      let exitHandled = false
-      const handleExit = (exitCode: number): void => {
-        if (exitHandled) return
-        exitHandled = true
-        loginExitUnlistenRef.current?.()
-        loginExitUnlistenRef.current = null
-        loginAuthInFlightRef.current = false
-        setSigningInMethodId(null)
-        if (exitCode === 0) {
-          // The login TUI writes credentials itself, so `authenticate`
-          // typically returns immediately — it also covers agents that gate
-          // on the explicit call. `authenticateAgent` shares the in-flight
-          // dedup + marks the agent authenticated so `createSession` skips
-          // its own authenticate. Re-prepare regardless of the authenticate
-          // outcome: the TUI already wrote credentials, so the session can
-          // proceed even when the explicit call fails.
-          void useAcpStore
-            .getState()
-            .authenticateAgent(agentId, method.id)
-            .catch((err) => {
-              toast.error(err instanceof Error ? err.message : 'Sign-in failed')
-            })
-            .finally(() => onSignedIn())
-        } else {
-          toast.error(`${agentName} sign-in exited with code ${exitCode}.`)
-        }
-      }
-      // Register the exit listener BEFORE spawn so an exit that lands while
-      // the spawn is in flight is still observed; the getExitCode poll below
-      // covers the remaining gap (exit before the listener attached).
-      const unlisten = terminalApi.onExit((id, exitCode) => {
-        if (ptyId === null || id !== ptyId) return
-        handleExit(exitCode)
+      const watch = beginLoginTerminalSignIn({
+        agentId: liveAgentId,
+        methodId: method.id,
+        agentName,
+        onSignedIn
       })
-      loginExitUnlistenRef.current = unlisten
+      if (!watch) return
       try {
         // Merge project env → agent-config env → method env (same layering
         // as launchAgentInPane; method env wins — it is the auth flow's own
@@ -197,25 +162,13 @@ export function useAgentSignIn({
           tabName: `Sign in — ${agentName}`
         })
         if (!spawnResult.success || !spawnResult.ptyId) {
-          unlisten()
-          loginExitUnlistenRef.current = null
-          loginAuthInFlightRef.current = false
-          setSigningInMethodId(null)
+          watch.abandon()
           toast.error(spawnResult.error ?? 'Could not open the sign-in terminal.')
           return
         }
-        ptyId = spawnResult.ptyId
-        // Fallback: the login process may have exited between spawn and the
-        // listener observing it — poll the recorded exit code once.
-        const exitResult = await terminalApi.getExitCode(ptyId)
-        if (exitResult.success && exitResult.data !== null) {
-          handleExit(exitResult.data)
-        }
+        await watch.attach(spawnResult.ptyId)
       } catch (err) {
-        unlisten()
-        loginExitUnlistenRef.current = null
-        loginAuthInFlightRef.current = false
-        setSigningInMethodId(null)
+        watch.abandon()
         toast.error(err instanceof Error ? err.message : 'Could not open the sign-in terminal.')
       }
     },
