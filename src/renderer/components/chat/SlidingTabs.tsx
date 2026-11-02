@@ -232,7 +232,7 @@ export function SlidingTabs<T extends string>({
             onClick={() => select(i)}
             className={cn(
               'relative z-[1] flex min-h-7 flex-1 items-center justify-center gap-1.5 rounded-md px-2 text-xs transition-colors duration-200 ease-out pointer-coarse:min-h-10 pointer-coarse:text-sm',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring',
               i === activeIndex ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
             )}
           >

@@ -131,7 +131,7 @@ export function SubagentRows({
               type="button"
               onClick={() => onSelect(tc.toolCallId)}
               className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-foreground/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                'flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-foreground/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
                 CHAT_ROW_MIN_H
               )}
             >

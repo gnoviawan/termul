@@ -56,7 +56,7 @@ export function ClaudeLimitNotice({ sessionId }: { sessionId: string }): React.J
           type="button"
           onClick={dismiss}
           aria-label="Not now"
-          className="shrink-0 rounded text-muted-foreground hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+          className="shrink-0 rounded text-muted-foreground hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-focus-ring"
         >
           <X size={13} />
         </button>
@@ -103,7 +103,7 @@ export function ClaudeLimitNotice({ sessionId }: { sessionId: string }): React.J
             <button
               type="button"
               onClick={() => cancelResume(sessionId)}
-              className="font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+              className="font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-focus-ring"
             >
               Cancel
             </button>

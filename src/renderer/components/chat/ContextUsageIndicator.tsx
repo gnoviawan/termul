@@ -165,7 +165,7 @@ export function ContextUsageDetails({
           aria-busy={pending || undefined}
           className={cn(
             'inline-flex h-7 w-full items-center justify-center rounded-md border border-border/60 text-xs font-medium text-foreground transition-colors duration-150',
-            'hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            'hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring',
             'disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none',
             STAGGER_ITEM
           )}
@@ -273,7 +273,7 @@ export function ContextUsageIndicator({
         'relative inline-flex size-8 shrink-0 items-center justify-center transition-[color,transform] ease-out motion-reduce:transition-none',
         warning ? 'text-warning' : 'text-muted-foreground hover:text-foreground',
         "after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1",
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         className
       )}
     >

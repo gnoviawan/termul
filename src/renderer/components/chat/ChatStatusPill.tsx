@@ -293,7 +293,7 @@ export function ChatStatusPill({
       aria-label={`Session status: ${triggerLabel}`}
       title={waitingLabel ?? undefined}
       className={cn(
-        'pointer-events-auto relative flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-popover/90 px-2.5 text-2xs font-medium shadow-pill backdrop-blur-md transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-muted',
+        'pointer-events-auto relative flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-popover/90 px-2.5 text-2xs font-medium shadow-pill backdrop-blur-md transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring data-[state=open]:bg-muted',
         "after:absolute after:-inset-2 after:content-[''] pointer-coarse:after:-inset-y-2.5"
       )}
     >
