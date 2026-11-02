@@ -2,6 +2,7 @@ import type { IpcResult } from '@shared/types/ipc.types'
 import { appDataDir } from '@tauri-apps/api/path'
 import {
   copyFile,
+  type DirEntry,
   mkdir,
   readDir,
   readTextFile,
@@ -11,6 +12,12 @@ import {
   writeTextFile
 } from '@tauri-apps/plugin-fs'
 import { Store } from '@tauri-apps/plugin-store'
+import { logFrontendError } from './log-api'
+
+const LOG_SOURCE = 'tauri-backup-api'
+
+// Cap on skipped paths named in one warning so the log line stays readable.
+const MAX_LOGGED_SKIPPED_PATHS = 20
 
 // Backup error codes
 export const BackupErrorCodes = {
@@ -247,24 +254,64 @@ async function countFiles(dirPath: string): Promise<number> {
 }
 
 /**
- * Copy directory recursively
+ * Copy one directory entry. Symlinks are never followed: they point outside the
+ * copied tree (e.g. Claude account links to the shared `~/.claude` dirs, #1669),
+ * so following them could copy unbounded or cyclic data, and Tauri `copyFile`
+ * rejects links to directories, which used to abort the whole backup. Links and
+ * other non-regular entries (sockets, FIFOs) are recorded in `skipped` instead.
  */
-async function copyDirectory(src: string, dest: string): Promise<void> {
+async function copyEntry(
+  entry: DirEntry,
+  src: string,
+  dest: string,
+  relPath: string,
+  skipped: string[]
+): Promise<void> {
+  if (entry.isSymlink || !(entry.isDirectory || entry.isFile)) {
+    skipped.push(relPath)
+    return
+  }
+  if (entry.isDirectory) {
+    await copyDirectory(src, dest, relPath, skipped)
+    return
+  }
+  await copyFile(src, dest)
+}
+
+/**
+ * Copy directory recursively, skipping symlinks (see `copyEntry`).
+ */
+async function copyDirectory(
+  src: string,
+  dest: string,
+  relPath: string,
+  skipped: string[]
+): Promise<void> {
   await mkdir(dest, { recursive: true })
   const entries = await readDir(src)
 
   for (const entry of entries) {
-    const srcPath = `${src}/${entry.name}`
-    const destPath = `${dest}/${entry.name}`
-
-    if (entry.isDirectory ?? false) {
-      // It's a directory
-      await copyDirectory(srcPath, destPath)
-    } else {
-      // It's a file
-      await copyFile(srcPath, destPath)
-    }
+    const childRel = relPath ? `${relPath}/${entry.name}` : entry.name
+    await copyEntry(entry, `${src}/${entry.name}`, `${dest}/${entry.name}`, childRel, skipped)
   }
+}
+
+/**
+ * Warn about entries left out of a copy. Paths are relative to the copied root
+ * so the home directory never reaches the log.
+ */
+function logSkippedEntries(operation: string, skipped: string[]): void {
+  if (skipped.length === 0) return
+  const shown = skipped.slice(0, MAX_LOGGED_SKIPPED_PATHS).join(', ')
+  const more =
+    skipped.length > MAX_LOGGED_SKIPPED_PATHS
+      ? ` (+${skipped.length - MAX_LOGGED_SKIPPED_PATHS} more)`
+      : ''
+  void logFrontendError({
+    level: 'warn',
+    source: LOG_SOURCE,
+    message: `[backup] ${operation}: skipped ${skipped.length} symlink or non-regular entries: ${shown}${more}`
+  })
 }
 
 /**
@@ -284,6 +331,7 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
 
     // Copy entire userData directory (except backups and versions folders)
     const entries = await readDir(userDataPath)
+    const skipped: string[] = []
 
     for (const entry of entries) {
       // Skip the backups directory itself, and the rollback versions store
@@ -294,17 +342,15 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
         continue
       }
 
-      const srcPath = `${userDataPath}/${entry.name}`
-      const destPath = `${backupPath}/${entry.name}`
-
-      if (entry.isDirectory ?? false) {
-        // It's a directory
-        await copyDirectory(srcPath, destPath)
-      } else {
-        // It's a file
-        await copyFile(srcPath, destPath)
-      }
+      await copyEntry(
+        entry,
+        `${userDataPath}/${entry.name}`,
+        `${backupPath}/${entry.name}`,
+        entry.name,
+        skipped
+      )
     }
+    logSkippedEntries('create', skipped)
 
     // Calculate backup size
     const size = await getDirectorySize(backupPath)
@@ -344,6 +390,11 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
   } catch (err) {
     // Check for disk space errors
     const errorMessage = extractErrorMessage(err, 'Unknown error')
+    void logFrontendError({
+      level: 'error',
+      source: LOG_SOURCE,
+      message: `[backup] create failed: ${errorMessage}`
+    })
 
     if (
       errorMessage.includes('ENOSPC') ||
@@ -479,7 +530,9 @@ export async function restoreBackup(backupId: string): Promise<IpcResult<void>> 
     oldUserDataPath = `${parentDir}/old-userdata-${timestamp}-${randomSuffix}`
 
     // Copy backup to temp directory
-    await copyDirectory(backupPath, tempRestorePath)
+    const skipped: string[] = []
+    await copyDirectory(backupPath, tempRestorePath, '', skipped)
+    logSkippedEntries('restore', skipped)
 
     // Remove backup-info.json from temp restore
     const tempInfoPath = `${tempRestorePath}/backup-info.json`
