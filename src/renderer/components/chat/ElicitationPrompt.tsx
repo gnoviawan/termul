@@ -4,7 +4,7 @@ import { requestExternalLinkOpen } from '@/components/external-link/ExternalLink
 import { FileQuestion } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { COMPOSER_FOCUS_CLASS, FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
+import { FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { Switch } from '@/components/ui/switch'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ElicitationField } from '@/lib/acp-api'
@@ -189,7 +189,6 @@ export function ElicitationPrompt({
         className={cn(
           'mx-auto w-full max-w-3xl',
           PROMPT_PANEL_CLASS,
-          COMPOSER_FOCUS_CLASS,
           !questionShaped && 'px-3.5 py-3 sm:px-4'
         )}
       >
