@@ -234,6 +234,8 @@ function PickerBody(props: PickerBodyProps): React.JSX.Element {
   const offerCreate = Boolean(create && needle && !exact && props.status === 'ready')
 
   const toggle = (value: string): void => {
+    // Done already sent its snapshot: a pick now would vanish when the picker closes.
+    if (applying) return
     setSelected((prev) =>
       prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
     )

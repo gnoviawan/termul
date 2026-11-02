@@ -103,7 +103,7 @@ export function GithubChoiceMenu<T extends string>({
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>{chip}</SheetTrigger>
         <MobileSheetContent title={title} aria-describedby={undefined}>
-          <div role="radiogroup" aria-label={title}>
+          <div role="radiogroup" aria-label={title} onKeyDown={moveBetweenRadios}>
             <SheetGroup>
               {options.map((option) => (
                 <SheetRow
@@ -139,4 +139,15 @@ export function GithubChoiceMenu<T extends string>({
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+/** Arrow keys move focus between the rows of a phone radio group, as a radio group promises. */
+function moveBetweenRadios(event: React.KeyboardEvent<HTMLDivElement>): void {
+  const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[event.key]
+  if (!step) return
+  const radios = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')]
+  const at = radios.indexOf(document.activeElement as HTMLElement)
+  if (at === -1) return
+  event.preventDefault()
+  radios[(at + step + radios.length) % radios.length]?.focus()
 }

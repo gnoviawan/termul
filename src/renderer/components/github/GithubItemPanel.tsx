@@ -113,6 +113,8 @@ export function GithubItemPanel({
     const store = useGithubStore.getState()
     void store.loadItem(itemRef, { refresh: true })
     if (isPr) void store.loadChecks(itemRef, { refresh: true })
+    // Labels or people added on GitHub show up in the pickers after a refresh.
+    void store.loadRepoMeta(cwd, repo, { refresh: true })
   }
 
   // After a push the item reports a new head before the cached checks do.
