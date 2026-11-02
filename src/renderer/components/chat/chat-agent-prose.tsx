@@ -17,11 +17,15 @@ import { syntaxShikiPair } from '@/lib/themes/syntax-shiki'
 import { cn } from '@/lib/utils'
 import { useColorTheme } from '@/stores/app-settings-store'
 import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
-import { ChatMedia, MediaAltChip } from './ChatMedia'
+import { ChatImageGallery, ChatMedia, MediaAltChip } from './ChatMedia'
 import { chatCodePlugin } from './chat-code-plugin'
 import { ChatMarkdownCode } from './chat-markdown-code'
 import { remarkFilePathLinks } from './chat-markdown-file-links'
-import { remarkTermulMedia } from './chat-markdown-images'
+import {
+  type GalleryItem,
+  parseChatMarkdownBlocks,
+  remarkTermulMedia
+} from './chat-markdown-images'
 import { ChatMarkdownTable } from './chat-markdown-table'
 import { ChatMarkdownSpan } from './chat-markdown-word'
 import { chatMediaFromMarkdown } from './chat-media-source'
@@ -41,7 +45,8 @@ const FILE_PATH_REMARK_PLUGINS = [
  */
 export const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
   'termul-file-path': ['dataPath'],
-  'termul-media': ['dataUrl', 'dataAlt', 'dataLinkPreview']
+  'termul-media': ['dataUrl', 'dataAlt', 'dataLinkPreview'],
+  'termul-gallery': ['dataItems']
 }
 
 function stringProp(props: Record<string, unknown>, name: string): string | undefined {
@@ -147,6 +152,41 @@ export function TermulMarkdownMedia({
   )
 }
 
+function parseGalleryItems(raw: string | undefined): GalleryItem[] {
+  try {
+    const parsed: unknown = JSON.parse(raw ?? '[]')
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (item): item is GalleryItem =>
+            typeof item?.url === 'string' && typeof item?.alt === 'string'
+        )
+      : []
+  } catch {
+    return []
+  }
+}
+
+/** Renders a `<termul-gallery>` element emitted by `remarkTermulMedia` as a strip of tiles. */
+export function TermulMarkdownGallery({
+  items,
+  filePathContext
+}: {
+  /** The JSON `data-items` attribute. */
+  items: string | undefined
+  filePathContext?: FilePathResolutionContext
+}): React.JSX.Element | null {
+  const cwd = filePathContext?.cwd
+  const gallery = useMemo(
+    () =>
+      parseGalleryItems(items).map(({ url, alt }) => {
+        const media = chatMediaFromMarkdown(url, alt, cwd)
+        return { alt, media: media?.kind === 'image' ? media : null }
+      }),
+    [items, cwd]
+  )
+  return gallery.length > 0 ? <ChatImageGallery items={gallery} /> : null
+}
+
 /**
  * Renders a `<termul-file-path>` element emitted by `remarkFilePathLinks` as
  * the open-in-editor button. The path arrives in the `data-path` attribute
@@ -227,6 +267,12 @@ export function AgentProse({
           filePathContext={filePathContext}
         />
       ),
+      'termul-gallery': (props: Record<string, unknown>) => (
+        <TermulMarkdownGallery
+          items={stringProp(props, 'data-items')}
+          filePathContext={filePathContext}
+        />
+      ),
       a: ({ href, children, node: _node, className, ...props }) => {
         if (href?.startsWith('#')) {
           const { target: _target, rel: _rel, ...anchorProps } = props
@@ -297,6 +343,7 @@ export function AgentProse({
         plugins={streaming ? STREAMDOWN_PLUGINS : STREAMDOWN_PLUGINS_WITH_PLAN}
         remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : MEDIA_REMARK_PLUGINS}
         allowedTags={STREAMDOWN_ALLOWED_TAGS}
+        parseMarkdownIntoBlocksFn={parseChatMarkdownBlocks}
         controls={STREAMDOWN_CONTROLS}
         components={components}
         lineNumbers={false}

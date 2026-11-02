@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { remarkTermulMedia, resolveLocalImagePath, termulMediaTag } from './chat-markdown-images'
+import {
+  parseChatMarkdownBlocks,
+  remarkTermulMedia,
+  resolveLocalImagePath,
+  termulMediaTag
+} from './chat-markdown-images'
 
 describe('chat markdown images', () => {
   it('rewrites non-https image nodes into termul-media raw HTML', () => {
@@ -9,6 +14,7 @@ describe('chat markdown images', () => {
         {
           type: 'paragraph',
           children: [
+            { type: 'text', value: 'See ' },
             { type: 'image', url: 'data:image/png;base64,QUJD', alt: 'tiny' },
             { type: 'image', url: 'file:///E:/proj/chart.png', alt: 'chart' },
             { type: 'image', url: 'output/chart.png', alt: 'rel' }
@@ -19,7 +25,7 @@ describe('chat markdown images', () => {
 
     remarkTermulMedia()(tree)
 
-    const children = tree.children[0].children as Array<{ type: string; value?: string }>
+    const children = tree.children[0].children.slice(1) as Array<{ type: string; value?: string }>
     expect(children).toHaveLength(3)
     expect(children[0]).toEqual({
       type: 'html',
@@ -356,5 +362,216 @@ describe('chat markdown images', () => {
       expect(resolveLocalImagePath('FILE:///E:/x.png')).toBe('E:/x.png')
       expect(resolveLocalImagePath('File:///home/u/x.png')).toBe('/home/u/x.png')
     })
+  })
+})
+
+type Node = { type: string; [key: string]: unknown }
+
+const image = (url: string, alt: string): Node => ({ type: 'image', url, alt })
+const text = (value: string): Node => ({ type: 'text', value })
+const paragraph = (...children: Node[]): Node => ({ type: 'paragraph', children })
+
+function transform(...children: Node[]): Node[] {
+  const tree = { type: 'root', children }
+  remarkTermulMedia()(tree)
+  return tree.children
+}
+
+function gallery(...items: Array<[url: string, alt: string]>): Node {
+  const json = JSON.stringify(items.map(([url, alt]) => ({ url, alt }))).replaceAll('"', '&quot;')
+  return { type: 'html', value: `<termul-gallery data-items="${json}"></termul-gallery>` }
+}
+
+function media(url: string, alt: string): Node {
+  return { type: 'html', value: termulMediaTag(url, alt) }
+}
+
+describe('chat markdown image galleries', () => {
+  it('groups images on one line into one strip', () => {
+    expect(
+      transform(paragraph(image('a.png', 'a'), text(' '), image('https://x.test/b.png', 'b')))
+    ).toEqual([gallery(['a.png', 'a'], ['https://x.test/b.png', 'b'])])
+  })
+
+  it('groups image-only paragraphs and soft breaks into one strip', () => {
+    expect(
+      transform(
+        paragraph(image('a.png', 'a'), text('\n'), image('b.png', 'b')),
+        paragraph(image('c.png', 'c')),
+        paragraph(image('d.png', 'd'), { type: 'break' })
+      )
+    ).toEqual([gallery(['a.png', 'a'], ['b.png', 'b'], ['c.png', 'c'], ['d.png', 'd'])])
+  })
+
+  it('keeps two images split by a text paragraph as two single images', () => {
+    expect(
+      transform(
+        paragraph(image('a.png', 'a')),
+        paragraph(text('Between')),
+        paragraph(image('b.png', 'b'))
+      )
+    ).toEqual([
+      paragraph(media('a.png', 'a')),
+      paragraph(text('Between')),
+      paragraph(media('b.png', 'b'))
+    ])
+  })
+
+  it('keeps images that share a paragraph with text inline', () => {
+    expect(
+      transform(paragraph(text('See '), image('a.png', 'a'), text(' and '), image('b.png', 'b')))
+    ).toEqual([paragraph(text('See '), media('a.png', 'a'), text(' and '), media('b.png', 'b'))])
+  })
+
+  it('leaves a lone image inline at its own size', () => {
+    expect(transform(paragraph(image('a.png', 'a')))).toEqual([paragraph(media('a.png', 'a'))])
+  })
+
+  it('keeps videos out of a strip, so a video breaks the run', () => {
+    expect(
+      transform(
+        paragraph(image('a.png', 'a')),
+        paragraph(image('https://cdn.test/clip.mp4', 'clip')),
+        paragraph(image('data:video/webm;base64,QQ', 'rec')),
+        paragraph(image('b.png', 'b'))
+      )
+    ).toEqual([
+      paragraph(media('a.png', 'a')),
+      paragraph(media('https://cdn.test/clip.mp4', 'clip')),
+      paragraph(media('data:video/webm;base64,QQ', 'rec')),
+      paragraph(media('b.png', 'b'))
+    ])
+  })
+
+  it('groups reference images through their definitions', () => {
+    const definition = (identifier: string, url: string): Node => ({
+      type: 'definition',
+      identifier,
+      url
+    })
+    const ref = (identifier: string, alt: string): Node => ({
+      type: 'imageReference',
+      identifier,
+      alt
+    })
+    expect(
+      transform(
+        paragraph(ref('r', 'a'), text(' '), ref('s', 'b')),
+        definition('r', 'a.png'),
+        definition('s', 'b.png')
+      )
+    ).toEqual([
+      gallery(['a.png', 'a'], ['b.png', 'b']),
+      definition('r', 'a.png'),
+      definition('s', 'b.png')
+    ])
+  })
+
+  it('leaves an undefined reference as text, which breaks the run', () => {
+    expect(transform(paragraph(image('a.png', 'a')), paragraph(text('![b][missing]')))).toEqual([
+      paragraph(media('a.png', 'a')),
+      paragraph(text('![b][missing]'))
+    ])
+  })
+
+  it('never groups media link previews', () => {
+    const link = (url: string, label: string): Node => ({
+      type: 'link',
+      url,
+      children: [text(label)]
+    })
+    expect(transform(paragraph(link('a.png', 'a')), paragraph(link('b.png', 'b')))).toEqual([
+      paragraph(link('a.png', 'a')),
+      {
+        type: 'html',
+        value:
+          '<termul-media data-url="a.png" data-alt="a" data-link-preview="true"></termul-media>'
+      },
+      paragraph(link('b.png', 'b')),
+      {
+        type: 'html',
+        value:
+          '<termul-media data-url="b.png" data-alt="b" data-link-preview="true"></termul-media>'
+      }
+    ])
+  })
+
+  it('skips a still-streaming image: it neither counts nor breaks the run', () => {
+    const incomplete = image('streamdown:incomplete-image', 'c')
+    expect(
+      transform(
+        paragraph(image('a.png', 'a')),
+        paragraph(incomplete),
+        paragraph(image('b.png', 'b'), text(' '), incomplete)
+      )
+    ).toEqual([gallery(['a.png', 'a'], ['b.png', 'b'])])
+  })
+
+  it('leaves a still-streaming image as it is when no strip forms', () => {
+    expect(
+      transform(
+        paragraph(image('a.png', 'a')),
+        paragraph(image('streamdown:incomplete-image', 'b'))
+      )
+    ).toEqual([
+      paragraph(media('a.png', 'a')),
+      paragraph(media('streamdown:incomplete-image', 'b'))
+    ])
+  })
+
+  it('groups a run inside a list item', () => {
+    const item = {
+      type: 'listItem',
+      children: [paragraph(image('a.png', 'a'), image('b.png', 'b'))]
+    }
+    const [list] = transform({ type: 'list', children: [item] })
+    expect(list).toEqual({
+      type: 'list',
+      children: [
+        {
+          type: 'listItem',
+          children: [gallery(['a.png', 'a'], ['b.png', 'b'])]
+        }
+      ]
+    })
+  })
+})
+
+describe('parseChatMarkdownBlocks', () => {
+  it('joins image-only blocks so a streamed run renders as one strip', () => {
+    expect(
+      parseChatMarkdownBlocks('Intro\n\n![a](a.png)\n\n![b](b.png) ![c](c.png)\n\nOutro')
+    ).toEqual(['Intro\n\n', '![a](a.png)\n\n![b](b.png) ![c](c.png)\n\n', 'Outro'])
+  })
+
+  it('joins image blocks whose destinations hold balanced parentheses', () => {
+    expect(parseChatMarkdownBlocks('![a](out/File_(1).png)\n\n![b](out/File_(2).png)')).toEqual([
+      '![a](out/File_(1).png)\n\n![b](out/File_(2).png)'
+    ])
+  })
+
+  it('keeps image blocks split by text apart', () => {
+    expect(parseChatMarkdownBlocks('![a](a.png)\n\nBetween\n\n![b](b.png)')).toEqual([
+      '![a](a.png)\n\n',
+      'Between\n\n',
+      '![b](b.png)'
+    ])
+  })
+
+  it('does not join a paragraph that mixes images and text', () => {
+    expect(parseChatMarkdownBlocks('![a](a.png)\n\nSee ![b](b.png)')).toEqual([
+      '![a](a.png)\n\n',
+      'See ![b](b.png)'
+    ])
+  })
+
+  it('joins a streamed image once its destination is complete', () => {
+    expect(parseChatMarkdownBlocks('![a](a.png)\n\n![b](b.p')).toEqual([
+      '![a](a.png)\n\n',
+      '![b](b.p'
+    ])
+    expect(parseChatMarkdownBlocks('![a](a.png)\n\n![b](b.png)')).toEqual([
+      '![a](a.png)\n\n![b](b.png)'
+    ])
   })
 })

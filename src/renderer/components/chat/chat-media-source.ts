@@ -7,7 +7,7 @@ import {
   blockResource,
   blockUri
 } from './chat-attachments'
-import { resolveLocalImagePath } from './chat-markdown-images'
+import { markdownMediaKind, resolveLocalImagePath, urlPathPart } from './chat-markdown-images'
 
 export type ChatMedia =
   | { kind: 'image' | 'video'; name: string; src: PathSource | UrlSource | BytesSource }
@@ -52,15 +52,6 @@ function kindForMime(mime: string | undefined): ChatMediaKind | null {
 function kindForPath(path: string): 'image' | 'video' | null {
   const kind = mediaKindForPath(path)
   return kind === 'image' || kind === 'video' ? kind : null
-}
-
-function urlPathPart(url: string): string {
-  if (!HTTPS_URL_RE.test(url)) return url
-  try {
-    return new URL(url).pathname
-  } catch {
-    return url
-  }
 }
 
 export function decodedLength(base64: string): number {
@@ -116,10 +107,7 @@ export function chatMediaFromMarkdown(
 ): ChatMedia | null {
   const trimmed = url.trim()
   if (!trimmed) return null
-  const dataMime = DATA_URL_RE.exec(trimmed)?.[1]
-  const kind =
-    (dataMime === undefined ? kindForPath(urlPathPart(trimmed)) : kindForMime(dataMime)) ?? 'image'
-  return fromUri(trimmed, kind, alt, cwd)
+  return fromUri(trimmed, markdownMediaKind(trimmed), alt, cwd)
 }
 
 function fromInlineData(
