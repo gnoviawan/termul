@@ -474,6 +474,32 @@ async fn an_elicitation_the_agent_no_longer_holds_is_not_listed_again() {
     assert_eq!(payload["pendingElicitations"], json!([]));
 }
 
+/// An answer that names another agent does not clear the owner's ticket.
+#[tokio::test]
+async fn an_answer_naming_another_agent_keeps_the_elicitation_pending() {
+    let (relay, _questions) = relay_with_question_rendezvous();
+    emit(
+        &relay,
+        "acp:elicitation_request",
+        elicitation_request("elicit-1"),
+    );
+    let acp = Arc::new(AcpManager::new(vec![]));
+    acp.install_test_agent_without_responders(crate::acp::AgentId("agent-2".to_string()));
+    let reply = handle_respond_elicitation(
+        "e1".to_string(),
+        &json!({"agentId": "agent-2", "requestId": "elicit-1", "action": "accept"}),
+        &acp,
+        &relay,
+    )
+    .await;
+    assert!(reply.ok, "{reply:?}");
+    let payload = subscribe_reply(&relay, json!({"sessionId": SID})).await;
+    assert_eq!(
+        ids(&payload, "pendingElicitations", "requestId"),
+        vec!["elicit-1"]
+    );
+}
+
 /// An answer the agent did not take leaves the elicitation pending, so a
 /// reopened client can answer it again.
 #[tokio::test]

@@ -561,6 +561,8 @@ pub(super) async fn handle_respond_elicitation(
         Err(error) if error.starts_with("unknown elicitation request") => {}
         Err(error) => return WsReply::err_with_code(id, "ELICITATION_FAILED", error),
     }
-    relay.elicitations().settle(&parsed.request_id);
+    relay
+        .elicitations()
+        .settle(&parsed.request_id, &parsed.agent_id);
     WsReply::ok(id, Some(json!({})))
 }

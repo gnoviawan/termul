@@ -66,9 +66,17 @@ impl ElicitationTickets {
         );
     }
 
-    /// Drop an answered elicitation. Idempotent.
-    pub fn settle(&self, request_id: &str) {
-        self.state.lock().tickets.remove(request_id);
+    /// Drop an answered elicitation when `agent_id` owns it, so an answer
+    /// naming another agent cannot clear the owner's ticket. Idempotent.
+    pub fn settle(&self, request_id: &str, agent_id: &AgentId) {
+        let mut state = self.state.lock();
+        if state
+            .tickets
+            .get(request_id)
+            .is_some_and(|ticket| ticket.agent_id == *agent_id)
+        {
+            state.tickets.remove(request_id);
+        }
     }
 
     /// The `elicitation_request` payloads of `session_id` still waiting for

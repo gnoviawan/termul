@@ -558,13 +558,18 @@ export function initAcpEventListeners(): () => void {
     // The transport captures this before the snapshot round-trip so a late
     // recovery for a torn-down/replaced session is rejected at install.
     recoveryGeneration: (sessionId) => sessionReopenGenerations.get(sessionId) ?? 0,
-    pendingPermissionSessions: () => [
-      ...new Set(
-        Object.values(useAcpStore.getState().pendingPermissions).map(
-          (permission) => permission.sessionId
+    pendingPermissionSessions: () => {
+      const state = useAcpStore.getState()
+      return [
+        ...new Set(
+          [
+            ...Object.values(state.pendingPermissions),
+            ...Object.values(state.pendingQuestions),
+            ...Object.values(state.pendingElicitations)
+          ].map((prompt) => prompt.sessionId)
         )
-      )
-    ],
+      ]
+    },
     installPendingPrompts: (sessionId, prompts) =>
       syncPendingPrompts(useAcpStore.getState, useAcpStore.setState, sessionId, prompts),
     setReconnecting: (reconnecting, recovered) => {
