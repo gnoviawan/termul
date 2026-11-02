@@ -67,27 +67,56 @@ describe('beginLoginTerminalSignIn', () => {
     expect(useLoginTerminalSignInStore.getState().byAgent['agent-live']?.ptyId).toBe('pty-1')
   })
 
-  it('ignores an exit seen before the pty is known', async () => {
+  it('handles an exit seen before attach names its pty, and ignores other ptys', async () => {
+    // getExitCode records no marker for a directly spawned login process.
     const onSignedIn = vi.fn()
     const watch = begin(onSignedIn)
+    emitExit('pty-other', 0)
     emitExit('pty-1', 0)
     expect(authenticateAgent).not.toHaveBeenCalled()
 
     await watch?.attach('pty-1')
+    await vi.waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
+    expect(authenticateAgent).toHaveBeenCalledTimes(1)
+    expect(mocks.getExitCode).not.toHaveBeenCalled()
+    expect(useLoginTerminalSignInStore.getState().byAgent).toEqual({})
+    expect(exitListeners).toHaveLength(0)
+  })
+
+  it('clears the sign-in on a non-zero exit before attach', async () => {
+    const watch = begin()
+    emitExit('pty-1', 1)
+    await watch?.attach('pty-1')
+
+    expect(useLoginTerminalSignInStore.getState().byAgent).toEqual({})
+    expect(mocks.toastError).toHaveBeenCalledWith('Devin sign-in exited with code 1.')
+    expect(begin()).not.toBeNull()
+  })
+
+  it('ignores exits of other ptys after attach', async () => {
+    const onSignedIn = vi.fn()
+    const watch = begin(onSignedIn)
+    await watch?.attach('pty-1')
+    emitExit('pty-other', 0)
+    expect(authenticateAgent).not.toHaveBeenCalled()
+
     emitExit('pty-1', 0)
     await vi.waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
     expect(useLoginTerminalSignInStore.getState().byAgent).toEqual({})
     expect(exitListeners).toHaveLength(0)
   })
 
-  it('re-prepares and toasts when authenticate fails after exit 0', async () => {
-    authenticateAgent.mockRejectedValue(new Error('authenticate refused'))
+  it('re-prepares and toasts when authenticate fails after exit 0, without logging the error', async () => {
+    authenticateAgent.mockRejectedValue(new Error('authenticate refused: token sk-secret'))
     const onSignedIn = vi.fn()
     await begin(onSignedIn)?.attach('pty-1')
 
     emitExit('pty-1', 0)
     await vi.waitFor(() => expect(onSignedIn).toHaveBeenCalledTimes(1))
-    expect(mocks.toastError).toHaveBeenCalledWith('authenticate refused')
+    expect(mocks.toastError).toHaveBeenCalledWith('authenticate refused: token sk-secret')
+    const messages = mocks.log.mock.calls.map(([entry]) => entry.message)
+    expect(messages).toContain('authenticate after the login terminal failed for agent-live')
+    expect(messages.join('\n')).not.toContain('sk-secret')
   })
 
   it('handles an exit once when the listener and the poll both see it', async () => {

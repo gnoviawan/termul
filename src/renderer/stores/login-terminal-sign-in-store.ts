@@ -42,8 +42,9 @@ const SOURCE = 'agentSignIn.loginTerminal'
 /**
  * Start watching a login terminal for one agent. The exit listener is
  * registered before the caller spawns the terminal, so an exit that lands
- * while the spawn is in flight is still seen; `attach` then polls the
- * recorded exit code once for an exit before the listener attached.
+ * while the spawn is in flight is buffered by PTY id and handled by
+ * `attach`; `attach` then polls the recorded exit code once for an exit
+ * before the listener attached.
  *
  * Exit 0 runs the ACP `authenticate` and then `onSignedIn` (re-prepare, read
  * the models again) whether or not the surface that started it is still
@@ -69,8 +70,14 @@ export function beginLoginTerminalSignIn(opts: {
 
   let entry: LoginTerminalSignIn = { agentId, methodId, agentName, ptyId: null }
   let done = false
+  // Exits seen while the spawn is in flight, before `attach` names our PTY.
+  const earlyExits = new Map<string, number>()
   const unlisten = terminalApi.onExit((id, exitCode) => {
-    if (entry.ptyId === null || id !== entry.ptyId) return
+    if (entry.ptyId === null) {
+      if (!done) earlyExits.set(id, exitCode)
+      return
+    }
+    if (id !== entry.ptyId) return
     handleExit(exitCode)
   })
 
@@ -81,6 +88,7 @@ export function beginLoginTerminalSignIn(opts: {
   const finish = (): void => {
     done = true
     unlisten()
+    earlyExits.clear()
     useLoginTerminalSignInStore.setState((s) => {
       // Only drop this sign-in's own record.
       if (s.byAgent[agentId] !== entry) return s
@@ -111,10 +119,11 @@ export function beginLoginTerminalSignIn(opts: {
       .getState()
       .authenticateAgent(agentId, methodId)
       .catch((err: unknown) => {
+        // A fixed message: the raw error can echo a token.
         void logFrontendError({
           level: 'warn',
           source: SOURCE,
-          message: `authenticate after the login terminal failed for ${agentId}: ${String(err)}`
+          message: `authenticate after the login terminal failed for ${agentId}`
         })
         toast.error(err instanceof Error ? err.message : 'Sign-in failed')
       })
@@ -132,6 +141,12 @@ export function beginLoginTerminalSignIn(opts: {
     attach: async (ptyId) => {
       if (done) return
       put({ ...entry, ptyId })
+      const earlyExit = earlyExits.get(ptyId)
+      earlyExits.clear()
+      if (earlyExit !== undefined) {
+        handleExit(earlyExit)
+        return
+      }
       const exitResult = await terminalApi.getExitCode(ptyId)
       if (exitResult.success && exitResult.data !== null) handleExit(exitResult.data)
     },
