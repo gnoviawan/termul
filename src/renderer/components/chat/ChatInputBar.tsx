@@ -443,6 +443,9 @@ export function ChatInputBar({
   // Story 5.3 (T2.3): on mobile web, scroll the editor into view once per
   // OSK-open window so iOS Safari doesn't leave the input under the keyboard.
   // rAF-deferred to let layout settle; fires once per OSK-open window.
+  // `nearest` scrolls only as far as needed to show the editor (iOS) and not
+  // at all when it already shows above the keyboard (Android resizes the
+  // layout onto it); `center` slid the composer up and left it there.
   useEffect(() => {
     const wasOpen = prevOskOpenRef.current
     prevOskOpenRef.current = osk.isOskOpen
@@ -450,7 +453,7 @@ export function ChatInputBar({
       const ed = editorRef.current
       const el = ed?.view.dom ?? null
       if (el) {
-        requestAnimationFrame(() => el.scrollIntoView({ block: 'center' }))
+        requestAnimationFrame(() => el.scrollIntoView({ block: 'nearest' }))
       }
     }
   }, [osk.isOskOpen, isMobileShell])

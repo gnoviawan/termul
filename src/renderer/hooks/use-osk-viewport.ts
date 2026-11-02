@@ -104,12 +104,69 @@ type OskTrigger = 'mount' | 'vv-resize' | 'vv-scroll' | 'window-resize' | 'close
 // Module-level so the hook's several consumers log each transition once.
 let lastLoggedOpen: boolean | null = null
 let settledCloseLogPending = false
+/**
+ * The field that had focus when the keyboard opened: the one that raised it.
+ * Weak, so a chat closed while the keyboard is up does not stay in memory.
+ */
+let keyboardFocusTarget: WeakRef<Element> | null = null
 
-function describeViewport(state: OskState, trigger: OskTrigger): string {
+/** What a keyboard close found and fixed, for the log. */
+interface ScrollRepair {
+  /** Bottom edge of the focused field before the reset: far above `inner` = stuck high. */
+  focusBottom: number
+  /** `element:offset` for each ancestor offset that was reset. */
+  reset: string[]
+}
+
+function describeElement(el: Element): string {
+  const slot = el.getAttribute('data-slot')
+  if (slot) return `${el.tagName.toLowerCase()}[${slot}]`
+  const classes = typeof el.className === 'string' ? el.className.trim().split(/\s+/) : []
+  return [el.tagName.toLowerCase(), ...classes.slice(0, 4)].join('.')
+}
+
+/**
+ * Focusing a field scrolls every ancestor that can hold an offset to bring the
+ * field into view, `overflow: hidden` ones included, and nothing scrolls those
+ * back when the keyboard closes: the composer then stays high above an empty
+ * band. Reset the offsets left on `overflow: hidden` ancestors of `from`. Real
+ * scrollers (`auto` / `scroll`) and the page keep their position. Returns what
+ * was reset, as `element:offset` entries for the log.
+ */
+export function resetClippedScroll(from: Element): string[] {
+  const reset: string[] = []
+  for (let el = from.parentElement; el; el = el.parentElement) {
+    if (el.scrollTop === 0 || getComputedStyle(el).overflowY !== 'hidden') continue
+    reset.push(`${describeElement(el)}:${Math.round(el.scrollTop)}`)
+    el.scrollTop = 0
+  }
+  return reset
+}
+
+/** The field to repair from: the one focused now, else the one that raised the keyboard. */
+function repairTarget(): Element | null {
+  const active = document.activeElement
+  if (active && active !== document.body && active !== document.documentElement) return active
+  const saved = keyboardFocusTarget?.deref()
+  return saved?.isConnected ? saved : null
+}
+
+function repairClippedScroll(): ScrollRepair | null {
+  const target = repairTarget()
+  if (!target) return null
+  const focusBottom = Math.round(target.getBoundingClientRect().bottom)
+  return { focusBottom, reset: resetClippedScroll(target) }
+}
+
+function describeViewport(
+  state: OskState,
+  trigger: OskTrigger,
+  repair: ScrollRepair | null
+): string {
   const standalone =
     typeof window.matchMedia === 'function' &&
     window.matchMedia('(display-mode: standalone)').matches
-  return [
+  const parts = [
     `trigger=${trigger}`,
     `open=${state.isOskOpen}`,
     `keyboard=${Math.round(state.keyboardHeight)}`,
@@ -119,7 +176,10 @@ function describeViewport(state: OskState, trigger: OskTrigger): string {
     `client=${document.documentElement.clientHeight}`,
     `screen=${window.screen?.height ?? 0}`,
     `standalone=${standalone}`
-  ].join(' ')
+  ]
+  if (repair) parts.push(`focusBottom=${repair.focusBottom}`)
+  if (repair && repair.reset.length > 0) parts.push(`reset=${repair.reset.join(',')}`)
+  return parts.join(' ')
 }
 
 /**
@@ -127,7 +187,7 @@ function describeViewport(state: OskState, trigger: OskTrigger): string {
  * closes can be read from the server log: which event ended the open state
  * and what the viewport measured then.
  */
-function logOskTransition(state: OskState, trigger: OskTrigger): void {
+function logOskTransition(state: OskState, trigger: OskTrigger, repair: ScrollRepair | null): void {
   if (trigger === 'close-recheck') {
     if (!settledCloseLogPending) return
     settledCloseLogPending = false
@@ -139,7 +199,7 @@ function logOskTransition(state: OskState, trigger: OskTrigger): void {
   void logFrontendError({
     level: 'info',
     source: 'osk-viewport',
-    message: describeViewport(state, trigger)
+    message: describeViewport(state, trigger, repair)
   })
 }
 
@@ -190,10 +250,19 @@ export function useOskViewport(): OskState {
       const next = resolveOskState(window.innerHeight, vv)
       writeKeyboardHeightVar(next.keyboardHeight)
       setState(next)
+      // A pinch-zoom also shrinks the visual viewport; only a keyboard opened
+      // at scale 1 arms the close repair.
+      if (next.isOskOpen && wasOpen !== true && vv.scale === 1) {
+        const active = document.activeElement
+        keyboardFocusTarget = active && active !== document.body ? new WeakRef(active) : null
+      }
+      const closing = !next.isOskOpen && (trigger === 'close-recheck' || wasOpen === true)
+      const repair = closing && keyboardFocusTarget ? repairClippedScroll() : null
       if (trigger === 'close-recheck') {
-        logOskTransition(next, trigger)
+        logOskTransition(next, trigger, repair)
+        if (!next.isOskOpen) keyboardFocusTarget = null
       } else if (wasOpen !== next.isOskOpen) {
-        logOskTransition(next, trigger)
+        logOskTransition(next, trigger, repair)
         if (recheckId !== null) {
           clearTimeout(recheckId)
           recheckId = null
