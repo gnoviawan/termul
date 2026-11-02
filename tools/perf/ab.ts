@@ -32,7 +32,6 @@ const METRICS: Array<{ key: string; unit: 'MB' | 'count' | 'ms' }> = [
 
 interface Side {
   exe: string
-  dist?: string
 }
 
 function parseArgs(argv: string[]): { a: Side; b: Side; runs: number; scenario: string[] } {
@@ -47,11 +46,11 @@ function parseArgs(argv: string[]): { a: Side; b: Side; runs: number; scenario: 
   const b = get('--b')
   if (!a || !b)
     throw new Error(
-      'usage: node tools/perf/ab.ts --a <exe> --b <exe> [--a-dist <dir>] [--b-dist <dir>] [--runs N] -- <scenario> [flags]'
+      'usage: node tools/perf/ab.ts --a <exe> --b <exe> [--runs N] -- <scenario> [flags]'
     )
   return {
-    a: { exe: a, dist: get('--a-dist') },
-    b: { exe: b, dist: get('--b-dist') },
+    a: { exe: a },
+    b: { exe: b },
     runs: Number(get('--runs') ?? 5),
     scenario
   }
@@ -59,7 +58,6 @@ function parseArgs(argv: string[]): { a: Side; b: Side; runs: number; scenario: 
 
 function runOnce(side: Side, scenario: string[]): PerfRunResult | null {
   const args = [path.join(TOOLKIT_ROOT, 'cli.ts'), ...scenario, '--exe', side.exe]
-  if (side.dist) args.push('--frontend-dist', side.dist)
   const proc = spawnSync('node', args, { encoding: 'utf8', timeout: 15 * 60 * 1000 })
   const runId = /run (\S+) (ok|FAILED)/.exec(proc.stdout ?? '')?.[1]
   if (!runId) {
@@ -94,7 +92,7 @@ for (let i = 0; i < runs; i++) {
   }
 }
 
-const describe = (side: Side): string => `${side.exe}${side.dist ? ` + ${side.dist}` : ''}`
+const describe = (side: Side): string => side.exe
 console.log(`\nA = ${describe(a)}\nB = ${describe(b)}\nscenario: ${scenario.join(' ')}`)
 console.log(`ok runs: A ${sides.A.length}/${runs}, B ${sides.B.length}/${runs}\n`)
 console.log(

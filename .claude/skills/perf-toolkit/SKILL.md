@@ -91,19 +91,18 @@ workload, and a low update count means the scenario did not stream.
 
 ```bash
 node tools/perf/ab.ts --a <exeA> --b <exeB> --runs 5 -- stream-storm --seed 42
-node tools/perf/ab.ts --a <exe> --a-dist <distA> --b <exe> --b-dist <distB> --runs 5 -- stream-storm
 ```
 
 Alternates A, B, A, B so drift favors neither side, then prints median and
 range per end metric with the error and work counts. Keep a copy of each exe
 (and its `rg.exe`) outside `target-perf` so a rebuild does not replace a side.
 
-`--frontend-dist <dir>` serves `http://tauri.localhost/*` from a built
-`dist-tauri` copy and reloads once, so two frontends compare on one exe
-without a Rust rebuild. The page then runs without Tauri's CSP header, on
-both sides alike; confirm a win on real builds before reporting it. The end
-snapshot's `pageState` lists the `tauri-index-*` / `AgentChatPanel-*`
-chunks that loaded, which proves which frontend ran.
+A frontend change needs a rebuilt exe: the frontend is embedded, and
+Playwright request interception does not see WebView2's `tauri.localhost`
+requests reliably, so serving another `dist-tauri` to an old exe silently
+runs the embedded build. The end snapshot's `pageState` lists the
+`tauri-index-*` / `AgentChatPanel-*` chunks that loaded; check them when a
+result looks too good or too flat.
 
 ## Finding what keeps memory alive
 

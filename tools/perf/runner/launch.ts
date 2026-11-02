@@ -25,7 +25,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -116,14 +116,6 @@ export interface LaunchOptions {
    * written through `plugin:store` after launch never reaches the renderer.
    */
   preseedStore?: Record<string, unknown>
-  /**
-   * Serve `http://tauri.localhost/*` from this built frontend folder instead
-   * of the assets embedded in the exe, then reload once. Lets an A/B compare
-   * two frontends on one exe without a Rust rebuild. The page then runs
-   * without the CSP header Tauri adds, on both sides alike; confirm a win on
-   * real builds before reporting it.
-   */
-  frontendDist?: string
 }
 
 export interface AppHandle {
@@ -363,7 +355,6 @@ export async function launchApp(opts: LaunchOptions): Promise<AppHandle> {
       keepState: opts.keepState
     })
     await prepareWindow(retryHandle)
-    if (opts.frontendDist) await serveFrontendFrom(retryHandle, opts.frontendDist)
     return retryHandle
   }
   const handle = buildHandle({
@@ -375,44 +366,7 @@ export async function launchApp(opts: LaunchOptions): Promise<AppHandle> {
     keepState: opts.keepState
   })
   await prepareWindow(handle)
-  if (opts.frontendDist) await serveFrontendFrom(handle, opts.frontendDist)
   return handle
-}
-
-const CONTENT_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json',
-  '.webmanifest': 'application/manifest+json',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2',
-  '.woff': 'font/woff',
-  '.wasm': 'application/wasm'
-}
-
-async function serveFrontendFrom(handle: AppHandle, distDir: string): Promise<void> {
-  if (!existsSync(path.join(distDir, 'tauri-index.html'))) {
-    throw new Error(`--frontend-dist has no tauri-index.html: ${distDir}`)
-  }
-  const page = await handle.page()
-  await page.route('http://tauri.localhost/**', async (route) => {
-    const pathname = decodeURIComponent(new URL(route.request().url()).pathname)
-    const file = path.join(distDir, pathname === '/' ? 'tauri-index.html' : pathname)
-    if (!existsSync(file) || !statSync(file).isFile()) {
-      await route.fulfill({ status: 404, body: '' })
-      return
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: CONTENT_TYPES[path.extname(file)] ?? 'application/octet-stream',
-      body: readFileSync(file)
-    })
-  })
-  await page.reload({ waitUntil: 'load' })
 }
 
 /**

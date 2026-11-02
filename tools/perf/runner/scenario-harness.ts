@@ -202,7 +202,6 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
       runId,
       exe: typeof flags.exe === 'string' ? flags.exe : undefined,
       keepState: flags['keep-state'] === true,
-      frontendDist: typeof flags['frontend-dist'] === 'string' ? flags['frontend-dist'] : undefined,
       preseedStore: Object.keys(preseedStore).length > 0 ? preseedStore : undefined
     })
     // The name the launcher's agent pill must show before a chat is sent.
