@@ -40,7 +40,14 @@ pub(super) fn writer_loop(
             }
         }
         let result = match command {
-            WriterCommand::Append(record) => append_record(&inner.root, &metadata, &mut tails, record),
+            WriterCommand::Append(record) => {
+                let derived = session_cache::AppendedLogDerived::of(&record);
+                let appended = append_record(&inner.root, &metadata, &mut tails, record);
+                if let (Ok(()), Some(derived)) = (&appended, derived) {
+                    derived.apply(&inner);
+                }
+                appended
+            }
             WriterCommand::Flush(reply) => {
                 let result = sync_session_files(&inner.root, &metadata);
                 let _ = reply.send(result.clone_for_reply());

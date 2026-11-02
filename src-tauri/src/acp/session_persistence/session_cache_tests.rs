@@ -139,6 +139,12 @@ fn splice_intruders(messages_path: &Path) {
 /// A store whose log carries both intruders, reopened so both caches start
 /// unseeded. Returns the store and the session directory.
 async fn reopened_with_intruders(root: &Path) -> (Arc<SessionPersistence>, PathBuf) {
+    reopened(root, true).await
+}
+
+/// The kept log, spliced with intruders when `intruders`, in a store
+/// reopened so both caches start unseeded.
+async fn reopened(root: &Path, intruders: bool) -> (Arc<SessionPersistence>, PathBuf) {
     let persistence = registered(root).await;
     enqueue_kept_log(&persistence);
     persistence.flush_session("session-1").await.unwrap();
@@ -146,7 +152,9 @@ async fn reopened_with_intruders(root: &Path) -> (Arc<SessionPersistence>, PathB
     let metadata = persistence.metadata("session-1").unwrap();
     let dir = persistence.session_dir(&metadata.storage_key).unwrap();
     drop(persistence);
-    splice_intruders(&dir.join(MESSAGES_FILE));
+    if intruders {
+        splice_intruders(&dir.join(MESSAGES_FILE));
+    }
     let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
     (reopened, dir)
 }
@@ -320,11 +328,10 @@ async fn assert_an_append_after_salvage_beats_the_overtaken_scan(cached: Cached)
     let (hook, reader) = paused_read(&persistence, cached).await;
 
     persistence.replay_after("session-1", 0).unwrap();
-    let (appended, expected) = match cached {
-        Cached::Commands => (commands_update(40, "appended"), json!("appended")),
-        Cached::Controls => (config_update(40, "sonnet"), json!("sonnet")),
-    };
-    persistence.enqueue_event(appended).unwrap();
+    let (record, expected) = appended(cached);
+    persistence.enqueue_event(record).unwrap();
+    // The writer applies the append to the cache once it is on disk.
+    persistence.flush_session("session-1").await.unwrap();
     hook.release();
 
     assert_eq!(
@@ -348,6 +355,130 @@ async fn a_commands_append_after_salvage_beats_the_overtaken_scan() {
     assert_an_append_after_salvage_beats_the_overtaken_scan(Cached::Commands).await;
 }
 
+fn appended(cached: Cached) -> (PersistedEventRecord, Value) {
+    match cached {
+        Cached::Commands => (commands_update(40, "appended"), json!("appended")),
+        Cached::Controls => (config_update(40, "sonnet"), json!("sonnet")),
+    }
+}
+
+/// An append queued before a salvage but written after it: the salvage's
+/// forget must not erase it, even when a scan of the rewritten log (which
+/// lacks it) seeds the cache in between.
+async fn assert_an_append_queued_across_a_salvage_survives_its_forget(cached: Cached) {
+    let root = temp_dir(&format!("queued-{cached:?}"));
+    let (persistence, dir) = reopened_with_intruders(&root).await;
+    persistence.reopen_writer("session-1").await.unwrap();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let writer_gate = ReplayTestHook::new(entered_tx);
+    persistence.set_writer_gate_test_hook(Arc::clone(&writer_gate));
+
+    let (record, expected) = appended(cached);
+    persistence.enqueue_event(record).unwrap();
+    tokio::task::spawn_blocking(move || entered_rx.recv())
+        .await
+        .unwrap()
+        .expect("the writer paused before writing the append");
+    persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(corrupt_backups(&dir), 1, "the salvage rewrote the log");
+    assert_eq!(
+        read(&persistence, cached).await,
+        kept(cached),
+        "{cached:?}: a read before the write scans the rewritten log"
+    );
+
+    writer_gate.release();
+    persistence.flush_session("session-1").await.unwrap();
+    assert_eq!(
+        read(&persistence, cached).await,
+        expected,
+        "{cached:?}: the written append replaces the older scan"
+    );
+    persistence.shutdown().await.unwrap();
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_controls_append_queued_across_a_salvage_survives_its_forget() {
+    assert_an_append_queued_across_a_salvage_survives_its_forget(Cached::Controls).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_commands_append_queued_across_a_salvage_survives_its_forget() {
+    assert_an_append_queued_across_a_salvage_survives_its_forget(Cached::Commands).await;
+}
+
+async fn assert_a_forget_of_another_session_keeps_the_scan(cached: Cached) {
+    let root = temp_dir(&format!("other-{cached:?}"));
+    let (persistence, _) = reopened(&root, false).await;
+    let (hook, reader) = paused_read(&persistence, cached).await;
+
+    persistence.forget_log_derived("session-2");
+    hook.release();
+
+    assert_eq!(reader.await.unwrap(), kept(cached));
+    assert_eq!(
+        hook.waits(),
+        1,
+        "{cached:?}: another session's forget must not reject the scan"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_controls_scan_survives_a_forget_of_another_session() {
+    assert_a_forget_of_another_session_keeps_the_scan(Cached::Controls).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_commands_scan_survives_a_forget_of_another_session() {
+    assert_a_forget_of_another_session_keeps_the_scan(Cached::Commands).await;
+}
+
+/// Every lock-free scan loses to a forget of its session: the read neither
+/// fails nor returns an unseeded scan, it scans once more under the session
+/// lock and seeds that.
+async fn assert_a_read_that_keeps_losing_scans_under_the_session_lock(cached: Cached) {
+    let root = temp_dir(&format!("locked-{cached:?}"));
+    let (persistence, _) = reopened(&root, false).await;
+    let forgets = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let callback = {
+        let persistence = Arc::downgrade(&persistence);
+        let forgets = Arc::clone(&forgets);
+        Arc::new(move || {
+            forgets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(persistence) = persistence.upgrade() {
+                persistence.forget_log_derived("session-1");
+            }
+        })
+    };
+    persistence.set_cache_scan_test_callback(callback);
+
+    assert_eq!(read(&persistence, cached).await, kept(cached));
+    assert_eq!(
+        forgets.load(std::sync::atomic::Ordering::SeqCst),
+        UNLOCKED_SCAN_ATTEMPTS,
+        "{cached:?}: every lock-free scan was overtaken"
+    );
+    assert_eq!(read(&persistence, cached).await, kept(cached));
+    assert_eq!(
+        forgets.load(std::sync::atomic::Ordering::SeqCst),
+        UNLOCKED_SCAN_ATTEMPTS,
+        "{cached:?}: the locked scan seeded the cache"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[tokio::test]
+async fn a_controls_read_that_keeps_losing_scans_under_the_session_lock() {
+    assert_a_read_that_keeps_losing_scans_under_the_session_lock(Cached::Controls).await;
+}
+
+#[tokio::test]
+async fn a_commands_read_that_keeps_losing_scans_under_the_session_lock() {
+    assert_a_read_that_keeps_losing_scans_under_the_session_lock(Cached::Commands).await;
+}
+
 fn command_list(name: &str, seq: u64) -> Option<CommandList> {
     CommandList::of_record(&commands_update(seq, name))
 }
@@ -362,7 +493,7 @@ fn a_seed_from_before_a_forget_is_rejected() {
         None
     );
     let fresh = cache.lookup("session-1").unwrap_err();
-    assert_ne!(fresh, ticket, "a forget moves the epoch on");
+    assert_ne!(fresh, ticket, "a forget moves the generation on");
     assert_eq!(
         cache.seed("session-1", fresh, command_list("kept", 3)),
         Some(command_list("kept", 3))
@@ -378,5 +509,22 @@ fn a_seed_keeps_a_list_appended_while_it_scanned() {
     assert_eq!(
         cache.seed("session-1", ticket, command_list("kept", 3)),
         Some(command_list("appended", 40))
+    );
+}
+
+#[test]
+fn a_forget_rejects_only_its_own_sessions_scans() {
+    let cache = SessionCache::<Option<CommandList>>::default();
+    let ticket = cache.lookup("session-1").unwrap_err();
+    let other = cache.lookup("session-2").unwrap_err();
+    cache.forget("session-2");
+    assert_eq!(
+        cache.seed("session-1", ticket, command_list("kept", 3)),
+        Some(command_list("kept", 3)),
+        "another session's forget leaves the ticket valid"
+    );
+    assert_eq!(
+        cache.seed("session-2", other, command_list("stale", 3)),
+        None
     );
 }

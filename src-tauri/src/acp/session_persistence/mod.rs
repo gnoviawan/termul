@@ -149,11 +149,11 @@ struct Inner {
     unsalvageable_log_stamps: Mutex<HashMap<String, LogStamps>>,
     /// Newest `availableCommands` per session (`None`: the log holds no list),
     /// so a tail payload whose window starts after the session's
-    /// `commands_update` still carries it. Appends replace an entry in append
-    /// order; a tail payload seeds a missing one from the log. Only a log
-    /// rewrite (salvage) or `delete_session` removes one, and that rejects
-    /// every scan already in flight (see `session_cache`): a seed racing an
-    /// append can then never fill a hole with the older list.
+    /// `commands_update` still carries it. The writer replaces an entry as it
+    /// writes each list; a tail payload seeds a missing one from the log.
+    /// Only a log rewrite (salvage) or `delete_session` removes one, and that
+    /// rejects the session's scans already in flight (see `session_cache`): a
+    /// seed racing an append can then never fill a hole with the older list.
     last_commands: session_cache::SessionCache<Option<CommandList>>,
     /// The session-controls twin of `last_commands` (see `controls`).
     last_controls: controls::ControlsCache,
@@ -175,7 +175,7 @@ pub struct SessionPersistence {
     #[cfg(test)]
     salvage_hook: Mutex<Option<Arc<ReplayTestHook>>>,
     #[cfg(test)]
-    cache_scan_hook: Mutex<Option<Arc<ReplayTestHook>>>,
+    cache_scan_hook: Mutex<Option<session_cache::CacheScanTestCallback>>,
 }
 
 #[cfg(test)]
@@ -701,17 +701,10 @@ impl SessionPersistence {
         record.payload = normalize_durable_payload(&record.type_, &record.payload);
         let session_id = record.session_id.clone();
         let runtime = self.runtime(&session_id)?;
-        let commands = (record.type_ == "commands_update").then(|| CommandList::of_record(&record));
-        let controls = ControlsFold::of_records([&record]);
+        // The writer updates `last_commands` / `last_controls` once the record
+        // is on disk (see `session_cache::AppendedLogDerived`).
         let _order = runtime.send_lock.lock();
-        Self::deliver(&runtime, &session_id, WriterCommand::Append(record))?;
-        self.inner.last_controls.note(&session_id, controls);
-        if let Some(commands) = commands {
-            self.inner
-                .last_commands
-                .update(&session_id, |entry| *entry = commands);
-        }
-        Ok(())
+        Self::deliver(&runtime, &session_id, WriterCommand::Append(record))
     }
 
     /// Hold this session's send lock across a critical section that both
@@ -1607,7 +1600,9 @@ impl SessionPersistence {
         let healed = self.rewrite_seq_intruders(&dir, session_id, &mut current);
         // Forget after the rewrite attempt whatever its outcome: a failure
         // can follow a rewrite (a second file, the metadata write), so no
-        // value folded from the old logs may outlive it.
+        // value folded from the old logs may outlive it. An append queued
+        // meanwhile is not lost: the writer, blocked on the entry lock until
+        // now, applies it to the caches only after writing it.
         self.forget_log_derived(session_id);
         if healed.is_err() {
             log::warn!(
@@ -1804,8 +1799,7 @@ impl SessionPersistence {
         self: &Arc<Self>,
         session_id: &str,
     ) -> Result<Option<CommandList>> {
-        self.read_through(&self.inner.last_commands, session_id)
-            .await
+        self.read_through::<Option<CommandList>>(session_id).await
     }
 
     /// Completed client turn ids reconstructed from durable prompt-complete

@@ -3,12 +3,12 @@
 //! `config_options_update` / `mode_update` records still carries them (the
 //! controls twin of `last_commands`).
 //!
-//! An entry is the [`ControlsFold`] of every controls record this process
-//! appended, plus whether the log has been folded into it. The first payload
-//! read of an unseeded entry scans the log once and merges the result. The
-//! fold keeps the newest value per control by seq, so a scan racing an
-//! append converges to the same entry whichever lands first. A scan that a
-//! log rewrite overtook never seeds (see `session_cache`).
+//! An entry is the [`ControlsFold`] of every controls record this process's
+//! writer wrote, plus whether the log has been folded into it. The first
+//! payload read of an unseeded entry scans the log once and merges the
+//! result. The fold keeps the newest value per control by seq, so a scan
+//! racing an append converges to the same entry whichever lands first. A
+//! scan that a log rewrite overtook never seeds (see `session_cache`).
 
 use std::collections::hash_map::Entry;
 use std::ops::ControlFlow;
@@ -31,6 +31,10 @@ impl LogDerived for CachedControls {
     const NAME: &'static str = "last_controls";
     type Scan = ControlsFold;
     type Value = Option<SessionControls>;
+
+    fn cache(inner: &Inner) -> &SessionCache<Self> {
+        &inner.last_controls
+    }
 
     fn scan(path: &Path, session_id: &str) -> io::Result<Self::Scan> {
         newest_controls(path, session_id)
@@ -67,8 +71,7 @@ impl SessionPersistence {
         self: &Arc<Self>,
         session_id: &str,
     ) -> Result<Option<SessionControls>> {
-        self.read_through(&self.inner.last_controls, session_id)
-            .await
+        self.read_through::<CachedControls>(session_id).await
     }
 }
 
