@@ -58,6 +58,7 @@ mod diff_stat;
 mod jsonl;
 mod model;
 mod normalize;
+mod session_cache;
 mod sweep;
 mod types;
 mod worktree_branch;
@@ -149,10 +150,11 @@ struct Inner {
     /// Newest `availableCommands` per session (`None`: the log holds no list),
     /// so a tail payload whose window starts after the session's
     /// `commands_update` still carries it. Appends replace an entry in append
-    /// order; a tail payload seeds a missing one from the log. Only
-    /// `delete_session` removes one: a seed racing an append can then never
-    /// fill a hole with the older list.
-    last_commands: Mutex<HashMap<String, Option<CommandList>>>,
+    /// order; a tail payload seeds a missing one from the log. Only a log
+    /// rewrite (salvage) or `delete_session` removes one, and that rejects
+    /// every scan already in flight (see `session_cache`): a seed racing an
+    /// append can then never fill a hole with the older list.
+    last_commands: session_cache::SessionCache<Option<CommandList>>,
     /// The session-controls twin of `last_commands` (see `controls`).
     last_controls: controls::ControlsCache,
     /// Test gate: the writer awaits this before executing each command so a
@@ -172,6 +174,8 @@ pub struct SessionPersistence {
     replay_hook: Mutex<Option<Arc<ReplayTestHook>>>,
     #[cfg(test)]
     salvage_hook: Mutex<Option<Arc<ReplayTestHook>>>,
+    #[cfg(test)]
+    cache_scan_hook: Mutex<Option<Arc<ReplayTestHook>>>,
 }
 
 #[cfg(test)]
@@ -342,7 +346,7 @@ impl SessionPersistence {
                 process_shutdown: AtomicBool::new(false),
                 seq_authority: Mutex::new(None),
                 unsalvageable_log_stamps: Mutex::new(HashMap::new()),
-                last_commands: Mutex::new(HashMap::new()),
+                last_commands: session_cache::SessionCache::default(),
                 last_controls: controls::ControlsCache::default(),
                 #[cfg(test)]
                 writer_gate_hook: Mutex::new(None),
@@ -353,6 +357,8 @@ impl SessionPersistence {
             replay_hook: Mutex::new(None),
             #[cfg(test)]
             salvage_hook: Mutex::new(None),
+            #[cfg(test)]
+            cache_scan_hook: Mutex::new(None),
         });
         service.recover().await?;
         Ok(service)
@@ -701,7 +707,9 @@ impl SessionPersistence {
         Self::deliver(&runtime, &session_id, WriterCommand::Append(record))?;
         self.inner.last_controls.note(&session_id, controls);
         if let Some(commands) = commands {
-            self.inner.last_commands.lock().insert(session_id, commands);
+            self.inner
+                .last_commands
+                .update(&session_id, |entry| *entry = commands);
         }
         Ok(())
     }
@@ -1219,8 +1227,7 @@ impl SessionPersistence {
             }
         }
         self.inner.sessions.lock().remove(session_id);
-        self.inner.last_commands.lock().remove(session_id);
-        self.inner.last_controls.forget(session_id);
+        self.forget_log_derived(session_id);
         let dir = self.session_dir(&metadata.storage_key)?;
         // Drop the catalog entry BEFORE touching the dir: a read-path
         // salvage serializes its rewrite on the catalog lock, so once the
@@ -1597,7 +1604,31 @@ impl SessionPersistence {
             hook.wait();
         }
         let dir = self.session_dir(&current.storage_key)?;
-        let Some(counts) = salvage_session_dir(&dir, session_id)? else {
+        let healed = self.rewrite_seq_intruders(&dir, session_id, &mut current);
+        // Forget after the rewrite attempt whatever its outcome: a failure
+        // can follow a rewrite (a second file, the metadata write), so no
+        // value folded from the old logs may outlive it.
+        self.forget_log_derived(session_id);
+        if healed.is_err() {
+            log::warn!(
+                "[acp-history] salvage rewrite failed; dropped cached commands and controls \
+                 session_id={}",
+                crate::logging::redact_session_id(session_id)
+            );
+        }
+        healed
+    }
+
+    /// The locked half of [`Self::salvage_seq_intruders`]: quarantine and
+    /// rewrite, then recount and persist the metadata. The caller holds the
+    /// catalog and entry locks.
+    fn rewrite_seq_intruders(
+        &self,
+        dir: &Path,
+        session_id: &str,
+        current: &mut SessionMetadata,
+    ) -> Result<bool> {
+        let Some(counts) = salvage_session_dir(dir, session_id)? else {
             return Ok(false);
         };
         // The recount is exact: no append could have landed mid-heal —
@@ -1609,7 +1640,7 @@ impl SessionPersistence {
         // The rewrite removed lines from the prefix a sweep checkpoint vouches
         // for; the next host start rescans and restamps.
         current.sweep_checkpoint = None;
-        self.persist_metadata(&current)?;
+        self.persist_metadata(current)?;
         log::warn!(
             "[acp-history] salvaged seq-intruder records session_id={} \
              intruder_lines={} message_count={} tool_count={} last_seq={}",
@@ -1773,22 +1804,8 @@ impl SessionPersistence {
         self: &Arc<Self>,
         session_id: &str,
     ) -> Result<Option<CommandList>> {
-        if let Some(known) = self.inner.last_commands.lock().get(session_id) {
-            return Ok(known.clone());
-        }
-        let metadata = self.metadata(session_id)?;
-        let path = self.session_dir(&metadata.storage_key)?.join(MESSAGES_FILE);
-        let id = session_id.to_string();
-        let found = tokio::task::spawn_blocking(move || newest_command_list(&path, &id))
+        self.read_through(&self.inner.last_commands, session_id)
             .await
-            .map_err(|error| SessionPersistenceError::PersistenceUnhealthy(error.to_string()))??;
-        Ok(self
-            .inner
-            .last_commands
-            .lock()
-            .entry(session_id.to_string())
-            .or_insert(found)
-            .clone())
     }
 
     /// Completed client turn ids reconstructed from durable prompt-complete

@@ -344,19 +344,19 @@ fn assert_merged(controls: Option<SessionControls>) {
 #[test]
 fn a_seed_of_an_older_scan_keeps_a_newer_noted_update() {
     let cache = ControlsCache::default();
+    let ticket = cache.lookup("session-1").unwrap_err();
     cache.note("session-1", switched_at_40());
-    assert_merged(cache.seed("session-1", created_at_1()));
-    assert_merged(cache.seeded("session-1").flatten());
+    assert_merged(cache.seed("session-1", ticket, created_at_1()).flatten());
+    assert_merged(cache.lookup("session-1").ok().flatten());
 }
 
 #[test]
 fn an_update_noted_after_the_seed_wins_over_the_scan() {
     let cache = ControlsCache::default();
-    assert!(
-        cache.seeded("session-1").is_none(),
-        "an unseeded session is not served from the cache"
-    );
-    cache.seed("session-1", created_at_1());
+    let Err(ticket) = cache.lookup("session-1") else {
+        panic!("an unseeded session is not served from the cache");
+    };
+    cache.seed("session-1", ticket, created_at_1());
     cache.note("session-1", switched_at_40());
-    assert_merged(cache.seeded("session-1").flatten());
+    assert_merged(cache.lookup("session-1").ok().flatten());
 }

@@ -7,76 +7,68 @@
 //! appended, plus whether the log has been folded into it. The first payload
 //! read of an unseeded entry scans the log once and merges the result. The
 //! fold keeps the newest value per control by seq, so a scan racing an
-//! append converges to the same entry whichever lands first.
+//! append converges to the same entry whichever lands first. A scan that a
+//! log rewrite overtook never seeds (see `session_cache`).
 
+use std::collections::hash_map::Entry;
 use std::ops::ControlFlow;
 use std::sync::LazyLock;
 
 use memchr::memmem;
 
+use super::session_cache::{LogDerived, SessionCache};
 use super::*;
 use crate::acp::session_payload::{ControlsFold, SessionControls, CONTROLS_RECORD_TYPES};
 
 #[derive(Default)]
-struct CachedControls {
+pub(super) struct CachedControls {
     /// The log on disk has been folded in.
     seeded: bool,
     fold: ControlsFold,
 }
 
-#[derive(Default)]
-pub(super) struct ControlsCache(Mutex<HashMap<String, CachedControls>>);
+impl LogDerived for CachedControls {
+    const NAME: &'static str = "last_controls";
+    type Scan = ControlsFold;
+    type Value = Option<SessionControls>;
 
-impl ControlsCache {
-    /// Merge the fold of an appended record into its session's entry.
-    pub(super) fn note(&self, session_id: &str, appended: ControlsFold) {
-        if appended != ControlsFold::default() {
-            self.0
-                .lock()
-                .entry(session_id.to_string())
-                .or_default()
-                .fold
-                .merge(appended);
-        }
+    fn scan(path: &Path, session_id: &str) -> io::Result<Self::Scan> {
+        newest_controls(path, session_id)
     }
 
-    pub(super) fn forget(&self, session_id: &str) {
-        self.0.lock().remove(session_id);
+    fn known(&self) -> Option<Self::Value> {
+        self.seeded.then(|| self.fold.controls())
     }
 
-    fn seeded(&self, session_id: &str) -> Option<Option<SessionControls>> {
-        let cache = self.0.lock();
-        let entry = cache.get(session_id).filter(|entry| entry.seeded)?;
-        Some(entry.fold.controls())
-    }
-
-    fn seed(&self, session_id: &str, scanned: ControlsFold) -> Option<SessionControls> {
-        let mut cache = self.0.lock();
-        let entry = cache.entry(session_id.to_string()).or_default();
+    fn seed(entry: Entry<'_, String, Self>, scanned: Self::Scan) -> Self::Value {
+        let entry = entry.or_default();
         entry.fold.merge(scanned);
         entry.seeded = true;
         entry.fold.controls()
     }
 }
 
+pub(super) type ControlsCache = SessionCache<CachedControls>;
+
+impl ControlsCache {
+    /// Merge the fold of an appended record into its session's entry.
+    pub(super) fn note(&self, session_id: &str, appended: ControlsFold) {
+        if appended != ControlsFold::default() {
+            self.update(session_id, |entry| entry.fold.merge(appended));
+        }
+    }
+}
+
 impl SessionPersistence {
     /// The session's latest controls. An unseeded session (after a host
-    /// restart, or one no append of this process touched) scans the log once
-    /// on the blocking pool.
+    /// restart, a log rewrite, or one no append of this process touched)
+    /// scans the log on the blocking pool.
     pub(super) async fn last_controls_async(
         self: &Arc<Self>,
         session_id: &str,
     ) -> Result<Option<SessionControls>> {
-        if let Some(known) = self.inner.last_controls.seeded(session_id) {
-            return Ok(known);
-        }
-        let metadata = self.metadata(session_id)?;
-        let path = self.session_dir(&metadata.storage_key)?.join(MESSAGES_FILE);
-        let id = session_id.to_string();
-        let scanned = tokio::task::spawn_blocking(move || newest_controls(&path, &id))
+        self.read_through(&self.inner.last_controls, session_id)
             .await
-            .map_err(|error| SessionPersistenceError::PersistenceUnhealthy(error.to_string()))??;
-        Ok(self.inner.last_controls.seed(session_id, scanned))
     }
 }
 
