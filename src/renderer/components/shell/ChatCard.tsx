@@ -101,7 +101,7 @@ export function ChatCard({
             title={entry.title}
             aria-label={statusWord ? `${entry.title}, ${statusWord}` : entry.title}
             aria-current={isActive ? 'true' : undefined}
-            className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg py-1.5 pl-2.5 pr-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg py-1.5 pl-2.5 pr-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring"
           >
             {/* Line 1 names the chat, line 2 is its metadata. */}
             <span className="flex min-w-0 items-center gap-2">
@@ -156,7 +156,7 @@ export function ChatCard({
               'relative inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground',
               "after:absolute after:-inset-1.5 after:content-['']",
               'transition-colors duration-150 ease-out hover:bg-foreground/[0.03] hover:text-foreground',
-              'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+              'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring',
               'pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 focus-visible:opacity-100',
               !hasCwd && 'cursor-not-allowed'
             )}

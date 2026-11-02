@@ -178,7 +178,7 @@ export function CommitDetailPane({
                     key={parent}
                     type="button"
                     title={`Select ${parent}`}
-                    className="shrink-0 rounded font-mono text-foreground/80 underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                    className="shrink-0 rounded font-mono text-foreground/80 underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring"
                     onClick={() => onSelectCommit(parent)}
                   >
                     {parent.slice(0, 7)}
@@ -290,7 +290,7 @@ function FileRow({ file, onOpen }: { file: GitCommitFile; onOpen: () => void }):
       type="button"
       title={`${title} — open diff`}
       onClick={onOpen}
-      className="group flex h-[30px] w-full items-center gap-2 rounded-md px-2 text-left transition-colors duration-150 ease-out hover:bg-foreground/[0.04] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+      className="group flex h-[30px] w-full items-center gap-2 rounded-md px-2 text-left transition-colors duration-150 ease-out hover:bg-foreground/[0.04] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-focus-ring"
     >
       <span
         className={cn(

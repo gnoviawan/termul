@@ -367,7 +367,7 @@ export function MobileShellDrawer({
                   }
                   onClick={() => setListSection(item)}
                   className={cn(
-                    'flex min-h-11 min-w-0 flex-1 items-center justify-center rounded-full outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    'flex min-h-11 min-w-0 flex-1 items-center justify-center rounded-full outline-none transition-colors duration-150 ease-out focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring',
                     isCurrent
                       ? 'bg-background text-foreground shadow-sm'
                       : 'text-muted-foreground hover:text-foreground'

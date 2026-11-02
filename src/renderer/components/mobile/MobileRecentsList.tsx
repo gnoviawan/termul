@@ -31,7 +31,7 @@ function rowAriaLabel(title: string, statusText: string | null | undefined, time
 function rowClass(isActive: boolean): string {
   return cn(
     'flex min-h-11 w-full min-w-0 items-center gap-3 rounded-full px-4 py-2 text-left text-base outline-none transition-colors duration-150 ease-out',
-    'select-none [-webkit-touch-callout:none] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+    'select-none [-webkit-touch-callout:none] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring',
     isActive ? 'bg-secondary text-foreground' : 'text-foreground hover:bg-foreground/[0.04]'
   )
 }
@@ -178,7 +178,7 @@ function RecentsRowShell({
         aria-label={`More actions for ${title}`}
         aria-haspopup="dialog"
         onClick={onOpenActions}
-        className="pointer-events-none absolute right-1 top-1/2 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-secondary text-foreground opacity-0 outline-none focus:pointer-events-auto focus:opacity-100 focus-visible:ring-2 focus-visible:ring-ring"
+        className="pointer-events-none absolute right-1 top-1/2 inline-flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-secondary text-foreground opacity-0 outline-none focus:pointer-events-auto focus:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring"
       >
         <MoreHorizontal size={16} aria-hidden="true" />
       </button>
