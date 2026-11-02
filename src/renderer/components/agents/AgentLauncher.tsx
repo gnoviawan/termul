@@ -1698,7 +1698,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 : undefined
             }
           >
-            {slashOpen && (
+            {slashOpen && !composerLocked && (
               <SlashCommandMenu
                 ref={menuRef}
                 sections={slashSections}
