@@ -138,6 +138,8 @@ export const LISTING_LOADING_LABEL = 'Loading…'
 export const LISTING_ERROR_LABEL = "Couldn't list this folder"
 export const LISTING_EMPTY_LABEL = 'This folder is empty'
 
+export const MAX_LISTING_ENTRIES = 200
+
 export function relativeDir(root: string, dir: string): string {
   if (dir === root || !dir.startsWith(`${root}/`)) return ''
   return `${dir.slice(root.length + 1)}/`
@@ -193,8 +195,20 @@ function explorerSections(
   recents: MentionMatch[],
   listing: DirListing | undefined
 ): MentionSection[] {
-  const entries = listing?.status === 'ready' ? listing.entries.map((m) => matchItem(m, null)) : []
+  const all = listing?.status === 'ready' ? listing.entries : []
+  const entries = all.slice(0, MAX_LISTING_ENTRIES).map((m) => matchItem(m, null))
   const notice = listingNotice(listing)
+  const hidden = all.length - entries.length
+  const hiddenNotice: MentionSection[] =
+    hidden > 0
+      ? [
+          {
+            id: 'listing-hidden',
+            notice: `${hidden} more not shown. Type a name to search.`,
+            items: []
+          }
+        ]
+      : []
   if (dir === root) {
     const sections: MentionSection[] = []
     if (recents.length > 0) {
@@ -205,7 +219,7 @@ function explorerSections(
       })
     }
     sections.push({ id: 'listing', heading: `${basename(root)}/`, notice, items: entries })
-    return sections
+    return sections.concat(hiddenNotice)
   }
   const rel = relativeDir(root, dir)
   const folder: MentionMatch = {
@@ -224,7 +238,8 @@ function explorerSections(
   }
   return [
     { id: 'this-folder', items: [useFolder] },
-    { id: 'listing', notice, items: entries }
+    { id: 'listing', notice, items: entries },
+    ...hiddenNotice
   ]
 }
 

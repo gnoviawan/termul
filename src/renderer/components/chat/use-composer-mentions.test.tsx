@@ -620,8 +620,75 @@ describe('useComposerMentions', () => {
       expect(key(result, 'ArrowLeft')).toBe(true)
       expect(result.current.view.enter).toBe('back')
       expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
-      expect(mockApi.readDirectory).toHaveBeenCalledTimes(2)
       expect(state.value).toBe('see @')
+    })
+
+    it('moves the caret with ArrowLeft while a query is typed instead of going back', async () => {
+      const { result } = renderMentions()
+      const state = { value: '@', caret: 1 }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'conversations' })
+      act(() => result.current.update('@fix', 4))
+      expect(key(result, 'ArrowLeft')).toBe(false)
+      expect(result.current.view.header).toEqual({ title: 'Conversations', crumb: '' })
+      act(() => result.current.update('@', 1))
+      expect(key(result, 'ArrowLeft')).toBe(true)
+      expect(result.current.view.header).toBeNull()
+    })
+
+    it('re-reads a folder on every visit, keeping the last listing on screen meanwhile', async () => {
+      const { result } = renderMentions()
+      const state = { value: '@', caret: 1 }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'explorer' })
+      await advance(0)
+      expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
+
+      mockApi.readDirectory.mockImplementation(async (dir: string) =>
+        dir === '/work'
+          ? { success: true, data: [entry('src', 'directory'), entry('NEW.md', 'file')] }
+          : { success: true, data: [] }
+      )
+      pick(result, state, result.current.sections[0].items[0].row)
+      await advance(0)
+      act(() => result.current.back())
+      expect(rows(result)).toEqual(['dir:src', 'dir:node_modules', 'file:README.md'])
+      await advance(0)
+      expect(rows(result)).toEqual(['dir:src', 'file:NEW.md'])
+      expect(mockApi.readDirectory.mock.calls.map(([dir]) => dir)).toEqual([
+        '/work',
+        '/work/src',
+        '/work'
+      ])
+    })
+
+    it('retries a folder that failed instead of showing the cached failure', async () => {
+      const { result } = renderMentions()
+      const state = { value: '@', caret: 1 }
+      const secret: MentionRow = {
+        kind: 'dir',
+        match: {
+          relPath: 'secret',
+          absPath: '/work/secret/',
+          name: 'secret',
+          ignored: false,
+          kind: 'dir'
+        }
+      }
+      act(() => result.current.update(state.value, state.caret))
+      pick(result, state, { kind: 'category', target: 'explorer' })
+      pick(result, state, secret)
+      await advance(0)
+      expect(result.current.sections.find((s) => s.id === 'listing')?.notice).toBe(
+        "Couldn't list this folder"
+      )
+
+      act(() => result.current.back())
+      mockApi.readDirectory.mockResolvedValue({ success: true, data: [entry('key.pem', 'file')] })
+      pick(result, state, secret)
+      expect(result.current.sections.find((s) => s.id === 'listing')?.notice).toBe('Loading…')
+      await advance(0)
+      expect(rows(result)).toEqual(['use-folder:Use this folder', 'file:key.pem'])
     })
 
     it('clears the typed query when drilling in, and Backspace on the empty query goes back', async () => {
@@ -764,6 +831,11 @@ describe('useComposerMentions', () => {
       const token = conversationToken('Fix web reconnect', 'new')
       expect(out).toEqual({ value: `ask ${token} `, caret: 4 + token.length + 1 })
       expect(result.current.menuOpen).toBe(false)
+      expect(mockLog).toHaveBeenCalledWith({
+        level: 'info',
+        message: 'composer mention picked conversation new…',
+        source: 'useComposerMentions'
+      })
     })
 
     it('shows matching chats above file results when typing at the root', async () => {

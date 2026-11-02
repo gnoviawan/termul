@@ -363,7 +363,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
   const explorerDir = menuOpen && !disabled && panel.kind === 'explorer' ? panel.dir : null
 
   useEffect(() => {
-    if (explorerDir === null || listingsRef.current[explorerDir]) return
+    if (explorerDir === null) return
     const dir = explorerDir
     const gen = listingGenRef.current
     const store = (listing: DirListing) => {
@@ -371,7 +371,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
       listingsRef.current = { ...listingsRef.current, [dir]: listing }
       setListings(listingsRef.current)
     }
-    store({ status: 'loading' })
+    if (listingsRef.current[dir]?.status !== 'ready') store({ status: 'loading' })
     void filesystemApi
       .readDirectory(dir)
       .then((res) => {
@@ -433,6 +433,11 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
         return clearQuery(value, token)
       }
       if (row.kind === 'conversation') {
+        logFrontendError({
+          level: 'info',
+          message: `composer mention picked conversation ${row.conversation.sessionId.slice(0, 8)}…`,
+          source: 'useComposerMentions'
+        })
         close()
         return insertConversationToken(
           value,

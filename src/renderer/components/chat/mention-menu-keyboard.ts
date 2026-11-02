@@ -29,7 +29,8 @@ export function tryHandleMentionMenuKeyDown(
   if (
     canGoBack &&
     noModifier &&
-    (e.key === 'ArrowLeft' || (e.key === 'Backspace' && filter === ''))
+    filter === '' &&
+    (e.key === 'ArrowLeft' || e.key === 'Backspace')
   ) {
     e.preventDefault()
     onBack()

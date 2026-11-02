@@ -315,6 +315,19 @@ describe('buildMentionSections: explorer panel', () => {
     expect(notice(listing([match('src/a.ts')]))).toBeUndefined()
   })
 
+  it('lists the first 200 entries and says how many more a search would find', () => {
+    const entries = Array.from({ length: 250 }, (_, i) => match(`f${i}.ts`))
+    const result = shown({ panel: explorer(ROOT), listing: listing(entries) })
+    expect(result.map((s) => [s.id, s.rows.length, s.notice])).toEqual([
+      ['listing', 200, undefined],
+      ['listing-hidden', 0, '50 more not shown. Type a name to search.']
+    ])
+    expect(result[0].rows.at(-1)).toBe('file:f199.ts')
+    expect(
+      shown({ panel: explorer(ROOT), listing: listing(entries.slice(0, 200)) }).map((s) => s.id)
+    ).toEqual(['listing'])
+  })
+
   it('searches globally when a query is typed in the explorer', () => {
     expect(
       shown({ panel: explorer(`${ROOT}/src`), filter: 'a', matches: [match('lib/a.ts')] })
