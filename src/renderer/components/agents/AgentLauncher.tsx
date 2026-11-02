@@ -949,6 +949,19 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   acpConfigs.some((config) => config.id === restored.configId))
             )
           : Boolean(restored)
+        // Desktop: a saved agent missing from the list may be a custom agent
+        // whose config has not loaded yet. Keep its id as the selection and
+        // leave the saved value alone; the list shows the default meanwhile,
+        // and the prewarm effect only warms the selection once it resolves.
+        if (
+          isTauriContext() &&
+          !restored &&
+          saved?.mode === 'acp' &&
+          typeof saved.agentId === 'string'
+        ) {
+          setSelectedConfigId(saved.agentId)
+          return
+        }
         const next = (restoredOk ? restored : null) ?? defaultAgent ?? supportedAgents[0]
         if (next) {
           setSelectedConfigId(next.configId)
@@ -1039,9 +1052,17 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
   }, [isolationMode, baseBranch, branches, baseBranchInfo])
 
+  // Configs whose persist failed here. A failed save rolls `agentConfigs` back
+  // to a new array, which re-runs the prewarm effect, so without this record a
+  // save that keeps failing retries in a tight loop until the renderer dies.
+  const failedPersistRef = useRef(new Set<string>())
+
   useEffect(() => {
     if (!activeConfigId || !projectRoot || selectedEntry?.status !== 'ready' || !selectedConfig)
       return
+    // Until the saved selection is read, `selectedEntry` shows the default as
+    // a placeholder. Warming it would spawn an agent the user may never use.
+    if (selectedEntry.configId !== selectedConfigId) return
     // Issue #840: on web the launcher is the FIRST prewarm path, and it may
     // only ever prewarm a CONFIGURED agent. A merely preselected default
     // (e.g. the catalog-derived Codex `npx` entry shown in the picker before
@@ -1056,6 +1077,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // default). Everything else stays exactly as #840 shaped it.
     const picked = userPickedConfigId === activeConfigId
     if (!isTauriContext() && !hasPersistedConfig && !picked) return
+    if (!hasPersistedConfig && failedPersistRef.current.has(selectedConfig.id)) return
     let cancelled = false
     void (async () => {
       try {
@@ -1065,7 +1087,17 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // the old launch args while the store already has the new pin. Never
         // let that stale snapshot overwrite the user's persisted config.
         if (!hasPersistedConfig) {
-          await saveAgentConfig(selectedConfig)
+          try {
+            await saveAgentConfig(selectedConfig)
+          } catch (err) {
+            failedPersistRef.current.add(selectedConfig.id)
+            void logFrontendError({
+              level: 'warn',
+              source: 'agentLauncher.prewarm',
+              message: `Could not save ${selectedConfig.name}, so it was not prepared: ${err instanceof Error ? err.message : String(err)}`
+            })
+            return
+          }
           if (cancelled) return
         }
         // Retarget the app-level warm pool to this agent+cwd: drains stale
@@ -1088,6 +1120,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     projectRoot,
     saveAgentConfig,
     selectedConfig,
+    selectedConfigId,
+    selectedEntry?.configId,
     selectedEntry?.status,
     activeProjectId,
     userPickedConfigId
