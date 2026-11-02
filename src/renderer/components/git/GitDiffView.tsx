@@ -229,7 +229,7 @@ function HunkActionBar({
   if (!onAction && !onSelectedAction) return null
   const verb = action === 'stage' ? 'Stage' : 'Unstage'
   const buttonClass =
-    'inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5 text-3xs font-medium uppercase tracking-wide text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.06] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-40 disabled:cursor-not-allowed'
+    'inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5 text-3xs font-medium uppercase tracking-wide text-muted-foreground transition-colors duration-150 ease-out hover:bg-foreground/[0.06] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring disabled:opacity-40 disabled:cursor-not-allowed'
   return (
     <>
       {onAction ? (

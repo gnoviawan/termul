@@ -398,7 +398,7 @@ export function McpServersSettings(): React.JSX.Element {
                         >
                           {detail}
                         </span>
-                        <CollapsibleTrigger className="inline-flex shrink-0 items-center gap-1 rounded text-xs text-secondary-foreground underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring">
+                        <CollapsibleTrigger className="inline-flex shrink-0 items-center gap-1 rounded text-xs text-secondary-foreground underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-focus-ring">
                           {tools && tools.length > 0
                             ? `${tools.length} tool${tools.length === 1 ? '' : 's'}`
                             : probeStatus === 'disconnected'
