@@ -115,7 +115,7 @@ export function SegmentedTrack({
         className={cn(
           'relative flex min-w-0 items-center justify-center gap-1.5 rounded-md px-1',
           'transition-[color,background-color] duration-150 ease-out',
-          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring',
+          'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ring',
           'disabled:cursor-not-allowed disabled:opacity-60',
           size,
           primary

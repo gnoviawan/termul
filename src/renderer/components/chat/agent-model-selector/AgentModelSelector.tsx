@@ -313,7 +313,7 @@ export function AgentModelSelector({
       aria-label="Cancel agent switch"
       title="Cancel the armed switch — the next send stays with the current agent"
       data-testid="agent-switch-cancel"
-      className="relative inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color] duration-150 ease-out before:absolute before:-inset-2.5 before:content-[''] hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+      className="relative inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color] duration-150 ease-out before:absolute before:-inset-2.5 before:content-[''] hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-60"
       onClick={() => cancelAgentSwitch(sessionId)}
     >
       <X size={10} aria-hidden="true" />

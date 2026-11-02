@@ -219,7 +219,7 @@ export function SelectionContextLayer({
                 // `bg-foreground/[0.06]` replaces the solid fill and lets the
                 // selected text show through the floating button.
                 'transition-colors hover:bg-[color-mix(in_oklab,oklch(var(--popover)),oklch(var(--foreground))_6%)]',
-                'outline-none focus-visible:ring-2 focus-visible:ring-ring'
+                'outline-none focus-visible:ring-2 focus-visible:ring-focus-ring'
               )}
             >
               <BlockQuote size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" />

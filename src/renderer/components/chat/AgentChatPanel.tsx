@@ -864,7 +864,7 @@ export function AgentChatPanel({
             <button
               type="button"
               onClick={retryDiscoveredReopen}
-              className="inline-flex min-h-11 items-center rounded-md border border-destructive/40 px-3 text-xs font-medium transition-colors hover:bg-destructive/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
+              className="inline-flex min-h-11 items-center rounded-md border border-destructive/40 px-3 text-xs font-medium transition-colors hover:bg-destructive/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
               Retry restore
             </button>
@@ -888,7 +888,7 @@ export function AgentChatPanel({
                 }
                 resumeStoppedChat()
               }}
-              className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
+              className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
               {codexSignedOut ? 'Sign in' : 'Resume chat'}
             </button>
