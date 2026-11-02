@@ -163,6 +163,12 @@ export const TEXT_CONTRAST_MIN = 4.5
 export const UI_CONTRAST_MIN = 3
 
 /**
+ * Keyboard focus edge: a step above the 3:1 field hairline, well under the
+ * theme ink (5:1 to 16:1), so focus reads without a bright white line.
+ */
+export const FOCUS_CONTRAST_MIN = 4
+
+/**
  * Move `fg` lightness away from `bg` (keeping hue) until it reaches
  * `minRatio`. Returns `fg` unchanged when it already passes.
  */

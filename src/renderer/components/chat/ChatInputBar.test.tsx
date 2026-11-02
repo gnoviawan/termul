@@ -2144,6 +2144,15 @@ describe('ChatInputBar mobile dock', () => {
     expect(composerCard()).not.toHaveClass('outline-none')
   })
 
+  it.each([
+    ['mobile', true],
+    ['desktop', false]
+  ])('draws no focus edge around the composer card on %s', (_shell, mobile) => {
+    mobileRef.current = mobile
+    render(bar())
+    expect(composerCard().className).not.toMatch(/focus-within:|has-\[/)
+  })
+
   it('collapses the queue by default on mobile and keeps it expanded on desktop', () => {
     const props = { queue, onRemoveQueued: vi.fn(), onSendQueuedNow: vi.fn() }
     const mobile = render(bar(props))

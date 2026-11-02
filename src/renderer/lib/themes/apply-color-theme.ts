@@ -8,6 +8,7 @@ import {
 } from './bundled-themes'
 import {
   darkenHex,
+  FOCUS_CONTRAST_MIN,
   hexToOklch,
   hexToOklchComponents,
   lightenHex,
@@ -139,6 +140,14 @@ export function readableUiComponents(color: string, surfaces: string[]): string 
   return solveEmittedContrast(color, surfaces, UI_CONTRAST_MIN)
 }
 
+/**
+ * CSS components for `--focus-ring`: a quiet tint of the ink lifted to the
+ * same contrast in every theme, so focus is dim but visible on any surface.
+ */
+export function focusRingComponents(ring: string, surfaces: string[]): string {
+  return solveEmittedContrast(mixHex(surfaces[0], ring, 0.2), surfaces, FOCUS_CONTRAST_MIN)
+}
+
 function applyCssVariables(
   palette: ThemePalette,
   appearance: ThemeAppearance,
@@ -242,6 +251,7 @@ function applyCssVariables(
       popoverHex
     ]),
     '--ring': hexToOklchComponents(ringHex),
+    '--focus-ring': `oklch(${focusRingComponents(ringHex, [card, tintedNeutralSurface.emittedHex, popoverHex])})`,
     '--terminal-bg': tintedNeutralSurface.components,
     '--terminal-fg': foregroundComponents,
     '--surface-dark': hexToOklchComponents(card),

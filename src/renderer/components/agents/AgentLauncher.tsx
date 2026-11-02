@@ -74,7 +74,6 @@ import {
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
 import { useComposerSendLock } from '@/components/chat/use-composer-send-lock'
 import { Paperclip } from '@/components/icons'
-import { COMPOSER_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
@@ -1725,9 +1724,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               className={cn(
                 'relative z-10',
                 COMPOSER_CARD_CLASS,
-                // Same focus affordance as the chat composer card
-                // (ChatInputBar) — the two cards are one visual family.
-                COMPOSER_FOCUS_CLASS,
                 dragActive && 'border-primary/70'
               )}
               onDragEnter={dropProps.onDragEnter}
