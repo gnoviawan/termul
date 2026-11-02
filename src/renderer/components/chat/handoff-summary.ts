@@ -295,6 +295,8 @@ const hasUserText = (t: HandoffTurn): t is HandoffTurn & { userText: string } =>
 function partitionTurns(items: HandoffItem[], budget: TranscriptBudget): HandoffTurn[] {
   const { maxFragmentChars } = budget
   let lastAgent: { lines: string[]; index: number; full: string } | null = null
+  // Characters of the lines rendered after `lastAgent`; they share its room.
+  let afterLastAgentChars = 0
   const turns: HandoffTurn[] = []
   let current: HandoffTurn | null = null
 
@@ -313,7 +315,10 @@ function partitionTurns(items: HandoffItem[], budget: TranscriptBudget): Handoff
       // one-liner: reasoning is not conversation.
       if (it.tool.kind === 'think') continue
       const oneLiner = toolOneLiner(it.tool, maxFragmentChars)
-      if (oneLiner.length > 0) openTurn().lines.push(`- ${oneLiner}`)
+      if (oneLiner.length > 0) {
+        openTurn().lines.push(`- ${oneLiner}`)
+        afterLastAgentChars += `- ${oneLiner}\n`.length
+      }
       continue
     }
     const message = it.message
@@ -333,18 +338,21 @@ function partitionTurns(items: HandoffItem[], budget: TranscriptBudget): Handoff
         lines: []
       }
       turns.push(current)
+      if (current.userText != null) afterLastAgentChars += `User: ${current.userText}\n`.length
     } else if (text.length > 0) {
       const turn = openTurn()
       turn.lines.push(`Agent: ${text}`)
       lastAgent = { lines: turn.lines, index: turn.lines.length - 1, full: `Agent: ${fullText}` }
+      afterLastAgentChars = 0
     }
   }
 
   // fitBodyBudget pins up to two `User:` fragments (the intent anchor and the
   // first kept turn), the omission note, and the truncation marker ahead of
-  // the tail, so the whole final reply must fit beside all of them.
+  // the tail, so the whole final reply must fit beside all of them and the
+  // lines that follow it.
   const pinnedRoom = 2 * (maxFragmentChars + 'User: …'.length) + 128
-  const finalRoom = budget.maxBodyChars - pinnedRoom
+  const finalRoom = budget.maxBodyChars - pinnedRoom - afterLastAgentChars
   if (budget.keepFinalAgentMessage && lastAgent && lastAgent.full.length <= finalRoom) {
     lastAgent.lines[lastAgent.index] = lastAgent.full
   }

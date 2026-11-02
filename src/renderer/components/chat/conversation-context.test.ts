@@ -88,4 +88,25 @@ describe('buildConversationContext budget edges', () => {
     expect(lines.at(-2)).toBe('User: last question')
     expect(lines.at(-1)).toBe(`Agent: ${'f'.repeat(1500)}…`)
   })
+
+  it('shortens the final reply when the tool lines after it leave no room for it whole', () => {
+    const tools = [1, 2, 3, 4].map((n) => ({
+      toolCallId: `t${n}`,
+      seq: 2 + n,
+      timestamp: (2 + n) * 10,
+      kind: 'read' as const,
+      title: `${n}`.padEnd(1400, 'p')
+    }))
+    const lines = buildConversationContext({
+      title: 'Tail',
+      agentName: null,
+      toolCalls: tools,
+      messages: [msg('u1', 'user', 1, 'q'), msg('a1', 'agent', 2, 'f'.repeat(8000))]
+    }).split('\n')
+    expect(lines.slice(2)).toEqual([
+      'User: q',
+      `Agent: ${'f'.repeat(1500)}…`,
+      ...[1, 2, 3, 4].map((n) => `- Read ${`${n}`.padEnd(1400, 'p')}`)
+    ])
+  })
 })
