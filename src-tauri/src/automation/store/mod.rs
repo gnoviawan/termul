@@ -18,12 +18,13 @@ use super::graph;
 use super::model::{wire_name, Automation, AutomationId, Issue, LastRun, Schedule};
 use super::schedule::{compute_next_run, ScheduleError};
 
-pub use runs::SettleOutcome;
+pub use runs::{ParkedRun, SettleOutcome};
 
 pub const DB_FILE_NAME: &str = "automations.sqlite";
 
 /// Each entry upgrades `user_version` N to N+1. Append only.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE automation (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -74,13 +75,15 @@ CREATE TABLE automation_step (
     finished_at INTEGER,
     PRIMARY KEY (run_id, node_id)
 );
-"#, r#"
+"#,
+    r#"
 CREATE TABLE automation_secret_name (
     project_id TEXT NOT NULL,
     name TEXT NOT NULL,
     PRIMARY KEY (project_id, name)
 );
-"#, r#"
+"#,
+    r#"
 CREATE TABLE automation_suggestion_dismissed (
     project_id TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
@@ -93,7 +96,13 @@ CREATE TABLE automation_suggestion_accepted (
     accepted_at INTEGER NOT NULL,
     PRIMARY KEY (project_id, fingerprint)
 );
-"#];
+"#,
+    r#"
+ALTER TABLE automation_run ADD COLUMN parked_node TEXT;
+ALTER TABLE automation_run ADD COLUMN parked_until INTEGER;
+CREATE INDEX idx_run_parked_until ON automation_run(parked_until) WHERE parked_until IS NOT NULL;
+"#,
+];
 
 #[derive(Debug)]
 pub enum StoreError {

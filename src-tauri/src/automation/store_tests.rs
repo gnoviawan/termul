@@ -1,10 +1,10 @@
 use serde_json::json;
 
 use super::model::{
-    Automation, IssueCode, LastRun, Run, RunId, RunStatus, RunTrigger, SettledStatus, Step,
+    Automation, IssueCode, LastRun, Parked, Run, RunId, RunStatus, RunTrigger, SettledStatus, Step,
     StepStatus,
 };
-use super::store::{AutomationStore, ClaimOutcome, SettleOutcome, StoreError};
+use super::store::{AutomationStore, ClaimOutcome, ParkedRun, SettleOutcome, StoreError};
 use super::test_support::{apply, node_id, sample_automation};
 
 const NOW: i64 = 1_000_030;
@@ -39,6 +39,7 @@ fn run(a: &Automation, id: &str, trigger: RunTrigger) -> Run {
         summary: None,
         conversation_id: None,
         worktree_id: None,
+        parked: None,
     }
 }
 
@@ -60,7 +61,7 @@ fn migrates_once_and_reopens_with_data() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
 }
 
 #[test]
@@ -398,9 +399,128 @@ fn reconcile_fails_stranded_runs_and_steps_once() {
     );
     let after = store.get(&a.id).unwrap().unwrap();
     assert_eq!(
-        (after.unseen_failures, after.consecutive_errors, after.next_run_at),
+        (
+            after.unseen_failures,
+            after.consecutive_errors,
+            after.next_run_at
+        ),
         (1, 0, a.next_run_at)
     );
+}
+
+fn decision(name: &str, at: i64) -> serde_json::Map<String, serde_json::Value> {
+    json!({ "decision": name, "decided_at": at })
+        .as_object()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn a_parked_run_waits_through_reconcile_and_resumes_exactly_once() {
+    let store = AutomationStore::open_in_memory().unwrap();
+    let a = approved(&store, &every_minute());
+    let r1: RunId = "r1".to_string().into();
+    store
+        .insert_run(&run(&a, "r1", RunTrigger::Manual))
+        .unwrap();
+    store
+        .upsert_step(&step("r1", "gate", StepStatus::Running, None))
+        .unwrap();
+
+    assert!(store
+        .park_run(
+            &r1,
+            &node_id("gate"),
+            90_000,
+            &json!({ "message": "Ship?" }),
+            50
+        )
+        .unwrap());
+
+    let waiting = store.get_run(&r1).unwrap().unwrap();
+    let parked = Parked {
+        node_id: node_id("gate"),
+        until: 90_000,
+    };
+    assert_eq!(
+        (waiting.status, waiting.parked.clone()),
+        (RunStatus::Waiting, Some(parked.clone()))
+    );
+    assert!(store.has_active_run(&a.id).unwrap());
+    assert_eq!(store.reconcile_stranded(60).unwrap(), 0);
+    assert_eq!(
+        store.get_steps(&r1).unwrap(),
+        vec![Step {
+            output: Some(json!({ "message": "Ship?" })),
+            ..step("r1", "gate", StepStatus::Waiting, None)
+        }]
+    );
+    let expected = ParkedRun {
+        run_id: r1.clone(),
+        automation_id: a.id.clone(),
+        parked,
+    };
+    assert_eq!(store.list_expired_parks(89_999).unwrap(), vec![]);
+    assert_eq!(
+        store.list_expired_parks(90_000).unwrap(),
+        vec![expected.clone()]
+    );
+    assert_eq!(store.parked_run_of(&a.id).unwrap(), Some(expected));
+    assert_eq!(
+        store.run_project_id(&r1).unwrap(),
+        Some(a.project_id.clone())
+    );
+
+    let wrong_node = store
+        .resume_parked(
+            &r1,
+            &node_id("other"),
+            StepStatus::Succeeded,
+            None,
+            decision("approved", 60),
+            60,
+        )
+        .unwrap();
+    assert_eq!(wrong_node, None);
+    let resumed = store
+        .resume_parked(
+            &r1,
+            &node_id("gate"),
+            StepStatus::Succeeded,
+            None,
+            decision("approved", 60),
+            60,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!((resumed.status, resumed.parked), (RunStatus::Running, None));
+    let late = store
+        .resume_parked(
+            &r1,
+            &node_id("gate"),
+            StepStatus::Failed,
+            Some("approval_timed_out"),
+            decision("timed_out", 70),
+            70,
+        )
+        .unwrap();
+    assert_eq!(late, None);
+    assert_eq!(
+        store.get_steps(&r1).unwrap(),
+        vec![Step {
+            output: Some(json!({ "message": "Ship?", "decision": "approved", "decided_at": 60 })),
+            ..step("r1", "gate", StepStatus::Succeeded, Some(60))
+        }]
+    );
+    assert_eq!(store.parked_run_of(&a.id).unwrap(), None);
+    assert_eq!(store.list_expired_parks(i64::MAX).unwrap(), vec![]);
+
+    store
+        .settle_run(&r1, SettledStatus::Succeeded, None, None, 80)
+        .unwrap();
+    assert!(!store
+        .park_run(&r1, &node_id("gate"), 90_000, &json!({}), 90)
+        .unwrap());
 }
 
 #[test]
@@ -444,11 +564,19 @@ fn answered_suggestions_are_the_dismissed_and_accepted_ones_of_the_project() {
     store.accept_suggestion("p1", "bbbb", NOW).unwrap();
     store.dismiss_suggestion("p2", "cccc", NOW).unwrap();
 
-    let mut p1: Vec<String> = store.answered_suggestions("p1").unwrap().into_iter().collect();
+    let mut p1: Vec<String> = store
+        .answered_suggestions("p1")
+        .unwrap()
+        .into_iter()
+        .collect();
     p1.sort();
     assert_eq!(p1, vec!["aaaa".to_string(), "bbbb".to_string()]);
     assert_eq!(
-        store.answered_suggestions("p2").unwrap().into_iter().collect::<Vec<_>>(),
+        store
+            .answered_suggestions("p2")
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>(),
         vec!["cccc".to_string()]
     );
 }

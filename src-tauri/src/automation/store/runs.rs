@@ -1,10 +1,13 @@
-//! Run and step ledger: insert, settle exactly once, reconcile, prune.
+//! Run and step ledger: insert, park and resume, settle exactly once,
+//! reconcile, prune.
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
+use serde_json::{Map, Value};
 
 use super::{from_i64, from_wire, to_i64, AutomationStore, StoreError, StoreResult};
 use crate::automation::model::{
-    wire_name, AutomationId, NodeId, Run, RunId, RunStatus, RunTrigger, SettledStatus, Step,
+    wire_name, AutomationId, NodeId, Parked, Run, RunId, RunStatus, RunTrigger, SettledStatus,
+    Step, StepStatus,
 };
 use crate::automation::schedule::backoff_ms;
 
@@ -17,13 +20,21 @@ pub enum SettleOutcome {
     AlreadySettled,
 }
 
+/// A waiting run and where it is parked.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParkedRun {
+    pub run_id: RunId,
+    pub automation_id: AutomationId,
+    pub parked: Parked,
+}
+
 impl AutomationStore {
     pub fn insert_run(&self, run: &Run) -> StoreResult<()> {
         self.conn()?.execute(
             "INSERT INTO automation_run (id, automation_id, revision, graph_json, trigger,
                 scheduled_for, status, started_at, finished_at, stop_reason, summary,
-                conversation_id, worktree_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                conversation_id, worktree_id, parked_node, parked_until)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 run.id.as_str(),
                 run.automation_id.as_str(),
@@ -38,6 +49,8 @@ impl AutomationStore {
                 run.summary,
                 run.conversation_id,
                 run.worktree_id,
+                run.parked.as_ref().map(|p| p.node_id.as_str()),
+                run.parked.as_ref().map(|p| p.until),
             ],
         )?;
         Ok(())
@@ -47,12 +60,165 @@ impl AutomationStore {
         get_run(&*self.conn()?, id)
     }
 
+    /// A `running` or `waiting` run: either one blocks an overlapping run.
     pub fn has_active_run(&self, automation_id: &AutomationId) -> StoreResult<bool> {
         Ok(self.conn()?.query_row(
-            "SELECT EXISTS(SELECT 1 FROM automation_run WHERE automation_id = ?1 AND status = 'running')",
+            "SELECT EXISTS(SELECT 1 FROM automation_run
+             WHERE automation_id = ?1 AND status IN ('running', 'waiting'))",
             params![automation_id.as_str()],
             |r| r.get(0),
         )?)
+    }
+
+    /// The project of a run's automation, deleted or not.
+    pub fn run_project_id(&self, run_id: &RunId) -> StoreResult<Option<String>> {
+        Ok(self
+            .conn()?
+            .query_row(
+                "SELECT a.project_id FROM automation_run r JOIN automation a ON a.id = r.automation_id
+                 WHERE r.id = ?1",
+                params![run_id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Parks a `running` run at `node_id` until `until`: the node's step
+    /// turns `waiting` with `output`, in one transaction. `false` when the
+    /// run is not running.
+    pub fn park_run(
+        &self,
+        run_id: &RunId,
+        node_id: &NodeId,
+        until: i64,
+        output: &Value,
+        now_ms: i64,
+    ) -> StoreResult<bool> {
+        let db = self.conn()?;
+        let tx = db.unchecked_transaction()?;
+        let parked = tx.execute(
+            "UPDATE automation_run SET status = 'waiting', parked_node = ?1, parked_until = ?2
+             WHERE id = ?3 AND status = 'running'",
+            params![node_id.as_str(), until, run_id.as_str()],
+        )?;
+        if parked == 0 {
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO automation_step (run_id, node_id, status, output_json, error, started_at, finished_at)
+             VALUES (?1, ?2, 'waiting', ?3, NULL, ?4, NULL)
+             ON CONFLICT(run_id, node_id) DO UPDATE SET
+                status = 'waiting', output_json = excluded.output_json, error = NULL, finished_at = NULL",
+            params![
+                run_id.as_str(),
+                node_id.as_str(),
+                serde_json::to_string(output)?,
+                now_ms
+            ],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    /// Claims a run parked at `node_id` back to `running` and turns its
+    /// waiting step terminal, its output merged with `decision_fields`. The
+    /// claim is the one arbiter between every way a park ends: `None` when
+    /// the run is no longer waiting there.
+    pub fn resume_parked(
+        &self,
+        run_id: &RunId,
+        node_id: &NodeId,
+        step_status: StepStatus,
+        error: Option<&str>,
+        decision_fields: Map<String, Value>,
+        now_ms: i64,
+    ) -> StoreResult<Option<Run>> {
+        let db = self.conn()?;
+        let tx = db.unchecked_transaction()?;
+        let claimed = tx.execute(
+            "UPDATE automation_run SET status = 'running', parked_node = NULL, parked_until = NULL
+             WHERE id = ?1 AND status = 'waiting' AND parked_node = ?2",
+            params![run_id.as_str(), node_id.as_str()],
+        )?;
+        if claimed == 0 {
+            return Ok(None);
+        }
+        let waiting: Option<String> = tx
+            .query_row(
+                "SELECT output_json FROM automation_step WHERE run_id = ?1 AND node_id = ?2",
+                params![run_id.as_str(), node_id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        let mut output = match waiting.as_deref().map(serde_json::from_str).transpose()? {
+            Some(Value::Object(fields)) => fields,
+            _ => Map::new(),
+        };
+        output.extend(decision_fields);
+        tx.execute(
+            "UPDATE automation_step SET status = ?1, error = ?2, output_json = ?3, finished_at = ?4
+             WHERE run_id = ?5 AND node_id = ?6 AND status = 'waiting'",
+            params![
+                wire_name(&step_status),
+                error,
+                serde_json::to_string(&Value::Object(output))?,
+                now_ms,
+                run_id.as_str(),
+                node_id.as_str()
+            ],
+        )?;
+        let run = get_run(&tx, run_id)?.ok_or_else(|| StoreError::NotFound(run_id.to_string()))?;
+        tx.commit()?;
+        Ok(Some(run))
+    }
+
+    /// Waiting runs whose park expired at or before `now_ms`.
+    pub fn list_expired_parks(&self, now_ms: i64) -> StoreResult<Vec<ParkedRun>> {
+        self.parked_runs(
+            "SELECT id, automation_id, parked_node, parked_until FROM automation_run
+             WHERE parked_until IS NOT NULL AND parked_until <= ?1 AND status = 'waiting'
+             ORDER BY parked_until, id",
+            params![now_ms],
+        )
+    }
+
+    /// The waiting run of `automation_id`, if any.
+    pub fn parked_run_of(&self, automation_id: &AutomationId) -> StoreResult<Option<ParkedRun>> {
+        Ok(self
+            .parked_runs(
+                "SELECT id, automation_id, parked_node, parked_until FROM automation_run
+                 WHERE automation_id = ?1 AND status = 'waiting' AND parked_node IS NOT NULL",
+                params![automation_id.as_str()],
+            )?
+            .into_iter()
+            .next())
+    }
+
+    fn parked_runs(&self, sql: &str, args: impl rusqlite::Params) -> StoreResult<Vec<ParkedRun>> {
+        let db = self.conn()?;
+        let mut stmt = db.prepare(sql)?;
+        let rows = stmt.query_map(args, |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (run_id, automation_id, node_id, until) = row?;
+            Ok(ParkedRun {
+                run_id: run_id.into(),
+                automation_id: automation_id.into(),
+                parked: Parked {
+                    node_id: NodeId::parse(node_id)
+                        .map_err(|e| StoreError::Corrupt(e.to_string()))?,
+                    until,
+                },
+            })
+        })
+        .collect()
     }
 
     /// Newest first.
@@ -84,7 +250,15 @@ impl AutomationStore {
         now_ms: i64,
     ) -> StoreResult<SettleOutcome> {
         let db = self.conn()?;
-        settle_locked(&db, id, status, stop_reason, summary, now_ms, Cadence::Follow)
+        settle_locked(
+            &db,
+            id,
+            status,
+            stop_reason,
+            summary,
+            now_ms,
+            Cadence::Follow,
+        )
     }
 
     /// Records a step. A step that already finished is never overwritten, so
@@ -159,6 +333,7 @@ impl AutomationStore {
     }
 
     /// Deletes finished runs (and their steps) that ended before `cutoff_ms`.
+    /// A waiting run has no `finished_at`, so it is never pruned.
     pub fn prune_runs(&self, cutoff_ms: i64) -> StoreResult<usize> {
         let db = self.conn()?;
         let tx = db.unchecked_transaction()?;
@@ -296,7 +471,16 @@ fn read_run(row: &Row<'_>) -> rusqlite::Result<StoreResult<Run>> {
     let summary: Option<String> = row.get("summary")?;
     let conversation_id: Option<String> = row.get("conversation_id")?;
     let worktree_id: Option<String> = row.get("worktree_id")?;
+    let parked_node: Option<String> = row.get("parked_node")?;
+    let parked_until: Option<i64> = row.get("parked_until")?;
     Ok((|| {
+        let parked = match (parked_node, parked_until) {
+            (Some(node_id), Some(until)) => Some(Parked {
+                node_id: NodeId::parse(node_id).map_err(|e| StoreError::Corrupt(e.to_string()))?,
+                until,
+            }),
+            _ => None,
+        };
         Ok(Run {
             id: id.into(),
             automation_id: automation_id.into(),
@@ -311,6 +495,7 @@ fn read_run(row: &Row<'_>) -> rusqlite::Result<StoreResult<Run>> {
             summary,
             conversation_id,
             worktree_id,
+            parked,
         })
     })())
 }
