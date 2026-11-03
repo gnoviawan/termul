@@ -12,7 +12,7 @@
 import { spawnSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { RESULTS_ROOT, TOOLKIT_ROOT } from './runner/launch.ts'
+import { RESULTS_ROOT, restoreDevAppData, TOOLKIT_ROOT } from './runner/launch.ts'
 import type { PerfRunResult } from './types.ts'
 
 const METRICS: Array<{ key: string; unit: 'MB' | 'count' | 'ms' }> = [
@@ -75,9 +75,24 @@ function parseArgs(argv: string[]): AbArgs {
   }
 }
 
+function stopAppsFrom(exe: string): void {
+  const target = path.resolve(exe).replace(/'/g, "''")
+  const script = `Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq '${target}' } | ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }`
+  spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    windowsHide: true
+  })
+}
+
 function runOnce(side: Side, scenario: string[], timeoutMs: number): PerfRunResult | null {
   const args = [path.join(TOOLKIT_ROOT, 'cli.ts'), ...scenario, '--exe', side.exe]
   const proc = spawnSync('node', args, { encoding: 'utf8', timeout: timeoutMs })
+  if (proc.signal) {
+    // The killed runner never reached its teardown: stop the app it spawned
+    // before the next run starts, and put the developer's app data back.
+    stopAppsFrom(side.exe)
+    restoreDevAppData()
+    console.log(`  run exceeded ${timeoutMs / 60000} min and was stopped`)
+  }
   const runId = /run (\S+) (ok|FAILED)/.exec(proc.stdout ?? '')?.[1]
   if (!runId) {
     console.log(`  no run id; exit ${proc.status}: ${(proc.stderr ?? '').slice(-300)}`)

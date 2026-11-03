@@ -216,6 +216,8 @@ export async function killPidTree(rootPid: number): Promise<void> {
 
 const DEV_IDENTIFIER = 'com.termul-manager.app.dev'
 const STASH_SUFFIX = '.perf-stash'
+/** Marks a dev-identifier dir as a perf run's own data. */
+const RUN_MARKER = '.perf-run'
 
 function devAppDataDirs(): string[] {
   return [process.env.APPDATA, process.env.LOCALAPPDATA]
@@ -223,16 +225,29 @@ function devAppDataDirs(): string[] {
     .map((root) => path.join(root, DEV_IDENTIFIER))
 }
 
+function markRunAppData(): void {
+  for (const dir of devAppDataDirs()) {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, RUN_MARKER), '')
+  }
+}
+
 /**
  * Runs need an empty app-data dir under the dev identifier, and `bun run dev`
  * uses that same identifier, so a developer's dev-mode projects and chats may
  * live there. Move them aside instead of deleting them. A stash left by a
- * crashed run is kept, and what sits in the dir beside it is that run's data.
+ * crashed run is kept; the dir beside it is deleted only when it carries the
+ * run marker, so dev data written after the crash is never removed.
  */
 function stashDevAppData(): void {
   for (const dir of devAppDataDirs()) {
     if (!existsSync(dir)) continue
     if (existsSync(dir + STASH_SUFFIX)) {
+      if (!existsSync(path.join(dir, RUN_MARKER))) {
+        throw new Error(
+          `${dir} holds data that is not a perf run's, and an earlier run's stash sits at ${dir}${STASH_SUFFIX}. Keep the one you want and remove the other.`
+        )
+      }
       rmSync(dir, { recursive: true, force: true })
     } else {
       try {
@@ -244,10 +259,11 @@ function stashDevAppData(): void {
       }
     }
   }
+  markRunAppData()
 }
 
 /** Remove the run's app data and put the developer's back. */
-function restoreDevAppData(): void {
+export function restoreDevAppData(): void {
   for (const dir of devAppDataDirs()) {
     rmSync(dir, { recursive: true, force: true })
     if (existsSync(dir + STASH_SUFFIX)) renameSync(dir + STASH_SUFFIX, dir)
@@ -264,8 +280,8 @@ function writePreseedStore(entries: Record<string, unknown>): void {
   if (!appData) throw new Error('APPDATA is not set; cannot preseed the dev-identifier store')
   // Only the run's own data is here: stashDevAppData moved the developer's aside.
   for (const runDir of devAppDataDirs()) rmSync(runDir, { recursive: true, force: true })
+  markRunAppData()
   const dir = path.join(appData, DEV_IDENTIFIER)
-  mkdirSync(dir, { recursive: true })
   const file: Record<string, unknown> = {}
   for (const [key, data] of Object.entries(entries)) file[key] = { _version: 1, data }
   writeFileSync(path.join(dir, 'termul-data.json'), JSON.stringify(file))
@@ -325,6 +341,21 @@ async function findMainPage(browser: Browser, debugPort: number): Promise<Page> 
 
 /** Launch the app and attach over CDP. Throws with actionable context on failure. */
 export async function launchApp(opts: LaunchOptions): Promise<AppHandle> {
+  stashDevAppData()
+  try {
+    return await launchAfterStash(opts)
+  } catch (err) {
+    // The spawned tree is already stopped on these paths; put the dev data back.
+    try {
+      restoreDevAppData()
+    } catch (restoreErr) {
+      throw new Error(`${String(err)}; also could not restore dev app data: ${String(restoreErr)}`)
+    }
+    throw err
+  }
+}
+
+async function launchAfterStash(opts: LaunchOptions): Promise<AppHandle> {
   const exe = resolveAppExe(opts.exe)
   const debugPort = await pickFreePort()
   const runDir = path.join(RESULTS_ROOT, opts.runId)
@@ -338,7 +369,6 @@ export async function launchApp(opts: LaunchOptions): Promise<AppHandle> {
   }
   const baseEnv: Record<string, string> = { ...cleanProcessEnv, ...(opts.env ?? {}) }
 
-  stashDevAppData()
   if (opts.preseedStore) writePreseedStore(opts.preseedStore)
   const rootPid = spawnApp(exe, debugPort, scratchDir, baseEnv)
   let browser: Browser
