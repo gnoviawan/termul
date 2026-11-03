@@ -355,3 +355,83 @@ fn a_suggestion_answer_needs_a_project_and_a_fingerprint() {
         "invalid_input"
     );
 }
+
+/// An approved manual automation whose run parks at `gate`, and that run.
+async fn waiting_run(
+    service: &AutomationService,
+) -> (super::model::AutomationId, super::model::Run) {
+    let created = service.create("p1", "Gated").unwrap();
+    service
+        .apply_ops(
+            &created.id,
+            1,
+            &ops(json!([
+                { "op": "add_node", "node": { "id": "gate", "label": "Ship?", "spec": {
+                    "kind": "approval", "message": "Ship it?", "timeout_ms": 60_000 } } },
+                { "op": "add_node", "node": { "id": "done", "label": "Done", "spec": {
+                    "kind": "transform", "fields": [] } } },
+                { "op": "connect", "edge": { "from": "trigger", "port": "out", "to": "gate" } },
+                { "op": "connect", "edge": { "from": "gate", "port": "out", "to": "done" } }
+            ])),
+        )
+        .unwrap();
+    service.approve(&created.id, 2).unwrap();
+    let run = service.run_now(&created.id).unwrap();
+    (
+        created.id,
+        until_status(service, &run.id, RunStatus::Waiting).await,
+    )
+}
+
+async fn until_status(
+    service: &AutomationService,
+    run_id: &super::model::RunId,
+    status: RunStatus,
+) -> super::model::Run {
+    for _ in 0..500 {
+        let run = service.engine().store().get_run(run_id).unwrap().unwrap();
+        if run.status == status {
+            return run;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("run {run_id} never reached {status:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn decide_approval_resolves_once_and_refuses_other_nodes_and_runs() {
+    let service = service();
+    let (_, run) = waiting_run(&service).await;
+    let gate = super::test_support::node_id("gate");
+
+    let not_a_gate = service.decide_approval(&run.id, &super::test_support::node_id("done"), true);
+    assert_eq!(
+        not_a_gate,
+        Err(ServiceError::InvalidInput(format!(
+            "done is not an approval node of run {}",
+            run.id
+        )))
+    );
+    let missing = service.decide_approval(&"nope".to_string().into(), &gate, true);
+    assert_eq!(missing, Err(ServiceError::NotFound("nope".to_string())));
+
+    assert_eq!(service.decide_approval(&run.id, &gate, true), Ok(true));
+    assert_eq!(service.decide_approval(&run.id, &gate, false), Ok(false));
+    assert_eq!(
+        until_status(&service, &run.id, RunStatus::Succeeded)
+            .await
+            .status,
+        RunStatus::Succeeded
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deleting_an_automation_cancels_its_waiting_run() {
+    let service = service();
+    let (id, run) = waiting_run(&service).await;
+
+    service.delete(&id).unwrap();
+
+    let run = until_status(&service, &run.id, RunStatus::Cancelled).await;
+    assert_eq!(run.stop_reason.as_deref(), Some("cancelled"));
+}

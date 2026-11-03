@@ -11,11 +11,11 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use super::agents::{self, AgentRegistry, KnownAgent};
-use super::engine::{Engine, EngineDeps, HttpConfig, ProjectRoots, SystemClock};
+use super::engine::{Decision, Engine, EngineDeps, HttpConfig, ProjectRoots, SystemClock};
 use super::graph::{self, OpError};
 use super::model::{
-    ApplyOpsResult, Automation, AutomationChanged, AutomationId, Issue, IssueCode, NodeSpec, Op,
-    Run, RunId, RunPolicy, RunTrigger, Schedule, Step,
+    ApplyOpsResult, Automation, AutomationChanged, AutomationId, Issue, IssueCode, NodeId,
+    NodeKind, NodeSpec, Op, Run, RunId, RunPolicy, RunTrigger, Schedule, Step,
 };
 use super::policy;
 use super::schedule;
@@ -261,7 +261,7 @@ impl AutomationService {
         Ok(saved)
     }
 
-    /// Soft-deletes and cancels a run in flight.
+    /// Soft-deletes and cancels a run in flight or waiting.
     pub fn delete(&self, id: &AutomationId) -> ServiceResult<()> {
         let automation = self.load(id)?;
         if !self.engine.store().soft_delete(id, self.engine.now_ms())? {
@@ -334,12 +334,39 @@ impl AutomationService {
             .start_run(&automation, RunTrigger::Manual, now)?)
     }
 
-    /// `false` when the run is not in flight.
+    /// `false` when the run is neither in flight nor waiting.
     pub fn cancel_run(&self, run_id: &RunId) -> ServiceResult<bool> {
         if self.engine.store().get_run(run_id)?.is_none() {
             return Err(ServiceError::NotFound(run_id.to_string()));
         }
-        Ok(self.engine.cancel_run(run_id))
+        Ok(self.engine.cancel_run(run_id)?)
+    }
+
+    /// A person approves or rejects the run waiting at `node_id`. `false`
+    /// when it no longer waits there (already decided, timed out or
+    /// cancelled). Only people decide: no agent tool calls this.
+    pub fn decide_approval(
+        &self,
+        run_id: &RunId,
+        node_id: &NodeId,
+        approved: bool,
+    ) -> ServiceResult<bool> {
+        let run = self
+            .engine
+            .store()
+            .get_run(run_id)?
+            .ok_or_else(|| ServiceError::NotFound(run_id.to_string()))?;
+        if run.graph.node(node_id).map(|n| n.spec.kind()) != Some(NodeKind::Approval) {
+            return Err(ServiceError::InvalidInput(format!(
+                "{node_id} is not an approval node of run {run_id}"
+            )));
+        }
+        let decision = if approved {
+            Decision::Approved
+        } else {
+            Decision::Rejected
+        };
+        Ok(self.engine.resolve(run_id, node_id, decision)?)
     }
 
     /// Newest first, at most 200.

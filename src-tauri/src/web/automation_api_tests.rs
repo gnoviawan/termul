@@ -209,7 +209,7 @@ async fn an_automation_is_built_approved_and_run_over_its_routes() {
             "id": run_id, "automation_id": id, "revision": 2, "graph": shaped_graph(),
             "trigger": "manual", "scheduled_for": 1000, "status": status,
             "started_at": 1000, "finished_at": finished_at, "stop_reason": null,
-            "summary": null, "conversation_id": null, "worktree_id": null
+            "summary": null, "conversation_id": null, "worktree_id": null, "parked": null
         })
     };
     assert_eq!((status, run), ok(run_json("running", Value::Null)));
@@ -286,6 +286,85 @@ async fn an_automation_is_built_approved_and_run_over_its_routes() {
         )
         .await,
         ok(json!([]))
+    );
+}
+
+#[tokio::test]
+async fn a_waiting_run_is_decided_over_its_approval_route() {
+    let service = service();
+    let app = router(&service);
+    let id = create(&app).await;
+    let gated = json!([
+        { "op": "add_node", "node": { "id": "gate", "label": "Ship?",
+          "spec": { "kind": "approval", "message": "Ship it?", "timeout_ms": 60000 } } },
+        { "op": "connect", "edge": { "from": "trigger", "port": "out", "to": "gate" } }
+    ]);
+    send(
+        app.clone(),
+        Method::POST,
+        &format!("/api/automations/{id}/ops"),
+        Some(json!({ "base_revision": 1, "ops": gated })),
+    )
+    .await;
+    send(
+        app.clone(),
+        Method::POST,
+        &format!("/api/automations/{id}/approve"),
+        Some(json!({ "revision": 2 })),
+    )
+    .await;
+    let (_, run) = send(
+        app.clone(),
+        Method::POST,
+        &format!("/api/automations/{id}/run"),
+        Some(json!({})),
+    )
+    .await;
+    let run_id = run["data"]["id"].as_str().unwrap().to_string();
+    let runs_uri = format!("/api/automations/{id}/runs?limit=5");
+    let mut parked = Value::Null;
+    for _ in 0..200 {
+        let (_, body) = send(app.clone(), Method::GET, &runs_uri, None).await;
+        if body["data"][0]["status"] == "waiting" {
+            parked = body["data"][0]["parked"].clone();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(parked, json!({ "node_id": "gate", "until": 61000 }));
+
+    let approval = format!("/api/automation-runs/{run_id}/approval");
+    let decide =
+        |node_id: &str, approved: bool| Some(json!({ "node_id": node_id, "approved": approved }));
+    let (status, body) = send(app.clone(), Method::POST, &approval, decide("Gate", true)).await;
+    assert_eq!(
+        (status, body["code"].clone()),
+        (422, json!("invalid_input"))
+    );
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        "/api/automation-runs/nope/approval",
+        decide("gate", true),
+    )
+    .await;
+    assert_eq!((status, body["code"].clone()), (404, json!("not_found")));
+    let lan = router_for(Some(service.clone()), false, LAN, OPEN);
+    let (status, _) = send(lan, Method::POST, &approval, decide("gate", true)).await;
+    assert_eq!(status, 403, "deciding is a write");
+
+    assert_eq!(
+        send(app.clone(), Method::POST, &approval, decide("gate", true)).await,
+        ok(json!(true))
+    );
+    assert_eq!(
+        send(app.clone(), Method::POST, &approval, decide("gate", false)).await,
+        ok(json!(false)),
+        "the run no longer waits"
+    );
+    assert_eq!(
+        wait_settled(&app, &id).await["data"][0]["status"],
+        json!("succeeded")
     );
 }
 
