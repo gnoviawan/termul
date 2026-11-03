@@ -137,8 +137,13 @@ function TurnActivityComponent({
     return { summary: summarizeToolActivity(allCalls), workRuns: runs, subagentGroups: groups }
   }, [items])
   // Subagents stay in the transcript when the turn folds: a closed turn
-  // shows its subagent groups, in launch order, under its header.
+  // shows its subagent groups, in launch order, under its header. They move
+  // there once the steps have folded away, so a group never shows twice.
   const pinnedGroups = useMemo(() => [...new Set(subagentGroups.values())], [subagentGroups])
+  const [stepsFolded, setStepsFolded] = useState(!open)
+  useEffect(() => {
+    if (open) setStepsFolded(false)
+  }, [open])
   // A long agent turn renders only its latest steps: every step stays mounted
   // while the turn is open, and hundreds of them cost hundreds of MB of DOM.
   const turnKey = items[0]?.key ?? ''
@@ -194,7 +199,7 @@ function TurnActivityComponent({
         {summary ? <DiffStat added={summary.added} removed={summary.removed} /> : null}
         {attentionRequired && !active ? <span>· needs attention</span> : null}
       </CollapsibleTrigger>
-      {!open && pinnedGroups.length > 0 ? (
+      {!open && stepsFolded && pinnedGroups.length > 0 ? (
         <div data-turn-subagents className="min-w-0 pl-4">
           {pinnedGroups.map((group) => (
             <SubagentGroup key={group.key} calls={group.calls} parentTurn={parentTurn} />
@@ -202,7 +207,7 @@ function TurnActivityComponent({
         </div>
       ) : null}
       <CollapsibleContent forceMount>
-        <CollapseExpandMotion open={open} motion="chat">
+        <CollapseExpandMotion open={open} motion="chat" onExitComplete={() => setStepsFolded(true)}>
           <div className="min-w-0 pb-1 pl-4">
             {hiddenSteps > 0 ? (
               <button

@@ -30,6 +30,7 @@ async function expectGroupAndPanel(page: Page, title: string, text: RegExp): Pro
   const pane = paneOf(page, title)
   await expect(pane.getByRole('button', { name: /^Worked/ })).toBeVisible()
   const header = pane.getByRole('button', { name: /^2 subagents:/ })
+  await expect(header).toHaveCount(1)
   await expect(header).toBeVisible()
   const row = pane.locator('[data-subagent-row]').first()
   if (!(await row.isVisible())) await header.click()
@@ -57,7 +58,7 @@ test('RFD subagents stay in the transcript after the turn, a reload and a reopen
   await launchChat(page, `${title} [SUBAGENTS:4] [BG_TAIL:8]`)
   const pane = paneOf(page, title)
   await expect(pane.getByText('I am waiting for them.').first()).toBeVisible()
-  await expect(pane.getByRole('button', { name: /^2 subagents:/ })).toBeVisible()
+  await expect(pane.getByRole('button', { name: /^2 subagents:/ })).toHaveCount(1)
   await expect(pane.getByRole('button', { name: /^Session status: subagents 2 done/ })).toBeVisible(
     {
       timeout: 20_000

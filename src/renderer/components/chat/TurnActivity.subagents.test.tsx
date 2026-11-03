@@ -73,6 +73,7 @@ describe('TurnActivity subagents', () => {
     const view = render(turn(true, 'active'))
     expect(groupHeaders()).toHaveLength(1)
     view.rerender(turn(false, 'ended'))
+    expect(groupHeaders()).toHaveLength(1)
     await waitFor(() => expect(screen.queryByText('Waiting for them.')).not.toBeInTheDocument())
     expect(groupHeaders()).toHaveLength(1)
   })
