@@ -30,6 +30,7 @@ import {
 import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
 import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
+import { forgetComposerSession } from '../composer-options'
 import {
   acceptsSessionTranscriptEvents,
   cacheOptionsFromSession,
@@ -730,6 +731,7 @@ export function dropSessionBookkeeping(
   inFlightDurabilityProbes.delete(sessionId)
   untrimmableSessions.delete(sessionId)
   forgetRegistryMcpServers(sessionId)
+  forgetComposerSession(sessionId)
   // A close that keeps the transcript for an open tab keeps the links too: a
   // later history reopen re-splices the pre-switch conversation through them.
   if (opts.keepLiveSwitchLinks) return

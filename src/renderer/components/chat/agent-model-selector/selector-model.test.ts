@@ -21,6 +21,7 @@ import {
   rowHasDescription,
   rowTooltip,
   rowTooltipDescription,
+  snapshotMatches,
   spacingPx,
   splitAgentTabs,
   splitContextOption,
@@ -680,5 +681,19 @@ describe('rowHasDescription', () => {
     expect(rowHasDescription(' ')).toBe(false)
     expect(rowHasDescription('')).toBe(false)
     expect(rowHasDescription('Most capable')).toBe(true)
+  })
+})
+
+describe('snapshotMatches', () => {
+  it('matches only when every snapshot value is live', () => {
+    const live = { effort: 'high' }
+    expect(snapshotMatches({ effort: 'high' }, live)).toBe(true)
+    expect(snapshotMatches({ effort: 'low' }, live)).toBe(false)
+    // Fast is not among the loaded options: the snapshot is not what runs now.
+    expect(snapshotMatches({ effort: 'high', fast: 'true' }, live)).toBe(false)
+  })
+
+  it('matches while the live options have not loaded', () => {
+    expect(snapshotMatches({ effort: 'high', fast: 'true' }, {})).toBe(true)
   })
 })

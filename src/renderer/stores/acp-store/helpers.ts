@@ -5,9 +5,13 @@
  */
 
 import type { BugReportSubmitRequest } from '@shared/types/bug-report.types'
-import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/persistence.types'
 import { UNASSIGNED_PROJECT_ID } from '@shared/types/web-projects.types'
-import { flattenConfigOptionValues } from '@/components/chat/chat-input-bar-config'
+import {
+  flattenConfigOptionValues,
+  MODEL_CATEGORY,
+  sessionModelSnapshot,
+  wireConfigValue
+} from '@/components/chat/chat-input-bar-config'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
 import { runningBackgroundSubagents } from '@/components/chat/subagent-strip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
@@ -44,7 +48,6 @@ import {
   isAgentAuthRequiredError,
   isClaudeAccountSignedOutError
 } from '@/lib/agents/acp-spawn-errors'
-import { persistenceApi } from '@/lib/api'
 import { serializeSelectionContexts } from '@/lib/composer/selection-context'
 import { restoreConversationLabels, stripConversationEnvelopes } from '@/lib/conversation-envelope'
 import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
@@ -71,6 +74,15 @@ import {
   type QueuedPrompt,
   sessionTurnBusy
 } from '../prompt-queue-orchestration'
+import {
+  latestModelPick,
+  type OptionValues,
+  readComposerOptions,
+  reopenRestores,
+  savedAgentWideValues,
+  savedModelValues,
+  warnOnce
+} from './composer-options'
 import { ephemeralSessionIds, stoppingAgentIds } from './ephemeral-ids'
 import { isIndexedRealSession } from './live-turn'
 import { modelCatalogFromOptions, persistModelCatalog } from './model-catalog'
@@ -1479,15 +1491,135 @@ export function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: Ses
 
 /** Sessions with a reapply currently in flight (dedupes event storms). */
 const reapplyInFlight = new Set<SessionId>()
+/** Sessions whose reapply was triggered while one ran: one more pass follows it. */
+const reapplyRerun = new Set<SessionId>()
 
-/** Minimal structural shape reapply needs from the store (keeps helpers
- *  decoupled from the full AcpState action surface). */
+/** The model a session runs now, as the composer shows it. */
+export function currentSessionModel(session: AcpSession | undefined): string | null {
+  return sessionModelSnapshot(session)?.modelId ?? null
+}
+
+/** Every option's value now: a later mismatch means something else moved it. */
+export function optionValueBaseline(
+  session: AcpSession | undefined
+): ReadonlyMap<string, string | boolean> {
+  return new Map((session?.configOptions ?? []).map((o) => [o.id, o.currentValue]))
+}
+
+/** How long a native model switch may take to re-advertise the options. */
+const READVERTISE_WAIT_MS = 1000
+const READVERTISE_POLL_MS = 25
+
+/** The non-model options as data: `setModel` itself only moves the model's value. */
+function nonModelOptionsKey(options: readonly SessionConfigOption[] | undefined): string {
+  return JSON.stringify((options ?? []).filter((o) => o.category !== MODEL_CATEGORY))
+}
+
+/**
+ * After a native `setModel`, wait (bounded) for the agent to re-advertise the
+ * options: the new model's effort choices arrive as a separate event, and
+ * values applied before it would be checked against the old model's.
+ * `before` is the option list from before the `setModel` call, so an update
+ * that landed ahead of the reply ends the wait at once.
+ */
+export async function waitForReadvertisedOptions(
+  get: AcpGet,
+  sessionId: SessionId,
+  before: readonly SessionConfigOption[]
+): Promise<void> {
+  const beforeKey = nonModelOptionsKey(before)
+  const deadline = Date.now() + READVERTISE_WAIT_MS
+  while (Date.now() < deadline) {
+    const session = get().sessions[sessionId]
+    if (session?.status !== 'active') return
+    if (nonModelOptionsKey(session.configOptions) !== beforeKey) return
+    await new Promise((resolve) => setTimeout(resolve, READVERTISE_POLL_MS))
+  }
+}
+
+/**
+ * Set saved option values on a live session, after its model is in place.
+ * Skips the model option, an option or value the session does not advertise
+ * (warn log), a value already current, and an option that moved off
+ * `baseline`: a change made while the restore ran wins. Stops once the
+ * session leaves `modelId`, the model the values belong to.
+ */
+export async function applyOptionValues(
+  get: AcpGet,
+  sessionId: SessionId,
+  values: OptionValues,
+  opts: {
+    source: string
+    modelId?: string | null
+    baseline?: ReadonlyMap<string, string | boolean>
+    persist?: boolean
+  }
+): Promise<void> {
+  const { source } = opts
+  const setOpts = opts.persist === false ? { persist: false } : undefined
+  let baseline = opts.baseline ?? optionValueBaseline(get().sessions[sessionId])
+  for (const [optionId, valueId] of Object.entries(values)) {
+    const session = get().sessions[sessionId]
+    if (session?.status !== 'active') return
+    if (opts.modelId && currentSessionModel(session) !== opts.modelId) return
+    const option = session.configOptions.find((o) => o.id === optionId)
+    if (option?.category === MODEL_CATEGORY) continue
+    if (option && baseline.has(optionId) && baseline.get(optionId) !== option.currentValue) continue
+    const wire = option ? wireConfigValue(option, valueId) : null
+    // Grouped selects nest their values; flatten like mergeAgentConfigOptions.
+    const advertised =
+      option != null &&
+      wire != null &&
+      (option.type === 'boolean' || flattenConfigOptionValues(option).some((v) => v.value === wire))
+    if (!advertised) {
+      warnOnce(
+        sessionId,
+        `${optionId}\0${valueId}`,
+        source,
+        `skipped saved value for '${optionId}' on session ${sessionId}: the session does not advertise it`
+      )
+      continue
+    }
+    if (option.currentValue === wire) continue
+    try {
+      await get().setConfigOption(sessionId, optionId, wire, setOpts)
+      void logFrontendError({
+        level: 'info',
+        source,
+        message: `restored saved value for '${optionId}' on session ${sessionId}`
+      })
+    } catch {
+      void logFrontendError({
+        level: 'warn',
+        source,
+        message: `the agent rejected the saved value for '${optionId}' on session ${sessionId}; kept its value (details withheld)`
+      })
+    }
+    // The set may re-advertise other options; compare later changes to that.
+    baseline = optionValueBaseline(get().sessions[sessionId])
+  }
+}
+
+/**
+ * Heal a live chat from the agent's saved composer record (#1486/#1479):
+ * the saved model first (the agent re-advertises effort choices on a model
+ * switch), then that model's values and the agent-wide ones. A reopened chat
+ * (`reopenRestores`) keeps its own model and values and gets only the
+ * agent-wide ones; so does a chat whose saved model is no longer offered.
+ * Skipped while a model pick runs on the chat. A restore, so it never writes
+ * the record.
+ */
 export async function reapplyPersistedComposerOptions(
   get: AcpGet,
   sessionId: SessionId,
   configId: string
 ): Promise<void> {
-  if (reapplyInFlight.has(sessionId)) return
+  if (latestModelPick.has(sessionId)) return
+  if (reapplyInFlight.has(sessionId)) {
+    // The pass in flight read the record before this trigger: run once more after it.
+    reapplyRerun.add(sessionId)
+    return
+  }
   const session = get().sessions[sessionId]
   // Only heal live chats: a session still initializing or sitting in an
   // error/launch-fail state has no stable advertised surface to validate
@@ -1504,76 +1636,76 @@ export async function reapplyPersistedComposerOptions(
   // user (or any event) changes a value while it is in flight, the change is
   // newer than the persisted record and must win — the saved value for that
   // option is then skipped instead of undoing it (review: race on #1488).
-  const valuesAtReadStart = new Map<string, string | boolean>()
-  for (const option of session.configOptions) valuesAtReadStart.set(option.id, option.currentValue)
-  const modelAtReadStart =
-    session.configOptions.find((o) => o.category === 'model')?.currentValue ??
-    session.models?.currentModelId ??
-    null
+  let baseline = optionValueBaseline(session)
+  const modelAtReadStart = currentSessionModel(session)
   try {
-    const result = await persistenceApi.read<PersistedComposerOptions>(
-      PersistenceKeys.lastComposerOptions(configId)
-    )
-    if (!result.success || !result.data) return
-    const saved = result.data
-
-    for (const [optionId, valueId] of Object.entries(saved.configValues ?? {})) {
-      const option = get().sessions[sessionId]?.configOptions.find((o) => o.id === optionId)
-      if (!option || option.currentValue === valueId) continue
-      if (valuesAtReadStart.get(optionId) !== option.currentValue) continue // changed during read
-      // Grouped selects nest their values; flatten like mergeAgentConfigOptions.
-      const advertised =
-        option.type === 'boolean' ||
-        flattenConfigOptionValues(option).some((v) => v.value === valueId)
-      if (!advertised) continue
+    const saved = await readComposerOptions(configId)
+    if (!saved || latestModelPick.has(sessionId)) return
+    const live = get().sessions[sessionId]
+    const current = currentSessionModel(live)
+    if (current !== modelAtReadStart) return // model changed during read
+    const agentWide = savedAgentWideValues(saved, live?.configOptions ?? [])
+    const applyValues = (values: OptionValues, modelId: string | null) =>
+      applyOptionValues(get, sessionId, values, {
+        source: 'acp.reapplyComposerOptions',
+        modelId,
+        baseline,
+        persist: false
+      })
+    // A reopened chat keeps its own model and values.
+    if (reopenRestores.has(sessionId)) return await applyValues(agentWide, current)
+    const target = saved.modelId
+    if (target && target !== current) {
+      // Advertised via a model-category config option (flattened for groups)
+      // or through the native session.models state when no option exists.
+      const modelOption = live?.configOptions.find((o) => o.category === MODEL_CATEGORY)
+      const advertised = modelOption
+        ? flattenConfigOptionValues(modelOption).some((v) => v.value === target)
+        : (live?.models?.availableModels.some((m) => m.modelId === target) ?? false)
+      if (!advertised) {
+        warnOnce(
+          sessionId,
+          `model\0${target}`,
+          'acp.reapplyComposerOptions',
+          `saved model is not advertised on session ${sessionId}; kept the session's model and its values`
+        )
+        return await applyValues(agentWide, current)
+      }
       try {
-        await get().setConfigOption(sessionId, optionId, valueId)
+        // Same route as the launcher apply: the native model state when the
+        // session has one, else the model option.
+        if (live?.models || !modelOption) {
+          const before = live?.configOptions ?? []
+          await get().setModel(sessionId, target, { persist: false })
+          if (Object.keys(savedModelValues(saved, target)).length > 0) {
+            await waitForReadvertisedOptions(get, sessionId, before)
+          }
+        } else {
+          await get().setConfigOption(sessionId, modelOption.id, target, { persist: false })
+        }
         void logFrontendError({
           level: 'info',
           source: 'acp.reapplyComposerOptions',
-          message: `re-applied persisted config '${optionId}' on session ${sessionId} (#1486/#1479)`
+          message: `re-applied persisted model on session ${sessionId} (#1486/#1479)`
         })
       } catch {
         void logFrontendError({
           level: 'warn',
           source: 'acp.reapplyComposerOptions',
-          message: `failed to re-apply persisted config '${optionId}' (details withheld)`
+          message: 'failed to re-apply persisted model (details withheld)'
         })
+        return
       }
+      // The switch re-advertised the options; compare later changes to that.
+      baseline = optionValueBaseline(get().sessions[sessionId])
     }
-
-    if (saved.modelId) {
-      const live = get().sessions[sessionId]
-      const modelOption = live?.configOptions.find((o) => o.category === 'model')
-      const current = modelOption?.currentValue ?? live?.models?.currentModelId ?? null
-      if (current !== modelAtReadStart) return // model changed during read
-      // Advertised via a model-category config option (flattened for groups)
-      // or through the native session.models state when no option exists.
-      const advertised =
-        (modelOption != null &&
-          (modelOption.type === 'boolean' ||
-            flattenConfigOptionValues(modelOption).some((v) => v.value === saved.modelId))) ||
-        (modelOption == null &&
-          (live?.models?.availableModels.some((m) => m.modelId === saved.modelId) ?? false))
-      if (advertised && current !== saved.modelId) {
-        try {
-          await get().setModel(sessionId, saved.modelId)
-          void logFrontendError({
-            level: 'info',
-            source: 'acp.reapplyComposerOptions',
-            message: `re-applied persisted model on session ${sessionId} (#1486/#1479)`
-          })
-        } catch {
-          void logFrontendError({
-            level: 'warn',
-            source: 'acp.reapplyComposerOptions',
-            message: 'failed to re-apply persisted model (details withheld)'
-          })
-        }
-      }
-    }
+    const model = currentSessionModel(get().sessions[sessionId])
+    await applyValues({ ...agentWide, ...savedModelValues(saved, model) }, model)
   } finally {
     reapplyInFlight.delete(sessionId)
+    if (reapplyRerun.delete(sessionId)) {
+      void reapplyPersistedComposerOptions(get, sessionId, configId)
+    }
   }
 }
 

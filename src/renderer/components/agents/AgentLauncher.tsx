@@ -1,4 +1,4 @@
-import type { LastSelectedAgent, PersistedComposerOptions } from '@shared/types/persistence.types'
+import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { BaseBranchInfo } from '@shared/types/worktree.types'
 import type { Editor } from '@tiptap/core'
@@ -36,20 +36,23 @@ import { useLauncherSelectorSource } from '@/components/agents/launcher/use-laun
 import {
   emptyPendingLauncherOptions,
   hasPendingLauncherOptions,
+  type LauncherModelPick,
+  launchPending,
+  mergeRestoredPending,
   optionsToPending,
   overlayPendingLauncherOptions,
-  type PendingLauncherOptions
+  type PendingLauncherOptions,
+  pendingWithModel,
+  restoredLauncherOptions
 } from '@/components/agents/pending-launcher-options'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
 import { appOwnedTempPaths, dedupeAttachmentBlocks } from '@/components/chat/chat-attachments'
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
-  flattenConfigOptionValues,
   isUsableConfigOption,
   partitionConfigOptions,
-  resolveModelOption,
-  wireConfigValue
+  resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
 import { COMPOSER_CARD_CLASS, useComposerToolbarMode } from '@/components/chat/chat-layout'
 import { ChatStarters, ChatStartHero } from '@/components/chat/chat-start'
@@ -110,6 +113,12 @@ import {
   useAcpSession,
   useAcpStore
 } from '@/stores/acp-store'
+import {
+  modelValuesPatch,
+  type OptionValues,
+  readComposerOptions,
+  savedModelValues
+} from '@/stores/acp-store/composer-options'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useWorktreePick } from '@/stores/shell-layout-store'
 import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
@@ -166,11 +175,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // A model chosen together with its agent in the model selector. The restore
   // effect for the new agent applies it over the saved options, so a saved
   // model does not replace the user's pick.
-  const pendingPickRef = useRef<{
-    configId: string
-    modelId: string
-    modelConfigId: string | null
-  } | null>(null)
+  const pendingPickRef = useRef<(LauncherModelPick & { configId: string }) | null>(null)
   const composerInputRef = useRef<HTMLElement | null>(null)
   const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
 
@@ -650,19 +655,81 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // The three ACP setters below are declared before `useChatComposer` so the
   // shared hook can pass them as `onSetConfig`/`onSetMode`/`onSetModel` without
   // a temporal-dead-zone reference (the hook captures them at call time).
+  // The newest pre-session model pick and the agent it was made on: a pick
+  // whose saved-record read finishes after a newer pick or an agent change
+  // is dropped.
+  const modelPickSeqRef = useRef(0)
+  const activeConfigIdRef = useRef(activeConfigId)
+  activeConfigIdRef.current = activeConfigId
+  // A model pick: the model, then its values (`values`: a favorite's
+  // snapshot, else the values saved for that model).
+  const handleSetModel = useCallback(
+    async (valueId: string, values?: OptionValues) => {
+      if (modelSource !== 'models' && !modelOption) {
+        throw new Error('No model option is available for this session')
+      }
+      const modelConfigId = modelSource === 'config' ? (modelOption?.id ?? null) : null
+      const remember = (): void => {
+        if (!activeConfigId) return
+        persistComposerOptions(activeConfigId, {
+          modelId: valueId,
+          ...(modelConfigId ? { configValues: { [modelConfigId]: valueId } } : {}),
+          ...(values ? modelValuesPatch(valueId, values, effectiveConfigOptions) : {})
+        })
+      }
+      // Every pick, pre-session or not, outdates a pre-session read in flight.
+      const seq = ++modelPickSeqRef.current
+      if (!preparedSessionId) {
+        const restore =
+          values ??
+          savedModelValues(
+            activeConfigId ? await readComposerOptions(activeConfigId) : null,
+            valueId
+          )
+        if (seq !== modelPickSeqRef.current || activeConfigIdRef.current !== activeConfigId) return
+        setPendingOptions((prev) =>
+          pendingWithModel(prev, valueId, restore, modelConfigId, effectiveConfigOptions)
+        )
+        remember()
+        return
+      }
+      try {
+        await useAcpStore.getState().pickModel(preparedSessionId, valueId, values)
+      } catch (err) {
+        toast.error(`Failed to set model: ${String(err)}`)
+        throw err
+      }
+      // The store skips persistence for warm-session defaults. An explicit
+      // pick on the prepared session still has to be remembered for the next
+      // new chat.
+      remember()
+    },
+    [modelOption, modelSource, preparedSessionId, activeConfigId, effectiveConfigOptions]
+  )
+
   const handleSetConfig = useCallback(
     async (configId: string, valueId: string | boolean) => {
+      if (modelSource === 'config' && configId === modelOption?.id && typeof valueId === 'string') {
+        await handleSetModel(valueId)
+        return
+      }
       const stored = typeof valueId === 'boolean' ? (valueId ? 'true' : 'false') : valueId
+      // A value belongs to the model on screen: that model brings it back.
+      const remember = (): void => {
+        if (!activeConfigId) return
+        const shownModel =
+          typeof modelOption?.currentValue === 'string' ? modelOption.currentValue : null
+        persistComposerOptions(activeConfigId, {
+          configValues: { [configId]: stored },
+          ...modelValuesPatch(shownModel, { [configId]: stored }, effectiveConfigOptions)
+        })
+      }
       if (!preparedSessionId) {
         setPendingOptions((prev) => ({
           ...prev,
           configValues: { ...prev.configValues, [configId]: stored }
         }))
-        if (activeConfigId) {
-          persistComposerOptions(activeConfigId, {
-            configValues: { [configId]: stored }
-          })
-        }
+        remember()
         return
       }
       try {
@@ -671,69 +738,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         toast.error(`Failed to set option: ${String(err)}`)
         throw err
       }
-      // The store skips persistence for warm-session defaults. An explicit
-      // pick on the prepared session still has to be remembered for the next
-      // new chat. Model picks also record modelId.
-      if (activeConfigId) {
-        persistComposerOptions(activeConfigId, {
-          ...(modelOption?.id === configId ? { modelId: stored } : {}),
-          configValues: { [configId]: stored }
-        })
-      }
+      remember()
     },
-    [preparedSessionId, activeConfigId, modelOption]
-  )
-
-  const handleSetModel = useCallback(
-    async (valueId: string) => {
-      if (!preparedSessionId) {
-        if (modelSource === 'models') {
-          setPendingOptions((prev) => ({ ...prev, modelId: valueId }))
-          if (activeConfigId) {
-            persistComposerOptions(activeConfigId, { modelId: valueId })
-          }
-          return
-        }
-        if (!modelOption) {
-          throw new Error('No model option is available for this session')
-        }
-        setPendingOptions((prev) => ({
-          ...prev,
-          modelId: valueId,
-          configValues: { ...prev.configValues, [modelOption.id]: valueId }
-        }))
-        if (activeConfigId) {
-          persistComposerOptions(activeConfigId, {
-            modelId: valueId,
-            configValues: { [modelOption.id]: valueId }
-          })
-        }
-        return
-      }
-      if (modelSource === 'models') {
-        try {
-          await useAcpStore.getState().setModel(preparedSessionId, valueId)
-          if (activeConfigId) {
-            persistComposerOptions(activeConfigId, { modelId: valueId })
-          }
-        } catch (err) {
-          toast.error(`Failed to set model: ${String(err)}`)
-          throw err
-        }
-        return
-      }
-      if (!modelOption) {
-        throw new Error('No model option is available for this session')
-      }
-      await handleSetConfig(modelOption.id, valueId)
-      if (activeConfigId) {
-        persistComposerOptions(activeConfigId, {
-          modelId: valueId,
-          configValues: { [modelOption.id]: valueId }
-        })
-      }
-    },
-    [handleSetConfig, modelOption, modelSource, preparedSessionId, activeConfigId]
+    [
+      preparedSessionId,
+      activeConfigId,
+      modelOption,
+      modelSource,
+      handleSetModel,
+      effectiveConfigOptions
+    ]
   )
 
   const handleSetMode = useCallback(
@@ -799,86 +813,43 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const mentionMenuOpen = mentions.menuOpen && !composerLocked && !slashOpen
 
   // Restore persisted composer selections for the current agent on mount and
-  // on agent change. Seeds `pendingOptions` (model/mode/config) +
-  // `isolationMode`/`baseBranch` (worktree) so the next chat starts with the
-  // user's last pick. Fallbacks: drop selections no longer advertised by the
-  // agent; fall back to 'current' when worktree is no longer available; fall
-  // back to defaultBase when baseBranch is no longer in the branch list.
-  // Runs on agent change; options may not be loaded yet on first run (cache
-  // miss + prepareChat in flight), so validation is best-effort — invalid
-  // selections are dropped silently if options are available, otherwise
-  // accepted as-is (the agent will ignore unknown values at launch).
+  // on agent change. Seeds `pendingOptions` (the model, then that model's
+  // values, then the mode) + `isolationMode`/`baseBranch` (worktree) so the
+  // next chat starts with the user's last pick. Fallbacks: drop selections no
+  // longer advertised by the agent; fall back to 'current' when worktree is no
+  // longer available; fall back to defaultBase when baseBranch is no longer in
+  // the branch list. Options may not be loaded yet on first run (cache miss +
+  // prepareChat in flight): saved values are then kept, and the live session
+  // skips what it does not advertise (`applyPendingLauncherOptions`).
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-run on agent change only; options/branches are read at run time, re-running on every options change would re-seed and fight user edits.
   useEffect(() => {
     if (!activeConfigId) return
     let cancelled = false
     void (async () => {
       try {
-        const result = await persistenceApi.read<PersistedComposerOptions>(
-          PersistenceKeys.lastComposerOptions(activeConfigId)
-        )
+        const saved = await readComposerOptions(activeConfigId)
         if (cancelled) return
-        if (!result.success || !result.data) {
-          if (pendingPickRef.current?.configId === activeConfigId) pendingPickRef.current = null
-          return
-        }
-        const saved = result.data
-        const configValues: Record<string, string> = {}
-        if (saved.configValues) {
-          for (const [cid, vid] of Object.entries(saved.configValues)) {
-            const opt = effectiveConfigOptions.find((o) => o.id === cid)
-            // Drop the value when the option is missing OR the value is no
-            // longer in the option's advertised values. Boolean options have
-            // no value list; "true" / "false" are the only stored forms.
-            const restored = opt ? wireConfigValue(opt, vid) : null
-            const selectStillAdvertised = Boolean(
-              opt && flattenConfigOptionValues(opt).some((o) => o.value === vid)
-            )
-            if (restored != null && (opt?.type === 'boolean' || selectStillAdvertised)) {
-              configValues[cid] = vid
-            } else {
-              void logFrontendError({
-                level: 'warn',
-                source: 'agentLauncher.restoreComposerOptions',
-                message: `dropping persisted config — option ${cid} no longer advertised`
-              })
-            }
-          }
-        }
-        let modelId = saved.modelId
-        if (modelId) {
-          const modelOpt = resolveModelOption(
-            partitionConfigOptions(effectiveConfigOptions).model,
-            effectiveModels
-          ).option
-          if (modelOpt && !flattenConfigOptionValues(modelOpt).some((o) => o.value === modelId)) {
+        const pick =
+          pendingPickRef.current?.configId === activeConfigId ? pendingPickRef.current : null
+        if (pick) pendingPickRef.current = null
+        if (!saved) return
+        const restored = restoredLauncherOptions({
+          saved,
+          pick,
+          models: effectiveModels,
+          modes: effectiveModes,
+          configOptions: effectiveConfigOptions,
+          onDrop: (what) =>
             void logFrontendError({
               level: 'warn',
               source: 'agentLauncher.restoreComposerOptions',
-              message: 'dropping persisted model — no longer advertised'
+              message: `dropping persisted ${what}: no longer advertised`
             })
-            modelId = undefined
-          }
-        }
-        let modeId = saved.modeId
-        if (modeId && effectiveModes) {
-          if (!effectiveModes.availableModes.some((m) => m.id === modeId)) {
-            void logFrontendError({
-              level: 'warn',
-              source: 'agentLauncher.restoreComposerOptions',
-              message: 'dropping persisted mode — no longer advertised'
-            })
-            modeId = undefined
-          }
-        }
-        const pick = pendingPickRef.current
-        if (pick && pick.configId === activeConfigId) {
-          pendingPickRef.current = null
-          modelId = pick.modelId
-          if (pick.modelConfigId) configValues[pick.modelConfigId] = pick.modelId
-        }
-        if (modelId || modeId || Object.keys(configValues).length > 0) {
-          setPendingOptions({ modelId, modeId, configValues })
+        })
+        if (hasPendingLauncherOptions(restored)) {
+          setPendingOptions((prev) =>
+            mergeRestoredPending(prev, restored, saved, effectiveConfigOptions)
+          )
         }
         // A restored `worktree` mode applies only when the pick is the project folder.
         if (
@@ -1280,13 +1251,26 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // Model selector: a model on another agent's tab selects that agent with
   // that model (as pending options, applied when the chat starts).
   const handleSelectAgentWithModel = useCallback(
-    (entry: SupportedAcpAgentEntry, pick: { modelId: string; modelConfigId: string | null }) => {
+    (entry: SupportedAcpAgentEntry, pick: LauncherModelPick) => {
       const configId = entry.config?.id ?? null
       pendingPickRef.current = configId ? { configId, ...pick } : null
       handleSelectAgent(entry)
       const configValues = pick.modelConfigId ? { [pick.modelConfigId]: pick.modelId } : {}
-      setPendingOptions({ modelId: pick.modelId, configValues })
-      if (configId) persistComposerOptions(configId, { modelId: pick.modelId, configValues })
+      setPendingOptions({
+        modelId: pick.modelId,
+        configValues: { ...pick.values, ...configValues }
+      })
+      if (configId) {
+        persistComposerOptions(configId, {
+          modelId: pick.modelId,
+          configValues,
+          ...modelValuesPatch(
+            pick.modelId,
+            pick.values ?? {},
+            useAcpStore.getState().agentOptionsCache[configId]?.configOptions ?? []
+          )
+        })
+      }
     },
     [handleSelectAgent]
   )
@@ -1336,6 +1320,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       models: modelsSnapshot,
       modes: modesSnapshot,
       configOptions: configOptionsSnapshot
+    })
+    // The model the shown options came from, before launcher picks paint over them.
+    const baseModelId = optionsToPending({
+      models: baseModels,
+      modes: baseModes,
+      configOptions: baseConfigOptions
+    }).modelId
+    const launchSnapshot = launchPending(pendingSnapshot, pendingOptions, {
+      modelId: baseModelId,
+      options: configOptionsSnapshot
     })
     const preparedKeySnapshot = preparedKey
     const configSnapshot = selectedConfig
@@ -1426,6 +1420,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           Object.keys(pendingOptions.configValues).length > 0
             ? pendingOptions.configValues
             : undefined,
+        ...modelValuesPatch(
+          launchSnapshot.modelId,
+          pendingOptions.configValues,
+          configOptionsSnapshot
+        ),
         isolationMode: persistedIsolationMode(isolationMode),
         baseBranch: isolationMode === 'worktree' ? baseBranch : null
       })
@@ -1436,7 +1435,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       blocks.push(...fileBlocks, ...contextBlocks)
       return {
         wireBlocks: dedupeAttachmentBlocks(blocks),
-        pendingPayload: hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null
+        pendingPayload: hasPendingLauncherOptions(launchSnapshot) ? launchSnapshot : null
       }
     }
 
@@ -1537,6 +1536,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     effectiveModels,
     effectiveModes,
     effectiveConfigOptions,
+    baseModels,
+    baseModes,
+    baseConfigOptions,
     buildPromptParts,
     conversationContexts,
     skillPathsRef,

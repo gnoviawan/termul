@@ -7,6 +7,7 @@ import {
 } from '@/components/agents/pending-launcher-options'
 import { ChatAutomationSuggestion } from '@/components/automations/ChatAutomationSuggestion'
 import { BrowserAgentIndicator } from '@/components/browser/BrowserAgentStop'
+import { armModelPick } from '@/components/chat/agent-model-selector/use-agent-switch'
 import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
 import { SkillFilesProvider } from '@/components/chat/skill-file-links'
 import { TermulMark } from '@/components/TermulMark'
@@ -38,6 +39,7 @@ import {
   useAcpStore,
   usePromptQueue
 } from '@/stores/acp-store'
+import type { OptionValues } from '@/stores/acp-store/composer-options'
 import { isResumeFailureError } from '@/stores/acp-store/helpers'
 import { isLaunchPlaceholderSessionId } from '@/stores/acp-store/live-turn'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
@@ -252,7 +254,7 @@ export function AgentChatPanel({
   const promptQueue = usePromptQueue(sessionId)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
-  const setModel = useAcpStore((s) => s.setModel)
+  const pickModel = useAcpStore((s) => s.pickModel)
   const setSwitchPendingOption = useAcpStore((s) => s.setSwitchPendingOption)
   // Story 5.3 (AC3): WS transport-level reconnect flag (separate from the
   // session-level `isClosed && isOpeningHistory` banner). Desktop Tauri never
@@ -479,8 +481,44 @@ export function AgentChatPanel({
     }
   }, [session, armedOptions, switchMcpServerCount])
 
+  // A model pick, from any surface: the model, then its values (a favorite's
+  // snapshot, else the ones saved for that model).
+  const handleSetModel = useCallback(
+    async (modelId: string, values?: OptionValues) => {
+      if (switchToConfigId) {
+        // Mirror the launcher's dual-write: when the target's model resolves
+        // via a config option (not the native models state), record it in
+        // configValues too so the pick applies through whichever surface the
+        // new session advertises.
+        const modelConfigOption = armedOptions?.configOptions.find(
+          (o) => o.category === MODEL_CATEGORY
+        )
+        await armModelPick(sessionId, switchToConfigId, {
+          modelId,
+          modelConfigId: modelConfigOption?.id ?? null,
+          values
+        })
+        return
+      }
+      try {
+        await pickModel(sessionId, modelId, values)
+      } catch (err) {
+        toast.error('Could not switch model. Try again.')
+        throw err
+      }
+    },
+    [armedOptions, pickModel, sessionId, switchToConfigId]
+  )
+
   const handleSetConfig = useCallback(
     async (configId: string, valueId: string | boolean) => {
+      const modelConfigOption = composerSession?.configOptions.find(
+        (o) => o.category === MODEL_CATEGORY
+      )
+      if (typeof valueId === 'string' && configId === modelConfigOption?.id) {
+        await handleSetModel(valueId)
+        return
+      }
       if (switchToConfigId) {
         await setSwitchPendingOption(sessionId, {
           configValues: { [configId]: typeof valueId === 'boolean' ? String(valueId) : valueId }
@@ -494,7 +532,14 @@ export function AgentChatPanel({
         throw err
       }
     },
-    [setConfigOption, setSwitchPendingOption, sessionId, switchToConfigId]
+    [
+      composerSession,
+      handleSetModel,
+      setConfigOption,
+      setSwitchPendingOption,
+      sessionId,
+      switchToConfigId
+    ]
   )
 
   const handleSetMode = useCallback(
@@ -511,34 +556,6 @@ export function AgentChatPanel({
       }
     },
     [setMode, setSwitchPendingOption, sessionId, switchToConfigId]
-  )
-
-  const handleSetModel = useCallback(
-    async (modelId: string) => {
-      if (switchToConfigId) {
-        // Mirror the launcher's dual-write: when the target's model resolves
-        // via a config option (not the native models state), record it in
-        // configValues too so the pick applies through whichever surface the
-        // new session advertises.
-        const modelConfigOption = armedOptions?.configOptions.find(
-          (o) => o.category === MODEL_CATEGORY
-        )
-        await setSwitchPendingOption(
-          sessionId,
-          modelConfigOption
-            ? { modelId, configValues: { [modelConfigOption.id]: modelId } }
-            : { modelId }
-        )
-        return
-      }
-      try {
-        await setModel(sessionId, modelId)
-      } catch (err) {
-        toast.error('Could not switch model. Try again.')
-        throw err
-      }
-    },
-    [armedOptions, setModel, setSwitchPendingOption, sessionId, switchToConfigId]
   )
 
   // Most recent user turn — drives the regenerate/retry affordances. We keep

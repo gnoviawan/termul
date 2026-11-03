@@ -28,6 +28,7 @@ const {
   mockSetConfigOption,
   mockSetMode,
   mockSetModel,
+  mockPickModel,
   sessionsMapRef,
   agentsRef,
   commandsRef,
@@ -96,6 +97,7 @@ const {
   mockSetConfigOption: vi.fn(),
   mockSetMode: vi.fn(),
   mockSetModel: vi.fn(),
+  mockPickModel: vi.fn(async () => {}),
   // Extra sessions addressable by id (e.g. the switch target's prepared warm
   // session) so useAcpSession('s-warm') resolves in armed-switch tests.
   sessionsMapRef: { current: {} as Record<string, object> },
@@ -274,6 +276,7 @@ vi.mock('@/stores/acp-store', () => {
     setConfigOption: mockSetConfigOption,
     setMode: mockSetMode,
     setModel: mockSetModel,
+    pickModel: mockPickModel,
     setSwitchPendingOption: mockSetSwitchPendingOption
   })
   return {
@@ -409,7 +412,7 @@ const { chatInputBarPropsRef } = vi.hoisted(() => ({
       modes?: unknown
       onSetConfig?: (configId: string, valueId: string) => Promise<void>
       onSetMode?: (modeId: string) => Promise<void>
-      onSetModel?: (modelId: string) => Promise<void>
+      onSetModel?: (modelId: string, values?: Record<string, string>) => Promise<void>
     }>
   }
 }))
@@ -2067,6 +2070,96 @@ describe('AgentChatPanel armed-switch composer scoping', () => {
     expect(mockSetConfigOption).not.toHaveBeenCalled()
     expect(mockSetMode).not.toHaveBeenCalled()
     expect(mockSetModel).not.toHaveBeenCalled()
+  })
+
+  it("arms a pick in the target's model option list as the model", async () => {
+    seedArmedSession()
+    sessionsMapRef.current['s-warm'] = mockAcpSession({
+      id: 's-warm',
+      agentId: 'agent-new',
+      cwd: '/w',
+      modes: targetModes,
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'm1',
+          options: [
+            { value: 'm1', name: 'M1' },
+            { value: 'm2', name: 'M2' }
+          ]
+        },
+        ...targetConfigOptions
+      ]
+    })
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await chatInputBarPropsRef.current.at(-1)?.onSetConfig?.('model', 'm2')
+
+    expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('s1', {
+      modelId: 'm2',
+      configValues: { model: 'm2' }
+    })
+    expect(mockSetConfigOption).not.toHaveBeenCalled()
+  })
+
+  it("arms a favorite's model with its snapshot values", async () => {
+    seedArmedSession()
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await chatInputBarPropsRef.current.at(-1)?.onSetModel?.('m2', { thought_level: 'max' })
+
+    expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('s1', {
+      modelId: 'm2',
+      configValues: { thought_level: 'max' }
+    })
+  })
+})
+
+describe('AgentChatPanel live model picks', () => {
+  const modelOption = {
+    id: 'model',
+    name: 'Model',
+    category: 'model',
+    type: 'select',
+    currentValue: 'm1',
+    options: [
+      { value: 'm1', name: 'M1' },
+      { value: 'm2', name: 'M2' }
+    ]
+  }
+
+  beforeEach(() => {
+    mockPickModel.mockReset().mockResolvedValue(undefined)
+    mockSetConfigOption.mockReset()
+    mockSetModel.mockReset()
+    sessionsMapRef.current = {}
+    sessionRef.current = mockAcpSession({
+      id: 's1',
+      agentId: 'agent-1',
+      cwd: '/w',
+      configOptions: [modelOption]
+    })
+  })
+
+  it("a favorite pick sends the model with the favorite's values", async () => {
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await chatInputBarPropsRef.current.at(-1)?.onSetModel?.('m2', { effort: 'high' })
+
+    expect(mockPickModel).toHaveBeenCalledWith('s1', 'm2', { effort: 'high' })
+    expect(mockSetModel).not.toHaveBeenCalled()
+  })
+
+  it("a pick in the model option's list restores that model's values", async () => {
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    await chatInputBarPropsRef.current.at(-1)?.onSetConfig?.('model', 'm2')
+
+    expect(mockPickModel).toHaveBeenCalledWith('s1', 'm2', undefined)
+    expect(mockSetConfigOption).not.toHaveBeenCalled()
   })
 })
 
