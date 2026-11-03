@@ -126,6 +126,15 @@ fn a_cursor_task_error_fails_the_record_although_its_status_is_completed() {
 }
 
 #[test]
+fn a_later_raw_output_without_an_error_clears_the_failure() {
+    let mut records = SubagentRecords::default();
+    cursor_start(&mut records, "tool_4", "explore");
+    cursor_done(&mut records, "tool_4", json!({ "error": "transient" }));
+    let done = cursor_done(&mut records, "tool_4", json!({ "durationMs": 900 }));
+    assert_eq!(done["end"], json!({ "reason": "completed" }));
+}
+
+#[test]
 fn a_cursor_background_task_keeps_running_after_its_call_completes() {
     let mut records = SubagentRecords::default();
     cursor_start(&mut records, "tool_3", "shell");

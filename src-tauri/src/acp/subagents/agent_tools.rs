@@ -203,10 +203,9 @@ fn absorb_opencode(view: &mut ToolView, event: &ToolEvent) {
     }
 }
 
+/// A new `rawOutput` replaces the last, so the error follows the latest one.
 fn absorb_error(view: &mut ToolView, output: &Map<String, Value>) {
-    if let Some(error) = bounded_text(output.get("error"), MAX_TEXT_CHARS) {
-        view.error = Some(error.to_string());
-    }
+    view.error = bounded_text(output.get("error"), MAX_TEXT_CHARS).map(str::to_string);
 }
 
 /// The subagent name in a Gemini CLI `invoke_agent` title.
