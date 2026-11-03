@@ -341,22 +341,37 @@ fn assert_merged(controls: Option<SessionControls>) {
     );
 }
 
+/// A controls cache with `session-1` registered under a fresh entry.
+fn registered_cache() -> (ControlsCache, CatalogEntry) {
+    let cache = ControlsCache::default();
+    let entry = super::super::session_cache::test_catalog_entry("session-1");
+    cache.register("session-1", &entry);
+    (cache, entry)
+}
+
 #[test]
 fn a_seed_of_an_older_scan_keeps_a_newer_noted_update() {
-    let cache = ControlsCache::default();
-    cache.note("session-1", switched_at_40());
-    assert_merged(cache.seed("session-1", created_at_1()));
-    assert_merged(cache.seeded("session-1").flatten());
+    let (cache, entry) = registered_cache();
+    let ticket = cache.lookup("session-1").unwrap_err();
+    cache.note("session-1", &entry, switched_at_40());
+    assert_merged(
+        cache
+            .seed("session-1", &entry, ticket, created_at_1())
+            .ok()
+            .flatten(),
+    );
+    assert_merged(cache.lookup("session-1").ok().flatten());
 }
 
 #[test]
 fn an_update_noted_after_the_seed_wins_over_the_scan() {
-    let cache = ControlsCache::default();
-    assert!(
-        cache.seeded("session-1").is_none(),
-        "an unseeded session is not served from the cache"
-    );
-    cache.seed("session-1", created_at_1());
-    cache.note("session-1", switched_at_40());
-    assert_merged(cache.seeded("session-1").flatten());
+    let (cache, entry) = registered_cache();
+    let Err(ticket) = cache.lookup("session-1") else {
+        panic!("an unseeded session is not served from the cache");
+    };
+    assert!(cache
+        .seed("session-1", &entry, ticket, created_at_1())
+        .is_ok());
+    cache.note("session-1", &entry, switched_at_40());
+    assert_merged(cache.lookup("session-1").ok().flatten());
 }
