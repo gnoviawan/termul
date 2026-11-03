@@ -168,6 +168,42 @@ describe('tauri-backup-api createBackup directory skipping', () => {
     expect(copySrcPaths).toEqual(['/appdata/settings.json'])
   })
 
+  it('leaves re-downloadable data and data-lock sidecars out of the backup (#1431)', async () => {
+    const tree: Record<string, DirEntry[]> = {
+      '/appdata': [
+        file('.termul.lock'),
+        file('store.json'),
+        file('store.json.lock'),
+        dir('acp-sessions'),
+        dir('acp-registry-binaries'),
+        dir('acp-catalog'),
+        dir('mcp-catalog'),
+        dir('browser-agent-profile'),
+        dir('browser-sessions'),
+        dir('browser-artifacts')
+      ],
+      '/appdata/acp-sessions': [file('.termul.lock'), file('session-1.json'), file('yarn.lock')],
+      '/appdata/acp-registry-binaries': [dir('codex')],
+      '/appdata/acp-registry-binaries/codex': [file('codex.exe')]
+    }
+    vi.mocked(readDir).mockImplementation(async (path: string | URL) => tree[String(path)] ?? [])
+
+    const result = await createBackup()
+
+    expect(result.success).toBe(true)
+    const copySrcPaths = vi.mocked(copyFile).mock.calls.map((c) => String(c[0]))
+    expect(copySrcPaths.sort()).toEqual([
+      '/appdata/acp-sessions/session-1.json',
+      '/appdata/acp-sessions/yarn.lock',
+      '/appdata/store.json'
+    ])
+    const readPaths = vi.mocked(readDir).mock.calls.map((c) => String(c[0]))
+    expect(readPaths.some((p) => p.startsWith('/appdata/acp-registry-binaries'))).toBe(false)
+    expect(readPaths.some((p) => p.startsWith('/appdata/browser-'))).toBe(false)
+    // Lock sidecars are left out on purpose, not reported as skipped links.
+    expect(vi.mocked(logFrontendError)).not.toHaveBeenCalled()
+  })
+
   it('still fails the backup when a regular file cannot be copied', async () => {
     vi.mocked(readDir).mockImplementation(async (path: string | URL) =>
       String(path) === '/appdata' ? [file('settings.json')] : []

@@ -162,12 +162,15 @@ export function showUpdateDownloadedToast(version: string): void {
 }
 
 /**
- * Show a toast notification with download progress
+ * Show a toast notification with download progress. Until the package download
+ * starts, the pre-update backup runs, so the toast says so instead of 0%.
  */
-function showDownloadProgressToast(version: string, progress: number): void {
-  toast.loading(`Downloading update ${version}...`, {
+function showDownloadProgressToast(version: string, progress: number, preparing: boolean): void {
+  toast.loading(preparing ? `Preparing update ${version}...` : `Downloading update ${version}...`, {
     id: progressToastId(version),
-    description: `${progress.toFixed(0)}% complete`,
+    description: preparing
+      ? 'Backing up your Termul data before the download starts.'
+      : `${progress.toFixed(0)}% complete`,
     duration: Infinity
   })
 }
@@ -183,8 +186,14 @@ function showDownloadProgressToast(version: string, progress: number): void {
  */
 export function useUpdateToast(): void {
   const isDesktop = isTauriContext()
-  const { updateAvailable, downloaded, isDownloading, skippedVersion, isManualUpdateMode } =
-    useUpdaterState()
+  const {
+    updateAvailable,
+    downloaded,
+    isDownloading,
+    isPreparingDownload,
+    skippedVersion,
+    isManualUpdateMode
+  } = useUpdaterState()
   const version = useUpdateVersion()
   const _updateDownloaded = useUpdateDownloaded()
   const downloading = useIsDownloading()
@@ -253,9 +262,9 @@ export function useUpdateToast(): void {
   // re-creating it on every tick made it flicker and could leave it stuck.
   useEffect(() => {
     if (progressVersion) {
-      showDownloadProgressToast(progressVersion, downloadProgress)
+      showDownloadProgressToast(progressVersion, downloadProgress, isPreparingDownload)
     }
-  }, [progressVersion, downloadProgress])
+  }, [progressVersion, downloadProgress, isPreparingDownload])
 
   // Dismiss the progress toast once, when the download ends (or on unmount).
   useEffect(() => {

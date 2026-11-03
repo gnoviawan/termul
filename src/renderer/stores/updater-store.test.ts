@@ -353,6 +353,49 @@ describe('updater-store', () => {
       expect(state.isDownloading).toBe(false)
     })
 
+    it('reports preparing until the facade sends the first download progress (#1431)', async () => {
+      useUpdaterStore.setState({ updateAvailable: true, downloaded: false })
+      const seen: Array<{ preparing: boolean; progress: number }> = []
+      let finishDownload: (() => void) | undefined
+      vi.mocked(tauriUpdaterApi.downloadUpdate).mockImplementation(async (onProgress) => {
+        const { isPreparingDownload, downloadProgress } = useUpdaterStore.getState()
+        seen.push({ preparing: isPreparingDownload, progress: downloadProgress })
+        onProgress?.({ bytesPerSecond: 0, percent: 0, transferred: 0, total: 0 })
+        onProgress?.({ bytesPerSecond: 0, percent: 40, transferred: 40, total: 100 })
+        await new Promise<void>((resolve) => {
+          finishDownload = resolve
+        })
+        return { success: true, data: undefined }
+      })
+
+      const download = useUpdaterStore.getState().downloadUpdate()
+      await vi.waitFor(() => expect(finishDownload).toBeDefined())
+      const midDownload = useUpdaterStore.getState()
+      finishDownload?.()
+      await download
+
+      expect(seen).toEqual([{ preparing: true, progress: 0 }])
+      expect(midDownload.isPreparingDownload).toBe(false)
+      expect(midDownload.downloadProgress).toBe(40)
+      expect(useUpdaterStore.getState().isPreparingDownload).toBe(false)
+    })
+
+    it('stops reporting preparing when the pre-update backup fails', async () => {
+      useUpdaterStore.setState({ updateAvailable: true, downloaded: false })
+      vi.mocked(tauriUpdaterApi.downloadUpdate).mockResolvedValue({
+        success: false,
+        error: 'Failed to create backup: disk error',
+        code: 'INSTALL_FAILED'
+      })
+
+      await useUpdaterStore.getState().downloadUpdate()
+
+      const state = useUpdaterStore.getState()
+      expect(state.isPreparingDownload).toBe(false)
+      expect(state.isDownloading).toBe(false)
+      expect(state.errorSource).toBe('download')
+    })
+
     it('should surface tauri install failure', async () => {
       useUpdaterStore.setState({ downloaded: true, error: null })
       vi.mocked(tauriUpdaterApi.installAndRestart).mockResolvedValue({
