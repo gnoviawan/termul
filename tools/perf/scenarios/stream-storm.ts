@@ -24,14 +24,19 @@ import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts
 import { launchChatViaUI, openLauncher, sleep, waitForLauncher } from '../runner/scenario-ui.ts'
 
 /**
+ * Workspace tabs are draggable; the Side panel's Chats / Explorer / Changes /
+ * GitHub tabs are also `role="tab"` but are not.
+ */
+const WORKSPACE_TAB = '[role="tab"][draggable]'
+
+/**
  * Switch the visible chat by clicking its entry in the workspace tab bar
- * (`role="tab"` inside the pane's `role="tablist"`; stream-storm opens only
- * chat tabs). Hidden chats are unmounted, so the pane holds one chat at a
- * time and the tab bar is the only place every chat is reachable. Returns
- * whether the click selected a different tab.
+ * (stream-storm opens only chat tabs). Hidden chats are unmounted, so the
+ * pane holds one chat at a time and the tab bar is the only place every chat
+ * is reachable. Returns whether the click selected a different tab.
  */
 async function switchToChatTab(page: Page, index: number): Promise<boolean> {
-  const tabs = page.locator('[role="tablist"] [role="tab"]')
+  const tabs = page.locator(WORKSPACE_TAB)
   const count = await tabs.count()
   if (count < 2) return false
   let target = tabs.nth(index % count)
@@ -111,10 +116,8 @@ async function drive(ctx: ScenarioContext): Promise<void> {
   // flowing for the scenario window; when duration=0 they run until
   // cancelled at teardown.
   for (let i = 0; i < totalSessions - 1; i++) {
-    // Each subsequent chat re-opens the launcher via the pane toolbar's
-    // "New agent chat" — the first launcher's surface morphs into the chat
-    // composer once a session exists, so the launcher must be brought back
-    // before typing the next prompt.
+    // Each subsequent chat re-opens the launcher (the first launcher's
+    // surface morphs into the chat composer once a session exists).
     try {
       await openLauncher(page)
       await launchChatViaUI(
@@ -122,9 +125,11 @@ async function drive(ctx: ScenarioContext): Promise<void> {
         workReal ? REAL_PROMPTS[(i + 1) % REAL_PROMPTS.length] : `perf stream ${i}`,
         ctx.expectedAgentName
       )
-    } catch {
-      // A failed launch shows up as a smaller session count downstream;
-      // keep the storm going rather than aborting the whole phase.
+    } catch (err) {
+      // Keep the storm going rather than aborting the phase, but say so: a
+      // silent failure here once left every run with a single chat.
+      const reason = err instanceof Error ? err.message.split('\n')[0] : String(err)
+      console.log(`chat ${i + 2} did not launch: ${reason}`)
     }
     await sleep(500)
   }

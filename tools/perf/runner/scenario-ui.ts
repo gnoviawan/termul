@@ -16,7 +16,7 @@ import { REPO_ROOT } from './launch.ts'
 import type { ScenarioContext } from './scenario-harness.ts'
 
 export const START_CHAT_SELECTOR = 'button[aria-label="Start agent chat"]'
-export const NEW_CHAT_SELECTOR = 'button[aria-label="New agent chat"]'
+export const NEW_CHAT_SELECTOR = 'button[aria-label="New chat"]'
 export const LAUNCHER_COMPOSER =
   '[data-agent-launcher-composer-group="true"] [data-composer-editor="true"]'
 export const CHAT_TAB_MARKER = '[data-chat-tab-state]'
@@ -38,7 +38,7 @@ export async function waitForLauncher(page: Page): Promise<void> {
 
 /**
  * Re-open the launcher on a workspace that already holds chats: click the
- * pane toolbar's "New agent chat" button, then wait for the launcher
+ * Side panel's "New chat" button (or Ctrl+T), then wait for the launcher
  * composer. Without this, a bare composer locator resolves to a hidden
  * chat-panel composer and every click burns the 30s actionability
  * timeout.
@@ -46,12 +46,19 @@ export async function waitForLauncher(page: Page): Promise<void> {
 export async function openLauncher(page: Page): Promise<void> {
   const composer = page.locator(LAUNCHER_COMPOSER).first()
   if (await composer.isVisible().catch(() => false)) return
-  await page.locator(NEW_CHAT_SELECTOR).first().click({ timeout: 5000 })
+  // The Side panel's "New chat" button when it is showing, else the Ctrl+T
+  // launcher overlay on the active pane.
+  const newChat = page.locator(NEW_CHAT_SELECTOR).first()
+  if (await newChat.isVisible().catch(() => false)) await newChat.click({ timeout: 5000 })
+  else await page.keyboard.press('Control+t')
   await composer.waitFor({ state: 'visible', timeout: 15_000 })
   await page.locator(START_CHAT_SELECTOR).first().waitFor({ state: 'visible', timeout: 10_000 })
 }
 
-export const AGENT_PICKER_TRIGGER = '[data-testid="agent-model-selector-trigger"]'
+// Scoped to the launcher: once a chat exists, its own composer carries the
+// same pill, and checking that one would approve whatever the launcher shows.
+export const AGENT_PICKER_TRIGGER =
+  '[data-agent-launcher-composer-group="true"] [data-testid="agent-model-selector-trigger"]'
 
 /** The combined selector pill's aria-label ends "Currently <agent name>". */
 function currentAgentFromAria(label: string): string {

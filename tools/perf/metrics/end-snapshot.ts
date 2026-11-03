@@ -231,7 +231,7 @@ export async function captureEndSnapshot(
       }
       const items = document.querySelectorAll('[data-slot="message-scroller-item"]')
       state.scrollerItems = items.length
-      state.chatTabs = document.querySelectorAll('[role="tablist"] [role="tab"]').length
+      state.chatTabs = document.querySelectorAll('[role="tab"][draggable]').length
       let maxRows = 0
       for (const item of items) {
         maxRows = Math.max(maxRows, item.querySelectorAll('[data-row-reveal]').length)
