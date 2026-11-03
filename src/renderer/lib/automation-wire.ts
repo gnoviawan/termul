@@ -7,6 +7,7 @@
 
 import type {
   AgentPolicy,
+  AgentTool,
   ApplyOpsResult,
   Automation,
   AutomationChanged,
@@ -85,6 +86,11 @@ const RUN_TRIGGERS = ['scheduled', 'catch_up', 'manual'] as const
 const PORTS = ['out', 'error', 'true', 'false'] as const
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
 const CONDITION_OPS = ['eq', 'ne', 'contains', 'gt', 'lt', 'exists'] as const
+const AGENT_TOOLS: readonly AgentTool[] = ['read', 'search', 'edit', 'execute', 'fetch', 'other']
+
+function agentTools(v: unknown, p: string): AgentTool[] {
+  return arr(v, p, (tool, tp) => oneOf(tool, tp, AGENT_TOOLS))
+}
 
 const automationId = (v: unknown, p: string): AutomationId => str(v, p) as AutomationId
 const runId = (v: unknown, p: string): RunId => str(v, p) as RunId
@@ -146,7 +152,8 @@ function nodeSpec(v: unknown, p: string): NodeSpec {
         // The host validated the schema subset; the renderer only displays it.
         output_schema: obj(o.output_schema, `${p}.output_schema`) as JsonSchemaSubset,
         timeout_ms: num(o.timeout_ms, `${p}.timeout_ms`),
-        max_attempts: num(o.max_attempts, `${p}.max_attempts`)
+        max_attempts: num(o.max_attempts, `${p}.max_attempts`),
+        tools: agentTools(o.tools, `${p}.tools`)
       }
     case 'transform':
       return { kind: 'transform', fields: arr(o.fields, `${p}.fields`, namedTemplate) }
@@ -245,7 +252,7 @@ function agentPolicy(v: unknown, p: string): AgentPolicy {
     agent_id: str(o.agent_id, `${p}.agent_id`),
     model: nullable(o.model, `${p}.model`, str),
     timeout_ms: num(o.timeout_ms, `${p}.timeout_ms`),
-    tools: oneOf(o.tools, `${p}.tools`, ['none'] as const)
+    tools: agentTools(o.tools, `${p}.tools`)
   }
 }
 

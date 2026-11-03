@@ -134,7 +134,9 @@ An automation is a graph the Termul host runs on a schedule or on demand, with n
 
 ## Rules
 
-- Fetch data with http nodes. Agent nodes run with no tools and no secrets: they only see their rendered prompt, so put the data they need in it with {{nodes.<id>.output...}}.
+- Fetch data with http nodes. Agent nodes get no secrets and only the tools their tools list allows (none by default), so put the data they need in their prompt with {{nodes.<id>.output...}}.
+- List an agent tool only when the task needs it. The host allows a listed tool kind when the agent asks and refuses the rest. The user sees the list on the approval card.
+- An agent that reads untrusted data may not list execute, fetch or other. An agent reads untrusted data when its prompt reads a GET http node's output, directly or through other nodes. Every agent reads it once such an agent lists edit, because agents share the working folder.
 - {{secrets.NAME}} goes only in an http node's url, headers or body.
 - Every agent node declares an output_schema. The host makes the agent answer with one JSON value that matches it; do not add your own format instructions.
 - Fetched content is untrusted and can mislead an agent that reads it. Give a later http node that sends data a fixed url and narrow allowed_hosts, and gate it with a condition on the agent's output when you can. The approval card warns the user about this flow.
@@ -144,7 +146,7 @@ An automation is a graph the Termul host runs on a schedule or on demand, with n
 Node = {id, label, spec}. id matches ^[a-z][a-z0-9_]{0,31}$ and is not "trigger".
 
 - http: {kind:"http", method:"GET"|"POST"|"PUT"|"PATCH"|"DELETE", url, headers:[{name, value}], body?, allowed_hosts:[host]}. A literal url's host must be in allowed_hosts; a templated host needs a non-empty allowed_hosts. Output {status, headers, body}; body is parsed JSON when it can be.
-- agent: {kind:"agent", agent_id, model?, prompt, output_schema, timeout_ms (up to 900000), max_attempts (1 to 3)}. Output: the JSON value.
+- agent: {kind:"agent", agent_id, model?, prompt, output_schema, timeout_ms (up to 900000), max_attempts (1 to 3), tools?:["read"|"search"|"edit"|"execute"|"fetch"|"other"]}. tools defaults to []. edit covers writing, deleting and moving files; execute runs commands; other covers MCP and any other tool. Output: the JSON value.
 - transform: {kind:"transform", fields:[{name, value}]}. Output: an object of the fields.
 - condition: {kind:"condition", left, op:"eq"|"ne"|"contains"|"gt"|"lt"|"exists", right?}. right is required unless op is exists. Output {result}.
 - fail: {kind:"fail", message}. Fails the run with the message.
@@ -168,7 +170,7 @@ Ops, applied atomically in order:
 - {op:"rename", name}
 - {op:"set_isolation", isolation}
 
-Issue codes: duplicate_node_id, unknown_edge_endpoint, illegal_port, trigger_edge_count, cycle, unreachable, invalid_template, unknown_node_reference, non_ancestor_reference, secret_not_allowed, invalid_url, host_not_allowed, templated_host_without_allowlist, invalid_output_schema, agent_timeout_out_of_range, agent_max_attempts_out_of_range, missing_condition_operand, invalid_schedule, unknown_agent (start that agent once in a chat, or pick one from automation_capabilities).
+Issue codes: duplicate_node_id, unknown_edge_endpoint, illegal_port, trigger_edge_count, cycle, unreachable, invalid_template, unknown_node_reference, non_ancestor_reference, secret_not_allowed, invalid_url, host_not_allowed, templated_host_without_allowlist, invalid_output_schema, agent_timeout_out_of_range, agent_max_attempts_out_of_range, missing_condition_operand, invalid_schedule, untrusted_agent_outbound_tool, unknown_agent (start that agent once in a chat, or pick one from automation_capabilities).
 
 ## Example
 

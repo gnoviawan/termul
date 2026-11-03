@@ -1,4 +1,5 @@
 import type {
+  AgentTool,
   Automation,
   AutomationNode,
   NodeKind,
@@ -117,4 +118,20 @@ export function nodeKeyDetail(spec: NodeSpec): string {
 
 export function nodeLabels(nodes: AutomationNode[]): Map<string, string> {
   return new Map(nodes.map((node) => [node.id, node.label]))
+}
+
+const AGENT_TOOL_LABELS: Record<AgentTool, string> = {
+  read: 'read files',
+  search: 'search',
+  edit: 'edit files',
+  execute: 'run commands',
+  fetch: 'fetch from the network',
+  other: 'MCP and other tools'
+}
+
+/** The run policy's tool allowlist of one agent node, in words. */
+export function agentToolsLabel(tools: AgentTool[]): string {
+  return tools.length === 0
+    ? 'no tools'
+    : `tools: ${tools.map((tool) => AGENT_TOOL_LABELS[tool]).join(', ')}`
 }

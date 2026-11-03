@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 use super::model::{
-    wire_name, Automation, ConditionOp, EdgeSource, Graph, HttpMethod, Issue, IssueCode, NodeId,
+    wire_name, AgentTool, Automation, ConditionOp, EdgeSource, Graph, HttpMethod, Issue, IssueCode, NodeId,
     NodeKind, NodeSpec, Op, Port, Trigger, AGENT_MAX_ATTEMPTS, AGENT_MAX_TIMEOUT_MS,
 };
 use super::template::{self, ParsedTemplate, Reference};
@@ -26,6 +26,7 @@ pub fn validate(automation: &Automation) -> Vec<Issue> {
     for node in &graph.nodes {
         check_node(graph, &node.id, &node.spec, &mut issues);
     }
+    check_untrusted_agent_tools(graph, &mut issues);
     issues
 }
 
@@ -318,9 +319,38 @@ fn check_http_host(id: &NodeId, url: &ParsedTemplate, allowed: &[String], issues
 }
 
 /// True when untrusted fetched content can steer an outbound request: an
-/// agent whose prompt reads data derived from a GET response has an http
-/// node downstream of it.
+/// agent that reads untrusted data has an http node downstream of it.
 pub fn untrusted_flow(graph: &Graph) -> bool {
+    untrusted_agents(graph).into_iter().any(|(agent, _)| {
+        descendants(graph, agent).iter().any(|d| {
+            graph
+                .node(d)
+                .is_some_and(|n| n.spec.kind() == NodeKind::Http)
+        })
+    })
+}
+
+/// Agent nodes that read untrusted data. An agent reads it when its prompt
+/// is derived from a GET response. Every agent reads it once such an agent
+/// may edit files, because agents of the run share the working directory
+/// and can read files without asking.
+fn untrusted_agents(graph: &Graph) -> Vec<(&NodeId, &[AgentTool])> {
+    let tainted = derived_from_get(graph);
+    let agents = graph.nodes.iter().filter_map(|n| match &n.spec {
+        NodeSpec::Agent { tools, .. } => Some((&n.id, tools.as_slice())),
+        _ => None,
+    });
+    let workspace_tainted = agents
+        .clone()
+        .any(|(id, tools)| tainted.contains(id) && tools.contains(&AgentTool::Edit));
+    agents
+        .filter(|(id, _)| workspace_tainted || tainted.contains(id))
+        .collect()
+}
+
+/// GET http nodes and every node whose templates read their output, directly
+/// or through other nodes.
+fn derived_from_get(graph: &Graph) -> HashSet<&NodeId> {
     let refs: HashMap<&NodeId, Vec<NodeId>> = graph
         .nodes
         .iter()
@@ -348,18 +378,31 @@ pub fn untrusted_flow(graph: &Graph) -> bool {
             }
         }
         if tainted.len() == before {
-            break;
+            return tainted;
         }
     }
-    graph.nodes.iter().any(|agent| {
-        matches!(agent.spec, NodeSpec::Agent { .. })
-            && refs[&agent.id].iter().any(|r| tainted.contains(r))
-            && descendants(graph, &agent.id).iter().any(|d| {
-                graph
-                    .node(d)
-                    .is_some_and(|n| n.spec.kind() == NodeKind::Http)
-            })
-    })
+}
+
+/// An agent that reads untrusted data may not use a tool that sends data
+/// out (research rec 7).
+fn check_untrusted_agent_tools(graph: &Graph, issues: &mut Vec<Issue>) {
+    for (id, tools) in untrusted_agents(graph) {
+        let outbound: Vec<String> = tools
+            .iter()
+            .filter(|t| t.sends_data_out())
+            .map(wire_name)
+            .collect();
+        if !outbound.is_empty() {
+            issues.push(issue(
+                Some(id),
+                IssueCode::UntrustedAgentOutboundTool,
+                format!(
+                    "this agent reads untrusted data (a GET response, or files an agent that reads one may edit), so it may not use tools that send data out: {}",
+                    outbound.join(", ")
+                ),
+            ));
+        }
+    }
 }
 
 fn references(spec: &NodeSpec) -> Vec<Reference> {

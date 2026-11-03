@@ -110,12 +110,28 @@ describe('RunPolicyCard', () => {
     expect(screen.getByText('cron "0 5 * * 1-5" in America/New_York')).toBeInTheDocument()
     expect(screen.getByText(formatDateTime(fixturePolicy.next_runs[2]))).toBeInTheDocument()
     expect(
-      screen.getByText(/claude \(sonnet\) · times out after 2 min · no tools/)
+      screen.getByText(/claude \(sonnet\) · times out after 2 min · tools: read files, search$/)
     ).toBeInTheDocument()
     expect(screen.getByText('API_KEY')).toBeInTheDocument()
     expect(screen.getByText('hooks.example.com')).toBeInTheDocument()
     expect(screen.getByText('backoff 30s/1m/5m/15m/60m')).toBeInTheDocument()
     expect(screen.getByText(/Fetched pages can carry instructions/)).toBeInTheDocument()
+  })
+
+  it('says when an agent gets no tools', () => {
+    render(
+      <RunPolicyCard
+        automation={automationWith({ revision: 2, approved_revision: 1 })}
+        policy={{ ...fixturePolicy, agents: [{ ...fixturePolicy.agents[0], tools: [] }] }}
+        issues={[]}
+        approving={false}
+        onApprove={() => {}}
+      />
+    )
+
+    expect(
+      screen.getByText(/claude \(sonnet\) · times out after 2 min · no tools$/)
+    ).toBeInTheDocument()
   })
 
   it('disables approval while issues exist', () => {

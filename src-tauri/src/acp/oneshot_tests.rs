@@ -34,7 +34,7 @@ def model_option():
 with open(os.environ["MOCK_PID_FILE"], "w") as f:
     f.write(str(os.getpid()))
 
-model, prompts, cancels, hung = "fast", 0, 0, None
+model, prompts, cancels, hung, session_mode = "fast", 0, 0, None, None
 for line in sys.stdin:
     msg = json.loads(line)
     method, rid = msg.get("method"), msg.get("id")
@@ -49,8 +49,16 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32000, "message": "Authentication required"}})
         else:
-            send({"jsonrpc": "2.0", "id": rid,
-                  "result": {"sessionId": "s1", "configOptions": [model_option()]}})
+            result = {"sessionId": "s1", "configOptions": [model_option()]}
+            if os.environ.get("MOCK_MODES"):
+                ids = os.environ["MOCK_MODES"].split(",")
+                session_mode = ids[0]
+                result["modes"] = {"currentModeId": ids[0],
+                                   "availableModes": [{"id": i, "name": i} for i in ids]}
+            send({"jsonrpc": "2.0", "id": rid, "result": result})
+    elif method == "session/set_mode":
+        session_mode = msg["params"]["modeId"]
+        send({"jsonrpc": "2.0", "id": rid, "result": {}})
     elif method == "session/set_config_option":
         model = msg["params"]["value"]
         send({"jsonrpc": "2.0", "id": rid, "result": {"configOptions": [model_option()]}})
@@ -75,6 +83,9 @@ for line in sys.stdin:
             send(done)
         elif text == "state":
             chunk(f"model={model} prompts={prompts} cancels={cancels}")
+            send(done)
+        elif text == "mode":
+            chunk(f"mode={session_mode}")
             send(done)
         elif text == "hang":
             hung = rid
@@ -154,6 +165,7 @@ impl Mock {
             cwd: self.dir.to_string_lossy().into_owned(),
             model: model.map(str::to_string),
             project_id: None,
+            tools: ToolAllowlist::default(),
         }
     }
 
@@ -224,6 +236,47 @@ async fn selects_the_requested_model_through_the_config_option() {
         "model=smart prompts=1 cancels=0"
     );
     session.dispose().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_that_starts_without_asking_moves_to_a_mode_that_asks() {
+    let Some(mock) = Mock::new().await else {
+        return;
+    };
+    for (modes, expected) in [
+        ("bypassPermissions,acceptEdits,plan,default", "mode=default"),
+        ("agent-full-access,agent,read-only", "mode=read-only"),
+        ("agent,plan,ask", "mode=ask"),
+        ("plan,bypassPermissions", "mode=plan"),
+        ("custom,default", "mode=custom"),
+    ] {
+        let request = mock.request(None, &[("MOCK_MODES", modes)]);
+        let mut session = OneShotSession::start(&mock.manager, request)
+            .await
+            .expect("one-shot session starts");
+        assert_eq!(reply(&mut session, "mode").await, expected, "{modes}");
+        session.dispose().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_with_no_mode_that_asks_fails_the_start_and_stops_the_agent() {
+    let Some(mock) = Mock::new().await else {
+        return;
+    };
+    let request = mock.request(None, &[("MOCK_MODES", "bypassPermissions,acceptEdits,plan")]);
+    let error = OneShotSession::start(&mock.manager, request)
+        .await
+        .err()
+        .expect("start fails");
+    assert_eq!(
+        error,
+        OneShotError::Spawn(
+            "the session runs in mode `bypassPermissions`, which uses tools without asking, and the agent offers no mode that asks".to_string()
+        )
+    );
+    assert!(process_exits(mock.agent_pid()));
+    assert_eq!(mock.manager.list_agents(), vec![]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

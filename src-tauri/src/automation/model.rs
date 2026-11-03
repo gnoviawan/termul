@@ -273,6 +273,8 @@ pub enum NodeSpec {
         output_schema: JsonSchemaSubset,
         timeout_ms: u64,
         max_attempts: u8,
+        #[serde(default)]
+        tools: Vec<AgentTool>,
     },
     Transform {
         fields: Vec<NamedTemplate>,
@@ -286,6 +288,42 @@ pub enum NodeSpec {
     Fail {
         message: Template,
     },
+}
+
+/// A class of tool an agent node may use. When the agent asks to use a
+/// tool, the host allows it only if its class is on the node's list.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTool {
+    Read,
+    Search,
+    /// Write, delete or move files.
+    Edit,
+    /// Run commands.
+    Execute,
+    /// Fetch from the network.
+    Fetch,
+    /// Any other tool, such as an MCP tool.
+    Other,
+}
+
+impl AgentTool {
+    /// Tools that can send data off the host.
+    pub fn sends_data_out(self) -> bool {
+        matches!(self, Self::Execute | Self::Fetch | Self::Other)
+    }
 }
 
 pub const AGENT_MAX_TIMEOUT_MS: u64 = 900_000;
@@ -476,6 +514,7 @@ pub enum IssueCode {
     AgentMaxAttemptsOutOfRange,
     MissingConditionOperand,
     InvalidSchedule,
+    UntrustedAgentOutboundTool,
     /// Added by the service, which owns the agent registry.
     UnknownAgent,
 }
@@ -580,14 +619,8 @@ pub struct AgentPolicy {
     pub agent_id: String,
     pub model: Option<String>,
     pub timeout_ms: u64,
-    pub tools: AgentTools,
-}
-
-/// v1 agents run with no tools; the enum leaves room for allowlists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentTools {
-    None,
+    /// Sorted and deduplicated; empty means no tools.
+    pub tools: Vec<AgentTool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

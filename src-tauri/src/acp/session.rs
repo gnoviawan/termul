@@ -31,10 +31,13 @@ mod activity;
 mod commands;
 mod sign_in;
 mod subagents;
+mod tool_policy;
 pub(crate) use activity::ActivityClock;
 pub use activity::AgentActivity;
 pub(crate) use sign_in::{RequestElicitationRoute, SignInPrompt, SignInSlot};
 pub(crate) use subagents::ChildRoute;
+pub(crate) use tool_policy::ToolDecision;
+pub use tool_policy::ToolAllowlist;
 
 /// A permission request awaiting the user's decision.
 ///
@@ -149,6 +152,8 @@ pub(crate) struct DriverState {
     last_commands: commands::LastCommands,
     /// Native subagent child sessions and the chat each one belongs to.
     subagents: subagents::SubagentRoutes,
+    /// Host answers to the permission requests of headless sessions.
+    tool_policies: tool_policy::ToolPolicies,
     /// The agent-level sign-in prompt and the `authenticate` requests that
     /// may raise one.
     sign_in: SignInSlot,
@@ -452,6 +457,36 @@ impl DriverState {
     pub(crate) fn unmark_ephemeral(&mut self, session_id: &str) {
         self.ephemeral_sessions.remove(session_id);
         self.promotable_sessions.remove(session_id);
+        self.tool_policies.forget(session_id);
+    }
+
+    /// Answer the session's permission requests from `allowlist` instead of
+    /// cancelling them. Only meaningful for an ephemeral session.
+    pub(crate) fn set_tool_allowlist(&mut self, session_id: String, allowlist: ToolAllowlist) {
+        self.tool_policies.set(session_id, allowlist);
+    }
+
+    /// Remember a tool call's kind for a later permission request that omits it.
+    pub(crate) fn note_tool_kind(
+        &mut self,
+        session_id: &str,
+        tool_call_id: &str,
+        kind: agent_client_protocol::schema::v1::ToolKind,
+    ) {
+        let root = self.subagents.root_of(session_id).to_string();
+        self.tool_policies.note_kind(&root, tool_call_id, kind);
+    }
+
+    /// The host's answer to a permission request, or `None` when the session
+    /// has no allowlist. A native subagent uses the allowlist of its chat.
+    pub(crate) fn answer_permission(
+        &self,
+        session_id: &str,
+        tool_call: &agent_client_protocol::schema::v1::ToolCallUpdate,
+        options: &[agent_client_protocol::schema::v1::PermissionOption],
+    ) -> Option<ToolDecision> {
+        self.tool_policies
+            .answer(self.subagents.root_of(session_id), tool_call, options)
     }
 
     /// Look up the canonicalized workspace root for a session, if known. A
@@ -484,6 +519,7 @@ impl DriverState {
         self.model_config_ids.remove(session_id);
         self.legacy_model_sessions.remove(session_id);
         self.promotable_sessions.remove(session_id);
+        self.tool_policies.forget(session_id);
         self.last_commands.forget(session_id);
         self.subagents.forget_root(session_id);
     }

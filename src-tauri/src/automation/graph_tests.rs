@@ -245,6 +245,69 @@ fn rule8_untrusted_flow_needs_get_data_reaching_an_agent_with_http_downstream() 
     assert!(!untrusted_flow(&no_http_after.graph));
 }
 
+fn agent_spec(prompt: &str, tools: serde_json::Value) -> serde_json::Value {
+    json!({ "kind": "agent", "agent_id": "claude", "prompt": prompt,
+            "output_schema": { "type": "object" }, "timeout_ms": 1000, "max_attempts": 1,
+            "tools": tools })
+}
+
+#[test]
+fn rule9_an_agent_reading_get_data_may_not_use_outbound_tools() {
+    let base = sample_automation();
+    let outbound = set_spec(
+        &base,
+        "extract",
+        agent_spec(
+            "Summarize {{nodes.fetch.output.items}}",
+            json!(["read", "execute", "edit", "fetch", "other"]),
+        ),
+    );
+    let issues = validate(&outbound);
+    assert_eq!(
+        issues
+            .iter()
+            .map(|i| (i.code, i.node_id.as_ref().map(ToString::to_string), i.message.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(
+            IssueCode::UntrustedAgentOutboundTool,
+            Some("extract".to_string()),
+            "this agent reads untrusted data (a GET response, or files an agent that reads one may edit), so it may not use tools that send data out: execute, fetch, other",
+        )]
+    );
+
+    let post_fetch = set_spec(
+        &outbound,
+        "fetch",
+        json!({ "kind": "http", "method": "POST", "url": "https://api.example.com/items",
+                "allowed_hosts": ["api.example.com"] }),
+    );
+    assert_eq!(codes(&post_fetch), vec![]);
+}
+
+#[test]
+fn rule9_a_tainted_agent_that_edits_files_taints_every_agent() {
+    let with_namer = |extract_tools: serde_json::Value| {
+        let a = set_spec(
+            &sample_automation(),
+            "extract",
+            agent_spec("Summarize {{nodes.fetch.output.items}}", extract_tools),
+        );
+        apply(
+            &a,
+            json!([
+                { "op": "add_node", "node": { "id": "namer", "label": "Name", "spec":
+                    agent_spec("Name the {{trigger.kind}} run", json!(["fetch"])) } },
+                { "op": "connect", "edge": { "from": "check", "port": "false", "to": "namer" } }
+            ]),
+        )
+    };
+    assert_eq!(codes(&with_namer(json!(["read"]))), vec![]);
+    assert_eq!(
+        codes(&with_namer(json!(["edit"]))),
+        vec![at(IssueCode::UntrustedAgentOutboundTool, "namer")]
+    );
+}
+
 #[test]
 fn other_issues_templates_conditions_and_schedules() {
     let bad_template = set_spec(

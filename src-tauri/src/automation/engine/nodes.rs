@@ -88,6 +88,7 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<NodeSu
             output_schema,
             timeout_ms,
             max_attempts,
+            tools,
         } => {
             let request = agent::AgentSpec {
                 agent_id,
@@ -96,6 +97,7 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<NodeSu
                 output_schema,
                 timeout_ms: *timeout_ms,
                 max_attempts: *max_attempts,
+                tools,
             };
             agent::run(scope, request).await.map(out)
         }

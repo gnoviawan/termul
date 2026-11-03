@@ -2,16 +2,19 @@
 //! JSON value matching the node's schema. A reply that does not match is
 //! re-prompted in the same session with the validation errors, up to
 //! `max_attempts`, all inside the node's `timeout_ms`. The session is always
-//! disposed.
+//! disposed. The host allows the tools on the node's list when the agent asks
+//! for them, and refuses the rest.
 
 use std::time::Duration;
 
+use agent_client_protocol::schema::v1::ToolKind;
 use serde_json::Value;
 use tokio::time::Instant;
 
 use super::nodes::{render_text, NodeError, NodeScope};
 use crate::acp::oneshot::{OneShotError, OneShotRequest, OneShotSession};
-use crate::automation::model::{JsonSchemaSubset, Template};
+use crate::acp::session::ToolAllowlist;
+use crate::automation::model::{AgentTool, JsonSchemaSubset, Template};
 use crate::automation::schema::{self, Schema};
 
 pub(super) struct AgentSpec<'a> {
@@ -21,6 +24,7 @@ pub(super) struct AgentSpec<'a> {
     pub output_schema: &'a JsonSchemaSubset,
     pub timeout_ms: u64,
     pub max_attempts: u8,
+    pub tools: &'a [AgentTool],
 }
 
 pub(super) async fn run(scope: &NodeScope<'_>, spec: AgentSpec<'_>) -> Result<Value, NodeError> {
@@ -33,7 +37,8 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: AgentSpec<'_>) -> Result<Va
         .map_err(|e| NodeError::failed(format!("invalid_output_schema: {e}")))?;
     let prompt = render_text(spec.prompt, &scope.render_context(None))?;
     let first = format!(
-        "{prompt}\n\nAnswer with exactly one JSON value that matches this JSON Schema, and nothing else. Do not use tools.\n```json\n{}\n```",
+        "{prompt}\n\nAnswer with exactly one JSON value that matches this JSON Schema, and nothing else. {}\n```json\n{}\n```",
+        tool_rule(spec.tools),
         spec.output_schema.0
     );
     let deadline = Instant::now() + Duration::from_millis(spec.timeout_ms);
@@ -42,6 +47,7 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: AgentSpec<'_>) -> Result<Va
         cwd: scope.run.cwd.to_string_lossy().into_owned(),
         model: spec.model.map(str::to_string),
         project_id: Some(scope.run.project_id.to_string()),
+        tools: allowlist(spec.tools),
     };
     let started = tokio::select! {
         started = tokio::time::timeout_at(deadline, OneShotSession::start(&engine.acp, request)) => started,
@@ -63,6 +69,40 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: AgentSpec<'_>) -> Result<Va
     .await;
     session.dispose().await;
     result
+}
+
+fn allowlist(tools: &[AgentTool]) -> ToolAllowlist {
+    ToolAllowlist::new(tools.iter().flat_map(|tool| match tool {
+        AgentTool::Read => &[ToolKind::Read][..],
+        AgentTool::Search => &[ToolKind::Search],
+        AgentTool::Edit => &[ToolKind::Edit, ToolKind::Delete, ToolKind::Move],
+        AgentTool::Execute => &[ToolKind::Execute],
+        AgentTool::Fetch => &[ToolKind::Fetch],
+        AgentTool::Other => &[ToolKind::Other, ToolKind::Think],
+    }
+    .iter()
+    .copied()))
+}
+
+pub(super) fn tool_rule(tools: &[AgentTool]) -> String {
+    if tools.is_empty() {
+        return "Do not use tools.".to_string();
+    }
+    let names: Vec<&str> = tools
+        .iter()
+        .map(|tool| match tool {
+            AgentTool::Read => "reading files",
+            AgentTool::Search => "searching",
+            AgentTool::Edit => "editing files",
+            AgentTool::Execute => "running commands",
+            AgentTool::Fetch => "fetching from the network",
+            AgentTool::Other => "other tools such as MCP tools",
+        })
+        .collect();
+    format!(
+        "You may use only these kinds of tools: {}. Any other tool is refused.",
+        names.join(", ")
+    )
 }
 
 async fn converse(

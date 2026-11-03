@@ -226,6 +226,20 @@ def say(text):
     send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s1",
           "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
 
+def ask(tool_id, kind):
+    send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s1",
+          "update": {"sessionUpdate": "tool_call", "toolCallId": tool_id, "title": tool_id, "kind": kind}}})
+    send({"jsonrpc": "2.0", "id": "perm-" + tool_id, "method": "session/request_permission",
+          "params": {"sessionId": "s1", "toolCall": {"toolCallId": tool_id}, "options": [
+              {"optionId": "always", "name": "Always", "kind": "allow_always"},
+              {"optionId": "once", "name": "Once", "kind": "allow_once"},
+              {"optionId": "no", "name": "No", "kind": "reject_once"}]}})
+    for line in sys.stdin:
+        reply = json.loads(line)
+        if reply.get("id") == "perm-" + tool_id and "method" not in reply:
+            outcome = reply["result"]["outcome"]
+            return outcome.get("optionId", outcome["outcome"])
+
 mode, hung = None, None
 for line in sys.stdin:
     msg = json.loads(line)
@@ -245,7 +259,10 @@ for line in sys.stdin:
         if mode == "MODE=hang":
             hung = rid
             continue
-        if mode == "MODE=ok" or (mode == "MODE=fix" and retry):
+        if mode == "MODE=tools":
+            answers = [ask("t1", "read"), ask("t2", "fetch"), ask("t3", "switch_mode")]
+            say(json.dumps({"headline": " ".join(answers), "count": len(answers)}))
+        elif mode == "MODE=ok" or (mode == "MODE=fix" and retry):
             say('Here it is:\n```json\n{"headline": "two items", "count": 2}\n```')
         elif mode == "MODE=fix":
             say('{"headline": 5, "count": 2}')
@@ -480,6 +497,48 @@ async fn a_schema_mismatch_is_reprompted_with_the_errors_and_then_accepted() {
     assert_eq!(
         prompts[1],
         "Your answer did not match the JSON Schema:\n- $.headline: expected string, got number\nAnswer again with only the corrected JSON value."
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_host_answers_tool_requests_from_the_node_allowlist() {
+    let f = fixture().await;
+    let Some(mock) = MockAgent::install(&f.te).await else {
+        return;
+    };
+    let mut open = agent("MODE=tools go", 1);
+    open["tools"] = json!(["read", "fetch"]);
+    let a = manual(
+        &f.te,
+        json!({
+            "nodes": [node("open", open), node("closed", agent("MODE=tools go", 1))],
+            "edges": [edge("trigger", "out", "open"), edge("open", "out", "closed")]
+        }),
+    );
+
+    let run = run_to_end(&f.te, &a).await;
+
+    assert_eq!(run.status, RunStatus::Succeeded);
+    assert_eq!(
+        output(&f.te.store, &run.id, "open"),
+        Some(json!({ "headline": "once once no", "count": 3 }))
+    );
+    assert_eq!(
+        output(&f.te.store, &run.id, "closed"),
+        Some(json!({ "headline": "no no no", "count": 3 }))
+    );
+    let prompts = mock.prompts();
+    assert!(
+        prompts[0].contains(
+            "and nothing else. You may use only these kinds of tools: reading files, fetching from the network. Any other tool is refused.\n"
+        ),
+        "{}",
+        prompts[0]
+    );
+    assert!(
+        prompts[1].contains("and nothing else. Do not use tools.\n"),
+        "{}",
+        prompts[1]
     );
 }
 
