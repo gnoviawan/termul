@@ -278,9 +278,15 @@ fn from_args_missing_event_log_capacity_value() {
     ));
 }
 
+// Explicit sessions dir so these tests never depend on $HOME / $TERMUL_SESSIONS_DIR,
+// which the ENV_LOCK tests below mutate while tests run in parallel.
+const SESSIONS_DIR_ARG: &str = "/tmp/termul-removed-flag-sessions";
+
 #[test]
 fn from_args_removed_permission_flags_parse_and_warn_once_each() {
     let cfg = ServerConfig::from_args([
+        "--sessions-dir",
+        SESSIONS_DIR_ARG,
         "--permission-timeout",
         "30",
         "--permission-reconnect-grace",
@@ -296,6 +302,7 @@ fn from_args_removed_permission_flags_parse_and_warn_once_each() {
     // Everything else is unaffected.
     assert_eq!(cfg.host, "127.0.0.1");
     assert_eq!(cfg.port, 8080);
+    assert_eq!(cfg.sessions_dir.as_deref(), Some(Path::new(SESSIONS_DIR_ARG)));
 }
 
 #[test]
@@ -306,31 +313,39 @@ fn from_args_removed_permission_flags_tolerate_invalid_values() {
         ("--permission-reconnect-grace", "0"),
         ("--permission-reconnect-grace", "-3"),
     ] {
-        let cfg = ServerConfig::from_args([flag, value])
+        let cfg = ServerConfig::from_args(["--sessions-dir", SESSIONS_DIR_ARG, flag, value])
             .unwrap_or_else(|e| panic!("{flag} {value} must not abort: {e}"));
         let warnings = removed_flag_warnings(&cfg);
         assert_eq!(warnings.len(), 1, "{flag} {value}");
         assert!(warnings[0].contains(flag));
+        assert_eq!(cfg.sessions_dir.as_deref(), Some(Path::new(SESSIONS_DIR_ARG)));
     }
 }
 
 #[test]
 fn from_args_removed_permission_flags_tolerate_missing_value() {
     // Trailing: no value at all.
-    let cfg = ServerConfig::from_args(["--permission-timeout"]).expect("must not abort");
+    let cfg = ServerConfig::from_args(["--sessions-dir", SESSIONS_DIR_ARG, "--permission-timeout"])
+        .expect("must not abort");
     let warnings = removed_flag_warnings(&cfg);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("no value"));
     // Followed by another flag: that flag is NOT swallowed as the value.
-    let cfg = ServerConfig::from_args(["--permission-reconnect-grace", "--port", "9091"])
-        .expect("must not abort");
+    let cfg = ServerConfig::from_args([
+        "--sessions-dir",
+        SESSIONS_DIR_ARG,
+        "--permission-reconnect-grace",
+        "--port",
+        "9091",
+    ])
+    .expect("must not abort");
     assert_eq!(cfg.port, 9091, "the next flag keeps its own value");
     let warnings = removed_flag_warnings(&cfg);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("no value"));
     // `-h` is help, never the removed flag's value.
     assert!(matches!(
-        ServerConfig::from_args(["--permission-timeout", "-h"]),
+        ServerConfig::from_args(["--sessions-dir", SESSIONS_DIR_ARG, "--permission-timeout", "-h"]),
         Err(ParseCliError::Help)
     ));
 }
