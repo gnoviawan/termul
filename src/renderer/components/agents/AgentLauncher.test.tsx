@@ -1808,6 +1808,176 @@ describe('AgentLauncher ACP new thread', () => {
     )
   })
 
+  it('does not prewarm the default agent while the saved selection is still loading', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    acpStateRef.current.agentConfigs = [ACP_CONFIG, OTHER_ACP_CONFIG]
+    const fallback = defaultReadyAgent()
+    let resolveSaved: (value: unknown) => void = () => undefined
+    mockPersistRead.mockImplementation((key: string) =>
+      key === 'agents/last-selected'
+        ? new Promise((resolve) => {
+            resolveSaved = resolve
+          })
+        : Promise.resolve({ success: true, data: undefined })
+    )
+    renderLauncher()
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(mockRetargetWarmPool).not.toHaveBeenCalled()
+    expect(mockSaveAgentConfig).not.toHaveBeenCalled()
+
+    resolveSaved({ success: true, data: { agentId: 'acp-registry:opencode', mode: 'acp' } })
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith('acp-registry:opencode', '/work', 'p1')
+    )
+    expect(mockRetargetWarmPool).not.toHaveBeenCalledWith(
+      fallback.configId,
+      expect.anything(),
+      expect.anything()
+    )
+  })
+
+  it('opens the next launcher on a saved custom agent, not the default', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    const custom: StoredAgentConfig = {
+      id: 'custom-next',
+      configId: 'custom-next',
+      name: 'Next Agent',
+      command: 'next-agent',
+      args: [],
+      env: {}
+    }
+    mockPersistRead.mockImplementation((key: string) =>
+      Promise.resolve(
+        key === 'agents/last-selected'
+          ? { success: true, data: { agentId: 'custom-next', mode: 'acp' } }
+          : { success: true, data: undefined }
+      )
+    )
+    const first = render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    first.unmount()
+
+    acpStateRef.current.agentConfigs = [custom]
+    mockResolvedAgentsOverride.current = [
+      ...buildSupportedAcpAgents([custom], 'windows-x86_64'),
+      {
+        id: custom.id,
+        configId: 'custom-next',
+        agent: { id: custom.id, name: custom.name, version: '', description: '', distribution: {} },
+        config: custom,
+        status: 'ready',
+        install: null,
+        manualInstall: null,
+        runtimeLauncher: null,
+        unavailableReason: null
+      }
+    ]
+    renderLauncher()
+
+    expect(
+      screen.getByRole('button', { name: /Currently Next Agent/ }),
+      'the second launcher must not open on the default agent'
+    ).toBeTruthy()
+  })
+
+  it('keeps a saved custom agent selected until its config loads', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    const custom: StoredAgentConfig = {
+      id: 'custom-mine',
+      configId: 'custom-mine',
+      name: 'My Agent',
+      command: 'my-agent',
+      args: [],
+      env: {}
+    }
+    mockPersistRead.mockImplementation((key: string) =>
+      Promise.resolve(
+        key === 'agents/last-selected'
+          ? { success: true, data: { agentId: 'custom-mine', mode: 'acp' } }
+          : { success: true, data: undefined }
+      )
+    )
+    const ui = (): React.JSX.Element => (
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    const { rerender } = render(ui())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(mockRetargetWarmPool).not.toHaveBeenCalled()
+    expect(mockPersistWrite).not.toHaveBeenCalledWith('agents/last-selected', expect.anything())
+
+    // The resolver lists a custom agent only once its config has loaded.
+    await act(async () => {
+      acpStateRef.current.agentConfigs = [custom]
+      mockResolvedAgentsOverride.current = [
+        ...buildSupportedAcpAgents([custom], 'windows-x86_64'),
+        {
+          id: custom.id,
+          configId: 'custom-mine',
+          agent: {
+            id: custom.id,
+            name: custom.name,
+            version: '',
+            description: '',
+            distribution: {}
+          },
+          config: custom,
+          status: 'ready',
+          install: null,
+          manualInstall: null,
+          runtimeLauncher: null,
+          unavailableReason: null
+        }
+      ]
+      rerender(ui())
+    })
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith('custom-mine', '/work', 'p1')
+    )
+    expect(mockRetargetWarmPool).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retry persisting an agent whose save failed', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    mockSaveAgentConfig.mockImplementation(async () => {
+      throw new Error('refusing to persist a raw secret')
+    })
+    const ui = (): React.JSX.Element => (
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    const { rerender } = render(ui())
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1))
+
+    // The store rolls a failed save back, which hands the launcher a new array.
+    await act(async () => {
+      acpStateRef.current.agentConfigs = [...acpStateRef.current.agentConfigs]
+      rerender(ui())
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    expect(mockSaveAgentConfig).toHaveBeenCalledTimes(1)
+    expect(mockRetargetWarmPool).not.toHaveBeenCalled()
+  })
+
   it('uses model config and native Agent/mode picker actions without duplicate Agent chips', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     acpStateRef.current.agentConfigs = [ACP_CONFIG]
