@@ -293,7 +293,6 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
     }
 
     await scenario.drive(ctx)
-    endSnapshot = await captureEndSnapshot(page, handle.rootPid, agentStatsDir)
     if (flags['heap-snapshot'] === true) {
       await writeHeapSnapshot(page, path.join(runDir, 'end.heapsnapshot'))
     }
@@ -302,6 +301,14 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
   } finally {
     collector?.stop()
     processCollector?.stop()
+    // Also after a failed drive: the error and work counts say what went wrong.
+    if (handle) {
+      const live = handle
+      endSnapshot = await live
+        .page()
+        .then((page) => captureEndSnapshot(page, live.rootPid, agentStatsDir))
+        .catch(() => undefined)
+    }
     if (handle) {
       await handle.teardown().catch(() => undefined)
     }

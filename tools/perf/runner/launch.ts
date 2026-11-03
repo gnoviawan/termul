@@ -25,7 +25,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -214,23 +214,43 @@ export async function killPidTree(rootPid: number): Promise<void> {
   await runPowerShell(script)
 }
 
+const DEV_IDENTIFIER = 'com.termul-manager.app.dev'
+const STASH_SUFFIX = '.perf-stash'
+
+function devAppDataDirs(): string[] {
+  return [process.env.APPDATA, process.env.LOCALAPPDATA]
+    .filter((root): root is string => Boolean(root))
+    .map((root) => path.join(root, DEV_IDENTIFIER))
+}
+
 /**
- * The plugin-store file (`termul-data.json`) and the app's other persisted
- * state live under the identifier's *shared* app-data dir, not under the
- * scratch WEBVIEW2_USER_DATA_FOLDER — the scratch dir only isolates browser
- * state. Without wiping it, persisted projects/chats/agent registrations
- * leak from one run into the next (the launcher never appears on a profile
- * that boots into restored chats, so stream-storm's start-button wait
- * times out). This wipes the dev-identifier's app-data dirs; the identity
- * `com.termul-manager.app.dev` is perf-toolkit-only, so nothing user-owned
- * lives there.
+ * Runs need an empty app-data dir under the dev identifier, and `bun run dev`
+ * uses that same identifier, so a developer's dev-mode projects and chats may
+ * live there. Move them aside instead of deleting them. A stash left by a
+ * crashed run is kept, and what sits in the dir beside it is that run's data.
  */
-function wipeDevAppData(): void {
-  const appData = process.env.APPDATA
-  const localAppData = process.env.LOCALAPPDATA
-  for (const root of [appData, localAppData]) {
-    if (root)
-      rmSync(path.join(root, 'com.termul-manager.app.dev'), { recursive: true, force: true })
+function stashDevAppData(): void {
+  for (const dir of devAppDataDirs()) {
+    if (!existsSync(dir)) continue
+    if (existsSync(dir + STASH_SUFFIX)) {
+      rmSync(dir, { recursive: true, force: true })
+    } else {
+      try {
+        renameSync(dir, dir + STASH_SUFFIX)
+      } catch (err) {
+        throw new Error(
+          `could not move ${dir} aside (close any dev-mode Termul first): ${String(err)}`
+        )
+      }
+    }
+  }
+}
+
+/** Remove the run's app data and put the developer's back. */
+function restoreDevAppData(): void {
+  for (const dir of devAppDataDirs()) {
+    rmSync(dir, { recursive: true, force: true })
+    if (existsSync(dir + STASH_SUFFIX)) renameSync(dir + STASH_SUFFIX, dir)
   }
 }
 
@@ -242,8 +262,9 @@ function wipeDevAppData(): void {
 function writePreseedStore(entries: Record<string, unknown>): void {
   const appData = process.env.APPDATA
   if (!appData) throw new Error('APPDATA is not set; cannot preseed the dev-identifier store')
-  wipeDevAppData()
-  const dir = path.join(appData, 'com.termul-manager.app.dev')
+  // Only the run's own data is here: stashDevAppData moved the developer's aside.
+  for (const runDir of devAppDataDirs()) rmSync(runDir, { recursive: true, force: true })
+  const dir = path.join(appData, DEV_IDENTIFIER)
   mkdirSync(dir, { recursive: true })
   const file: Record<string, unknown> = {}
   for (const [key, data] of Object.entries(entries)) file[key] = { _version: 1, data }
@@ -317,6 +338,7 @@ export async function launchApp(opts: LaunchOptions): Promise<AppHandle> {
   }
   const baseEnv: Record<string, string> = { ...cleanProcessEnv, ...(opts.env ?? {}) }
 
+  stashDevAppData()
   if (opts.preseedStore) writePreseedStore(opts.preseedStore)
   const rootPid = spawnApp(exe, debugPort, scratchDir, baseEnv)
   let browser: Browser
@@ -428,7 +450,7 @@ function buildHandle(args: HandleArgs): AppHandle {
     await killPidTree(rootPid)
     if (!keepState) {
       rmSync(scratchDir, { recursive: true, force: true })
-      wipeDevAppData()
+      restoreDevAppData()
     }
   }
 

@@ -153,7 +153,9 @@ for (const [key, row] of [...byClass.entries()]
     `  ${String(row.count).padStart(7)}  ${(row.bytes / 1e6).toFixed(2).padStart(7)}  ${key}`
   )
 }
-console.log(`\ndetached nodes held by no live chain (garbage awaiting GC): ${unreachable}`)
+// The flood only walks detached-to-detached edges, so a node reached through a
+// plain object between two detached nodes lands here too, not only garbage.
+console.log(`\ndetached nodes not attributed to a holder chain: ${unreachable}`)
 console.log('\nholder chains, by detached nodes they keep alive:')
 for (const [, group] of [...groups.entries()].sort((a, b) => b[1].held - a[1].held).slice(0, 8)) {
   console.log(`\n  keeps ${group.held} detached nodes via ${group.entries} entries, e.g.:`)

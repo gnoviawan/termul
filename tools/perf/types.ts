@@ -175,6 +175,8 @@ export interface EndSnapshot {
   privateBytesByRole: Record<ProcessRole, number>
   /** Every process in the app tree except the fake agents the harness supplies. */
   appPrivateBytes: number
+  /** False when the process tree could not be read; the byte totals are then 0, not measured. */
+  processesSampled: boolean
   otherChildren: Array<{ name: string; privateBytes: number; commandLine: string }>
   appLogErrorLines: number | null
   agentUpdatesEmitted: number | null
@@ -355,11 +357,13 @@ export function summarize(result: PerfRunResult): Record<string, number> {
   if (end) {
     if (end.heapUsedAfterGcBytes !== null) out.endHeapAfterGcBytes = end.heapUsedAfterGcBytes
     if (end.domNodes !== null) out.endDomNodes = end.domNodes
-    out.endAppPrivateBytes = end.appPrivateBytes
-    out.endRendererPrivateBytes = end.privateBytesByRole.renderer
-    out.endGpuPrivateBytes = end.privateBytesByRole.gpu
-    out.endHostPrivateBytes = end.privateBytesByRole.host
-    out.endOtherChildPrivateBytes = end.privateBytesByRole.otherChild
+    if (end.processesSampled) {
+      out.endAppPrivateBytes = end.appPrivateBytes
+      out.endRendererPrivateBytes = end.privateBytesByRole.renderer
+      out.endGpuPrivateBytes = end.privateBytesByRole.gpu
+      out.endHostPrivateBytes = end.privateBytesByRole.host
+      out.endOtherChildPrivateBytes = end.privateBytesByRole.otherChild
+    }
     if (end.appLogErrorLines !== null) out.appLogErrorLines = end.appLogErrorLines
     if (end.agentUpdatesEmitted !== null) out.agentUpdatesEmitted = end.agentUpdatesEmitted
   }

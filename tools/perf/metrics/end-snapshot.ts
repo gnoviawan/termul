@@ -127,8 +127,13 @@ async function rendererAllocatorBreakdown(page: Page): Promise<Record<string, nu
     levelOfDetail: 'detailed'
   })
   await session.send('Tracing.end')
-  await complete
-  await session.detach()
+  // A connection lost before tracingComplete must not stall the run's teardown.
+  const timedOut = await Promise.race([
+    complete.then(() => false),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 30_000))
+  ])
+  await session.detach().catch(() => undefined)
+  if (timedOut) throw new Error('Tracing.tracingComplete did not arrive within 30 s')
   const totals = new Map<number, Record<string, number>>()
   for (const event of events) {
     const allocators = event.ph === 'v' ? event.args?.dumps?.allocators : undefined
@@ -150,12 +155,21 @@ async function rendererAllocatorBreakdown(page: Page): Promise<Record<string, nu
 export async function writeHeapSnapshot(page: Page, file: string): Promise<void> {
   const cdp = await page.context().newCDPSession(page)
   const out = createWriteStream(file)
-  cdp.on('HeapProfiler.addHeapSnapshotChunk', (payload: { chunk: string }) => {
-    out.write(payload.chunk)
+  let writeError: Error | null = null
+  out.on('error', (err) => {
+    writeError = err
   })
-  await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false })
-  await new Promise<void>((resolve) => out.end(resolve))
-  await cdp.detach()
+  cdp.on('HeapProfiler.addHeapSnapshotChunk', (payload: { chunk: string }) => {
+    if (!writeError) out.write(payload.chunk)
+  })
+  try {
+    await cdp.send('HeapProfiler.takeHeapSnapshot', { reportProgress: false })
+    await new Promise<void>((resolve) => out.end(resolve))
+  } finally {
+    out.destroy()
+    await cdp.detach().catch(() => undefined)
+  }
+  if (writeError) throw writeError
 }
 
 export async function captureEndSnapshot(
@@ -179,6 +193,7 @@ export async function captureEndSnapshot(
       otherChild: 0
     },
     appPrivateBytes: 0,
+    processesSampled: false,
     otherChildren: [],
     appLogErrorLines: null,
     agentUpdatesEmitted: null,
@@ -263,6 +278,7 @@ export async function captureEndSnapshot(
   try {
     const tree = await sampleTreeWithCommandLines(rootPid)
     if (tree.length === 0) gaps.push('process tree sample returned nothing')
+    else snapshot.processesSampled = true
     for (const proc of tree) {
       const role = classifyProcess(proc.name, proc.commandLine)
       snapshot.privateBytesByRole[role] += proc.privateBytes
@@ -279,12 +295,20 @@ export async function captureEndSnapshot(
     gaps.push(`process tree sample failed: ${String(err)}`)
   }
 
-  snapshot.appLogErrorLines = countAppLogErrors()
-  if (snapshot.appLogErrorLines === null) gaps.push('app log not found')
-  const agentStats = sumAgentStats(agentStatsDir)
-  if (agentStats) {
-    snapshot.agentUpdatesEmitted = agentStats.updates
-    snapshot.agentTextCharsEmitted = agentStats.textChars
+  try {
+    snapshot.appLogErrorLines = countAppLogErrors()
+    if (snapshot.appLogErrorLines === null) gaps.push('app log not found')
+  } catch (err) {
+    gaps.push(`app log read failed: ${String(err)}`)
+  }
+  try {
+    const agentStats = sumAgentStats(agentStatsDir)
+    if (agentStats) {
+      snapshot.agentUpdatesEmitted = agentStats.updates
+      snapshot.agentTextCharsEmitted = agentStats.textChars
+    }
+  } catch (err) {
+    gaps.push(`agent stats read failed: ${String(err)}`)
   }
   return snapshot
 }

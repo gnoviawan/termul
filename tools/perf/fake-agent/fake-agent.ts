@@ -499,12 +499,16 @@ function startStatsWriter(statsDir: string): void {
   setInterval(() => void Bun.write(statsFile, JSON.stringify(stats)), 1000).unref()
 }
 
-function emitUpdate(agent: FakeAgent, sessionId: string): void {
-  const { update, fingerprint } = buildUpdate(agent, sessionId)
-  notify('session/update', { sessionId, update } as JsonValue)
+function countEmitted(update: Record<string, JsonValue>): void {
   stats.emittedUpdates++
   const content = update.content as { text?: unknown } | undefined
   if (typeof content?.text === 'string') stats.emittedTextChars += content.text.length
+}
+
+function emitUpdate(agent: FakeAgent, sessionId: string): void {
+  const { update, fingerprint } = buildUpdate(agent, sessionId)
+  notify('session/update', { sessionId, update } as JsonValue)
+  countEmitted(update)
   if (agent.inFlight) {
     agent.inFlight.hash = fnv1a(agent.inFlight.hash + fingerprint)
     agent.inFlight.emitted++
@@ -611,6 +615,7 @@ function replayFixture(agent: FakeAgent, id: number | string, sessionId: string)
         .map((l) => JSON.parse(l) as Record<string, JsonValue>)
       for (const update of fixtures) {
         notify('session/update', { sessionId, update } as JsonValue)
+        countEmitted(update)
       }
       respond(id, { stopReason: 'end_turn' } as JsonValue)
     })

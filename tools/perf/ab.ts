@@ -34,7 +34,25 @@ interface Side {
   exe: string
 }
 
-function parseArgs(argv: string[]): { a: Side; b: Side; runs: number; scenario: string[] } {
+interface AbArgs {
+  a: Side
+  b: Side
+  runs: number
+  /** Per-run limit; a soak needs more than the default. */
+  timeoutMs: number
+  scenario: string[]
+}
+
+function positiveInt(flag: string, raw: string | undefined, fallback: number): number {
+  if (raw === undefined) return fallback
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${flag} must be a positive integer, got "${raw}"`)
+  }
+  return value
+}
+
+function parseArgs(argv: string[]): AbArgs {
   const sep = argv.indexOf('--')
   const own = sep === -1 ? argv : argv.slice(0, sep)
   const scenario = sep === -1 ? ['stream-storm'] : argv.slice(sep + 1)
@@ -46,19 +64,20 @@ function parseArgs(argv: string[]): { a: Side; b: Side; runs: number; scenario: 
   const b = get('--b')
   if (!a || !b)
     throw new Error(
-      'usage: node tools/perf/ab.ts --a <exe> --b <exe> [--runs N] -- <scenario> [flags]'
+      'usage: node tools/perf/ab.ts --a <exe> --b <exe> [--runs N] [--timeout-min M] -- <scenario> [flags]'
     )
   return {
     a: { exe: a },
     b: { exe: b },
-    runs: Number(get('--runs') ?? 5),
+    runs: positiveInt('--runs', get('--runs'), 5),
+    timeoutMs: positiveInt('--timeout-min', get('--timeout-min'), 15) * 60 * 1000,
     scenario
   }
 }
 
-function runOnce(side: Side, scenario: string[]): PerfRunResult | null {
+function runOnce(side: Side, scenario: string[], timeoutMs: number): PerfRunResult | null {
   const args = [path.join(TOOLKIT_ROOT, 'cli.ts'), ...scenario, '--exe', side.exe]
-  const proc = spawnSync('node', args, { encoding: 'utf8', timeout: 15 * 60 * 1000 })
+  const proc = spawnSync('node', args, { encoding: 'utf8', timeout: timeoutMs })
   const runId = /run (\S+) (ok|FAILED)/.exec(proc.stdout ?? '')?.[1]
   if (!runId) {
     console.log(`  no run id; exit ${proc.status}: ${(proc.stderr ?? '').slice(-300)}`)
@@ -78,14 +97,14 @@ function format(value: number, unit: string): string {
   return `${Math.round(value)}`
 }
 
-const { a, b, runs, scenario } = parseArgs(process.argv.slice(2))
+const { a, b, runs, timeoutMs, scenario } = parseArgs(process.argv.slice(2))
 const sides: Record<'A' | 'B', PerfRunResult[]> = { A: [], B: [] }
 for (let i = 0; i < runs; i++) {
   for (const [label, side] of [
     ['A', a],
     ['B', b]
   ] as const) {
-    const result = runOnce(side, scenario)
+    const result = runOnce(side, scenario, timeoutMs)
     const status = result ? result.meta.status : 'missing'
     console.log(`run ${i + 1}/${runs} ${label} ${status} ${result?.meta.runId ?? ''}`)
     if (result && result.meta.status === 'ok') sides[label].push(result)
