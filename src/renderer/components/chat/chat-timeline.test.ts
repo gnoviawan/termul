@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ContentBlock, ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
+import { subagentToolCall } from '@/lib/test-utils/subagent'
 import type { ChatMessage } from '@/stores/acp-store'
 import {
   activityParentTurn,
@@ -236,6 +237,20 @@ describe('groupTurnActivity', () => {
       expect(activity.hasFinalResponse).toBe(false)
       expect(activity.items.map(timelineItemId)).toEqual(['narration', 'failed'])
     }
+  })
+
+  it('does not flag a turn whose background subagent is still running', () => {
+    const items = buildTimeline(
+      [msg('user', 'user', 100, 1), msg('final', 'agent', 130, 4, 'Waiting for them')],
+      [
+        subagentToolCall(
+          { background: true },
+          { toolCallId: 'bg', status: 'in_progress', timestamp: 120, seq: 3 }
+        )
+      ]
+    )
+    const activity = groupTurnActivity(items, false).find((item) => item.kind === 'activity')
+    expect(activity?.kind === 'activity' && activity.attentionRequired).toBe(false)
   })
 
   it('keeps every media-bearing reply visible when later text and an empty tail arrive', () => {

@@ -70,27 +70,13 @@ export function SubagentSurfaceProvider({
   const [stack, setStack] = useState<PanelEntry[]>([])
   const top = stack[stack.length - 1] ?? null
 
-  const open = useCallback<SubagentSurface['open']>(
-    (id, siblings, options) => {
-      setStack((prev) =>
-        options?.nested && prev.length > 0 ? [...prev, { id, siblings }] : [{ id, siblings }]
-      )
-      log('info', `Opened subagent ${id.slice(0, 128)} in chat ${sessionId}`)
-    },
-    [sessionId]
-  )
-  const close = useCallback(() => {
-    setStack((prev) => {
-      if (prev.length > 0) log('info', `Closed the subagent panel in chat ${sessionId}`)
-      return []
-    })
-  }, [sessionId])
-  const back = useCallback(() => {
-    setStack((prev) => {
-      if (prev.length === 1) log('info', `Closed the subagent panel in chat ${sessionId}`)
-      return prev.slice(0, -1)
-    })
-  }, [sessionId])
+  const open = useCallback<SubagentSurface['open']>((id, siblings, options) => {
+    setStack((prev) =>
+      options?.nested && prev.length > 0 ? [...prev, { id, siblings }] : [{ id, siblings }]
+    )
+  }, [])
+  const close = useCallback(() => setStack([]), [])
+  const back = useCallback(() => setStack((prev) => prev.slice(0, -1)), [])
   const step = useCallback((delta: -1 | 1) => {
     setStack((prev) => {
       const current = prev[prev.length - 1]
@@ -117,11 +103,24 @@ export function SubagentSurfaceProvider({
     setStack([])
   }, [missing, top, sessionId])
 
+  const openId = top?.id ?? null
+  const loggedId = useRef<string | null>(null)
+  useEffect(() => {
+    if (openId === loggedId.current) return
+    loggedId.current = openId
+    log(
+      'info',
+      openId
+        ? `Showing subagent ${openId.slice(0, 128)} in chat ${sessionId}`
+        : `Closed the subagent panel in chat ${sessionId}`
+    )
+  }, [openId, sessionId])
+
   useOverlayRegistration('subagent-panel', isMobile && toolCall !== undefined, close)
 
   const value = useMemo<SubagentSurface>(
-    () => ({ sessionId, agentId, filePathContext, openId: top?.id ?? null, open }),
-    [sessionId, agentId, filePathContext, top?.id, open]
+    () => ({ sessionId, agentId, filePathContext, openId, open }),
+    [sessionId, agentId, filePathContext, openId, open]
   )
 
   let panel: ((sheet: boolean) => ReactNode) | null = null
@@ -170,6 +169,11 @@ export function SubagentSurfaceProvider({
             side={isMobile ? 'bottom' : 'right'}
             closeButton={false}
             aria-describedby={undefined}
+            onOpenAutoFocus={(event) => {
+              // Focusing Back would pop its tooltip over the header.
+              event.preventDefault()
+              ;(event.currentTarget as HTMLElement | null)?.focus()
+            }}
             onClick={(event) => {
               // A file link opened the editor, which the sheet would cover.
               const target = event.target as Element

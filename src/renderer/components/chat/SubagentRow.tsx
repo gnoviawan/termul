@@ -3,6 +3,7 @@ import { AgentIcon } from '@/components/agents/AgentIcon'
 import { Bot, Check, ChevronRight, LoaderCircle, X } from '@/components/icons'
 import { badgeVariants } from '@/components/ui/badge'
 import type { ToolCall } from '@/lib/acp-api'
+import { getAgentById } from '@/lib/agents/custom-agents'
 import { cn } from '@/lib/utils'
 import {
   type SubagentCounts,
@@ -100,7 +101,7 @@ export function SubagentAvatar({
         className
       )}
     >
-      {agentId ? (
+      {agentId && getAgentById(agentId) ? (
         <AgentIcon agentId={agentId} className="size-4" />
       ) : (
         <Bot size={16} className="text-muted-foreground" />
@@ -118,12 +119,19 @@ export function SubagentAvatar({
 }
 
 /** The agent type as an outline chip. */
-export function SubagentTypeChip({ type }: { type: string }): React.JSX.Element {
+export function SubagentTypeChip({
+  type,
+  className
+}: {
+  type: string
+  className?: string
+}): React.JSX.Element {
   return (
     <span
       className={cn(
         badgeVariants({ variant: 'outline' }),
-        'max-w-[12rem] shrink-0 truncate rounded-md px-1.5 py-0 text-3xs font-normal text-muted-foreground'
+        'max-w-[12rem] min-w-0 shrink-[10] truncate rounded-md px-1.5 py-0 text-3xs font-normal text-muted-foreground',
+        className
       )}
     >
       {type}
@@ -166,6 +174,9 @@ export function SubagentCountParts({ counts }: { counts: SubagentCounts }): Reac
     </>
   )
 }
+
+/** A row narrower than the chips need (phone, docked panel beside the chat) keeps the title. */
+const NARROW_HIDDEN = '@max-[36rem]:hidden'
 
 interface SubagentRowProps {
   toolCall: ToolCall
@@ -221,10 +232,12 @@ function SubagentRowComponent({
     >
       <SubagentAvatar status={status} />
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="flex min-w-0 items-center gap-2 overflow-hidden">
           <span className="min-w-0 truncate text-sm font-medium text-foreground">{title}</span>
-          {type && <SubagentTypeChip type={type} />}
-          {toolCall.subagent?.background && <SubagentTypeChip type="background" />}
+          {type && <SubagentTypeChip type={type} className={NARROW_HIDDEN} />}
+          {toolCall.subagent?.background && (
+            <SubagentTypeChip type="background" className={NARROW_HIDDEN} />
+          )}
         </span>
         {detail && (
           <span
@@ -240,7 +253,7 @@ function SubagentRowComponent({
       <SubagentStatusLabel
         toolCall={toolCall}
         status={status}
-        wordClassName="@max-[26rem]:sr-only"
+        wordClassName="@max-[36rem]:sr-only"
       />
       <SubagentElapsed toolCall={toolCall} status={status} className="min-w-[5ch]" />
       <ChevronRight size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" />

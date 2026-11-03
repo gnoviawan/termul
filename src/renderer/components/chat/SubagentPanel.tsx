@@ -98,13 +98,11 @@ function activitySegments(calls: readonly ToolCall[]): ActivitySegment[] {
 function Activity({
   toolCall,
   childCalls,
-  status,
   parentTurn,
   agentName
 }: {
   toolCall: ToolCall
   childCalls: readonly ToolCall[]
-  status: SubagentStatus
   parentTurn: ParentTurn
   agentName: string
 }): React.JSX.Element {
@@ -122,9 +120,7 @@ function Activity({
     if (transcript === 'none') {
       return <Missing>{agentName} doesn't report what this subagent does.</Missing>
     }
-    return (
-      <Missing>{status === 'running' ? 'No tool calls yet.' : 'It ran no tool calls.'}</Missing>
-    )
+    return <Missing>No tool calls to show.</Missing>
   }
   return (
     <Section title={<span className="tabular-nums">Activity · {childCalls.length}</span>}>
@@ -293,7 +289,7 @@ export function SubagentPanel({
             <h2 className="truncate text-sm font-semibold text-foreground">{title}</h2>
           )}
           {meta.length > 0 && (
-            <p className="truncate text-xs tabular-nums text-muted-foreground">
+            <p className="break-words text-xs tabular-nums text-muted-foreground">
               {meta.join(' · ')}
             </p>
           )}
@@ -312,7 +308,6 @@ export function SubagentPanel({
         <Activity
           toolCall={toolCall}
           childCalls={childCalls}
-          status={status}
           parentTurn={parentTurn}
           agentName={agentName}
         />
