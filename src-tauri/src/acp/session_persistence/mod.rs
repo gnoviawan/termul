@@ -1443,7 +1443,7 @@ impl SessionPersistence {
             // — they still participate in boundary detection via `universe`.
             let oldest_tail_seq = universe
                 .iter()
-                .filter(|r| !is_tool_event(&r.type_))
+                .filter(|r| !is_tool_log_record(&r.type_, &r.payload))
                 .map(|r| r.seq)
                 .min()
                 .unwrap_or(0);
@@ -1452,7 +1452,7 @@ impl SessionPersistence {
             // no seq (a corrupt edge) are always retained — the renderer
             // tolerates them.
             let mut records = universe.clone();
-            records.retain(|r| !is_tool_event(&r.type_) || r.seq >= oldest_tail_seq);
+            records.retain(|r| !is_tool_log_record(&r.type_, &r.payload) || r.seq >= oldest_tail_seq);
             // Find the first fold-relevant record the fold will process.
             // Only a `message_chunk` can open mid-run; any other type starts
             // deterministically regardless of preceding state.
@@ -1505,7 +1505,7 @@ impl SessionPersistence {
                 let records = self.replay_after(session_id, 0)?;
                 let tool_records = records
                     .iter()
-                    .filter(|record| is_tool_event(&record.type_))
+                    .filter(|record| is_tool_log_record(&record.type_, &record.payload))
                     .cloned()
                     .collect();
                 return Ok(TailReplay {
@@ -1704,10 +1704,19 @@ impl SessionPersistence {
         let records = self.replay_after_async(session_id.to_string(), 0).await?;
         let payload = crate::acp::session_payload::materialize_session_payload(&metadata, &records);
         log::info!(
-            "[acp-history] session_payload session_id={} messages={} tool_summaries={}",
+            "[acp-history] session_payload session_id={} messages={} tool_summaries={} subagents={}",
             crate::logging::redact_session_id(session_id),
             payload.messages.len(),
-            payload.tool_calls.len()
+            payload.tool_calls.len(),
+            payload
+                .tool_calls
+                .iter()
+                .filter(|call| {
+                    call.meta.as_ref().is_some_and(|meta| {
+                        meta.get(crate::acp::subagents::SUBAGENT_META_KEY).is_some()
+                    })
+                })
+                .count()
         );
         controls::log_payload_controls(session_id, payload.controls.as_ref());
         Ok(payload)

@@ -143,6 +143,7 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { buildTimeline } from '@/components/chat/chat-timeline'
+import { subagentChildCalls, subagentResultText } from '@/components/chat/subagent-strip'
 import { describeToolCall } from '@/components/chat/tool-call-summary'
 import {
   _clearPayloadCacheForTesting,
@@ -1503,6 +1504,66 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     expect(toolCalls[0].subagent).toEqual(record)
     expect(toolCalls[1]).toMatchObject({ subagent: nested, parentToolCallId: 'd1' })
     const items = buildTimeline(state.messages['s-sub'], toolCalls)
+    expect(items.flatMap((i) => (i.kind === 'tool' ? [i.tool.toolCallId] : []))).toEqual(['d1'])
+  })
+
+  it('restores a subagent with the calls it made, its text and its result', async () => {
+    const record = subagentRecord({
+      dispatchToolCallId: 'd1',
+      rootSessionId: 's-sub-detail',
+      background: true,
+      state: endedState('completed')
+    })
+    setCachedSessionPayload('s-sub-detail', {
+      metadata: {
+        id: 's-sub-detail',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 12,
+        status: 'closed'
+      },
+      messages: [
+        msg('turn:t1', 'user', 'review', 5) as never,
+        msg('snapshot:agent:12', 'agent', 'done', 12) as never
+      ],
+      toolCalls: [
+        {
+          toolCallId: 'd1',
+          kind: 'think',
+          status: 'completed',
+          seq: 7,
+          timestamp: 7,
+          content: [{ type: 'content', content: { type: 'text', text: 'Async agent launched.' } }],
+          subagentText: 'Found one stale selector.',
+          _meta: subagentMeta(record),
+          restoredSummary: false
+        },
+        {
+          toolCallId: 'c1',
+          kind: 'read',
+          status: 'completed',
+          title: 'Read src/store.ts',
+          locations: [{ path: 'src/store.ts' }],
+          seq: 8,
+          timestamp: 8,
+          _meta: { claudeCode: { parentToolUseId: 'd1' } },
+          restoredSummary: false
+        }
+      ] as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-sub-detail')
+    const state = useAcpStore.getState()
+    const toolCalls = state.toolCalls['s-sub-detail']
+    const children = subagentChildCalls(toolCalls, 'd1')
+    expect(children.map((call) => call.title)).toEqual(['Read src/store.ts'])
+    expect(subagentResultText(toolCalls[0])).toBe('Found one stale selector.')
+    const items = buildTimeline(state.messages['s-sub-detail'], toolCalls)
     expect(items.flatMap((i) => (i.kind === 'tool' ? [i.tool.toolCallId] : []))).toEqual(['d1'])
   })
 
