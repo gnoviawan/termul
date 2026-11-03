@@ -612,6 +612,25 @@ export const activeWirePromptTurns = new Map<SessionId, string>()
  */
 export const echoedWirePromptTurns = new Map<SessionId, string>()
 
+/**
+ * Queue resends for sessions whose prompt the host rejected as busy while this
+ * client saw no turn running: another client's reopen holds the host's turn
+ * gate, and no turn end will reach this client to flush the queue. Cleared on
+ * the session's next dispatched prompt.
+ */
+export const busyQueueRetries = new Map<
+  SessionId,
+  { attempts: number; timer: ReturnType<typeof setTimeout> | null }
+>()
+
+/** Test-only: cancel pending busy-queue resends. */
+export function _resetBusyQueueRetriesForTesting(): void {
+  for (const retry of busyQueueRetries.values()) {
+    if (retry.timer) clearTimeout(retry.timer)
+  }
+  busyQueueRetries.clear()
+}
+
 const ENDED_PROMPT_TURN_LIMIT = 256
 const endedPromptTurnIds = new Set<string>()
 

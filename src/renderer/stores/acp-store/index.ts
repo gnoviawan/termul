@@ -141,6 +141,7 @@ export * from './live-turn'
 export {
   _addEphemeralSessionIdForTesting,
   _handoffOnlyTurnIdsForTesting,
+  _resetBusyQueueRetriesForTesting,
   _resetEphemeralSessionIdsForTesting,
   _resetHistorySeqWatermarksForTesting,
   _resetInFlightPreparedForTesting,

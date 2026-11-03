@@ -23,7 +23,7 @@ import { getCachedSessionPayload, setCachedSessionPayload } from '@/lib/acp-hist
 import { AcpTransportError, isOutcomeUncertainError } from '@/lib/acp-transport'
 import { bumpTurnEndNotice } from '@/lib/agent-chat-notify'
 import { parseBrowserConsentTicket } from '@/lib/browser-consent-api'
-import { settleCommand } from '@/lib/command-engine'
+import { COMMAND_RESEND_DELAYS_MS, settleCommand } from '@/lib/command-engine'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
 import { readOnlyGuardOfSession } from '@/stores/github-chat-links-store'
@@ -61,6 +61,7 @@ import { withoutRejectedRateLimit } from '../rate-limit'
 import {
   activeWirePromptTurns,
   bugReportCollectors,
+  busyQueueRetries,
   claimPromptTurnEnd,
   commitMessageCollectors,
   echoedWirePromptTurns,
@@ -114,6 +115,30 @@ export function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId):
     // Agent-dead rejections are surfaced by the crash/disconnect events.
     if (isAgentDeadError(err)) return
     toast.error(`Failed to send queued message: ${String(err)}`)
+  })
+}
+
+/**
+ * Retry the queue of a session the host called busy while this client sees no
+ * turn running. The host's gate is then held by another client's reopen, which
+ * ends without any event here, so nothing else would flush the queue. Delays
+ * follow the command resend ladder; the last one repeats until a send goes out.
+ */
+function scheduleBusyQueueRetry(set: TurnEndSetter, sessionId: SessionId): void {
+  const retry = busyQueueRetries.get(sessionId) ?? { attempts: 0, timer: null }
+  if (retry.timer) return
+  const delayMs =
+    COMMAND_RESEND_DELAYS_MS[Math.min(retry.attempts, COMMAND_RESEND_DELAYS_MS.length - 1)]
+  retry.attempts += 1
+  retry.timer = setTimeout(() => {
+    retry.timer = null
+    flushNextQueuedPrompt(set, sessionId)
+  }, delayMs)
+  busyQueueRetries.set(sessionId, retry)
+  void logFrontendError({
+    level: 'info',
+    source: 'acp-store.busyQueueRetry',
+    message: `Prompt on session ${sessionId} was rejected as busy with no turn running here; retrying the queue in ${delayMs}ms (attempt ${retry.attempts})`
   })
 }
 
@@ -282,8 +307,11 @@ export async function runPromptTurn(
   let enqueued = false
   let userMessage: ChatMessage | null = null
   let openTurnId = ''
-  const previousOpenTurnId = session.openTurnId
   const skipUserAppend = Boolean(options?.skipUserAppend)
+  // A skipUserAppend send takes over the optimistic turn its caller painted
+  // for this same prompt (the launch seed, a crash retry). That turn was never
+  // sent, so a busy rejection must not restore it as a running one.
+  const previousOpenTurnId = skipUserAppend ? null : session.openTurnId
   // Mint the client turn-id HERE (not inside the transport) so the optimistic
   // user message below can share the same `turn:<turnId>` id as the server's
   // `user_prompt` echo → reliable dedup in `_onUserPrompt` regardless of block
@@ -560,6 +588,7 @@ export async function runPromptTurn(
     }
     dispatchedAgentId = liveSession.agentId
     settleDispatch(await send(liveSession, turnId))
+    busyQueueRetries.delete(sessionId)
   } catch (err) {
     if (isPromptTurnInProgressError(err)) {
       settleCommand(turnId, 'rejected')
@@ -586,6 +615,7 @@ export async function runPromptTurn(
         openTurnId,
         queuedOrigin
       )
+      if (!sessionTurnBusy(get().sessions[sessionId])) scheduleBusyQueueRetry(set, sessionId)
       return
     }
     // AD-6: losing the transport before the reply leaves the outcome UNKNOWN
