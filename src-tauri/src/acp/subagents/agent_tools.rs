@@ -77,7 +77,15 @@ fn apply_cursor(
     now_ms: u64,
 ) -> MappedToolEvent {
     let source = CURSOR_TASK.source;
-    apply_tool(records, root, event, now_ms, source, CURSOR_CAPS, absorb_cursor)
+    apply_tool(
+        records,
+        root,
+        event,
+        now_ms,
+        source,
+        CURSOR_CAPS,
+        absorb_cursor,
+    )
 }
 
 /// Cursor's `rawOutput`: `{durationMs, isBackground}` or `{error}`, both on
@@ -123,7 +131,9 @@ pub(crate) fn apply_cursor_task(
     };
     let source = records.get(&root, call).map(|tracked| tracked.source());
     if source != Some(SubagentSource::CursorTask) {
-        log::warn!("[acp] cursor/task for tool call {redacted}, which is not a Cursor task; ignored");
+        log::warn!(
+            "[acp] cursor/task for tool call {redacted}, which is not a Cursor task; ignored"
+        );
         return None;
     }
     if let Some(agent) = bounded_id(params.get("agentId")) {
@@ -162,7 +172,15 @@ fn apply_opencode(
     now_ms: u64,
 ) -> MappedToolEvent {
     let source = OPENCODE_TASK.source;
-    apply_tool(records, root, event, now_ms, source, FINAL_ONLY_CAPS, absorb_opencode)
+    apply_tool(
+        records,
+        root,
+        event,
+        now_ms,
+        source,
+        FINAL_ONLY_CAPS,
+        absorb_opencode,
+    )
 }
 
 /// OpenCode's `rawOutput`: `{output, metadata}` when completed, `{error,
@@ -224,7 +242,15 @@ fn apply_gemini(
     now_ms: u64,
 ) -> MappedToolEvent {
     let source = GEMINI_AGENT.source;
-    apply_tool(records, root, event, now_ms, source, FINAL_ONLY_CAPS, absorb_gemini)
+    apply_tool(
+        records,
+        root,
+        event,
+        now_ms,
+        source,
+        FINAL_ONLY_CAPS,
+        absorb_gemini,
+    )
 }
 
 /// The title names the subagent; it is the only field Gemini CLI sends.

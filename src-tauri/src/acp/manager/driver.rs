@@ -654,16 +654,16 @@ pub(super) async fn drive_connection(
         )
         .on_receive_request(
             async move |request: CursorTaskRequest, responder, _cx| {
-                super::native_subagents::deliver_cursor_task(
+                let delivered = super::native_subagents::deliver_cursor_task(
                     &cursor_state,
                     cursor_persistence.as_ref(),
                     &cursor_sinks,
                     &cursor_agent_id,
                     &request.0,
                 )
-                .await?;
+                .await;
                 let _ = responder.respond(serde_json::json!({}));
-                Ok(())
+                delivered
             },
             agent_client_protocol::on_receive_request!(),
         )

@@ -89,7 +89,9 @@ pub(super) async fn run_command_loop(
             let agent_name = response.agent_info.as_ref().map(|info| info.name.as_str());
             let family = crate::acp::subagents::AgentFamily::from_agent_name(agent_name);
             if family != crate::acp::subagents::AgentFamily::Other {
-                log::info!("[acp] agent {agent_id} is {family:?}: its subagent tool calls are mapped");
+                log::info!(
+                    "[acp] agent {agent_id} is {family:?}: its subagent tool calls are mapped"
+                );
             }
             driver_state.lock().subagent_records().set_agent(family);
 

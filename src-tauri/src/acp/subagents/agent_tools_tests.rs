@@ -102,14 +102,22 @@ fn a_cursor_task_completes_then_cursor_task_adds_its_model() {
     assert_eq!(filled["model"], "gpt-5.1-codex");
     assert_eq!(filled["usage"], json!({ "durationMs": 42000 }));
     assert_eq!(filled["endedAt"], 200, "the end time stays the call's");
-    assert_eq!(apply_cursor_task(&mut records, &task, 400), None, "a repeat changes nothing");
+    assert_eq!(
+        apply_cursor_task(&mut records, &task, 400),
+        None,
+        "a repeat changes nothing"
+    );
 }
 
 #[test]
 fn a_cursor_task_error_fails_the_record_although_its_status_is_completed() {
     let mut records = SubagentRecords::default();
     cursor_start(&mut records, "tool_2", "explore");
-    let done = cursor_done(&mut records, "tool_2", json!({ "error": "Subagent hit its turn limit" }));
+    let done = cursor_done(
+        &mut records,
+        "tool_2",
+        json!({ "error": "Subagent hit its turn limit" }),
+    );
     assert_eq!(done["activity"], "idle");
     assert_eq!(
         done["end"],
@@ -121,7 +129,11 @@ fn a_cursor_task_error_fails_the_record_although_its_status_is_completed() {
 fn a_cursor_background_task_keeps_running_after_its_call_completes() {
     let mut records = SubagentRecords::default();
     cursor_start(&mut records, "tool_3", "shell");
-    let done = cursor_done(&mut records, "tool_3", json!({ "durationMs": 900, "isBackground": true }));
+    let done = cursor_done(
+        &mut records,
+        "tool_3",
+        json!({ "durationMs": 900, "isBackground": true }),
+    );
     assert_eq!(done["background"], true);
     assert_eq!(done["activity"], "running");
 }
@@ -146,7 +158,10 @@ fn cursor_task_for_another_call_changes_nothing() {
     let mut records = SubagentRecords::default();
     let untracked = json!({ "toolCallId": "tool_9", "model": "m" });
     assert_eq!(apply_cursor_task(&mut records, &untracked, 1), None);
-    assert_eq!(apply_cursor_task(&mut records, &json!({ "model": "m" }), 1), None);
+    assert_eq!(
+        apply_cursor_task(&mut records, &json!({ "model": "m" }), 1),
+        None
+    );
 
     map(
         &mut records,
@@ -161,7 +176,12 @@ fn cursor_task_for_another_call_changes_nothing() {
     );
     let claude = json!({ "toolCallId": "toolu_1", "model": "m" });
     assert_eq!(apply_cursor_task(&mut records, &claude, 2), None);
-    assert_eq!(records.record(ROOT, "toolu_1").and_then(|r| r.model.clone()), None);
+    assert_eq!(
+        records
+            .record(ROOT, "toolu_1")
+            .and_then(|r| r.model.clone()),
+        None
+    );
 }
 
 #[test]
@@ -309,7 +329,12 @@ fn a_gemini_cli_subagent_runs_until_its_report_arrives() {
     let mut records = SubagentRecords::default();
     records.set_agent(AgentFamily::GeminiCli);
     let title = "Delegating to agent 'codebase_investigator'";
-    let start = record(&map(&mut records, "tool_call", gemini_call("in_progress", title), 100));
+    let start = record(&map(
+        &mut records,
+        "tool_call",
+        gemini_call("in_progress", title),
+        100,
+    ));
     assert_eq!(
         start,
         json!({
@@ -326,7 +351,8 @@ fn a_gemini_cli_subagent_runs_until_its_report_arrives() {
         })
     );
     let mut done = gemini_call("completed", title);
-    done["content"] = json!([{ "type": "content", "content": { "type": "text", "text": "Report" } }]);
+    done["content"] =
+        json!([{ "type": "content", "content": { "type": "text", "text": "Report" } }]);
     let done = record(&map(&mut records, "tool_call_update", done, 200));
     assert_eq!(done["end"], json!({ "reason": "completed" }));
 }
@@ -335,7 +361,12 @@ fn a_gemini_cli_subagent_runs_until_its_report_arrives() {
 fn a_gemini_title_on_another_agent_is_not_a_subagent() {
     let mut records = SubagentRecords::default();
     let title = "Delegating to agent 'generalist'";
-    let mapped = map(&mut records, "tool_call", gemini_call("in_progress", title), 1);
+    let mapped = map(
+        &mut records,
+        "tool_call",
+        gemini_call("in_progress", title),
+        1,
+    );
     assert!(mapped.is_empty());
     assert_eq!(records.len(), 0);
 }
@@ -350,7 +381,12 @@ fn other_gemini_think_calls_are_not_subagents() {
         "Delegating to agent 'a' and 'b'",
         "Delegating to agent 'generalist' now",
     ] {
-        let mapped = map(&mut records, "tool_call", gemini_call("in_progress", title), 1);
+        let mapped = map(
+            &mut records,
+            "tool_call",
+            gemini_call("in_progress", title),
+            1,
+        );
         assert!(mapped.is_empty(), "{title}");
     }
     let mut shell = gemini_call("in_progress", "Delegating to agent 'generalist'");

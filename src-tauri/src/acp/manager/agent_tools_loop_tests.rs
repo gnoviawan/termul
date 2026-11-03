@@ -196,7 +196,10 @@ async fn a_cursor_task_gets_its_model_from_cursor_task_and_the_request_is_answer
     assert_eq!(events[2].1["update"]["toolCallId"], "tool_1");
     assert_eq!(filled["model"], "gpt-5.1-codex");
     assert_eq!(filled["usage"]["durationMs"], 4200);
-    assert_eq!(events[3].1["content"]["text"], "acked", "cursor/task is answered with {{}}");
+    assert_eq!(
+        events[3].1["content"]["text"], "acked",
+        "cursor/task is answered with {{}}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

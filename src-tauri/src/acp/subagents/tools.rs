@@ -385,7 +385,8 @@ fn apply_claude(
         live_progress: false,
         usage: true,
     };
-    apply_tool(records, root, event, now_ms, CLAUDE_META.source, caps, ToolView::absorb_claude)
+    let (source, absorb) = (CLAUDE_META.source, ToolView::absorb_claude);
+    apply_tool(records, root, event, now_ms, source, caps, absorb)
 }
 
 fn apply_heuristic(
@@ -400,7 +401,8 @@ fn apply_heuristic(
         live_progress: false,
         usage: false,
     };
-    apply_tool(records, root, event, now_ms, TOOL_HEURISTIC.source, caps, |_, _| {})
+    let source = TOOL_HEURISTIC.source;
+    apply_tool(records, root, event, now_ms, source, caps, |_, _| {})
 }
 
 /// Apply one event of a dispatch call: the shared fields, then the source's

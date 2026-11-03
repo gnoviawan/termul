@@ -131,7 +131,10 @@ impl SubagentRecords {
         }
     }
 
-    fn apply(entry: &mut DispatchEntry, update: impl FnOnce(&mut DispatchEntry)) -> Option<Subagent> {
+    fn apply(
+        entry: &mut DispatchEntry,
+        update: impl FnOnce(&mut DispatchEntry),
+    ) -> Option<Subagent> {
         let before = entry.record.clone();
         update(entry);
         if entry.record == before {
