@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { ToolCall } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
 import type { ChatMessage } from '@/stores/acp-store/types'
@@ -7,7 +7,9 @@ import {
   lastUserBoundary,
   runningBackgroundSubagents,
   type SubagentCounts,
+  type SubagentStatus,
   selectCurrentTurnSubagents,
+  subagentParentTurn,
   subagentStatus,
   withRunningBackground
 } from './subagent-strip'
@@ -19,12 +21,12 @@ export interface CurrentTurnSubagents {
   earlier: number
   /** Background subagents still running, from any turn. */
   backgroundRunning: number
+  /** Status per row, in row order. */
+  statuses: SubagentStatus[]
   counts: SubagentCounts
-  /** Settle time per subagent id, stamped on an observed running -> settled transition. */
-  endedAt: Readonly<Record<string, number>>
 }
 
-/** The pill's subagents, their status counts and their settle times. */
+/** The pill's subagents and their statuses. */
 export function useCurrentTurnSubagents(
   toolCalls: readonly ToolCall[],
   messages: readonly ChatMessage[],
@@ -47,34 +49,28 @@ export function useCurrentTurnSubagents(
     [toolCalls, messages]
   )
   const subagents = useMemo(() => withRunningBackground(current, background), [current, background])
-  const counts = countSubagents(subagents, turnActive)
-
-  // Settle time is stamped only on an observed running -> settled transition,
-  // so history-loaded rows never show a bogus duration.
-  const [endedAt, setEndedAt] = useState<Record<string, number>>({})
-  const prevRunning = useRef(new Map<string, boolean>())
-  useEffect(() => {
-    const settled: string[] = []
-    for (const tc of subagents) {
-      const running = subagentStatus(tc, turnActive) === 'running'
-      if (prevRunning.current.get(tc.toolCallId) === true && !running) settled.push(tc.toolCallId)
-      prevRunning.current.set(tc.toolCallId, running)
-    }
-    if (settled.length === 0) return
-    const stamp = Date.now()
-    setEndedAt((prev) => {
-      const next = { ...prev }
-      for (const id of settled) next[id] ??= stamp
-      return next
-    })
-  }, [subagents, turnActive])
+  const statuses = useMemo(
+    () =>
+      subagents.map((tc) =>
+        subagentStatus(
+          tc,
+          subagentParentTurn(
+            tc,
+            hasUser ? { seq: lastUserSeq, timestamp: lastUserTimestamp } : null,
+            turnActive
+          )
+        )
+      ),
+    [subagents, hasUser, lastUserSeq, lastUserTimestamp, turnActive]
+  )
+  const counts = countSubagents(statuses)
 
   return {
     subagents,
     earlier: subagents.length - current.length,
     backgroundRunning: background.length,
-    counts,
-    endedAt
+    statuses,
+    counts
   }
 }
 

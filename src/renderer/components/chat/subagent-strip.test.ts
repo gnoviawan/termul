@@ -7,13 +7,11 @@ import {
 } from '@/lib/test-utils/subagent'
 import {
   countSubagents,
-  formatElapsed,
+  formatSubagentElapsed,
   formatTokens,
-  isBackgroundSubagent,
   runningBackgroundSubagents,
   selectCurrentTurnSubagents,
   subagentDurationMs,
-  subagentMetrics,
   subagentStatus,
   subagentTitle,
   subagentType
@@ -81,29 +79,34 @@ describe('selectCurrentTurnSubagents', () => {
 
 describe('subagentStatus and counts', () => {
   it('maps a running record by the turn and an idle record by its end', () => {
-    expect(subagentStatus(sub({ status: 'pending' }), true)).toBe('running')
-    expect(subagentStatus(sub({ status: undefined }), true)).toBe('running')
-    expect(subagentStatus(settled('completed'), true)).toBe('done')
-    expect(subagentStatus(settled('failed'), true)).toBe('failed')
-    expect(subagentStatus(sub({}, { state: endedState('cancelled') }), true)).toBe('stopped')
-    expect(subagentStatus(sub({}, { state: endedState('unexplained') }), true)).toBe('stopped')
+    expect(subagentStatus(sub({ status: 'pending' }), 'active')).toBe('running')
+    expect(subagentStatus(sub({ status: undefined }), 'active')).toBe('running')
+    expect(subagentStatus(settled('completed'), 'active')).toBe('done')
+    expect(subagentStatus(settled('failed'), 'active')).toBe('failed')
+    expect(subagentStatus(sub({}, { state: endedState('cancelled') }), 'active')).toBe('stopped')
+    expect(subagentStatus(sub({}, { state: endedState('unexplained') }), 'active')).toBe('stopped')
   })
 
   it('shows an unknown record as stopped, not failed', () => {
-    expect(subagentStatus(sub({}, { state: { activity: 'unknown' } }), true)).toBe('stopped')
+    expect(subagentStatus(sub({}, { state: { activity: 'unknown' } }), 'active')).toBe('stopped')
   })
 
   it('counts waiting for input as running', () => {
-    expect(subagentStatus(sub({}, { state: { activity: 'requires_action' } }), true)).toBe(
+    expect(subagentStatus(sub({}, { state: { activity: 'requires_action' } }), 'active')).toBe(
       'running'
     )
   })
 
-  it('classifies in-flight calls as stopped after the turn ended, counted as failed', () => {
-    expect(subagentStatus(sub({ status: 'pending' }), false)).toBe('stopped')
-    expect(subagentStatus(sub({ status: 'in_progress' }), false)).toBe('stopped')
+  it('classifies in-flight calls as stopped after the turn ended, apart from failed', () => {
+    expect(subagentStatus(sub({ status: 'pending' }), 'ended')).toBe('stopped')
+    expect(subagentStatus(sub({ status: 'in_progress' }), 'ended')).toBe('stopped')
     const list = [sub({ toolCallId: '1' }), settled('failed', { toolCallId: '2' })]
-    expect(countSubagents(list, false)).toEqual({ running: 0, done: 0, failed: 2 })
+    expect(countSubagents(list.map((tc) => subagentStatus(tc, 'ended')))).toEqual({
+      running: 0,
+      done: 0,
+      failed: 1,
+      stopped: 1
+    })
   })
 
   it('counts each bucket', () => {
@@ -113,7 +116,12 @@ describe('subagentStatus and counts', () => {
       settled('completed', { toolCallId: '3' }),
       settled('failed', { toolCallId: '4' })
     ]
-    expect(countSubagents(list, true)).toEqual({ running: 1, done: 2, failed: 1 })
+    expect(countSubagents(list.map((tc) => subagentStatus(tc, 'active')))).toEqual({
+      running: 1,
+      done: 2,
+      failed: 1,
+      stopped: 0
+    })
   })
 })
 
@@ -131,27 +139,14 @@ describe('title and type', () => {
   })
 })
 
-describe('subagentMetrics', () => {
-  it('reads tokens and duration from the record usage', () => {
-    expect(subagentMetrics(sub({}, { usage: { totalTokens: 37847, durationMs: 3574 } }))).toEqual({
-      totalTokens: 37847,
-      durationMs: 3574
-    })
-  })
-
-  it('returns nothing when usage is absent', () => {
-    expect(subagentMetrics(sub())).toEqual({})
-  })
-})
-
 describe('formatters', () => {
-  it('formats elapsed as mm:ss and h:mm:ss', () => {
-    expect(formatElapsed(0)).toBe('00:00')
-    expect(formatElapsed(3574)).toBe('00:03')
-    expect(formatElapsed(65_000)).toBe('01:05')
-    expect(formatElapsed(3_600_000)).toBe('1:00:00')
-    expect(formatElapsed(3_725_000)).toBe('1:02:05')
-    expect(formatElapsed(-5)).toBe('00:00')
+  it('formats elapsed as 42s, 3m 05s and 1h 02m', () => {
+    expect(formatSubagentElapsed(0)).toBe('0s')
+    expect(formatSubagentElapsed(42_900)).toBe('42s')
+    expect(formatSubagentElapsed(185_000)).toBe('3m 05s')
+    expect(formatSubagentElapsed(3_600_000)).toBe('1h 00m')
+    expect(formatSubagentElapsed(3_725_000)).toBe('1h 02m')
+    expect(formatSubagentElapsed(-5)).toBe('0s')
   })
 
   it('formats tokens compactly', () => {
@@ -167,29 +162,33 @@ describe('background subagents', () => {
     sub({ status: 'completed', ...partial }, { background: true, ...record })
 
   it('keeps running after the turn ends even though the launch call completed', () => {
-    expect(subagentStatus(background(), true)).toBe('running')
-    expect(subagentStatus(background(), false)).toBe('running')
+    expect(subagentStatus(background(), 'active')).toBe('running')
+    expect(subagentStatus(background(), 'ended')).toBe('running')
     expect(
-      countSubagents([background(), settled('completed', { toolCallId: 'f' })], false)
-    ).toEqual({ running: 1, done: 1, failed: 0 })
+      countSubagents(
+        [background(), settled('completed', { toolCallId: 'f' })].map((tc) =>
+          subagentStatus(tc, 'ended')
+        )
+      )
+    ).toEqual({ running: 1, done: 1, failed: 0, stopped: 0 })
   })
 
   it('lets a known end state win over an active turn', () => {
     const ended = (reason: 'completed' | 'failed' | 'cancelled') =>
       background({}, { state: endedState(reason) })
-    expect(subagentStatus(ended('completed'), true)).toBe('done')
-    expect(subagentStatus(ended('failed'), true)).toBe('failed')
-    expect(subagentStatus(ended('cancelled'), true)).toBe('stopped')
+    expect(subagentStatus(ended('completed'), 'active')).toBe('done')
+    expect(subagentStatus(ended('failed'), 'active')).toBe('failed')
+    expect(subagentStatus(ended('cancelled'), 'active')).toBe('stopped')
   })
 
   it('reads a background launch that lost its end as done, a foreground one as stopped', () => {
-    expect(subagentStatus(background({ status: 'in_progress' }), false)).toBe('done')
-    expect(subagentStatus(sub({ status: 'in_progress' }), false)).toBe('stopped')
+    expect(subagentStatus(background({ status: 'in_progress' }), 'ended')).toBe('done')
+    expect(subagentStatus(sub({ status: 'in_progress' }), 'ended')).toBe('stopped')
   })
 
   it('stays running after the turn when the source reports progress live', () => {
     const live = sub({ status: 'in_progress' }, { source: 'acp-rfd', caps: { liveProgress: true } })
-    expect(subagentStatus(live, false)).toBe('running')
+    expect(subagentStatus(live, 'ended')).toBe('running')
   })
 
   it('times a background row from the host start stamp to its end, not by the launch duration', () => {
@@ -217,11 +216,6 @@ describe('background subagents', () => {
   it('keeps the reported total for a foreground row', () => {
     const call = settled('completed', { timestamp: 1_000 }, { usage: { durationMs: 4_000 } })
     expect(subagentDurationMs(call, 'done', 0, 99_000)).toBe(4_000)
-  })
-
-  it('flags background rows', () => {
-    expect(isBackgroundSubagent(background())).toBe(true)
-    expect(isBackgroundSubagent(sub())).toBe(false)
   })
 })
 

@@ -499,6 +499,13 @@ import {
   AUTO_RESUME_FAILED_REASON
 } from './use-idle-stop-auto-resume'
 
+/** The chat pane root: the `@container` the subagent surface wraps. */
+function chatRoot(container: HTMLElement): HTMLElement {
+  const root = container.querySelector<HTMLElement>('.\\@container')
+  if (!root) throw new Error('chat pane root not rendered')
+  return root
+}
+
 function seedLiveSession(id: string, lastError: string | null = null): void {
   sessionRef.current = mockAcpSession({ id, cwd: '/w', status: 'closed', lastError })
 }
@@ -571,8 +578,8 @@ describe('AgentChatPanel restored-tab rehydration', () => {
   it('marks the live chat pane root as a pane-scoped @container (Story 5.1)', () => {
     seedLiveSession('s1')
     const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(container.firstElementChild?.className).toContain('@container')
-    expect(container.firstElementChild?.className).toMatch(/flex h-full flex-col/)
+    // The subagent surface wraps the pane root so its panel can dock beside it.
+    expect(chatRoot(container).className).toMatch(/flex h-full flex-col/)
   })
 
   it('does not rehydrate a hidden tab (no background cold spawns)', () => {
@@ -1196,15 +1203,13 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
     seedLiveSession('s1')
     oskRef.current = { isOskOpen: true, keyboardHeight: 300, height: 500, offsetTop: 300 }
     const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
-    const root = container.firstElementChild as HTMLElement
-    expect(root.style.paddingBottom).toContain('300px')
+    expect(chatRoot(container).style.paddingBottom).toContain('300px')
   })
 
   it('does not apply OSK padding when the OSK is closed (desktop non-regression)', () => {
     seedLiveSession('s1')
     const { container } = render(<AgentChatPanel sessionId="s1" isVisible />)
-    const root = container.firstElementChild as HTMLElement
-    expect(root.style.paddingBottom).toBe('')
+    expect(chatRoot(container).style.paddingBottom).toBe('')
   })
 
   describe('reconnect grace period', () => {

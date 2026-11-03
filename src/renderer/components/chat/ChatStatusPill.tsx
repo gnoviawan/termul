@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, ChevronRight, FileDiff } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { DiffStatCounts } from '@/components/ui/diff-stat-counts'
@@ -7,7 +7,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { ToolCall } from '@/lib/acp-api'
-import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/stores/acp-store/types'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
@@ -15,12 +14,11 @@ import { ChangedFilesRows, openChangedFile } from './ChangedFilesList'
 import { CHAT_SPRING_SOFT } from './chat-motion'
 import { SlidingTabs } from './SlidingTabs'
 import {
-  RunningIcon,
   SubagentCountParts,
-  SubagentDetails,
-  SubagentRows,
+  SubagentRow,
+  SubagentStatusIcon,
   subagentCountSummary
-} from './SubagentList'
+} from './SubagentRow'
 import { useChatChangedFiles } from './use-chat-changed-files'
 import { useBackgroundWait, useCurrentTurnSubagents } from './use-current-turn-subagents'
 
@@ -36,7 +34,6 @@ interface ChatStatusPillProps {
   messages: readonly ChatMessage[]
   /** Session `activeTurn`: a subagent with no status yet counts as running while true; its end refreshes git state. */
   turnActive: boolean
-  filePathContext: FilePathResolutionContext | undefined
   /**
    * Phone shell: a "Git" action beside the changed-files totals opens the Git
    * sheet. It is called with the pill, which the Git sheet returns focus to.
@@ -87,7 +84,6 @@ export function ChatStatusPill({
   toolCalls,
   messages,
   turnActive,
-  filePathContext,
   onOpenGitChanges,
   hidden = false,
   isVisible = true,
@@ -97,7 +93,6 @@ export function ChatStatusPill({
   const isMobile = useMobileWebShell()
   const [open, setOpen] = useState(false)
   const [pickedTab, setPickedTab] = useState<StatusTab | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   // Set while focus is handed to the Git sheet, so closing this sheet does not
@@ -105,7 +100,7 @@ export function ChatStatusPill({
   const handingOffFocus = useRef(false)
 
   const changes = useChatChangedFiles(cwd, toolCalls, turnActive)
-  const { subagents, earlier, backgroundRunning, counts, endedAt } = useCurrentTurnSubagents(
+  const { subagents, earlier, backgroundRunning, statuses, counts } = useCurrentTurnSubagents(
     toolCalls,
     messages,
     turnActive
@@ -137,6 +132,7 @@ export function ChatStatusPill({
   }, [tabCount, open, isMobile])
 
   const subagentSummary = subagentCountSummary(counts)
+  const subagentIds = useMemo(() => subagents.map((tc) => tc.toolCallId), [subagents])
   const hasTotals = changes.totalAdded > 0 || changes.totalRemoved > 0
   const listClassName = isMobile ? 'max-h-[min(22.5rem,55dvh)]' : 'max-h-72'
 
@@ -200,17 +196,24 @@ export function ChatStatusPill({
           {waitingLabel && (
             <p className="px-2.5 pb-1 text-2xs text-muted-foreground">{waitingLabel}</p>
           )}
-          <SubagentRows
-            subagents={subagents}
-            turnActive={turnActive}
-            endedAt={endedAt}
-            running={counts.running}
-            className={listClassName}
-            onSelect={(id) => {
-              setOpen(false)
-              setSelectedId(id)
-            }}
-          />
+          <ul
+            className={cn(
+              'scroller-thin flex flex-col overflow-y-auto overscroll-contain',
+              listClassName
+            )}
+          >
+            {subagents.map((tc, i) => (
+              <li key={tc.toolCallId}>
+                <SubagentRow
+                  toolCall={tc}
+                  status={statuses[i] ?? 'stopped'}
+                  siblings={subagentIds}
+                  surface="popover"
+                  onOpen={close}
+                />
+              </li>
+            ))}
+          </ul>
         </>
       )
     }
@@ -300,7 +303,7 @@ export function ChatStatusPill({
       {subagents.length > 0 && (
         <>
           {counts.running > 0 ? (
-            <RunningIcon />
+            <SubagentStatusIcon status="running" />
           ) : (
             <Bot size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />
           )}
@@ -386,14 +389,6 @@ export function ChatStatusPill({
           </motion.div>
         )}
       </AnimatePresence>
-      <SubagentDetails
-        toolCalls={toolCalls}
-        subagents={subagents}
-        selectedId={selectedId}
-        turnActive={turnActive}
-        filePathContext={filePathContext}
-        onClose={() => setSelectedId(null)}
-      />
     </>
   )
 }

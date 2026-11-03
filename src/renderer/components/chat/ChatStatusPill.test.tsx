@@ -49,7 +49,6 @@ function Pill({ toolCalls, hidden }: { toolCalls: ToolCall[]; hidden?: boolean }
       toolCalls={toolCalls}
       messages={[user]}
       turnActive={false}
-      filePathContext={undefined}
       hidden={hidden}
     />
   )

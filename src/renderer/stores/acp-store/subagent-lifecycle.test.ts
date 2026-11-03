@@ -168,7 +168,7 @@ describe('subagent record ingest', () => {
     const ended = { ...record, ...endedState('completed'), endedAt: 9_000 }
     ingest('update', { toolCallId: 'tc-1', _meta: subagentMeta(ended) })
     expect(stored('tc-1').subagent).toEqual(ended)
-    expect(subagentStatus(stored('tc-1'), true)).toBe('done')
+    expect(subagentStatus(stored('tc-1'), 'active')).toBe('done')
   })
 
   it('keeps the record when an update does not carry it, or carries a malformed one', () => {
@@ -177,7 +177,7 @@ describe('subagent record ingest', () => {
     ingest('update', { toolCallId: 'tc-1', status: 'completed', _meta: { claudeCode: {} } })
     expect(stored('tc-1').status).toBe('completed')
     expect(stored('tc-1').subagent).toEqual(record)
-    expect(subagentStatus(stored('tc-1'), false)).toBe('running')
+    expect(subagentStatus(stored('tc-1'), 'ended')).toBe('running')
 
     ingest('update', { toolCallId: 'tc-1', _meta: { [SUBAGENT_META_KEY]: { activity: 'idle' } } })
     expect(stored('tc-1').subagent).toEqual(record)
@@ -223,7 +223,7 @@ describe('cancelRunningSubagents', () => {
       end: { reason: 'unexplained' },
       endedAt: 20
     })
-    expect(subagentStatus(settled.s1[0] as ToolCall, false)).toBe('stopped')
+    expect(subagentStatus(settled.s1[0] as ToolCall, 'ended')).toBe('stopped')
     expect(settled.s1[1]).toBe(done)
     expect(settled.s2).toBe(toolCalls.s2)
     expect(cancelRunningSubagents({ toolCalls: settled, messages: {} }, ['s1'], 30)).toBe(settled)

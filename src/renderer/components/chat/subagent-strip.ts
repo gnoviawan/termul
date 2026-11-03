@@ -4,17 +4,19 @@
  * duration. No React/store dependency, so it is directly unit-testable.
  */
 import type { SubagentEndReason } from '@shared/types/subagent'
-import type { ToolCall } from '@/lib/acp-api'
-import { isSubagentCall, isSubagentRunning } from './tool-call-summary'
+import type { ContentBlock, ToolCall } from '@/lib/acp-api'
+import {
+  describeToolCall,
+  isSubagentCall,
+  isSubagentRunning,
+  type ParentTurn,
+  readableOutput
+} from './tool-call-summary'
 
-/** `stopped`: cancelled, ended without a reason, or lost when its turn ended. Counts as failed. */
+/** `stopped`: cancelled, ended without a reason, or lost when its turn ended. */
 export type SubagentStatus = 'running' | 'done' | 'failed' | 'stopped'
 
-export interface SubagentCounts {
-  running: number
-  done: number
-  failed: number
-}
+export type SubagentCounts = Record<SubagentStatus, number>
 
 /** Fields of the latest user message the turn boundary needs. */
 export interface TurnBoundary {
@@ -118,13 +120,25 @@ const END_STATUS: Record<SubagentEndReason, SubagentStatus> = {
 }
 
 /**
- * Status of a current-turn row; `turnActive` is the chat's `activeTurn`. An
- * `unknown` record is not a failure. A record still running that the turn
+ * Where a subagent's turn stands: the latest turn is `active` while the chat
+ * runs it and `ended` after; an older turn is `superseded`.
+ */
+export function subagentParentTurn(
+  toolCall: ToolCall,
+  lastUserMessage: TurnBoundary | null,
+  turnActive: boolean
+): ParentTurn {
+  if (lastUserMessage !== null && !isAfterBoundary(toolCall, lastUserMessage)) return 'superseded'
+  return turnActive ? 'active' : 'ended'
+}
+
+/**
+ * An `unknown` record is not a failure. A record still running that the turn
  * rules no longer count lost its end: a background launch reads as done, a
  * foreground one as stopped.
  */
-export function subagentStatus(toolCall: ToolCall, turnActive: boolean): SubagentStatus {
-  if (isSubagentRunning(toolCall, turnActive ? 'active' : 'ended')) return 'running'
+export function subagentStatus(toolCall: ToolCall, parentTurn: ParentTurn): SubagentStatus {
+  if (isSubagentRunning(toolCall, parentTurn)) return 'running'
   const record = toolCall.subagent
   if (!record) return 'stopped'
   switch (record.activity) {
@@ -136,11 +150,6 @@ export function subagentStatus(toolCall: ToolCall, turnActive: boolean): Subagen
     case 'requires_action':
       return record.background ? 'done' : 'stopped'
   }
-}
-
-/** True for a dispatch that keeps running after its launch call returns. */
-export function isBackgroundSubagent(toolCall: ToolCall): boolean {
-  return toolCall.subagent?.background === true
 }
 
 const NO_CHILD_CALLS: readonly ToolCall[] = []
@@ -176,15 +185,9 @@ export function subagentDurationMs(
   return endedAt !== undefined ? Math.max(0, endedAt - started) : total
 }
 
-export function countSubagents(
-  toolCalls: readonly ToolCall[],
-  turnActive: boolean
-): SubagentCounts {
-  const counts: SubagentCounts = { running: 0, done: 0, failed: 0 }
-  for (const tc of toolCalls) {
-    const status = subagentStatus(tc, turnActive)
-    counts[status === 'stopped' ? 'failed' : status] += 1
-  }
+export function countSubagents(statuses: readonly SubagentStatus[]): SubagentCounts {
+  const counts: SubagentCounts = { running: 0, done: 0, failed: 0, stopped: 0 }
+  for (const status of statuses) counts[status] += 1
   return counts
 }
 
@@ -197,23 +200,16 @@ export function subagentType(toolCall: ToolCall): string | undefined {
   return toolCall.subagent?.role ?? toolCall.subagent?.description
 }
 
-/** Total tokens and duration the source reported. */
-export function subagentMetrics(toolCall: ToolCall): {
-  totalTokens?: number
-  durationMs?: number
-} {
-  const usage = toolCall.subagent?.usage
-  return { totalTokens: usage?.totalTokens, durationMs: usage?.durationMs }
-}
-
-/** `mm:ss`, or `h:mm:ss` from one hour up. Negative/NaN clamp to 0. */
-export function formatElapsed(ms: number): string {
+/** `42s`, `3m 05s`, `1h 02m`. Negative/NaN clamp to `0s`. */
+export function formatSubagentElapsed(ms: number): string {
   const total = Number.isFinite(ms) && ms > 0 ? Math.floor(ms / 1000) : 0
   const hours = Math.floor(total / 3600)
   const minutes = Math.floor((total % 3600) / 60)
   const seconds = total % 60
   const pad = (n: number): string => String(n).padStart(2, '0')
-  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`
+  if (hours > 0) return `${hours}h ${pad(minutes)}m`
+  if (minutes > 0) return `${minutes}m ${pad(seconds)}s`
+  return `${seconds}s`
 }
 
 /** `842 tok`, `37.8k tok`, `1.2M tok`. */
@@ -224,4 +220,82 @@ export function formatTokens(tokens: number): string {
     `${value.toFixed(1).replace(/\.0$/, '')}${unit} tok`
   if (n < 1_000_000) return compact(n / 1000, 'k')
   return compact(n / 1_000_000, 'M')
+}
+
+function firstLine(text: string | undefined): string | undefined {
+  const line = text
+    ?.split('\n')
+    .map((part) => part.trim())
+    .find((part) => part.length > 0)
+  return line && line.length > 0 ? line : undefined
+}
+
+function lastLine(text: string | undefined): string | undefined {
+  const lines = text?.split('\n').map((part) => part.trim()) ?? []
+  for (let i = lines.length - 1; i >= 0; i--) if (lines[i]) return lines[i]
+  return undefined
+}
+
+/**
+ * The subagent's final answer, once. A foreground dispatch returns it as the
+ * call's result; a background launch returns only a receipt, so its answer is
+ * the text it streamed, if any.
+ */
+export function subagentResultText(toolCall: ToolCall): string | undefined {
+  const streamed = toolCall.subagentText?.trim() ? toolCall.subagentText : undefined
+  if (toolCall.subagent?.background) return streamed
+  const text = (toolCall.content ?? [])
+    .flatMap((item) => {
+      const block =
+        item.type === 'content' ? (item as { content?: ContentBlock }).content : undefined
+      return block?.type === 'text' && block.text ? [block.text] : []
+    })
+    .join('\n\n')
+  if (text.trim()) return text
+  const raw = readableOutput(toolCall.rawOutput)
+  return raw.trim() ? raw : streamed
+}
+
+/** Tool calls the subagent made, from its live transcript or the usage it reported. */
+export function subagentToolCount(
+  toolCall: ToolCall,
+  childCalls: readonly ToolCall[]
+): number | undefined {
+  if (childCalls.length > 0) return childCalls.length
+  return toolCall.subagent?.usage?.toolUses
+}
+
+export type SubagentDetailTone = 'muted' | 'destructive'
+
+/**
+ * The row's one detail line: latest progress while running (its newest tool
+ * call, else its newest line of text), the error or first line of the result
+ * once settled. Undefined when the agent reported nothing to show.
+ */
+export function subagentDetail(
+  toolCall: ToolCall,
+  status: SubagentStatus,
+  childCalls: readonly ToolCall[]
+): { text: string; tone: SubagentDetailTone } | undefined {
+  const record = toolCall.subagent
+  if (status === 'running') {
+    const latest = childCalls[childCalls.length - 1]
+    const count = subagentToolCount(toolCall, childCalls)
+    const tools = count ? `${count} ${count === 1 ? 'tool' : 'tools'}` : undefined
+    const progress = latest
+      ? (() => {
+          const { verb, primary } = describeToolCall(latest)
+          return `${verb} ${primary}`.trim()
+        })()
+      : lastLine(toolCall.subagentText)
+    const text = [progress, tools].filter(Boolean).join(' · ')
+    return text ? { text, tone: 'muted' } : undefined
+  }
+  if (status === 'failed') {
+    const error = record?.activity === 'idle' ? firstLine(record.end.error) : undefined
+    const text = error ?? firstLine(subagentResultText(toolCall))
+    return text ? { text, tone: 'destructive' } : undefined
+  }
+  const text = firstLine(subagentResultText(toolCall))
+  return text ? { text, tone: 'muted' } : undefined
 }

@@ -12,9 +12,11 @@ import { CHEVRON_TRANSITION } from './chat-motion'
 import type { TimelineItem } from './chat-timeline'
 import { formatTurnDuration } from './format-turn-duration'
 import { RowReveal } from './RowReveal'
+import { SubagentGroup } from './SubagentGroup'
 import { ThinkingStatus } from './ThinkingStatus'
 import { ThoughtGroup } from './ThoughtGroup'
 import {
+  isSubagentCall,
   type ParentTurn,
   summarizeToolActivity,
   type ToolActivitySummary
@@ -36,7 +38,7 @@ const expandedStepLimits = new Map<string, number>()
 interface TurnActivityProps {
   items: TimelineItem[]
   active: boolean
-  /** Where this turn stands; the subagent cards inside show running from it. */
+  /** Where this turn stands; the subagents inside show running from it. */
   parentTurn: ParentTurn
   durationMs: number | null
   attentionRequired: boolean
@@ -46,7 +48,6 @@ interface TurnActivityProps {
   statusLine?: string | null
   /** Filesystem roots used for "Open file" actions on file tool calls. */
   filePathContext?: FilePathResolutionContext
-  onOpenSubagent: (toolCall: ToolCall) => void
 }
 
 /** Borderless, turn-level disclosure for reasoning, tools, and intermediate narration. */
@@ -59,8 +60,7 @@ function TurnActivityComponent({
   hasFinalResponse,
   enter,
   statusLine,
-  filePathContext,
-  onOpenSubagent
+  filePathContext
 }: TurnActivityProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const [open, setOpen] = useState(active || (!attentionRequired && !hasFinalResponse))
@@ -80,9 +80,11 @@ function TurnActivityComponent({
   // Each contiguous run of thoughts and tool calls gets its own nested
   // disclosure, so narration between two runs keeps its seat: work, text,
   // work. `workRuns` maps every member's key to its run, so a lone thought
-  // (absent) still renders bare. `summary` still covers every call in the
-  // turn for the trigger's aggregate diffstat.
-  const { summary, workRuns } = useMemo(() => {
+  // (absent) still renders bare. Subagents launched between two narration
+  // messages sit outside the runs as one group, at the first one's place;
+  // `subagentGroups` maps each member's key to it. `summary` still covers
+  // every call in the turn for the trigger's aggregate diffstat.
+  const { summary, workRuns, subagentGroups } = useMemo(() => {
     const allCalls: ToolCall[] = []
     const runs = new Map<
       string,
@@ -92,7 +94,9 @@ function TurnActivityComponent({
         failed: boolean
       }
     >()
+    const groups = new Map<string, { key: string; calls: ToolCall[] }>()
     let run: WorkRunItem[] | null = null
+    let group: { key: string; calls: ToolCall[] } | null = null
     const flush = (): void => {
       if (run) {
         const calls = run.flatMap((item) => (item.kind === 'tool' ? [item.tool] : []))
@@ -112,16 +116,25 @@ function TurnActivityComponent({
       run = null
     }
     for (const item of items) {
-      if (item.kind === 'tool' || item.kind === 'thought-group') {
-        if (item.kind === 'tool') allCalls.push(item.tool)
+      if (item.kind === 'tool') allCalls.push(item.tool)
+      if (item.kind === 'tool' && isSubagentCall(item.tool)) {
+        if (group) {
+          group.calls.push(item.tool)
+        } else {
+          flush()
+          group = { key: item.key, calls: [item.tool] }
+        }
+        groups.set(item.key, group)
+      } else if (item.kind === 'tool' || item.kind === 'thought-group') {
         if (!run) run = []
         run.push(item)
       } else {
         flush()
+        group = null
       }
     }
     flush()
-    return { summary: summarizeToolActivity(allCalls), workRuns: runs }
+    return { summary: summarizeToolActivity(allCalls), workRuns: runs, subagentGroups: groups }
   }, [items])
   // A long agent turn renders only its latest steps: every step stays mounted
   // while the turn is open, and hundreds of them cost hundreds of MB of DOM.
@@ -139,12 +152,14 @@ function TurnActivityComponent({
       .filter((item) => {
         const run = workRuns.get(item.key)
         if (run) return run.items[0] === item
+        const group = subagentGroups.get(item.key)
+        if (group) return group.key === item.key
         return item.kind === 'thought-group' || item.kind === 'message'
       })
       .map((item) => item.key)
     const hidden = Math.max(0, stepKeys.length - stepLimit)
     return { hiddenSteps: hidden, hiddenKeys: new Set(stepKeys.slice(0, hidden)) }
-  }, [items, workRuns, stepLimit])
+  }, [items, workRuns, subagentGroups, stepLimit])
   const label =
     active && statusLine
       ? statusLine
@@ -193,6 +208,19 @@ function TurnActivityComponent({
             ) : null}
             {items.map((item, index) => {
               if (hiddenKeys.has(item.key)) return null
+              const group = subagentGroups.get(item.key)
+              if (group) {
+                if (group.key !== item.key) return null
+                return (
+                  <RowReveal
+                    key={item.key}
+                    animate={enter.animate(item.key)}
+                    staggerIndex={enter.staggerIndex(item.key)}
+                  >
+                    <SubagentGroup calls={group.calls} parentTurn={parentTurn} />
+                  </RowReveal>
+                )
+              }
               const run = workRuns.get(item.key)
               if (run) {
                 // Only a run's first item renders — as the group's disclosure;
@@ -203,13 +231,11 @@ function TurnActivityComponent({
                     key={item.key}
                     items={run.items}
                     summary={run.summary}
-                    parentTurn={parentTurn}
                     // Lets a still-streaming thought inside the run keep streaming.
                     isLiveTail={active && run.items[run.items.length - 1] === lastItem}
                     failed={run.failed}
                     enter={enter}
                     filePathContext={filePathContext}
-                    onOpenSubagent={onOpenSubagent}
                   />
                 )
               }
