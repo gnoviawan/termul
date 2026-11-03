@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolCall, ToolCallStatus } from '@/lib/acp-api'
+import { endedState, subagentToolCall } from '@/lib/test-utils/subagent'
 import { SubagentDetailsDialog } from './SubagentDetailsDialog'
 import { ToolCallCard } from './ToolCallCard'
 
@@ -50,17 +51,14 @@ describe('ToolCallCard', () => {
 
   it('opens read-only delegation details while a subagent is running', () => {
     const onOpenSubagent = vi.fn()
-    const delegatedCall: ToolCall = {
-      toolCallId: 'task-1',
-      title: 'Audit branch code for slop',
-      kind: 'think',
-      status: 'in_progress',
-      rawInput: {
-        subagent_type: 'explorer',
-        description: 'Audit branch code for slop',
+    const delegatedCall = subagentToolCall(
+      {
+        role: 'explorer',
+        title: 'Audit branch code for slop',
         prompt: 'Inspect the branch without changing files.'
-      }
-    }
+      },
+      { toolCallId: 'task-1', title: 'Task' }
+    )
     render(<ToolCallCard toolCall={delegatedCall} onOpenSubagent={onOpenSubagent} />)
 
     fireEvent.click(screen.getByRole('button', { name: /audit branch code for slop/i }))
@@ -83,18 +81,11 @@ describe('ToolCallCard', () => {
     expect(dialog).toHaveTextContent('Running')
   })
 
-  it('shows the activity kind on a running delegation', () => {
-    const delegatedCall: ToolCall = {
-      toolCallId: 'task-activity',
-      title: 'Explore the tree',
-      kind: 'think',
-      status: 'in_progress',
-      rawInput: {
-        subagent_type: 'explorer',
-        prompt: 'Look around.',
-        activityKind: 'exploring'
-      }
-    }
+  it('says a delegation that waits for input is waiting', () => {
+    const delegatedCall = subagentToolCall(
+      { title: 'Explore the tree', state: { activity: 'requires_action' } },
+      { toolCallId: 'task-activity' }
+    )
     render(
       <SubagentDetailsDialog
         toolCall={delegatedCall}
@@ -105,23 +96,19 @@ describe('ToolCallCard', () => {
       />
     )
     expect(screen.getByRole('dialog', { name: 'Explore the tree' })).toHaveTextContent(
-      'Running · exploring'
+      'Waiting for input'
     )
   })
 
   it('renders markdown in the delegation result', async () => {
-    const delegatedCall: ToolCall = {
-      toolCallId: 'task-markdown',
-      title: 'Summarize findings',
-      kind: 'think',
-      status: 'completed',
-      rawInput: {
-        subagent_type: 'explorer',
-        description: 'Summarize findings',
-        prompt: 'Summarize the files.'
-      },
-      rawOutput: { text: '**Important**\n\n- first item\n- second item\n\nUse `status`.' }
-    }
+    const delegatedCall = subagentToolCall(
+      { title: 'Summarize findings', prompt: 'Summarize the files.', state: endedState() },
+      {
+        toolCallId: 'task-markdown',
+        status: 'completed',
+        rawOutput: { text: '**Important**\n\n- first item\n- second item\n\nUse `status`.' }
+      }
+    )
     const onOpenSubagent = vi.fn()
     render(<ToolCallCard toolCall={delegatedCall} onOpenSubagent={onOpenSubagent} />)
 

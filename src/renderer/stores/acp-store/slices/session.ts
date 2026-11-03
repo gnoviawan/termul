@@ -124,6 +124,7 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import { cancelRunningSubagents } from '../subagent-lifecycle'
+import { withSubagentIngest } from '../subagent-transcript'
 import {
   type AcpState,
   ChatLaunchCancelledError,
@@ -163,6 +164,11 @@ function installableTranscript(
   return projectTranscript(payload, options)
 }
 
+/** Restored tool calls with their subagent records lifted, as live ingest does. */
+function restoredTimelineCalls(payload: SessionPayload): ToolCall[] {
+  return restoredToolCalls(payload).map(withSubagentIngest)
+}
+
 /**
  * The projection half of {@link installableTranscript}. A switch splice reads
  * its source sessions with this and records their watermarks only once the
@@ -177,7 +183,7 @@ function projectTranscript(
       // A tail window can cut through a switch turn — boundary rows only
       // carry meaning for the turn partition, never render standalone.
       messages: normalizeUserMessages(payload.messages).filter((m) => m.handoffBoundary !== true),
-      toolCalls: restoredToolCalls(payload),
+      toolCalls: restoredTimelineCalls(payload),
       switches: restoredSwitches(payload)
     }
   }
@@ -188,7 +194,7 @@ function projectTranscript(
       : normalizeUserMessages(visible)
   return {
     messages,
-    toolCalls: dropHiddenToolCalls(restoredToolCalls(payload), messages, hidden),
+    toolCalls: dropHiddenToolCalls(restoredTimelineCalls(payload), messages, hidden),
     switches: restoredSwitches(payload)
   }
 }

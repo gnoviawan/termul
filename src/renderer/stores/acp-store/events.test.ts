@@ -151,6 +151,7 @@ import {
   _setAcpTransportForTests,
   type AcpTransport
 } from '@/lib/acp-transport'
+import { subagentMeta, subagentRecord, subagentToolCall } from '@/lib/test-utils/subagent'
 import {
   _flushCoalescedForTesting,
   _resetAcpAuthForTesting,
@@ -168,6 +169,8 @@ import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { agentReuseKey } from '../acp-reuse-keys'
 import { selectAgentIdentity } from './helpers'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
+
+const UNEXPLAINED_END = { activity: 'idle', end: { reason: 'unexplained' } }
 
 describe('acp-store', () => {
   beforeEach(() => {
@@ -460,17 +463,15 @@ describe('acp-store', () => {
       },
       toolCalls: {
         s1: [
-          {
-            toolCallId: 'termul-subagent:child-1',
-            status: 'in_progress',
-            rawInput: { description: 'Review', prompt: 'p' },
-            subagentLifecycle: { state: 'running', agentId: 'child-1' }
-          }
+          subagentToolCall(
+            { source: 'acp-rfd', caps: { liveProgress: true } },
+            { toolCallId: 'termul-subagent:child-1', status: 'in_progress' }
+          )
         ]
       }
     })
     useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
-    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagentLifecycle?.state).toBe('cancelled')
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagent).toMatchObject(UNEXPLAINED_END)
   })
 
   it('agent_disconnected cancels a background launch that never reported its end', () => {
@@ -481,18 +482,15 @@ describe('acp-store', () => {
       },
       toolCalls: {
         s1: [
-          {
-            toolCallId: 'toolu_bg',
-            status: 'completed',
-            timestamp: 2,
-            rawInput: { description: 'Run e2e', prompt: 'p', run_in_background: true },
-            subagentLifecycle: { background: true }
-          }
+          subagentToolCall(
+            { background: true },
+            { toolCallId: 'toolu_bg', status: 'completed', timestamp: 2 }
+          )
         ]
       }
     })
     useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
-    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagentLifecycle?.state).toBe('cancelled')
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagent).toMatchObject(UNEXPLAINED_END)
   })
 
   it('session close applies a buffered tool update before cancelling running subagents', () => {
@@ -524,13 +522,19 @@ describe('acp-store', () => {
       sessionId: 's1',
       update: {
         toolCallId: 'termul-subagent:child-1',
-        _meta: { 'termul/subagent': { state: 'running', sessionId: 'child-1' } }
+        _meta: subagentMeta(
+          subagentRecord({
+            dispatchToolCallId: 'termul-subagent:child-1',
+            source: 'acp-rfd',
+            caps: { liveProgress: true }
+          })
+        )
       }
     })
     useAcpStore
       .getState()
       ._onSessionClosed({ agentId: 'agent-1', sessionId: 's1', reason: 'closed' })
-    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagentLifecycle?.state).toBe('cancelled')
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagent).toMatchObject(UNEXPLAINED_END)
   })
 
   it.each([

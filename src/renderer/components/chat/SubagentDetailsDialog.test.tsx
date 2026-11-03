@@ -8,6 +8,11 @@ import {
   settleOverlayBackStack,
   waitForSentinelDepth
 } from '@/lib/test-utils/overlay-back-stack'
+import {
+  endedState,
+  type SubagentRecordOverrides,
+  subagentToolCall
+} from '@/lib/test-utils/subagent'
 import { readOverlaySentinelDepth, useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { SubagentDetailsDialog } from './SubagentDetailsDialog'
 
@@ -44,17 +49,14 @@ vi.mock('framer-motion', async () => {
   }
 })
 
-const delegatedCall: ToolCall = {
-  toolCallId: 'task-1',
-  title: 'Audit branch code for slop',
-  kind: 'think',
-  status: 'in_progress',
-  rawInput: {
-    subagent_type: 'explorer',
-    description: 'Audit branch code for slop',
+const delegatedCall: ToolCall = subagentToolCall(
+  {
+    role: 'explorer',
+    title: 'Audit branch code for slop',
     prompt: 'Inspect the branch without changing files.'
-  }
-}
+  },
+  { toolCallId: 'task-1', title: 'Task' }
+)
 
 function Harness({ onOpenChange }: { onOpenChange?: (open: boolean) => void }): React.JSX.Element {
   const [open, setOpen] = useState(true)
@@ -192,6 +194,63 @@ describe('SubagentDetailsDialog agent prose', () => {
       )
     })
     expect(readMediaBytesMock).toHaveBeenCalledWith('/proj/out/chart.png')
+  })
+})
+
+describe('SubagentDetailsDialog status and record', () => {
+  const statusOf = (
+    record: SubagentRecordOverrides,
+    call: Partial<ToolCall> = {},
+    parentTurn: 'active' | 'ended' = 'active'
+  ): string => {
+    const { unmount } = render(
+      <SubagentDetailsDialog
+        toolCall={subagentToolCall({ title: 'Audit', ...record }, call)}
+        parentTurn={parentTurn}
+        open
+        onOpenChange={() => {}}
+        filePathContext={undefined}
+      />
+    )
+    const text = screen.getByRole('dialog', { name: 'Audit' }).querySelector('p')?.textContent
+    unmount()
+    return text ?? ''
+  }
+
+  it.each([
+    ['running', {}, {}, 'Running'],
+    ['background', { background: true }, { status: 'completed' }, 'Running in background'],
+    ['waiting', { state: { activity: 'requires_action' } }, {}, 'Waiting for input'],
+    ['completed', { state: endedState('completed') }, {}, 'Completed'],
+    ['failed', { state: endedState('failed') }, {}, 'Failed'],
+    ['cancelled', { state: endedState('cancelled') }, {}, 'Stopped'],
+    ['unexplained', { state: endedState('unexplained') }, {}, 'Stopped'],
+    ['unknown', { state: { activity: 'unknown' } }, {}, 'Status unavailable']
+  ] as const)('reads %s from the record', (_label, record, call, expected) => {
+    expect(statusOf(record as SubagentRecordOverrides, call as Partial<ToolCall>)).toBe(expected)
+  })
+
+  it('reads a running record whose turn ended as lost', () => {
+    expect(statusOf({ background: true }, { status: 'in_progress' }, 'ended')).toBe('Completed')
+    expect(statusOf({}, { status: 'in_progress' }, 'ended')).toBe('Status unavailable')
+  })
+
+  it('shows the prompt and the background output file from the record', () => {
+    render(
+      <SubagentDetailsDialog
+        toolCall={subagentToolCall(
+          { title: 'Audit', prompt: 'Look around.', background: true, outputFile: '/tmp/a.out' },
+          { status: 'completed', rawInput: { prompt: 'ignored' } }
+        )}
+        open
+        onOpenChange={() => {}}
+        filePathContext={undefined}
+      />
+    )
+    const dialog = screen.getByRole('dialog', { name: 'Audit' })
+    expect(dialog).toHaveTextContent('Look around.')
+    expect(dialog).not.toHaveTextContent('ignored')
+    expect(within(dialog).getByText('Output file: /tmp/a.out')).toBeInTheDocument()
   })
 })
 

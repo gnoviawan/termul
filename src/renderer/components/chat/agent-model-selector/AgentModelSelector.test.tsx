@@ -10,6 +10,7 @@ import {
   pressSystemBack,
   waitForSentinelDepth
 } from '@/lib/test-utils/overlay-back-stack'
+import { subagentToolCall } from '@/lib/test-utils/subagent'
 import { agentReuseKey } from '@/stores/acp-reuse-keys'
 import { prepareChatKey } from '@/stores/acp-store/helpers'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
@@ -222,14 +223,7 @@ const CLAUDE_MODELS = {
 }
 
 const BACKGROUND_LAUNCH = {
-  'session-1': [
-    {
-      toolCallId: 'bg-1',
-      status: 'completed',
-      rawInput: { description: 'Run e2e', prompt: 'p', run_in_background: true },
-      subagentLifecycle: { background: true }
-    }
-  ]
+  'session-1': [subagentToolCall({ background: true }, { toolCallId: 'bg-1', status: 'completed' })]
 }
 
 function seed(

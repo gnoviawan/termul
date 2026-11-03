@@ -2,6 +2,11 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolCall } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
+import {
+  endedState,
+  type SubagentRecordOverrides,
+  subagentToolCall
+} from '@/lib/test-utils/subagent'
 import type { ChatMessage } from '@/stores/acp-store/types'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { ChatStatusPill } from './ChatStatusPill'
@@ -25,18 +30,22 @@ const user: ChatMessage = {
   seq: 1
 }
 
-function sub(partial: Partial<ToolCall>): ToolCall {
-  return {
-    toolCallId: 'a1',
-    seq: 2,
-    timestamp: Date.now(),
-    rawInput: {
-      description: 'Audit code',
+/** A Claude dispatch whose record follows its call status, as the host maps it. */
+function sub(partial: Partial<ToolCall>, record: SubagentRecordOverrides = {}): ToolCall {
+  const { status } = partial
+  const settled = record.background
+    ? status === 'failed'
+    : status === 'completed' || status === 'failed'
+  return subagentToolCall(
+    {
+      title: 'Audit code',
       prompt: 'do it',
-      subagent_type: 'general-purpose'
+      role: 'general-purpose',
+      ...(settled && status && { state: endedState(status === 'failed' ? 'failed' : 'completed') }),
+      ...record
     },
-    ...partial
-  }
+    { toolCallId: 'a1', seq: 2, timestamp: Date.now(), ...partial }
+  )
 }
 
 /** No cwd: no git status read and, without file edits, no changed files. */
@@ -80,12 +89,10 @@ describe('ChatStatusPill subagents', () => {
   it('shows counts on the pill and rows in the popover', () => {
     renderPill([
       sub({ toolCallId: 'a', status: 'in_progress' }),
-      sub({
-        toolCallId: 'b',
-        status: 'completed',
-        rawInput: { description: 'Write tests', prompt: 'p' },
-        subagentUsage: { totalDurationMs: 3574, totalTokens: 37847 }
-      }),
+      sub(
+        { toolCallId: 'b', status: 'completed' },
+        { title: 'Write tests', role: undefined, usage: { durationMs: 3574, totalTokens: 37847 } }
+      ),
       sub({ toolCallId: 'c', status: 'failed' })
     ])
     expect(pill()).toHaveTextContent(/1 running.*1 done.*1 failed/)
@@ -134,7 +141,7 @@ describe('ChatStatusPill subagents', () => {
 
     rerender(
       <ChatStatusPill
-        toolCalls={[{ ...running, status: 'completed' }]}
+        toolCalls={[{ ...running, ...sub({ status: 'completed', timestamp: start }) }]}
         {...base}
         turnActive={false}
       />
@@ -185,10 +192,10 @@ describe('ChatStatusPill subagents', () => {
   })
 
   it('counts a launched background agent as running and tags its row', () => {
-    const launched = sub({
-      status: 'completed',
-      subagentLifecycle: { background: true, outputFile: '/tmp/a1.output' }
-    })
+    const launched = sub(
+      { status: 'completed' },
+      { background: true, outputFile: '/tmp/a1.output' }
+    )
     renderPill([launched])
     expect(pill()).toHaveAccessibleName('Session status: subagents 1 running')
     fireEvent.click(pill())
@@ -202,7 +209,7 @@ describe('ChatStatusPill subagents', () => {
 
   it('says the chat waits on background subagents after the turn ends, and logs it once', () => {
     vi.mocked(logFrontendError).mockClear()
-    const launched = sub({ status: 'completed', subagentLifecycle: { background: true } })
+    const launched = sub({ status: 'completed' }, { background: true })
     const done = sub({ toolCallId: 'b', status: 'completed' })
     const { rerender } = renderPill([launched, done], { turnActive: false })
     expect(pill()).toHaveAccessibleName(
@@ -212,10 +219,7 @@ describe('ChatStatusPill subagents', () => {
     const popover = screen.getByRole('dialog', { name: 'Subagents' })
     expect(within(popover).getByText('Waiting on 1 background subagent')).toBeInTheDocument()
 
-    const ended = {
-      ...launched,
-      subagentLifecycle: { background: true, state: 'completed' as const }
-    }
+    const ended = sub({ status: 'completed' }, { background: true, state: endedState() })
     rerender(<ChatStatusPill toolCalls={[ended, done]} {...base} turnActive={false} />)
     expect(pill()).toHaveAccessibleName('Session status: subagents 2 done')
     expect(screen.queryByText(/^Waiting on/)).toBeNull()
@@ -226,11 +230,10 @@ describe('ChatStatusPill subagents', () => {
   })
 
   it('lists an earlier turn subagent the host still runs, so the wait has a row', () => {
-    const earlier = sub({
-      seq: 0,
-      status: 'completed',
-      subagentLifecycle: { background: true, state: 'running' }
-    })
+    const earlier = sub(
+      { seq: 0, status: 'completed' },
+      { background: true, source: 'acp-rfd', caps: { liveProgress: true } }
+    )
     renderPill([earlier], { turnActive: false })
     expect(pill()).toHaveAccessibleName(
       'Session status: subagents 1 running; waiting on 1 background subagent'
@@ -245,7 +248,7 @@ describe('ChatStatusPill subagents', () => {
   })
 
   it('does not say it waits while the turn is still running', () => {
-    const launched = sub({ status: 'completed', subagentLifecycle: { background: true } })
+    const launched = sub({ status: 'completed' }, { background: true })
     renderPill([launched])
     expect(pill()).toHaveAccessibleName('Session status: subagents 1 running')
   })

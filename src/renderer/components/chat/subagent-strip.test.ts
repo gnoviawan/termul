@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ToolCall } from '@/lib/acp-api'
 import {
+  endedState,
+  type SubagentRecordOverrides,
+  subagentToolCall
+} from '@/lib/test-utils/subagent'
+import {
   countSubagents,
   formatElapsed,
   formatTokens,
@@ -14,16 +19,18 @@ import {
   subagentType
 } from './subagent-strip'
 
-function sub(partial: Partial<ToolCall> = {}): ToolCall {
-  return {
-    toolCallId: 'a1',
-    rawInput: {
-      description: 'Audit code',
-      prompt: 'p',
-      subagent_type: 'general-purpose'
-    },
-    ...partial
-  }
+/** A dispatch call; the record mirrors the call (running while pending). */
+function sub(partial: Partial<ToolCall> = {}, record: SubagentRecordOverrides = {}): ToolCall {
+  return subagentToolCall({ role: 'general-purpose', ...record }, { toolCallId: 'a1', ...partial })
+}
+
+/** A foreground call the host settled from the tool-call status. */
+function settled(
+  reason: 'completed' | 'failed',
+  partial: Partial<ToolCall> = {},
+  record: SubagentRecordOverrides = {}
+): ToolCall {
+  return sub({ status: reason, ...partial }, { state: endedState(reason), ...record })
 }
 
 describe('selectCurrentTurnSubagents', () => {
@@ -73,71 +80,66 @@ describe('selectCurrentTurnSubagents', () => {
 })
 
 describe('subagentStatus and counts', () => {
-  it('maps statuses', () => {
+  it('maps a running record by the turn and an idle record by its end', () => {
     expect(subagentStatus(sub({ status: 'pending' }), true)).toBe('running')
-    expect(subagentStatus(sub({ status: 'in_progress' }), true)).toBe('running')
-    expect(subagentStatus(sub({ status: 'completed' }), true)).toBe('done')
-    expect(subagentStatus(sub({ status: 'failed' }), true)).toBe('failed')
+    expect(subagentStatus(sub({ status: undefined }), true)).toBe('running')
+    expect(subagentStatus(settled('completed'), true)).toBe('done')
+    expect(subagentStatus(settled('failed'), true)).toBe('failed')
+    expect(subagentStatus(sub({}, { state: endedState('cancelled') }), true)).toBe('stopped')
+    expect(subagentStatus(sub({}, { state: endedState('unexplained') }), true)).toBe('stopped')
+  })
+
+  it('shows an unknown record as stopped, not failed', () => {
+    expect(subagentStatus(sub({}, { state: { activity: 'unknown' } }), true)).toBe('stopped')
+  })
+
+  it('counts waiting for input as running', () => {
+    expect(subagentStatus(sub({}, { state: { activity: 'requires_action' } }), true)).toBe(
+      'running'
+    )
   })
 
   it('classifies in-flight calls as stopped after the turn ended, counted as failed', () => {
     expect(subagentStatus(sub({ status: 'pending' }), false)).toBe('stopped')
     expect(subagentStatus(sub({ status: 'in_progress' }), false)).toBe('stopped')
-    expect(subagentStatus(sub({ status: 'in_progress' }), true)).toBe('running')
-    const list = [
-      sub({ toolCallId: '1', status: 'in_progress' }),
-      sub({ toolCallId: '2', status: 'failed' })
-    ]
+    const list = [sub({ toolCallId: '1' }), settled('failed', { toolCallId: '2' })]
     expect(countSubagents(list, false)).toEqual({ running: 0, done: 0, failed: 2 })
-  })
-
-  it('treats a null status as running only while the turn is active', () => {
-    expect(subagentStatus(sub({ status: undefined }), true)).toBe('running')
-    expect(subagentStatus(sub({ status: undefined }), false)).toBe('done')
   })
 
   it('counts each bucket', () => {
     const list = [
       sub({ toolCallId: '1', status: 'in_progress' }),
-      sub({ toolCallId: '2', status: 'completed' }),
-      sub({ toolCallId: '3', status: 'completed' }),
-      sub({ toolCallId: '4', status: 'failed' })
+      settled('completed', { toolCallId: '2' }),
+      settled('completed', { toolCallId: '3' }),
+      settled('failed', { toolCallId: '4' })
     ]
-    expect(countSubagents(list, true)).toEqual({
-      running: 1,
-      done: 2,
-      failed: 1
-    })
+    expect(countSubagents(list, true)).toEqual({ running: 1, done: 2, failed: 1 })
   })
 })
 
 describe('title and type', () => {
-  it('prefers description, then title, then a fallback', () => {
-    expect(subagentTitle(sub())).toBe('Audit code')
-    const codex = sub({
-      title: 'Spawn agent',
-      rawInput: { receiverThreadIds: ['t-1'] }
-    })
-    expect(subagentTitle(codex)).toBe('Spawn agent')
-    expect(subagentTitle(sub({ title: undefined, rawInput: { receiverThreadIds: ['t'] } }))).toBe(
-      'Subagent'
-    )
+  it('reads the record title', () => {
+    expect(subagentTitle(sub({}, { title: 'Audit code' }))).toBe('Audit code')
+    expect(subagentTitle({ toolCallId: 'x', title: 'Spawn agent' })).toBe('Spawn agent')
+    expect(subagentTitle({ toolCallId: 'x' })).toBe('Subagent')
   })
 
-  it('reads subagent_type when present', () => {
+  it('reads the role, then the description', () => {
     expect(subagentType(sub())).toBe('general-purpose')
-    expect(subagentType(sub({ rawInput: { description: 'd', prompt: 'p' } }))).toBeUndefined()
+    expect(subagentType(sub({}, { role: undefined, description: 'reviewer' }))).toBe('reviewer')
+    expect(subagentType(sub({}, { role: undefined }))).toBeUndefined()
   })
 })
 
 describe('subagentMetrics', () => {
-  it('reads tokens and duration from subagentUsage', () => {
-    expect(
-      subagentMetrics(sub({ subagentUsage: { totalTokens: 37847, totalDurationMs: 3574 } }))
-    ).toEqual({ totalTokens: 37847, totalDurationMs: 3574 })
+  it('reads tokens and duration from the record usage', () => {
+    expect(subagentMetrics(sub({}, { usage: { totalTokens: 37847, durationMs: 3574 } }))).toEqual({
+      totalTokens: 37847,
+      durationMs: 3574
+    })
   })
 
-  it('returns nothing when subagentUsage is absent', () => {
+  it('returns nothing when usage is absent', () => {
     expect(subagentMetrics(sub())).toEqual({})
   })
 })
@@ -161,39 +163,45 @@ describe('formatters', () => {
 })
 
 describe('background subagents', () => {
-  const background = (partial: Partial<ToolCall> = {}) =>
-    sub({ status: 'completed', subagentLifecycle: { background: true }, ...partial })
+  const background = (partial: Partial<ToolCall> = {}, record: SubagentRecordOverrides = {}) =>
+    sub({ status: 'completed', ...partial }, { background: true, ...record })
 
   it('keeps running after the turn ends even though the launch call completed', () => {
     expect(subagentStatus(background(), true)).toBe('running')
     expect(subagentStatus(background(), false)).toBe('running')
     expect(
-      countSubagents([background(), sub({ toolCallId: 'f', status: 'completed' })], false)
+      countSubagents([background(), settled('completed', { toolCallId: 'f' })], false)
     ).toEqual({ running: 1, done: 1, failed: 0 })
   })
 
   it('lets a known end state win over an active turn', () => {
-    const ended = (state: 'completed' | 'failed' | 'cancelled') =>
-      background({ subagentLifecycle: { background: true, state } })
+    const ended = (reason: 'completed' | 'failed' | 'cancelled') =>
+      background({}, { state: endedState(reason) })
     expect(subagentStatus(ended('completed'), true)).toBe('done')
     expect(subagentStatus(ended('failed'), true)).toBe('failed')
     expect(subagentStatus(ended('cancelled'), true)).toBe('stopped')
   })
 
-  it('stays running after the turn when the host still reports running', () => {
-    const live = sub({
-      status: 'in_progress',
-      subagentLifecycle: { state: 'running', agentId: 'child-1' }
-    })
+  it('reads a background launch that lost its end as done, a foreground one as stopped', () => {
+    expect(subagentStatus(background({ status: 'in_progress' }), false)).toBe('done')
+    expect(subagentStatus(sub({ status: 'in_progress' }), false)).toBe('stopped')
+  })
+
+  it('stays running after the turn when the source reports progress live', () => {
+    const live = sub({ status: 'in_progress' }, { source: 'acp-rfd', caps: { liveProgress: true } })
     expect(subagentStatus(live, false)).toBe('running')
   })
 
-  it('times a background row from launch to its end, not by the launch duration', () => {
-    const call = background({
-      timestamp: 1_000,
-      subagentUsage: { totalDurationMs: 4_000 },
-      subagentLifecycle: { background: true, state: 'completed', endedAt: 181_000 }
-    })
+  it('times a background row from the host start stamp to its end, not by the launch duration', () => {
+    const call = background(
+      { timestamp: 500 },
+      {
+        startedAt: 1_000,
+        usage: { durationMs: 4_000 },
+        state: endedState('completed'),
+        endedAt: 181_000
+      }
+    )
     expect(subagentDurationMs(call, 'done', 0, undefined)).toBe(180_000)
     expect(subagentDurationMs(background({ timestamp: 1_000 }), 'running', 61_000, undefined)).toBe(
       60_000
@@ -201,8 +209,13 @@ describe('background subagents', () => {
     expect(subagentDurationMs(background({ timestamp: 1_000 }), 'done', 0, 91_000)).toBe(90_000)
   })
 
+  it('times a running row from the host start stamp on a reopened chat', () => {
+    const reopened = sub({ timestamp: 90_000 }, { startedAt: 30_000 })
+    expect(subagentDurationMs(reopened, 'running', 100_000, undefined)).toBe(70_000)
+  })
+
   it('keeps the reported total for a foreground row', () => {
-    const call = sub({ timestamp: 1_000, subagentUsage: { totalDurationMs: 4_000 } })
+    const call = settled('completed', { timestamp: 1_000 }, { usage: { durationMs: 4_000 } })
     expect(subagentDurationMs(call, 'done', 0, 99_000)).toBe(4_000)
   })
 
@@ -215,30 +228,29 @@ describe('background subagents', () => {
 describe('runningBackgroundSubagents', () => {
   const user = (seq: number) => ({ role: 'user', seq, timestamp: seq })
   const agentReply = { role: 'agent', seq: 9, timestamp: 9 }
-  const launch = (toolCallId: string, seq: number, lifecycle: ToolCall['subagentLifecycle']) =>
-    sub({ toolCallId, seq, status: 'completed', subagentLifecycle: lifecycle })
+  const launch = (toolCallId: string, seq: number, record: SubagentRecordOverrides) =>
+    sub({ toolCallId, seq, status: 'completed' }, record)
+  const live = { caps: { liveProgress: true } }
   const ids = (calls: ToolCall[]) => calls.map((tc) => tc.toolCallId)
 
   it('lists the background launches of the latest turn that have not ended', () => {
     const calls = [
       launch('earlier-launch', 2, { background: true }),
-      launch('earlier-host-running', 3, { background: true, state: 'running' }),
+      launch('earlier-live', 3, { background: true, ...live }),
       launch('launch', 6, { background: true }),
-      launch('host-running', 7, { state: 'running' }),
-      launch('completed', 7, { background: true, state: 'completed' }),
-      launch('cancelled', 7, { background: true, state: 'cancelled' }),
-      sub({
-        toolCallId: 'launch-failed',
-        seq: 7,
-        status: 'failed',
-        subagentLifecycle: { background: true }
-      }),
+      launch('live', 7, live),
+      launch('live-waiting', 7, { ...live, state: { activity: 'requires_action' } }),
+      launch('completed', 7, { background: true, state: endedState('completed') }),
+      launch('cancelled', 7, { background: true, state: endedState('cancelled') }),
+      launch('unknown', 7, { background: true, state: { activity: 'unknown' } }),
+      sub({ toolCallId: 'launch-failed', seq: 7, status: 'failed' }, { background: true }),
       sub({ toolCallId: 'foreground', seq: 8, status: 'in_progress' })
     ]
     expect(ids(runningBackgroundSubagents(calls, [user(1), user(5), agentReply]))).toEqual([
-      'earlier-host-running',
+      'earlier-live',
       'launch',
-      'host-running'
+      'live',
+      'live-waiting'
     ])
   })
 
@@ -256,47 +268,23 @@ describe('runningBackgroundSubagents', () => {
 })
 
 describe('Codex rows', () => {
-  const collab = (id: string, title: string, seq: number, threads: string[]): ToolCall => ({
-    toolCallId: id,
-    title,
-    kind: 'other',
-    status: 'completed',
-    seq,
-    rawInput: {
-      prompt: 'p',
-      senderThreadId: 'parent',
-      receiverThreadIds: threads,
-      agentsStates: Object.fromEntries(threads.map((t) => [t, { status: 'running' }]))
-    }
-  })
-  const activity = (id: string, kind: string, thread: string, seq: number): ToolCall => ({
-    toolCallId: id,
-    title: `${kind} subagent`,
-    kind: 'other',
-    status: 'completed',
-    seq,
-    rawInput: { agentThreadId: thread, agentPath: '/root/x', activityKind: kind }
-  })
-
-  it('shows one row per spawned agent, not per control call or activity card', () => {
+  it('shows one row per record, not per control call', () => {
+    const control = (id: string, seq: number): ToolCall => ({
+      toolCallId: id,
+      title: 'wait',
+      kind: 'other',
+      status: 'completed',
+      seq,
+      subagentControl: { subagentIds: [] }
+    })
     const picked = selectCurrentTurnSubagents(
       [
-        collab('spawn-1', 'spawnAgent', 1, ['t1']),
-        activity('start-1', 'started', 't1', 2),
-        collab('wait-1', 'wait', 3, ['t1']),
-        collab('send-1', 'sendInput', 4, ['t1']),
-        activity('done-1', 'completed', 't1', 5)
+        sub({ toolCallId: 'spawn-1', seq: 1 }, { source: 'codex-collab', background: true }),
+        control('wait-1', 2),
+        control('send-1', 3)
       ],
       null
     )
     expect(picked.map((t) => t.toolCallId)).toEqual(['spawn-1'])
-  })
-
-  it('uses a started activity card when no spawn names its thread', () => {
-    const picked = selectCurrentTurnSubagents(
-      [activity('start-2', 'started', 't2', 1), activity('done-2', 'completed', 't2', 2)],
-      null
-    )
-    expect(picked.map((t) => t.toolCallId)).toEqual(['start-2'])
   })
 })

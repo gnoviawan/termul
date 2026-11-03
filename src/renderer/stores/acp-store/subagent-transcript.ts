@@ -9,8 +9,7 @@
 import { asRecord } from '@/components/chat/tool-call-summary'
 import type { MessageChunkEvent, ToolCall } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
-import { withSubagentLifecycle } from './subagent-lifecycle'
-import { withSubagentUsage } from './subagent-usage'
+import { withSubagentRecord } from './subagent-lifecycle'
 import type { AcpState } from './types'
 
 const MAX_PARENT_ID_CHARS = 512
@@ -34,11 +33,9 @@ export function withParentToolCallId<T extends { toolCallId: string; _meta?: unk
   return parent && parent !== call.toolCallId ? { ...call, parentToolCallId: parent } : call
 }
 
-/** Every ingest-time subagent field: usage, lifecycle, and parent dispatch. */
-export function withSubagentIngest<
-  T extends { toolCallId: string; rawInput?: unknown; _meta?: unknown }
->(call: T): T {
-  return withParentToolCallId(withSubagentLifecycle(withSubagentUsage(call)))
+/** Every ingest-time subagent field: the host's record and control marker, and parent dispatch. */
+export function withSubagentIngest<T extends { toolCallId: string; _meta?: unknown }>(call: T): T {
+  return withParentToolCallId(withSubagentRecord(call))
 }
 
 /** The subagent text a chunk adds; null for thought, user, and non-text chunks. */

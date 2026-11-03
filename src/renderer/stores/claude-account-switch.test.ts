@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { acpApi } from '@/lib/acp-api'
 import { AcpTransportError } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
+import { endedState, subagentToolCall } from '@/lib/test-utils/subagent'
 import { agentReuseKey } from '@/stores/acp-reuse-keys'
 import {
   _addEphemeralSessionIdForTesting,
@@ -170,13 +171,11 @@ describe('claude account switch', () => {
   })
 
   describe('with a background subagent still running after the turn', () => {
-    const launch = (state?: 'completed') => ({
-      toolCallId: 'bg-1',
-      status: 'completed' as const,
-      seq: 2,
-      rawInput: { description: 'Run e2e', prompt: 'p', run_in_background: true },
-      subagentLifecycle: { background: true, ...(state ? { state } : {}) }
-    })
+    const launch = (state?: 'completed') =>
+      subagentToolCall(
+        { background: true, ...(state ? { state: endedState(state) } : {}) },
+        { toolCallId: 'bg-1', status: 'completed', seq: 2 }
+      )
     beforeEach(() => {
       useAcpStore.setState({
         messages: { c1: [{ id: 'u1', role: 'user', blocks: [], timestamp: 1, seq: 1 }] },

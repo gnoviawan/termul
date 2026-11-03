@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolCall } from '@/lib/acp-api'
+import { endedState, subagentToolCall } from '@/lib/test-utils/subagent'
 import type { ChatMessage } from '@/stores/acp-store/types'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { ChatStatusPill } from './ChatStatusPill'
@@ -24,13 +25,10 @@ const user: ChatMessage = {
   seq: 1
 }
 
-const subagent: ToolCall = {
-  toolCallId: 'a1',
-  seq: 2,
-  timestamp: 2,
-  status: 'completed',
-  rawInput: { description: 'Audit code', prompt: 'p', subagent_type: 'Explore' }
-}
+const subagent: ToolCall = subagentToolCall(
+  { role: 'Explore', state: endedState('completed') },
+  { toolCallId: 'a1', seq: 2, timestamp: 2, status: 'completed' }
+)
 
 const edit = (id: string, path: string): ToolCall => ({
   toolCallId: id,

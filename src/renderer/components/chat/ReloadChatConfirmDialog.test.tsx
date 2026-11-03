@@ -10,12 +10,13 @@ vi.mock('@/stores/reload-chat', async (orig) => {
 })
 
 import { useReloadChat } from '@/hooks/use-reload-chat'
+import { type SubagentRecordOverrides, subagentToolCall } from '@/lib/test-utils/subagent'
 import { useAcpStore } from '@/stores/acp-store'
 import { FRESH } from '@/stores/acp-store/testkit'
 import { useReloadConfirmStore } from '@/stores/reload-confirm-store'
 import { ReloadChatConfirmDialog } from './ReloadChatConfirmDialog'
 
-function seed(subagentLifecycle?: Record<string, unknown>): void {
+function seed(record?: SubagentRecordOverrides): void {
   useAcpStore.setState({
     ...FRESH,
     sessions: {
@@ -33,16 +34,8 @@ function seed(subagentLifecycle?: Record<string, unknown>): void {
       s1: [{ id: 'u1', role: 'user', blocks: [], streaming: false, timestamp: 1, seq: 1 }]
     },
     toolCalls: {
-      s1: subagentLifecycle
-        ? [
-            {
-              toolCallId: 'bg-1',
-              status: 'completed',
-              seq: 2,
-              rawInput: { description: 'Audit', prompt: 'p' },
-              subagentLifecycle
-            }
-          ]
+      s1: record
+        ? [subagentToolCall(record, { toolCallId: 'bg-1', status: 'completed', seq: 2 })]
         : []
     },
     reloadingChatIds: {}
@@ -64,7 +57,7 @@ describe('reload with background agents', () => {
   })
 
   it('asks first, and reloads only on confirm', () => {
-    seed({ background: true, state: 'running' })
+    seed({ background: true, caps: { liveProgress: true } })
     const { result } = renderHook(() => useReloadChat('s1'))
     act(() => result.current.reload?.())
     expect(reloadMock).not.toHaveBeenCalled()
@@ -93,7 +86,7 @@ describe('reload with background agents', () => {
   })
 
   it('does not reload on cancel', () => {
-    seed({ background: true, state: 'running' })
+    seed({ background: true })
     useReloadConfirmStore.setState({ request: { sessionId: 's1', backgroundAgents: 2 } })
     render(<ReloadChatConfirmDialog sessionId="s1" />)
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))

@@ -8,6 +8,7 @@ import {
 import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
 import { commandToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
+import { endedState, subagentToolCall } from '@/lib/test-utils/subagent'
 import type { AcpSession } from '@/stores/acp-store'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useBrowserControlStore } from '@/stores/browser-control-store'
@@ -1263,11 +1264,10 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
       seedLiveSession('s1')
       toolCallsRef.current = {
         s1: [
-          {
-            toolCallId: 'a1',
-            status: 'completed',
-            rawInput: { description: 'Audit code', prompt: 'p', subagent_type: 'general-purpose' }
-          }
+          subagentToolCall(
+            { role: 'general-purpose', state: endedState('completed') },
+            { toolCallId: 'a1', status: 'completed' }
+          )
         ] as unknown as Array<{ id: string; kind: string }>
       }
       try {
