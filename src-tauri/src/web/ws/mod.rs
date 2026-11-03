@@ -74,6 +74,7 @@ mod prompts;
 mod relay;
 mod sessions;
 mod store;
+mod subagents;
 mod subscribe;
 mod watch;
 
@@ -92,6 +93,7 @@ use projects::*;
 use prompts::*;
 use relay::*;
 use sessions::*;
+use subagents::*;
 use store::*;
 use subscribe::*;
 use watch::*;

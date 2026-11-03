@@ -106,6 +106,7 @@ impl CommandClass {
 pub const WS_COMMAND_CLASSES: &[(&str, CommandClass)] = &[
     ("send_prompt", CommandClass::command(Replay::Entity)),
     ("cancel_prompt", CommandClass::idempotent()),
+    ("stop_subagent", CommandClass::idempotent()),
     ("set_config_option", CommandClass::idempotent()),
     ("set_mode", CommandClass::idempotent()),
     ("set_model", CommandClass::idempotent()),

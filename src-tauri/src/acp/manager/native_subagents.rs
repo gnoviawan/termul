@@ -4,9 +4,10 @@
 //! subagent in its own ACP session when the client advertises
 //! `clientCapabilities.subagents`. Versions 0.78-0.89 send the AIR draft
 //! form; 0.90 and newer send the RFD form to clients that are not AIR
-//! clients, which Termul is not. Termul advertises the capability only to
-//! 0.78 through 0.99, the versions whose wire was verified, but routes the
-//! subagent updates of any agent that sends them.
+//! clients, which Termul is not. Codex ACP 2.5 sends the RFD form too.
+//! Termul advertises the capability only to the versions whose wire was
+//! verified ([`VERIFIED_ADAPTERS`]), but routes the subagent updates of any
+//! agent that sends them.
 //!
 //! In both forms the agent does not send a dispatch tool call to the chat. It
 //! announces each subagent on its parent session, sends the subagent's own
@@ -46,12 +47,37 @@ use crate::web::EventSink;
 
 /// `clientCapabilities` key that turns the native form on.
 const SUBAGENTS_CAPABILITY_KEY: &str = "subagents";
-const CLAUDE_PACKAGE_NAME: &str = "@agentclientprotocol/claude-agent-acp";
-/// First adapter version verified to send native subagent sessions.
-const NATIVE_SUBAGENTS_MIN: (u64, u64, u64) = (0, 78, 0);
-/// First adapter version past the verified wire (0.78 through 0.99). A 1.0
-/// may change the RFD form, so it keeps the legacy behavior until verified.
-const NATIVE_SUBAGENTS_UNVERIFIED: (u64, u64, u64) = (1, 0, 0);
+/// An adapter whose native subagent wire Termul verified, and for which
+/// versions. A later major may change the form, so it keeps the legacy
+/// behavior until verified.
+struct VerifiedAdapter {
+    label: &'static str,
+    /// The npm package; a launch names it pinned (`package@X.Y.Z`) or runs an
+    /// entry point inside its install.
+    package: &'static str,
+    /// First version verified to send native subagent sessions.
+    min: (u64, u64, u64),
+    /// First version past the verified wire.
+    unverified: (u64, u64, u64),
+}
+
+const VERIFIED_ADAPTERS: [VerifiedAdapter; 2] = [
+    // AIR from 0.78, RFD from 0.90.
+    VerifiedAdapter {
+        label: "Claude adapter",
+        package: "@agentclientprotocol/claude-agent-acp",
+        min: (0, 78, 0),
+        unverified: (1, 0, 0),
+    },
+    // RFD (its "standard" subagent protocol) when `subagents` is advertised;
+    // announces each child without a state, then reports it.
+    VerifiedAdapter {
+        label: "Codex adapter",
+        package: "@agentclientprotocol/codex-acp",
+        min: (2, 5, 0),
+        unverified: (3, 0, 0),
+    },
+];
 /// Child updates that are chat history. Child state updates (usage, mode,
 /// commands, config, plan, session info) would overwrite the chat's own.
 const CHILD_HISTORY_KINDS: [&str; 5] = [
@@ -107,24 +133,24 @@ pub(super) enum SessionRoute {
     Claimed(Vec<Value>),
 }
 
-/// True when `config` launches a Claude adapter version verified to send
-/// native subagent sessions. Other versions keep the legacy behavior (no
-/// capability).
+/// True when `config` launches an adapter version verified to send native
+/// subagent sessions (Claude Agent ACP 0.78-0.99, Codex ACP 2.5-2.x). Other
+/// versions keep the legacy behavior (no capability).
 pub(super) fn uses_native_subagents(config: &AgentConfig) -> bool {
-    let Some(version) = claude_adapter_version(config) else {
-        return false;
-    };
-    if version >= NATIVE_SUBAGENTS_UNVERIFIED {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
+    VERIFIED_ADAPTERS.iter().any(|adapter| {
+        let Some(version) = adapter_version(config, adapter.package) else {
+            return false;
+        };
+        if version >= adapter.unverified {
             let (major, minor, patch) = version;
             log::info!(
-                "[acp] Claude adapter {major}.{minor}.{patch} is newer than the verified native subagent range (0.78-0.99); not advertising subagents"
+                "[acp] {} {major}.{minor}.{patch} is newer than the verified native subagent range; not advertising subagents",
+                adapter.label
             );
-        });
-        return false;
-    }
-    version >= NATIVE_SUBAGENTS_MIN
+            return false;
+        }
+        version >= adapter.min
+    })
 }
 
 /// Add `subagents: {}` to the serialized `initialize` client capabilities.
@@ -386,13 +412,24 @@ fn rfd_update(
             native::apply_rfd(record, update, next, false, now_ms);
         });
     }
-    if !next.as_ref().is_some_and(|next| next.state.is_working()) {
-        log::warn!(
-            "[acp] native subagent {} reported a state before it was announced; dropped",
-            crate::logging::redact_session_id(child)
-        );
-        return SessionRoute::Claimed(Vec::new());
-    }
+    // Codex announces a child without a state and reports its state next;
+    // until then the record shows it as unobservable. An end report for an
+    // unknown child (a replay after the chat reloaded) announces nothing.
+    let next = match next {
+        None => native::RfdState {
+            state: SubagentState::Unknown,
+            usage: None,
+        },
+        Some(next) if next.state.is_working() => next,
+        Some(_) => {
+            log::warn!(
+                "[acp] native subagent {} reported a state before it was announced; dropped",
+                crate::logging::redact_session_id(child)
+            );
+            return SessionRoute::Claimed(Vec::new());
+        }
+    };
+    let next = Some(next);
     announce(
         &mut state,
         parent,
@@ -588,17 +625,19 @@ fn rerouted(params: &Value, route: &ChildRoute) -> Value {
     params
 }
 
-/// The Claude adapter version `config` launches: from an exact
-/// `@agentclientprotocol/claude-agent-acp@X.Y.Z` argument, or from the
-/// `package.json` above a launched `claude-agent-acp` entry point.
-fn claude_adapter_version(config: &AgentConfig) -> Option<(u64, u64, u64)> {
+/// The version of npm `package` that `config` launches: from an exact
+/// `package@X.Y.Z` argument, or from the `package.json` above a launched
+/// entry point inside the package.
+fn adapter_version(config: &AgentConfig, package: &str) -> Option<(u64, u64, u64)> {
+    let bin = package.rsplit('/').next().unwrap_or(package);
+    let pinned = format!("{package}@");
     let candidates = std::iter::once(&config.command).chain(config.args.iter());
     for arg in candidates {
-        if let Some(version) = crate::acp::claude_agent::parse_pinned_claude_package(arg) {
-            return parse_semver(&version);
+        if let Some(version) = arg.strip_prefix(&pinned) {
+            return parse_exact_semver(version);
         }
-        if arg.contains("claude-agent-acp") {
-            if let Some(version) = installed_package_version(std::path::Path::new(arg)) {
+        if arg.contains(bin) {
+            if let Some(version) = installed_package_version(std::path::Path::new(arg), package) {
                 return Some(version);
             }
         }
@@ -606,7 +645,7 @@ fn claude_adapter_version(config: &AgentConfig) -> Option<(u64, u64, u64)> {
     None
 }
 
-fn installed_package_version(entry: &std::path::Path) -> Option<(u64, u64, u64)> {
+fn installed_package_version(entry: &std::path::Path, package: &str) -> Option<(u64, u64, u64)> {
     for dir in entry.ancestors().skip(1).take(6) {
         let Ok(manifest) = std::fs::read_to_string(dir.join("package.json")) else {
             continue;
@@ -614,12 +653,21 @@ fn installed_package_version(entry: &std::path::Path) -> Option<(u64, u64, u64)>
         let Ok(value) = serde_json::from_str::<Value>(&manifest) else {
             continue;
         };
-        if value.get("name").and_then(Value::as_str) != Some(CLAUDE_PACKAGE_NAME) {
+        if value.get("name").and_then(Value::as_str) != Some(package) {
             continue;
         }
         return parse_semver(value.get("version")?.as_str()?);
     }
     None
+}
+
+/// A pinned `X.Y.Z` (no range, tag or prerelease): what npx runs exactly.
+fn parse_exact_semver(version: &str) -> Option<(u64, u64, u64)> {
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    if version.split('.').count() != 3 || !version.split('.').all(digits) {
+        return None;
+    }
+    parse_semver(version)
 }
 
 pub(super) fn parse_semver(version: &str) -> Option<(u64, u64, u64)> {

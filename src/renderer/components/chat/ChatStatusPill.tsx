@@ -19,6 +19,7 @@ import {
   SubagentStatusIcon,
   subagentCountSummary
 } from './SubagentRow'
+import { SubagentRowStop } from './SubagentRowStop'
 import { useChatChangedFiles } from './use-chat-changed-files'
 import { useBackgroundWait, useCurrentTurnSubagents } from './use-current-turn-subagents'
 
@@ -203,14 +204,17 @@ export function ChatStatusPill({
             )}
           >
             {subagents.map((tc, i) => (
-              <li key={tc.toolCallId}>
-                <SubagentRow
-                  toolCall={tc}
-                  status={statuses[i] ?? 'stopped'}
-                  siblings={subagentIds}
-                  surface="popover"
-                  onOpen={close}
-                />
+              <li key={tc.toolCallId} className="flex min-w-0 items-center gap-1">
+                <div className="min-w-0 flex-1">
+                  <SubagentRow
+                    toolCall={tc}
+                    status={statuses[i] ?? 'stopped'}
+                    siblings={subagentIds}
+                    surface="popover"
+                    onOpen={close}
+                  />
+                </div>
+                {isMobile && <SubagentRowStop toolCall={tc} status={statuses[i] ?? 'stopped'} />}
               </li>
             ))}
           </ul>

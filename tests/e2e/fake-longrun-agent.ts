@@ -98,6 +98,8 @@
  * `running`) on the chat, works under its own session id, and keeps working
  * after the turn ends at `n` seconds. `<seconds>` after that, each reports
  * `subagent_update` state `idle` (`stopReason: end_turn`, with usage).
+ * `session/cancel` with a subagent's session id stops only that subagent: it
+ * reports `idle` (`stopReason: cancelled`) and clears `capabilities.cancel`.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -541,6 +543,9 @@ const SUBAGENT_TASKS = [
   }
 ] as const
 
+/** Stops for the RFD subagents still working, keyed by child session id. */
+const subagentStops = new Map<string, () => void>()
+
 /**
  * `[SUBAGENTS]`: two subagents report activity until the turn ends, or past it
  * with `[BG_TAIL]`. Wire form: RFD with `[BG_TAIL]`, else AIR when the host
@@ -652,6 +657,21 @@ function runSubagentTurn(
           stopReason: 'end_turn',
           usage: { totalTokens: 1500, inputTokens: 1200, outputTokens: 300 }
         }
+      })
+    }
+  }
+  if (form === 'rfd') {
+    for (const task of SUBAGENT_TASKS) {
+      const child = childSession(task.key)
+      subagentStops.set(child, () => {
+        if (ended.has(task.key)) return
+        ended.add(task.key)
+        update(sessionId, {
+          sessionUpdate: 'subagent_update',
+          sessionId: child,
+          capabilities: { cancel: null },
+          state: { state: 'idle', stopReason: 'cancelled' }
+        })
       })
     }
   }
@@ -999,6 +1019,12 @@ function handle(msg: JsonRpcMessage): void {
     case 'cancel':
     case 'session/cancel': {
       const sessionId = String(p.sessionId ?? 'unknown')
+      const stopSubagent = subagentStops.get(sessionId)
+      if (stopSubagent) {
+        subagentStops.delete(sessionId)
+        stopSubagent()
+        break
+      }
       const inFlight = inFlightBySession.get(sessionId)
       if (inFlight) {
         notify('session/update', {

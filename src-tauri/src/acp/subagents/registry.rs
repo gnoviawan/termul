@@ -96,6 +96,18 @@ impl SubagentRecords {
         }
     }
 
+    /// The record of subagent `id` (its [`Subagent::id`]) in chat `root`.
+    pub(crate) fn find(&self, root: &str, id: &str) -> Option<&Subagent> {
+        self.order
+            .iter()
+            .filter(|(chat, _)| chat == root)
+            .filter_map(|key| match self.tracked.get(key) {
+                Some(Tracked::Dispatch(entry)) => Some(&entry.record),
+                _ => None,
+            })
+            .find(|record| record.id == id)
+    }
+
     /// Create (with `create`) or update the dispatch `call` of `root`, then
     /// apply `update`. Returns the record when it is new or changed.
     pub(crate) fn upsert(

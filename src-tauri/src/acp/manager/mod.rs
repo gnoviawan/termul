@@ -255,6 +255,18 @@ enum AcpCommand {
         session_id: SessionId,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Stop one subagent of chat `root_session_id` (`session/cancel` for its
+    /// child session when the agent offers it).
+    StopSubagent {
+        root_session_id: String,
+        subagent_id: String,
+        reply: oneshot::Sender<
+            Result<
+                crate::acp::subagents::StopSubagentOutcome,
+                crate::acp::subagents::StopSubagentError,
+            >,
+        >,
+    },
     /// Session ids whose workspace roots are registered on this agent's
     /// driver — the authoritative "which live agent owns which session" set
     /// (issue #837: `list_agents` payload extension). A session id appears
@@ -1459,6 +1471,55 @@ impl AcpManager {
         // The driver resolved every parked approval and question of the session
         // as cancelled before it replied, whatever the reply says.
         self.release_session_tickets(&cancelled_session);
+        result
+    }
+
+    /// Stop subagent `subagent_id` of chat `root_session_id`. Converges: a
+    /// subagent whose work already ended answers `AlreadyEnded` and nothing
+    /// is sent. The agent confirms a stop on the subagent's record.
+    pub(crate) async fn stop_subagent(
+        &self,
+        agent_id: &AgentId,
+        root_session_id: String,
+        subagent_id: String,
+    ) -> Result<crate::acp::subagents::StopSubagentOutcome, crate::acp::subagents::StopSubagentError>
+    {
+        use crate::acp::subagents::StopSubagentError;
+        let subagent = crate::logging::redact_session_id(&subagent_id);
+        let chat = crate::logging::redact_session_id(&root_session_id);
+        log::info!("[acp] stop of subagent {subagent} in chat {chat} requested");
+        let result = match self.command_tx(agent_id) {
+            Err(_) => Err(StopSubagentError::UnknownAgent),
+            Ok(tx) => {
+                let (reply, reply_rx) = oneshot::channel();
+                let command = AcpCommand::StopSubagent {
+                    root_session_id,
+                    subagent_id,
+                    reply,
+                };
+                match tx.send(command) {
+                    Err(_) => Err(StopSubagentError::Failed(
+                        "agent thread is no longer running".to_string(),
+                    )),
+                    Ok(()) => reply_rx.await.unwrap_or_else(|_| {
+                        Err(StopSubagentError::Failed(
+                            "agent thread dropped the reply".to_string(),
+                        ))
+                    }),
+                }
+            }
+        };
+        match &result {
+            Ok(outcome) => {
+                log::info!("[acp] stop of subagent {subagent} in chat {chat}: {outcome:?}")
+            }
+            Err(StopSubagentError::Failed(error)) => {
+                log::warn!("[acp] stop of subagent {subagent} in chat {chat} failed: {error}")
+            }
+            Err(refusal) => {
+                log::info!("[acp] stop of subagent {subagent} in chat {chat} refused: {refusal:?}")
+            }
+        }
         result
     }
 

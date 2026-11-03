@@ -29,6 +29,7 @@ import type {
   McpInstallPlanReply,
   McpInstallPlanRequest
 } from '@shared/types/mcp-install.types'
+import type { SubagentId, SubagentStopOutcome } from '@shared/types/subagent'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AcpAuthenticateReply,
@@ -1451,6 +1452,19 @@ export class WsAcpTransport implements AcpTransport {
 
   async cancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {
     await this.request('cancel_prompt', { agentId, sessionId })
+  }
+
+  async stopSubagent(
+    agentId: AgentId,
+    rootSessionId: SessionId,
+    subagentId: SubagentId
+  ): Promise<SubagentStopOutcome> {
+    const reply = await this.request<{ outcome: SubagentStopOutcome }>('stop_subagent', {
+      agentId,
+      rootSessionId,
+      subagentId
+    })
+    return reply.outcome
   }
 
   async deleteAgentSession(

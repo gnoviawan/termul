@@ -1147,3 +1147,201 @@ fn tool_calls_replayed_by_session_load_are_not_mapped() {
     );
     assert!(state.lock().subagent_records().record(ROOT, "toolu_old").is_none());
 }
+
+fn codex_config(args: Vec<String>) -> AgentConfig {
+    AgentConfig {
+        config_id: Some("acp-registry:codex-acp".to_string()),
+        name: "Codex".to_string(),
+        command: "npx".to_string(),
+        args,
+        env: HashMap::new(),
+        allow_terminal: false,
+    }
+}
+
+#[test]
+fn native_form_is_offered_to_the_verified_codex_adapter() {
+    let pinned = |version: &str| {
+        codex_config(vec![
+            "-y".to_string(),
+            format!("@agentclientprotocol/codex-acp@{version}"),
+        ])
+    };
+    let advertised = |config: &AgentConfig| AgentRuntimeProfile::resolve(config).native_subagents;
+    assert!(advertised(&pinned("2.5.0")), "the registry pin");
+    assert!(advertised(&pinned("2.9.1")));
+    assert!(!advertised(&pinned("2.4.9")), "before the verified wire");
+    assert!(!advertised(&pinned("3.0.0")), "past the verified wire");
+    assert!(!advertised(&pinned("latest")));
+    assert!(!advertised(&codex_config(vec![
+        "-y".to_string(),
+        "@zed-industries/codex-acp@0.9.0".to_string()
+    ])));
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let package = root
+        .path()
+        .join("node_modules/@agentclientprotocol/codex-acp");
+    std::fs::create_dir_all(package.join("dist")).expect("package dir");
+    let entry = package.join("dist/index.js");
+    std::fs::write(&entry, "").expect("entry");
+    std::fs::write(
+        package.join("package.json"),
+        json!({ "name": "@agentclientprotocol/codex-acp", "version": "2.5.0" }).to_string(),
+    )
+    .expect("manifest");
+    let installed = AgentConfig {
+        command: "node".to_string(),
+        ..codex_config(vec![entry.to_string_lossy().into_owned()])
+    };
+    assert!(
+        advertised(&installed),
+        "an installed entry point reads its manifest"
+    );
+}
+
+const CODEX_CHILD: &str = "sess-root:subagent:thread-7";
+
+fn codex_parent(body: Value) -> Value {
+    let mut body = body;
+    body["sessionUpdate"] = json!("subagent_update");
+    body["sessionId"] = json!(CODEX_CHILD);
+    update(ROOT, body)
+}
+
+/// Codex ACP 2.5.0 (`StandardSubagentEventRouter`): the announce carries no
+/// state (`ensureAnnounced`), the cancel capability follows the child's turn
+/// (`publishCancellation`), the state comes from its foreground tracker
+/// (`updateSubagentState`), the model from a child `config_option_update`
+/// (`publishConfiguration`), and an interrupted turn ends idle `cancelled`
+/// (`turnEndState`).
+#[test]
+fn a_codex_rfd_sequence_maps_to_one_stoppable_card() {
+    let state = Mutex::new(DriverState::new());
+    let route = |raw: Value| claimed(route_session_update(&state, &raw, 5));
+
+    let announce = route(codex_parent(json!({
+        "capabilities": {},
+        "title": "explorer",
+        "description": "Map the repo",
+    })));
+    assert_eq!(announce.len(), 1, "a state-less announce creates the card");
+    let card = &announce[0]["update"];
+    assert_eq!(card["sessionUpdate"], "tool_call");
+    assert_eq!(card["toolCallId"], format!("termul-subagent:{CODEX_CHILD}"));
+    assert_eq!(card["title"], "explorer");
+    let record = &card["_meta"]["termul/subagent"];
+    assert_eq!(record["activity"], "unknown");
+    assert_eq!(record["description"], "Map the repo");
+    assert!(record["caps"]["stop"].is_null());
+
+    let cancel = single(route_session_update(
+        &state,
+        &codex_parent(json!({ "capabilities": { "cancel": {} } })),
+        6,
+    ));
+    assert_eq!(
+        cancel["update"]["_meta"]["termul/subagent"]["caps"]["stop"],
+        "session-cancel"
+    );
+
+    let running = single(route_session_update(
+        &state,
+        &codex_parent(json!({ "state": { "state": "running" } })),
+        7,
+    ));
+    assert_eq!(running["update"]["status"], "in_progress");
+    assert_eq!(
+        running["update"]["_meta"]["termul/subagent"]["activity"],
+        "running"
+    );
+    assert_eq!(
+        state.lock().subagent_route(CODEX_CHILD).map(|r| r.ended),
+        Some(false)
+    );
+
+    let model = single(route_session_update(
+        &state,
+        &update(
+            CODEX_CHILD,
+            json!({
+                "sessionUpdate": "config_option_update",
+                "configOptions": [{
+                    "id": "model", "name": "Model",
+                    "description": "Model Codex uses for the subagent",
+                    "category": "model", "type": "select",
+                    "currentValue": "gpt-5.5",
+                    "options": [{ "value": "gpt-5.5", "name": "gpt-5.5", "description": null }]
+                }]
+            }),
+        ),
+        8,
+    ));
+    assert_eq!(
+        model["update"]["_meta"]["termul/subagent"]["model"],
+        "gpt-5.5"
+    );
+
+    let chunk = single(route_session_update(
+        &state,
+        &agent_chunk(CODEX_CHILD, "child text"),
+        9,
+    ));
+    assert_eq!(chunk["sessionId"], ROOT);
+    assert_eq!(
+        chunk["update"]["_meta"]["claudeCode"]["parentToolUseId"],
+        format!("termul-subagent:{CODEX_CHILD}")
+    );
+    assert!(
+        route(update(
+            CODEX_CHILD,
+            json!({ "sessionUpdate": "session_info_update", "title": "explorer" })
+        ))
+        .is_empty(),
+        "the child's session info never reaches the chat"
+    );
+
+    let ended = single(route_session_update(
+        &state,
+        &codex_parent(json!({ "state": { "state": "idle", "stopReason": "cancelled" } })),
+        10,
+    ));
+    assert_eq!(ended["update"]["status"], "completed");
+    let record = &ended["update"]["_meta"]["termul/subagent"];
+    assert_eq!(record["end"]["reason"], "cancelled");
+    assert_eq!(record["endedAt"], 10);
+    let cleared = single(route_session_update(
+        &state,
+        &codex_parent(json!({ "capabilities": { "cancel": null } })),
+        11,
+    ));
+    assert!(cleared["update"]["_meta"]["termul/subagent"]["caps"]["stop"].is_null());
+    assert_eq!(
+        state.lock().subagent_route(CODEX_CHILD).map(|r| r.ended),
+        Some(true)
+    );
+}
+
+#[test]
+fn a_codex_failed_turn_ends_failed_with_its_message() {
+    let state = Mutex::new(DriverState::new());
+    claimed(route_session_update(
+        &state,
+        &codex_parent(json!({ "capabilities": {} })),
+        1,
+    ));
+    let failed = single(route_session_update(
+        &state,
+        &codex_parent(json!({ "state": {
+            "state": "idle", "stopReason": "error",
+            "error": { "code": -32603, "message": "Subagent work failed" }
+        } })),
+        2,
+    ));
+    assert_eq!(failed["update"]["status"], "failed");
+    let record = &failed["update"]["_meta"]["termul/subagent"];
+    assert_eq!(
+        record["end"],
+        json!({ "reason": "failed", "error": "Subagent work failed" })
+    );
+}

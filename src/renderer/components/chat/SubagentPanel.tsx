@@ -1,6 +1,6 @@
 import { useReducedMotion } from 'framer-motion'
 import { type ReactNode, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, Clock, X } from '@/components/icons'
+import { ArrowLeft, Clock, Square, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { IconActionButton } from '@/components/ui/icon-action-button'
 import type { ToolCall } from '@/lib/acp-api'
@@ -21,6 +21,7 @@ import { useSubagentChildCalls, useSubagentSurface } from './subagent-surface-co
 import { SubagentElapsed } from './subagent-time'
 import { ToolCallCard } from './ToolCallCard'
 import { isSubagentCall, type ParentTurn } from './tool-call-summary'
+import { useStopSubagent } from './use-stop-subagent'
 
 /** Activity rows shown; the newest win when a subagent made more. */
 export const MAX_SUBAGENT_ACTIVITY_ROWS = 50
@@ -212,6 +213,24 @@ function Outcome({
   )
 }
 
+/** Stops the subagent at once: the panel is a deliberate view, so no confirm. */
+function StopButton({
+  toolCall,
+  status
+}: {
+  toolCall: ToolCall
+  status: SubagentStatus
+}): React.JSX.Element | null {
+  const { canStop, stopping, stop } = useStopSubagent(toolCall, status)
+  if (!canStop) return null
+  return (
+    <Button type="button" variant="outline" size="xs" disabled={stopping} onClick={stop}>
+      <Square size={10} fill="currentColor" strokeWidth={0} aria-hidden="true" />
+      {stopping ? 'Stopping' : 'Stop'}
+    </Button>
+  )
+}
+
 export interface SubagentPanelProps {
   toolCall: ToolCall
   status: SubagentStatus
@@ -303,6 +322,7 @@ export function SubagentPanel({
         <div data-slot="subagent-actions" className="flex shrink-0 items-center gap-2">
           <SubagentStatusLabel toolCall={toolCall} status={status} />
           <SubagentElapsed toolCall={toolCall} status={status} />
+          <StopButton toolCall={toolCall} status={status} />
         </div>
       </div>
       <div

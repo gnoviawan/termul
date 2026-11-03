@@ -112,6 +112,13 @@ interface SubagentFields {
 
 export type Subagent = SubagentFields & SubagentState
 
+/**
+ * A stop request that did its job. `sent`: the host sent the agent
+ * `session/cancel` for the child session, and the agent confirms on the record.
+ * `already_ended`: the subagent's work had ended; nothing was sent.
+ */
+export type SubagentStopOutcome = 'sent' | 'already_ended'
+
 export interface SubagentControl {
   /** Subagents the call steers. */
   subagentIds: SubagentId[]
