@@ -136,6 +136,9 @@ function TurnActivityComponent({
     flush()
     return { summary: summarizeToolActivity(allCalls), workRuns: runs, subagentGroups: groups }
   }, [items])
+  // Subagents stay in the transcript when the turn folds: a closed turn
+  // shows its subagent groups, in launch order, under its header.
+  const pinnedGroups = useMemo(() => [...new Set(subagentGroups.values())], [subagentGroups])
   // A long agent turn renders only its latest steps: every step stays mounted
   // while the turn is open, and hundreds of them cost hundreds of MB of DOM.
   const turnKey = items[0]?.key ?? ''
@@ -191,6 +194,13 @@ function TurnActivityComponent({
         {summary ? <DiffStat added={summary.added} removed={summary.removed} /> : null}
         {attentionRequired && !active ? <span>· needs attention</span> : null}
       </CollapsibleTrigger>
+      {!open && pinnedGroups.length > 0 ? (
+        <div data-turn-subagents className="min-w-0 pl-4">
+          {pinnedGroups.map((group) => (
+            <SubagentGroup key={group.key} calls={group.calls} parentTurn={parentTurn} />
+          ))}
+        </div>
+      ) : null}
       <CollapsibleContent forceMount>
         <CollapseExpandMotion open={open} motion="chat">
           <div className="min-w-0 pb-1 pl-4">
