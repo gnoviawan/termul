@@ -97,6 +97,8 @@ mod test_driver;
 #[cfg(test)]
 pub(crate) use test_driver::{FakeAuth, FakeDriver, FakeTurn};
 #[cfg(test)]
+mod agent_tools_loop_tests;
+#[cfg(test)]
 mod native_subagents_loop_tests;
 #[cfg(test)]
 mod native_subagents_tests;

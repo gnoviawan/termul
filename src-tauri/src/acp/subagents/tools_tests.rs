@@ -245,15 +245,15 @@ fn an_invalid_usage_value_is_ignored() {
 }
 
 #[test]
-fn a_cursor_task_is_mapped_by_the_heuristic() {
+fn an_unknown_agents_dispatch_is_mapped_by_the_heuristic() {
     let mut records = SubagentRecords::default();
     let start = record(&map(
         &mut records,
         "tool_call",
         json!({
-            "toolCallId": "cursor-1",
-            "title": "Task: Explore auth",
-            "kind": "think",
+            "toolCallId": "call-1",
+            "title": "Delegate",
+            "kind": "other",
             "status": "in_progress",
             "rawInput": { "description": "Explore auth", "prompt": "Find the login flow" },
         }),
@@ -268,35 +268,10 @@ fn a_cursor_task_is_mapped_by_the_heuristic() {
     let failed = record(&map(
         &mut records,
         "tool_call_update",
-        json!({ "toolCallId": "cursor-1", "status": "failed" }),
+        json!({ "toolCallId": "call-1", "status": "failed" }),
         6,
     ));
     assert_eq!(failed["end"], json!({ "reason": "failed" }));
-}
-
-#[test]
-fn an_opencode_background_task_keeps_running_after_its_call_completes() {
-    let mut records = SubagentRecords::default();
-    map(
-        &mut records,
-        "tool_call",
-        json!({
-            "toolCallId": "oc-1",
-            "title": "task",
-            "kind": "think",
-            "rawInput": { "subagent_type": "general", "description": "Index", "prompt": "Index it" },
-        }),
-        1,
-    );
-    let done = record(&map(
-        &mut records,
-        "tool_call_update",
-        json!({ "toolCallId": "oc-1", "status": "completed", "rawOutput": { "isBackground": true } }),
-        2,
-    ));
-    assert_eq!(done["role"], "general");
-    assert_eq!(done["background"], true);
-    assert_eq!(done["activity"], "running");
 }
 
 #[test]

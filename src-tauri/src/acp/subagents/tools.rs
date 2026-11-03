@@ -6,9 +6,9 @@ use serde_json::{Map, Value};
 
 use super::registry::{DispatchEntry, SubagentRecords};
 use super::{
-    bounded_id, bounded_text, codex_collab, count, Subagent, SubagentCaps, SubagentControl,
-    SubagentEndReason, SubagentSource, SubagentState, SubagentTranscript, SubagentUsage,
-    MAX_PROMPT_CHARS, MAX_TEXT_CHARS, SUBAGENT_META_KEY,
+    agent_tools, bounded_id, bounded_text, codex_collab, count, AgentFamily, Subagent,
+    SubagentCaps, SubagentControl, SubagentEnd, SubagentEndReason, SubagentSource, SubagentState,
+    SubagentTranscript, SubagentUsage, MAX_PROMPT_CHARS, MAX_TEXT_CHARS, SUBAGENT_META_KEY,
 };
 
 /// `rawInput` keys that name a subagent, in title order.
@@ -25,7 +25,14 @@ const CLAUDE_USAGE_FIELDS: [&str; 3] = ["totalTokens", "totalDurationMs", "total
 /// not classified yet. The first whose `claims` accepts the call owns it for
 /// the rest of its events. To support another agent's dispatch form, add its
 /// mapper before [`TOOL_HEURISTIC`], which must stay last.
-pub(crate) const TOOL_MAPPERS: &[ToolMapper] = &[codex_collab::MAPPER, CLAUDE_META, TOOL_HEURISTIC];
+pub(crate) const TOOL_MAPPERS: &[ToolMapper] = &[
+    codex_collab::MAPPER,
+    CLAUDE_META,
+    agent_tools::CURSOR_TASK,
+    agent_tools::OPENCODE_TASK,
+    agent_tools::GEMINI_AGENT,
+    TOOL_HEURISTIC,
+];
 
 /// One way to read subagents from tool calls.
 pub(crate) struct ToolMapper {
@@ -45,8 +52,7 @@ const CLAUDE_META: ToolMapper = ToolMapper {
     apply: apply_claude,
 };
 
-/// Any other agent's dispatch call (Cursor `Task`, OpenCode `task`, ...),
-/// recognized from its `rawInput` alone.
+/// Any other agent's dispatch call, recognized from its `rawInput` alone.
 const TOOL_HEURISTIC: ToolMapper = ToolMapper {
     source: SubagentSource::ToolHeuristic,
     claims: claims_heuristic,
@@ -100,7 +106,11 @@ impl ToolStatus {
 /// The fields of one agent tool event that the mappers read.
 pub(crate) struct ToolEvent<'a> {
     pub id: &'a str,
+    /// The agent on the connection.
+    pub agent: AgentFamily,
     pub title: Option<&'a str>,
+    /// ACP tool kind (`think`, `other`, ...).
+    pub kind: Option<&'a str>,
     /// `None` on an update that leaves the status unchanged.
     pub status: Option<ToolStatus>,
     pub raw_input: Option<&'a Map<String, Value>>,
@@ -111,13 +121,19 @@ pub(crate) struct ToolEvent<'a> {
 
 impl<'a> ToolEvent<'a> {
     /// `None` without a usable `toolCallId`.
-    pub(crate) fn parse(kind: &str, update: &'a Map<String, Value>) -> Option<Self> {
+    pub(crate) fn parse(
+        update_kind: &str,
+        update: &'a Map<String, Value>,
+        agent: AgentFamily,
+    ) -> Option<Self> {
         let id = bounded_id(update.get("toolCallId"))?;
         let status = ToolStatus::parse(update.get("status"))
-            .or((kind == "tool_call").then_some(ToolStatus::Pending));
+            .or((update_kind == "tool_call").then_some(ToolStatus::Pending));
         Some(Self {
             id,
+            agent,
             title: bounded_text(update.get("title"), MAX_TEXT_CHARS),
+            kind: update.get("kind").and_then(Value::as_str),
             status,
             raw_input: update.get("rawInput").and_then(Value::as_object),
             raw_output: update.get("rawOutput"),
@@ -142,7 +158,7 @@ pub(crate) fn map_tool_event(
     update: &Map<String, Value>,
     now_ms: u64,
 ) -> MappedToolEvent {
-    let Some(event) = ToolEvent::parse(kind, update) else {
+    let Some(event) = ToolEvent::parse(kind, update, records.agent()) else {
         return MappedToolEvent::default();
     };
     let mapper = match records.get(root, event.id) {
@@ -162,15 +178,18 @@ pub(crate) fn map_tool_event(
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ToolView {
     tool_title: Option<String>,
-    input_title: Option<String>,
+    pub(super) input_title: Option<String>,
     input_description: Option<String>,
-    role: Option<String>,
+    pub(super) role: Option<String>,
     prompt: Option<String>,
     pub status: ToolStatus,
-    background: bool,
+    pub(super) background: bool,
     output_file: Option<String>,
-    usage: Option<SubagentUsage>,
+    pub(super) usage: Option<SubagentUsage>,
     usage_warned: bool,
+    pub(super) model: Option<String>,
+    /// The failure the call's output reports, whatever its status.
+    pub(super) error: Option<String>,
     /// Codex agent threads the call names.
     pub threads: Vec<String>,
 }
@@ -263,14 +282,39 @@ impl ToolView {
         record.prompt.clone_from(&self.prompt);
     }
 
+    /// Copy everything the view read onto `record`.
+    pub(crate) fn fill(&self, record: &mut Subagent, now_ms: u64) {
+        self.describe(record);
+        record.background = self.background;
+        record.output_file.clone_from(&self.output_file);
+        record.usage.clone_from(&self.usage);
+        record.model.clone_from(&self.model);
+        record.set_state(self.state(), now_ms);
+    }
+
+    /// The duration usage field.
+    pub(super) fn set_duration(&mut self, duration_ms: u64) {
+        self.usage
+            .get_or_insert_with(SubagentUsage::default)
+            .duration_ms = Some(duration_ms);
+    }
+
     /// The state the tool status implies. A background launch completes its
-    /// call at launch and keeps running.
+    /// call at launch and keeps running. A reported error fails the call
+    /// even when its status says completed.
     fn state(&self) -> SubagentState {
+        let failed = || SubagentState::Idle {
+            end: SubagentEnd {
+                reason: SubagentEndReason::Failed,
+                error: self.error.clone(),
+            },
+        };
         match self.status {
             ToolStatus::Pending | ToolStatus::InProgress => SubagentState::Running,
+            ToolStatus::Failed => failed(),
+            ToolStatus::Completed if self.error.is_some() => failed(),
             ToolStatus::Completed if self.background => SubagentState::Running,
             ToolStatus::Completed => SubagentState::idle(SubagentEndReason::Completed),
-            ToolStatus::Failed => SubagentState::idle(SubagentEndReason::Failed),
         }
     }
 }
@@ -341,7 +385,7 @@ fn apply_claude(
         live_progress: false,
         usage: true,
     };
-    apply_tool(records, root, event, now_ms, CLAUDE_META.source, caps)
+    apply_tool(records, root, event, now_ms, CLAUDE_META.source, caps, ToolView::absorb_claude)
 }
 
 fn apply_heuristic(
@@ -356,16 +400,19 @@ fn apply_heuristic(
         live_progress: false,
         usage: false,
     };
-    apply_tool(records, root, event, now_ms, TOOL_HEURISTIC.source, caps)
+    apply_tool(records, root, event, now_ms, TOOL_HEURISTIC.source, caps, |_, _| {})
 }
 
-fn apply_tool(
+/// Apply one event of a dispatch call: the shared fields, then the source's
+/// own (`absorb`).
+pub(super) fn apply_tool(
     records: &mut SubagentRecords,
     root: &str,
     event: &ToolEvent,
     now_ms: u64,
     source: SubagentSource,
     caps: SubagentCaps,
+    absorb: fn(&mut ToolView, &ToolEvent),
 ) -> MappedToolEvent {
     let record = records.upsert(
         root,
@@ -373,16 +420,8 @@ fn apply_tool(
         || new_entry(root, event.id, source, caps, now_ms),
         |entry| {
             entry.view.absorb(event);
-            if source == SubagentSource::ClaudeMeta {
-                entry.view.absorb_claude(event);
-            }
-            let view = &entry.view;
-            let record = &mut entry.record;
-            view.describe(record);
-            record.background = view.background;
-            record.output_file.clone_from(&view.output_file);
-            record.usage.clone_from(&view.usage);
-            record.set_state(view.state(), now_ms);
+            absorb(&mut entry.view, event);
+            entry.view.fill(&mut entry.record, now_ms);
         },
     );
     MappedToolEvent::record(record)

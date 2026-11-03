@@ -151,6 +151,37 @@ pub(super) async fn deliver_session_update(
     let SessionRoute::Claimed(updates) = route_session_update(state, params, now) else {
         return Ok(false);
     };
+    deliver_routed(state, persistence, sinks, agent_id, updates).await?;
+    Ok(true)
+}
+
+/// Apply Cursor's `cursor/task` request to its task's record and deliver the
+/// record when it changed.
+pub(super) async fn deliver_cursor_task(
+    state: &Mutex<DriverState>,
+    persistence: Option<&Arc<SessionPersistence>>,
+    sinks: &[Arc<dyn EventSink>],
+    agent_id: &AgentId,
+    params: &Value,
+) -> Result<(), agent_client_protocol::Error> {
+    let now = crate::acp::session_persistence::now_millis();
+    let record = subagents::apply_cursor_task(state.lock().subagent_records(), params, now);
+    let Some(record) = record else {
+        return Ok(());
+    };
+    let update = record_update(&record, None, None);
+    deliver_routed(state, persistence, sinks, agent_id, vec![update]).await
+}
+
+/// Fan routed `session/update` params out through the typed notification
+/// path.
+async fn deliver_routed(
+    state: &Mutex<DriverState>,
+    persistence: Option<&Arc<SessionPersistence>>,
+    sinks: &[Arc<dyn EventSink>],
+    agent_id: &AgentId,
+    updates: Vec<Value>,
+) -> Result<(), agent_client_protocol::Error> {
     for value in updates {
         match serde_json::from_value::<SessionNotification>(value) {
             Ok(notification) => {
@@ -166,7 +197,7 @@ pub(super) async fn deliver_session_update(
             Err(error) => log::warn!("[acp] dropped a routed session update: {error}"),
         }
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Route one raw `session/update`. `now_ms` is the host clock for records.

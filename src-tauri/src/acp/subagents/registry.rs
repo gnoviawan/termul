@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use super::codex_collab::ThreadState;
 use super::tools::ToolView;
-use super::{log_transition, Subagent, SubagentSource};
+use super::{log_transition, AgentFamily, Subagent, SubagentSource};
 
 const MAX_TRACKED: usize = 1024;
 /// Codex agent threads kept per chat.
@@ -59,6 +59,8 @@ pub(crate) struct SubagentRecords {
     order: Vec<Key>,
     /// Codex agent thread states per chat.
     codex_threads: HashMap<String, HashMap<String, ThreadState>>,
+    /// The agent on the connection; kept across chats.
+    agent: AgentFamily,
 }
 
 fn key(root: &str, call: &str) -> Key {
@@ -68,6 +70,23 @@ fn key(root: &str, call: &str) -> Key {
 impl SubagentRecords {
     pub(crate) fn get(&self, root: &str, call: &str) -> Option<&Tracked> {
         self.tracked.get(&key(root, call))
+    }
+
+    pub(crate) fn agent(&self) -> AgentFamily {
+        self.agent
+    }
+
+    pub(crate) fn set_agent(&mut self, agent: AgentFamily) {
+        self.agent = agent;
+    }
+
+    /// The chat of tracked call `call`, for agent messages that name a tool
+    /// call but no session.
+    pub(crate) fn root_of(&self, call: &str) -> Option<&str> {
+        self.order
+            .iter()
+            .find(|(_, tracked)| tracked == call)
+            .map(|(root, _)| root.as_str())
     }
 
     pub(crate) fn record(&self, root: &str, call: &str) -> Option<&Subagent> {
@@ -88,13 +107,7 @@ impl SubagentRecords {
     ) -> Option<Subagent> {
         let key = key(root, call);
         if let Some(Tracked::Dispatch(entry)) = self.tracked.get_mut(&key) {
-            let before = entry.record.clone();
-            update(entry);
-            if entry.record == before {
-                return None;
-            }
-            log_transition(Some(&before), &entry.record);
-            return Some(entry.record.clone());
+            return Self::apply(entry, update);
         }
         let mut entry = create();
         update(&mut entry);
@@ -102,6 +115,30 @@ impl SubagentRecords {
         let record = entry.record.clone();
         self.insert(key, Tracked::Dispatch(Box::new(entry)));
         Some(record)
+    }
+
+    /// Update the tracked dispatch `call` of `root`. Returns the record when
+    /// it changed; `None` for an untracked call.
+    pub(crate) fn update_dispatch(
+        &mut self,
+        root: &str,
+        call: &str,
+        update: impl FnOnce(&mut DispatchEntry),
+    ) -> Option<Subagent> {
+        match self.tracked.get_mut(&key(root, call)) {
+            Some(Tracked::Dispatch(entry)) => Self::apply(entry, update),
+            _ => None,
+        }
+    }
+
+    fn apply(entry: &mut DispatchEntry, update: impl FnOnce(&mut DispatchEntry)) -> Option<Subagent> {
+        let before = entry.record.clone();
+        update(entry);
+        if entry.record == before {
+            return None;
+        }
+        log_transition(Some(&before), &entry.record);
+        Some(entry.record.clone())
     }
 
     /// Record `call` of `root` as a control call naming `subagent_ids`.
