@@ -15,7 +15,6 @@ interface AutomationApprovalCardProps {
   onDecided: () => void
 }
 
-/** The decision a waiting run asks for. Only a person decides it, here. */
 export function AutomationApprovalCard({
   runId,
   node,

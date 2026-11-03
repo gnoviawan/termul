@@ -371,7 +371,6 @@ export function parseApprovalOutput(v: unknown): ApprovalStepOutput | null {
   }
 }
 
-/** A decide reply: `false` when the run was no longer waiting at that node. */
 export function parseDecided(v: unknown): boolean {
   return bool(v, 'decided')
 }
