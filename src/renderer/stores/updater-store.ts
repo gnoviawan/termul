@@ -66,6 +66,8 @@ export interface UpdaterStoreState {
   skippedVersion: string | null
   isChecking: boolean
   isDownloading: boolean
+  /** True while a download runs the pre-update backup, before any package bytes. */
+  isPreparingDownload: boolean
   error: string | null
   /** Which step produced `error`, so the UI names the failure correctly. */
   errorSource: UpdaterErrorSource | null
@@ -110,6 +112,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   skippedVersion: null,
   isChecking: false,
   isDownloading: false,
+  isPreparingDownload: false,
   error: null,
   errorSource: null,
   lastChecked: null,
@@ -206,7 +209,13 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
     // must not turn an opened release page into a staged update.
     const isManualAction = get().isManualUpdateMode
 
-    set({ isDownloading: true, error: null, errorSource: null, downloadProgress: 0 })
+    set({
+      isDownloading: true,
+      isPreparingDownload: true,
+      error: null,
+      errorSource: null,
+      downloadProgress: 0
+    })
 
     try {
       const result = await tauriDownloadUpdate((progress) => {
@@ -234,7 +243,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       const errorMessage = err instanceof Error ? err.message : 'Failed to download update'
       set({ error: errorMessage, errorSource: 'download' })
     } finally {
-      set({ isDownloading: false })
+      set({ isDownloading: false, isPreparingDownload: false })
     }
   },
 
@@ -581,7 +590,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Internal action: Called when download progress updates (IPC event)
    */
   _setDownloadProgress: (progress: DownloadProgress): void => {
-    set({ downloadProgress: progress.percent })
+    set({ downloadProgress: progress.percent, isPreparingDownload: false })
   },
 
   /**
@@ -713,6 +722,7 @@ export function useUpdaterState() {
       skippedVersion: state.skippedVersion,
       isChecking: state.isChecking,
       isDownloading: state.isDownloading,
+      isPreparingDownload: state.isPreparingDownload,
       error: state.error,
       errorSource: state.errorSource,
       lastChecked: state.lastChecked,
