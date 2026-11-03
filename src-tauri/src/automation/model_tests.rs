@@ -5,8 +5,8 @@ use serde_json::{json, Value};
 
 use super::graph::validate;
 use super::model::{
-    ApplyOpsResult, Automation, Edge, EdgeSource, Isolation, LastRun, NodeId, Op, Port, Run,
-    RunPolicy, RunStatus, RunTrigger, Step, StepStatus, Trigger,
+    ApplyOpsResult, Automation, Edge, EdgeSource, Isolation, LastRun, NodeId, Op, Parked, Port,
+    Run, RunPolicy, RunStatus, RunTrigger, Step, StepStatus, Trigger,
 };
 use super::policy::run_policy;
 use super::suggest::{Cadence, Suggestion};
@@ -70,6 +70,7 @@ fn build_fixture() -> WireFixture {
         summary: None,
         conversation_id: None,
         worktree_id: Some("wt-1".into()),
+        parked: None,
     };
     let running = Run {
         id: "run-2".to_string().into(),
@@ -78,6 +79,19 @@ fn build_fixture() -> WireFixture {
         finished_at: None,
         stop_reason: None,
         worktree_id: None,
+        ..run.clone()
+    };
+    let waiting = Run {
+        id: "run-3".to_string().into(),
+        trigger: RunTrigger::Manual,
+        status: RunStatus::Waiting,
+        finished_at: None,
+        stop_reason: None,
+        worktree_id: None,
+        parked: Some(Parked {
+            node_id: node_id("gate"),
+            until: 1_773_050_400_100,
+        }),
         ..run.clone()
     };
     let steps = vec![
@@ -108,6 +122,27 @@ fn build_fixture() -> WireFixture {
             started_at: None,
             finished_at: None,
         },
+        Step {
+            run_id: waiting.id.clone(),
+            node_id: node_id("gate"),
+            status: StepStatus::Waiting,
+            output: Some(json!({ "message": "Post the digest?" })),
+            error: None,
+            started_at: Some(1_773_046_800_200),
+            finished_at: None,
+        },
+        Step {
+            run_id: run.id.clone(),
+            node_id: node_id("gate"),
+            status: StepStatus::Failed,
+            output: Some(
+                json!({ "message": "Post the digest?", "decision": "rejected",
+                "decided_at": 1_773_046_830_000_i64 }),
+            ),
+            error: Some("rejected".into()),
+            started_at: Some(1_773_046_800_200),
+            finished_at: Some(1_773_046_830_000),
+        },
     ];
     WireFixture {
         run_policy: run_policy(&automation, 1_772_798_400_000),
@@ -126,9 +161,11 @@ fn build_fixture() -> WireFixture {
             { "op": "disconnect", "edge": { "from": "check", "port": "false", "to": "alert" } },
             { "op": "set_trigger", "trigger": { "kind": "manual" } },
             { "op": "rename", "name": "Digest" },
-            { "op": "set_isolation", "isolation": "worktree_per_run" }
+            { "op": "set_isolation", "isolation": "worktree_per_run" },
+            { "op": "add_node", "node": { "id": "gate", "label": "Approve post", "spec": {
+                "kind": "approval", "message": "Post {{nodes.shape.output.text}}?", "timeout_ms": 3600000 } } }
         ])),
-        runs: vec![run, running],
+        runs: vec![run, running, waiting],
         steps,
         suggestion: Suggestion {
             fingerprint: "3f1c9a0d5b7e2468".to_string(),

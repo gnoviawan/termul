@@ -6,6 +6,7 @@ use std::fmt;
 use super::model::{
     wire_name, Automation, ConditionOp, EdgeSource, Graph, HttpMethod, Issue, IssueCode, NodeId,
     NodeKind, NodeSpec, Op, Port, Trigger, AGENT_MAX_ATTEMPTS, AGENT_MAX_TIMEOUT_MS,
+    APPROVAL_MAX_TIMEOUT_MS, APPROVAL_MIN_TIMEOUT_MS,
 };
 use super::template::{self, ParsedTemplate, Reference};
 use super::{schedule, schema};
@@ -55,7 +56,9 @@ fn legal_ports(source: Option<NodeKind>) -> &'static [Port] {
         None => &[Port::Out],
         Some(NodeKind::Condition) => &[Port::True, Port::False, Port::Error],
         Some(NodeKind::Fail) => &[],
-        Some(NodeKind::Http | NodeKind::Agent | NodeKind::Transform) => &[Port::Out, Port::Error],
+        Some(NodeKind::Http | NodeKind::Agent | NodeKind::Transform | NodeKind::Approval) => {
+            &[Port::Out, Port::Error]
+        }
     }
 }
 
@@ -262,6 +265,17 @@ fn check_node(graph: &Graph, id: &NodeId, spec: &NodeSpec, issues: &mut Vec<Issu
                     format!("max_attempts must be 1..={AGENT_MAX_ATTEMPTS}, got {max_attempts}"),
                 ));
             }
+        }
+        NodeSpec::Approval { timeout_ms, .. }
+            if !(APPROVAL_MIN_TIMEOUT_MS..=APPROVAL_MAX_TIMEOUT_MS).contains(timeout_ms) =>
+        {
+            issues.push(issue(
+                Some(id),
+                IssueCode::ApprovalTimeoutOutOfRange,
+                format!(
+                    "timeout_ms must be {APPROVAL_MIN_TIMEOUT_MS}..={APPROVAL_MAX_TIMEOUT_MS}, got {timeout_ms}"
+                ),
+            ));
         }
         NodeSpec::Condition {
             op, right: None, ..

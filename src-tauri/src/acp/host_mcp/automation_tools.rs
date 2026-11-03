@@ -148,8 +148,9 @@ Node = {id, label, spec}. id matches ^[a-z][a-z0-9_]{0,31}$ and is not "trigger"
 - transform: {kind:"transform", fields:[{name, value}]}. Output: an object of the fields.
 - condition: {kind:"condition", left, op:"eq"|"ne"|"contains"|"gt"|"lt"|"exists", right?}. right is required unless op is exists. Output {result}.
 - fail: {kind:"fail", message}. Fails the run with the message.
+- approval: {kind:"approval", message, timeout_ms (60000 to 604800000)}. Pauses the run until a person approves or rejects it in the Automations tab. Approved fires out; rejected or timed out fires error (error "rejected" or "approval_timed_out"). Output {message, decision:"approved"|"rejected"|"timed_out"|"cancelled", decided_at}. Agents can add approval nodes but never decide them.
 
-Edge = {from:"trigger" or a node id, port, to}. Ports: trigger has out; condition has true, false, error; fail has none; the others have out and error. Exactly one edge leaves trigger. out fires on success and error on failure; a failure with no error edge fails the run. The graph is acyclic and every node is reachable from trigger.
+Edge = {from:"trigger" or a node id, port, to}. Ports: trigger has out; condition has true, false, error; fail has none; the others (http, agent, transform, approval) have out and error. Exactly one edge leaves trigger. out fires on success and error on failure; a failure with no error edge fails the run. The graph is acyclic and every node is reachable from trigger.
 
 Trigger = {kind:"manual"} | {kind:"schedule", schedule}. Schedule = {kind:"cron", expr (5 fields), timezone (IANA, e.g. "Europe/Berlin")} | {kind:"every", every_ms, anchor_ms} | {kind:"at", at (unix ms)}.
 
@@ -168,7 +169,7 @@ Ops, applied atomically in order:
 - {op:"rename", name}
 - {op:"set_isolation", isolation}
 
-Issue codes: duplicate_node_id, unknown_edge_endpoint, illegal_port, trigger_edge_count, cycle, unreachable, invalid_template, unknown_node_reference, non_ancestor_reference, secret_not_allowed, invalid_url, host_not_allowed, templated_host_without_allowlist, invalid_output_schema, agent_timeout_out_of_range, agent_max_attempts_out_of_range, missing_condition_operand, invalid_schedule, unknown_agent (start that agent once in a chat, or pick one from automation_capabilities).
+Issue codes: duplicate_node_id, unknown_edge_endpoint, illegal_port, trigger_edge_count, cycle, unreachable, invalid_template, unknown_node_reference, non_ancestor_reference, secret_not_allowed, invalid_url, host_not_allowed, templated_host_without_allowlist, invalid_output_schema, agent_timeout_out_of_range, agent_max_attempts_out_of_range, missing_condition_operand, approval_timeout_out_of_range, invalid_schedule, unknown_agent (start that agent once in a chat, or pick one from automation_capabilities).
 
 ## Example
 

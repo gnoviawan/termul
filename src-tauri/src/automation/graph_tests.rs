@@ -230,6 +230,44 @@ fn rule7_agent_schema_and_bounds() {
     );
 }
 
+fn with_gate(timeout_ms: u64, message: &str) -> Automation {
+    apply(
+        &sample_automation(),
+        json!([
+            { "op": "add_node", "node": { "id": "gate", "label": "Post it?", "spec": {
+                "kind": "approval", "message": message, "timeout_ms": timeout_ms } } },
+            { "op": "disconnect", "edge": { "from": "shape", "port": "out", "to": "post" } },
+            { "op": "connect", "edge": { "from": "shape", "port": "out", "to": "gate" } },
+            { "op": "connect", "edge": { "from": "gate", "port": "out", "to": "post" } },
+            { "op": "connect", "edge": { "from": "gate", "port": "error", "to": "alert" } }
+        ]),
+    )
+}
+
+#[test]
+fn approval_nodes_route_out_and_error_within_timeout_bounds() {
+    let message = "Post {{nodes.shape.output.text}}?";
+    for ok in [60_000, 604_800_000] {
+        assert_eq!(codes(&with_gate(ok, message)), vec![], "{ok}");
+    }
+    for out_of_range in [59_999, 604_800_001] {
+        assert_eq!(
+            codes(&with_gate(out_of_range, message)),
+            vec![at(IssueCode::ApprovalTimeoutOutOfRange, "gate")],
+            "{out_of_range}"
+        );
+    }
+    let true_port = apply(
+        &with_gate(60_000, message),
+        json!([{ "op": "connect", "edge": { "from": "gate", "port": "true", "to": "alert" } }]),
+    );
+    assert_eq!(codes(&true_port), vec![at(IssueCode::IllegalPort, "gate")]);
+    assert_eq!(
+        codes(&with_gate(60_000, "Key {{secrets.API_KEY}}")),
+        vec![at(IssueCode::SecretNotAllowed, "gate")]
+    );
+}
+
 #[test]
 fn rule8_untrusted_flow_needs_get_data_reaching_an_agent_with_http_downstream() {
     let base = sample_automation();

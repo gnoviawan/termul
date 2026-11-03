@@ -43,7 +43,10 @@ pub fn run_policy(automation: &Automation, now_ms: i64) -> RunPolicy {
                     hosts: allowed_hosts.clone(),
                 });
             }
-            NodeSpec::Transform { .. } | NodeSpec::Condition { .. } | NodeSpec::Fail { .. } => {}
+            NodeSpec::Transform { .. }
+            | NodeSpec::Condition { .. }
+            | NodeSpec::Fail { .. }
+            | NodeSpec::Approval { .. } => {}
         }
     }
     RunPolicy {
