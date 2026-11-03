@@ -504,6 +504,10 @@ pub(super) async fn drive_connection(
     let raw_agent_id = agent_id.clone();
     let raw_state = driver_state.clone();
     let raw_persistence = persistence.clone();
+    let cursor_sinks = sinks.clone();
+    let cursor_agent_id = agent_id.clone();
+    let cursor_state = driver_state.clone();
+    let cursor_persistence = persistence.clone();
     let perm_sinks = sinks.clone();
     let perm_agent_id = agent_id.clone();
     let perm_state = driver_state.clone();
@@ -645,6 +649,21 @@ pub(super) async fn drive_connection(
                     &event,
                 );
                 Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: CursorTaskRequest, responder, _cx| {
+                let delivered = super::native_subagents::deliver_cursor_task(
+                    &cursor_state,
+                    cursor_persistence.as_ref(),
+                    &cursor_sinks,
+                    &cursor_agent_id,
+                    &request.0,
+                )
+                .await;
+                let _ = responder.respond(serde_json::json!({}));
+                delivered
             },
             agent_client_protocol::on_receive_request!(),
         )

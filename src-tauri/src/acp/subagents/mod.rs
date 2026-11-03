@@ -11,16 +11,20 @@
 //! - [`native`] maps ACP subagent sessions (RFD and AIR forms); the driver's
 //!   router (`manager/native_subagents.rs`) owns the child session routes.
 //! - [`tools`] maps the dispatch tool calls of agents without subagent
-//!   sessions, through the ordered [`tools::TOOL_MAPPERS`] chain.
+//!   sessions, through the ordered [`tools::TOOL_MAPPERS`] chain: Codex
+//!   collab, Claude meta, the Cursor, OpenCode and Gemini CLI mappers in
+//!   [`agent_tools`], then a conservative heuristic.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+mod agent_tools;
 mod codex_collab;
 pub(crate) mod native;
 mod registry;
 mod tools;
 
+pub(crate) use agent_tools::apply_cursor_task;
 pub(crate) use registry::{DispatchEntry, SubagentRecords};
 pub(crate) use tools::{map_tool_event, MappedToolEvent, ToolView};
 
@@ -35,6 +39,24 @@ pub(crate) const MAX_PROMPT_CHARS: usize = 8_000;
 pub(crate) const SUBAGENT_META_KEY: &str = "termul/subagent";
 /// `_meta` key on a call that steers existing subagents ([`SubagentControl`]).
 pub(crate) const SUBAGENT_CONTROL_META_KEY: &str = "termul/subagentControl";
+
+/// The agent on a connection, for mappers whose wire form alone is too
+/// generic to claim a call. Read from `initialize` `agentInfo.name`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum AgentFamily {
+    #[default]
+    Other,
+    GeminiCli,
+}
+
+impl AgentFamily {
+    pub(crate) fn from_agent_name(name: Option<&str>) -> Self {
+        match name {
+            Some("gemini-cli") => Self::GeminiCli,
+            _ => Self::Other,
+        }
+    }
+}
 
 /// Which mapper produced the record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
