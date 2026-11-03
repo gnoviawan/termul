@@ -184,7 +184,7 @@ function TurnActivityComponent({
                 type="button"
                 onClick={showEarlierSteps}
                 className={cn(
-                  'flex w-full cursor-pointer items-center text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                  'flex w-full cursor-pointer items-center text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
                   CHAT_ROW_MIN_H
                 )}
               >
