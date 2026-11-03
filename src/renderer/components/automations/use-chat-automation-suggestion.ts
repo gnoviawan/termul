@@ -7,9 +7,6 @@ import { useSuggestAutomations } from '@/stores/app-settings-store'
 import { isSnoozed, useSuggestionSnoozes } from './suggestion-snooze'
 import { type SuggestionActions, useSuggestionActions } from './use-suggestion-actions'
 
-/** A prompt this much older than the chat on screen is history, not a send. */
-const SENT_SLACK_MS = 10_000
-
 /** Chats that already showed a card; at most one per chat. */
 const offeredChats = new Set<string>()
 
@@ -49,7 +46,6 @@ export function useChatAutomationSuggestion(
   const lastUserId = useAcpStore((s) => lastUserMessage(s.messages[sessionId])?.id ?? null)
   const snoozes = useSuggestionSnoozes((s) => s.until)
   const [suggestion, setSuggestion] = useState<AutomationSuggestion | null>(null)
-  const mountedAt = useRef(Date.now())
   const matched = useRef<string | null>(null)
   // A launch swaps the placeholder session id for the real one: still one chat.
   const offered = useRef(false)
@@ -60,7 +56,7 @@ export function useChatAutomationSuggestion(
     if (offered.current || offeredChats.has(sessionId)) return
     matched.current = lastUserId
     const message = lastUserMessage(useAcpStore.getState().messages[sessionId])
-    if (!message || message.timestamp < mountedAt.current - SENT_SLACK_MS) return
+    if (!message?.sentHere) return
     const text = promptText(message)
     if (!text) return
     let current = true

@@ -1,7 +1,10 @@
 import type { AutomationSuggestion } from '@shared/types/automation.types'
 import { Workflow } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { WriteGate } from '@/components/ui/write-gate'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
+import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
 
 export function suggestionCopy(suggestion: AutomationSuggestion): string {
   return (
@@ -27,6 +30,7 @@ export function AutomationSuggestionCard({
   onDismiss
 }: AutomationSuggestionCardProps): React.JSX.Element {
   const size = useMobileWebShell() ? 'touch' : 'sm'
+  const gated = !useServerAdmitsRemoteWrites()
   const titleId = `automation-suggestion-${suggestion.fingerprint}`
   return (
     <section
@@ -48,16 +52,22 @@ export function AutomationSuggestionCard({
         </div>
       </div>
       <div className="mt-2.5 flex flex-wrap items-center gap-2">
-        <Button size={size} disabled={busy} onClick={onCreate}>
-          Create automation
-        </Button>
+        <WriteGate gated={gated}>
+          <Button size={size} disabled={gated || busy} onClick={onCreate}>
+            Create automation
+          </Button>
+        </WriteGate>
+        {/* Snoozing is local to this device, so a read-only client keeps it. */}
         <Button variant="outline" size={size} disabled={busy} onClick={onLater}>
           Not now
         </Button>
-        <Button variant="ghost" size={size} disabled={busy} onClick={onDismiss}>
-          Don't suggest this again
-        </Button>
+        <WriteGate gated={gated}>
+          <Button variant="ghost" size={size} disabled={gated || busy} onClick={onDismiss}>
+            Don't suggest this again
+          </Button>
+        </WriteGate>
       </div>
+      {gated && <p className="mt-2 text-xs text-muted-foreground">{READ_ONLY_SERVER_REASON}</p>}
     </section>
   )
 }

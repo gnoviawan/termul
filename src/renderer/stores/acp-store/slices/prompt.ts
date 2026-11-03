@@ -387,6 +387,7 @@ export async function runPromptTurn(
           streaming: false,
           timestamp: Date.now(),
           seq: nextSeq(),
+          sentHere: true,
           ...guardField
         }
         // Plan persistence: do NOT drop `plans[sessionId]` here. The ACP
@@ -437,6 +438,7 @@ export async function runPromptTurn(
       streaming: false,
       timestamp: Date.now(),
       seq: nextSeq(),
+      sentHere: true,
       ...guardField
     }
     return {

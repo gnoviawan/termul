@@ -151,6 +151,13 @@ export interface ChatMessage {
    * device that loads it.
    */
   readOnlyGuard?: string
+  /**
+   * Set on the optimistic user bubble this device appends when its user sends.
+   * A replayed history turn or another device's live echo never has it, so
+   * per-device reactions to a send (the repeated-ask card) key on it rather
+   * than on `timestamp`, which replay and echoes stamp with `Date.now()`.
+   */
+  sentHere?: true
 }
 
 /**

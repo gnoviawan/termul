@@ -2,7 +2,7 @@ use chrono::{NaiveDateTime, TimeZone};
 use chrono_tz::Tz;
 
 use super::normalize::tokens;
-use super::{detect, match_prompt, Prompt};
+use super::{before_send, detect, match_prompt, Prompt};
 use crate::automation::model::Schedule;
 
 const BERLIN: Tz = Tz::Europe__Berlin;
@@ -267,4 +267,65 @@ fn a_new_prompt_matches_the_suggestion_it_repeats() {
     assert_eq!(hit, Some(&found[0].suggestion));
     assert_eq!(match_prompt(&found, "fix the flaky reconnect test"), None);
     assert_eq!(match_prompt(&found, "summarize"), None);
+}
+
+#[test]
+fn the_sent_prompt_is_dropped_once_when_it_was_just_recorded() {
+    let now = at(BERLIN, "2026-10-30 09:05");
+    let sent = "Summarize the open PRs in termul!";
+    let mut prompts = weekday_prs();
+    prompts.push(prompt(
+        BERLIN,
+        "2026-10-30 09:02",
+        "summarize the open PRs in termul",
+    ));
+    prompts.push(prompt(
+        BERLIN,
+        "2026-10-30 09:04",
+        "summarize open PRs in termul",
+    ));
+    prompts.push(prompt(
+        BERLIN,
+        "2026-10-30 09:05",
+        "fix the flaky reconnect test",
+    ));
+
+    let kept = before_send(prompts, sent, now);
+
+    assert_eq!(
+        kept.iter().map(|p| p.at_ms).collect::<Vec<_>>(),
+        vec![
+            at(BERLIN, "2026-10-26 09:05"),
+            at(BERLIN, "2026-10-27 09:02"),
+            at(BERLIN, "2026-10-28 09:11"),
+            at(BERLIN, "2026-10-29 09:07"),
+            at(BERLIN, "2026-10-30 09:02"),
+            at(BERLIN, "2026-10-30 09:05"),
+        ]
+    );
+}
+
+#[test]
+fn a_matching_prompt_recorded_before_the_send_window_is_kept() {
+    let now = at(BERLIN, "2026-10-30 09:05");
+    let mut prompts = weekday_prs();
+    prompts.push(prompt(
+        BERLIN,
+        "2026-10-30 08:59",
+        "summarize the open PRs in termul",
+    ));
+
+    let kept = before_send(prompts.clone(), "summarize the open PRs in termul", now);
+
+    assert_eq!(kept, prompts);
+}
+
+#[test]
+fn a_long_sent_prompt_matches_its_truncated_record() {
+    let now = at(BERLIN, "2026-10-30 09:05");
+    let sent = format!("summarize the open PRs in termul, {}", "zebra ".repeat(400));
+    let recorded = sent[..2048].to_string();
+    let prompts = vec![prompt(BERLIN, "2026-10-30 09:05", &recorded)];
+
+    assert_eq!(before_send(prompts, &sent, now), vec![]);
 }
