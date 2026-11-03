@@ -114,6 +114,11 @@ export function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId):
     if (isPromptTurnInProgressError(err)) return
     // Agent-dead rejections are surfaced by the crash/disconnect events.
     if (isAgentDeadError(err)) return
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp-store.flushNextQueuedPrompt',
+      message: `Queued prompt on session ${sessionId} failed to send: ${String(err)}`
+    })
     toast.error(`Failed to send queued message: ${String(err)}`)
   })
 }
@@ -132,6 +137,10 @@ function scheduleBusyQueueRetry(set: TurnEndSetter, sessionId: SessionId): void 
   retry.attempts += 1
   retry.timer = setTimeout(() => {
     retry.timer = null
+    if (!useAcpStore.getState().sessions[sessionId]) {
+      busyQueueRetries.delete(sessionId)
+      return
+    }
     flushNextQueuedPrompt(set, sessionId)
   }, delayMs)
   busyQueueRetries.set(sessionId, retry)
@@ -590,6 +599,9 @@ export async function runPromptTurn(
     settleDispatch(await send(liveSession, turnId))
     busyQueueRetries.delete(sessionId)
   } catch (err) {
+    // Only a busy rejection keeps the retry ladder; any other outcome (an
+    // echo-accepted or reconciled turn, a definite failure) starts it over.
+    if (!isPromptTurnInProgressError(err)) busyQueueRetries.delete(sessionId)
     if (isPromptTurnInProgressError(err)) {
       settleCommand(turnId, 'rejected')
       activeWirePromptTurns.delete(sessionId)
