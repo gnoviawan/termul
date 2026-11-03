@@ -57,6 +57,7 @@ export type NodeSpec =
   | { kind: 'transform'; fields: NamedTemplate[] }
   | { kind: 'condition'; left: Template; op: ConditionOp; right: Template | null }
   | { kind: 'fail'; message: Template }
+  | { kind: 'approval'; message: Template; timeout_ms: number }
 
 export type NodeKind = NodeSpec['kind']
 
@@ -68,7 +69,8 @@ export type Edge = { from: NodeId | 'trigger'; port: Port; to: NodeId }
 
 export type Graph = { nodes: AutomationNode[]; edges: Edge[] }
 
-export type RunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
+/** `waiting`: parked at a node until a person decides or its deadline passes. */
+export type RunStatus = 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
 
 export type LastRun = { run_id: RunId; status: RunStatus; finished_at: number }
 
@@ -122,12 +124,16 @@ export type IssueCode =
   | 'missing_condition_operand'
   | 'invalid_schedule'
   | 'unknown_agent'
+  | 'approval_timeout_out_of_range'
 
 export type Issue = { node_id: NodeId | null; code: IssueCode; message: string }
 
 export type ApplyOpsResult = { automation: Automation; issues: Issue[] }
 
 export type RunTrigger = 'scheduled' | 'catch_up' | 'manual'
+
+/** Where a waiting run is parked; `until` is its deadline in epoch ms. */
+export type Parked = { node_id: NodeId; until: number }
 
 export type AutomationRun = {
   id: RunId
@@ -144,9 +150,18 @@ export type AutomationRun = {
   summary: string | null
   conversation_id: string | null
   worktree_id: string | null
+  /** Set exactly while `status` is `waiting`. */
+  parked: Parked | null
 }
 
-export type StepStatus = 'running' | 'succeeded' | 'failed' | 'skipped'
+export type StepStatus = 'running' | 'waiting' | 'succeeded' | 'failed' | 'skipped'
+
+export type ApprovalDecision = 'approved' | 'rejected' | 'timed_out' | 'cancelled'
+
+/** An approval step's `output`: the rendered message, plus the decision once made. */
+export type ApprovalStepOutput =
+  | { message: string; decision?: undefined }
+  | { message: string; decision: ApprovalDecision; decided_at: number }
 
 export type AutomationStep = {
   run_id: RunId
