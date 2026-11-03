@@ -1198,6 +1198,12 @@ fn native_form_is_offered_to_the_verified_codex_adapter() {
         advertised(&installed),
         "an installed entry point reads its manifest"
     );
+    std::fs::write(
+        package.join("package.json"),
+        json!({ "name": "@agentclientprotocol/codex-acp", "version": "2.5.0-beta.1" }).to_string(),
+    )
+    .expect("manifest");
+    assert!(!advertised(&installed), "a prerelease is not the verified wire");
 }
 
 const CODEX_CHILD: &str = "sess-root:subagent:thread-7";

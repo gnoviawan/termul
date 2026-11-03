@@ -656,12 +656,13 @@ fn installed_package_version(entry: &std::path::Path, package: &str) -> Option<(
         if value.get("name").and_then(Value::as_str) != Some(package) {
             continue;
         }
-        return parse_semver(value.get("version")?.as_str()?);
+        return parse_exact_semver(value.get("version")?.as_str()?);
     }
     None
 }
 
-/// A pinned `X.Y.Z` (no range, tag or prerelease): what npx runs exactly.
+/// An exact `X.Y.Z` (no range, tag, prerelease or build): a pinned npx
+/// package or an installed manifest. A prerelease is not the verified wire.
 fn parse_exact_semver(version: &str) -> Option<(u64, u64, u64)> {
     let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
     if version.split('.').count() != 3 || !version.split('.').all(digits) {
