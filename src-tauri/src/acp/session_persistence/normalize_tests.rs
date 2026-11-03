@@ -162,7 +162,10 @@ fn a_subagents_own_call_keeps_its_masked_title_and_path() {
     let title = kept["title"].as_str().unwrap();
     assert!(title.starts_with("Read src/a.ts with token "), "{title}");
     assert!(!title.contains("sk-abcdefghijklmnopqrstuv"));
-    assert!(kept.get("content").is_none(), "a child call's output is never durable");
+    assert!(
+        kept.get("content").is_none(),
+        "a child call's output is never durable"
+    );
     assert!(kept.get("rawInput").is_none());
 }
 
@@ -184,6 +187,13 @@ fn a_dispatch_keeps_its_bounded_text_result() {
     let kept = super::normalize_durable_payload("tool_call_update", &payload)["update"].clone();
     let text = kept["content"][0]["content"]["text"].as_str().unwrap();
     assert_eq!(text.len(), super::MAX_DURABLE_SUBAGENT_TEXT_CHARS);
-    assert_eq!(kept["content"].as_array().unwrap().len(), 1, "only the text is kept");
-    assert!(kept.get("title").is_none(), "the record carries the dispatch title");
+    assert_eq!(
+        kept["content"].as_array().unwrap().len(),
+        1,
+        "only the text is kept"
+    );
+    assert!(
+        kept.get("title").is_none(),
+        "the record carries the dispatch title"
+    );
 }

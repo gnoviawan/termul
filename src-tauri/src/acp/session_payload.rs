@@ -607,7 +607,11 @@ fn fold_subagent_text(
     else {
         return;
     };
-    push_text_tail(&mut folds[*slot].text, text, MAX_DURABLE_SUBAGENT_TEXT_CHARS);
+    push_text_tail(
+        &mut folds[*slot].text,
+        text,
+        MAX_DURABLE_SUBAGENT_TEXT_CHARS,
+    );
 }
 
 /// Path-only locations from a durable record; `None` when absent or when no
@@ -818,10 +822,7 @@ pub(crate) fn fold_session_records(
                     .and_then(|b| b.get("text"))
                     .and_then(Value::as_str)
                     .map(str::to_owned);
-                match first_text
-                    .as_deref()
-                    .and_then(strip_handoff_display_text)
-                {
+                match first_text.as_deref().and_then(strip_handoff_display_text) {
                     Some(HandoffText::Draft(draft)) => {
                         if let Some(obj) = blocks[0].as_object_mut() {
                             obj.insert("text".to_string(), Value::from(draft));

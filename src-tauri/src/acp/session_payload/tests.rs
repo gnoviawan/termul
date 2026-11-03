@@ -941,9 +941,16 @@ fn a_restored_dispatch_carries_its_result_and_its_subagents_text() {
     ];
     let payload = materialize_session_payload(&metadata(), &records);
     let value = serde_json::to_value(&payload).unwrap();
-    assert_eq!(value["toolCalls"][0]["subagentText"], json!("Checked a. Checked b."));
+    assert_eq!(
+        value["toolCalls"][0]["subagentText"],
+        json!("Checked a. Checked b.")
+    );
     assert_eq!(value["toolCalls"][0]["content"], result);
-    assert_eq!(payload.messages.len(), 1, "subagent text never joins the main reply");
+    assert_eq!(
+        payload.messages.len(),
+        1,
+        "subagent text never joins the main reply"
+    );
 }
 
 #[test]
@@ -978,7 +985,10 @@ fn a_restored_subagent_keeps_only_its_newest_text_and_calls() {
             "_meta": {"claudeCode": {"parentToolUseId": "nobody"}}}),
     ));
     let calls = fold_tool_call_summaries(&records);
-    let ids: Vec<&str> = calls.iter().map(|call| call.tool_call_id.as_str()).collect();
+    let ids: Vec<&str> = calls
+        .iter()
+        .map(|call| call.tool_call_id.as_str())
+        .collect();
     assert_eq!(ids.len(), 1 + MAX_RESTORED_CHILD_CALLS);
     assert_eq!(ids[1], "c5", "the oldest calls go first");
     assert!(!ids.contains(&"stray"));
