@@ -150,6 +150,11 @@ impl super::DriverState {
         self.subagents.mark_running(child)
     }
 
+    /// The subagent records of every chat on this connection.
+    pub(crate) fn subagent_records(&mut self) -> &mut crate::acp::subagents::SubagentRecords {
+        &mut self.subagent_records
+    }
+
     /// The route of a native subagent session, `None` for a chat session.
     pub(crate) fn subagent_route(&self, session_id: &str) -> Option<ChildRoute> {
         self.subagents.route(session_id).cloned()

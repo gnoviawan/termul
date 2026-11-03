@@ -34,9 +34,16 @@
 //!   `restoredSummary` records, so the restored chat renders as before.
 //!   The durable DTO only ever holds the path-only summary — never diff
 //!   text, titles, or raw input.
+//! - A subagent dispatch (a call whose durable `_meta` carries the host's
+//!   `termul/subagent` record) is the one tool call restored as a timeline
+//!   card: `{toolCallId, kind, status?, seq, timestamp, _meta,
+//!   restoredSummary: false}` with the latest record, so a reopened chat
+//!   shows its subagents as a live one does.
 
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::acp::subagents::SUBAGENT_META_KEY;
 
 mod controls;
 
@@ -173,8 +180,8 @@ pub struct MaterializedDiffStat {
 }
 
 /// One restored durable file-change summary (renderer `ToolCall` with
-/// `restoredSummary: true`). camelCase keys; `status`/`diffStat` are omitted
-/// when no record carried them.
+/// `restoredSummary: true`), or a restored subagent dispatch card. camelCase
+/// keys; `status`/`diffStat` are omitted when no record carried them.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MaterializedToolCallSummary {
@@ -182,6 +189,8 @@ pub struct MaterializedToolCallSummary {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// Empty (omitted) only on a subagent dispatch.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub locations: Vec<MaterializedToolCallLocation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_stat: Option<MaterializedDiffStat>,
@@ -189,8 +198,12 @@ pub struct MaterializedToolCallSummary {
     pub seq: u64,
     /// The first record's `recorded_at`.
     pub timestamp: u64,
-    /// Always `true`: marks the record as a summary the timeline never
-    /// renders as a card.
+    /// A subagent dispatch's latest `termul/subagent` record and its parent
+    /// dispatch (`claudeCode.parentToolUseId`).
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
+    /// `true` for a file-change summary the timeline never renders as a
+    /// card; `false` for a subagent dispatch, which renders as one.
     pub restored_summary: bool,
 }
 
@@ -321,6 +334,10 @@ struct ToolSummaryFold {
     status: Option<String>,
     locations: Option<Vec<MaterializedToolCallLocation>>,
     diff_stat: Option<MaterializedDiffStat>,
+    /// The latest durable `termul/subagent` record.
+    subagent: Option<Value>,
+    /// The first durable `claudeCode.parentToolUseId`.
+    parent: Option<Value>,
     seq: u64,
     timestamp: u64,
 }
@@ -331,9 +348,9 @@ struct ToolSummaryFold {
 /// `tool_call` upserts by `toolCallId`, a `tool_call_update` folds into an
 /// already-seen id (updates for unknown ids are dropped), and per id the
 /// LATEST event carrying a field wins (`kind`, `status`, `locations`,
-/// `diffStat`) while `seq`/`timestamp` stay those of the first record. Only
-/// summaries whose final kind is edit/delete/move and that carry a path are
-/// emitted. Non-tool records are ignored, so callers may pass the full
+/// `diffStat`, the subagent record) while `seq`/`timestamp` stay those of
+/// the first record. Only subagent dispatches and summaries whose final kind
+/// is edit/delete/move and that carry a path are emitted. Non-tool records are ignored, so callers may pass the full
 /// record set or just the tool-call log. Malformed fields degrade (skipped),
 /// never fail the fold.
 #[must_use]
@@ -364,6 +381,8 @@ pub fn fold_tool_call_summaries(
                     status: None,
                     locations: None,
                     diff_stat: None,
+                    subagent: None,
+                    parent: None,
                     seq: record.seq,
                     timestamp: record.recorded_at,
                 });
@@ -385,10 +404,37 @@ pub fn fold_tool_call_summaries(
         if let Some(diff_stat) = summary_diff_stat(tool.get("diffStat")) {
             fold.diff_stat = Some(diff_stat);
         }
+        let meta = tool.get("_meta");
+        if let Some(subagent) = meta.and_then(|meta| meta.get(SUBAGENT_META_KEY)) {
+            fold.subagent = Some(subagent.clone());
+        }
+        if fold.parent.is_none() {
+            fold.parent = meta
+                .and_then(|meta| meta.get("claudeCode"))
+                .and_then(|claude| claude.get("parentToolUseId"))
+                .cloned();
+        }
     }
     folds
         .into_iter()
         .filter_map(|fold| {
+            if let Some(subagent) = fold.subagent {
+                let mut meta = serde_json::json!({ SUBAGENT_META_KEY: subagent });
+                if let Some(parent) = fold.parent {
+                    meta["claudeCode"] = serde_json::json!({ "parentToolUseId": parent });
+                }
+                return Some(MaterializedToolCallSummary {
+                    tool_call_id: fold.tool_call_id,
+                    kind: fold.kind.unwrap_or_else(|| "think".to_string()),
+                    status: fold.status,
+                    locations: fold.locations.unwrap_or_default(),
+                    diff_stat: fold.diff_stat,
+                    seq: fold.seq,
+                    timestamp: fold.timestamp,
+                    meta: Some(meta),
+                    restored_summary: false,
+                });
+            }
             let kind = fold
                 .kind
                 .filter(|kind| is_file_change_kind(Some(kind.as_str())))?;
@@ -401,6 +447,7 @@ pub fn fold_tool_call_summaries(
                 diff_stat: fold.diff_stat,
                 seq: fold.seq,
                 timestamp: fold.timestamp,
+                meta: None,
                 restored_summary: true,
             })
         })

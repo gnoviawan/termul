@@ -39,6 +39,7 @@ pub mod safe_url;
 pub mod session;
 pub mod session_payload;
 pub mod session_persistence;
+pub(crate) mod subagents;
 pub mod terminal;
 
 // Re-exported for the renderer bridge and `lib.rs` wiring. `AcpManager`

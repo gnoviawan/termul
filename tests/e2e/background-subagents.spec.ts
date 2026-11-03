@@ -3,10 +3,10 @@ import { chatTab, launchChat, openWorkspace, selectProject } from './ui'
 
 /**
  * Background subagents that outlive their turn. The fake agent's
- * `[SUBAGENTS:4] [BG_TAIL:8]` launches two background subagents, ends the
- * turn after 4 s while they keep reporting, and reports their end 8 s later
- * through the host's `termul/subagent` marker. Until then the chat's status
- * pill keeps them running and says the chat waits on them.
+ * `[SUBAGENTS:4] [BG_TAIL:8]` announces two subagents in the ACP RFD form
+ * (`subagent_update`), ends the turn after 4 s while they keep reporting, and
+ * reports each one idle 8 s later. Until then the chat's status pill keeps
+ * them running and says the chat waits on them.
  *
  * Chats live in proj-c, the least contested seeded project (see
  * elicitation.spec.ts).

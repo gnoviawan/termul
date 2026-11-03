@@ -850,6 +850,63 @@ fn tool_call_summaries_fold_latest_field_wins_with_first_seq() {
 }
 
 #[test]
+fn subagent_dispatches_restore_as_cards_with_their_latest_record() {
+    let running = json!({"id": "child-1", "activity": "running", "title": "Review"});
+    let idle = json!({"id": "child-1", "activity": "idle",
+        "end": {"reason": "completed"}, "title": "Review"});
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "review"),
+        tool_record(
+            2,
+            "tool_call",
+            json!({"toolCallId": "d1", "kind": "think", "status": "in_progress",
+                "_meta": {"termul/subagent": running}}),
+        ),
+        // A child call: grouped under d1 live, not restored (not a dispatch).
+        tool_record(
+            3,
+            "tool_call",
+            json!({"toolCallId": "c1", "kind": "read",
+                "_meta": {"claudeCode": {"parentToolUseId": "d1"}}}),
+        ),
+        tool_record(
+            4,
+            "tool_call_update",
+            json!({"toolCallId": "d1", "status": "completed",
+                "_meta": {"termul/subagent": idle}}),
+        ),
+        // A nested dispatch keeps its parent dispatch id.
+        tool_record(
+            5,
+            "tool_call",
+            json!({"toolCallId": "d2", "_meta": {"termul/subagent": running,
+                "claudeCode": {"parentToolUseId": "d1"}}}),
+        ),
+        // A call that only steers subagents is not a card.
+        tool_record(
+            6,
+            "tool_call",
+            json!({"toolCallId": "w1", "kind": "other",
+                "_meta": {"termul/subagentControl": {"subagentIds": ["child-1"]}}}),
+        ),
+        prompt_complete(7, "turn-1"),
+    ];
+    let value = serde_json::to_value(materialize_session_payload(&metadata(), &records)).unwrap();
+    assert_eq!(
+        value["toolCalls"],
+        json!([
+            {"toolCallId": "d1", "kind": "think", "status": "completed",
+                "seq": 2, "timestamp": 102,
+                "_meta": {"termul/subagent": idle}, "restoredSummary": false},
+            {"toolCallId": "d2", "kind": "think", "seq": 5, "timestamp": 105,
+                "_meta": {"termul/subagent": running,
+                    "claudeCode": {"parentToolUseId": "d1"}},
+                "restoredSummary": false},
+        ])
+    );
+}
+
+#[test]
 fn tool_call_summaries_skip_malformed_fields_and_always_serialize() {
     let records = vec![
         tool_record(

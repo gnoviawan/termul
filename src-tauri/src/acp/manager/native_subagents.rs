@@ -1,25 +1,32 @@
-//! Native subagent sessions for Claude Agent ACP. From version 0.78 the
-//! adapter runs each subagent in its own ACP session when the client
-//! advertises `clientCapabilities.subagents`. Versions 0.78-0.89 send the AIR
-//! draft form; 0.90 and newer send the RFD form to clients that are not AIR
-//! clients, which Termul is not. Termul advertises the capability only to
-//! 0.78 through 0.99, the versions whose wire was verified.
+//! The driver's raw `session/update` router, for every agent.
 //!
-//! In both forms the adapter does not send the `Agent`/`Task` tool call to the
-//! chat. It announces each subagent on its parent session, sends the
-//! subagent's own traffic under the child session id, and reports when the
-//! subagent's work ends:
+//! **Subagent sessions.** From version 0.78 Claude Agent ACP runs each
+//! subagent in its own ACP session when the client advertises
+//! `clientCapabilities.subagents`. Versions 0.78-0.89 send the AIR draft
+//! form; 0.90 and newer send the RFD form to clients that are not AIR
+//! clients, which Termul is not. Termul advertises the capability only to
+//! 0.78 through 0.99, the versions whose wire was verified, but routes the
+//! subagent updates of any agent that sends them.
+//!
+//! In both forms the agent does not send a dispatch tool call to the chat. It
+//! announces each subagent on its parent session, sends the subagent's own
+//! traffic under the child session id, and reports the subagent's state:
 //!
 //! - AIR: `subagent_spawned`, then `subagent_state_update` with an end state.
-//! - RFD: `subagent_update` with `state.state` `running` (the announce, and a
-//!   reused child starting again), `requires_action`, `idle` (with a
-//!   `stopReason`, or none for an unexplained end), or `unknown`. `session_message` records replace the
-//!   launch call: the prompt from parent to child, and the child's reply.
+//! - RFD: `subagent_update` upserts (title, description, capabilities, and a
+//!   `state` of `running`, `requires_action`, `idle` or `unknown`).
+//!   `session_message` records replace the launch call: the prompt from
+//!   parent to child, and the child's reply.
 //!
-//! The driver turns both into the shape the chat already renders: a
-//! synthesized dispatch card that stays running until the subagent ends, with
-//! the child's tool calls and text stamped with
-//! `_meta.claudeCode.parentToolUseId` so they group under it.
+//! The router synthesizes a dispatch card on the chat that carries the
+//! subagent's record (`crate::acp::subagents`), and stamps the child's tool
+//! calls and text with `_meta.claudeCode.parentToolUseId` so they group under
+//! it.
+//!
+//! **Tool calls.** An agent tool call on a chat session goes through the tool
+//! mappers (`crate::acp::subagents::map_tool_event`), which stamp a dispatch
+//! call with its record or a steering call with its control marker. Agent-sent
+//! copies of those host keys are stripped first.
 
 use std::sync::Arc;
 
@@ -31,21 +38,20 @@ use serde_json::{json, Map, Value};
 use crate::acp::config::{AgentConfig, AgentId};
 use crate::acp::session::{ChildRoute, DriverState};
 use crate::acp::session_persistence::SessionPersistence;
+use crate::acp::subagents::{
+    self, bounded_id, native, Subagent, SubagentEndReason, SubagentSource, SubagentState,
+    SUBAGENT_META_KEY,
+};
 use crate::web::EventSink;
 
 /// `clientCapabilities` key that turns the native form on.
 const SUBAGENTS_CAPABILITY_KEY: &str = "subagents";
-/// The renderer's host lifecycle marker (`subagent-lifecycle.ts`).
-const TERMUL_SUBAGENT_META_KEY: &str = "termul/subagent";
 const CLAUDE_PACKAGE_NAME: &str = "@agentclientprotocol/claude-agent-acp";
 /// First adapter version verified to send native subagent sessions.
 const NATIVE_SUBAGENTS_MIN: (u64, u64, u64) = (0, 78, 0);
 /// First adapter version past the verified wire (0.78 through 0.99). A 1.0
 /// may change the RFD form, so it keeps the legacy behavior until verified.
 const NATIVE_SUBAGENTS_UNVERIFIED: (u64, u64, u64) = (1, 0, 0);
-const MAX_ID_CHARS: usize = 512;
-const MAX_NAME_CHARS: usize = 512;
-const MAX_TASK_CHARS: usize = 8_000;
 /// Child updates that are chat history. Child state updates (usage, mode,
 /// commands, config, plan, session info) would overwrite the chat's own.
 const CHILD_HISTORY_KINDS: [&str; 5] = [
@@ -93,8 +99,8 @@ impl agent_client_protocol::JsonRpcNotification for RawSessionUpdate {}
 
 /// What the driver does with one raw `session/update`.
 #[derive(Debug, PartialEq)]
-pub(super) enum NativeRoute {
-    /// Not native subagent traffic: the typed handler takes it unchanged.
+pub(super) enum SessionRoute {
+    /// The typed handler takes the update unchanged.
     PassThrough,
     /// Claimed. Each value is a `session/update` params object addressed to
     /// a chat session; an empty list drops the update.
@@ -134,7 +140,7 @@ pub(super) fn advertise_subagents(initialize: &mut Value) {
 /// Route one raw `session/update` and fan out what it claims through the
 /// typed notification path. Returns false when the typed handler must take
 /// the update unchanged.
-pub(super) async fn deliver_native_update(
+pub(super) async fn deliver_session_update(
     state: &Mutex<DriverState>,
     persistence: Option<&Arc<SessionPersistence>>,
     sinks: &[Arc<dyn EventSink>],
@@ -142,7 +148,7 @@ pub(super) async fn deliver_native_update(
     params: &Value,
 ) -> Result<bool, agent_client_protocol::Error> {
     let now = crate::acp::session_persistence::now_millis();
-    let NativeRoute::Claimed(updates) = route_session_update(state, params, now) else {
+    let SessionRoute::Claimed(updates) = route_session_update(state, params, now) else {
         return Ok(false);
     };
     for value in updates {
@@ -157,212 +163,245 @@ pub(super) async fn deliver_native_update(
                 )
                 .await?;
             }
-            Err(error) => log::warn!("[acp] dropped a routed subagent update: {error}"),
+            Err(error) => log::warn!("[acp] dropped a routed session update: {error}"),
         }
     }
     Ok(true)
 }
 
-/// Route one raw `session/update`. `now_ms` stamps the end of a subagent.
+/// Route one raw `session/update`. `now_ms` is the host clock for records.
+/// A message chunk on a chat session costs one lock and no copy.
 pub(super) fn route_session_update(
     state: &Mutex<DriverState>,
     params: &Value,
     now_ms: u64,
-) -> NativeRoute {
+) -> SessionRoute {
     let Some(session_id) = params.get("sessionId").and_then(Value::as_str) else {
-        return NativeRoute::PassThrough;
+        return SessionRoute::PassThrough;
     };
     let Some(update) = params.get("update").and_then(Value::as_object) else {
-        return NativeRoute::PassThrough;
+        return SessionRoute::PassThrough;
     };
     let kind = update
         .get("sessionUpdate")
         .and_then(Value::as_str)
         .unwrap_or_default();
     match kind {
-        "subagent_spawned" => spawned(state, session_id, update),
-        "subagent_state_update" => state_update(state, update, now_ms),
+        "subagent_spawned" => air_spawned(state, session_id, update, now_ms),
+        "subagent_state_update" => air_state_update(state, update, now_ms),
         "subagent_update" => rfd_update(state, session_id, update, now_ms),
         "session_message" => rfd_message(state, session_id, update),
         _ => {
-            let Some(route) = state.lock().subagent_route(session_id) else {
-                return NativeRoute::PassThrough;
-            };
-            if !CHILD_HISTORY_KINDS.contains(&kind) {
-                return NativeRoute::Claimed(Vec::new());
+            let mut state = state.lock();
+            if let Some(route) = state.subagent_route(session_id) {
+                if kind == "config_option_update" {
+                    return child_config(&mut state, session_id, update);
+                }
+                if !CHILD_HISTORY_KINDS.contains(&kind) {
+                    return SessionRoute::Claimed(Vec::new());
+                }
+                return SessionRoute::Claimed(vec![rerouted(params, &route)]);
             }
-            NativeRoute::Claimed(vec![rerouted(params, &route)])
+            if !matches!(kind, "tool_call" | "tool_call_update") {
+                return SessionRoute::PassThrough;
+            }
+            chat_tool_event(&mut state, session_id, kind, params, update, now_ms)
         }
     }
 }
 
-/// How a subagent's work ended, in the renderer's lifecycle terms.
-#[derive(Debug, Clone, Copy)]
-enum SubagentEnd {
-    Completed,
-    Failed,
-    Cancelled,
+/// An agent tool call on a chat session: strip spoofed host keys, then let
+/// the tool mappers stamp it and report the dispatches it changed. During a
+/// `session/load` replay window the typed handler drops replayed history, so
+/// the mappers skip it.
+fn chat_tool_event(
+    state: &mut DriverState,
+    session_id: &str,
+    kind: &str,
+    params: &Value,
+    update: &Map<String, Value>,
+    now_ms: u64,
+) -> SessionRoute {
+    let spoofed = subagents::has_spoofed_meta(update);
+    let mapped = if state.in_replay_window(session_id) {
+        subagents::MappedToolEvent::default()
+    } else {
+        subagents::map_tool_event(state.subagent_records(), session_id, kind, update, now_ms)
+    };
+    if !spoofed && mapped.is_empty() {
+        return SessionRoute::PassThrough;
+    }
+    let mut params = params.clone();
+    if spoofed {
+        subagents::strip_spoofed_meta(&mut params["update"]);
+        log::warn!(
+            "[acp] session {}: dropped agent-sent subagent keys from a tool call",
+            crate::logging::redact_session_id(session_id)
+        );
+    }
+    if let Some((key, value)) = mapped.stamp {
+        meta_object(&mut params["update"]).insert(key.to_string(), value);
+    }
+    let mut routed = vec![params];
+    routed.extend(
+        mapped
+            .changed
+            .iter()
+            .map(|record| record_update(record, None, None)),
+    );
+    SessionRoute::Claimed(routed)
 }
 
-impl SubagentEnd {
-    fn from_air(state: &str) -> Option<Self> {
-        match state {
-            "completed" => Some(Self::Completed),
-            "failed" | "disconnected" => Some(Self::Failed),
-            "cancelled" => Some(Self::Cancelled),
-            _ => None,
-        }
+/// `update._meta`, created as an object when missing.
+fn meta_object(update: &mut Value) -> &mut Map<String, Value> {
+    if !update["_meta"].is_object() {
+        update["_meta"] = json!({});
     }
+    update["_meta"]
+        .as_object_mut()
+        .expect("`_meta` was just made an object")
+}
 
-    fn lifecycle(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-        }
+/// A `tool_call_update` on the record's dispatch that carries the record,
+/// and the dispatch `status` and `title` when they changed.
+fn record_update(record: &Subagent, status: Option<&str>, title: Option<&str>) -> Value {
+    let mut update = json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": record.dispatch_tool_call_id,
+        "_meta": { SUBAGENT_META_KEY: record.meta_value() },
+    });
+    if let Some(status) = status {
+        update["status"] = json!(status);
     }
+    if let Some(title) = title {
+        update["title"] = json!(title);
+    }
+    json!({ "sessionId": record.root_session_id, "update": update })
+}
 
-    /// A cancelled subagent is not an error, so its card does not show as
-    /// failed; the lifecycle marker carries the real end.
-    fn status(self) -> &'static str {
-        match self {
-            Self::Completed | Self::Cancelled => "completed",
-            Self::Failed => "failed",
-        }
+/// The dispatch card status for a subagent state. A cancelled subagent is not
+/// an error, so its card does not show as failed; the record carries the real
+/// end. An unobservable child leaves the status as it was.
+fn card_status(state: &SubagentState) -> Option<&'static str> {
+    match state {
+        SubagentState::Running | SubagentState::RequiresAction => Some("in_progress"),
+        SubagentState::Idle { end } if end.reason == SubagentEndReason::Failed => Some("failed"),
+        SubagentState::Idle { .. } => Some("completed"),
+        SubagentState::Unknown => None,
     }
 }
 
-/// An RFD `state` object: the child works, or its current work ended.
-enum RfdWork {
-    Working,
-    Ended(SubagentEnd),
-}
-
-/// `None` for a state the RFD form does not define.
-fn rfd_work(state: &Value) -> Option<RfdWork> {
-    let state = state.as_object()?;
-    match state.get("state")?.as_str()? {
-        "running" | "requires_action" => Some(RfdWork::Working),
-        // An idle child is reusable: a later `running` starts its card again.
-        // Idle with no stop reason is an end the adapter could not explain
-        // (the stream ended, the Claude process died, a worker restarted):
-        // the card shows it stopped, neither a success nor a failure.
-        "idle" => Some(RfdWork::Ended(
-            match state.get("stopReason").and_then(Value::as_str) {
-                None | Some("cancelled") => SubagentEnd::Cancelled,
-                Some("error") => SubagentEnd::Failed,
-                Some(_) => SubagentEnd::Completed,
-            },
-        )),
-        // The child can no longer be observed (AIR's `disconnected`).
-        "unknown" => Some(RfdWork::Ended(SubagentEnd::Failed)),
-        _ => None,
-    }
-}
-
-fn spawned(state: &Mutex<DriverState>, parent: &str, update: &Map<String, Value>) -> NativeRoute {
+fn air_spawned(
+    state: &Mutex<DriverState>,
+    parent: &str,
+    update: &Map<String, Value>,
+    now_ms: u64,
+) -> SessionRoute {
     let Some(child) = bounded_id(update.get("subagentSessionId")) else {
         log::warn!("[acp] subagent_spawned has no usable subagentSessionId; dropped");
-        return NativeRoute::Claimed(Vec::new());
+        return SessionRoute::Claimed(Vec::new());
     };
-    let name = bounded_text(update.get("name"), MAX_NAME_CHARS).unwrap_or("Subagent");
-    let task = bounded_text(update.get("task"), MAX_TASK_CHARS).unwrap_or(name);
     announce(
-        state,
+        &mut state.lock(),
         parent,
         child,
-        name,
-        json!({ "description": name, "prompt": task }),
+        SubagentSource::AcpAir,
+        now_ms,
+        |record| native::apply_air_spawn(record, update),
     )
 }
 
-fn state_update(
+fn air_state_update(
     state: &Mutex<DriverState>,
     update: &Map<String, Value>,
     now_ms: u64,
-) -> NativeRoute {
+) -> SessionRoute {
     let Some(child) = bounded_id(update.get("subagentSessionId")) else {
         log::warn!("[acp] subagent_state_update has no usable subagentSessionId; dropped");
-        return NativeRoute::Claimed(Vec::new());
+        return SessionRoute::Claimed(Vec::new());
     };
     let raw_state = update
         .get("state")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let Some(end) = SubagentEnd::from_air(raw_state) else {
+    let Some(next) = native::air_state(raw_state) else {
         log::warn!(
             "[acp] native subagent {} sent an unknown state; dropped",
             crate::logging::redact_session_id(child)
         );
-        return NativeRoute::Claimed(Vec::new());
+        return SessionRoute::Claimed(Vec::new());
     };
-    ended(state, child, end, now_ms)
+    change(&mut state.lock(), child, |record| {
+        record.set_state(next, now_ms);
+    })
 }
 
-/// RFD `subagent_update`: the announce, a change of work state, or the end
-/// of the child's current work.
+/// RFD `subagent_update`: the announce, or an upsert of a known child's
+/// title, description, capabilities and state.
 fn rfd_update(
     state: &Mutex<DriverState>,
     parent: &str,
     update: &Map<String, Value>,
     now_ms: u64,
-) -> NativeRoute {
+) -> SessionRoute {
     let child = bounded_id(update.get("sessionId"));
-    let work = update.get("state").and_then(rfd_work);
-    let (Some(child), Some(work)) = (child, work) else {
+    let (Some(child), Ok(next)) = (child, native::rfd_state(update)) else {
         log::warn!("[acp] subagent_update has no usable sessionId or state; dropped");
-        return NativeRoute::Claimed(Vec::new());
+        return SessionRoute::Claimed(Vec::new());
     };
-    if let RfdWork::Ended(end) = work {
-        return ended(state, child, end, now_ms);
+    let mut state = state.lock();
+    if state.subagent_route(child).is_some() {
+        return change(&mut state, child, |record| {
+            native::apply_rfd(record, update, next, false, now_ms);
+        });
     }
-    let known = state.lock().subagent_route(child).is_some();
-    if !known {
-        let role = bounded_text(update.get("description"), MAX_NAME_CHARS);
-        let title = bounded_text(update.get("title"), MAX_NAME_CHARS)
-            .or(role)
-            .unwrap_or("Subagent");
-        let input = match role {
-            Some(role) => json!({ "description": title, "subagent_type": role }),
-            None => json!({ "description": title, "prompt": title }),
-        };
-        return announce(state, parent, child, title, input);
+    if !next.as_ref().is_some_and(|next| next.state.is_working()) {
+        log::warn!(
+            "[acp] native subagent {} reported a state before it was announced; dropped",
+            crate::logging::redact_session_id(child)
+        );
+        return SessionRoute::Claimed(Vec::new());
     }
-    let Some(route) = state.lock().resume_subagent(child) else {
-        return NativeRoute::Claimed(Vec::new());
+    announce(
+        &mut state,
+        parent,
+        child,
+        SubagentSource::AcpRfd,
+        now_ms,
+        |record| native::apply_rfd(record, update, next, true, now_ms),
+    )
+}
+
+/// A child's `config_option_update` never reaches the chat; a model change
+/// updates the child's record.
+fn child_config(state: &mut DriverState, child: &str, update: &Map<String, Value>) -> SessionRoute {
+    let Some(model) = native::child_model(update) else {
+        return SessionRoute::Claimed(Vec::new());
     };
-    log::info!(
-        "[acp] native subagent {} runs again",
-        crate::logging::redact_session_id(child)
-    );
-    NativeRoute::Claimed(vec![json!({
-        "sessionId": route.root_session_id,
-        "update": {
-            "sessionUpdate": "tool_call_update",
-            "toolCallId": route.dispatch_id,
-            "status": "in_progress",
-            "_meta": { TERMUL_SUBAGENT_META_KEY: { "state": "running", "sessionId": child } },
-        }
-    })])
+    change(state, child, |record| record.model = Some(model))
 }
 
 /// RFD `session_message`. Only a child's message to its own parent (the
 /// launch reply, or a hand-back report) reaches the chat, as the content of
 /// the child's card. A prompt to a child is dropped. Each linked message
 /// comes as two views; only the recipient's view counts.
-fn rfd_message(state: &Mutex<DriverState>, view: &str, update: &Map<String, Value>) -> NativeRoute {
+fn rfd_message(
+    state: &Mutex<DriverState>,
+    view: &str,
+    update: &Map<String, Value>,
+) -> SessionRoute {
     let recipient = bounded_id(update.get("recipientSessionId"));
     let content = update.get("content").and_then(Value::as_array);
     let (Some(recipient), Some(content)) = (recipient, content) else {
         log::warn!("[acp] session_message has no usable recipientSessionId or content; dropped");
-        return NativeRoute::Claimed(Vec::new());
+        return SessionRoute::Claimed(Vec::new());
     };
     let sender_route = bounded_id(update.get("senderSessionId"))
         .and_then(|sender| state.lock().subagent_route(sender));
     let Some(route) =
         sender_route.filter(|route| recipient == view && route.parent_session_id == recipient)
     else {
-        return NativeRoute::Claimed(Vec::new());
+        return SessionRoute::Claimed(Vec::new());
     };
     let content: Vec<Value> = content
         .iter()
@@ -370,9 +409,9 @@ fn rfd_message(state: &Mutex<DriverState>, view: &str, update: &Map<String, Valu
         .map(|block| json!({ "type": "content", "content": block }))
         .collect();
     if content.is_empty() {
-        return NativeRoute::Claimed(Vec::new());
+        return SessionRoute::Claimed(Vec::new());
     }
-    NativeRoute::Claimed(vec![json!({
+    SessionRoute::Claimed(vec![json!({
         "sessionId": route.root_session_id,
         "update": {
             "sessionUpdate": "tool_call_update",
@@ -382,127 +421,140 @@ fn rfd_message(state: &Mutex<DriverState>, view: &str, update: &Map<String, Valu
     })])
 }
 
-/// Register `child` under `parent` and synthesize its running dispatch card
-/// on the chat.
+/// Register `child` under `parent`, create its record with `fill`, and
+/// synthesize its dispatch card on the chat.
 fn announce(
-    state: &Mutex<DriverState>,
+    state: &mut DriverState,
     parent: &str,
     child: &str,
-    title: &str,
-    raw_input: Value,
-) -> NativeRoute {
-    let Some(route) = state.lock().register_subagent(parent, child) else {
+    source: SubagentSource,
+    now_ms: u64,
+    fill: impl FnOnce(&mut Subagent),
+) -> SessionRoute {
+    let Some(route) = state.register_subagent(parent, child) else {
         log::warn!("[acp] native subagent names its own session as parent; dropped");
-        return NativeRoute::Claimed(Vec::new());
+        return SessionRoute::Claimed(Vec::new());
     };
-    log::info!(
-        "[acp] native subagent {} spawned in session {}{}",
-        crate::logging::redact_session_id(child),
-        crate::logging::redact_session_id(&route.root_session_id),
-        if route.parent_dispatch_id.is_some() {
-            " (nested)"
-        } else {
-            ""
-        }
+    let parent_id = route
+        .parent_dispatch_id
+        .is_some()
+        .then(|| route.parent_session_id.clone());
+    let record = state.subagent_records().upsert(
+        &route.root_session_id,
+        &route.dispatch_id,
+        || subagents::DispatchEntry {
+            record: native::new_record(
+                &route.root_session_id,
+                child,
+                parent_id,
+                &route.dispatch_id,
+                source,
+                now_ms,
+            ),
+            view: subagents::ToolView::default(),
+        },
+        |entry| fill(&mut entry.record),
     );
+    let Some(record) = record else {
+        return SessionRoute::Claimed(Vec::new());
+    };
+    sync_route(state, child, &record.state);
     let mut meta = Map::new();
-    meta.insert(
-        TERMUL_SUBAGENT_META_KEY.to_string(),
-        json!({ "state": "running", "sessionId": child }),
-    );
+    meta.insert(SUBAGENT_META_KEY.to_string(), record.meta_value());
     if let Some(parent_dispatch) = &route.parent_dispatch_id {
         meta.insert(
             "claudeCode".to_string(),
             json!({ "parentToolUseId": parent_dispatch }),
         );
     }
-    NativeRoute::Claimed(vec![json!({
+    SessionRoute::Claimed(vec![json!({
         "sessionId": route.root_session_id,
         "update": {
             "sessionUpdate": "tool_call",
             "toolCallId": route.dispatch_id,
-            "title": title,
+            "title": record.title,
             "kind": "think",
-            "status": "in_progress",
-            "rawInput": raw_input,
+            "status": card_status(&record.state).unwrap_or("in_progress"),
             "_meta": meta,
         }
     })])
 }
 
-/// Mark `child` ended and end its dispatch card. A repeated end report (the
-/// adapter re-sends current states after `session/load`) changes nothing, so
-/// the card keeps its first `endedAt`.
-fn ended(state: &Mutex<DriverState>, child: &str, end: SubagentEnd, now_ms: u64) -> NativeRoute {
-    let mut state = state.lock();
-    let Some(route) = state.end_subagent(child) else {
-        if state.subagent_route(child).is_some() {
-            log::debug!(
-                "[acp] native subagent {} reported its end again; ignored",
-                crate::logging::redact_session_id(child)
-            );
-        } else {
-            log::warn!(
-                "[acp] native subagent {} ended before it was announced; dropped",
-                crate::logging::redact_session_id(child)
-            );
-        }
-        return NativeRoute::Claimed(Vec::new());
+/// Apply `edit` to the record of announced child `child` and report the
+/// change on its dispatch card. An unchanged record (a repeated end report:
+/// the adapter re-sends current states after `session/load`) reports
+/// nothing, so the card keeps its first `endedAt`.
+fn change(state: &mut DriverState, child: &str, edit: impl FnOnce(&mut Subagent)) -> SessionRoute {
+    let Some(route) = state.subagent_route(child) else {
+        log::warn!(
+            "[acp] native subagent {} reported before it was announced; dropped",
+            crate::logging::redact_session_id(child)
+        );
+        return SessionRoute::Claimed(Vec::new());
     };
-    drop(state);
-    log::info!(
-        "[acp] native subagent {} ended: {}",
-        crate::logging::redact_session_id(child),
-        end.lifecycle()
+    let records = state.subagent_records();
+    let Some(before) = records
+        .record(&route.root_session_id, &route.dispatch_id)
+        .cloned()
+    else {
+        log::warn!(
+            "[acp] native subagent {} has no record (evicted); dropped",
+            crate::logging::redact_session_id(child)
+        );
+        return SessionRoute::Claimed(Vec::new());
+    };
+    let after = records.upsert(
+        &route.root_session_id,
+        &route.dispatch_id,
+        || subagents::DispatchEntry {
+            record: before.clone(),
+            view: subagents::ToolView::default(),
+        },
+        |entry| edit(&mut entry.record),
     );
-    NativeRoute::Claimed(vec![json!({
-        "sessionId": route.root_session_id,
-        "update": {
-            "sessionUpdate": "tool_call_update",
-            "toolCallId": route.dispatch_id,
-            "status": end.status(),
-            "_meta": {
-                TERMUL_SUBAGENT_META_KEY: {
-                    "state": end.lifecycle(),
-                    "endedAt": now_ms,
-                    "sessionId": child,
-                }
-            },
-        }
-    })])
+    let Some(after) = after else {
+        log::debug!(
+            "[acp] native subagent {} reported no change; ignored",
+            crate::logging::redact_session_id(child)
+        );
+        return SessionRoute::Claimed(Vec::new());
+    };
+    sync_route(state, child, &after.state);
+    let status = (before.state != after.state)
+        .then(|| card_status(&after.state))
+        .flatten();
+    let title = (before.title != after.title).then_some(after.title.as_str());
+    SessionRoute::Claimed(vec![record_update(&after, status, title)])
+}
+
+/// Keep the child route's work flag (the idle reaper's evidence) in step
+/// with its record: an unobservable child no longer counts as working.
+fn sync_route(state: &mut DriverState, child: &str, record_state: &SubagentState) {
+    if record_state.is_working() {
+        state.resume_subagent(child);
+    } else {
+        state.end_subagent(child);
+    }
 }
 
 /// A child update re-addressed to its chat, stamped with its dispatch.
+/// Agent-sent copies of the host's subagent keys are dropped.
 fn rerouted(params: &Value, route: &ChildRoute) -> Value {
     let mut params = params.clone();
     params["sessionId"] = Value::String(route.root_session_id.clone());
     let update = &mut params["update"];
-    if !update["_meta"].is_object() {
-        update["_meta"] = json!({});
+    if subagents::strip_spoofed_meta(update) {
+        log::warn!(
+            "[acp] session {}: dropped agent-sent subagent keys from child traffic",
+            crate::logging::redact_session_id(&route.root_session_id)
+        );
     }
-    if !update["_meta"]["claudeCode"].is_object() {
-        update["_meta"]["claudeCode"] = json!({});
+    let meta = meta_object(update);
+    if !meta.get("claudeCode").is_some_and(Value::is_object) {
+        meta.insert("claudeCode".to_string(), json!({}));
     }
-    update["_meta"]["claudeCode"]["parentToolUseId"] = Value::String(route.dispatch_id.clone());
+    meta["claudeCode"]["parentToolUseId"] = Value::String(route.dispatch_id.clone());
     params
-}
-
-fn bounded_id(value: Option<&Value>) -> Option<&str> {
-    value
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty() && id.len() <= MAX_ID_CHARS)
-}
-
-fn bounded_text(value: Option<&Value>, max: usize) -> Option<&str> {
-    let text = value.and_then(Value::as_str)?.trim();
-    if text.is_empty() {
-        return None;
-    }
-    let end = text
-        .char_indices()
-        .nth(max)
-        .map_or(text.len(), |(index, _)| index);
-    Some(&text[..end])
 }
 
 /// The Claude adapter version `config` launches: from an exact
