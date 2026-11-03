@@ -119,8 +119,8 @@ export function SubagentSurfaceProvider({
   useOverlayRegistration('subagent-panel', isMobile && toolCall !== undefined, close)
 
   const value = useMemo<SubagentSurface>(
-    () => ({ sessionId, agentId, filePathContext, openId, open }),
-    [sessionId, agentId, filePathContext, openId, open]
+    () => ({ sessionId, agentId, filePathContext, openId, opensDialog: !docked, open }),
+    [sessionId, agentId, filePathContext, openId, docked, open]
   )
 
   let panel: ((sheet: boolean) => ReactNode) | null = null

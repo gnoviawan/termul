@@ -204,7 +204,7 @@ function SubagentRowComponent({
   nested = false,
   onOpen
 }: SubagentRowProps): React.JSX.Element {
-  const { open, openId } = useSubagentSurface()
+  const { open, openId, opensDialog } = useSubagentSurface()
   const childCalls = useSubagentChildCalls(toolCall.toolCallId)
   const title = subagentTitle(toolCall)
   const type = subagentType(toolCall)
@@ -215,7 +215,7 @@ function SubagentRowComponent({
     <button
       type="button"
       data-subagent-row={toolCall.toolCallId}
-      aria-haspopup="dialog"
+      aria-haspopup={opensDialog ? 'dialog' : undefined}
       aria-current={selected ? 'true' : undefined}
       onClick={() => {
         onOpen?.()

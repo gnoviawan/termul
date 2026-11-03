@@ -261,8 +261,8 @@ export function subagentToolCount(
   toolCall: ToolCall,
   childCalls: readonly ToolCall[]
 ): number | undefined {
-  if (childCalls.length > 0) return childCalls.length
-  return toolCall.subagent?.usage?.toolUses
+  const count = Math.max(childCalls.length, toolCall.subagent?.usage?.toolUses ?? 0)
+  return count > 0 ? count : undefined
 }
 
 export type SubagentDetailTone = 'muted' | 'destructive'

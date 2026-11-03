@@ -16,6 +16,8 @@ export interface SubagentSurface {
   filePathContext: FilePathResolutionContext | undefined
   /** The subagent the panel shows, if open. */
   openId: string | null
+  /** The panel opens as a modal sheet (phone, narrow pane), not docked beside the chat. */
+  opensDialog: boolean
   /**
    * Show `id` in the panel. `siblings` is the list the row sits in, for
    * "i of n" and arrow-key stepping. `nested` keeps the current subagent
@@ -30,6 +32,7 @@ const DETACHED: SubagentSurface = {
   agentId: undefined,
   filePathContext: undefined,
   openId: null,
+  opensDialog: false,
   open: () => {}
 }
 

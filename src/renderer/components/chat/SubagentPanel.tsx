@@ -50,9 +50,11 @@ function TaskPrompt({ prompt }: { prompt: string }): React.JSX.Element {
   const [overflows, setOverflows] = useState(false)
   const ref = useRef<HTMLParagraphElement>(null)
   useLayoutEffect(() => {
+    // A longer prompt for the same subagent may now overflow the clamp.
+    void prompt
     const el = ref.current
     if (el && !expanded) setOverflows(el.scrollHeight > el.clientHeight + 1)
-  }, [expanded])
+  }, [expanded, prompt])
   return (
     <Section title="Task">
       <p
@@ -262,7 +264,11 @@ export function SubagentPanel({
         if (event.key === 'Escape') {
           event.stopPropagation()
           onClose()
-        } else if (position.total > 1 && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+        } else if (
+          position.total > 1 &&
+          (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
+          !(event.target as Element).closest('[data-subagent-panel-body]')
+        ) {
           event.preventDefault()
           onStep(event.key === 'ArrowUp' ? -1 : 1)
         }
@@ -299,7 +305,10 @@ export function SubagentPanel({
           <SubagentElapsed toolCall={toolCall} status={status} />
         </div>
       </div>
-      <div className="scroller-thin flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain px-4 py-4">
+      <div
+        data-subagent-panel-body
+        className="scroller-thin flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto overscroll-contain px-4 py-4"
+      >
         {record?.prompt?.trim() ? (
           <TaskPrompt key={toolCall.toolCallId} prompt={record.prompt} />
         ) : (
