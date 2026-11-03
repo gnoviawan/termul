@@ -64,6 +64,14 @@ export type NodeSpec =
   | { kind: 'merge'; mode: MergeMode }
   /** Parks the run durably for `duration_ms`. */
   | { kind: 'wait'; duration_ms: number }
+  | {
+      kind: 'mcp_tool'
+      /** The project MCP server's registry entry id. */
+      server_id: string
+      tool: string
+      arguments: NamedTemplate[]
+      timeout_ms: number
+    }
 
 export type NodeKind = NodeSpec['kind']
 
@@ -135,6 +143,12 @@ export type IssueCode =
   | 'loop_item_outside_body'
   | 'merge_needs_two_inputs'
   | 'unknown_agent'
+  | 'mcp_timeout_out_of_range'
+  | 'invalid_mcp_arguments'
+  | 'unknown_mcp_server'
+  | 'mcp_tools_pending'
+  | 'mcp_server_unavailable'
+  | 'unknown_mcp_tool'
 
 export type Issue = { node_id: NodeId | null; code: IssueCode; message: string }
 
@@ -183,12 +197,21 @@ export type AgentPolicy = {
   tools: 'none'
 }
 
+/** An `mcp_tool` node; `server_name` is null when the server is not configured. */
+export type McpToolPolicy = {
+  node_id: NodeId
+  server_id: string
+  server_name: string | null
+  tool: string
+}
+
 export type RunPolicy = {
   trigger_summary: string
   next_runs: number[]
   agents: AgentPolicy[]
   secrets: { node_id: NodeId; names: string[] }[]
   outbound_hosts: { node_id: NodeId; hosts: string[] }[]
+  mcp_tools: McpToolPolicy[]
   untrusted_flow: boolean
   failure_policy: string
 }

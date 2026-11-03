@@ -160,6 +160,64 @@ fn rule5_secrets_only_in_http_nodes() {
         vec![at(IssueCode::SecretNotAllowed, "check")]
     );
     assert_eq!(codes(&fail), vec![at(IssueCode::SecretNotAllowed, "alert")]);
+    let mcp = set_spec(
+        &base,
+        "shape",
+        json!({ "kind": "mcp_tool", "server_id": "srv", "tool": "t",
+                "arguments": [{ "name": "token", "value": "{{secrets.API_KEY}}" }] }),
+    );
+    assert_eq!(codes(&mcp), vec![at(IssueCode::SecretNotAllowed, "shape")]);
+}
+
+fn mcp_shape(arguments: serde_json::Value, timeout_ms: Option<u64>) -> Automation {
+    let mut spec =
+        json!({ "kind": "mcp_tool", "server_id": "srv", "tool": "t", "arguments": arguments });
+    if let Some(ms) = timeout_ms {
+        spec["timeout_ms"] = json!(ms);
+    }
+    set_spec(&sample_automation(), "shape", spec)
+}
+
+#[test]
+fn mcp_tool_timeout_range_and_argument_names() {
+    let args = json!([{ "name": "q", "value": "{{nodes.extract.output.summary}}" }]);
+    assert_eq!(codes(&mcp_shape(args.clone(), None)), vec![]);
+    assert_eq!(codes(&mcp_shape(args.clone(), Some(300_000))), vec![]);
+    assert_eq!(
+        codes(&mcp_shape(args.clone(), Some(0))),
+        vec![at(IssueCode::McpTimeoutOutOfRange, "shape")]
+    );
+    assert_eq!(
+        validate(&mcp_shape(args, Some(300_001)))
+            .into_iter()
+            .map(|i| i.message)
+            .collect::<Vec<_>>(),
+        vec!["timeout_ms must be 1..=300000, got 300001".to_string()]
+    );
+    let bad_names = mcp_shape(
+        json!([
+            { "name": " ", "value": "a" },
+            { "name": "q", "value": "b" },
+            { "name": "q", "value": "c" }
+        ]),
+        None,
+    );
+    assert_eq!(
+        validate(&bad_names)
+            .into_iter()
+            .map(|i| (i.code, i.message))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                IssueCode::InvalidMcpArguments,
+                "an argument has an empty name".to_string()
+            ),
+            (
+                IssueCode::InvalidMcpArguments,
+                "argument q is given more than once".to_string()
+            ),
+        ]
+    );
 }
 
 fn post_with(url: &str, allowed: serde_json::Value) -> Automation {
@@ -243,6 +301,25 @@ fn rule8_untrusted_flow_needs_get_data_reaching_an_agent_with_http_downstream() 
     assert!(!untrusted_flow(&post_fetch.graph));
     let no_http_after = apply(&base, json!([{ "op": "remove_node", "id": "post" }]));
     assert!(!untrusted_flow(&no_http_after.graph));
+}
+
+#[test]
+fn rule8_an_mcp_tool_result_is_untrusted_and_an_mcp_tool_is_a_sink() {
+    let tool = json!({ "kind": "mcp_tool", "server_id": "srv", "tool": "t" });
+    let base = sample_automation();
+    let post_fetch = set_spec(
+        &base,
+        "fetch",
+        json!({ "kind": "http", "method": "POST", "url": "https://api.example.com/items",
+                "allowed_hosts": ["api.example.com"] }),
+    );
+    assert!(!untrusted_flow(&post_fetch.graph));
+    let mcp_fetch = set_spec(&post_fetch, "fetch", tool.clone());
+    assert!(untrusted_flow(&mcp_fetch.graph));
+    let mcp_post = set_spec(&base, "post", tool.clone());
+    assert!(untrusted_flow(&mcp_post.graph));
+    let untainted_mcp_post = set_spec(&post_fetch, "post", tool);
+    assert!(!untrusted_flow(&untainted_mcp_post.graph));
 }
 
 #[test]
