@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { acpApi } from '@/lib/acp-api'
+import {
+  endedState,
+  type SubagentRecordOverrides,
+  subagentToolCall
+} from '@/lib/test-utils/subagent'
 import { switchBlockedReason, useAcpStore } from '@/stores/acp-store'
 import { FRESH } from '@/stores/acp-store/testkit'
 import { reloadAgentChat, reloadChatBlockedReason } from './reload-chat'
@@ -148,14 +153,11 @@ describe('reloadAgentChat', () => {
 })
 
 describe('background agents and reload', () => {
-  const backgroundAgent = (id: string, extra: Record<string, unknown> = {}) => ({
-    toolCallId: id,
-    status: 'completed',
-    seq: 5,
-    rawInput: { description: 'Audit', prompt: 'p', run_in_background: true },
-    subagentLifecycle: { background: true },
-    ...extra
-  })
+  const backgroundAgent = (id: string, record: SubagentRecordOverrides = {}) =>
+    subagentToolCall(
+      { background: true, ...record },
+      { toolCallId: id, status: 'completed', seq: 5 }
+    )
   const blocked = () => reloadChatBlockedReason(useAcpStore.getState(), 's1')
 
   beforeEach(() => {
@@ -186,7 +188,7 @@ describe('background agents and reload', () => {
     useAcpStore.setState((s) => ({
       sessions: { ...s.sessions, s1: session('s1', { busy: true }) },
       toolCalls: {
-        s1: [backgroundAgent('a', { subagentLifecycle: { background: true, state: 'completed' } })]
+        s1: [backgroundAgent('a', { state: endedState('completed') })]
       }
     }))
     expect(blocked()).toBe('Wait until this reply finishes.')

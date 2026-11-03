@@ -155,6 +155,7 @@ import {
   AcpTransportError
 } from '@/lib/acp-transport'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
+import { endedState, subagentMeta, subagentRecord } from '@/lib/test-utils/subagent'
 import {
   _flushCoalescedForTesting,
   _installTransportRecoveryForTesting,
@@ -1447,6 +1448,62 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     // REFRESH: the timeline shows only the restored messages.
     const items = buildTimeline(state.messages['s-sum'], toolCalls)
     expect(items.map((i) => i.kind)).toEqual(['message', 'message'])
+  })
+
+  it('restores a subagent dispatch as a timeline card with its record and nested parent', async () => {
+    const record = subagentRecord({
+      dispatchToolCallId: 'd1',
+      rootSessionId: 's-sub',
+      title: 'Review the store',
+      prompt: 'Read src/store.ts',
+      state: endedState('completed')
+    })
+    const nested = subagentRecord({ dispatchToolCallId: 'd2', rootSessionId: 's-sub' })
+    setCachedSessionPayload('s-sub', {
+      metadata: {
+        id: 's-sub',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 12,
+        status: 'closed'
+      },
+      messages: [
+        msg('turn:t1', 'user', 'review', 5) as never,
+        msg('snapshot:agent:12', 'agent', 'done', 12) as never
+      ],
+      toolCalls: [
+        {
+          toolCallId: 'd1',
+          kind: 'think',
+          status: 'completed',
+          seq: 7,
+          timestamp: 7,
+          _meta: subagentMeta(record),
+          restoredSummary: false
+        },
+        {
+          toolCallId: 'd2',
+          kind: 'think',
+          seq: 8,
+          timestamp: 8,
+          _meta: { ...subagentMeta(nested), claudeCode: { parentToolUseId: 'd1' } },
+          restoredSummary: false
+        }
+      ] as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-sub')
+    const state = useAcpStore.getState()
+    const toolCalls = state.toolCalls['s-sub']
+    expect(toolCalls[0].subagent).toEqual(record)
+    expect(toolCalls[1]).toMatchObject({ subagent: nested, parentToolCallId: 'd1' })
+    const items = buildTimeline(state.messages['s-sub'], toolCalls)
+    expect(items.flatMap((i) => (i.kind === 'tool' ? [i.tool.toolCallId] : []))).toEqual(['d1'])
   })
 
   it('keeps whole-session summaries on a windowed tail fetch (summaries predate the window)', async () => {

@@ -119,7 +119,6 @@ import {
 } from './slices/session'
 import { createSwitchSlice } from './slices/switch'
 import { appendBlocks, createTranscriptSlice } from './slices/transcript'
-import { applyCodexThreadStates, mergedLifecycleField } from './subagent-lifecycle'
 import { subagentChunkText, withSubagentIngest, withSubagentText } from './subagent-transcript'
 import type {
   AcpSession,
@@ -398,7 +397,6 @@ async function installTransportRecovery(
         recoveredToolCalls[idx] = {
           ...recoveredToolCalls[idx],
           ...stamped,
-          ...mergedLifecycleField(recoveredToolCalls[idx], stamped),
           timestamp: recoveredToolCalls[idx].timestamp,
           seq: recoveredToolCalls[idx].seq
         }
@@ -411,11 +409,9 @@ async function installTransportRecovery(
       const idx = recoveredToolCalls.findIndex((t) => t.toolCallId === update.toolCallId)
       if (idx === -1) continue
       const prior = recoveredToolCalls[idx]
-      const ingested = withSubagentIngest(update)
       recoveredToolCalls[idx] = {
         ...prior,
-        ...ingested,
-        ...mergedLifecycleField(prior, ingested),
+        ...withSubagentIngest(update),
         ...applyTerminalStream(prior, update),
         timestamp: prior.timestamp,
         seq: prior.seq
@@ -473,11 +469,7 @@ async function installTransportRecovery(
             ...current.toolCalls,
             [recovery.sessionId]: trimLiveToolCalls([
               ...splicedToolCalls,
-              ...dropHiddenToolCalls(
-                applyCodexThreadStates(recoveredToolCalls),
-                installedMessages,
-                hidden
-              )
+              ...dropHiddenToolCalls(recoveredToolCalls, installedMessages, hidden)
             ])
           }
         : current.toolCalls,

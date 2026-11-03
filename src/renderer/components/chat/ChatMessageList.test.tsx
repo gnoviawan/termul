@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { endedState, subagentToolCall } from '@/lib/test-utils/subagent'
 import { useAcpStore } from '@/stores/acp-store'
 import { seedSession } from '@/stores/acp-store/testkit'
 import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
@@ -525,18 +526,10 @@ describe('ChatMessageList', () => {
     const delegation: TimelineItem = {
       kind: 'tool',
       key: 'task-1',
-      tool: {
-        toolCallId: 'task-1',
-        title: 'Audit branch',
-        kind: 'think',
-        rawInput: {
-          subagent_type: 'explorer',
-          description: 'Audit branch',
-          prompt: 'Review the branch without editing.'
-        },
-        timestamp: 1_500,
-        seq: 2
-      }
+      tool: subagentToolCall(
+        { title: 'Audit branch', role: 'explorer', prompt: 'Review the branch without editing.' },
+        { toolCallId: 'task-1', title: 'Audit branch', status: undefined, timestamp: 1_500, seq: 2 }
+      )
     }
     const { rerender } = render(
       <ChatMessageList
@@ -558,11 +551,14 @@ describe('ChatMessageList', () => {
           userItem,
           {
             ...delegation,
-            tool: {
-              ...delegation.tool,
-              status: 'completed',
-              rawOutput: { text: 'No changes needed.' }
-            }
+            tool: subagentToolCall(
+              { title: 'Audit branch', role: 'explorer', state: endedState() },
+              {
+                ...delegation.tool,
+                status: 'completed',
+                rawOutput: { text: 'No changes needed.' }
+              }
+            )
           },
           finalAgentItem
         ]}
@@ -590,16 +586,17 @@ describe('ChatMessageList', () => {
     const delegation: TimelineItem = {
       kind: 'tool',
       key: 'task-1',
-      tool: {
-        toolCallId: 'task-1',
-        title: 'Audit branch',
-        kind: 'think',
-        status: 'completed',
-        rawInput: { subagent_type: 'explorer', description: 'Audit branch' },
-        rawOutput: { text: 'Edited src/foo.ts.' },
-        timestamp: 1_500,
-        seq: 2
-      }
+      tool: subagentToolCall(
+        { title: 'Audit branch', role: 'explorer', state: endedState() },
+        {
+          toolCallId: 'task-1',
+          title: 'Audit branch',
+          status: 'completed',
+          rawOutput: { text: 'Edited src/foo.ts.' },
+          timestamp: 1_500,
+          seq: 2
+        }
+      )
     }
     render(
       <ChatMessageList

@@ -35,6 +35,7 @@ vi.mock('@/lib/web-tab-session', () => ({
 }))
 
 import type { ToolCall } from '@/lib/acp-api'
+import { subagentMeta, subagentRecord } from '@/lib/test-utils/subagent'
 import {
   _flushCoalescedForTesting,
   _installTransportRecoveryForTesting,
@@ -159,8 +160,15 @@ describe('subagent transcript ingest (reconnect recovery)', () => {
     useAcpStore.setState(FRESH)
   })
 
-  it('rebuilds child ids, child text, and the background state from the snapshot', async () => {
+  it('rebuilds child ids, child text, and the subagent record from the snapshot', async () => {
     seedSession('s-rec', 'agent-1', false)
+    const record = subagentRecord({
+      dispatchToolCallId: 'd1',
+      rootSessionId: 's-rec',
+      background: true,
+      prompt: dispatchInput.prompt,
+      startedAt: 1_000
+    })
     await _installTransportRecoveryForTesting({
       sessionId: 's-rec',
       watermark: 20,
@@ -185,7 +193,8 @@ describe('subagent transcript ingest (reconnect recovery)', () => {
             toolCall: {
               toolCallId: 'd1',
               status: 'pending',
-              rawInput: { ...dispatchInput, run_in_background: true }
+              rawInput: { ...dispatchInput, run_in_background: true },
+              _meta: subagentMeta(record)
             }
           }
         },
@@ -230,7 +239,8 @@ describe('subagent transcript ingest (reconnect recovery)', () => {
 
     const dispatch = stored('d1', 's-rec')
     expect(dispatch.subagentText).toBe('Child report')
-    expect(dispatch.subagentLifecycle?.background).toBe(true)
+    // The status update carries no record, so the persisted one stays.
+    expect(dispatch.subagent).toEqual(record)
     expect(dispatch.status).toBe('completed')
     expect(stored('c1', 's-rec').parentToolCallId).toBe('d1')
     const agentText = useAcpStore

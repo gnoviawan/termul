@@ -1,3 +1,4 @@
+import type { Subagent, SubagentEndReason } from '@shared/types/subagent'
 import { useReducedMotion } from 'framer-motion'
 import {
   Dialog,
@@ -13,16 +14,34 @@ import { SubagentActivityList } from './SubagentActivityList'
 import { renderContentItem } from './ToolCallCard'
 import {
   describeToolCall,
-  firstString,
   isSubagentRunning,
   type ParentTurn,
   readableOutput
 } from './tool-call-summary'
 
-const LIFECYCLE_STATUS: Record<string, string> = {
+const END_STATUS: Record<SubagentEndReason, string> = {
   completed: 'Completed',
   failed: 'Failed',
-  cancelled: 'Stopped'
+  cancelled: 'Stopped',
+  unexplained: 'Stopped'
+}
+
+/** Header status line. A running record the turn rules no longer count lost its end. */
+function subagentStatusText(subagent: Subagent | undefined, running: boolean): string {
+  if (!subagent) return 'Status unavailable'
+  if (running) {
+    if (subagent.activity === 'requires_action') return 'Waiting for input'
+    return subagent.background ? 'Running in background' : 'Running'
+  }
+  switch (subagent.activity) {
+    case 'idle':
+      return END_STATUS[subagent.end.reason]
+    case 'unknown':
+      return 'Status unavailable'
+    case 'running':
+    case 'requires_action':
+      return subagent.background ? 'Completed' : 'Status unavailable'
+  }
 }
 
 /**
@@ -47,26 +66,12 @@ export function SubagentDetailsDialog({
   filePathContext: FilePathResolutionContext | undefined
 }): React.JSX.Element {
   const { primary } = describeToolCall(toolCall)
-  const input =
-    toolCall.rawInput && typeof toolCall.rawInput === 'object'
-      ? (toolCall.rawInput as Record<string, unknown>)
-      : null
-  const taskPrompt = firstString(input, ['prompt'])
-  const activityKind = firstString(input, ['activityKind', 'activity_kind'])
+  const subagent = toolCall.subagent
+  const taskPrompt = subagent?.prompt
   const reduced = useReducedMotion() ?? false
   const running = isSubagentRunning(toolCall, parentTurn)
-  const lifecycle = toolCall.subagentLifecycle
-  const background = lifecycle?.background === true
-  const taskStatus = running
-    ? background
-      ? 'Running in background'
-      : 'Running'
-    : (LIFECYCLE_STATUS[lifecycle?.state ?? ''] ??
-      (toolCall.status === 'completed'
-        ? 'Completed'
-        : toolCall.status === 'failed'
-          ? 'Failed'
-          : 'Status unavailable'))
+  const background = subagent?.background === true
+  const taskStatus = subagentStatusText(subagent, running)
   const content = toolCall.content ?? []
   const hasContent = content.length > 0
   const resultText = hasContent ? '' : readableOutput(toolCall.rawOutput)
@@ -84,9 +89,7 @@ export function SubagentDetailsDialog({
       >
         <DialogHeader className="pr-6">
           <DialogTitle className="break-words">{primary}</DialogTitle>
-          <DialogDescription>
-            {activityKind ? `${taskStatus} · ${activityKind}` : taskStatus}
-          </DialogDescription>
+          <DialogDescription>{taskStatus}</DialogDescription>
         </DialogHeader>
         <div className="scroller-thin min-h-0 space-y-4 overflow-y-auto">
           {taskPrompt && (
@@ -102,9 +105,9 @@ export function SubagentDetailsDialog({
                 This agent continues after its launch. It sends its final report to the main agent,
                 not to this card.
               </p>
-              {lifecycle?.outputFile && (
+              {subagent?.outputFile && (
                 <p className="break-all font-mono text-xs text-muted-foreground">
-                  Output file: {lifecycle.outputFile}
+                  Output file: {subagent.outputFile}
                 </p>
               )}
             </section>
