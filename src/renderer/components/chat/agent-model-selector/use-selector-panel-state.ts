@@ -272,11 +272,14 @@ export function useSelectorPanelState(
     [effectiveId, viewId, ...lookupIds],
     `${modelValue ?? ''}\n${optionsSignature(liveValues)}`
   )
+  // The model the live values belong to: `modelValue` runs ahead of it while a pick is pending.
+  const confirmedModel =
+    typeof props.modelOption?.currentValue === 'string' ? props.modelOption.currentValue : null
   const favoriteKeyFor = (configId: string, modelId: string): FavoriteKey =>
     favoriteKey(
       configId,
       modelId,
-      configId === effectiveId && modelId === modelValue
+      configId === effectiveId && modelId === confirmedModel
         ? liveValues
         : saved[configId]?.modelValues?.[modelId]
     )

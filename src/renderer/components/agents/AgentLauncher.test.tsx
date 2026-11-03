@@ -2254,6 +2254,48 @@ describe('AgentLauncher ACP new thread', () => {
     )
   })
 
+  it('an effort set while the saved record loads wins over the restored one', async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    acpStateRef.current.agentOptionsCache[ACP_CONFIG.id] = {
+      models: null,
+      modes: null,
+      configOptions: preparedSession(ACP_CONFIG).configOptions,
+      updatedAt: 1
+    }
+    const held: Array<() => void> = []
+    mockPersistRead.mockImplementation(async (key: string) => {
+      if (key === 'agents/last-selected') {
+        return { success: true, data: { agentId: ACP_CONFIG.id, mode: 'acp' } }
+      }
+      if (key === `agents/composer-options/${ACP_CONFIG.id}`) {
+        await new Promise<void>((resolve) => held.push(resolve))
+        return {
+          success: true,
+          data: { modelId: 'm1', modelValues: { m1: { thinking: 'medium' } } }
+        }
+      }
+      return { success: true, data: undefined }
+    })
+    renderLauncher()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Medium/ }))
+    clickMenuOption('Low')
+    // Every reader of the record (the restore, the open panel) gets it now.
+    await waitFor(() => expect(held.length).toBeGreaterThan(0))
+    await act(async () => {
+      for (const release of held) release()
+    })
+    await act(async () => {})
+
+    setComposerValue('hello low')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalled())
+    const { pending } = mockFinalizeChatLaunch.mock.calls[0][0] as {
+      pending: { configValues: Record<string, string> }
+    }
+    expect(pending.configValues).toMatchObject({ thinking: 'low' })
+  })
+
   it('an effort set before the chat starts is saved under the model on screen', async () => {
     acpStateRef.current.agentConfigs = [ACP_CONFIG]
     acpStateRef.current.agentOptionsCache[ACP_CONFIG.id] = {

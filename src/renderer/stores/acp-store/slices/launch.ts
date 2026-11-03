@@ -16,7 +16,7 @@ import {
 import { logFrontendError } from '@/lib/log-api'
 import { pendingRestartVersionsAfterSpawn } from '../../agent-update-orchestration'
 import { dropPromptQueueForSession } from '../../prompt-queue-orchestration'
-import { userPickedDuringRestore } from '../composer-options'
+import { isScopedOption, userPickedDuringRestore } from '../composer-options'
 import {
   cacheOptionsFromSession,
   currentSessionModel,
@@ -620,7 +620,7 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
         message: `Skipping option '${label}' on session ${sessionId} after apply failure: ${err instanceof Error ? err.message : String(err)}`
       })
     }
-    const warnNotAdvertised = (label: string, what: 'option' | 'value'): void => {
+    const warnNotAdvertised = (label: string, what: 'option' | 'value' | 'model'): void => {
       void logFrontendError({
         level: 'warn',
         source: 'acp.applyPendingLauncherOptions',
@@ -645,6 +645,9 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
     const sessionAfterMode = live()
     const modelConfigOption = sessionAfterMode?.configOptions.find((o) => o.category === 'model')
     let modelConfigIdHandled: string | null = null
+    // Scoped values (effort, Fast) belong to the requested model: none of them
+    // apply when the session falls back to its default model.
+    let modelMissed = false
     if (pending.modelId) {
       // Already-current fast path, keyed on the DISPLAYED model
       // (`resolveModelOption` precedence: the model config option when one is
@@ -684,6 +687,7 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
         }
         if (!applied) {
           if (restore) return // the values belong to the model that did not apply
+          modelMissed = true
           toast.error('Selected model is not available in this session', {
             description: `The model "${pending.modelId}" is not advertised by the agent and no model config option exists. Falling back to the agent's default model.`
           })
@@ -704,6 +708,10 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
       }
       // A restore leaves an option the user set while it ran as the user set it.
       if (restore && userPickedDuringRestore(sessionId, configId)) continue
+      if (modelMissed && isScopedOption(option)) {
+        warnNotAdvertised(configId, 'model')
+        continue
+      }
       // Skip already-current values — picks that were flushed live to a warm
       // session earlier must not fire redundant wire calls on the claimed
       // session. Boolean options are stored as "true" / "false" and must go

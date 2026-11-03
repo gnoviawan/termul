@@ -162,7 +162,7 @@ import {
   readComposerOptions,
   reopenRestores
 } from './composer-options'
-import { reapplyPersistedComposerOptions } from './helpers'
+import { prepareChatKey, reapplyPersistedComposerOptions } from './helpers'
 import { dropSessionBookkeeping } from './slices/transcript'
 import {
   FRESH,
@@ -1242,6 +1242,67 @@ describe('per-model option values (spec-model-options-persist-with-model)', () =
     expect(effortOf('s1')).toBe('high')
   })
 
+  it("a launch whose model does not apply skips that model's values but keeps the mode", async () => {
+    seedOptionsSession('s1', 'agent-1', {
+      models: {
+        currentModelId: 'sonnet',
+        availableModels: [{ modelId: 'sonnet', name: 'Sonnet' }]
+      },
+      configOptions: [effortOption('opus', 'medium'), permissionOption('default')]
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'acp_set_model') throw new Error('unknown model')
+      const { configId, valueId } = args as Record<string, string>
+      wire.push(`${configId}=${valueId}`)
+      return [effortOption('opus', 'medium'), permissionOption(valueId)]
+    })
+
+    await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+      modelId: 'opus',
+      configValues: { effort: 'high', permission: 'bypass' }
+    })
+
+    expect(wire).toEqual(['permission=bypass'])
+    expect(warnsFrom('acp.applyPendingLauncherOptions')).toEqual([
+      "Skipped option 'effort' on session s1: the model is not advertised by this session"
+    ])
+  })
+
+  it('a reapply triggered while one runs runs once more after it', async () => {
+    seedChat('s1', 'opus', 'high')
+
+    const first = reapplyPersistedComposerOptions(useAcpStore.getState as never, 's1', CONFIG)
+    stored[RECORD_KEY] = { modelId: 'opus', modelValues: { opus: { effort: 'low' } } }
+    await reapplyPersistedComposerOptions(useAcpStore.getState as never, 's1', CONFIG)
+    await first
+
+    await vi.waitFor(() => expect(wire).toEqual(['effort=low']))
+  })
+
+  it('an effort set while the model moves is not saved under either model', async () => {
+    seedChat('s1', 'opus', 'high')
+    vi.mocked(invoke).mockImplementation(async (_command: string, args?: unknown) => {
+      const { configId, valueId } = args as Record<string, string>
+      wire.push(`${configId}=${valueId}`)
+      // Another surface switched the chat to Sonnet before this reply.
+      useAcpStore.setState((s) => ({
+        sessions: {
+          ...s.sessions,
+          s1: {
+            ...s.sessions.s1,
+            configOptions: [modelOption('sonnet'), effortOption('sonnet', 'low')]
+          }
+        }
+      }))
+      return [modelOption('sonnet'), effortOption('sonnet', valueId)]
+    })
+
+    await useAcpStore.getState().setConfigOption('s1', 'effort', 'low')
+    await settleWrites()
+
+    expect(stored[RECORD_KEY]).toEqual({ configValues: { effort: 'low' } })
+  })
+
   describe('an armed agent switch', () => {
     const TARGET = 'cfg-target'
     const TARGET_KEY = `agents/composer-options/${TARGET}`
@@ -1305,6 +1366,37 @@ describe('per-model option values (spec-model-options-persist-with-model)', () =
         modeId: undefined,
         configValues: { effort: 'high', permission: 'bypass' }
       })
+    })
+
+    it("classifies a pick against the target's prepared session when the cache is empty", async () => {
+      armSwitch('s1')
+      seedOptionsSession('s-warm', 'agent-2', {
+        configOptions: [
+          modelOption('sonnet'),
+          effortOption('opus', 'medium'),
+          permissionOption('default')
+        ]
+      })
+      useAcpStore.setState(
+        (s) =>
+          ({
+            agentOptionsCache: { ...s.agentOptionsCache, [TARGET]: undefined },
+            preparedSessions: {
+              ...s.preparedSessions,
+              [prepareChatKey(TARGET, '/work', undefined)]: 's-warm'
+            }
+          }) as never
+      )
+      await useAcpStore.getState().setSwitchPendingOption('s1', {
+        modelId: 'opus',
+        configValues: { model: 'opus', effort: 'high', permission: 'bypass' }
+      })
+
+      await useAcpStore
+        .getState()
+        .setSwitchPendingOption('s1', { modelId: 'sonnet', configValues: { model: 'sonnet' } })
+
+      expect(armed('s1')?.configValues).toEqual({ permission: 'bypass', model: 'sonnet' })
     })
 
     it("a model pick replaces the last model's values and keeps the mode", async () => {

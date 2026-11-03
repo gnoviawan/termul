@@ -411,8 +411,10 @@ describe('acp-store: a reopened chat comes back on its own model and values', ()
       chatModel?: string
       /** Throw to fail `session/resume`. */
       onResume?: () => void
+      /** False when the restore is held by `onSet`: the open settles only after it. */
+      awaitOpen?: boolean
     } = {}
-  ): Promise<{ wire: string[]; transport: AcpTransport }> {
+  ): Promise<{ wire: string[]; transport: AcpTransport; opened: Promise<void> }> {
     const wire: string[] = []
     const agent = { model: 'sonnet', effort: 'high', context: '200k', permission: 'default' }
     const advertised = () => [
@@ -464,8 +466,9 @@ describe('acp-store: a reopened chat comes back on its own model and values', ()
       )
     } as unknown as AcpTransport
     _setAcpTransportForTests(transport)
-    await useAcpStore.getState().openHistorySession(id)
-    return { wire, transport }
+    const opened = useAcpStore.getState().openHistorySession(id)
+    if (opts.awaitOpen !== false) await opened
+    return { wire, transport, opened }
   }
 
   const controlsOf = (id: string) =>
@@ -535,7 +538,8 @@ describe('acp-store: a reopened chat comes back on its own model and values', ()
     const id = 's-own-user-wins'
     const effortSet = deferred<void>()
     let userPick: Promise<void> | null = null
-    const { wire } = await reopen(id, {
+    const { wire, opened } = await reopen(id, {
+      awaitOpen: false,
       onSet: (configId) => {
         if (configId !== 'effort') return
         // The user picks Sonnet while the restore's effort is in flight.
@@ -548,7 +552,7 @@ describe('acp-store: a reopened chat comes back on its own model and values', ()
     effortSet.resolve()
 
     await vi.waitFor(() => expect(wire).toEqual(['model=opus', 'model=sonnet', 'effort=low']))
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await opened
     expect(wire).not.toContain('context=1m')
   })
 
@@ -595,7 +599,8 @@ describe('acp-store: a reopened chat comes back on its own model and values', ()
     const id = 's-own-user-option'
     const modelSet = deferred<void>()
     let userSet: Promise<void> | null = null
-    const { wire } = await reopen(id, {
+    const { wire, opened } = await reopen(id, {
+      awaitOpen: false,
       onSet: (configId) => {
         if (configId !== 'model') return
         // The user picks a 200K context while the restore's model switch is in flight.
@@ -608,7 +613,7 @@ describe('acp-store: a reopened chat comes back on its own model and values', ()
     modelSet.resolve()
 
     await vi.waitFor(() => expect(wire).toEqual(['context=200k', 'model=opus', 'effort=low']))
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await opened
     expect(wire).not.toContain('context=1m')
     expect(controlsOf(id)).toContainEqual(['context', '200k'])
   })
@@ -659,5 +664,31 @@ describe('acp-store: a reopened chat comes back on its own model and values', ()
     expect(wire).toEqual([])
     expect(toast.error).not.toHaveBeenCalled()
     expect(controlsOf(id)).toContainEqual(['effort', 'high'])
+  })
+
+  it('a prompt typed while the restore runs is sent on the chat model and values', async () => {
+    const id = 's-own-queued-prompt'
+    const modelSet = deferred<void>()
+    let typed: Promise<void> | null = null
+    const { wire, transport, opened } = await reopen(id, {
+      awaitOpen: false,
+      onSet: (configId) => {
+        if (configId !== 'model') return
+        typed = useAcpStore.getState().sendPrompt(id, 'next step')
+        return modelSet.promise
+      }
+    })
+    const sends = () =>
+      [
+        ...vi.mocked(transport.sendPrompt).mock.calls,
+        ...vi.mocked(transport.sendPromptBlocks).mock.calls
+      ].length
+    await vi.waitFor(() => expect(typed).not.toBeNull())
+    expect(sends()).toBe(0)
+
+    modelSet.resolve()
+    await opened
+    await vi.waitFor(() => expect(sends()).toBe(1))
+    expect(wire).toEqual(['model=opus', 'effort=low', 'context=1m'])
   })
 })

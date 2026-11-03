@@ -1488,6 +1488,8 @@ export function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: Ses
 
 /** Sessions with a reapply currently in flight (dedupes event storms). */
 const reapplyInFlight = new Set<SessionId>()
+/** Sessions whose reapply was triggered while one ran: one more pass follows it. */
+const reapplyRerun = new Set<SessionId>()
 
 /** The model a session runs now, as the composer shows it. */
 export function currentSessionModel(session: AcpSession | undefined): string | null {
@@ -1609,7 +1611,12 @@ export async function reapplyPersistedComposerOptions(
   sessionId: SessionId,
   configId: string
 ): Promise<void> {
-  if (reapplyInFlight.has(sessionId) || latestModelPick.has(sessionId)) return
+  if (latestModelPick.has(sessionId)) return
+  if (reapplyInFlight.has(sessionId)) {
+    // The pass in flight read the record before this trigger: run once more after it.
+    reapplyRerun.add(sessionId)
+    return
+  }
   const session = get().sessions[sessionId]
   // Only heal live chats: a session still initializing or sitting in an
   // error/launch-fail state has no stable advertised surface to validate
@@ -1693,6 +1700,9 @@ export async function reapplyPersistedComposerOptions(
     await applyValues({ ...agentWide, ...savedModelValues(saved, model) }, model)
   } finally {
     reapplyInFlight.delete(sessionId)
+    if (reapplyRerun.delete(sessionId)) {
+      void reapplyPersistedComposerOptions(get, sessionId, configId)
+    }
   }
 }
 

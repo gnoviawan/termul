@@ -628,12 +628,15 @@ export function favoriteRowName(name: string, label: string | null): string {
   return label ? `${name.trim()} · ${label}` : name.trim()
 }
 
-/** True when a snapshot holds no value that differs from the live ones. */
+/**
+ * True when every snapshot value is live now. A snapshot option the loaded
+ * options lack does not match.
+ */
 export function snapshotMatches(
   options: Record<string, string> | undefined,
   live: Record<string, string>
 ): boolean {
-  return Object.entries(options ?? {}).every(
-    ([optionId, value]) => live[optionId] === undefined || live[optionId] === value
-  )
+  // Before the live options load there is nothing to differ from.
+  if (Object.keys(live).length === 0) return true
+  return Object.entries(options ?? {}).every(([optionId, value]) => live[optionId] === value)
 }

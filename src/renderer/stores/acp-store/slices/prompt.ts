@@ -894,6 +894,8 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   setConfigOption: async (sessionId, configId, valueId, opts) => {
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
+    // The model the value is set on: if it moved before the reply, the value's model is unknown.
+    const modelAtRequest = currentSessionModel(session)
     const response = await withAuthRetry(
       get,
       session.agentId,
@@ -969,11 +971,9 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
           ? { modelId: stored, configValues: { [configId]: stored } }
           : {
               configValues: { [configId]: stored },
-              ...modelValuesPatch(
-                currentSessionModel(get().sessions[sessionId]),
-                { [configId]: stored },
-                updated
-              )
+              ...(currentSessionModel(get().sessions[sessionId]) === modelAtRequest
+                ? modelValuesPatch(modelAtRequest, { [configId]: stored }, updated)
+                : {})
             },
         sessionId
       )

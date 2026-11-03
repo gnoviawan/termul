@@ -113,7 +113,7 @@ export async function readComposerOptions(
  * set on. The model itself and mode (Claude's permission mode is a
  * `mode`-category option) stay agent-wide.
  */
-function isScopedOption(option: SessionConfigOption): boolean {
+export function isScopedOption(option: SessionConfigOption): boolean {
   return option.category !== MODEL_CATEGORY && option.category !== MODE_CATEGORY
 }
 

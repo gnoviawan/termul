@@ -28,6 +28,7 @@ import {
   killSpawnedAgentIfUnused,
   MAX_LIVE_TOOL_CALLS,
   plainLastError,
+  prepareChatKey,
   type SwitchMarkerFacts,
   setSwitchRejection,
   spliceSwitchTranscript,
@@ -161,7 +162,11 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
       return
     }
     const toConfigId = switching.toConfigId
-    const targetOptions = get().agentOptionsCache[toConfigId]?.configOptions ?? []
+    // The options the armed composer shows: the target's prepared session, else its cache.
+    const preparedId = get().preparedSessions[prepareChatKey(toConfigId, session.cwd, undefined)]
+    const prepared = preparedId ? get().sessions[preparedId] : undefined
+    const targetOptions =
+      prepared?.configOptions ?? get().agentOptionsCache[toConfigId]?.configOptions ?? []
     // Merge into the armed switch's pending options — the pick is queued for
     // the NEW session (`switchAgent` applies it), never written to the old
     // session's option state or its agent's wire.
@@ -205,7 +210,7 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
     // Scoped values belong to the armed model (a model pick brings its own).
     const armedModel =
       get().sessions[sessionId]?.switching?.pendingOptions?.modelId ??
-      sessionModelSnapshot(get().agentOptionsCache[toConfigId])?.modelId
+      sessionModelSnapshot(prepared ?? get().agentOptionsCache[toConfigId])?.modelId
     persistComposerOptions(toConfigId, {
       modelId: patch.modelId,
       modeId: patch.modeId,

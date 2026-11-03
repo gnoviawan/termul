@@ -113,6 +113,7 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import {
+  agentWideValues,
   modelValuesPatch,
   type OptionValues,
   readComposerOptions,
@@ -676,8 +677,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           ...(values ? modelValuesPatch(valueId, values, effectiveConfigOptions) : {})
         })
       }
+      // Every pick, pre-session or not, outdates a pre-session read in flight.
+      const seq = ++modelPickSeqRef.current
       if (!preparedSessionId) {
-        const seq = ++modelPickSeqRef.current
         const restore =
           values ??
           savedModelValues(
@@ -844,7 +846,21 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               message: `dropping persisted ${what}: no longer advertised`
             })
         })
-        if (hasPendingLauncherOptions(restored)) setPendingOptions(restored)
+        // Picks made while the record was read win; a model picked meanwhile
+        // keeps its own values, so only the restored agent-wide ones join it.
+        if (hasPendingLauncherOptions(restored)) {
+          setPendingOptions((prev) => {
+            const restoredValues =
+              prev.modelId && prev.modelId !== restored.modelId
+                ? agentWideValues(restored.configValues, effectiveConfigOptions)
+                : restored.configValues
+            return {
+              modelId: prev.modelId ?? restored.modelId,
+              modeId: prev.modeId ?? restored.modeId,
+              configValues: { ...restoredValues, ...prev.configValues }
+            }
+          })
+        }
         // A restored `worktree` mode applies only when the pick is the project folder.
         if (
           saved.isolationMode === 'worktree' &&

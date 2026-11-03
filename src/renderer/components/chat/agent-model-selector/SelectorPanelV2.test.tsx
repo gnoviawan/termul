@@ -2715,6 +2715,23 @@ describe('SelectorPanelV2 favorites keep option snapshots', () => {
     expect(favoriteNames()).toEqual(['Claude Sonnet · Low'])
   })
 
+  it("while a model pick is pending, its star saves that model's values, not the live ones", async () => {
+    stored.set(`agents/composer-options/${CURSOR.id}`, {
+      modelId: 'opus',
+      modelValues: { sonnet: { thought_level: 'low' } }
+    })
+    const store = storeOf([])
+    // The chat still runs Opus; Sonnet shows while its pick is in flight.
+    render(<Panel {...props({ favoritesStore: store, modelValue: 'sonnet' })} />)
+    await act(async () => {})
+
+    await act(async () => fireEvent.click(listStar('Claude Sonnet')))
+
+    expect(store.list()).toEqual([
+      expect.objectContaining({ modelId: 'sonnet', options: { thought_level: 'low' } })
+    ])
+  })
+
   it('two snapshots of one model are two favorites, and picking one passes its values', () => {
     const onPickModel = vi.fn()
     const store = createFavoritesStore(

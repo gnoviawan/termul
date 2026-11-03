@@ -791,9 +791,11 @@ async function openHistorySessionInner(
   // agent-wide last pick (restoreReopenedChatSelection marks it so the
   // agent-wide reapply skips it).
   const ownSelection = reopenedChatSelection(controls)
-  const restoreOwnSelection = (): void => {
+  // Awaited before the open settles: prompts typed meanwhile stay queued and
+  // flush on the chat's own model and values, not the agent's defaults.
+  const restoreOwnSelection = async (): Promise<void> => {
     if (!ownSelection || !isCurrentSessionReopen(id, reopenGeneration)) return
-    void restoreReopenedChatSelection(get, id, ownSelection).catch((err: unknown) => {
+    await restoreReopenedChatSelection(get, id, ownSelection).catch((err: unknown) => {
       void logFrontendError({
         level: 'warn',
         source: 'acp.reopenSelection',
@@ -1233,7 +1235,7 @@ async function openHistorySessionInner(
         }
       })
       scheduleReplayEnd(set, id, reopenGeneration)
-      restoreOwnSelection()
+      await restoreOwnSelection()
     } catch (err) {
       // Deleted or superseded mid-load: do not restore transcript or surface a
       // resume error on the newer session incarnation.
@@ -1273,7 +1275,7 @@ async function openHistorySessionInner(
       mergeReopenOutcomeIfUnchanged(set, id, reopenGeneration, reopenBaseline, outcome)
       set((s) => ({ sessions: withSessionActive(s.sessions, id, keepRestoredError) }))
       scheduleReplayEnd(set, id, reopenGeneration)
-      restoreOwnSelection()
+      await restoreOwnSelection()
       return
     } catch (err) {
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
@@ -1330,7 +1332,7 @@ async function openHistorySessionInner(
         }
       })
       scheduleReplayEnd(set, id, reopenGeneration)
-      restoreOwnSelection()
+      await restoreOwnSelection()
     } catch (err) {
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
