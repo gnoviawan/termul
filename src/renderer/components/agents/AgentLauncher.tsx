@@ -960,6 +960,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           typeof saved.agentId === 'string'
         ) {
           setSelectedConfigId(saved.agentId)
+          // The next launcher starts from this cache; without it, it opens on
+          // the default and a quick send launches that agent instead.
+          cachedConfigId = saved.agentId
           return
         }
         const next = (restoredOk ? restored : null) ?? defaultAgent ?? supportedAgents[0]

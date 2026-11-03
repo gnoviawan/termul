@@ -1839,6 +1839,58 @@ describe('AgentLauncher ACP new thread', () => {
     )
   })
 
+  it('opens the next launcher on a saved custom agent, not the default', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    const custom: StoredAgentConfig = {
+      id: 'custom-next',
+      configId: 'custom-next',
+      name: 'Next Agent',
+      command: 'next-agent',
+      args: [],
+      env: {}
+    }
+    mockPersistRead.mockImplementation((key: string) =>
+      Promise.resolve(
+        key === 'agents/last-selected'
+          ? { success: true, data: { agentId: 'custom-next', mode: 'acp' } }
+          : { success: true, data: undefined }
+      )
+    )
+    const first = render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    })
+    first.unmount()
+
+    acpStateRef.current.agentConfigs = [custom]
+    mockResolvedAgentsOverride.current = [
+      ...buildSupportedAcpAgents([custom], 'windows-x86_64'),
+      {
+        id: custom.id,
+        configId: 'custom-next',
+        agent: { id: custom.id, name: custom.name, version: '', description: '', distribution: {} },
+        config: custom,
+        status: 'ready',
+        install: null,
+        manualInstall: null,
+        runtimeLauncher: null,
+        unavailableReason: null
+      }
+    ]
+    renderLauncher()
+
+    expect(
+      screen.getByRole('button', { name: /Currently Next Agent/ }),
+      'the second launcher must not open on the default agent'
+    ).toBeTruthy()
+  })
+
   it('keeps a saved custom agent selected until its config loads', async () => {
     vi.mocked(isTauriContext).mockReturnValue(true)
     const custom: StoredAgentConfig = {
