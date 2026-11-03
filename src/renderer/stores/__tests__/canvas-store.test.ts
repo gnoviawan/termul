@@ -81,6 +81,7 @@ import type { IpcResult } from '@shared/types/ipc.types'
 import { asJsonText, createCanvasBridge } from '@/lib/canvas-bridge'
 import type { LeafNode } from '@/types/workspace.types'
 import { useAppSettingsStore } from '../app-settings-store'
+import { CANVAS_LOAD_TIMEOUT_MS } from '../canvas-load-watchdog'
 import { type CanvasMount, pinVerdict, useCanvasStore } from '../canvas-store'
 import { useProjectStore } from '../project-store'
 import { useWorkspaceStore } from '../workspace-store'
@@ -674,6 +675,79 @@ describe('mount and load', () => {
       .applyRemount(PROJECT, { previousMountSeq: 7, mountSeq: 8, reason: 'x', lost: null })
     expect(applied).toBe(false)
     expect(currentMount().mountSeq).toBe(41)
+  })
+})
+
+describe('load watchdog (#1490)', () => {
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    open.mockResolvedValueOnce(openInfo())
+    await useCanvasStore.getState().openCanvas(PROJECT, DOC_A)
+  })
+
+  afterEach(async () => {
+    await useCanvasStore.getState().unmountCanvas(PROJECT)
+    vi.useRealTimers()
+  })
+
+  it('a frame that never reports ready fails the mount with a visible message', () => {
+    const editor = mountEditor()
+    vi.advanceTimersByTime(CANVAS_LOAD_TIMEOUT_MS - 1)
+    expect(session()?.phase.kind).toBe('loading')
+
+    vi.advanceTimersByTime(1)
+    expect(session()?.phase).toEqual({
+      kind: 'failed',
+      code: 'EDITOR_LOAD_TIMEOUT',
+      message: 'The canvas editor did not finish loading. Open the canvas again to retry.',
+      mountSeq: 41
+    })
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warn', source: 'canvas-store.loadTimeout' })
+    )
+    // The failed mount's bridge is gone: a late ready does nothing.
+    editor.ready()
+    expect(editor.posted).toHaveLength(0)
+  })
+
+  it('event.ready disarms it, even while the document is still loading', async () => {
+    const editor = mountEditor()
+    editor.ready()
+    vi.advanceTimersByTime(CANVAS_LOAD_TIMEOUT_MS)
+    expect(session()?.phase.kind).toBe('loading')
+
+    readDocument.mockResolvedValueOnce(ok({ bytes: null }))
+    documentLoaded.mockResolvedValueOnce(ok(view()))
+    editor.reply('host.describe', JSON.stringify({ tag: PIN, engineVersion: '0.6.0' }))
+    await flush()
+    expect(session()?.phase.kind).toBe('ready')
+  })
+
+  it('a crash remount is watched under its new mountSeq', async () => {
+    const editor = mountEditor()
+    editor.ready()
+    crashed.mockResolvedValueOnce(
+      ok({ previousMountSeq: 41, mountSeq: 43, reason: 'the editor crashed: panic', lost: null })
+    )
+    editor.send({ method: 'event.crashed', params: '{"reason":"panic"}', mountSeq: 41 })
+    await flush()
+    expect(currentMount().mountSeq).toBe(43)
+
+    vi.advanceTimersByTime(CANVAS_LOAD_TIMEOUT_MS)
+    expect(session()?.phase).toMatchObject({
+      kind: 'failed',
+      code: 'EDITOR_LOAD_TIMEOUT',
+      mountSeq: 43
+    })
+  })
+
+  it('a canvas closed before the timeout is not failed afterwards', async () => {
+    await useCanvasStore.getState().unmountCanvas(PROJECT)
+    vi.advanceTimersByTime(CANVAS_LOAD_TIMEOUT_MS)
+    expect(session()).toBeUndefined()
+    expect(logFrontendError).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'canvas-store.loadTimeout' })
+    )
   })
 })
 
