@@ -148,12 +148,14 @@ import {
   type AcpTransport,
   AcpTransportError
 } from '@/lib/acp-transport'
+import { COMMAND_RESEND_DELAYS_MS } from '@/lib/command-engine'
 import { buildReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { commandToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import {
   _flushCoalescedForTesting,
   _resetAcpAuthForTesting,
+  _resetBusyQueueRetriesForTesting,
   _resetCoalesceForTesting,
   _resetEphemeralSessionIdsForTesting,
   _resetHistorySeqWatermarksForTesting,
@@ -202,6 +204,7 @@ describe('acp-store', () => {
     _resetSessionIndexLoadGenerationForTesting()
     _resetHistorySeqWatermarksForTesting()
     _resetLiveSwitchSourcesForTesting()
+    _resetBusyQueueRetriesForTesting()
     useAcpStore.setState(FRESH)
   })
 
@@ -625,6 +628,45 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().messages['s1']).toHaveLength(0)
     expect(useAcpStore.getState().sessions['s1'].lastError).toBeNull()
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  it('issue #1594: a launch first turn the host rejects as busy is queued and resent, not stuck on its own optimistic turn', async () => {
+    // Another client reopening the new chat holds the host's turn gate, so the
+    // launcher's first send comes back ACP_TURN_IN_PROGRESS. No turn is running
+    // and none will end, so the chat must go idle and resend the prompt itself.
+    vi.useFakeTimers()
+    try {
+      seedSession('s1', 'agent-1', false)
+      const blocks: ContentBlock[] = [{ type: 'text', text: 'first prompt' }]
+      useAcpStore.getState().seedLaunchUserMessage('s1', blocks)
+      const sendPromptBlocks = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new AcpTransportError('rate_limited', 'ACP_TURN_IN_PROGRESS: session s1')
+        )
+        .mockReturnValue(new Promise(() => {}))
+      _setAcpTransportForTests({
+        sendPrompt: sendPromptBlocks,
+        sendPromptBlocks,
+        dispose: vi.fn()
+      } as unknown as AcpTransport)
+
+      await useAcpStore.getState().sendPromptBlocks('s1', blocks, { skipUserAppend: true })
+
+      expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+      expect(useAcpStore.getState().sessions['s1'].openTurnId).toBeNull()
+      expect(useAcpStore.getState().promptQueues['s1'].map((q) => q.blocks)).toEqual([blocks])
+
+      await vi.advanceTimersByTimeAsync(COMMAND_RESEND_DELAYS_MS[0])
+
+      expect(sendPromptBlocks).toHaveBeenCalledTimes(2)
+      expect(sendPromptBlocks.mock.calls[1][2]).toEqual(blocks)
+      expect(useAcpStore.getState().promptQueues['s1']).toEqual([])
+      expect(useAcpStore.getState().messages['s1'].map((m) => m.blocks)).toEqual([blocks])
+      expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('queues a prompt sent while a history reopen is in flight, then flushes onto the repointed agent', async () => {
