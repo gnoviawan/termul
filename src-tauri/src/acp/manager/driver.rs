@@ -500,7 +500,6 @@ pub(super) async fn drive_connection(
     // the title, a native agent `session_info_update` is suppressed here (the
     // durable defense in `append_record` is the second layer).
     let notif_persistence = persistence.clone();
-    let native_subagents = profile.native_subagents;
     let raw_sinks = sinks.clone();
     let raw_agent_id = agent_id.clone();
     let raw_state = driver_state.clone();
@@ -549,19 +548,19 @@ pub(super) async fn drive_connection(
     let connection_result = Client
         .builder()
         .name(format!("termul-acp-{agent_id}"))
-        // Before the typed handler: native subagent traffic is claimed and
-        // re-addressed to its chat; everything else passes on unchanged.
+        // Before the typed handler, for every agent: subagent session traffic
+        // is claimed and re-addressed to its chat, and tool calls get their
+        // subagent records; everything else passes on unchanged.
         .on_receive_notification(
             async move |raw: super::native_subagents::RawSessionUpdate, cx| {
-                let claimed = native_subagents
-                    && super::native_subagents::deliver_native_update(
-                        &raw_state,
-                        raw_persistence.as_ref(),
-                        &raw_sinks,
-                        &raw_agent_id,
-                        &raw.0,
-                    )
-                    .await?;
+                let claimed = super::native_subagents::deliver_session_update(
+                    &raw_state,
+                    raw_persistence.as_ref(),
+                    &raw_sinks,
+                    &raw_agent_id,
+                    &raw.0,
+                )
+                .await?;
                 if claimed {
                     return Ok(agent_client_protocol::Handled::Yes);
                 }

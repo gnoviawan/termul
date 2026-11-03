@@ -80,6 +80,10 @@ for line in sys.stdin:
                               "subagentSessionId": "child-1", "state": "completed"})
         else:
             text("mock-1", "legacy")
+            update("mock-1", {"sessionUpdate": "subagent_update", "sessionId": "child-9",
+                              "title": "Unasked", "state": {"state": "running"}})
+            update("mock-1", {"sessionUpdate": "subagent_update", "sessionId": "child-9",
+                              "state": {"state": "idle", "stopReason": "end_turn"}})
         send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
 "#;
 
@@ -214,7 +218,7 @@ async fn an_air_adapter_reports_each_subagent_on_its_chat() {
     let dispatch = &events[0].2["toolCall"];
     assert_eq!(dispatch["toolCallId"], "termul-subagent:child-1");
     assert_eq!(dispatch["status"], "in_progress");
-    assert_eq!(dispatch["_meta"]["termul/subagent"]["state"], "running");
+    assert_eq!(dispatch["_meta"]["termul/subagent"]["activity"], "running");
 
     let child_call = &events[1].2["toolCall"];
     assert_eq!(child_call["toolCallId"], "toolu_read");
@@ -231,7 +235,7 @@ async fn an_air_adapter_reports_each_subagent_on_its_chat() {
     let end = &events[4].2["update"];
     assert_eq!(end["toolCallId"], "termul-subagent:child-1");
     assert_eq!(end["status"], "completed");
-    assert_eq!(end["_meta"]["termul/subagent"]["state"], "completed");
+    assert_eq!(end["_meta"]["termul/subagent"]["end"]["reason"], "completed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -260,7 +264,7 @@ async fn an_rfd_adapter_reports_each_subagent_on_its_chat() {
     assert_eq!(dispatch["toolCallId"], "termul-subagent:child-1");
     assert_eq!(dispatch["title"], "Explore");
     assert_eq!(dispatch["status"], "in_progress");
-    assert_eq!(dispatch["_meta"]["termul/subagent"]["state"], "running");
+    assert_eq!(dispatch["_meta"]["termul/subagent"]["activity"], "running");
     assert_eq!(
         events[1].2["toolCall"]["_meta"]["claudeCode"]["parentToolUseId"],
         "termul-subagent:child-1"
@@ -275,15 +279,26 @@ async fn an_rfd_adapter_reports_each_subagent_on_its_chat() {
     let end = &events[5].2["update"];
     assert_eq!(end["toolCallId"], "termul-subagent:child-1");
     assert_eq!(end["status"], "completed");
-    assert_eq!(end["_meta"]["termul/subagent"]["state"], "completed");
+    assert_eq!(end["_meta"]["termul/subagent"]["end"]["reason"], "completed");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_older_adapter_is_not_offered_native_subagents() {
-    let Some((_, events)) = run_mock_claude("0.77.0").await else {
+async fn an_older_adapter_is_not_offered_native_subagents_but_its_updates_still_route() {
+    let Some((chat, events)) = run_mock_claude("0.77.0").await else {
         return;
     };
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].0, "acp:message_chunk");
+    let kinds: Vec<_> = events.iter().map(|(kind, _, _)| kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        ["acp:message_chunk", "acp:tool_call", "acp:tool_call_update"]
+    );
     assert_eq!(events[0].2["content"]["text"], "legacy");
+    assert!(events
+        .iter()
+        .all(|(_, sid, _)| sid.as_deref() == Some(chat.as_str())));
+    let dispatch = &events[1].2["toolCall"];
+    assert_eq!(dispatch["toolCallId"], "termul-subagent:child-9");
+    assert_eq!(dispatch["_meta"]["termul/subagent"]["source"], "acp-rfd");
+    let end = &events[2].2["update"];
+    assert_eq!(end["_meta"]["termul/subagent"]["activity"], "idle");
 }

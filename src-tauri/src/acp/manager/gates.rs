@@ -524,7 +524,8 @@ pub(super) struct AgentRuntimeProfile {
     pub(super) summarize_thinking: bool,
     /// Claude Agent ACP versions that send native subagent sessions (AIR
     /// draft or RFD form): advertise `subagents` so each subagent reports its
-    /// real end (`native_subagents.rs`).
+    /// real end. Gates only the advertisement; the router in
+    /// `native_subagents.rs` handles subagent updates from any agent.
     pub(super) native_subagents: bool,
 }
 

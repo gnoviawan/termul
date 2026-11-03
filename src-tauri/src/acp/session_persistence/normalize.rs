@@ -274,6 +274,64 @@ fn add_file_change_summary(
     }
 }
 
+/// Longest durable subagent record (serialized bytes).
+const MAX_DURABLE_SUBAGENT_BYTES: usize = 16 * 1024;
+/// Longest durable subagent control marker (serialized bytes).
+const MAX_DURABLE_SUBAGENT_CONTROL_BYTES: usize = 4 * 1024;
+const MAX_DURABLE_PARENT_TOOL_USE_ID_CHARS: usize = 512;
+
+fn serialized_len(value: &Value) -> usize {
+    serde_json::to_string(value).map_or(usize::MAX, |text| text.len())
+}
+
+/// The durable part of a tool event's `_meta`: the host's subagent record
+/// (`termul/subagent`) and control marker (`termul/subagentControl`), each
+/// bounded, and `claudeCode.parentToolUseId`. Nothing else from `_meta`.
+/// These values are host-written (the router strips agent-sent copies) and
+/// skip `sanitize_value`, whose secret-key rule would erase the record's
+/// token counts. A record over the bound loses its prompt first, then is
+/// dropped.
+fn durable_subagent_meta(tool: &serde_json::Map<String, Value>) -> Option<Value> {
+    use crate::acp::subagents::{SUBAGENT_CONTROL_META_KEY, SUBAGENT_META_KEY};
+    let meta = tool.get("_meta")?.as_object()?;
+    let mut kept = serde_json::Map::new();
+    if let Some(record) = meta.get(SUBAGENT_META_KEY) {
+        let mut record = record.clone();
+        if record.is_object() && serialized_len(&record) > MAX_DURABLE_SUBAGENT_BYTES {
+            if let Some(fields) = record.as_object_mut() {
+                fields.remove("prompt");
+            }
+            log::warn!("[acp] persistence: dropped an oversized subagent prompt");
+        }
+        if record.is_object() && serialized_len(&record) <= MAX_DURABLE_SUBAGENT_BYTES {
+            kept.insert(SUBAGENT_META_KEY.to_string(), record);
+        } else {
+            log::warn!("[acp] persistence: dropped a malformed or oversized subagent record");
+        }
+    }
+    if let Some(control) = meta.get(SUBAGENT_CONTROL_META_KEY) {
+        if control.is_object() && serialized_len(control) <= MAX_DURABLE_SUBAGENT_CONTROL_BYTES {
+            kept.insert(SUBAGENT_CONTROL_META_KEY.to_string(), control.clone());
+        } else {
+            log::warn!(
+                "[acp] persistence: dropped a malformed or oversized subagent control marker"
+            );
+        }
+    }
+    let parent = meta
+        .get("claudeCode")
+        .and_then(|claude| claude.get("parentToolUseId"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.chars().count() <= MAX_DURABLE_PARENT_TOOL_USE_ID_CHARS);
+    if let Some(parent) = parent {
+        kept.insert(
+            "claudeCode".to_string(),
+            serde_json::json!({ "parentToolUseId": parent }),
+        );
+    }
+    (!kept.is_empty()).then_some(Value::Object(kept))
+}
+
 pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
     if matches!(type_, "tool_call" | "tool_call_update") {
         // Strict DTO: tool-authored free-form content, arguments, output, and
@@ -282,7 +340,10 @@ pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
         // host-derived file-change summary for file-changing calls
         // (`add_file_change_summary`: path-only `locations` + `diffStat`
         // counts) so restored sessions can repopulate the Changed files
-        // panel without persisting any diff text.
+        // panel without persisting any diff text, plus the subagent `_meta`
+        // (`durable_subagent_meta`: the host's subagent record or control
+        // marker, and the parent dispatch id) so a reopened chat shows its
+        // subagents and groups their calls under them.
         let mut event = serde_json::Map::new();
         for field in ["agentId", "sessionId"] {
             if let Some(value) = payload.get(field) {
@@ -302,6 +363,9 @@ pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
                 }
             }
             add_file_change_summary(type_, tool, &mut reduced);
+            if let Some(meta) = durable_subagent_meta(tool) {
+                reduced.insert("_meta".to_string(), meta);
+            }
             event.insert(key.to_string(), Value::Object(reduced));
         }
         Value::Object(event)
