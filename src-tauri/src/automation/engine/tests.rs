@@ -606,7 +606,7 @@ async fn cancelling_mid_agent_cancels_the_run() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    assert!(f.te.engine.cancel_run(&run.id));
+    assert!(f.te.engine.cancel_run(&run.id).unwrap());
     let run = settled(&f.te.store, &run.id).await;
 
     assert_eq!(
@@ -620,7 +620,7 @@ async fn cancelling_mid_agent_cancels_the_run() {
             ("after".to_string(), SKIPPED),
         ])
     );
-    assert!(!f.te.engine.cancel_run(&run.id));
+    assert!(!f.te.engine.cancel_run(&run.id).unwrap());
 }
 
 fn every_10s(te: &TestEngine, graph: Value) -> Automation {
@@ -650,6 +650,7 @@ fn running_row(a: &Automation) -> Run {
         summary: None,
         conversation_id: None,
         worktree_id: None,
+        parked: None,
     }
 }
 
@@ -802,3 +803,5 @@ async fn a_worktree_per_run_runs_in_a_fresh_worktree_that_is_removed_after() {
     assert!(!repo.join(".termul/worktrees").join(&name).exists());
     assert_eq!(git(&["branch", "--list", "automation/*"]), "");
 }
+
+mod approval;

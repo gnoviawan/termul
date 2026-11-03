@@ -8,6 +8,13 @@ use super::executor::RunScope;
 use super::{agent, http};
 use crate::automation::graph;
 use crate::automation::model::{ConditionOp, NamedTemplate, NodeId, NodeSpec, Port, Template};
+
+/// What running a node yields: a finished node that fires `port`, or a
+/// request to park the run until `until` (epoch ms).
+pub(super) enum Advance {
+    Next(NodeSuccess),
+    Park { until: i64, output: Value },
+}
 use crate::automation::template::{self, RenderContext, RenderError};
 
 pub(super) struct NodeScope<'a> {
@@ -58,10 +65,12 @@ impl NodeError {
     }
 }
 
-pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<NodeSuccess, NodeError> {
-    let out = |output| NodeSuccess {
-        output,
-        port: Port::Out,
+pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<Advance, NodeError> {
+    let out = |output| {
+        Advance::Next(NodeSuccess {
+            output,
+            port: Port::Out,
+        })
     };
     match spec {
         NodeSpec::Http {
@@ -100,11 +109,35 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<NodeSu
             agent::run(scope, request).await.map(out)
         }
         NodeSpec::Transform { fields } => transform(scope, fields).map(out),
-        NodeSpec::Condition { left, op, right } => condition(scope, left, *op, right.as_ref()),
+        NodeSpec::Condition { left, op, right } => {
+            condition(scope, left, *op, right.as_ref()).map(Advance::Next)
+        }
         NodeSpec::Fail { message } => {
             let ctx = scope.render_context(None);
             Err(NodeError::Halt(render_text(message, &ctx)?))
         }
+        NodeSpec::Approval {
+            message,
+            timeout_ms,
+        } => {
+            let ctx = scope.render_context(None);
+            let message = render_text(message, &ctx)?;
+            let timeout = i64::try_from(*timeout_ms).unwrap_or(i64::MAX);
+            Ok(Advance::Park {
+                until: scope.run.engine.now_ms().saturating_add(timeout),
+                output: json!({ "message": message }),
+            })
+        }
+    }
+}
+
+/// The port a node's recorded success fired, so a resumed walk follows the
+/// same edges: a condition's `result` picks `true` or `false`.
+pub(super) fn replay_port(spec: &NodeSpec, output: &Value) -> Port {
+    match spec {
+        NodeSpec::Condition { .. } if output["result"] == Value::Bool(true) => Port::True,
+        NodeSpec::Condition { .. } => Port::False,
+        _ => Port::Out,
     }
 }
 

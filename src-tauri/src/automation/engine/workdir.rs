@@ -28,17 +28,17 @@ pub(super) enum Workdir {
 }
 
 impl Workdir {
+    /// `worktree` is the run's `worktree_id`: `Some` means worktree-per-run,
+    /// whatever the automation's isolation is now, so a resumed run keeps the
+    /// isolation it started with.
     pub(super) async fn prepare(
         roots: &ProjectRoots,
         project_id: &str,
-        isolation: Isolation,
         worktree: Option<&str>,
     ) -> Result<Self, String> {
         let root = roots(project_id).ok_or_else(|| "project_unavailable".to_string())?;
-        let name = match (isolation, worktree) {
-            (Isolation::SharedInRoot, _) => return Ok(Self::Shared(root)),
-            (Isolation::WorktreePerRun, Some(name)) => name.to_string(),
-            (Isolation::WorktreePerRun, None) => return Err("worktree_unavailable".to_string()),
+        let Some(name) = worktree.map(str::to_string) else {
+            return Ok(Self::Shared(root));
         };
         let branch = format!("automation/{name}");
         let root_text = root.to_string_lossy().into_owned();

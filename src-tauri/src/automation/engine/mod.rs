@@ -1,13 +1,18 @@
 //! The run engine, one per host. A 30 s tick claims due automations and
 //! starts runs; each run walks its graph snapshot on its own task and settles
-//! exactly once. Boot settles runs a dead process left `running` and fires
-//! one catch-up per past-due automation.
+//! exactly once. A run that reaches an approval node parks: it holds no task,
+//! only its SQLite row, until a decision, a cancel or its deadline resumes
+//! it. Boot settles runs a dead process left `running`, expires overdue
+//! parks and fires one catch-up per past-due automation.
 
 mod agent;
 mod executor;
 mod http;
 mod nodes;
+mod park;
 mod workdir;
+
+pub use park::Decision;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -22,7 +27,7 @@ use tokio_util::task::TaskTracker;
 
 use super::agents::AgentRegistry;
 use super::model::{
-    Automation, AutomationChanged, AutomationId, Isolation, Run, RunId, RunStatus, RunTrigger,
+    Automation, AutomationChanged, AutomationId, Run, RunId, RunStatus, RunTrigger,
 };
 use super::secrets::Secrets;
 use super::store::{AutomationStore, ClaimOutcome, StoreResult};
@@ -160,18 +165,21 @@ impl Engine {
         let _ = self.changes.send(change);
     }
 
-    /// Settles runs a dead process left `running`, prunes, and fires one
-    /// catch-up run per automation whose slot passed while the host was down.
+    /// Settles runs a dead process left `running` (parked runs survive),
+    /// times out overdue parks, prunes, and fires one catch-up run per
+    /// automation whose slot passed while the host was down.
     pub fn boot(self: &Arc<Self>) {
         let now = self.now_ms();
         if let Err(error) = self.store.reconcile_stranded(now) {
             log::error!("[Automation] boot reconcile failed: {error}");
         }
+        self.expire_parks(now);
         self.fire_due(RunTrigger::CatchUp);
         self.prune(now);
     }
 
     pub fn tick(self: &Arc<Self>) {
+        self.expire_parks(self.now_ms());
         self.fire_due(RunTrigger::Scheduled);
         let now = self.now_ms();
         let due = self
@@ -254,6 +262,7 @@ impl Engine {
             stop_reason: None,
             summary: None,
             conversation_id: None,
+            parked: None,
         };
         if overlapping {
             run.status = RunStatus::Skipped;
@@ -287,65 +296,99 @@ impl Engine {
             run.revision
         );
         self.notify(&automation.project_id, Some(&automation.id));
-        let engine = Arc::clone(self);
-        let task_run = run.clone();
-        let project_id = automation.project_id.clone();
-        let isolation = automation.isolation;
-        self.tasks.spawn(async move {
-            engine
-                .execute(task_run, project_id, isolation, cancel)
-                .await;
-        });
+        self.spawn_execute(run.clone(), automation.project_id.clone(), cancel);
         Ok(run)
     }
 
-    /// Cancels an in-flight run, including its agent prompt or request.
-    /// `false` when no such run is in flight.
-    pub fn cancel_run(&self, run_id: &RunId) -> bool {
-        let active = self.active.lock();
-        let Some(entry) = active.values().find(|a| &a.run_id == run_id) else {
-            return false;
-        };
-        entry.cancel.cancel();
-        log::info!("[Automation] cancel requested for run {run_id}");
-        true
+    fn spawn_execute(self: &Arc<Self>, run: Run, project_id: String, cancel: CancellationToken) {
+        let engine = Arc::clone(self);
+        self.tasks.spawn(async move {
+            engine.execute(run, project_id, cancel).await;
+        });
     }
 
-    /// Cancels the in-flight run of `automation_id`, if any.
-    pub fn cancel_automation(&self, automation_id: &AutomationId) {
-        if let Some(entry) = self.active.lock().get(automation_id) {
+    /// Cancels an in-flight run, including its agent prompt or request, or
+    /// a waiting run, which settles `cancelled`. `false` when the run is
+    /// neither.
+    pub fn cancel_run(self: &Arc<Self>, run_id: &RunId) -> StoreResult<bool> {
+        let mut active = self.active.lock();
+        if let Some(entry) = active.values().find(|a| &a.run_id == run_id) {
             entry.cancel.cancel();
+            log::info!("[Automation] cancel requested for run {run_id}");
+            return Ok(true);
+        }
+        let Some(parked) = self.store.get_run(run_id)?.and_then(|run| run.parked) else {
+            return Ok(false);
+        };
+        log::info!("[Automation] cancel requested for waiting run {run_id}");
+        self.resolve_locked(&mut active, run_id, &parked.node_id, Decision::Cancelled)
+    }
+
+    /// Cancels the in-flight or waiting run of `automation_id`, if any.
+    pub fn cancel_automation(self: &Arc<Self>, automation_id: &AutomationId) {
+        let mut active = self.active.lock();
+        if let Some(entry) = active.get(automation_id) {
+            entry.cancel.cancel();
+            return;
+        }
+        let parked = match self.store.parked_run_of(automation_id) {
+            Ok(Some(parked)) => parked,
+            Ok(None) => return,
+            Err(error) => {
+                log::error!("[Automation] waiting run of {automation_id} unreadable: {error}");
+                return;
+            }
+        };
+        if let Err(error) = self.resolve_locked(
+            &mut active,
+            &parked.run_id,
+            &parked.parked.node_id,
+            Decision::Cancelled,
+        ) {
+            log::error!(
+                "[Automation] cancel of waiting run {} failed: {error}",
+                parked.run_id
+            );
         }
     }
 
-    async fn execute(
-        self: Arc<Self>,
-        run: Run,
-        project_id: String,
-        isolation: Isolation,
-        cancel: CancellationToken,
-    ) {
-        let outcome = match workdir::Workdir::prepare(
-            &self.project_roots,
-            &project_id,
-            isolation,
-            run.worktree_id.as_deref(),
-        )
-        .await
-        {
-            Ok(dir) => {
-                let scope = executor::RunScope {
-                    engine: &self,
-                    run: &run,
-                    project_id: &project_id,
-                    cwd: dir.path(),
-                    cancel: &cancel,
-                };
-                let outcome = executor::walk(&scope).await;
-                dir.release().await;
-                outcome
+    async fn execute(self: Arc<Self>, run: Run, project_id: String, cancel: CancellationToken) {
+        let end = if cancel.is_cancelled() {
+            executor::WalkEnd::Settled(executor::skip_unrun(&self, &run))
+        } else {
+            match workdir::Workdir::prepare(
+                &self.project_roots,
+                &project_id,
+                run.worktree_id.as_deref(),
+            )
+            .await
+            {
+                Ok(dir) => {
+                    let scope = executor::RunScope {
+                        engine: &self,
+                        run: &run,
+                        project_id: &project_id,
+                        cwd: dir.path(),
+                        cancel: &cancel,
+                    };
+                    let end = executor::walk(&scope).await;
+                    // Before the park commits: a resume prepares a worktree
+                    // with the same name.
+                    dir.release().await;
+                    end
+                }
+                Err(reason) => executor::WalkEnd::Settled(executor::Outcome::failed(reason)),
             }
-            Err(reason) => executor::Outcome::failed(reason),
+        };
+        let outcome = match end {
+            executor::WalkEnd::Settled(outcome) => outcome,
+            executor::WalkEnd::Parked(request) => match self.park(&run, request, &cancel) {
+                Ok(()) => {
+                    self.notify(&project_id, Some(&run.automation_id));
+                    return;
+                }
+                Err(reason) => executor::Outcome::failed(reason),
+            },
         };
         if let Err(error) = self.store.settle_run(
             &run.id,
