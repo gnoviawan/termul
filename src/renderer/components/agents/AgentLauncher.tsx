@@ -38,6 +38,7 @@ import {
   hasPendingLauncherOptions,
   type LauncherModelPick,
   launchPending,
+  mergeRestoredPending,
   optionsToPending,
   overlayPendingLauncherOptions,
   type PendingLauncherOptions,
@@ -113,7 +114,6 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import {
-  agentWideValues,
   modelValuesPatch,
   type OptionValues,
   readComposerOptions,
@@ -846,20 +846,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               message: `dropping persisted ${what}: no longer advertised`
             })
         })
-        // Picks made while the record was read win; a model picked meanwhile
-        // keeps its own values, so only the restored agent-wide ones join it.
         if (hasPendingLauncherOptions(restored)) {
-          setPendingOptions((prev) => {
-            const restoredValues =
-              prev.modelId && prev.modelId !== restored.modelId
-                ? agentWideValues(restored.configValues, effectiveConfigOptions)
-                : restored.configValues
-            return {
-              modelId: prev.modelId ?? restored.modelId,
-              modeId: prev.modeId ?? restored.modeId,
-              configValues: { ...restoredValues, ...prev.configValues }
-            }
-          })
+          setPendingOptions((prev) =>
+            mergeRestoredPending(prev, restored, saved, effectiveConfigOptions)
+          )
         }
         // A restored `worktree` mode applies only when the pick is the project folder.
         if (

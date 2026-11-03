@@ -3,6 +3,7 @@ import {
   emptyPendingLauncherOptions,
   hasPendingLauncherOptions,
   launchPending,
+  mergeRestoredPending,
   optionsToPending,
   overlayPendingLauncherOptions,
   pendingWithModel,
@@ -513,6 +514,36 @@ describe('restoring the launcher from a saved record', () => {
         modeId: undefined,
         configValues: { model: 'sonnet', permission: 'default' }
       })
+    })
+  })
+})
+
+describe('merging a restore that lands after the user started picking', () => {
+  const SAVED = {
+    modelId: 'opus',
+    configValues: { model: 'opus', effort: 'high', fast: 'on', permission: 'plan' },
+    modelValues: { opus: { effort: 'high', fast: 'on' } }
+  }
+  const RESTORED = {
+    modelId: 'opus',
+    configValues: { effort: 'high', fast: 'on', permission: 'plan' }
+  }
+
+  it("a model picked during a cold-start read keeps its own values, not the restored model's", () => {
+    const prev = { modelId: 'sonnet', configValues: { model: 'sonnet' } }
+    expect(mergeRestoredPending(prev, RESTORED, SAVED, [])).toEqual({
+      modelId: 'sonnet',
+      modeId: undefined,
+      configValues: { model: 'sonnet', permission: 'plan' }
+    })
+  })
+
+  it('an edit made during the read wins over the restored value of the same model', () => {
+    const prev = { configValues: { effort: 'low' } }
+    expect(mergeRestoredPending(prev, RESTORED, SAVED, [])).toEqual({
+      modelId: 'opus',
+      modeId: undefined,
+      configValues: { effort: 'low', fast: 'on', permission: 'plan' }
     })
   })
 })

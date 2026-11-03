@@ -223,6 +223,28 @@ export function restoredLauncherOptions(input: {
 }
 
 /**
+ * Merge a restore that finished after the user started picking: their picks
+ * win. A model picked meanwhile keeps its own values, so only the record's
+ * agent-wide values join it (on a cold start, the record's guess of them).
+ */
+export function mergeRestoredPending(
+  prev: PendingLauncherOptions,
+  restored: PendingLauncherOptions,
+  saved: PersistedComposerOptions,
+  options: readonly SessionConfigOption[]
+): PendingLauncherOptions {
+  const restoredValues =
+    prev.modelId && prev.modelId !== restored.modelId
+      ? savedAgentWideValues(saved, options)
+      : restored.configValues
+  return {
+    modelId: prev.modelId ?? restored.modelId,
+    modeId: prev.modeId ?? restored.modeId,
+    configValues: { ...restoredValues, ...prev.configValues }
+  }
+}
+
+/**
  * The launch payload: the options on screen, plus picks for options that had
  * not loaded yet (a cold start shows none, but the saved values still apply).
  * Shown scoped values (effort, Fast) belong to the model the shown options
