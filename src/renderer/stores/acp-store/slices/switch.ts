@@ -6,6 +6,7 @@ import { PersistenceKeys } from '@shared/types/persistence.types'
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
 import type { PendingLauncherOptions } from '@/components/agents/pending-launcher-options'
+import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
 import { buildHandoffSummary, sanitizeHandoffWireBlocks } from '@/components/chat/handoff-summary'
 import {
   type AgentId,
@@ -18,6 +19,7 @@ import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
+import { agentWideValues, modelValuesPatch } from '../composer-options'
 import {
   acceptsSessionTranscriptEvents,
   appendOrderedAgents,
@@ -159,6 +161,7 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
       return
     }
     const toConfigId = switching.toConfigId
+    const targetOptions = get().agentOptionsCache[toConfigId]?.configOptions ?? []
     // Merge into the armed switch's pending options — the pick is queued for
     // the NEW session (`switchAgent` applies it), never written to the old
     // session's option state or its agent's wire.
@@ -166,10 +169,16 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
       const current = s.sessions[sessionId]
       if (!current?.switching) return {}
       const prev = current.switching.pendingOptions
+      // A model pick replaces the last model's values with its own (they come
+      // in `patch`); only the agent-wide ones stay.
+      const kept =
+        patch.modelId === undefined
+          ? prev?.configValues
+          : agentWideValues(prev?.configValues ?? {}, targetOptions)
       const pendingOptions: PendingLauncherOptions = {
         modelId: patch.modelId ?? prev?.modelId,
         modeId: patch.modeId ?? prev?.modeId,
-        configValues: { ...prev?.configValues, ...patch.configValues }
+        configValues: { ...kept, ...patch.configValues }
       }
       return {
         sessions: {
@@ -193,10 +202,15 @@ export const createSwitchSlice: StateCreator<AcpState, [], [], SwitchSliceState>
     })
     // The pick belongs to the agent that will own the next prompt — persist
     // it under the TARGET config (never the session's current owner).
+    // Scoped values belong to the armed model (a model pick brings its own).
+    const armedModel =
+      get().sessions[sessionId]?.switching?.pendingOptions?.modelId ??
+      sessionModelSnapshot(get().agentOptionsCache[toConfigId])?.modelId
     persistComposerOptions(toConfigId, {
       modelId: patch.modelId,
       modeId: patch.modeId,
-      configValues: patch.configValues
+      configValues: patch.configValues,
+      ...modelValuesPatch(armedModel, patch.configValues ?? {}, targetOptions)
     })
     // NOTE: the armed composer's displayed values come from the
     // `switching.pendingOptions` overlay (AgentChatPanel), so the pick is

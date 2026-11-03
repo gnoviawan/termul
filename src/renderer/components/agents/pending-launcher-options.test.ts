@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   emptyPendingLauncherOptions,
   hasPendingLauncherOptions,
+  launchPending,
   optionsToPending,
-  overlayPendingLauncherOptions
+  overlayPendingLauncherOptions,
+  pendingWithModel,
+  restoredLauncherOptions
 } from './pending-launcher-options'
 
 describe('pending-launcher-options', () => {
@@ -348,6 +351,168 @@ describe('pending-launcher-options', () => {
       })
 
       expect(overlaid.configOptions[0]?.currentValue).toBe('claude-sonnet')
+    })
+  })
+})
+
+describe('restoring the launcher from a saved record', () => {
+  const select = (id: string, category: string, current: string, values: string[]) => ({
+    id,
+    name: id,
+    category,
+    type: 'select' as const,
+    currentValue: current,
+    options: values.map((value) => ({ value, name: value }))
+  })
+  /** The launcher's options while `model` is on screen; Claude-style permission mode as a config option. */
+  const optionsFor = (model: string) => [
+    select('model', 'model', model, ['opus', 'sonnet']),
+    select('effort', 'thought_level', 'medium', ['low', 'medium', 'high']),
+    select('permission', 'mode', 'default', ['default', 'bypass'])
+  ]
+  const SAVED = {
+    modelId: 'opus',
+    configValues: { model: 'opus', effort: 'high', permission: 'bypass' },
+    modelValues: { opus: { effort: 'high' }, sonnet: { effort: 'low' } }
+  }
+  const restore = (input: Partial<Parameters<typeof restoredLauncherOptions>[0]>) => {
+    const dropped: string[] = []
+    const pending = restoredLauncherOptions({
+      saved: SAVED,
+      pick: null,
+      models: null,
+      modes: null,
+      configOptions: optionsFor('opus'),
+      onDrop: (what) => dropped.push(what),
+      ...input
+    })
+    return { pending, dropped }
+  }
+
+  it("brings back the saved model with that model's own values and the agent-wide mode", () => {
+    expect(restore({}).pending).toEqual({
+      modelId: 'opus',
+      modeId: undefined,
+      configValues: { permission: 'bypass', effort: 'high', model: 'opus' }
+    })
+  })
+
+  it("keeps the saved model's values and the mode on a cold start, before the options load", () => {
+    expect(restore({ configOptions: [] }).pending).toEqual({
+      modelId: 'opus',
+      modeId: undefined,
+      configValues: { permission: 'bypass', effort: 'high' }
+    })
+  })
+
+  it('keeps a legacy record’s flat values on a cold start', () => {
+    const { pending, dropped } = restore({
+      saved: {
+        modelId: 'opus',
+        configValues: { model: 'opus', effort: 'low', permission: 'bypass' }
+      },
+      configOptions: []
+    })
+    expect(pending).toEqual({
+      modelId: 'opus',
+      modeId: undefined,
+      configValues: { effort: 'low', permission: 'bypass' }
+    })
+    expect(dropped).toEqual([])
+  })
+
+  it('drops a value the options of the same model no longer offer', () => {
+    const { pending, dropped } = restore({
+      saved: { modelId: 'opus', modelValues: { opus: { effort: 'max' } } }
+    })
+    expect(pending.configValues).toEqual({ model: 'opus' })
+    expect(dropped).toEqual(['option effort'])
+  })
+
+  it("keeps a value unchecked while another model's options are on screen", () => {
+    const { pending, dropped } = restore({
+      saved: { modelId: 'opus', modelValues: { opus: { effort: 'max' } } },
+      configOptions: optionsFor('sonnet')
+    })
+    expect(pending.configValues).toEqual({ effort: 'max', model: 'opus' })
+    expect(dropped).toEqual([])
+  })
+
+  it("a model picked with its agent comes with that model's values, or the favorite's", () => {
+    const pick = { modelId: 'sonnet', modelConfigId: 'model' }
+    expect(restore({ pick }).pending.configValues).toEqual({
+      permission: 'bypass',
+      effort: 'low',
+      model: 'sonnet'
+    })
+    expect(
+      restore({ pick: { ...pick, values: { effort: 'medium' } } }).pending.configValues
+    ).toEqual({ permission: 'bypass', effort: 'medium', model: 'sonnet' })
+  })
+
+  it('a record from before per-model values restores its flat values', () => {
+    const { pending } = restore({
+      saved: { modelId: 'opus', configValues: { model: 'sonnet', effort: 'low' } }
+    })
+    expect(pending).toEqual({
+      modelId: 'opus',
+      modeId: undefined,
+      configValues: { effort: 'low', model: 'opus' }
+    })
+  })
+
+  it("a model pick replaces the last model's values with its own and keeps the mode", () => {
+    const prev = {
+      modelId: 'opus',
+      modeId: 'plan',
+      configValues: { model: 'opus', effort: 'high', permission: 'bypass' }
+    }
+    const options = optionsFor('opus')
+    expect(pendingWithModel(prev, 'sonnet', { effort: 'low' }, 'model', options)).toEqual({
+      modelId: 'sonnet',
+      modeId: 'plan',
+      configValues: { permission: 'bypass', effort: 'low', model: 'sonnet' }
+    })
+    expect(pendingWithModel(prev, 'sonnet', {}, 'model', options).configValues).toEqual({
+      permission: 'bypass',
+      model: 'sonnet'
+    })
+  })
+
+  it('a model pick before any option is known keeps the earlier values for the live apply', () => {
+    const prev = { modelId: 'opus', configValues: { effort: 'high', permission: 'bypass' } }
+    expect(pendingWithModel(prev, 'sonnet', { effort: 'low' }, null, [])).toEqual({
+      modelId: 'sonnet',
+      configValues: { effort: 'low', permission: 'bypass' }
+    })
+  })
+
+  describe('the launch payload', () => {
+    const options = optionsFor('opus')
+
+    it("keeps the shown effort when the launch runs the shown options' model", () => {
+      const displayed = {
+        modelId: 'opus',
+        configValues: { model: 'opus', effort: 'high', permission: 'default' }
+      }
+      expect(launchPending(displayed, { configValues: {} }, { modelId: 'opus', options })).toEqual({
+        modelId: 'opus',
+        modeId: undefined,
+        configValues: displayed.configValues
+      })
+    })
+
+    it("drops the shown effort of another model: a never-tuned pick launches on the agent's default", () => {
+      const displayed = {
+        modelId: 'sonnet',
+        configValues: { model: 'sonnet', effort: 'high', permission: 'default' }
+      }
+      const pending = { modelId: 'sonnet', configValues: { model: 'sonnet' } }
+      expect(launchPending(displayed, pending, { modelId: 'opus', options })).toEqual({
+        modelId: 'sonnet',
+        modeId: undefined,
+        configValues: { model: 'sonnet', permission: 'default' }
+      })
     })
   })
 })

@@ -212,7 +212,14 @@ export interface PersistedRejectedOptionValues {
 export interface PersistedComposerOptions {
   modelId?: string
   modeId?: string
+  /** The last value of every option, the model option included (pre-`modelValues` shape). */
   configValues?: Record<string, string>
+  /**
+   * Non-model option values (effort, Fast, ...) per model id: a model brings
+   * back its own values. Absent on records written before it existed; those
+   * restore the flat `configValues`.
+   */
+  modelValues?: Record<string, Record<string, string>>
   isolationMode?: 'current' | 'worktree'
   baseBranch?: string | null
 }

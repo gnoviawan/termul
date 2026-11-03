@@ -7,6 +7,8 @@ import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
 import {
   alignSessionModelProjection,
+  isUsableConfigOption,
+  MODEL_CATEGORY,
   withSessionModelOnIndex
 } from '@/components/chat/chat-input-bar-config'
 import {
@@ -36,9 +38,19 @@ import {
   waitForTurnClear
 } from '../../prompt-queue-orchestration'
 import {
+  latestModelPick,
+  modelValuesPatch,
+  nextPickSeq,
+  noteUserPick,
+  readComposerOptions,
+  savedModelValues
+} from '../composer-options'
+import {
   appendPlanSnapshot,
+  applyOptionValues,
   cacheOptionsFromSession,
   configIdForAgentId,
+  currentSessionModel,
   dropElicitationsForSession,
   dropPermissionsForSession,
   dropQuestionsForSession,
@@ -53,6 +65,7 @@ import {
   recoverPromptToQueue,
   SWITCH_SPLICE_ID_PREFIX,
   sessionProjectId,
+  waitForReadvertisedOptions,
   writeAgentOptionsCache
 } from '../helpers'
 import { useAcpStore } from '../index'
@@ -708,6 +721,7 @@ type PromptSliceState = Pick<
   | 'setConfigOption'
   | 'setMode'
   | 'setModel'
+  | 'pickModel'
   | 'respondPermission'
   | 'answerQuestion'
   | 'respondElicitation'
@@ -877,7 +891,7 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   // required to emit `mode_update` / `config_options_update` after a set, and
   // there is no model event at all — so the acknowledged reply is the only
   // source of the applied value.
-  setConfigOption: async (sessionId, configId, valueId) => {
+  setConfigOption: async (sessionId, configId, valueId, opts) => {
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
     const response = await withAuthRetry(
@@ -937,12 +951,30 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
         message: `set_config_option response for session ${sessionId} re-asserted the creation default on '${optionId}'; kept the session's current value`
       })
     }
+    // A restore running on this chat leaves a user's own pick alone.
+    if (opts?.persist !== false) noteUserPick(sessionId, configId)
     const agentConfigId = configIdForAgentId(get(), session.agentId)
     if (agentConfigId) {
       writeAgentOptionsCache(set, agentConfigId, { configOptions: updated })
+      if (opts?.persist === false) return
+      const stored = typeof valueId === 'boolean' ? String(valueId) : valueId
+      const isModel = session.configOptions.some(
+        (option) => option.id === configId && option.category === MODEL_CATEGORY
+      )
+      // A model pick is the record's model; a scoped value also belongs to
+      // the model the session runs, so that model brings it back.
       persistComposerOptions(
         agentConfigId,
-        { configValues: { [configId]: typeof valueId === 'boolean' ? String(valueId) : valueId } },
+        isModel
+          ? { modelId: stored, configValues: { [configId]: stored } }
+          : {
+              configValues: { [configId]: stored },
+              ...modelValuesPatch(
+                currentSessionModel(get().sessions[sessionId]),
+                { [configId]: stored },
+                updated
+              )
+            },
         sessionId
       )
     }
@@ -974,7 +1006,7 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     }
   },
 
-  setModel: async (sessionId, modelId) => {
+  setModel: async (sessionId, modelId, opts) => {
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
     await withAuthRetry(get, session.agentId, 'session/set_model', 'text', () =>
@@ -1003,10 +1035,53 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
         sessionIndex: withSessionModelOnIndex(s.sessionIndex, sessionId, session)
       }
     })
-    cacheOptionsFromSession(set, get, sessionId)
+    // Persist first: the reapply `cacheOptionsFromSession` starts reads the
+    // record after queued writes, so it sees this pick, not the last one.
     const configId = configIdForAgentId(get(), session.agentId)
-    if (configId) {
-      persistComposerOptions(configId, { modelId }, sessionId)
+    if (configId && opts?.persist !== false) {
+      const modelOption = session.configOptions.find((o) => o.category === MODEL_CATEGORY)
+      persistComposerOptions(
+        configId,
+        { modelId, ...(modelOption ? { configValues: { [modelOption.id]: modelId } } : {}) },
+        sessionId
+      )
+    }
+    cacheOptionsFromSession(set, get, sessionId)
+  },
+
+  // The composer's model pick: the model first (the agent re-advertises
+  // effort choices on a switch), then `values` (a favorite's snapshot) or the
+  // values saved for that model. A newer pick or a model change made while
+  // the saved record is read wins.
+  pickModel: async (sessionId, modelId, values) => {
+    const session = get().sessions[sessionId]
+    if (!session) throw new Error(`unknown session ${sessionId}`)
+    const seq = nextPickSeq()
+    latestModelPick.set(sessionId, seq)
+    try {
+      const configId = configIdForAgentId(get(), session.agentId)
+      const restore =
+        values ?? (configId ? savedModelValues(await readComposerOptions(configId), modelId) : {})
+      if (latestModelPick.get(sessionId) !== seq) return
+      const live = get().sessions[sessionId]
+      if (!live) return
+      if (currentSessionModel(live) !== modelId) {
+        const modelOption = live.configOptions.find(
+          (o) => o.category === MODEL_CATEGORY && isUsableConfigOption(o)
+        )
+        if (modelOption) await get().setConfigOption(sessionId, modelOption.id, modelId)
+        else {
+          const before = live.configOptions
+          await get().setModel(sessionId, modelId)
+          if (Object.keys(restore).length > 0) {
+            await waitForReadvertisedOptions(get, sessionId, before)
+          }
+        }
+      }
+      if (latestModelPick.get(sessionId) !== seq) return
+      await applyOptionValues(get, sessionId, restore, { source: 'acp.pickModel', modelId })
+    } finally {
+      if (latestModelPick.get(sessionId) === seq) latestModelPick.delete(sessionId)
     }
   },
 

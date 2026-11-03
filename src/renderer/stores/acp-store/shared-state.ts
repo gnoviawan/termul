@@ -5,7 +5,6 @@
  * Package-internal: index.ts re-exports only the public names.
  */
 
-import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/persistence.types'
 import type { WsAgentSummary } from '@shared/types/web-protocol.types'
 import { sessionModelSnapshot } from '@/components/chat/chat-input-bar-config'
 import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
@@ -20,7 +19,6 @@ import {
   isClaudeAccountSignedOutError,
   isDefiniteSpawnRejection
 } from '@/lib/agents/acp-spawn-errors'
-import { persistenceApi } from '@/lib/api'
 import { __resetCommandEngineForTesting } from '@/lib/command-engine'
 import { __clearCommandJournalForTesting } from '@/lib/command-journal'
 import { projectForCwd, resolveAgentSpawnEnv } from '@/lib/env-parser'
@@ -35,6 +33,7 @@ import {
   isDetachedReuseKey,
   parseReuseKey
 } from '../acp-reuse-keys'
+import { _resetComposerSessionsForTesting } from './composer-options'
 import { ephemeralSessionIds } from './ephemeral-ids'
 import {
   isReusableStatus,
@@ -415,63 +414,7 @@ export function _resetInFlightPreparedForTesting(): void {
   pendingWarmAgents.clear()
 }
 
-/**
- * Persist composer selections (model/mode/config) per agent-config-id via
- * `persistenceApi` (debounced). Called from the store setters so running-chatbox
- * selection changes are captured regardless of which surface triggered them.
- * Merges the patch into the existing record (not a full overwrite) so a
- * single-field change (e.g. config) doesn't wipe the persisted model. Skips
- * ephemeral/warm-pool sessions so agent defaults don't overwrite the user's
- * real last selection. Best-effort — a persistence failure logs a warn and
- * does not throw (the selection still applied to the live session).
- *
- * ## Concurrency: per-key serialization
- *
- * Each call does read-merge-write. Without serialization, two concurrent
- * calls (e.g. setModel + setMode firing in the same tick) can both read the
- * same prior record, then the second write overwrites the first's field. The
- * `composerOptionQueues` map chains promises per key so each patch reads the
- * latest in-flight record immediately before writing.
- */
-export const composerOptionQueues = new Map<string, Promise<void>>()
-
-export function persistComposerOptions(
-  configId: string,
-  patch: PersistedComposerOptions,
-  sessionId?: SessionId
-): void {
-  if (sessionId && ephemeralSessionIds.has(sessionId)) return
-  const key = PersistenceKeys.lastComposerOptions(configId)
-  const prev = composerOptionQueues.get(key) ?? Promise.resolve()
-  const next = prev.then(async () => {
-    const result = await persistenceApi.read<PersistedComposerOptions>(key)
-    const existing = result.success ? (result.data ?? {}) : {}
-    const merged: PersistedComposerOptions = { ...existing, ...patch }
-    // Deep-merge configValues so a single config change doesn't wipe
-    // sibling config values persisted from a prior selection.
-    if (existing.configValues && patch.configValues) {
-      merged.configValues = { ...existing.configValues, ...patch.configValues }
-    }
-    // Drop undefined values so the record stays compact and absent fields
-    // mean "use agent default" (not "explicitly unset to undefined").
-    for (const k of Object.keys(merged) as (keyof PersistedComposerOptions)[]) {
-      if (merged[k] === undefined) delete merged[k]
-    }
-    await persistenceApi.writeDebounced(key, merged)
-  })
-  composerOptionQueues.set(key, next)
-  next.catch((err) => {
-    void logFrontendError({
-      level: 'warn',
-      source: 'acp-store.persistComposerOptions',
-      message: `persist failed for ${configId}: ${err instanceof Error ? err.message : String(err)}`
-    })
-  })
-  // Clean up the queue entry once settled to avoid unbounded growth.
-  next.finally(() => {
-    if (composerOptionQueues.get(key) === next) composerOptionQueues.delete(key)
-  })
-}
+export { composerOptionQueues, persistComposerOptions } from './composer-options'
 
 /**
  * Session ids created via `createSession({ ephemeral: true })` (warm-pool seeds)
@@ -567,6 +510,7 @@ export function rejectBugReportCollector(sessionId: SessionId, reason: string): 
 /** Test-only: clear the ephemeral-session tracking set between tests. */
 export function _resetEphemeralSessionIdsForTesting(): void {
   ephemeralSessionIds.clear()
+  _resetComposerSessionsForTesting()
   commitMessageCollectors.clear()
   bugReportCollectors.clear()
 }

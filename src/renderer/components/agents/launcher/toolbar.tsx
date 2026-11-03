@@ -22,6 +22,7 @@ import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { cn } from '@/lib/utils'
 import { type AcpSession, useAcpStore } from '@/stores/acp-store'
+import type { OptionValues } from '@/stores/acp-store/composer-options'
 import { CLAUDE_AGENT_CONFIG_ID } from '@/stores/claude-account-switch'
 import { AgentUpdateCta } from './AgentUpdateCta'
 
@@ -103,7 +104,7 @@ export function LauncherToolbar({
   modelOption: SessionConfigOption | null
   modelSource: 'config' | 'models' | null
   optionsInteractive: boolean
-  handleSetModel: (valueId: string) => Promise<void>
+  handleSetModel: (valueId: string, values?: OptionValues) => Promise<void>
   thoughtLevel: SessionConfigOption | null
   modelConfig: SessionConfigOption[]
   handleSetConfig: (configId: string, valueId: string | boolean) => Promise<void>

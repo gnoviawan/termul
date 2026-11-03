@@ -19,6 +19,7 @@ import {
   type FavoriteKey,
   type FavoritesStore,
   favoriteId,
+  optionsSignature,
   useFavoriteModels,
   useFavoritesStore
 } from './favorite-models'
@@ -57,6 +58,7 @@ import {
   agentTrackCapacity,
   type CatalogModel,
   entryDisableReason,
+  favoriteRowName,
   type ModelCatalog,
   rowAccessibleName,
   rowHasDescription,
@@ -73,7 +75,7 @@ import {
 } from './selector-tokens'
 import { editSections, restSections } from './session-option-sections'
 import { useRejectedOptionValues } from './use-option-values'
-import { useSelectorPanelState } from './use-selector-panel-state'
+import { type FavoriteHit, useSelectorPanelState } from './use-selector-panel-state'
 
 const LIST_ROW = '[data-selector-row]'
 /** Key prefix of the Favorites section's rows (the same model shows again below). */
@@ -81,12 +83,15 @@ const FAVORITES_PREFIX = 'favorite\0'
 
 /** A favorite as a DOM attribute value (ids hold `:`, `/` and maybe more). */
 function favoriteEntryId(key: FavoriteKey): string {
-  return `${encodeURIComponent(key.configId)}/${encodeURIComponent(key.modelId)}`
+  const signature = optionsSignature(key.options)
+  return `${encodeURIComponent(key.configId)}/${encodeURIComponent(key.modelId)}${signature ? `/${encodeURIComponent(signature)}` : ''}`
 }
 
-/** A row's `data-row-key`: the Favorites copy apart from the list row. */
-function rowKeyOf(configId: string | null, modelId: string, inFavorites = false): string {
-  return `${inFavorites ? 'favorite/' : ''}${encodeURIComponent(configId ?? '')}/${encodeURIComponent(modelId)}`
+/** A row's `data-row-key`: a Favorites copy (one per snapshot) apart from the list row. */
+function rowKeyOf(configId: string | null, modelId: string, favorite?: FavoriteKey): string {
+  return favorite
+    ? `favorite/${favoriteEntryId(favorite)}`
+    : `${encodeURIComponent(configId ?? '')}/${encodeURIComponent(modelId)}`
 }
 
 /** An agent row's highlight key (search results list agents after models). */
@@ -747,7 +752,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
       void logFrontendError({
         level: 'warn',
         source: 'SelectorPanelV2.favorites',
-        message: `Failed to ${on ? 'add' : 'remove'} favorite ${id.replace('\0', '/')}: ${String(error)}`
+        message: `Failed to ${on ? 'add' : 'remove'} favorite ${key.configId}/${key.modelId}: ${String(error)}`
       })
     })
   }
@@ -774,18 +779,21 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
     selectedValue: string | undefined,
     /** Rows from several agents: another agent's row says whose it is. */
     mixed: boolean,
-    keyPrefix = ''
+    /** A Favorites row: its own key and snapshot, picked with the model. */
+    fav?: FavoriteHit
   ): ReactNode => {
     // The row's own agent, never the open tab: Favorites and search mix agents.
     const tab = tabOf(configId)
-    const inFavorites = keyPrefix === FAVORITES_PREFIX
+    const inFavorites = fav !== undefined
     return options.map((model) => {
-      const key = configId ? { configId, modelId: model.value } : null
-      const rowKey = rowKeyOf(configId, model.value, inFavorites)
+      const key = fav?.favorite ?? (configId ? state.favoriteKeyFor(configId, model.value) : null)
+      const rowKey = rowKeyOf(configId, model.value, fav?.favorite)
       return (
         <DenseModelRow
-          key={`${keyPrefix}${configId}\0${model.value}`}
-          name={model.name}
+          key={
+            fav ? `${FAVORITES_PREFIX}${favoriteId(fav.favorite)}` : `${configId}\0${model.value}`
+          }
+          name={fav ? favoriteRowName(model.name, fav.label) : model.name}
           tooltip={
             [model.description, configId === sw.currentConfigId ? capabilities : null]
               .filter(Boolean)
@@ -816,7 +824,7 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
           onPick={() => {
             const active = document.activeElement as HTMLElement | null
             if (active?.dataset.rowKey === rowKey) pickedRow.current = rowKey
-            state.pick(configId, catalog, model.value)
+            state.pick(configId, catalog, model.value, fav?.favorite.options)
           }}
         />
       )
@@ -885,9 +893,9 @@ export function SelectorPanelV2(props: SelectorPanelV2Props): React.JSX.Element 
                     favorite.configId,
                     favorite.catalog,
                     [favorite.model],
-                    favorite.configId === effectiveId ? modelValue : undefined,
+                    favorite.active ? modelValue : undefined,
                     true,
-                    FAVORITES_PREFIX
+                    favorite
                   )
                 )}
               </div>

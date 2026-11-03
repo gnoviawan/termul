@@ -9,6 +9,13 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { logFrontendError } from '@/lib/log-api'
 import { type AcpState, useAcpStore } from '@/stores/acp-store'
+import {
+  latestArmedPick,
+  nextPickSeq,
+  type OptionValues,
+  readComposerOptions,
+  savedModelValues
+} from '@/stores/acp-store/composer-options'
 import { waitForTurnClear } from '@/stores/prompt-queue-orchestration'
 import { runningBackgroundSubagents } from '../subagent-strip'
 
@@ -19,6 +26,45 @@ export interface SwitchModelPick {
   modelId: string
   /** The target's model config option id, when its list came from one. */
   modelConfigId: string | null
+  /** A favorite's option values; without them the model's saved values apply. */
+  values?: OptionValues
+}
+
+/** The pending options a model pick arms: the model, then its values. */
+async function pendingForModelPick(
+  configId: string,
+  pick: SwitchModelPick
+): Promise<{ modelId: string; configValues?: OptionValues }> {
+  const values = pick.values ?? savedModelValues(await readComposerOptions(configId), pick.modelId)
+  const configValues = pick.modelConfigId
+    ? { ...values, [pick.modelConfigId]: pick.modelId }
+    : values
+  return Object.keys(configValues).length > 0
+    ? { modelId: pick.modelId, configValues }
+    : { modelId: pick.modelId }
+}
+
+/**
+ * Queue a model pick on a chat's armed switch to `configId`, with its values.
+ * Dropped when a newer pick, or a different switch target, landed while the
+ * saved record was read.
+ */
+export async function armModelPick(
+  sessionId: string,
+  configId: string,
+  pick: SwitchModelPick
+): Promise<void> {
+  const seq = nextPickSeq()
+  latestArmedPick.set(sessionId, seq)
+  try {
+    const pending = await pendingForModelPick(configId, pick)
+    if (latestArmedPick.get(sessionId) !== seq) return
+    const store = useAcpStore.getState()
+    if (store.sessions[sessionId]?.switching?.toConfigId !== configId) return
+    await store.setSwitchPendingOption(sessionId, pending)
+  } finally {
+    if (latestArmedPick.get(sessionId) === seq) latestArmedPick.delete(sessionId)
+  }
 }
 
 /**
@@ -118,14 +164,7 @@ export function useAgentSwitch(sessionId: string): {
       const armed = await store.armAgentSwitch(sessionId, configId)
       if (!armed || !pick) return armed
       try {
-        await useAcpStore
-          .getState()
-          .setSwitchPendingOption(
-            sessionId,
-            pick.modelConfigId
-              ? { modelId: pick.modelId, configValues: { [pick.modelConfigId]: pick.modelId } }
-              : { modelId: pick.modelId }
-          )
+        await armModelPick(sessionId, configId, pick)
       } catch (err) {
         void logFrontendError({
           level: 'warn',

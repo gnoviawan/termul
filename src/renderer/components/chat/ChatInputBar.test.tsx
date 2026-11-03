@@ -159,7 +159,7 @@ const {
     // Override-able store session agent id (defaults to the live agent; the
     // empty-row test clears it).
     mockSessionAgentId: { current: 'agent-1' as string },
-    mockArmAgentSwitch: vi.fn(async () => true),
+    mockArmAgentSwitch: vi.fn(async (_sessionId: string, _toConfigId: string) => true),
     mockSetSwitchPendingOption: vi.fn(async () => {}),
     mockAgentOptionsCache: { current: {} as Record<string, unknown> },
     mockCancelAgentSwitch: vi.fn(),
@@ -233,7 +233,12 @@ vi.mock('@/stores/acp-store', () => {
     respondPermission: mockRespondPermission,
     agentConfigs: mockAgentConfigs.current,
     saveAgentConfig: mockSaveAgentConfig,
-    armAgentSwitch: mockArmAgentSwitch,
+    // Like the store: a successful arm records the switch target on the chat.
+    armAgentSwitch: async (sessionId: string, toConfigId: string) => {
+      const armed = await mockArmAgentSwitch(sessionId, toConfigId)
+      if (armed) mockSwitching.current = { toConfigId, status: 'pending' }
+      return armed
+    },
     setSwitchPendingOption: mockSetSwitchPendingOption,
     agentOptionsCache: mockAgentOptionsCache.current,
     prepareChat: vi.fn(),
