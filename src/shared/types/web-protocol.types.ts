@@ -119,6 +119,8 @@ export type WsEventType = (typeof WS_EVENT_TYPES)[number]
 export const WS_REQUEST_TYPES = [
   'send_prompt',
   'cancel_prompt',
+  // Stop one subagent of a chat (`session/cancel` for its child session).
+  'stop_subagent',
   'set_config_option',
   'set_mode',
   'set_model',
@@ -330,6 +332,7 @@ export const WS_COMMAND_CLASSES: Readonly<
 > = {
   send_prompt: ['command', 'entity'],
   cancel_prompt: ['idempotent', null],
+  stop_subagent: ['idempotent', null],
   set_config_option: ['idempotent', null],
   set_mode: ['idempotent', null],
   set_model: ['idempotent', null],

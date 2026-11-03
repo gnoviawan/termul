@@ -26,6 +26,7 @@ import type {
   McpInstallPlanReply,
   McpInstallPlanRequest
 } from '@shared/types/mcp-install.types'
+import type { SubagentId, SubagentStopOutcome } from '@shared/types/subagent'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import {
   type AddProjectPayload,
@@ -448,6 +449,15 @@ export interface AcpTransport {
     displayContent?: ContentBlock[]
   ): Promise<PromptDispatchResult>
   cancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void>
+  /**
+   * Stop one subagent of chat `rootSessionId`. Rejects with `not_found` (no
+   * such agent or subagent) or `unsupported` (the agent offers no stop for it).
+   */
+  stopSubagent(
+    agentId: AgentId,
+    rootSessionId: SessionId,
+    subagentId: SubagentId
+  ): Promise<SubagentStopOutcome>
   setConfigOption(
     agentId: AgentId,
     sessionId: SessionId,

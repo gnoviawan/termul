@@ -1115,6 +1115,33 @@ pub(super) async fn run_command_loop(
                 let _ = reply.send(result.map_err(|e| e.to_string()));
             }
 
+            AcpCommand::StopSubagent {
+                root_session_id,
+                subagent_id,
+                reply,
+            } => {
+                use crate::acp::subagents::{
+                    stop_plan, StopPlan, StopSubagentError, StopSubagentOutcome,
+                };
+                let child = {
+                    let mut state = driver_state.lock();
+                    let records = state.subagent_records();
+                    stop_plan(records.find(&root_session_id, &subagent_id)).map(|plan| match plan {
+                        StopPlan::CancelSession(child) => Some(child.to_string()),
+                        StopPlan::AlreadyEnded => None,
+                    })
+                };
+                let result = match child {
+                    Ok(Some(child)) => cx
+                        .send_notification(CancelNotification::new(&SessionId::new(child.as_str())))
+                        .map(|()| StopSubagentOutcome::Sent)
+                        .map_err(|error| StopSubagentError::Failed(error.to_string())),
+                    Ok(None) => Ok(StopSubagentOutcome::AlreadyEnded),
+                    Err(refusal) => Err(refusal),
+                };
+                let _ = reply.send(result);
+            }
+
             AcpCommand::SetMode {
                 session_id,
                 mode_id,
@@ -1574,7 +1601,7 @@ pub(super) fn send_reply<T>(slot: &ReplySlot<T>, value: Result<T, String>) {
 }
 
 /// Typed initialize plus the capabilities SDK 1.3 cannot set: Codex gateway
-/// auth, and (Claude only) native subagent sessions.
+/// auth, and (verified Claude and Codex adapters) native subagent sessions.
 pub(super) fn initialize_message(
     request: &InitializeRequest,
     native_subagents: bool,

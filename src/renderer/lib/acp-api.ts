@@ -16,7 +16,12 @@
  */
 
 import type { ClaudeRateLimit } from '@shared/types/claude-accounts.types'
-import type { Subagent, SubagentControl } from '@shared/types/subagent'
+import type {
+  Subagent,
+  SubagentControl,
+  SubagentId,
+  SubagentStopOutcome
+} from '@shared/types/subagent'
 import {
   type AgentCapabilities,
   isProviderErrorCode,
@@ -1322,6 +1327,15 @@ export async function acpCancelPrompt(agentId: AgentId, sessionId: SessionId): P
   await getAcpTransport().cancelPrompt(agentId, sessionId)
 }
 
+/** Stop one subagent of chat `rootSessionId` (desktop and web share the `/ws` request). */
+export async function acpStopSubagent(
+  agentId: AgentId,
+  rootSessionId: SessionId,
+  subagentId: SubagentId
+): Promise<SubagentStopOutcome> {
+  return getAcpTransport().stopSubagent(agentId, rootSessionId, subagentId)
+}
+
 export async function acpSetConfigOption(
   agentId: AgentId,
   sessionId: SessionId,
@@ -1487,6 +1501,7 @@ export const acpApi = {
   sendPrompt: acpSendPrompt,
   sendPromptBlocks: acpSendPromptBlocks,
   cancelPrompt: acpCancelPrompt,
+  stopSubagent: acpStopSubagent,
   setConfigOption: acpSetConfigOption,
   setMode: acpSetMode,
   setModel: acpSetModel,

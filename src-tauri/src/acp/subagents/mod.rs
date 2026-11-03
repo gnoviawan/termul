@@ -22,10 +22,13 @@ mod agent_tools;
 mod codex_collab;
 pub(crate) mod native;
 mod registry;
+mod stop;
 mod tools;
 
 pub(crate) use agent_tools::apply_cursor_task;
 pub(crate) use registry::{DispatchEntry, SubagentRecords};
+pub(crate) use stop::{stop_plan, StopPlan};
+pub(crate) use stop::{StopSubagentError, StopSubagentOutcome};
 pub(crate) use tools::{map_tool_event, MappedToolEvent, ToolView};
 
 /// Longest id (session, tool call, thread) the host keeps.
