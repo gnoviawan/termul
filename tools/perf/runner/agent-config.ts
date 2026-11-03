@@ -20,6 +20,7 @@
  * command names/shapes mirror the plugin-store JS API exactly.
  */
 
+import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { WS_PROTOCOL_VERSION } from '../../../src/shared/types/web-protocol.types.ts'
 import type { AppHandle } from './launch.ts'
@@ -189,6 +190,49 @@ export async function seedPerfProjects(
   if (result !== 'ok') {
     throw new Error(`perf-project seed failed: ${String(result)}`)
   }
+}
+
+/**
+ * Pre-launch store entries for the fake agent: the agent list plus
+ * `agents/last-selected`, so the launcher restores the perf agent instead of
+ * falling through to codex. Same keys and shapes `registerFakeAgent` writes.
+ */
+export function fakeAgentPreseed(config: StoredAgentConfig): Record<string, unknown> {
+  return {
+    [ACP_AGENTS_KEY]: [config],
+    'agents/last-selected': { mode: 'acp', agentId: config.configId }
+  }
+}
+
+/**
+ * Pre-launch store entries for perf projects: the old `projects` record,
+ * which the renderer's legacy import hands to the host registry on boot.
+ */
+export function perfProjectsPreseed(
+  projects: PerfProjectSeed[],
+  activeProjectId?: string
+): Record<string, unknown> {
+  return {
+    projects: {
+      projects: projects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        color: 'blue',
+        path: p.path,
+        isArchived: false
+      })),
+      groups: [],
+      activeProjectId: activeProjectId ?? projects[0]?.id ?? '',
+      updatedAt: new Date().toISOString()
+    }
+  }
+}
+
+/** The single perf project stream-storm, pty-flood and soak run in. */
+export function singlePerfProject(): PerfProjectSeed {
+  const dir = path.join(process.env.TEMP ?? 'C:\\temp', 'termul-perf-project')
+  mkdirSync(dir, { recursive: true })
+  return { id: 'perf-project-0001', name: 'perf-project', path: dir }
 }
 
 /** Single-project convenience wrapper — stream-storm/pty-flood/soak use. */
