@@ -1,7 +1,7 @@
 import type { ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import type { AgentReloadMark, ChatMessage } from '@/stores/acp-store'
-import type { ParentTurn } from './tool-call-summary'
+import { isSubagentCall, type ParentTurn } from './tool-call-summary'
 
 export type TimelineItem =
   | {
@@ -267,10 +267,16 @@ export function spliceReloadMarker(
   if (hasOlderItem || emptyAtReload) items.splice(first, 0, marker)
 }
 
+/**
+ * A failed or unfinished tool call flags the turn. Subagents are left out:
+ * their group shows each one's state, and a background one is meant to
+ * outlive the turn.
+ */
 export function activityNeedsAttention(items: TimelineItem[]): boolean {
   return items.some(
     (item) =>
       item.kind === 'tool' &&
+      !isSubagentCall(item.tool) &&
       (item.tool.status === 'failed' ||
         item.tool.status === 'pending' ||
         item.tool.status === 'in_progress')

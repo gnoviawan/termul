@@ -28,7 +28,7 @@ test('the status pill waits on background subagents after the turn ends', async 
 
   const pill = pane.getByRole('button', { name: /^Session status: subagents/ })
   await expect(pill).toHaveAccessibleName(
-    /^Session status: subagents 2 running; waiting on 2 background subagents/
+    /^Session status: subagents 2 working; waiting on 2 background subagents/
   )
   await pill.click()
   await expect(

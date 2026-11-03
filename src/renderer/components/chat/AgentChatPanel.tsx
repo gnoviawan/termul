@@ -70,6 +70,7 @@ import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
 import { PromptReconcileNotice } from './PromptReconcileNotice'
 import { ReloadChatConfirmDialog } from './ReloadChatConfirmDialog'
+import { SubagentSurfaceProvider } from './SubagentSurface'
 import { useApprovalDock } from './use-approval-dock'
 import { AUTO_RESUME_FAILED_REASON, useIdleStopAutoResume } from './use-idle-stop-auto-resume'
 
@@ -839,7 +840,7 @@ export function AgentChatPanel({
     if (pane) workspace.showAgentLauncher(pane.id)
   }
 
-  return (
+  const chat = (
     // biome-ignore lint/a11y/noStaticElementInteractions: onFocus / onBlur only observe bubbled focus to track approval prompts; the root is not itself interactive
     <div
       ref={rootRef}
@@ -966,7 +967,6 @@ export function AgentChatPanel({
             toolCalls={toolCalls}
             messages={messages}
             turnActive={session.activeTurn}
-            filePathContext={filePathContext}
             onOpenGitChanges={
               isMobileShell ? (opener) => openGitSheet(session.cwd, opener) : undefined
             }
@@ -1090,5 +1090,19 @@ export function AgentChatPanel({
         </div>
       )}
     </div>
+  )
+
+  return (
+    <SubagentSurfaceProvider
+      sessionId={session.id}
+      agentId={session.agentId}
+      toolCalls={toolCalls}
+      messages={messages}
+      turnActive={session.activeTurn}
+      filePathContext={filePathContext}
+      isVisible={isVisible}
+    >
+      {chat}
+    </SubagentSurfaceProvider>
   )
 }

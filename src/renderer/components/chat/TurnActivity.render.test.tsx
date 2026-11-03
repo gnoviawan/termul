@@ -58,7 +58,6 @@ function renderSettledTurn(items: TimelineItem[]): void {
         attentionRequired={false}
         hasFinalResponse
         enter={enter}
-        onOpenSubagent={vi.fn()}
       />
     </TooltipProvider>
   )
@@ -80,7 +79,6 @@ function renderActiveTurn(items: TimelineItem[]): void {
         attentionRequired={false}
         hasFinalResponse={false}
         enter={enter}
-        onOpenSubagent={vi.fn()}
       />
     </TooltipProvider>
   )
@@ -117,7 +115,6 @@ describe('TurnActivity long turns', () => {
           attentionRequired={false}
           hasFinalResponse={false}
           enter={enter}
-          onOpenSubagent={vi.fn()}
         />
       </TooltipProvider>
     )
@@ -195,7 +192,6 @@ describe('TurnActivity work runs', () => {
           attentionRequired={false}
           hasFinalResponse={false}
           enter={enter}
-          onOpenSubagent={vi.fn()}
         />
       </TooltipProvider>
     )

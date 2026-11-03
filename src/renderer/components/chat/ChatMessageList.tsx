@@ -1,6 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useShallow } from 'zustand/shallow'
+import { useEffect, useMemo, useRef } from 'react'
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -11,7 +10,7 @@ import {
   useMessageScroller
 } from '@/components/ui/message-scroller'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
-import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
+import type { SessionId } from '@/lib/acp-api'
 import type { SelectionContext } from '@/lib/composer/selection-context'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
@@ -30,15 +29,13 @@ import {
 import { opencodeStatusLine } from './opencode-status'
 import { RowReveal } from './RowReveal'
 import { SelectionContextLayer } from './SelectionContextLayer'
-import { SubagentDetailsDialog } from './SubagentDetailsDialog'
-import { subagentChildCalls } from './subagent-strip'
+import { SubagentGroup } from './SubagentGroup'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
 import { TurnActivity } from './TurnActivity'
+import { isSubagentCall } from './tool-call-summary'
 import { type EnterTracker, useEnterTracker } from './use-enter-tracker'
 import { WorktreeCreationCard } from './WorktreeCreationCard'
-
-const NO_CALLS: readonly ToolCall[] = []
 
 /** Reports the live item count to the scroller so the jump button can badge unread. */
 function ItemCountReporter({ count }: { count: number }): null {
@@ -89,7 +86,6 @@ interface TimelineRenderProps {
   onEditMessage?: (text: string) => void
   onRetry?: () => void
   filePathContext?: FilePathResolutionContext
-  onOpenSubagent: (toolCall: ToolCall) => void
   parentTurnActive: boolean
   statusLine: string | null
   /** Whether the scroller log announces additions (off on the mobile shell). */
@@ -109,7 +105,6 @@ function VirtualizedTimeline({
   onEditMessage,
   onRetry,
   filePathContext,
-  onOpenSubagent,
   parentTurnActive,
   statusLine,
   live
@@ -196,7 +191,6 @@ function VirtualizedTimeline({
           enter={enter}
           statusLine={item.active ? statusLine : null}
           filePathContext={filePathContext}
-          onOpenSubagent={onOpenSubagent}
         />
       )
     }
@@ -204,12 +198,14 @@ function VirtualizedTimeline({
       const id = item.tool.toolCallId
       return (
         <RowReveal animate={enter.animate(id)} staggerIndex={enter.staggerIndex(id)}>
-          <ToolCallCard
-            toolCall={item.tool}
-            filePathContext={filePathContext}
-            parentTurn={parentTurnActive ? 'active' : 'superseded'}
-            onOpenSubagent={onOpenSubagent}
-          />
+          {isSubagentCall(item.tool) ? (
+            <SubagentGroup
+              calls={[item.tool]}
+              parentTurn={parentTurnActive ? 'active' : 'superseded'}
+            />
+          ) : (
+            <ToolCallCard toolCall={item.tool} filePathContext={filePathContext} />
+          )}
         </RowReveal>
       )
     }
@@ -345,41 +341,6 @@ export function ChatMessageList({
   const lastMsgIndex = useMemo(() => lastMessageIndex(stableItems), [stableItems])
   const itemIds = useMemo(() => items.map(timelineItemId), [items])
   const enter = useEnterTracker(sessionId, itemIds)
-  const [selection, setSelection] = useState<{ sessionId: SessionId; toolCall: ToolCall } | null>(
-    null
-  )
-  const openSubagent = useCallback(
-    (toolCall: ToolCall) => setSelection({ sessionId, toolCall }),
-    [sessionId]
-  )
-  const selectedItem = items.find(
-    (item) => item.kind === 'tool' && item.tool.toolCallId === selection?.toolCall.toolCallId
-  )
-  const selectedTool =
-    selection?.sessionId === sessionId
-      ? selectedItem?.kind === 'tool'
-        ? selectedItem.tool
-        : selection.toolCall
-      : null
-  const selectedToolId = selectedTool?.toolCallId
-  const selectedGroup = selectedToolId
-    ? stableItems.find(
-        (item) =>
-          item.kind === 'activity' &&
-          item.items.some((row) => row.kind === 'tool' && row.tool.toolCallId === selectedToolId)
-      )
-    : undefined
-  const selectedParentTurn =
-    selectedGroup?.kind === 'activity'
-      ? activityParentTurn(stableItems, selectedGroup)
-      : showRunningIndicator
-        ? 'active'
-        : 'superseded'
-  const selectedChildCalls = useAcpStore(
-    useShallow((s) =>
-      selectedToolId ? subagentChildCalls(s.toolCalls[sessionId], selectedToolId) : NO_CALLS
-    )
-  )
 
   if (items.length === 0 && !showRunningIndicator) {
     return <ChatEmptyState sessionId={sessionId} />
@@ -403,7 +364,6 @@ export function ChatMessageList({
               filePathContext={filePathContext}
               onEditMessage={onEditMessage}
               onRetry={onRetry}
-              onOpenSubagent={openSubagent}
               parentTurnActive={showRunningIndicator}
               statusLine={statusLine}
               live={live}
@@ -412,18 +372,6 @@ export function ChatMessageList({
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
-      {selectedTool && (
-        <SubagentDetailsDialog
-          toolCall={selectedTool}
-          childToolCalls={selectedChildCalls}
-          parentTurn={selectedParentTurn}
-          filePathContext={filePathContext}
-          open
-          onOpenChange={(open) => {
-            if (!open) setSelection(null)
-          }}
-        />
-      )}
     </SelectionContextLayer>
   )
 }

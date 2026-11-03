@@ -1,6 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { endedState, subagentToolCall } from '@/lib/test-utils/subagent'
 import { useAcpStore } from '@/stores/acp-store'
 import { seedSession } from '@/stores/acp-store/testkit'
 import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
@@ -520,103 +519,6 @@ describe('ChatMessageList', () => {
 
     fireEvent.click(secondRun)
     expect(screen.getByText('tsconfig')).toBeInTheDocument()
-  })
-
-  it('keeps delegation details open when the parent turn completes', async () => {
-    const delegation: TimelineItem = {
-      kind: 'tool',
-      key: 'task-1',
-      tool: subagentToolCall(
-        { title: 'Audit branch', role: 'explorer', prompt: 'Review the branch without editing.' },
-        { toolCallId: 'task-1', title: 'Audit branch', status: undefined, timestamp: 1_500, seq: 2 }
-      )
-    }
-    const { rerender } = render(
-      <ChatMessageList
-        items={[userItem, delegation, streamingAgentItem]}
-        sessionId="session-1"
-        showRunningIndicator
-      />
-    )
-
-    // The finished run folded once the streaming reply took the live tail —
-    // open it to reach the delegation card.
-    fireEvent.click(screen.getByRole('button', { name: 'Ran 1 agent' }))
-    fireEvent.click(screen.getByRole('button', { name: /audit branch/i }))
-    expect(screen.getByRole('dialog', { name: 'Audit branch' })).toHaveTextContent('Running')
-
-    rerender(
-      <ChatMessageList
-        items={[
-          userItem,
-          {
-            ...delegation,
-            tool: subagentToolCall(
-              { title: 'Audit branch', role: 'explorer', state: endedState() },
-              {
-                ...delegation.tool,
-                status: 'completed',
-                rawOutput: { text: 'No changes needed.' }
-              }
-            )
-          },
-          finalAgentItem
-        ]}
-        sessionId="session-1"
-        showRunningIndicator={false}
-      />
-    )
-
-    await waitFor(
-      () => {
-        expect(screen.getByRole('button', { name: 'Worked for 3s' })).toHaveAttribute(
-          'aria-expanded',
-          'false'
-        )
-        expect(within(screen.getByRole('log')).queryByText('Audit branch')).not.toBeInTheDocument()
-      },
-      { timeout: 5000 }
-    )
-    expect(screen.getByRole('dialog', { name: 'Audit branch' })).toHaveTextContent(
-      'No changes needed.'
-    )
-  })
-
-  it('passes the chat file-path context to subagent result prose', () => {
-    const delegation: TimelineItem = {
-      kind: 'tool',
-      key: 'task-1',
-      tool: subagentToolCall(
-        { title: 'Audit branch', role: 'explorer', state: endedState() },
-        {
-          toolCallId: 'task-1',
-          title: 'Audit branch',
-          status: 'completed',
-          rawOutput: { text: 'Edited src/foo.ts.' },
-          timestamp: 1_500,
-          seq: 2
-        }
-      )
-    }
-    render(
-      <ChatMessageList
-        items={[userItem, delegation, finalAgentItem]}
-        sessionId="session-1"
-        showRunningIndicator={false}
-        filePathContext={{ cwd: '/proj/sub', projectRoot: '/proj' }}
-      />
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: 'Worked for 3s' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Ran 1 agent' }))
-    fireEvent.click(screen.getByRole('button', { name: /audit branch/i }))
-
-    const prose = within(screen.getByRole('dialog', { name: 'Audit branch' })).getByTestId(
-      'agent-prose'
-    )
-    expect(prose).toHaveTextContent('Edited src/foo.ts.')
-    expect(prose).toHaveAttribute('data-cwd', '/proj/sub')
-    expect(prose).toHaveAttribute('data-project-root', '/proj')
   })
 
   it('allows keyboard-accessible reopening after completion', () => {

@@ -105,7 +105,6 @@ function Pill(props: {
     <ChatStatusPill
       sessionId="s1"
       messages={[]}
-      filePathContext={undefined}
       {...props}
       turnActive={props.turnActive ?? false}
     />
