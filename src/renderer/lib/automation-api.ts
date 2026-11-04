@@ -237,7 +237,7 @@ export function cancelAutomationRun(runId: RunId): Promise<IpcResult<void>> {
 }
 
 /**
- * Approve or reject the approval node `nodeId` a run is waiting at. `false`
+ * Approve or reject the approval node `nodeId` a run is parked on. `false`
  * means the run had already moved on (decided elsewhere, timed out or
  * cancelled), so there was nothing to decide.
  */

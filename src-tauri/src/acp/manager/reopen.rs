@@ -12,6 +12,16 @@ pub struct SessionReopenOutcome {
     pub models: Option<SessionModelState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config_options: Option<Vec<SessionConfigOption>>,
+    /// The driver answered without the agent because the agent already holds
+    /// the session live (`answer_reopen_of_held_session`). Host-only.
+    #[serde(skip)]
+    pub answered_by_host: bool,
+}
+
+/// Whether a reopen outcome means the agent took the reopen's MCP list. A
+/// reopen the host answered left the agent on its earlier plan token.
+pub(super) fn reached_agent(outcome: &Result<SessionReopenOutcome, String>) -> bool {
+    matches!(outcome, Ok(outcome) if !outcome.answered_by_host)
 }
 
 /// Convert a reopen response into the outcome plus whether its model list is
@@ -31,6 +41,7 @@ fn reopen_outcome(
             modes,
             models: resolved.models,
             config_options,
+            answered_by_host: false,
         },
         resolved.legacy_only,
     )
@@ -99,6 +110,41 @@ pub(super) fn acp_err_wire_string(error: agent_client_protocol::Error) -> String
             crate::acp::provider_errors::tag_provider_error(&events::AcpErrorDetail::from(&error))
         }
     }
+}
+
+/// Answer a `session/load` or `session/resume` of a session this driver
+/// already holds live, without sending it to the agent. Returns whether it
+/// answered.
+///
+/// The agent's session is already set up, and the client reads history from
+/// the persisted log. claude-acp rebuilds a live session when any reopen input
+/// differs from the one it was created with (MCP servers, extra directories),
+/// and the rebuild kills the background shells and subagents the session
+/// started. Reopening the PWA on an idle-looking chat did this. The caller has
+/// already refused the reopen when a prompt turn is running.
+pub(super) fn answer_reopen_of_held_session(
+    req_state: &Mutex<DriverState>,
+    session_id: &str,
+    op: &str,
+    slot: &ReplySlot<SessionReopenOutcome>,
+) -> bool {
+    if req_state.lock().session_root(session_id).is_none() {
+        return false;
+    }
+    log::info!(
+        "[acp] session {} {op} answered by the host: the agent already holds it live",
+        crate::logging::redact_session_id(session_id)
+    );
+    send_reply(
+        slot,
+        Ok(SessionReopenOutcome {
+            modes: None,
+            models: None,
+            config_options: None,
+            answered_by_host: true,
+        }),
+    );
+    true
 }
 
 /// Timed `session/load` / `session/resume`: preserve the option snapshot,

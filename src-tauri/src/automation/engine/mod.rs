@@ -1,18 +1,16 @@
 //! The run engine, one per host. A 30 s tick claims due automations and
 //! starts runs; each run walks its graph snapshot on its own task and settles
-//! exactly once. A run that reaches an approval node parks: it holds no task,
-//! only its SQLite row, until a decision, a cancel or its deadline resumes
-//! it. Boot settles runs a dead process left `running`, expires overdue
-//! parks and fires one catch-up per past-due automation.
+//! exactly once, or parks on a `wait` or `approval` and resumes later
+//! (`park.rs`). Boot settles runs a dead process left `running`, resumes
+//! parked ones and fires one catch-up per past-due automation.
 
 mod agent;
+mod control;
 mod executor;
 mod http;
 mod nodes;
 mod park;
 mod workdir;
-
-pub use park::Decision;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -26,11 +24,10 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use super::agents::AgentRegistry;
-use super::model::{
-    Automation, AutomationChanged, AutomationId, Run, RunId, RunStatus, RunTrigger,
-};
+use super::model::{Automation, AutomationChanged, AutomationId, Run, RunId, RunStatus, RunTrigger};
 use super::secrets::Secrets;
 use super::store::{AutomationStore, ClaimOutcome, StoreResult};
+use executor::WalkResult;
 use crate::acp::AcpManager;
 
 pub const TICK: Duration = Duration::from_secs(30);
@@ -103,6 +100,8 @@ pub struct Engine {
     /// the cancel handle.
     active: Mutex<HashMap<AutomationId, ActiveRun>>,
     tasks: TaskTracker,
+    /// Cancelled at shutdown; park timers stop on it.
+    shutdown: CancellationToken,
     last_prune_at: Mutex<Option<i64>>,
 }
 
@@ -128,6 +127,7 @@ impl Engine {
             changes: broadcast::channel(256).0,
             active: Mutex::new(HashMap::new()),
             tasks: TaskTracker::new(),
+            shutdown: CancellationToken::new(),
             last_prune_at: Mutex::new(None),
         }))
     }
@@ -165,21 +165,21 @@ impl Engine {
         let _ = self.changes.send(change);
     }
 
-    /// Settles runs a dead process left `running` (parked runs survive),
-    /// times out overdue parks, prunes, and fires one catch-up run per
-    /// automation whose slot passed while the host was down.
+    /// Settles runs a dead process left `running`, resumes or re-arms parked
+    /// runs, prunes, and fires one catch-up run per automation whose slot
+    /// passed while the host was down.
     pub fn boot(self: &Arc<Self>) {
         let now = self.now_ms();
         if let Err(error) = self.store.reconcile_stranded(now) {
             log::error!("[Automation] boot reconcile failed: {error}");
         }
-        self.expire_parks(now);
+        self.arm_parked();
         self.fire_due(RunTrigger::CatchUp);
         self.prune(now);
     }
 
     pub fn tick(self: &Arc<Self>) {
-        self.expire_parks(self.now_ms());
+        self.resume_due();
         self.fire_due(RunTrigger::Scheduled);
         let now = self.now_ms();
         let due = self
@@ -308,61 +308,47 @@ impl Engine {
     }
 
     /// Cancels an in-flight run, including its agent prompt or request, or
-    /// a waiting run, which settles `cancelled`. `false` when the run is
-    /// neither.
-    pub fn cancel_run(self: &Arc<Self>, run_id: &RunId) -> StoreResult<bool> {
-        let mut active = self.active.lock();
+    /// a parked run. `false` when the run is neither.
+    pub fn cancel_run(&self, run_id: &RunId) -> bool {
+        // Held throughout, so a resume cannot claim the run in between.
+        let active = self.active.lock();
         if let Some(entry) = active.values().find(|a| &a.run_id == run_id) {
             entry.cancel.cancel();
             log::info!("[Automation] cancel requested for run {run_id}");
-            return Ok(true);
+            return true;
         }
-        let Some(parked) = self.store.get_run(run_id)?.and_then(|run| run.parked) else {
-            return Ok(false);
-        };
-        log::info!("[Automation] cancel requested for waiting run {run_id}");
-        self.resolve_locked(&mut active, run_id, &parked.node_id, Decision::Cancelled)
+        match self.store.get_run(run_id) {
+            Ok(Some(run)) => self.cancel_parked(&run),
+            Ok(None) => false,
+            Err(error) => {
+                log::error!("[Automation] cancel of run {run_id} failed: {error}");
+                false
+            }
+        }
     }
 
-    /// Cancels the in-flight or waiting run of `automation_id`, if any.
-    pub fn cancel_automation(self: &Arc<Self>, automation_id: &AutomationId) {
-        let mut active = self.active.lock();
+    /// Cancels the in-flight or parked run of `automation_id`, if any.
+    pub fn cancel_automation(&self, automation_id: &AutomationId) {
+        let active = self.active.lock();
         if let Some(entry) = active.get(automation_id) {
             entry.cancel.cancel();
             return;
         }
-        let parked = match self.store.parked_run_of(automation_id) {
-            Ok(Some(parked)) => parked,
-            Ok(None) => return,
-            Err(error) => {
-                log::error!("[Automation] waiting run of {automation_id} unreadable: {error}");
-                return;
+        for (run, _) in self.parked_runs() {
+            if &run.automation_id == automation_id {
+                self.cancel_parked(&run);
             }
-        };
-        if let Err(error) = self.resolve_locked(
-            &mut active,
-            &parked.run_id,
-            &parked.parked.node_id,
-            Decision::Cancelled,
-        ) {
-            log::error!(
-                "[Automation] cancel of waiting run {} failed: {error}",
-                parked.run_id
-            );
         }
     }
 
     async fn execute(self: Arc<Self>, run: Run, project_id: String, cancel: CancellationToken) {
-        let prepared =
-            workdir::Workdir::prepare(&self.project_roots, &project_id, run.worktree_id.as_deref())
-                .await;
-        let outcome = match prepared {
-            Ok(dir) if cancel.is_cancelled() => {
-                dir.release().await;
-                executor::skip_unrun(&self, &run)
-            }
-            Err(_) if cancel.is_cancelled() => executor::skip_unrun(&self, &run),
-            Err(reason) => executor::Outcome::failed(reason),
+        let result = match workdir::Workdir::prepare(
+            &self.project_roots,
+            &project_id,
+            run.worktree_id.as_deref(),
+        )
+        .await
+        {
             Ok(dir) => {
                 let scope = executor::RunScope {
                     engine: &self,
@@ -371,42 +357,55 @@ impl Engine {
                     cwd: dir.path(),
                     cancel: &cancel,
                 };
-                let outcome = match executor::walk(&scope).await {
-                    executor::WalkEnd::Settled(outcome) => outcome,
-                    executor::WalkEnd::Parked(request) => {
-                        match self.park(&run, request, &cancel) {
-                            // The parked run keeps its worktree for the resume.
-                            Ok(()) => {
-                                self.notify(&project_id, Some(&run.automation_id));
-                                return;
-                            }
-                            Err(outcome) => outcome,
-                        }
-                    }
-                };
-                dir.release().await;
-                outcome
+                let result = executor::walk(&scope).await;
+                // A parked run keeps its worktree; the resume reuses it.
+                if matches!(result, WalkResult::Settled(_)) {
+                    dir.release().await;
+                }
+                result
             }
+            Err(reason) => WalkResult::Settled(executor::Outcome::failed(reason)),
         };
-        if let Err(error) = self.store.settle_run(
-            &run.id,
-            outcome.status,
-            outcome.stop_reason.as_deref(),
-            None,
-            self.now_ms(),
-        ) {
-            log::error!("[Automation] settle of run {} failed: {error}", run.id);
-        }
-        {
-            let mut active = self.active.lock();
-            if active
-                .get(&run.automation_id)
-                .is_some_and(|a| a.run_id == run.id)
-            {
-                active.remove(&run.automation_id);
+        match result {
+            WalkResult::Settled(outcome) => {
+                if let Err(error) = self.store.settle_run(
+                    &run.id,
+                    outcome.status,
+                    outcome.stop_reason.as_deref(),
+                    None,
+                    self.now_ms(),
+                ) {
+                    log::error!("[Automation] settle of run {} failed: {error}", run.id);
+                }
+                self.release_active(&run);
+            }
+            WalkResult::Parked { wait_until } => {
+                // Decided under the lock `cancel_run` and `resume` take, so a
+                // cancel that landed while the walk was parking is honoured
+                // before any resume can claim the wait.
+                let mut active = self.active.lock();
+                let cancelled = cancel.is_cancelled();
+                if cancelled {
+                    self.cancel_parked(&run);
+                }
+                forget(&mut active, &run);
+                drop(active);
+                if !cancelled {
+                    self.arm_timer(wait_until);
+                }
             }
         }
         self.notify(&project_id, Some(&run.automation_id));
+    }
+
+    /// Whether a task is executing a run of `automation_id`.
+    #[cfg(test)]
+    pub(crate) fn is_executing(&self, automation_id: &AutomationId) -> bool {
+        self.active.lock().contains_key(automation_id)
+    }
+
+    fn release_active(&self, run: &Run) {
+        forget(&mut self.active.lock(), run);
     }
 
     /// Boots, then ticks every [`TICK`] on `runtime` until stopped.
@@ -432,7 +431,9 @@ impl Engine {
     }
 
     /// Cancels every in-flight run and waits (bounded) for them to settle.
+    /// Parked runs stay parked and resume at the next boot.
     async fn shutdown(&self) {
+        self.shutdown.cancel();
         for entry in self.active.lock().values() {
             entry.cancel.cancel();
         }
@@ -444,6 +445,16 @@ impl Engine {
             log::warn!("[Automation] runs still settling after {SHUTDOWN_GRACE:?} at shutdown");
         }
         log::info!("[Automation] engine stopped");
+    }
+}
+
+/// Drops `run`'s entry, leaving one a newer run of the automation holds.
+fn forget(active: &mut HashMap<AutomationId, ActiveRun>, run: &Run) {
+    if active
+        .get(&run.automation_id)
+        .is_some_and(|a| a.run_id == run.id)
+    {
+        active.remove(&run.automation_id);
     }
 }
 
@@ -469,5 +480,9 @@ impl EngineHandle {
     }
 }
 
+#[cfg(test)]
+mod approval_tests;
+#[cfg(test)]
+mod control_tests;
 #[cfg(test)]
 mod tests;

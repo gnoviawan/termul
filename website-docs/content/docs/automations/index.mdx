@@ -79,7 +79,7 @@ If the machine was off or Termul was closed when a run was due, Termul runs the 
 
 ## Check a run
 
-The **Runs** list shows each run, newest first, with its status, start time and duration. A run is **Running**, **Waiting for approval**, **Succeeded**, **Failed**, **Cancelled** or **Skipped**. Click a run to open it.
+The **Runs** list shows each run with its status, start time and duration. A run in progress is listed first, then the others, newest first. A run is **Running**, **Waiting for approval**, **Succeeded**, **Failed**, **Cancelled** or **Skipped**. Click a run to open it.
 
 The run shows how it was started (**Scheduled**, **Catch-up** or **Manual**), when it started, how long it took and which revision ran. Below that is each step in order with its status. A step that did not run shows **Not reached**. If a step failed, its error is shown under it. Click **Output** to see what a step produced.
 
@@ -91,7 +91,7 @@ An approval step pauses the run until a person approves or rejects it. The step 
 
 Only you can approve or reject. An agent can add an approval step to an automation, but it cannot decide one.
 
-When a run reaches an approval step, the run shows **Waiting for approval**, and the automation shows "A run is waiting for your approval". To decide:
+When a run reaches an approval step, the run shows **Waiting for approval**, and the automation shows "A run is waiting for your approval." To decide:
 
 1. Open the automation in the **Automations** tab. This works in the desktop app, in a browser and on a phone.
 2. Click **Review**, or click the waiting run in the **Runs** list.
@@ -106,9 +106,11 @@ What happens next:
 
 Each approval step has its own time limit, from 1 minute to 7 days. A time limit outside that range is listed as an issue, and you cannot approve the automation until the agent fixes it.
 
-If someone already decided on another device, the run refreshes and shows that decision. After a decision, the approval step shows **Approved**, **Rejected**, **Timed out** or **Cancelled**, and when that happened.
+An approval step inside a loop asks once for each item. Each item's message can name that item.
 
-A waiting run still counts as in progress, so a scheduled run that comes due while it waits is recorded as **Skipped**. A waiting run keeps waiting when Termul or the machine restarts. If the approval expired while Termul was closed, it times out when Termul starts again. To stop a waiting run, click **Cancel run**.
+If someone already decided on another device, Termul says that the run is no longer waiting and shows the decision. After a decision, the approval step shows **Approved**, **Rejected** or **Timed out**, and when that happened.
+
+A waiting run still counts as in progress, so a scheduled run that comes due while it waits is recorded as **Skipped**. A waiting run keeps waiting when Termul or the machine restarts. If the approval expired while Termul was closed, it times out when Termul starts again. To stop a waiting run, click **Cancel run**. A server that does not accept changes from your device shows the approval buttons turned off.
 
 ## Secrets
 

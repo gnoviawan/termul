@@ -230,44 +230,6 @@ fn rule7_agent_schema_and_bounds() {
     );
 }
 
-fn with_gate(timeout_ms: u64, message: &str) -> Automation {
-    apply(
-        &sample_automation(),
-        json!([
-            { "op": "add_node", "node": { "id": "gate", "label": "Post it?", "spec": {
-                "kind": "approval", "message": message, "timeout_ms": timeout_ms } } },
-            { "op": "disconnect", "edge": { "from": "shape", "port": "out", "to": "post" } },
-            { "op": "connect", "edge": { "from": "shape", "port": "out", "to": "gate" } },
-            { "op": "connect", "edge": { "from": "gate", "port": "out", "to": "post" } },
-            { "op": "connect", "edge": { "from": "gate", "port": "error", "to": "alert" } }
-        ]),
-    )
-}
-
-#[test]
-fn approval_nodes_route_out_and_error_within_timeout_bounds() {
-    let message = "Post {{nodes.shape.output.text}}?";
-    for ok in [60_000, 604_800_000] {
-        assert_eq!(codes(&with_gate(ok, message)), vec![], "{ok}");
-    }
-    for out_of_range in [59_999, 604_800_001] {
-        assert_eq!(
-            codes(&with_gate(out_of_range, message)),
-            vec![at(IssueCode::ApprovalTimeoutOutOfRange, "gate")],
-            "{out_of_range}"
-        );
-    }
-    let true_port = apply(
-        &with_gate(60_000, message),
-        json!([{ "op": "connect", "edge": { "from": "gate", "port": "true", "to": "alert" } }]),
-    );
-    assert_eq!(codes(&true_port), vec![at(IssueCode::IllegalPort, "gate")]);
-    assert_eq!(
-        codes(&with_gate(60_000, "Key {{secrets.API_KEY}}")),
-        vec![at(IssueCode::SecretNotAllowed, "gate")]
-    );
-}
-
 #[test]
 fn rule8_untrusted_flow_needs_get_data_reaching_an_agent_with_http_downstream() {
     let base = sample_automation();
@@ -412,4 +374,330 @@ fn topo_order_follows_edges_then_declaration_order() {
         json!([{ "op": "connect", "edge": { "from": "shape", "port": "out", "to": "extract" } }]),
     );
     assert_eq!(topo_order(&cyclic.graph), None);
+}
+
+/// fetch -> each (for_each over the fetched list) -item-> post -> mark;
+/// each -out-> done. Passes every rule.
+fn loop_automation() -> Automation {
+    let mut a = Automation::new("p".into(), "loop".into(), 0);
+    a.graph = serde_json::from_value(json!({
+        "nodes": [
+            { "id": "fetch", "label": "", "spec": { "kind": "http", "method": "GET",
+                "url": "https://api.example.com/items", "allowed_hosts": ["api.example.com"] } },
+            { "id": "each", "label": "", "spec": { "kind": "for_each",
+                "items": "{{nodes.fetch.output.body.items}}", "max_iterations": 10 } },
+            { "id": "post", "label": "", "spec": { "kind": "http", "method": "POST",
+                "url": "https://api.example.com/items/{{nodes.each.index}}",
+                "body": "{{nodes.each.item}}", "allowed_hosts": ["api.example.com"] } },
+            { "id": "mark", "label": "", "spec": { "kind": "transform",
+                "fields": [{ "name": "status", "value": "{{nodes.post.output.status}}" },
+                           { "name": "name", "value": "{{nodes.each.item.name}}" },
+                           { "name": "before", "value": "{{nodes.fetch.output.status}}" }] } },
+            { "id": "done", "label": "", "spec": { "kind": "transform",
+                "fields": [{ "name": "all", "value": "{{nodes.each.output}}" }] } }
+        ],
+        "edges": [
+            { "from": "trigger", "port": "out", "to": "fetch" },
+            { "from": "fetch", "port": "out", "to": "each" },
+            { "from": "each", "port": "item", "to": "post" },
+            { "from": "post", "port": "out", "to": "mark" },
+            { "from": "each", "port": "out", "to": "done" }
+        ]
+    }))
+    .unwrap();
+    a
+}
+
+fn add_transform(a: &Automation, id: &str, value: &str, from: &str, port: &str) -> Automation {
+    apply(
+        a,
+        json!([
+            { "op": "add_node", "node": { "id": id, "label": "", "spec": { "kind": "transform",
+                "fields": [{ "name": "v", "value": value }] } } },
+            { "op": "connect", "edge": { "from": from, "port": port, "to": id } }
+        ]),
+    )
+}
+
+#[test]
+fn a_closed_loop_body_with_item_and_index_references_has_no_issues() {
+    assert_eq!(codes(&loop_automation()), vec![]);
+}
+
+#[test]
+fn new_kinds_have_their_own_ports() {
+    let a = apply(
+        &loop_automation(),
+        json!([
+            { "op": "add_node", "node": { "id": "pause", "label": "", "spec": { "kind": "wait", "duration_ms": 1000 } } },
+            { "op": "connect", "edge": { "from": "done", "port": "out", "to": "pause" } },
+            { "op": "add_node", "node": { "id": "after", "label": "", "spec": { "kind": "transform", "fields": [] } } },
+            { "op": "connect", "edge": { "from": "pause", "port": "out", "to": "after" } },
+            { "op": "connect", "edge": { "from": "each", "port": "error", "to": "after" } }
+        ]),
+    );
+    assert_eq!(codes(&a), vec![]);
+    let bad = apply(
+        &a,
+        json!([
+            { "op": "connect", "edge": { "from": "pause", "port": "error", "to": "after" } },
+            { "op": "connect", "edge": { "from": "fetch", "port": "item", "to": "after" } },
+            { "op": "connect", "edge": { "from": "each", "port": "true", "to": "after" } }
+        ]),
+    );
+    assert_eq!(
+        codes(&bad),
+        vec![
+            at(IssueCode::IllegalPort, "pause"),
+            at(IssueCode::IllegalPort, "fetch"),
+            at(IssueCode::IllegalPort, "each"),
+        ]
+    );
+}
+
+#[test]
+fn for_each_and_wait_bounds() {
+    let base = loop_automation();
+    let zero = set_spec(
+        &base,
+        "each",
+        json!({ "kind": "for_each", "items": "{{nodes.fetch.output.body.items}}", "max_iterations": 0 }),
+    );
+    let over = set_spec(
+        &base,
+        "each",
+        json!({ "kind": "for_each", "items": "{{nodes.fetch.output.body.items}}", "max_iterations": 101 }),
+    );
+    let max = set_spec(
+        &base,
+        "each",
+        json!({ "kind": "for_each", "items": "{{nodes.fetch.output.body.items}}", "max_iterations": 100 }),
+    );
+    assert_eq!(
+        codes(&zero),
+        vec![at(IssueCode::ForEachMaxIterationsOutOfRange, "each")]
+    );
+    assert_eq!(
+        codes(&over),
+        vec![at(IssueCode::ForEachMaxIterationsOutOfRange, "each")]
+    );
+    assert_eq!(codes(&max), vec![]);
+    let waits = |ms: u64| {
+        codes(&set_spec(
+            &base,
+            "done",
+            json!({ "kind": "wait", "duration_ms": ms }),
+        ))
+    };
+    assert_eq!(waits(0), vec![at(IssueCode::WaitDurationOutOfRange, "done")]);
+    assert_eq!(waits(604_800_000), vec![]);
+    assert_eq!(
+        waits(604_800_001),
+        vec![at(IssueCode::WaitDurationOutOfRange, "done")]
+    );
+}
+
+fn with_gate(timeout_ms: u64, message: &str) -> Automation {
+    apply(
+        &sample_automation(),
+        json!([
+            { "op": "add_node", "node": { "id": "gate", "label": "Post it?", "spec": {
+                "kind": "approval", "message": message, "timeout_ms": timeout_ms } } },
+            { "op": "disconnect", "edge": { "from": "shape", "port": "out", "to": "post" } },
+            { "op": "connect", "edge": { "from": "shape", "port": "out", "to": "gate" } },
+            { "op": "connect", "edge": { "from": "gate", "port": "out", "to": "post" } },
+            { "op": "connect", "edge": { "from": "gate", "port": "error", "to": "alert" } }
+        ]),
+    )
+}
+
+#[test]
+fn approval_nodes_route_out_and_error_within_timeout_bounds() {
+    let message = "Post {{nodes.shape.output.text}}?";
+    for ok in [60_000, 604_800_000] {
+        assert_eq!(codes(&with_gate(ok, message)), vec![], "{ok}");
+    }
+    for out_of_range in [59_999, 604_800_001] {
+        assert_eq!(
+            codes(&with_gate(out_of_range, message)),
+            vec![at(IssueCode::ApprovalTimeoutOutOfRange, "gate")],
+            "{out_of_range}"
+        );
+    }
+    let true_port = apply(
+        &with_gate(60_000, message),
+        json!([{ "op": "connect", "edge": { "from": "gate", "port": "true", "to": "alert" } }]),
+    );
+    assert_eq!(codes(&true_port), vec![at(IssueCode::IllegalPort, "gate")]);
+    assert_eq!(
+        codes(&with_gate(60_000, "Key {{secrets.API_KEY}}")),
+        vec![at(IssueCode::SecretNotAllowed, "gate")]
+    );
+}
+
+#[test]
+fn an_approval_may_sit_inside_a_loop_body_and_read_the_item() {
+    let a = apply(
+        &loop_automation(),
+        json!([
+            { "op": "add_node", "node": { "id": "gate", "label": "", "spec": { "kind": "approval",
+                "message": "Post {{nodes.each.item}}?", "timeout_ms": 60000 } } },
+            { "op": "disconnect", "edge": { "from": "each", "port": "item", "to": "post" } },
+            { "op": "connect", "edge": { "from": "each", "port": "item", "to": "gate" } },
+            { "op": "connect", "edge": { "from": "gate", "port": "out", "to": "post" } }
+        ]),
+    );
+    assert_eq!(codes(&a), vec![]);
+}
+
+#[test]
+fn a_body_node_with_an_edge_from_outside_the_body_is_not_closed() {
+    let from_before = apply(
+        &loop_automation(),
+        json!([{ "op": "connect", "edge": { "from": "fetch", "port": "error", "to": "mark" } }]),
+    );
+    assert_eq!(
+        codes(&from_before),
+        vec![at(IssueCode::LoopBodyNotClosed, "mark")]
+    );
+    let from_loop_out = apply(
+        &loop_automation(),
+        json!([{ "op": "connect", "edge": { "from": "each", "port": "out", "to": "post" } }]),
+    );
+    assert_eq!(
+        codes(&from_loop_out),
+        vec![at(IssueCode::LoopBodyNotClosed, "post")]
+    );
+}
+
+#[test]
+fn a_for_each_inside_a_body_is_nested() {
+    let a = apply(
+        &loop_automation(),
+        json!([
+            { "op": "add_node", "node": { "id": "inner", "label": "", "spec": { "kind": "for_each",
+                "items": "{{nodes.each.item.children}}", "max_iterations": 5 } } },
+            { "op": "connect", "edge": { "from": "mark", "port": "out", "to": "inner" } }
+        ]),
+    );
+    assert_eq!(codes(&a), vec![at(IssueCode::NestedForEach, "inner")]);
+}
+
+#[test]
+fn loop_item_and_index_only_inside_that_loops_body() {
+    let base = loop_automation();
+    let after = add_transform(&base, "late", "{{nodes.each.item}}", "done", "out");
+    assert_eq!(
+        codes(&after),
+        vec![at(IssueCode::LoopItemOutsideBody, "late")]
+    );
+    let not_a_loop = add_transform(&base, "odd", "{{nodes.post.index}}", "mark", "out");
+    assert_eq!(
+        codes(&not_a_loop),
+        vec![at(IssueCode::LoopItemOutsideBody, "odd")]
+    );
+    let unknown = add_transform(&base, "ghosted", "{{nodes.ghost.item}}", "mark", "out");
+    assert_eq!(
+        codes(&unknown),
+        vec![at(IssueCode::UnknownNodeReference, "ghosted")]
+    );
+}
+
+#[test]
+fn a_loops_output_inside_its_body_points_at_item() {
+    let a = add_transform(&loop_automation(), "peek", "{{nodes.each.output}}", "mark", "out");
+    let issues = validate(&a);
+    assert_eq!(
+        issues
+            .iter()
+            .map(|i| (i.code, i.message.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(
+            IssueCode::NonAncestorReference,
+            "fields.v references nodes.each.output, which exists only after the loop; inside each's body use nodes.each.item"
+        )]
+    );
+    let outside = add_transform(&loop_automation(), "leak", "{{nodes.mark.output}}", "done", "out");
+    assert_eq!(
+        codes(&outside),
+        vec![at(IssueCode::NonAncestorReference, "leak")]
+    );
+}
+
+#[test]
+fn a_merge_needs_two_incoming_edges() {
+    let one = apply(
+        &loop_automation(),
+        json!([
+            { "op": "add_node", "node": { "id": "join", "label": "", "spec": { "kind": "merge", "mode": "any" } } },
+            { "op": "connect", "edge": { "from": "done", "port": "out", "to": "join" } }
+        ]),
+    );
+    assert_eq!(
+        codes(&one),
+        vec![at(IssueCode::MergeNeedsTwoInputs, "join")]
+    );
+    let two = apply(
+        &one,
+        json!([{ "op": "connect", "edge": { "from": "each", "port": "error", "to": "join" } }]),
+    );
+    assert_eq!(codes(&two), vec![]);
+}
+
+#[test]
+fn untrusted_flow_passes_through_merge_and_for_each() {
+    let agent = |prompt: &str| {
+        json!({ "kind": "agent", "agent_id": "claude", "prompt": prompt,
+                "output_schema": { "type": "string" }, "timeout_ms": 1000, "max_attempts": 1 })
+    };
+    let with_agent = |prompt: &str| {
+        apply(
+            &loop_automation(),
+            json!([
+                { "op": "add_node", "node": { "id": "join", "label": "", "spec": { "kind": "merge", "mode": "any" } } },
+                { "op": "connect", "edge": { "from": "done", "port": "out", "to": "join" } },
+                { "op": "connect", "edge": { "from": "each", "port": "error", "to": "join" } },
+                { "op": "add_node", "node": { "id": "think", "label": "", "spec": agent(prompt) } },
+                { "op": "connect", "edge": { "from": "join", "port": "out", "to": "think" } },
+                { "op": "add_node", "node": { "id": "send", "label": "", "spec": { "kind": "http",
+                    "method": "POST", "url": "https://hooks.example.com/x", "allowed_hosts": ["hooks.example.com"] } } },
+                { "op": "connect", "edge": { "from": "think", "port": "out", "to": "send" } }
+            ]),
+        )
+    };
+    assert!(untrusted_flow(&with_agent("{{nodes.join.output.value}}").graph));
+    assert!(untrusted_flow(&with_agent("{{nodes.done.output}}").graph));
+    assert!(!untrusted_flow(&with_agent("{{trigger.kind}}").graph));
+
+    let trusted_items = set_spec(
+        &set_spec(
+            &loop_automation(),
+            "fetch",
+            json!({ "kind": "transform", "fields": [{ "name": "body", "value": "x" }] }),
+        ),
+        "post",
+        json!({ "kind": "transform", "fields": [] }),
+    );
+    let in_body = apply(
+        &trusted_items,
+        json!([
+            { "op": "update_node", "id": "mark", "spec": agent("{{nodes.each.item}}") },
+            { "op": "add_node", "node": { "id": "send", "label": "", "spec": { "kind": "http",
+                "method": "POST", "url": "https://hooks.example.com/x", "allowed_hosts": ["hooks.example.com"] } } },
+            { "op": "connect", "edge": { "from": "done", "port": "out", "to": "send" } }
+        ]),
+    );
+    assert!(!untrusted_flow(&in_body.graph));
+    let fetched_items = set_spec(
+        &in_body,
+        "fetch",
+        json!({ "kind": "http", "method": "GET", "url": "https://api.example.com/items",
+                "allowed_hosts": ["api.example.com"] }),
+    );
+    assert!(untrusted_flow(&fetched_items.graph));
+    let index_only = apply(
+        &fetched_items,
+        json!([{ "op": "update_node", "id": "mark", "spec": agent("item {{nodes.each.index}}") }]),
+    );
+    assert!(!untrusted_flow(&index_only.graph));
 }

@@ -1,12 +1,10 @@
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::model::{
     Automation, IssueCode, LastRun, Parked, Run, RunId, RunStatus, RunTrigger, SettledStatus, Step,
     StepStatus,
 };
-use super::store::{
-    AutomationStore, ClaimOutcome, ParkDecision, ParkedRun, SettleOutcome, StoreError,
-};
+use super::store::{AutomationStore, ClaimOutcome, ParkEnd, SettleOutcome, StoreError};
 use super::test_support::{apply, node_id, sample_automation};
 
 const NOW: i64 = 1_000_030;
@@ -352,6 +350,8 @@ fn step(run: &str, node: &str, status: StepStatus, finished_at: Option<i64>) -> 
         error: None,
         started_at: Some(10),
         finished_at,
+        iteration: None,
+        wait_until: None,
     }
 }
 
@@ -401,189 +401,9 @@ fn reconcile_fails_stranded_runs_and_steps_once() {
     );
     let after = store.get(&a.id).unwrap().unwrap();
     assert_eq!(
-        (
-            after.unseen_failures,
-            after.consecutive_errors,
-            after.next_run_at
-        ),
+        (after.unseen_failures, after.consecutive_errors, after.next_run_at),
         (1, 0, a.next_run_at)
     );
-}
-
-fn decision(name: &str, at: i64) -> serde_json::Map<String, serde_json::Value> {
-    json!({ "decision": name, "decided_at": at })
-        .as_object()
-        .unwrap()
-        .clone()
-}
-
-#[test]
-fn a_parked_run_waits_through_reconcile_and_resumes_exactly_once() {
-    let store = AutomationStore::open_in_memory().unwrap();
-    let a = approved(&store, &every_minute());
-    let r1: RunId = "r1".to_string().into();
-    store
-        .insert_run(&run(&a, "r1", RunTrigger::Manual))
-        .unwrap();
-    store
-        .upsert_step(&step("r1", "gate", StepStatus::Running, None))
-        .unwrap();
-
-    assert!(store
-        .park_run(
-            &r1,
-            &node_id("gate"),
-            90_000,
-            &json!({ "message": "Ship?" }),
-            50
-        )
-        .unwrap());
-
-    let waiting = store.get_run(&r1).unwrap().unwrap();
-    let parked = Parked {
-        node_id: node_id("gate"),
-        until: 90_000,
-    };
-    assert_eq!(
-        (waiting.status, waiting.parked.clone()),
-        (RunStatus::Waiting, Some(parked.clone()))
-    );
-    assert!(store.has_active_run(&a.id).unwrap());
-    assert_eq!(store.reconcile_stranded(60).unwrap(), 0);
-    assert_eq!(
-        store.get_steps(&r1).unwrap(),
-        vec![Step {
-            output: Some(json!({ "message": "Ship?" })),
-            ..step("r1", "gate", StepStatus::Waiting, None)
-        }]
-    );
-    let expected = ParkedRun {
-        run_id: r1.clone(),
-        automation_id: a.id.clone(),
-        parked,
-    };
-    assert_eq!(store.list_expired_parks(89_999).unwrap(), vec![]);
-    assert_eq!(
-        store.list_expired_parks(90_000).unwrap(),
-        vec![expected.clone()]
-    );
-    assert_eq!(store.parked_run_of(&a.id).unwrap(), Some(expected));
-    assert_eq!(
-        store.run_project_id(&r1).unwrap(),
-        Some(a.project_id.clone())
-    );
-
-    let wrong_node = store
-        .resume_parked(
-            &r1,
-            &node_id("other"),
-            ParkDecision {
-                status: StepStatus::Succeeded,
-                error: None,
-                fields: decision("approved", 60),
-                before_ms: Some(60),
-            },
-            60,
-        )
-        .unwrap();
-    assert_eq!(wrong_node, None);
-    let after_deadline = store
-        .resume_parked(
-            &r1,
-            &node_id("gate"),
-            ParkDecision {
-                status: StepStatus::Succeeded,
-                error: None,
-                fields: decision("approved", 90_000),
-                before_ms: Some(90_000),
-            },
-            90_000,
-        )
-        .unwrap();
-    assert_eq!(after_deadline, None);
-    let resumed = store
-        .resume_parked(
-            &r1,
-            &node_id("gate"),
-            ParkDecision {
-                status: StepStatus::Succeeded,
-                error: None,
-                fields: decision("approved", 60),
-                before_ms: Some(60),
-            },
-            60,
-        )
-        .unwrap()
-        .unwrap();
-    assert_eq!((resumed.status, resumed.parked), (RunStatus::Running, None));
-    let late = store
-        .resume_parked(
-            &r1,
-            &node_id("gate"),
-            ParkDecision {
-                status: StepStatus::Failed,
-                error: Some("approval_timed_out"),
-                fields: decision("timed_out", 70),
-                before_ms: None,
-            },
-            70,
-        )
-        .unwrap();
-    assert_eq!(late, None);
-    assert_eq!(
-        store.get_steps(&r1).unwrap(),
-        vec![Step {
-            output: Some(json!({ "message": "Ship?", "decision": "approved", "decided_at": 60 })),
-            ..step("r1", "gate", StepStatus::Succeeded, Some(60))
-        }]
-    );
-    assert_eq!(store.parked_run_of(&a.id).unwrap(), None);
-    assert_eq!(store.list_expired_parks(i64::MAX).unwrap(), vec![]);
-
-    store
-        .settle_run(&r1, SettledStatus::Succeeded, None, None, 80)
-        .unwrap();
-    assert!(!store
-        .park_run(&r1, &node_id("gate"), 90_000, &json!({}), 90)
-        .unwrap());
-}
-
-#[test]
-fn a_waiting_run_lists_ahead_of_newer_skipped_runs() {
-    let store = AutomationStore::open_in_memory().unwrap();
-    let a = approved(&store, &every_minute());
-    store
-        .insert_run(&run(&a, "waiting", RunTrigger::Manual))
-        .unwrap();
-    store
-        .upsert_step(&step("waiting", "gate", StepStatus::Running, None))
-        .unwrap();
-    assert!(store
-        .park_run(
-            &"waiting".to_string().into(),
-            &node_id("gate"),
-            90_000,
-            &json!({ "message": "Ship?" }),
-            50
-        )
-        .unwrap());
-    for (i, id) in ["skip1", "skip2", "skip3"].into_iter().enumerate() {
-        store
-            .insert_run(&Run {
-                status: RunStatus::Skipped,
-                started_at: 2_000_000 + i as i64,
-                finished_at: Some(2_000_000 + i as i64),
-                ..run(&a, id, RunTrigger::Scheduled)
-            })
-            .unwrap();
-    }
-    let page: Vec<String> = store
-        .list_runs(&a.id, 2)
-        .unwrap()
-        .into_iter()
-        .map(|r| r.id.to_string())
-        .collect();
-    assert_eq!(page, vec!["waiting", "skip3"]);
 }
 
 #[test]
@@ -627,19 +447,229 @@ fn answered_suggestions_are_the_dismissed_and_accepted_ones_of_the_project() {
     store.accept_suggestion("p1", "bbbb", NOW).unwrap();
     store.dismiss_suggestion("p2", "cccc", NOW).unwrap();
 
-    let mut p1: Vec<String> = store
-        .answered_suggestions("p1")
-        .unwrap()
-        .into_iter()
-        .collect();
+    let mut p1: Vec<String> = store.answered_suggestions("p1").unwrap().into_iter().collect();
     p1.sort();
     assert_eq!(p1, vec!["aaaa".to_string(), "bbbb".to_string()]);
     assert_eq!(
-        store
-            .answered_suggestions("p2")
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>(),
+        store.answered_suggestions("p2").unwrap().into_iter().collect::<Vec<_>>(),
         vec!["cccc".to_string()]
     );
+}
+
+#[test]
+fn schema_4_keeps_the_step_rows_of_a_schema_3_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("automations.sqlite");
+    {
+        let db = rusqlite::Connection::open(&path).unwrap();
+        for sql in &super::store::MIGRATIONS[..3] {
+            db.execute_batch(sql).unwrap();
+        }
+        db.pragma_update(None, "user_version", 3).unwrap();
+        db.execute_batch(
+            r#"INSERT INTO automation (id, project_id, name, revision, enabled, trigger_json,
+                   graph_json, isolation, created_at, updated_at)
+               VALUES ('auto-old', 'p1', 'Old', 1, 1, '{"kind":"manual"}',
+                   '{"nodes":[],"edges":[]}', 'shared_in_root', 1, 1);
+               INSERT INTO automation_run (id, automation_id, revision, graph_json, trigger,
+                   scheduled_for, status, started_at, finished_at)
+               VALUES ('run-old', 'auto-old', 1, '{"nodes":[],"edges":[]}', 'manual', 5,
+                   'succeeded', 5, 9);
+               INSERT INTO automation_step (run_id, node_id, status, output_json, error,
+                   started_at, finished_at)
+               VALUES ('run-old', 'fetch', 'succeeded', '{"items":[1,2]}', NULL, 6, 7),
+                      ('run-old', 'post', 'failed', NULL, 'http_status:500', 7, 8);"#,
+        )
+        .unwrap();
+    }
+
+    let store = AutomationStore::open(&path).unwrap();
+    let run_id = RunId::from("run-old".to_string());
+    assert_eq!(
+        store.get_steps(&run_id).unwrap(),
+        vec![
+            Step {
+                run_id: run_id.clone(),
+                node_id: node_id("fetch"),
+                iteration: None,
+                status: StepStatus::Succeeded,
+                output: Some(json!({ "items": [1, 2] })),
+                error: None,
+                started_at: Some(6),
+                finished_at: Some(7),
+                wait_until: None,
+            },
+            Step {
+                run_id: run_id.clone(),
+                node_id: node_id("post"),
+                iteration: None,
+                status: StepStatus::Failed,
+                output: None,
+                error: Some("http_status:500".into()),
+                started_at: Some(7),
+                finished_at: Some(8),
+                wait_until: None,
+            },
+        ]
+    );
+    let mut in_loop = step("run-old", "post", StepStatus::Succeeded, Some(9));
+    in_loop.iteration = Some(0);
+    assert!(store.upsert_step(&in_loop).unwrap());
+    assert_eq!(
+        store
+            .get_steps(&run_id)
+            .unwrap()
+            .iter()
+            .map(|s| (s.node_id.to_string(), s.iteration, s.status))
+            .collect::<Vec<_>>(),
+        vec![
+            ("fetch".to_string(), None, StepStatus::Succeeded),
+            ("post".to_string(), None, StepStatus::Failed),
+            ("post".to_string(), Some(0), StepStatus::Succeeded),
+        ]
+    );
+}
+
+fn waiting(run: &str, node: &str, iteration: Option<u32>, output: Option<Value>) -> Step {
+    Step {
+        iteration,
+        output,
+        wait_until: Some(5_000),
+        ..step(run, node, StepStatus::Waiting, None)
+    }
+}
+
+fn run_id(id: &str) -> RunId {
+    RunId::from(id.to_string())
+}
+
+#[test]
+fn a_run_reads_where_it_is_parked_from_its_waiting_step() {
+    let store = AutomationStore::open_in_memory().unwrap();
+    let a = approved(&store, &every_minute());
+    store.insert_run(&run(&a, "r1", RunTrigger::Manual)).unwrap();
+    store.insert_run(&run(&a, "r2", RunTrigger::Manual)).unwrap();
+    store
+        .upsert_step(&waiting("r1", "gate", Some(2), None))
+        .unwrap();
+    let parked = Parked {
+        node_id: node_id("gate"),
+        iteration: Some(2),
+        until: 5_000,
+    };
+
+    let r1 = store.get_run(&run_id("r1")).unwrap().unwrap();
+    assert_eq!(r1.parked, Some(parked.clone()));
+    assert_eq!(store.get_run(&run_id("r2")).unwrap().unwrap().parked, None);
+    assert_eq!(store.list_parked().unwrap(), vec![(r1, parked)]);
+
+    store
+        .claim_park(&run_id("r1"), &node_id("gate"), Some(2), ParkEnd::Approved, 4_000)
+        .unwrap();
+    assert_eq!(store.get_run(&run_id("r1")).unwrap().unwrap().parked, None);
+    assert_eq!(store.list_parked().unwrap(), vec![]);
+}
+
+#[test]
+fn a_decision_claims_a_waiting_approval_once_and_only_before_its_deadline() {
+    let store = AutomationStore::open_in_memory().unwrap();
+    let a = approved(&store, &every_minute());
+    store.insert_run(&run(&a, "r1", RunTrigger::Manual)).unwrap();
+    store
+        .upsert_step(&waiting("r1", "gate", None, Some(json!({ "message": "Ship?" }))))
+        .unwrap();
+    let claim = |end, now| {
+        store
+            .claim_park(&run_id("r1"), &node_id("gate"), None, end, now)
+            .unwrap()
+    };
+
+    assert!(!claim(ParkEnd::Approved, 5_000), "the deadline passed");
+    assert!(claim(ParkEnd::Rejected, 4_999));
+    assert!(!claim(ParkEnd::Approved, 4_999), "already decided");
+    assert!(!claim(ParkEnd::ApprovalTimedOut, 5_000), "already decided");
+
+    let gate = &store.get_steps(&run_id("r1")).unwrap()[0];
+    assert_eq!(
+        (gate.status, gate.error.as_deref(), gate.output.clone(), gate.finished_at),
+        (
+            StepStatus::Failed,
+            Some("rejected"),
+            Some(json!({ "message": "Ship?", "decision": "rejected", "decided_at": 4_999 })),
+            Some(4_999)
+        )
+    );
+}
+
+#[test]
+fn the_deadline_claim_times_out_an_approval_but_resumes_a_wait() {
+    let store = AutomationStore::open_in_memory().unwrap();
+    let a = approved(&store, &every_minute());
+    store.insert_run(&run(&a, "r1", RunTrigger::Manual)).unwrap();
+    store.insert_run(&run(&a, "r2", RunTrigger::Manual)).unwrap();
+    store
+        .upsert_step(&waiting("r1", "gate", None, Some(json!({ "message": "Ship?" }))))
+        .unwrap();
+    store
+        .upsert_step(&waiting("r2", "pause", Some(0), None))
+        .unwrap();
+
+    assert!(!store
+        .claim_park(&run_id("r1"), &node_id("gate"), None, ParkEnd::ApprovalTimedOut, 4_999)
+        .unwrap());
+    assert!(store
+        .claim_park(&run_id("r1"), &node_id("gate"), None, ParkEnd::ApprovalTimedOut, 5_000)
+        .unwrap());
+    assert!(store
+        .claim_park(&run_id("r2"), &node_id("pause"), Some(0), ParkEnd::WaitDue, 5_001)
+        .unwrap());
+
+    let ended = |id: &str| {
+        let s = store.get_steps(&run_id(id)).unwrap().remove(0);
+        (s.status, s.error, s.output)
+    };
+    assert_eq!(
+        ended("r1"),
+        (
+            StepStatus::Failed,
+            Some("approval_timed_out".to_string()),
+            Some(json!({ "message": "Ship?", "decision": "timed_out", "decided_at": 5_000 }))
+        )
+    );
+    assert_eq!(
+        ended("r2"),
+        (
+            StepStatus::Succeeded,
+            None,
+            Some(json!({ "resumed_at": 5_001 }))
+        )
+    );
+}
+
+#[test]
+fn runs_list_the_one_in_flight_first_then_newest() {
+    let store = AutomationStore::open_in_memory().unwrap();
+    let a = approved(&store, &every_minute());
+    for (id, status, started_at) in [
+        ("parked", RunStatus::Running, 1_000),
+        ("old", RunStatus::Succeeded, 500),
+        ("skip1", RunStatus::Skipped, 2_000),
+        ("skip2", RunStatus::Skipped, 3_000),
+    ] {
+        store
+            .insert_run(&Run {
+                status,
+                started_at,
+                ..run(&a, id, RunTrigger::Scheduled)
+            })
+            .unwrap();
+    }
+
+    let ids: Vec<String> = store
+        .list_runs(&a.id, 3)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id.to_string())
+        .collect();
+    assert_eq!(ids, vec!["parked", "skip2", "skip1"]);
 }

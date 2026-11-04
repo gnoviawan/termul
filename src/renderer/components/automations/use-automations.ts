@@ -127,13 +127,13 @@ export function useAutomationRuns(id: AutomationId | null): HostQuery<Automation
 
 const RUNNING_POLL_MS = 2000
 
-/** Steps of one run; polls while the run is still going. */
+/** Steps of one run; polls while the run executes. A parked run changes only through change events. */
 export function useRunSteps(run: AutomationRun | null): HostQuery<AutomationStep[]> {
   const runId: RunId | null = run?.id ?? null
   return useHostQuery(
     runId,
     () => getAutomationRunSteps(runId as RunId),
     (change) => change.automation_id === run?.automation_id,
-    run?.status === 'running' ? RUNNING_POLL_MS : null
+    run?.status === 'running' && run.parked === null ? RUNNING_POLL_MS : null
   )
 }

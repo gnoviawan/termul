@@ -174,45 +174,42 @@ mod engine_support {
 
     /// An engine on an in-memory store whose every project resolves to
     /// `root`.
-    pub fn test_engine(root: PathBuf, vault: Arc<dyn SecretVault>, http: HttpConfig) -> TestEngine {
+    pub fn test_engine(
+        root: PathBuf,
+        vault: Arc<dyn SecretVault>,
+        http: HttpConfig,
+    ) -> TestEngine {
         let store = Arc::new(AutomationStore::open_in_memory().unwrap());
+        test_engine_on(store, root, vault, http)
+    }
+
+    /// [`test_engine`] over `store`, so a second engine can stand in for a
+    /// restarted host on the same database file.
+    pub fn test_engine_on(
+        store: Arc<AutomationStore>,
+        root: PathBuf,
+        vault: Arc<dyn SecretVault>,
+        http: HttpConfig,
+    ) -> TestEngine {
         let clock = FakeClock::at(1_000);
         let agents = Arc::new(AgentRegistry::in_memory());
         let secrets = Arc::new(Secrets::new(vault, store.clone()));
-        let mut te = TestEngine {
-            engine: Engine::new(EngineDeps {
-                store: store.clone(),
-                agents: agents.clone(),
-                secrets: secrets.clone(),
-                acp: Arc::new(AcpManager::new(vec![])),
-                project_roots: Arc::new(|_| None),
-                clock: clock.clone(),
-                http: http.clone(),
-            })
-            .unwrap(),
+        let engine = Engine::new(EngineDeps {
+            store: store.clone(),
+            agents: agents.clone(),
+            secrets: secrets.clone(),
+            acp: Arc::new(AcpManager::new(vec![])),
+            project_roots: Arc::new(move |_| Some(root.clone())),
+            clock: clock.clone(),
+            http,
+        })
+        .unwrap();
+        TestEngine {
+            engine,
             clock,
             store,
             agents,
             secrets,
-        };
-        te.engine = te.restarted(root, http);
-        te
-    }
-
-    impl TestEngine {
-        /// A fresh engine on the same store, clock, agents and secrets, as
-        /// after a host restart.
-        pub fn restarted(&self, root: PathBuf, http: HttpConfig) -> Arc<Engine> {
-            Engine::new(EngineDeps {
-                store: self.store.clone(),
-                agents: self.agents.clone(),
-                secrets: self.secrets.clone(),
-                acp: Arc::new(AcpManager::new(vec![])),
-                project_roots: Arc::new(move |_| Some(root.clone())),
-                clock: self.clock.clone(),
-                http,
-            })
-            .unwrap()
         }
     }
 }

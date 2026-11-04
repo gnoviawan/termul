@@ -430,7 +430,7 @@ pub static ROUTES: &[ApiRoute] = &[
         .ipc::<bool>(),
     ApiRoute::get("/api/automation-runs/{run_id}/steps", Tag::Automations, "A run's steps")
         .ipc::<Vec<Step>>(),
-    ApiRoute::post("/api/automation-runs/{run_id}/approval", Tag::Automations, "Approve or reject a waiting run")
+    ApiRoute::post("/api/automation-runs/{run_id}/approval", Tag::Automations, "Approve or reject a parked approval")
         .json::<automation::ApprovalBody>()
         .ipc::<bool>(),
     ApiRoute::get("/api/automation-agents", Tag::Automations, "Agents an automation can use")

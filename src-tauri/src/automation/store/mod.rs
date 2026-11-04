@@ -18,13 +18,12 @@ use super::graph;
 use super::model::{wire_name, Automation, AutomationId, Issue, LastRun, Schedule};
 use super::schedule::{compute_next_run, ScheduleError};
 
-pub use runs::{ParkDecision, ParkedRun, SettleOutcome};
+pub use runs::{ParkEnd, SettleOutcome};
 
 pub const DB_FILE_NAME: &str = "automations.sqlite";
 
 /// Each entry upgrades `user_version` N to N+1. Append only.
-const MIGRATIONS: &[&str] = &[
-    r#"
+pub(crate) const MIGRATIONS: &[&str] = &[r#"
 CREATE TABLE automation (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -75,15 +74,13 @@ CREATE TABLE automation_step (
     finished_at INTEGER,
     PRIMARY KEY (run_id, node_id)
 );
-"#,
-    r#"
+"#, r#"
 CREATE TABLE automation_secret_name (
     project_id TEXT NOT NULL,
     name TEXT NOT NULL,
     PRIMARY KEY (project_id, name)
 );
-"#,
-    r#"
+"#, r#"
 CREATE TABLE automation_suggestion_dismissed (
     project_id TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
@@ -96,13 +93,26 @@ CREATE TABLE automation_suggestion_accepted (
     accepted_at INTEGER NOT NULL,
     PRIMARY KEY (project_id, fingerprint)
 );
-"#,
-    r#"
-ALTER TABLE automation_run ADD COLUMN parked_node TEXT;
-ALTER TABLE automation_run ADD COLUMN parked_until INTEGER;
-CREATE INDEX idx_run_parked_until ON automation_run(parked_until) WHERE parked_until IS NOT NULL;
-"#,
-];
+"#, r#"
+CREATE TABLE automation_step_v4 (
+    run_id TEXT NOT NULL REFERENCES automation_run(id),
+    node_id TEXT NOT NULL,
+    iteration INTEGER NOT NULL DEFAULT -1,
+    status TEXT NOT NULL,
+    output_json TEXT,
+    error TEXT,
+    started_at INTEGER,
+    finished_at INTEGER,
+    wait_until INTEGER,
+    PRIMARY KEY (run_id, node_id, iteration)
+);
+INSERT INTO automation_step_v4 (run_id, node_id, iteration, status, output_json, error, started_at, finished_at)
+    SELECT run_id, node_id, -1, status, output_json, error, started_at, finished_at
+    FROM automation_step ORDER BY rowid;
+DROP TABLE automation_step;
+ALTER TABLE automation_step_v4 RENAME TO automation_step;
+CREATE INDEX idx_step_waiting ON automation_step(wait_until) WHERE status = 'waiting';
+"#];
 
 #[derive(Debug)]
 pub enum StoreError {
@@ -233,6 +243,18 @@ impl AutomationStore {
     /// The live (not deleted) automation with this id.
     pub fn get(&self, id: &AutomationId) -> StoreResult<Option<Automation>> {
         get_live(&*self.conn()?, id)
+    }
+
+    /// The project of `id`, deleted automations included.
+    pub fn project_of(&self, id: &AutomationId) -> StoreResult<Option<String>> {
+        Ok(self
+            .conn()?
+            .query_row(
+                "SELECT project_id FROM automation WHERE id = ?1",
+                params![id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?)
     }
 
     pub fn list(&self, project_id: Option<&str>) -> StoreResult<Vec<Automation>> {

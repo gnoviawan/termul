@@ -1,145 +1,81 @@
+import wire from '@shared/types/__fixtures__/automation.json'
 import { describe, expect, it } from 'vitest'
-import {
-  parseApprovalOutput,
-  parseAutomation,
-  parseRun,
-  parseStepList,
-  WireShapeError
-} from '../automation-wire'
+import { parseApprovalOutput, parseRun, parseRunList, parseStepList } from '@/lib/automation-wire'
 
-const GRAPH = {
-  nodes: [
-    {
-      id: 'gate',
-      label: 'Ship it?',
-      spec: { kind: 'approval', message: 'Deploy {{trigger.kind}}?', timeout_ms: 3_600_000 }
-    }
-  ],
-  edges: [{ from: 'trigger', port: 'out', to: 'gate' }]
-}
-
-const RUN = {
-  id: 'run-3',
-  automation_id: 'auto-1',
-  revision: 2,
-  graph: GRAPH,
-  trigger: 'manual',
-  scheduled_for: 1_000,
-  status: 'waiting',
-  started_at: 1_100,
-  finished_at: null,
-  stop_reason: null,
-  summary: null,
-  conversation_id: null,
-  worktree_id: null,
-  parked: { node_id: 'gate', until: 3_601_100 }
-}
-
-function shapeError(parse: () => unknown): string {
-  try {
-    parse()
-  } catch (err) {
-    if (err instanceof WireShapeError) return err.message
-    throw err
-  }
-  return 'parsed'
-}
-
-describe('automation wire: approval shapes', () => {
-  it('parses an approval node spec', () => {
-    const automation = parseAutomation({
-      id: 'auto-1',
-      project_id: 'p1',
-      name: 'Deploy',
-      revision: 2,
-      approved_revision: 2,
-      enabled: true,
-      trigger: { kind: 'manual' },
-      graph: GRAPH,
-      isolation: 'shared_in_root',
-      next_run_at: null,
-      consecutive_errors: 0,
-      schedule_error_count: 0,
-      unseen_failures: 0,
-      last_run: null,
-      created_at: 1,
-      updated_at: 1,
-      deleted_at: null
-    })
-
-    expect(automation.graph.nodes[0].spec).toEqual({
-      kind: 'approval',
-      message: 'Deploy {{trigger.kind}}?',
-      timeout_ms: 3_600_000
-    })
+describe('automation wire parser', () => {
+  it('round-trips the fixture runs and steps, loops, merges, waits and approvals included', () => {
+    expect(parseRunList(wire.runs)).toEqual(wire.runs)
+    expect(parseStepList(wire.steps)).toEqual(wire.steps)
   })
 
-  it('rejects an approval node without a numeric timeout', () => {
-    const graph = {
-      ...GRAPH,
-      nodes: [{ ...GRAPH.nodes[0], spec: { kind: 'approval', message: 'ok?', timeout_ms: '1h' } }]
-    }
-
-    expect(shapeError(() => parseRun({ ...RUN, graph }))).toBe(
-      'run.graph.nodes[0].spec.timeout_ms: expected a number'
-    )
-  })
-
-  it('parses a waiting run with where it is parked', () => {
-    const run = parseRun(RUN)
-
-    expect(run.status).toBe('waiting')
-    expect(run.parked).toEqual({ node_id: 'gate', until: 3_601_100 })
-  })
-
-  it('reads a missing parked field on a settled run as null', () => {
-    const { parked: _, ...settled } = { ...RUN, status: 'succeeded', finished_at: 2_000 }
-
-    expect(parseRun(settled).parked).toBeNull()
-    expect(parseRun({ ...settled, parked: null }).status).toBe('succeeded')
-  })
-
-  it('rejects a waiting run that is not parked, and a parked run that is not waiting', () => {
-    expect(shapeError(() => parseRun({ ...RUN, parked: null }))).toBe(
-      'run.parked: expected a parked node'
-    )
-    expect(shapeError(() => parseRun({ ...RUN, status: 'running' }))).toBe(
-      'run.parked: expected null unless waiting'
-    )
-    expect(shapeError(() => parseRun({ ...RUN, parked: { node_id: 'gate' } }))).toBe(
-      'run.parked.until: expected a number'
-    )
-  })
-
-  it('parses a waiting step', () => {
-    const [step] = parseStepList([
-      {
-        run_id: 'run-3',
-        node_id: 'gate',
-        status: 'waiting',
-        output: { message: 'Deploy manual?' },
-        error: null,
-        started_at: 1_200,
-        finished_at: null
-      }
+  it('reads the control-flow kinds, the item port and a parked step', () => {
+    const { graph } = parseRun(wire.runs[0])
+    expect(graph.nodes.map((node) => node.spec)).toEqual([
+      { kind: 'for_each', items: '{{trigger.kind}}', max_iterations: 5 },
+      expect.objectContaining({ kind: 'transform' }),
+      { kind: 'merge', mode: 'any' },
+      { kind: 'wait', duration_ms: 3600000 },
+      { kind: 'approval', message: 'Ship {{nodes.body.output.item}}?', timeout_ms: 86400000 },
+      { kind: 'fail', message: '{{trigger.kind}}' }
     ])
+    expect(graph.edges[1]).toEqual({ from: 'each', port: 'item', to: 'body' })
+    expect(parseStepList(wire.steps)[4]).toMatchObject({
+      node_id: 'pause',
+      iteration: null,
+      status: 'waiting',
+      wait_until: 1773050461000
+    })
+  })
 
-    expect(step.status).toBe('waiting')
-    expect(step.output).toEqual({ message: 'Deploy manual?' })
+  it('reads a step without the new fields as outside any loop and not parked', () => {
+    const { iteration: _, wait_until: __, ...legacy } = wire.steps[0]
+    expect(parseStepList([legacy])[0]).toMatchObject({ iteration: null, wait_until: null })
+  })
+
+  it('rejects an unknown merge mode and port', () => {
+    const run = structuredClone(wire.runs[0])
+    run.graph.nodes[2].spec = { kind: 'merge', mode: 'some' } as never
+    expect(() => parseRun(run)).toThrow(/mode/)
+    const edge = structuredClone(wire.runs[0])
+    edge.graph.edges[1].port = 'each'
+    expect(() => parseRun(edge)).toThrow(/port/)
+  })
+
+  it('reads where a running run is parked, a wait or an approval in a loop', () => {
+    expect(parseRunList(wire.runs).map((run) => [run.status, run.parked])).toEqual([
+      ['failed', null],
+      ['running', { node_id: 'pause', iteration: null, until: 1773050461000 }],
+      ['running', { node_id: 'gate', iteration: 1, until: 1773133261000 }]
+    ])
+  })
+
+  it('reads a run from a host without parked runs as not parked', () => {
+    const { parked: _, ...legacy } = wire.runs[1]
+    expect(parseRun(legacy).parked).toBeNull()
+  })
+
+  it('rejects an approval without a numeric timeout and a parked run without a deadline', () => {
+    const run = structuredClone(wire.runs[0])
+    run.graph.nodes[4].spec = { kind: 'approval', message: 'ok?', timeout_ms: '1h' } as never
+    expect(() => parseRun(run)).toThrow('run.graph.nodes[4].spec.timeout_ms: expected a number')
+    const parked = structuredClone(wire.runs[1])
+    parked.parked = { node_id: 'pause' } as never
+    expect(() => parseRun(parked)).toThrow('run.parked.until: expected a number')
   })
 
   it('reads an approval output before and after the decision', () => {
-    expect(parseApprovalOutput({ message: 'Deploy manual?' })).toEqual({
-      message: 'Deploy manual?'
+    const [waiting, decided] = parseStepList(wire.steps).slice(5)
+    expect(parseApprovalOutput(waiting.output)).toEqual({ message: 'Ship b?' })
+    expect(parseApprovalOutput(decided.output)).toEqual({
+      message: 'Ship a?',
+      decision: 'rejected',
+      decided_at: 1773046900000
     })
-    expect(
-      parseApprovalOutput({ message: 'Deploy manual?', decision: 'timed_out', decided_at: 9 })
-    ).toEqual({ message: 'Deploy manual?', decision: 'timed_out', decided_at: 9 })
   })
 
   it('reads any other output as no approval detail', () => {
     expect(parseApprovalOutput(null)).toBeNull()
-    expect(parseApprovalOutput({ items: [] })).toBeNull()
+    expect(parseApprovalOutput({ resumed_at: 9 })).toBeNull()
     expect(parseApprovalOutput({ message: 'x', decision: 'maybe', decided_at: 9 })).toBeNull()
     expect(parseApprovalOutput({ message: 'x', decision: 'approved' })).toBeNull()
   })

@@ -74,8 +74,8 @@ const RUN: &str = "/api/automations/{id}/run";
 const RUNS: &str = "/api/automations/{id}/runs";
 const SEEN: &str = "/api/automations/{id}/seen";
 const CANCEL_RUN: &str = "/api/automation-runs/{run_id}/cancel";
-const RUN_STEPS: &str = "/api/automation-runs/{run_id}/steps";
 const RUN_APPROVAL: &str = "/api/automation-runs/{run_id}/approval";
+const RUN_STEPS: &str = "/api/automation-runs/{run_id}/steps";
 const AGENTS: &str = "/api/automation-agents";
 const SECRETS: &str = "/api/automation-secrets";
 const SUGGESTIONS: &str = "/api/automation-suggestions";
@@ -95,8 +95,8 @@ pub fn automation_router<S>(state: AutomationRouteState) -> Router<S> {
         .route(RUNS, get(list_runs))
         .route(SEEN, post(mark_seen))
         .route(CANCEL_RUN, post(cancel_run))
-        .route(RUN_STEPS, get(run_steps))
         .route(RUN_APPROVAL, post(decide))
+        .route(RUN_STEPS, get(run_steps))
         .route(AGENTS, get(list_agents))
         .route(
             SECRETS,

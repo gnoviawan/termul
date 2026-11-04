@@ -1,166 +1,133 @@
-//! Parking: a run that reaches an approval node leaves memory and waits in
-//! the store. Every way a park ends (approve, reject, timeout, cancel) goes
-//! through [`Engine::resolve`], whose store claim lets exactly one of them
-//! win, and resumes the run on a new task.
+//! Parked runs. A run whose `wait` or `approval` step is `waiting` has no
+//! task: its row stays `running` (so the overlap guard still sees it) and its
+//! step rows hold everything the resume needs. One idempotent path resumes
+//! it, called by a timer armed at park time, by every tick and at boot, and
+//! by a person deciding an approval; a CAS on the waiting step lets exactly
+//! one caller win.
 
-use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use serde::Serialize;
-use serde_json::{json, Map, Value};
 use tokio_util::sync::CancellationToken;
 
-use super::executor::{self, ParkRequest};
+use super::workdir::Workdir;
 use super::{ActiveRun, Engine};
-use crate::automation::model::{wire_name, AutomationId, NodeId, Run, RunId, StepStatus};
-use crate::automation::store::{ParkDecision, StoreResult};
-
-/// How an approval park ended. The wire name is the step output's
-/// `decision`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Decision {
-    Approved,
-    Rejected,
-    TimedOut,
-    Cancelled,
-}
-
-impl Decision {
-    /// The parked step's terminal status and error. Approved fires `out`;
-    /// the rest fail the step, so its `error` edges fire (a cancelled run
-    /// stops before routing anything).
-    fn step(self) -> (StepStatus, Option<&'static str>) {
-        match self {
-            Self::Approved => (StepStatus::Succeeded, None),
-            Self::Rejected => (StepStatus::Failed, Some("rejected")),
-            Self::TimedOut => (StepStatus::Failed, Some("approval_timed_out")),
-            Self::Cancelled => (StepStatus::Failed, Some(executor::CANCELLED)),
-        }
-    }
-
-    /// Fields merged into the waiting step's output.
-    fn fields(self, now_ms: i64) -> Map<String, Value> {
-        match json!({ "decision": wire_name(&self), "decided_at": now_ms }) {
-            Value::Object(fields) => fields,
-            _ => Map::new(),
-        }
-    }
-}
+use crate::automation::model::{NodeId, Parked, Run, RunId};
+use crate::automation::store::{ParkEnd, StoreResult};
 
 impl Engine {
-    /// Commits a walk's park and drops the run's active entry. `cancel_run`
-    /// takes the same lock, so a cancel either lands before the check here
-    /// (the run settles `cancelled` without parking) or finds the run parked.
-    /// `Err` is the outcome the run settles with instead of parking.
-    pub(super) fn park(
-        self: &Arc<Self>,
-        run: &Run,
-        request: ParkRequest,
-        cancel: &CancellationToken,
-    ) -> Result<(), executor::Outcome> {
-        let mut active = self.active.lock();
-        if cancel.is_cancelled() {
-            drop(active);
-            executor::record(
-                self,
-                run,
-                &request.node_id,
-                StepStatus::Failed,
-                None,
-                Some(executor::CANCELLED.to_string()),
-                None,
-            );
-            return Err(executor::skip_unrun(self, run));
+    /// Resumes every parked run whose wait is due.
+    pub fn resume_due(self: &Arc<Self>) {
+        if self.shutdown.is_cancelled() {
+            return;
         }
-        match self.store.park_run(
-            &run.id,
-            &request.node_id,
-            request.until,
-            &request.output,
-            self.now_ms(),
-        ) {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(executor::Outcome::failed(
-                    "park_failed: the run is not running",
-                ))
+        let now = self.now_ms();
+        for (run, parked) in self.parked_runs() {
+            if parked.until <= now {
+                let end = ParkEnd::due(run.graph.node(&parked.node_id).map(|n| n.spec.kind()));
+                self.resume(run, parked, end, now);
+            }
+        }
+    }
+
+    /// A person approves or rejects the approval `node_id` that `run_id` is
+    /// parked on. `false` when it is not parked there (any more) or its
+    /// deadline passed.
+    pub fn decide(
+        self: &Arc<Self>,
+        run_id: &RunId,
+        node_id: &NodeId,
+        approved: bool,
+    ) -> StoreResult<bool> {
+        let now = self.now_ms();
+        let Some(run) = self.store.get_run(run_id)? else {
+            return Ok(false);
+        };
+        let Some(parked) = run.parked.clone().filter(|p| &p.node_id == node_id) else {
+            return Ok(false);
+        };
+        let end = if approved {
+            ParkEnd::Approved
+        } else {
+            ParkEnd::Rejected
+        };
+        Ok(self.resume(run, parked, end, now))
+    }
+
+    /// Boot: resumes the parked runs that are due and arms a timer for each
+    /// of the others.
+    pub(super) fn arm_parked(self: &Arc<Self>) {
+        let now = self.now_ms();
+        let parked = self.parked_runs();
+        log::info!("[Automation] {} parked run(s) at boot", parked.len());
+        for wait_until in parked.iter().map(|(_, p)| p.until).filter(|at| *at > now) {
+            self.arm_timer(wait_until);
+        }
+        self.resume_due();
+    }
+
+    /// Calls [`Engine::resume_due`] at `wait_until`, or never once the engine
+    /// shuts down.
+    pub(super) fn arm_timer(self: &Arc<Self>, wait_until: i64) {
+        let delay = u64::try_from(wait_until - self.now_ms()).unwrap_or(0);
+        let engine = Arc::clone(self);
+        let shutdown = self.shutdown.clone();
+        self.tasks.spawn(async move {
+            tokio::select! {
+                () = tokio::time::sleep(Duration::from_millis(delay)) => engine.resume_due(),
+                () = shutdown.cancelled() => {}
+            }
+        });
+    }
+
+    pub(super) fn parked_runs(&self) -> Vec<(Run, Parked)> {
+        self.store.list_parked().unwrap_or_else(|error| {
+            log::error!("[Automation] parked runs unreadable: {error}");
+            Vec::new()
+        })
+    }
+
+    /// Ends the park with `end` and executes the run again. `false` when
+    /// another caller ended it first, or the run cannot resume now.
+    fn resume(self: &Arc<Self>, run: Run, parked: Parked, end: ParkEnd, now: i64) -> bool {
+        let Parked {
+            node_id,
+            iteration,
+            until,
+        } = parked;
+        let automation = match self.store.get(&run.automation_id) {
+            Ok(Some(automation)) => automation,
+            Ok(None) => {
+                log::info!(
+                    "[Automation] parked run {} belongs to a deleted automation",
+                    run.id
+                );
+                self.cancel_parked(&run);
+                return false;
             }
             Err(error) => {
-                log::error!("[Automation] park of run {} failed: {error}", run.id);
-                executor::record(
-                    self,
-                    run,
-                    &request.node_id,
-                    StepStatus::Failed,
-                    None,
-                    Some("park_failed".to_string()),
-                    None,
-                );
-                return Err(executor::Outcome::failed("park_failed"));
+                log::error!("[Automation] resume of run {} failed: {error}", run.id);
+                return false;
+            }
+        };
+        let mut active = self.active.lock();
+        // Rechecked under the lock `shutdown` cancels through, so a timer that
+        // passed the check in `resume_due` cannot start a run after shutdown.
+        if self.shutdown.is_cancelled() || active.contains_key(&run.automation_id) {
+            return false;
+        }
+        match self
+            .store
+            .claim_park(&run.id, &node_id, iteration, end, now)
+        {
+            Ok(true) => {}
+            Ok(false) => return false,
+            Err(error) => {
+                log::error!("[Automation] park claim of run {} failed: {error}", run.id);
+                return false;
             }
         }
-        if active
-            .get(&run.automation_id)
-            .is_some_and(|a| a.run_id == run.id)
-        {
-            active.remove(&run.automation_id);
-        }
-        log::info!(
-            "[Automation] run {} parked at {} until {}",
-            run.id,
-            request.node_id,
-            request.until
-        );
-        Ok(())
-    }
-
-    /// Ends the park of `run_id` at `node_id` with `decision` and resumes the
-    /// run. `false` when it is no longer parked there: another decision, the
-    /// timeout or a cancel won.
-    pub fn resolve(
-        self: &Arc<Self>,
-        run_id: &RunId,
-        node_id: &NodeId,
-        decision: Decision,
-    ) -> StoreResult<bool> {
-        let mut active = self.active.lock();
-        self.resolve_locked(&mut active, run_id, node_id, decision)
-    }
-
-    pub(super) fn resolve_locked(
-        self: &Arc<Self>,
-        active: &mut HashMap<AutomationId, ActiveRun>,
-        run_id: &RunId,
-        node_id: &NodeId,
-        decision: Decision,
-    ) -> StoreResult<bool> {
-        // Looked up before the claim, so a won claim always gets its task.
-        let Some(project_id) = self.store.run_project_id(run_id)? else {
-            return Ok(false);
-        };
-        let now = self.now_ms();
-        let (status, error) = decision.step();
-        // A person's decision after the deadline loses to the timeout, even
-        // before the next tick records it.
-        let before = matches!(decision, Decision::Approved | Decision::Rejected).then_some(now);
-        let resolution = ParkDecision {
-            status,
-            error,
-            fields: decision.fields(now),
-            before_ms: before,
-        };
-        let Some(run) = self.store.resume_parked(run_id, node_id, resolution, now)? else {
-            log::info!(
-                "[Automation] run {run_id} is not waiting at {node_id}; {} ignored",
-                wire_name(&decision)
-            );
-            return Ok(false);
-        };
         let cancel = CancellationToken::new();
-        if decision == Decision::Cancelled {
-            cancel.cancel();
-        }
         active.insert(
             run.automation_id.clone(),
             ActiveRun {
@@ -168,49 +135,49 @@ impl Engine {
                 cancel: cancel.clone(),
             },
         );
+        drop(active);
         log::info!(
-            "[Automation] run {run_id} at {node_id} resolved {}",
-            wire_name(&decision)
+            "[Automation] resumed run {} at {node_id}{} ({end:?}, due {until})",
+            run.id,
+            super::executor::at_iteration(iteration)
         );
-        self.notify(&project_id, Some(&run.automation_id));
-        self.spawn_execute(run, project_id, cancel);
-        Ok(true)
+        self.notify(&automation.project_id, Some(&automation.id));
+        self.spawn_execute(run, automation.project_id, cancel);
+        true
     }
 
-    /// Resolves every park whose deadline passed as timed out, or as
-    /// cancelled when its automation was deleted: a deleted automation's
-    /// `error` edges never run.
-    pub(super) fn expire_parks(self: &Arc<Self>, now_ms: i64) {
-        let expired = match self.store.list_expired_parks(now_ms) {
-            Ok(expired) => expired,
+    /// Settles a parked run `cancelled` and removes its worktree. `false`
+    /// when the run is not parked.
+    pub(super) fn cancel_parked(&self, run: &Run) -> bool {
+        match self.store.cancel_parked(&run.id, self.now_ms()) {
+            Ok(Some(_)) => {}
+            Ok(None) => return false,
             Err(error) => {
-                log::error!("[Automation] list expired parks failed: {error}");
-                return;
-            }
-        };
-        for parked in expired {
-            log::info!(
-                "[Automation] run {} park at {} expired",
-                parked.run_id,
-                parked.parked.node_id
-            );
-            let decision = match self.store.get(&parked.automation_id) {
-                Ok(Some(_)) => Decision::TimedOut,
-                Ok(None) => Decision::Cancelled,
-                Err(error) => {
-                    log::error!(
-                        "[Automation] automation of expired run {} unreadable: {error}",
-                        parked.run_id
-                    );
-                    continue;
-                }
-            };
-            if let Err(error) = self.resolve(&parked.run_id, &parked.parked.node_id, decision) {
-                log::error!(
-                    "[Automation] timeout of run {} failed: {error}",
-                    parked.run_id
-                );
+                log::error!("[Automation] cancel of parked run {} failed: {error}", run.id);
+                return false;
             }
         }
+        log::info!("[Automation] cancelled parked run {}", run.id);
+        let project_id = match self.store.project_of(&run.automation_id) {
+            Ok(project_id) => project_id,
+            Err(error) => {
+                log::warn!("[Automation] project of run {} unknown: {error}", run.id);
+                None
+            }
+        };
+        if let Some(project_id) = &project_id {
+            self.notify(project_id, Some(&run.automation_id));
+        }
+        let root = project_id.and_then(|p| (self.project_roots)(&p));
+        if let (Some(root), Some(name)) = (root, run.worktree_id.clone()) {
+            self.tasks.spawn(async move {
+                match Workdir::existing(root, &name).await {
+                    Ok(Some(dir)) => dir.release().await,
+                    Ok(None) => {}
+                    Err(error) => log::warn!("[Automation] run worktree {name} not removed: {error}"),
+                }
+            });
+        }
+        true
     }
 }

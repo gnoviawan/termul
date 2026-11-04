@@ -940,7 +940,9 @@ export const MAX_LIVE_TOOL_CALLS = 500
  * Cap a session's live tool calls at {@link MAX_LIVE_TOOL_CALLS}: drop the
  * OLDEST FINISHED calls (status `completed`/`failed`), always retaining
  * in-flight ones (`pending`/`in_progress`/absent status — never drop what we
- * can't prove finished). The result preserves relative order of survivors.
+ * can't prove finished). Subagent dispatches are never dropped either: each
+ * is a row of the transcript, while the calls a subagent makes are its detail.
+ * The result preserves relative order of survivors.
  */
 export function trimLiveToolCalls(calls: ToolCall[]): ToolCall[] {
   if (calls.length <= MAX_LIVE_TOOL_CALLS) return calls
@@ -951,7 +953,11 @@ export function trimLiveToolCalls(calls: ToolCall[]): ToolCall[] {
   // never drop what we can't prove finished.
   for (let i = 0; i < calls.length; i++) {
     const status = calls[i].status
-    if (dropCount > 0 && (status === 'completed' || status === 'failed')) {
+    if (
+      dropCount > 0 &&
+      calls[i].subagent === undefined &&
+      (status === 'completed' || status === 'failed')
+    ) {
       dropCount--
       continue
     }

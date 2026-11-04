@@ -16,9 +16,7 @@ pub fn wire_name<T: Serialize>(value: &T) -> String {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct AutomationId(String);
 
@@ -44,9 +42,7 @@ impl fmt::Display for AutomationId {
     }
 }
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct RunId(String);
 
@@ -74,9 +70,7 @@ impl fmt::Display for RunId {
 
 /// `^[a-z][a-z0-9_]{0,31}$`, never `trigger`. Parsing rejects anything else,
 /// so every `NodeId` in memory is well-formed.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(try_from = "String", into = "String")]
 pub struct NodeId(String);
 
@@ -138,9 +132,7 @@ impl fmt::Display for NodeId {
 /// A string with `{{ path }}` holes; see `template.rs` for the grammar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
-#[schemars(
-    description = r#"A string with `{{ path }}` holes, filled when the step runs. A path starts at `trigger.scheduled_for`, `trigger.kind`, `nodes.<id>.output[.field...]` or `secrets.<NAME>`."#
-)]
+#[schemars(description = r#"A string with `{{ path }}` holes, filled when the step runs. A path starts at `trigger.scheduled_for`, `trigger.kind`, `nodes.<id>.output[.field...]`, `secrets.<NAME>`, or inside a for_each body `nodes.<loop>.item[.field...]` and `nodes.<loop>.index`."#)]
 pub struct Template(pub String);
 
 impl Template {
@@ -294,6 +286,21 @@ pub enum NodeSpec {
     Fail {
         message: Template,
     },
+    /// Runs the nodes behind its `item` edges once per element of `items`,
+    /// then fires `out` with one object per iteration.
+    ForEach {
+        items: Template,
+        max_iterations: u32,
+    },
+    /// Joins branches: `any` runs when one incoming edge fired, `all` only
+    /// when every one did.
+    Merge {
+        mode: MergeMode,
+    },
+    /// Parks the run durably for `duration_ms`, then continues.
+    Wait {
+        duration_ms: u64,
+    },
     /// Parks the run until a person approves (`out`) or rejects it, or
     /// `timeout_ms` passes (`error`).
     Approval {
@@ -304,8 +311,17 @@ pub enum NodeSpec {
 
 pub const AGENT_MAX_TIMEOUT_MS: u64 = 900_000;
 pub const AGENT_MAX_ATTEMPTS: u8 = 3;
+pub const FOR_EACH_MAX_ITERATIONS: u32 = 100;
+pub const WAIT_MAX_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 pub const APPROVAL_MIN_TIMEOUT_MS: u64 = 60_000;
-pub const APPROVAL_MAX_TIMEOUT_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+pub const APPROVAL_MAX_TIMEOUT_MS: u64 = WAIT_MAX_MS;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeMode {
+    Any,
+    All,
+}
 
 impl NodeSpec {
     pub fn kind(&self) -> NodeKind {
@@ -315,6 +331,9 @@ impl NodeSpec {
             NodeSpec::Transform { .. } => NodeKind::Transform,
             NodeSpec::Condition { .. } => NodeKind::Condition,
             NodeSpec::Fail { .. } => NodeKind::Fail,
+            NodeSpec::ForEach { .. } => NodeKind::ForEach,
+            NodeSpec::Merge { .. } => NodeKind::Merge,
+            NodeSpec::Wait { .. } => NodeKind::Wait,
             NodeSpec::Approval { .. } => NodeKind::Approval,
         }
     }
@@ -348,6 +367,8 @@ impl NodeSpec {
             NodeSpec::Fail { message } | NodeSpec::Approval { message, .. } => {
                 vec![("message".to_string(), message)]
             }
+            NodeSpec::ForEach { items, .. } => vec![("items".to_string(), items)],
+            NodeSpec::Merge { .. } | NodeSpec::Wait { .. } => Vec::new(),
         }
     }
 }
@@ -359,6 +380,9 @@ pub enum NodeKind {
     Transform,
     Condition,
     Fail,
+    ForEach,
+    Merge,
+    Wait,
     Approval,
 }
 
@@ -433,6 +457,8 @@ pub enum Port {
     Error,
     True,
     False,
+    /// A `for_each` node's loop body entry.
+    Item,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -495,8 +521,14 @@ pub enum IssueCode {
     AgentTimeoutOutOfRange,
     AgentMaxAttemptsOutOfRange,
     MissingConditionOperand,
-    ApprovalTimeoutOutOfRange,
     InvalidSchedule,
+    ForEachMaxIterationsOutOfRange,
+    WaitDurationOutOfRange,
+    LoopBodyNotClosed,
+    NestedForEach,
+    LoopItemOutsideBody,
+    MergeNeedsTwoInputs,
+    ApprovalTimeoutOutOfRange,
     /// Added by the service, which owns the agent registry.
     UnknownAgent,
 }
@@ -511,8 +543,6 @@ pub struct ApplyOpsResult {
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
     Running,
-    /// Parked at an approval node until a person decides or the park expires.
-    Waiting,
     Succeeded,
     Failed,
     Cancelled,
@@ -564,14 +594,17 @@ pub struct Run {
     pub summary: Option<String>,
     pub conversation_id: Option<String>,
     pub worktree_id: Option<String>,
-    /// `Some` exactly while `status` is `waiting`.
+    /// Read from the run's `waiting` step, never stored on the run: a
+    /// parked run's status stays `running`.
+    #[serde(default)]
     pub parked: Option<Parked>,
 }
 
-/// Where a waiting run is parked and when the park expires (epoch ms).
+/// The step a `running` run is parked on and when its park ends (epoch ms).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Parked {
     pub node_id: NodeId,
+    pub iteration: Option<u32>,
     pub until: i64,
 }
 
@@ -579,22 +612,34 @@ pub struct Parked {
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
     Running,
-    /// The parked node of a waiting run.
-    Waiting,
     Succeeded,
     Failed,
     Skipped,
+    /// A `wait` or `approval` step whose run is parked until `wait_until`.
+    Waiting,
+}
+
+impl StepStatus {
+    pub fn is_finished(self) -> bool {
+        matches!(self, StepStatus::Succeeded | StepStatus::Failed)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Step {
     pub run_id: RunId,
     pub node_id: NodeId,
+    /// 0-based iteration for a node inside a `for_each` body, else `None`.
+    #[serde(default)]
+    pub iteration: Option<u32>,
     pub status: StepStatus,
     pub output: Option<Value>,
     pub error: Option<String>,
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
+    /// When a `waiting` step's park ends.
+    #[serde(default)]
+    pub wait_until: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

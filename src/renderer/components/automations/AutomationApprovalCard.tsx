@@ -1,46 +1,45 @@
-import type { AutomationNode, RunId } from '@shared/types/automation.types'
+import type { NodeId, RunId } from '@shared/types/automation.types'
 import { useId, useState } from 'react'
 import { toast } from 'sonner'
 import { Hand } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { WriteGate } from '@/components/ui/write-gate'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { decideAutomationApproval } from '@/lib/automation-api'
 import { formatDateTime } from './automation-format'
 
 interface AutomationApprovalCardProps {
   runId: RunId
-  node: AutomationNode
+  nodeId: NodeId
+  label: string
   until: number
   /** The rendered message; `null` while the steps load, empty when it has none. */
   message: string | null
-  /** The server is read-only for this client: no decision can be sent. */
-  gated: boolean
   onDecided: () => void
 }
 
 export function AutomationApprovalCard({
   runId,
-  node,
+  nodeId,
+  label,
   until,
   message,
-  gated,
   onDecided
 }: AutomationApprovalCardProps): React.JSX.Element {
   const titleId = useId()
+  const gated = !useServerAdmitsRemoteWrites()
   const [pending, setPending] = useState<boolean | null>(null)
 
   const decide = async (approved: boolean): Promise<void> => {
     setPending(approved)
-    const result = await decideAutomationApproval(runId, node.id, approved)
+    const result = await decideAutomationApproval(runId, nodeId, approved)
+    setPending(null)
     if (!result.success) {
-      setPending(null)
       toast.error(`Could not record the decision: ${result.error}`)
       return
     }
-    // `false` means it was decided elsewhere first; the refresh shows how.
-    // A repeat click after a failed refresh only gets `false` back.
+    if (!result.data) toast.info('This run is no longer waiting for approval.')
     onDecided()
-    setPending(null)
   }
 
   return (
@@ -48,7 +47,7 @@ export function AutomationApprovalCard({
       <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-4 py-3">
         <Hand size={16} className="shrink-0 text-warning" />
         <h4 id={titleId} className="min-w-0 truncate text-sm font-medium text-foreground">
-          {node.label}
+          {label}
         </h4>
         <span className="ml-auto text-xs tabular-nums text-muted-foreground">
           Expires {formatDateTime(until)}
@@ -68,8 +67,8 @@ export function AutomationApprovalCard({
           Approve to let the run continue. Rejecting, or no decision before it expires, fails this
           step.
         </p>
-        <WriteGate gated={gated}>
-          <div className="flex gap-2">
+        <div className="flex gap-2">
+          <WriteGate gated={gated} className="flex-1 sm:flex-none">
             <Button
               variant="outline"
               size="sm"
@@ -79,6 +78,8 @@ export function AutomationApprovalCard({
             >
               {pending === false ? 'Rejecting…' : 'Reject'}
             </Button>
+          </WriteGate>
+          <WriteGate gated={gated} className="flex-1 sm:flex-none">
             <Button
               size="sm"
               className="flex-1 sm:flex-none pointer-coarse:h-11"
@@ -87,8 +88,8 @@ export function AutomationApprovalCard({
             >
               {pending === true ? 'Approving…' : 'Approve'}
             </Button>
-          </div>
-        </WriteGate>
+          </WriteGate>
+        </div>
       </footer>
     </section>
   )

@@ -1,26 +1,25 @@
 //! One executor per node kind, dispatched by a single exhaustive match.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Map, Value};
 
-use super::executor::RunScope;
-use super::{agent, http};
+use super::executor::{RunScope, Walk};
+use super::{agent, control, http};
 use crate::automation::graph;
 use crate::automation::model::{ConditionOp, NamedTemplate, NodeId, NodeSpec, Port, Template};
-
-/// What running a node yields: a finished node that fires `port`, or a
-/// request to park the run until `until` (epoch ms).
-pub(super) enum Advance {
-    Next(NodeSuccess),
-    Park { until: i64, output: Value },
-}
-use crate::automation::template::{self, RenderContext, RenderError};
+use crate::automation::template::{self, LoopFrame, RenderContext, RenderError};
 
 pub(super) struct NodeScope<'a> {
     pub run: &'a RunScope<'a>,
+    pub walk: &'a Walk<'a>,
     pub node_id: &'a NodeId,
+    /// `Some(i)` inside iteration `i` of a for_each body.
+    pub iteration: Option<u32>,
+    pub frame: Option<&'a LoopFrame>,
     pub outputs: &'a HashMap<NodeId, Value>,
+    /// Indices into `graph.edges` of the edges that fired so far.
+    pub fired: &'a HashSet<usize>,
 }
 
 impl NodeScope<'_> {
@@ -34,6 +33,15 @@ impl NodeScope<'_> {
             trigger: self.run.run.trigger,
             outputs: self.outputs,
             secrets,
+            frame: self.frame,
+        }
+    }
+
+    /// `<run>:<node>`, plus `:<iteration>` inside a for_each body.
+    pub(super) fn idempotency_key(&self) -> String {
+        match self.iteration {
+            Some(i) => format!("{}:{}:{i}", self.run.run.id, self.node_id),
+            None => format!("{}:{}", self.run.run.id, self.node_id),
         }
     }
 }
@@ -54,6 +62,9 @@ pub(super) enum NodeError {
     /// A `fail` node: the run fails with this message.
     Halt(String),
     Cancelled,
+    /// A `wait` or `approval` parked the run; nothing after it runs or is
+    /// recorded until it resumes.
+    Parked { wait_until: i64 },
 }
 
 impl NodeError {
@@ -65,12 +76,10 @@ impl NodeError {
     }
 }
 
-pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<Advance, NodeError> {
-    let out = |output| {
-        Advance::Next(NodeSuccess {
-            output,
-            port: Port::Out,
-        })
+pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<NodeSuccess, NodeError> {
+    let out = |output| NodeSuccess {
+        output,
+        port: Port::Out,
     };
     match spec {
         NodeSpec::Http {
@@ -109,35 +118,21 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: &NodeSpec) -> Result<Advanc
             agent::run(scope, request).await.map(out)
         }
         NodeSpec::Transform { fields } => transform(scope, fields).map(out),
-        NodeSpec::Condition { left, op, right } => {
-            condition(scope, left, *op, right.as_ref()).map(Advance::Next)
-        }
+        NodeSpec::Condition { left, op, right } => condition(scope, left, *op, right.as_ref()),
         NodeSpec::Fail { message } => {
             let ctx = scope.render_context(None);
             Err(NodeError::Halt(render_text(message, &ctx)?))
         }
+        NodeSpec::ForEach {
+            items,
+            max_iterations,
+        } => control::for_each(scope, items, *max_iterations).await,
+        NodeSpec::Merge { .. } => Ok(out(control::merge(scope))),
+        NodeSpec::Wait { duration_ms } => Err(control::wait(scope, *duration_ms)),
         NodeSpec::Approval {
             message,
             timeout_ms,
-        } => {
-            let ctx = scope.render_context(None);
-            let message = render_text(message, &ctx)?;
-            let timeout = i64::try_from(*timeout_ms).unwrap_or(i64::MAX);
-            Ok(Advance::Park {
-                until: scope.run.engine.now_ms().saturating_add(timeout),
-                output: json!({ "message": message }),
-            })
-        }
-    }
-}
-
-/// The port a node's recorded success fired, so a resumed walk follows the
-/// same edges: a condition's `result` picks `true` or `false`.
-pub(super) fn replay_port(spec: &NodeSpec, output: &Value) -> Port {
-    match spec {
-        NodeSpec::Condition { .. } if output["result"] == Value::Bool(true) => Port::True,
-        NodeSpec::Condition { .. } => Port::False,
-        _ => Port::Out,
+        } => Err(control::approval(scope, message, *timeout_ms)),
     }
 }
 

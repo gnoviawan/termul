@@ -144,3 +144,60 @@ fn the_durable_subagent_meta_is_bounded() {
     );
     assert!(malformed.get("_meta").is_none());
 }
+
+#[test]
+fn a_subagents_own_call_keeps_its_masked_title_and_path() {
+    let payload = json!({
+        "toolCall": {
+            "toolCallId": "c1",
+            "kind": "read",
+            "title": "Read src/a.ts with token sk-abcdefghijklmnopqrstuv",
+            "rawInput": { "file_path": "https://bob:hunter2pass@example.com/a.ts" },
+            "content": [{ "type": "content", "content": { "type": "text", "text": "file body" } }],
+            "_meta": { "claudeCode": { "parentToolUseId": "d1" } },
+        },
+    });
+    let kept = super::normalize_durable_payload("tool_call", &payload)["toolCall"].clone();
+    let path = kept["locations"][0]["path"].as_str().unwrap();
+    assert!(
+        path.starts_with("https://bob:") && !path.contains("hunter2pass"),
+        "{path}"
+    );
+    let title = kept["title"].as_str().unwrap();
+    assert!(title.starts_with("Read src/a.ts with token "), "{title}");
+    assert!(!title.contains("sk-abcdefghijklmnopqrstuv"));
+    assert!(
+        kept.get("content").is_none(),
+        "a child call's output is never durable"
+    );
+    assert!(kept.get("rawInput").is_none());
+}
+
+#[test]
+fn a_dispatch_keeps_its_bounded_text_result() {
+    let long = "r".repeat(super::MAX_DURABLE_SUBAGENT_TEXT_CHARS + 10);
+    let payload = json!({
+        "update": {
+            "toolCallId": "d1",
+            "status": "completed",
+            "title": "Agent",
+            "content": [
+                { "type": "content", "content": { "type": "image", "data": "AAAA" } },
+                { "type": "content", "content": { "type": "text", "text": long } },
+            ],
+            "_meta": { "termul/subagent": { "id": "d1", "activity": "idle" } },
+        },
+    });
+    let kept = super::normalize_durable_payload("tool_call_update", &payload)["update"].clone();
+    let text = kept["content"][0]["content"]["text"].as_str().unwrap();
+    assert_eq!(text.len(), super::MAX_DURABLE_SUBAGENT_TEXT_CHARS);
+    assert_eq!(
+        kept["content"].as_array().unwrap().len(),
+        1,
+        "only the text is kept"
+    );
+    assert!(
+        kept.get("title").is_none(),
+        "the record carries the dispatch title"
+    );
+}

@@ -11,7 +11,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use super::agents::{self, AgentRegistry, KnownAgent};
-use super::engine::{Decision, Engine, EngineDeps, HttpConfig, ProjectRoots, SystemClock};
+use super::engine::{Engine, EngineDeps, HttpConfig, ProjectRoots, SystemClock};
 use super::graph::{self, OpError};
 use super::model::{
     ApplyOpsResult, Automation, AutomationChanged, AutomationId, Issue, IssueCode, NodeId,
@@ -261,7 +261,7 @@ impl AutomationService {
         Ok(saved)
     }
 
-    /// Soft-deletes and cancels a run in flight or waiting.
+    /// Soft-deletes and cancels a run in flight.
     pub fn delete(&self, id: &AutomationId) -> ServiceResult<()> {
         let automation = self.load(id)?;
         if !self.engine.store().soft_delete(id, self.engine.now_ms())? {
@@ -334,17 +334,18 @@ impl AutomationService {
             .start_run(&automation, RunTrigger::Manual, now)?)
     }
 
-    /// `false` when the run is neither in flight nor waiting.
+    /// `false` when the run is not in flight.
     pub fn cancel_run(&self, run_id: &RunId) -> ServiceResult<bool> {
         if self.engine.store().get_run(run_id)?.is_none() {
             return Err(ServiceError::NotFound(run_id.to_string()));
         }
-        Ok(self.engine.cancel_run(run_id)?)
+        Ok(self.engine.cancel_run(run_id))
     }
 
-    /// A person approves or rejects the run waiting at `node_id`. `false`
-    /// when it no longer waits there (already decided, timed out or
-    /// cancelled). Only people decide: no agent tool calls this.
+    /// A person approves or rejects the run parked at the approval
+    /// `node_id`. `false` when it is not parked there: already decided,
+    /// timed out, cancelled or past its deadline. Only people decide: no
+    /// agent tool calls this.
     pub fn decide_approval(
         &self,
         run_id: &RunId,
@@ -361,15 +362,16 @@ impl AutomationService {
                 "{node_id} is not an approval node of run {run_id}"
             )));
         }
-        let decision = if approved {
-            Decision::Approved
-        } else {
-            Decision::Rejected
-        };
-        Ok(self.engine.resolve(run_id, node_id, decision)?)
+        let decided = self.engine.decide(run_id, node_id, approved)?;
+        log::info!(
+            "[Automation] approval {node_id} of run {run_id} {} ({})",
+            if approved { "approved" } else { "rejected" },
+            if decided { "applied" } else { "not waiting" }
+        );
+        Ok(decided)
     }
 
-    /// A waiting run first, then newest first, at most 200.
+    /// The run in flight first, then newest first, at most 200.
     pub fn list_runs(&self, id: &AutomationId, limit: usize) -> ServiceResult<Vec<Run>> {
         Ok(self
             .engine

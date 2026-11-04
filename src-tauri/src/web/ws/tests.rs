@@ -992,6 +992,7 @@ fn reopen_outcome_serializes_as_ws_reply_payload() {
         modes: None,
         models: None,
         config_options: Some(vec![]),
+        answered_by_host: false,
     };
     let reply = ok_with_payload("reopen-1".to_string(), &outcome);
     assert!(reply.ok);
@@ -1817,6 +1818,7 @@ fn resume_ok_payload_marks_replay_snapshot_null() {
         modes: None,
         models: None,
         config_options: None,
+        answered_by_host: false,
     };
     let reply = resume_ok_payload("r1".to_string(), &outcome);
     assert!(reply.ok);

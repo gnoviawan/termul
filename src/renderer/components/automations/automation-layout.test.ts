@@ -73,6 +73,31 @@ describe('layoutGraph', () => {
     ])
   })
 
+  it("puts a loop's body left of what follows the loop, whatever the edge order", () => {
+    const layout = layoutGraph(
+      graph(
+        ['each', 'done', 'body'],
+        [
+          ['trigger', 'out', 'each'],
+          ['each', 'out', 'done'],
+          ['each', 'item', 'body']
+        ]
+      ),
+      METRICS
+    )
+
+    expect(layout.nodes.map(({ id, rank, order }) => [id, rank, order])).toEqual([
+      ['trigger', 0, 0],
+      ['each', 1, 0],
+      ['done', 2, 1],
+      ['body', 2, 0]
+    ])
+    expect(layout.edges.slice(1).map(({ to, port, x1 }) => [to, port, x1])).toEqual([
+      ['done', 'out', 290],
+      ['body', 'item', 210]
+    ])
+  })
+
   it('lays out a cycle, an unreachable node and a dangling edge without throwing', () => {
     const layout = layoutGraph(
       graph(

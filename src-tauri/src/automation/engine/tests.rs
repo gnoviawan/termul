@@ -29,12 +29,15 @@ use crate::automation::test_support::{test_engine, MemoryVault, TestEngine};
 const API_KEY: &str = "sk-live-123";
 
 #[derive(Clone, Default)]
-struct Seen {
-    posts: Arc<Mutex<Vec<(String, Value)>>>,
-    stolen: Arc<Mutex<u32>>,
+pub(super) struct Seen {
+    pub posts: Arc<Mutex<Vec<(String, Value)>>>,
+    pub stolen: Arc<Mutex<u32>>,
+    /// GET /items requests served.
+    pub fetches: Arc<Mutex<u32>>,
 }
 
-async fn items(headers: HeaderMap) -> impl IntoResponse {
+async fn items(State(seen): State<Seen>, headers: HeaderMap) -> impl IntoResponse {
+    *seen.fetches.lock() += 1;
     let auth = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
@@ -69,7 +72,7 @@ async fn collect(
 }
 
 /// Serves `api.test` and `evil.test` from one local listener.
-async fn serve() -> (HttpConfig, Seen) {
+pub(super) async fn serve() -> (HttpConfig, Seen) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = listener.local_addr().unwrap();
     let off_list = format!("http://evil.test:{}/steal", addr.port());
@@ -114,18 +117,18 @@ async fn serve() -> (HttpConfig, Seen) {
     (config, seen)
 }
 
-fn url(path: &str, config: &HttpConfig) -> String {
+pub(super) fn url(path: &str, config: &HttpConfig) -> String {
     format!("http://api.test:{}{path}", config.resolve[0].1.port())
 }
 
-struct Fixture {
-    te: TestEngine,
-    http: HttpConfig,
-    seen: Seen,
-    root: tempfile::TempDir,
+pub(super) struct Fixture {
+    pub te: TestEngine,
+    pub http: HttpConfig,
+    pub seen: Seen,
+    pub root: tempfile::TempDir,
 }
 
-async fn fixture() -> Fixture {
+pub(super) async fn fixture() -> Fixture {
     let (http, seen) = serve().await;
     let root = tempfile::tempdir().unwrap();
     let vault = Arc::new(MemoryVault::default());
@@ -140,7 +143,7 @@ async fn fixture() -> Fixture {
 }
 
 /// An approved automation in project `p1`, stored as of the fake clock.
-fn approved(te: &TestEngine, graph: Value, trigger: Value) -> Automation {
+pub(super) fn approved(te: &TestEngine, graph: Value, trigger: Value) -> Automation {
     let mut a = Automation::new("p1".into(), "test".into(), te.engine.now_ms());
     a.graph = serde_json::from_value::<Graph>(graph).unwrap();
     a.trigger = serde_json::from_value::<Trigger>(trigger).unwrap();
@@ -148,16 +151,16 @@ fn approved(te: &TestEngine, graph: Value, trigger: Value) -> Automation {
     te.store.create(&a, te.engine.now_ms()).unwrap()
 }
 
-fn manual(te: &TestEngine, graph: Value) -> Automation {
+pub(super) fn manual(te: &TestEngine, graph: Value) -> Automation {
     approved(te, graph, json!({ "kind": "manual" }))
 }
 
-async fn run_to_end(te: &TestEngine, a: &Automation) -> Run {
+pub(super) async fn run_to_end(te: &TestEngine, a: &Automation) -> Run {
     let run = te.engine.start_run(a, RunTrigger::Manual, 1_000).unwrap();
     settled(&te.store, &run.id).await
 }
 
-async fn settled(store: &AutomationStore, id: &RunId) -> Run {
+pub(super) async fn settled(store: &AutomationStore, id: &RunId) -> Run {
     for _ in 0..1500 {
         let run = store.get_run(id).unwrap().unwrap();
         if run.status != RunStatus::Running {
@@ -169,7 +172,7 @@ async fn settled(store: &AutomationStore, id: &RunId) -> Run {
 }
 
 /// `node -> (status, error)` for every step of the run.
-fn steps(store: &AutomationStore, id: &RunId) -> BTreeMap<String, (StepStatus, Option<String>)> {
+pub(super) fn steps(store: &AutomationStore, id: &RunId) -> BTreeMap<String, (StepStatus, Option<String>)> {
     store
         .get_steps(id)
         .unwrap()
@@ -178,7 +181,7 @@ fn steps(store: &AutomationStore, id: &RunId) -> BTreeMap<String, (StepStatus, O
         .collect()
 }
 
-fn output(store: &AutomationStore, id: &RunId, node: &str) -> Option<Value> {
+pub(super) fn output(store: &AutomationStore, id: &RunId, node: &str) -> Option<Value> {
     store
         .get_steps(id)
         .unwrap()
@@ -187,7 +190,7 @@ fn output(store: &AutomationStore, id: &RunId, node: &str) -> Option<Value> {
         .and_then(|s| s.output)
 }
 
-fn ok(error: Option<&str>) -> (StepStatus, Option<String>) {
+pub(super) fn ok(error: Option<&str>) -> (StepStatus, Option<String>) {
     let status = if error.is_some() {
         StepStatus::Failed
     } else {
@@ -196,22 +199,22 @@ fn ok(error: Option<&str>) -> (StepStatus, Option<String>) {
     (status, error.map(str::to_string))
 }
 
-const SKIPPED: (StepStatus, Option<String>) = (StepStatus::Skipped, None);
+pub(super) const SKIPPED: (StepStatus, Option<String>) = (StepStatus::Skipped, None);
 
-fn http_get(url: &str) -> Value {
+pub(super) fn http_get(url: &str) -> Value {
     json!({ "kind": "http", "method": "GET", "url": url, "allowed_hosts": ["api.test"],
             "headers": [{ "name": "Authorization", "value": "Bearer {{secrets.API_KEY}}" }] })
 }
 
-fn node(id: &str, spec: Value) -> Value {
+pub(super) fn node(id: &str, spec: Value) -> Value {
     json!({ "id": id, "label": id, "spec": spec })
 }
 
-fn edge(from: &str, port: &str, to: &str) -> Value {
+pub(super) fn edge(from: &str, port: &str, to: &str) -> Value {
     json!({ "from": from, "port": port, "to": to })
 }
 
-fn transform(fields: Value) -> Value {
+pub(super) fn transform(fields: Value) -> Value {
     json!({ "kind": "transform", "fields": fields })
 }
 
@@ -606,7 +609,7 @@ async fn cancelling_mid_agent_cancels_the_run() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    assert!(f.te.engine.cancel_run(&run.id).unwrap());
+    assert!(f.te.engine.cancel_run(&run.id));
     let run = settled(&f.te.store, &run.id).await;
 
     assert_eq!(
@@ -620,7 +623,7 @@ async fn cancelling_mid_agent_cancels_the_run() {
             ("after".to_string(), SKIPPED),
         ])
     );
-    assert!(!f.te.engine.cancel_run(&run.id).unwrap());
+    assert!(!f.te.engine.cancel_run(&run.id));
 }
 
 fn every_10s(te: &TestEngine, graph: Value) -> Automation {
@@ -803,5 +806,3 @@ async fn a_worktree_per_run_runs_in_a_fresh_worktree_that_is_removed_after() {
     assert!(!repo.join(".termul/worktrees").join(&name).exists());
     assert_eq!(git(&["branch", "--list", "automation/*"]), "");
 }
-
-mod approval;

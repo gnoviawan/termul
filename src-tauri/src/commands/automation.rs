@@ -315,9 +315,7 @@ pub async fn automation_dismiss_suggestion(
     fingerprint: String,
     webview: Webview,
 ) -> IpcResult<()> {
-    call(&webview, |s| {
-        s.dismiss_suggestion(&project_id, &fingerprint)
-    })
+    call(&webview, |s| s.dismiss_suggestion(&project_id, &fingerprint))
 }
 
 #[tauri::command]

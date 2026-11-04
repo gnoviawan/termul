@@ -1,6 +1,6 @@
 //! A run's working directory: the project root, or a throwaway git worktree
-//! per run that is removed with its branch when the run settles. A parked
-//! run keeps its worktree, and the resumed walk reopens it.
+//! per run that is removed with its branch when the run ends. A parked run
+//! keeps its worktree, and the resume finds it again.
 
 use std::path::{Path, PathBuf};
 
@@ -19,6 +19,10 @@ pub(super) fn worktree_name(run_id: &RunId, isolation: Isolation) -> Option<Stri
     }
 }
 
+fn branch_of(name: &str) -> String {
+    format!("automation/{name}")
+}
+
 pub(super) enum Workdir {
     Shared(PathBuf),
     Worktree {
@@ -29,9 +33,7 @@ pub(super) enum Workdir {
 }
 
 impl Workdir {
-    /// `worktree` is the run's `worktree_id`: `Some` means worktree-per-run,
-    /// whatever the automation's isolation is now, so a resumed run keeps the
-    /// isolation it started with.
+    /// `worktree` is the run's [`worktree_name`]: `None` runs in the root.
     pub(super) async fn prepare(
         roots: &ProjectRoots,
         project_id: &str,
@@ -41,20 +43,16 @@ impl Workdir {
         let Some(name) = worktree.map(str::to_string) else {
             return Ok(Self::Shared(root));
         };
-        let branch = format!("automation/{name}");
+        if let Some(existing) = Self::existing(root.clone(), &name).await? {
+            log::info!("[Automation] run worktree {name} reused");
+            return Ok(existing);
+        }
+        let branch = branch_of(&name);
         let root_text = root.to_string_lossy().into_owned();
         let created = {
             let (root_text, name, branch) = (root_text.clone(), name.clone(), branch.clone());
             tokio::task::spawn_blocking(move || {
-                let kept = WorktreeManager::list(&root_text)?
-                    .into_iter()
-                    .find(|entry| entry.branch == branch);
-                match kept {
-                    Some(entry) => Ok(entry),
-                    None => {
-                        WorktreeManager::create(&root_text, &name, &branch, true, None, None, None)
-                    }
-                }
+                WorktreeManager::create(&root_text, &name, &branch, true, None, None, None)
             })
             .await
         };
@@ -70,6 +68,29 @@ impl Workdir {
             }
             Err(error) => Err(format!("worktree_failed: {error}")),
         }
+    }
+
+    /// The run worktree `name` under `root`, if it is still checked out on
+    /// the run's own branch. A listing that fails is an error, not absence.
+    pub(super) async fn existing(root: PathBuf, name: &str) -> Result<Option<Self>, String> {
+        let root_text = root.to_string_lossy().into_owned();
+        let listed = match tokio::task::spawn_blocking(move || WorktreeManager::list(&root_text)).await {
+            Ok(Ok(listed)) => listed,
+            Ok(Err(error)) => return Err(format!("worktree_failed: {}", error.error_code())),
+            Err(error) => return Err(format!("worktree_failed: {error}")),
+        };
+        let branch = branch_of(name);
+        let Some(entry) = listed
+            .into_iter()
+            .find(|e| e.name == name && e.branch == branch)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Self::Worktree {
+            root,
+            path: PathBuf::from(entry.path),
+            branch,
+        }))
     }
 
     pub(super) fn path(&self) -> &Path {

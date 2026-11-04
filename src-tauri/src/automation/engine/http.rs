@@ -79,7 +79,7 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: HttpSpec<'_>) -> Result<Val
             }
         }),
     };
-    let idempotency_key = format!("{}:{}", scope.run.run.id, scope.node_id);
+    let idempotency_key = scope.idempotency_key();
     let runner = &scope.run.engine.http;
     let mut method = to_method(spec.method);
     for _ in 0..=MAX_REDIRECTS {

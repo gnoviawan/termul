@@ -36,6 +36,8 @@ export type NamedTemplate = { name: string; value: Template }
 
 export type ConditionOp = 'eq' | 'ne' | 'contains' | 'gt' | 'lt' | 'exists'
 
+export type MergeMode = 'any' | 'all'
+
 export type NodeSpec =
   | {
       kind: 'http'
@@ -57,20 +59,25 @@ export type NodeSpec =
   | { kind: 'transform'; fields: NamedTemplate[] }
   | { kind: 'condition'; left: Template; op: ConditionOp; right: Template | null }
   | { kind: 'fail'; message: Template }
+  /** Runs the nodes behind its `item` edges once per element of `items`. */
+  | { kind: 'for_each'; items: Template; max_iterations: number }
+  | { kind: 'merge'; mode: MergeMode }
+  /** Parks the run durably for `duration_ms`. */
+  | { kind: 'wait'; duration_ms: number }
+  /** Parks the run until a person approves (`out`) or rejects it, or `timeout_ms` passes (`error`). */
   | { kind: 'approval'; message: Template; timeout_ms: number }
 
 export type NodeKind = NodeSpec['kind']
 
 export type AutomationNode = { id: NodeId; label: string; spec: NodeSpec }
 
-export type Port = 'out' | 'error' | 'true' | 'false'
+export type Port = 'out' | 'error' | 'true' | 'false' | 'item'
 
 export type Edge = { from: NodeId | 'trigger'; port: Port; to: NodeId }
 
 export type Graph = { nodes: AutomationNode[]; edges: Edge[] }
 
-/** `waiting`: parked at a node until a person decides or its deadline passes. */
-export type RunStatus = 'running' | 'waiting' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
+export type RunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
 
 export type LastRun = { run_id: RunId; status: RunStatus; finished_at: number }
 
@@ -123,8 +130,14 @@ export type IssueCode =
   | 'agent_max_attempts_out_of_range'
   | 'missing_condition_operand'
   | 'invalid_schedule'
-  | 'unknown_agent'
+  | 'for_each_max_iterations_out_of_range'
+  | 'wait_duration_out_of_range'
+  | 'loop_body_not_closed'
+  | 'nested_for_each'
+  | 'loop_item_outside_body'
+  | 'merge_needs_two_inputs'
   | 'approval_timeout_out_of_range'
+  | 'unknown_agent'
 
 export type Issue = { node_id: NodeId | null; code: IssueCode; message: string }
 
@@ -132,8 +145,8 @@ export type ApplyOpsResult = { automation: Automation; issues: Issue[] }
 
 export type RunTrigger = 'scheduled' | 'catch_up' | 'manual'
 
-/** Where a waiting run is parked; `until` is its deadline in epoch ms. */
-export type Parked = { node_id: NodeId; until: number }
+/** The step a `running` run is parked on; `until` is when the park ends (epoch ms). */
+export type Parked = { node_id: NodeId; iteration: number | null; until: number }
 
 export type AutomationRun = {
   id: RunId
@@ -150,28 +163,35 @@ export type AutomationRun = {
   summary: string | null
   conversation_id: string | null
   worktree_id: string | null
-  /** Set exactly while `status` is `waiting`. */
+  /** Read from the run's `waiting` step; a parked run's status stays `running`. */
   parked: Parked | null
 }
 
-export type StepStatus = 'running' | 'waiting' | 'succeeded' | 'failed' | 'skipped'
-
-export type ApprovalDecision = 'approved' | 'rejected' | 'timed_out' | 'cancelled'
-
-/** An approval step's `output`: the rendered message, plus the decision once made. */
-export type ApprovalStepOutput =
-  | { message: string; decision?: undefined }
-  | { message: string; decision: ApprovalDecision; decided_at: number }
+export type StepStatus = 'running' | 'succeeded' | 'failed' | 'skipped' | 'waiting'
 
 export type AutomationStep = {
   run_id: RunId
   node_id: NodeId
+  /** 0-based iteration for a node inside a `for_each` body, else null. */
+  iteration: number | null
   status: StepStatus
   output: unknown
   error: string | null
   started_at: number | null
   finished_at: number | null
+  /** When a `waiting` step's park ends. */
+  wait_until: number | null
 }
+
+export type ApprovalDecision = 'approved' | 'rejected' | 'timed_out'
+
+/**
+ * An approval step's `output`: the rendered message, plus the decision once
+ * made. A cancelled approval keeps only the message.
+ */
+export type ApprovalStepOutput =
+  | { message: string; decision?: undefined }
+  | { message: string; decision: ApprovalDecision; decided_at: number }
 
 export type AgentPolicy = {
   node_id: NodeId

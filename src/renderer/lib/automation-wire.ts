@@ -82,13 +82,14 @@ function oneOf<T extends string>(value: unknown, path: string, allowed: readonly
   return value as T
 }
 
-const RUN_STATUSES = ['running', 'waiting', 'succeeded', 'failed', 'cancelled', 'skipped'] as const
-const STEP_STATUSES = ['running', 'waiting', 'succeeded', 'failed', 'skipped'] as const
-const APPROVAL_DECISIONS = ['approved', 'rejected', 'timed_out', 'cancelled'] as const
+const RUN_STATUSES = ['running', 'succeeded', 'failed', 'cancelled', 'skipped'] as const
+const STEP_STATUSES = ['running', 'succeeded', 'failed', 'skipped', 'waiting'] as const
+const APPROVAL_DECISIONS = ['approved', 'rejected', 'timed_out'] as const
 const RUN_TRIGGERS = ['scheduled', 'catch_up', 'manual'] as const
-const PORTS = ['out', 'error', 'true', 'false'] as const
+const PORTS = ['out', 'error', 'true', 'false', 'item'] as const
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
 const CONDITION_OPS = ['eq', 'ne', 'contains', 'gt', 'lt', 'exists'] as const
+const MERGE_MODES = ['any', 'all'] as const
 
 const automationId = (v: unknown, p: string): AutomationId => str(v, p) as AutomationId
 const runId = (v: unknown, p: string): RunId => str(v, p) as RunId
@@ -163,6 +164,16 @@ function nodeSpec(v: unknown, p: string): NodeSpec {
       }
     case 'fail':
       return { kind: 'fail', message: str(o.message, `${p}.message`) }
+    case 'for_each':
+      return {
+        kind: 'for_each',
+        items: str(o.items, `${p}.items`),
+        max_iterations: num(o.max_iterations, `${p}.max_iterations`)
+      }
+    case 'merge':
+      return { kind: 'merge', mode: oneOf(o.mode, `${p}.mode`, MERGE_MODES) }
+    case 'wait':
+      return { kind: 'wait', duration_ms: num(o.duration_ms, `${p}.duration_ms`) }
     case 'approval':
       return {
         kind: 'approval',
@@ -170,7 +181,7 @@ function nodeSpec(v: unknown, p: string): NodeSpec {
         timeout_ms: num(o.timeout_ms, `${p}.timeout_ms`)
       }
     default:
-      return fail(`${p}.kind`, 'http|agent|transform|condition|fail|approval')
+      return fail(`${p}.kind`, 'http|agent|transform|condition|fail|for_each|merge|wait|approval')
   }
 }
 
@@ -301,16 +312,15 @@ export function parseApplyOpsResult(v: unknown): ApplyOpsResult {
 
 function parked(v: unknown, p: string): Parked {
   const o = obj(v, p)
-  return { node_id: nodeId(o.node_id, `${p}.node_id`), until: num(o.until, `${p}.until`) }
+  return {
+    node_id: nodeId(o.node_id, `${p}.node_id`),
+    iteration: nullable(o.iteration, `${p}.iteration`, num),
+    until: num(o.until, `${p}.until`)
+  }
 }
 
 export function parseRun(v: unknown, p = 'run'): AutomationRun {
   const o = obj(v, p)
-  const status = oneOf<RunStatus>(o.status, `${p}.status`, RUN_STATUSES)
-  const parkedAt = nullable(o.parked, `${p}.parked`, parked)
-  if ((status === 'waiting') !== (parkedAt !== null)) {
-    fail(`${p}.parked`, status === 'waiting' ? 'a parked node' : 'null unless waiting')
-  }
   return {
     id: runId(o.id, `${p}.id`),
     automation_id: automationId(o.automation_id, `${p}.automation_id`),
@@ -318,14 +328,14 @@ export function parseRun(v: unknown, p = 'run'): AutomationRun {
     graph: graph(o.graph, `${p}.graph`),
     trigger: oneOf<RunTrigger>(o.trigger, `${p}.trigger`, RUN_TRIGGERS),
     scheduled_for: num(o.scheduled_for, `${p}.scheduled_for`),
-    status,
+    status: oneOf<RunStatus>(o.status, `${p}.status`, RUN_STATUSES),
     started_at: num(o.started_at, `${p}.started_at`),
     finished_at: nullable(o.finished_at, `${p}.finished_at`, num),
     stop_reason: nullable(o.stop_reason, `${p}.stop_reason`, str),
     summary: nullable(o.summary, `${p}.summary`, str),
     conversation_id: nullable(o.conversation_id, `${p}.conversation_id`, str),
     worktree_id: nullable(o.worktree_id, `${p}.worktree_id`, str),
-    parked: parkedAt
+    parked: nullable(o.parked, `${p}.parked`, parked)
   }
 }
 
@@ -338,11 +348,13 @@ function step(v: unknown, p: string): AutomationStep {
   return {
     run_id: runId(o.run_id, `${p}.run_id`),
     node_id: nodeId(o.node_id, `${p}.node_id`),
+    iteration: nullable(o.iteration, `${p}.iteration`, num),
     status: oneOf<StepStatus>(o.status, `${p}.status`, STEP_STATUSES),
     output: o.output ?? null,
     error: nullable(o.error, `${p}.error`, str),
     started_at: nullable(o.started_at, `${p}.started_at`, num),
-    finished_at: nullable(o.finished_at, `${p}.finished_at`, num)
+    finished_at: nullable(o.finished_at, `${p}.finished_at`, num),
+    wait_until: nullable(o.wait_until, `${p}.wait_until`, num)
   }
 }
 

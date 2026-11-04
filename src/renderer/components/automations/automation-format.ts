@@ -9,7 +9,17 @@ import type {
   StepStatus,
   Trigger
 } from '@shared/types/automation.types'
-import { Bot, Braces, GitBranch, Globe, Hand, XCircle } from '@/components/icons'
+import {
+  Bot,
+  Braces,
+  GitBranch,
+  GitMerge,
+  Globe,
+  Hand,
+  Hourglass,
+  Repeat,
+  XCircle
+} from '@/components/icons'
 
 /** What the list and the header show; needs-approval wins because it asks the user to act. */
 export type AutomationState = 'needs_approval' | 'disabled' | 'armed'
@@ -30,12 +40,11 @@ export const STATUS_PRESENTATION: Record<
   { label: string; className: string }
 > = {
   running: { label: 'Running', className: 'text-primary' },
-  // Only approval nodes park a run today.
-  waiting: { label: 'Waiting for approval', className: 'text-warning' },
   succeeded: { label: 'Succeeded', className: 'text-success' },
   failed: { label: 'Failed', className: 'text-destructive' },
   cancelled: { label: 'Cancelled', className: 'text-muted-foreground' },
-  skipped: { label: 'Skipped', className: 'text-muted-foreground' }
+  skipped: { label: 'Skipped', className: 'text-muted-foreground' },
+  waiting: { label: 'Waiting', className: 'text-warning' }
 }
 
 export const NODE_KIND_PRESENTATION: Record<NodeKind, { label: string; Icon: typeof Globe }> = {
@@ -44,6 +53,9 @@ export const NODE_KIND_PRESENTATION: Record<NodeKind, { label: string; Icon: typ
   transform: { label: 'Transform', Icon: Braces },
   condition: { label: 'Condition', Icon: GitBranch },
   fail: { label: 'Fail', Icon: XCircle },
+  for_each: { label: 'For each', Icon: Repeat },
+  merge: { label: 'Merge', Icon: GitMerge },
+  wait: { label: 'Wait', Icon: Hourglass },
   approval: { label: 'Approval', Icon: Hand }
 }
 
@@ -51,16 +63,28 @@ export const DECISION_PRESENTATION: Record<ApprovalDecision, { label: string; cl
   {
     approved: { label: 'Approved', className: 'text-success' },
     rejected: { label: 'Rejected', className: 'text-destructive' },
-    timed_out: { label: 'Timed out', className: 'text-destructive' },
-    cancelled: { label: 'Cancelled', className: 'text-muted-foreground' }
+    timed_out: { label: 'Timed out', className: 'text-destructive' }
   }
 
-/** The approval node a waiting run is parked at, from the run's own graph. */
-export function parkedApproval(run: AutomationRun): { node: AutomationNode; until: number } | null {
+const WAITING_FOR_APPROVAL = { label: 'Waiting for approval', className: 'text-warning' }
+
+export interface ParkedApproval {
+  node: AutomationNode
+  iteration: number | null
+  until: number
+}
+
+/** The approval node a run is parked on, from the run's own graph; null for a wait or no park. */
+export function parkedApproval(run: AutomationRun): ParkedApproval | null {
   if (run.parked === null) return null
-  const { node_id, until } = run.parked
+  const { node_id, iteration, until } = run.parked
   const node = run.graph.nodes.find((candidate) => candidate.id === node_id)
-  return node?.spec.kind === 'approval' ? { node, until } : null
+  return node?.spec.kind === 'approval' ? { node, iteration, until } : null
+}
+
+/** A run parked on an approval reads as waiting for it; its status stays `running`. */
+export function runStatusPresentation(run: AutomationRun): { label: string; className: string } {
+  return parkedApproval(run) ? WAITING_FOR_APPROVAL : STATUS_PRESENTATION[run.status]
 }
 
 const DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
@@ -132,6 +156,13 @@ export function nodeKeyDetail(spec: NodeSpec): string {
     case 'condition':
       return [spec.left, spec.op, spec.right].filter(Boolean).join(' ')
     case 'fail':
+      return spec.message
+    case 'for_each':
+      return `${spec.items} · max ${spec.max_iterations}`
+    case 'merge':
+      return spec.mode === 'all' ? 'When every branch ran' : 'When any branch ran'
+    case 'wait':
+      return `Wait ${formatDuration(spec.duration_ms)}`
     case 'approval':
       return spec.message
   }

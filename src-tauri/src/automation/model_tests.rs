@@ -57,8 +57,26 @@ fn build_fixture() -> WireFixture {
         automation_id: automation.id.clone(),
         revision: 1,
         graph: serde_json::from_value(json!({
-            "nodes": [{ "id": "stop", "label": "Stop", "spec": { "kind": "fail", "message": "{{trigger.kind}}" } }],
-            "edges": [{ "from": "trigger", "port": "out", "to": "stop" }]
+            "nodes": [
+                { "id": "each", "label": "Each item", "spec": { "kind": "for_each", "items": "{{trigger.kind}}", "max_iterations": 5 } },
+                { "id": "body", "label": "Body", "spec": { "kind": "transform", "fields": [
+                    { "name": "item", "value": "{{nodes.each.item.name}}" },
+                    { "name": "index", "value": "{{nodes.each.index}}" }] } },
+                { "id": "join", "label": "Join", "spec": { "kind": "merge", "mode": "any" } },
+                { "id": "pause", "label": "Pause", "spec": { "kind": "wait", "duration_ms": 3_600_000 } },
+                { "id": "gate", "label": "Ship it?", "spec": { "kind": "approval", "message": "Ship {{nodes.body.output.item}}?", "timeout_ms": 86_400_000 } },
+                { "id": "stop", "label": "Stop", "spec": { "kind": "fail", "message": "{{trigger.kind}}" } }
+            ],
+            "edges": [
+                { "from": "trigger", "port": "out", "to": "each" },
+                { "from": "each", "port": "item", "to": "body" },
+                { "from": "each", "port": "out", "to": "join" },
+                { "from": "each", "port": "error", "to": "join" },
+                { "from": "join", "port": "out", "to": "pause" },
+                { "from": "pause", "port": "out", "to": "gate" },
+                { "from": "gate", "port": "out", "to": "stop" },
+                { "from": "gate", "port": "error", "to": "stop" }
+            ]
         }))
         .unwrap(),
         trigger: RunTrigger::Scheduled,
@@ -79,20 +97,21 @@ fn build_fixture() -> WireFixture {
         finished_at: None,
         stop_reason: None,
         worktree_id: None,
-        ..run.clone()
-    };
-    let waiting = Run {
-        id: "run-3".to_string().into(),
-        trigger: RunTrigger::Manual,
-        status: RunStatus::Waiting,
-        finished_at: None,
-        stop_reason: None,
-        worktree_id: None,
         parked: Some(Parked {
-            node_id: node_id("gate"),
-            until: 1_773_050_400_100,
+            node_id: node_id("pause"),
+            iteration: None,
+            until: 1_773_050_461_000,
         }),
         ..run.clone()
+    };
+    let awaiting_approval = Run {
+        id: "run-3".to_string().into(),
+        parked: Some(Parked {
+            node_id: node_id("gate"),
+            iteration: Some(1),
+            until: 1_773_133_261_000,
+        }),
+        ..running.clone()
     };
     let steps = vec![
         Step {
@@ -103,6 +122,8 @@ fn build_fixture() -> WireFixture {
             error: None,
             started_at: Some(1_773_046_800_200),
             finished_at: Some(1_773_046_801_000),
+            iteration: None,
+            wait_until: None,
         },
         Step {
             run_id: run.id.clone(),
@@ -112,6 +133,19 @@ fn build_fixture() -> WireFixture {
             error: Some("secret_missing:HOOK_KEY".into()),
             started_at: Some(1_773_046_859_000),
             finished_at: Some(1_773_046_860_000),
+            iteration: None,
+            wait_until: None,
+        },
+        Step {
+            run_id: run.id.clone(),
+            node_id: node_id("body"),
+            status: StepStatus::Succeeded,
+            output: Some(json!({ "item": "b", "index": 1 })),
+            error: None,
+            started_at: Some(1_773_046_860_100),
+            finished_at: Some(1_773_046_860_200),
+            iteration: Some(1),
+            wait_until: None,
         },
         Step {
             run_id: run.id.clone(),
@@ -121,27 +155,41 @@ fn build_fixture() -> WireFixture {
             error: None,
             started_at: None,
             finished_at: None,
+            iteration: None,
+            wait_until: None,
         },
         Step {
-            run_id: waiting.id.clone(),
+            run_id: run.id.clone(),
+            node_id: node_id("pause"),
+            status: StepStatus::Waiting,
+            output: None,
+            error: None,
+            started_at: Some(1_773_046_861_000),
+            finished_at: None,
+            iteration: None,
+            wait_until: Some(1_773_050_461_000),
+        },
+        Step {
+            run_id: awaiting_approval.id.clone(),
             node_id: node_id("gate"),
             status: StepStatus::Waiting,
-            output: Some(json!({ "message": "Post the digest?" })),
+            output: Some(json!({ "message": "Ship b?" })),
             error: None,
-            started_at: Some(1_773_046_800_200),
+            started_at: Some(1_773_046_861_000),
             finished_at: None,
+            iteration: Some(1),
+            wait_until: Some(1_773_133_261_000),
         },
         Step {
             run_id: run.id.clone(),
             node_id: node_id("gate"),
             status: StepStatus::Failed,
-            output: Some(
-                json!({ "message": "Post the digest?", "decision": "rejected",
-                "decided_at": 1_773_046_830_000_i64 }),
-            ),
+            output: Some(json!({ "message": "Ship a?", "decision": "rejected", "decided_at": 1_773_046_900_000_i64 })),
             error: Some("rejected".into()),
-            started_at: Some(1_773_046_800_200),
-            finished_at: Some(1_773_046_830_000),
+            started_at: Some(1_773_046_861_000),
+            finished_at: Some(1_773_046_900_000),
+            iteration: Some(0),
+            wait_until: Some(1_773_133_261_000),
         },
     ];
     WireFixture {
@@ -157,15 +205,14 @@ fn build_fixture() -> WireFixture {
             { "op": "update_node", "id": "note", "label": "Renamed" },
             { "op": "update_node", "id": "check", "spec": { "kind": "condition", "left": "{{nodes.extract.output.urgent}}", "op": "exists", "right": null } },
             { "op": "remove_node", "id": "note" },
+            { "op": "add_node", "node": { "id": "gate", "label": "Gate", "spec": { "kind": "merge", "mode": "all" } } },
             { "op": "connect", "edge": { "from": "check", "port": "false", "to": "alert" } },
             { "op": "disconnect", "edge": { "from": "check", "port": "false", "to": "alert" } },
             { "op": "set_trigger", "trigger": { "kind": "manual" } },
             { "op": "rename", "name": "Digest" },
-            { "op": "set_isolation", "isolation": "worktree_per_run" },
-            { "op": "add_node", "node": { "id": "gate", "label": "Approve post", "spec": {
-                "kind": "approval", "message": "Post {{nodes.shape.output.text}}?", "timeout_ms": 3600000 } } }
+            { "op": "set_isolation", "isolation": "worktree_per_run" }
         ])),
-        runs: vec![run, running, waiting],
+        runs: vec![run, running, awaiting_approval],
         steps,
         suggestion: Suggestion {
             fingerprint: "3f1c9a0d5b7e2468".to_string(),
