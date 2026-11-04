@@ -31,12 +31,13 @@ fn opened() -> ActivityEvent {
 #[test]
 fn a_turn_is_busy_until_it_ends_unread() {
     let table = ChatActivities::default();
-    let busy = table.observe(SID, opened(), no_inputs).expect("changed");
+    let busy = table.observe(SID, 1, opened(), no_inputs).expect("changed");
     assert!(busy.busy && !busy.unread);
 
     let ended = table
         .observe(
             SID,
+            7,
             ActivityEvent::TurnEnded { end: Some(end(7)) },
             no_inputs,
         )
@@ -57,6 +58,7 @@ fn a_read_marker_at_the_turn_end_clears_unread_and_an_older_one_does_not() {
     let table = ChatActivities::default();
     table.observe(
         SID,
+        7,
         ActivityEvent::TurnEnded { end: Some(end(7)) },
         no_inputs,
     );
@@ -85,8 +87,8 @@ fn a_read_marker_at_the_turn_end_clears_unread_and_an_older_one_does_not() {
 #[test]
 fn an_unchanged_record_is_not_reported() {
     let table = ChatActivities::default();
-    table.observe(SID, opened(), no_inputs);
-    assert_eq!(table.observe(SID, opened(), no_inputs), None);
+    table.observe(SID, 1, opened(), no_inputs);
+    assert_eq!(table.observe(SID, 2, opened(), no_inputs), None);
 }
 
 #[test]
@@ -94,6 +96,7 @@ fn closing_or_the_agent_dying_ends_the_work() {
     let table = ChatActivities::default();
     table.observe(
         SID,
+        1,
         ActivityEvent::Working {
             agent_id: Some("a1".to_string()),
             working: true,
@@ -102,13 +105,13 @@ fn closing_or_the_agent_dying_ends_the_work() {
     );
     assert!(table.get(SID).busy);
     assert_eq!(
-        table.observe(SID, ActivityEvent::Closed, no_inputs),
+        table.observe(SID, 2, ActivityEvent::Closed, no_inputs),
         Some(ChatActivity::default())
     );
     assert!(table.snapshot().is_empty(), "an idle chat leaves the state");
 
-    table.observe(SID, opened(), no_inputs);
-    table.observe("s2", opened(), no_inputs);
+    table.observe(SID, 3, opened(), no_inputs);
+    table.observe("s2", 1, opened(), no_inputs);
     let mut sessions = table.agent_ended("a1");
     sessions.sort();
     assert_eq!(sessions, vec![SID.to_string(), "s2".to_string()]);
@@ -122,7 +125,7 @@ fn closing_or_the_agent_dying_ends_the_work() {
 fn needs_you_follows_the_pending_prompts() {
     let table = ChatActivities::default();
     let raised = table
-        .observe(SID, ActivityEvent::Prompt { agent_id: None }, || {
+        .observe(SID, 1, ActivityEvent::Prompt { agent_id: None }, || {
             (true, None)
         })
         .expect("changed");
@@ -156,8 +159,27 @@ fn the_wire_record_names_every_field() {
 #[test]
 fn forgetting_reports_whether_anything_was_shown() {
     let table = ChatActivities::default();
-    table.observe(SID, opened(), no_inputs);
+    table.observe(SID, 1, opened(), no_inputs);
     assert!(table.forget(SID));
     assert!(!table.forget(SID));
     assert_eq!(table.get(SID), ChatActivity::default());
+}
+
+/// Two threads can observe one session's events out of seq order: a turn end
+/// numbered before the next turn opened must not close that turn.
+#[test]
+fn an_event_older_than_the_last_applied_one_is_ignored() {
+    let table = ChatActivities::default();
+    table.observe(SID, 6, opened(), no_inputs);
+
+    assert_eq!(
+        table.observe(
+            SID,
+            5,
+            ActivityEvent::TurnEnded { end: Some(end(5)) },
+            no_inputs
+        ),
+        None
+    );
+    assert!(table.get(SID).busy, "the newer turn is still open");
 }

@@ -178,26 +178,42 @@ impl Entry {
     }
 }
 
+#[derive(Default)]
+struct Table {
+    entries: HashMap<String, Entry>,
+    /// The seq of the newest event applied per session. An event is numbered
+    /// under the log lock but observed after it, so two threads can observe
+    /// a session's events out of seq order: the older one is stale.
+    applied: HashMap<String, u64>,
+}
+
 /// Per-session chat activity of one host.
 #[derive(Default)]
 pub struct ChatActivities {
-    entries: Mutex<HashMap<String, Entry>>,
+    table: Mutex<Table>,
 }
 
 impl ChatActivities {
-    /// Record `event` for `session_id`, then re-derive its record. `inputs`
+    /// Record `event`, numbered `seq`, for `session_id`, then re-derive its
+    /// record. An event older than one already applied is ignored. `inputs`
     /// reads, under this table's lock, whether the session has a pending
     /// prompt and its read marker. Returns the record when it changed.
     pub fn observe(
         &self,
         session_id: &str,
+        seq: u64,
         event: ActivityEvent,
         inputs: impl FnOnce() -> (bool, Option<ReadMark>),
     ) -> Option<ChatActivity> {
-        let mut entries = self.entries.lock();
-        let entry = entries.entry(session_id.to_string()).or_default();
+        let mut table = self.table.lock();
+        let applied = table.applied.entry(session_id.to_string()).or_default();
+        if *applied >= seq {
+            return None;
+        }
+        *applied = seq;
+        let entry = table.entries.entry(session_id.to_string()).or_default();
         entry.apply(event);
-        Self::rederive(&mut entries, session_id, inputs)
+        Self::rederive(&mut table.entries, session_id, inputs)
     }
 
     /// Re-derive the record of `session_id` (a prompt answered, a read marker
@@ -207,11 +223,11 @@ impl ChatActivities {
         session_id: &str,
         inputs: impl FnOnce() -> (bool, Option<ReadMark>),
     ) -> Option<ChatActivity> {
-        let mut entries = self.entries.lock();
-        if !entries.contains_key(session_id) {
+        let mut table = self.table.lock();
+        if !table.entries.contains_key(session_id) {
             return None;
         }
-        Self::rederive(&mut entries, session_id, inputs)
+        Self::rederive(&mut table.entries, session_id, inputs)
     }
 
     fn rederive(
@@ -234,21 +250,22 @@ impl ChatActivities {
     /// Returns every session id the table holds, so the caller re-derives
     /// them all (the agent's pending prompts were released too).
     pub fn agent_ended(&self, agent_id: &str) -> Vec<String> {
-        let mut entries = self.entries.lock();
-        for entry in entries.values_mut() {
+        let mut table = self.table.lock();
+        for entry in table.entries.values_mut() {
             if entry.agent_id.as_deref() == Some(agent_id) {
                 entry.turn_open = false;
                 entry.agent_working = false;
             }
         }
-        entries.keys().cloned().collect()
+        table.entries.keys().cloned().collect()
     }
 
     /// The sessions currently shown as needing the user.
     #[must_use]
     pub fn needing_you(&self) -> Vec<String> {
-        self.entries
+        self.table
             .lock()
+            .entries
             .iter()
             .filter(|(_, entry)| entry.shown.needs_you)
             .map(|(session_id, _)| session_id.clone())
@@ -257,8 +274,10 @@ impl ChatActivities {
 
     /// Drop a deleted session. Returns whether it was shown as anything.
     pub fn forget(&self, session_id: &str) -> bool {
-        self.entries
-            .lock()
+        let mut table = self.table.lock();
+        table.applied.remove(session_id);
+        table
+            .entries
             .remove(session_id)
             .is_some_and(|entry| !entry.shown.is_idle())
     }
@@ -266,8 +285,9 @@ impl ChatActivities {
     /// The record of `session_id` as last derived (idle when unknown).
     #[must_use]
     pub fn get(&self, session_id: &str) -> ChatActivity {
-        self.entries
+        self.table
             .lock()
+            .entries
             .get(session_id)
             .map(|entry| entry.shown.clone())
             .unwrap_or_default()
@@ -276,8 +296,9 @@ impl ChatActivities {
     /// Every non-idle record, by session id.
     #[must_use]
     pub fn snapshot(&self) -> BTreeMap<String, ChatActivity> {
-        self.entries
+        self.table
             .lock()
+            .entries
             .iter()
             .filter(|(_, entry)| !entry.shown.is_idle())
             .map(|(session_id, entry)| (session_id.clone(), entry.shown.clone()))

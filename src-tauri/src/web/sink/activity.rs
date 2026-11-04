@@ -36,7 +36,7 @@ impl WsRelaySink {
         };
         let changed = self
             .chat_activity
-            .observe(sid, event, || self.activity_inputs(sid));
+            .observe(sid, seq, event, || self.activity_inputs(sid));
         self.announce_activity(sid, changed);
     }
 
