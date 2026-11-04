@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { RECONNECT_GRACE_MS } from '@/hooks/use-delayed-flag'
 import { logFrontendError } from '@/lib/log-api'
+import { chatActivityRecord, resetChatActivity } from '@/lib/test-utils/chat-activity'
 import { mockProject, seedProjectStore } from '@/lib/test-utils/store'
 import {
   _addEphemeralSessionIdForTesting,
@@ -11,6 +12,7 @@ import {
 } from '@/stores/acp-store'
 import { FRESH } from '@/stores/acp-store/testkit'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
+import { useChatActivityStore } from '@/stores/chat-activity-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useProjectStore } from '@/stores/project-store'
 import {
@@ -84,6 +86,31 @@ function region(): string {
   return useShellAnnouncerStore.getState().message
 }
 
+/**
+ * Play the host: every chat holding a pending prompt in the ACP store gets a
+ * Needs you record, as the host's `chat_activity` watch would send it.
+ * Registered before the hook mounts, so the record lands first.
+ */
+function mirrorHostNeedsYou(): () => void {
+  return useAcpStore.subscribe((state, prev) => {
+    if (
+      state.pendingPermissions === prev.pendingPermissions &&
+      state.pendingQuestions === prev.pendingQuestions &&
+      state.pendingElicitations === prev.pendingElicitations
+    ) {
+      return
+    }
+    const pending = [state.pendingPermissions, state.pendingQuestions, state.pendingElicitations]
+    const sessions: Record<string, ReturnType<typeof chatActivityRecord>> = {}
+    for (const items of pending) {
+      for (const { sessionId } of Object.values(items ?? {})) {
+        sessions[sessionId] = chatActivityRecord({ needsYou: true })
+      }
+    }
+    useChatActivityStore.getState().replace(sessions)
+  })
+}
+
 /** Let the announcer's clear-then-set delay elapse. */
 function settle(): void {
   act(() => {
@@ -92,8 +119,12 @@ function settle(): void {
 }
 
 describe('useShellAnnouncements', () => {
+  let stopMirror: () => void = () => {}
+
   beforeEach(() => {
     vi.useFakeTimers()
+    resetChatActivity()
+    stopMirror = mirrorHostNeedsYou()
     vi.mocked(logFrontendError).mockClear()
     _resetShellAnnouncerForTests()
     useShellAnnouncerStore.setState({ announce: realAnnounce })
@@ -118,6 +149,7 @@ describe('useShellAnnouncements', () => {
   })
 
   afterEach(() => {
+    stopMirror()
     vi.restoreAllMocks()
     _resetEphemeralSessionIdsForTesting()
     _resetShellAnnouncerForTests()
@@ -323,6 +355,23 @@ describe('useShellAnnouncements', () => {
       })
       act(() => {
         useAcpStore.setState({ pendingPermissions: permission('r2', 'other') })
+      })
+      settle()
+      expect(region()).toBe('Agent Chat needs you')
+    })
+
+    it('announces a chat this phone never opened once the host says it needs you', () => {
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        useChatActivityStore
+          .getState()
+          .replace({ elsewhere: chatActivityRecord({ busy: true, projectId: 'p1' }) })
+      })
+      act(() => {
+        useChatActivityStore.getState().apply({
+          sessionId: 'elsewhere',
+          ...chatActivityRecord({ busy: true, needsYou: true, projectId: 'p1' })
+        })
       })
       settle()
       expect(region()).toBe('Agent Chat needs you')

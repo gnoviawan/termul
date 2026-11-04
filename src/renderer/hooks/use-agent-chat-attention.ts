@@ -1,93 +1,88 @@
 import { useMemo } from 'react'
 import { useShallow } from 'zustand/shallow'
-import { agentChatIsRunning, agentChatNeedsAttention } from '@/lib/agent-chat-attention'
+import { agentChatIsRunning, chatNeedsYou, chatProjectId } from '@/lib/agent-chat-attention'
 import { isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
+import { useChatActivityStore } from '@/stores/chat-activity-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 
 export interface ProjectAgentChatSignals {
   attentionCounts: Record<string, number>
-  /** First open Agent chat in each Project that needs you. */
+  /** First Agent chat in each Project that needs you: open chats in tab order, then the rest. */
   firstNeedsYouSessionId: Record<string, string>
+  /** Session id to Project id of every Agent chat that needs you. */
+  needsYouChats: ReadonlyMap<string, string>
+  /** Projects where the host has an Agent chat working. */
+  workingProjectIds: ReadonlySet<string>
+  /** Projects with an open Agent chat whose process is connected and idle. */
   runningProjectIds: ReadonlySet<string>
 }
 
-/** Attention counts, the chat to open, and which Projects still have a running process. */
+/**
+ * Per-Project Needs you, Working and running signals of the Agent chats. Needs
+ * you and Working come from the host's `chat_activity` records, so a chat
+ * this surface never opened counts under its Project. The open chats (tabs
+ * and retained chats) add what only this renderer's Session knows: a
+ * disconnected Agent, a closed chat that cannot resume, an idle process.
+ */
 export function useAgentChatProjectSignals(): ProjectAgentChatSignals {
   const sessions = useAcpStore(useShallow((state) => state.sessions ?? {}))
   const agentStatus = useAcpStore(useShallow((state) => state.agentStatus ?? {}))
-  const permissionSessionIds = useAcpStore(
-    useShallow((state) =>
-      Object.values(state.pendingPermissions ?? {}).map((item) => item.sessionId)
-    )
-  )
-  const questionSessionIds = useAcpStore(
-    useShallow((state) => Object.values(state.pendingQuestions ?? {}).map((item) => item.sessionId))
-  )
-  const elicitationSessionIds = useAcpStore(
-    useShallow((state) =>
-      Object.values(state.pendingElicitations ?? {}).map((item) => item.sessionId)
-    )
-  )
+  const activity = useChatActivityStore((state) => state.sessions)
   const root = useWorkspaceStore((state) => state.root)
   const retainedByProject = useAgentChatLifetimeStore((state) => state.retainedByProject)
 
   return useMemo(() => {
-    const sessionIds = new Set<string>()
+    const openChatIds = new Set<string>()
     for (const leaf of getAllLeafPanes(root)) {
       for (const tab of leaf.tabs) {
-        if (tab.type === 'agent-chat') sessionIds.add(tab.sessionId)
+        if (tab.type === 'agent-chat') openChatIds.add(tab.sessionId)
       }
     }
     for (const ids of Object.values(retainedByProject)) {
-      for (const sessionId of ids) sessionIds.add(sessionId)
+      for (const sessionId of ids) openChatIds.add(sessionId)
     }
-    const permissions = new Set(permissionSessionIds)
-    const questions = new Set(questionSessionIds)
-    const elicitations = new Set(elicitationSessionIds)
-    const attentionCounts: Record<string, number> = {}
-    const firstNeedsYouSessionId: Record<string, string> = {}
+    const needsYouChats = new Map<string, string>()
+    const workingProjectIds = new Set<string>()
     const runningProjectIds = new Set<string>()
-    for (const sessionId of sessionIds) {
+    for (const sessionId of new Set([...openChatIds, ...Object.keys(activity)])) {
+      if (isEphemeralAcpSession(sessionId)) continue
+      const record = activity[sessionId]
       const session = sessions[sessionId]
-      if (!session) continue
-      const ephemeral = isEphemeralAcpSession(sessionId)
-      const needsAttention = agentChatNeedsAttention({
-        projectId: session.projectId,
-        sessionStatus: session.status,
-        agentStatus: agentStatus[session.agentId],
-        pendingPermission: permissions.has(sessionId),
-        pendingQuestion: questions.has(sessionId),
-        pendingElicitation: elicitations.has(sessionId),
-        lastError: session.lastError ?? null,
-        ephemeral
-      })
-      if (needsAttention) {
-        attentionCounts[session.projectId] = (attentionCounts[session.projectId] ?? 0) + 1
-        if (!firstNeedsYouSessionId[session.projectId]) {
-          firstNeedsYouSessionId[session.projectId] = sessionId
-        }
+      const projectId = chatProjectId(record, session)
+      if (!projectId) continue
+      const open = openChatIds.has(sessionId)
+      const status = session ? agentStatus[session.agentId] : undefined
+      if (chatNeedsYou(record, open ? session : undefined, status)) {
+        needsYouChats.set(sessionId, projectId)
       }
+      if (record?.busy) workingProjectIds.add(projectId)
       if (
+        open &&
+        session &&
         agentChatIsRunning({
           projectId: session.projectId,
           sessionStatus: session.status,
-          agentStatus: agentStatus[session.agentId],
+          agentStatus: status,
           activeTurn: session.activeTurn,
-          ephemeral
+          ephemeral: false
         })
       ) {
         runningProjectIds.add(session.projectId)
       }
     }
-    return { attentionCounts, firstNeedsYouSessionId, runningProjectIds }
-  }, [
-    agentStatus,
-    elicitationSessionIds,
-    permissionSessionIds,
-    questionSessionIds,
-    retainedByProject,
-    root,
-    sessions
-  ])
+    const attentionCounts: Record<string, number> = {}
+    const firstNeedsYouSessionId: Record<string, string> = {}
+    for (const [sessionId, projectId] of needsYouChats) {
+      attentionCounts[projectId] = (attentionCounts[projectId] ?? 0) + 1
+      firstNeedsYouSessionId[projectId] ??= sessionId
+    }
+    return {
+      attentionCounts,
+      firstNeedsYouSessionId,
+      needsYouChats,
+      workingProjectIds,
+      runningProjectIds
+    }
+  }, [activity, agentStatus, retainedByProject, root, sessions])
 }

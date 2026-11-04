@@ -47,6 +47,8 @@ vi.mock('@/hooks/use-agent-chat-attention', () => ({
   useAgentChatProjectSignals: () => ({
     attentionCounts: {},
     firstNeedsYouSessionId: {},
+    needsYouChats: new Map<string, string>(),
+    workingProjectIds: new Set<string>(),
     runningProjectIds: new Set<string>()
   })
 }))
