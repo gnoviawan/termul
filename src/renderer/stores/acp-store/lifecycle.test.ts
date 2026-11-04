@@ -192,6 +192,7 @@ describe('failed session lifecycle (story 5)', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+      configId: 'cfg-1',
       cwd: '/work',
       projectId: 'p1',
       initialUserBlocks: [{ type: 'text', text: 'hello agent' }]
@@ -317,6 +318,7 @@ describe('failed session lifecycle (story 5)', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+      configId: 'cfg-1',
       cwd: '/work',
       projectId: 'p1',
       initialUserBlocks: [{ type: 'text', text: 'hello agent' }]
@@ -355,6 +357,7 @@ describe('failed session lifecycle (story 5)', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+      configId: 'cfg-1',
       cwd: '/work',
       projectId: 'p1',
       initialUserBlocks: [{ type: 'text', text: 'hello agent' }]
@@ -398,7 +401,7 @@ describe('failed session lifecycle (story 5)', () => {
       .saveAgentConfig({ id: 'cfg-npx', name: 'NPX Agent', command: 'npx', args: [], env: {} })
     const placeholderId = useAcpStore
       .getState()
-      .createLaunchPlaceholder({ cwd: '/work', projectId: 'p1' })
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
     ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn npx ENOENT'))
     await expect(
       useAcpStore.getState().finalizeChatLaunch({
@@ -413,11 +416,14 @@ describe('failed session lifecycle (story 5)', () => {
 
   it('marks the first prompt of a launch as sent here, placed or seeded', () => {
     const placed = useAcpStore.getState().createLaunchPlaceholder({
+      configId: 'cfg-1',
       cwd: '/work',
       projectId: 'p1',
       initialUserBlocks: [{ type: 'text', text: 'hello agent' }]
     })
-    const seeded = useAcpStore.getState().createLaunchPlaceholder({ cwd: '/work', projectId: 'p1' })
+    const seeded = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
     useAcpStore.getState().seedLaunchUserMessage(seeded, [{ type: 'text', text: 'hello seeded' }])
 
     const placedMessage = useAcpStore.getState().messages[placed][0]
@@ -559,7 +565,7 @@ describe('failed session lifecycle (story 5)', () => {
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     const placeholderId = useAcpStore
       .getState()
-      .createLaunchPlaceholder({ cwd: '/work', projectId: 'p1' })
+      .createLaunchPlaceholder({ configId: 'cfg-1', cwd: '/work', projectId: 'p1' })
     ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn boom'))
     await expect(
       useAcpStore.getState().finalizeChatLaunch({
@@ -939,6 +945,7 @@ describe('failed session lifecycle (story 5)', () => {
         .getState()
         .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
       const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+        configId: 'cfg-1',
         cwd: '/work',
         projectId: 'p1',
         initialUserBlocks: initialText ? [{ type: 'text', text: initialText }] : undefined

@@ -216,8 +216,11 @@ export function ChatInputBar({
   const modeAgentName = useAcpStore(
     (s) => s.agentConfigs?.find((c) => c.id === (armedConfigId ?? currentAgentConfigId))?.name
   )
-  const agentTemplateId = useAgentTemplateId(session.agentId, armedConfigId)
-  const agentIcon = useAgentIcon(session.agentId, armedConfigId)
+  // A launch placeholder has no agent yet, so resolve by config id: the armed
+  // target, else the chat's own config (the launching one before spawn).
+  const glyphConfigId = armedConfigId ?? currentAgentConfigId ?? undefined
+  const agentTemplateId = useAgentTemplateId(session.agentId, glyphConfigId)
+  const agentIcon = useAgentIcon(session.agentId, glyphConfigId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
   // recorded count retain the existing global-registry fallback.
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
@@ -468,17 +471,13 @@ export function ChatInputBar({
   // gates flow from the composer's props. The launcher places its agent
   // picker left-most in the equivalent cluster — mirror that placement.
   // Narrow-mode row 1 gates on a CHEAP session-derived boolean (the live
-  // agent id OR the session-index agentConfigId), NOT the picker's presence
-  // callback: `agentSwitchChip` renders inside row 1, so keying row 1 on a
-  // value only the mounted picker can set true is circular — a
-  // mode-less/model-less session would never mount it. The index fallback
-  // covers the reopen window where openHistorySession installs the restored
-  // session (agentConfigId present, runtime agentId not yet) — the picker
-  // resolves the indexed config, so the toolbar must mount then too.
-  const indexedAgentConfigId = useAcpStore(
-    (s) => s.sessionIndex?.find((e) => e.id === session.id)?.agentConfigId
-  )
-  const agentControlMounted = Boolean(session.agentId) || Boolean(indexedAgentConfigId)
+  // agent id OR the chat's config id), NOT the picker's presence callback:
+  // `agentSwitchChip` renders inside row 1, so keying row 1 on a value only
+  // the mounted picker can set true is circular — a mode-less/model-less
+  // session would never mount it. The config id covers a launch placeholder
+  // before its agent spawns and the reopen window where openHistorySession
+  // installs the restored session before its agent reconnects.
+  const agentControlMounted = Boolean(session.agentId) || Boolean(currentAgentConfigId)
   const selectorMounted =
     agentControlMounted ||
     Boolean(modelOption) ||
