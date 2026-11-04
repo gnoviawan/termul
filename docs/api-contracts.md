@@ -631,6 +631,7 @@ A session log event has one of three delivery tiers (`tier_of` in `src-tauri/src
 | `acp:mode_update` | session | Session log event (reliable). |
 | `acp:config_options_update` | session | Session log event (reliable). |
 | `acp:usage_update` | session | Session log event (reliable). Context-window use and optional cost. |
+| `acp:agent_working` | session | Session log event (reliable). Live only. The agent started or stopped working in the session outside a prompt turn, `{agentId, sessionId, working}`. The `list_agents` summary carries the current set as `workingSessions`. |
 | `acp:permission_request` | session | Session log event (reliable). Live only: never written to the durable log. A `host:` request id with `_meta.termul.origin_kind = "browser"` is a host-originated browser consent ticket with the fixed options `allow_session`, `allow_project` and `deny`. |
 | `acp:question_request` | session | Session log event (reliable). A structured question from the agent, including one from the host `ask_user` tool. |
 | `acp:question_cancelled` | session | Session log event (reliable). A pending question can no longer be answered. |

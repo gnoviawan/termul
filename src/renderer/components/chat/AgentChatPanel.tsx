@@ -49,7 +49,7 @@ import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useGitSheetStore } from '@/stores/git-sheet-store'
 import { hydrateGithubChatLinks } from '@/stores/github-chat-links-store'
 import { useProjectStore } from '@/stores/project-store'
-import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
+import { isAgentDeadError, sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
 import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
@@ -716,7 +716,9 @@ export function AgentChatPanel({
   }, [messages, toolCalls, agentSwitches, session?.worktreeProgressId, reloadMark, sessionId])
   // Keep the bottom cue visible for the complete turn, including while thought,
   // tool, and agent-message surfaces stream their own local progress.
-  const showRunningIndicator = Boolean(session?.activeTurn)
+  // Agent work outside a prompt turn (a turn Claude Code started itself after a
+  // background task finished) shows the same cue, Stop and queue as a turn.
+  const showRunningIndicator = sessionTurnBusy(session ?? undefined)
   // Same rule as ChatMessageList's empty state.
   const isEmptyChat = timeline.length === 0 && !showRunningIndicator
 
@@ -811,12 +813,12 @@ export function AgentChatPanel({
   // Failed launches keep the Retry affordance even without a user prompt in
   // the transcript (the retry relaunches without re-sending).
   const isFailedLaunch = session.status === 'error' && Boolean(session.launchConfigId)
-  const canOfferRetry = (canRetryLastUserTurn || isFailedLaunch) && !session.activeTurn
+  const canOfferRetry = (canRetryLastUserTurn || isFailedLaunch) && !sessionTurnBusy(session)
   // The error notice's "Resume chat" for a stopped chat whose resume failed
   // reopens without re-sending, so it needs no user turn in the transcript.
   const isClosedResumeFailure =
     isClosed && !discoveredReopenContext && isResumeFailureError(session.lastError)
-  const canOfferNoticeRetry = (canOfferRetry || isClosedResumeFailure) && !session.activeTurn
+  const canOfferNoticeRetry = (canOfferRetry || isClosedResumeFailure) && !sessionTurnBusy(session)
   const retryDiscoveredReopen = discoveredReopenContext
     ? () => {
         void openDiscoveredSession(
@@ -1055,7 +1057,7 @@ export function AgentChatPanel({
           <ChatInputBar
             session={composerSession ?? session}
             projectRoot={skillsProjectRoot}
-            busy={session.activeTurn}
+            busy={sessionTurnBusy(session)}
             disabled={isClosed && !isResumableStop}
             controlsDisabled={isClosed}
             onDraftStart={isResumableStop ? startAutoResume : undefined}

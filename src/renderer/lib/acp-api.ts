@@ -708,6 +708,12 @@ export interface AgentDisconnectedEvent {
   agentId: AgentId
   reason: AgentExitReason
 }
+/** The agent started or stopped working in a session outside a prompt turn. */
+export interface AgentWorkingEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  working: boolean
+}
 export interface SessionClosedEvent {
   agentId: AgentId
   sessionId: SessionId
@@ -807,6 +813,7 @@ export const ACP_EVENTS = {
   sessionInfoUpdate: 'acp:session_info_update',
   agentSwitch: 'acp:agent_switch',
   usageUpdate: 'acp:usage_update',
+  agentWorking: 'acp:agent_working',
   browserOpenRequest: 'acp:browser_open_request',
   agentSignInRequest: 'acp:agent_sign_in_request',
   agentSignInResolved: 'acp:agent_sign_in_resolved',

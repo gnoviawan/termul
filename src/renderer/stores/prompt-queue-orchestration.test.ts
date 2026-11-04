@@ -49,6 +49,10 @@ describe('prompt-queue-orchestration', () => {
     expect(sessionTurnBusy({ openTurnId: null, activeTurn: false })).toBe(false)
     expect(sessionTurnBusy({ openTurnId: 't1', activeTurn: false })).toBe(true)
     expect(sessionTurnBusy({ openTurnId: null, activeTurn: true })).toBe(true)
+    // Agent work outside a prompt turn keeps a live chat busy, never a dead one.
+    expect(sessionTurnBusy({ activeTurn: false, agentWorking: true, status: 'active' })).toBe(true)
+    expect(sessionTurnBusy({ activeTurn: false, agentWorking: true, status: 'closed' })).toBe(false)
+    expect(sessionTurnBusy({ activeTurn: false, agentWorking: true, status: 'error' })).toBe(false)
   })
 
   it('appends and drops queued prompts', () => {

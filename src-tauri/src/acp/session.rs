@@ -32,12 +32,16 @@ mod commands;
 mod sign_in;
 mod subagents;
 mod tool_policy;
+mod unprompted;
 pub(crate) use activity::ActivityClock;
 pub use activity::AgentActivity;
 pub(crate) use sign_in::{RequestElicitationRoute, SignInPrompt, SignInSlot};
 pub(crate) use subagents::ChildRoute;
 pub use tool_policy::ToolAllowlist;
 pub(crate) use tool_policy::{ToolDecision, PROTECTED_DIRS, PROTECTED_FILES};
+pub(crate) use unprompted::UnpromptedWork;
+#[cfg(test)]
+pub(crate) use unprompted::UNPROMPTED_QUIET;
 
 /// A permission request awaiting the user's decision.
 ///
@@ -160,6 +164,8 @@ pub(crate) struct DriverState {
     /// The agent-level sign-in prompt and the `authenticate` requests that
     /// may raise one.
     sign_in: SignInSlot,
+    /// Sessions the agent works in outside a prompt turn.
+    unprompted: UnpromptedWork,
 }
 
 /// State of one session's replay window: how many reopens are in flight and
@@ -279,6 +285,10 @@ impl DriverState {
 
     pub(crate) fn sign_in(&mut self) -> &mut SignInSlot {
         &mut self.sign_in
+    }
+
+    pub(crate) fn unprompted(&mut self) -> &mut UnpromptedWork {
+        &mut self.unprompted
     }
 
     /// Register a pending permission request and return its globally-unique
@@ -535,6 +545,9 @@ impl DriverState {
         self.last_commands.forget(session_id);
         self.subagents.forget_root(session_id);
         self.subagent_records.forget_root(session_id);
+        // A closed or deleted session no longer works. A close tells clients
+        // with `session_closed`; a delete reports `agent_working` itself.
+        self.unprompted.end(session_id);
     }
 
     /// Whether an `available_commands_update` repeats the set last fanned
@@ -886,6 +899,7 @@ impl DriverState {
                     .values()
                     .map(|w| w.open_count)
                     .sum::<usize>(),
+            unprompted_sessions: self.unprompted.count(),
             last_active_at: self.last_active.last(),
         }
     }
