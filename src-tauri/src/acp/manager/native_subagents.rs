@@ -479,13 +479,22 @@ fn rfd_message(
     if content.is_empty() {
         return SessionRoute::Claimed(Vec::new());
     }
+    let mut update = json!({
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": route.dispatch_id,
+        "content": content,
+    });
+    // The record marks the reply as the subagent's result, which history keeps.
+    if let Some(record) = state
+        .lock()
+        .subagent_records()
+        .record(&route.root_session_id, &route.dispatch_id)
+    {
+        update["_meta"] = json!({ SUBAGENT_META_KEY: record.meta_value() });
+    }
     SessionRoute::Claimed(vec![json!({
         "sessionId": route.root_session_id,
-        "update": {
-            "sessionUpdate": "tool_call_update",
-            "toolCallId": route.dispatch_id,
-            "content": content,
-        }
+        "update": update,
     })])
 }
 

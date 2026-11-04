@@ -34,6 +34,14 @@ pub(super) fn is_tool_event(type_: &str) -> bool {
     matches!(type_, "tool_call" | "tool_call_update")
 }
 
+/// True for a record that lives in `tool-calls.jsonl`: tool events and the
+/// text a subagent writes under its dispatch. Subagent work then sits in the
+/// log a tail payload reads whole, so a reopened chat restores each
+/// subagent's text however far back it ran.
+pub(super) fn is_tool_log_record(type_: &str, payload: &Value) -> bool {
+    is_tool_event(type_) || (type_ == "message_chunk" && is_subagent_chunk(payload))
+}
+
 /// True when the record participates in the transcript fold
 /// (`session_payload::fold_session_records`): boundaries (`user_prompt`,
 /// `tool_call`, `prompt_complete`, `agent_switch` — CAP-2: a switch splits
@@ -332,6 +340,68 @@ fn durable_subagent_meta(tool: &serde_json::Map<String, Value>) -> Option<Value>
     (!kept.is_empty()).then_some(Value::Object(kept))
 }
 
+/// Longest durable title of a subagent's own tool call (characters).
+const MAX_DURABLE_CHILD_TITLE_CHARS: usize = 512;
+/// Longest durable subagent result or text (characters). Same bound as the
+/// renderer's `MAX_SUBAGENT_TEXT_CHARS`.
+pub(crate) const MAX_DURABLE_SUBAGENT_TEXT_CHARS: usize = 8_000;
+
+/// A subagent's own tool call (it names a parent dispatch): keep what its
+/// Activity row shows, the title and path with credentials masked.
+fn add_child_call_summary(
+    tool: &serde_json::Map<String, Value>,
+    reduced: &mut serde_json::Map<String, Value>,
+) {
+    if let Some(title) =
+        crate::acp::subagents::bounded_text(tool.get("title"), MAX_DURABLE_CHILD_TITLE_CHARS)
+    {
+        let masked = crate::acp::manager::stderr_ring::redact_line(title);
+        reduced.insert("title".to_string(), Value::String(masked));
+    }
+    if reduced.contains_key("locations") {
+        return;
+    }
+    if let Some(path) =
+        tool_event_path(tool).filter(|path| path.chars().count() <= MAX_SUMMARY_PATH_CHARS)
+    {
+        let masked = crate::acp::manager::stderr_ring::redact_line(path);
+        reduced.insert(
+            "locations".to_string(),
+            serde_json::json!([{ "path": masked }]),
+        );
+    }
+}
+
+/// The text a subagent dispatch returned (its content's text blocks),
+/// bounded. That text is the subagent's result.
+fn add_subagent_result(
+    tool: &serde_json::Map<String, Value>,
+    reduced: &mut serde_json::Map<String, Value>,
+) {
+    let text = tool
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("content"))
+        .filter_map(|item| item.get("content"))
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let text = Value::String(text);
+    let Some(text) =
+        crate::acp::subagents::bounded_text(Some(&text), MAX_DURABLE_SUBAGENT_TEXT_CHARS)
+    else {
+        return;
+    };
+    reduced.insert(
+        "content".to_string(),
+        serde_json::json!([{ "type": "content", "content": { "type": "text", "text": text } }]),
+    );
+}
+
 pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
     if matches!(type_, "tool_call" | "tool_call_update") {
         // Strict DTO: tool-authored free-form content, arguments, output, and
@@ -343,7 +413,9 @@ pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
         // panel without persisting any diff text, plus the subagent `_meta`
         // (`durable_subagent_meta`: the host's subagent record or control
         // marker, and the parent dispatch id) so a reopened chat shows its
-        // subagents and groups their calls under them.
+        // subagents and groups their calls under them. A dispatch also keeps
+        // its bounded text result, and a subagent's own call its masked
+        // title and path, so the subagent panel restores Activity and Result.
         let mut event = serde_json::Map::new();
         for field in ["agentId", "sessionId"] {
             if let Some(value) = payload.get(field) {
@@ -364,6 +436,11 @@ pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
             }
             add_file_change_summary(type_, tool, &mut reduced);
             if let Some(meta) = durable_subagent_meta(tool) {
+                if meta.get(crate::acp::subagents::SUBAGENT_META_KEY).is_some() {
+                    add_subagent_result(tool, &mut reduced);
+                } else if meta.get("claudeCode").is_some() {
+                    add_child_call_summary(tool, &mut reduced);
+                }
                 reduced.insert("_meta".to_string(), meta);
             }
             event.insert(key.to_string(), Value::Object(reduced));

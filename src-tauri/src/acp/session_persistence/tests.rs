@@ -3976,3 +3976,92 @@ async fn session_payload_tail_reads_the_command_list_from_the_log_after_restart(
     assert_eq!(serde_json::to_value(&tail).unwrap()["commandsSeq"], json!(1));
     let _ = fs::remove_dir_all(root);
 }
+
+#[tokio::test]
+async fn a_tail_payload_restores_each_subagents_calls_text_and_result() {
+    let root = temp_dir("payload-tail-subagents");
+    let (persistence, metadata) = registered(&root).await;
+    let record = json!({"id": "child-1", "activity": "idle", "end": {"reason": "completed"}});
+    let tool = |seq: u64, type_: &str, tool: Value| {
+        let key = if type_ == "tool_call" { "toolCall" } else { "update" };
+        payload_record(
+            seq,
+            type_,
+            json!({"agentId": "runtime-1", "sessionId": "session-1", key: tool}),
+        )
+    };
+    let events = vec![
+        payload_record(
+            1,
+            "user_prompt",
+            json!({"agentId": "runtime-1", "sessionId": "session-1", "turnId": "turn-1",
+                "content": [{"type": "text", "text": "review"}]}),
+        ),
+        tool(
+            2,
+            "tool_call",
+            json!({"toolCallId": "d1", "kind": "think", "title": "Agent",
+                "rawInput": {"prompt": "secret plan"},
+                "_meta": {"termul/subagent": record}}),
+        ),
+        tool(
+            3,
+            "tool_call",
+            json!({"toolCallId": "c1", "kind": "execute", "status": "completed",
+                "title": "curl -H 'Authorization: Bearer abcdefghijklmnop1234' x",
+                "rawInput": {"command": "curl"},
+                "_meta": {"claudeCode": {"parentToolUseId": "d1", "toolName": "Bash"}}}),
+        ),
+        payload_record(
+            4,
+            "message_chunk",
+            json!({"agentId": "runtime-1", "sessionId": "session-1", "role": "agent",
+                "parentToolCallId": "d1", "content": {"type": "text", "text": "Found one bug."}}),
+        ),
+        tool(
+            5,
+            "tool_call_update",
+            json!({"toolCallId": "d1", "status": "completed",
+                "content": [{"type": "content", "content": {"type": "text", "text": "One bug."}}],
+                "_meta": {"termul/subagent": record}}),
+        ),
+        payload_record(
+            6,
+            "prompt_complete",
+            json!({"sessionId": "session-1", "turnId": "turn-1", "stopReason": "end_turn"}),
+        ),
+    ];
+    for event in events {
+        persistence.enqueue_event(event).unwrap();
+    }
+    for turn in 0..6 {
+        let seq = 7 + turn * 3;
+        enqueue_turn(&persistence, seq, &format!("turn-{}", turn + 2), "again", "reply");
+    }
+    persistence.flush_session("session-1").await.unwrap();
+
+    let dir = root.join("store").join(&metadata.storage_key);
+    let messages_log = fs::read_to_string(dir.join(MESSAGES_FILE)).unwrap();
+    let tool_log = fs::read_to_string(dir.join(TOOL_CALLS_FILE)).unwrap();
+    assert!(tool_log.contains("Found one bug."), "subagent text lives in the tool log");
+    assert!(!messages_log.contains("Found one bug."));
+    assert!(!tool_log.contains("abcdefghijklmnop1234"), "child titles are masked");
+    assert!(!tool_log.contains("secret plan"));
+
+    let tail = persistence
+        .session_payload_tail_async("session-1", 2)
+        .await
+        .unwrap();
+    assert!(tail.messages.iter().all(|message| message.seq > 6), "turn 1 is outside the window");
+    let calls = serde_json::to_value(&tail.tool_calls).unwrap();
+    assert_eq!(calls[0]["toolCallId"], "d1");
+    assert_eq!(calls[0]["subagentText"], "Found one bug.");
+    assert_eq!(calls[0]["content"][0]["content"]["text"], "One bug.");
+    assert_eq!(calls[1]["toolCallId"], "c1");
+    assert_eq!(calls[1]["_meta"]["claudeCode"]["parentToolUseId"], "d1");
+    let title = calls[1]["title"].as_str().unwrap();
+    assert!(title.starts_with("curl -H") && !title.contains("abcdefghijklmnop1234"), "{title}");
+    let full = persistence.session_payload_async("session-1").await.unwrap();
+    assert_eq!(full.tool_calls, tail.tool_calls, "full and tail restore the same subagents");
+    let _ = fs::remove_dir_all(root);
+}

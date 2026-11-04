@@ -308,7 +308,7 @@ fn append_record_then(
     {
         return Err(SessionPersistenceError::CorruptSession);
     }
-    let tool_event = is_tool_event(&record.type_);
+    let tool_event = is_tool_log_record(&record.type_, &record.payload);
     let dir = root.join(&current.storage_key);
     let path = dir.join(if tool_event {
         TOOL_CALLS_FILE
