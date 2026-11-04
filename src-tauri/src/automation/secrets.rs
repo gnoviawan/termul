@@ -9,7 +9,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 
@@ -139,14 +139,54 @@ impl SecretVault for FileVault {
     }
 }
 
-/// The vault this host keeps secrets in, chosen once: the file vault when
-/// `data_dir` already holds one or the OS keychain does not answer, else the
-/// keychain. A file vault that cannot be read leaves the keychain, which fails
-/// closed where there is none.
+/// The vault this host keeps secrets in, chosen on the first secret read or
+/// write: the file vault when `data_dir` already holds one or the OS keychain
+/// does not answer, else the keychain. A file vault that cannot be read leaves
+/// the keychain, which fails closed where there is none. Choosing lazily
+/// keeps a locked Linux keyring from prompting when the app starts.
 pub fn open_vault(data_dir: &Path) -> Arc<dyn SecretVault> {
-    choose_vault(data_dir, || {
+    lazy_vault(data_dir, || {
         credentials::read_secret(PROBE_ACCOUNT, "empty").is_ok()
     })
+}
+
+pub(super) fn lazy_vault(
+    data_dir: &Path,
+    keychain_answers: impl Fn() -> bool + Send + Sync + 'static,
+) -> Arc<dyn SecretVault> {
+    Arc::new(LazyVault {
+        data_dir: data_dir.to_path_buf(),
+        keychain_answers: Box::new(keychain_answers),
+        chosen: OnceLock::new(),
+    })
+}
+
+struct LazyVault {
+    data_dir: PathBuf,
+    keychain_answers: Box<dyn Fn() -> bool + Send + Sync>,
+    chosen: OnceLock<Arc<dyn SecretVault>>,
+}
+
+impl LazyVault {
+    fn vault(&self) -> &dyn SecretVault {
+        self.chosen
+            .get_or_init(|| choose_vault(&self.data_dir, &self.keychain_answers))
+            .as_ref()
+    }
+}
+
+impl SecretVault for LazyVault {
+    fn get(&self, account: &str) -> Result<Option<String>, SecretError> {
+        self.vault().get(account)
+    }
+
+    fn set(&self, account: &str, value: &str) -> Result<(), SecretError> {
+        self.vault().set(account, value)
+    }
+
+    fn delete(&self, account: &str) -> Result<(), SecretError> {
+        self.vault().delete(account)
+    }
 }
 
 pub(super) fn choose_vault(

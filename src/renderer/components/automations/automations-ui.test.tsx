@@ -1,6 +1,14 @@
-import type { AutomationId, Issue, NodeId, RunId } from '@shared/types/automation.types'
+import wire from '@shared/types/__fixtures__/automation.json'
+import type {
+  AutomationId,
+  AutomationSuggestion,
+  Issue,
+  NodeId,
+  RunId
+} from '@shared/types/automation.types'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { parseSuggestionList } from '@/lib/automation-wire'
 import {
   automationWith,
   detailWith,
@@ -9,6 +17,8 @@ import {
   fixtureSteps,
   runWith
 } from '@/lib/test-utils/automation-fixtures'
+import { expectNotWriteGated, expectWriteGated } from '@/lib/test-utils/write-gate'
+import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
 
 const api = vi.hoisted(() => ({
   approveAutomation: vi.fn(),
@@ -24,6 +34,10 @@ const api = vi.hoisted(() => ({
   setAutomationSecret: vi.fn()
 }))
 vi.mock('@/lib/automation-api', () => api)
+const writes = vi.hoisted(() => ({ admitted: true }))
+vi.mock('@/hooks/use-server-admits-remote-writes', () => ({
+  useServerAdmitsRemoteWrites: () => writes.admitted
+}))
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
 import { AutomationDetail } from './AutomationDetail'
@@ -31,13 +45,16 @@ import { AutomationDiagram } from './AutomationDiagram'
 import { AutomationList, EMPTY_EXAMPLE } from './AutomationList'
 import { AutomationRunDetail } from './AutomationRunDetail'
 import { AutomationSecretsDialog } from './AutomationSecretsDialog'
+import { AutomationSuggestionCard } from './AutomationSuggestionCard'
 import { formatDateTime } from './automation-format'
 import { RunPolicyCard } from './RunPolicyCard'
 
 const ok = <T,>(data: T) => ({ success: true as const, data })
+const [SUGGESTION] = parseSuggestionList([wire.suggestion]) as [AutomationSuggestion]
 
 beforeEach(() => {
   vi.clearAllMocks()
+  writes.admitted = true
 })
 
 describe('AutomationList', () => {
@@ -310,6 +327,93 @@ describe('AutomationSecretsDialog', () => {
     expect(screen.queryByDisplayValue('sk-live-123')).toBeNull()
     expect(document.body.innerHTML).not.toContain('sk-live-123')
     expect(screen.getByRole('button', { name: 'Replace' })).toBeInTheDocument()
+  })
+})
+
+describe('write controls on a server that refuses remote writes', () => {
+  const SURFACES = [
+    ['a read-only remote client', false],
+    ['the desktop', true]
+  ] as const
+  const expectGate = (el: HTMLElement, admitted: boolean): void =>
+    admitted ? expectNotWriteGated(el) : expectWriteGated(el)
+  const hint = (): HTMLElement | null =>
+    screen.queryByText(READ_ONLY_SERVER_REASON, { selector: 'p' })
+  const detailProps = {
+    runs: [],
+    narrow: false,
+    isVisible: true,
+    onOpenRun: () => {},
+    onDeleted: () => {},
+    onChanged: () => {}
+  }
+
+  it.each(SURFACES)('AutomationDetail on %s', (_, admitted) => {
+    writes.admitted = admitted
+    render(
+      <AutomationDetail
+        {...detailProps}
+        detail={detailWith({ revision: 7, approved_revision: 6, unseen_failures: 2 })}
+      />
+    )
+
+    for (const name of ['Approve and arm', 'Run now', 'Delete']) {
+      expectGate(screen.getByRole('button', { name }), admitted)
+    }
+    expectGate(screen.getByRole('switch', { name: 'Enabled' }), admitted)
+    expectNotWriteGated(screen.getByRole('button', { name: 'Secrets' }))
+    expect(hint() !== null).toBe(!admitted)
+    expect(api.markAutomationSeen.mock.calls).toEqual(admitted ? [['auto-1']] : [])
+  })
+
+  it.each(SURFACES)('AutomationRunDetail on %s', (_, admitted) => {
+    writes.admitted = admitted
+    api.getAutomationRunSteps.mockReturnValue(new Promise(() => {}))
+    render(<AutomationRunDetail run={runWith({ status: 'running' })} />)
+
+    const cancel = screen.getByRole('button', { name: 'Cancel run' })
+    expectGate(cancel, admitted)
+    expect(hint() !== null).toBe(!admitted)
+  })
+
+  it.each(SURFACES)('AutomationSecretsDialog on %s', async (_, admitted) => {
+    writes.admitted = admitted
+    api.listAutomationSecrets.mockResolvedValue(ok(['API_KEY']))
+    render(
+      <AutomationSecretsDialog
+        projectId="project-1"
+        referenced={['API_KEY', 'HOOK_KEY']}
+        open
+        onOpenChange={() => {}}
+      />
+    )
+
+    await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument())
+    expect(screen.getByText('Missing')).toBeInTheDocument()
+    for (const name of ['Replace', 'Delete', 'Set']) {
+      expectGate(screen.getByRole('button', { name }), admitted)
+    }
+    expect(hint() !== null).toBe(!admitted)
+  })
+
+  it.each(SURFACES)('AutomationSuggestionCard on %s keeps Not now', (_, admitted) => {
+    writes.admitted = admitted
+    const onLater = vi.fn()
+    render(
+      <AutomationSuggestionCard
+        suggestion={SUGGESTION}
+        busy={false}
+        onCreate={() => {}}
+        onLater={onLater}
+        onDismiss={() => {}}
+      />
+    )
+
+    expectGate(screen.getByRole('button', { name: 'Create automation' }), admitted)
+    expectGate(screen.getByRole('button', { name: "Don't suggest this again" }), admitted)
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }))
+    expect(onLater).toHaveBeenCalledTimes(1)
+    expect(hint() !== null).toBe(!admitted)
   })
 })
 

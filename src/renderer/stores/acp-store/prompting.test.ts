@@ -252,6 +252,23 @@ describe('acp-store', () => {
     expect(after[0].blocks[0]).toEqual({ type: 'text', text: 'hi there' })
   })
 
+  it('marks a prompt sent on this device as sent here, and not the echo of another device', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+    void useAcpStore.getState().sendPrompt('s1', 'hi there')
+    await Promise.resolve()
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      turnId: 'turn-from-device-b',
+      content: [{ type: 'text', text: 'and from the phone' }]
+    })
+
+    const [sent, echoed] = useAcpStore.getState().messages['s1']
+    expect([sent.blocks, sent.sentHere]).toEqual([[{ type: 'text', text: 'hi there' }], true])
+    expect([echoed.id, echoed.sentHere]).toEqual(['turn:turn-from-device-b', undefined])
+  })
+
   it('sendPromptBlocks stores displayBlocks in the optimistic message while dispatching the wire blocks', async () => {
     // The composer splits display (token text, rendered as inline chips in the
     // timeline) from wire (path-framed text, dispatched to the agent). The

@@ -577,6 +577,50 @@ async fn one_mutation_is_one_automation_changed_delta_on_the_agents_watch() {
     assert_eq!(deltas, vec![expected]);
 }
 
+#[tokio::test]
+async fn a_lagged_forwarder_tells_the_agents_watch_to_resync() {
+    let relay = Arc::new(WsRelaySink::new());
+    let (out, mut frames) = outbound_channel(16, 15);
+    relay
+        .watches()
+        .subscribe(WatchKind::Agents, "", &out, || json!([]))
+        .unwrap();
+    let (changes, receiver) = broadcast::channel(1);
+    for project_id in ["p1", "p2", "p3", "p4"] {
+        changes
+            .send(AutomationChanged {
+                project_id: project_id.to_string(),
+                automation_id: None,
+                proposed: false,
+                proposed_by: None,
+            })
+            .unwrap();
+    }
+    tokio::spawn(forward_changes(receiver, relay.clone()));
+
+    let mut deltas = Vec::new();
+    for _ in 0..200 {
+        while let Ok(Outbound::Watch(frame)) = frames.try_recv() {
+            if let Some(delta) = frame.delta_value() {
+                deltas.push(delta.clone());
+            }
+        }
+        if deltas.len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    assert_eq!(
+        deltas,
+        vec![
+            json!({ "event": "automation_resync", "payload": { "missed": 3 } }),
+            json!({ "event": "automation_changed",
+                "payload": { "project_id": "p4", "automation_id": null } }),
+        ]
+    );
+}
+
 /// Through the real host stack: the bearer gate covers the automation
 /// routes, and both router variants merge them (no service is installed in
 /// the test process, so an admitted request reads `unavailable`).

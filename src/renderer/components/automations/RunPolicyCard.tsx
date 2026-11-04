@@ -1,6 +1,8 @@
 import type { Automation, Issue, RunPolicy } from '@shared/types/automation.types'
 import { AlertTriangle, ShieldCheck } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { WriteGate } from '@/components/ui/write-gate'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { agentToolsLabel, formatDateTime, formatDuration, nodeLabels } from './automation-format'
 
 interface RunPolicyCardProps {
@@ -26,6 +28,7 @@ export function RunPolicyCard({
   const labels = nodeLabels(automation.graph.nodes)
   const labelOf = (nodeId: string): string => labels.get(nodeId) ?? nodeId
   const needsApproval = automation.approved_revision !== automation.revision
+  const gated = !useServerAdmitsRemoteWrites()
 
   return (
     <section
@@ -110,15 +113,17 @@ export function RunPolicyCard({
                 ? 'Not approved yet. It will not run until you approve this revision.'
                 : `Revision ${automation.approved_revision} was approved. This revision needs your approval before it runs again.`}
           </p>
-          <Button
-            size="sm"
-            className="pointer-coarse:h-11"
-            disabled={issues.length > 0 || approving}
-            onClick={onApprove}
-          >
-            {/* Approval never enables: a disabled automation stays disabled. */}
-            {approving ? 'Approving…' : automation.enabled ? 'Approve and arm' : 'Approve'}
-          </Button>
+          <WriteGate gated={gated}>
+            <Button
+              size="sm"
+              className="pointer-coarse:h-11"
+              disabled={gated || issues.length > 0 || approving}
+              onClick={onApprove}
+            >
+              {/* Approval never enables: a disabled automation stays disabled. */}
+              {approving ? 'Approving…' : automation.enabled ? 'Approve and arm' : 'Approve'}
+            </Button>
+          </WriteGate>
         </footer>
       )}
     </section>

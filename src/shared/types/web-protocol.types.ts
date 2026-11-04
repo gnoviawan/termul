@@ -1169,6 +1169,9 @@ export interface AgentsWatchDelta {
     // One automation changed; the payload is `{ project_id, automation_id }`
     // and clients re-read it. Not roster state either.
     | 'automation_changed'
+    // The host dropped `automation_changed` deltas it could not forward in
+    // time; the payload is `{ missed }` and clients re-read every automation.
+    | 'automation_resync'
   payload: unknown
 }
 

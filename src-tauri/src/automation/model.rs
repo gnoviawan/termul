@@ -644,6 +644,9 @@ pub struct NodeHosts {
 
 /// Wire event name of [`AutomationChanged`].
 pub const EVENT_AUTOMATION_CHANGED: &str = "automation_changed";
+/// Wire event name for "change events were dropped; re-read every
+/// automation". Its payload is `{missed}`, the count dropped.
+pub const EVENT_AUTOMATION_RESYNC: &str = "automation_resync";
 
 /// Something about an automation changed: its definition, its approval, or a
 /// run. `automation_id` is `None` for project-wide changes (secret names).

@@ -69,6 +69,16 @@ function applyRosterDelta(state: AcpState, delta: AgentsWatchDelta): void {
     publishAutomationChange(delta.payload)
     return
   }
+  if (delta?.event === 'automation_resync') {
+    const missed = (delta.payload as { missed?: unknown } | null | undefined)?.missed
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp-store.agentRosterWatch',
+      message: `host dropped ${String(missed)} automation change(s); re-reading automations`
+    })
+    requestAutomationResync()
+    return
+  }
   const agentId = (delta?.payload as { agentId?: unknown } | null | undefined)?.agentId
   if (typeof agentId !== 'string') {
     void logFrontendError({

@@ -411,6 +411,27 @@ describe('failed session lifecycle (story 5)', () => {
     expect(useAcpStore.getState().sessions[placeholderId].lastError).toMatch(/Install Node\.js/)
   })
 
+  it('marks the first prompt of a launch as sent here, placed or seeded', () => {
+    const placed = useAcpStore.getState().createLaunchPlaceholder({
+      cwd: '/work',
+      projectId: 'p1',
+      initialUserBlocks: [{ type: 'text', text: 'hello agent' }]
+    })
+    const seeded = useAcpStore.getState().createLaunchPlaceholder({ cwd: '/work', projectId: 'p1' })
+    useAcpStore.getState().seedLaunchUserMessage(seeded, [{ type: 'text', text: 'hello seeded' }])
+
+    const placedMessage = useAcpStore.getState().messages[placed][0]
+    const seededMessage = useAcpStore.getState().messages[seeded][0]
+    expect([placedMessage.blocks, placedMessage.sentHere]).toEqual([
+      [{ type: 'text', text: 'hello agent' }],
+      true
+    ])
+    expect([seededMessage.blocks, seededMessage.sentHere]).toEqual([
+      [{ type: 'text', text: 'hello seeded' }],
+      true
+    ])
+  })
+
   it('deleting an open failed session also closes its workspace tab', async () => {
     const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
     await useAcpStore.getState().deleteHistorySession(placeholderId)
