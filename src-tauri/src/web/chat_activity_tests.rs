@@ -18,8 +18,16 @@ fn mark(seq: u64) -> ReadMark {
     }
 }
 
-fn no_inputs() -> (bool, Option<ReadMark>) {
-    (false, None)
+fn no_inputs() -> ActivityInputs {
+    inputs(false, None)
+}
+
+fn inputs(needs_you: bool, read: Option<ReadMark>) -> ActivityInputs {
+    ActivityInputs {
+        needs_you,
+        read,
+        log_epoch: Some("e1".to_string()),
+    }
 }
 
 fn opened() -> ActivityEvent {
@@ -35,12 +43,7 @@ fn a_turn_is_busy_until_it_ends_unread() {
     assert!(busy.busy && !busy.unread);
 
     let ended = table
-        .observe(
-            SID,
-            7,
-            ActivityEvent::TurnEnded { end: Some(end(7)) },
-            no_inputs,
-        )
+        .observe(SID, 7, ActivityEvent::TurnEnded, no_inputs)
         .expect("changed");
     assert_eq!(
         ended,
@@ -56,20 +59,15 @@ fn a_turn_is_busy_until_it_ends_unread() {
 #[test]
 fn a_read_marker_at_the_turn_end_clears_unread_and_an_older_one_does_not() {
     let table = ChatActivities::default();
-    table.observe(
-        SID,
-        7,
-        ActivityEvent::TurnEnded { end: Some(end(7)) },
-        no_inputs,
-    );
+    table.observe(SID, 7, ActivityEvent::TurnEnded, no_inputs);
 
     assert_eq!(
-        table.refresh(SID, || (false, Some(mark(6)))),
+        table.refresh(SID, || inputs(false, Some(mark(6)))),
         None,
         "still unread"
     );
     let read = table
-        .refresh(SID, || (false, Some(mark(7))))
+        .refresh(SID, || inputs(false, Some(mark(7))))
         .expect("changed");
     assert!(!read.unread);
     let other_epoch = ReadMark {
@@ -78,7 +76,7 @@ fn a_read_marker_at_the_turn_end_clears_unread_and_an_older_one_does_not() {
     };
     assert!(
         table
-            .refresh(SID, || (false, Some(other_epoch)))
+            .refresh(SID, || inputs(false, Some(other_epoch)))
             .expect("changed")
             .unread
     );
@@ -126,7 +124,7 @@ fn needs_you_follows_the_pending_prompts() {
     let table = ChatActivities::default();
     let raised = table
         .observe(SID, 1, ActivityEvent::Prompt { agent_id: None }, || {
-            (true, None)
+            inputs(true, None)
         })
         .expect("changed");
     assert!(raised.needs_you);
@@ -165,6 +163,54 @@ fn forgetting_reports_whether_anything_was_shown() {
     assert_eq!(table.get(SID), ChatActivity::default());
 }
 
+/// The agent's first turn can end before persistence registers the session,
+/// under a placeholder log epoch. Once registered, the turn end stands under
+/// the persisted epoch, so a surface reading it there clears the dot.
+#[tokio::test]
+async fn a_turn_end_before_registration_is_read_under_the_persisted_epoch() {
+    use crate::acp::session_persistence::{SessionPersistence, SessionRegistration};
+    use crate::web::sink::{AcpEvent, EventSink, WsRelaySink};
+
+    let root = std::env::temp_dir().join(format!("termul-activity-epoch-{}", uuid::Uuid::new_v4()));
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let persistence = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    let relay = WsRelaySink::with_persistence(64, persistence.clone());
+    relay.emit(&AcpEvent {
+        sid: Some(SID.to_string()),
+        type_: "acp:prompt_complete",
+        payload: json!({ "sessionId": SID, "stopReason": "end_turn" }),
+    });
+    persistence
+        .register_session(SessionRegistration {
+            session_id: SID.to_string(),
+            cwd,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    relay.note_session_registered_inherent(SID);
+
+    let persisted = persistence.log_epoch(SID).expect("minted at registration");
+    let turn_end = relay.chat_activity().get(SID).turn_end.expect("unread");
+    assert_eq!(
+        turn_end,
+        TurnEnd {
+            log_epoch: persisted,
+            seq: 1
+        }
+    );
+    let head = relay.log_head(SID).expect("head");
+    relay
+        .chat_reads()
+        .mark(SID, &head, Some(&turn_end.log_epoch), turn_end.seq);
+    relay.refresh_chat_activity(SID);
+    assert!(!relay.chat_activity().get(SID).unread);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Two threads can observe one session's events out of seq order: a turn end
 /// numbered before the next turn opened must not close that turn.
 #[test]
@@ -173,12 +219,7 @@ fn an_event_older_than_the_last_applied_one_is_ignored() {
     table.observe(SID, 6, opened(), no_inputs);
 
     assert_eq!(
-        table.observe(
-            SID,
-            5,
-            ActivityEvent::TurnEnded { end: Some(end(5)) },
-            no_inputs
-        ),
+        table.observe(SID, 5, ActivityEvent::TurnEnded, no_inputs),
         None
     );
     assert!(table.get(SID).busy, "the newer turn is still open");

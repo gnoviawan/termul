@@ -9,8 +9,7 @@
 
 use serde_json::Value;
 
-use crate::web::chat_activity::{ActivityEvent, ChatActivity, TurnEnd};
-use crate::web::chat_reads::ReadMark;
+use crate::web::chat_activity::{ActivityEvent, ActivityInputs, ChatActivity};
 use crate::web::watch::publish_chat_activity;
 
 use super::WsRelaySink;
@@ -25,13 +24,7 @@ impl WsRelaySink {
     /// A session event was numbered at `seq`: fold it into the session's
     /// activity.
     pub(super) fn observe_activity(&self, sid: &str, type_: &str, payload: &Value, seq: u64) {
-        let turn_end = || {
-            self.log_head(sid).map(|head| TurnEnd {
-                log_epoch: head.log_epoch,
-                seq,
-            })
-        };
-        let Some(event) = ActivityEvent::parse(type_, payload, turn_end) else {
+        let Some(event) = ActivityEvent::parse(type_, payload) else {
             return;
         };
         let changed = self
@@ -40,7 +33,8 @@ impl WsRelaySink {
         self.announce_activity(sid, changed);
     }
 
-    /// Re-derive the activity of `sid` (its read marker moved).
+    /// Re-derive the activity of `sid` (its read marker moved, its log
+    /// adopted the persisted epoch).
     pub fn refresh_chat_activity(&self, sid: &str) {
         let changed = self
             .chat_activity
@@ -75,8 +69,8 @@ impl WsRelaySink {
         }
     }
 
-    /// Whether `sid` has a pending prompt, and its read marker.
-    fn activity_inputs(&self, sid: &str) -> (bool, Option<ReadMark>) {
+    /// Whether `sid` has a pending prompt, its read marker and its log epoch.
+    fn activity_inputs(&self, sid: &str) -> ActivityInputs {
         let permission = self
             .rendezvous()
             .is_some_and(|rendezvous| !rendezvous.pending_requests(sid).is_empty());
@@ -85,8 +79,11 @@ impl WsRelaySink {
                 .is_some_and(|rendezvous| !rendezvous.pending_requests(sid).is_empty())
         };
         let elicitation = || !self.elicitations.pending_requests(sid).is_empty();
-        let needs_you = permission || question() || elicitation();
-        (needs_you, self.chat_reads.get(sid))
+        ActivityInputs {
+            needs_you: permission || question() || elicitation(),
+            read: self.chat_reads.get(sid),
+            log_epoch: self.log_head(sid).map(|head| head.log_epoch),
+        }
     }
 
     fn announce_activity(&self, sid: &str, changed: Option<ChatActivity>) {

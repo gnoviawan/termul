@@ -80,8 +80,8 @@ impl ChatActivity {
 pub enum ActivityEvent {
     /// The host accepted a prompt (`user_prompt`).
     TurnOpened { agent_id: Option<String> },
-    /// The turn ended (`prompt_complete`) at `end`.
-    TurnEnded { end: Option<TurnEnd> },
+    /// The turn ended (`prompt_complete`).
+    TurnEnded,
     /// `agent_working` (work outside a prompt turn).
     Working {
         agent_id: Option<String>,
@@ -94,13 +94,9 @@ pub enum ActivityEvent {
 }
 
 impl ActivityEvent {
-    /// The activity meaning of a session event of wire type `type_`. `end`
-    /// gives the turn end a `prompt_complete` stands at.
-    pub fn parse(
-        type_: &str,
-        payload: &Value,
-        end: impl FnOnce() -> Option<TurnEnd>,
-    ) -> Option<Self> {
+    /// The activity meaning of a session event of wire type `type_`.
+    #[must_use]
+    pub fn parse(type_: &str, payload: &Value) -> Option<Self> {
         let agent_id = || {
             payload
                 .get("agentId")
@@ -111,7 +107,7 @@ impl ActivityEvent {
             "user_prompt" => Some(Self::TurnOpened {
                 agent_id: agent_id(),
             }),
-            "prompt_complete" => Some(Self::TurnEnded { end: end() }),
+            "prompt_complete" => Some(Self::TurnEnded),
             "agent_working" => Some(Self::Working {
                 agent_id: agent_id(),
                 working: payload
@@ -131,28 +127,42 @@ impl ActivityEvent {
     }
 }
 
+/// What a record is derived from besides the session's events, read under the
+/// table's lock.
+#[derive(Debug, Default)]
+pub struct ActivityInputs {
+    /// The session has a pending permission, question or elicitation.
+    pub needs_you: bool,
+    /// The session's read marker.
+    pub read: Option<ReadMark>,
+    /// The epoch the session's log stands under now. A turn end is stamped
+    /// with it when derived, not when observed: a turn can end under a
+    /// placeholder epoch before persistence registers the session, and the
+    /// seqs carry over to the persisted epoch it adopts.
+    pub log_epoch: Option<String>,
+}
+
 /// The facts the relay saw for one chat, and the record last published.
 #[derive(Debug, Default)]
 struct Entry {
     agent_id: Option<String>,
     turn_open: bool,
     agent_working: bool,
-    turn_end: Option<TurnEnd>,
+    /// The seq of the newest `prompt_complete`.
+    turn_end: Option<u64>,
     shown: ChatActivity,
 }
 
 impl Entry {
-    fn apply(&mut self, event: ActivityEvent) {
+    fn apply(&mut self, event: ActivityEvent, seq: u64) {
         match event {
             ActivityEvent::TurnOpened { agent_id } => {
                 self.agent_id = agent_id.or(self.agent_id.take());
                 self.turn_open = true;
             }
-            ActivityEvent::TurnEnded { end } => {
+            ActivityEvent::TurnEnded => {
                 self.turn_open = false;
-                if end.is_some() {
-                    self.turn_end = end;
-                }
+                self.turn_end = Some(seq);
             }
             ActivityEvent::Working { agent_id, working } => {
                 self.agent_id = agent_id.or(self.agent_id.take());
@@ -168,12 +178,18 @@ impl Entry {
         }
     }
 
-    fn derive(&self, needs_you: bool, read: Option<&ReadMark>) -> ChatActivity {
+    fn derive(&self, inputs: ActivityInputs) -> ChatActivity {
+        let turn_end = self
+            .turn_end
+            .zip(inputs.log_epoch)
+            .map(|(seq, log_epoch)| TurnEnd { log_epoch, seq });
         ChatActivity {
             busy: self.turn_open || self.agent_working,
-            needs_you,
-            unread: self.turn_end.as_ref().is_some_and(|end| !end.read_by(read)),
-            turn_end: self.turn_end.clone(),
+            needs_you: inputs.needs_you,
+            unread: turn_end
+                .as_ref()
+                .is_some_and(|end| !end.read_by(inputs.read.as_ref())),
+            turn_end,
         }
     }
 }
@@ -196,14 +212,13 @@ pub struct ChatActivities {
 impl ChatActivities {
     /// Record `event`, numbered `seq`, for `session_id`, then re-derive its
     /// record. An event older than one already applied is ignored. `inputs`
-    /// reads, under this table's lock, whether the session has a pending
-    /// prompt and its read marker. Returns the record when it changed.
+    /// is read under this table's lock. Returns the record when it changed.
     pub fn observe(
         &self,
         session_id: &str,
         seq: u64,
         event: ActivityEvent,
-        inputs: impl FnOnce() -> (bool, Option<ReadMark>),
+        inputs: impl FnOnce() -> ActivityInputs,
     ) -> Option<ChatActivity> {
         let mut table = self.table.lock();
         let applied = table.applied.entry(session_id.to_string()).or_default();
@@ -212,16 +227,16 @@ impl ChatActivities {
         }
         *applied = seq;
         let entry = table.entries.entry(session_id.to_string()).or_default();
-        entry.apply(event);
+        entry.apply(event, seq);
         Self::rederive(&mut table.entries, session_id, inputs)
     }
 
     /// Re-derive the record of `session_id` (a prompt answered, a read marker
-    /// moved). Returns the record when it changed.
+    /// moved, the log epoch adopted). Returns the record when it changed.
     pub fn refresh(
         &self,
         session_id: &str,
-        inputs: impl FnOnce() -> (bool, Option<ReadMark>),
+        inputs: impl FnOnce() -> ActivityInputs,
     ) -> Option<ChatActivity> {
         let mut table = self.table.lock();
         if !table.entries.contains_key(session_id) {
@@ -233,11 +248,10 @@ impl ChatActivities {
     fn rederive(
         entries: &mut HashMap<String, Entry>,
         session_id: &str,
-        inputs: impl FnOnce() -> (bool, Option<ReadMark>),
+        inputs: impl FnOnce() -> ActivityInputs,
     ) -> Option<ChatActivity> {
         let entry = entries.get_mut(session_id)?;
-        let (needs_you, read) = inputs();
-        let derived = entry.derive(needs_you, read.as_ref());
+        let derived = entry.derive(inputs());
         let changed = derived != entry.shown;
         entry.shown = derived.clone();
         if derived.is_idle() {
