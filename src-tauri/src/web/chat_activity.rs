@@ -166,6 +166,16 @@ impl Entry {
                 self.turn_end = Some(seq);
             }
             ActivityEvent::Working { agent_id, working } => {
+                // A resumed session can keep the previous agent's quiet-sweep
+                // emitting `agent_working` false after a new owner started.
+                // Do not let that stale clear replace ownership or drop Working.
+                if !working {
+                    if let (Some(current), Some(incoming)) = (&self.agent_id, &agent_id) {
+                        if current != incoming {
+                            return;
+                        }
+                    }
+                }
                 self.agent_id = agent_id.or(self.agent_id.take());
                 self.agent_working = working;
             }

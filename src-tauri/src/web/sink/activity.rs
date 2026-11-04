@@ -69,6 +69,13 @@ impl WsRelaySink {
         }
     }
 
+    /// Drop the activity record of a chat deleted through the desktop command.
+    /// Activity-only: does not release tickets or rendezvous (unlike
+    /// [`Self::forget_session`]).
+    pub fn forget_chat_activity(&self, sid: &str) {
+        self.forget_activity(sid);
+    }
+
     /// Whether `sid` has a pending prompt, its read marker and its log epoch.
     fn activity_inputs(&self, sid: &str) -> ActivityInputs {
         let permission = self

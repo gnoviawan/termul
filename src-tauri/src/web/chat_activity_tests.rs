@@ -139,6 +139,63 @@ fn closing_or_the_agent_dying_ends_the_work() {
     );
 }
 
+/// A resumed chat's new owner starts unprompted work; the previous agent's
+/// quiet sweep must not clear Working or reclaim ownership.
+#[test]
+fn stale_working_false_from_another_agent_is_ignored() {
+    let table = ChatActivities::default();
+    table.observe(
+        SID,
+        1,
+        ActivityEvent::Working {
+            agent_id: Some("a1".to_string()),
+            working: true,
+        },
+        no_inputs,
+    );
+    // New owner takes over with unprompted work.
+    table.observe(
+        SID,
+        2,
+        ActivityEvent::Working {
+            agent_id: Some("a2".to_string()),
+            working: true,
+        },
+        no_inputs,
+    );
+    assert!(table.get(SID).busy);
+
+    // Previous agent's quiet sweep arrives later — ignore it.
+    assert_eq!(
+        table.observe(
+            SID,
+            3,
+            ActivityEvent::Working {
+                agent_id: Some("a1".to_string()),
+                working: false,
+            },
+            no_inputs,
+        ),
+        None,
+        "stale clear must not change the record"
+    );
+    assert!(table.get(SID).busy, "new owner's Working stays");
+
+    // Current owner clearing still works.
+    let cleared = table
+        .observe(
+            SID,
+            4,
+            ActivityEvent::Working {
+                agent_id: Some("a2".to_string()),
+                working: false,
+            },
+            no_inputs,
+        )
+        .expect("changed");
+    assert!(!cleared.busy);
+}
+
 #[test]
 fn needs_you_follows_the_pending_prompts() {
     let table = ChatActivities::default();
