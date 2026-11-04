@@ -156,8 +156,12 @@ pub(super) async fn run_command_loop(
                     let mut request = NewSessionRequest::new(cwd.clone())
                         .mcp_servers(mcp_servers)
                         .additional_directories(additional_directories);
-                    if profile.summarize_thinking {
-                        request = request.meta(summarized_thinking_meta());
+                    let mut meta = profile.summarize_thinking.then(summarized_thinking_meta);
+                    if let Some(allowlist) = &tool_allowlist {
+                        meta = Some(with_headless_options(meta.unwrap_or_default(), allowlist));
+                    }
+                    if let Some(meta) = meta {
+                        request = request.meta(meta);
                     }
                     let timeout = session_new_timeout();
                     log::debug!(

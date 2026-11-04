@@ -7,10 +7,10 @@
 //! persisted for, or replayed to a client, on desktop and `termul-server`
 //! alike. The session is ephemeral, so the host injects no MCP server and the
 //! driver auto-cancels questions and elicitations. Permission requests are
-//! answered from the request's [`ToolAllowlist`]. A session that starts in a
-//! mode that runs tools without asking is moved to a mode that asks, so every
-//! tool the agent gates reaches that allowlist. The host never selects a
-//! bypass mode.
+//! answered from the request's [`ToolAllowlist`]. A session that does not
+//! start in a mode known to ask is moved to one, so every tool the agent
+//! gates reaches that allowlist. The host never selects a bypass mode, and
+//! asks Claude Agent ACP to load no settings files and offer no bypass mode.
 
 use std::fmt;
 use std::sync::{Arc, OnceLock};
@@ -48,19 +48,10 @@ pub struct OneShotRequest {
     pub tools: ToolAllowlist,
 }
 
-/// Modes of known agents that run some tools without asking (Claude Agent,
-/// Cursor, Codex). The host would never see those requests.
-const NON_ASKING_MODES: [&str; 6] = [
-    "acceptEdits",
-    "auto",
-    "agent",
-    "workspace-write",
-    "bypassPermissions",
-    "agent-full-access",
-];
-
-/// Modes that ask before acting, in the order the host prefers them.
-const ASKING_MODES: [&str; 3] = ["default", "read-only", "ask"];
+/// Modes known to ask before a tool acts (Claude Agent, Cursor, Codex,
+/// Gemini), most preferred first. A session moves to the first one its agent
+/// offers: `plan` only as a last resort, since it blocks edits and commands.
+const ASKING_MODES: [&str; 4] = ["default", "read-only", "ask", "plan"];
 
 /// A completed turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -321,18 +312,20 @@ async fn ensure_asking_mode(
         return Ok(());
     };
     let current = modes.current_mode_id.0.as_ref();
-    if !NON_ASKING_MODES.contains(&current) {
-        return Ok(());
-    }
-    let Some(target) = ASKING_MODES
+    let preferred = ASKING_MODES
         .into_iter()
-        .find(|id| modes.available_modes.iter().any(|m| m.id.0.as_ref() == *id))
-    else {
+        .find(|id| modes.available_modes.iter().any(|m| m.id.0.as_ref() == *id));
+    let target = match preferred {
+        Some(target) if target == current => return Ok(()),
+        None if ASKING_MODES.contains(&current) => return Ok(()),
+        target => target,
+    };
+    let Some(target) = target else {
         log::warn!(
-            "[acp-oneshot] agent {agent_id} starts in mode {current} and offers no mode that asks"
+            "[acp-oneshot] agent {agent_id} starts in mode {current} and offers no known mode that asks"
         );
         return Err(OneShotError::Spawn(format!(
-            "the session runs in mode `{current}`, which uses tools without asking, and the agent offers no mode that asks"
+            "the session runs in mode `{current}`, which may use tools without asking, and the agent offers no known mode that asks"
         )));
     };
     log::info!("[acp-oneshot] agent {agent_id} starts in mode {current}; switching to {target}");

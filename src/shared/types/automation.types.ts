@@ -126,6 +126,7 @@ export type IssueCode =
   | 'missing_condition_operand'
   | 'invalid_schedule'
   | 'untrusted_agent_outbound_tool'
+  | 'outbound_agent_file_tool'
   | 'unknown_agent'
 
 export type Issue = { node_id: NodeId | null; code: IssueCode; message: string }

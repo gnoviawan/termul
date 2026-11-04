@@ -72,16 +72,18 @@ pub(super) async fn run(scope: &NodeScope<'_>, spec: AgentSpec<'_>) -> Result<Va
 }
 
 fn allowlist(tools: &[AgentTool]) -> ToolAllowlist {
-    ToolAllowlist::new(tools.iter().flat_map(|tool| match tool {
-        AgentTool::Read => &[ToolKind::Read][..],
-        AgentTool::Search => &[ToolKind::Search],
-        AgentTool::Edit => &[ToolKind::Edit, ToolKind::Delete, ToolKind::Move],
-        AgentTool::Execute => &[ToolKind::Execute],
-        AgentTool::Fetch => &[ToolKind::Fetch],
-        AgentTool::Other => &[ToolKind::Other, ToolKind::Think],
-    }
-    .iter()
-    .copied()))
+    ToolAllowlist::new(tools.iter().flat_map(|tool| {
+        match tool {
+            AgentTool::Read => &[ToolKind::Read][..],
+            AgentTool::Search => &[ToolKind::Search],
+            AgentTool::Edit => &[ToolKind::Edit, ToolKind::Delete, ToolKind::Move],
+            AgentTool::Execute => &[ToolKind::Execute],
+            AgentTool::Fetch => &[ToolKind::Fetch],
+            AgentTool::Other => &[ToolKind::Other, ToolKind::Think],
+        }
+        .iter()
+        .copied()
+    }))
 }
 
 pub(super) fn tool_rule(tools: &[AgentTool]) -> String {

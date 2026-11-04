@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use agent_client_protocol::schema::v1::{
     PermissionOption, RequestPermissionOutcome, ToolCallUpdate, ToolKind,
 };
@@ -5,10 +7,16 @@ use serde_json::json;
 
 use super::{ToolAllowlist, ToolPolicies};
 
-fn tool_call(id: &str, kind: Option<&str>) -> ToolCallUpdate {
+fn tool_call(id: &str, kind: Option<&str>, paths: &[&Path]) -> ToolCallUpdate {
     let mut value = json!({ "toolCallId": id });
     if let Some(kind) = kind {
         value["kind"] = json!(kind);
+    }
+    if !paths.is_empty() {
+        value["locations"] = json!(paths
+            .iter()
+            .map(|p| json!({ "path": p }))
+            .collect::<Vec<_>>());
     }
     serde_json::from_value(value).unwrap()
 }
@@ -31,91 +39,142 @@ fn all_options() -> Vec<PermissionOption> {
     ])
 }
 
-fn policies(kinds: &[ToolKind]) -> ToolPolicies {
-    let mut policies = ToolPolicies::default();
-    policies.set("s1".into(), ToolAllowlist::new(kinds.iter().copied()));
-    policies
+struct Fixture {
+    dir: tempfile::TempDir,
+    policies: ToolPolicies,
 }
 
-/// `(kind, allowed, chosen option id or "cancelled")`
-fn answer(
-    policies: &ToolPolicies,
-    call: &ToolCallUpdate,
-    opts: &[PermissionOption],
-) -> Option<(ToolKind, bool, String)> {
-    policies.answer("s1", call, opts).map(|d| {
-        let chosen = match d.outcome {
-            RequestPermissionOutcome::Selected(selected) => selected.option_id.0.to_string(),
-            _ => "cancelled".to_string(),
-        };
-        (d.kind, d.allowed, chosen)
-    })
+impl Fixture {
+    fn new(kinds: &[ToolKind]) -> Self {
+        let mut policies = ToolPolicies::default();
+        policies.set("s1".into(), ToolAllowlist::new(kinds.iter().copied()));
+        Self {
+            dir: tempfile::tempdir().unwrap(),
+            policies,
+        }
+    }
+
+    fn root(&self) -> PathBuf {
+        self.dir.path().canonicalize().unwrap()
+    }
+
+    /// The chosen option id, or "cancelled"; `None` without an allowlist.
+    fn answer(&self, call: &ToolCallUpdate, opts: &[PermissionOption]) -> Option<String> {
+        let root = self.root();
+        self.policies
+            .answer("s1", Some(&root), call, opts)
+            .map(|d| match d.outcome {
+                RequestPermissionOutcome::Selected(selected) => selected.option_id.0.to_string(),
+                _ => "cancelled".to_string(),
+            })
+    }
 }
 
 #[test]
 fn a_listed_kind_gets_the_allow_once_option_and_anything_else_reject_once() {
-    let p = policies(&[ToolKind::Read, ToolKind::Fetch]);
+    let f = Fixture::new(&[ToolKind::Fetch, ToolKind::Read]);
+    let inside = f.root().join("notes.txt");
     assert_eq!(
-        answer(&p, &tool_call("t1", Some("read")), &all_options()),
-        Some((ToolKind::Read, true, "once".into()))
+        f.answer(&tool_call("t1", Some("fetch"), &[]), &all_options()),
+        Some("once".into())
     );
     assert_eq!(
-        answer(&p, &tool_call("t2", Some("execute")), &all_options()),
-        Some((ToolKind::Execute, false, "no".into()))
+        f.answer(&tool_call("t2", Some("read"), &[&inside]), &all_options()),
+        Some("once".into())
+    );
+    assert_eq!(
+        f.answer(&tool_call("t3", Some("execute"), &[]), &all_options()),
+        Some("no".into())
     );
 }
 
 #[test]
-fn a_request_without_a_kind_uses_the_kind_of_its_earlier_tool_call() {
-    let mut p = policies(&[ToolKind::Edit]);
-    p.note_kind("s1", "t1", ToolKind::Edit);
+fn a_request_without_a_kind_uses_its_earlier_tool_call_and_an_unknown_one_is_refused() {
+    let mut f = Fixture::new(&[ToolKind::Edit, ToolKind::Other]);
+    let inside = f.root().join("out.md");
+    f.policies
+        .note_call("s1", "t1", Some(ToolKind::Edit), Some(vec![inside]));
     assert_eq!(
-        answer(&p, &tool_call("t1", None), &all_options()),
-        Some((ToolKind::Edit, true, "once".into()))
+        f.answer(&tool_call("t1", None, &[]), &all_options()),
+        Some("once".into())
     );
     assert_eq!(
-        answer(&p, &tool_call("t9", None), &all_options()),
-        Some((ToolKind::Other, false, "no".into()))
+        f.answer(&tool_call("t9", None, &[]), &all_options()),
+        Some("no".into())
+    );
+}
+
+#[test]
+fn a_file_tool_is_allowed_only_inside_the_working_directory_and_off_protected_paths() {
+    let f = Fixture::new(&[ToolKind::Read, ToolKind::Edit]);
+    let root = f.root();
+    std::fs::create_dir(root.join("docs")).unwrap();
+    let answer = |kind: &str, path: PathBuf| {
+        f.answer(&tool_call("t", Some(kind), &[&path]), &all_options())
+            .unwrap()
+    };
+    assert_eq!(answer("edit", root.join("docs/new/report.md")), "once");
+    assert_eq!(answer("read", root.join("docs/../README.md")), "once");
+    assert_eq!(answer("read", PathBuf::from("/etc/passwd")), "no");
+    assert_eq!(answer("read", root.join("../outside.txt")), "no");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("/etc", root.join("docs/escape")).unwrap();
+        assert_eq!(answer("read", root.join("docs/escape/passwd")), "no");
+    }
+    assert_eq!(answer("read", root.join(".env.local")), "no");
+    assert_eq!(answer("edit", root.join(".git/hooks/pre-commit")), "no");
+    assert_eq!(
+        answer("edit", root.join(".claude/settings.local.json")),
+        "no"
+    );
+    assert_eq!(answer("edit", root.join("sub/.mcp.json")), "no");
+    assert_eq!(answer("edit", root.join(".Claude/settings.json")), "no");
+    assert_eq!(answer("read", root.join(".ENV")), "no");
+    assert_eq!(answer("edit", root.join(".git./config")), "no");
+    assert_eq!(answer("edit", root.join(".github/workflows/ci.yml")), "no");
+    assert_eq!(answer("read", PathBuf::from("notes.txt")), "no");
+    assert_eq!(answer("edit", PathBuf::from("~/.bashrc")), "no");
+    assert_eq!(
+        f.answer(&tool_call("t", Some("read"), &[]), &all_options()),
+        Some("no".into())
     );
 }
 
 #[test]
 fn a_mode_switch_is_never_allowed() {
-    let p = policies(&[ToolKind::SwitchMode, ToolKind::Other]);
+    let f = Fixture::new(&[ToolKind::SwitchMode, ToolKind::Other]);
     assert_eq!(
-        answer(&p, &tool_call("t1", Some("switch_mode")), &all_options()),
-        Some((ToolKind::SwitchMode, false, "no".into()))
+        f.answer(&tool_call("t1", Some("switch_mode"), &[]), &all_options()),
+        Some("no".into())
     );
 }
 
 #[test]
 fn missing_options_fall_back_to_a_refusal_or_a_cancel() {
-    let p = policies(&[ToolKind::Read]);
+    let f = Fixture::new(&[ToolKind::Fetch]);
     assert_eq!(
-        answer(
-            &p,
-            &tool_call("t1", Some("read")),
+        f.answer(
+            &tool_call("t1", Some("fetch"), &[]),
             &options(&[("always", "allow_always"), ("no", "reject_once")])
         ),
-        Some((ToolKind::Read, false, "no".into()))
+        Some("no".into())
     );
     assert_eq!(
-        answer(
-            &p,
-            &tool_call("t2", Some("edit")),
+        f.answer(
+            &tool_call("t2", Some("execute"), &[]),
             &options(&[("once", "allow_once"), ("never", "reject_always")])
         ),
-        Some((ToolKind::Edit, false, "cancelled".into()))
+        Some("cancelled".into())
     );
 }
 
 #[test]
 fn a_session_without_an_allowlist_gets_no_answer() {
-    let mut p = policies(&[ToolKind::Read]);
-    p.forget("s1");
-    p.note_kind("s1", "t1", ToolKind::Read);
+    let mut f = Fixture::new(&[ToolKind::Fetch]);
+    f.policies.forget("s1");
     assert_eq!(
-        answer(&p, &tool_call("t1", Some("read")), &all_options()),
+        f.answer(&tool_call("t1", Some("fetch"), &[]), &all_options()),
         None
     );
 }

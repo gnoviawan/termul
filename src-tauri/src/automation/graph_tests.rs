@@ -230,8 +230,27 @@ fn rule7_agent_schema_and_bounds() {
     );
 }
 
+fn agent_spec(prompt: &str, tools: serde_json::Value) -> serde_json::Value {
+    json!({ "kind": "agent", "agent_id": "claude", "prompt": prompt,
+            "output_schema": { "type": "object" }, "timeout_ms": 1000, "max_attempts": 1,
+            "tools": tools })
+}
+
+fn messages(a: &Automation) -> Vec<(IssueCode, String, String)> {
+    validate(a)
+        .into_iter()
+        .map(|i| {
+            (
+                i.code,
+                i.node_id.map(|n| n.to_string()).unwrap_or_default(),
+                i.message,
+            )
+        })
+        .collect()
+}
+
 #[test]
-fn rule8_untrusted_flow_needs_get_data_reaching_an_agent_with_http_downstream() {
+fn rule8_untrusted_flow_needs_untrusted_data_reaching_an_agent_with_http_downstream() {
     let base = sample_automation();
     assert!(untrusted_flow(&base.graph));
     let post_fetch = set_spec(
@@ -240,71 +259,78 @@ fn rule8_untrusted_flow_needs_get_data_reaching_an_agent_with_http_downstream() 
         json!({ "kind": "http", "method": "POST", "url": "https://api.example.com/items",
                 "allowed_hosts": ["api.example.com"] }),
     );
-    assert!(!untrusted_flow(&post_fetch.graph));
+    assert!(untrusted_flow(&post_fetch.graph));
+    let trusted_prompt = set_spec(
+        &base,
+        "extract",
+        agent_spec("Summarize {{trigger.kind}}", json!([])),
+    );
+    assert!(!untrusted_flow(&trusted_prompt.graph));
+    let fetching = set_spec(
+        &base,
+        "extract",
+        agent_spec("Summarize {{trigger.kind}}", json!(["fetch"])),
+    );
+    assert!(untrusted_flow(&fetching.graph));
     let no_http_after = apply(&base, json!([{ "op": "remove_node", "id": "post" }]));
     assert!(!untrusted_flow(&no_http_after.graph));
 }
 
-fn agent_spec(prompt: &str, tools: serde_json::Value) -> serde_json::Value {
-    json!({ "kind": "agent", "agent_id": "claude", "prompt": prompt,
-            "output_schema": { "type": "object" }, "timeout_ms": 1000, "max_attempts": 1,
-            "tools": tools })
-}
-
 #[test]
-fn rule9_an_agent_reading_get_data_may_not_use_outbound_tools() {
-    let base = sample_automation();
-    let outbound = set_spec(
-        &base,
+fn rule9_an_agent_reading_untrusted_data_may_not_send_data_out_or_edit() {
+    let all_tools = set_spec(
+        &sample_automation(),
         "extract",
         agent_spec(
             "Summarize {{nodes.fetch.output.items}}",
             json!(["read", "execute", "edit", "fetch", "other"]),
         ),
     );
-    let issues = validate(&outbound);
     assert_eq!(
-        issues
-            .iter()
-            .map(|i| (i.code, i.node_id.as_ref().map(ToString::to_string), i.message.as_str()))
-            .collect::<Vec<_>>(),
-        vec![(
-            IssueCode::UntrustedAgentOutboundTool,
-            Some("extract".to_string()),
-            "this agent reads untrusted data (a GET response, or files an agent that reads one may edit), so it may not use tools that send data out: execute, fetch, other",
-        )]
+        messages(&all_tools),
+        vec![
+            (
+                IssueCode::UntrustedAgentOutboundTool,
+                "extract".to_string(),
+                "this agent's prompt reads untrusted data (an http response, or the output of an agent that can fetch, run commands or use other tools), so it may not use: execute, edit, fetch, other".to_string(),
+            ),
+            (
+                IssueCode::OutboundAgentFileTool,
+                "extract".to_string(),
+                "this agent can take in untrusted data with execute, fetch, other, so it may not also use: read, edit".to_string(),
+            ),
+        ]
     );
-
-    let post_fetch = set_spec(
-        &outbound,
-        "fetch",
-        json!({ "kind": "http", "method": "POST", "url": "https://api.example.com/items",
-                "allowed_hosts": ["api.example.com"] }),
+    let reading = set_spec(
+        &sample_automation(),
+        "extract",
+        agent_spec(
+            "Summarize {{nodes.fetch.output.items}}",
+            json!(["read", "search"]),
+        ),
     );
-    assert_eq!(codes(&post_fetch), vec![]);
+    assert_eq!(codes(&reading), vec![]);
 }
 
 #[test]
-fn rule9_a_tainted_agent_that_edits_files_taints_every_agent() {
-    let with_namer = |extract_tools: serde_json::Value| {
-        let a = set_spec(
-            &sample_automation(),
-            "extract",
-            agent_spec("Summarize {{nodes.fetch.output.items}}", extract_tools),
-        );
-        apply(
-            &a,
-            json!([
-                { "op": "add_node", "node": { "id": "namer", "label": "Name", "spec":
-                    agent_spec("Name the {{trigger.kind}} run", json!(["fetch"])) } },
-                { "op": "connect", "edge": { "from": "check", "port": "false", "to": "namer" } }
-            ]),
-        )
-    };
-    assert_eq!(codes(&with_namer(json!(["read"]))), vec![]);
+fn rule9_an_agent_that_reaches_out_taints_the_agents_that_read_its_output() {
+    let base = set_spec(
+        &sample_automation(),
+        "extract",
+        agent_spec("Look up {{trigger.kind}}", json!(["fetch"])),
+    );
+    assert_eq!(codes(&base), vec![]);
+    let with_writer = apply(
+        &base,
+        json!([
+            { "op": "add_node", "node": { "id": "writer", "label": "Write", "spec":
+                agent_spec("Save {{nodes.extract.output.summary}}", json!(["edit"])) } },
+            { "op": "connect", "edge": { "from": "check", "port": "false", "to": "writer" } }
+        ]),
+    );
     assert_eq!(
-        codes(&with_namer(json!(["edit"]))),
-        vec![at(IssueCode::UntrustedAgentOutboundTool, "namer")]
+        codes(&with_writer),
+        vec![at(IssueCode::UntrustedAgentOutboundTool, "writer")]
     );
 }
 

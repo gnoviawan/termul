@@ -314,20 +314,25 @@ pub(super) async fn handle_session_notification(
     if is_replayed_history(&notification.update) && state.lock().note_replayed_update(&session_id) {
         return Ok(());
     }
+    let paths = |locations: &[agent_client_protocol::schema::v1::ToolCallLocation]| {
+        locations.iter().map(|l| l.path.clone()).collect::<Vec<_>>()
+    };
     let tool_call = match &notification.update {
-        agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => {
-            Some((tool_call.tool_call_id.0.to_string(), Some(tool_call.kind)))
-        }
-        agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => {
-            Some((update.tool_call_id.0.to_string(), update.fields.kind))
-        }
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => Some((
+            tool_call.tool_call_id.0.to_string(),
+            Some(tool_call.kind),
+            Some(paths(&tool_call.locations)),
+        )),
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => Some((
+            update.tool_call_id.0.to_string(),
+            update.fields.kind,
+            update.fields.locations.as_deref().map(paths),
+        )),
         _ => None,
     };
-    if let Some((tool_call_id, kind)) = tool_call {
+    if let Some((tool_call_id, kind, paths)) = tool_call {
         let mut state = state.lock();
-        if let Some(kind) = kind {
-            state.note_tool_kind(&session_id, &tool_call_id, kind);
-        }
+        state.note_tool_call(&session_id, &tool_call_id, kind, paths);
         state.bind_tool_call(tool_call_id, session_id.clone());
     }
     // AD-8: gate native `session_info_update` fan-out. When the host already

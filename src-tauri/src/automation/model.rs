@@ -320,9 +320,15 @@ pub enum AgentTool {
 }
 
 impl AgentTool {
-    /// Tools that can send data off the host.
-    pub fn sends_data_out(self) -> bool {
+    /// Tools that reach past the host: they can send data out and bring
+    /// untrusted data in.
+    pub fn reaches_out(self) -> bool {
         matches!(self, Self::Execute | Self::Fetch | Self::Other)
+    }
+
+    /// Tools that read or change the project's files.
+    pub fn touches_files(self) -> bool {
+        matches!(self, Self::Read | Self::Search | Self::Edit)
     }
 }
 
@@ -515,6 +521,7 @@ pub enum IssueCode {
     MissingConditionOperand,
     InvalidSchedule,
     UntrustedAgentOutboundTool,
+    OutboundAgentFileTool,
     /// Added by the service, which owns the agent registry.
     UnknownAgent,
 }

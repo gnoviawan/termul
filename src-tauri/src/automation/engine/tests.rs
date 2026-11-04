@@ -226,9 +226,11 @@ def say(text):
     send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s1",
           "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
 
-def ask(tool_id, kind):
-    send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s1",
-          "update": {"sessionUpdate": "tool_call", "toolCallId": tool_id, "title": tool_id, "kind": kind}}})
+def ask(tool_id, kind, path=None):
+    call = {"sessionUpdate": "tool_call", "toolCallId": tool_id, "title": tool_id, "kind": kind}
+    if path:
+        call["locations"] = [{"path": path}]
+    send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s1", "update": call}})
     send({"jsonrpc": "2.0", "id": "perm-" + tool_id, "method": "session/request_permission",
           "params": {"sessionId": "s1", "toolCall": {"toolCallId": tool_id}, "options": [
               {"optionId": "always", "name": "Always", "kind": "allow_always"},
@@ -248,6 +250,7 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": 1, "agentCapabilities": {}, "authMethods": []}})
     elif method == "session/new":
+        cwd = msg["params"]["cwd"]
         send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": "s1"}})
     elif method == "session/prompt":
         text = msg["params"]["prompt"][0]["text"]
@@ -260,7 +263,10 @@ for line in sys.stdin:
             hung = rid
             continue
         if mode == "MODE=tools":
-            answers = [ask("t1", "read"), ask("t2", "fetch"), ask("t3", "switch_mode")]
+            answers = [ask("t1", "read", os.path.join(cwd, "notes.txt")),
+                       ask("t2", "read", "/etc/passwd"),
+                       ask("t3", "read", os.path.join(cwd, ".env")),
+                       ask("t4", "fetch"), ask("t5", "switch_mode")]
             say(json.dumps({"headline": " ".join(answers), "count": len(answers)}))
         elif mode == "MODE=ok" or (mode == "MODE=fix" and retry):
             say('Here it is:\n```json\n{"headline": "two items", "count": 2}\n```')
@@ -507,7 +513,7 @@ async fn the_host_answers_tool_requests_from_the_node_allowlist() {
         return;
     };
     let mut open = agent("MODE=tools go", 1);
-    open["tools"] = json!(["read", "fetch"]);
+    open["tools"] = json!(["read"]);
     let a = manual(
         &f.te,
         json!({
@@ -521,16 +527,16 @@ async fn the_host_answers_tool_requests_from_the_node_allowlist() {
     assert_eq!(run.status, RunStatus::Succeeded);
     assert_eq!(
         output(&f.te.store, &run.id, "open"),
-        Some(json!({ "headline": "once once no", "count": 3 }))
+        Some(json!({ "headline": "once no no no no", "count": 5 }))
     );
     assert_eq!(
         output(&f.te.store, &run.id, "closed"),
-        Some(json!({ "headline": "no no no", "count": 3 }))
+        Some(json!({ "headline": "no no no no no", "count": 5 }))
     );
     let prompts = mock.prompts();
     assert!(
         prompts[0].contains(
-            "and nothing else. You may use only these kinds of tools: reading files, fetching from the network. Any other tool is refused.\n"
+            "and nothing else. You may use only these kinds of tools: reading files. Any other tool is refused.\n"
         ),
         "{}",
         prompts[0]

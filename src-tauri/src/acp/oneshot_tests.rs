@@ -42,6 +42,9 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": 1, "agentCapabilities": {}, "authMethods": []}})
     elif method == "session/new":
+        if os.environ.get("MOCK_META_FILE"):
+            with open(os.environ["MOCK_META_FILE"], "w") as f:
+                f.write(json.dumps(msg["params"].get("_meta")))
         if os.environ.get("MOCK_MCP_FILE"):
             with open(os.environ["MOCK_MCP_FILE"], "w") as f:
                 f.write(json.dumps([s.get("name") for s in msg["params"].get("mcpServers", [])]))
@@ -248,7 +251,9 @@ async fn a_session_that_starts_without_asking_moves_to_a_mode_that_asks() {
         ("agent-full-access,agent,read-only", "mode=read-only"),
         ("agent,plan,ask", "mode=ask"),
         ("plan,bypassPermissions", "mode=plan"),
-        ("custom,default", "mode=custom"),
+        ("build,plan", "mode=plan"),
+        ("full-access,default", "mode=default"),
+        ("plan,default", "mode=default"),
     ] {
         let request = mock.request(None, &[("MOCK_MODES", modes)]);
         let mut session = OneShotSession::start(&mock.manager, request)
@@ -260,11 +265,37 @@ async fn a_session_that_starts_without_asking_moves_to_a_mode_that_asks() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_one_shot_session_asks_claude_for_no_settings_files_tools_or_bypass_mode() {
+    let Some(mock) = Mock::new().await else {
+        return;
+    };
+    let meta_file = mock.dir.join("meta.json");
+    let request = mock.request(None, &[("MOCK_META_FILE", meta_file.to_str().unwrap())]);
+    let session = OneShotSession::start(&mock.manager, request)
+        .await
+        .expect("one-shot session starts");
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&meta_file).unwrap()).unwrap();
+    let options = &meta["claudeCode"]["options"];
+    assert_eq!(options["settingSources"], serde_json::json!([]));
+    assert_eq!(options["allowDangerouslySkipPermissions"], false);
+    assert_eq!(options["tools"], serde_json::json!([]));
+    assert!(options["settings"]["permissions"]["deny"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("Read(**/.env*)")));
+    session.dispose().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_session_with_no_mode_that_asks_fails_the_start_and_stops_the_agent() {
     let Some(mock) = Mock::new().await else {
         return;
     };
-    let request = mock.request(None, &[("MOCK_MODES", "bypassPermissions,acceptEdits,plan")]);
+    let request = mock.request(
+        None,
+        &[("MOCK_MODES", "bypassPermissions,acceptEdits,yolo")],
+    );
     let error = OneShotSession::start(&mock.manager, request)
         .await
         .err()
@@ -272,7 +303,7 @@ async fn a_session_with_no_mode_that_asks_fails_the_start_and_stops_the_agent() 
     assert_eq!(
         error,
         OneShotError::Spawn(
-            "the session runs in mode `bypassPermissions`, which uses tools without asking, and the agent offers no mode that asks".to_string()
+            "the session runs in mode `bypassPermissions`, which may use tools without asking, and the agent offers no known mode that asks".to_string()
         )
     );
     assert!(process_exits(mock.agent_pid()));

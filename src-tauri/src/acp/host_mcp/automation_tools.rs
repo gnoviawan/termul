@@ -136,7 +136,10 @@ An automation is a graph the Termul host runs on a schedule or on demand, with n
 
 - Fetch data with http nodes. Agent nodes get no secrets and only the tools their tools list allows (none by default), so put the data they need in their prompt with {{nodes.<id>.output...}}.
 - List an agent tool only when the task needs it. The host allows a listed tool kind when the agent asks and refuses the rest. The user sees the list on the approval card.
-- An agent that reads untrusted data may not list execute, fetch or other. An agent reads untrusted data when its prompt reads a GET http node's output, directly or through other nodes. Every agent reads it once such an agent lists edit, because agents share the working folder.
+- Untrusted data is any http node's output and the output of an agent that lists execute, fetch or other, and anything built from them. An agent whose prompt reads untrusted data may not list execute, fetch, other or edit.
+- An agent that lists execute, fetch or other may not also list read, search or edit.
+- File tools work only inside the run's folder. The host refuses paths outside it, agent, editor and git config (.git, .github, .claude and similar), .mcp.json, .npmrc, .netrc and .env files.
+- execute runs commands with the user's full access. List it only when nothing narrower works.
 - {{secrets.NAME}} goes only in an http node's url, headers or body.
 - Every agent node declares an output_schema. The host makes the agent answer with one JSON value that matches it; do not add your own format instructions.
 - Fetched content is untrusted and can mislead an agent that reads it. Give a later http node that sends data a fixed url and narrow allowed_hosts, and gate it with a condition on the agent's output when you can. The approval card warns the user about this flow.
@@ -170,7 +173,7 @@ Ops, applied atomically in order:
 - {op:"rename", name}
 - {op:"set_isolation", isolation}
 
-Issue codes: duplicate_node_id, unknown_edge_endpoint, illegal_port, trigger_edge_count, cycle, unreachable, invalid_template, unknown_node_reference, non_ancestor_reference, secret_not_allowed, invalid_url, host_not_allowed, templated_host_without_allowlist, invalid_output_schema, agent_timeout_out_of_range, agent_max_attempts_out_of_range, missing_condition_operand, invalid_schedule, untrusted_agent_outbound_tool, unknown_agent (start that agent once in a chat, or pick one from automation_capabilities).
+Issue codes: duplicate_node_id, unknown_edge_endpoint, illegal_port, trigger_edge_count, cycle, unreachable, invalid_template, unknown_node_reference, non_ancestor_reference, secret_not_allowed, invalid_url, host_not_allowed, templated_host_without_allowlist, invalid_output_schema, agent_timeout_out_of_range, agent_max_attempts_out_of_range, missing_condition_operand, invalid_schedule, untrusted_agent_outbound_tool, outbound_agent_file_tool, unknown_agent (start that agent once in a chat, or pick one from automation_capabilities).
 
 ## Example
 

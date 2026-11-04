@@ -36,8 +36,8 @@ pub(crate) use activity::ActivityClock;
 pub use activity::AgentActivity;
 pub(crate) use sign_in::{RequestElicitationRoute, SignInPrompt, SignInSlot};
 pub(crate) use subagents::ChildRoute;
-pub(crate) use tool_policy::ToolDecision;
 pub use tool_policy::ToolAllowlist;
+pub(crate) use tool_policy::{ToolDecision, PROTECTED_DIRS, PROTECTED_FILES};
 
 /// A permission request awaiting the user's decision.
 ///
@@ -466,15 +466,18 @@ impl DriverState {
         self.tool_policies.set(session_id, allowlist);
     }
 
-    /// Remember a tool call's kind for a later permission request that omits it.
-    pub(crate) fn note_tool_kind(
+    /// Remember a tool call's kind and paths for a later permission request
+    /// that omits them.
+    pub(crate) fn note_tool_call(
         &mut self,
         session_id: &str,
         tool_call_id: &str,
-        kind: agent_client_protocol::schema::v1::ToolKind,
+        kind: Option<agent_client_protocol::schema::v1::ToolKind>,
+        paths: Option<Vec<PathBuf>>,
     ) {
         let root = self.subagents.root_of(session_id).to_string();
-        self.tool_policies.note_kind(&root, tool_call_id, kind);
+        self.tool_policies
+            .note_call(&root, tool_call_id, kind, paths);
     }
 
     /// The host's answer to a permission request, or `None` when the session
@@ -485,8 +488,14 @@ impl DriverState {
         tool_call: &agent_client_protocol::schema::v1::ToolCallUpdate,
         options: &[agent_client_protocol::schema::v1::PermissionOption],
     ) -> Option<ToolDecision> {
-        self.tool_policies
-            .answer(self.subagents.root_of(session_id), tool_call, options)
+        let root = self.session_root(session_id);
+        let root = root.map(|r| r.canonicalize().unwrap_or(r));
+        self.tool_policies.answer(
+            self.subagents.root_of(session_id),
+            root.as_deref(),
+            tool_call,
+            options,
+        )
     }
 
     /// Look up the canonicalized workspace root for a session, if known. A

@@ -124,7 +124,7 @@ const AGENT_TOOL_LABELS: Record<AgentTool, string> = {
   read: 'read files',
   search: 'search',
   edit: 'edit files',
-  execute: 'run commands',
+  execute: 'run commands (full access)',
   fetch: 'fetch from the network',
   other: 'MCP and other tools'
 }
