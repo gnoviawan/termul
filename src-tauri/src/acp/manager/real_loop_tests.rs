@@ -56,7 +56,8 @@ for line in sys.stdin:
     elif method == "initialize":
         send({"jsonrpc": "2.0", "id": rid, "result": {
             "protocolVersion": 1,
-            "agentCapabilities": {"sessionCapabilities": {"close": {}}},
+            "agentCapabilities": {"loadSession": True,
+                                  "sessionCapabilities": {"close": {}, "resume": {}}},
             "authMethods": []}})
     elif method == "session/new":
         send({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": "mock-1"}})
@@ -100,6 +101,9 @@ for line in sys.stdin:
             hung = None
     elif method == "session/close":
         send({"jsonrpc": "2.0", "id": rid, "result": {}})
+    elif method in ("session/load", "session/resume"):
+        send({"jsonrpc": "2.0", "id": rid,
+              "error": {"code": -32603, "message": "reopen reached the agent"}})
 "#;
 
 /// Serializes every test that reads or writes process-global ACP timeout state:
@@ -1117,6 +1121,61 @@ async fn close_session_waits_out_an_agent_that_ignores_the_cancel() {
         assert_eq!(names, vec!["prompt_complete", "session_closed"], "{seen:?}");
         assert_eq!(seen[1].1["reason"], "closed");
     }
+    h.finish().await;
+}
+
+/// Reopening a chat on the agent that holds its session live (a PWA reopen of
+/// an idle chat) is answered by the host. claude-acp rebuilds a live session
+/// when any reopen input differs from the one it was created with, and the
+/// rebuild kills the session's background shells and subagents. The mock
+/// fails every `session/load` and `session/resume` that reaches it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reopen_of_a_session_the_agent_holds_never_reaches_the_agent() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let tokens_before = h.acp.host_plan_server.tokens_bound_to(&h.session_id.0);
+    let resume = h
+        .acp
+        .resume_session(
+            &h.agent_id,
+            h.session_id.clone(),
+            h.dir.to_string_lossy().to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await;
+    let load = h
+        .acp
+        .load_session(
+            &h.agent_id,
+            h.session_id.clone(),
+            h.dir.to_string_lossy().to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await;
+    let unheld = h
+        .acp
+        .resume_session(
+            &h.agent_id,
+            SessionId("mock-unheld".to_string()),
+            h.dir.to_string_lossy().to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await;
+
+    assert_eq!(resume.map(|outcome| outcome.models), Ok(None));
+    assert_eq!(load.map(|outcome| outcome.models), Ok(None));
+    assert_eq!(tokens_before.len(), 1, "{tokens_before:?}");
+    assert_eq!(
+        h.acp.host_plan_server.tokens_bound_to(&h.session_id.0),
+        tokens_before,
+        "the agent keeps the plan token it holds"
+    );
+    let error = unheld.expect_err("a session the agent does not hold still reopens on the agent");
+    assert!(error.contains("reopen reached the agent"), "{error}");
     h.finish().await;
 }
 
