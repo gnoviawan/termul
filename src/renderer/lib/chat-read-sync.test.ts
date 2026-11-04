@@ -41,4 +41,19 @@ describe('markChatRead', () => {
     expect(failing).toHaveBeenCalledTimes(2)
     expect(failing).toHaveBeenLastCalledWith('s2', 7, 'e1')
   })
+
+  it('does not send an answered point again, so a refused read is not resent on every update', async () => {
+    const reply = vi.fn(async (sessionId: string) => ({ sessionId, seq: 0, logEpoch: 'e0' }))
+    const phone = surface(reply)
+
+    markChatRead('s3', { logEpoch: 'e1', seq: 7 }, phone)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    markChatRead('s3', { logEpoch: 'e1', seq: 7 }, phone)
+    markChatRead('s3', { logEpoch: 'e2', seq: 7 }, phone)
+
+    expect(reply.mock.calls).toEqual([
+      ['s3', 7, 'e1'],
+      ['s3', 7, 'e2']
+    ])
+  })
 })

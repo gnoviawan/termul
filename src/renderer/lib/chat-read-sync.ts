@@ -11,29 +11,27 @@ import { isAfter, type LogPoint } from '@/lib/log-point'
 
 const SOURCE = 'chat-read-sync'
 
-const unanswered = new Map<string, LogPoint>()
+/** The newest point sent per session, kept once the host answered it. */
+const sent = new Map<string, LogPoint>()
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
 /**
- * Tell the host this surface read `sessionId` up to `read`. A point already in
- * flight for the session is not sent again; a failure is logged and lets the
- * next call retry.
+ * Tell the host this surface read `sessionId` up to `read`. A point already
+ * sent for the session, in flight or answered, is not sent again; a failure
+ * is logged and lets the next call retry.
  */
 export function markChatRead(
   sessionId: string,
   read: LogPoint,
   transport: AcpTransport = getAcpTransport()
 ): void {
-  if (!transport.markChatRead || !isAfter(read, unanswered.get(sessionId))) return
-  unanswered.set(sessionId, read)
-  const settle = () => {
-    if (unanswered.get(sessionId) === read) unanswered.delete(sessionId)
-  }
-  transport.markChatRead(sessionId, read.seq, read.logEpoch).then(settle, (error: unknown) => {
-    settle()
+  if (!transport.markChatRead || !isAfter(read, sent.get(sessionId))) return
+  sent.set(sessionId, read)
+  transport.markChatRead(sessionId, read.seq, read.logEpoch).catch((error: unknown) => {
+    if (sent.get(sessionId) === read) sent.delete(sessionId)
     void logFrontendError({
       level: 'warn',
       source: SOURCE,
