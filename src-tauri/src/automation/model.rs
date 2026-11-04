@@ -511,7 +511,7 @@ pub struct ApplyOpsResult {
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
     Running,
-    /// Parked at an approval node; see [`Run::parked`].
+    /// Parked at an approval node until a person decides or the park expires.
     Waiting,
     Succeeded,
     Failed,
