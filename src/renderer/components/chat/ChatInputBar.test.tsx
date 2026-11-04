@@ -881,6 +881,19 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     expect(modelChip.innerHTML).toContain(claudePathSig)
   })
 
+  it('a launch placeholder with no cached options still shows the agent pill', async () => {
+    mockSessionAgentId.current = ''
+    mockLaunchConfigId.current = 'acp-registry:claude-acp'
+    renderInputBar({ session: { ...session(), agentId: '', modes: null, models: null } })
+
+    const trigger = await screen.findByTestId('agent-model-selector-trigger')
+    const claudePathSig = (findBundledIconByKey('acp:claude-acp')?.svg ?? '').match(
+      /d="([^"]{20,60})/
+    )?.[1]
+    expect(claudePathSig).toBeTruthy()
+    expect(trigger.innerHTML).toContain(claudePathSig)
+  })
+
   it('disables the agent switch control for a closed session (chips disabled pattern)', async () => {
     renderInputBar({ disabled: true })
     const trigger = await screen.findByRole('button', {
