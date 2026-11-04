@@ -28,7 +28,7 @@ Inside, the steps are grouped, for example "Read 1 file, ran 1 search". Click a 
 
 ## Review changed files
 
-When the agent edited, deleted, or moved files in this chat, a status pill shows at the top right of the chat. It shows how many files changed and how many lines were added and removed, and how many subagents run or ended. Click the pill to open the list. In a Git repository, the list shows all uncommitted files in the checkout. These can include changes from other chats or made outside Termul. When there are both changed files and subagents, the list has a **Changed files** tab and a **Subagents** tab. On a phone the list opens as a sheet, and you can swipe between the tabs.
+When the agent edited, deleted, or moved files in this chat, a status pill shows at the top right of the chat. It shows how many files changed and how many lines were added and removed, and how many subagents run or ended. Click the pill to open the list. In a Git repository, the list shows the files that this chat's edit, delete, and move steps touched and that are still uncommitted, under the caption "Edited this session, uncommitted". Files you commit or discard drop out of the list. Changes made by you, by a terminal, or by other chats in the same checkout are not listed. A file the agent changed only through a shell command, for example a formatter, is not listed either. The **Changes** tab in the side panel still shows it. When there are both changed files and subagents, the list has a **Changed files** tab and a **Subagents** tab. On a phone the list opens as a sheet, and you can swipe between the tabs.
 
 The picture below was taken when the list was a bar above the message box. The list itself is the same.
 
