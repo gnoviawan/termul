@@ -129,12 +129,81 @@ describe('RunPolicyCard', () => {
     expect(screen.getByText('cron "0 5 * * 1-5" in America/New_York')).toBeInTheDocument()
     expect(screen.getByText(formatDateTime(fixturePolicy.next_runs[2]))).toBeInTheDocument()
     expect(
-      screen.getByText(/claude \(sonnet\) · times out after 2 min · no tools/)
+      screen.getByText(/claude \(sonnet\) · times out after 2 min · tools: read files, search$/)
     ).toBeInTheDocument()
     expect(screen.getByText('API_KEY')).toBeInTheDocument()
     expect(screen.getByText('hooks.example.com')).toBeInTheDocument()
     expect(screen.getByText('backoff 30s/1m/5m/15m/60m')).toBeInTheDocument()
     expect(screen.getByText(/Fetched pages can carry instructions/)).toBeInTheDocument()
+  })
+
+  it('says when an agent gets no tools', () => {
+    render(
+      <RunPolicyCard
+        automation={automationWith({ revision: 2, approved_revision: 1 })}
+        policy={{ ...fixturePolicy, agents: [{ ...fixturePolicy.agents[0], tools: [] }] }}
+        issues={[]}
+        approving={false}
+        onApprove={() => {}}
+      />
+    )
+
+    expect(
+      screen.getByText(/claude \(sonnet\) · times out after 2 min · no tools$/)
+    ).toBeInTheDocument()
+  })
+
+  it('names the MCP tool each node calls and the server it runs on', () => {
+    render(
+      <RunPolicyCard
+        automation={automationWith({
+          graph: {
+            nodes: [
+              ...fixtureAutomation.graph.nodes,
+              {
+                id: 'issues' as NodeId,
+                label: 'Open issues',
+                spec: {
+                  kind: 'mcp_tool',
+                  server_id: 'srv-github',
+                  tool: 'list_issues',
+                  arguments: [],
+                  timeout_ms: 30_000
+                }
+              }
+            ],
+            edges: fixtureAutomation.graph.edges
+          }
+        })}
+        policy={fixturePolicy}
+        issues={[]}
+        approving={false}
+        onApprove={() => {}}
+      />
+    )
+
+    const rows = within(screen.getByText('MCP tools').parentElement as HTMLElement).getAllByRole(
+      'listitem'
+    )
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'Open issues · calls MCP tool list_issues on GitHub (srv-github)',
+      'ping · calls MCP tool ping on srv-removed (not configured)'
+    ])
+  })
+
+  it('shows no MCP tools row when no node calls one', () => {
+    render(
+      <RunPolicyCard
+        automation={fixtureAutomation}
+        policy={{ ...fixturePolicy, mcp_tools: [] }}
+        issues={[]}
+        approving={false}
+        onApprove={() => {}}
+      />
+    )
+
+    expect(screen.queryByText('MCP tools')).toBeNull()
+    expect(screen.getByText('Outbound hosts')).toBeInTheDocument()
   })
 
   it('disables approval while issues exist', () => {
@@ -508,5 +577,35 @@ describe('AutomationDiagram', () => {
       'aria-hidden',
       'true'
     )
+  })
+
+  it('labels an MCP tool step with its tool', () => {
+    render(
+      <AutomationDiagram
+        graph={{
+          nodes: [
+            {
+              id: 'issues' as NodeId,
+              label: 'Open issues',
+              spec: {
+                kind: 'mcp_tool',
+                server_id: 'srv-github',
+                tool: 'list_issues',
+                arguments: [],
+                timeout_ms: 60_000
+              }
+            }
+          ],
+          edges: [{ from: 'trigger', port: 'out', to: 'issues' as NodeId }]
+        }}
+        trigger={{ kind: 'manual' }}
+      />
+    )
+
+    const steps = within(screen.getByRole('list', { name: 'Automation steps' }))
+    expect(steps.getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'Trigger: Run manually. Next: Open issues',
+      'Open issues, MCP tool: list_issues'
+    ])
   })
 })

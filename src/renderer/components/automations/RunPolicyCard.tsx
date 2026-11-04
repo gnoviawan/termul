@@ -3,7 +3,7 @@ import { AlertTriangle, ShieldCheck } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { WriteGate } from '@/components/ui/write-gate'
 import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
-import { formatDateTime, formatDuration, nodeLabels } from './automation-format'
+import { agentToolsLabel, formatDateTime, formatDuration, nodeLabels } from './automation-format'
 
 interface RunPolicyCardProps {
   automation: Automation
@@ -71,7 +71,7 @@ export function RunPolicyCard({
                     {agent.agent_id}
                     {agent.model ? ` (${agent.model})` : ''}
                     {` · times out after ${formatDuration(agent.timeout_ms)}`}
-                    {agent.tools === 'none' ? ' · no tools' : ''}
+                    {` · ${agentToolsLabel(agent.tools)}`}
                   </span>
                 </li>
               ))}
@@ -93,14 +93,35 @@ export function RunPolicyCard({
             labelOf={labelOf}
           />
         </PolicyRow>
+        {policy.mcp_tools.length > 0 && (
+          <PolicyRow term="MCP tools">
+            <ul className="flex flex-col gap-1">
+              {policy.mcp_tools.map((call) => (
+                <li key={call.node_id}>
+                  <span className="text-foreground">{labelOf(call.node_id)}</span>
+                  <span className="text-muted-foreground">
+                    {' · calls MCP tool '}
+                    <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-2xs text-secondary-foreground">
+                      {call.tool}
+                    </code>
+                    {call.server_name === null
+                      ? ` on ${call.server_id} (not configured)`
+                      : ` on ${call.server_name} (${call.server_id})`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </PolicyRow>
+        )}
         <PolicyRow term="On failure">{policy.failure_policy}</PolicyRow>
       </dl>
 
       {policy.untrusted_flow && (
         <p className="mx-4 mb-3 flex gap-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning">
           <AlertTriangle size={14} className="mt-px shrink-0" />
-          An agent reads content fetched from the web, and a later step sends data out. Fetched
-          pages can carry instructions, so check the outbound hosts before you approve.
+          An agent reads content fetched from the web or returned by an MCP tool, and a later step
+          sends data out or calls a tool. Fetched pages can carry instructions, so check the
+          outbound hosts and MCP tools before you approve.
         </p>
       )}
 

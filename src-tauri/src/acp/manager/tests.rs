@@ -83,6 +83,29 @@ fn summarized_thinking_meta_asks_for_a_visible_summary() {
     );
 }
 
+#[test]
+fn headless_options_limit_claude_tools_and_deny_protected_paths() {
+    use agent_client_protocol::schema::v1::ToolKind;
+    let allowlist =
+        crate::acp::session::ToolAllowlist::new([ToolKind::Search, ToolKind::Read, ToolKind::Other]);
+    let meta = Value::Object(with_headless_options(summarized_thinking_meta(), &allowlist));
+    let options = &meta["claudeCode"]["options"];
+    assert_eq!(options["thinking"]["display"], "summarized");
+    assert_eq!(options["settingSources"], serde_json::json!([]));
+    assert_eq!(options["allowDangerouslySkipPermissions"], false);
+    assert_eq!(options["tools"], serde_json::json!(["Read", "Grep", "Glob"]));
+    let deny = options["settings"]["permissions"]["deny"].as_array().unwrap();
+    for rule in ["Read(**/.env*)", "Edit(**/.claude/**)", "Edit(**/.git/**)", "Read(**/.mcp.json)"] {
+        assert!(deny.contains(&serde_json::json!(rule)), "{rule}");
+    }
+
+    let none = Value::Object(with_headless_options(
+        Meta::new(),
+        &crate::acp::session::ToolAllowlist::default(),
+    ));
+    assert_eq!(none["claudeCode"]["options"]["tools"], serde_json::json!([]));
+}
+
 #[tokio::test]
 async fn owns_session_queries_authoritative_agent_driver_state() {
     let manager = AcpManager::new(vec![]);

@@ -1,4 +1,5 @@
 import type {
+  AgentTool,
   Automation,
   AutomationNode,
   NodeKind,
@@ -15,6 +16,7 @@ import {
   Globe,
   Hourglass,
   Repeat,
+  Wrench,
   XCircle
 } from '@/components/icons'
 
@@ -52,7 +54,8 @@ export const NODE_KIND_PRESENTATION: Record<NodeKind, { label: string; Icon: typ
   fail: { label: 'Fail', Icon: XCircle },
   for_each: { label: 'For each', Icon: Repeat },
   merge: { label: 'Merge', Icon: GitMerge },
-  wait: { label: 'Wait', Icon: Hourglass }
+  wait: { label: 'Wait', Icon: Hourglass },
+  mcp_tool: { label: 'MCP tool', Icon: Wrench }
 }
 
 const DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
@@ -131,9 +134,27 @@ export function nodeKeyDetail(spec: NodeSpec): string {
       return spec.mode === 'all' ? 'When every branch ran' : 'When any branch ran'
     case 'wait':
       return `Wait ${formatDuration(spec.duration_ms)}`
+    case 'mcp_tool':
+      return spec.tool
   }
 }
 
 export function nodeLabels(nodes: AutomationNode[]): Map<string, string> {
   return new Map(nodes.map((node) => [node.id, node.label]))
+}
+
+const AGENT_TOOL_LABELS: Record<AgentTool, string> = {
+  read: 'read files',
+  search: 'search',
+  edit: 'edit files',
+  execute: 'run commands (full access)',
+  fetch: 'fetch from the network',
+  other: 'MCP and other tools'
+}
+
+/** The run policy's tool allowlist of one agent node, in words. */
+export function agentToolsLabel(tools: AgentTool[]): string {
+  return tools.length === 0
+    ? 'no tools'
+    : `tools: ${tools.map((tool) => AGENT_TOOL_LABELS[tool]).join(', ')}`
 }

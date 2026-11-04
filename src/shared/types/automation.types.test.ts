@@ -121,7 +121,8 @@ const typed: Unbranded<WireFixture> = {
               required: ['summary', 'urgent']
             },
             timeout_ms: 120000,
-            max_attempts: 2
+            max_attempts: 2,
+            tools: ['search', 'read', 'search']
           }
         },
         {
@@ -278,6 +279,20 @@ const typed: Unbranded<WireFixture> = {
         left: '{{nodes.extract.output.urgent}}',
         op: 'exists',
         right: null
+      }
+    },
+    {
+      op: 'add_node',
+      node: {
+        id: 'lookup',
+        label: 'Lookup',
+        spec: {
+          kind: 'mcp_tool',
+          server_id: 'srv-github',
+          tool: 'search',
+          arguments: [],
+          timeout_ms: 60000
+        }
       }
     },
     {
@@ -456,7 +471,7 @@ const typed: Unbranded<WireFixture> = {
         agent_id: 'claude',
         model: 'sonnet',
         timeout_ms: 120000,
-        tools: 'none'
+        tools: ['read', 'search']
       }
     ],
     secrets: [
@@ -477,6 +492,20 @@ const typed: Unbranded<WireFixture> = {
       {
         node_id: 'post',
         hosts: ['hooks.example.com']
+      }
+    ],
+    mcp_tools: [
+      {
+        node_id: 'issues',
+        server_id: 'srv-github',
+        server_name: 'GitHub',
+        tool: 'list_issues'
+      },
+      {
+        node_id: 'ping',
+        server_id: 'srv-removed',
+        server_name: null,
+        tool: 'ping'
       }
     ],
     untrusted_flow: true,

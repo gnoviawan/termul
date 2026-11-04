@@ -179,6 +179,9 @@ pub struct SessionCreationContext {
     /// record so a resend finds the session after ledger eviction or a host
     /// restart. Ephemeral sessions are live-only and carry no durable stamp.
     pub command_id: Option<String>,
+    /// How the host answers an ephemeral session's permission requests.
+    /// `None` cancels every request.
+    pub tool_allowlist: Option<crate::acp::session::ToolAllowlist>,
 }
 
 /// Commands sent from Tauri command handlers to an agent's driver thread.
@@ -198,6 +201,7 @@ enum AcpCommand {
         worktree_branch: Option<String>,
         additional_directories: Vec<PathBuf>,
         command_id: Option<String>,
+        tool_allowlist: Option<crate::acp::session::ToolAllowlist>,
         reply: oneshot::Sender<Result<NewSessionOutcome, String>>,
     },
     LoadSession {
@@ -1146,6 +1150,7 @@ impl AcpManager {
                 worktree_branch: context.worktree_branch,
                 additional_directories,
                 command_id: context.command_id,
+                tool_allowlist: context.tool_allowlist,
                 reply,
             })
             .await

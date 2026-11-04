@@ -40,6 +40,11 @@ impl HttpRunner {
             .map_err(|e| format!("automation http client: {e}"))?;
         Ok(Self { client, config })
     }
+
+    /// Bytes of a response kept in a step output.
+    pub(super) fn body_cap(&self) -> usize {
+        self.config.body_cap
+    }
 }
 
 pub(super) struct HttpSpec<'a> {
