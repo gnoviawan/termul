@@ -50,6 +50,20 @@ describe('useAgentChatProjectSignals', () => {
     expect(result.current.attentionCounts).toEqual({})
   })
 
+  it("marks an open chat's project working from this surface's own turn before the host echoes it", () => {
+    seedOptionsSession('s1', 'agent-1', { projectId: 'p1' })
+    useAgentChatLifetimeStore.setState({ retainedByProject: { p1: ['s1'] } })
+    act(() => {
+      useAcpStore.setState((state) => ({
+        sessions: { ...state.sessions, s1: { ...state.sessions.s1, openTurnId: 'turn-1' } }
+      }))
+    })
+
+    const { result } = renderHook(() => useAgentChatProjectSignals())
+
+    expect([...result.current.workingProjectIds]).toEqual(['p1'])
+  })
+
   it("counts an opened chat's pending prompt once, from the host, in tab order first", () => {
     seedOptionsSession('s1', 'agent-1', { projectId: 'p1' })
     useAgentChatLifetimeStore.setState({ retainedByProject: { p1: ['s1'] } })

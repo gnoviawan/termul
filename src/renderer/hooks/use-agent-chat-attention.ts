@@ -4,6 +4,7 @@ import { agentChatIsRunning, chatNeedsYou, chatProjectId } from '@/lib/agent-cha
 import { isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useChatActivityStore } from '@/stores/chat-activity-store'
+import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 
 export interface ProjectAgentChatSignals {
@@ -12,7 +13,7 @@ export interface ProjectAgentChatSignals {
   firstNeedsYouSessionId: Record<string, string>
   /** Session id to Project id of every Agent chat that needs you. */
   needsYouChats: ReadonlyMap<string, string>
-  /** Projects where the host has an Agent chat working. */
+  /** Projects where the host, or this renderer's own open turn, has an Agent chat working. */
   workingProjectIds: ReadonlySet<string>
   /** Projects with an open Agent chat whose process is connected and idle. */
   runningProjectIds: ReadonlySet<string>
@@ -56,7 +57,8 @@ export function useAgentChatProjectSignals(): ProjectAgentChatSignals {
       if (chatNeedsYou(record, open ? session : undefined, status)) {
         needsYouChats.set(sessionId, projectId)
       }
-      if (record?.busy) workingProjectIds.add(projectId)
+      const localBusy = open && session?.status === 'active' && sessionTurnBusy(session)
+      if (record?.busy || localBusy) workingProjectIds.add(projectId)
       if (
         open &&
         session &&
