@@ -21,7 +21,7 @@ use super::policy;
 use super::schedule;
 use super::secrets::{self, SecretError, Secrets};
 use super::store::{AutomationStore, StoreError, DB_FILE_NAME};
-use super::suggest::{self, Candidate, PromptHistory, SessionHistory, Suggestion};
+use super::suggest::{self, Candidate, Prompt, PromptHistory, SessionHistory, Suggestion};
 use crate::acp::config::AgentConfig;
 use crate::acp::AcpManager;
 
@@ -428,22 +428,25 @@ impl AutomationService {
         timezone: Option<&str>,
     ) -> ServiceResult<Vec<Suggestion>> {
         Ok(self
-            .candidates(project_id, timezone)?
+            .candidates(project_id, timezone, |prompts, _| prompts)?
             .into_iter()
             .map(|candidate| candidate.suggestion)
             .collect())
     }
 
-    /// The open suggestion `text` repeats, if any. A hit tells the
-    /// project's open screens to list suggestions again: the prompt that
-    /// matched may be the one that made the ask a suggestion.
+    /// The open suggestion `text` repeats, if any, counted over the asks
+    /// before this one: `text` was just sent and may already be in history.
+    /// A hit tells the project's open screens to list suggestions again: the
+    /// prompt that matched may have changed their counts.
     pub fn match_prompt(
         &self,
         project_id: &str,
         text: &str,
         timezone: Option<&str>,
     ) -> ServiceResult<Option<Suggestion>> {
-        let candidates = self.candidates(project_id, timezone)?;
+        let candidates = self.candidates(project_id, timezone, |prompts, now| {
+            suggest::before_send(prompts, text, now)
+        })?;
         let hit = suggest::match_prompt(&candidates, text).cloned();
         if let Some(hit) = &hit {
             log::info!(
@@ -482,6 +485,7 @@ impl AutomationService {
         &self,
         project_id: &str,
         timezone: Option<&str>,
+        history: impl FnOnce(Vec<Prompt>, i64) -> Vec<Prompt>,
     ) -> ServiceResult<Vec<Candidate>> {
         let project_id = project_id.trim();
         if project_id.is_empty() {
@@ -494,7 +498,10 @@ impl AutomationService {
             .unwrap_or_else(suggest::host_timezone);
         let now = self.engine.now_ms();
         let answered = self.engine.store().answered_suggestions(project_id)?;
-        let prompts = self.history.prompts(project_id, now - suggest::WINDOW_MS);
+        let prompts = history(
+            self.history.prompts(project_id, now - suggest::WINDOW_MS),
+            now,
+        );
         let mut candidates = suggest::detect(&prompts, now, tz);
         let found = candidates.len();
         candidates.retain(|c| !answered.contains(&c.suggestion.fingerprint));

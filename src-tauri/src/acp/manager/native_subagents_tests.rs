@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use serde_json::{json, Value};
 
 use super::native_subagents::{
-    advertise_subagents, deliver_native_update, parse_semver, route_session_update, NativeRoute,
+    advertise_subagents, deliver_session_update, parse_semver, route_session_update, SessionRoute,
 };
 use super::*;
 
@@ -61,14 +61,14 @@ fn agent_chunk(session_id: &str, text: &str) -> Value {
     )
 }
 
-fn claimed(route: NativeRoute) -> Vec<Value> {
+fn claimed(route: SessionRoute) -> Vec<Value> {
     match route {
-        NativeRoute::Claimed(values) => values,
-        NativeRoute::PassThrough => panic!("expected the update to be claimed"),
+        SessionRoute::Claimed(values) => values,
+        SessionRoute::PassThrough => panic!("expected the update to be claimed"),
     }
 }
 
-fn single(route: NativeRoute) -> Value {
+fn single(route: SessionRoute) -> Value {
     let mut values = claimed(route);
     assert_eq!(values.len(), 1, "expected one synthesized update");
     values.remove(0)
@@ -94,11 +94,11 @@ fn chat_updates_pass_through_unchanged() {
     let state = Mutex::new(DriverState::new());
     assert_eq!(
         route_session_update(&state, &agent_chunk(ROOT, "hello"), 1),
-        NativeRoute::PassThrough
+        SessionRoute::PassThrough
     );
     assert_eq!(
         route_session_update(&state, &json!({ "sessionId": ROOT }), 1),
-        NativeRoute::PassThrough
+        SessionRoute::PassThrough
     );
 }
 
@@ -109,15 +109,28 @@ fn spawn_synthesizes_a_running_dispatch_card_on_the_chat() {
     let card = single(route_session_update(&state, &spawned(ROOT, CHILD), 1));
     assert_eq!(card["sessionId"], ROOT);
     let meta = &card["update"]["_meta"];
-    assert_eq!(meta["termul/subagent"]["state"], "running");
-    assert_eq!(meta["termul/subagent"]["sessionId"], CHILD);
+    assert_eq!(
+        meta["termul/subagent"],
+        json!({
+            "id": CHILD,
+            "rootSessionId": ROOT,
+            "dispatchToolCallId": "termul-subagent:sess-child",
+            "source": "acp-air",
+            "title": "Explore repo",
+            "prompt": "Read every file under src/",
+            "background": false,
+            "activity": "running",
+            "startedAt": 1,
+            "caps": { "stop": null, "transcript": "live", "liveProgress": true, "usage": false },
+        })
+    );
     assert!(
         meta.get("claudeCode").is_none(),
         "a top-level subagent has no parent"
     );
-    assert_eq!(
-        card["update"]["rawInput"]["prompt"],
-        "Read every file under src/"
+    assert!(
+        card["update"].get("rawInput").is_none(),
+        "the card carries the record, not a faked tool input"
     );
 
     let SessionUpdate::ToolCall(call) = typed(card).update else {
@@ -207,9 +220,10 @@ fn state_update_ends_the_dispatch_card() {
     claimed(route_session_update(&state, &spawned(ROOT, CHILD), 1));
     let end = single(route_session_update(&state, &ended(CHILD, "completed"), 42));
     assert_eq!(end["sessionId"], ROOT);
-    let marker = &end["update"]["_meta"]["termul/subagent"];
-    assert_eq!(marker["state"], "completed");
-    assert_eq!(marker["endedAt"], 42);
+    let record = &end["update"]["_meta"]["termul/subagent"];
+    assert_eq!(record["activity"], "idle");
+    assert_eq!(record["end"], json!({ "reason": "completed" }));
+    assert_eq!(record["endedAt"], 42);
     let SessionUpdate::ToolCallUpdate(update) = typed(end).update else {
         panic!("the end must be a tool_call_update");
     };
@@ -229,19 +243,27 @@ fn state_update_ends_the_dispatch_card() {
 
 #[test]
 fn state_update_maps_each_end_state() {
-    for (raw, lifecycle, status) in [
-        ("failed", "failed", "failed"),
-        ("disconnected", "failed", "failed"),
-        ("cancelled", "cancelled", "completed"),
+    for (raw, expected, status) in [
+        (
+            "failed",
+            json!({ "activity": "idle", "end": { "reason": "failed" } }),
+            json!("failed"),
+        ),
+        (
+            "cancelled",
+            json!({ "activity": "idle", "end": { "reason": "cancelled" } }),
+            json!("completed"),
+        ),
+        // The child can no longer be observed: not an end, not a failure.
+        ("disconnected", json!({ "activity": "unknown" }), Value::Null),
     ] {
         let state = Mutex::new(DriverState::new());
         claimed(route_session_update(&state, &spawned(ROOT, CHILD), 1));
         let end = single(route_session_update(&state, &ended(CHILD, raw), 2));
         assert_eq!(end["update"]["status"], status, "{raw}");
-        assert_eq!(
-            end["update"]["_meta"]["termul/subagent"]["state"], lifecycle,
-            "{raw}"
-        );
+        let record = &end["update"]["_meta"]["termul/subagent"];
+        assert_eq!(record["activity"], expected["activity"], "{raw}");
+        assert_eq!(record["end"], expected["end"], "{raw}");
     }
 }
 
@@ -347,12 +369,25 @@ fn rfd_sequence_reports_one_card_per_subagent_on_its_chat() {
     assert_eq!(card["sessionId"], ROOT);
     assert_eq!(
         card["update"]["_meta"]["termul/subagent"],
-        json!({ "state": "running", "sessionId": CHILD })
+        json!({
+            "id": CHILD,
+            "rootSessionId": ROOT,
+            "dispatchToolCallId": "termul-subagent:sess-child",
+            "source": "acp-rfd",
+            "title": "e2e agent",
+            "description": "general-purpose",
+            "background": false,
+            "activity": "running",
+            "startedAt": 100,
+            "caps": {
+                "stop": "session-cancel",
+                "transcript": "live",
+                "liveProgress": true,
+                "usage": true,
+            },
+        })
     );
-    assert_eq!(
-        card["update"]["rawInput"],
-        json!({ "description": "e2e agent", "subagent_type": "general-purpose" })
-    );
+    assert!(card["update"].get("rawInput").is_none());
     let SessionUpdate::ToolCall(call) = typed(card).update else {
         panic!("the announce must be a tool_call");
     };
@@ -395,10 +430,10 @@ fn rfd_sequence_reports_one_card_per_subagent_on_its_chat() {
 
     let end = routed[6].remove(0);
     assert_eq!(end["sessionId"], ROOT);
-    assert_eq!(
-        end["update"]["_meta"]["termul/subagent"],
-        json!({ "state": "completed", "endedAt": 106, "sessionId": CHILD })
-    );
+    let record = &end["update"]["_meta"]["termul/subagent"];
+    assert_eq!(record["activity"], "idle");
+    assert_eq!(record["end"], json!({ "reason": "completed" }));
+    assert_eq!(record["endedAt"], 106);
     let SessionUpdate::ToolCallUpdate(end) = typed(end).update else {
         panic!("the end must be a tool_call_update");
     };
@@ -407,42 +442,62 @@ fn rfd_sequence_reports_one_card_per_subagent_on_its_chat() {
 }
 
 #[test]
-fn rfd_states_map_to_the_lifecycle() {
-    for (raw, lifecycle, status) in [
+fn rfd_states_map_to_the_record() {
+    let idle = |end: Value| json!({ "activity": "idle", "end": end });
+    for (raw, expected, status) in [
         (
             json!({ "state": "idle", "stopReason": "end_turn" }),
-            "completed",
-            "completed",
+            idle(json!({ "reason": "completed" })),
+            json!("completed"),
         ),
-        (json!({ "state": "idle" }), "cancelled", "completed"),
+        (
+            json!({ "state": "idle" }),
+            idle(json!({ "reason": "unexplained" })),
+            json!("completed"),
+        ),
         (
             json!({ "state": "idle", "stopReason": "max_tokens" }),
-            "completed",
-            "completed",
+            idle(json!({ "reason": "completed" })),
+            json!("completed"),
         ),
         (
             json!({ "state": "idle", "stopReason": "cancelled" }),
-            "cancelled",
-            "completed",
+            idle(json!({ "reason": "cancelled" })),
+            json!("completed"),
         ),
         (
             json!({ "state": "idle", "stopReason": "error", "error": { "code": -32603, "message": "boom" } }),
-            "failed",
-            "failed",
+            idle(json!({ "reason": "failed", "error": "boom" })),
+            json!("failed"),
         ),
-        (json!({ "state": "unknown" }), "failed", "failed"),
+        (
+            json!({ "state": "requires_action" }),
+            json!({ "activity": "requires_action" }),
+            json!("in_progress"),
+        ),
+        (
+            json!({ "state": "unknown" }),
+            json!({ "activity": "unknown" }),
+            Value::Null,
+        ),
     ] {
         let state = Mutex::new(DriverState::new());
         claimed(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
-        let end = single(route_session_update(
+        let update = single(route_session_update(
             &state,
             &rfd_state(ROOT, CHILD, raw.clone()),
             2,
         ));
-        assert_eq!(end["update"]["status"], status, "{raw}");
+        assert_eq!(update["update"]["status"], status, "{raw}");
+        let record = &update["update"]["_meta"]["termul/subagent"];
+        assert_eq!(record["activity"], expected["activity"], "{raw}");
+        assert_eq!(record["end"], expected["end"], "{raw}");
+        let ended = expected["activity"] == "idle";
+        assert_eq!(record.get("endedAt").is_some(), ended, "{raw}");
         assert_eq!(
-            end["update"]["_meta"]["termul/subagent"]["state"], lifecycle,
-            "{raw}"
+            state.lock().subagent_route(CHILD).map(|route| route.ended),
+            Some(expected["activity"] != "requires_action"),
+            "only working children count as running: {raw}"
         );
     }
 }
@@ -451,29 +506,22 @@ fn rfd_states_map_to_the_lifecycle() {
 fn an_idle_rfd_child_runs_again_when_reused() {
     let state = Mutex::new(DriverState::new());
     claimed(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
-    let waiting = rfd_state(ROOT, CHILD, json!({ "state": "requires_action" }));
-    assert!(claimed(route_session_update(&state, &waiting, 2)).is_empty());
     let idle = rfd_state(
         ROOT,
         CHILD,
         json!({ "state": "idle", "stopReason": "end_turn" }),
     );
-    single(route_session_update(&state, &idle, 3));
+    let end = single(route_session_update(&state, &idle, 3));
+    assert_eq!(end["update"]["_meta"]["termul/subagent"]["endedAt"], 3);
 
     let running = rfd_state(ROOT, CHILD, json!({ "state": "running" }));
     let resumed = single(route_session_update(&state, &running, 4));
-    assert_eq!(
-        resumed,
-        json!({
-            "sessionId": ROOT,
-            "update": {
-                "sessionUpdate": "tool_call_update",
-                "toolCallId": "termul-subagent:sess-child",
-                "status": "in_progress",
-                "_meta": { "termul/subagent": { "state": "running", "sessionId": CHILD } },
-            },
-        })
-    );
+    assert_eq!(resumed["update"]["toolCallId"], "termul-subagent:sess-child");
+    assert_eq!(resumed["update"]["status"], "in_progress");
+    let record = &resumed["update"]["_meta"]["termul/subagent"];
+    assert_eq!(record["activity"], "running");
+    assert!(record.get("endedAt").is_none(), "running clears the end");
+    assert!(record.get("end").is_none());
     assert!(
         claimed(route_session_update(&state, &running, 5)).is_empty(),
         "a child that already runs reports nothing new"
@@ -521,7 +569,7 @@ async fn idle_twice_fans_out_one_end_event() {
         json!({ "state": "idle", "stopReason": "end_turn" }),
     );
     for raw in [rfd_announce(ROOT, CHILD), idle.clone(), idle] {
-        assert!(deliver_native_update(&state, None, &sinks, &agent_id, &raw)
+        assert!(deliver_session_update(&state, None, &sinks, &agent_id, &raw)
             .await
             .expect("fan out"));
     }
@@ -626,18 +674,11 @@ fn requires_action_restarts_an_ended_child() {
     single(route_session_update(&state, &idle, 2));
 
     let waiting = rfd_state(ROOT, CHILD, json!({ "state": "requires_action" }));
-    assert_eq!(
-        claimed(route_session_update(&state, &waiting, 3)),
-        [json!({
-            "sessionId": ROOT,
-            "update": {
-                "sessionUpdate": "tool_call_update",
-                "toolCallId": "termul-subagent:sess-child",
-                "status": "in_progress",
-                "_meta": { "termul/subagent": { "state": "running", "sessionId": CHILD } },
-            },
-        })]
-    );
+    let update = single(route_session_update(&state, &waiting, 3));
+    assert_eq!(update["update"]["status"], "in_progress");
+    let record = &update["update"]["_meta"]["termul/subagent"];
+    assert_eq!(record["activity"], "requires_action");
+    assert!(record.get("endedAt").is_none());
     assert_eq!(
         state.lock().subagent_route(CHILD).map(|route| route.ended),
         Some(false)
@@ -799,7 +840,7 @@ async fn claimed_updates_fan_out_on_the_chat_session() {
     let deliver = |raw: Value| {
         let (state, sinks, agent_id) = (state.clone(), sinks.clone(), agent_id.clone());
         async move {
-            deliver_native_update(&state, None, &sinks, &agent_id, &raw)
+            deliver_session_update(&state, None, &sinks, &agent_id, &raw)
                 .await
                 .expect("fan out")
         }
@@ -841,7 +882,7 @@ async fn rfd_updates_fan_out_on_the_chat_session() {
     let agent_id = AgentId::new();
     for raw in rfd_sequence() {
         assert!(
-            deliver_native_update(&state, None, &sinks, &agent_id, &raw)
+            deliver_session_update(&state, None, &sinks, &agent_id, &raw)
                 .await
                 .expect("fan out"),
             "{raw}"
@@ -861,7 +902,7 @@ async fn rfd_updates_fan_out_on_the_chat_session() {
     );
     assert!(seen.iter().all(|event| event.sid.as_deref() == Some(ROOT)));
     assert_eq!(
-        seen[0].payload["toolCall"]["_meta"]["termul/subagent"]["state"],
+        seen[0].payload["toolCall"]["_meta"]["termul/subagent"]["activity"],
         "running"
     );
     assert_eq!(
@@ -869,7 +910,444 @@ async fn rfd_updates_fan_out_on_the_chat_session() {
         "termul-subagent:sess-child"
     );
     assert_eq!(
-        seen[4].payload["update"]["_meta"]["termul/subagent"]["state"],
-        "completed"
+        seen[4].payload["update"]["_meta"]["termul/subagent"]["activity"],
+        "idle"
+    );
+}
+
+fn record_of(routed: &Value) -> &Value {
+    let update = routed
+        .get("update")
+        .expect("a routed session/update has an update");
+    &update["_meta"]["termul/subagent"]
+}
+
+#[test]
+fn rfd_capabilities_set_and_clear_the_stop_route() {
+    let state = Mutex::new(DriverState::new());
+    let card = single(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
+    assert_eq!(record_of(&card)["caps"]["stop"], "session-cancel");
+
+    let cleared = update(
+        ROOT,
+        json!({ "sessionUpdate": "subagent_update", "sessionId": CHILD, "capabilities": null }),
+    );
+    let change = single(route_session_update(&state, &cleared, 2));
+    assert_eq!(record_of(&change)["caps"]["stop"], Value::Null);
+    assert!(
+        change["update"].get("status").is_none(),
+        "a capability change leaves the card status"
+    );
+
+    let no_cancel = update(
+        ROOT,
+        json!({ "sessionUpdate": "subagent_update", "sessionId": CHILD, "capabilities": {} }),
+    );
+    assert!(
+        claimed(route_session_update(&state, &no_cancel, 3)).is_empty(),
+        "an empty capability set still has no stop route: unchanged"
+    );
+}
+
+#[test]
+fn an_idle_child_keeps_its_reported_usage() {
+    let state = Mutex::new(DriverState::new());
+    claimed(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
+    let idle = rfd_state(
+        ROOT,
+        CHILD,
+        json!({
+            "state": "idle",
+            "stopReason": "end_turn",
+            "usage": { "inputTokens": 1200, "outputTokens": 300, "totalTokens": 1500, "thoughtTokens": 9 },
+        }),
+    );
+    let end = single(route_session_update(&state, &idle, 2));
+    assert_eq!(
+        record_of(&end)["usage"],
+        json!({ "inputTokens": 1200, "outputTokens": 300, "totalTokens": 1500 })
+    );
+}
+
+#[test]
+fn a_child_model_change_updates_its_record_and_never_reaches_the_chat() {
+    let state = Mutex::new(DriverState::new());
+    claimed(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
+    let config = |model: &str| {
+        update(
+            CHILD,
+            json!({
+                "sessionUpdate": "config_option_update",
+                "configOptions": [
+                    { "id": "mode", "name": "Mode", "type": "select", "currentValue": "default" },
+                    { "id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": model },
+                ],
+            }),
+        )
+    };
+    let change = single(route_session_update(&state, &config("claude-haiku-4-5"), 2));
+    assert_eq!(change["sessionId"], ROOT);
+    assert_eq!(change["update"]["sessionUpdate"], "tool_call_update");
+    assert_eq!(change["update"]["toolCallId"], "termul-subagent:sess-child");
+    assert_eq!(record_of(&change)["model"], "claude-haiku-4-5");
+    assert!(
+        claimed(route_session_update(&state, &config("claude-haiku-4-5"), 3)).is_empty(),
+        "the same model reports nothing"
+    );
+    let no_model = update(
+        CHILD,
+        json!({ "sessionUpdate": "config_option_update", "configOptions": [] }),
+    );
+    assert!(claimed(route_session_update(&state, &no_model, 4)).is_empty());
+}
+
+#[test]
+fn a_title_update_without_a_state_updates_the_record() {
+    let state = Mutex::new(DriverState::new());
+    claimed(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
+    let retitled = update(
+        ROOT,
+        json!({ "sessionUpdate": "subagent_update", "sessionId": CHILD, "title": "Audit the store" }),
+    );
+    let change = single(route_session_update(&state, &retitled, 2));
+    assert_eq!(change["update"]["title"], "Audit the store");
+    assert_eq!(record_of(&change)["title"], "Audit the store");
+    assert_eq!(record_of(&change)["activity"], "running");
+    assert!(change["update"].get("status").is_none());
+
+    let cleared = update(
+        ROOT,
+        json!({ "sessionUpdate": "subagent_update", "sessionId": CHILD, "description": null, "title": null }),
+    );
+    let change = single(route_session_update(&state, &cleared, 3));
+    assert_eq!(record_of(&change)["title"], "Subagent", "no title, no description");
+    assert!(record_of(&change).get("description").is_none());
+}
+
+#[test]
+fn an_announce_without_a_title_uses_the_description() {
+    let state = Mutex::new(DriverState::new());
+    let announce = update(
+        ROOT,
+        json!({
+            "sessionUpdate": "subagent_update",
+            "sessionId": CHILD,
+            "description": "code-reviewer",
+            "state": { "state": "running" },
+        }),
+    );
+    let card = single(route_session_update(&state, &announce, 1));
+    assert_eq!(card["update"]["title"], "code-reviewer");
+    assert_eq!(record_of(&card)["caps"]["stop"], Value::Null);
+}
+
+#[test]
+fn child_traffic_loses_spoofed_subagent_keys() {
+    let state = Mutex::new(DriverState::new());
+    claimed(route_session_update(&state, &rfd_announce(ROOT, CHILD), 1));
+    let spoof = update(
+        CHILD,
+        json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "toolu_child",
+            "title": "Read",
+            "_meta": {
+                "termul/subagent": { "activity": "idle" },
+                "termul/subagentControl": { "subagentIds": ["x"] },
+                "claudeCode": { "toolName": "Read" },
+            },
+        }),
+    );
+    let routed = single(route_session_update(&state, &spoof, 2));
+    assert_eq!(
+        routed["update"]["_meta"],
+        json!({ "claudeCode": { "toolName": "Read", "parentToolUseId": "termul-subagent:sess-child" } })
+    );
+}
+
+fn claude_agent_call(id: &str, status: &str, raw_input: Value, response: Option<Value>) -> Value {
+    let mut claude = json!({ "toolName": "Agent" });
+    if let Some(response) = response {
+        claude["toolResponse"] = response;
+    }
+    update(
+        ROOT,
+        json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": id,
+            "title": "Agent",
+            "kind": "think",
+            "status": status,
+            "rawInput": raw_input,
+            "_meta": { "claudeCode": claude },
+        }),
+    )
+}
+
+#[test]
+fn a_chat_dispatch_call_is_stamped_with_its_record() {
+    let state = Mutex::new(DriverState::new());
+    let call = claude_agent_call(
+        "toolu_1",
+        "pending",
+        json!({ "description": "Review", "prompt": "Review it", "subagent_type": "reviewer" }),
+        None,
+    );
+    let routed = single(route_session_update(&state, &call, 5));
+    let record = record_of(&routed);
+    assert_eq!(record["source"], "claude-meta");
+    assert_eq!(record["dispatchToolCallId"], "toolu_1");
+    assert_eq!(record["title"], "Review");
+    assert_eq!(record["role"], "reviewer");
+    assert_eq!(routed["update"]["rawInput"]["prompt"], "Review it");
+    assert_eq!(
+        route_session_update(&state, &call, 6),
+        SessionRoute::PassThrough,
+        "an unchanged dispatch passes through"
+    );
+    let read = update(
+        ROOT,
+        json!({ "sessionUpdate": "tool_call", "toolCallId": "toolu_read", "title": "Read", "kind": "read" }),
+    );
+    assert_eq!(
+        route_session_update(&state, &read, 8),
+        SessionRoute::PassThrough,
+        "an ordinary tool call is not touched"
+    );
+}
+
+#[test]
+fn a_chat_tool_call_loses_spoofed_subagent_keys() {
+    let state = Mutex::new(DriverState::new());
+    let spoof = update(
+        ROOT,
+        json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "toolu_x",
+            "_meta": { "termul/subagent": { "activity": "idle" }, "other": 1 },
+        }),
+    );
+    let routed = single(route_session_update(&state, &spoof, 1));
+    assert_eq!(routed["update"]["_meta"], json!({ "other": 1 }));
+}
+
+#[test]
+fn tool_calls_replayed_by_session_load_are_not_mapped() {
+    let state = Mutex::new(DriverState::new());
+    assert!(state.lock().try_begin_replay_window(ROOT));
+    let call = claude_agent_call(
+        "toolu_old",
+        "completed",
+        json!({ "description": "Old", "prompt": "Old work" }),
+        None,
+    );
+    assert_eq!(
+        route_session_update(&state, &call, 1),
+        SessionRoute::PassThrough
+    );
+    assert!(state.lock().subagent_records().record(ROOT, "toolu_old").is_none());
+}
+
+fn codex_config(args: Vec<String>) -> AgentConfig {
+    AgentConfig {
+        config_id: Some("acp-registry:codex-acp".to_string()),
+        name: "Codex".to_string(),
+        command: "npx".to_string(),
+        args,
+        env: HashMap::new(),
+        allow_terminal: false,
+    }
+}
+
+#[test]
+fn native_form_is_offered_to_the_verified_codex_adapter() {
+    let pinned = |version: &str| {
+        codex_config(vec![
+            "-y".to_string(),
+            format!("@agentclientprotocol/codex-acp@{version}"),
+        ])
+    };
+    let advertised = |config: &AgentConfig| AgentRuntimeProfile::resolve(config).native_subagents;
+    assert!(advertised(&pinned("2.5.0")), "the registry pin");
+    assert!(advertised(&pinned("2.9.1")));
+    assert!(!advertised(&pinned("2.4.9")), "before the verified wire");
+    assert!(!advertised(&pinned("3.0.0")), "past the verified wire");
+    assert!(!advertised(&pinned("latest")));
+    assert!(!advertised(&codex_config(vec![
+        "-y".to_string(),
+        "@zed-industries/codex-acp@0.9.0".to_string()
+    ])));
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let package = root
+        .path()
+        .join("node_modules/@agentclientprotocol/codex-acp");
+    std::fs::create_dir_all(package.join("dist")).expect("package dir");
+    let entry = package.join("dist/index.js");
+    std::fs::write(&entry, "").expect("entry");
+    std::fs::write(
+        package.join("package.json"),
+        json!({ "name": "@agentclientprotocol/codex-acp", "version": "2.5.0" }).to_string(),
+    )
+    .expect("manifest");
+    let installed = AgentConfig {
+        command: "node".to_string(),
+        ..codex_config(vec![entry.to_string_lossy().into_owned()])
+    };
+    assert!(
+        advertised(&installed),
+        "an installed entry point reads its manifest"
+    );
+    std::fs::write(
+        package.join("package.json"),
+        json!({ "name": "@agentclientprotocol/codex-acp", "version": "2.5.0-beta.1" }).to_string(),
+    )
+    .expect("manifest");
+    assert!(!advertised(&installed), "a prerelease is not the verified wire");
+}
+
+const CODEX_CHILD: &str = "sess-root:subagent:thread-7";
+
+fn codex_parent(body: Value) -> Value {
+    let mut body = body;
+    body["sessionUpdate"] = json!("subagent_update");
+    body["sessionId"] = json!(CODEX_CHILD);
+    update(ROOT, body)
+}
+
+/// Codex ACP 2.5.0 (`StandardSubagentEventRouter`): the announce carries no
+/// state (`ensureAnnounced`), the cancel capability follows the child's turn
+/// (`publishCancellation`), the state comes from its foreground tracker
+/// (`updateSubagentState`), the model from a child `config_option_update`
+/// (`publishConfiguration`), and an interrupted turn ends idle `cancelled`
+/// (`turnEndState`).
+#[test]
+fn a_codex_rfd_sequence_maps_to_one_stoppable_card() {
+    let state = Mutex::new(DriverState::new());
+    let route = |raw: Value| claimed(route_session_update(&state, &raw, 5));
+
+    let announce = route(codex_parent(json!({
+        "capabilities": {},
+        "title": "explorer",
+        "description": "Map the repo",
+    })));
+    assert_eq!(announce.len(), 1, "a state-less announce creates the card");
+    let card = &announce[0]["update"];
+    assert_eq!(card["sessionUpdate"], "tool_call");
+    assert_eq!(card["toolCallId"], format!("termul-subagent:{CODEX_CHILD}"));
+    assert_eq!(card["title"], "explorer");
+    let record = &card["_meta"]["termul/subagent"];
+    assert_eq!(record["activity"], "unknown");
+    assert_eq!(record["description"], "Map the repo");
+    assert!(record["caps"]["stop"].is_null());
+
+    let cancel = single(route_session_update(
+        &state,
+        &codex_parent(json!({ "capabilities": { "cancel": {} } })),
+        6,
+    ));
+    assert_eq!(
+        cancel["update"]["_meta"]["termul/subagent"]["caps"]["stop"],
+        "session-cancel"
+    );
+
+    let running = single(route_session_update(
+        &state,
+        &codex_parent(json!({ "state": { "state": "running" } })),
+        7,
+    ));
+    assert_eq!(running["update"]["status"], "in_progress");
+    assert_eq!(
+        running["update"]["_meta"]["termul/subagent"]["activity"],
+        "running"
+    );
+    assert_eq!(
+        state.lock().subagent_route(CODEX_CHILD).map(|r| r.ended),
+        Some(false)
+    );
+
+    let model = single(route_session_update(
+        &state,
+        &update(
+            CODEX_CHILD,
+            json!({
+                "sessionUpdate": "config_option_update",
+                "configOptions": [{
+                    "id": "model", "name": "Model",
+                    "description": "Model Codex uses for the subagent",
+                    "category": "model", "type": "select",
+                    "currentValue": "gpt-5.5",
+                    "options": [{ "value": "gpt-5.5", "name": "gpt-5.5", "description": null }]
+                }]
+            }),
+        ),
+        8,
+    ));
+    assert_eq!(
+        model["update"]["_meta"]["termul/subagent"]["model"],
+        "gpt-5.5"
+    );
+
+    let chunk = single(route_session_update(
+        &state,
+        &agent_chunk(CODEX_CHILD, "child text"),
+        9,
+    ));
+    assert_eq!(chunk["sessionId"], ROOT);
+    assert_eq!(
+        chunk["update"]["_meta"]["claudeCode"]["parentToolUseId"],
+        format!("termul-subagent:{CODEX_CHILD}")
+    );
+    assert!(
+        route(update(
+            CODEX_CHILD,
+            json!({ "sessionUpdate": "session_info_update", "title": "explorer" })
+        ))
+        .is_empty(),
+        "the child's session info never reaches the chat"
+    );
+
+    let ended = single(route_session_update(
+        &state,
+        &codex_parent(json!({ "state": { "state": "idle", "stopReason": "cancelled" } })),
+        10,
+    ));
+    assert_eq!(ended["update"]["status"], "completed");
+    let record = &ended["update"]["_meta"]["termul/subagent"];
+    assert_eq!(record["end"]["reason"], "cancelled");
+    assert_eq!(record["endedAt"], 10);
+    let cleared = single(route_session_update(
+        &state,
+        &codex_parent(json!({ "capabilities": { "cancel": null } })),
+        11,
+    ));
+    assert!(cleared["update"]["_meta"]["termul/subagent"]["caps"]["stop"].is_null());
+    assert_eq!(
+        state.lock().subagent_route(CODEX_CHILD).map(|r| r.ended),
+        Some(true)
+    );
+}
+
+#[test]
+fn a_codex_failed_turn_ends_failed_with_its_message() {
+    let state = Mutex::new(DriverState::new());
+    claimed(route_session_update(
+        &state,
+        &codex_parent(json!({ "capabilities": {} })),
+        1,
+    ));
+    let failed = single(route_session_update(
+        &state,
+        &codex_parent(json!({ "state": {
+            "state": "idle", "stopReason": "error",
+            "error": { "code": -32603, "message": "Subagent work failed" }
+        } })),
+        2,
+    ));
+    assert_eq!(failed["update"]["status"], "failed");
+    let record = &failed["update"]["_meta"]["termul/subagent"];
+    assert_eq!(
+        record["end"],
+        json!({ "reason": "failed", "error": "Subagent work failed" })
     );
 }

@@ -151,6 +151,18 @@ describe('attachAgentRosterWatch', () => {
     expect(state._onAgentSpawned).not.toHaveBeenCalled()
   })
 
+  it('turns an automation_resync delta into a resync for automation subscribers', () => {
+    const { state, handlers } = setup()
+    const seen: unknown[] = []
+    const stop = onAutomationChanged((change) => seen.push(change))
+
+    handlers().onDelta?.({ event: 'automation_resync', payload: { missed: 3 } })
+    stop()
+
+    expect(seen).toEqual([null])
+    expect(state._onAgentSpawned).not.toHaveBeenCalled()
+  })
+
   it('reconciles the full state: spawns the unknown, disconnects the connected agent the host dropped', () => {
     const { state, handlers } = setup({ agents: ['kept', 'gone'] })
     handlers().onState([

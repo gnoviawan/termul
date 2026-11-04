@@ -119,7 +119,7 @@ impl PromptHistory for SessionHistory {
 }
 
 /// At most 2 KB, cut on a character boundary.
-fn truncate(mut text: String) -> String {
+pub(super) fn truncate(mut text: String) -> String {
     if text.len() > MAX_PROMPT_BYTES {
         let mut end = MAX_PROMPT_BYTES;
         while !text.is_char_boundary(end) {

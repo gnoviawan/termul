@@ -1,7 +1,6 @@
 /**
- * Subagent lifecycle at ingest: a background launch completes its tool call
- * long before the agent ends, so the store keeps the agent state apart from
- * the tool-call status (Claude launch receipt, host marker, Codex states).
+ * The host's canonical subagent record at ingest: parsed off
+ * `_meta["termul/subagent"]`, replaced when present, kept when absent.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -33,20 +32,25 @@ vi.mock('@/lib/web-tab-session', () => ({
   getTabFocusedSessionId: vi.fn(() => null)
 }))
 
+import { SUBAGENT_CONTROL_META_KEY, SUBAGENT_META_KEY } from '@shared/types/subagent'
 import { subagentStatus } from '@/components/chat/subagent-strip'
-import { isSubagentRunning } from '@/components/chat/tool-call-summary'
 import type { ToolCall } from '@/lib/acp-api'
+import {
+  endedState,
+  subagentMeta,
+  subagentRecord,
+  subagentToolCall
+} from '@/lib/test-utils/subagent'
 import {
   _flushCoalescedForTesting,
   _resetCoalesceForTesting,
   useAcpStore
 } from '@/stores/acp-store'
 import {
-  _resetSubagentLifecycleLogsForTesting,
-  applyCodexThreadStates,
+  _resetSubagentRecordLogsForTesting,
   cancelRunningSubagents,
-  extractSubagentLifecycle,
-  mergeSubagentLifecycle
+  parseSubagent,
+  parseSubagentControl
 } from './subagent-lifecycle'
 import { FRESH, seedSession } from './testkit'
 
@@ -74,336 +78,174 @@ const stored = (id: string): ToolCall => {
   return call
 }
 
-const claudeAgentInput = {
-  description: 'Audit the renderer',
+const warnings = () =>
+  logMock.mock.calls
+    .map(([entry]) => entry as unknown as { level: string; source: string; message: string })
+    .filter((entry) => entry.level === 'warn' && entry.source === 'acp-store.subagentRecord')
+
+const record = subagentRecord({
+  dispatchToolCallId: 'tc-1',
+  background: true,
+  role: 'general-purpose',
   prompt: 'Read every file under src/renderer and report.',
-  subagent_type: 'general-purpose',
-  run_in_background: true
-}
+  startedAt: 1_000,
+  usage: { totalTokens: 1_200, durationMs: 4_000 },
+  outputFile: '/tmp/agent-abc.output'
+})
 
-const asyncReceipt = {
-  claudeCode: {
-    toolName: 'Agent',
-    toolResponse: {
-      status: 'async_launched',
-      isAsync: true,
-      agentId: 'agent-abc',
-      description: 'Audit the renderer',
-      prompt: 'Read every file under src/renderer and report.',
-      outputFile: '/tmp/agent-abc.output'
-    }
-  }
-}
+beforeEach(() => {
+  logMock.mockClear()
+  _resetSubagentRecordLogsForTesting()
+})
 
-describe('subagent lifecycle ingest (Claude)', () => {
+describe('parseSubagent', () => {
+  it('reads a valid record', () => {
+    expect(parseSubagent('tc-1', subagentMeta(record))).toEqual(record)
+    const ended = subagentRecord({
+      state: { activity: 'idle', end: { reason: 'failed', error: 'boom' } }
+    })
+    expect(parseSubagent('tc-1', subagentMeta(ended))).toEqual(ended)
+  })
+
+  it('is undefined without the key, and drops fields the contract does not name', () => {
+    expect(parseSubagent('tc-1', { claudeCode: {} })).toBeUndefined()
+    expect(parseSubagent('tc-1', undefined)).toBeUndefined()
+    expect(
+      parseSubagent('tc-1', subagentMeta({ ...record, extra: 'x' } as never))
+    ).not.toHaveProperty('extra')
+    expect(warnings()).toEqual([])
+  })
+
+  it.each([
+    ['a missing id', { ...record, id: undefined }],
+    ['an unknown source', { ...record, source: 'other' }],
+    ['an unknown activity', { ...record, activity: 'done' }],
+    ['a non-finite number', { ...record, startedAt: Number.NaN }],
+    ['a bad caps.stop', { ...record, caps: { ...record.caps, stop: 'kill' } }],
+    ['an end on a running record', { ...record, end: { reason: 'completed' } }],
+    ['an idle record without an end', { ...record, activity: 'idle' }],
+    ['an unknown end reason', { ...record, activity: 'idle', end: { reason: 'gone' } }]
+  ])('drops a record with %s', (_label, bad) => {
+    expect(parseSubagent('tc-1', { [SUBAGENT_META_KEY]: bad })).toBeUndefined()
+    expect(warnings()).toHaveLength(1)
+  })
+
+  it('warns once per tool call id', () => {
+    const bad = { [SUBAGENT_META_KEY]: { ...record, activity: 'idle' } }
+    parseSubagent('tc-1', bad)
+    parseSubagent('tc-1', bad)
+    parseSubagent('tc-2', bad)
+    expect(warnings().map((entry) => entry.message)).toEqual([
+      'Dropped malformed termul/subagent on tool call tc-1: bad end',
+      'Dropped malformed termul/subagent on tool call tc-2: bad end'
+    ])
+  })
+})
+
+describe('parseSubagentControl', () => {
+  it('reads the steered ids and drops a malformed marker', () => {
+    expect(
+      parseSubagentControl('w1', { [SUBAGENT_CONTROL_META_KEY]: { subagentIds: ['t1', 't2'] } })
+    ).toEqual({ subagentIds: ['t1', 't2'] })
+    expect(
+      parseSubagentControl('w1', { [SUBAGENT_CONTROL_META_KEY]: { subagentIds: [1] } })
+    ).toBeUndefined()
+    expect(warnings()).toHaveLength(1)
+  })
+})
+
+describe('subagent record ingest', () => {
   beforeEach(() => {
-    logMock.mockClear()
     _resetCoalesceForTesting()
-    _resetSubagentLifecycleLogsForTesting()
     useAcpStore.setState(FRESH)
     seedSession('s1', 'agent-1')
   })
 
-  it('keeps a background launch running after its tool call completes', () => {
-    ingest('call', { toolCallId: 'tc-1', status: 'pending', rawInput: claudeAgentInput })
-    ingest('update', { toolCallId: 'tc-1', _meta: asyncReceipt })
+  it('lifts the record on a live tool call and replaces it on an update', () => {
+    ingest('call', { toolCallId: 'tc-1', status: 'pending', _meta: subagentMeta(record) })
+    expect(stored('tc-1').subagent).toEqual(record)
+
+    const ended = { ...record, ...endedState('completed'), endedAt: 9_000 }
+    ingest('update', { toolCallId: 'tc-1', _meta: subagentMeta(ended) })
+    expect(stored('tc-1').subagent).toEqual(ended)
+    expect(subagentStatus(stored('tc-1'), 'active')).toBe('done')
+  })
+
+  it('keeps the record when an update does not carry it, or carries a malformed one', () => {
+    ingest('call', { toolCallId: 'tc-1', status: 'pending', _meta: subagentMeta(record) })
     // The adapter's next update replaces `_meta` wholesale.
     ingest('update', { toolCallId: 'tc-1', status: 'completed', _meta: { claudeCode: {} } })
+    expect(stored('tc-1').status).toBe('completed')
+    expect(stored('tc-1').subagent).toEqual(record)
+    expect(subagentStatus(stored('tc-1'), 'ended')).toBe('running')
 
-    const call = stored('tc-1')
-    expect(call.status).toBe('completed')
-    expect(call.subagentLifecycle).toEqual({
-      background: true,
-      agentId: 'agent-abc',
-      outputFile: '/tmp/agent-abc.output'
-    })
-    expect(isSubagentRunning(call, 'active')).toBe(true)
-    expect(subagentStatus(call, true)).toBe('running')
-    // Nothing reports the end of this launch, so it outlives its turn.
-    expect(subagentStatus(call, false)).toBe('running')
-    expect(isSubagentRunning(call, 'superseded')).toBe(false)
-    expect(logMock).toHaveBeenCalledWith(
-      expect.objectContaining({ level: 'info', source: 'acp-store.subagentLifecycle' })
-    )
+    ingest('update', { toolCallId: 'tc-1', _meta: { [SUBAGENT_META_KEY]: { activity: 'idle' } } })
+    expect(stored('tc-1').subagent).toEqual(record)
+    expect(warnings()).toHaveLength(1)
   })
 
-  it('detects the receipt without the run_in_background input', () => {
+  it('lifts the control marker', () => {
     ingest('call', {
-      toolCallId: 'tc-2',
-      status: 'completed',
-      rawInput: { description: 'd', prompt: 'p' },
-      _meta: asyncReceipt
+      toolCallId: 'w1',
+      title: 'wait',
+      _meta: { [SUBAGENT_CONTROL_META_KEY]: { subagentIds: ['t1'] } }
     })
-    expect(stored('tc-2').subagentLifecycle?.background).toBe(true)
-    expect(isSubagentRunning(stored('tc-2'), 'active')).toBe(true)
+    expect(stored('w1').subagentControl).toEqual({ subagentIds: ['t1'] })
+    expect(stored('w1').subagent).toBeUndefined()
   })
 
-  it('keeps a foreground agent done when its tool call completes', () => {
-    ingest('call', {
-      toolCallId: 'tc-3',
-      status: 'pending',
-      rawInput: { description: 'd', prompt: 'p', subagent_type: 'Explore' }
-    })
-    ingest('update', {
-      toolCallId: 'tc-3',
-      status: 'completed',
-      _meta: { claudeCode: { toolResponse: { status: 'completed', totalDurationMs: 90_000 } } }
-    })
-    const call = stored('tc-3')
-    expect(call.subagentLifecycle).toBeUndefined()
-    expect(subagentStatus(call, true)).toBe('done')
-  })
-
-  it('ends a background agent on the host marker while the turn is still active', () => {
-    ingest('call', { toolCallId: 'tc-4', status: 'completed', rawInput: claudeAgentInput })
-    expect(subagentStatus(stored('tc-4'), true)).toBe('running')
-    ingest('update', {
-      toolCallId: 'tc-4',
-      _meta: { 'termul/subagent': { state: 'completed', sessionId: 'child-1', endedAt: 5000 } }
-    })
-    const call = stored('tc-4')
-    expect(call.subagentLifecycle).toEqual({
-      background: true,
-      state: 'completed',
-      agentId: 'child-1',
-      endedAt: 5000
-    })
-    expect(subagentStatus(call, true)).toBe('done')
-  })
-
-  it('maps failed and cancelled host states', () => {
-    ingest('call', { toolCallId: 'f', status: 'completed', rawInput: claudeAgentInput })
-    ingest('call', { toolCallId: 'c', status: 'completed', rawInput: claudeAgentInput })
-    ingest('update', { toolCallId: 'f', _meta: { 'termul/subagent': { state: 'failed' } } })
-    ingest('update', { toolCallId: 'c', _meta: { 'termul/subagent': { state: 'cancelled' } } })
-    expect(subagentStatus(stored('f'), true)).toBe('failed')
-    expect(subagentStatus(stored('c'), true)).toBe('stopped')
-  })
-
-  it('keeps a Cursor background task running after its result arrives', () => {
-    ingest('call', {
-      toolCallId: 'cursor-1',
-      status: 'pending',
-      rawInput: { _toolName: 'task', description: 'Explore', prompt: 'Map the repo' }
-    })
-    ingest('update', {
-      toolCallId: 'cursor-1',
-      status: 'completed',
-      rawOutput: { isBackground: true }
-    })
-    const call = stored('cursor-1')
-    expect(call.subagentLifecycle).toEqual({ background: true })
-    expect(subagentStatus(call, true)).toBe('running')
-    expect(subagentStatus(call, false)).toBe('running')
-  })
-
-  it('keeps a Cursor foreground task done when its result arrives', () => {
-    ingest('call', {
-      toolCallId: 'cursor-2',
-      status: 'completed',
-      rawInput: { _toolName: 'task', description: 'Explore', prompt: 'Map the repo' },
-      rawOutput: { durationMs: 95_000, isBackground: false }
-    })
-    expect(stored('cursor-2').subagentLifecycle).toBeUndefined()
-    expect(subagentStatus(stored('cursor-2'), true)).toBe('done')
-  })
-
-  it('keeps an OpenCode background subagent running after its launch returns', () => {
-    ingest('call', {
-      toolCallId: 'oc-1',
-      status: 'completed',
-      rawInput: { agent: 'general', description: 'Explore', prompt: 'p', background: true }
-    })
-    expect(subagentStatus(stored('oc-1'), true)).toBe('running')
-  })
-
-  it('keeps the lifecycle when an oversized call degrades to the structural subset', () => {
-    ingest('call', { toolCallId: 'tc-5', status: 'completed', rawInput: claudeAgentInput })
-    ingest('update', { toolCallId: 'tc-5', blob: 'x'.repeat(500_000) })
-    expect(stored('tc-5').blob).toBeUndefined()
-    expect(stored('tc-5').subagentLifecycle?.background).toBe(true)
-  })
-})
-
-describe('extractSubagentLifecycle', () => {
-  it('ignores unknown states and over-long strings', () => {
-    expect(
-      extractSubagentLifecycle({
-        toolCallId: 't',
-        _meta: { 'termul/subagent': { state: 'idle', sessionId: 'x'.repeat(600) } }
-      })
-    ).toBeUndefined()
-  })
-
-  it('returns undefined for a plain tool call', () => {
-    expect(
-      extractSubagentLifecycle({ toolCallId: 't', rawInput: { command: 'ls' } })
-    ).toBeUndefined()
-  })
-})
-
-describe('mergeSubagentLifecycle', () => {
-  it('adds fields and never clears them', () => {
-    expect(
-      mergeSubagentLifecycle({ background: true, agentId: 'a' }, { state: 'completed' })
-    ).toEqual({ background: true, agentId: 'a', state: 'completed' })
-  })
-
-  it('drops the end stamp when the agent runs again', () => {
-    expect(
-      mergeSubagentLifecycle({ state: 'completed', endedAt: 10 }, { state: 'running' })
-    ).toEqual({ state: 'running' })
-  })
-})
-
-describe('applyCodexThreadStates', () => {
-  const spawn = (agentsStates: Record<string, unknown>, extra: Partial<ToolCall> = {}) =>
-    ({
-      toolCallId: 'spawn-1',
-      title: 'spawnAgent',
-      kind: 'other',
-      status: 'completed',
-      seq: 1,
-      rawInput: {
-        prompt: 'Check the weather',
-        senderThreadId: 'parent',
-        receiverThreadIds: ['child-1'],
-        agentsStates
-      },
-      ...extra
-    }) as ToolCall
-
-  const wait = (status: string, seq = 2): ToolCall => ({
-    toolCallId: `wait-${seq}`,
-    title: 'wait',
-    kind: 'other',
-    status: 'completed',
-    seq,
-    rawInput: {
-      senderThreadId: 'parent',
-      receiverThreadIds: ['child-1'],
-      agentsStates: { 'child-1': { status, message: null } }
-    }
-  })
-
-  it('keeps a spawned agent running until a later call reports it done', () => {
-    const running = applyCodexThreadStates([spawn({ 'child-1': { status: 'running' } })])
-    expect(running[0]?.subagentLifecycle).toEqual({
-      background: true,
-      state: 'running',
-      agentId: 'child-1'
-    })
-    expect(subagentStatus(running[0]!, true)).toBe('running')
-
-    const done = applyCodexThreadStates([
-      spawn({ 'child-1': { status: 'running' } }),
-      wait('completed')
-    ])
-    expect(done[0]?.subagentLifecycle?.state).toBe('completed')
-    expect(subagentStatus(done[0]!, true)).toBe('done')
-  })
-
-  it('keeps a completed agent completed after closeAgent shuts it down', () => {
-    const calls = applyCodexThreadStates([
-      spawn({ 'child-1': { status: 'running' } }),
-      wait('completed', 2),
-      { ...wait('shutdown', 3), title: 'closeAgent' }
-    ])
-    expect(calls[0]?.subagentLifecycle?.state).toBe('completed')
-  })
-
-  it('maps errored and interrupted threads', () => {
-    expect(
-      applyCodexThreadStates([spawn({ 'child-1': { status: 'errored' } })])[0]?.subagentLifecycle
-        ?.state
-    ).toBe('failed')
-    expect(
-      applyCodexThreadStates([spawn({ 'child-1': { status: 'interrupted' } })])[0]
-        ?.subagentLifecycle?.state
-    ).toBe('cancelled')
-  })
-
-  it('reads activity cards', () => {
-    const activity = (kind: string, seq: number): ToolCall => ({
-      toolCallId: `act-${kind}`,
-      title: `${kind} subagent weather`,
-      kind: 'other',
-      status: 'completed',
-      seq,
-      rawInput: { agentThreadId: 'child-1', agentPath: '/root/weather', activityKind: kind }
-    })
-    const calls = applyCodexThreadStates([
-      spawn({ 'child-1': { status: 'pendingInit' } }),
-      activity('started', 2),
-      activity('completed', 3)
-    ])
-    expect(calls[0]?.subagentLifecycle?.state).toBe('completed')
-    expect(calls[1]?.subagentLifecycle?.state).toBe('completed')
-  })
-
-  it('returns the same array when nothing changes', () => {
-    const plain: ToolCall[] = [{ toolCallId: 'read', kind: 'read', rawInput: { path: 'a' } }]
-    expect(applyCodexThreadStates(plain)).toBe(plain)
-    const once = applyCodexThreadStates([spawn({ 'child-1': { status: 'running' } })])
-    expect(applyCodexThreadStates(once)).toBe(once)
-  })
-
-  it('patches the spawn card through store ingest', () => {
-    logMock.mockClear()
-    _resetCoalesceForTesting()
-    useAcpStore.setState(FRESH)
-    seedSession('s1', 'agent-1')
-    ingest('call', {
-      ...spawn({ 'child-1': { status: 'running' } }),
-      seq: undefined
-    } as unknown as Record<string, unknown>)
-    expect(stored('spawn-1').subagentLifecycle?.state).toBe('running')
-    ingest('call', { ...wait('completed'), seq: undefined } as unknown as Record<string, unknown>)
-    expect(stored('spawn-1').subagentLifecycle?.state).toBe('completed')
+  it('keeps the record when an oversized call degrades to the structural subset', () => {
+    ingest('call', { toolCallId: 'tc-1', status: 'completed', _meta: subagentMeta(record) })
+    ingest('update', { toolCallId: 'tc-1', blob: 'x'.repeat(500_000) })
+    expect(stored('tc-1').blob).toBeUndefined()
+    expect(stored('tc-1').subagent).toEqual(record)
   })
 })
 
 describe('cancelRunningSubagents', () => {
-  it('cancels only calls the host still marks running', () => {
-    const running: ToolCall = {
-      toolCallId: 'child-1',
-      status: 'in_progress',
-      subagentLifecycle: { state: 'running', agentId: 'child-1' }
-    }
-    const done: ToolCall = {
-      toolCallId: 'child-2',
-      status: 'completed',
-      subagentLifecycle: { state: 'completed', endedAt: 5 }
-    }
+  const user = { id: 'u', role: 'user' as const, blocks: [], timestamp: 5, seq: 5 }
+
+  it('ends records a live source still reports running', () => {
+    const running = subagentToolCall(
+      { caps: { liveProgress: true }, state: { activity: 'requires_action' } },
+      { toolCallId: 'child-1', status: 'in_progress' }
+    )
+    const done = subagentToolCall(
+      { caps: { liveProgress: true }, state: endedState(), endedAt: 5 },
+      { toolCallId: 'child-2', status: 'completed' }
+    )
     const toolCalls = { s1: [running, done], s2: [running] }
     const settled = cancelRunningSubagents({ toolCalls, messages: {} }, ['s1'], 20)
     expect(settled).not.toBe(toolCalls)
-    expect(settled.s1[0]?.subagentLifecycle).toEqual({
-      state: 'cancelled',
-      agentId: 'child-1',
+    expect(settled.s1[0]?.subagent).toEqual({
+      ...running.subagent,
+      activity: 'idle',
+      end: { reason: 'unexplained' },
       endedAt: 20
     })
+    expect(subagentStatus(settled.s1[0] as ToolCall, 'ended')).toBe('stopped')
     expect(settled.s1[1]).toBe(done)
     expect(settled.s2).toBe(toolCalls.s2)
     expect(cancelRunningSubagents({ toolCalls: settled, messages: {} }, ['s1'], 30)).toBe(settled)
+    expect(logMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        message: 'Cancelled 1 running subagents on chat s1: the agent process is gone'
+      })
+    )
   })
 
-  it('cancels a background launch of the latest turn that never reported an end', () => {
-    const launch = (toolCallId: string, seq: number): ToolCall => ({
-      toolCallId,
-      status: 'completed',
-      seq,
-      rawInput: { description: 'Run e2e', prompt: 'p', run_in_background: true },
-      subagentLifecycle: { background: true }
-    })
+  it('ends a background launch of the latest turn, and leaves older ones', () => {
+    const launch = (toolCallId: string, seq: number): ToolCall =>
+      subagentToolCall({ background: true }, { toolCallId, status: 'completed', seq })
     const earlier = launch('earlier', 2)
     const toolCalls = { s1: [earlier, launch('latest', 6)] }
-    const messages = { s1: [{ id: 'u', role: 'user' as const, blocks: [], timestamp: 5, seq: 5 }] }
-    const settled = cancelRunningSubagents({ toolCalls, messages }, ['s1'], 20)
+    const settled = cancelRunningSubagents({ toolCalls, messages: { s1: [user] } }, ['s1'], 20)
     expect(settled.s1[0]).toBe(earlier)
-    expect(settled.s1[1]?.subagentLifecycle).toEqual({
+    expect(settled.s1[1]?.subagent).toMatchObject({
       background: true,
-      state: 'cancelled',
+      activity: 'idle',
+      end: { reason: 'unexplained' },
       endedAt: 20
     })
   })

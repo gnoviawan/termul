@@ -362,6 +362,8 @@ export function createInvokeAcpTransport(): AcpTransport {
     cancelPrompt: async (agentId, sessionId) => {
       await invoke('acp_cancel_prompt', { agentId, sessionId })
     },
+    stopSubagent: (agentId, rootSessionId, subagentId) =>
+      invoke('acp_stop_subagent', { agentId, rootSessionId, subagentId }),
     setConfigOption: (agentId, sessionId, configId, valueId) =>
       invoke<SessionConfigOption[] | null>('acp_set_config_option', {
         agentId,

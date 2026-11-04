@@ -4,7 +4,7 @@
 
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
-import { wireConfigValue } from '@/components/chat/chat-input-bar-config'
+import { flattenConfigOptionValues, wireConfigValue } from '@/components/chat/chat-input-bar-config'
 import { type AgentId, acpApi, type ContentBlock, type SessionId } from '@/lib/acp-api'
 import { agentPolicyForConfigId } from '@/lib/agents/acp-registry'
 import {
@@ -16,15 +16,18 @@ import {
 import { logFrontendError } from '@/lib/log-api'
 import { pendingRestartVersionsAfterSpawn } from '../../agent-update-orchestration'
 import { dropPromptQueueForSession } from '../../prompt-queue-orchestration'
+import { isScopedOption, userPickedDuringRestore } from '../composer-options'
 import {
   cacheOptionsFromSession,
+  currentSessionModel,
   dropPreparedSlots,
   dropRecordKey,
   isLivePreparedSession,
   newId,
   plainLastError,
   prepareChatKey,
-  reapOrphanPreparedSession
+  reapOrphanPreparedSession,
+  waitForReadvertisedOptions
 } from '../helpers'
 import {
   forgetRegistryMcpServers,
@@ -489,7 +492,8 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
             blocks,
             streaming: false,
             timestamp: Date.now(),
-            seq: nextSeq()
+            seq: nextSeq(),
+            sentHere: true
           }
         : null
     set((s) => ({
@@ -568,7 +572,8 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
         blocks,
         streaming: false,
         timestamp: Date.now(),
-        seq: nextSeq()
+        seq: nextSeq(),
+        sentHere: true
       }
       return {
         messages: {
@@ -598,8 +603,11 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
     })
   },
 
-  applyPendingLauncherOptions: async (sessionId, pending) => {
+  applyPendingLauncherOptions: async (sessionId, pending, opts) => {
     if (!pending) return
+    const restore = opts?.restore === true
+    // A restore is not a pick: it leaves the saved record alone.
+    const setOpts = restore ? { persist: false } : undefined
     // Re-read the session per step: earlier applies (and concurrent events)
     // may have changed the advertised options, and the session may have closed.
     const live = (): AcpSession | undefined => get().sessions[sessionId]
@@ -612,6 +620,13 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
         level: 'warn',
         source: 'acp.applyPendingLauncherOptions',
         message: `Skipping option '${label}' on session ${sessionId} after apply failure: ${err instanceof Error ? err.message : String(err)}`
+      })
+    }
+    const warnNotAdvertised = (label: string, what: 'option' | 'value' | 'model'): void => {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.applyPendingLauncherOptions',
+        message: `Skipped option '${label}' on session ${sessionId}: the ${what} is not advertised by this session`
       })
     }
     if (pending.modeId) {
@@ -632,6 +647,9 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
     const sessionAfterMode = live()
     const modelConfigOption = sessionAfterMode?.configOptions.find((o) => o.category === 'model')
     let modelConfigIdHandled: string | null = null
+    // Scoped values (effort, Fast) belong to the requested model: none of them
+    // apply when the session falls back to its default model.
+    let modelMissed = false
     if (pending.modelId) {
       // Already-current fast path, keyed on the DISPLAYED model
       // (`resolveModelOption` precedence: the model config option when one is
@@ -646,18 +664,23 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
       if (!applied && sessionAfterMode && sessionAfterMode.status !== 'closed') {
         if (sessionAfterMode.models) {
           try {
-            await get().setModel(sessionId, pending.modelId)
+            const before = sessionAfterMode.configOptions
+            await get().setModel(sessionId, pending.modelId, setOpts)
             applied = true
             // `models` can be a projection of the same config option. When so,
             // applying the model above already handled this launcher value.
             modelConfigIdHandled = modelConfigOption?.id ?? null
+            const valuesFollow = Object.keys(pending.configValues).some(
+              (id) => id !== modelConfigIdHandled
+            )
+            if (valuesFollow) await waitForReadvertisedOptions(get, sessionId, before)
           } catch {
             // native setModel rejected; fall through to a model config option
           }
         }
         if (!applied && modelConfigOption) {
           try {
-            await get().setConfigOption(sessionId, modelConfigOption.id, pending.modelId)
+            await get().setConfigOption(sessionId, modelConfigOption.id, pending.modelId, setOpts)
             applied = true
             modelConfigIdHandled = modelConfigOption.id
           } catch (err) {
@@ -665,6 +688,8 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
           }
         }
         if (!applied) {
+          if (restore) return // the values belong to the model that did not apply
+          modelMissed = true
           toast.error('Selected model is not available in this session', {
             description: `The model "${pending.modelId}" is not advertised by the agent and no model config option exists. Falling back to the agent's default model.`
           })
@@ -675,11 +700,18 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
       if (configId === modelConfigIdHandled) continue
       const session = live()
       if (!session || session.status === 'closed') return
+      if (restore && pending.modelId && currentSessionModel(session) !== pending.modelId) return
       const option = session.configOptions.find((o) => o.id === configId)
       // Skip ids the session doesn't advertise — stale/retired values in the
       // snapshot must not fire a doomed wire call on every launch.
       if (!option) {
-        warnOptionFailure(configId, new Error('option is not advertised by this session'))
+        warnNotAdvertised(configId, 'option')
+        continue
+      }
+      // A restore leaves an option the user set while it ran as the user set it.
+      if (restore && userPickedDuringRestore(sessionId, configId)) continue
+      if (modelMissed && isScopedOption(option)) {
+        warnNotAdvertised(configId, 'model')
         continue
       }
       // Skip already-current values — picks that were flushed live to a warm
@@ -687,9 +719,16 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
       // session. Boolean options are stored as "true" / "false" and must go
       // out as booleans.
       const wireValue = wireConfigValue(option, valueId)
+      if (
+        option.type !== 'boolean' &&
+        !flattenConfigOptionValues(option).some((entry) => entry.value === valueId)
+      ) {
+        warnNotAdvertised(configId, 'value')
+        continue
+      }
       if (wireValue == null || option.currentValue === wireValue) continue
       try {
-        await get().setConfigOption(sessionId, configId, wireValue)
+        await get().setConfigOption(sessionId, configId, wireValue, setOpts)
       } catch (err) {
         warnOptionFailure(configId, err)
       }

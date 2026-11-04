@@ -51,30 +51,42 @@ export async function openLauncher(page: Page): Promise<void> {
   await page.locator(START_CHAT_SELECTOR).first().waitFor({ state: 'visible', timeout: 10_000 })
 }
 
-export const AGENT_PICKER_TRIGGER = 'button[aria-label^="Select ACP agent:"]'
+export const AGENT_PICKER_TRIGGER = '[data-testid="agent-model-selector-trigger"]'
+
+/** The combined selector pill's aria-label ends "Currently <agent name>". */
+function currentAgentFromAria(label: string): string {
+  const match = /Currently (.+)$/i.exec(label)
+  return match ? match[1].trim() : label
+}
 
 /**
- * Ensure the launcher's agent pill names `expectedName` before we send a
- * prompt. The pill's aria-label is "Select ACP agent: <label>". On a
- * mismatch we open the picker and click the entry whose label matches —
- * same clicks a user makes. A hard throw beats silently running codex:
- * its every attempt errors, which both wastes the run and hides the bug.
+ * Ensure the launcher's agent/model pill names `expectedName` before we send
+ * a prompt. On a mismatch we open the selector and click the agent tab whose
+ * aria-label matches — same clicks a user makes. A hard throw beats silently
+ * running codex: its every attempt errors, which both wastes the run and
+ * hides the bug.
  */
 async function ensureAgentSelected(page: Page, expectedName: string): Promise<void> {
   const trigger = page.locator(AGENT_PICKER_TRIGGER).first()
-  const label = (await trigger.getAttribute('aria-label').catch(() => null)) ?? ''
+  await trigger.waitFor({ state: 'visible', timeout: 10_000 })
   const want = expectedName.trim().toLowerCase()
-  if (label.toLowerCase().includes(want)) return
+  // The pill shows the default until the saved agent's config has loaded.
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const label = (await trigger.getAttribute('aria-label').catch(() => null)) ?? ''
+    if (currentAgentFromAria(label).toLowerCase().includes(want)) return
+    await sleep(250)
+  }
   await trigger.click({ timeout: 5000 })
-  const option = page
-    .locator(`button[aria-pressed]`)
-    .filter({ hasText: new RegExp(want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })
+  const tab = page
+    .locator(`[data-testid^="agent-tab-"][aria-label="${expectedName.replace(/"/g, '\\"')}" i]`)
     .first()
-  await option.click({ timeout: 5000 })
+  await tab.click({ timeout: 5000 })
+  await page.keyboard.press('Escape')
   const after = (await trigger.getAttribute('aria-label').catch(() => null)) ?? ''
-  if (!after.toLowerCase().includes(want)) {
+  if (!currentAgentFromAria(after).toLowerCase().includes(want)) {
     throw new Error(
-      `launcher agent is "${after.replace('Select ACP agent: ', '')}", expected "${expectedName}"`
+      `launcher agent is "${currentAgentFromAria(after)}", expected "${expectedName}"`
     )
   }
 }

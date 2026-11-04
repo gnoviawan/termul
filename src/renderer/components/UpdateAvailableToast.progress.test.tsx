@@ -32,6 +32,7 @@ vi.mock('@/lib/confirm-install-update', () => ({
 
 const VERSION = '0.5.0-nightly.20261028.101.bbbbbbb'
 let isManualUpdateMode = false
+let isPreparingDownload = false
 
 vi.mock('@/stores/updater-store', () => ({
   updaterStore: {
@@ -42,6 +43,7 @@ vi.mock('@/stores/updater-store', () => ({
     updateAvailable: true,
     downloaded: false,
     isDownloading: true,
+    isPreparingDownload,
     skippedVersion: null,
     isManualUpdateMode
   }),
@@ -58,6 +60,7 @@ import { useUpdateToast } from './UpdateAvailableToast'
 describe('useUpdateToast download progress', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    isPreparingDownload = false
   })
 
   it('shows the progress toast while a signed update downloads', () => {
@@ -65,9 +68,27 @@ describe('useUpdateToast download progress', () => {
 
     renderHook(() => useUpdateToast())
 
-    expect(toast.loading).toHaveBeenCalledWith(
-      `Downloading update ${VERSION}...`,
-      expect.objectContaining({ id: `download-progress-${VERSION}` })
+    expect(toast.loading).toHaveBeenCalledWith(`Downloading update ${VERSION}...`, {
+      id: `download-progress-${VERSION}`,
+      description: '0% complete',
+      duration: Infinity
+    })
+  })
+
+  it('says the update is being prepared, not 0%, while the pre-update backup runs (#1431)', () => {
+    isManualUpdateMode = false
+    isPreparingDownload = true
+
+    renderHook(() => useUpdateToast())
+
+    expect(toast.loading).toHaveBeenCalledWith(`Preparing update ${VERSION}...`, {
+      id: `download-progress-${VERSION}`,
+      description: 'Backing up your Termul data before the download starts.',
+      duration: Infinity
+    })
+    expect(toast.loading).not.toHaveBeenCalledWith(
+      expect.stringContaining('Downloading'),
+      expect.anything()
     )
   })
 

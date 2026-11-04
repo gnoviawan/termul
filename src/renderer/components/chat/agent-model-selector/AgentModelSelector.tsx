@@ -18,6 +18,7 @@ import type { SessionConfigOption, SessionModeState, SessionUsage } from '@/lib/
 import { isModelPickerV2Enabled } from '@/lib/model-picker-flag'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
+import type { OptionValues } from '@/stores/acp-store/composer-options'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { shouldShowSessionUsage } from '../context-usage-utils'
 import { MobileModelPill } from './mobile/MobileModelPill'
@@ -77,7 +78,8 @@ interface AgentModelSelectorProps {
   usage?: SessionUsage | null
   messages?: ReadonlyArray<{ role: string }>
   onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
-  onSetModel: (modelId: string) => void | Promise<void>
+  /** `values`: a favorite's option values, applied after the model. */
+  onSetModel: (modelId: string, values?: OptionValues) => void | Promise<void>
   /**
    * Optional takeover of the close focus pass (Radix `onCloseAutoFocus`). The
    * launcher uses it to move the caret into the composer only after this
@@ -164,8 +166,9 @@ export function AgentModelSelector({
   const escapeRef = useRef<(() => boolean) | null>(null)
 
   const selectModel = useCallback(
-    (valueId: string) => {
+    (valueId: string, values?: OptionValues) => {
       if (!modelOption) return
+      if (values) return onSetModel(valueId, values)
       if (modelSource === 'models') return onSetModel(valueId)
       return onSetConfig(modelOption.id, valueId)
     },
@@ -188,7 +191,10 @@ export function AgentModelSelector({
     [fastMode, onSetConfig]
   )
 
-  const modelSelect = useOptimisticSelect(selectValue(modelOption?.currentValue), selectModel)
+  const modelSelect = useOptimisticSelect<OptionValues>(
+    selectValue(modelOption?.currentValue),
+    selectModel
+  )
   const effortSelect = useOptimisticSelect(selectValue(thoughtLevel?.currentValue), selectEffort)
   const fastSelect = useOptimisticSelect(
     fastMode ? (storedConfigValue(fastMode) ?? undefined) : undefined,
@@ -262,7 +268,7 @@ export function AgentModelSelector({
     disabled,
     modelOption,
     modelValue: modelSelect.displayValue,
-    onPickModel: (value) => modelSelect.select(value),
+    onPickModel: (value, values) => modelSelect.select(value, values),
     thoughtLevel,
     effortValue: effortSelect.displayValue,
     onEffort: (value) => effortSelect.select(value),

@@ -5,7 +5,8 @@
  * `opening` (facade open in flight) → `loading` (iframe navigating, bridge
  * attached; on `event.ready` the pin is checked and the document loaded) →
  * `ready` (document loaded, theme and locale sent), `failed` (mount
- * refused, load failed or editor crashed) or `unloaded` (no mount: the host
+ * refused, load failed, no `event.ready` within the load watchdog's
+ * timeout, or editor crashed) or `unloaded` (no mount: the host
  * evicted it to stay under `canvas.max_mounted` (AD-26), or an open was
  * refused because the canvas that had to make room could not be saved). The host allocates `mountSeq` on
  * every open and never reuses it, so a remount cannot accept the previous
@@ -73,6 +74,11 @@ import { readCanvasThemeTokens } from '@/lib/canvas-theme'
 import { logFrontendError } from '@/lib/log-api'
 import { basename } from '@/lib/path-basename'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
+import {
+  armLoadWatchdog,
+  CANVAS_LOAD_TIMEOUT_MS,
+  clearLoadWatchdog
+} from '@/stores/canvas-load-watchdog'
 import { useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -299,6 +305,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
    * goes stale and its bridge is disposed. */
   const releaseMount = (projectId: string): void => {
     nextLifecycleGeneration(projectId)
+    clearLoadWatchdog(projectId)
     bridges.get(projectId)?.bridge.dispose()
     bridges.delete(projectId)
     savesInFlight.delete(projectId)
@@ -327,9 +334,28 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
     code: CanvasErrorCode,
     message: string
   ): void => {
+    clearLoadWatchdog(projectId)
     bridges.get(projectId)?.bridge.dispose()
     bridges.delete(projectId)
     patchSession(projectId, { phase: { kind: 'failed', code, message, mountSeq } })
+  }
+
+  /** #1490: the mount's frame never posted `event.ready`, so without this
+   * the tab would show "Loading editor…" forever. */
+  const loadTimedOut = (projectId: string, mountSeq: number): void => {
+    const phase = get().sessions[projectId]?.phase
+    if (phase?.kind !== 'loading' || phase.mount.mountSeq !== mountSeq) return
+    logCanvas(
+      'warn',
+      'loadTimeout',
+      `canvas editor did not report ready for project ${projectId} mountSeq=${mountSeq} within ${CANVAS_LOAD_TIMEOUT_MS}ms`
+    )
+    failMount(
+      projectId,
+      mountSeq,
+      'EDITOR_LOAD_TIMEOUT',
+      'The canvas editor did not finish loading. Open the canvas again to retry.'
+    )
   }
 
   /** AD-31: the document is loaded before anything can be dirty or saved. A
@@ -724,6 +750,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
           }
         }
       }))
+      armLoadWatchdog(projectId, mount.mountSeq, loadTimedOut)
       showTab(docPath)
       return true
     },
@@ -812,6 +839,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
       const session = get().sessions[projectId]
       switch (event.method) {
         case 'event.ready':
+          clearLoadWatchdog(projectId, mountSeq)
           if (session?.phase.kind === 'loading') void completeMount(projectId, session.phase.mount)
           if (session?.phase.kind === 'ready') {
             // The frame reloaded itself and shows an empty editor: nothing is
@@ -942,6 +970,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => {
         ...CLEAN_PROJECTION,
         crash: remount
       })
+      armLoadWatchdog(projectId, mount.mountSeq, loadTimedOut)
       logCanvas(
         'warn',
         'remount',

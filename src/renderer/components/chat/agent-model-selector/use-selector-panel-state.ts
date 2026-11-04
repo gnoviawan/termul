@@ -1,7 +1,20 @@
+import type { PersistedComposerOptions } from '@shared/types/persistence.types'
 import { useEffect, useMemo, useState } from 'react'
+import type { SessionConfigOption } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
+import { useAcpStore } from '@/stores/acp-store'
+import {
+  liveOptionValues,
+  type OptionValues,
+  readComposerOptions
+} from '@/stores/acp-store/composer-options'
 import { shouldShowSessionUsage } from '../context-usage-utils'
-import type { FavoriteModel } from './favorite-models'
+import {
+  type FavoriteKey,
+  type FavoriteModel,
+  favoriteKey,
+  optionsSignature
+} from './favorite-models'
 import type { SelectorPanelProps } from './SelectorPanel'
 import {
   type AgentTab,
@@ -15,6 +28,7 @@ import {
   type ModelCatalog,
   modelMatches,
   resolveFavorites,
+  snapshotMatches,
   stableAgentTabs
 } from './selector-model'
 import type { SelectorModelStatus } from './selector-source'
@@ -28,6 +42,15 @@ export interface ModelHit {
   configId: string
   catalog: ModelCatalog | null
   model: CatalogModel
+}
+
+/** A row of the Favorites section: the starred key with its snapshot. */
+export interface FavoriteHit extends ModelHit {
+  favorite: FavoriteKey
+  /** What the snapshot reads as: its effort ("High"), plus what sets it apart from a twin ("High · Fast"). */
+  label: string | null
+  /** The composer runs this model with values that match the snapshot. */
+  active: boolean
 }
 
 /** What the panel's list shows. Each kind is one body; the panels draw them. */
@@ -46,7 +69,7 @@ export type PanelView =
       /** The composer's agent; `catalog` is null when it gives no model choice. */
       kind: 'effective'
       catalog: ModelCatalog | null
-      favorites: ModelHit[]
+      favorites: FavoriteHit[]
       /** The list is from the last session; this is why. */
       stale: SelectorModelStatus | null
     }
@@ -87,7 +110,18 @@ export interface SelectorPanelState {
   /** Another agent's tab with models: the footer says how to reach its options. */
   otherHintTab: AgentTab | null
   contextUsage: ReturnType<typeof shouldShowSessionUsage>
-  pick: (configId: string | null, catalog: ModelCatalog | null, value: string) => void
+  /** `values`: a favorite's option values, applied after the model. */
+  pick: (
+    configId: string | null,
+    catalog: ModelCatalog | null,
+    value: string,
+    values?: OptionValues
+  ) => void
+  /**
+   * A model row's star: the model with its values now. The composer's model
+   * snapshots the live values, another its saved ones, else none.
+   */
+  favoriteKeyFor: (configId: string, modelId: string) => FavoriteKey
   openAgent: (tab: AgentTab) => void
   showMore: () => void
   /** The busy confirmation's two answers. */
@@ -224,6 +258,39 @@ export function useSelectorPanelState(
   const known = useKnownCatalogs(sw.workspace.cwd, lookupIds)
   const knownById = new Map(lookupIds.map((id, i) => [id, known[i] ?? null]))
 
+  const { thoughtLevel, fastMode, genericOptions, modelValue } = props
+  const liveValues = useMemo(
+    () =>
+      liveOptionValues(
+        [thoughtLevel, fastMode, ...genericOptions].filter(
+          (option): option is SessionConfigOption => option != null
+        )
+      ),
+    [thoughtLevel, fastMode, genericOptions]
+  )
+  const saved = useSavedComposerOptions(
+    [effectiveId, viewId, ...lookupIds],
+    `${modelValue ?? ''}\n${optionsSignature(liveValues)}`
+  )
+  // The model the live values belong to: `modelValue` runs ahead of it while a pick is pending.
+  const confirmedModel =
+    typeof props.modelOption?.currentValue === 'string' ? props.modelOption.currentValue : null
+  const favoriteKeyFor = (configId: string, modelId: string): FavoriteKey =>
+    favoriteKey(
+      configId,
+      modelId,
+      configId === effectiveId && modelId === confirmedModel
+        ? liveValues
+        : saved[configId]?.modelValues?.[modelId]
+    )
+  const cachedOptions = useAcpStore((s) => s.agentOptionsCache)
+  const optionsOf = (configId: string): readonly SessionConfigOption[] =>
+    configId === effectiveId
+      ? [thoughtLevel, fastMode, ...genericOptions].filter(
+          (option): option is SessionConfigOption => option != null
+        )
+      : (cachedOptions?.[configId]?.configOptions ?? [])
+
   const setQuery = (next: string): void => {
     setQueryState(next)
     setConfirm(null)
@@ -243,19 +310,25 @@ export function useSelectorPanelState(
 
   // A model pick never closes the panel: effort levels and Fast depend on the
   // model (the agent sends new ones), so the user sets them next, here.
-  const pick = (configId: string | null, catalog: ModelCatalog | null, value: string): void => {
+  const pick = (
+    configId: string | null,
+    catalog: ModelCatalog | null,
+    value: string,
+    values?: OptionValues
+  ): void => {
     if (configId === effectiveId) {
-      props.onPickModel(value)
+      props.onPickModel(value, values)
       return
     }
     if (configId && configId === sw.currentConfigId) {
-      sw.pickCurrentModel(catalog, value)
+      sw.pickCurrentModel(catalog, value, values)
       return
     }
     if (!configId) return
-    const choice = {
+    const choice: SwitchModelPick = {
       modelId: value,
-      modelConfigId: catalog?.source === 'config' ? catalog.id : null
+      modelConfigId: catalog?.source === 'config' ? catalog.id : null,
+      values
     }
     if (sw.blocked) {
       setQueryState('')
@@ -354,14 +427,25 @@ export function useSelectorPanelState(
         catalog: effectiveCatalog,
         favorites:
           modelOption && showFavorites
-            ? resolveFavorites(favorites, catalogOf, (id) => {
-                // Uninstalled agents hide their favorites; reinstalling shows them again.
-                const tab = tabById.get(id)
-                return tab ? isInstalledTab(tab) : false
-              }).map(({ configId, model }) => ({
-                configId,
-                catalog: catalogOf(configId),
-                model
+            ? resolveFavorites(
+                favorites,
+                catalogOf,
+                (id) => {
+                  // Uninstalled agents hide their favorites; reinstalling shows them again.
+                  const tab = tabById.get(id)
+                  return tab ? isInstalledTab(tab) : false
+                },
+                optionsOf
+              ).map(({ model, label, addedAt: _addedAt, ...favorite }) => ({
+                configId: favorite.configId,
+                catalog: catalogOf(favorite.configId),
+                model,
+                favorite,
+                label,
+                active:
+                  favorite.configId === effectiveId &&
+                  favorite.modelId === modelValue &&
+                  snapshotMatches(favorite.options, liveValues)
               }))
             : [],
         stale: status?.stale && status.error ? status : null
@@ -431,6 +515,7 @@ export function useSelectorPanelState(
     otherHintTab,
     contextUsage: shouldShowSessionUsage(props.usage ?? null, props.messages ?? []),
     pick,
+    favoriteKeyFor,
     openAgent,
     showMore,
     waitForTurn,
@@ -441,4 +526,33 @@ export function useSelectorPanelState(
     notSetUp,
     hasUpdate
   }
+}
+
+/**
+ * The saved composer record of each listed agent, read again when `refresh`
+ * changes (the composer's model or values moved, so a record was written).
+ */
+function useSavedComposerOptions(
+  configIds: readonly (string | null)[],
+  refresh: string
+): Record<string, PersistedComposerOptions | null> {
+  const [saved, setSaved] = useState<Record<string, PersistedComposerOptions | null>>({})
+  const idsKey = [...new Set(configIds.filter((id): id is string => Boolean(id)))].join('\n')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `refresh` re-reads after a write
+  useEffect(() => {
+    let cancelled = false
+    for (const configId of idsKey.split('\n')) {
+      if (!configId) continue
+      // A failed read leaves that agent's rows without a snapshot.
+      void readComposerOptions(configId)
+        .then((record) => {
+          if (!cancelled) setSaved((prev) => ({ ...prev, [configId]: record }))
+        })
+        .catch(() => {})
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [idsKey, refresh])
+  return saved
 }

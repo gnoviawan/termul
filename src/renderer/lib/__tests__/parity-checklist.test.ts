@@ -3409,3 +3409,34 @@ describe('Web server setup plumbing parity (gh-1105)', () => {
     expect(fileExists('web-setup-gate.test.ts'), 'web-setup-gate.test.ts should exist').toBe(true)
   })
 })
+
+// Stop one subagent (subagent program PR C): desktop (Channel carrier) and web
+// share the `/ws` request `stop_subagent`, so both reach the one host service
+// `AcpManager::stop_subagent`, which sends `session/cancel` for the child.
+describe('Subagent stop parity', () => {
+  const SRC_TAURI = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const read = (...parts: string[]): string => readFileSync(join(SRC_TAURI, ...parts), 'utf-8')
+
+  it('the facade and the transport send one /ws request on every carrier', () => {
+    expect(readFileSync(join(LIB_DIR, 'acp-api.ts'), 'utf-8')).toMatch(
+      /getAcpTransport\(\)\.stopSubagent\(agentId, rootSessionId, subagentId\)/
+    )
+    expect(readFileSync(join(LIB_DIR, 'acp-transport', 'ws-transport.ts'), 'utf-8')).toMatch(
+      /this\.request<\{ outcome: SubagentStopOutcome \}>\('stop_subagent'/
+    )
+    expect(
+      readFileSync(join(LIB_DIR, 'acp-transport', 'desktop-transport.ts'), 'utf-8')
+    ).not.toMatch(/stopSubagent/)
+  })
+
+  it('the host routes the request to the shared service and classes it idempotent', () => {
+    expect(read('web', 'ws', 'dispatch.rs')).toMatch(
+      /"stop_subagent" => handle_stop_subagent\(id, &req\.payload, acp\)\.await/
+    )
+    expect(read('web', 'ws', 'subagents.rs')).toMatch(/acp\s*\.stop_subagent\(/)
+    expect(read('web', 'command_ledger', 'class.rs')).toContain(
+      '("stop_subagent", CommandClass::idempotent()),'
+    )
+    expect(read('acp', 'manager', 'command_loop.rs')).toMatch(/StopPlan::CancelSession\(child\)/)
+  })
+})

@@ -18,8 +18,8 @@
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Page } from 'playwright'
-import { type PerfProjectSeed, reloadRenderer, seedPerfProjects } from '../runner/agent-config.ts'
-import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts'
+import type { PerfProjectSeed } from '../runner/agent-config.ts'
+import type { ScenarioContext, ScenarioDef, ScenarioFlags } from '../runner/scenario-harness.ts'
 import { launchChatViaUI, openLauncher, sleep, spawnFloodTerminal } from '../runner/scenario-ui.ts'
 
 interface SwitchLatency {
@@ -79,10 +79,9 @@ async function loadProjectWorkspace(ctx: ScenarioContext, page: Page, cwd: strin
   }
 }
 
-async function drive(ctx: ScenarioContext): Promise<void> {
-  const { flags } = ctx
+/** The P perf projects; the harness seeds them before launch, first one active. */
+function projectSeeds(flags: ScenarioFlags): PerfProjectSeed[] {
   const projects = Math.max(2, Math.floor(Number(flags.projects ?? 3)))
-  const cycles = Math.max(1, Math.floor(Number(flags.cycles ?? 10)))
   const projectsRoot = process.env.TEMP ?? 'C:\\temp'
   const seeds: PerfProjectSeed[] = []
   for (let p = 0; p < projects; p++) {
@@ -91,15 +90,20 @@ async function drive(ctx: ScenarioContext): Promise<void> {
     mkdirSync(dir, { recursive: true })
     seeds.push({ id: `perf-project-${String(p).padStart(4, '0')}`, name, path: dir })
   }
+  return seeds
+}
 
-  // --- setup: seed P projects + live load in each --------------------------
+async function drive(ctx: ScenarioContext): Promise<void> {
+  const { flags } = ctx
+  const cycles = Math.max(1, Math.floor(Number(flags.cycles ?? 10)))
+  const seeds = projectSeeds(flags)
+
+  // --- setup: live load in each seeded project -----------------------------
   const setup = await ctx.beginPhase('setup-workspaces')
   const page = await ctx.handle.page()
-  // Persist the project list so the sidebar renders every entry, reload so
-  // the boot sequence activates projects[0], then visit each project in
-  // turn and attach live load (chat + terminal) so tabs exist per project.
-  await seedPerfProjects(ctx.handle, seeds, seeds[0].id)
-  await reloadRenderer(ctx.handle)
+  // The sidebar renders every seeded project and projects[0] boots active.
+  // Visit each project in turn and attach live load (chat + terminal) so
+  // tabs exist per project.
   await page
     .locator(`[aria-label^="Project: ${seeds[0].name}"]`)
     .first()
@@ -163,5 +167,6 @@ export const projectSwitchScenario: ScenarioDef = {
     'lines-per-sec': 50,
     'with-terminals': true
   },
+  preseedProjects: projectSeeds,
   drive
 }

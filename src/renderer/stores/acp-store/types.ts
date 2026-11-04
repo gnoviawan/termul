@@ -151,6 +151,13 @@ export interface ChatMessage {
    * device that loads it.
    */
   readOnlyGuard?: string
+  /**
+   * Set on the optimistic user bubble this device appends when its user sends.
+   * A replayed history turn or another device's live echo never has it, so
+   * per-device reactions to a send (the repeated-ask card) key on it rather
+   * than on `timestamp`, which replay and echoes stamp with `Date.now()`.
+   */
+  sentHere?: true
 }
 
 /**
@@ -382,6 +389,12 @@ export interface BugReportDraftInput {
   userDescription: string
   /** Host-collected diagnostics; `logTail` is already secret-masked. */
   diagnostics: BugReportContext
+}
+
+/** How an option set reaches the agent's saved composer record. */
+export interface OptionSetOptions {
+  /** False for a restore or reapply: only user picks update the saved record. Defaults to true. */
+  persist?: boolean
 }
 
 export interface AcpState {
@@ -767,7 +780,14 @@ export interface AcpState {
           configValues: Record<string, string>
         }
       | null
-      | undefined
+      | undefined,
+    opts?: {
+      /**
+       * A restore (a reopened chat's own selection), not a pick: the saved
+       * record is left alone, and a change made while it runs wins.
+       */
+      restore?: boolean
+    }
   ) => Promise<void>
   /** Set the agent the warm-session pool targets (reactive driver for retarget + refill gate). */
   setSelectedAgentConfigId: (configId: string | null) => void
@@ -961,10 +981,21 @@ export interface AcpState {
   setConfigOption: (
     sessionId: SessionId,
     configId: string,
-    valueId: string | boolean
+    valueId: string | boolean,
+    opts?: OptionSetOptions
   ) => Promise<void>
   setMode: (sessionId: SessionId, modeId: string) => Promise<void>
-  setModel: (sessionId: SessionId, modelId: string) => Promise<void>
+  setModel: (sessionId: SessionId, modelId: string, opts?: OptionSetOptions) => Promise<void>
+  /**
+   * Pick a model in the composer, then restore its option values: `values`
+   * (a favorite's snapshot), else the values saved for that model. A value the
+   * session does not advertise is skipped with a warn log.
+   */
+  pickModel: (
+    sessionId: SessionId,
+    modelId: string,
+    values?: Record<string, string>
+  ) => Promise<void>
 
   // Actions — permission
   respondPermission: (requestId: string, optionId?: string) => Promise<void>

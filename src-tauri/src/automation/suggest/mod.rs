@@ -22,6 +22,9 @@ use normalize::{jaccard, tokens, TokenSet};
 pub const WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// Prompts with fewer meaningful words are too vague to compare.
 const MIN_TOKENS: usize = 3;
+/// A match runs right after the send; a record of the same words older than
+/// this is an earlier ask, not the one being matched.
+const SEND_WINDOW_MS: i64 = 5 * 60 * 1000;
 /// Two prompts with at least this token overlap ask the same thing.
 const SIMILARITY: f64 = 0.6;
 const MIN_OCCURRENCES: usize = 3;
@@ -126,6 +129,24 @@ fn candidate(group: Group, tz: Tz) -> Option<Candidate> {
         },
         seed: group.seed,
     })
+}
+
+/// `prompts` as they stood before `text` was sent: the newest record of
+/// `text` itself (same words, truncated as history stores it) from the last
+/// five minutes is dropped, if the host persisted it already.
+pub fn before_send(mut prompts: Vec<Prompt>, text: &str, now_ms: i64) -> Vec<Prompt> {
+    let sent = tokens(&history::truncate(text.to_string()));
+    let newest = prompts
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.at_ms >= now_ms - SEND_WINDOW_MS && p.at_ms <= now_ms)
+        .filter(|(_, p)| tokens(&p.text) == sent)
+        .max_by_key(|(_, p)| p.at_ms)
+        .map(|(index, _)| index);
+    if let Some(index) = newest {
+        prompts.remove(index);
+    }
+    prompts
 }
 
 /// The candidate `text` asks again, if any: the one whose first prompt it

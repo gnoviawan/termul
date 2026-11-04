@@ -5,6 +5,10 @@ import { automationWith, detailWith } from '@/lib/test-utils/automation-fixtures
 
 const phone = vi.hoisted(() => ({ current: false }))
 const hosted = vi.hoisted(() => ({ automations: [] as Automation[] }))
+const writes = vi.hoisted(() => ({ admitted: true }))
+vi.mock('@/hooks/use-server-admits-remote-writes', () => ({
+  useServerAdmitsRemoteWrites: () => writes.admitted
+}))
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 vi.mock('@/hooks/use-mobile-web-shell', () => ({ useMobileWebShell: () => phone.current }))
@@ -27,6 +31,8 @@ vi.mock('@/lib/automation-api', async (importOriginal) => {
 })
 
 import { publishAutomationChange } from '@/lib/automation-api'
+import { expectWriteGated } from '@/lib/test-utils/write-gate'
+import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
 import { AutomationsPanel } from './AutomationsPanel'
 
 const first = automationWith({ id: 'auto-1' as AutomationId, name: 'Morning digest' })
@@ -39,6 +45,7 @@ function deleteSecondElsewhere(): void {
 
 beforeEach(() => {
   phone.current = false
+  writes.admitted = true
   hosted.automations = [first, second]
 })
 
@@ -65,5 +72,20 @@ describe('AutomationsPanel', () => {
     expect(await screen.findByRole('button', { name: /Morning digest/ })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Open PR summary' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Automations' })).toBeNull()
+  })
+
+  it.each([
+    ['desktop', false],
+    ['phone', true]
+  ])('on a read-only remote client (%s), the open automation offers no write that would fail', async (_, onPhone) => {
+    phone.current = onPhone
+    writes.admitted = false
+    render(<AutomationsPanel projectId="p1" isVisible />)
+    fireEvent.click(await screen.findByRole('button', { name: /Open PR summary/ }))
+    expect(await screen.findByRole('heading', { name: 'Open PR summary' })).toBeInTheDocument()
+
+    expectWriteGated(screen.getByRole('button', { name: 'Run now' }))
+    expectWriteGated(screen.getByRole('switch', { name: 'Enabled' }))
+    expect(screen.getByText(READ_ONLY_SERVER_REASON, { selector: 'p' })).toBeInTheDocument()
   })
 })

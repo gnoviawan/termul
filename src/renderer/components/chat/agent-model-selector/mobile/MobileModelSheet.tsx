@@ -32,6 +32,7 @@ import {
   type AgentTab,
   type CatalogModel,
   entryDisableReason,
+  favoriteRowName,
   isInstalledTab,
   type ModelCatalog,
   rowAccessibleName,
@@ -39,7 +40,7 @@ import {
 } from '../selector-model'
 import { editSections, restSections } from '../session-option-sections'
 import { useRejectedOptionValues } from '../use-option-values'
-import { useSelectorPanelState } from '../use-selector-panel-state'
+import { type FavoriteHit, useSelectorPanelState } from '../use-selector-panel-state'
 import { installRouteKey, PROVIDERS_ROUTE_KEY, ProviderList } from './MobileProviderList'
 import { ProviderSetupScreen, setupRouteKey } from './MobileProviderSetup'
 import {
@@ -146,7 +147,7 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
       void logFrontendError({
         level: 'warn',
         source: 'MobileModelSheet.favorites',
-        message: `Failed to ${on ? 'add' : 'remove'} favorite ${id.replace('\0', '/')}: ${String(error)}`
+        message: `Failed to ${on ? 'add' : 'remove'} favorite ${key.configId}/${key.modelId}: ${String(error)}`
       })
     })
   }
@@ -156,23 +157,26 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
     catalog: ModelCatalog | null,
     models: readonly CatalogModel[],
     selectedValue: string | undefined,
-    showAgent: boolean
+    showAgent: boolean,
+    /** A Favorites row: its own key and snapshot, picked with the model. */
+    fav?: FavoriteHit
   ): ReactNode =>
     models.map((model) => {
       const tab = tabOf(configId)
-      const key = configId ? { configId, modelId: model.value } : null
+      const key = fav?.favorite ?? (configId ? state.favoriteKeyFor(configId, model.value) : null)
       const agentName = showAgent && configId !== effectiveId ? tab?.name : undefined
+      const title = fav ? favoriteRowName(model.name, fav.label) : model.name.trim()
       return (
         <SheetRow
-          key={`${configId}\0${model.value}`}
+          key={fav ? `favorite\0${favoriteId(fav.favorite)}` : `${configId}\0${model.value}`}
           icon={showAgent && tab ? <TabGlyph tab={tab} /> : undefined}
-          title={model.name.trim()}
+          title={title}
           subtitle={model.description || undefined}
-          aria-label={agentName ? rowAccessibleName({ name: model.name, agentName }) : undefined}
+          aria-label={agentName ? rowAccessibleName({ name: title, agentName }) : undefined}
           accessory="check"
           selected={model.value === selectedValue}
           disabled={disabled}
-          onSelect={() => state.pick(configId, catalog, model.value)}
+          onSelect={() => state.pick(configId, catalog, model.value, fav?.favorite.options)}
           aside={
             key ? (
               <StarToggle
@@ -241,8 +245,9 @@ export function MobileModelSheet(props: MobileModelSheetProps): React.JSX.Elemen
                   favorite.configId,
                   favorite.catalog,
                   [favorite.model],
-                  favorite.configId === effectiveId ? modelValue : undefined,
-                  true
+                  favorite.active ? modelValue : undefined,
+                  true,
+                  favorite
                 )
               )}
             </SheetGroup>

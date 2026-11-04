@@ -10,6 +10,7 @@ vi.mock('@/stores/reload-chat', async (orig) => {
 })
 
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { subagentToolCall } from '@/lib/test-utils/subagent'
 import { useAcpStore } from '@/stores/acp-store'
 import { FRESH } from '@/stores/acp-store/testkit'
 import { useReloadConfirmStore } from '@/stores/reload-confirm-store'
@@ -69,13 +70,7 @@ describe('ReloadChatMenuItem', () => {
 
   it('asks to confirm first while background agents run', async () => {
     seed({}, [
-      {
-        toolCallId: 'bg-1',
-        status: 'completed',
-        seq: 2,
-        rawInput: { description: 'Audit', prompt: 'p' },
-        subagentLifecycle: { background: true, state: 'running' }
-      }
+      subagentToolCall({ background: true }, { toolCallId: 'bg-1', status: 'completed', seq: 2 })
     ])
     fireEvent.click(await openItem())
     expect(reloadMock).not.toHaveBeenCalled()

@@ -6,6 +6,7 @@
  * Tool input shapes vary per agent, so extraction is best-effort across a set of
  * common key names, with graceful fallbacks to the agent-provided title.
  */
+import type { Subagent, SubagentControl } from '@shared/types/subagent'
 import type { ToolCall, ToolCallContent, ToolKind } from '@/lib/acp-api'
 import { diffLineCounts } from './tool-call-format'
 
@@ -26,16 +27,6 @@ export interface ToolCallSummary {
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
-}
-
-function firstThreadId(obj: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = obj[key]
-    if (!Array.isArray(value)) continue
-    const hit = value.find((item) => typeof item === 'string' && item.trim().length > 0)
-    if (typeof hit === 'string') return hit.trim()
-  }
-  return undefined
 }
 
 export function firstString(
@@ -74,7 +65,6 @@ export const PATH_KEYS = [
 const COMMAND_KEYS = ['command', 'cmd', 'script', 'commandLine']
 const QUERY_KEYS = ['query', 'pattern', 'q', 'search', 'searchTerm', 'regex']
 const URL_KEYS = ['url', 'uri', 'href', 'link']
-const TASK_NAME_KEYS = ['description', 'task', 'name', 'title']
 
 /**
  * Keys that commonly carry readable text in a tool-call content item or raw
@@ -83,26 +73,19 @@ const TASK_NAME_KEYS = ['description', 'task', 'name', 'title']
  */
 export const READABLE_TEXT_KEYS = ['output', 'stdout', 'result', 'text', 'content', 'message']
 
+/** A subagent dispatch: the host attached its canonical record. */
+export function isSubagentCall(toolCall: ToolCall): toolCall is ToolCall & { subagent: Subagent } {
+  return toolCall.subagent !== undefined
+}
+
 /**
- * Detect a subagent/Task dispatch. ACP gives no dedicated kind for these and
- * discards the raw tool name, so such calls arrive looking like a `think` chunk.
- * We discriminate on `rawInput`: a subagent dispatch carries a `subagent_type`,
- * or both a `description` and a `prompt`. Genuine reasoning has neither.
+ * A call that steers existing subagents instead of starting one (Codex
+ * `wait`, `sendInput`, `closeAgent`, activity cards), as the host marks it.
  */
-export function isSubagentCall(toolCall: ToolCall): boolean {
-  const input = asRecord(toolCall.rawInput)
-  if (!input) return false
-  if (firstString(input, ['subagent_type', 'subagentType'])) return true
-  if (
-    firstString(input, ['senderThreadId', 'receiverThreadIds', 'agentThreadId', 'agentPath']) ||
-    firstThreadId(input, ['receiverThreadIds'])
-  ) {
-    return true
-  }
-  return (
-    firstString(input, ['description']) !== undefined &&
-    firstString(input, ['prompt']) !== undefined
-  )
+export function isSubagentControlCall(
+  toolCall: ToolCall
+): toolCall is ToolCall & { subagentControl: SubagentControl } {
+  return toolCall.subagentControl !== undefined
 }
 
 /** Final path segment (handles both `/` and `\\`). */
@@ -234,28 +217,21 @@ export function isToolCallRunning(toolCall: ToolCall): boolean {
 export type ParentTurn = 'active' | 'ended' | 'superseded'
 
 /**
- * Whether a subagent is still running. A known terminal agent state always
- * wins over the tool-call status, and a host state of `running` holds in any
- * turn: the host reports the real end later.
- *
- * Without a host state, a foreground dispatch runs only while its turn is
- * active: pending/in_progress or no status yet (the adapter sends the dispatch
- * before any status update). A cancelled or crashed turn can leave it pending
- * forever, so an ended turn never counts that as running. A background launch
- * completes its tool call at once and outlives its turn, but nothing reports
- * its end, so it counts as running until a newer user turn starts. A launch
- * whose completed receipt never arrived (the turn was stopped first) follows
- * the foreground rule.
+ * Whether a subagent is still running. Only a running or waiting record can
+ * be. A source that reports progress live holds `running` across turns until
+ * it reports the end. Otherwise the record mirrors the dispatch call, whose
+ * completion a cancelled or crashed turn can lose, so a foreground dispatch
+ * runs only while its turn is active. A background launch completes its call
+ * at once and outlives its turn, but nothing reports its end, so it counts as
+ * running until a newer user turn starts.
  */
 export function isSubagentRunning(toolCall: ToolCall, parentTurn: ParentTurn): boolean {
-  const lifecycle = toolCall.subagentLifecycle
-  if (lifecycle?.state !== undefined && lifecycle.state !== 'running') return false
-  if (toolCall.status === 'failed') return false
-  if (lifecycle?.state === 'running') return true
-  if (lifecycle?.background === true && toolCall.status === 'completed') {
-    return parentTurn !== 'superseded'
-  }
-  return parentTurn === 'active' && (isToolCallRunning(toolCall) || toolCall.status == null)
+  const record = toolCall.subagent
+  if (!record) return false
+  if (record.activity === 'idle' || record.activity === 'unknown') return false
+  if (record.caps.liveProgress) return true
+  if (record.background && toolCall.status === 'completed') return parentTurn !== 'superseded'
+  return parentTurn === 'active'
 }
 
 function runningVerbForKind(kind: ToolKind | undefined): string {
@@ -335,11 +311,13 @@ export function describeToolCall(toolCall: ToolCall): ToolCallSummary {
     ? runningVerbForKind(toolCall.kind)
     : verbForKind(toolCall.kind)
 
-  // Subagent/Task dispatch: render as the task name with no verb (the robot
-  // icon carries the meaning), rather than the misleading "Thinking" of `think`.
+  // Subagent dispatch: render as the task name with no verb (the robot icon
+  // carries the meaning), rather than the misleading "Thinking" of `think`.
   if (isSubagentCall(toolCall)) {
-    const name = firstString(input, TASK_NAME_KEYS) ?? title ?? 'Subagent task'
-    return { verb: '', primary: name, detail: null }
+    return { verb: '', primary: toolCall.subagent.title, detail: null }
+  }
+  if (isSubagentControlCall(toolCall)) {
+    return { verb: '', primary: title ?? 'Agent command', detail: null }
   }
 
   switch (toolCall.kind) {
@@ -409,60 +387,6 @@ type ActivityCategory =
   | 'mode'
   | 'other'
 
-/** `rawInput` flags of a subagent dispatch that asks for a background launch. */
-export const BACKGROUND_INPUT_KEYS = ['run_in_background', 'is_background', 'background']
-
-function isBackgroundAgent(call: ToolCall): boolean {
-  if (call.subagentLifecycle?.background === true) return true
-  const input = asRecord(call.rawInput)
-  if (!input) return false
-  return BACKGROUND_INPUT_KEYS.some((key) => input[key] === true)
-}
-
-/** A Codex collaboration tool call (`spawnAgent`, `wait`, `sendInput`, ...). */
-export function isCodexCollabCall(call: ToolCall): boolean {
-  const input = asRecord(call.rawInput)
-  return !!input && ('senderThreadId' in input || 'agentsStates' in input)
-}
-
-export function isCodexSpawnCall(call: ToolCall): boolean {
-  return (
-    isCodexCollabCall(call) &&
-    (call.title ?? '').replace(/[_\s-]/g, '').toLowerCase() === 'spawnagent'
-  )
-}
-
-/** A Codex subagent activity card (`Start subagent <name>`, ...). */
-export function codexActivity(call: ToolCall): { threadId: string; kind: string } | null {
-  const input = asRecord(call.rawInput)
-  const threadId = firstString(input, ['agentThreadId'])
-  const kind = firstString(input, ['activityKind'])
-  return threadId && kind ? { threadId, kind } : null
-}
-
-/** Thread ids a Codex collab call names: receivers plus `agentsStates` keys. */
-export function codexThreadIds(call: ToolCall): string[] {
-  const input = asRecord(call.rawInput)
-  if (!input) return []
-  const ids = new Set<string>()
-  if (Array.isArray(input.receiverThreadIds)) {
-    for (const id of input.receiverThreadIds) if (typeof id === 'string' && id) ids.add(id)
-  }
-  for (const id of Object.keys(asRecord(input.agentsStates) ?? {})) ids.add(id)
-  return [...ids]
-}
-
-/**
- * A call that controls an existing subagent instead of starting one: a Codex
- * collab call other than `spawnAgent` (`wait`, `sendInput`, `closeAgent`, ...),
- * or a Codex activity card (`Start subagent <name>`, ...), which reports an
- * agent that its spawn call already represents.
- */
-export function isSubagentControlCall(call: ToolCall): boolean {
-  if (codexActivity(call)) return true
-  return isCodexCollabCall(call) && !isCodexSpawnCall(call)
-}
-
 /**
  * Create-only edit: at least one diff item, and every diff created its file
  * (`oldText == null`). A mixed create+edit call, or a restored call with no
@@ -484,10 +408,7 @@ const ACTIVITY_CATEGORY_RULES: ReadonlyArray<{
   match: (call: ToolCall) => boolean
 }> = [
   { category: 'agent-control', match: (call) => isSubagentControlCall(call) },
-  {
-    category: 'background-agent',
-    match: (call) => isSubagentCall(call) && isBackgroundAgent(call)
-  },
+  { category: 'background-agent', match: (call) => call.subagent?.background === true },
   { category: 'agent', match: (call) => isSubagentCall(call) },
   { category: 'command', match: (call) => call.kind === 'execute' },
   { category: 'file-read', match: (call) => call.kind === 'read' },

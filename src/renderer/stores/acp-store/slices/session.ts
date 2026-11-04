@@ -96,7 +96,11 @@ import {
 } from '../live-turn'
 import { recordRegistryMcpServers } from '../registry-mcp-fingerprints'
 import { liveSiblingCount, reloadInFlight } from '../reload-guard'
-import { resolveReopenControls } from '../session-controls'
+import {
+  reopenedChatSelection,
+  resolveReopenControls,
+  restoreReopenedChatSelection
+} from '../session-controls'
 import {
   adoptHostOwnedAgent,
   beginSessionReopen,
@@ -120,6 +124,7 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import { cancelRunningSubagents } from '../subagent-lifecycle'
+import { withSubagentIngest } from '../subagent-transcript'
 import {
   type AcpState,
   ChatLaunchCancelledError,
@@ -159,6 +164,11 @@ function installableTranscript(
   return projectTranscript(payload, options)
 }
 
+/** Restored tool calls with their subagent records lifted, as live ingest does. */
+function restoredTimelineCalls(payload: SessionPayload): ToolCall[] {
+  return restoredToolCalls(payload).map(withSubagentIngest)
+}
+
 /**
  * The projection half of {@link installableTranscript}. A switch splice reads
  * its source sessions with this and records their watermarks only once the
@@ -173,7 +183,7 @@ function projectTranscript(
       // A tail window can cut through a switch turn — boundary rows only
       // carry meaning for the turn partition, never render standalone.
       messages: normalizeUserMessages(payload.messages).filter((m) => m.handoffBoundary !== true),
-      toolCalls: restoredToolCalls(payload),
+      toolCalls: restoredTimelineCalls(payload),
       switches: restoredSwitches(payload)
     }
   }
@@ -184,7 +194,7 @@ function projectTranscript(
       : normalizeUserMessages(visible)
   return {
     messages,
-    toolCalls: dropHiddenToolCalls(restoredToolCalls(payload), messages, hidden),
+    toolCalls: dropHiddenToolCalls(restoredTimelineCalls(payload), messages, hidden),
     switches: restoredSwitches(payload)
   }
 }
@@ -783,6 +793,22 @@ async function openHistorySessionInner(
     captureReopenControlBaseline(get().sessions, id),
     payload
   )
+  // Q2: the chat comes back on its own last model and values, not the
+  // agent-wide last pick (restoreReopenedChatSelection marks it so the
+  // agent-wide reapply skips it).
+  const ownSelection = reopenedChatSelection(controls)
+  // Awaited before the open settles: prompts typed meanwhile stay queued and
+  // flush on the chat's own model and values, not the agent's defaults.
+  const restoreOwnSelection = async (): Promise<void> => {
+    if (!ownSelection || !isCurrentSessionReopen(id, reopenGeneration)) return
+    await restoreReopenedChatSelection(get, id, ownSelection).catch((err: unknown) => {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.reopenSelection',
+        message: `Could not restore the last model on reopened session ${id}: ${err instanceof Error ? err.message : String(err)}`
+      })
+    })
+  }
 
   // Register the session record + local transcript BEFORE any agent work, so
   // the pane shows the conversation instantly; the (possibly ~30s cold-spawn)
@@ -1215,6 +1241,7 @@ async function openHistorySessionInner(
         }
       })
       scheduleReplayEnd(set, id, reopenGeneration)
+      await restoreOwnSelection()
     } catch (err) {
       // Deleted or superseded mid-load: do not restore transcript or surface a
       // resume error on the newer session incarnation.
@@ -1254,6 +1281,7 @@ async function openHistorySessionInner(
       mergeReopenOutcomeIfUnchanged(set, id, reopenGeneration, reopenBaseline, outcome)
       set((s) => ({ sessions: withSessionActive(s.sessions, id, keepRestoredError) }))
       scheduleReplayEnd(set, id, reopenGeneration)
+      await restoreOwnSelection()
       return
     } catch (err) {
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
@@ -1310,6 +1338,7 @@ async function openHistorySessionInner(
         }
       })
       scheduleReplayEnd(set, id, reopenGeneration)
+      await restoreOwnSelection()
     } catch (err) {
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()

@@ -52,6 +52,39 @@ export interface BackupInfo {
 // Maximum number of backups to keep
 const MAX_BACKUPS = 3
 
+/**
+ * Top-level userData entries the backup leaves out: its own destination, the
+ * rollback store, and data Termul downloads or rebuilds by itself (agent
+ * binaries, registry catalogs, browser profiles and captures). Agent binaries
+ * alone can be gigabytes in thousands of files, and copying them one file at a
+ * time held the update download at 0% before it started (#1431).
+ */
+const EXCLUDED_TOP_LEVEL_ENTRIES: ReadonlySet<string> = new Set([
+  'backups',
+  'versions',
+  'acp-registry-binaries',
+  'acp-catalog',
+  'mcp-catalog',
+  'browser-agent-profile',
+  'browser-sessions',
+  'browser-artifacts'
+])
+
+/**
+ * Data-lock sidecars (src-tauri/src/data_lock.rs) are held locked while Termul
+ * runs. They carry no data, and on Windows reading a locked file fails, which
+ * failed the backup.
+ */
+const DATA_LOCK_SIDECARS: ReadonlySet<string> = new Set([
+  '.termul.lock',
+  'store.json.lock',
+  'projects.json.lock'
+])
+
+function isDataLockSidecar(entry: DirEntry): boolean {
+  return entry.isFile && DATA_LOCK_SIDECARS.has(entry.name)
+}
+
 // Store file for metadata persistence
 const METADATA_STORE_FILE = 'backup-metadata.json'
 
@@ -271,6 +304,7 @@ async function copyEntry(
     skipped.push(relPath)
     return
   }
+  if (isDataLockSidecar(entry)) return
   if (entry.isDirectory) {
     await copyDirectory(src, dest, relPath, skipped)
     return
@@ -329,16 +363,11 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
     // Create backup directory
     await mkdir(backupPath, { recursive: true })
 
-    // Copy entire userData directory (except backups and versions folders)
     const entries = await readDir(userDataPath)
     const skipped: string[] = []
 
     for (const entry of entries) {
-      // Skip the backups directory itself, and the rollback versions store
-      // (both grow unbounded relative to a single backup and would otherwise
-      // be copied recursively into every new backup, making backups slow and
-      // fragile enough to silently block updates).
-      if (entry.name === 'backups' || entry.name === 'versions') {
+      if (EXCLUDED_TOP_LEVEL_ENTRIES.has(entry.name)) {
         continue
       }
 

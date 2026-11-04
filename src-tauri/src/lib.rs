@@ -567,6 +567,65 @@ fn main_webview_allows_navigation(url: &tauri::Url) -> bool {
     }
 }
 
+/// A navigation the main-webview guard lets through only for the canvas
+/// iframe (issue #1490).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanvasFrameNavigation {
+    /// `about:blank`: the iframe's initial document, before `src` is set.
+    InitialDocument,
+    /// `http://127.0.0.1:<port>/canvas/...` on the live bundle listener.
+    Bundle { port: u16 },
+}
+
+/// The canvas exception to [`main_webview_allows_navigation`] (issue #1490).
+///
+/// WKWebView (macOS) and WebKitGTK (Linux) ask the navigation hook about
+/// every frame, not just the main one, so the release guard cancelled the
+/// canvas `<iframe>` that `CanvasShell` points at the loopback bundle
+/// listener and the tab stayed blank. Only that listener is admitted: plain
+/// `http`, host exactly `127.0.0.1`, the live listener's port, and a
+/// `/canvas/` path (the listener serves nothing else; each path still needs
+/// its canvas token there). `canvas_port` is `None` while the listener is
+/// down or rebinding, which admits nothing on loopback. `about:blank` is the
+/// iframe's initial document and carries no content.
+fn canvas_frame_navigation(
+    url: &tauri::Url,
+    canvas_port: Option<u16>,
+) -> Option<CanvasFrameNavigation> {
+    match url.scheme() {
+        "about" => (url.path() == "blank").then_some(CanvasFrameNavigation::InitialDocument),
+        "http" => {
+            let port = canvas_port?;
+            let is_bundle = url.host_str() == Some("127.0.0.1")
+                && url.port_or_known_default() == Some(port)
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.path().starts_with("/canvas/");
+            is_bundle.then_some(CanvasFrameNavigation::Bundle { port })
+        }
+        _ => None,
+    }
+}
+
+/// The main webview's whole navigation decision: the #406 policy, then the
+/// canvas iframe exception.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainNavigation {
+    Allowed,
+    CanvasFrame(CanvasFrameNavigation),
+    Blocked,
+}
+
+fn main_webview_navigation(url: &tauri::Url, canvas_port: Option<u16>) -> MainNavigation {
+    if main_webview_allows_navigation(url) {
+        return MainNavigation::Allowed;
+    }
+    match canvas_frame_navigation(url, canvas_port) {
+        Some(frame) => MainNavigation::CanvasFrame(frame),
+        None => MainNavigation::Blocked,
+    }
+}
+
 fn set_zoom_factor<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     zoom_factor: f64,
@@ -1178,15 +1237,37 @@ pub fn run() {
     // a stray chat-link click (or any external anchor) can never tear down the
     // SPA (issue #406). Browser-tab webviews decide each hop, redirects
     // included, in the navigation hook they are built with: the host
-    // perimeter, then the agent's origin authorization.
+    // perimeter, then the agent's origin authorization. The hook also sees
+    // sub-frame loads on macOS/Linux, so the canvas iframe's bundle listener
+    // is admitted by port and path (issue #1490).
     builder = builder.plugin(
         tauri::plugin::Builder::<_, ()>::new("main-navigation-guard")
             .on_navigation(|webview, url| {
-                if webview.label() == "main" {
-                    let allow = main_webview_allows_navigation(url);
-                    if !allow {
-                        // Log only the scheme and host — a blocked URL's query,
-                        // fragment, or userinfo may carry secrets/PII (CWE-532).
+                if webview.label() != "main" {
+                    return true;
+                }
+                let canvas_port = webview
+                    .try_state::<Arc<crate::canvas::static_server::StaticServer>>()
+                    .and_then(|server| server.addr())
+                    .map(|addr| addr.port());
+                // Logs carry only the scheme, host and port — the URL's path,
+                // query, fragment, or userinfo may carry secrets/PII such as
+                // the canvas token (CWE-532).
+                match main_webview_navigation(url, canvas_port) {
+                    MainNavigation::Allowed => true,
+                    MainNavigation::CanvasFrame(CanvasFrameNavigation::InitialDocument) => {
+                        log::debug!(
+                            "[navigation] allowed canvas frame initial document on main webview: about:blank"
+                        );
+                        true
+                    }
+                    MainNavigation::CanvasFrame(CanvasFrameNavigation::Bundle { port }) => {
+                        log::debug!(
+                            "[navigation] allowed canvas frame load on main webview: http://127.0.0.1:{port}/canvas/<redacted>"
+                        );
+                        true
+                    }
+                    MainNavigation::Blocked => {
                         let scheme = url.scheme();
                         let host = url.host_str().unwrap_or("(unknown)");
                         log::warn!(
@@ -1194,10 +1275,8 @@ pub fn run() {
                             scheme,
                             host
                         );
+                        false
                     }
-                    allow
-                } else {
-                    true
                 }
             })
             .build(),

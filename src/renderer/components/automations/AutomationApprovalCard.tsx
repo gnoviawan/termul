@@ -3,6 +3,7 @@ import { useId, useState } from 'react'
 import { toast } from 'sonner'
 import { Hand } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { WriteGate } from '@/components/ui/write-gate'
 import { decideAutomationApproval } from '@/lib/automation-api'
 import { formatDateTime } from './automation-format'
 
@@ -12,6 +13,8 @@ interface AutomationApprovalCardProps {
   until: number
   /** The rendered message; `null` while the steps load, empty when it has none. */
   message: string | null
+  /** The server is read-only for this client: no decision can be sent. */
+  gated: boolean
   onDecided: () => void
 }
 
@@ -20,6 +23,7 @@ export function AutomationApprovalCard({
   node,
   until,
   message,
+  gated,
   onDecided
 }: AutomationApprovalCardProps): React.JSX.Element {
   const titleId = useId()
@@ -64,25 +68,27 @@ export function AutomationApprovalCard({
           Approve to let the run continue. Rejecting, or no decision before it expires, fails this
           step.
         </p>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="flex-1 sm:flex-none pointer-coarse:h-11"
-            disabled={pending !== null}
-            onClick={() => void decide(false)}
-          >
-            {pending === false ? 'Rejecting…' : 'Reject'}
-          </Button>
-          <Button
-            size="sm"
-            className="flex-1 sm:flex-none pointer-coarse:h-11"
-            disabled={pending !== null || message === null}
-            onClick={() => void decide(true)}
-          >
-            {pending === true ? 'Approving…' : 'Approve'}
-          </Button>
-        </div>
+        <WriteGate gated={gated}>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1 sm:flex-none pointer-coarse:h-11"
+              disabled={gated || pending !== null}
+              onClick={() => void decide(false)}
+            >
+              {pending === false ? 'Rejecting…' : 'Reject'}
+            </Button>
+            <Button
+              size="sm"
+              className="flex-1 sm:flex-none pointer-coarse:h-11"
+              disabled={gated || pending !== null || message === null}
+              onClick={() => void decide(true)}
+            >
+              {pending === true ? 'Approving…' : 'Approve'}
+            </Button>
+          </div>
+        </WriteGate>
       </footer>
     </section>
   )

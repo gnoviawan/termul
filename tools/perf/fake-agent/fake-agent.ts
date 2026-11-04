@@ -30,6 +30,8 @@
  * debugging) are also accepted.
  */
 
+import { tmpdir } from 'node:os'
+
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
 interface JsonRpcMessage {
@@ -388,12 +390,9 @@ function buildMockUpdate(
     flight.openTools = flight.openTools.filter((t) => t !== due)
     update.sessionUpdate = 'tool_call_update'
     update.toolCallId = due.toolCallId
-    update.update = {
-      toolCallId: due.toolCallId,
-      status: 'completed',
-      ...(due.kind === 'execute' && {
-        rawOutput: `ok\nexit 0\n${generateText(rng, 300, false)}`
-      })
+    update.status = 'completed'
+    if (due.kind === 'execute') {
+      update.rawOutput = `ok\nexit 0\n${generateText(rng, 300, false)}`
     }
   } else if (knobs.toolCallEvery > 0 && flight.eventIndex > 0 && flight.eventIndex % 7 === 0) {
     // 2) Open a new tool call every ~7 events (real session cadence).
@@ -402,8 +401,7 @@ function buildMockUpdate(
     const path = `src/${pick(rng, WORDS)}.ts`
     update.sessionUpdate = 'tool_call'
     update.toolCallId = toolCallId
-    update.toolCall = {
-      toolCallId,
+    Object.assign(update, {
       title: spec.title,
       kind: spec.kind,
       status: 'in_progress',
@@ -420,15 +418,13 @@ function buildMockUpdate(
         ]
       }),
       ...(spec.kind === 'execute' && { rawInput: { command: 'bun test', cwd: '.' } })
-    }
+    })
     flight.openTools.push({ toolCallId, kind: spec.kind, remaining: knobs.toolUpdateDelay })
   } else if (flight.eventIndex > 0 && flight.eventIndex % 41 === 0) {
     // 3) Usage update periodically (token counters in the header).
     update.sessionUpdate = 'usage_update'
-    update.usage = {
-      inputTokens: 12000 + Math.floor(rng() * 4000),
-      outputTokens: 2400 + Math.floor(rng() * 1200)
-    }
+    update.used = 12000 + Math.floor(rng() * 4000)
+    update.size = 200000
   } else if (rng() < knobs.thoughtFraction) {
     update.sessionUpdate = 'agent_thought_chunk'
     update.content = { type: 'text', text: generateText(rng, 200, false) }
@@ -439,9 +435,7 @@ function buildMockUpdate(
     update.content = { type: 'text', text: generateText(rng, 900, rng() < 0.6) }
   }
 
-  const fingerprint = fnv1a(
-    `${update.sessionUpdate}:${JSON.stringify(update.content ?? update.toolCall ?? update.update ?? update.usage ?? '')}`
-  )
+  const fingerprint = fnv1a(JSON.stringify(update))
   flight.eventIndex++
   return { update, fingerprint }
 }
@@ -472,41 +466,45 @@ export function buildUpdate(
     const toolCallId = `tool-${agent.sessionCounter}-${agent.toolCounter++}`
     update.sessionUpdate = 'tool_call'
     update.toolCallId = toolCallId
-    update.toolCall = {
-      title: `Read ${pick(rng, WORDS)}`,
-      kind: 'read',
-      status: 'in_progress',
-      rawInput: { path: `src/${pick(rng, WORDS)}.ts` }
-    }
+    update.title = `Read ${pick(rng, WORDS)}`
+    update.kind = 'read'
+    update.status = 'in_progress'
+    update.rawInput = { path: `src/${pick(rng, WORDS)}.ts` }
   } else if (knobs.planEvery > 0 && i > 0 && i % knobs.planEvery === 0) {
     update.sessionUpdate = 'plan'
-    update.plan = [
-      { status: 'completed', text: 'Gather metrics' },
-      { status: 'in_progress', text: 'Analyze frames' },
-      { status: 'pending', text: 'Report' }
+    update.entries = [
+      { content: 'Gather metrics', priority: 'high', status: 'completed' },
+      { content: 'Analyze frames', priority: 'medium', status: 'in_progress' },
+      { content: 'Report', priority: 'low', status: 'pending' }
     ]
   } else if (knobs.usageEvery > 0 && i > 0 && i % knobs.usageEvery === 0) {
     update.sessionUpdate = 'usage_update'
-    update.usage = {
-      inputTokens: 1000 + Math.floor(rng() * 500),
-      outputTokens: 500 + Math.floor(rng() * 300)
-    }
+    update.used = 1000 + Math.floor(rng() * 500)
+    update.size = 200000
   } else {
     update.sessionUpdate = 'agent_message_chunk'
     update.content = { type: 'text', text }
   }
   // Fingerprint the CONTENT (kind + payload) — the determinism contract is
   // over the emitted event sequence, not the wall-clock pacing.
-  const fingerprint = fnv1a(
-    `${update.sessionUpdate}:${JSON.stringify(update.content ?? update.toolCall ?? update.plan ?? update.usage ?? '')}`
-  )
+  const fingerprint = fnv1a(JSON.stringify(update))
   agent.inFlight!.eventIndex++
   return { update, fingerprint }
+}
+
+const stats = { emittedUpdates: 0, emittedTextChars: 0 }
+
+function startStatsWriter(statsDir: string): void {
+  const statsFile = `${statsDir}/agent-${process.pid}.json`
+  setInterval(() => void Bun.write(statsFile, JSON.stringify(stats)), 1000).unref()
 }
 
 function emitUpdate(agent: FakeAgent, sessionId: string): void {
   const { update, fingerprint } = buildUpdate(agent, sessionId)
   notify('session/update', { sessionId, update } as JsonValue)
+  stats.emittedUpdates++
+  const content = update.content as { text?: unknown } | undefined
+  if (typeof content?.text === 'string') stats.emittedTextChars += content.text.length
   if (agent.inFlight) {
     agent.inFlight.hash = fnv1a(agent.inFlight.hash + fingerprint)
     agent.inFlight.emitted++
@@ -769,6 +767,7 @@ export function selfTest(): void {
 const isMain = import.meta.main && !process.argv.includes('--self-test')
 if (isMain) {
   const agent = createAgent(readKnobs())
+  if (Bun.env.PERF_AGENT_STATS === '1') startStatsWriter(`${tmpdir()}/termul-perf-agent-stats`)
   readMessages(agent).catch((e: unknown) => {
     console.error('fake agent reader failed:', e)
     process.exit(1)

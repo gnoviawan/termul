@@ -11,6 +11,8 @@ import { AlertCircle, Hand, KeyRound, Loader2, Trash2 } from '@/components/icons
 import { Button } from '@/components/ui/button'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { Switch } from '@/components/ui/switch'
+import { WriteGate } from '@/components/ui/write-gate'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import {
   approveAutomation,
   deleteAutomation,
@@ -19,6 +21,7 @@ import {
   setAutomationEnabled
 } from '@/lib/automation-api'
 import { cn } from '@/lib/utils'
+import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
 import { AutomationDiagram } from './AutomationDiagram'
 import { AutomationSecretsDialog } from './AutomationSecretsDialog'
 import {
@@ -54,6 +57,7 @@ export function AutomationDetail({
   onChanged
 }: AutomationDetailProps): React.JSX.Element {
   const { automation, issues, policy } = detail
+  const gated = !useServerAdmitsRemoteWrites()
   const [busy, setBusy] = useState<Busy>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [secretsOpen, setSecretsOpen] = useState(false)
@@ -65,8 +69,8 @@ export function AutomationDetail({
   // The runs list is on screen: its failures count as seen.
   const unseen = automation.unseen_failures
   useEffect(() => {
-    if (isVisible && unseen > 0) void markAutomationSeen(automation.id)
-  }, [isVisible, unseen, automation.id])
+    if (!gated && isVisible && unseen > 0) void markAutomationSeen(automation.id)
+  }, [gated, isVisible, unseen, automation.id])
 
   const act = async <T,>(
     kind: Exclude<Busy, null>,
@@ -109,44 +113,50 @@ export function AutomationDetail({
           >
             {state.label}
           </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="ml-auto shrink-0 text-destructive pointer-coarse:h-11"
-            disabled={busy === 'delete'}
-            onClick={() => setConfirmDelete(true)}
-          >
-            <Trash2 size={14} />
-            Delete
-          </Button>
+          <WriteGate gated={gated} className="ml-auto shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto shrink-0 text-destructive pointer-coarse:h-11"
+              disabled={gated || busy === 'delete'}
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Trash2 size={14} />
+              Delete
+            </Button>
+          </WriteGate>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label
-            htmlFor={`automation-enabled-${automation.id}`}
-            className="flex min-h-9 items-center gap-2 pr-2 text-sm text-foreground pointer-coarse:min-h-11"
-          >
-            <Switch
-              id={`automation-enabled-${automation.id}`}
-              checked={automation.enabled}
-              disabled={busy === 'enable'}
-              onCheckedChange={(enabled) =>
-                void act('enable', 'Could not change the automation', () =>
-                  setAutomationEnabled(automation.id, enabled)
-                )
-              }
-            />
-            Enabled
-          </label>
-          <Button
-            variant="outline"
-            size="sm"
-            className="pointer-coarse:h-11"
-            disabled={busy === 'run'}
-            onClick={() => void runNow()}
-          >
-            {busy === 'run' ? <Loader2 size={14} className="animate-spin" /> : null}
-            Run now
-          </Button>
+          <WriteGate gated={gated}>
+            <label
+              htmlFor={`automation-enabled-${automation.id}`}
+              className="flex min-h-9 items-center gap-2 pr-2 text-sm text-foreground pointer-coarse:min-h-11"
+            >
+              <Switch
+                id={`automation-enabled-${automation.id}`}
+                checked={automation.enabled}
+                disabled={gated || busy === 'enable'}
+                onCheckedChange={(enabled) =>
+                  void act('enable', 'Could not change the automation', () =>
+                    setAutomationEnabled(automation.id, enabled)
+                  )
+                }
+              />
+              Enabled
+            </label>
+          </WriteGate>
+          <WriteGate gated={gated}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="pointer-coarse:h-11"
+              disabled={gated || busy === 'run'}
+              onClick={() => void runNow()}
+            >
+              {busy === 'run' ? <Loader2 size={14} className="animate-spin" /> : null}
+              Run now
+            </Button>
+          </WriteGate>
           <Button
             variant="outline"
             size="sm"
@@ -157,6 +167,7 @@ export function AutomationDetail({
             Secrets
           </Button>
         </div>
+        {gated && <p className="text-xs text-muted-foreground">{READ_ONLY_SERVER_REASON}</p>}
       </header>
 
       {waiting && (

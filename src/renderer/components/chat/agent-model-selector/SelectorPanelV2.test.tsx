@@ -2661,3 +2661,109 @@ describe('SelectorPanelV2 keyboard pick and search highlight', () => {
     expect(onPickModel).toHaveBeenCalledWith('opus')
   })
 })
+
+describe('SelectorPanelV2 favorites keep option snapshots', () => {
+  const at = (minute: number): string => new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString()
+  const favoritesList = (): HTMLElement[] =>
+    Array.from(
+      screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('[data-favorite-entry]')
+    )
+  const favoriteNames = (): string[] =>
+    favoritesList().map(
+      (row) => row.querySelector('[data-selector-row]')?.getAttribute('aria-label') ?? ''
+    )
+  const listStar = (name: string): HTMLElement => {
+    const row = Array.from(
+      screen.getByTestId('selector-list').querySelectorAll<HTMLElement>('[data-selector-row]')
+    ).find((el) => el.getAttribute('aria-label') === name && !el.closest('[data-favorite-entry]'))
+    return row?.parentElement?.querySelector('[data-testid="selector-favorite"]') as HTMLElement
+  }
+
+  it('starring the current model saves its live values and labels the favorite with its effort', async () => {
+    const store = storeOf([])
+    render(<Panel {...props({ favoritesStore: store })} />)
+
+    await act(async () => fireEvent.click(listStar('Claude Opus')))
+
+    expect(store.list()).toEqual([
+      {
+        configId: CURSOR.id,
+        modelId: 'opus',
+        options: { thought_level: 'high', context: '300k' },
+        addedAt: expect.any(String)
+      }
+    ])
+    expect(favoriteNames()).toEqual(['Claude Opus · High'])
+    expect(listStar('Claude Opus')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it("starring another model saves that model's last-used values", async () => {
+    stored.set(`agents/composer-options/${CURSOR.id}`, {
+      modelId: 'opus',
+      modelValues: { sonnet: { thought_level: 'low' } }
+    })
+    const store = storeOf([])
+    render(<Panel {...props({ favoritesStore: store })} />)
+    // The saved record loads after mount; the star then carries its values.
+    await act(async () => {})
+
+    await act(async () => fireEvent.click(listStar('Claude Sonnet')))
+
+    expect(store.list()).toEqual([
+      expect.objectContaining({ modelId: 'sonnet', options: { thought_level: 'low' } })
+    ])
+    expect(favoriteNames()).toEqual(['Claude Sonnet · Low'])
+  })
+
+  it("while a model pick is pending, its star saves that model's values, not the live ones", async () => {
+    stored.set(`agents/composer-options/${CURSOR.id}`, {
+      modelId: 'opus',
+      modelValues: { sonnet: { thought_level: 'low' } }
+    })
+    const store = storeOf([])
+    // The chat still runs Opus; Sonnet shows while its pick is in flight.
+    render(<Panel {...props({ favoritesStore: store, modelValue: 'sonnet' })} />)
+    await act(async () => {})
+
+    await act(async () => fireEvent.click(listStar('Claude Sonnet')))
+
+    expect(store.list()).toEqual([
+      expect.objectContaining({ modelId: 'sonnet', options: { thought_level: 'low' } })
+    ])
+  })
+
+  it('two snapshots of one model are two favorites, and picking one passes its values', () => {
+    const onPickModel = vi.fn()
+    const store = createFavoritesStore(
+      memoryFavoritesAdapter([
+        {
+          configId: CURSOR.id,
+          modelId: 'opus',
+          options: { thought_level: 'high' },
+          addedAt: at(0)
+        },
+        { configId: CURSOR.id, modelId: 'opus', options: { thought_level: 'low' }, addedAt: at(1) }
+      ])
+    )
+    render(<Panel {...props({ favoritesStore: store, onPickModel })} />)
+
+    expect(favoriteNames()).toEqual(['Claude Opus · High', 'Claude Opus · Low'])
+    // The chat runs Opus at high: only that snapshot reads as the current pick.
+    expect(
+      favoritesList().map((row) =>
+        row.querySelector('[data-selector-row]')?.getAttribute('aria-pressed')
+      )
+    ).toEqual(['true', 'false'])
+    fireEvent.click(favoritesList()[1]?.querySelector('[data-selector-row]') as HTMLElement)
+    expect(onPickModel).toHaveBeenCalledWith('opus', { thought_level: 'low' })
+  })
+
+  it('a favorite starred before snapshots shows the model alone and picks without values', () => {
+    const onPickModel = vi.fn()
+    render(<Panel {...props({ favoritesStore: storeOf([[CURSOR.id, 'sonnet']]), onPickModel })} />)
+
+    expect(favoriteNames()).toEqual(['Claude Sonnet'])
+    fireEvent.click(favoritesList()[0]?.querySelector('[data-selector-row]') as HTMLElement)
+    expect(onPickModel).toHaveBeenCalledWith('sonnet', undefined)
+  })
+})

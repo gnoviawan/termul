@@ -3,7 +3,6 @@ import { memo, useState } from 'react'
 import { ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import type { ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { CHAT_ROW_MIN_H } from './chat-layout'
@@ -12,7 +11,7 @@ import type { TimelineItem } from './chat-timeline'
 import { RowReveal } from './RowReveal'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
-import type { ParentTurn, ToolActivitySummary } from './tool-call-summary'
+import type { ToolActivitySummary } from './tool-call-summary'
 import type { EnterTracker } from './use-enter-tracker'
 
 /** One step of agent work between two narration messages. */
@@ -43,15 +42,12 @@ interface WorkRunGroupProps {
   items: WorkRunItem[]
   /** Categorized rollup on the trigger line — "Thought 2 times, ran 3 commands". */
   summary: ToolActivitySummary
-  /** Where the parent turn stands. */
-  parentTurn: ParentTurn
   /** True while this run owns the turn's last timeline item: the label shimmers and its trailing thought streams. */
   isLiveTail: boolean
   /** A call failed: the trigger reads red. */
   failed: boolean
   enter: EnterTracker
   filePathContext?: FilePathResolutionContext
-  onOpenSubagent: (toolCall: ToolCall) => void
 }
 
 /**
@@ -63,12 +59,10 @@ interface WorkRunGroupProps {
 function WorkRunGroupComponent({
   items,
   summary,
-  parentTurn,
   isLiveTail,
   failed,
   enter,
-  filePathContext,
-  onOpenSubagent
+  filePathContext
 }: WorkRunGroupProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const [open, setOpen] = useState(false)
@@ -124,12 +118,7 @@ function WorkRunGroupComponent({
                   animate={enter.animate(id)}
                   staggerIndex={enter.staggerIndex(id)}
                 >
-                  <ToolCallCard
-                    toolCall={item.tool}
-                    filePathContext={filePathContext}
-                    parentTurn={parentTurn}
-                    onOpenSubagent={onOpenSubagent}
-                  />
+                  <ToolCallCard toolCall={item.tool} filePathContext={filePathContext} />
                 </RowReveal>
               )
             })}
