@@ -748,8 +748,10 @@ from the plan store (logged `source: 'planRehydrate'`); the agent can still emit
 >   (`MAX_LIVE_TOOL_CALLS`): the oldest *finished* calls drop, in-flight ones are always
 >   retained, and every install path (reopen/resume/recovery) applies the same cap. A dropped
 >   edit, delete or move call leaves a path-only file-change summary (`restoredSummary`), and
->   summaries do not count toward the cap, so the Changed files list keeps every file the
->   session touched.
+>   summaries do not count toward the cap, so the Changed files list never loses a file
+>   that an edit, delete or move call touched. In a git repository the list still shows
+>   only those files that git reports uncommitted, and a file changed only by a shell
+>   command never enters it.
 > - **Tool raw output clamp** — a string `rawOutput` ≥ 32 KiB clamps to 32 KiB +
 >   a `[termul: tool output truncated]` marker on live update (logged once per toolCallId
 >   without content; non-string values pass through).
