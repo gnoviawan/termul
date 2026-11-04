@@ -1,13 +1,15 @@
 import type {
+  ApprovalDecision,
   Automation,
   AutomationNode,
+  AutomationRun,
   NodeKind,
   NodeSpec,
   RunStatus,
   StepStatus,
   Trigger
 } from '@shared/types/automation.types'
-import { Bot, Braces, GitBranch, Globe, XCircle } from '@/components/icons'
+import { Bot, Braces, GitBranch, Globe, Hand, XCircle } from '@/components/icons'
 
 /** What the list and the header show; needs-approval wins because it asks the user to act. */
 export type AutomationState = 'needs_approval' | 'disabled' | 'armed'
@@ -28,6 +30,8 @@ export const STATUS_PRESENTATION: Record<
   { label: string; className: string }
 > = {
   running: { label: 'Running', className: 'text-primary' },
+  // Only approval nodes park a run today.
+  waiting: { label: 'Waiting for approval', className: 'text-warning' },
   succeeded: { label: 'Succeeded', className: 'text-success' },
   failed: { label: 'Failed', className: 'text-destructive' },
   cancelled: { label: 'Cancelled', className: 'text-muted-foreground' },
@@ -39,7 +43,24 @@ export const NODE_KIND_PRESENTATION: Record<NodeKind, { label: string; Icon: typ
   agent: { label: 'Agent', Icon: Bot },
   transform: { label: 'Transform', Icon: Braces },
   condition: { label: 'Condition', Icon: GitBranch },
-  fail: { label: 'Fail', Icon: XCircle }
+  fail: { label: 'Fail', Icon: XCircle },
+  approval: { label: 'Approval', Icon: Hand }
+}
+
+export const DECISION_PRESENTATION: Record<ApprovalDecision, { label: string; className: string }> =
+  {
+    approved: { label: 'Approved', className: 'text-success' },
+    rejected: { label: 'Rejected', className: 'text-destructive' },
+    timed_out: { label: 'Timed out', className: 'text-destructive' },
+    cancelled: { label: 'Cancelled', className: 'text-muted-foreground' }
+  }
+
+/** The approval node a waiting run is parked at, from the run's own graph. */
+export function parkedApproval(run: AutomationRun): { node: AutomationNode; until: number } | null {
+  if (run.parked === null) return null
+  const { node_id, until } = run.parked
+  const node = run.graph.nodes.find((candidate) => candidate.id === node_id)
+  return node?.spec.kind === 'approval' ? { node, until } : null
 }
 
 const DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
@@ -111,6 +132,7 @@ export function nodeKeyDetail(spec: NodeSpec): string {
     case 'condition':
       return [spec.left, spec.op, spec.right].filter(Boolean).join(' ')
     case 'fail':
+    case 'approval':
       return spec.message
   }
 }

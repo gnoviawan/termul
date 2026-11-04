@@ -280,6 +280,18 @@ const typed: Unbranded<WireFixture> = {
     {
       op: 'set_isolation',
       isolation: 'worktree_per_run'
+    },
+    {
+      op: 'add_node',
+      node: {
+        id: 'gate',
+        label: 'Approve post',
+        spec: {
+          kind: 'approval',
+          message: 'Post {{nodes.shape.output.text}}?',
+          timeout_ms: 3600000
+        }
+      }
     }
   ],
   apply_ops_result: {
@@ -347,7 +359,8 @@ const typed: Unbranded<WireFixture> = {
       stop_reason: 'node post failed',
       summary: null,
       conversation_id: null,
-      worktree_id: 'wt-1'
+      worktree_id: 'wt-1',
+      parked: null
     },
     {
       id: 'run-2',
@@ -380,7 +393,45 @@ const typed: Unbranded<WireFixture> = {
       stop_reason: null,
       summary: null,
       conversation_id: null,
-      worktree_id: null
+      worktree_id: null,
+      parked: null
+    },
+    {
+      id: 'run-3',
+      automation_id: 'auto-1',
+      revision: 1,
+      graph: {
+        nodes: [
+          {
+            id: 'stop',
+            label: 'Stop',
+            spec: {
+              kind: 'fail',
+              message: '{{trigger.kind}}'
+            }
+          }
+        ],
+        edges: [
+          {
+            from: 'trigger',
+            port: 'out',
+            to: 'stop'
+          }
+        ]
+      },
+      trigger: 'manual',
+      scheduled_for: 1773046800000,
+      status: 'waiting',
+      started_at: 1773046800100,
+      finished_at: null,
+      stop_reason: null,
+      summary: null,
+      conversation_id: null,
+      worktree_id: null,
+      parked: {
+        node_id: 'gate',
+        until: 1773050400100
+      }
     }
   ],
   steps: [
@@ -416,6 +467,30 @@ const typed: Unbranded<WireFixture> = {
       error: null,
       started_at: null,
       finished_at: null
+    },
+    {
+      run_id: 'run-3',
+      node_id: 'gate',
+      status: 'waiting',
+      output: {
+        message: 'Post the digest?'
+      },
+      error: null,
+      started_at: 1773046800200,
+      finished_at: null
+    },
+    {
+      run_id: 'run-1',
+      node_id: 'gate',
+      status: 'failed',
+      output: {
+        message: 'Post the digest?',
+        decision: 'rejected',
+        decided_at: 1773046830000
+      },
+      error: 'rejected',
+      started_at: 1773046800200,
+      finished_at: 1773046830000
     }
   ],
   run_policy: {

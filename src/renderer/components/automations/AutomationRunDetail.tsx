@@ -9,11 +9,15 @@ import { ChevronDown, ChevronRight, Loader2 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
 import { cancelAutomationRun } from '@/lib/automation-api'
+import { parseApprovalOutput } from '@/lib/automation-wire'
 import { cn } from '@/lib/utils'
+import { AutomationApprovalCard } from './AutomationApprovalCard'
 import {
+  DECISION_PRESENTATION,
   formatDateTime,
   formatDuration,
   NODE_KIND_PRESENTATION,
+  parkedApproval,
   STATUS_PRESENTATION
 } from './automation-format'
 import { layoutGraph } from './automation-layout'
@@ -27,8 +31,14 @@ const TRIGGER_LABEL: Record<RunTrigger, string> = {
 
 const ORDER_METRICS = { nodeWidth: 1, nodeHeight: 1, gapX: 0, gapY: 0 }
 
-export function AutomationRunDetail({ run }: { run: AutomationRun }): React.JSX.Element {
-  const { data: steps, error } = useRunSteps(run)
+export function AutomationRunDetail({
+  run,
+  onChanged
+}: {
+  run: AutomationRun
+  onChanged: () => void
+}): React.JSX.Element {
+  const { data: steps, error, reload } = useRunSteps(run)
   const [cancelling, setCancelling] = useState(false)
   // Steps in graph order (by rank, then row position) of the run's own snapshot.
   const nodes = useMemo(() => {
@@ -40,6 +50,11 @@ export function AutomationRunDetail({ run }: { run: AutomationRun }): React.JSX.
       .flatMap((p) => byId.get(p.id) ?? [])
   }, [run.graph])
   const stepOf = new Map((steps ?? []).map((step) => [step.node_id, step]))
+  const approval = parkedApproval(run)
+  const approvalMessage = approval
+    ? (parseApprovalOutput(stepOf.get(approval.node.id)?.output)?.message ??
+      (steps === null ? null : ''))
+    : null
 
   const status = STATUS_PRESENTATION[run.status]
   const cancel = async (): Promise<void> => {
@@ -58,7 +73,7 @@ export function AutomationRunDetail({ run }: { run: AutomationRun }): React.JSX.
             ` · took ${formatDuration(run.finished_at - run.started_at)}`}
           {` · revision ${run.revision}`}
         </span>
-        {run.status === 'running' && (
+        {(run.status === 'running' || run.status === 'waiting') && (
           <Button
             variant="outline"
             size="sm"
@@ -73,6 +88,19 @@ export function AutomationRunDetail({ run }: { run: AutomationRun }): React.JSX.
       {run.stop_reason && <p className="text-xs text-destructive">{run.stop_reason}</p>}
       {run.summary && <p className="text-sm text-foreground">{run.summary}</p>}
       {error && <p className="text-xs text-destructive">Could not load the steps: {error}</p>}
+      {approval && (
+        <AutomationApprovalCard
+          key={`${run.id}:${approval.node.id}`}
+          runId={run.id}
+          node={approval.node}
+          until={approval.until}
+          message={approvalMessage}
+          onDecided={() => {
+            reload()
+            onChanged()
+          }}
+        />
+      )}
 
       <ol className="flex flex-col gap-2" aria-label="Steps">
         {nodes.map((node) => (
@@ -108,6 +136,8 @@ function StepRow({
       ? formatDuration(step.finished_at - step.started_at)
       : null
   const hasOutput = step !== null && step.output !== null && step.output !== undefined
+  const approval = kind === 'approval' && step ? parseApprovalOutput(step.output) : null
+  const decision = approval?.decision === undefined ? null : approval
 
   return (
     <li className="rounded-lg border border-border bg-card">
@@ -124,7 +154,15 @@ function StepRow({
           {status?.label ?? (loading ? '' : 'Not reached')}
         </span>
       </div>
-      {step?.error && (
+      {decision && (
+        <p className="border-t border-border px-3 py-2 text-xs tabular-nums">
+          <span className={DECISION_PRESENTATION[decision.decision].className}>
+            {DECISION_PRESENTATION[decision.decision].label}
+          </span>
+          <span className="text-muted-foreground"> · {formatDateTime(decision.decided_at)}</span>
+        </p>
+      )}
+      {step?.error && !decision && (
         <p className="border-t border-border px-3 py-2 font-mono text-xs break-words text-destructive">
           {step.error}
         </p>

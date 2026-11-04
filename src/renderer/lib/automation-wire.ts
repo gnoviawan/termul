@@ -8,6 +8,8 @@
 import type {
   AgentPolicy,
   ApplyOpsResult,
+  ApprovalDecision,
+  ApprovalStepOutput,
   Automation,
   AutomationChanged,
   AutomationDetail,
@@ -25,6 +27,7 @@ import type {
   LastRun,
   NodeId,
   NodeSpec,
+  Parked,
   RunId,
   RunPolicy,
   RunStatus,
@@ -79,8 +82,9 @@ function oneOf<T extends string>(value: unknown, path: string, allowed: readonly
   return value as T
 }
 
-const RUN_STATUSES = ['running', 'succeeded', 'failed', 'cancelled', 'skipped'] as const
-const STEP_STATUSES = ['running', 'succeeded', 'failed', 'skipped'] as const
+const RUN_STATUSES = ['running', 'waiting', 'succeeded', 'failed', 'cancelled', 'skipped'] as const
+const STEP_STATUSES = ['running', 'waiting', 'succeeded', 'failed', 'skipped'] as const
+const APPROVAL_DECISIONS = ['approved', 'rejected', 'timed_out', 'cancelled'] as const
 const RUN_TRIGGERS = ['scheduled', 'catch_up', 'manual'] as const
 const PORTS = ['out', 'error', 'true', 'false'] as const
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
@@ -159,8 +163,14 @@ function nodeSpec(v: unknown, p: string): NodeSpec {
       }
     case 'fail':
       return { kind: 'fail', message: str(o.message, `${p}.message`) }
+    case 'approval':
+      return {
+        kind: 'approval',
+        message: str(o.message, `${p}.message`),
+        timeout_ms: num(o.timeout_ms, `${p}.timeout_ms`)
+      }
     default:
-      return fail(`${p}.kind`, 'http|agent|transform|condition|fail')
+      return fail(`${p}.kind`, 'http|agent|transform|condition|fail|approval')
   }
 }
 
@@ -289,8 +299,18 @@ export function parseApplyOpsResult(v: unknown): ApplyOpsResult {
   }
 }
 
+function parked(v: unknown, p: string): Parked {
+  const o = obj(v, p)
+  return { node_id: nodeId(o.node_id, `${p}.node_id`), until: num(o.until, `${p}.until`) }
+}
+
 export function parseRun(v: unknown, p = 'run'): AutomationRun {
   const o = obj(v, p)
+  const status = oneOf<RunStatus>(o.status, `${p}.status`, RUN_STATUSES)
+  const parkedAt = nullable(o.parked, `${p}.parked`, parked)
+  if ((status === 'waiting') !== (parkedAt !== null)) {
+    fail(`${p}.parked`, status === 'waiting' ? 'a parked node' : 'null unless waiting')
+  }
   return {
     id: runId(o.id, `${p}.id`),
     automation_id: automationId(o.automation_id, `${p}.automation_id`),
@@ -298,13 +318,14 @@ export function parseRun(v: unknown, p = 'run'): AutomationRun {
     graph: graph(o.graph, `${p}.graph`),
     trigger: oneOf<RunTrigger>(o.trigger, `${p}.trigger`, RUN_TRIGGERS),
     scheduled_for: num(o.scheduled_for, `${p}.scheduled_for`),
-    status: oneOf<RunStatus>(o.status, `${p}.status`, RUN_STATUSES),
+    status,
     started_at: num(o.started_at, `${p}.started_at`),
     finished_at: nullable(o.finished_at, `${p}.finished_at`, num),
     stop_reason: nullable(o.stop_reason, `${p}.stop_reason`, str),
     summary: nullable(o.summary, `${p}.summary`, str),
     conversation_id: nullable(o.conversation_id, `${p}.conversation_id`, str),
-    worktree_id: nullable(o.worktree_id, `${p}.worktree_id`, str)
+    worktree_id: nullable(o.worktree_id, `${p}.worktree_id`, str),
+    parked: parkedAt
   }
 }
 
@@ -327,6 +348,31 @@ function step(v: unknown, p: string): AutomationStep {
 
 export function parseStepList(v: unknown): AutomationStep[] {
   return arr(v, 'steps', step)
+}
+
+/**
+ * An approval step's output, or `null` when it has another shape. Step output
+ * is free-form per node kind, so a mismatch hides the approval detail rather
+ * than failing the whole step list.
+ */
+export function parseApprovalOutput(v: unknown): ApprovalStepOutput | null {
+  try {
+    const o = obj(v, 'output')
+    const message = str(o.message, 'output.message')
+    if (o.decision === undefined) return { message }
+    return {
+      message,
+      decision: oneOf<ApprovalDecision>(o.decision, 'output.decision', APPROVAL_DECISIONS),
+      decided_at: num(o.decided_at, 'output.decided_at')
+    }
+  } catch (err) {
+    if (err instanceof WireShapeError) return null
+    throw err
+  }
+}
+
+export function parseDecided(v: unknown): boolean {
+  return bool(v, 'decided')
 }
 
 export interface SchedulePreview {

@@ -1,6 +1,13 @@
-import type { AutomationId, Issue, NodeId, RunId } from '@shared/types/automation.types'
+import type {
+  AutomationId,
+  AutomationRun,
+  Graph,
+  Issue,
+  NodeId,
+  RunId
+} from '@shared/types/automation.types'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   automationWith,
   detailWith,
@@ -13,6 +20,7 @@ import {
 const api = vi.hoisted(() => ({
   approveAutomation: vi.fn(),
   cancelAutomationRun: vi.fn(),
+  decideAutomationApproval: vi.fn(),
   deleteAutomation: vi.fn(),
   deleteAutomationSecret: vi.fn(),
   getAutomationRunSteps: vi.fn(),
@@ -24,7 +32,8 @@ const api = vi.hoisted(() => ({
   setAutomationSecret: vi.fn()
 }))
 vi.mock('@/lib/automation-api', () => api)
-vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
+const toast = vi.hoisted(() => ({ error: vi.fn() }))
+vi.mock('sonner', () => ({ toast }))
 
 import { AutomationDetail } from './AutomationDetail'
 import { AutomationDiagram } from './AutomationDiagram'
@@ -227,7 +236,7 @@ describe('AutomationDetail', () => {
 describe('AutomationRunDetail', () => {
   it('lists every node in graph order with its step status, duration, output and error', async () => {
     api.getAutomationRunSteps.mockResolvedValue(ok(fixtureSteps))
-    render(<AutomationRunDetail run={runWith()} />)
+    render(<AutomationRunDetail run={runWith()} onChanged={() => {}} />)
 
     const steps = within(screen.getByRole('list', { name: 'Steps' }))
     await waitFor(() => expect(steps.getByText('Succeeded')).toBeInTheDocument())
@@ -251,7 +260,7 @@ describe('AutomationRunDetail', () => {
       api.getAutomationRunSteps.mockImplementation(
         () => new Promise((resolve) => setTimeout(() => resolve(ok(fixtureSteps)), 3000))
       )
-      render(<AutomationRunDetail run={runWith({ status: 'running' })} />)
+      render(<AutomationRunDetail run={runWith({ status: 'running' })} onChanged={() => {}} />)
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3100)
@@ -330,5 +339,208 @@ describe('AutomationDiagram', () => {
       'aria-hidden',
       'true'
     )
+  })
+})
+
+describe('approval runs', () => {
+  const GATE = 'gate' as NodeId
+  const graph: Graph = {
+    nodes: [
+      {
+        id: GATE,
+        label: 'Ship it?',
+        spec: { kind: 'approval', message: 'Deploy {{trigger.kind}}?', timeout_ms: 3_600_000 }
+      },
+      {
+        id: 'notify' as NodeId,
+        label: 'Notify',
+        spec: { kind: 'transform', fields: [{ name: 'text', value: 'shipped' }] }
+      }
+    ],
+    edges: [
+      { from: 'trigger', port: 'out', to: GATE },
+      { from: GATE, port: 'out', to: 'notify' as NodeId }
+    ]
+  }
+  const NOW = new Date(2026, 10, 3, 9, 0).getTime()
+  const UNTIL = new Date(2026, 10, 3, 10, 0).getTime()
+  const waitingRun = (): AutomationRun =>
+    runWith({
+      id: 'run-7' as RunId,
+      graph,
+      status: 'waiting',
+      finished_at: null,
+      stop_reason: null,
+      parked: { node_id: GATE, until: UNTIL }
+    })
+  const waitingStep = {
+    run_id: 'run-7' as RunId,
+    node_id: GATE,
+    status: 'waiting' as const,
+    output: { message: 'Deploy manual?\nTwo files changed.' },
+    error: null,
+    started_at: NOW,
+    finished_at: null
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] })
+    api.getAutomationRunSteps.mockResolvedValue(ok([waitingStep]))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows the rendered message, the deadline and the decision buttons for a waiting run', async () => {
+    render(<AutomationRunDetail run={waitingRun()} onChanged={() => {}} />)
+
+    const card = within(await screen.findByRole('region', { name: 'Ship it?' }))
+    await waitFor(() =>
+      expect(card.getByText(/Deploy manual\?/)).toHaveTextContent(
+        'Deploy manual? Two files changed.',
+        { normalizeWhitespace: true }
+      )
+    )
+    expect(card.getByText('Expires Tue, Nov 3, 10:00 AM')).toBeInTheDocument()
+    expect(card.getByRole('button', { name: 'Approve' })).toBeEnabled()
+    expect(card.getByRole('button', { name: 'Reject' })).toBeEnabled()
+    expect(screen.getByRole('heading', { level: 3 })).toHaveTextContent('Waiting for approval')
+    expect(screen.getByRole('button', { name: 'Cancel run' })).toBeEnabled()
+    const steps = within(screen.getByRole('list', { name: 'Steps' }))
+    expect(steps.getAllByRole('listitem').map((row) => row.textContent)).toEqual([
+      'Ship it?Waiting for approvalOutput',
+      'NotifyNot reached'
+    ])
+  })
+
+  it('approves through the facade, holds the buttons while it is pending, then refreshes', async () => {
+    let reply: (value: unknown) => void = () => {}
+    api.decideAutomationApproval.mockReturnValue(
+      new Promise((resolve) => {
+        reply = resolve
+      })
+    )
+    const onChanged = vi.fn()
+    render(<AutomationRunDetail run={waitingRun()} onChanged={onChanged} />)
+    await waitFor(() => expect(api.getAutomationRunSteps).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+
+    expect(api.decideAutomationApproval).toHaveBeenCalledWith('run-7', 'gate', true)
+    expect(screen.getByRole('button', { name: 'Approving…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled()
+    await act(async () => reply(ok(true)))
+    expect(onChanged).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(api.getAutomationRunSteps).toHaveBeenCalledTimes(2))
+  })
+
+  it('rejects, and treats an already-decided reply as a refresh, not an error', async () => {
+    api.decideAutomationApproval.mockResolvedValue(ok(false))
+    const onChanged = vi.fn()
+    render(<AutomationRunDetail run={waitingRun()} onChanged={onChanged} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+    })
+
+    expect(api.decideAutomationApproval).toHaveBeenCalledWith('run-7', 'gate', false)
+    expect(onChanged).toHaveBeenCalledTimes(1)
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('re-enables the buttons and reports a failed decision', async () => {
+    api.decideAutomationApproval.mockResolvedValue({
+      success: false,
+      error: 'host offline',
+      code: 'NETWORK'
+    })
+    const onChanged = vi.fn()
+    render(<AutomationRunDetail run={waitingRun()} onChanged={onChanged} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    })
+
+    expect(toast.error).toHaveBeenCalledWith('Could not record the decision: host offline')
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled()
+    expect(onChanged).not.toHaveBeenCalled()
+  })
+
+  it('shows no decision card once the run has moved on, and the decision on its step', async () => {
+    api.getAutomationRunSteps.mockResolvedValue(
+      ok([
+        {
+          ...waitingStep,
+          status: 'failed',
+          output: { ...waitingStep.output, decision: 'rejected', decided_at: UNTIL },
+          error: 'rejected',
+          finished_at: UNTIL
+        }
+      ])
+    )
+    const settled: AutomationRun = {
+      ...waitingRun(),
+      status: 'failed',
+      finished_at: UNTIL,
+      parked: null
+    }
+    render(<AutomationRunDetail run={settled} onChanged={() => {}} />)
+
+    const steps = within(screen.getByRole('list', { name: 'Steps' }))
+    await waitFor(() => expect(steps.getByText('Rejected')).toHaveClass('text-destructive'))
+    expect(steps.getAllByRole('listitem')[0]).toHaveTextContent(
+      'Ship it?1 hFailedRejected · Tue, Nov 3, 10:00 AMOutput'
+    )
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Ship it?' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Cancel run' })).toBeNull()
+  })
+
+  it('points the automation at its waiting run, and lists it as waiting', () => {
+    const onOpenRun = vi.fn()
+    render(
+      <AutomationDetail
+        detail={detailWith()}
+        runs={[waitingRun(), runWith()]}
+        narrow={false}
+        isVisible
+        onOpenRun={onOpenRun}
+        onDeleted={() => {}}
+        onChanged={() => {}}
+      />
+    )
+
+    expect(screen.getByText('A run is waiting for your approval.')).toBeInTheDocument()
+    expect(screen.getByText('Waiting for approval')).toHaveClass('text-warning')
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }))
+    expect(onOpenRun).toHaveBeenCalledWith('run-7')
+  })
+
+  it('shows no waiting banner when no run is waiting', () => {
+    render(
+      <AutomationDetail
+        detail={detailWith()}
+        runs={[runWith()]}
+        narrow={false}
+        isVisible
+        onOpenRun={() => {}}
+        onDeleted={() => {}}
+        onChanged={() => {}}
+      />
+    )
+
+    expect(screen.getByText('Failed')).toBeInTheDocument()
+    expect(screen.queryByText('A run is waiting for your approval.')).toBeNull()
+  })
+
+  it('draws an approval node with its message as the key detail', () => {
+    render(<AutomationDiagram graph={graph} trigger={{ kind: 'manual' }} />)
+
+    const steps = within(screen.getByRole('list', { name: 'Automation steps' }))
+    expect(steps.getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'Trigger: Run manually. Next: Ship it?',
+      'Ship it?, Approval: Deploy {{trigger.kind}}?. Next: Notify',
+      'Notify, Transform: text'
+    ])
   })
 })
