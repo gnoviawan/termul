@@ -94,8 +94,15 @@ fn activity<W: Wire>(wire: &W) -> serde_json::Map<String, Value> {
     sessions
 }
 
+/// The record of a session with no persisted record, hence no project.
 fn record(busy: bool, needs_you: bool, unread: bool, turn_end: Value) -> Value {
-    json!({ "busy": busy, "needsYou": needs_you, "unread": unread, "turnEnd": turn_end })
+    json!({
+        "busy": busy,
+        "needsYou": needs_you,
+        "unread": unread,
+        "turnEnd": turn_end,
+        "projectId": null,
+    })
 }
 
 fn log_epoch(host: &Host) -> String {
@@ -425,4 +432,51 @@ async fn a_turn_end_after_the_delete_does_not_bring_the_chat_back() {
         host.relay.chat_activity().snapshot(),
         std::collections::BTreeMap::new()
     );
+}
+
+/// A surface counts a chat it never opened under the chat's project: the
+/// record names the project the session was created in.
+#[tokio::test(start_paused = true)]
+async fn the_record_names_the_project_the_session_was_created_in() {
+    let root = std::env::temp_dir().join(format!("termul-chat-activity-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    persistence
+        .register_session(crate::acp::SessionRegistration {
+            session_id: SESSION.to_string(),
+            runtime_agent_id: Some(AGENT.to_string()),
+            project_id: Some("p-1".to_string()),
+            cwd: root.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+    let acp = Arc::new(AcpManager::new(vec![relay.clone()]));
+    let host = Host::from_parts(relay, acp, HistoryMode::Server);
+    let mut watcher = host.connect();
+    watcher.authenticate().await;
+    watch_activity(&mut watcher.peer).await;
+
+    emit(
+        &host,
+        Some(SESSION),
+        "acp:agent_working",
+        json!({ "agentId": AGENT, "sessionId": SESSION, "working": true }),
+    );
+    watcher.peer.read_for(Duration::from_millis(50)).await;
+    assert_eq!(
+        activity(&watcher.peer).get(SESSION),
+        Some(&json!({
+            "busy": true,
+            "needsYou": false,
+            "unread": false,
+            "turnEnd": null,
+            "projectId": "p-1",
+        }))
+    );
+    persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }

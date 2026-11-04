@@ -42,11 +42,11 @@
 //!   logEpoch}`, the marker of one session as it stands after a
 //!   `mark_chat_read`.
 //! - `chat_activity`: state = `{sessions: {sessionId: {busy, needsYou,
-//!   unread, turnEnd}}}`, every chat with something to show or a turn end to
-//!   remember ([`crate::web::chat_activity`]); a delta is `{sessionId, busy,
-//!   needsYou, unread, turnEnd}`, one session's record as it stands. A record
-//!   with every flag false and no `turnEnd` means the chat has nothing to
-//!   show (it left the state).
+//!   unread, turnEnd, projectId}}}`, every chat with something to show or a
+//!   turn end to remember ([`crate::web::chat_activity`]); a delta is
+//!   `{sessionId, busy, needsYou, unread, turnEnd, projectId}`, one session's
+//!   record as it stands. A record with every flag false and no `turnEnd`
+//!   means the chat has nothing to show (it left the state).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

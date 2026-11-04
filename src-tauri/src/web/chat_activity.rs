@@ -13,6 +13,9 @@
 //! - `unread`: the newest turn end this host saw is past the shared last-read
 //!   marker ([`crate::web::chat_reads`]). `turnEnd` is that turn end, so the
 //!   surface showing the chat can mark it read.
+//! - `projectId`: the project the session was created in (its persisted
+//!   record), so a surface can count a chat it never opened under its
+//!   project. Absent for a session with no persisted record.
 //!
 //! Records live in memory, like the read markers they are compared with.
 
@@ -43,6 +46,7 @@ pub struct ChatActivity {
     pub needs_you: bool,
     pub unread: bool,
     pub turn_end: Option<TurnEnd>,
+    pub project_id: Option<String>,
 }
 
 impl ChatActivity {
@@ -53,7 +57,8 @@ impl ChatActivity {
         !self.busy && !self.needs_you && !self.unread
     }
 
-    /// The record inside the watch state: `{busy, needsYou, unread, turnEnd}`.
+    /// The record inside the watch state: `{busy, needsYou, unread, turnEnd,
+    /// projectId}`.
     #[must_use]
     pub fn to_record(&self) -> Value {
         json!({
@@ -64,6 +69,7 @@ impl ChatActivity {
                 "seq": end.seq,
                 "logEpoch": end.log_epoch,
             })),
+            "projectId": self.project_id,
         })
     }
 
@@ -141,6 +147,8 @@ pub struct ActivityInputs {
     /// placeholder epoch before persistence registers the session, and the
     /// seqs carry over to the persisted epoch it adopts.
     pub log_epoch: Option<String>,
+    /// The project in the session's persisted record.
+    pub project_id: Option<String>,
 }
 
 /// The facts the relay saw for one chat, and the record last published.
@@ -219,6 +227,7 @@ impl Entry {
                 .as_ref()
                 .is_some_and(|end| !end.read_by(inputs.read.as_ref())),
             turn_end,
+            project_id: inputs.project_id,
         }
     }
 }

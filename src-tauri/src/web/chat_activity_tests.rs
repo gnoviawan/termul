@@ -27,6 +27,7 @@ fn inputs(needs_you: bool, read: Option<ReadMark>) -> ActivityInputs {
         needs_you,
         read,
         log_epoch: Some("e1".to_string()),
+        project_id: None,
     }
 }
 
@@ -52,6 +53,7 @@ fn a_turn_is_busy_until_it_ends_unread() {
             needs_you: false,
             unread: true,
             turn_end: Some(end(7)),
+            project_id: None,
         }
     );
 }
@@ -211,12 +213,29 @@ fn needs_you_follows_the_pending_prompts() {
 }
 
 #[test]
+fn the_record_names_the_project_once_the_session_has_one() {
+    let table = ChatActivities::default();
+    table.observe(SID, 1, opened(), no_inputs);
+    let in_project = || ActivityInputs {
+        project_id: Some("p1".to_string()),
+        ..ActivityInputs::default()
+    };
+    let registered = table
+        .observe(SID, 2, ActivityEvent::Prompt { agent_id: None }, in_project)
+        .expect("the project is news to the watchers");
+    assert_eq!(registered.project_id.as_deref(), Some("p1"));
+    assert!(registered.busy);
+    assert_eq!(table.refresh(SID, in_project), None);
+}
+
+#[test]
 fn the_wire_record_names_every_field() {
     let activity = ChatActivity {
         busy: false,
         needs_you: true,
         unread: true,
         turn_end: Some(end(3)),
+        project_id: Some("p1".to_string()),
     };
     assert_eq!(
         activity.to_wire(SID),
@@ -226,9 +245,14 @@ fn the_wire_record_names_every_field() {
             "needsYou": true,
             "unread": true,
             "turnEnd": { "seq": 3, "logEpoch": "e1" },
+            "projectId": "p1",
         })
     );
     assert_eq!(ChatActivity::default().to_record()["turnEnd"], json!(null));
+    assert_eq!(
+        ChatActivity::default().to_record()["projectId"],
+        json!(null)
+    );
 }
 
 #[test]

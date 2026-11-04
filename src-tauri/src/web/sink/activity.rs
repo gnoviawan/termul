@@ -3,9 +3,10 @@
 //! marker move re-derives the session's record, and a changed record goes to
 //! every `chat_activity` watcher.
 //!
-//! Lock order: the activity table is taken before the ticket tables and the
-//! read markers it reads, and after the watch hub (whose state closure reads
-//! it). Nothing here holds the table while calling into the hub.
+//! Lock order: the activity table is taken before the ticket tables, the
+//! read markers and the persisted session catalog it reads, and after the
+//! watch hub (whose state closure reads it). Nothing here holds the table
+//! while calling into the hub.
 
 use serde_json::Value;
 
@@ -76,7 +77,8 @@ impl WsRelaySink {
         self.forget_activity(sid);
     }
 
-    /// Whether `sid` has a pending prompt, its read marker and its log epoch.
+    /// Whether `sid` has a pending prompt, its read marker, its log epoch and
+    /// its project.
     fn activity_inputs(&self, sid: &str) -> ActivityInputs {
         let permission = self
             .rendezvous()
@@ -86,10 +88,16 @@ impl WsRelaySink {
                 .is_some_and(|rendezvous| !rendezvous.pending_requests(sid).is_empty())
         };
         let elicitation = || !self.elicitations.pending_requests(sid).is_empty();
+        let project_id = self
+            .persistence
+            .as_ref()
+            .and_then(|persistence| persistence.metadata(sid).ok())
+            .and_then(|metadata| metadata.project_id);
         ActivityInputs {
             needs_you: permission || question() || elicitation(),
             read: self.chat_reads.get(sid),
             log_epoch: self.log_head(sid).map(|head| head.log_epoch),
+            project_id,
         }
     }
 
