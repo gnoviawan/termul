@@ -153,19 +153,19 @@ export interface ChatChangedFiles {
   files: ChangedFile[]
   /** The base the paths were resolved against; row subtitles are relative to it. */
   rowBase: string
-  /** `git`: uncommitted files of the checkout. `session`: files this session's tool calls touched (no git repository). */
+  /** `git`: files this session touched that are still uncommitted. `session`: every file this session touched (no git repository). */
   source: 'git' | 'session'
   totalAdded: number
   totalRemoved: number
 }
 
 /**
- * The files a chat changed. In a git repository: the uncommitted files of the
- * checkout at `cwd` (staged, unstaged and untracked, against HEAD) with their
- * git line counts, so a committed, discarded or deleted file drops out and a
- * clean tree lists nothing. Outside a git repository: the files touched by
- * ACP tool calls (edit/delete/move) in the session, one row per file with
- * summed +N −N counts.
+ * The files a chat changed: the files its ACP tool calls touched
+ * (edit/delete/move). In a git repository only those still uncommitted in the
+ * checkout at `cwd` list, with git's status and line counts, so a committed,
+ * discarded or deleted file drops out and files changed outside the session
+ * never show. Outside a git repository every touched file lists, one row per
+ * file with summed +N −N counts.
  */
 export function useChatChangedFiles(
   cwd: string,
@@ -173,13 +173,17 @@ export function useChatChangedFiles(
   turnActive: boolean
 ): ChatChangedFiles {
   const git = useGitChangedFiles(cwd, toolCalls, turnActive)
+  const sessionFiles = useMemo(() => extractChangedFiles(toolCalls, cwd), [toolCalls, cwd])
   return useMemo(() => {
+    const sessionPaths = new Set(sessionFiles.map((file) => file.path))
     const files =
       git.state === 'unavailable'
-        ? extractChangedFiles(toolCalls, cwd)
+        ? sessionFiles
         : git.state === 'loading'
           ? []
-          : git.files.map((file) => ({ ...file, path: resolveFilePath(file.path, git.root) }))
+          : git.files
+              .map((file) => ({ ...file, path: resolveFilePath(file.path, git.root) }))
+              .filter((file) => sessionPaths.has(file.path))
     return {
       files,
       rowBase: git.state === 'ready' ? git.root : cwd,
@@ -187,5 +191,5 @@ export function useChatChangedFiles(
       totalAdded: files.reduce((sum, f) => sum + f.added, 0),
       totalRemoved: files.reduce((sum, f) => sum + f.removed, 0)
     }
-  }, [git, toolCalls, cwd])
+  }, [git, sessionFiles, cwd])
 }
