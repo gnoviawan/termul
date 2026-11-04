@@ -151,7 +151,7 @@ async fn an_unsubscribed_watcher_follows_the_turn<W: Wire>() {
     watcher.read_for(Duration::from_millis(50)).await;
     assert_eq!(
         activity(&watcher).get(SESSION),
-        Some(&record(false, false, false, turn_end.clone())),
+        None,
         "reading the turn end clears the dot on every watcher"
     );
 
@@ -160,8 +160,8 @@ async fn an_unsubscribed_watcher_follows_the_turn<W: Wire>() {
     watch_activity(&mut late).await;
     assert_eq!(
         activity(&late).get(SESSION),
-        Some(&record(false, false, false, turn_end)),
-        "a new watcher gets the record in its first state"
+        None,
+        "a read chat is not in a new watcher's first state"
     );
     let reply = prompter.peer.wait_reply("p1").await;
     assert_eq!(reply["payload"], json!(StopReason::EndTurn), "{reply}");
@@ -341,4 +341,37 @@ async fn a_closed_session_stops_working_and_a_deleted_one_leaves_the_list() {
     host.relay.forget_session(SESSION).await;
     watcher.peer.read_for(Duration::from_millis(50)).await;
     assert_eq!(activity(&watcher.peer).get(SESSION), None);
+}
+
+/// An agent that reports a turn end after its chat was deleted does not bring
+/// the chat back into every list.
+#[tokio::test(start_paused = true)]
+async fn a_turn_end_after_the_delete_does_not_bring_the_chat_back() {
+    let host = Host::new(|_, _| {});
+    let mut watcher = host.connect();
+    watcher.authenticate().await;
+    watch_activity(&mut watcher.peer).await;
+    let turn_end = || {
+        emit(
+            &host,
+            Some(SESSION),
+            "acp:prompt_complete",
+            json!({ "agentId": AGENT, "sessionId": SESSION, "stopReason": "end_turn" }),
+        );
+    };
+
+    turn_end();
+    watcher.peer.read_for(Duration::from_millis(50)).await;
+    assert_eq!(
+        activity(&watcher.peer).get(SESSION).map(|r| &r["unread"]),
+        Some(&json!(true))
+    );
+    host.relay.forget_session(SESSION).await;
+    turn_end();
+    watcher.peer.read_for(Duration::from_millis(50)).await;
+    assert_eq!(activity(&watcher.peer).get(SESSION), None);
+    assert_eq!(
+        host.relay.chat_activity().snapshot(),
+        std::collections::BTreeMap::new()
+    );
 }

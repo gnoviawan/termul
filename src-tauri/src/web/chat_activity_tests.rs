@@ -70,16 +70,24 @@ fn a_read_marker_at_the_turn_end_clears_unread_and_an_older_one_does_not() {
         .refresh(SID, || inputs(false, Some(mark(7))))
         .expect("changed");
     assert!(!read.unread);
+    assert!(table.snapshot().is_empty(), "a read chat leaves the state");
+    assert_eq!(table.get(SID), ChatActivity::default());
+}
+
+#[test]
+fn a_read_marker_of_another_epoch_leaves_the_turn_end_unread() {
+    let table = ChatActivities::default();
+    table.observe(SID, 7, ActivityEvent::TurnEnded, no_inputs);
     let other_epoch = ReadMark {
         log_epoch: "e0".to_string(),
         seq: 99,
     };
-    assert!(
-        table
-            .refresh(SID, || inputs(false, Some(other_epoch)))
-            .expect("changed")
-            .unread
+    assert_eq!(
+        table.refresh(SID, || inputs(false, Some(other_epoch))),
+        None,
+        "still unread"
     );
+    assert!(table.get(SID).unread);
 }
 
 #[test]
@@ -110,6 +118,14 @@ fn closing_or_the_agent_dying_ends_the_work() {
 
     table.observe(SID, 3, opened(), no_inputs);
     table.observe("s2", 1, opened(), no_inputs);
+    table.observe(
+        "other-agent",
+        1,
+        ActivityEvent::TurnOpened {
+            agent_id: Some("a2".to_string()),
+        },
+        no_inputs,
+    );
     let mut sessions = table.agent_ended("a1");
     sessions.sort();
     assert_eq!(sessions, vec![SID.to_string(), "s2".to_string()]);
@@ -117,6 +133,10 @@ fn closing_or_the_agent_dying_ends_the_work() {
         table.refresh(sid, no_inputs);
     }
     assert!(!table.get(SID).busy && !table.get("s2").busy);
+    assert!(
+        table.get("other-agent").busy,
+        "another agent's chat works on"
+    );
 }
 
 #[test]
@@ -161,6 +181,12 @@ fn forgetting_reports_whether_anything_was_shown() {
     assert!(table.forget(SID));
     assert!(!table.forget(SID));
     assert_eq!(table.get(SID), ChatActivity::default());
+    assert_eq!(
+        table.observe(SID, 2, ActivityEvent::TurnEnded, no_inputs),
+        None,
+        "a deleted chat takes no more events"
+    );
+    assert!(table.snapshot().is_empty());
 }
 
 /// The agent's first turn can end before persistence registers the session,

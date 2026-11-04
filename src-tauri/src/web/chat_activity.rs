@@ -46,10 +46,11 @@ pub struct ChatActivity {
 }
 
 impl ChatActivity {
-    /// Nothing to show and no turn end to remember: the chat leaves the state.
+    /// Nothing to show: the chat leaves the state. A turn end matters only
+    /// while it is unread, so a read one is not remembered.
     #[must_use]
     pub fn is_idle(&self) -> bool {
-        !self.busy && !self.needs_you && !self.unread && self.turn_end.is_none()
+        !self.busy && !self.needs_you && !self.unread
     }
 
     /// The record inside the watch state: `{busy, needsYou, unread, turnEnd}`.
@@ -194,12 +195,17 @@ impl Entry {
     }
 }
 
+/// Where a deleted session's applied seq stands: past every event, so an
+/// agent's late event cannot bring the chat back.
+const DELETED: u64 = u64::MAX;
+
 #[derive(Default)]
 struct Table {
     entries: HashMap<String, Entry>,
     /// The seq of the newest event applied per session. An event is numbered
     /// under the log lock but observed after it, so two threads can observe
-    /// a session's events out of seq order: the older one is stale.
+    /// a session's events out of seq order: the older one is stale. A deleted
+    /// session stands at [`DELETED`].
     applied: HashMap<String, u64>,
 }
 
@@ -261,17 +267,19 @@ impl ChatActivities {
     }
 
     /// The agent `agent_id` is gone: none of its sessions works any more.
-    /// Returns every session id the table holds, so the caller re-derives
-    /// them all (the agent's pending prompts were released too).
+    /// Returns those sessions, for the caller to re-derive.
     pub fn agent_ended(&self, agent_id: &str) -> Vec<String> {
         let mut table = self.table.lock();
-        for entry in table.entries.values_mut() {
-            if entry.agent_id.as_deref() == Some(agent_id) {
+        table
+            .entries
+            .iter_mut()
+            .filter(|(_, entry)| entry.agent_id.as_deref() == Some(agent_id))
+            .map(|(session_id, entry)| {
                 entry.turn_open = false;
                 entry.agent_working = false;
-            }
-        }
-        table.entries.keys().cloned().collect()
+                session_id.clone()
+            })
+            .collect()
     }
 
     /// The sessions currently shown as needing the user.
@@ -286,10 +294,11 @@ impl ChatActivities {
             .collect()
     }
 
-    /// Drop a deleted session. Returns whether it was shown as anything.
+    /// Drop a deleted session and ignore its later events. Returns whether it
+    /// was shown as anything.
     pub fn forget(&self, session_id: &str) -> bool {
         let mut table = self.table.lock();
-        table.applied.remove(session_id);
+        table.applied.insert(session_id.to_string(), DELETED);
         table
             .entries
             .remove(session_id)
