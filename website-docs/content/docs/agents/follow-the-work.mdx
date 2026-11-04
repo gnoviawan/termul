@@ -90,6 +90,10 @@ Termul sends the queued messages in order, one each time the agent finishes a tu
 
 You cannot edit a queued message. Remove it and type it again.
 
+### When the agent works after its turn
+
+An agent can keep working after its turn ends. For example, Claude Code starts a turn of its own when a background command or a subagent finishes. While that happens, the chat shows the same working cue and the same stop button as during a turn. A message you send goes into the queue and goes out when the work ends. Termul counts the work as ended when no step is still running and the agent sends nothing for 30 seconds.
+
 ## Stop a turn
 
 To stop the agent, do one of these:
@@ -98,6 +102,8 @@ To stop the agent, do one of these:
 - Click **Cancel turn**, the square button. It takes the place of the send button while the agent works and the message box is empty.
 
 Termul tells the agent to stop. Any approval request or question that was waiting is cancelled. If you have queued messages, Termul sends the next one.
+
+This also works while the agent works after its turn. Termul tells the agent to stop that work, and the chat shows it as idle right away.
 
 ## Edit or retry a message
 
