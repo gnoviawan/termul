@@ -66,15 +66,16 @@ export function layoutGraph(graph: Graph, metrics: LayoutMetrics): DiagramLayout
     })
   })
 
-  const outgoing = new Map<DiagramNodeId, number>()
   const placedEdges = edges.map((edge): PlacedEdge => {
     const from = placed.get(edge.from) as PlacedNode
     const to = placed.get(edge.to) as PlacedNode
-    const siblings = edges.filter((e) => e.from === edge.from).length
-    const index = outgoing.get(edge.from) ?? 0
-    outgoing.set(edge.from, index + 1)
-    // Fan a node's outgoing edges across its bottom edge so ports stay apart.
-    const spread = metrics.nodeWidth / (siblings + 1)
+    // Fan a node's outgoing edges across its bottom edge so ports stay apart,
+    // a loop's `item` edges first so the body sits left of what follows it.
+    const siblings = edges
+      .filter((e) => e.from === edge.from)
+      .sort((a, b) => portRank(a.port) - portRank(b.port))
+    const index = siblings.indexOf(edge)
+    const spread = metrics.nodeWidth / (siblings.length + 1)
     return {
       from: edge.from,
       to: edge.to,
@@ -94,7 +95,12 @@ export function layoutGraph(graph: Graph, metrics: LayoutMetrics): DiagramLayout
   }
 }
 
-type LayoutEdge = { from: DiagramNodeId; to: DiagramNodeId }
+type LayoutEdge = { from: DiagramNodeId; to: DiagramNodeId; port: Port }
+
+/** `item` (a loop body) leads; every other port keeps declaration order. */
+function portRank(port: Port): number {
+  return port === 'item' ? 0 : 1
+}
 
 /**
  * Longest path from the trigger (Kahn's order). A node with no parent sits on
@@ -147,10 +153,14 @@ function orderRows(
       const mean = parents.length
         ? parents.reduce((sum, p) => sum + p, 0) / parents.length
         : Number.POSITIVE_INFINITY
-      return { id, mean, inputIndex }
+      const port = Math.min(
+        1,
+        ...edges.filter((edge) => edge.to === id).map((e) => portRank(e.port))
+      )
+      return { id, mean, port, inputIndex }
     })
     // Parentless nodes (the trigger, an unreachable node) keep input order after the rest.
-    keyed.sort((a, b) => (a.mean === b.mean ? a.inputIndex - b.inputIndex : a.mean - b.mean))
+    keyed.sort((a, b) => a.mean - b.mean || a.port - b.port || a.inputIndex - b.inputIndex)
     // Normalize to the row's width so rows of different lengths compare.
     keyed.forEach(({ id }, order) => {
       position.set(id, (order + 0.5) / keyed.length)

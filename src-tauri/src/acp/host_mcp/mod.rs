@@ -32,6 +32,8 @@ pub mod parent;
 pub mod presence;
 
 #[cfg(test)]
+mod automation_tools_tests;
+#[cfg(test)]
 mod gateway_harness;
 
 use std::collections::HashMap;
