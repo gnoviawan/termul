@@ -45,7 +45,7 @@ export interface ChatLaunchRequest {
    */
   newWorktree?: { projectRoot: string; baseBranch: string | null }
   /** Paint the placeholder (option snapshot, optimistic first turn). */
-  placeholder?: Omit<PlaceholderArgs, 'cwd' | 'projectId' | 'worktreeProgressId'>
+  placeholder?: Omit<PlaceholderArgs, 'configId' | 'cwd' | 'projectId' | 'worktreeProgressId'>
   /**
    * Runs once the checkout is ready and before the agent session starts.
    * Throwing {@link LaunchAbort} calls the launch off.
@@ -127,6 +127,7 @@ export function launchChat(request: ChatLaunchRequest): ChatLaunch {
   const store = useAcpStore.getState()
   const placeholderId = store.createLaunchPlaceholder({
     ...request.placeholder,
+    configId,
     cwd: newWorktree ? newWorktree.projectRoot : request.checkout.launchCwd,
     projectId,
     worktreeProgressId: progressId

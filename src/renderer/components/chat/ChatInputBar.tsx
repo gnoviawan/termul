@@ -216,8 +216,11 @@ export function ChatInputBar({
   const modeAgentName = useAcpStore(
     (s) => s.agentConfigs?.find((c) => c.id === (armedConfigId ?? currentAgentConfigId))?.name
   )
-  const agentTemplateId = useAgentTemplateId(session.agentId, armedConfigId)
-  const agentIcon = useAgentIcon(session.agentId, armedConfigId)
+  // A launch placeholder has no agent yet, so resolve by config id: the armed
+  // target, else the chat's own config (the launching one before spawn).
+  const glyphConfigId = armedConfigId ?? currentAgentConfigId ?? undefined
+  const agentTemplateId = useAgentTemplateId(session.agentId, glyphConfigId)
+  const agentIcon = useAgentIcon(session.agentId, glyphConfigId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
   // recorded count retain the existing global-registry fallback.
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)

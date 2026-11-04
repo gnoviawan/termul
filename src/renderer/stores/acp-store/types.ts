@@ -274,11 +274,11 @@ export interface AcpSession {
    */
   discovered?: boolean
   /**
-   * Agent config id recorded when a chat launch fails (`finalizeChatLaunch`
-   * catch). Present only on failed-launch placeholder sessions; consumed by
-   * `retryFailedLaunch` to re-run prepare against the same config. Cleared by
-   * replacement: a successful retry swaps the placeholder for the real
-   * session record, which never carries this field.
+   * Agent config a launch placeholder is starting (`createLaunchPlaceholder`).
+   * Present only on placeholder sessions: the composer reads it for the
+   * agent's name and icon before the agent spawns, and `retryFailedLaunch`
+   * re-runs prepare against it once the launch fails. Cleared by
+   * replacement: the real session record never carries this field.
    */
   launchConfigId?: string
   /**
@@ -730,6 +730,8 @@ export interface AcpState {
    * `session/new` finishes. Painted from options cache (+ pending overlays).
    */
   createLaunchPlaceholder: (args: {
+    /** Agent config being launched, stamped as the placeholder's `launchConfigId`. */
+    configId: string
     cwd: string
     projectId: string
     models?: SessionModelState | null

@@ -66,6 +66,7 @@ const {
   mockAgentConfigs,
   mockSwitching,
   mockSessionAgentId,
+  mockLaunchConfigId,
   mockArmAgentSwitch,
   mockSetSwitchPendingOption,
   mockAgentOptionsCache,
@@ -159,6 +160,7 @@ const {
     // Override-able store session agent id (defaults to the live agent; the
     // empty-row test clears it).
     mockSessionAgentId: { current: 'agent-1' as string },
+    mockLaunchConfigId: { current: undefined as string | undefined },
     mockArmAgentSwitch: vi.fn(async (_sessionId: string, _toConfigId: string) => true),
     mockSetSwitchPendingOption: vi.fn(async () => {}),
     mockAgentOptionsCache: { current: {} as Record<string, unknown> },
@@ -247,6 +249,7 @@ vi.mock('@/stores/acp-store', () => {
     sessions: {
       'session-1': {
         agentId: mockSessionAgentId.current,
+        launchConfigId: mockLaunchConfigId.current,
         switching: mockSwitching.current
       }
     },
@@ -747,6 +750,7 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     mockSwitching.current = null
     mockResolvedAgents.current = null
     mockSessionAgentId.current = 'agent-1'
+    mockLaunchConfigId.current = undefined
     mockAgentOptionsCache.current = {}
   })
 
@@ -855,6 +859,26 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     expect(modelChip.innerHTML).toContain(claudePathSig)
     const cursorPathSig = cursorSvg.match(/d="([^"]{20,60})/)?.[1]
     if (cursorPathSig) expect(modelChip.innerHTML).not.toContain(cursorPathSig)
+  })
+
+  it('a launch placeholder shows its launching agent glyph before the agent spawns', async () => {
+    // A launcher hand-off into a new worktree paints the chat on a placeholder
+    // whose agent has not spawned yet, so there is no live agent to resolve.
+    mockSessionAgentId.current = ''
+    mockLaunchConfigId.current = 'acp-registry:claude-acp'
+    const s = {
+      ...session(),
+      agentId: '',
+      models: { currentModelId: 'm1', availableModels: [{ modelId: 'm1', name: 'Model One' }] }
+    }
+    renderInputBar({ session: s })
+
+    const modelChip = await screen.findByRole('button', { name: /Model One/ })
+    const claudePathSig = (findBundledIconByKey('acp:claude-acp')?.svg ?? '').match(
+      /d="([^"]{20,60})/
+    )?.[1]
+    expect(claudePathSig).toBeTruthy()
+    expect(modelChip.innerHTML).toContain(claudePathSig)
   })
 
   it('disables the agent switch control for a closed session (chips disabled pattern)', async () => {
