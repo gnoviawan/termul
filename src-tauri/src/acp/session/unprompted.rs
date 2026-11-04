@@ -75,7 +75,7 @@ enum Effect {
     /// A tool call finished.
     Closed(String),
     /// An update to a tool call with no status (output, a keep-alive).
-    Touched,
+    Touched(String),
     /// Not work.
     Ignored,
 }
@@ -108,7 +108,7 @@ fn effect_of(update: &SessionUpdate) -> Effect {
     let status_effect = |id: String, status: Option<ToolCallStatus>| match status {
         Some(ToolCallStatus::Pending | ToolCallStatus::InProgress) => Effect::Opened(id),
         Some(_) => Effect::Closed(id),
-        None => Effect::Touched,
+        None => Effect::Touched(id),
     };
     match update {
         SessionUpdate::AgentMessageChunk(_) | SessionUpdate::AgentThoughtChunk(_) => {
@@ -133,7 +133,7 @@ impl UnpromptedWork {
             let open_tool_calls = match effect {
                 Effect::Activity => HashSet::new(),
                 Effect::Opened(id) => HashSet::from([id]),
-                Effect::Closed(_) | Effect::Touched | Effect::Ignored => return false,
+                Effect::Closed(_) | Effect::Touched(_) | Effect::Ignored => return false,
             };
             self.sessions.insert(
                 session_id.to_string(),
@@ -151,11 +151,21 @@ impl UnpromptedWork {
                 work.open_tool_calls.insert(id);
             }
             Effect::Closed(id) => {
-                if work.open_tool_calls.remove(&id) && work.open_tool_calls.is_empty() {
+                // A finished call that was not open (a republished status) is
+                // not activity: it must not push back the quiet deadline.
+                if !work.open_tool_calls.remove(&id) {
+                    return false;
+                }
+                if work.open_tool_calls.is_empty() {
                     self.wake.notify_one();
                 }
             }
-            Effect::Touched => {}
+            Effect::Touched(id) => {
+                // Output or a keep-alive holds the session only for an open call.
+                if !work.open_tool_calls.contains(&id) {
+                    return false;
+                }
+            }
             Effect::Ignored => return false,
         }
         work.last_update = now;

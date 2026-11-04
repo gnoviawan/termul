@@ -76,15 +76,21 @@ fn state_updates_and_finished_tool_calls_do_not_start_work() {
 }
 
 #[test]
-fn a_keep_alive_update_pushes_back_the_quiet_deadline() {
+fn a_keep_alive_update_holds_only_an_open_call() {
     let mut work = UnpromptedWork::default();
     let start = Instant::now();
-    work.note("s1", &chunk(), start);
-    let later = start + Duration::from_secs(20);
+    work.note("s1", &tool_call("t1", ToolCallStatus::InProgress), start);
+    let later = start + Duration::from_secs(5 * 60);
 
-    assert!(!work.note("s1", &tool_update("t9", None), later));
-    assert!(work.take_quiet(start + UNPROMPTED_QUIET).is_empty());
-    assert_eq!(work.next_deadline(), Some(later + UNPROMPTED_QUIET));
+    assert!(!work.note("s1", &tool_update("t1", None), later));
+    assert_eq!(work.next_deadline(), Some(later + UNPROMPTED_STALE));
+
+    work.note(
+        "s1",
+        &tool_update("other", None),
+        later + Duration::from_secs(60),
+    );
+    assert_eq!(work.next_deadline(), Some(later + UNPROMPTED_STALE));
 }
 
 #[test]
@@ -132,4 +138,19 @@ fn subagent_traffic_is_not_work_of_the_chat() {
     assert!(!work.note("s1", &acp::SessionUpdate::AgentMessageChunk(child), now));
     assert!(!work.note("s1", &acp::SessionUpdate::ToolCall(card), now));
     assert_eq!(work.count(), 0);
+}
+
+#[test]
+fn a_republished_finished_call_does_not_push_back_the_quiet_deadline() {
+    let mut work = UnpromptedWork::default();
+    let start = Instant::now();
+    work.note("s1", &chunk(), start);
+
+    work.note(
+        "s1",
+        &tool_update("old", Some(ToolCallStatus::Completed)),
+        start + Duration::from_secs(20),
+    );
+
+    assert_eq!(work.next_deadline(), Some(start + UNPROMPTED_QUIET));
 }

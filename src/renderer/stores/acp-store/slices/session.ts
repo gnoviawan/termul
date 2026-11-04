@@ -134,7 +134,7 @@ import {
   type TurnEndSetter
 } from '../types'
 import { authenticatedAgents, evictAgentForTransport, withAuthRetry } from './agent'
-import { flushNextQueuedPrompt, runPromptTurn } from './prompt'
+import { flushNextQueuedPrompt, latestAgentWorkingReport, runPromptTurn } from './prompt'
 import { loadFreshSourcePayload } from './switch-seam'
 import {
   dropSessionBookkeeping,
@@ -990,6 +990,7 @@ async function openHistorySessionInner(
     // spawning — otherwise every reload spawns a duplicate agent and resumes
     // on it while the original keeps running. A live turn also adopts on
     // desktop (#882): spawning would race the owner the guard is protecting.
+    const reportBeforeListing = latestAgentWorkingReport(id)?.seq
     const { adopted, listingTrusted, working } = await adoptHostOwnedAgent(
       set,
       id,
@@ -1008,11 +1009,16 @@ async function openHistorySessionInner(
       turnOwnerConnected = true
     }
     // The owner's listing says whether it works in this chat outside a prompt
-    // turn now; later changes arrive as `agent_working` events.
+    // turn now; later changes arrive as `agent_working` events. A report from
+    // the owner during the listing round trip is newer than the listing.
+    const report = latestAgentWorkingReport(id)
+    const reportIsNewer =
+      report !== undefined && report.seq !== reportBeforeListing && report.agentId === adopted
+    const agentWorking = reportIsNewer ? report.working : Boolean(working)
     set((s) => {
       const session = s.sessions[id]
-      if (!session || Boolean(session.agentWorking) === Boolean(working)) return {}
-      return { sessions: { ...s.sessions, [id]: { ...session, agentWorking: Boolean(working) } } }
+      if (!session || Boolean(session.agentWorking) === agentWorking) return {}
+      return { sessions: { ...s.sessions, [id]: { ...session, agentWorking } } }
     })
   }
   if (

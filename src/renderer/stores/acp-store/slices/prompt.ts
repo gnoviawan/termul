@@ -99,6 +99,19 @@ import {
 } from './prompt-reconcile'
 import { clampLiveToolCallFields, flushCoalescedSync } from './transcript'
 
+/**
+ * The newest `agent_working` report per session. A reopen reads the agent
+ * listing over a round trip; a report that arrives meanwhile is newer and wins.
+ */
+const latestAgentWorking = new Map<SessionId, { agentId: AgentId; working: boolean; seq: number }>()
+let agentWorkingSeq = 0
+
+export function latestAgentWorkingReport(
+  sessionId: SessionId
+): { agentId: AgentId; working: boolean; seq: number } | undefined {
+  return latestAgentWorking.get(sessionId)
+}
+
 /** Send the next queued prompt after the current turn closes. */
 export function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
   const state = useAcpStore.getState()
@@ -1351,6 +1364,12 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   },
 
   _onAgentWorking: (e) => {
+    agentWorkingSeq += 1
+    latestAgentWorking.set(e.sessionId, {
+      agentId: e.agentId,
+      working: e.working,
+      seq: agentWorkingSeq
+    })
     // Only the agent the chat runs on speaks for it: a stopped process can
     // still report after the chat moved to a new one.
     const session = get().sessions[e.sessionId]

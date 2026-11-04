@@ -500,7 +500,8 @@ impl DriverState {
         self.last_commands.forget(session_id);
         self.subagents.forget_root(session_id);
         self.subagent_records.forget_root(session_id);
-        // A closed session no longer works; `session_closed` tells clients.
+        // A closed or deleted session no longer works. A close tells clients
+        // with `session_closed`; a delete reports `agent_working` itself.
         self.unprompted.end(session_id);
     }
 

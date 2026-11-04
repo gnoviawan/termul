@@ -314,12 +314,26 @@ pub(super) async fn handle_session_notification(
     if is_replayed_history(&notification.update) && state.lock().note_replayed_update(&session_id) {
         return Ok(());
     }
+    let tool_call_id = match &notification.update {
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => {
+            Some(tool_call.tool_call_id.0.to_string())
+        }
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => {
+            Some(update.tool_call_id.0.to_string())
+        }
+        _ => None,
+    };
     // An update while no prompt turn runs is the agent working on its own
     // (`session::unprompted`). `sweep_unprompted_work` reports its end. Only a
-    // session the driver holds counts: a closed one stays closed.
+    // session the driver holds counts, and a subagent dispatch never does:
+    // the host stamps only changed dispatch records, so the registry decides.
     let started_working = {
         let mut state = state.lock();
-        !state.is_turn_active(&session_id)
+        let is_dispatch = tool_call_id
+            .as_deref()
+            .is_some_and(|call| state.subagent_records().get(&session_id, call).is_some());
+        !is_dispatch
+            && !state.is_turn_active(&session_id)
             && state.session_root(&session_id).is_some()
             && state.unprompted().note(
                 &session_id,
@@ -330,15 +344,6 @@ pub(super) async fn handle_session_notification(
     if started_working {
         crate::acp::events::emit_agent_working(sinks, agent_id, &session_id, true);
     }
-    let tool_call_id = match &notification.update {
-        agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => {
-            Some(tool_call.tool_call_id.0.to_string())
-        }
-        agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => {
-            Some(update.tool_call_id.0.to_string())
-        }
-        _ => None,
-    };
     if let Some(tool_call_id) = tool_call_id {
         state
             .lock()

@@ -1504,17 +1504,30 @@ pub(super) async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
                 let req_plan_server = host_plan_server.clone();
+                let req_sinks = sinks.clone();
+                let req_agent_id = agent_id.clone();
                 spawn_request(&cx, slot, async move {
                     let result = req_cx
                         .send_request(DeleteSessionRequest::new(&session_id))
                         .block_task()
                         .await;
                     if result.is_ok() {
-                        let pending = {
+                        let (pending, stopped_working) = {
                             let mut state = req_state.lock();
+                            // No `session_closed` follows a delete, so clients
+                            // hear the end of the agent's own work here.
+                            let stopped_working = state.unprompted().end(&session_id.0);
                             let (_ephemeral, pending) = state.begin_close_session(&session_id.0);
-                            pending
+                            (pending, stopped_working)
                         };
+                        if stopped_working {
+                            crate::acp::events::emit_agent_working(
+                                &req_sinks,
+                                &req_agent_id,
+                                &session_id.0,
+                                false,
+                            );
+                        }
                         for permission in pending {
                             let _ = permission.responder.respond(RequestPermissionResponse::new(
                                 RequestPermissionOutcome::Cancelled,

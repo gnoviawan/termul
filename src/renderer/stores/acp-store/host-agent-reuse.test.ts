@@ -637,4 +637,35 @@ describe('acp-store: reopening a chat its agent works in outside a turn', () => 
     expect(session?.activeTurn).toBeFalsy()
     expect(Boolean(session?.agentWorking)).toBe(busy)
   })
+
+  it('keeps a working report that arrives while the listing is read', async () => {
+    const transport = fakeWebTransport(
+      [
+        {
+          id: HOST_AGENT,
+          name: 'Claude',
+          configId: 'acp-registry:claude-acp',
+          capabilities: { loadSession: true },
+          ownsSession: ['s-race'],
+          workingSessions: ['s-race']
+        }
+      ],
+      { 's-race': finishedPayload('s-race') }
+    )
+    const listing = transport.listAgentDetails
+    ;(transport as unknown as { listAgentDetails: () => Promise<unknown> }).listAgentDetails =
+      async () => {
+        const summaries = await listing?.()
+        // The work ended after the host built the listing.
+        useAcpStore
+          .getState()
+          ._onAgentWorking({ agentId: HOST_AGENT, sessionId: 's-race', working: false })
+        return summaries
+      }
+    _setAcpTransportForTests(transport)
+
+    await useAcpStore.getState().openHistorySession('s-race')
+
+    expect(useAcpStore.getState().sessions['s-race']?.agentWorking).toBeFalsy()
+  })
 })
