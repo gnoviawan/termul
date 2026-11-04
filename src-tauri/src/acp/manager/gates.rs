@@ -556,6 +556,65 @@ pub(super) fn summarized_thinking_meta() -> Meta {
     )])
 }
 
+/// `meta` plus the Claude Agent ACP options of a headless session. Claude
+/// Code reads, searches and runs some tools inside its cwd without asking,
+/// so the host also limits its built-in tools to the ones `allowlist` names
+/// and denies the protected paths in the flag settings tier. It loads no
+/// settings files, so no saved allow rule, hook or sandbox auto-allow runs a
+/// tool without asking the host, and it offers no bypass mode. Other agents
+/// ignore `claudeCode`.
+pub(super) fn with_headless_options(
+    mut meta: Meta,
+    allowlist: &crate::acp::session::ToolAllowlist,
+) -> Meta {
+    use agent_client_protocol::schema::v1::ToolKind;
+    const CLAUDE_TOOLS: [(ToolKind, &[&str]); 5] = [
+        (ToolKind::Read, &["Read"]),
+        (ToolKind::Search, &["Grep", "Glob"]),
+        (ToolKind::Edit, &["Edit", "Write", "NotebookEdit"]),
+        (ToolKind::Execute, &["Bash", "BashOutput", "KillShell"]),
+        (ToolKind::Fetch, &["WebFetch", "WebSearch"]),
+    ];
+    let tools: Vec<&str> = CLAUDE_TOOLS
+        .iter()
+        .filter(|(kind, _)| allowlist.allows(*kind))
+        .flat_map(|(_, names)| names.iter().copied())
+        .collect();
+    let deny: Vec<String> = crate::acp::session::PROTECTED_DIRS
+        .iter()
+        .map(|dir| format!("**/{dir}/**"))
+        .chain(
+            crate::acp::session::PROTECTED_FILES
+                .iter()
+                .map(|file| format!("**/{file}")),
+        )
+        .chain(["**/.env*".to_string()])
+        .flat_map(|pattern| [format!("Read({pattern})"), format!("Edit({pattern})")])
+        .collect();
+    let claude = meta
+        .entry("claudeCode".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !claude.is_object() {
+        *claude = serde_json::json!({});
+    }
+    let options = claude
+        .as_object_mut()
+        .map(|c| c.entry("options".to_string()).or_insert_with(|| serde_json::json!({})));
+    if let Some(serde_json::Value::Object(options)) = options {
+        options.insert("settingSources".to_string(), serde_json::json!([]));
+        options.insert(
+            "allowDangerouslySkipPermissions".to_string(),
+            serde_json::json!(false),
+        );
+        options.insert("tools".to_string(), serde_json::json!(tools));
+        options.insert(
+            "settings".to_string(),
+            serde_json::json!({ "permissions": { "deny": deny } }),
+        );
+    }
+    meta
+}
+
 impl AgentRuntimeProfile {
     pub(super) fn resolve(config: &AgentConfig) -> Self {
         let factory_droid = crate::acp::factory_key::is_factory_droid(config);

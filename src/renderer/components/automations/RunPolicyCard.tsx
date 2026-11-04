@@ -3,7 +3,7 @@ import { AlertTriangle, ShieldCheck } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { WriteGate } from '@/components/ui/write-gate'
 import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
-import { formatDateTime, formatDuration, nodeLabels } from './automation-format'
+import { agentToolsLabel, formatDateTime, formatDuration, nodeLabels } from './automation-format'
 
 interface RunPolicyCardProps {
   automation: Automation
@@ -71,7 +71,7 @@ export function RunPolicyCard({
                     {agent.agent_id}
                     {agent.model ? ` (${agent.model})` : ''}
                     {` · times out after ${formatDuration(agent.timeout_ms)}`}
-                    {agent.tools === 'none' ? ' · no tools' : ''}
+                    {` · ${agentToolsLabel(agent.tools)}`}
                   </span>
                 </li>
               ))}

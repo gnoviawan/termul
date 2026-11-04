@@ -36,6 +36,9 @@ export type NamedTemplate = { name: string; value: Template }
 
 export type ConditionOp = 'eq' | 'ne' | 'contains' | 'gt' | 'lt' | 'exists'
 
+/** A class of tool an agent node may use; the host refuses the rest. */
+export type AgentTool = 'read' | 'search' | 'edit' | 'execute' | 'fetch' | 'other'
+
 export type MergeMode = 'any' | 'all'
 
 export type NodeSpec =
@@ -55,6 +58,7 @@ export type NodeSpec =
       output_schema: JsonSchemaSubset
       timeout_ms: number
       max_attempts: number
+      tools: AgentTool[]
     }
   | { kind: 'transform'; fields: NamedTemplate[] }
   | { kind: 'condition'; left: Template; op: ConditionOp; right: Template | null }
@@ -136,6 +140,8 @@ export type IssueCode =
   | 'agent_max_attempts_out_of_range'
   | 'missing_condition_operand'
   | 'invalid_schedule'
+  | 'untrusted_agent_outbound_tool'
+  | 'outbound_agent_file_tool'
   | 'for_each_max_iterations_out_of_range'
   | 'wait_duration_out_of_range'
   | 'loop_body_not_closed'
@@ -194,7 +200,8 @@ export type AgentPolicy = {
   agent_id: string
   model: string | null
   timeout_ms: number
-  tools: 'none'
+  /** Sorted and deduplicated; empty means no tools. */
+  tools: AgentTool[]
 }
 
 /** An `mcp_tool` node; `server_name` is null when the server is not configured. */

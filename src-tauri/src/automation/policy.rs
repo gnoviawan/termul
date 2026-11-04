@@ -1,10 +1,12 @@
 //! The run policy the approval card renders, derived from an automation.
 
+use std::collections::BTreeSet;
+
 use chrono::{TimeZone, Utc};
 
 use super::graph;
 use super::model::{
-    AgentPolicy, AgentTools, Automation, McpToolPolicy, NodeHosts, NodeSecrets, NodeSpec,
+    AgentPolicy, Automation, McpToolPolicy, NodeHosts, NodeSecrets, NodeSpec,
     RunPolicy, Schedule, Trigger,
 };
 use super::schedule::{next_runs, BACKOFF_LADDER_MS};
@@ -28,13 +30,19 @@ pub fn run_policy(
                 agent_id,
                 model,
                 timeout_ms,
+                tools,
                 ..
             } => agents.push(AgentPolicy {
                 node_id: node.id.clone(),
                 agent_id: agent_id.clone(),
                 model: model.clone(),
                 timeout_ms: *timeout_ms,
-                tools: AgentTools::None,
+                tools: tools
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
             }),
             NodeSpec::Http { allowed_hosts, .. } => {
                 let names = graph::secret_names(&node.spec);

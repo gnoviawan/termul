@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::model::{AgentPolicy, AgentTools, McpToolPolicy, NodeHosts, NodeSecrets, RunPolicy};
+use super::model::{AgentPolicy, AgentTool, McpToolPolicy, NodeHosts, NodeSecrets, RunPolicy};
 use super::policy::run_policy;
 use super::test_support::{apply, node_id, sample_automation};
 
@@ -18,7 +18,7 @@ fn derives_the_approval_card_for_the_sample() {
                 agent_id: "claude".into(),
                 model: Some("sonnet".into()),
                 timeout_ms: 120_000,
-                tools: AgentTools::None,
+                tools: vec![AgentTool::Read, AgentTool::Search],
             }],
             secrets: vec![
                 NodeSecrets {

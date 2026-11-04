@@ -288,8 +288,27 @@ fn rule7_agent_schema_and_bounds() {
     );
 }
 
+fn agent_spec(prompt: &str, tools: serde_json::Value) -> serde_json::Value {
+    json!({ "kind": "agent", "agent_id": "claude", "prompt": prompt,
+            "output_schema": { "type": "object" }, "timeout_ms": 1000, "max_attempts": 1,
+            "tools": tools })
+}
+
+fn messages(a: &Automation) -> Vec<(IssueCode, String, String)> {
+    validate(a)
+        .into_iter()
+        .map(|i| {
+            (
+                i.code,
+                i.node_id.map(|n| n.to_string()).unwrap_or_default(),
+                i.message,
+            )
+        })
+        .collect()
+}
+
 #[test]
-fn rule8_untrusted_flow_needs_get_data_reaching_an_agent_with_http_downstream() {
+fn rule8_untrusted_flow_needs_untrusted_data_reaching_an_agent_with_http_downstream() {
     let base = sample_automation();
     assert!(untrusted_flow(&base.graph));
     let post_fetch = set_spec(
@@ -298,27 +317,118 @@ fn rule8_untrusted_flow_needs_get_data_reaching_an_agent_with_http_downstream() 
         json!({ "kind": "http", "method": "POST", "url": "https://api.example.com/items",
                 "allowed_hosts": ["api.example.com"] }),
     );
-    assert!(!untrusted_flow(&post_fetch.graph));
+    assert!(untrusted_flow(&post_fetch.graph));
+    let trusted_prompt = set_spec(
+        &base,
+        "extract",
+        agent_spec("Summarize {{trigger.kind}}", json!([])),
+    );
+    assert!(!untrusted_flow(&trusted_prompt.graph));
+    let fetching = set_spec(
+        &base,
+        "extract",
+        agent_spec("Summarize {{trigger.kind}}", json!(["fetch"])),
+    );
+    assert!(untrusted_flow(&fetching.graph));
     let no_http_after = apply(&base, json!([{ "op": "remove_node", "id": "post" }]));
     assert!(!untrusted_flow(&no_http_after.graph));
+}
+
+#[test]
+fn rule9_an_agent_reading_untrusted_data_may_not_send_data_out_or_edit() {
+    let all_tools = set_spec(
+        &sample_automation(),
+        "extract",
+        agent_spec(
+            "Summarize {{nodes.fetch.output.items}}",
+            json!(["read", "execute", "edit", "fetch", "other"]),
+        ),
+    );
+    assert_eq!(
+        messages(&all_tools),
+        vec![
+            (
+                IssueCode::UntrustedAgentOutboundTool,
+                "extract".to_string(),
+                "this agent's prompt reads untrusted data (an http response, an MCP tool result, or the output of an agent that can fetch, run commands or use other tools), so it may not use: execute, edit, fetch, other".to_string(),
+            ),
+            (
+                IssueCode::OutboundAgentFileTool,
+                "extract".to_string(),
+                "this agent can take in untrusted data with fetch, other, so it may not also use: read, edit".to_string(),
+            ),
+        ]
+    );
+    let reading = set_spec(
+        &sample_automation(),
+        "extract",
+        agent_spec(
+            "Summarize {{nodes.fetch.output.items}}",
+            json!(["read", "search"]),
+        ),
+    );
+    assert_eq!(codes(&reading), vec![]);
+}
+
+#[test]
+fn rule9_an_agent_may_run_commands_and_use_files_together() {
+    let command_line = set_spec(
+        &sample_automation(),
+        "extract",
+        agent_spec(
+            "Run the test suite for {{trigger.kind}} and fix it",
+            json!(["execute", "read", "search", "edit"]),
+        ),
+    );
+    assert_eq!(codes(&command_line), vec![]);
+    let fetching = set_spec(
+        &sample_automation(),
+        "extract",
+        agent_spec("Look up {{trigger.kind}}", json!(["execute", "fetch", "read"])),
+    );
+    assert_eq!(
+        codes(&fetching),
+        vec![at(IssueCode::OutboundAgentFileTool, "extract")]
+    );
+}
+
+#[test]
+fn rule9_an_agent_that_reaches_out_taints_the_agents_that_read_its_output() {
+    let base = set_spec(
+        &sample_automation(),
+        "extract",
+        agent_spec("Look up {{trigger.kind}}", json!(["fetch"])),
+    );
+    assert_eq!(codes(&base), vec![]);
+    let with_writer = apply(
+        &base,
+        json!([
+            { "op": "add_node", "node": { "id": "writer", "label": "Write", "spec":
+                agent_spec("Save {{nodes.extract.output.summary}}", json!(["edit"])) } },
+            { "op": "connect", "edge": { "from": "check", "port": "false", "to": "writer" } }
+        ]),
+    );
+    assert_eq!(
+        codes(&with_writer),
+        vec![at(IssueCode::UntrustedAgentOutboundTool, "writer")]
+    );
 }
 
 #[test]
 fn rule8_an_mcp_tool_result_is_untrusted_and_an_mcp_tool_is_a_sink() {
     let tool = json!({ "kind": "mcp_tool", "server_id": "srv", "tool": "t" });
     let base = sample_automation();
-    let post_fetch = set_spec(
+    let trusted = set_spec(
         &base,
         "fetch",
-        json!({ "kind": "http", "method": "POST", "url": "https://api.example.com/items",
-                "allowed_hosts": ["api.example.com"] }),
+        json!({ "kind": "transform", "fields": [{ "name": "items", "value": "x" }] }),
     );
-    assert!(!untrusted_flow(&post_fetch.graph));
-    let mcp_fetch = set_spec(&post_fetch, "fetch", tool.clone());
+    assert!(!untrusted_flow(&trusted.graph));
+    let mcp_fetch = set_spec(&trusted, "fetch", tool.clone());
     assert!(untrusted_flow(&mcp_fetch.graph));
     let mcp_post = set_spec(&base, "post", tool.clone());
     assert!(untrusted_flow(&mcp_post.graph));
-    let untainted_mcp_post = set_spec(&post_fetch, "post", tool);
+    let untainted_mcp_post = set_spec(&trusted, "post", tool);
     assert!(!untrusted_flow(&untainted_mcp_post.graph));
 }
 
@@ -724,4 +834,32 @@ fn untrusted_flow_passes_through_merge_and_for_each() {
         json!([{ "op": "update_node", "id": "mark", "spec": agent("item {{nodes.each.index}}") }]),
     );
     assert!(!untrusted_flow(&index_only.graph));
+}
+
+#[test]
+fn rule9_untrusted_data_reaches_an_agent_through_loop_items_and_merges() {
+    let in_body = apply(
+        &loop_automation(),
+        json!([{ "op": "update_node", "id": "mark",
+                 "spec": agent_spec("Save {{nodes.each.item.name}}", json!(["edit"])) }]),
+    );
+    assert_eq!(
+        codes(&in_body),
+        vec![at(IssueCode::UntrustedAgentOutboundTool, "mark")]
+    );
+    let after_merge = apply(
+        &loop_automation(),
+        json!([
+            { "op": "add_node", "node": { "id": "join", "label": "", "spec": { "kind": "merge", "mode": "any" } } },
+            { "op": "connect", "edge": { "from": "done", "port": "out", "to": "join" } },
+            { "op": "connect", "edge": { "from": "each", "port": "error", "to": "join" } },
+            { "op": "add_node", "node": { "id": "think", "label": "",
+                "spec": agent_spec("Sum up {{nodes.join.output.value}}", json!(["fetch"])) } },
+            { "op": "connect", "edge": { "from": "join", "port": "out", "to": "think" } }
+        ]),
+    );
+    assert_eq!(
+        codes(&after_merge),
+        vec![at(IssueCode::UntrustedAgentOutboundTool, "think")]
+    );
 }

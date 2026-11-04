@@ -314,19 +314,26 @@ pub(super) async fn handle_session_notification(
     if is_replayed_history(&notification.update) && state.lock().note_replayed_update(&session_id) {
         return Ok(());
     }
-    let tool_call_id = match &notification.update {
-        agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => {
-            Some(tool_call.tool_call_id.0.to_string())
-        }
-        agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => {
-            Some(update.tool_call_id.0.to_string())
-        }
+    let paths = |locations: &[agent_client_protocol::schema::v1::ToolCallLocation]| {
+        locations.iter().map(|l| l.path.clone()).collect::<Vec<_>>()
+    };
+    let tool_call = match &notification.update {
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => Some((
+            tool_call.tool_call_id.0.to_string(),
+            Some(tool_call.kind),
+            Some(paths(&tool_call.locations)),
+        )),
+        agent_client_protocol::schema::v1::SessionUpdate::ToolCallUpdate(update) => Some((
+            update.tool_call_id.0.to_string(),
+            update.fields.kind,
+            update.fields.locations.as_deref().map(paths),
+        )),
         _ => None,
     };
-    if let Some(tool_call_id) = tool_call_id {
-        state
-            .lock()
-            .bind_tool_call(tool_call_id, session_id.clone());
+    if let Some((tool_call_id, kind, paths)) = tool_call {
+        let mut state = state.lock();
+        state.note_tool_call(&session_id, &tool_call_id, kind, paths);
+        state.bind_tool_call(tool_call_id, session_id.clone());
     }
     // AD-8: gate native `session_info_update` fan-out. When the host already
     // owns a higher-precedence title (`BackgroundGenerated` from a prior
@@ -614,9 +621,24 @@ pub(super) async fn drive_connection(
                 } = request;
                 let session_string = perm_state.lock().chat_session_for(session_id.0.as_ref());
                 if perm_state.lock().is_ephemeral(&session_string) {
-                    let _ = responder.respond(RequestPermissionResponse::new(
-                        RequestPermissionOutcome::Cancelled,
-                    ));
+                    let decision =
+                        perm_state
+                            .lock()
+                            .answer_permission(&session_string, &tool_call, &options);
+                    let outcome = match decision {
+                        Some(decision) => {
+                            log::info!(
+                                "[acp] {perm_agent_id} headless session {}: {} {:?} tool call {}",
+                                crate::logging::redact_session_id(&session_string),
+                                if decision.allowed { "allowed" } else { "refused" },
+                                decision.kind,
+                                tool_call.tool_call_id.0
+                            );
+                            decision.outcome
+                        }
+                        None => RequestPermissionOutcome::Cancelled,
+                    };
+                    let _ = responder.respond(RequestPermissionResponse::new(outcome));
                     return Ok(());
                 }
                 // A permission request is agent activity — the turn is waiting

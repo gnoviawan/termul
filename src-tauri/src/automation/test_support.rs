@@ -61,7 +61,7 @@ pub fn sample_automation() -> Automation {
                 "output_schema": { "type": "object",
                     "properties": { "summary": { "type": "string" }, "urgent": { "type": "boolean" } },
                     "required": ["summary", "urgent"] },
-                "timeout_ms": 120000, "max_attempts": 2 } },
+                "timeout_ms": 120000, "max_attempts": 2, "tools": ["search", "read", "search"] } },
             { "id": "check", "label": "Urgent?", "spec": {
                 "kind": "condition", "left": "{{nodes.extract.output.urgent}}", "op": "eq", "right": "true" } },
             { "id": "shape", "label": "Shape", "spec": {

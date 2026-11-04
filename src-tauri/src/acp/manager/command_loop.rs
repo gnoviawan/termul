@@ -150,6 +150,7 @@ pub(super) async fn run_command_loop(
                 worktree_branch,
                 additional_directories,
                 command_id,
+                tool_allowlist,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -164,8 +165,12 @@ pub(super) async fn run_command_loop(
                     let mut request = NewSessionRequest::new(cwd.clone())
                         .mcp_servers(mcp_servers)
                         .additional_directories(additional_directories);
-                    if profile.summarize_thinking {
-                        request = request.meta(summarized_thinking_meta());
+                    let mut meta = profile.summarize_thinking.then(summarized_thinking_meta);
+                    if let Some(allowlist) = &tool_allowlist {
+                        meta = Some(with_headless_options(meta.unwrap_or_default(), allowlist));
+                    }
+                    if let Some(meta) = meta {
+                        request = request.meta(meta);
                     }
                     let timeout = session_new_timeout();
                     log::debug!(
@@ -245,6 +250,9 @@ pub(super) async fn run_command_loop(
                                 state.set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
                                 if ephemeral {
                                     state.mark_ephemeral(session_id.0.clone());
+                                    if let Some(allowlist) = tool_allowlist {
+                                        state.set_tool_allowlist(session_id.0.clone(), allowlist);
+                                    }
                                     state.note_promotable_registration(
                                         session_id.0.clone(),
                                         registration,

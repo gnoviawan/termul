@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 use super::model::{
-    wire_name, Automation, ConditionOp, EdgeSource, Graph, HttpMethod, Issue, IssueCode, NodeId,
+    wire_name, AgentTool, Automation, ConditionOp, EdgeSource, Graph, Issue, IssueCode, NodeId,
     NodeKind, NodeSpec, Op, Port, Trigger, AGENT_MAX_ATTEMPTS, AGENT_MAX_TIMEOUT_MS,
     FOR_EACH_MAX_ITERATIONS, WAIT_MAX_MS,
     MCP_MAX_TIMEOUT_MS,
@@ -30,6 +30,7 @@ pub fn validate(automation: &Automation) -> Vec<Issue> {
     for node in &graph.nodes {
         check_node(graph, &bodies, &node.id, &node.spec, &mut issues);
     }
+    check_agent_tools(graph, &mut issues);
     issues
 }
 
@@ -484,27 +485,47 @@ fn check_http_host(id: &NodeId, url: &ParsedTemplate, allowed: &[String], issues
     }
 }
 
-/// True when untrusted fetched content can steer an outbound action: an
-/// agent whose prompt reads data derived from a GET response or an MCP tool
-/// result has an http or mcp_tool node downstream of it.
+/// True when untrusted content can steer an outbound action: an agent that
+/// reads untrusted data has an http or mcp_tool node downstream of it.
 pub fn untrusted_flow(graph: &Graph) -> bool {
     let bodies = loop_bodies(graph);
+    let tainted = untrusted_outputs(graph, &bodies);
+    graph.nodes.iter().any(|agent| {
+        let NodeSpec::Agent { tools, .. } = &agent.spec else {
+            return false;
+        };
+        let reads_untrusted = tools.iter().any(|t| t.reaches_out())
+            || data_sources(graph, &bodies, &agent.id, &agent.spec)
+                .iter()
+                .any(|r| tainted.contains(r));
+        reads_untrusted
+            && downstream(graph, &bodies, &agent.id).iter().any(|d| {
+                graph
+                    .node(d)
+                    .is_some_and(|n| matches!(n.spec.kind(), NodeKind::Http | NodeKind::McpTool))
+            })
+    })
+}
+
+/// Nodes whose output carries untrusted content: every http response, every
+/// MCP tool result, every agent that can reach past the host, and every node whose data comes from
+/// one of those, directly or through other nodes.
+fn untrusted_outputs<'g>(
+    graph: &'g Graph,
+    bodies: &HashMap<NodeId, HashSet<NodeId>>,
+) -> HashSet<&'g NodeId> {
     let sources: HashMap<&NodeId, Vec<NodeId>> = graph
         .nodes
         .iter()
-        .map(|n| (&n.id, data_sources(graph, &bodies, &n.id, &n.spec)))
+        .map(|n| (&n.id, data_sources(graph, bodies, &n.id, &n.spec)))
         .collect();
     let mut tainted: HashSet<&NodeId> = graph
         .nodes
         .iter()
-        .filter(|n| {
-            matches!(
-                n.spec,
-                NodeSpec::Http {
-                    method: HttpMethod::Get,
-                    ..
-                } | NodeSpec::McpTool { .. }
-            )
+        .filter(|n| match &n.spec {
+            NodeSpec::Http { .. } | NodeSpec::McpTool { .. } => true,
+            NodeSpec::Agent { tools, .. } => tools.iter().any(|t| t.reaches_out()),
+            _ => false,
         })
         .map(|n| &n.id)
         .collect();
@@ -516,18 +537,60 @@ pub fn untrusted_flow(graph: &Graph) -> bool {
             }
         }
         if tainted.len() == before {
-            break;
+            return tainted;
         }
     }
-    graph.nodes.iter().any(|agent| {
-        matches!(agent.spec, NodeSpec::Agent { .. })
-            && sources[&agent.id].iter().any(|r| tainted.contains(r))
-            && downstream(graph, &bodies, &agent.id).iter().any(|d| {
-                graph
-                    .node(d)
-                    .is_some_and(|n| matches!(n.spec.kind(), NodeKind::Http | NodeKind::McpTool))
-            })
-    })
+}
+
+/// Research rec 7. An agent whose prompt reads untrusted content may not use
+/// tools that send data out, or edit files (a planted hook or config runs
+/// later). An agent that fetches or uses other tools takes in untrusted
+/// content itself, so it may not also read or change files.
+fn check_agent_tools(graph: &Graph, issues: &mut Vec<Issue>) {
+    let bodies = loop_bodies(graph);
+    let tainted = untrusted_outputs(graph, &bodies);
+    for node in &graph.nodes {
+        let NodeSpec::Agent { tools, .. } = &node.spec else {
+            continue;
+        };
+        let names = |keep: fn(AgentTool) -> bool| -> Vec<String> {
+            tools
+                .iter()
+                .copied()
+                .filter(|t| keep(*t))
+                .map(|t| wire_name(&t))
+                .collect()
+        };
+        let reads_untrusted = data_sources(graph, &bodies, &node.id, &node.spec)
+            .iter()
+            .any(|r| tainted.contains(r));
+        let risky = names(|t| t.reaches_out() || t == AgentTool::Edit);
+        if reads_untrusted && !risky.is_empty() {
+            issues.push(issue(
+                Some(&node.id),
+                IssueCode::UntrustedAgentOutboundTool,
+                format!(
+                    "this agent's prompt reads untrusted data (an http response, an MCP tool result, or the output of an agent that can fetch, run commands or use other tools), so it may not use: {}",
+                    risky.join(", ")
+                ),
+            ));
+        }
+        // A shell command already reads and writes every file the user can,
+        // so file tools listed beside execute grant nothing more.
+        let outbound = names(|t| t.reaches_out() && t != AgentTool::Execute);
+        let files = names(AgentTool::touches_files);
+        if !outbound.is_empty() && !files.is_empty() {
+            issues.push(issue(
+                Some(&node.id),
+                IssueCode::OutboundAgentFileTool,
+                format!(
+                    "this agent can take in untrusted data with {}, so it may not also use: {}",
+                    outbound.join(", "),
+                    files.join(", ")
+                ),
+            ));
+        }
+    }
 }
 
 /// The nodes whose outputs flow into `id`'s output: the outputs its

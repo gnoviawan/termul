@@ -54,7 +54,8 @@
               "required": ["summary", "urgent"]
             },
             "timeout_ms": 120000,
-            "max_attempts": 2
+            "max_attempts": 2,
+            "tools": ["search", "read", "search"]
           }
         },
         {
@@ -583,7 +584,7 @@
         "agent_id": "claude",
         "model": "sonnet",
         "timeout_ms": 120000,
-        "tools": "none"
+        "tools": ["read", "search"]
       }
     ],
     "secrets": [

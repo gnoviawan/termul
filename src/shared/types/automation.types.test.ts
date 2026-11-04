@@ -121,7 +121,8 @@ const typed: Unbranded<WireFixture> = {
               required: ['summary', 'urgent']
             },
             timeout_ms: 120000,
-            max_attempts: 2
+            max_attempts: 2,
+            tools: ['search', 'read', 'search']
           }
         },
         {
@@ -470,7 +471,7 @@ const typed: Unbranded<WireFixture> = {
         agent_id: 'claude',
         model: 'sonnet',
         timeout_ms: 120000,
-        tools: 'none'
+        tools: ['read', 'search']
       }
     ],
     secrets: [
