@@ -1393,13 +1393,48 @@ fn reopen_fixture() -> ReopenFixture {
     server.begin_turn("agent-1", "sess-real");
     // What `prepare_reopen_mcp` does: register + bind, drop nothing.
     let (_, new_token, new_prov) = server.register_session("agent-1");
-    server.bind_session(&new_token, "sess-real");
+    server.bind_reopen_session(&new_token, "sess-real");
     ReopenFixture {
         server,
         port,
         old: (old_token, old_prov),
         new: (new_token, new_prov),
     }
+}
+
+/// A token is reused by a later reopen on the same agent only once its own
+/// reopen succeeded: a failed reopen evicts it.
+#[test]
+fn a_reopen_token_is_reused_only_after_its_reopen_succeeds() {
+    let credentials = |fx: &ReopenFixture| fx.server.bound_credentials("agent-1", "sess-real");
+    let failed = reopen_fixture();
+    let old = Some((failed.port, failed.old.0.clone(), failed.old.1.clone()));
+    assert_eq!(
+        credentials(&failed),
+        old,
+        "the pending token is not handed out"
+    );
+    failed
+        .server
+        .settle_reopen_token("sess-real", &failed.new.0, false);
+    assert_eq!(credentials(&failed), old);
+    assert_eq!(
+        failed.server.bound_credentials("agent-2", "sess-real"),
+        None
+    );
+
+    let reopened = reopen_fixture();
+    reopened
+        .server
+        .settle_reopen_token("sess-real", &reopened.new.0, true);
+    assert_eq!(
+        credentials(&reopened),
+        Some((
+            reopened.port,
+            reopened.new.0.clone(),
+            reopened.new.1.clone()
+        ))
+    );
 }
 
 #[test]
