@@ -7,6 +7,7 @@ import type {
   AutomationRun,
   AutomationStep,
   AutomationSuggestion,
+  Graph,
   RunPolicy,
   Trigger
 } from './automation.types'
@@ -31,6 +32,38 @@ type Unbranded<T> = T extends string & { readonly __brand: string }
     : T extends object
       ? { [K in keyof T]: Unbranded<T[K]> }
       : T
+
+const runGraph: Unbranded<Graph> = {
+  nodes: [
+    {
+      id: 'each',
+      label: 'Each item',
+      spec: { kind: 'for_each', items: '{{trigger.kind}}', max_iterations: 5 }
+    },
+    {
+      id: 'body',
+      label: 'Body',
+      spec: {
+        kind: 'transform',
+        fields: [
+          { name: 'item', value: '{{nodes.each.item.name}}' },
+          { name: 'index', value: '{{nodes.each.index}}' }
+        ]
+      }
+    },
+    { id: 'join', label: 'Join', spec: { kind: 'merge', mode: 'any' } },
+    { id: 'pause', label: 'Pause', spec: { kind: 'wait', duration_ms: 3600000 } },
+    { id: 'stop', label: 'Stop', spec: { kind: 'fail', message: '{{trigger.kind}}' } }
+  ],
+  edges: [
+    { from: 'trigger', port: 'out', to: 'each' },
+    { from: 'each', port: 'item', to: 'body' },
+    { from: 'each', port: 'out', to: 'join' },
+    { from: 'each', port: 'error', to: 'join' },
+    { from: 'join', port: 'out', to: 'pause' },
+    { from: 'pause', port: 'out', to: 'stop' }
+  ]
+}
 
 const typed: Unbranded<WireFixture> = {
   automation: {
@@ -252,6 +285,10 @@ const typed: Unbranded<WireFixture> = {
       id: 'note'
     },
     {
+      op: 'add_node',
+      node: { id: 'gate', label: 'Gate', spec: { kind: 'merge', mode: 'all' } }
+    },
+    {
       op: 'connect',
       edge: {
         from: 'check',
@@ -320,25 +357,7 @@ const typed: Unbranded<WireFixture> = {
       id: 'run-1',
       automation_id: 'auto-1',
       revision: 1,
-      graph: {
-        nodes: [
-          {
-            id: 'stop',
-            label: 'Stop',
-            spec: {
-              kind: 'fail',
-              message: '{{trigger.kind}}'
-            }
-          }
-        ],
-        edges: [
-          {
-            from: 'trigger',
-            port: 'out',
-            to: 'stop'
-          }
-        ]
-      },
+      graph: runGraph,
       trigger: 'scheduled',
       scheduled_for: 1773046800000,
       status: 'failed',
@@ -353,25 +372,7 @@ const typed: Unbranded<WireFixture> = {
       id: 'run-2',
       automation_id: 'auto-1',
       revision: 1,
-      graph: {
-        nodes: [
-          {
-            id: 'stop',
-            label: 'Stop',
-            spec: {
-              kind: 'fail',
-              message: '{{trigger.kind}}'
-            }
-          }
-        ],
-        edges: [
-          {
-            from: 'trigger',
-            port: 'out',
-            to: 'stop'
-          }
-        ]
-      },
+      graph: runGraph,
       trigger: 'catch_up',
       scheduled_for: 1773046800000,
       status: 'running',
@@ -387,6 +388,7 @@ const typed: Unbranded<WireFixture> = {
     {
       run_id: 'run-1',
       node_id: 'fetch',
+      iteration: null,
       status: 'succeeded',
       output: {
         items: [
@@ -397,25 +399,52 @@ const typed: Unbranded<WireFixture> = {
       },
       error: null,
       started_at: 1773046800200,
-      finished_at: 1773046801000
+      finished_at: 1773046801000,
+      wait_until: null
     },
     {
       run_id: 'run-1',
       node_id: 'post',
+      iteration: null,
       status: 'failed',
       output: null,
       error: 'secret_missing:HOOK_KEY',
       started_at: 1773046859000,
-      finished_at: 1773046860000
+      finished_at: 1773046860000,
+      wait_until: null
+    },
+    {
+      run_id: 'run-1',
+      node_id: 'body',
+      iteration: 1,
+      status: 'succeeded',
+      output: { item: 'b', index: 1 },
+      error: null,
+      started_at: 1773046860100,
+      finished_at: 1773046860200,
+      wait_until: null
     },
     {
       run_id: 'run-1',
       node_id: 'alert',
+      iteration: null,
       status: 'skipped',
       output: null,
       error: null,
       started_at: null,
-      finished_at: null
+      finished_at: null,
+      wait_until: null
+    },
+    {
+      run_id: 'run-1',
+      node_id: 'pause',
+      iteration: null,
+      status: 'waiting',
+      output: null,
+      error: null,
+      started_at: 1773046861000,
+      finished_at: null,
+      wait_until: 1773050461000
     }
   ],
   run_policy: {

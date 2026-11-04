@@ -9,6 +9,24 @@ use crate::automation::model::{
 use crate::automation::schedule::backoff_ms;
 
 pub const STRANDED_REASON: &str = "stranded";
+pub const CANCELLED_REASON: &str = "cancelled";
+
+/// `iteration` is stored as -1 outside a loop so it can sit in the primary
+/// key; only this file sees the sentinel.
+const NO_ITERATION: i64 = -1;
+
+fn iteration_column(iteration: Option<u32>) -> i64 {
+    iteration.map_or(NO_ITERATION, i64::from)
+}
+
+/// A `running` run whose `wait` step is `waiting`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParkedRun {
+    pub run: Run,
+    pub node_id: NodeId,
+    pub iteration: Option<u32>,
+    pub wait_until: i64,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SettleOutcome {
@@ -87,8 +105,9 @@ impl AutomationStore {
         settle_locked(&db, id, status, stop_reason, summary, now_ms, Cadence::Follow)
     }
 
-    /// Records a step. A step that already finished is never overwritten, so
-    /// a replayed engine write cannot re-run or rewrite it. Returns whether
+    /// Records a step, keyed by node and iteration. Only `running` and
+    /// `waiting` rows are ever overwritten, so a replayed engine write cannot
+    /// re-run or rewrite a step that finished or was skipped. Returns whether
     /// the row changed.
     pub fn upsert_step(&self, step: &Step) -> StoreResult<bool> {
         let output = step
@@ -97,26 +116,111 @@ impl AutomationStore {
             .map(serde_json::to_string)
             .transpose()?;
         let changed = self.conn()?.execute(
-            "INSERT INTO automation_step (run_id, node_id, status, output_json, error, started_at, finished_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(run_id, node_id) DO UPDATE SET
+            "INSERT INTO automation_step (run_id, node_id, iteration, status, output_json, error,
+                started_at, finished_at, wait_until)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(run_id, node_id, iteration) DO UPDATE SET
                 status = excluded.status,
                 output_json = excluded.output_json,
                 error = excluded.error,
                 started_at = COALESCE(automation_step.started_at, excluded.started_at),
-                finished_at = excluded.finished_at
-             WHERE automation_step.status = 'running'",
+                finished_at = excluded.finished_at,
+                wait_until = excluded.wait_until
+             WHERE automation_step.status IN ('running', 'waiting')",
             params![
                 step.run_id.as_str(),
                 step.node_id.as_str(),
+                iteration_column(step.iteration),
                 wire_name(&step.status),
                 output,
                 step.error,
                 step.started_at,
                 step.finished_at,
+                step.wait_until,
             ],
         )?;
         Ok(changed == 1)
+    }
+
+    /// Every parked run with the wait it is parked on, soonest first.
+    pub fn list_parked(&self) -> StoreResult<Vec<ParkedRun>> {
+        let db = self.conn()?;
+        let mut stmt = db.prepare(
+            "SELECT r.*, s.node_id AS wait_node, s.iteration AS wait_iteration,
+                    s.wait_until AS wait_at
+             FROM automation_step s JOIN automation_run r ON r.id = s.run_id
+             WHERE s.status = 'waiting' AND r.status = 'running'
+             ORDER BY s.wait_until, r.id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let node: String = row.get("wait_node")?;
+            let iteration: i64 = row.get("wait_iteration")?;
+            let wait_until: Option<i64> = row.get("wait_at")?;
+            let run = read_run(row)?;
+            Ok((|| {
+                Ok(ParkedRun {
+                    run: run?,
+                    node_id: NodeId::parse(node).map_err(|e| StoreError::Corrupt(e.to_string()))?,
+                    iteration: read_iteration(iteration),
+                    wait_until: wait_until.unwrap_or(0),
+                })
+            })())
+        })?;
+        rows.map(|r| r?).collect()
+    }
+
+    /// Compare-and-swap that ends a due wait: only the caller that moves the
+    /// step from `waiting` to `succeeded` resumes the run.
+    pub fn claim_wait(
+        &self,
+        run_id: &RunId,
+        node_id: &NodeId,
+        iteration: Option<u32>,
+        now_ms: i64,
+    ) -> StoreResult<bool> {
+        let changed = self.conn()?.execute(
+            "UPDATE automation_step SET status = 'succeeded', output_json = ?1, finished_at = ?2
+             WHERE run_id = ?3 AND node_id = ?4 AND iteration = ?5 AND status = 'waiting'
+               AND wait_until <= ?2",
+            params![
+                serde_json::json!({ "resumed_at": now_ms }).to_string(),
+                now_ms,
+                run_id.as_str(),
+                node_id.as_str(),
+                iteration_column(iteration),
+            ],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// Cancels a parked run: its waiting step fails `cancelled` and the run
+    /// settles `cancelled`, in one transaction. `None` when the run is not
+    /// parked (it finished, or it is executing).
+    pub fn cancel_parked(&self, run_id: &RunId, now_ms: i64) -> StoreResult<Option<Run>> {
+        let db = self.conn()?;
+        let tx = db.unchecked_transaction()?;
+        let changed = tx.execute(
+            "UPDATE automation_step SET status = 'failed', error = ?1, finished_at = ?2
+             WHERE run_id = ?3 AND status = 'waiting'",
+            params![CANCELLED_REASON, now_ms, run_id.as_str()],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        let outcome = settle_in(
+            &tx,
+            run_id,
+            SettledStatus::Cancelled,
+            Some(CANCELLED_REASON),
+            None,
+            now_ms,
+            Cadence::Follow,
+        )?;
+        tx.commit()?;
+        Ok(match outcome {
+            SettleOutcome::Settled(run) => Some(*run),
+            SettleOutcome::AlreadySettled => None,
+        })
     }
 
     pub fn get_steps(&self, run_id: &RunId) -> StoreResult<Vec<Step>> {
@@ -128,21 +232,27 @@ impl AutomationStore {
     }
 
     /// Boot recovery: runs left `running` by a dead process are settled
-    /// `failed` (never re-fired) and their running steps fail with them. The
-    /// host died, not the automation, so the cadence is left alone and the
-    /// boot catch-up still fires.
+    /// `failed` (never re-fired) and their running steps fail with them. A
+    /// parked run (one with a `waiting` step) is not stranded: it resumes.
+    /// The host died, not the automation, so the cadence is left alone and
+    /// the boot catch-up still fires.
     pub fn reconcile_stranded(&self, now_ms: i64) -> StoreResult<usize> {
         let db = self.conn()?;
         let ids: Vec<RunId> = {
-            let mut stmt = db.prepare("SELECT id FROM automation_run WHERE status = 'running'")?;
+            let mut stmt = db.prepare(
+                "SELECT id FROM automation_run r WHERE status = 'running' AND NOT EXISTS (
+                    SELECT 1 FROM automation_step s WHERE s.run_id = r.id AND s.status = 'waiting')",
+            )?;
             let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
             rows.map(|r| r.map(RunId::from)).collect::<Result<_, _>>()?
         };
-        db.execute(
-            "UPDATE automation_step SET status = 'failed', error = ?1, finished_at = ?2
-             WHERE status = 'running'",
-            params![STRANDED_REASON, now_ms],
-        )?;
+        for id in &ids {
+            db.execute(
+                "UPDATE automation_step SET status = 'failed', error = ?1, finished_at = ?2
+                 WHERE run_id = ?3 AND status = 'running'",
+                params![STRANDED_REASON, now_ms, id.as_str()],
+            )?;
+        }
         for id in &ids {
             settle_locked(
                 &db,
@@ -203,8 +313,6 @@ enum Cadence {
     Keep,
 }
 
-/// Runs that leave the cadence alone still show in `last_run` and the
-/// failure badge.
 fn settle_locked(
     db: &Connection,
     id: &RunId,
@@ -215,6 +323,22 @@ fn settle_locked(
     cadence: Cadence,
 ) -> StoreResult<SettleOutcome> {
     let tx = db.unchecked_transaction()?;
+    let outcome = settle_in(&tx, id, status, stop_reason, summary, now_ms, cadence)?;
+    tx.commit()?;
+    Ok(outcome)
+}
+
+/// The settle itself, inside the caller's transaction. Runs that leave the
+/// cadence alone still show in `last_run` and the failure badge.
+fn settle_in(
+    tx: &Connection,
+    id: &RunId,
+    status: SettledStatus,
+    stop_reason: Option<&str>,
+    summary: Option<&str>,
+    now_ms: i64,
+    cadence: Cadence,
+) -> StoreResult<SettleOutcome> {
     let changed = tx.execute(
         "UPDATE automation_run SET status = ?1, finished_at = ?2, stop_reason = ?3, summary = ?4
          WHERE id = ?5 AND status = 'running'",
@@ -227,12 +351,12 @@ fn settle_locked(
         ],
     )?;
     if changed == 0 {
-        return match get_run(&tx, id)? {
+        return match get_run(tx, id)? {
             Some(_) => Ok(SettleOutcome::AlreadySettled),
             None => Err(StoreError::NotFound(id.to_string())),
         };
     }
-    let run = get_run(&tx, id)?.ok_or_else(|| StoreError::NotFound(id.to_string()))?;
+    let run = get_run(tx, id)?.ok_or_else(|| StoreError::NotFound(id.to_string()))?;
     if status != SettledStatus::Skipped {
         let mut c = tx.query_row(
             "SELECT consecutive_errors, unseen_failures, next_run_at FROM automation WHERE id = ?1",
@@ -273,7 +397,6 @@ fn settle_locked(
             ],
         )?;
     }
-    tx.commit()?;
     log::info!(
         "[Automation] settled run {id} of {} as {}",
         run.automation_id,
@@ -315,9 +438,15 @@ fn read_run(row: &Row<'_>) -> rusqlite::Result<StoreResult<Run>> {
     })())
 }
 
+fn read_iteration(column: i64) -> Option<u32> {
+    u32::try_from(column).ok()
+}
+
 fn read_step(row: &Row<'_>) -> rusqlite::Result<StoreResult<Step>> {
     let run_id: String = row.get("run_id")?;
     let node_id: String = row.get("node_id")?;
+    let iteration: i64 = row.get("iteration")?;
+    let wait_until: Option<i64> = row.get("wait_until")?;
     let status: String = row.get("status")?;
     let output: Option<String> = row.get("output_json")?;
     let error: Option<String> = row.get("error")?;
@@ -327,11 +456,13 @@ fn read_step(row: &Row<'_>) -> rusqlite::Result<StoreResult<Step>> {
         Ok(Step {
             run_id: run_id.into(),
             node_id: NodeId::parse(node_id).map_err(|e| StoreError::Corrupt(e.to_string()))?,
+            iteration: read_iteration(iteration),
             status: from_wire(status)?,
             output: output.as_deref().map(serde_json::from_str).transpose()?,
             error,
             started_at,
             finished_at,
+            wait_until,
         })
     })())
 }

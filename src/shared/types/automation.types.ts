@@ -36,6 +36,8 @@ export type NamedTemplate = { name: string; value: Template }
 
 export type ConditionOp = 'eq' | 'ne' | 'contains' | 'gt' | 'lt' | 'exists'
 
+export type MergeMode = 'any' | 'all'
+
 export type NodeSpec =
   | {
       kind: 'http'
@@ -57,12 +59,17 @@ export type NodeSpec =
   | { kind: 'transform'; fields: NamedTemplate[] }
   | { kind: 'condition'; left: Template; op: ConditionOp; right: Template | null }
   | { kind: 'fail'; message: Template }
+  /** Runs the nodes behind its `item` edges once per element of `items`. */
+  | { kind: 'for_each'; items: Template; max_iterations: number }
+  | { kind: 'merge'; mode: MergeMode }
+  /** Parks the run durably for `duration_ms`. */
+  | { kind: 'wait'; duration_ms: number }
 
 export type NodeKind = NodeSpec['kind']
 
 export type AutomationNode = { id: NodeId; label: string; spec: NodeSpec }
 
-export type Port = 'out' | 'error' | 'true' | 'false'
+export type Port = 'out' | 'error' | 'true' | 'false' | 'item'
 
 export type Edge = { from: NodeId | 'trigger'; port: Port; to: NodeId }
 
@@ -121,6 +128,12 @@ export type IssueCode =
   | 'agent_max_attempts_out_of_range'
   | 'missing_condition_operand'
   | 'invalid_schedule'
+  | 'for_each_max_iterations_out_of_range'
+  | 'wait_duration_out_of_range'
+  | 'loop_body_not_closed'
+  | 'nested_for_each'
+  | 'loop_item_outside_body'
+  | 'merge_needs_two_inputs'
   | 'unknown_agent'
 
 export type Issue = { node_id: NodeId | null; code: IssueCode; message: string }
@@ -146,16 +159,20 @@ export type AutomationRun = {
   worktree_id: string | null
 }
 
-export type StepStatus = 'running' | 'succeeded' | 'failed' | 'skipped'
+export type StepStatus = 'running' | 'succeeded' | 'failed' | 'skipped' | 'waiting'
 
 export type AutomationStep = {
   run_id: RunId
   node_id: NodeId
+  /** 0-based iteration for a node inside a `for_each` body, else null. */
+  iteration: number | null
   status: StepStatus
   output: unknown
   error: string | null
   started_at: number | null
   finished_at: number | null
+  /** When a `waiting` step's run resumes. */
+  wait_until: number | null
 }
 
 export type AgentPolicy = {

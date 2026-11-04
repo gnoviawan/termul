@@ -78,6 +78,7 @@ import {
   HelpCircleIcon,
   HistoryIcon,
   Home01Icon,
+  HourglassIcon,
   Image02Icon,
   InformationCircleIcon,
   KeyboardIcon,
@@ -117,6 +118,7 @@ import {
   RefreshCcwIcon,
   RefreshCwIcon,
   RegexIcon,
+  RepeatIcon,
   ReplaceAllIcon,
   ReplaceIcon,
   RotateCcwIcon,
@@ -284,6 +286,7 @@ export const GripVertical = hugeIcon('GripVertical', GripVerticalIcon)
 export const Hash = hugeIcon('Hash', HashIcon)
 export const HelpCircle = hugeIcon('HelpCircle', HelpCircleIcon)
 export const History = hugeIcon('History', HistoryIcon)
+export const Hourglass = hugeIcon('Hourglass', HourglassIcon)
 export const ImageIcon = hugeIcon('ImageIcon', Image02Icon)
 export const KeySquare = hugeIcon('KeySquare', KeySquareIcon)
 export const KeyRound = hugeIcon('KeyRound', KeyRoundIcon)
@@ -316,6 +319,7 @@ export const Pin = hugeIcon('Pin', PinIcon)
 export const RefreshCcw = hugeIcon('RefreshCcw', RefreshCcwIcon)
 export const RefreshCw = hugeIcon('RefreshCw', RefreshCwIcon)
 export const Regex = hugeIcon('Regex', RegexIcon)
+export const Repeat = hugeIcon('Repeat', RepeatIcon)
 export const Replace = hugeIcon('Replace', ReplaceIcon)
 export const ReplaceAll = hugeIcon('ReplaceAll', ReplaceAllIcon)
 export const RotateCcw = hugeIcon('RotateCcw', RotateCcwIcon)

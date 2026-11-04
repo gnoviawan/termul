@@ -1,5 +1,6 @@
 //! A run's working directory: the project root, or a throwaway git worktree
-//! per run that is removed with its branch when the run ends.
+//! per run that is removed with its branch when the run ends. A parked run
+//! keeps its worktree, and the resume finds it again.
 
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,10 @@ pub(super) fn worktree_name(run_id: &RunId, isolation: Isolation) -> Option<Stri
     }
 }
 
+fn branch_of(name: &str) -> String {
+    format!("automation/{name}")
+}
+
 pub(super) enum Workdir {
     Shared(PathBuf),
     Worktree {
@@ -28,19 +33,21 @@ pub(super) enum Workdir {
 }
 
 impl Workdir {
+    /// `worktree` is the run's [`worktree_name`]: `None` runs in the root.
     pub(super) async fn prepare(
         roots: &ProjectRoots,
         project_id: &str,
-        isolation: Isolation,
         worktree: Option<&str>,
     ) -> Result<Self, String> {
         let root = roots(project_id).ok_or_else(|| "project_unavailable".to_string())?;
-        let name = match (isolation, worktree) {
-            (Isolation::SharedInRoot, _) => return Ok(Self::Shared(root)),
-            (Isolation::WorktreePerRun, Some(name)) => name.to_string(),
-            (Isolation::WorktreePerRun, None) => return Err("worktree_unavailable".to_string()),
+        let Some(name) = worktree.map(str::to_string) else {
+            return Ok(Self::Shared(root));
         };
-        let branch = format!("automation/{name}");
+        if let Some(existing) = Self::existing(root.clone(), &name).await {
+            log::info!("[Automation] run worktree {name} reused");
+            return Ok(existing);
+        }
+        let branch = branch_of(&name);
         let root_text = root.to_string_lossy().into_owned();
         let created = {
             let (root_text, name, branch) = (root_text.clone(), name.clone(), branch.clone());
@@ -61,6 +68,21 @@ impl Workdir {
             }
             Err(error) => Err(format!("worktree_failed: {error}")),
         }
+    }
+
+    /// The run worktree `name` under `root`, if it is still checked out.
+    pub(super) async fn existing(root: PathBuf, name: &str) -> Option<Self> {
+        let root_text = root.to_string_lossy().into_owned();
+        let listed = tokio::task::spawn_blocking(move || WorktreeManager::list(&root_text))
+            .await
+            .ok()?
+            .ok()?;
+        let entry = listed.into_iter().find(|e| e.name == name)?;
+        Some(Self::Worktree {
+            root,
+            path: PathBuf::from(entry.path),
+            branch: branch_of(name),
+        })
     }
 
     pub(super) fn path(&self) -> &Path {

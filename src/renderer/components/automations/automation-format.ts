@@ -7,7 +7,16 @@ import type {
   StepStatus,
   Trigger
 } from '@shared/types/automation.types'
-import { Bot, Braces, GitBranch, Globe, XCircle } from '@/components/icons'
+import {
+  Bot,
+  Braces,
+  GitBranch,
+  GitMerge,
+  Globe,
+  Hourglass,
+  Repeat,
+  XCircle
+} from '@/components/icons'
 
 /** What the list and the header show; needs-approval wins because it asks the user to act. */
 export type AutomationState = 'needs_approval' | 'disabled' | 'armed'
@@ -31,7 +40,8 @@ export const STATUS_PRESENTATION: Record<
   succeeded: { label: 'Succeeded', className: 'text-success' },
   failed: { label: 'Failed', className: 'text-destructive' },
   cancelled: { label: 'Cancelled', className: 'text-muted-foreground' },
-  skipped: { label: 'Skipped', className: 'text-muted-foreground' }
+  skipped: { label: 'Skipped', className: 'text-muted-foreground' },
+  waiting: { label: 'Waiting', className: 'text-warning' }
 }
 
 export const NODE_KIND_PRESENTATION: Record<NodeKind, { label: string; Icon: typeof Globe }> = {
@@ -39,7 +49,10 @@ export const NODE_KIND_PRESENTATION: Record<NodeKind, { label: string; Icon: typ
   agent: { label: 'Agent', Icon: Bot },
   transform: { label: 'Transform', Icon: Braces },
   condition: { label: 'Condition', Icon: GitBranch },
-  fail: { label: 'Fail', Icon: XCircle }
+  fail: { label: 'Fail', Icon: XCircle },
+  for_each: { label: 'For each', Icon: Repeat },
+  merge: { label: 'Merge', Icon: GitMerge },
+  wait: { label: 'Wait', Icon: Hourglass }
 }
 
 const DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
@@ -112,6 +125,12 @@ export function nodeKeyDetail(spec: NodeSpec): string {
       return [spec.left, spec.op, spec.right].filter(Boolean).join(' ')
     case 'fail':
       return spec.message
+    case 'for_each':
+      return `${spec.items} · max ${spec.max_iterations}`
+    case 'merge':
+      return spec.mode === 'all' ? 'When every branch ran' : 'When any branch ran'
+    case 'wait':
+      return `Wait ${formatDuration(spec.duration_ms)}`
   }
 }
 

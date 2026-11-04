@@ -229,9 +229,9 @@ async fn an_automation_is_built_approved_and_run_over_its_routes() {
         )
         .await,
         ok(json!([{
-            "run_id": run_id, "node_id": "shape", "status": "succeeded",
+            "run_id": run_id, "node_id": "shape", "iteration": null, "status": "succeeded",
             "output": { "greeting": "hello" }, "error": null,
-            "started_at": 1000, "finished_at": 1000
+            "started_at": 1000, "finished_at": 1000, "wait_until": null
         }]))
     );
 

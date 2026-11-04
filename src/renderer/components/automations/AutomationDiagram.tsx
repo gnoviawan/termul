@@ -13,20 +13,22 @@ import { type LayoutMetrics, layoutGraph, TRIGGER } from './automation-layout'
 const WIDE: LayoutMetrics = { nodeWidth: 216, nodeHeight: 58, gapX: 24, gapY: 44 }
 const NARROW: LayoutMetrics = { nodeWidth: 156, nodeHeight: 58, gapX: 12, gapY: 44 }
 
-const PORTS: Port[] = ['out', 'error', 'true', 'false']
+const PORTS: Port[] = ['out', 'error', 'true', 'false', 'item']
 
 const EDGE_CLASS: Record<Port, string> = {
   out: 'text-muted-foreground',
   error: 'text-destructive',
   true: 'text-success',
-  false: 'text-muted-foreground'
+  false: 'text-muted-foreground',
+  item: 'text-primary'
 }
 
 const PORT_TEXT: Record<Port, string> = {
   out: 'Next',
   error: 'On error',
   true: 'If true',
-  false: 'If false'
+  false: 'If false',
+  item: 'For each item'
 }
 
 interface AutomationDiagramProps {

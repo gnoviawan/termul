@@ -60,7 +60,7 @@ fn migrates_once_and_reopens_with_data() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
 }
 
 #[test]
@@ -349,6 +349,8 @@ fn step(run: &str, node: &str, status: StepStatus, finished_at: Option<i64>) -> 
         error: None,
         started_at: Some(10),
         finished_at,
+        iteration: None,
+        wait_until: None,
     }
 }
 
@@ -450,5 +452,79 @@ fn answered_suggestions_are_the_dismissed_and_accepted_ones_of_the_project() {
     assert_eq!(
         store.answered_suggestions("p2").unwrap().into_iter().collect::<Vec<_>>(),
         vec!["cccc".to_string()]
+    );
+}
+
+#[test]
+fn schema_4_keeps_the_step_rows_of_a_schema_3_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("automations.sqlite");
+    {
+        let db = rusqlite::Connection::open(&path).unwrap();
+        for sql in &super::store::MIGRATIONS[..3] {
+            db.execute_batch(sql).unwrap();
+        }
+        db.pragma_update(None, "user_version", 3).unwrap();
+        db.execute_batch(
+            r#"INSERT INTO automation (id, project_id, name, revision, enabled, trigger_json,
+                   graph_json, isolation, created_at, updated_at)
+               VALUES ('auto-old', 'p1', 'Old', 1, 1, '{"kind":"manual"}',
+                   '{"nodes":[],"edges":[]}', 'shared_in_root', 1, 1);
+               INSERT INTO automation_run (id, automation_id, revision, graph_json, trigger,
+                   scheduled_for, status, started_at, finished_at)
+               VALUES ('run-old', 'auto-old', 1, '{"nodes":[],"edges":[]}', 'manual', 5,
+                   'succeeded', 5, 9);
+               INSERT INTO automation_step (run_id, node_id, status, output_json, error,
+                   started_at, finished_at)
+               VALUES ('run-old', 'fetch', 'succeeded', '{"items":[1,2]}', NULL, 6, 7),
+                      ('run-old', 'post', 'failed', NULL, 'http_status:500', 7, 8);"#,
+        )
+        .unwrap();
+    }
+
+    let store = AutomationStore::open(&path).unwrap();
+    let run_id = RunId::from("run-old".to_string());
+    assert_eq!(
+        store.get_steps(&run_id).unwrap(),
+        vec![
+            Step {
+                run_id: run_id.clone(),
+                node_id: node_id("fetch"),
+                iteration: None,
+                status: StepStatus::Succeeded,
+                output: Some(json!({ "items": [1, 2] })),
+                error: None,
+                started_at: Some(6),
+                finished_at: Some(7),
+                wait_until: None,
+            },
+            Step {
+                run_id: run_id.clone(),
+                node_id: node_id("post"),
+                iteration: None,
+                status: StepStatus::Failed,
+                output: None,
+                error: Some("http_status:500".into()),
+                started_at: Some(7),
+                finished_at: Some(8),
+                wait_until: None,
+            },
+        ]
+    );
+    let mut in_loop = step("run-old", "post", StepStatus::Succeeded, Some(9));
+    in_loop.iteration = Some(0);
+    assert!(store.upsert_step(&in_loop).unwrap());
+    assert_eq!(
+        store
+            .get_steps(&run_id)
+            .unwrap()
+            .iter()
+            .map(|s| (s.node_id.to_string(), s.iteration, s.status))
+            .collect::<Vec<_>>(),
+        vec![
+            ("fetch".to_string(), None, StepStatus::Succeeded),
+            ("post".to_string(), None, StepStatus::Failed),
+            ("post".to_string(), Some(0), StepStatus::Succeeded),
+        ]
     );
 }
