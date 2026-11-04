@@ -314,19 +314,43 @@ function statusPill(page: Page): { pill: Locator; openGit: () => Promise<void> }
   }
 }
 
+/**
+ * The pill lists the session's edits that git reports uncommitted, and the
+ * fake agent's `[DOCK]` edits write no file: put two of them on disk, a
+ * committed file it modified and a new untracked one.
+ */
+async function writeDockEdits(project: Project): Promise<void> {
+  await mkdir(join(project.path, 'src'), { recursive: true })
+  await writeFile(join(project.path, 'src/session.ts'), 'a\nb\n')
+  execSync('git add src/session.ts', { cwd: project.path })
+  execSync('git -c user.email=e2e@termul -c user.name=e2e commit -q -m session', {
+    cwd: project.path
+  })
+  await writeFile(join(project.path, 'src/session.ts'), 'a\nb\nz1\n')
+  await writeFile(join(project.path, 'src/auth.ts'), 'export const auth = 1\n')
+}
+
 test.describe('Git sheet focus return', () => {
   test('closing the Git sheet opened from the status pill returns focus to the pill', async ({
     page
   }) => {
     const project = await registerProject({ git: true })
-    // The pill lists git's uncommitted files; the fake agent's edits write none.
+    await writeDockEdits(project)
+    // A change from outside the session: the pill leaves it out.
     await writeFile(join(project.path, 'uncommitted.txt'), 'not committed\n')
     await bootShell(page, project)
     await chooseIsolation(page, 'Current checkout')
     await startChat(page, `[DOCK] ${LONG} git action`)
     const { pill, openGit } = statusPill(page)
     const sheet = page.getByRole('dialog', { name: 'Git changes' })
-    await expect(pill).toBeVisible()
+    await expect(pill).toHaveAccessibleName('Session status: 2 changed files')
+    await pill.tap()
+    const files = page.getByRole('dialog', { name: 'Changed files' })
+    await expect(files.getByRole('button', { name: /src\/auth\.ts, Untracked$/ })).toBeVisible()
+    await expect(files.getByRole('button', { name: /src\/session\.ts, Modified$/ })).toBeVisible()
+    await expect(files.getByText('uncommitted.txt')).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await expect(files).toBeHidden()
 
     // Escape.
     await openGit()
@@ -359,8 +383,7 @@ test.describe('Git sheet focus return', () => {
     page
   }) => {
     const project = await registerProject({ git: true })
-    // The pill lists git's uncommitted files; the fake agent's edits write none.
-    await writeFile(join(project.path, 'uncommitted.txt'), 'not committed\n')
+    await writeDockEdits(project)
     await bootShell(page, project)
     await chooseIsolation(page, 'Current checkout')
     await startChat(page, `[DOCK] ${LONG} git entries`)
