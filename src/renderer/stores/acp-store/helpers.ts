@@ -14,6 +14,7 @@ import {
 } from '@/components/chat/chat-input-bar-config'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
 import { runningBackgroundSubagents } from '@/components/chat/subagent-strip'
+import { describeToolCall, toolCallPath } from '@/components/chat/tool-call-summary'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
   type AgentId,
@@ -937,35 +938,71 @@ export const MAX_LIVE_WINDOW_MESSAGES = 300
 export const MAX_LIVE_TOOL_CALLS = 500
 
 /**
+ * The restored-style summary of a file-changing call: the path, kind, status
+ * and line counts the changed files list reads, without the diff text. Null
+ * for a call that changes no file.
+ */
+function fileChangeSummary(call: ToolCall): ToolCall | null {
+  if (call.kind !== 'edit' && call.kind !== 'delete' && call.kind !== 'move') return null
+  const path = toolCallPath(call)?.trim()
+  if (!path) return null
+  const summary: ToolCall = {
+    toolCallId: call.toolCallId,
+    kind: call.kind,
+    locations: [{ path }],
+    restoredSummary: true
+  }
+  if (call.status !== undefined) summary.status = call.status
+  if (call.seq !== undefined) summary.seq = call.seq
+  if (call.timestamp !== undefined) summary.timestamp = call.timestamp
+  const diffStat = describeToolCall(call).diffStat
+  if (diffStat) summary.diffStat = diffStat
+  return summary
+}
+
+/**
  * Cap a session's live tool calls at {@link MAX_LIVE_TOOL_CALLS}: drop the
  * OLDEST FINISHED calls (status `completed`/`failed`), always retaining
  * in-flight ones (`pending`/`in_progress`/absent status — never drop what we
  * can't prove finished). Subagent dispatches are never dropped either: each
  * is a row of the transcript, while the calls a subagent makes are its detail.
- * The result preserves relative order of survivors.
+ * A dropped file-changing call leaves its {@link fileChangeSummary}, and
+ * summaries never count toward the cap, so the changed files list keeps every
+ * file the session touched. The result preserves relative order of survivors.
  */
 export function trimLiveToolCalls(calls: ToolCall[]): ToolCall[] {
   if (calls.length <= MAX_LIVE_TOOL_CALLS) return calls
-  let dropCount = calls.length - MAX_LIVE_TOOL_CALLS
+  const liveCount = calls.reduce((count, call) => (call.restoredSummary ? count : count + 1), 0)
+  if (liveCount <= MAX_LIVE_TOOL_CALLS) return calls
+  let dropCount = liveCount - MAX_LIVE_TOOL_CALLS
   const survivors: ToolCall[] = []
+  let liveSurvivors = 0
   // Walk oldest→newest; finished calls (completed/failed — provably done) drop
   // from the head until the cap holds. Absent status is treated as in-flight:
   // never drop what we can't prove finished.
-  for (let i = 0; i < calls.length; i++) {
-    const status = calls[i].status
-    if (
-      dropCount > 0 &&
-      calls[i].subagent === undefined &&
-      (status === 'completed' || status === 'failed')
-    ) {
-      dropCount--
+  for (const call of calls) {
+    if (call.restoredSummary) {
+      survivors.push(call)
       continue
     }
-    survivors.push(calls[i])
+    if (
+      dropCount > 0 &&
+      call.subagent === undefined &&
+      (call.status === 'completed' || call.status === 'failed')
+    ) {
+      dropCount--
+      const summary = fileChangeSummary(call)
+      if (summary) survivors.push(summary)
+      continue
+    }
+    survivors.push(call)
+    liveSurvivors++
   }
   // Degenerate guard: more in-flight calls than the cap — keep the newest
   // (never trim in-flight, and the array must not grow without bound).
-  return survivors.length > MAX_LIVE_TOOL_CALLS ? survivors.slice(-MAX_LIVE_TOOL_CALLS) : survivors
+  let excess = liveSurvivors - MAX_LIVE_TOOL_CALLS
+  if (excess <= 0) return survivors
+  return survivors.filter((call) => call.restoredSummary || excess-- <= 0)
 }
 
 /** True when live (or mid-replay) session updates may mutate transcript maps. */
