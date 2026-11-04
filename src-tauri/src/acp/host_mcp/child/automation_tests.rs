@@ -386,7 +386,7 @@ fn the_guide_carries_the_secrets_and_question_rules() {
                 "{{secrets.NAME}} goes only in an http node's url, headers or body.",
                 "ask at most 5 typed questions",
                 "\"you decide\"",
-                "Agent nodes run with no tools and no secrets",
+                "Agent nodes get no secrets and only the tools their tools list allows",
                 "call automation_propose(id)",
             ] {
                 assert!(guide.contains(rule), "missing {rule:?}");
