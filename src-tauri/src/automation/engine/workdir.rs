@@ -43,7 +43,7 @@ impl Workdir {
         let Some(name) = worktree.map(str::to_string) else {
             return Ok(Self::Shared(root));
         };
-        if let Some(existing) = Self::existing(root.clone(), &name).await {
+        if let Some(existing) = Self::existing(root.clone(), &name).await? {
             log::info!("[Automation] run worktree {name} reused");
             return Ok(existing);
         }
@@ -70,19 +70,27 @@ impl Workdir {
         }
     }
 
-    /// The run worktree `name` under `root`, if it is still checked out.
-    pub(super) async fn existing(root: PathBuf, name: &str) -> Option<Self> {
+    /// The run worktree `name` under `root`, if it is still checked out on
+    /// the run's own branch. A listing that fails is an error, not absence.
+    pub(super) async fn existing(root: PathBuf, name: &str) -> Result<Option<Self>, String> {
         let root_text = root.to_string_lossy().into_owned();
-        let listed = tokio::task::spawn_blocking(move || WorktreeManager::list(&root_text))
-            .await
-            .ok()?
-            .ok()?;
-        let entry = listed.into_iter().find(|e| e.name == name)?;
-        Some(Self::Worktree {
+        let listed = match tokio::task::spawn_blocking(move || WorktreeManager::list(&root_text)).await {
+            Ok(Ok(listed)) => listed,
+            Ok(Err(error)) => return Err(format!("worktree_failed: {}", error.error_code())),
+            Err(error) => return Err(format!("worktree_failed: {error}")),
+        };
+        let branch = branch_of(name);
+        let Some(entry) = listed
+            .into_iter()
+            .find(|e| e.name == name && e.branch == branch)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(Self::Worktree {
             root,
             path: PathBuf::from(entry.path),
-            branch: branch_of(name),
-        })
+            branch,
+        }))
     }
 
     pub(super) fn path(&self) -> &Path {

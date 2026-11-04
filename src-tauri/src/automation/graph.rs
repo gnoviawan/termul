@@ -516,7 +516,7 @@ fn data_sources(
     for reference in references(spec) {
         match reference {
             Reference::NodeOutput { node, .. } => out.push(node),
-            Reference::LoopItem { node, .. } | Reference::LoopIndex { node } => {
+            Reference::LoopItem { node, .. } => {
                 if let Some(l) = graph.node(&node) {
                     out.extend(referenced_nodes(&l.spec));
                 }

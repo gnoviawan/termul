@@ -84,7 +84,9 @@ impl Engine {
             }
         };
         let mut active = self.active.lock();
-        if active.contains_key(&run.automation_id) {
+        // Rechecked under the lock `shutdown` cancels through, so a timer that
+        // passed the check in `resume_due` cannot start a run after shutdown.
+        if self.shutdown.is_cancelled() || active.contains_key(&run.automation_id) {
             return;
         }
         match self.store.claim_wait(&run.id, &node_id, iteration, now) {
@@ -138,8 +140,10 @@ impl Engine {
         let root = project_id.and_then(|p| (self.project_roots)(&p));
         if let (Some(root), Some(name)) = (root, run.worktree_id.clone()) {
             self.tasks.spawn(async move {
-                if let Some(dir) = Workdir::existing(root, &name).await {
-                    dir.release().await;
+                match Workdir::existing(root, &name).await {
+                    Ok(Some(dir)) => dir.release().await,
+                    Ok(None) => {}
+                    Err(error) => log::warn!("[Automation] run worktree {name} not removed: {error}"),
                 }
             });
         }

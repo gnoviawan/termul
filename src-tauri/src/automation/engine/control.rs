@@ -118,7 +118,15 @@ pub(super) fn wait(scope: &NodeScope<'_>, duration_ms: u64) -> NodeError {
         .row(scope.node_id, scope.iteration, StepStatus::Waiting);
     row.started_at = Some(now);
     row.wait_until = Some(wait_until);
-    scope.walk.record(row);
+    // Parking without a stored `waiting` row would leave nothing to resume.
+    if let Err(error) = scope.run.engine.store.upsert_step(&row) {
+        log::error!(
+            "[Automation] run {} wait {} not recorded: {error}",
+            scope.run.run.id,
+            scope.node_id
+        );
+        return NodeError::failed(format!("wait_not_recorded: {error}"));
+    }
     log::info!(
         "[Automation] run {} parked at {}{} until {wait_until}",
         scope.run.run.id,

@@ -642,4 +642,9 @@ fn untrusted_flow_passes_through_merge_and_for_each() {
                 "allowed_hosts": ["api.example.com"] }),
     );
     assert!(untrusted_flow(&fetched_items.graph));
+    let index_only = apply(
+        &fetched_items,
+        json!([{ "op": "update_node", "id": "mark", "spec": agent("item {{nodes.each.index}}") }]),
+    );
+    assert!(!untrusted_flow(&index_only.graph));
 }
