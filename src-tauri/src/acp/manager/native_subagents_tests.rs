@@ -639,6 +639,16 @@ fn handback_views(tool_use_id: &str, sender: &str, recipient: &str, text: &str) 
     ]
 }
 
+/// `routed` without the record a report carries; panics when it has none.
+fn without_record(mut routed: Value) -> Value {
+    let meta = routed["update"]
+        .as_object_mut()
+        .and_then(|update| update.remove("_meta"))
+        .expect("a report carries its subagent's record");
+    assert!(meta.get("termul/subagent").is_some(), "{meta}");
+    routed
+}
+
 fn report_on(dispatch_id: &str, text: &str) -> Value {
     json!({
         "sessionId": ROOT,
@@ -657,6 +667,7 @@ fn a_handback_report_lands_once_from_its_two_views() {
     let routed: Vec<Value> = handback_views("toolu_handback", CHILD, ROOT, "Found 3 call sites.")
         .iter()
         .flat_map(|view| claimed(route_session_update(&state, view, 2)))
+        .map(without_record)
         .collect();
     assert_eq!(
         routed,
@@ -704,6 +715,7 @@ fn a_nested_handback_lands_once_on_the_nested_card() {
         handback_views("toolu_inner_handback", GRANDCHILD, CHILD, "inner done")
             .iter()
             .flat_map(|view| claimed(route_session_update(&state, view, 3)))
+            .map(without_record)
             .collect();
     assert_eq!(
         routed,
