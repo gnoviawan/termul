@@ -28,17 +28,39 @@ Inside, the steps are grouped, for example "Read 1 file, ran 1 search". Click a 
 
 ## Review changed files
 
-The **Changed files** bar above the message box lists every file the agent edited, deleted, or moved in this chat. It shows how many files changed and how many lines were added and removed. Click the bar to open the list.
+When the agent edited, deleted, or moved files in this chat, a status pill shows at the top right of the chat. It shows how many files changed and how many lines were added and removed, and how many subagents run or ended. Click the pill to open the list. When there are both changed files and subagents, the list has a **Changed files** tab and a **Subagents** tab. On a phone the list opens as a sheet, and you can swipe between the tabs.
+
+The picture below was taken when the list was a bar above the message box. The list itself is the same.
 
 ![The opened Changed files list shows cart.ts in the src folder, marked M, with 3 lines added and 2 removed.](/screenshots/agents-changed-files.png)
 
 Each file has a letter: **M** for modified, **D** for deleted, or **R** for renamed. Click a file to open it in the editor. A deleted file does not open. This list is for review only. To stage and commit the changes, use the **Changes** tab in the side panel. See [Git](/docs/git).
 
-## Open a subagent's details
+## Follow subagents
 
-Some agents hand part of a task to a helper agent, called a subagent. A subagent step has a robot icon. Open the turn's step list and click the step. A window shows its status (**Running**, **Completed**, or **Failed**), the **Task prompt** the agent gave it, and the **Result**. It does not list the subagent's own steps.
+Some agents hand part of a task to a helper agent, called a subagent. Subagents that the agent starts together show as one group in the turn. The group header shows up to three agent icons, the number of subagents, a summary such as "1 working · 1 done · 1 failed", and how long they have run. The group stays open while a subagent runs and folds when all of them finish. A single subagent shows as one card without the header. The group stays in the chat after the turn ends, and when you reopen the chat later.
 
-![The details of a subagent step named "Review the checkout flow". It shows Completed, the task prompt, and the result.](/screenshots/agents-subagent.png)
+Each row shows the subagent's title and type, its latest step while it runs or the first line of its result when it ends, its status (**Running**, **Done**, **Failed** or **Stopped**) and its time.
+
+Click a row to open the subagent. On a wide window it opens beside the chat; on a narrow one it slides in from the right, and on a phone it opens as a full-height sheet. The panel shows:
+
+- **Task**, the prompt the agent gave the subagent. Click **Show full prompt** for the rest of a long prompt.
+- **Activity**, the steps the subagent ran. Click a step to expand it. A subagent that started its own subagents shows them here too; click one to open it, and click **Back** to return.
+- **Latest message** while the subagent runs, or **Result** when it ends.
+
+Use the left and right arrow keys to move to the other subagents of the chat. When the agent did not report a section, the panel says why.
+
+### Stop one subagent
+
+To stop one subagent and leave the others running, click **Stop** in its panel. On a phone, tap the stop button on its row in the **Subagents** sheet and confirm. The work it did so far is kept. **Stop** shows only while the subagent runs and when the agent supports it. To stop the whole turn instead, use the Stop button of the chat.
+
+### Subagents that run in the background
+
+An agent can end its turn while subagents it started keep working in the background. The chat then keeps those subagents as running, and the [status pill](#review-changed-files) says "Waiting on N background subagents". While they run, Termul does not switch the agent or the Claude account of the chat, because that would stop them.
+
+## See earlier steps of a long turn
+
+A long turn shows only its latest 40 steps. Click **Show N earlier steps** at the top of the turn to load 50 more.
 
 ## See images, videos, and audio
 
