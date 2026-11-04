@@ -7,6 +7,7 @@ use super::model::{
     wire_name, Automation, ConditionOp, EdgeSource, Graph, HttpMethod, Issue, IssueCode, NodeId,
     NodeKind, NodeSpec, Op, Port, Trigger, AGENT_MAX_ATTEMPTS, AGENT_MAX_TIMEOUT_MS,
     FOR_EACH_MAX_ITERATIONS, WAIT_MAX_MS,
+    MCP_MAX_TIMEOUT_MS,
 };
 use super::template::{self, ParsedTemplate, Reference};
 use super::{schedule, schema};
@@ -58,7 +59,9 @@ fn legal_ports(source: Option<NodeKind>) -> &'static [Port] {
         None => &[Port::Out],
         Some(NodeKind::Condition) => &[Port::True, Port::False, Port::Error],
         Some(NodeKind::Fail) => &[],
-        Some(NodeKind::Http | NodeKind::Agent | NodeKind::Transform) => &[Port::Out, Port::Error],
+        Some(NodeKind::Http | NodeKind::Agent | NodeKind::Transform | NodeKind::McpTool) => {
+            &[Port::Out, Port::Error]
+        }
         Some(NodeKind::ForEach) => &[Port::Item, Port::Out, Port::Error],
         Some(NodeKind::Merge | NodeKind::Wait) => &[Port::Out],
     }
@@ -377,6 +380,30 @@ fn check_node(
                 ));
             }
         }
+        NodeSpec::McpTool {
+            arguments,
+            timeout_ms,
+            ..
+        } => {
+            if *timeout_ms == 0 || *timeout_ms > MCP_MAX_TIMEOUT_MS {
+                issues.push(issue(
+                    Some(id),
+                    IssueCode::McpTimeoutOutOfRange,
+                    format!("timeout_ms must be 1..={MCP_MAX_TIMEOUT_MS}, got {timeout_ms}"),
+                ));
+            }
+            let mut seen = HashSet::new();
+            for argument in arguments {
+                let problem = if argument.name.trim().is_empty() {
+                    "an argument has an empty name".to_string()
+                } else if !seen.insert(argument.name.as_str()) {
+                    format!("argument {} is given more than once", argument.name)
+                } else {
+                    continue;
+                };
+                issues.push(issue(Some(id), IssueCode::InvalidMcpArguments, problem));
+            }
+        }
         NodeSpec::Condition {
             op, right: None, ..
         } if *op != ConditionOp::Exists => {
@@ -457,9 +484,9 @@ fn check_http_host(id: &NodeId, url: &ParsedTemplate, allowed: &[String], issues
     }
 }
 
-/// True when untrusted fetched content can steer an outbound request: an
-/// agent whose prompt reads data derived from a GET response has an http
-/// node downstream of it.
+/// True when untrusted fetched content can steer an outbound action: an
+/// agent whose prompt reads data derived from a GET response or an MCP tool
+/// result has an http or mcp_tool node downstream of it.
 pub fn untrusted_flow(graph: &Graph) -> bool {
     let bodies = loop_bodies(graph);
     let sources: HashMap<&NodeId, Vec<NodeId>> = graph
@@ -476,7 +503,7 @@ pub fn untrusted_flow(graph: &Graph) -> bool {
                 NodeSpec::Http {
                     method: HttpMethod::Get,
                     ..
-                }
+                } | NodeSpec::McpTool { .. }
             )
         })
         .map(|n| &n.id)
@@ -498,7 +525,7 @@ pub fn untrusted_flow(graph: &Graph) -> bool {
             && downstream(graph, &bodies, &agent.id).iter().any(|d| {
                 graph
                     .node(d)
-                    .is_some_and(|n| n.spec.kind() == NodeKind::Http)
+                    .is_some_and(|n| matches!(n.spec.kind(), NodeKind::Http | NodeKind::McpTool))
             })
     })
 }

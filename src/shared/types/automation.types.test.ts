@@ -281,6 +281,20 @@ const typed: Unbranded<WireFixture> = {
       }
     },
     {
+      op: 'add_node',
+      node: {
+        id: 'lookup',
+        label: 'Lookup',
+        spec: {
+          kind: 'mcp_tool',
+          server_id: 'srv-github',
+          tool: 'search',
+          arguments: [],
+          timeout_ms: 60000
+        }
+      }
+    },
+    {
       op: 'remove_node',
       id: 'note'
     },
@@ -477,6 +491,20 @@ const typed: Unbranded<WireFixture> = {
       {
         node_id: 'post',
         hosts: ['hooks.example.com']
+      }
+    ],
+    mcp_tools: [
+      {
+        node_id: 'issues',
+        server_id: 'srv-github',
+        server_name: 'GitHub',
+        tool: 'list_issues'
+      },
+      {
+        node_id: 'ping',
+        server_id: 'srv-removed',
+        server_name: null,
+        tool: 'ping'
       }
     ],
     untrusted_flow: true,

@@ -15,6 +15,7 @@ import {
   Globe,
   Hourglass,
   Repeat,
+  Wrench,
   XCircle
 } from '@/components/icons'
 
@@ -52,7 +53,8 @@ export const NODE_KIND_PRESENTATION: Record<NodeKind, { label: string; Icon: typ
   fail: { label: 'Fail', Icon: XCircle },
   for_each: { label: 'For each', Icon: Repeat },
   merge: { label: 'Merge', Icon: GitMerge },
-  wait: { label: 'Wait', Icon: Hourglass }
+  wait: { label: 'Wait', Icon: Hourglass },
+  mcp_tool: { label: 'MCP tool', Icon: Wrench }
 }
 
 const DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
@@ -131,6 +133,8 @@ export function nodeKeyDetail(spec: NodeSpec): string {
       return spec.mode === 'all' ? 'When every branch ran' : 'When any branch ran'
     case 'wait':
       return `Wait ${formatDuration(spec.duration_ms)}`
+    case 'mcp_tool':
+      return spec.tool
   }
 }
 

@@ -12,6 +12,10 @@
 //! (stateless Tauri command) — the renderer already holds the full config and
 //! passes it through.
 //!
+//! [`connect`] is the one client connection path: the probe and the
+//! automation engine's `mcp_tool` node (`automation::mcp`) both open servers
+//! through it.
+//!
 //! ## Transport mapping
 //!
 //! - `stdio` → rmcp `transport-child-process` (`TokioChildProcess`). On Windows
@@ -118,7 +122,7 @@ impl std::fmt::Debug for McpServerConfig {
 }
 
 impl McpServerConfig {
-    fn transport(&self) -> String {
+    pub(crate) fn transport(&self) -> String {
         self.r#type.clone().unwrap_or_else(|| "stdio".to_string())
     }
 }
@@ -359,11 +363,55 @@ async fn probe_once(server: McpServerConfig) -> ProbeResult {
 }
 
 async fn probe_inner(server: &McpServerConfig) -> ProbeResult {
+    match connect(server, None).await {
+        Ok(connection) => drive_running(connection).await,
+        Err(ConnectError::AuthRequired { www_authenticate }) => {
+            ProbeResult::auth_required(www_authenticate)
+        }
+        Err(ConnectError::Failed(error)) => ProbeResult::disconnected(error),
+    }
+}
+
+/// What [`connect`] could not do: the server wants OAuth (with its raw
+/// `WWW-Authenticate` challenge, possibly empty), or a short value-free
+/// reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConnectError {
+    AuthRequired { www_authenticate: String },
+    Failed(String),
+}
+
+/// An initialized client connection. Dropping it closes the connection and
+/// kills a stdio server.
+pub(crate) struct McpConnection {
+    pub service: RunningService<rmcp::service::RoleClient, ClientConfig>,
+    /// The stored OAuth access token the connection sends, so a caller can
+    /// keep it out of what it reports.
+    pub bearer: Option<String>,
+    #[cfg(windows)]
+    _tree: Option<crate::process_util::KillOnCloseJob>,
+}
+
+/// What every Termul MCP client advertises: no elicitation, sampling, roots
+/// or tasks, so a server cannot ask it for user input.
+pub(crate) fn client_config() -> ClientConfig {
+    ClientConfig::default()
+}
+
+/// Opens and initializes one client connection to `server`, the probe's and
+/// the automation engine's shared path. A stdio server starts in `cwd` when
+/// given, else in the host's working directory. Never logs secrets.
+pub(crate) async fn connect(
+    server: &McpServerConfig,
+    cwd: Option<&std::path::Path>,
+) -> Result<McpConnection, ConnectError> {
     let transport = server.transport();
     match transport.as_str() {
-        "stdio" => probe_stdio(server).await,
-        "http" | "sse" => probe_http(server, &transport).await,
-        other => ProbeResult::disconnected(format!("unsupported transport '{other}'")),
+        "stdio" => connect_stdio(server, cwd).await,
+        "http" | "sse" => connect_http(server, &transport).await,
+        other => Err(ConnectError::Failed(format!(
+            "unsupported transport '{other}'"
+        ))),
     }
 }
 
@@ -386,15 +434,25 @@ fn resolve_stdio_command(command: &str) -> (String, Vec<String>) {
     }
 }
 
-async fn probe_stdio(server: &McpServerConfig) -> ProbeResult {
+async fn connect_stdio(
+    server: &McpServerConfig,
+    cwd: Option<&std::path::Path>,
+) -> Result<McpConnection, ConnectError> {
     let command = match server.command.as_deref() {
         Some(c) if !c.trim().is_empty() => c,
-        _ => return ProbeResult::disconnected("stdio command is required"),
+        _ => {
+            return Err(ConnectError::Failed(
+                "stdio command is required".to_string(),
+            ))
+        }
     };
     let (program, prepend_args) = resolve_stdio_command(command);
     let mut cmd = Command::new(&program);
     cmd.args(&prepend_args);
     cmd.args(&server.args);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
     // Scrub AppImage-only vars before the probe's own env, so an explicit entry
     // still wins and the probed stdio server resolves host libraries (#1435).
     crate::process_util::clean_appimage_env(&mut cmd);
@@ -423,23 +481,30 @@ async fn probe_stdio(server: &McpServerConfig) -> ProbeResult {
         .spawn();
     let transport = match spawn {
         Ok((proc, _stderr)) => proc,
-        Err(error) => return ProbeResult::disconnected(format!("spawn failed: {error}")),
+        Err(error) => return Err(ConnectError::Failed(format!("spawn failed: {error}"))),
     };
     #[cfg(windows)]
     let _tree = transport.id().and_then(|pid| {
         crate::process_util::KillOnCloseJob::new_assigned_pid(pid, "MCP probe", true)
     });
-    let running = match serve_client(ClientConfig::default(), transport).await {
-        Ok(service) => service,
-        Err(error) => return ProbeResult::disconnected(format!("initialize failed: {error}")),
-    };
-    drive_running(running).await
+    let service = serve_client(client_config(), transport)
+        .await
+        .map_err(|error| ConnectError::Failed(format!("initialize failed: {error}")))?;
+    Ok(McpConnection {
+        service,
+        bearer: None,
+        #[cfg(windows)]
+        _tree,
+    })
 }
 
-async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
+async fn connect_http(
+    server: &McpServerConfig,
+    transport: &str,
+) -> Result<McpConnection, ConnectError> {
     let url = match server.url.as_deref() {
         Some(u) if !u.trim().is_empty() => u,
-        _ => return ProbeResult::disconnected(format!("{transport} URL is required")),
+        _ => return Err(ConnectError::Failed(format!("{transport} URL is required"))),
     };
     let mut config = StreamableHttpClientTransportConfig::with_uri(url);
     if !server.headers.is_empty() {
@@ -496,13 +561,15 @@ async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
                     transport,
                     "MCP probe: server requires OAuth authentication"
                 );
-                return ProbeResult::auth_required(www_auth_header);
+                return Err(ConnectError::AuthRequired {
+                    www_authenticate: www_auth_header,
+                });
             }
         }
     }
 
     let client = StreamableHttpClientTransport::from_config(config);
-    let running = match serve_client(ClientConfig::default(), client).await {
+    let service = match serve_client(client_config(), client).await {
         Ok(service) => service,
         Err(error) => {
             // Fallback: if the pre-flight didn't catch it but serve_client
@@ -521,12 +588,19 @@ async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
                     transport,
                     "MCP probe: server requires OAuth (detected from serve_client error)"
                 );
-                return ProbeResult::auth_required(String::new());
+                return Err(ConnectError::AuthRequired {
+                    www_authenticate: String::new(),
+                });
             }
-            return ProbeResult::disconnected(format!("initialize failed: {error}"));
+            return Err(ConnectError::Failed(format!("initialize failed: {error}")));
         }
     };
-    drive_running(running).await
+    Ok(McpConnection {
+        service,
+        bearer: stored_token,
+        #[cfg(windows)]
+        _tree: None,
+    })
 }
 
 /// Pre-flight check: send a raw HTTP request to the MCP server URL and check
@@ -578,9 +652,8 @@ async fn check_oauth_required(url: &str, headers: &[McpNameValuePair]) -> Option
 /// Drive an initialized rmcp client service: list all tools (paginated), then
 /// cancel (tear down the connection — the probe is one-shot). Maps the rmcp
 /// `Tool` model to the trimmed `McpToolInfo` the UI surfaces.
-async fn drive_running(
-    running: RunningService<rmcp::service::RoleClient, ClientConfig>,
-) -> ProbeResult {
+async fn drive_running(connection: McpConnection) -> ProbeResult {
+    let running = connection.service;
     let tools = match running.list_all_tools().await {
         Ok(tools) => tools,
         Err(error) => {

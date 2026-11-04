@@ -1,13 +1,13 @@
 use serde_json::json;
 
-use super::model::{AgentPolicy, AgentTools, NodeHosts, NodeSecrets, RunPolicy};
+use super::model::{AgentPolicy, AgentTools, McpToolPolicy, NodeHosts, NodeSecrets, RunPolicy};
 use super::policy::run_policy;
 use super::test_support::{apply, node_id, sample_automation};
 
 #[test]
 fn derives_the_approval_card_for_the_sample() {
     // 2026-03-06T12:00Z, a Friday; next weekday 05:00 New York slots follow DST.
-    let policy = run_policy(&sample_automation(), 1_772_798_400_000);
+    let policy = run_policy(&sample_automation(), 1_772_798_400_000, &|_| None);
     assert_eq!(
         policy,
         RunPolicy {
@@ -40,6 +40,7 @@ fn derives_the_approval_card_for_the_sample() {
                     hosts: vec!["hooks.example.com".into()],
                 },
             ],
+            mcp_tools: vec![],
             untrusted_flow: true,
             failure_policy: "backoff 30s/1m/5m/15m/60m".into(),
         }
@@ -51,7 +52,7 @@ fn summarizes_manual_every_and_at_triggers() {
     let base = sample_automation();
     let summary = |trigger: serde_json::Value| {
         let a = apply(&base, json!([{ "op": "set_trigger", "trigger": trigger }]));
-        let p = run_policy(&a, 0);
+        let p = run_policy(&a, 0, &|_| None);
         (p.trigger_summary, p.next_runs)
     };
     assert_eq!(
@@ -72,5 +73,36 @@ fn summarizes_manual_every_and_at_triggers() {
             json!({ "kind": "schedule", "schedule": { "kind": "at", "at": 1_772_798_400_000_i64 } })
         ),
         ("once at 2026-03-06T12:00Z".into(), vec![1_772_798_400_000])
+    );
+}
+
+#[test]
+fn lists_each_mcp_tool_node_with_its_server_name_when_the_server_is_known() {
+    let a = apply(
+        &sample_automation(),
+        json!([
+            { "op": "add_node", "node": { "id": "issues", "label": "Issues", "spec": {
+                "kind": "mcp_tool", "server_id": "srv-gh", "tool": "list_issues" } } },
+            { "op": "add_node", "node": { "id": "gone", "label": "Gone", "spec": {
+                "kind": "mcp_tool", "server_id": "srv-old", "tool": "ping" } } }
+        ]),
+    );
+    let names = |id: &str| (id == "srv-gh").then(|| "GitHub".to_string());
+    assert_eq!(
+        run_policy(&a, 0, &names).mcp_tools,
+        vec![
+            McpToolPolicy {
+                node_id: node_id("issues"),
+                server_id: "srv-gh".into(),
+                server_name: Some("GitHub".into()),
+                tool: "list_issues".into(),
+            },
+            McpToolPolicy {
+                node_id: node_id("gone"),
+                server_id: "srv-old".into(),
+                server_name: None,
+                tool: "ping".into(),
+            },
+        ]
     );
 }
