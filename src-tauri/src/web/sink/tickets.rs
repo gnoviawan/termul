@@ -3,7 +3,9 @@
 //! Tickets have no timeout, so the relay must tell the rendezvous when a ticket
 //! can no longer be answered: the turn ended, the session closed, or the agent
 //! died. The agent driver has already cancelled the parked responders on those
-//! paths; this releases the relay side and the session's queue slot.
+//! paths; this releases the relay side and the session's queue slot. Stop,
+//! close and kill release outside any session event, so a release re-derives
+//! the chats it stopped needing the user (after the ticket locks are gone).
 
 use super::WsRelaySink;
 use crate::acp::AgentId;
@@ -26,6 +28,7 @@ impl WsRelaySink {
                 elicitations,
                 "released pending approvals after the session ended"
             );
+            self.refresh_chat_activity(session_id);
         }
     }
 
@@ -78,6 +81,7 @@ impl WsRelaySink {
                 elicitations,
                 "released pending approvals after the agent ended"
             );
+            self.refresh_pending_chat_activity();
         }
     }
 }

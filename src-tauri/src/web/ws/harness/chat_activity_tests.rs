@@ -343,6 +343,57 @@ async fn a_closed_session_stops_working_and_a_deleted_one_leaves_the_list() {
     assert_eq!(activity(&watcher.peer).get(SESSION), None);
 }
 
+fn raise_permission(host: &Host, request_id: &str) {
+    emit(
+        host,
+        Some(SESSION),
+        "acp:permission_request",
+        json!({
+            "agentId": AGENT, "sessionId": SESSION, "requestId": request_id,
+            "toolCall": {"toolCallId": request_id}, "options": [{"optionId": "allow"}],
+        }),
+    );
+}
+
+/// Stop, a close and a kill release the relay tickets outside any session
+/// event: the chat stops needing the user at once.
+#[tokio::test(start_paused = true)]
+async fn released_tickets_stop_needing_you() {
+    let host = ticket_host();
+    let mut watcher = host.connect();
+    watcher.authenticate().await;
+    watch_activity(&mut watcher.peer).await;
+
+    raise_permission(&host, "perm-1");
+    watcher.peer.read_for(Duration::from_millis(50)).await;
+    assert_eq!(
+        activity(&watcher.peer).get(SESSION),
+        Some(&record(false, true, false, Value::Null))
+    );
+    host.relay.release_session_tickets(SESSION);
+    watcher.peer.read_for(Duration::from_millis(50)).await;
+    assert_eq!(
+        activity(&watcher.peer).get(SESSION),
+        None,
+        "Stop or close released the session's tickets"
+    );
+
+    raise_permission(&host, "perm-2");
+    watcher.peer.read_for(Duration::from_millis(50)).await;
+    assert_eq!(
+        activity(&watcher.peer).get(SESSION),
+        Some(&record(false, true, false, Value::Null))
+    );
+    host.relay
+        .release_agent_tickets(&AgentId(AGENT.to_string()));
+    watcher.peer.read_for(Duration::from_millis(50)).await;
+    assert_eq!(
+        activity(&watcher.peer).get(SESSION),
+        None,
+        "a kill released the agent's tickets"
+    );
+}
+
 /// An agent that reports a turn end after its chat was deleted does not bring
 /// the chat back into every list.
 #[tokio::test(start_paused = true)]

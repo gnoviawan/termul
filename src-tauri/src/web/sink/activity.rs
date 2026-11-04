@@ -42,8 +42,8 @@ impl WsRelaySink {
         self.announce_activity(sid, changed);
     }
 
-    /// A pending prompt was answered: re-derive every session shown as
-    /// needing the user.
+    /// A pending prompt was answered or released: re-derive every session
+    /// shown as needing the user.
     pub fn refresh_pending_chat_activity(&self) {
         for sid in self.chat_activity.needing_you() {
             self.refresh_chat_activity(&sid);
