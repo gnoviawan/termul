@@ -313,9 +313,11 @@ describe('ChatsList card content', () => {
     expect(screen.getByRole('button', { name: 'Chat shown' })).toBeInTheDocument()
   })
 
-  it("ignores a stale busy flag on this renderer's own session record", () => {
+  it('ignores a busy flag left on a session record that is not live', () => {
     setIndex([entry('a')])
-    useAcpStore.setState({ sessions: { a: mockAcpSession({ id: 'a', activeTurn: true }) } })
+    useAcpStore.setState({
+      sessions: { a: mockAcpSession({ id: 'a', status: 'closed', activeTurn: true }) }
+    })
     render(<ChatsList project={project} />)
     expect(screen.getByRole('button', { name: 'Chat a' })).toBeInTheDocument()
   })

@@ -118,8 +118,48 @@ describe('useAgentChatStatusSignals', () => {
     })
   })
 
-  it("ignores turn flags and pending prompts on this renderer's own record", () => {
+  it('shows Working from the moment this renderer submits, before the host echoes the turn', () => {
     seedOptionsSession('s1', 'agent-1', { title: 'Chat', activeTurn: true, openTurnId: 't1' })
+    const { result } = renderHook(() => useAgentChatStatusSignals('s1'))
+
+    expect(result.current.turnBusy).toBe(true)
+    act(() => seedChatActivity({ s1: { busy: true } }))
+    expect(result.current.turnBusy).toBe(true)
+  })
+
+  it('stops Working once Stop ends the turn here and on the host', () => {
+    seedOptionsSession('s1', 'agent-1', { title: 'Chat', activeTurn: true, openTurnId: 't1' })
+    seedChatActivity({ s1: { busy: true } })
+    const { result } = renderHook(() => useAgentChatStatusSignals('s1'))
+    expect(result.current.turnBusy).toBe(true)
+
+    act(() => {
+      seedOptionsSession('s1', 'agent-1', { title: 'Chat', activeTurn: false, openTurnId: null })
+      seedChatActivity({ s1: { unread: true, turnEnd: { seq: 9, logEpoch: 'e1' } } })
+    })
+    expect(result.current).toMatchObject({ turnBusy: false, unread: true })
+  })
+
+  it('stops Working when Stop ends the agent work outside a turn', () => {
+    seedOptionsSession('s1', 'agent-1', { title: 'Chat', agentWorking: true })
+    seedChatActivity({ s1: { busy: true } })
+    const { result } = renderHook(() => useAgentChatStatusSignals('s1'))
+    expect(result.current.turnBusy).toBe(true)
+
+    act(() => {
+      seedOptionsSession('s1', 'agent-1', { title: 'Chat', agentWorking: false })
+      seedChatActivity({})
+    })
+    expect(result.current.turnBusy).toBe(false)
+  })
+
+  it('ignores turn flags left on a record that is not live, and pending prompts held here', () => {
+    seedOptionsSession('s1', 'agent-1', {
+      title: 'Chat',
+      status: 'closed',
+      activeTurn: true,
+      openTurnId: 't1'
+    })
     useAcpStore.setState({
       pendingPermissions: {
         r1: { requestId: 'r1', agentId: 'agent-1', sessionId: 's1', options: [], toolCall: null }

@@ -117,8 +117,19 @@ describe('AgentChatTabInline activity indicator', () => {
     expect(screen.getByTitle(WORKING)).toBeInTheDocument()
   })
 
-  it("ignores stale turn flags on this renderer's own session record", () => {
+  it('spins as soon as this renderer submits, before the host echoes the turn', () => {
     seedOptionsSession('s1', 'agent-1', { title: 'My Chat', activeTurn: true, openTurnId: 't1' })
+    renderChip(false)
+    expect(screen.getByTitle(WORKING)).toBeInTheDocument()
+  })
+
+  it('ignores turn flags left on a session record that is not live', () => {
+    seedOptionsSession('s1', 'agent-1', {
+      title: 'My Chat',
+      status: 'closed',
+      activeTurn: true,
+      openTurnId: 't1'
+    })
     renderChip(false)
     expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
   })

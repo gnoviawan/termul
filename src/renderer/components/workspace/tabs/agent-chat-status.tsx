@@ -3,6 +3,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { sessionNeedsAttention } from '@/lib/agent-chat-attention'
 import { type AcpSession, isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
 import { useChatActivityStore } from '@/stores/chat-activity-store'
+import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
 
 /**
  * Per-session status signals shared by the desktop `AgentChatTabInline`, the
@@ -23,7 +24,10 @@ export interface AgentChatStatusSignals {
    * resume by itself (`sessionNeedsAttention`).
    */
   needsAttention: boolean
-  /** The host has a prompt turn open or the agent working outside one. */
+  /**
+   * The host has a prompt turn open or the agent working outside one, or this
+   * renderer's live Session does (the composer's own state).
+   */
   turnBusy: boolean
   /**
    * A turn end nobody has read (host), on a chat this renderer is not showing.
@@ -51,10 +55,14 @@ export function useAgentChatStatusSignals(sessionId: string): AgentChatStatusSig
         lastError: session.lastError ?? null
       })
     : false
+  // A live chat this renderer drives knows its turn before the host echoes it
+  // back, so the row starts Working with the composer. A record that is not
+  // live keeps whatever turn flags it last had, so only the host counts then.
+  const localBusy = session?.status === 'active' && sessionTurnBusy(session)
   return {
     session,
     needsAttention: Boolean(activity?.needsYou) || sessionAttention,
-    turnBusy: Boolean(activity?.busy),
+    turnBusy: Boolean(activity?.busy) || localBusy,
     unread: Boolean(activity?.unread) && !viewing
   }
 }
