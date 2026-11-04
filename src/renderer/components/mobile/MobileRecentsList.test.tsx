@@ -4,9 +4,9 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { formatChatCreatedTime } from '@/lib/relative-time'
 import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
+import { resetChatActivity, seedChatActivity } from '@/lib/test-utils/chat-activity'
 import { _resetEphemeralSessionIdsForTesting, useAcpStore } from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { useProjectStore } from '@/stores/project-store'
 import { MobileRecentsList } from './MobileRecentsList'
 
@@ -138,7 +138,7 @@ beforeEach(() => {
   workspaceRef.current.fullscreenPaneId = null
   useAcpStore.setState(FRESH)
   _resetEphemeralSessionIdsForTesting()
-  useAgentChatUnreadStore.setState({ unread: {} })
+  resetChatActivity()
   useProjectStore.setState({
     projects: [
       {
@@ -181,7 +181,8 @@ describe('MobileRecentsList merged list', () => {
       { id: 's1', title: 'Index title' },
       { id: 'h2', title: 'Past chat', ageMs: 10 }
     ])
-    seedOptionsSession('s1', 'agent-1', { title: 'Live title', activeTurn: true, openTurnId: 't1' })
+    seedOptionsSession('s1', 'agent-1', { title: 'Live title' })
+    seedChatActivity({ s1: { busy: true } })
     seedTabs([{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }], 'tab-1')
     renderList({ activeTabId: 'tab-1' })
 
@@ -193,6 +194,50 @@ describe('MobileRecentsList merged list', () => {
     // Status is a glyph with sr-only text, never a visible chip beside the title.
     expect(within(row).getByText('Working')).toHaveClass('sr-only')
     expect(screen.queryByText('Index title')).not.toBeInTheDocument()
+  })
+
+  it('shows the host status of an open chat this phone has not loaded yet', () => {
+    seedHistory([{ id: 's1', title: 'Desktop chat' }])
+    seedTabs([{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }], null)
+    seedChatActivity({ s1: { busy: true, needsYou: true } })
+    renderList()
+
+    const row = screen.getByRole('button', { name: /^Desktop chat, Needs you, Working/ })
+    expect(within(row).getByTitle('Working')).toBeInTheDocument()
+  })
+
+  it('shows the host status of a Recents chat with no tab here, Failed included', () => {
+    seedHistory([
+      { id: 'busy', title: 'Busy chat' },
+      { id: 'done', title: 'Done chat', ageMs: 10 },
+      { id: 'idle', title: 'Idle chat', ageMs: 20 }
+    ])
+    useAcpStore.setState({
+      sessionIndex: [
+        ...(useAcpStore.getState().sessionIndex ?? []),
+        mockSessionIndexEntry({
+          id: 'fail',
+          title: 'Failed chat',
+          projectId: 'p1',
+          cwd: '/work',
+          status: 'error',
+          lastActivityAt: Date.now() - 30
+        })
+      ]
+    })
+    seedChatActivity({
+      busy: { busy: true },
+      done: { unread: true, turnEnd: { seq: 4, logEpoch: 'e1' } },
+      fail: { needsYou: true }
+    })
+    renderList()
+
+    expect(screen.getByRole('button', { name: /^Busy chat, Working/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Done chat, New activity/ })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /^Failed chat, Failed, Needs you/ })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Idle chat(, created .*)?$/ })).toBeInTheDocument()
   })
 
   it('filters on the title the row shows, the live one for an open chat', () => {
@@ -263,7 +308,8 @@ describe('MobileRecentsList merged list', () => {
     const long = 'A very long chat title that keeps going and going past the drawer width ok'
     expect(long.length).toBeGreaterThanOrEqual(70)
     seedHistory([{ id: 's1', title: long }])
-    seedOptionsSession('s1', 'agent-1', { title: long, activeTurn: true, openTurnId: 't1' })
+    seedOptionsSession('s1', 'agent-1', { title: long })
+    seedChatActivity({ s1: { busy: true } })
     seedTabs([{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }])
     renderList()
 
