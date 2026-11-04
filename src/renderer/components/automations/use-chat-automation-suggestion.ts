@@ -10,8 +10,15 @@ import { type SuggestionActions, useSuggestionActions } from './use-suggestion-a
 /** Chats that already showed a card; at most one per chat. */
 const offeredChats = new Set<string>()
 
+/**
+ * Sent prompts the host already answered. A remounted chat must not ask
+ * again: once the prompt is history, it would count toward its own match.
+ */
+const answeredMessages = new Set<string>()
+
 export function resetOfferedChatsForTests(): void {
   offeredChats.clear()
+  answeredMessages.clear()
 }
 
 function lastUserMessage(messages: ChatMessage[] | undefined): ChatMessage | null {
@@ -53,6 +60,7 @@ export function useChatAutomationSuggestion(
 
   useEffect(() => {
     if (!enabled || !projectId || !lastUserId || matched.current === lastUserId) return
+    if (answeredMessages.has(lastUserId)) return
     if (offered.current || offeredChats.has(sessionId)) return
     matched.current = lastUserId
     const message = lastUserMessage(useAcpStore.getState().messages[sessionId])
@@ -64,6 +72,7 @@ export function useChatAutomationSuggestion(
     void matchAutomationSuggestion(projectId, text).then((result) => {
       if (!current || !result.success) return
       answered = true
+      answeredMessages.add(message.id)
       if (!result.data) return
       const { until } = useSuggestionSnoozes.getState()
       if (isSnoozed(until, projectId, result.data.fingerprint)) return

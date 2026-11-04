@@ -159,6 +159,19 @@ describe('the in-chat suggestion card', () => {
     expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
   })
 
+  it('does not ask again about an answered prompt when the chat remounts', async () => {
+    api.matchAutomationSuggestion.mockImplementation(() => ok(null))
+    const first = render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
+    sendInChat('s1', 'summarize the open PRs in termul')
+    await act(async () => {})
+    first.unmount()
+
+    render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
+
+    await act(async () => {})
+    expect(api.matchAutomationSuggestion).toHaveBeenCalledTimes(1)
+  })
+
   it('shows at most one card per chat', async () => {
     render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
     sendInChat('s1', 'summarize the open PRs in termul')
