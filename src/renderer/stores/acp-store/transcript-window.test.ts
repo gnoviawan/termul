@@ -1568,6 +1568,41 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     expect(summary?.locations).toEqual([{ path: 'src/old.ts' }, { path: 'src/new.ts' }])
   })
 
+  it('(f7) a trimmed multi-file edit without locations keeps every diff path in the summary', () => {
+    const sid = 's-multi-edit-summary'
+    seedSession(sid, 'agent-1', true)
+    const edit: ToolCall = {
+      toolCallId: 'multi-0',
+      kind: 'edit',
+      status: 'completed',
+      seq: 0,
+      content: [
+        { type: 'diff', path: 'src/a.ts', oldText: 'a', newText: 'A' },
+        { type: 'diff', path: 'src/b.ts', oldText: null, newText: 'b' },
+        { type: 'diff', path: 'src/a.ts', oldText: 'A', newText: 'AA' }
+      ]
+    }
+    const reads = Array.from(
+      { length: 500 },
+      (_, i): ToolCall => ({
+        toolCallId: `read-${i}`,
+        kind: 'read',
+        status: 'completed',
+        seq: i + 1
+      })
+    )
+    useAcpStore.setState({ toolCalls: { [sid]: [edit, ...reads] } })
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: { toolCallId: 'next', kind: 'read', status: 'completed', seq: 501 }
+    })
+    _flushCoalescedForTesting()
+    const summary = useAcpStore.getState().toolCalls[sid][0]
+    expect(summary?.restoredSummary).toBe(true)
+    expect(summary?.locations).toEqual([{ path: 'src/a.ts' }, { path: 'src/b.ts' }])
+  })
+
   it('(f5) restored file-change summaries all survive a restore past the cap', async () => {
     const sid = 's-restored-summaries'
     const summaries = Array.from(

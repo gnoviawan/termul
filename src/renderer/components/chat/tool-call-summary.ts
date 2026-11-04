@@ -172,6 +172,30 @@ export function toolCallPath(toolCall: ToolCall): string | undefined {
   return firstDiffPath(content)
 }
 
+/**
+ * Every path a file-changing call claims, trimmed and deduped in order: its
+ * `toolCallPath`, each `locations` entry (both ends of a move), then each diff
+ * item's path (a multi-file edit that lists its files only as diffs). The
+ * session-paths filter and the trimmed-call summary share it; the host's
+ * `file_change_paths` (session_persistence/normalize.rs) mirrors it for the
+ * durable summary.
+ */
+export function toolCallChangedPaths(toolCall: ToolCall): string[] {
+  const diffPaths = (toolCall.content ?? []).map((item) =>
+    item.type === 'diff' ? (item as { path?: string }).path : undefined
+  )
+  const paths = new Set<string>()
+  for (const raw of [
+    toolCallPath(toolCall),
+    ...(toolCall.locations ?? []).map((loc) => loc.path),
+    ...diffPaths
+  ]) {
+    const path = raw?.trim()
+    if (path) paths.add(path)
+  }
+  return Array.from(paths)
+}
+
 /** "L<start>-<end>" from common range keys, or null when not derivable. */
 function lineRange(input: Record<string, unknown> | null): string | null {
   const start = firstNumber(input, ['startLine', 'start_line', 'start', 'line', 'lineStart'])

@@ -181,6 +181,10 @@ pub(super) fn fold_counts(records: &mut [PersistedEventRecord]) -> FoldCounts {
 /// summary — the field is omitted instead.
 pub(crate) const MAX_SUMMARY_PATH_CHARS: usize = 4096;
 
+/// Most paths one file-change summary persists; a call that claims more
+/// keeps its first ones.
+pub(crate) const MAX_SUMMARY_PATHS: usize = 256;
+
 /// Tool kinds whose calls change files (the Changed files panel's domain).
 pub(crate) fn is_file_change_kind(kind: Option<&str>) -> bool {
     matches!(kind, Some("edit" | "delete" | "move"))
@@ -238,13 +242,51 @@ fn tool_event_path(tool: &serde_json::Map<String, Value>) -> Option<&str> {
         })
 }
 
-/// Add the bounded, path-only file-change summary (`locations: [{path}]`,
-/// `diffStat: {added, removed}`) to a reduced tool DTO when the gate admits
-/// the event: a `tool_call` whose `kind` is edit/delete/move, or a
-/// `tool_call_update` whose own `kind` is one of those OR that carries diff
-/// content. Fields are added only when derivable; a path that is longer than
-/// [`MAX_SUMMARY_PATH_CHARS`] is omitted. Diff text, titles, `rawInput`, and
-/// line numbers are never persisted — only the derived path and counts.
+/// Every path a file-changing tool event claims, mirroring the renderer's
+/// `toolCallChangedPaths`: [`tool_event_path`] first, then each `locations`
+/// entry (both ends of a move), then each diff item's `path` (a multi-file
+/// edit that lists its files only as diffs). Trimmed, deduped in order;
+/// a blank path or one longer than [`MAX_SUMMARY_PATH_CHARS`] is skipped, and
+/// at most [`MAX_SUMMARY_PATHS`] are kept.
+fn file_change_paths(tool: &serde_json::Map<String, Value>) -> Vec<&str> {
+    let items = |field: &str| {
+        tool.get(field)
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice)
+    };
+    let locations = items("locations").iter();
+    let diffs = items("content")
+        .iter()
+        .filter(|item| diff_stat::is_diff_item(item));
+    let mut paths: Vec<&str> = Vec::new();
+    let candidates = tool_event_path(tool)
+        .into_iter()
+        .chain(
+            locations
+                .chain(diffs)
+                .filter_map(|item| item.get("path").and_then(Value::as_str)),
+        )
+        .map(str::trim)
+        .filter(|path| !path.is_empty() && path.chars().count() <= MAX_SUMMARY_PATH_CHARS);
+    for path in candidates {
+        if paths.len() == MAX_SUMMARY_PATHS {
+            break;
+        }
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+/// Add the bounded, path-only file-change summary (`locations: [{path}, …]`
+/// from [`file_change_paths`], `diffStat: {added, removed}`) to a reduced
+/// tool DTO when the gate admits the event: a `tool_call` whose `kind` is
+/// edit/delete/move, or a `tool_call_update` whose own `kind` is one of those
+/// OR that carries diff content. Fields are added only when derivable; a path
+/// that is longer than [`MAX_SUMMARY_PATH_CHARS`] is omitted. Diff text,
+/// titles, `rawInput`, and line numbers are never persisted — only the derived
+/// paths and counts.
 fn add_file_change_summary(
     type_: &str,
     tool: &serde_json::Map<String, Value>,
@@ -267,13 +309,13 @@ fn add_file_change_summary(
         return;
     }
     let stat = diff_stat::content_diff_stat(tool.get("content"));
-    if let Some(path) =
-        tool_event_path(tool).filter(|path| path.chars().count() <= MAX_SUMMARY_PATH_CHARS)
-    {
-        reduced.insert(
-            "locations".to_string(),
-            serde_json::json!([{ "path": path }]),
-        );
+    let paths = file_change_paths(tool);
+    if !paths.is_empty() {
+        let locations = paths
+            .into_iter()
+            .map(|path| serde_json::json!({ "path": path }))
+            .collect();
+        reduced.insert("locations".to_string(), Value::Array(locations));
     }
     if let Some(counts) = stat {
         reduced.insert(
