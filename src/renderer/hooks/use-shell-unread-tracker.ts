@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { useChatReadMarker } from '@/hooks/use-chat-read-marker'
 import { resolveMobileActiveLeaf } from '@/hooks/use-mobile-active-leaf'
@@ -50,8 +50,9 @@ export function useShellUnreadTracker(): void {
   )
   useEffect(() => startChatActivitySync(), [])
   const activeKey = activeSessionIds.join('\u0000')
+  // Before paint: a chat switched to must not show its own dot for a frame.
   // biome-ignore lint/correctness/useExhaustiveDependencies: activeKey is the stable identity of activeSessionIds
-  useEffect(() => {
+  useLayoutEffect(() => {
     useChatActivityStore.getState().setViewing(activeSessionIds)
   }, [activeKey])
   useChatReadMarker(activeSessionIds)
