@@ -149,6 +149,24 @@ function extractChangedFiles(toolCalls: ToolCall[], cwd: string): ChangedFile[] 
   return files
 }
 
+/**
+ * The resolved paths this session's file-changing calls touched, both ends of
+ * a move included: the git rows the session may claim. A failed call changed
+ * nothing, so it claims no row.
+ */
+function sessionTouchedPaths(toolCalls: ToolCall[], cwd: string): Set<string> {
+  const paths = new Set<string>()
+  for (const tc of toolCalls) {
+    if (!isChangedFileKind(tc.kind) || tc.status === 'failed') continue
+    for (const raw of [toolCallPath(tc), ...(tc.locations ?? []).map((loc) => loc.path)]) {
+      const trimmed = raw?.trim()
+      const path = trimmed && resolveFilePath(trimmed, cwd)
+      if (path) paths.add(path)
+    }
+  }
+  return paths
+}
+
 export interface ChatChangedFiles {
   files: ChangedFile[]
   /** The base the paths were resolved against; row subtitles are relative to it. */
@@ -173,17 +191,16 @@ export function useChatChangedFiles(
   turnActive: boolean
 ): ChatChangedFiles {
   const git = useGitChangedFiles(cwd, toolCalls, turnActive)
-  const sessionFiles = useMemo(() => extractChangedFiles(toolCalls, cwd), [toolCalls, cwd])
   return useMemo(() => {
-    const sessionPaths = new Set(sessionFiles.map((file) => file.path))
-    const files =
-      git.state === 'unavailable'
-        ? sessionFiles
-        : git.state === 'loading'
-          ? []
-          : git.files
-              .map((file) => ({ ...file, path: resolveFilePath(file.path, git.root) }))
-              .filter((file) => sessionPaths.has(file.path))
+    let files: ChangedFile[]
+    if (git.state === 'unavailable') files = extractChangedFiles(toolCalls, cwd)
+    else if (git.state === 'loading') files = []
+    else {
+      const sessionPaths = sessionTouchedPaths(toolCalls, cwd)
+      files = git.files
+        .map((file) => ({ ...file, path: resolveFilePath(file.path, git.root) }))
+        .filter((file) => sessionPaths.has(file.path))
+    }
     return {
       files,
       rowBase: git.state === 'ready' ? git.root : cwd,
@@ -191,5 +208,5 @@ export function useChatChangedFiles(
       totalAdded: files.reduce((sum, f) => sum + f.added, 0),
       totalRemoved: files.reduce((sum, f) => sum + f.removed, 0)
     }
-  }, [git, sessionFiles, cwd])
+  }, [git, toolCalls, cwd])
 }
