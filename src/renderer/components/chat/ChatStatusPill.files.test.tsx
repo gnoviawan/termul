@@ -789,6 +789,34 @@ describe('ChatStatusPill changed files with git as the source of truth', () => {
     noPill()
   })
 
+  it('leaves out a dirty file whose only session edit failed', async () => {
+    setGit([['src/other.ts', 'modified', 7, 2]])
+    render(panel([makeToolCall({ toolCallId: 'e1', path: 'src/other.ts', status: 'failed' })]))
+    await waitFor(() => expect(gitApiMock.getDiffStat).toHaveBeenCalledWith('/work'))
+    await act(async () => {})
+    noPill()
+  })
+
+  it('lists both ends of a moved file', async () => {
+    setGit([
+      ['src/old.ts', 'deleted', 0, 3],
+      ['src/new.ts', 'untracked', 3, 0]
+    ])
+    render(
+      panel([
+        makeToolCall({
+          toolCallId: 'm1',
+          kind: 'move',
+          content: [],
+          rawInput: {},
+          locations: [{ path: 'src/old.ts' }, { path: 'src/new.ts' }]
+        })
+      ])
+    )
+    expect(await screen.findByText('+3')).toBeInTheDocument()
+    expect(pill()).toHaveAccessibleName('Session status: 2 changed files')
+  })
+
   it('drops files that the agent committed', async () => {
     setGit([
       ['src/a.ts', 'modified', 3, 1],
