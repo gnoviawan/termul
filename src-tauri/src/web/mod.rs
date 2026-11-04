@@ -27,6 +27,7 @@ pub mod canvas_api;
 pub mod canvas_persistence_api;
 pub mod capabilities;
 pub mod catalog_api;
+pub mod chat_activity;
 pub mod chat_reads;
 pub mod command_ledger;
 pub mod config;

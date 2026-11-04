@@ -321,6 +321,7 @@ impl WsRelaySink {
             Err(never) => match never {},
         };
         self.mark_head_ahead(sid, head_ahead);
+        self.observe_activity(sid, type_, &event.payload, event.seq);
         event
     }
 

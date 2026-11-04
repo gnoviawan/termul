@@ -58,6 +58,7 @@ pub(super) fn handle_mark_chat_read(id: String, payload: &Value, relay: &WsRelay
                 "chat read marker moved"
             );
             publish_chat_read(relay, &parsed.session_id);
+            relay.refresh_chat_activity(&parsed.session_id);
             mark
         }
         MarkOutcome::Unchanged(mark) => {

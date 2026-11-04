@@ -1080,8 +1080,8 @@ export type WsCanvasReplyPayload =
 export const WS_WATCH_FRAME_TYPE = 'watch'
 
 /**
- * The watches a connection can hold. `projects`, `chat_history`, `agents` and
- * `chat_reads` have the empty scope; `fs` and `terminals` are scoped to a
+ * The watches a connection can hold. `projects`, `chat_history`, `agents`,
+ * `chat_reads` and `chat_activity` have the empty scope; `fs` and `terminals` are scoped to a
  * project id, `store` to a store key.
  */
 export const WS_WATCH_NAMES = [
@@ -1091,7 +1091,8 @@ export const WS_WATCH_NAMES = [
   'fs',
   'store',
   'terminals',
-  'chat_reads'
+  'chat_reads',
+  'chat_activity'
 ] as const
 
 /** One of {@link WS_WATCH_NAMES}. */
@@ -1207,6 +1208,32 @@ export interface ChatReadsWatchState {
 
 /** A `chat_reads` delta: one session's marker as it stands after it moved. */
 export type ChatReadsWatchDelta = ChatReadMark
+
+/**
+ * What every chat list shows for one agent chat, owned by the host and the
+ * same for every surface whether or not it subscribed to the session.
+ * `busy`: a prompt turn is open or the agent works outside one. `needsYou`: a
+ * permission, question or elicitation waits for an answer. `unread`: the
+ * newest turn end the host saw (`turnEnd`) is past the shared last-read
+ * marker.
+ */
+export interface ChatActivityRecord {
+  busy: boolean
+  needsYou: boolean
+  unread: boolean
+  turnEnd: { seq: number; logEpoch: string } | null
+}
+
+/** `chat_activity` watch state: every chat with something to show or a turn end to remember. */
+export interface ChatActivityWatchState {
+  sessions: Record<string, ChatActivityRecord>
+}
+
+/**
+ * A `chat_activity` delta: one session's record as it stands. Every flag false
+ * and no `turnEnd` means the chat has nothing to show.
+ */
+export type ChatActivityWatchDelta = ChatActivityRecord & { sessionId: string }
 
 /** `fs` watch state: the canonical root being watched. A new state means: refresh the trees. */
 export interface FsWatchState {
