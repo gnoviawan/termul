@@ -1537,6 +1537,37 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     expect(calls.filter((c) => !c.restoredSummary)).toHaveLength(MAX_LIVE_TOOL_CALLS)
   })
 
+  it('(f6) a trimmed move keeps both of its paths in the summary', () => {
+    const sid = 's-move-summary'
+    seedSession(sid, 'agent-1', true)
+    const move: ToolCall = {
+      toolCallId: 'move-0',
+      kind: 'move',
+      status: 'completed',
+      seq: 0,
+      locations: [{ path: 'src/old.ts' }, { path: 'src/new.ts' }]
+    }
+    const reads = Array.from(
+      { length: 500 },
+      (_, i): ToolCall => ({
+        toolCallId: `read-${i}`,
+        kind: 'read',
+        status: 'completed',
+        seq: i + 1
+      })
+    )
+    useAcpStore.setState({ toolCalls: { [sid]: [move, ...reads] } })
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: { toolCallId: 'next', kind: 'read', status: 'completed', seq: 501 }
+    })
+    _flushCoalescedForTesting()
+    const summary = useAcpStore.getState().toolCalls[sid][0]
+    expect(summary?.restoredSummary).toBe(true)
+    expect(summary?.locations).toEqual([{ path: 'src/old.ts' }, { path: 'src/new.ts' }])
+  })
+
   it('(f5) restored file-change summaries all survive a restore past the cap', async () => {
     const sid = 's-restored-summaries'
     const summaries = Array.from(
