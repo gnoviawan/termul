@@ -34,9 +34,19 @@ function closedSessionCannotResume(lastError: string | null): boolean {
 export function agentChatNeedsAttention(input: AgentChatAttentionInput): boolean {
   if (input.ephemeral || input.projectId.length === 0) return false
   if (input.pendingPermission || input.pendingQuestion || input.pendingElicitation) return true
+  return sessionNeedsAttention(input)
+}
+
+/**
+ * The part of {@link agentChatNeedsAttention} only this renderer's own Session
+ * record knows: a disconnected Agent, or a closed Session that cannot resume
+ * by itself. Pending prompts come from the host's chat activity instead.
+ */
+export function sessionNeedsAttention(
+  input: Pick<AgentChatAttentionInput, 'sessionStatus' | 'agentStatus' | 'lastError'>
+): boolean {
   if (input.sessionStatus === 'closed' && closedSessionCannotResume(input.lastError)) return true
-  if (input.agentStatus === 'disconnected') return true
-  return false
+  return input.agentStatus === 'disconnected'
 }
 
 /** A connected Agent chat with no turn in progress. The activity spinner covers a live turn. */

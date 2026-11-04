@@ -53,6 +53,7 @@ import { serializeSelectionContexts } from '@/lib/composer/selection-context'
 import { restoreConversationLabels, stripConversationEnvelopes } from '@/lib/conversation-envelope'
 import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
+import { isAfter, type LogPoint } from '@/lib/log-point'
 import {
   isFolderTokenPath,
   parseFileSegments,
@@ -62,7 +63,6 @@ import {
 } from '@/lib/skill-tokens'
 import { wireBlocksToDisplay, wireTextToDisplay } from '@/lib/skills-wire-reverse'
 import { randomUUID } from '@/lib/uuid'
-import { isAfter, type LogPoint } from '@/stores/agent-chat-unread-store'
 import {
   configIdFromReuseKey,
   detachedReuseKey,
