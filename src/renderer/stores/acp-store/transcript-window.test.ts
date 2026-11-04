@@ -1493,6 +1493,89 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     expect(calls.some((c) => c.toolCallId === 'child-2')).toBe(true)
   })
 
+  it('(f4) a trimmed file-changing call stays as a path-only summary outside the cap', () => {
+    const sid = 's-edit-summary'
+    seedSession(sid, 'agent-1', true)
+    const edit: ToolCall = {
+      toolCallId: 'edit-0',
+      title: 'Edit a.ts',
+      kind: 'edit',
+      status: 'completed',
+      seq: 0,
+      timestamp: 10,
+      rawInput: { filePath: 'src/a.ts' },
+      content: [{ type: 'diff', path: 'src/a.ts', oldText: 'one\ntwo', newText: 'one\nTWO\nthree' }]
+    }
+    const reads = Array.from(
+      { length: 499 },
+      (_, i): ToolCall => ({
+        toolCallId: `read-${i}`,
+        kind: 'read',
+        status: 'completed',
+        seq: i + 1
+      })
+    )
+    useAcpStore.setState({ toolCalls: { [sid]: [edit, ...reads] } })
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: { toolCallId: 'next', kind: 'read', status: 'completed', seq: 500 }
+    })
+    _flushCoalescedForTesting()
+    const calls = useAcpStore.getState().toolCalls[sid]
+    expect(calls).toHaveLength(MAX_LIVE_TOOL_CALLS + 1)
+    expect(calls[0]).toEqual({
+      toolCallId: 'edit-0',
+      kind: 'edit',
+      status: 'completed',
+      seq: 0,
+      timestamp: 10,
+      locations: [{ path: 'src/a.ts' }],
+      diffStat: { added: 2, removed: 1 },
+      restoredSummary: true
+    })
+    expect(calls.filter((c) => !c.restoredSummary)).toHaveLength(MAX_LIVE_TOOL_CALLS)
+  })
+
+  it('(f5) restored file-change summaries all survive a restore past the cap', async () => {
+    const sid = 's-restored-summaries'
+    const summaries = Array.from(
+      { length: 600 },
+      (_, i): ToolCall => ({
+        toolCallId: `s-${i}`,
+        kind: 'edit',
+        status: 'completed',
+        locations: [{ path: `src/f${i}.ts` }],
+        diffStat: { added: 1, removed: 0 },
+        restoredSummary: true,
+        seq: i
+      })
+    )
+    setCachedSessionPayload(sid, {
+      metadata: fakeMetadata(sid, 1),
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hi' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ],
+      toolCalls: summaries
+    })
+    useAcpStore.setState({
+      agents: { 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().openHistorySession(sid)
+    const installed = useAcpStore.getState().toolCalls[sid]
+    expect(installed).toHaveLength(600)
+    expect(installed[0]?.toolCallId).toBe('s-0')
+  })
+
   it('(g) oversized string rawOutput clamps to 32 KiB + marker, logged without content', () => {
     const sid = 's-clamp'
     seedSession(sid, 'agent-1', true)
