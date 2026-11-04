@@ -1,11 +1,18 @@
 import type { ChatActivityRecord } from '@shared/types/web-protocol.types'
 import { useChatActivityStore } from '@/stores/chat-activity-store'
 
-/** A host `chat_activity` record: idle unless `overrides` say otherwise. */
+/** A host `chat_activity` record: idle and of no project unless `overrides` say otherwise. */
 export function chatActivityRecord(
   overrides: Partial<ChatActivityRecord> = {}
 ): ChatActivityRecord {
-  return { busy: false, needsYou: false, unread: false, turnEnd: null, ...overrides }
+  return {
+    busy: false,
+    needsYou: false,
+    unread: false,
+    turnEnd: null,
+    projectId: null,
+    ...overrides
+  }
 }
 
 /** Install what the host's `chat_activity` watch would hold, and the chats this renderer shows. */
