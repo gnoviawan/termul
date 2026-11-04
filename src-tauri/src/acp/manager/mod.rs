@@ -1238,10 +1238,18 @@ impl AcpManager {
     /// server. `Some` prepends the host plan server, injects OAuth headers, and
     /// gates transports. The renderer sends `Some` on every history reopen, not
     /// only Reload this chat, so the agent keeps the `termul` server and the
-    /// user's MCP servers (#1420). The new plan token is bound to the known
-    /// session id right away. The session's earlier token is NOT removed here;
-    /// the caller settles both through `settle_reopen_plan_token` once the
-    /// reopen's outcome is known.
+    /// user's MCP servers (#1420).
+    ///
+    /// When this agent already holds a settled plan token for the session, the
+    /// reopen passes the same token again and returns no token to settle, so
+    /// the session's plan cache, title flags, asks and browser tabs stay. The
+    /// `termul` entry is then unchanged, and claude-acp keeps the live session
+    /// if the user's servers are unchanged too. claude-acp rebuilds a session
+    /// whose MCP list changed, which kills its background shells and
+    /// subagents. Otherwise a new pending token is bound to the session right
+    /// away. The session's earlier token is NOT removed here; the caller
+    /// settles both through `settle_reopen_plan_token` once the reopen's
+    /// outcome is known.
     async fn prepare_reopen_mcp(
         &self,
         agent_id: &AgentId,
@@ -1252,11 +1260,22 @@ impl AcpManager {
         let Some(mcp_servers) = mcp_servers else {
             return Ok((None, None));
         };
-        // The token from an earlier create or reload of this session stays
-        // valid here: a live agent child still holds it, and the reopen can
+        // A token from an earlier create or reload on another agent stays
+        // valid here: that agent's child can still hold it, and the reopen can
         // fail. `settle_reopen_plan_token` drops it once the reopen succeeds.
-        let (port, token, provisional_sid) = self.host_plan_server.register_session(&agent_id.0);
-        self.host_plan_server.bind_session(&token, session_id);
+        let (port, token, provisional_sid, new_token) = match self
+            .host_plan_server
+            .bound_credentials(&agent_id.0, session_id)
+        {
+            Some((port, token, provisional_sid)) => (port, token, provisional_sid, None),
+            None => {
+                let (port, token, provisional_sid) =
+                    self.host_plan_server.register_session(&agent_id.0);
+                self.host_plan_server
+                    .bind_reopen_session(&token, session_id);
+                (port, token.clone(), provisional_sid, Some(token))
+            }
+        };
         let mut combined = build_internal_plan_stdio(&agent_id.0, port, &token, &provisional_sid);
         combined.extend(mcp_servers);
         // Count before OAuth injection. `inject_oauth_tokens` returns servers
@@ -1265,24 +1284,25 @@ impl AcpManager {
         let server_count = combined.len();
         let combined = inject_oauth_tokens(combined).await;
         if let Err(error) = gate_mcp_servers(caps, &combined) {
-            // The failure path of the settle: evict only the new token, so the
+            // The failure path of the settle: evict only a new token, so the
             // session's earlier token, plan cache and title flags stay.
-            self.host_plan_server
-                .settle_reopen_token(session_id, &token, false);
+            self.settle_reopen_plan_token(session_id, new_token.as_deref(), false);
             return Err(error);
         }
         log::info!(
-            "[acp] session {} reopen attaches {} mcp servers",
+            "[acp] session {} reopen attaches {} mcp servers (plan token {})",
             crate::logging::redact_session_id(session_id),
-            server_count
+            server_count,
+            if new_token.is_some() { "new" } else { "kept" }
         );
-        Ok((Some(combined), Some(token)))
+        Ok((Some(combined), new_token))
     }
 
     /// Finish the plan-token bookkeeping of a reopen started by
     /// `prepare_reopen_mcp`. On success the session's earlier token(s) are
     /// dropped and the new one kept; on failure the new token is evicted and
-    /// the earlier one stays valid for a still-live agent child.
+    /// the earlier one stays valid for a still-live agent child. A reopen that
+    /// kept the agent's token has nothing to settle.
     fn settle_reopen_plan_token(&self, session_id: &str, plan_token: Option<&str>, reopened: bool) {
         if let Some(token) = plan_token {
             self.host_plan_server
@@ -2117,17 +2137,31 @@ impl AcpManager {
     /// whose command loop answers `AcpCommand::ResumeSession` with an empty ok
     /// outcome, so `handle_resume_session`'s success path is reachable from
     /// the WS layer. `OwnsSession` behaves like
-    /// `install_test_agent_with_sessions`.
+    /// `install_test_agent_with_sessions`. `session/new` answers with the id
+    /// `sess-created`. The returned receiver gets the MCP list of every
+    /// `session/new` and `session/resume`, in arrival order.
     #[cfg(test)]
     pub(crate) fn install_test_agent_with_resume(
         &self,
         agent_id: AgentId,
         sessions: std::collections::HashSet<String>,
-    ) {
+    ) -> mpsc::UnboundedReceiver<Option<Vec<McpServer>>> {
+        let (sent_tx, sent_rx) = mpsc::unbounded_channel();
         let (command_tx, mut command_rx) = mpsc::unbounded_channel();
         tokio::spawn(async move {
             while let Some(command) = command_rx.recv().await {
                 match command {
+                    AcpCommand::NewSession {
+                        mcp_servers, reply, ..
+                    } => {
+                        let _ = sent_tx.send(Some(mcp_servers));
+                        let _ = reply.send(Ok(NewSessionOutcome {
+                            session_id: SessionId("sess-created".to_string()),
+                            modes: None,
+                            models: None,
+                            config_options: None,
+                        }));
+                    }
                     AcpCommand::OwnsSession { session_id, reply } => {
                         let _ = reply.send(Ok(sessions.contains(&session_id.0)));
                     }
@@ -2140,7 +2174,10 @@ impl AcpManager {
                     AcpCommand::IsEphemeralSession { reply, .. } => {
                         let _ = reply.send(Ok(false));
                     }
-                    AcpCommand::ResumeSession { reply, .. } => {
+                    AcpCommand::ResumeSession {
+                        mcp_servers, reply, ..
+                    } => {
+                        let _ = sent_tx.send(mcp_servers);
                         let _ = reply.send(Ok(SessionReopenOutcome {
                             modes: None,
                             models: None,
@@ -2167,6 +2204,7 @@ impl AcpManager {
                 stamp: SpawnStamp::default(),
             },
         );
+        sent_rx
     }
 
     /// Fixture for the "agent already resolved it" race: the fake driver
