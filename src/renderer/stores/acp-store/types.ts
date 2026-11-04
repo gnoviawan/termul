@@ -18,6 +18,7 @@ import type {
   AgentSignInResolvedEvent,
   AgentSpawnedEvent,
   AgentSwitchEvent,
+  AgentWorkingEvent,
   AskUserQuestionEvent,
   AuthenticateInput,
   AuthMethod,
@@ -206,6 +207,13 @@ export interface AcpSession {
   opencodeNotice?: OpenCodeSessionNotice
   /** True while a prompt turn is in flight (UI spinners, cancel). */
   activeTurn: boolean
+  /**
+   * True while the agent works in this session outside a prompt turn (the
+   * host's `agent_working` event): Claude Code running a turn of its own after
+   * a background task finished, or any agent streaming with no prompt open.
+   * The chat shows busy and queues what the user sends. Ephemeral.
+   */
+  agentWorking?: boolean
   /** Project-scoped MCP attachments active for this session when known. */
   mcpServerCount?: number
   /**
@@ -1030,6 +1038,8 @@ export interface AcpState {
   _onQuestionCancelled: (e: QuestionCancelledEvent) => void
   _onElicitationRequest: (e: ElicitationRequestEvent, eventSeq?: number) => void
   _onPromptComplete: (e: PromptCompleteEvent, eventSeq?: number) => void
+  /** The agent started or stopped working outside a prompt turn. */
+  _onAgentWorking: (e: AgentWorkingEvent) => void
   _onAgentError: (e: AgentErrorEvent) => void
   /** Story 1.9 FR26: typed crash event → `status: 'error'` + manual restart. */
   _onAgentCrashed: (e: AgentCrashedEvent) => void

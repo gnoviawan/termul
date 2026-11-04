@@ -314,6 +314,22 @@ pub(super) async fn handle_session_notification(
     if is_replayed_history(&notification.update) && state.lock().note_replayed_update(&session_id) {
         return Ok(());
     }
+    // An update while no prompt turn runs is the agent working on its own
+    // (`session::unprompted`). `sweep_unprompted_work` reports its end. Only a
+    // session the driver holds counts: a closed one stays closed.
+    let started_working = {
+        let mut state = state.lock();
+        !state.is_turn_active(&session_id)
+            && state.session_root(&session_id).is_some()
+            && state.unprompted().note(
+                &session_id,
+                &notification.update,
+                tokio::time::Instant::now(),
+            )
+    };
+    if started_working {
+        crate::acp::events::emit_agent_working(sinks, agent_id, &session_id, true);
+    }
     let tool_call_id = match &notification.update {
         agent_client_protocol::schema::v1::SessionUpdate::ToolCall(tool_call) => {
             Some(tool_call.tool_call_id.0.to_string())
@@ -386,6 +402,37 @@ fn session_info_notices(
             crate::acp::events::opencode_notices(info.meta.as_ref())
         }
         _ => crate::acp::events::OpenCodeNotices::default(),
+    }
+}
+
+/// Report the end of agent work outside a prompt turn
+/// (`session::unprompted`): sleep until a working session can go quiet, then
+/// tell every sink which sessions did. Waits without a timer while no session
+/// can go quiet.
+pub(super) async fn sweep_unprompted_work(
+    state: Arc<Mutex<DriverState>>,
+    sinks: Vec<Arc<dyn EventSink>>,
+    agent_id: AgentId,
+) {
+    let wake = state.lock().unprompted().wake();
+    loop {
+        let deadline = state.lock().unprompted().next_deadline();
+        match deadline {
+            None => wake.notified().await,
+            Some(deadline) => {
+                tokio::select! {
+                    () = tokio::time::sleep_until(deadline) => {}
+                    () = wake.notified() => {}
+                }
+            }
+        }
+        let quiet = state
+            .lock()
+            .unprompted()
+            .take_quiet(tokio::time::Instant::now());
+        for session_id in quiet {
+            crate::acp::events::emit_agent_working(&sinks, &agent_id, &session_id, false);
+        }
     }
 }
 
@@ -494,6 +541,10 @@ pub(super) async fn drive_connection(
     let notif_sinks = sinks.clone();
     let notif_agent_id = agent_id.clone();
     let notif_state = driver_state.clone();
+    // Lives as long as this connection: dropping the handle aborts it.
+    let _unprompted_sweeper = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+        sweep_unprompted_work(driver_state.clone(), sinks.clone(), agent_id.clone()),
+    ));
     // AD-8: capture persistence into the notification closure so the host can
     // gate `session_info_update` fan-out on `title_source`. When a background
     // title (`BackgroundGenerated`) or a future local alias (`LocalAlias`) owns

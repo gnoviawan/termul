@@ -568,3 +568,73 @@ describe('acp-store: host agent reuse on web (#837)', () => {
     expect(session?.lastError).toContain('socket closed')
   })
 })
+
+describe('acp-store: reopening a chat its agent works in outside a turn', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(isTauriContext).mockReturnValue(false)
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetAcpAuthForTesting()
+    _resetInFlightPreparedForTesting()
+    _resetEphemeralSessionIdsForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
+    _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
+    useAcpStore.setState(FRESH)
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:claude-acp',
+          name: 'Claude',
+          command: 'claude',
+          args: [],
+          env: {},
+          templateId: 'claude-acp'
+        }
+      ]
+    })
+  })
+
+  function finishedPayload(id: string): Record<string, unknown> {
+    const payload = seededPayload(id)
+    payload.messages = [
+      ...(payload.messages as unknown[]),
+      {
+        id: 'm2',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'done' }],
+        streaming: false,
+        timestamp: 1,
+        seq: 2
+      }
+    ]
+    return payload
+  }
+
+  it.each([
+    [['s-working'], true],
+    [[], false]
+  ])('takes the busy state from the owner listing (workingSessions %j)', async (working, busy) => {
+    const transport = fakeWebTransport(
+      [
+        {
+          id: HOST_AGENT,
+          name: 'Claude',
+          configId: 'acp-registry:claude-acp',
+          capabilities: { loadSession: true },
+          ownsSession: ['s-working'],
+          workingSessions: working
+        }
+      ],
+      { 's-working': finishedPayload('s-working') }
+    )
+    _setAcpTransportForTests(transport)
+
+    await useAcpStore.getState().openHistorySession('s-working')
+
+    const session = useAcpStore.getState().sessions['s-working']
+    expect(session?.activeTurn).toBeFalsy()
+    expect(Boolean(session?.agentWorking)).toBe(busy)
+  })
+})

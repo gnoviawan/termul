@@ -34,6 +34,7 @@ export interface QueuedPrompt {
 export interface TurnBusySession {
   openTurnId?: string | null
   activeTurn?: boolean
+  agentWorking?: boolean
   status?: string
 }
 
@@ -80,7 +81,10 @@ export function isAgentDeadError(err: unknown): boolean {
 
 export function sessionTurnBusy(session: TurnBusySession | undefined): boolean {
   if (!session) return false
-  return Boolean(session.openTurnId || session.activeTurn)
+  if (session.openTurnId || session.activeTurn) return true
+  // Agent work outside a prompt turn counts while the chat is live: a closed
+  // or crashed chat has no process left to work.
+  return Boolean(session.agentWorking) && session.status !== 'closed' && session.status !== 'error'
 }
 
 export function dropPromptQueueForSession(

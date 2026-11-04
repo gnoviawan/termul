@@ -680,7 +680,7 @@ export async function adoptHostOwnedAgent(
   configId: string,
   cwd: string,
   options?: { allowDesktop?: boolean; isCurrent?: () => boolean; projectId?: string | null }
-): Promise<{ adopted: AgentId | null; listingTrusted: boolean }> {
+): Promise<{ adopted: AgentId | null; listingTrusted: boolean; working?: boolean }> {
   const trimmedCwd = cwd.trim()
   if ((!options?.allowDesktop && isTauriContext()) || trimmedCwd.length === 0) {
     return { adopted: null, listingTrusted: false }
@@ -738,7 +738,11 @@ export async function adoptHostOwnedAgent(
         ? { ...s.configToLiveAgent, [reuseKey]: match.id }
         : s.configToLiveAgent
   }))
-  return { adopted: match.id, listingTrusted: true }
+  return {
+    adopted: match.id,
+    listingTrusted: true,
+    working: match.workingSessions?.includes(sessionId) === true
+  }
 }
 
 export type EnsureLiveAgentOptions = {

@@ -774,6 +774,7 @@ type PromptSliceState = Pick<
   | '_onQuestionCancelled'
   | '_onElicitationRequest'
   | '_onPromptComplete'
+  | '_onAgentWorking'
 >
 
 /** The host's stable `already_resolved` reply: the approval/question ticket was
@@ -832,7 +833,12 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
 
   cancelPrompt: async (sessionId) => {
     const session = get().sessions[sessionId]
-    if (!session?.activeTurn) return
+    if (!session?.activeTurn) {
+      // No prompt turn here, but the agent works on its own: `session/cancel`
+      // stops that work too, and the host answers with `agent_working` false.
+      if (session?.agentWorking) await acpApi.cancelPrompt(session.agentId, sessionId)
+      return
+    }
     // A prompt still waiting to be confirmed may never have reached the host:
     // Stop abandons the command (no more same-id resends — a late resend must
     // not start a turn the user cancelled) and ends the local turn view itself,
@@ -1342,6 +1348,26 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       delete pendingQuestions[e.questionId]
       return { pendingQuestions }
     })
+  },
+
+  _onAgentWorking: (e) => {
+    // Only the agent the chat runs on speaks for it: a stopped process can
+    // still report after the chat moved to a new one.
+    const session = get().sessions[e.sessionId]
+    if (!session || session.agentId !== e.agentId) return
+    if (Boolean(session.agentWorking) === e.working) return
+    set((s) => {
+      const current = s.sessions[e.sessionId]
+      if (!current) return {}
+      return { sessions: { ...s.sessions, [e.sessionId]: { ...current, agentWorking: e.working } } }
+    })
+    void logFrontendError({
+      level: 'info',
+      source: 'acp-store.agentWorking',
+      message: `Agent ${e.working ? 'started' : 'stopped'} working on session ${e.sessionId} outside a prompt turn`
+    })
+    // A message sent meanwhile waited in the queue; it goes out now.
+    if (!e.working) flushNextQueuedPrompt(set, e.sessionId)
   },
 
   _onPromptComplete: (e, eventSeq) => {

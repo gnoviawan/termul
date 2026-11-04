@@ -990,7 +990,7 @@ async function openHistorySessionInner(
     // spawning — otherwise every reload spawns a duplicate agent and resumes
     // on it while the original keeps running. A live turn also adopts on
     // desktop (#882): spawning would race the owner the guard is protecting.
-    const { adopted, listingTrusted } = await adoptHostOwnedAgent(
+    const { adopted, listingTrusted, working } = await adoptHostOwnedAgent(
       set,
       id,
       meta.agentConfigId,
@@ -1007,6 +1007,13 @@ async function openHistorySessionInner(
       liveAgentId = adopted
       turnOwnerConnected = true
     }
+    // The owner's listing says whether it works in this chat outside a prompt
+    // turn now; later changes arrive as `agent_working` events.
+    set((s) => {
+      const session = s.sessions[id]
+      if (!session || Boolean(session.agentWorking) === Boolean(working)) return {}
+      return { sessions: { ...s.sessions, [id]: { ...session, agentWorking: Boolean(working) } } }
+    })
   }
   if (
     !options?.forceNewAgent &&

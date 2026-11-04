@@ -3251,3 +3251,165 @@ async fn a_rejected_reopen_on_the_holding_agent_keeps_its_token() {
         vec![held_token]
     );
 }
+
+// ---- agent work outside a prompt turn (`session::unprompted`) -------------
+
+fn tool_call_notification(
+    session_id: &str,
+    status: agent_client_protocol::schema::v1::ToolCallStatus,
+) -> agent_client_protocol::schema::v1::SessionNotification {
+    use agent_client_protocol::schema::v1 as acp;
+    acp::SessionNotification::new(
+        acp::SessionId::new(session_id),
+        acp::SessionUpdate::ToolCall(acp::ToolCall::new("tool-1", "Run a command").status(status)),
+    )
+}
+
+fn tool_finished_notification(
+    session_id: &str,
+) -> agent_client_protocol::schema::v1::SessionNotification {
+    use agent_client_protocol::schema::v1 as acp;
+    acp::SessionNotification::new(
+        acp::SessionId::new(session_id),
+        acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+            "tool-1",
+            acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
+        )),
+    )
+}
+
+/// Driver state holding `session_id`, as after `session/new`.
+fn held_session_state(session_id: &str) -> Arc<Mutex<DriverState>> {
+    let state = Arc::new(Mutex::new(DriverState::new()));
+    state
+        .lock()
+        .set_session_root(session_id.to_string(), std::path::PathBuf::from("/tmp"));
+    state
+}
+
+#[tokio::test]
+async fn an_update_for_a_session_the_driver_does_not_hold_is_not_work() {
+    let state = Arc::new(Mutex::new(DriverState::new()));
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+
+    handle_session_notification(
+        &state,
+        None,
+        &sinks,
+        &AgentId::new(),
+        thought_notification("sess-closed", "late"),
+    )
+    .await
+    .expect("update");
+
+    assert!(working_events(&sink).is_empty());
+}
+
+/// The `working` value of every `agent_working` event the sink saw, in order.
+fn working_events(sink: &CapturingSink) -> Vec<bool> {
+    sink.seen
+        .lock()
+        .iter()
+        .filter(|event| event.type_ == crate::acp::events::EVENT_AGENT_WORKING)
+        .map(|event| event.payload["working"].as_bool().expect("working flag"))
+        .collect()
+}
+
+#[tokio::test]
+async fn an_update_outside_a_prompt_turn_reports_the_agent_working_once() {
+    let state = held_session_state("sess-1");
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+    let agent = AgentId::new();
+
+    for text in ["first", "second"] {
+        handle_session_notification(
+            &state,
+            None,
+            &sinks,
+            &agent,
+            thought_notification("sess-1", text),
+        )
+        .await
+        .expect("update");
+    }
+
+    assert_eq!(working_events(&sink), vec![true]);
+    let first = &sink.seen.lock()[0];
+    assert_eq!(
+        first.type_,
+        crate::acp::events::EVENT_AGENT_WORKING,
+        "busy before the update shows"
+    );
+    assert_eq!(first.payload["sessionId"], "sess-1");
+    assert_eq!(state.lock().activity(0).unprompted_sessions, 1);
+    assert!(
+        state.lock().activity(0).has_evidence(),
+        "the idle reaper keeps the agent"
+    );
+}
+
+#[tokio::test]
+async fn an_update_during_a_prompt_turn_is_not_work_outside_a_turn() {
+    let state = held_session_state("sess-1");
+    assert!(state.lock().try_begin_turn("sess-1").is_some());
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+
+    handle_session_notification(
+        &state,
+        None,
+        &sinks,
+        &AgentId::new(),
+        thought_notification("sess-1", "turn"),
+    )
+    .await
+    .expect("update");
+
+    assert!(working_events(&sink).is_empty());
+    assert_eq!(state.lock().activity(0).unprompted_sessions, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_sweeper_reports_the_end_of_work_once_the_session_goes_quiet() {
+    use agent_client_protocol::schema::v1::ToolCallStatus;
+    let state = held_session_state("sess-1");
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+    let agent = AgentId::new();
+    let sweeper = tokio::spawn(sweep_unprompted_work(
+        state.clone(),
+        sinks.clone(),
+        agent.clone(),
+    ));
+
+    handle_session_notification(
+        &state,
+        None,
+        &sinks,
+        &agent,
+        tool_call_notification("sess-1", ToolCallStatus::InProgress),
+    )
+    .await
+    .expect("tool call");
+    // A command can run far longer than the quiet period.
+    tokio::time::sleep(crate::acp::session::UNPROMPTED_QUIET * 10).await;
+    assert_eq!(working_events(&sink), vec![true]);
+
+    handle_session_notification(
+        &state,
+        None,
+        &sinks,
+        &agent,
+        tool_finished_notification("sess-1"),
+    )
+    .await
+    .expect("tool update");
+    tokio::time::sleep(crate::acp::session::UNPROMPTED_QUIET - Duration::from_secs(1)).await;
+    assert_eq!(working_events(&sink), vec![true]);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(working_events(&sink), vec![true, false]);
+    assert_eq!(state.lock().activity(0).unprompted_sessions, 0);
+    sweeper.abort();
+}

@@ -274,6 +274,11 @@ enum AcpCommand {
     SessionIds {
         reply: oneshot::Sender<Result<Vec<String>, String>>,
     },
+    /// Session ids the agent works in outside a prompt turn now
+    /// (`session::unprompted`).
+    WorkingSessionIds {
+        reply: oneshot::Sender<Result<Vec<String>, String>>,
+    },
     /// The canonical workspace root of every session registered on this
     /// agent's driver (`(session id, root)`), for the destructive-operation
     /// guard.
@@ -410,6 +415,9 @@ pub struct AgentSummary {
     /// answer "which live agent owns this session" from the `list_agents`
     /// reply alone, without a per-agent round-trip.
     pub owns_session: Vec<String>,
+    /// Owned sessions the agent works in outside a prompt turn now, so a
+    /// client that opens one later shows it busy. Always serialized.
+    pub working_sessions: Vec<String>,
     /// The `commandId` of the `spawn_agent` that created this agent. In-process
     /// only: never serialized to clients.
     #[serde(skip)]
@@ -972,6 +980,7 @@ impl AcpManager {
                 namespace: entry.stable_namespace.clone(),
                 capabilities: entry.capabilities.clone(),
                 owns_session: Vec::new(),
+                working_sessions: Vec::new(),
                 command_id: entry.stamp.command_id.clone(),
             })
             .collect()
@@ -1017,6 +1026,15 @@ impl AcpManager {
                         "[acp] session-ownership query failed for agent {}: {error}",
                         summary.id.0
                     );
+                    continue;
+                }
+            }
+            // Best effort like ownership: a failed query shows no session busy.
+            if let Ok(tx) = self.command_tx(&summary.id) {
+                if let Ok(ids) =
+                    send_command(&tx, |reply| AcpCommand::WorkingSessionIds { reply }).await
+                {
+                    summary.working_sessions = ids;
                 }
             }
         }
@@ -2064,6 +2082,7 @@ impl AcpManager {
                 running_terminals: 0,
                 running_subagents: 0,
                 reopens_in_flight: 0,
+                unprompted_sessions: 0,
                 last_active_at: std::time::Instant::now(),
             }),
             probes: Mutex::new(0),

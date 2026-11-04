@@ -45,6 +45,7 @@ import {
   type AgentSignInResolvedEvent,
   type AgentSpawnedEvent,
   type AgentSwitchEvent,
+  type AgentWorkingEvent,
   type AskUserQuestionEvent,
   type AvailableCommand,
   acpApi,
@@ -632,6 +633,9 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<UsageUpdateEvent>(ACP_EVENTS.usageUpdate, (e) =>
       useAcpStore.getState()._onUsageUpdate(e)
+    ),
+    acpApi.onEvent<AgentWorkingEvent>(ACP_EVENTS.agentWorking, (e) =>
+      useAcpStore.getState()._onAgentWorking(e)
     ),
     acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e, eventSeq) =>
       useAcpStore.getState()._onPermissionRequest(e, eventSeq)

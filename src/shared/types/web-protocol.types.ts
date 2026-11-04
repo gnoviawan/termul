@@ -83,6 +83,9 @@ export const WS_EVENT_TYPES = [
   // contiguous; the title itself reaches the UI through the
   // `session_info_update` that follows it, so clients have no handler for it.
   'local_title_generated',
+  // Live-only, never persisted: the agent started or stopped working in the
+  // session outside a prompt turn (reliable tier).
+  'agent_working',
   // Top-level frame `{ type: 'gap', sid }` (no `seq`): LOSSY events of `sid`
   // were dropped for this connection because it could not keep up. The client
   // installs an atomic snapshot of the session.
@@ -487,6 +490,11 @@ export interface WsAgentSummary {
    * as "unknown/none".
    */
   ownsSession?: string[]
+  /**
+   * Owned sessions the agent works in outside a prompt turn now (the state
+   * the `agent_working` event reports live). Older servers omit it.
+   */
+  workingSessions?: string[]
 }
 
 // ============================================================================
@@ -760,6 +768,7 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   agent_switch: WS_RELAY_TIERS.RELIABLE,
   // Durable host record that owns a seq — reliable so no seq goes missing.
   local_title_generated: WS_RELAY_TIERS.RELIABLE,
+  agent_working: WS_RELAY_TIERS.RELIABLE,
   // Frames about delivery itself: a gap must reach the client in order, and a
   // heartbeat is never queued, so neither may be a lossy event.
   gap: WS_RELAY_TIERS.RELIABLE,
