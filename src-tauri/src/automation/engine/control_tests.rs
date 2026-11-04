@@ -563,6 +563,34 @@ async fn cancelling_a_parked_run_settles_it_cancelled() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelling_a_run_parked_inside_a_loop_fails_the_loop_too() {
+    let f = fixture().await;
+    let a = manual(&f.te, loop_graph(&f, 10, Some(1_000)));
+    let run = f.te.engine.start_run(&a, RunTrigger::Manual, 1_000).unwrap();
+    parked(&f.te, &a, &run.id).await;
+
+    assert!(f.te.engine.cancel_run(&run.id));
+
+    let cancelled = |node: &str, iteration| {
+        (
+            node.to_string(),
+            iteration,
+            StepStatus::Failed,
+            Some("cancelled".to_string()),
+        )
+    };
+    assert_eq!(
+        rows(&f.te.store, &run.id),
+        vec![
+            row("fetch", None, StepStatus::Succeeded),
+            cancelled("each", None),
+            row("shape", Some(0), StepStatus::Succeeded),
+            cancelled("pause", Some(0)),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deleting_the_automation_cancels_its_parked_run() {
     let f = fixture().await;
     let a = manual(&f.te, paused_graph(&f));

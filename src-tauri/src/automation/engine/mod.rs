@@ -379,12 +379,17 @@ impl Engine {
                 self.release_active(&run);
             }
             WalkResult::Parked { wait_until } => {
-                self.release_active(&run);
-                // A cancel that landed while the walk was parking found the
-                // run active; honour it now that it is parked.
-                if cancel.is_cancelled() {
+                // Decided under the lock `cancel_run` and `resume` take, so a
+                // cancel that landed while the walk was parking is honoured
+                // before any resume can claim the wait.
+                let mut active = self.active.lock();
+                let cancelled = cancel.is_cancelled();
+                if cancelled {
                     self.cancel_parked(&run);
-                } else {
+                }
+                forget(&mut active, &run);
+                drop(active);
+                if !cancelled {
                     self.arm_timer(wait_until);
                 }
             }
@@ -393,13 +398,7 @@ impl Engine {
     }
 
     fn release_active(&self, run: &Run) {
-        let mut active = self.active.lock();
-        if active
-            .get(&run.automation_id)
-            .is_some_and(|a| a.run_id == run.id)
-        {
-            active.remove(&run.automation_id);
-        }
+        forget(&mut self.active.lock(), run);
     }
 
     /// Boots, then ticks every [`TICK`] on `runtime` until stopped.
@@ -439,6 +438,16 @@ impl Engine {
             log::warn!("[Automation] runs still settling after {SHUTDOWN_GRACE:?} at shutdown");
         }
         log::info!("[Automation] engine stopped");
+    }
+}
+
+/// Drops `run`'s entry, leaving one a newer run of the automation holds.
+fn forget(active: &mut HashMap<AutomationId, ActiveRun>, run: &Run) {
+    if active
+        .get(&run.automation_id)
+        .is_some_and(|a| a.run_id == run.id)
+    {
+        active.remove(&run.automation_id);
     }
 }
 

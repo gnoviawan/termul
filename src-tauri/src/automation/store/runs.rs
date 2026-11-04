@@ -193,9 +193,10 @@ impl AutomationStore {
         Ok(changed == 1)
     }
 
-    /// Cancels a parked run: its waiting step fails `cancelled` and the run
-    /// settles `cancelled`, in one transaction. `None` when the run is not
-    /// parked (it finished, or it is executing).
+    /// Cancels a parked run: its waiting step, and a `for_each` still
+    /// `running` around it, fail `cancelled` and the run settles
+    /// `cancelled`, in one transaction. `None` when the run is not parked (it
+    /// finished, or it is executing).
     pub fn cancel_parked(&self, run_id: &RunId, now_ms: i64) -> StoreResult<Option<Run>> {
         let db = self.conn()?;
         let tx = db.unchecked_transaction()?;
@@ -207,6 +208,11 @@ impl AutomationStore {
         if changed == 0 {
             return Ok(None);
         }
+        tx.execute(
+            "UPDATE automation_step SET status = 'failed', error = ?1, finished_at = ?2
+             WHERE run_id = ?3 AND status = 'running'",
+            params![CANCELLED_REASON, now_ms, run_id.as_str()],
+        )?;
         let outcome = settle_in(
             &tx,
             run_id,
