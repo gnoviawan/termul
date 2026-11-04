@@ -152,13 +152,17 @@ fn a_subagents_own_call_keeps_its_masked_title_and_path() {
             "toolCallId": "c1",
             "kind": "read",
             "title": "Read src/a.ts with token sk-abcdefghijklmnopqrstuv",
-            "rawInput": { "file_path": "src/a.ts" },
+            "rawInput": { "file_path": "https://bob:hunter2pass@example.com/a.ts" },
             "content": [{ "type": "content", "content": { "type": "text", "text": "file body" } }],
             "_meta": { "claudeCode": { "parentToolUseId": "d1" } },
         },
     });
     let kept = super::normalize_durable_payload("tool_call", &payload)["toolCall"].clone();
-    assert_eq!(kept["locations"], json!([{ "path": "src/a.ts" }]));
+    let path = kept["locations"][0]["path"].as_str().unwrap();
+    assert!(
+        path.starts_with("https://bob:") && !path.contains("hunter2pass"),
+        "{path}"
+    );
     let title = kept["title"].as_str().unwrap();
     assert!(title.starts_with("Read src/a.ts with token "), "{title}");
     assert!(!title.contains("sk-abcdefghijklmnopqrstuv"));

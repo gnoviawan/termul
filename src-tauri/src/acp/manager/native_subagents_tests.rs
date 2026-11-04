@@ -413,8 +413,14 @@ fn rfd_sequence_reports_one_card_per_subagent_on_its_chat() {
         Some("termul-subagent:sess-child")
     );
 
-    let reply = routed[5].remove(0);
+    let mut reply = routed[5].remove(0);
     assert_eq!(reply["sessionId"], ROOT);
+    let meta = reply["update"]
+        .as_object_mut()
+        .unwrap()
+        .remove("_meta")
+        .expect("the reply carries the record, so history keeps it as the result");
+    assert_eq!(meta["termul/subagent"]["id"], CHILD);
     assert_eq!(
         reply["update"],
         json!({

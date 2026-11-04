@@ -347,7 +347,7 @@ const MAX_DURABLE_CHILD_TITLE_CHARS: usize = 512;
 pub(crate) const MAX_DURABLE_SUBAGENT_TEXT_CHARS: usize = 8_000;
 
 /// A subagent's own tool call (it names a parent dispatch): keep what its
-/// Activity row shows, the title with credentials masked and the path.
+/// Activity row shows, the title and path with credentials masked.
 fn add_child_call_summary(
     tool: &serde_json::Map<String, Value>,
     reduced: &mut serde_json::Map<String, Value>,
@@ -364,9 +364,10 @@ fn add_child_call_summary(
     if let Some(path) =
         tool_event_path(tool).filter(|path| path.chars().count() <= MAX_SUMMARY_PATH_CHARS)
     {
+        let masked = crate::acp::manager::stderr_ring::redact_line(path);
         reduced.insert(
             "locations".to_string(),
-            serde_json::json!([{ "path": path }]),
+            serde_json::json!([{ "path": masked }]),
         );
     }
 }

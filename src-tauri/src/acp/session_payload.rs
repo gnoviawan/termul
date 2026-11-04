@@ -504,9 +504,6 @@ pub fn fold_tool_call_summaries(
         .into_iter()
         .zip(keep)
         .filter_map(|(mut fold, keep)| {
-            if !keep {
-                return None;
-            }
             if let Some(subagent) = fold.subagent {
                 let mut meta = serde_json::json!({ SUBAGENT_META_KEY: subagent });
                 if let Some(parent) = fold.parent {
@@ -528,7 +525,8 @@ pub fn fold_tool_call_summaries(
                     restored_summary: false,
                 });
             }
-            if children.contains(&fold.tool_call_id) {
+            // A child past the cap still restores as a file-change summary.
+            if keep && children.contains(&fold.tool_call_id) {
                 let parent = fold.parent.unwrap_or(Value::Null);
                 return Some(MaterializedToolCallSummary {
                     tool_call_id: fold.tool_call_id,

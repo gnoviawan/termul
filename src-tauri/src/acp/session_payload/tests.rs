@@ -967,7 +967,9 @@ fn a_restored_subagent_keeps_only_its_newest_text_and_calls() {
         records.push(tool_record(
             seq,
             "tool_call",
-            json!({"toolCallId": format!("c{step}"), "kind": "read",
+            json!({"toolCallId": format!("c{step}"),
+                "kind": if step == 0 { "edit" } else { "read" },
+                "locations": [{"path": format!("src/{step}.ts")}],
                 "_meta": {"claudeCode": {"parentToolUseId": "d1"}}}),
         ));
     }
@@ -989,8 +991,13 @@ fn a_restored_subagent_keeps_only_its_newest_text_and_calls() {
         .iter()
         .map(|call| call.tool_call_id.as_str())
         .collect();
-    assert_eq!(ids.len(), 1 + MAX_RESTORED_CHILD_CALLS);
-    assert_eq!(ids[1], "c5", "the oldest calls go first");
+    assert_eq!(ids.len(), 2 + MAX_RESTORED_CHILD_CALLS);
+    assert_eq!(
+        ids[1], "c0",
+        "an edit past the cap stays a file-change summary"
+    );
+    assert!(calls[1].restored_summary);
+    assert_eq!(ids[2], "c5", "the oldest calls go first");
     assert!(!ids.contains(&"stray"));
     let text = calls[0].subagent_text.as_deref().unwrap();
     assert_eq!(text.chars().count(), MAX_DURABLE_SUBAGENT_TEXT_CHARS);
