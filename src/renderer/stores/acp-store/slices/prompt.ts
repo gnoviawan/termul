@@ -100,16 +100,35 @@ import {
 import { clampLiveToolCallFields, flushCoalescedSync } from './transcript'
 
 /**
- * The newest `agent_working` report per session. A reopen reads the agent
- * listing over a round trip; a report that arrives meanwhile is newer and wins.
+ * The newest `agent_working` report per session and agent. A reopen reads the
+ * agent listing over a round trip; a report from the adopted owner that
+ * arrives meanwhile is newer and wins. Keyed by agent too, so a late report of
+ * a former owner never hides the current owner's.
  */
-const latestAgentWorking = new Map<SessionId, { agentId: AgentId; working: boolean; seq: number }>()
+const latestAgentWorking = new Map<string, { working: boolean; seq: number }>()
 let agentWorkingSeq = 0
 
+const agentWorkingKey = (sessionId: SessionId, agentId: AgentId): string =>
+  `${sessionId}\u0000${agentId}`
+
+/** The sequence number of the newest `agent_working` report seen so far. */
+export function agentWorkingReportSeq(): number {
+  return agentWorkingSeq
+}
+
 export function latestAgentWorkingReport(
-  sessionId: SessionId
-): { agentId: AgentId; working: boolean; seq: number } | undefined {
-  return latestAgentWorking.get(sessionId)
+  sessionId: SessionId,
+  agentId: AgentId
+): { working: boolean; seq: number } | undefined {
+  return latestAgentWorking.get(agentWorkingKey(sessionId, agentId))
+}
+
+/** Forget a deleted chat's reports. */
+export function forgetAgentWorkingReports(sessionId: SessionId): void {
+  const prefix = `${sessionId}\u0000`
+  for (const key of latestAgentWorking.keys()) {
+    if (key.startsWith(prefix)) latestAgentWorking.delete(key)
+  }
 }
 
 /** Send the next queued prompt after the current turn closes. */
@@ -1365,8 +1384,7 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
 
   _onAgentWorking: (e) => {
     agentWorkingSeq += 1
-    latestAgentWorking.set(e.sessionId, {
-      agentId: e.agentId,
+    latestAgentWorking.set(agentWorkingKey(e.sessionId, e.agentId), {
       working: e.working,
       seq: agentWorkingSeq
     })
