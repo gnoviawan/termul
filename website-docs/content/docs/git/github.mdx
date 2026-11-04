@@ -27,8 +27,13 @@ On a phone, open the side menu and tap the **GitHub** icon. See [Use Termul on a
 
 - When the project is a fork, a **Repository** menu above the filters switches between your repository and its upstream.
 - **All**, **Issues** and **PRs** pick the kind of item.
-- The state menu picks **Open**, **Closed**, **Merged**, **Draft** or **All states**.
-- **Assigned to me** and **Review requested** narrow the list to items that need you.
+- The search field finds items by the words in them.
+- **State** picks **Open**, **Closed**, **Merged**, **Draft** or **All states**.
+- **Labels** shows items with any of the labels you pick, with all of them, or without them. The labels you filter by show as chips; select the x on a chip to remove it.
+- The assignee menu picks **Anyone**, **Assigned to me**, **Unassigned**, **Review requested** (pull requests only) or **Assigned to** a person.
+- **Sort** changes the order of the list.
+
+On a phone, the label and assignee lists open as a sheet. Your choices apply when you select **Done**.
 
 The list refreshes on its own every two minutes while Termul is visible. Select **Refresh** (the circular arrow at the end of the **All**, **Issues** and **PRs** row) to update it now. If a refresh fails, the last list stays on screen.
 
@@ -36,17 +41,26 @@ Each filter is kept per working copy, so a [worktree](/docs/git/worktrees) can s
 
 ## Read an issue or pull request
 
-Select an item to open it in a tab in the main area. The tab shows:
+Select an item to open it in a tab in the main area. The top of the tab shows the title, the state, and the **Labels** and **Assignees** rows. On a wide pane they move to a sidebar. The tab has these tabs:
 
-- The description and the **Comments**.
-- For a pull request, the **Review threads** and the **Checks**. A failed check has a log button that shows the last lines of its job log.
-- **Open on GitHub** opens the item in your web browser.
+- For a pull request: **Conversation**, **Checks** and **Threads**.
+- For an issue: **Conversation** and **Linked chats**.
+
+**Conversation** shows the description, the comments and events such as label changes, in one timeline. Comments from bots are folded to one line; select **Show** to read one. **Checks** lists failed, pending and cancelled checks first, and folds the rest behind **Show N passed and skipped**. A failed check has a log button that shows the last lines of its job log.
+
+**Open on GitHub** opens the item in your web browser. To close an open item, select **Close issue** or **Close pull request** in its header. A closed issue has **Reopen issue**.
+
+## Edit labels and assignees
+
+Select **Labels** or **Assignees** on an item to pick them from a list. Your choice applies when you select **Done**. To make a new label, type its name in the label list and select **Create label**. The list shows the labels with their GitHub colors.
+
+On a `termul-server` that is read-only for remote clients, you can't change labels, assignees or the state of an item.
 
 The tab stays open when you restart Termul, like other tabs.
 
 ## Comment and reply
 
-- To comment on an issue or pull request, type in the **Leave a comment (Markdown)** box under the **Comments** and select **Comment**. You can also press Ctrl+Enter (Cmd+Enter on macOS).
+- To comment on an issue or pull request, type in the **Leave a comment (Markdown)** box at the bottom of **Conversation**. On a phone the box stays at the bottom of the screen, above the keyboard and select **Comment**. You can also press Ctrl+Enter (Cmd+Enter on macOS).
 - To answer a review thread, select **Reply** under the thread, type your reply, and select **Reply** again.
 
 The comment is posted on GitHub with your `gh` login, and the tab shows it as GitHub saved it. If GitHub refuses the comment, the error appears under the box and your text stays there so you can try again. On a `termul-server` that is read-only for remote clients, the comment and reply boxes are off.
