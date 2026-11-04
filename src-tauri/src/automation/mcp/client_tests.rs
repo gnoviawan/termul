@@ -190,21 +190,13 @@ async fn input_required_is_reported_and_never_answered() {
     assert_eq!(serde_json::to_value(&capabilities).unwrap(), json!({}));
 }
 
-/// Over `initialize` a server cannot send `input_required` at all: rmcp
-/// turns it into an error, which fails the step as a tool error.
+/// Over `initialize` rmcp refuses to send `input_required` and errors
+/// instead; that is still a request for user input.
 #[tokio::test]
-async fn over_initialize_an_input_request_comes_back_as_a_tool_error() {
+async fn over_initialize_an_input_request_is_still_input_required() {
     let (client, _) = connected(false).await;
     let outcome = call_on(&client, "confirm", Map::new()).await.unwrap();
-    assert_eq!(
-        outcome.response,
-        ToolResponse::Complete {
-            structured: None,
-            text: "InputRequiredResult requires negotiated protocol version 2026-07-28 or newer"
-                .into(),
-            is_error: true,
-        }
-    );
+    assert_eq!(outcome.response, ToolResponse::InputRequired);
 }
 
 #[tokio::test]
@@ -256,5 +248,23 @@ fn the_redactor_cuts_env_header_and_token_values_but_not_short_ones() {
             "error sending request for url (https://mcp.example.com/?key=abc)".into()
         )),
         McpFailure::Unavailable("error sending request for url ([server url])".into())
+    );
+}
+
+#[test]
+fn the_redactor_cuts_expanded_env_values_and_the_url_from_results() {
+    std::env::set_var("TERMUL_MCP_REDACTOR_TEST_TOKEN", "expanded-token-value-42");
+    let mut config = server("srv", "files").config;
+    config.env.push(McpNameValuePair {
+        name: "API_KEY".into(),
+        value: "${TERMUL_MCP_REDACTOR_TEST_TOKEN}".into(),
+    });
+    config.url = Some("https://mcp.example.com/?key=abc".into());
+    let redactor = Redactor::new(&config, None);
+    assert_eq!(
+        redactor.value(json!({
+            "echo": "token expanded-token-value-42 from https://mcp.example.com/?key=abc"
+        })),
+        json!({ "echo": "token [redacted] from [server url]" })
     );
 }

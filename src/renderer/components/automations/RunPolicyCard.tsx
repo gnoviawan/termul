@@ -104,8 +104,9 @@ export function RunPolicyCard({
                     <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-2xs text-secondary-foreground">
                       {call.tool}
                     </code>
-                    {` on ${call.server_name ?? call.server_id}`}
-                    {call.server_name === null ? ' (not configured)' : ''}
+                    {call.server_name === null
+                      ? ` on ${call.server_id} (not configured)`
+                      : ` on ${call.server_name} (${call.server_id})`}
                   </span>
                 </li>
               ))}

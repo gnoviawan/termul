@@ -25,6 +25,7 @@ fn fixture() -> Fixture {
     });
     let tools = McpTools::new(
         registry(vec![server("srv-1", "files"), server("srv-2", "remote")]),
+        Arc::new(|project: &str| Some(std::path::PathBuf::from(format!("/projects/{project}")))),
         fake.clone(),
         clock.clone(),
         on_change,
@@ -60,6 +61,10 @@ async fn a_first_lookup_is_pending_lists_once_and_announces_the_result() {
         Lookup::Ready(vec![search_tool()])
     );
     assert_eq!(f.fake.list_count(), 1);
+    assert_eq!(
+        *f.fake.list_cwds.lock(),
+        vec![Some(std::path::PathBuf::from("/projects/p1"))]
+    );
     assert_eq!(
         *f.changes.lock(),
         vec![("p1".to_string(), "srv-1".to_string())]

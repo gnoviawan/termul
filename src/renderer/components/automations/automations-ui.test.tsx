@@ -170,7 +170,7 @@ describe('RunPolicyCard', () => {
       'listitem'
     )
     expect(rows.map((row) => row.textContent)).toEqual([
-      'Open issues · calls MCP tool list_issues on GitHub',
+      'Open issues · calls MCP tool list_issues on GitHub (srv-github)',
       'ping · calls MCP tool ping on srv-removed (not configured)'
     ])
   })

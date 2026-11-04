@@ -98,6 +98,9 @@ fn termul_server_reads_the_project_file() {
     assert_eq!(servers("other"), vec![]);
     std::fs::write(root.path().join(".termul/mcp-servers.json"), "{not json").unwrap();
     assert_eq!(servers("p1"), vec![]);
+    let oversized = format!("[{}]", " ".repeat(crate::web::mcp_servers_api::MAX_REGISTRY_BYTES));
+    std::fs::write(root.path().join(".termul/mcp-servers.json"), oversized).unwrap();
+    assert_eq!(servers("p1"), vec![]);
 }
 
 #[test]
@@ -133,4 +136,30 @@ fn desktop_reads_the_store_key_and_falls_back_to_the_project_file() {
         ids(&servers("any-project")),
         vec![("srv-1", "Files"), ("srv-3", "Remote")]
     );
+}
+
+#[test]
+fn desktop_falls_back_to_the_project_file_when_the_store_value_is_not_a_list() {
+    let root = tempfile::tempdir().unwrap();
+    write_project_file(
+        root.path(),
+        &json!([{ "id": "file-1", "name": "From file", "command": "x" }]),
+    );
+    let store =
+        Arc::new(WebStore::open(root.path().join("store.json"), StorePolicy::default()).unwrap());
+    let desktop = ClientIdentity {
+        device_id: "desktop-device".into(),
+        client_instance_id: "tab-1".into(),
+    };
+    store
+        .write(
+            DESKTOP_STORE_KEY,
+            json!({ "_version": 1, "data": "not a list" }),
+            Precondition::default(),
+            &desktop,
+            1,
+        )
+        .unwrap();
+    let servers = desktop_store_servers(store, roots_at(root.path()));
+    assert_eq!(ids(&servers("p1")), vec![("file-1", "From file")]);
 }

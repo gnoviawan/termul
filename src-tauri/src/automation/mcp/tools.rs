@@ -14,7 +14,7 @@ use serde::Serialize;
 use super::{
     McpClient, McpFailure, McpServerConfig, McpServerEntry, ProjectMcpServers, ToolSchema,
 };
-use crate::automation::engine::Clock;
+use crate::automation::engine::{Clock, ProjectRoots};
 
 /// Like the settings probe: a server that has not listed by then is unavailable.
 pub const LISTING_DEADLINE: Duration = Duration::from_secs(10);
@@ -137,6 +137,7 @@ struct State {
 
 pub struct McpTools {
     servers: ProjectMcpServers,
+    roots: ProjectRoots,
     client: Arc<dyn McpClient>,
     clock: Arc<dyn Clock>,
     on_change: OnListingChanged,
@@ -144,14 +145,18 @@ pub struct McpTools {
 }
 
 impl McpTools {
+    /// A stdio server lists in its project's root, as runs start it in the
+    /// run's working directory.
     pub fn new(
         servers: ProjectMcpServers,
+        roots: ProjectRoots,
         client: Arc<dyn McpClient>,
         clock: Arc<dyn Clock>,
         on_change: OnListingChanged,
     ) -> Arc<Self> {
         Arc::new(Self {
             servers,
+            roots,
             client,
             clock,
             on_change,
@@ -249,8 +254,12 @@ impl McpTools {
 
     async fn list(&self, project_id: &str, server: &McpServerEntry) -> Listing {
         let started = std::time::Instant::now();
-        let listed =
-            tokio::time::timeout(LISTING_DEADLINE, self.client.list_tools(&server.config)).await;
+        let root = (self.roots)(project_id);
+        let listed = tokio::time::timeout(
+            LISTING_DEADLINE,
+            self.client.list_tools(&server.config, root.as_deref()),
+        )
+        .await;
         let at_ms = self.clock.now_ms();
         let listing = match listed {
             Ok(Ok(tools)) => Listing::Ready { tools, at_ms },

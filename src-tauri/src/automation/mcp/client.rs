@@ -1,8 +1,10 @@
 //! The production [`McpClient`]: one rmcp connection per call through the
 //! probe's [`connect`], which advertises no elicitation, sampling, roots or
-//! tasks. A call never answers `input_required`; it reports it. Every value
-//! that leaves here has the server's env values, header values and OAuth
-//! token cut out, in case the server echoes them.
+//! tasks. A call never answers `input_required`; it reports it. Every result
+//! and failure that leaves here has the server's url and its env values
+//! (as written and as expanded), header values and OAuth token of at least
+//! [`MIN_REDACTED_LEN`] bytes cut out, in case the server echoes them.
+//! Shorter values pass through.
 
 use std::path::Path;
 
@@ -20,9 +22,10 @@ impl McpClient for RmcpClient {
     fn list_tools<'a>(
         &'a self,
         server: &'a McpServerConfig,
+        cwd: Option<&'a Path>,
     ) -> BoxFuture<'a, Result<Vec<ToolSchema>, McpFailure>> {
         async move {
-            let connection = open(server, None).await?;
+            let connection = open(server, cwd).await?;
             let redactor = Redactor::new(server, connection.bearer.as_deref());
             let listed = list_on(&connection.service).await;
             let _ = connection.service.cancel().await;
@@ -59,7 +62,7 @@ async fn open(server: &McpServerConfig, cwd: Option<&Path>) -> Result<McpConnect
     connect(server, cwd).await.map_err(|error| match error {
         ConnectError::AuthRequired { .. } => McpFailure::AuthRequired,
         ConnectError::Failed(reason) => {
-            McpFailure::Unavailable(Redactor::new(server, None).failure_text(&reason))
+            McpFailure::Unavailable(Redactor::new(server, None).text(&reason))
         }
     })
 }
@@ -84,6 +87,12 @@ impl Redactor {
                 let last_word = pair.value.split_whitespace().last().map(str::to_string);
                 [Some(pair.value.clone()), last_word]
             })
+            .chain(
+                server
+                    .env
+                    .iter()
+                    .map(|pair| Some(crate::acp::mcp_probe::expand_env(&pair.value))),
+            )
             .flatten()
             .chain(bearer.map(str::to_string))
             .filter(|value| value.len() >= MIN_REDACTED_LEN)
@@ -96,24 +105,20 @@ impl Redactor {
         }
     }
 
+    /// The server url goes too: it can carry a key in its query.
     fn text(&self, text: &str) -> String {
-        self.secrets.iter().fold(text.to_string(), |acc, secret| {
-            acc.replace(secret, REDACTED)
-        })
-    }
-
-    /// Failure reasons also lose the server url, which can carry a key.
-    fn failure_text(&self, text: &str) -> String {
-        let text = self.text(text);
-        match &self.url {
+        let text = match &self.url {
             Some(url) => text.replace(url, "[server url]"),
-            None => text,
-        }
+            None => text.to_string(),
+        };
+        self.secrets
+            .iter()
+            .fold(text, |acc, secret| acc.replace(secret, REDACTED))
     }
 
     pub(super) fn failure(&self, failure: McpFailure) -> McpFailure {
         match failure {
-            McpFailure::Unavailable(reason) => McpFailure::Unavailable(self.failure_text(&reason)),
+            McpFailure::Unavailable(reason) => McpFailure::Unavailable(self.text(&reason)),
             other => other,
         }
     }
@@ -169,7 +174,9 @@ pub(crate) async fn list_on<S: Service<RoleClient>>(
 
 /// Lists the tools, then sends one `tools/call` for `tool` and drives no
 /// follow-up round. A JSON-RPC error from the server is a tool error, so the
-/// node's `error` edge can route it like an `isError` result.
+/// node's `error` edge can route it like an `isError` result, except rmcp's
+/// refusal to send an `InputRequiredResult` over a protocol older than
+/// MRTR's, which is still a request for user input.
 pub(crate) async fn call_on<S: Service<RoleClient>>(
     service: &RunningService<RoleClient, S>,
     tool: &str,
@@ -199,6 +206,9 @@ pub(crate) async fn call_on<S: Service<RoleClient>>(
             return Err(McpFailure::Unavailable(
                 "tools/call returned an unknown result".to_string(),
             ))
+        }
+        Err(ServiceError::McpError(error)) if error.message.contains("InputRequiredResult") => {
+            ToolResponse::InputRequired
         }
         Err(ServiceError::McpError(error)) => ToolResponse::Complete {
             structured: None,

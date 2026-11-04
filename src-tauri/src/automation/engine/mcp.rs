@@ -96,7 +96,8 @@ fn failure_message(failure: McpFailure, tool: &str) -> String {
 
 /// The step output: `structuredContent` when the tool declares an output
 /// schema (checked against it when the schema is inside the supported
-/// subset) or sends one, else the text blocks as `{text}`.
+/// subset) or sends one, else the text blocks as `{text}`. Structured
+/// output over `cap` bytes fails the step: cut JSON would not parse.
 fn output(outcome: CallOutcome, cap: usize) -> Result<Value, NodeError> {
     let (structured, text) = match outcome.response {
         ToolResponse::InputRequired => return Err(NodeError::failed(INPUT_REQUIRED)),
@@ -129,11 +130,21 @@ fn output(outcome: CallOutcome, cap: usize) -> Result<Value, NodeError> {
                     )));
                 }
             }
-            Ok(value)
+            within_cap(value, cap)
         }
-        (None, Some(value)) => Ok(value),
+        (None, Some(value)) => within_cap(value, cap),
         (None, None) => Ok(text_output(text, cap)),
     }
+}
+
+fn within_cap(value: Value, cap: usize) -> Result<Value, NodeError> {
+    let size = serde_json::to_vec(&value).map_or(0, |bytes| bytes.len());
+    if size > cap {
+        return Err(NodeError::failed(format!(
+            "mcp_output_too_large: structured output is {size} bytes, over the {cap} byte cap"
+        )));
+    }
+    Ok(value)
 }
 
 /// `{text}`, cut at `cap` bytes on a character boundary (`truncated: true`).

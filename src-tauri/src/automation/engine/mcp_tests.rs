@@ -20,12 +20,16 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(HttpConfig::default())
+}
+
+fn fixture_with(http: HttpConfig) -> Fixture {
     let fake = FakeMcp::new();
     let root = tempfile::tempdir().unwrap();
     let te = test_engine_with_mcp(
         root.path().to_path_buf(),
         Arc::new(MemoryVault::default()),
-        HttpConfig::default(),
+        http,
         registry(vec![server("srv-1", "files")]),
         fake.clone(),
     );
@@ -335,4 +339,29 @@ async fn a_slow_tool_times_out_and_a_cancel_stops_the_call() {
     let cancelled = settled(&f.te, &run).await;
     assert_eq!(cancelled.status, RunStatus::Cancelled);
     assert_eq!(step(&f.te, &cancelled, "call"), failed("cancelled"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn structured_output_over_the_cap_fails_the_step() {
+    let f = fixture_with(HttpConfig {
+        body_cap: 16,
+        ..HttpConfig::default()
+    });
+    f.fake
+        .lists("files", Ok(vec![tool("dump", json!({ "type": "object" }), None)]));
+    f.fake.answers(
+        "dump",
+        ToolResponse::Complete {
+            structured: Some(json!({ "note": "0123456789abcdef" })),
+            text: String::new(),
+            is_error: false,
+        },
+    );
+    let a = manual(&f.te, graph(call_node("dump", json!([]), 5_000), json!([]), json!([])));
+    let run = run_to_end(&f.te, &a).await;
+    assert_eq!(run.status, RunStatus::Failed);
+    assert_eq!(
+        step(&f.te, &run, "call"),
+        failed("mcp_output_too_large: structured output is 27 bytes, over the 16 byte cap")
+    );
 }

@@ -20,7 +20,9 @@ pub use registry::{
     desktop_store_servers, parse_registry, project_file_servers, McpServerEntry,
     ProjectMcpServers, DESKTOP_STORE_KEY,
 };
-pub use tools::{Listing, Lookup, McpTools, OnListingChanged, ServerStatus, ServerTools};
+pub use tools::{
+    Listing, Lookup, McpTools, OnListingChanged, ServerStatus, ServerTools, LISTING_DEADLINE,
+};
 
 pub use crate::acp::mcp_probe::McpServerConfig;
 
@@ -68,9 +70,11 @@ pub enum ToolResponse {
 /// The seam between the automation host and MCP servers. Each call opens its
 /// own connection and closes it before returning.
 pub trait McpClient: Send + Sync {
+    /// A stdio server starts in `cwd` when given.
     fn list_tools<'a>(
         &'a self,
         server: &'a McpServerConfig,
+        cwd: Option<&'a Path>,
     ) -> BoxFuture<'a, Result<Vec<ToolSchema>, McpFailure>>;
 
     /// Lists the tools, then calls `tool` once if the listing has it. A

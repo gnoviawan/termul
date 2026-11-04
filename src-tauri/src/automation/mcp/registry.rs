@@ -42,13 +42,8 @@ struct StoredEntry {
 /// renderer's `{ _version, data }` envelope. The first entry wins a
 /// duplicate id.
 pub fn parse_registry(value: &Value) -> Vec<McpServerEntry> {
-    let items = match value {
-        Value::Array(items) => items,
-        Value::Object(map) => match map.get("data") {
-            Some(Value::Array(items)) => items,
-            _ => return Vec::new(),
-        },
-        _ => return Vec::new(),
+    let Some(items) = registry_items(value) else {
+        return Vec::new();
     };
     let mut entries: Vec<McpServerEntry> = Vec::new();
     let mut malformed = 0;
@@ -77,9 +72,33 @@ pub fn parse_registry(value: &Value) -> Vec<McpServerEntry> {
     entries
 }
 
+/// The stored list, bare or in the `{ _version, data }` envelope; `None`
+/// when `value` has neither shape.
+fn registry_items(value: &Value) -> Option<&Vec<Value>> {
+    match value {
+        Value::Array(items) => Some(items),
+        Value::Object(map) => match map.get("data") {
+            Some(Value::Array(items)) => Some(items),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// At most one byte past the limit, so an oversized file is refused
+/// without loading it.
+fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_REGISTRY_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 fn read_project_file(root: &Path) -> Vec<McpServerEntry> {
     let path = registry_path(root);
-    match std::fs::read(&path) {
+    match read_capped(&path) {
         Ok(bytes) if bytes.len() > MAX_REGISTRY_BYTES => {
             log::warn!("[Automation] MCP registry file is over 1 MiB; ignoring it");
             Vec::new()
@@ -109,11 +128,16 @@ pub fn project_file_servers(roots: ProjectRoots) -> ProjectMcpServers {
 }
 
 /// Desktop: the one list in the web store, for every project. A store with
-/// no list yet (or that cannot be read) falls back to the project file.
+/// no list yet, a value that is not a list, or a store that cannot be read
+/// falls back to the project file.
 pub fn desktop_store_servers(store: Arc<WebStore>, roots: ProjectRoots) -> ProjectMcpServers {
     let from_file = project_file_servers(roots);
     Arc::new(move |project_id| match store.peek(DESKTOP_STORE_KEY) {
-        Ok(Some(value)) => parse_registry(&value),
+        Ok(Some(value)) if registry_items(&value).is_some() => parse_registry(&value),
+        Ok(Some(_)) => {
+            log::warn!("[Automation] the stored MCP server list has no list shape; reading the project file");
+            from_file(project_id)
+        }
         Ok(None) => from_file(project_id),
         Err(error) => {
             log::warn!("[Automation] MCP servers unreadable from the store: {error}");

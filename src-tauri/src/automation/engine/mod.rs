@@ -60,7 +60,8 @@ pub type ProjectRoots = Arc<dyn Fn(&str) -> Option<PathBuf> + Send + Sync>;
 pub struct HttpConfig {
     /// Wall-clock budget of one request, body included.
     pub request_timeout: Duration,
-    /// Response bytes kept in the step output; the rest is cut.
+    /// Response bytes kept in the step output; the rest is cut. An
+    /// `mcp_tool` step whose structured output is larger fails instead.
     pub body_cap: usize,
     /// DNS overrides, so tests can serve a real hostname locally.
     pub resolve: Vec<(String, SocketAddr)>,
@@ -128,6 +129,7 @@ impl Engine {
         let changes = broadcast::channel(256).0;
         let mcp = McpTools::new(
             mcp_servers,
+            project_roots.clone(),
             mcp_client,
             clock.clone(),
             listing_changed(store.clone(), changes.clone()),
