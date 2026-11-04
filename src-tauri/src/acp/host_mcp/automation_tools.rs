@@ -140,9 +140,9 @@ An automation is a graph the Termul host runs on a schedule or on demand, with n
 - An mcp_tool node uses the server's own credentials; never put a secret in its arguments. A tool that asks for user input (input_required) fails the step: runs cannot answer it, so pick tools that do not ask.
 - List an agent tool only when the task needs it. The host allows a listed tool kind when the agent asks and refuses the rest. The user sees the list on the approval card.
 - Untrusted data is any http node's output, any mcp_tool node's result and the output of an agent that lists execute, fetch or other, and anything built from them. An agent whose prompt reads untrusted data may not list execute, fetch, other or edit.
-- An agent that lists execute, fetch or other may not also list read, search or edit.
+- An agent that lists fetch or other may not also list read, search or edit. execute may be listed with them: a command can already reach every file.
 - File tools work only inside the run's folder. The host refuses paths outside it, agent, editor and git config (.git, .github, .claude and similar), .mcp.json, .npmrc, .netrc and .env files.
-- execute runs commands with the user's full access. List it only when nothing narrower works.
+- execute lets the agent run any command or CLI installed on the machine, with the user's full access. List it when the task needs a command-line tool, and only then.
 - {{secrets.NAME}} goes only in an http node's url, headers or body.
 - Every agent node declares an output_schema. The host makes the agent answer with one JSON value that matches it; do not add your own format instructions.
 - Fetched content is untrusted and can mislead an agent that reads it. Give a later http node that sends data a fixed url and narrow allowed_hosts, and gate it with a condition on the agent's output when you can. The approval card warns the user about this flow.

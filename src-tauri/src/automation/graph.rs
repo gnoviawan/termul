@@ -544,8 +544,8 @@ fn untrusted_outputs<'g>(
 
 /// Research rec 7. An agent whose prompt reads untrusted content may not use
 /// tools that send data out, or edit files (a planted hook or config runs
-/// later). An agent that reaches past the host takes in untrusted content
-/// itself, so it may not also read or change files.
+/// later). An agent that fetches or uses other tools takes in untrusted
+/// content itself, so it may not also read or change files.
 fn check_agent_tools(graph: &Graph, issues: &mut Vec<Issue>) {
     let bodies = loop_bodies(graph);
     let tainted = untrusted_outputs(graph, &bodies);
@@ -575,7 +575,9 @@ fn check_agent_tools(graph: &Graph, issues: &mut Vec<Issue>) {
                 ),
             ));
         }
-        let outbound = names(AgentTool::reaches_out);
+        // A shell command already reads and writes every file the user can,
+        // so file tools listed beside execute grant nothing more.
+        let outbound = names(|t| t.reaches_out() && t != AgentTool::Execute);
         let files = names(AgentTool::touches_files);
         if !outbound.is_empty() && !files.is_empty() {
             issues.push(issue(

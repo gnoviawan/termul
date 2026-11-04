@@ -355,7 +355,7 @@ fn rule9_an_agent_reading_untrusted_data_may_not_send_data_out_or_edit() {
             (
                 IssueCode::OutboundAgentFileTool,
                 "extract".to_string(),
-                "this agent can take in untrusted data with execute, fetch, other, so it may not also use: read, edit".to_string(),
+                "this agent can take in untrusted data with fetch, other, so it may not also use: read, edit".to_string(),
             ),
         ]
     );
@@ -368,6 +368,28 @@ fn rule9_an_agent_reading_untrusted_data_may_not_send_data_out_or_edit() {
         ),
     );
     assert_eq!(codes(&reading), vec![]);
+}
+
+#[test]
+fn rule9_an_agent_may_run_commands_and_use_files_together() {
+    let command_line = set_spec(
+        &sample_automation(),
+        "extract",
+        agent_spec(
+            "Run the test suite for {{trigger.kind}} and fix it",
+            json!(["execute", "read", "search", "edit"]),
+        ),
+    );
+    assert_eq!(codes(&command_line), vec![]);
+    let fetching = set_spec(
+        &sample_automation(),
+        "extract",
+        agent_spec("Look up {{trigger.kind}}", json!(["execute", "fetch", "read"])),
+    );
+    assert_eq!(
+        codes(&fetching),
+        vec![at(IssueCode::OutboundAgentFileTool, "extract")]
+    );
 }
 
 #[test]
