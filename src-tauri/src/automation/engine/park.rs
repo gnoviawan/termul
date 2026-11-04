@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use super::executor::{self, ParkRequest};
 use super::{ActiveRun, Engine};
 use crate::automation::model::{wire_name, AutomationId, NodeId, Run, RunId, StepStatus};
-use crate::automation::store::StoreResult;
+use crate::automation::store::{ParkDecision, StoreResult};
 
 /// How an approval park ended. The wire name is the step output's
 /// `decision`.
@@ -49,25 +49,43 @@ impl Decision {
 }
 
 impl Engine {
-    /// Commits a walk's park and drops the run's active entry. A cancel that
-    /// fired before the commit resolves the park as cancelled right away.
+    /// Commits a walk's park and drops the run's active entry. `cancel_run`
+    /// takes the same lock, so a cancel either lands before the check here
+    /// (the run settles `cancelled` without parking) or finds the run parked.
+    /// `Err` is the outcome the run settles with instead of parking.
     pub(super) fn park(
         self: &Arc<Self>,
         run: &Run,
         request: ParkRequest,
         cancel: &CancellationToken,
-    ) -> Result<(), String> {
-        let now = self.now_ms();
+    ) -> Result<(), executor::Outcome> {
         let mut active = self.active.lock();
+        if cancel.is_cancelled() {
+            drop(active);
+            executor::record(
+                self,
+                run,
+                &request.node_id,
+                StepStatus::Failed,
+                None,
+                Some(executor::CANCELLED.to_string()),
+                None,
+            );
+            return Err(executor::skip_unrun(self, run));
+        }
         match self.store.park_run(
             &run.id,
             &request.node_id,
             request.until,
             &request.output,
-            now,
+            self.now_ms(),
         ) {
             Ok(true) => {}
-            Ok(false) => return Err("park_failed: the run is not running".to_string()),
+            Ok(false) => {
+                return Err(executor::Outcome::failed(
+                    "park_failed: the run is not running",
+                ))
+            }
             Err(error) => {
                 log::error!("[Automation] park of run {} failed: {error}", run.id);
                 executor::record(
@@ -79,7 +97,7 @@ impl Engine {
                     Some("park_failed".to_string()),
                     None,
                 );
-                return Err("park_failed".to_string());
+                return Err(executor::Outcome::failed("park_failed"));
             }
         }
         if active
@@ -94,16 +112,6 @@ impl Engine {
             request.node_id,
             request.until
         );
-        if cancel.is_cancelled() {
-            if let Err(error) =
-                self.resolve_locked(&mut active, &run.id, &request.node_id, Decision::Cancelled)
-            {
-                log::error!(
-                    "[Automation] cancel of parked run {} failed: {error}",
-                    run.id
-                );
-            }
-        }
         Ok(())
     }
 
@@ -133,10 +141,16 @@ impl Engine {
         };
         let now = self.now_ms();
         let (status, error) = decision.step();
-        let Some(run) =
-            self.store
-                .resume_parked(run_id, node_id, status, error, decision.fields(now), now)?
-        else {
+        // A person's decision after the deadline loses to the timeout, even
+        // before the next tick records it.
+        let before = matches!(decision, Decision::Approved | Decision::Rejected).then_some(now);
+        let resolution = ParkDecision {
+            status,
+            error,
+            fields: decision.fields(now),
+            before_ms: before,
+        };
+        let Some(run) = self.store.resume_parked(run_id, node_id, resolution, now)? else {
             log::info!(
                 "[Automation] run {run_id} is not waiting at {node_id}; {} ignored",
                 wire_name(&decision)
@@ -163,7 +177,9 @@ impl Engine {
         Ok(true)
     }
 
-    /// Resolves every park whose deadline passed as timed out.
+    /// Resolves every park whose deadline passed as timed out, or as
+    /// cancelled when its automation was deleted: a deleted automation's
+    /// `error` edges never run.
     pub(super) fn expire_parks(self: &Arc<Self>, now_ms: i64) {
         let expired = match self.store.list_expired_parks(now_ms) {
             Ok(expired) => expired,
@@ -178,9 +194,18 @@ impl Engine {
                 parked.run_id,
                 parked.parked.node_id
             );
-            if let Err(error) =
-                self.resolve(&parked.run_id, &parked.parked.node_id, Decision::TimedOut)
-            {
+            let decision = match self.store.get(&parked.automation_id) {
+                Ok(Some(_)) => Decision::TimedOut,
+                Ok(None) => Decision::Cancelled,
+                Err(error) => {
+                    log::error!(
+                        "[Automation] automation of expired run {} unreadable: {error}",
+                        parked.run_id
+                    );
+                    continue;
+                }
+            };
+            if let Err(error) = self.resolve(&parked.run_id, &parked.parked.node_id, decision) {
                 log::error!(
                     "[Automation] timeout of run {} failed: {error}",
                     parked.run_id

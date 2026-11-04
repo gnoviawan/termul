@@ -353,42 +353,40 @@ impl Engine {
     }
 
     async fn execute(self: Arc<Self>, run: Run, project_id: String, cancel: CancellationToken) {
-        let end = if cancel.is_cancelled() {
-            executor::WalkEnd::Settled(executor::skip_unrun(&self, &run))
-        } else {
-            match workdir::Workdir::prepare(
-                &self.project_roots,
-                &project_id,
-                run.worktree_id.as_deref(),
-            )
-            .await
-            {
-                Ok(dir) => {
-                    let scope = executor::RunScope {
-                        engine: &self,
-                        run: &run,
-                        project_id: &project_id,
-                        cwd: dir.path(),
-                        cancel: &cancel,
-                    };
-                    let end = executor::walk(&scope).await;
-                    // Before the park commits: a resume prepares a worktree
-                    // with the same name.
-                    dir.release().await;
-                    end
-                }
-                Err(reason) => executor::WalkEnd::Settled(executor::Outcome::failed(reason)),
+        let prepared =
+            workdir::Workdir::prepare(&self.project_roots, &project_id, run.worktree_id.as_deref())
+                .await;
+        let outcome = match prepared {
+            Ok(dir) if cancel.is_cancelled() => {
+                dir.release().await;
+                executor::skip_unrun(&self, &run)
             }
-        };
-        let outcome = match end {
-            executor::WalkEnd::Settled(outcome) => outcome,
-            executor::WalkEnd::Parked(request) => match self.park(&run, request, &cancel) {
-                Ok(()) => {
-                    self.notify(&project_id, Some(&run.automation_id));
-                    return;
-                }
-                Err(reason) => executor::Outcome::failed(reason),
-            },
+            Err(_) if cancel.is_cancelled() => executor::skip_unrun(&self, &run),
+            Err(reason) => executor::Outcome::failed(reason),
+            Ok(dir) => {
+                let scope = executor::RunScope {
+                    engine: &self,
+                    run: &run,
+                    project_id: &project_id,
+                    cwd: dir.path(),
+                    cancel: &cancel,
+                };
+                let outcome = match executor::walk(&scope).await {
+                    executor::WalkEnd::Settled(outcome) => outcome,
+                    executor::WalkEnd::Parked(request) => {
+                        match self.park(&run, request, &cancel) {
+                            // The parked run keeps its worktree for the resume.
+                            Ok(()) => {
+                                self.notify(&project_id, Some(&run.automation_id));
+                                return;
+                            }
+                            Err(outcome) => outcome,
+                        }
+                    }
+                };
+                dir.release().await;
+                outcome
+            }
         };
         if let Err(error) = self.store.settle_run(
             &run.id,

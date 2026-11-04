@@ -34,8 +34,9 @@ export function AutomationApprovalCard({
       return
     }
     // `false` means it was decided elsewhere first; the refresh shows how.
-    // The buttons stay disabled until the run moves on and this card goes.
+    // A repeat click after a failed refresh only gets `false` back.
     onDecided()
+    setPending(null)
   }
 
   return (
@@ -76,7 +77,7 @@ export function AutomationApprovalCard({
           <Button
             size="sm"
             className="flex-1 sm:flex-none pointer-coarse:h-11"
-            disabled={pending !== null}
+            disabled={pending !== null || message === null}
             onClick={() => void decide(true)}
           >
             {pending === true ? 'Approving…' : 'Approve'}

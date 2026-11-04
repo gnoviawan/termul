@@ -276,3 +276,88 @@ async fn a_run_due_while_another_waits_is_skipped_as_overlap() {
         (RunStatus::Skipped, Some(OVERLAP_REASON))
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_decision_after_the_deadline_loses_to_the_timeout() {
+    let f = fixture().await;
+    let a = gated(&f, true);
+    let run = parked_run(&f, &a).await;
+
+    f.te.clock.set(1_000 + HOUR_MS);
+    assert!(!f
+        .te
+        .engine
+        .resolve(&run.id, &gate_id(), Decision::Approved)
+        .unwrap());
+    f.te.engine.tick();
+    let run = settled(&f.te.store, &run.id).await;
+
+    assert_eq!(
+        steps(&f.te.store, &run.id)["gate"],
+        ok(Some("approval_timed_out"))
+    );
+    assert_eq!(steps(&f.te.store, &run.id)["done"], SKIPPED);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_expired_park_of_a_deleted_automation_settles_cancelled() {
+    let f = fixture().await;
+    let a = gated(&f, true);
+    let run = parked_run(&f, &a).await;
+    assert!(f.te.store.soft_delete(&a.id, 2_000).unwrap());
+
+    f.te.clock.set(1_000 + HOUR_MS);
+    f.te.engine.tick();
+    let run = settled(&f.te.store, &run.id).await;
+
+    assert_eq!(run.status, RunStatus::Cancelled);
+    assert_eq!(steps(&f.te.store, &run.id)["gate"], ok(Some("cancelled")));
+    assert_eq!(steps(&f.te.store, &run.id)["handled"], SKIPPED);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_parked_worktree_run_keeps_its_worktree_until_it_settles() {
+    let f = fixture().await;
+    let repo = f.root.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "init",
+    ]);
+    let mut a = gated(&f, true);
+    a.isolation = crate::automation::model::Isolation::WorktreePerRun;
+    let run = parked_run(&f, &a).await;
+    let worktree = repo
+        .join(".termul/worktrees")
+        .join(run.worktree_id.clone().unwrap());
+    assert!(worktree.exists(), "the parked run keeps its worktree");
+    std::fs::write(worktree.join("edit.txt"), "kept").unwrap();
+
+    f.te.clock.set(2_000);
+    assert!(f
+        .te
+        .engine
+        .resolve(&run.id, &gate_id(), Decision::Approved)
+        .unwrap());
+    let run = settled(&f.te.store, &run.id).await;
+
+    assert_eq!(run.status, RunStatus::Succeeded);
+    assert!(!worktree.exists(), "the settled run removes its worktree");
+    assert_eq!(git(&["branch", "--list", "automation/*"]), "");
+}

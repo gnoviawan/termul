@@ -18,7 +18,7 @@ use super::graph;
 use super::model::{wire_name, Automation, AutomationId, Issue, LastRun, Schedule};
 use super::schedule::{compute_next_run, ScheduleError};
 
-pub use runs::{ParkedRun, SettleOutcome};
+pub use runs::{ParkDecision, ParkedRun, SettleOutcome};
 
 pub const DB_FILE_NAME: &str = "automations.sqlite";
 

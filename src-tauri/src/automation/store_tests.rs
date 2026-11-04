@@ -4,7 +4,9 @@ use super::model::{
     Automation, IssueCode, LastRun, Parked, Run, RunId, RunStatus, RunTrigger, SettledStatus, Step,
     StepStatus,
 };
-use super::store::{AutomationStore, ClaimOutcome, ParkedRun, SettleOutcome, StoreError};
+use super::store::{
+    AutomationStore, ClaimOutcome, ParkDecision, ParkedRun, SettleOutcome, StoreError,
+};
 use super::test_support::{apply, node_id, sample_automation};
 
 const NOW: i64 = 1_000_030;
@@ -475,20 +477,40 @@ fn a_parked_run_waits_through_reconcile_and_resumes_exactly_once() {
         .resume_parked(
             &r1,
             &node_id("other"),
-            StepStatus::Succeeded,
-            None,
-            decision("approved", 60),
+            ParkDecision {
+                status: StepStatus::Succeeded,
+                error: None,
+                fields: decision("approved", 60),
+                before_ms: Some(60),
+            },
             60,
         )
         .unwrap();
     assert_eq!(wrong_node, None);
+    let after_deadline = store
+        .resume_parked(
+            &r1,
+            &node_id("gate"),
+            ParkDecision {
+                status: StepStatus::Succeeded,
+                error: None,
+                fields: decision("approved", 90_000),
+                before_ms: Some(90_000),
+            },
+            90_000,
+        )
+        .unwrap();
+    assert_eq!(after_deadline, None);
     let resumed = store
         .resume_parked(
             &r1,
             &node_id("gate"),
-            StepStatus::Succeeded,
-            None,
-            decision("approved", 60),
+            ParkDecision {
+                status: StepStatus::Succeeded,
+                error: None,
+                fields: decision("approved", 60),
+                before_ms: Some(60),
+            },
             60,
         )
         .unwrap()
@@ -498,9 +520,12 @@ fn a_parked_run_waits_through_reconcile_and_resumes_exactly_once() {
         .resume_parked(
             &r1,
             &node_id("gate"),
-            StepStatus::Failed,
-            Some("approval_timed_out"),
-            decision("timed_out", 70),
+            ParkDecision {
+                status: StepStatus::Failed,
+                error: Some("approval_timed_out"),
+                fields: decision("timed_out", 70),
+                before_ms: None,
+            },
             70,
         )
         .unwrap();
@@ -521,6 +546,44 @@ fn a_parked_run_waits_through_reconcile_and_resumes_exactly_once() {
     assert!(!store
         .park_run(&r1, &node_id("gate"), 90_000, &json!({}), 90)
         .unwrap());
+}
+
+#[test]
+fn a_waiting_run_lists_ahead_of_newer_skipped_runs() {
+    let store = AutomationStore::open_in_memory().unwrap();
+    let a = approved(&store, &every_minute());
+    store
+        .insert_run(&run(&a, "waiting", RunTrigger::Manual))
+        .unwrap();
+    store
+        .upsert_step(&step("waiting", "gate", StepStatus::Running, None))
+        .unwrap();
+    assert!(store
+        .park_run(
+            &"waiting".to_string().into(),
+            &node_id("gate"),
+            90_000,
+            &json!({ "message": "Ship?" }),
+            50
+        )
+        .unwrap());
+    for (i, id) in ["skip1", "skip2", "skip3"].into_iter().enumerate() {
+        store
+            .insert_run(&Run {
+                status: RunStatus::Skipped,
+                started_at: 2_000_000 + i as i64,
+                finished_at: Some(2_000_000 + i as i64),
+                ..run(&a, id, RunTrigger::Scheduled)
+            })
+            .unwrap();
+    }
+    let page: Vec<String> = store
+        .list_runs(&a.id, 2)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id.to_string())
+        .collect();
+    assert_eq!(page, vec!["waiting", "skip3"]);
 }
 
 #[test]

@@ -422,7 +422,7 @@ describe('approval runs', () => {
     )
     const onChanged = vi.fn()
     render(<AutomationRunDetail run={waitingRun()} onChanged={onChanged} />)
-    await waitFor(() => expect(api.getAutomationRunSteps).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled())
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
 
@@ -432,6 +432,29 @@ describe('approval runs', () => {
     await act(async () => reply(ok(true)))
     expect(onChanged).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(api.getAutomationRunSteps).toHaveBeenCalledTimes(2))
+  })
+
+  it('holds Approve until the message loads, but lets the run be rejected', async () => {
+    api.getAutomationRunSteps.mockReturnValue(new Promise(() => {}))
+    render(<AutomationRunDetail run={waitingRun()} onChanged={() => {}} />)
+
+    const card = within(await screen.findByRole('region', { name: 'Ship it?' }))
+    expect(card.getByText('Loading the message…')).toBeInTheDocument()
+    expect(card.getByRole('button', { name: 'Approve' })).toBeDisabled()
+    expect(card.getByRole('button', { name: 'Reject' })).toBeEnabled()
+  })
+
+  it('lets the reviewer act again after a decision whose refresh never lands', async () => {
+    api.decideAutomationApproval.mockResolvedValue(ok(true))
+    render(<AutomationRunDetail run={waitingRun()} onChanged={() => {}} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled())
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    })
+
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled()
   })
 
   it('rejects, and treats an already-decided reply as a refresh, not an error', async () => {
@@ -456,6 +479,7 @@ describe('approval runs', () => {
     })
     const onChanged = vi.fn()
     render(<AutomationRunDetail run={waitingRun()} onChanged={onChanged} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled())
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Approve' }))

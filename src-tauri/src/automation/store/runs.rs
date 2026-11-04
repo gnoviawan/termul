@@ -28,6 +28,18 @@ pub struct ParkedRun {
     pub parked: Parked,
 }
 
+/// How a park ends, as the store writes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParkDecision<'a> {
+    /// The parked step's terminal status.
+    pub status: StepStatus,
+    pub error: Option<&'a str>,
+    /// Merged into the waiting step's output.
+    pub fields: Map<String, Value>,
+    /// The claim fails when the park expired at or before this instant.
+    pub before_ms: Option<i64>,
+}
+
 impl AutomationStore {
     pub fn insert_run(&self, run: &Run) -> StoreResult<()> {
         self.conn()?.execute(
@@ -121,24 +133,30 @@ impl AutomationStore {
     }
 
     /// Claims a run parked at `node_id` back to `running` and turns its
-    /// waiting step terminal, its output merged with `decision_fields`. The
+    /// waiting step terminal, its output merged with `decision.fields`. The
     /// claim is the one arbiter between every way a park ends: `None` when
-    /// the run is no longer waiting there.
+    /// the run is no longer waiting there, or when `decision.before_ms` is
+    /// set and the park expired by then.
     pub fn resume_parked(
         &self,
         run_id: &RunId,
         node_id: &NodeId,
-        step_status: StepStatus,
-        error: Option<&str>,
-        decision_fields: Map<String, Value>,
+        decision: ParkDecision<'_>,
         now_ms: i64,
     ) -> StoreResult<Option<Run>> {
+        let ParkDecision {
+            status: step_status,
+            error,
+            fields: decision_fields,
+            before_ms,
+        } = decision;
         let db = self.conn()?;
         let tx = db.unchecked_transaction()?;
         let claimed = tx.execute(
             "UPDATE automation_run SET status = 'running', parked_node = NULL, parked_until = NULL
-             WHERE id = ?1 AND status = 'waiting' AND parked_node = ?2",
-            params![run_id.as_str(), node_id.as_str()],
+             WHERE id = ?1 AND status = 'waiting' AND parked_node = ?2
+                AND (?3 IS NULL OR parked_until > ?3)",
+            params![run_id.as_str(), node_id.as_str(), before_ms],
         )?;
         if claimed == 0 {
             return Ok(None);
@@ -221,12 +239,13 @@ impl AutomationStore {
         .collect()
     }
 
-    /// Newest first.
+    /// A waiting run first, so a page of skipped overlap runs cannot hide
+    /// it, then newest first.
     pub fn list_runs(&self, automation_id: &AutomationId, limit: usize) -> StoreResult<Vec<Run>> {
         let db = self.conn()?;
         let mut stmt = db.prepare(
             "SELECT * FROM automation_run WHERE automation_id = ?1
-             ORDER BY started_at DESC, rowid DESC LIMIT ?2",
+             ORDER BY status = 'waiting' DESC, started_at DESC, rowid DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(
             params![

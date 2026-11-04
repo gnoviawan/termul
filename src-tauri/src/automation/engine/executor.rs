@@ -244,7 +244,7 @@ pub(super) async fn walk(scope: &RunScope<'_>) -> WalkEnd {
             Err(error) => Finished::from(error),
         };
         let (status, output, error) = finished.step_fields();
-        record(
+        let recorded = record(
             scope.engine,
             scope.run,
             id,
@@ -254,6 +254,11 @@ pub(super) async fn walk(scope: &RunScope<'_>) -> WalkEnd {
             Some(started_at),
         );
         state.apply(id, finished);
+        // An unrecorded step stays `running`, and a resume after a later
+        // park would run it again.
+        if !recorded && state.stop.is_none() {
+            state.stop = Some(Outcome::failed(format!("{id}: step_not_recorded")));
+        }
         log::info!(
             "[Automation] run {} step {id} {}",
             scope.run.id,
@@ -285,7 +290,7 @@ fn targets(graph: &Graph, from: &EdgeSource, port: Port) -> HashSet<NodeId> {
 }
 
 /// `upsert_step` never overwrites a finished step, so recording `skipped`
-/// over a replayed node is a no-op.
+/// over a replayed node is a no-op. `false` when the write failed.
 pub(super) fn record(
     engine: &Engine,
     run: &Run,
@@ -294,7 +299,7 @@ pub(super) fn record(
     output: Option<Value>,
     error: Option<String>,
     started_at: Option<i64>,
-) {
+) -> bool {
     let finished_at = (status != StepStatus::Running).then(|| engine.now_ms());
     let step = Step {
         run_id: run.id.clone(),
@@ -305,10 +310,14 @@ pub(super) fn record(
         started_at,
         finished_at,
     };
-    if let Err(error) = engine.store.upsert_step(&step) {
-        log::error!(
-            "[Automation] run {} step {node_id} not recorded: {error}",
-            run.id
-        );
+    match engine.store.upsert_step(&step) {
+        Ok(_) => true,
+        Err(error) => {
+            log::error!(
+                "[Automation] run {} step {node_id} not recorded: {error}",
+                run.id
+            );
+            false
+        }
     }
 }

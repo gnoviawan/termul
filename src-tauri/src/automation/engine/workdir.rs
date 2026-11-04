@@ -1,5 +1,6 @@
 //! A run's working directory: the project root, or a throwaway git worktree
-//! per run that is removed with its branch when the run ends.
+//! per run that is removed with its branch when the run settles. A parked
+//! run keeps its worktree, and the resumed walk reopens it.
 
 use std::path::{Path, PathBuf};
 
@@ -45,7 +46,15 @@ impl Workdir {
         let created = {
             let (root_text, name, branch) = (root_text.clone(), name.clone(), branch.clone());
             tokio::task::spawn_blocking(move || {
-                WorktreeManager::create(&root_text, &name, &branch, true, None, None, None)
+                let kept = WorktreeManager::list(&root_text)?
+                    .into_iter()
+                    .find(|entry| entry.branch == branch);
+                match kept {
+                    Some(entry) => Ok(entry),
+                    None => {
+                        WorktreeManager::create(&root_text, &name, &branch, true, None, None, None)
+                    }
+                }
             })
             .await
         };

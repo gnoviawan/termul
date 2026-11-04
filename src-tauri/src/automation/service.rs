@@ -369,7 +369,7 @@ impl AutomationService {
         Ok(self.engine.resolve(run_id, node_id, decision)?)
     }
 
-    /// Newest first, at most 200.
+    /// A waiting run first, then newest first, at most 200.
     pub fn list_runs(&self, id: &AutomationId, limit: usize) -> ServiceResult<Vec<Run>> {
         Ok(self
             .engine
