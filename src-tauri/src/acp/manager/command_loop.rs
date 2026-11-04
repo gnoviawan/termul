@@ -367,6 +367,10 @@ pub(super) async fn run_command_loop(
                             );
                         }
                     }
+                    if answer_reopen_of_held_session(&req_state, &session_id.0, "load", &task_slot)
+                    {
+                        return;
+                    }
                     // Open the replay window IMMEDIATELY BEFORE the request is
                     // sent — not at admission time — so suppression covers
                     // exactly the agent's history replay and live updates
@@ -464,6 +468,14 @@ pub(super) async fn run_command_loop(
                                 crate::logging::redact_session_id(&session_id.0)
                             );
                         }
+                    }
+                    if answer_reopen_of_held_session(
+                        &req_state,
+                        &session_id.0,
+                        "resume",
+                        &task_slot,
+                    ) {
+                        return;
                     }
                     // Same deferred replay window as LoadSession above: opened
                     // immediately before the request so suppression covers

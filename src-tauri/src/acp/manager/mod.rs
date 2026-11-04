@@ -1187,7 +1187,7 @@ impl AcpManager {
             reply,
         })
         .await;
-        self.settle_reopen_plan_token(&session_key, plan_token.as_deref(), outcome.is_ok());
+        self.settle_reopen_plan_token(&session_key, plan_token.as_deref(), reached_agent(&outcome));
         outcome
     }
 
@@ -1228,7 +1228,7 @@ impl AcpManager {
             reply,
         })
         .await;
-        self.settle_reopen_plan_token(&session_key, plan_token.as_deref(), outcome.is_ok());
+        self.settle_reopen_plan_token(&session_key, plan_token.as_deref(), reached_agent(&outcome));
         outcome
     }
 
@@ -1242,14 +1242,12 @@ impl AcpManager {
     ///
     /// When this agent already holds a settled plan token for the session, the
     /// reopen passes the same token again and returns no token to settle, so
-    /// the session's plan cache, title flags, asks and browser tabs stay. The
-    /// `termul` entry is then unchanged, and claude-acp keeps the live session
-    /// if the user's servers are unchanged too. claude-acp rebuilds a session
-    /// whose MCP list changed, which kills its background shells and
-    /// subagents. Otherwise a new pending token is bound to the session right
-    /// away. The session's earlier token is NOT removed here; the caller
-    /// settles both through `settle_reopen_plan_token` once the reopen's
-    /// outcome is known.
+    /// the session's plan cache, title flags, asks and browser tabs stay.
+    /// Otherwise a new pending token is bound to the session right away. The
+    /// session's earlier token is NOT removed here; the caller settles both
+    /// through `settle_reopen_plan_token` once the reopen's outcome is known.
+    /// A reopen the driver answers without the agent (it already holds the
+    /// session live) settles as not reopened, so the agent keeps its token.
     async fn prepare_reopen_mcp(
         &self,
         agent_id: &AgentId,
@@ -2182,6 +2180,7 @@ impl AcpManager {
                             modes: None,
                             models: None,
                             config_options: None,
+                            answered_by_host: false,
                         }));
                     }
                     _ => {}
