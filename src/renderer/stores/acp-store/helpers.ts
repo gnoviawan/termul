@@ -930,26 +930,32 @@ export const MAX_LIVE_WINDOW_MESSAGES = 300
 /**
  * Maximum number of tool calls retained per session in the live React window
  * (CAP-2). Mirrors the host's persisted budget (`PERSISTED_TOOL_CALLS_LIMIT` =
- * 500 in acp-history-persistence) so the live list plateaus at the same size
+ * 500 in acp-history-persistence) so the live calls plateau at the same size
  * the durable history keeps — older finished cards drop, in-flight calls are
  * always retained, and late updates for trimmed ids are already no-ops
- * (`_onToolCallUpdate`'s `idx === -1` path).
+ * (`_onToolCallUpdate`'s `idx === -1` path). File-change summaries do not
+ * count toward the cap, so the list grows past it by one small summary per
+ * dropped file-changing call.
  */
 export const MAX_LIVE_TOOL_CALLS = 500
 
 /**
- * The restored-style summary of a file-changing call: the path, kind, status
- * and line counts the changed files list reads, without the diff text. Null
- * for a call that changes no file.
+ * The restored-style summary of a file-changing call: its paths (both ends
+ * of a move), kind, status and line counts, which the changed files list
+ * reads, without the diff text. Null for a call that changes no file.
  */
 function fileChangeSummary(call: ToolCall): ToolCall | null {
   if (call.kind !== 'edit' && call.kind !== 'delete' && call.kind !== 'move') return null
-  const path = toolCallPath(call)?.trim()
-  if (!path) return null
+  const paths = new Set<string>()
+  for (const raw of [toolCallPath(call), ...(call.locations ?? []).map((loc) => loc.path)]) {
+    const path = raw?.trim()
+    if (path) paths.add(path)
+  }
+  if (paths.size === 0) return null
   const summary: ToolCall = {
     toolCallId: call.toolCallId,
     kind: call.kind,
-    locations: [{ path }],
+    locations: Array.from(paths, (path) => ({ path })),
     restoredSummary: true
   }
   if (call.status !== undefined) summary.status = call.status
