@@ -10,11 +10,14 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { WriteGate } from '@/components/ui/write-gate'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import {
   deleteAutomationSecret,
   listAutomationSecrets,
   setAutomationSecret
 } from '@/lib/automation-api'
+import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
 
 interface AutomationSecretsDialogProps {
   projectId: string
@@ -37,6 +40,7 @@ export function AutomationSecretsDialog({
 }: AutomationSecretsDialogProps): React.JSX.Element {
   const [stored, setStored] = useState<Set<string> | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const gated = !useServerAdmitsRemoteWrites()
 
   const reload = useCallback(async (): Promise<void> => {
     const result = await listAutomationSecrets(projectId)
@@ -60,6 +64,7 @@ export function AutomationSecretsDialog({
             owner-only file. Only HTTP steps can use them, and a saved value is never shown again.
           </DialogDescription>
         </DialogHeader>
+        {gated && <p className="text-xs text-muted-foreground">{READ_ONLY_SERVER_REASON}</p>}
         {error && <p className="text-xs text-destructive">{error}</p>}
         {names.length === 0 ? (
           <p className="text-sm text-muted-foreground">This automation uses no secrets.</p>
@@ -72,6 +77,7 @@ export function AutomationSecretsDialog({
                 name={name}
                 isSet={stored?.has(name) ?? false}
                 isReferenced={referenced.includes(name)}
+                gated={gated}
                 onChanged={reload}
                 onError={setError}
               />
@@ -88,6 +94,7 @@ function SecretRow({
   name,
   isSet,
   isReferenced,
+  gated,
   onChanged,
   onError
 }: {
@@ -95,6 +102,7 @@ function SecretRow({
   name: string
   isSet: boolean
   isReferenced: boolean
+  gated: boolean
   onChanged: () => Promise<void>
   onError: (error: string | null) => void
 }): React.JSX.Element {
@@ -134,26 +142,30 @@ function SecretRow({
         </span>
         {!isReferenced && <span className="text-xs text-muted-foreground">Unused</span>}
         {!editing && (
-          <Button
-            variant="outline"
-            size="xs"
-            className="pointer-coarse:h-11"
-            disabled={busy}
-            onClick={() => setEditing(true)}
-          >
-            {isSet ? 'Replace' : 'Set'}
-          </Button>
+          <WriteGate gated={gated}>
+            <Button
+              variant="outline"
+              size="xs"
+              className="pointer-coarse:h-11"
+              disabled={gated || busy}
+              onClick={() => setEditing(true)}
+            >
+              {isSet ? 'Replace' : 'Set'}
+            </Button>
+          </WriteGate>
         )}
         {isSet && !editing && (
-          <Button
-            variant="ghost"
-            size="xs"
-            className="text-destructive pointer-coarse:h-11"
-            disabled={busy}
-            onClick={() => void remove()}
-          >
-            Delete
-          </Button>
+          <WriteGate gated={gated}>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="text-destructive pointer-coarse:h-11"
+              disabled={gated || busy}
+              onClick={() => void remove()}
+            >
+              Delete
+            </Button>
+          </WriteGate>
         )}
       </div>
       {editing && (

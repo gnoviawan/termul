@@ -19,7 +19,8 @@
 //! `termul-server` needs `--allow-remote-writes`.
 //!
 //! [`forward_changes`] carries the service's change events to the `agents`
-//! watch as `{event: "automation_changed", payload}`.
+//! watch as `{event: "automation_changed", payload}`, and a dropped run of
+//! them as `{event: "automation_resync", payload: {missed}}`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -35,7 +36,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::broadcast::{self, error::RecvError};
 
-use crate::automation::model::{AutomationChanged, AutomationId, RunId, EVENT_AUTOMATION_CHANGED};
+use crate::automation::model::{
+    AutomationChanged, AutomationId, RunId, EVENT_AUTOMATION_CHANGED, EVENT_AUTOMATION_RESYNC,
+};
 use crate::automation::service::{AutomationService, ServiceError, ServiceResult};
 use crate::commands::automation::{
     delete_secret, list_suggestions, match_suggestion, parse_ops, preview_schedule, set_secret,
@@ -570,8 +573,9 @@ async fn accept(
 
 /// Hands every [`AutomationChanged`] to `relay`'s `agents` watch, which
 /// reaches web clients, the desktop's own carrier and shared-live peers. The
-/// payload is the event as serialized, unedited. Returns when the service is
-/// gone.
+/// payload is the event as serialized, unedited. A lag that drops events is
+/// announced as `automation_resync` so clients re-read what they show.
+/// Returns when the service is gone.
 pub async fn forward_changes(
     mut changes: broadcast::Receiver<AutomationChanged>,
     relay: Arc<WsRelaySink>,
@@ -585,7 +589,12 @@ pub async fn forward_changes(
                 }
             },
             Err(RecvError::Lagged(missed)) => {
-                tracing::warn!(target: LOG_TARGET, missed, "automation change events dropped: forwarder lagged");
+                tracing::warn!(target: LOG_TARGET, missed, "automation change events dropped: forwarder lagged; clients told to resync");
+                publish_agent_event(
+                    &relay,
+                    EVENT_AUTOMATION_RESYNC,
+                    &serde_json::json!({ "missed": missed }),
+                );
             }
             Err(RecvError::Closed) => return,
         }

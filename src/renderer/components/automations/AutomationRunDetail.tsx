@@ -8,8 +8,11 @@ import { useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, Loader2 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { FOCUS_RING_CLASS } from '@/components/ui/panel-styles'
+import { WriteGate } from '@/components/ui/write-gate'
+import { useServerAdmitsRemoteWrites } from '@/hooks/use-server-admits-remote-writes'
 import { cancelAutomationRun } from '@/lib/automation-api'
 import { cn } from '@/lib/utils'
+import { READ_ONLY_SERVER_REASON } from '@/lib/write-gate'
 import {
   formatDateTime,
   formatDuration,
@@ -30,6 +33,7 @@ const ORDER_METRICS = { nodeWidth: 1, nodeHeight: 1, gapX: 0, gapY: 0 }
 export function AutomationRunDetail({ run }: { run: AutomationRun }): React.JSX.Element {
   const { data: steps, error } = useRunSteps(run)
   const [cancelling, setCancelling] = useState(false)
+  const gated = !useServerAdmitsRemoteWrites()
   // Steps in graph order (by rank, then row position) of the run's own snapshot.
   const nodes = useMemo(() => {
     const placed = layoutGraph(run.graph, ORDER_METRICS).nodes
@@ -59,17 +63,22 @@ export function AutomationRunDetail({ run }: { run: AutomationRun }): React.JSX.
           {` · revision ${run.revision}`}
         </span>
         {run.status === 'running' && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="ml-auto pointer-coarse:h-11"
-            disabled={cancelling}
-            onClick={() => void cancel()}
-          >
-            Cancel run
-          </Button>
+          <WriteGate gated={gated} className="ml-auto">
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-auto pointer-coarse:h-11"
+              disabled={gated || cancelling}
+              onClick={() => void cancel()}
+            >
+              Cancel run
+            </Button>
+          </WriteGate>
         )}
       </header>
+      {gated && run.status === 'running' && (
+        <p className="text-xs text-muted-foreground">{READ_ONLY_SERVER_REASON}</p>
+      )}
       {run.stop_reason && <p className="text-xs text-destructive">{run.stop_reason}</p>}
       {run.summary && <p className="text-sm text-foreground">{run.summary}</p>}
       {error && <p className="text-xs text-destructive">Could not load the steps: {error}</p>}

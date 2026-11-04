@@ -492,7 +492,8 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
             blocks,
             streaming: false,
             timestamp: Date.now(),
-            seq: nextSeq()
+            seq: nextSeq(),
+            sentHere: true
           }
         : null
     set((s) => ({
@@ -571,7 +572,8 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
         blocks,
         streaming: false,
         timestamp: Date.now(),
-        seq: nextSeq()
+        seq: nextSeq(),
+        sentHere: true
       }
       return {
         messages: {

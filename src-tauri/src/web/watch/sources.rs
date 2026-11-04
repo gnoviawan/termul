@@ -23,7 +23,10 @@
 //!   revision}`): a hint to re-read one browser policy scope. And so does
 //!   `automation_changed` (`{project_id, automation_id}`, published by
 //!   `automation_api::forward_changes`): a hint to re-read one automation, or
-//!   a project's automations when `automation_id` is null.
+//!   a project's automations when `automation_id` is null. When the
+//!   forwarder falls behind and change events are dropped, it publishes
+//!   `automation_resync` (`{missed}`, the count dropped) instead: a hint to
+//!   re-read every automation the client shows.
 //! - `fs` (scope = project id): state = `{root}`; a delta is `{root, paths}`
 //!   for one debounced batch of changes, or `{ended, reason}` once the
 //!   project is no longer watchable (the host releases the subscription).

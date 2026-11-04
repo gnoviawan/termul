@@ -1,10 +1,11 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use serde_json::json;
 
 use super::engine::HttpConfig;
 use super::model::Op;
-use super::secrets::{choose_vault, SecretError, Secrets, FILE_VAULT_NAME};
+use super::secrets::{choose_vault, lazy_vault, SecretError, Secrets, FILE_VAULT_NAME};
 use super::service::AutomationService;
 use super::store::AutomationStore;
 use super::test_support::{no_history, test_engine, MemoryVault};
@@ -199,4 +200,64 @@ fn a_file_vault_value_never_reaches_the_logs_or_the_service_views() {
     let logs = logged_lines().join("\n");
     assert!(logs.contains("secret API_KEY set for project p1"), "{logs}");
     assert!(!logs.contains(FILE_VALUE), "{logs}");
+}
+
+fn counted_probe(answers: bool) -> (Arc<AtomicUsize>, impl Fn() -> bool + Send + Sync + 'static) {
+    let probes = Arc::new(AtomicUsize::new(0));
+    let counter = probes.clone();
+    (probes, move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        answers
+    })
+}
+
+#[test]
+fn opening_the_vault_and_listing_names_do_not_probe_the_keychain() {
+    let dir = tempfile::tempdir().unwrap();
+    let (probes, probe) = counted_probe(false);
+
+    let secrets = Secrets::new(
+        lazy_vault(dir.path(), probe),
+        Arc::new(AutomationStore::open_in_memory().unwrap()),
+    );
+    assert_eq!(secrets.list_names("p1").unwrap(), Vec::<String>::new());
+    assert_eq!(probes.load(Ordering::SeqCst), 0);
+
+    assert_eq!(
+        secrets.resolve("p1", &["API_KEY".to_string()]).unwrap_err(),
+        SecretError::Missing("API_KEY".to_string())
+    );
+    assert_eq!(probes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn the_first_secret_operation_probes_once_and_later_ones_reuse_the_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let (probes, probe) = counted_probe(false);
+    let vault = lazy_vault(dir.path(), probe);
+
+    assert_eq!(vault.get("automation:p1:API_KEY").unwrap(), None);
+    assert_eq!(vault.get("automation:p1:API_KEY").unwrap(), None);
+    vault.set("automation:p1:API_KEY", FILE_VALUE).unwrap();
+    vault.delete("automation:p1:API_KEY").unwrap();
+
+    assert_eq!(probes.load(Ordering::SeqCst), 1);
+    assert_eq!(vault_file(dir.path()), json!({}));
+}
+
+#[test]
+fn a_lazy_vault_over_an_existing_secrets_file_never_probes() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(FILE_VAULT_NAME),
+        r#"{"automation:p1:API_KEY":"kept"}"#,
+    )
+    .unwrap();
+
+    let vault = lazy_vault(dir.path(), || panic!("the keychain is not probed"));
+
+    assert_eq!(
+        vault.get("automation:p1:API_KEY").unwrap().as_deref(),
+        Some("kept")
+    );
 }

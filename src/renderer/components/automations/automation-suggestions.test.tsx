@@ -18,6 +18,10 @@ vi.mock('@/lib/automation-suggestion-launch', async (importOriginal) => ({
   launchSuggestionChat: launch.launchSuggestionChat
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
+const writes = vi.hoisted(() => ({ admitted: true }))
+vi.mock('@/hooks/use-server-admits-remote-writes', () => ({
+  useServerAdmitsRemoteWrites: () => writes.admitted
+}))
 
 import { suggestionPrompt } from '@/lib/automation-suggestion-launch'
 import { useAcpStore } from '@/stores/acp-store'
@@ -49,7 +53,8 @@ function sendInChat(sessionId: string, text: string): void {
             role: 'user',
             blocks: [{ type: 'text', text }],
             streaming: false,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            sentHere: true
           }
         ]
       }
@@ -64,6 +69,7 @@ beforeEach(() => {
   useAcpStore.setState({ messages: {} })
   resetOfferedChatsForTests()
   setSuggest(true)
+  writes.admitted = true
   api.listAutomationSuggestions.mockImplementation(() => ok([SUGGESTION]))
   api.matchAutomationSuggestion.mockImplementation(() => ok(SUGGESTION))
   api.acceptAutomationSuggestion.mockImplementation(() => ok(undefined))
@@ -136,6 +142,36 @@ describe('the in-chat suggestion card', () => {
     expect(api.acceptAutomationSuggestion).not.toHaveBeenCalled()
   })
 
+  it('on a read-only remote client, still matches (a read) but only Not now is offered', async () => {
+    writes.admitted = false
+    render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
+    sendInChat('s1', 'summarize the open PRs in termul')
+
+    expect(await screen.findByText(COPY)).toBeTruthy()
+    expect(api.matchAutomationSuggestion).toHaveBeenCalledWith(
+      'p1',
+      'summarize the open PRs in termul'
+    )
+    expect(
+      (screen.getByRole('button', { name: 'Create automation' }) as HTMLButtonElement).disabled
+    ).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }))
+    expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
+  })
+
+  it('does not ask again about an answered prompt when the chat remounts', async () => {
+    api.matchAutomationSuggestion.mockImplementation(() => ok(null))
+    const first = render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
+    sendInChat('s1', 'summarize the open PRs in termul')
+    await act(async () => {})
+    first.unmount()
+
+    render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
+
+    await act(async () => {})
+    expect(api.matchAutomationSuggestion).toHaveBeenCalledTimes(1)
+  })
+
   it('shows at most one card per chat', async () => {
     render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
     sendInChat('s1', 'summarize the open PRs in termul')
@@ -193,7 +229,7 @@ describe('the in-chat suggestion card', () => {
     expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
   })
 
-  it('does not match history that loads into the chat', async () => {
+  it('never asks about a user message this device did not send (a replay or another device echo)', async () => {
     render(<ChatAutomationSuggestion sessionId="s1" projectId="p1" />)
 
     act(() => {
@@ -201,11 +237,11 @@ describe('the in-chat suggestion card', () => {
         messages: {
           s1: [
             {
-              id: 'old',
+              id: 'turn:from-elsewhere',
               role: 'user',
               blocks: [{ type: 'text', text: 'summarize the open PRs in termul' }],
               streaming: false,
-              timestamp: Date.now() - 60 * 60 * 1000
+              timestamp: Date.now()
             }
           ]
         }
@@ -214,6 +250,7 @@ describe('the in-chat suggestion card', () => {
 
     await act(async () => {})
     expect(api.matchAutomationSuggestion).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('automation-suggestion-card')).toBeNull()
   })
 })
 

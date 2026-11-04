@@ -6,6 +6,7 @@ use serde_json::json;
 use super::engine::HttpConfig;
 use super::model::{AutomationChanged, IssueCode, Op, RunStatus, Schedule};
 use super::service::{AutomationService, ServiceError};
+use super::suggest::Prompt;
 use super::test_support::{no_history, test_engine, weekday_asks, MemoryVault, FRIDAY_MS};
 use crate::acp::config::AgentConfig;
 
@@ -354,4 +355,40 @@ fn a_suggestion_answer_needs_a_project_and_a_fingerprint() {
         service.accept_suggestion("", "abcd").unwrap_err().code(),
         "invalid_input"
     );
+}
+
+fn service_after_send(sent: &'static str, persisted: bool) -> AutomationService {
+    let te = test_engine(
+        std::env::temp_dir(),
+        Arc::new(MemoryVault::default()),
+        HttpConfig::default(),
+    );
+    te.clock.set(FRIDAY_MS);
+    let history = move |project_id: &str, _since_ms: i64| {
+        let mut prompts = weekday_asks(project_id);
+        if persisted {
+            prompts.push(Prompt {
+                at_ms: FRIDAY_MS,
+                text: sent.to_string(),
+            });
+        }
+        prompts
+    };
+    AutomationService::new(te.engine, Arc::new(history))
+}
+
+#[test]
+fn a_match_counts_the_days_before_the_prompt_just_sent() {
+    let sent = "summarize the open PRs in termul";
+    for persisted in [true, false] {
+        let hit = service_after_send(sent, persisted)
+            .match_prompt("p1", sent, Some("UTC"))
+            .unwrap()
+            .unwrap_or_else(|| panic!("no match when persisted={persisted}"));
+        assert_eq!(
+            (hit.occurrences, hit.days, persisted),
+            (4, 4, persisted),
+            "persisted={persisted}"
+        );
+    }
 }
