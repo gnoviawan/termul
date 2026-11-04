@@ -401,7 +401,13 @@ fn add_child_call_summary(
         let masked = crate::acp::manager::stderr_ring::redact_line(title);
         reduced.insert("title".to_string(), Value::String(masked));
     }
-    if reduced.contains_key("locations") {
+    // A file-change summary already claimed the call's paths: mask each one.
+    if let Some(Value::Array(locations)) = reduced.get_mut("locations") {
+        for location in locations {
+            if let Some(Value::String(path)) = location.get_mut("path") {
+                *path = crate::acp::manager::stderr_ring::redact_line(path);
+            }
+        }
         return;
     }
     if let Some(path) =

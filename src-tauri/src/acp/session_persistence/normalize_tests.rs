@@ -284,3 +284,27 @@ fn a_file_change_summary_claims_every_location_and_diff_path_within_bounds() {
         "an overlong path is skipped"
     );
 }
+
+#[test]
+fn a_subagents_multi_file_edit_masks_every_persisted_path() {
+    let edit = reduced_edit(
+        "tool_call",
+        json!({
+            "toolCallId": "c2",
+            "kind": "edit",
+            "content": [
+                { "type": "diff", "path": "/work/a.ts", "newText": "a\n" },
+                { "type": "diff", "path": "https://bob:hunter2pass@example.com/b.ts", "newText": "b\n" },
+            ],
+            "_meta": { "claudeCode": { "parentToolUseId": "d1" } },
+        }),
+    );
+    let paths = edit["locations"].as_array().unwrap();
+    assert_eq!(paths.len(), 2);
+    assert_eq!(paths[0], json!({ "path": "/work/a.ts" }));
+    let second = paths[1]["path"].as_str().unwrap();
+    assert!(
+        second.starts_with("https://bob:") && !second.contains("hunter2pass"),
+        "{second}"
+    );
+}

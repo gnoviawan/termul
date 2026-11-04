@@ -1603,6 +1603,34 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     expect(summary?.locations).toEqual([{ path: 'src/a.ts' }, { path: 'src/b.ts' }])
   })
 
+  it('(f8) a late update without locations keeps every path of a summary past the live bound', () => {
+    const sid = 's-summary-late-update'
+    seedSession(sid, 'agent-1', true)
+    const locations = Array.from({ length: 40 }, (_, i) => ({ path: `src/f${i}.ts` }))
+    useAcpStore.setState({
+      toolCalls: {
+        [sid]: [
+          {
+            toolCallId: 'multi-0',
+            kind: 'edit',
+            status: 'completed',
+            locations,
+            restoredSummary: true
+          }
+        ]
+      }
+    })
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: sid,
+      update: { toolCallId: 'multi-0', status: 'completed' }
+    })
+    _flushCoalescedForTesting()
+    const card = useAcpStore.getState().toolCalls[sid][0]
+    expect(card?.restoredSummary).toBeUndefined()
+    expect(card?.locations).toEqual(locations)
+  })
+
   it('(f5) restored file-change summaries all survive a restore past the cap', async () => {
     const sid = 's-restored-summaries'
     const summaries = Array.from(

@@ -1556,8 +1556,14 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         seq: list[idx].seq ?? nextSeq()
       })
       if (!merged) return {}
+      // An update without `locations` keeps the stored ones: they were
+      // bounded when stored, and a file-change summary may claim more paths
+      // than the live bound (every file of a multi-file edit).
       const next = [...list]
-      next[idx] = merged
+      next[idx] =
+        clampedUpdate.locations === undefined && list[idx].locations !== undefined
+          ? { ...merged, locations: list[idx].locations }
+          : merged
       return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }
     }
     if (useCoalesce) {
