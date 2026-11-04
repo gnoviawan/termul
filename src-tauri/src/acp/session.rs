@@ -154,6 +154,9 @@ pub(crate) struct DriverState {
     subagents: subagents::SubagentRoutes,
     /// Host answers to the permission requests of headless sessions.
     tool_policies: tool_policy::ToolPolicies,
+    /// Subagent records per chat (`crate::acp::subagents`), for native child
+    /// sessions and tool-mapped dispatches alike.
+    subagent_records: crate::acp::subagents::SubagentRecords,
     /// The agent-level sign-in prompt and the `authenticate` requests that
     /// may raise one.
     sign_in: SignInSlot,
@@ -531,6 +534,7 @@ impl DriverState {
         self.tool_policies.forget(session_id);
         self.last_commands.forget(session_id);
         self.subagents.forget_root(session_id);
+        self.subagent_records.forget_root(session_id);
     }
 
     /// Whether an `available_commands_update` repeats the set last fanned
@@ -570,6 +574,12 @@ impl DriverState {
     /// Callers fall back to the `"model"` convention when `None`.
     pub(crate) fn model_config_id(&self, session_id: &str) -> Option<String> {
         self.model_config_ids.get(session_id).cloned()
+    }
+
+    /// A `session/load` / `session/resume` replay window is open for the
+    /// session.
+    pub(crate) fn in_replay_window(&self, session_id: &str) -> bool {
+        self.replay_windows.contains_key(session_id)
     }
 
     /// Open a replay window for a session (or add a reference to an already

@@ -1,6 +1,6 @@
 ---
 title: Automations
-description: Have an agent build a task that runs on a schedule, review its run policy, approve it, and check its runs.
+description: Have an agent build a task that runs on a schedule, act on suggestions for repeated asks, review its run policy, approve it, and check its runs.
 ---
 
 An automation is a task that runs on its own, on a schedule or when you start it. For example, "every weekday at 9, summarize open PRs". You do not build automations by hand. You describe one to an AI agent in a chat, the agent builds it, and you review and approve it in the **Automations** tab. It does not run until you approve it.
@@ -35,6 +35,21 @@ The agent cannot approve, enable or run an automation. Only you can.
 
 To change an automation later, ask an agent in a chat. Every change makes a new revision, and the automation needs your approval again. Until you approve the new revision, the automation does not run, not even with **Run now**.
 
+## Suggestions from repeated asks
+
+Termul can notice when you keep asking for the same thing and offer to turn it into an automation. It never builds one without asking you.
+
+- **In a chat.** When your request names a cadence, such as "every morning" or "weekly", or repeats something you asked earlier in the same chat, the agent first finishes the task. Then it asks once in that chat: "This looks repeatable. Want me to turn it into a scheduled background automation?" Answer **Yes, schedule it** to have the agent build it, or **Not now**. It does not ask again in that chat.
+- **Across chats.** Termul looks at the prompts you sent in the project's chats over the last 30 days. If you asked something very similar on 3 or more different days, it suggests an automation with a schedule guessed from when you usually ask, for example weekly, on weekdays or daily at a certain time. This check runs on your machine and does not send your prompts to an AI model.
+
+A suggestion shows up as a card titled **This looks repeatable**, with the request it noticed, how many days you asked it and the usual timing. The card appears in a chat right after you send a matching request (at most once per chat), and in the **Suggested** section at the top of the **Automations** tab.
+
+- **Create automation** starts a new chat on your default agent with a prompt that asks it to build the automation. The agent may ask you a few questions first, such as when it should run and where the results should go, and then sends it to you for review. If no default agent is ready, Termul opens the agent launcher so you can pick one. If the chat cannot start, for example because the project has no folder, Termul shows an error and the suggestion stays so you can try again.
+- **Not now** hides the suggestion in this project on this device for 24 hours. It shows up again when the 24 hours are over, even on a screen you left open.
+- **Don't suggest this again** removes the suggestion for good.
+
+To turn off the suggestion card, open **Settings**, choose **Agent chats** and turn off **Suggest automations from repeated chats**. It is on by default. The agent can still ask in chat whether to schedule a repeatable request while this setting is off.
+
 ## Review and approve
 
 The **Run policy** card shows what the automation will do once it is approved:
@@ -50,7 +65,7 @@ If an AI step reads content from the web and a later step sends data out, the ca
 
 If the automation has problems, they are listed above the card under a heading such as **1 issue to fix before approval**, and you cannot approve it. Ask the agent that built it to fix them.
 
-When everything looks right, click **Approve and arm**. The automation turns **Armed** and runs on its schedule.
+When everything looks right, click **Approve and arm**. The automation turns **Armed** and runs on its schedule. If the automation is switched off, the button says **Approve** instead: approving does not turn it on, so it stays **Disabled** until you turn on **Enabled**.
 
 Below the card, **Diagram** shows the automation's steps and how they connect. A step can make a web request (HTTP), run an AI agent (Agent), reshape data (Transform), choose a path (Condition) or stop the run with an error (Fail).
 

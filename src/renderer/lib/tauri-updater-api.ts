@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type DownloadEvent, Update } from '@tauri-apps/plugin-updater'
+import { logFrontendError } from './log-api'
 import { BackupErrorCodes, createBackup, setAppVersion } from './tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from './tauri-rollback-api'
 
@@ -20,6 +21,15 @@ const STABLE_UPDATE_MANIFEST_URL =
   'https://github.com/gnoviawan/termul/releases/latest/download/latest.json'
 const UPSTREAM_LATEST_RELEASE_URL = 'https://api.github.com/repos/gnoviawan/termul/releases/latest'
 const AUR_UPDATE_CHECK_TIMEOUT_MS = 8000
+// Total cap on the signed package download (reqwest's request timeout covers
+// the whole body). Without one, a stalled connection or proxy left the download
+// at 0% with no error (#1431). Long enough for the installer at ~25 KB/s.
+const UPDATE_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000
+const LOG_SOURCE = 'tauri-updater-api'
+
+function logUpdater(level: 'info' | 'warn' | 'error', message: string): void {
+  void logFrontendError({ level, source: LOG_SOURCE, message: `[updater] ${message}` })
+}
 
 /**
  * Release channel selection for the desktop updater. The persisted preference
@@ -610,6 +620,11 @@ async function checkGitHubFallback(): Promise<UpdateInfo | null> {
   return compareVersions(latestVersion, currentVersion) > 0 ? mapGitHubReleaseToInfo(release) : null
 }
 
+/**
+ * Download the pending signed update. A first download of a version runs the
+ * pre-update backup before the package download; `onProgress` gets its first
+ * (0%) event only once that preparation is over.
+ */
 export async function downloadUpdate(
   onProgress?: (progress: DownloadProgress) => void
 ): Promise<IpcResult<void>> {
@@ -652,16 +667,22 @@ export async function downloadUpdate(
     const updateVersion = updateHandle.version
 
     if (preparedUpdateVersion !== updateVersion) {
+      logUpdater('info', `backing up app data before downloading ${updateVersion}`)
+      const preparationStartedAt = Date.now()
       const preparationResult = await prepareUpdateRecovery()
       if (!preparationResult.success) {
+        logUpdater('error', `update preparation failed: ${preparationResult.error}`)
         return preparationResult
       }
+      logUpdater('info', `backup finished in ${Date.now() - preparationStartedAt} ms`)
       preparedUpdateVersion = updateVersion
     }
 
     let downloadedSoFar = 0
     let totalBytes = 0
 
+    // The first progress event marks the end of preparation: the package
+    // download starts now.
     if (onProgress) {
       onProgress({
         bytesPerSecond: 0,
@@ -671,23 +692,32 @@ export async function downloadUpdate(
       })
     }
 
-    await updateHandle.download((event) => {
-      if (!onProgress) return
-
-      const mapped = mapDownloadEventToProgress(event, downloadedSoFar, totalBytes)
-      downloadedSoFar = mapped.downloadedSoFar
-      totalBytes = mapped.totalBytes
-      onProgress(mapped.progress)
-    })
+    logUpdater('info', `downloading ${updateVersion}`)
+    const downloadStartedAt = Date.now()
+    await updateHandle.download(
+      (event) => {
+        const mapped = mapDownloadEventToProgress(event, downloadedSoFar, totalBytes)
+        downloadedSoFar = mapped.downloadedSoFar
+        totalBytes = mapped.totalBytes
+        onProgress?.(mapped.progress)
+      },
+      { timeout: UPDATE_DOWNLOAD_TIMEOUT_MS }
+    )
+    logUpdater(
+      'info',
+      `downloaded ${updateVersion} (${downloadedSoFar} bytes) in ${Date.now() - downloadStartedAt} ms`
+    )
 
     downloadedUpdate = updateHandle
     downloadedVersion = updateVersion
 
     return { success: true, data: undefined }
   } catch (error) {
+    const message = getErrorMessage(error, 'Failed to download update')
+    logUpdater('error', `download failed: ${message}`)
     return {
       success: false,
-      error: getErrorMessage(error, 'Failed to download update'),
+      error: message,
       code: UpdaterErrorCodes.DOWNLOAD_FAILED
     }
   } finally {

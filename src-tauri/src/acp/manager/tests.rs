@@ -2980,8 +2980,8 @@ async fn new_session_injects_a_refreshed_oauth_token() {
 
 // ---- #1420: plan token handling on a history reopen ----------------------
 
-/// A session that already has a live plan token and a cached plan, the state a
-/// reopen starts from.
+/// A session that already has a live plan token and a cached plan, held by
+/// `agent-live`. A reopen on any other agent mints a new token.
 fn manager_with_live_plan_token(session_id: &str) -> (AcpManager, String) {
     let manager = AcpManager::new(vec![]);
     let (_, old_token, _) = manager.host_plan_server.register_session("agent-live");
@@ -3095,5 +3095,115 @@ async fn a_reopen_without_an_mcp_list_touches_no_tokens() {
     assert_eq!(
         manager.host_plan_server.tokens_bound_to("sess-none-list"),
         vec![old_token]
+    );
+}
+
+async fn resume_with_empty_user_list(manager: &AcpManager, agent: &AgentId, session_id: &str) {
+    manager
+        .resume_session(
+            agent,
+            SessionId(session_id.to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await
+        .expect("the fixture accepts session/resume");
+}
+
+async fn next_mcp_list(
+    sent: &mut mpsc::UnboundedReceiver<Option<Vec<McpServer>>>,
+) -> serde_json::Value {
+    let servers = sent
+        .recv()
+        .await
+        .unwrap()
+        .expect("the request sends a list");
+    serde_json::to_value(servers).unwrap()
+}
+
+/// A PWA reopen of an idle chat resumes the session on the agent that still
+/// holds it. claude-acp rebuilds a live session whose MCP list changed, and
+/// that kills its background shells and subagents, so the reopen must send
+/// the list the session was created with and keep the session's state.
+#[tokio::test]
+async fn a_reopen_on_the_agent_that_created_the_session_sends_the_creation_mcp_list() {
+    let manager = AcpManager::new(vec![]);
+    let agent = AgentId("agent-holder".to_string());
+    let mut sent = manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+    manager
+        .new_session(&agent, "/tmp".to_string(), Vec::new())
+        .await
+        .expect("the fixture accepts session/new");
+    let created = next_mcp_list(&mut sent).await;
+    manager.host_plan_server.seed_plan_for_test("sess-created");
+
+    resume_with_empty_user_list(&manager, &agent, "sess-created").await;
+    resume_with_empty_user_list(&manager, &agent, "sess-created").await;
+
+    assert_eq!(next_mcp_list(&mut sent).await, created);
+    assert_eq!(next_mcp_list(&mut sent).await, created);
+    assert_eq!(
+        manager
+            .host_plan_server
+            .tokens_bound_to("sess-created")
+            .len(),
+        1
+    );
+    assert!(manager
+        .host_plan_server
+        .plan_cached_for_test("sess-created"));
+}
+
+/// The chat of the 2026-11-03 report: a fresh agent resumed the session, and
+/// a later PWA reopen landed on that same agent.
+#[tokio::test]
+async fn a_reopen_after_a_successful_reopen_on_the_same_agent_sends_the_same_list() {
+    let (manager, other_agents_token) = manager_with_live_plan_token("sess-moved");
+    let agent = AgentId("agent-fresh".to_string());
+    let mut sent = manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+
+    resume_with_empty_user_list(&manager, &agent, "sess-moved").await;
+    let first = next_mcp_list(&mut sent).await;
+    resume_with_empty_user_list(&manager, &agent, "sess-moved").await;
+
+    assert_eq!(next_mcp_list(&mut sent).await, first);
+    let bound = manager.host_plan_server.tokens_bound_to("sess-moved");
+    assert_eq!(bound.len(), 1, "{bound:?}");
+    assert_ne!(
+        bound[0], other_agents_token,
+        "another agent's token is never reused"
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_reopen_on_the_holding_agent_keeps_its_token() {
+    let manager = AcpManager::new(vec![]);
+    let agent = AgentId("agent-holder-gate".to_string());
+    manager.install_test_agent_with_resume(agent.clone(), [].into_iter().collect());
+    let (_, held_token, _) = manager.host_plan_server.register_session(&agent.0);
+    manager
+        .host_plan_server
+        .bind_session(&held_token, "sess-held-gate");
+    // The fixture agent has no HTTP MCP capability, so the gate rejects this.
+    let http = McpServer::Http(agent_client_protocol::schema::v1::McpServerHttp::new(
+        "remote",
+        "https://example.invalid/mcp",
+    ));
+
+    manager
+        .resume_session(
+            &agent,
+            SessionId("sess-held-gate".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(vec![http]),
+        )
+        .await
+        .expect_err("the gate must reject an HTTP server");
+
+    assert_eq!(
+        manager.host_plan_server.tokens_bound_to("sess-held-gate"),
+        vec![held_token]
     );
 }

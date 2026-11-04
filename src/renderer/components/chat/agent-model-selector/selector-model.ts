@@ -2,8 +2,13 @@ import type { PersistedModelCatalog } from '@shared/types/persistence.types'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { AgentCapabilities, SessionConfigOption, SessionModelState } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
-import { flattenConfigOptionValues } from '../chat-input-bar-config'
-import type { FavoriteKey } from './favorite-models'
+import {
+  flattenConfigOptionValues,
+  isBinaryOnOffOption,
+  isFastModeEnabled,
+  THOUGHT_LEVEL_CATEGORY
+} from '../chat-input-bar-config'
+import { type FavoriteKey, favoriteKey } from './favorite-models'
 
 /** Tabs shown in the agent track before the rest go behind "More". */
 export const MAX_VISIBLE_AGENT_TABS = 4
@@ -496,29 +501,142 @@ export function splitContextOption(options: readonly SessionConfigOption[]): {
   return { context: options[index], rest: options.filter((_, i) => i !== index) }
 }
 
-/** The favorite key for a model on an agent, or null when the agent cannot be armed. */
+/**
+ * The favorite key for a model on an agent with its option snapshot, or null
+ * when the agent cannot be armed.
+ */
 export function favoriteFor(
   entry: SupportedAcpAgentEntry,
   agentConfigs: readonly { id: string }[],
-  modelId: string
+  modelId: string,
+  options?: Record<string, string>
 ): FavoriteKey | null {
   const configId = armableConfigId(entry, agentConfigs)
-  return configId ? { configId, modelId } : null
+  return configId ? favoriteKey(configId, modelId, options) : null
+}
+
+/** Option ids that name an effort level, for a snapshot whose agent's options are unknown. */
+const EFFORT_OPTION_ID = /effort|thought|thinking|reasoning/i
+/** An on/off value, as stored for a switch whose option is unknown. */
+const ON_OFF_VALUE = /^(true|false|on|off|enabled|disabled)$/i
+const ON_VALUE = /^(true|on|enabled)$/i
+
+function titleCase(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+/** A value as its option names it, else title-cased. */
+function valueName(option: SessionConfigOption | undefined, value: string): string {
+  const named = option
+    ? flattenConfigOptionValues(option)
+        .find((entry) => entry.value === value)
+        ?.name.trim()
+    : undefined
+  return named || titleCase(value)
+}
+
+/**
+ * The effort a favorite's snapshot holds, as its option names it ("High"),
+ * or null. The agent's `thought_level` option says which entry is effort;
+ * without it an effort-like option id with a non-on/off value is read.
+ */
+export function snapshotEffortLabel(
+  options: Record<string, string> | undefined,
+  agentOptions: readonly SessionConfigOption[]
+): string | null {
+  if (!options) return null
+  const effortOption = agentOptions.find((o) => o.category === THOUGHT_LEVEL_CATEGORY)
+  const optionId = effortOption
+    ? effortOption.id
+    : Object.keys(options).find(
+        (id) => EFFORT_OPTION_ID.test(id) && !ON_OFF_VALUE.test(options[id] ?? '')
+      )
+  const value = optionId ? options[optionId] : undefined
+  return value === undefined ? null : valueName(effortOption, value)
+}
+
+/** One snapshot value in a label: "Fast" for an On switch, nothing for Off, else the value's name. */
+function snapshotValueLabel(
+  option: SessionConfigOption | undefined,
+  optionId: string,
+  value: string
+): string | null {
+  const onOff = option ? isBinaryOnOffOption(option) : ON_OFF_VALUE.test(value)
+  if (!onOff) return valueName(option, value)
+  const on = option ? isFastModeEnabled(option, value) : ON_VALUE.test(value)
+  if (!on) return null
+  const name = option?.name.trim() || titleCase(optionId)
+  return /fast/i.test(name) ? 'Fast' : name
 }
 
 /**
  * Favorites to show, in the given (starred) order, with the model each points
- * at. A favorite whose agent is not installed, has no known list, or no longer
- * offers the model is HIDDEN: the store keeps it, so a reinstall brings it back.
+ * at and the label its snapshot reads as: the effort ("High"), plus what sets
+ * it apart when another favorite of the model has the same effort ("High ·
+ * Fast"). A favorite whose agent is not installed, has no known list, or no
+ * longer offers the model is HIDDEN: the store keeps it, so a reinstall
+ * brings it back.
  */
 export function resolveFavorites<F extends FavoriteKey>(
   favorites: readonly F[],
   catalogOf: (configId: string) => ModelCatalog | null,
-  installed: (configId: string) => boolean = () => true
-): Array<F & { model: CatalogModel }> {
-  return favorites.flatMap((favorite) => {
+  installed: (configId: string) => boolean = () => true,
+  optionsOf: (configId: string) => readonly SessionConfigOption[] = () => []
+): Array<F & { model: CatalogModel; label: string | null }> {
+  const shown = favorites.flatMap((favorite) => {
     if (!installed(favorite.configId)) return []
     const model = catalogOf(favorite.configId)?.options.find((m) => m.value === favorite.modelId)
-    return model ? [{ ...favorite, model }] : []
+    if (!model) return []
+    const label = snapshotEffortLabel(favorite.options, optionsOf(favorite.configId))
+    return [{ ...favorite, model, label }]
   })
+  return shown.map((entry) => {
+    const twins = shown.filter(
+      (other) =>
+        other !== entry &&
+        other.configId === entry.configId &&
+        other.modelId === entry.modelId &&
+        other.label === entry.label
+    )
+    if (twins.length === 0) return entry
+    const differing = new Set(
+      twins.flatMap((twin) =>
+        Object.keys({ ...twin.options, ...entry.options }).filter(
+          (id) => twin.options?.[id] !== entry.options?.[id]
+        )
+      )
+    )
+    const agentOptions = optionsOf(entry.configId)
+    const extras = [...differing].sort().flatMap((id) => {
+      const value = entry.options?.[id]
+      const extra =
+        value === undefined
+          ? null
+          : snapshotValueLabel(
+              agentOptions.find((o) => o.id === id),
+              id,
+              value
+            )
+      return extra ? [extra] : []
+    })
+    return { ...entry, label: [entry.label, ...extras].filter(Boolean).join(' · ') || null }
+  })
+}
+
+/** A Favorites row's name: the model, then its snapshot's label ("Opus · High"). */
+export function favoriteRowName(name: string, label: string | null): string {
+  return label ? `${name.trim()} · ${label}` : name.trim()
+}
+
+/**
+ * True when every snapshot value is live now. A snapshot option the loaded
+ * options lack does not match.
+ */
+export function snapshotMatches(
+  options: Record<string, string> | undefined,
+  live: Record<string, string>
+): boolean {
+  // Before the live options load there is nothing to differ from.
+  if (Object.keys(live).length === 0) return true
+  return Object.entries(options ?? {}).every(([optionId, value]) => live[optionId] === value)
 }

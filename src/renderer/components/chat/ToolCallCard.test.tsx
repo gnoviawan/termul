@@ -1,7 +1,6 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolCall, ToolCallStatus } from '@/lib/acp-api'
-import { SubagentDetailsDialog } from './SubagentDetailsDialog'
 import { ToolCallCard } from './ToolCallCard'
 
 vi.mock('framer-motion', async () => {
@@ -34,118 +33,11 @@ function withTooltip(ui: React.JSX.Element): React.JSX.Element {
   return <TooltipProvider>{ui}</TooltipProvider>
 }
 
-/**
- * ToolCallCard requires `onOpenSubagent` — the chat list owns the details
- * dialog so it survives virtualized row removal. Tests that don't exercise
- * delegation pass a no-op stub.
- */
-function Card(props: React.ComponentProps<typeof ToolCallCard>): React.JSX.Element {
-  return <ToolCallCard {...props} onOpenSubagent={props.onOpenSubagent ?? vi.fn()} />
-}
+const Card = ToolCallCard
 
 describe('ToolCallCard', () => {
   afterEach(() => {
     vi.restoreAllMocks()
-  })
-
-  it('opens read-only delegation details while a subagent is running', () => {
-    const onOpenSubagent = vi.fn()
-    const delegatedCall: ToolCall = {
-      toolCallId: 'task-1',
-      title: 'Audit branch code for slop',
-      kind: 'think',
-      status: 'in_progress',
-      rawInput: {
-        subagent_type: 'explorer',
-        description: 'Audit branch code for slop',
-        prompt: 'Inspect the branch without changing files.'
-      }
-    }
-    render(<ToolCallCard toolCall={delegatedCall} onOpenSubagent={onOpenSubagent} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /audit branch code for slop/i }))
-
-    // The card reports the request; the chat list owns the dialog so it
-    // survives virtualized row removal.
-    expect(onOpenSubagent).toHaveBeenCalledTimes(1)
-    expect(onOpenSubagent).toHaveBeenCalledWith(delegatedCall)
-    render(
-      <SubagentDetailsDialog
-        toolCall={onOpenSubagent.mock.calls[0][0]}
-        parentTurn="active"
-        open
-        onOpenChange={() => {}}
-        filePathContext={undefined}
-      />
-    )
-    const dialog = screen.getByRole('dialog', { name: 'Audit branch code for slop' })
-    expect(dialog).toHaveTextContent('Inspect the branch without changing files.')
-    expect(dialog).toHaveTextContent('Running')
-  })
-
-  it('shows the activity kind on a running delegation', () => {
-    const delegatedCall: ToolCall = {
-      toolCallId: 'task-activity',
-      title: 'Explore the tree',
-      kind: 'think',
-      status: 'in_progress',
-      rawInput: {
-        subagent_type: 'explorer',
-        prompt: 'Look around.',
-        activityKind: 'exploring'
-      }
-    }
-    render(
-      <SubagentDetailsDialog
-        toolCall={delegatedCall}
-        parentTurn="active"
-        open
-        onOpenChange={() => {}}
-        filePathContext={undefined}
-      />
-    )
-    expect(screen.getByRole('dialog', { name: 'Explore the tree' })).toHaveTextContent(
-      'Running · exploring'
-    )
-  })
-
-  it('renders markdown in the delegation result', async () => {
-    const delegatedCall: ToolCall = {
-      toolCallId: 'task-markdown',
-      title: 'Summarize findings',
-      kind: 'think',
-      status: 'completed',
-      rawInput: {
-        subagent_type: 'explorer',
-        description: 'Summarize findings',
-        prompt: 'Summarize the files.'
-      },
-      rawOutput: { text: '**Important**\n\n- first item\n- second item\n\nUse `status`.' }
-    }
-    const onOpenSubagent = vi.fn()
-    render(<ToolCallCard toolCall={delegatedCall} onOpenSubagent={onOpenSubagent} />)
-
-    fireEvent.click(screen.getByRole('button', { name: /summarize findings/i }))
-
-    expect(onOpenSubagent).toHaveBeenCalledWith(delegatedCall)
-    render(
-      <SubagentDetailsDialog
-        toolCall={onOpenSubagent.mock.calls[0][0]}
-        open
-        onOpenChange={() => {}}
-        filePathContext={undefined}
-      />
-    )
-    const dialog = screen.getByRole('dialog', { name: 'Summarize findings' })
-    expect(await within(dialog).findByText('Important')).toBeInTheDocument()
-    expect(
-      within(dialog).getByText('Important').closest('[data-streamdown="strong"]')
-    ).not.toBeNull()
-    expect(within(dialog).getByRole('list')).toBeInTheDocument()
-    expect(
-      within(dialog).getByText('status').closest('[data-streamdown="inline-code"]')
-    ).not.toBeNull()
-    expect(within(dialog).queryByText('**Important**')).not.toBeInTheDocument()
   })
 
   it('shimmers the label text in the present tense only while running', () => {

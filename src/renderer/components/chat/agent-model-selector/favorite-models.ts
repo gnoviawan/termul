@@ -6,26 +6,39 @@ import { createContext, useContext, useSyncExternalStore } from 'react'
  * `configId` is the STORE id that `armableConfigId` returns, never the
  * registry agent id: picking a favorite arms that config.
  *
+ * `options` snapshots the model's option values (effort, Fast, ...) when it
+ * was starred, and is part of the identity: "Opus · High" and "Opus · Low"
+ * are two favorites. Picking one applies the model, then the snapshot.
+ * Favorites starred before snapshots existed have none; picking one restores
+ * the model's last-used values.
+ *
  * The UI only talks to `FavoritesStore`. Today the adapter is localStorage;
  * a backend adapter drops in behind the same store with no UI change.
  *
  * Backend contract (not built yet):
  * - `GET /me/favorite-models` → `{ items: FavoriteModel[] }`
- * - `PUT /me/favorite-models/{configId}/{modelId}` → 204, idempotent
- *   (a repeat keeps the first `addedAt`)
- * - `DELETE /me/favorite-models/{configId}/{modelId}` → 204, idempotent
- *   (a missing favorite is not an error)
- * - Path segments are encoded with `favoritePath` (configIds contain `:`).
+ * - `PUT /me/favorite-models/{configId}/{modelId}[?options={signature}]` →
+ *   204, idempotent (a repeat keeps the first `addedAt`); the body carries the
+ *   `options` snapshot
+ * - `DELETE /me/favorite-models/{configId}/{modelId}[?options={signature}]`
+ *   → 204, idempotent (a missing favorite is not an error)
+ * - Paths are built with `favoritePath` (configIds contain `:`); the
+ *   signature is `optionsSignature`, so each snapshot is its own resource.
  * - First run against the backend: PUT each local favorite, then clear
  *   `termul.favoriteModels.v1`.
  * - The HTTP adapter must queue writes per key: a PUT and a DELETE for the
- *   same `configId`+`modelId` go out one after the other, each sent only
+ *   same `favoriteId` go out one after the other, each sent only
  *   once the previous one has settled. The store already resolves races
  *   locally (last write wins, rollback only for the newest), but two
  *   requests in flight for one key can reach the server out of order and
  *   leave it holding the older state. Different keys may run in parallel.
  */
-export type FavoriteKey = { configId: string; modelId: string }
+export type FavoriteKey = {
+  configId: string
+  modelId: string
+  /** The model's option values when starred, by option id. Absent: none snapshotted. */
+  options?: Record<string, string>
+}
 export type FavoriteModel = FavoriteKey & { addedAt: string }
 
 export interface FavoritesStore {
@@ -50,17 +63,45 @@ export interface FavoritesAdapter {
 
 export const FAVORITES_STORAGE_KEY = 'termul.favoriteModels.v1'
 
+/** A snapshot as a stable string (sorted by option id); empty for none. */
+export function optionsSignature(options: Record<string, string> | undefined): string {
+  if (!options) return ''
+  const entries = Object.entries(options).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return entries.length > 0 ? JSON.stringify(entries) : ''
+}
+
+/** A favorite key; an empty snapshot is stored as none. */
+export function favoriteKey(
+  configId: string,
+  modelId: string,
+  options?: Record<string, string>
+): FavoriteKey {
+  return optionsSignature(options) ? { configId, modelId, options } : { configId, modelId }
+}
+
 /** The backend path for one favorite. */
 export function favoritePath(key: FavoriteKey): string {
-  return `/me/favorite-models/${encodeURIComponent(key.configId)}/${encodeURIComponent(key.modelId)}`
+  const path = `/me/favorite-models/${encodeURIComponent(key.configId)}/${encodeURIComponent(key.modelId)}`
+  const signature = optionsSignature(key.options)
+  return signature ? `${path}?options=${encodeURIComponent(signature)}` : path
 }
 
 export function favoriteId(key: FavoriteKey): string {
-  return `${key.configId}\0${key.modelId}`
+  const signature = optionsSignature(key.options)
+  return `${key.configId}\0${key.modelId}${signature ? `\0${signature}` : ''}`
 }
 
 export function sameFavorite(a: FavoriteKey, b: FavoriteKey): boolean {
-  return a.configId === b.configId && a.modelId === b.modelId
+  return favoriteId(a) === favoriteId(b)
+}
+
+function isOptionValues(value: unknown): value is Record<string, string> {
+  return (
+    value != null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.values(value).every((v) => typeof v === 'string')
+  )
 }
 
 function isFavorite(value: unknown): value is FavoriteModel {
@@ -71,7 +112,8 @@ function isFavorite(value: unknown): value is FavoriteModel {
     typeof v.modelId === 'string' &&
     typeof v.addedAt === 'string' &&
     v.configId !== '' &&
-    v.modelId !== ''
+    v.modelId !== '' &&
+    (v.options === undefined || isOptionValues(v.options))
   )
 }
 
@@ -239,7 +281,9 @@ export function createFavoritesStore(
       // Idempotent: on twice keeps the first addedAt; off on a missing key is a no-op.
       if (on ? current : !current) return
       if (!confirmed.has(id)) confirmed.set(id, current)
-      const next = on ? { ...key, addedAt: now().toISOString() } : null
+      const next = on
+        ? { ...favoriteKey(key.configId, key.modelId, key.options), addedAt: now().toISOString() }
+        : null
       const mine = ++seq
       latest.set(id, mine)
       replace(key, next)

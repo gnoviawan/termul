@@ -151,6 +151,7 @@ import {
   _setAcpTransportForTests,
   type AcpTransport
 } from '@/lib/acp-transport'
+import { subagentMeta, subagentRecord, subagentToolCall } from '@/lib/test-utils/subagent'
 import {
   _flushCoalescedForTesting,
   _resetAcpAuthForTesting,
@@ -165,7 +166,11 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
+import { agentReuseKey } from '../acp-reuse-keys'
+import { selectAgentIdentity } from './helpers'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
+
+const UNEXPLAINED_END = { activity: 'idle', end: { reason: 'unexplained' } }
 
 describe('acp-store', () => {
   beforeEach(() => {
@@ -458,17 +463,15 @@ describe('acp-store', () => {
       },
       toolCalls: {
         s1: [
-          {
-            toolCallId: 'termul-subagent:child-1',
-            status: 'in_progress',
-            rawInput: { description: 'Review', prompt: 'p' },
-            subagentLifecycle: { state: 'running', agentId: 'child-1' }
-          }
+          subagentToolCall(
+            { source: 'acp-rfd', caps: { liveProgress: true } },
+            { toolCallId: 'termul-subagent:child-1', status: 'in_progress' }
+          )
         ]
       }
     })
     useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
-    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagentLifecycle?.state).toBe('cancelled')
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagent).toMatchObject(UNEXPLAINED_END)
   })
 
   it('agent_disconnected cancels a background launch that never reported its end', () => {
@@ -479,18 +482,15 @@ describe('acp-store', () => {
       },
       toolCalls: {
         s1: [
-          {
-            toolCallId: 'toolu_bg',
-            status: 'completed',
-            timestamp: 2,
-            rawInput: { description: 'Run e2e', prompt: 'p', run_in_background: true },
-            subagentLifecycle: { background: true }
-          }
+          subagentToolCall(
+            { background: true },
+            { toolCallId: 'toolu_bg', status: 'completed', timestamp: 2 }
+          )
         ]
       }
     })
     useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'crashed' })
-    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagentLifecycle?.state).toBe('cancelled')
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagent).toMatchObject(UNEXPLAINED_END)
   })
 
   it('session close applies a buffered tool update before cancelling running subagents', () => {
@@ -522,13 +522,19 @@ describe('acp-store', () => {
       sessionId: 's1',
       update: {
         toolCallId: 'termul-subagent:child-1',
-        _meta: { 'termul/subagent': { state: 'running', sessionId: 'child-1' } }
+        _meta: subagentMeta(
+          subagentRecord({
+            dispatchToolCallId: 'termul-subagent:child-1',
+            source: 'acp-rfd',
+            caps: { liveProgress: true }
+          })
+        )
       }
     })
     useAcpStore
       .getState()
       ._onSessionClosed({ agentId: 'agent-1', sessionId: 's1', reason: 'closed' })
-    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagentLifecycle?.state).toBe('cancelled')
+    expect(useAcpStore.getState().toolCalls.s1?.[0]?.subagent).toMatchObject(UNEXPLAINED_END)
   })
 
   it.each([
@@ -553,6 +559,35 @@ describe('acp-store', () => {
     useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason })
     expect(useAcpStore.getState().agentStatus['agent-1']).toBeUndefined()
     expect(useAcpStore.getState().sessions['s1'].status).toBe('closed')
+  })
+
+  it('an idle-reaped chat keeps its agent config so the list keeps the agent icon', () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState({
+      agents: { 'agent-1': {} as never },
+      agentStatus: { 'agent-1': 'connected' },
+      agentConfigs: [{ id: 'cfg-claude', name: 'Claude', templateId: 'claude-acp' } as never],
+      configToLiveAgent: { [agentReuseKey('cfg-claude', '/work', 'p1')]: 'agent-1' },
+      sessionIndex: [
+        {
+          id: 's1',
+          agentId: 'agent-1',
+          agentConfigId: 'cfg-claude',
+          title: 'Chat',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 1,
+          messageCount: 0,
+          status: 'active'
+        }
+      ]
+    })
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1', reason: 'reaped' })
+    const state = useAcpStore.getState()
+    expect(state.configToLiveAgent).toEqual({})
+    expect(state.sessionIndex[0]).toMatchObject({ status: 'closed', agentConfigId: 'cfg-claude' })
+    expect(selectAgentIdentity(state, 'agent-1').templateId).toBe('claude-acp')
   })
 
   it.each([

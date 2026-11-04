@@ -156,9 +156,31 @@ fn removed_flag_warnings(cfg: &ServerConfig) -> Vec<&String> {
         .collect()
 }
 
+/// `ServerConfig::from_args` with a private `--state-dir` prepended, for
+/// tests that do not hold `ENV_LOCK`. Without it the sessions dir, the
+/// projects file and the `server-config.json` lookup come from
+/// `$HOME` / `$XDG_STATE_HOME`, which `ENV_LOCK` tests such as
+/// `default_sessions_dir_empty_home_yields_none_not_cwd_relative` clear
+/// while this test runs on another thread — `from_args` then fails with
+/// "could not determine sessions directory" (#1626). The dir is never
+/// created: `from_args` only derives paths from it. It goes first so a
+/// trailing flag in `args` stays trailing.
+fn from_args_isolated<'a>(
+    args: impl IntoIterator<Item = &'a str>,
+) -> Result<ServerConfig, ParseCliError> {
+    let state_dir =
+        std::env::temp_dir().join(format!("termul-config-isolated-{}", std::process::id()));
+    let mut argv = vec![
+        "--state-dir".to_owned(),
+        state_dir.to_string_lossy().into_owned(),
+    ];
+    argv.extend(args.into_iter().map(str::to_owned));
+    ServerConfig::from_args(argv)
+}
+
 #[test]
 fn from_args_defaults() {
-    let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("defaults");
+    let cfg = from_args_isolated(Vec::<&str>::new()).expect("defaults");
     assert_eq!(cfg.host, "127.0.0.1");
     assert_eq!(cfg.port, 8080);
     assert_eq!(
@@ -216,7 +238,7 @@ fn from_args_bad_project_root_fails_fast() {
 
 #[test]
 fn from_args_host_and_port() {
-    let cfg = ServerConfig::from_args(["--host", "0.0.0.0", "--port", "9090"]).expect("parse");
+    let cfg = from_args_isolated(["--host", "0.0.0.0", "--port", "9090"]).expect("parse");
     assert_eq!(cfg.host, "0.0.0.0");
     assert_eq!(cfg.port, 9090);
 }
@@ -247,7 +269,7 @@ fn from_args_rejects_port_zero() {
 
 #[test]
 fn from_args_accepts_event_log_capacity() {
-    let cfg = ServerConfig::from_args(["--event-log-capacity", "1024"]).expect("parse");
+    let cfg = from_args_isolated(["--event-log-capacity", "1024"]).expect("parse");
     assert_eq!(cfg.event_log_capacity, 1024);
     // The other defaults stay intact.
     assert_eq!(cfg.host, "127.0.0.1");
@@ -278,9 +300,15 @@ fn from_args_missing_event_log_capacity_value() {
     ));
 }
 
+// Explicit sessions dir so these tests never depend on $HOME / $TERMUL_SESSIONS_DIR,
+// which the ENV_LOCK tests below mutate while tests run in parallel.
+const SESSIONS_DIR_ARG: &str = "/tmp/termul-removed-flag-sessions";
+
 #[test]
 fn from_args_removed_permission_flags_parse_and_warn_once_each() {
     let cfg = ServerConfig::from_args([
+        "--sessions-dir",
+        SESSIONS_DIR_ARG,
         "--permission-timeout",
         "30",
         "--permission-reconnect-grace",
@@ -296,6 +324,7 @@ fn from_args_removed_permission_flags_parse_and_warn_once_each() {
     // Everything else is unaffected.
     assert_eq!(cfg.host, "127.0.0.1");
     assert_eq!(cfg.port, 8080);
+    assert_eq!(cfg.sessions_dir.as_deref(), Some(Path::new(SESSIONS_DIR_ARG)));
 }
 
 #[test]
@@ -306,31 +335,39 @@ fn from_args_removed_permission_flags_tolerate_invalid_values() {
         ("--permission-reconnect-grace", "0"),
         ("--permission-reconnect-grace", "-3"),
     ] {
-        let cfg = ServerConfig::from_args([flag, value])
+        let cfg = ServerConfig::from_args(["--sessions-dir", SESSIONS_DIR_ARG, flag, value])
             .unwrap_or_else(|e| panic!("{flag} {value} must not abort: {e}"));
         let warnings = removed_flag_warnings(&cfg);
         assert_eq!(warnings.len(), 1, "{flag} {value}");
         assert!(warnings[0].contains(flag));
+        assert_eq!(cfg.sessions_dir.as_deref(), Some(Path::new(SESSIONS_DIR_ARG)));
     }
 }
 
 #[test]
 fn from_args_removed_permission_flags_tolerate_missing_value() {
     // Trailing: no value at all.
-    let cfg = ServerConfig::from_args(["--permission-timeout"]).expect("must not abort");
+    let cfg = ServerConfig::from_args(["--sessions-dir", SESSIONS_DIR_ARG, "--permission-timeout"])
+        .expect("must not abort");
     let warnings = removed_flag_warnings(&cfg);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("no value"));
     // Followed by another flag: that flag is NOT swallowed as the value.
-    let cfg = ServerConfig::from_args(["--permission-reconnect-grace", "--port", "9091"])
-        .expect("must not abort");
+    let cfg = ServerConfig::from_args([
+        "--sessions-dir",
+        SESSIONS_DIR_ARG,
+        "--permission-reconnect-grace",
+        "--port",
+        "9091",
+    ])
+    .expect("must not abort");
     assert_eq!(cfg.port, 9091, "the next flag keeps its own value");
     let warnings = removed_flag_warnings(&cfg);
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].contains("no value"));
     // `-h` is help, never the removed flag's value.
     assert!(matches!(
-        ServerConfig::from_args(["--permission-timeout", "-h"]),
+        ServerConfig::from_args(["--sessions-dir", SESSIONS_DIR_ARG, "--permission-timeout", "-h"]),
         Err(ParseCliError::Help)
     ));
 }
@@ -466,7 +503,7 @@ fn from_args_unknown_option() {
 // parsed and ignored like the removed permission flags.
 #[test]
 fn from_args_removed_workspace_manifests_dir_parses_and_warns_once() {
-    let cfg = ServerConfig::from_args(["--workspace-manifests-dir", "/var/lib/termul/manifests"])
+    let cfg = from_args_isolated(["--workspace-manifests-dir", "/var/lib/termul/manifests"])
         .expect("the removed flag still parses");
     let warnings: Vec<_> = cfg
         .deprecation_warnings
@@ -481,16 +518,15 @@ fn from_args_removed_workspace_manifests_dir_parses_and_warns_once() {
         vec!["--workspace-manifests-dir", ""],
         vec!["--workspace-manifests-dir", "--port", "9091"],
     ] {
-        ServerConfig::from_args(args).expect("a removed flag must not abort startup");
+        from_args_isolated(args).expect("a removed flag must not abort startup");
     }
-    let cfg = ServerConfig::from_args(["--workspace-manifests-dir", "--port", "9091"]).unwrap();
+    let cfg = from_args_isolated(["--workspace-manifests-dir", "--port", "9091"]).unwrap();
     assert_eq!(cfg.port, 9091);
 }
 
 #[test]
 fn from_args_accepts_store_file() {
-    let cfg =
-        ServerConfig::from_args(["--store-file", "/var/lib/termul/store.json"]).expect("parse");
+    let cfg = from_args_isolated(["--store-file", "/var/lib/termul/store.json"]).expect("parse");
     assert_eq!(
         cfg.store_file,
         Some(PathBuf::from("/var/lib/termul/store.json"))
@@ -544,8 +580,8 @@ fn from_args_missing_state_dir_value() {
 
 #[test]
 fn from_args_accepts_projects_file() {
-    let cfg = ServerConfig::from_args(["--projects-file", "/var/lib/termul/projects.json"])
-        .expect("parse");
+    let cfg =
+        from_args_isolated(["--projects-file", "/var/lib/termul/projects.json"]).expect("parse");
     assert_eq!(
         cfg.projects_file,
         Some(PathBuf::from("/var/lib/termul/projects.json"))

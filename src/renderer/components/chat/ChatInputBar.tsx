@@ -28,6 +28,7 @@ import {
   useAgentTemplateId,
   useSessionUsage
 } from '@/stores/acp-store'
+import type { OptionValues } from '@/stores/acp-store/composer-options'
 import { ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
@@ -106,8 +107,11 @@ interface ChatInputBarProps {
   onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
   /** Apply a legacy mode immediately. May return a Promise for chip pending UI. */
   onSetMode: (modeId: string) => void | Promise<void>
-  /** Apply a native ACP model selection immediately. May return a Promise for chip pending UI. */
-  onSetModel: (modelId: string) => void | Promise<void>
+  /**
+   * Apply a model pick, then its option values (`values`: a favorite's
+   * snapshot). May return a Promise for chip pending UI.
+   */
+  onSetModel: (modelId: string, values?: OptionValues) => void | Promise<void>
   /** External text to load into the composer (edit a message / pick a suggestion). */
   seedText?: string
   /** Bump to re-apply `seedText` even if the text is unchanged. */

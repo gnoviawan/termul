@@ -18,34 +18,27 @@
  * long frames, heap slope? Reproduces the multi-agent slowness as numbers.
  */
 
-import { mkdirSync } from 'node:fs'
-import path from 'node:path'
 import type { Page } from 'playwright'
-import { reloadRenderer, seedPerfProject } from '../runner/agent-config.ts'
+import { singlePerfProject } from '../runner/agent-config.ts'
 import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts'
 import { launchChatViaUI, openLauncher, sleep, waitForLauncher } from '../runner/scenario-ui.ts'
 
 /**
- * Switch the visible chat by clicking its tab-bar entry. Chat tabs render
- * as a labeled div (WorkspaceTabBar) whose click handler selects the tab;
- * the wrapper element in the pane carries `data-chat-tab-state`.
+ * Switch the visible chat by clicking its entry in the workspace tab bar
+ * (`role="tab"` inside the pane's `role="tablist"`; stream-storm opens only
+ * chat tabs). Hidden chats are unmounted, so the pane holds one chat at a
+ * time and the tab bar is the only place every chat is reachable. Returns
+ * whether the click selected a different tab.
  */
-async function switchToChatTab(page: Page, index: number): Promise<void> {
-  const wrappers = page.locator('[data-chat-tab-state]')
-  const count = await wrappers.count()
-  if (count === 0) return
-  const target = wrappers.nth(index % count)
-  const visible = await target.getAttribute('data-chat-tab-state')
-  if (visible === 'visible') return
-  // The tab-bar entry is the labeled clickable div above the wrapper.
-  const tabEntry = target.locator('xpath=ancestor::div[@aria-label][1]')
-  const entryCount = await tabEntry.count()
-  if (entryCount > 0) {
-    await tabEntry
-      .first()
-      .click({ timeout: 5000 })
-      .catch(() => undefined)
-  }
+async function switchToChatTab(page: Page, index: number): Promise<boolean> {
+  const tabs = page.locator('[role="tablist"] [role="tab"]')
+  const count = await tabs.count()
+  if (count < 2) return false
+  let target = tabs.nth(index % count)
+  if ((await target.getAttribute('aria-selected')) === 'true')
+    target = tabs.nth((index + 1) % count)
+  await target.click({ timeout: 5000 }).catch(() => undefined)
+  return (await target.getAttribute('aria-selected').catch(() => null)) === 'true'
 }
 
 async function drive(ctx: ScenarioContext): Promise<void> {
@@ -93,20 +86,10 @@ async function drive(ctx: ScenarioContext): Promise<void> {
     await chatComposer.press('Enter', { timeout: 3000 }).catch(() => undefined)
   }
 
-  // --- setup: seed a project + wait for the launcher -----------------------
-  // Fresh scratch profiles start with zero projects; the launcher mounts
-  // only once a project is selected, so seed one first and reload so the
-  // boot sequence activates it.
-  const seed = await ctx.beginPhase('seed-project')
-  const projectDir = path.join(process.env.TEMP ?? 'C:\\temp', 'termul-perf-project')
-  mkdirSync(projectDir, { recursive: true })
-  await seedPerfProject(handle, projectDir)
-  await reloadRenderer(handle)
-  await seed.end()
-
+  // --- setup: wait for the launcher ----------------------------------------
+  // The harness seeds the perf project before launch (`preseedProjects`).
   // The launcher's composer mounts only on an empty pane with a selected
-  // project — wait for it to become visible (fresh scratch profile = no
-  // tabs, so the launcher is the default surface after reload).
+  // project, so wait for it to become visible.
   await waitForLauncher(page)
 
   // --- warmup phase --------------------------------------------------------
@@ -154,16 +137,20 @@ async function drive(ctx: ScenarioContext): Promise<void> {
   let nextSwitch = Date.now() + cycleMs
   let cursor = 0
   let followUpIdx = 0
+  let switches = 0
+  let attempts = 0
   while (Date.now() < deadline) {
     await sleep(250)
     if (Date.now() >= nextSwitch) {
-      await switchToChatTab(page, cursor++)
+      attempts++
+      if (await switchToChatTab(page, cursor++)) switches++
       nextSwitch = Date.now() + cycleMs
       if (workReal && cursor % 2 === 0) {
         await sendFollowUp(FOLLOW_UPS[followUpIdx++ % FOLLOW_UPS.length])
       }
     }
   }
+  console.log(`tab switches: ${switches} of ${attempts}`)
   await sustained.end()
 
   // --- measure phase --------------------------------------------------------
@@ -185,5 +172,6 @@ export const streamStormScenario: ScenarioDef = {
     measure: 20,
     'switch-every-ms': 5000
   },
+  preseedProjects: () => [singlePerfProject()],
   drive
 }

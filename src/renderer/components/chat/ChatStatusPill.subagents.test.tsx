@@ -1,10 +1,17 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import type { ToolCall } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
+import {
+  endedState,
+  type SubagentRecordOverrides,
+  subagentToolCall
+} from '@/lib/test-utils/subagent'
 import type { ChatMessage } from '@/stores/acp-store/types'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { ChatStatusPill } from './ChatStatusPill'
+import { SubagentSurfaceProvider } from './SubagentSurface'
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
@@ -25,35 +32,59 @@ const user: ChatMessage = {
   seq: 1
 }
 
-function sub(partial: Partial<ToolCall>): ToolCall {
-  return {
-    toolCallId: 'a1',
-    seq: 2,
-    timestamp: Date.now(),
-    rawInput: {
-      description: 'Audit code',
+/** A Claude dispatch whose record follows its call status, as the host maps it. */
+function sub(partial: Partial<ToolCall>, record: SubagentRecordOverrides = {}): ToolCall {
+  const { status } = partial
+  const settled = record.background
+    ? status === 'failed'
+    : status === 'completed' || status === 'failed'
+  return subagentToolCall(
+    {
+      title: 'Audit code',
       prompt: 'do it',
-      subagent_type: 'general-purpose'
+      role: 'general-purpose',
+      ...(settled && status && { state: endedState(status === 'failed' ? 'failed' : 'completed') }),
+      ...record
     },
-    ...partial
-  }
+    { toolCallId: 'a1', seq: 2, timestamp: Date.now(), ...partial }
+  )
 }
 
 /** No cwd: no git status read and, without file edits, no changed files. */
 const base = {
   sessionId: 's1',
   cwd: '',
-  messages: [user],
-  turnActive: true,
-  filePathContext: undefined
+  messages: [user] as readonly ChatMessage[],
+  turnActive: true
 }
 
-function renderPill(
-  toolCalls: ToolCall[],
-  extra: Partial<typeof base> & { hidden?: boolean } = {}
-) {
-  return render(<ChatStatusPill toolCalls={toolCalls} {...base} {...extra} />)
+type PillProps = Partial<typeof base> & { hidden?: boolean; isVisible?: boolean }
+
+/** The pill inside its chat's subagent surface, as AgentChatPanel mounts it. */
+function Pill({ toolCalls, ...extra }: PillProps & { toolCalls: ToolCall[] }): React.JSX.Element {
+  const props = { ...base, ...extra }
+  return (
+    <TooltipProvider>
+      <SubagentSurfaceProvider
+        sessionId={props.sessionId}
+        agentId={undefined}
+        toolCalls={toolCalls}
+        messages={props.messages}
+        turnActive={props.turnActive}
+        filePathContext={undefined}
+        isVisible={props.isVisible ?? true}
+      >
+        <ChatStatusPill toolCalls={toolCalls} {...props} />
+      </SubagentSurfaceProvider>
+    </TooltipProvider>
+  )
 }
+
+function renderPill(toolCalls: ToolCall[], extra: PillProps = {}) {
+  return render(<Pill toolCalls={toolCalls} {...extra} />)
+}
+
+const panel = () => screen.getByTestId('subagent-panel')
 
 const pill = () => screen.getByRole('button', { name: /^Session status:/ })
 
@@ -80,31 +111,31 @@ describe('ChatStatusPill subagents', () => {
   it('shows counts on the pill and rows in the popover', () => {
     renderPill([
       sub({ toolCallId: 'a', status: 'in_progress' }),
-      sub({
-        toolCallId: 'b',
-        status: 'completed',
-        rawInput: { description: 'Write tests', prompt: 'p' },
-        subagentUsage: { totalDurationMs: 3574, totalTokens: 37847 }
-      }),
+      sub(
+        { toolCallId: 'b', status: 'completed' },
+        { title: 'Write tests', role: undefined, usage: { durationMs: 3574, totalTokens: 37847 } }
+      ),
       sub({ toolCallId: 'c', status: 'failed' })
     ])
-    expect(pill()).toHaveTextContent(/1 running.*1 done.*1 failed/)
-    expect(pill()).toHaveAccessibleName('Session status: subagents 1 running, 1 done, 1 failed')
+    expect(pill()).toHaveTextContent(/1 working.*1 done.*1 failed/)
+    expect(pill()).toHaveAccessibleName('Session status: subagents 1 working, 1 done, 1 failed')
     fireEvent.click(pill())
     const popover = screen.getByRole('dialog', { name: 'Subagents' })
     expect(popover).not.toHaveAttribute('data-sheet')
-    expect(within(popover).getByRole('button', { name: /^done\s*Write tests/ })).toHaveTextContent(
-      /00:03.*37\.8k tok/
+    expect(within(popover).getByRole('button', { name: /^Write tests.*Done/ })).toHaveTextContent(
+      /Done\s*3s/
     )
+    expect(within(popover).getByRole('button', { name: /^Audit code.*Working/ })).toBeVisible()
     expect(within(popover).getAllByText('general-purpose').length).toBeGreaterThan(0)
   })
 
-  it('opens the details dialog from a row and closes the popover', () => {
-    renderPill([sub({ status: 'completed' })])
+  it('opens the subagent panel from a row and closes the popover', () => {
+    renderPill([sub({ status: 'completed' }), sub({ toolCallId: 'b', status: 'in_progress' })])
     fireEvent.click(pill())
-    fireEvent.click(screen.getByRole('button', { name: /^done\s*Audit code/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Audit code.*Done/ }))
     expect(screen.queryByRole('dialog', { name: 'Subagents' })).toBeNull()
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(panel()).toHaveTextContent('Subagent of this chat · 1 of 2')
+    expect(within(panel()).getByRole('heading', { name: 'Audit code' })).toBeInTheDocument()
   })
 
   it('ticks only while open and visible, and keeps the settled duration', () => {
@@ -117,14 +148,14 @@ describe('ChatStatusPill subagents', () => {
     expect(vi.getTimerCount()).toBe(0)
 
     fireEvent.click(pill())
-    const row = () => screen.getByRole('button', { name: /^running\s*Audit code/ })
-    expect(row()).toHaveTextContent('00:04')
+    const row = () => screen.getByRole('button', { name: /^Audit code.*Working/ })
+    expect(row()).toHaveTextContent(/Working\s*4s/)
     act(() => {
       vi.advanceTimersByTime(3000)
     })
-    expect(row()).toHaveTextContent('00:07')
+    expect(row()).toHaveTextContent(/Working\s*7s/)
 
-    rerender(<ChatStatusPill toolCalls={[running]} {...base} isVisible={false} />)
+    rerender(<Pill toolCalls={[running]} isVisible={false} />)
     // Hiding also closes the popover; drain Radix's unmount focus timers (a
     // live tick interval would make runAllTimers abort instead).
     act(() => {
@@ -132,20 +163,16 @@ describe('ChatStatusPill subagents', () => {
     })
     expect(vi.getTimerCount()).toBe(0)
 
-    rerender(
-      <ChatStatusPill
-        toolCalls={[{ ...running, status: 'completed' }]}
-        {...base}
-        turnActive={false}
-      />
-    )
+    const settled = sub({ status: 'completed', timestamp: start }, { endedAt: start + 7000 })
+    rerender(<Pill toolCalls={[settled]} turnActive={false} />)
     fireEvent.click(pill())
-    const done = () => screen.getByRole('button', { name: /^done\s*Audit code/ })
-    expect(done()).toHaveTextContent('00:07')
+    const done = () => screen.getByRole('button', { name: /^Audit code.*Done/ })
+    expect(done()).toHaveTextContent(/Done\s*7s/)
     act(() => {
       vi.advanceTimersByTime(5000)
     })
-    expect(done()).toHaveTextContent('00:07')
+    expect(done()).toHaveTextContent(/Done\s*7s/)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('closes the popover when its chat tab is hidden', () => {
@@ -154,100 +181,97 @@ describe('ChatStatusPill subagents', () => {
     fireEvent.click(pill())
     expect(screen.getByRole('dialog', { name: 'Subagents' })).toBeInTheDocument()
 
-    rerender(<ChatStatusPill toolCalls={calls} {...base} isVisible={false} />)
+    rerender(<Pill toolCalls={calls} isVisible={false} />)
     expect(screen.queryByRole('dialog', { name: 'Subagents' })).toBeNull()
 
-    rerender(<ChatStatusPill toolCalls={calls} {...base} />)
+    rerender(<Pill toolCalls={calls} />)
     expect(screen.queryByRole('dialog', { name: 'Subagents' })).toBeNull()
   })
 
-  it('shows an in-flight call as stopped (counted failed) once the turn ended', () => {
+  it('shows an in-flight call as stopped once the turn ended', () => {
     renderPill([sub({ status: 'in_progress' })], { turnActive: false })
-    expect(pill()).toHaveTextContent('1 failed')
+    expect(pill()).toHaveTextContent('1 stopped')
     fireEvent.click(pill())
-    expect(screen.getByRole('button', { name: /^stopped\s*Audit code/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Audit code.*Stopped/ })).toBeInTheDocument()
   })
 
-  it('keeps the dialog mounted when its call leaves the current turn', () => {
+  it('keeps the panel open when its subagent leaves the current turn', () => {
     const call = sub({ status: 'completed' })
-    const props = { sessionId: 's1', cwd: '', turnActive: false, filePathContext: undefined }
-    const { rerender } = render(<ChatStatusPill toolCalls={[call]} messages={[user]} {...props} />)
+    const { rerender } = renderPill([call], { turnActive: false })
     fireEvent.click(pill())
-    fireEvent.click(screen.getByRole('button', { name: /^done\s*Audit code/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Audit code.*Done/ }))
     rerender(
-      <ChatStatusPill
+      <Pill
         toolCalls={[call]}
+        turnActive={false}
         messages={[user, { ...user, id: 'u2', seq: 10 }]}
-        {...props}
       />
     )
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(within(panel()).getByRole('heading', { name: 'Audit code' })).toBeInTheDocument()
   })
 
   it('counts a launched background agent as running and tags its row', () => {
-    const launched = sub({
-      status: 'completed',
-      subagentLifecycle: { background: true, outputFile: '/tmp/a1.output' }
-    })
+    const launched = sub(
+      { status: 'completed' },
+      { background: true, outputFile: '/tmp/a1.output' }
+    )
     renderPill([launched])
-    expect(pill()).toHaveAccessibleName('Session status: subagents 1 running')
+    expect(pill()).toHaveAccessibleName('Session status: subagents 1 working')
     fireEvent.click(pill())
-    const row = screen.getByRole('button', { name: /^running\s*Audit code/ })
+    const row = screen.getByRole('button', { name: /^Audit code.*Working/ })
     expect(within(row).getByText('background')).toBeInTheDocument()
     fireEvent.click(row)
-    const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByText('Running in background')).toBeInTheDocument()
-    expect(within(dialog).getByText('Output file: /tmp/a1.output')).toBeInTheDocument()
+    expect(within(panel()).getByText('Working')).toBeInTheDocument()
+    expect(within(panel()).getByText('Output file: /tmp/a1.output')).toBeInTheDocument()
   })
 
   it('says the chat waits on background subagents after the turn ends, and logs it once', () => {
     vi.mocked(logFrontendError).mockClear()
-    const launched = sub({ status: 'completed', subagentLifecycle: { background: true } })
+    const launched = sub({ status: 'completed' }, { background: true })
     const done = sub({ toolCallId: 'b', status: 'completed' })
     const { rerender } = renderPill([launched, done], { turnActive: false })
     expect(pill()).toHaveAccessibleName(
-      'Session status: subagents 1 running, 1 done; waiting on 1 background subagent'
+      'Session status: subagents 1 working, 1 done; waiting on 1 background subagent'
     )
     fireEvent.click(pill())
     const popover = screen.getByRole('dialog', { name: 'Subagents' })
     expect(within(popover).getByText('Waiting on 1 background subagent')).toBeInTheDocument()
 
-    const ended = {
-      ...launched,
-      subagentLifecycle: { background: true, state: 'completed' as const }
-    }
-    rerender(<ChatStatusPill toolCalls={[ended, done]} {...base} turnActive={false} />)
+    const ended = sub({ status: 'completed' }, { background: true, state: endedState() })
+    rerender(<Pill toolCalls={[ended, done]} turnActive={false} />)
     expect(pill()).toHaveAccessibleName('Session status: subagents 2 done')
     expect(screen.queryByText(/^Waiting on/)).toBeNull()
-    expect(vi.mocked(logFrontendError).mock.calls.map(([entry]) => entry.message)).toEqual([
+    expect(
+      vi
+        .mocked(logFrontendError)
+        .mock.calls.map(([entry]) => entry.message)
+        .filter((message) => message.includes('background'))
+    ).toEqual([
       'Chat s1 waits on 1 background subagent after its turn ended',
       'Chat s1 no longer waits on background subagents'
     ])
   })
 
   it('lists an earlier turn subagent the host still runs, so the wait has a row', () => {
-    const earlier = sub({
-      seq: 0,
-      status: 'completed',
-      subagentLifecycle: { background: true, state: 'running' }
-    })
+    const earlier = sub(
+      { seq: 0, status: 'completed' },
+      { background: true, source: 'acp-rfd', caps: { liveProgress: true } }
+    )
     renderPill([earlier], { turnActive: false })
     expect(pill()).toHaveAccessibleName(
-      'Session status: subagents 1 running; waiting on 1 background subagent'
+      'Session status: subagents 1 working; waiting on 1 background subagent'
     )
     fireEvent.click(pill())
     const popover = screen.getByRole('dialog', { name: 'Subagents' })
     expect(within(popover).getByText('Waiting on 1 background subagent')).toBeInTheDocument()
     expect(within(popover).getAllByRole('button', { name: /Audit code/ })).toHaveLength(1)
-    expect(
-      within(popover).getByRole('button', { name: /^running\s*Audit code/ })
-    ).toBeInTheDocument()
+    expect(within(popover).getByRole('button', { name: /^Audit code.*Working/ })).toBeVisible()
   })
 
   it('does not say it waits while the turn is still running', () => {
-    const launched = sub({ status: 'completed', subagentLifecycle: { background: true } })
+    const launched = sub({ status: 'completed' }, { background: true })
     renderPill([launched])
-    expect(pill()).toHaveAccessibleName('Session status: subagents 1 running')
+    expect(pill()).toHaveAccessibleName('Session status: subagents 1 working')
   })
 
   it('opens a bottom sheet on the phone shell and registers it for Back', () => {

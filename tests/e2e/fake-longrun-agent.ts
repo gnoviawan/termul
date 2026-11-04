@@ -91,11 +91,15 @@
  *   subagents' traffic under their own session ids, and a
  *   `subagent_state_update` when each one ends (the first at about 45 %).
  *
- * `[BG_TAIL:<seconds>]` with `[SUBAGENTS]` (legacy form only): the turn ends
- * at `<seconds>` of `[SUBAGENTS:n]` while the two background subagents keep
- * reporting for `<seconds>` more. Then each launch call gets the host's
- * `_meta["termul/subagent"]` marker with `state: completed`, the end a host
- * with native subagent support reports.
+ * `[BG_TAIL:<seconds>]` with `[SUBAGENTS]`: the RFD subagent form (Claude
+ * 0.90+), sent whether or not the host advertised the capability (the host
+ * routes subagent updates from any agent). Each subagent is announced with
+ * `subagent_update` (title, description, `capabilities.cancel`, state
+ * `running`) on the chat, works under its own session id, and keeps working
+ * after the turn ends at `n` seconds. `<seconds>` after that, each reports
+ * `subagent_update` state `idle` (`stopReason: end_turn`, with usage).
+ * `session/cancel` with a subagent's session id stops only that subagent: it
+ * reports `idle` (`stopReason: cancelled`) and clears `capabilities.cancel`.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -539,7 +543,14 @@ const SUBAGENT_TASKS = [
   }
 ] as const
 
-/** `[SUBAGENTS]`: two subagents report activity until the turn ends, or past it with `[BG_TAIL]`. */
+/** Stops for the RFD subagents still working, keyed by child session id. */
+const subagentStops = new Map<string, () => void>()
+
+/**
+ * `[SUBAGENTS]`: two subagents report activity until the turn ends, or past it
+ * with `[BG_TAIL]`. Wire form: RFD with `[BG_TAIL]`, else AIR when the host
+ * advertised subagents, else legacy `Agent` tool calls.
+ */
 function runSubagentTurn(
   id: number | string,
   sessionId: string,
@@ -562,8 +573,9 @@ function runSubagentTurn(
       content: { type: 'text', text: value },
       ...(meta ? { _meta: meta } : {})
     })
-  const native = nativeSubagents
-  const tail = native ? 0 : tailSeconds
+  const form: 'rfd' | 'air' | 'legacy' =
+    tailSeconds > 0 ? 'rfd' : nativeSubagents ? 'air' : 'legacy'
+  const tail = form === 'rfd' ? tailSeconds : 0
   const tag = randomUUID().slice(0, 6)
   const childSession = (key: string): string => `${sessionId}-sub-${key}-${tag}`
   const dispatchId = (key: string): string => `toolu_bg_${key}_${tag}`
@@ -571,7 +583,18 @@ function runSubagentTurn(
   text(sessionId, 'I will run two reviewers in the background.\n\n')
   for (const task of SUBAGENT_TASKS) {
     const prompt = `Read ${task.files.join(' and ')} and report every bug you find.`
-    if (native) {
+    if (form === 'rfd') {
+      update(sessionId, {
+        sessionUpdate: 'subagent_update',
+        sessionId: childSession(task.key),
+        title: task.name,
+        description: 'general-purpose',
+        capabilities: { cancel: {} },
+        state: { state: 'running' }
+      })
+      continue
+    }
+    if (form === 'air') {
       update(sessionId, {
         sessionUpdate: 'subagent_spawned',
         subagentSessionId: childSession(task.key),
@@ -619,17 +642,36 @@ function runSubagentTurn(
   const endSubagent = (key: string): void => {
     if (ended.has(key)) return
     ended.add(key)
-    if (native) {
+    if (form === 'air') {
       update(sessionId, {
         sessionUpdate: 'subagent_state_update',
         subagentSessionId: childSession(key),
         state: 'completed'
       })
-    } else if (tail > 0) {
+    } else if (form === 'rfd') {
       update(sessionId, {
-        sessionUpdate: 'tool_call_update',
-        toolCallId: dispatchId(key),
-        _meta: { 'termul/subagent': { state: 'completed', endedAt: Date.now() } }
+        sessionUpdate: 'subagent_update',
+        sessionId: childSession(key),
+        state: {
+          state: 'idle',
+          stopReason: 'end_turn',
+          usage: { totalTokens: 1500, inputTokens: 1200, outputTokens: 300 }
+        }
+      })
+    }
+  }
+  if (form === 'rfd') {
+    for (const task of SUBAGENT_TASKS) {
+      const child = childSession(task.key)
+      subagentStops.set(child, () => {
+        if (ended.has(task.key)) return
+        ended.add(task.key)
+        update(sessionId, {
+          sessionUpdate: 'subagent_update',
+          sessionId: child,
+          capabilities: { cancel: null },
+          state: { state: 'idle', stopReason: 'cancelled' }
+        })
       })
     }
   }
@@ -662,8 +704,9 @@ function runSubagentTurn(
     if (task) {
       step++
       const file = task.files[step % task.files.length]
-      const sid = native ? childSession(task.key) : sessionId
-      const parent = native ? undefined : { claudeCode: { parentToolUseId: dispatchId(task.key) } }
+      const legacy = form === 'legacy'
+      const sid = legacy ? sessionId : childSession(task.key)
+      const parent = legacy ? { claudeCode: { parentToolUseId: dispatchId(task.key) } } : undefined
       update(sid, {
         sessionUpdate: 'tool_call',
         toolCallId: `toolu_child_${task.key}_${step}_${tag}`,
@@ -976,6 +1019,12 @@ function handle(msg: JsonRpcMessage): void {
     case 'cancel':
     case 'session/cancel': {
       const sessionId = String(p.sessionId ?? 'unknown')
+      const stopSubagent = subagentStops.get(sessionId)
+      if (stopSubagent) {
+        subagentStops.delete(sessionId)
+        stopSubagent()
+        break
+      }
       const inFlight = inFlightBySession.get(sessionId)
       if (inFlight) {
         notify('session/update', {

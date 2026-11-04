@@ -10,6 +10,7 @@ import {
   pressSystemBack,
   waitForSentinelDepth
 } from '@/lib/test-utils/overlay-back-stack'
+import { subagentToolCall } from '@/lib/test-utils/subagent'
 import { agentReuseKey } from '@/stores/acp-reuse-keys'
 import { prepareChatKey } from '@/stores/acp-store/helpers'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
@@ -32,6 +33,7 @@ if (typeof document.elementFromPoint !== 'function') {
 const {
   mockArmAgentSwitch,
   mockSetSwitchPendingOption,
+  mockPickModel,
   mockCancelAgentSwitch,
   mockCancelPrompt,
   mockPrepareChat,
@@ -46,9 +48,10 @@ const {
   subscribeListeners,
   acpStateRef
 } = vi.hoisted(() => ({
-  mockArmAgentSwitch: vi.fn(async () => true),
+  mockArmAgentSwitch: vi.fn(async (_sessionId: string, _toConfigId: string) => true),
   mockSetSwitchPendingOption: vi.fn(async () => {}),
   mockCancelAgentSwitch: vi.fn(),
+  mockPickModel: vi.fn(async (_sessionId: string, _modelId: string, _values?: unknown) => {}),
   mockCancelPrompt: vi.fn(async () => {}),
   mockPrepareChat: vi.fn(),
   mockCancelPreparedChat: vi.fn(),
@@ -75,8 +78,23 @@ vi.mock('@/stores/acp-store', async () => {
     ...acpStateRef.current,
     authenticateAgent: mockAuthenticateAgent,
     cancelPreparedChat: mockCancelPreparedChat,
-    armAgentSwitch: mockArmAgentSwitch,
+    // Like the store: a successful arm records the switch target on the chat.
+    armAgentSwitch: async (sessionId: string, toConfigId: string) => {
+      const armed = await mockArmAgentSwitch(sessionId, toConfigId)
+      if (armed) {
+        const sessions = (acpStateRef.current.sessions ?? {}) as Record<string, object>
+        acpStateRef.current = {
+          ...acpStateRef.current,
+          sessions: {
+            ...sessions,
+            [sessionId]: { ...sessions[sessionId], switching: { toConfigId } }
+          }
+        }
+      }
+      return armed
+    },
     setSwitchPendingOption: mockSetSwitchPendingOption,
+    pickModel: mockPickModel,
     cancelAgentSwitch: mockCancelAgentSwitch,
     cancelPrompt: mockCancelPrompt,
     prepareChat: mockPrepareChat,
@@ -205,14 +223,7 @@ const CLAUDE_MODELS = {
 }
 
 const BACKGROUND_LAUNCH = {
-  'session-1': [
-    {
-      toolCallId: 'bg-1',
-      status: 'completed',
-      rawInput: { description: 'Run e2e', prompt: 'p', run_in_background: true },
-      subagentLifecycle: { background: true }
-    }
-  ]
+  'session-1': [subagentToolCall({ background: true }, { toolCallId: 'bg-1', status: 'completed' })]
 }
 
 function seed(
@@ -833,6 +844,94 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
     })
   })
 
+  it("arms a model picked on another tab with that model's saved values", async () => {
+    seed([readyEntry(CLAUDE)])
+    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
+    mockPersistenceApi.read.mockImplementation(async (key: string) =>
+      key === `agents/composer-options/${CLAUDE.id}`
+        ? {
+            success: true,
+            data: { modelId: 'opus', modelValues: { haiku: { effort: 'low' } } }
+          }
+        : { success: false }
+    )
+    try {
+      renderSelector()
+      open()
+      fireEvent.click(screen.getByRole('tab', { name: 'Claude Agent' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Claude Haiku' }))
+
+      await waitFor(() => {
+        expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('session-1', {
+          modelId: 'haiku',
+          configValues: { effort: 'low' }
+        })
+      })
+    } finally {
+      mockPersistenceApi.read.mockImplementation(async () => ({ success: false }))
+    }
+  })
+
+  it("arms another agent's favorite with its snapshot", async () => {
+    seed([readyEntry(CLAUDE)])
+    acpStateRef.current.agentOptionsCache = { [CLAUDE.id]: CLAUDE_MODELS }
+    const favoritesStore = createFavoritesStore(memoryFavoritesAdapter())
+    await favoritesStore.set(
+      { configId: CLAUDE.id, modelId: 'haiku', options: { effort: 'max' } },
+      true
+    )
+    renderSelector({ v2PanelProps: { favoritesStore } })
+    open()
+
+    const favorites = await screen.findByRole('group', { name: 'Favorites' })
+    fireEvent.click(within(favorites).getByRole('button', { name: /Claude Haiku · Max/ }))
+
+    await waitFor(() => {
+      expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('session-1', {
+        modelId: 'haiku',
+        configValues: { effort: 'max' }
+      })
+    })
+  })
+
+  it("with a switch armed, a model of the chat's own agent drops the switch and picks it with its values", async () => {
+    seed([readyEntry(CURSOR), readyEntry(CLAUDE)], {
+      switching: { toConfigId: CLAUDE.id },
+      models: {
+        currentModelId: 'c1',
+        availableModels: [
+          { modelId: 'c1', name: 'Cursor One' },
+          { modelId: 'c2', name: 'Cursor Two' }
+        ]
+      },
+      configOptions: []
+    })
+    const cursorModels = {
+      currentModelId: 'c1',
+      availableModels: [
+        { modelId: 'c1', name: 'Cursor One' },
+        { modelId: 'c2', name: 'Cursor Two' }
+      ]
+    }
+    acpStateRef.current.agentOptionsCache = {
+      [CLAUDE.id]: CLAUDE_MODELS,
+      [CURSOR.id]: { models: cursorModels, modes: null, configOptions: [], updatedAt: 1 }
+    }
+    const favoritesStore = createFavoritesStore(memoryFavoritesAdapter())
+    await favoritesStore.set(
+      { configId: CURSOR.id, modelId: 'c2', options: { effort: 'low' } },
+      true
+    )
+    renderSelector({ v2PanelProps: { favoritesStore } })
+    open()
+
+    const favorites = await screen.findByRole('group', { name: 'Favorites' })
+    fireEvent.click(within(favorites).getByRole('button', { name: /Cursor Two · Low/ }))
+
+    expect(mockCancelAgentSwitch).toHaveBeenCalledWith('session-1')
+    expect(mockPickModel).toHaveBeenCalledWith('session-1', 'c2', { effort: 'low' })
+  })
+
   it('does not save a model pick when the store rejects the arm', async () => {
     mockArmAgentSwitch.mockResolvedValueOnce(false)
     seed([readyEntry(CLAUDE)])
@@ -1294,6 +1393,46 @@ describe('phone Select model sheet', () => {
 
     const favorites = await within(sheet()).findByRole('group', { name: 'Favorites' })
     expect(within(favorites).getByRole('button', { name: 'Sonnet 5.5' })).toBeInTheDocument()
+  })
+
+  it('a starred model keeps its effort and Fast, and picking it sends them with the model', async () => {
+    const favoritesStore = createFavoritesStore(memoryFavoritesAdapter())
+    const onSetModel = vi.fn()
+    renderSelector({ v2PanelProps: { favoritesStore }, onSetModel })
+    open()
+
+    const opusStar = within(sheet())
+      .getAllByRole('button', { name: 'Add to favorites' })
+      .at(0) as HTMLElement
+    fireEvent.click(opusStar)
+    const favorites = await within(sheet()).findByRole('group', { name: 'Favorites' })
+    fireEvent.click(within(favorites).getByRole('button', { name: 'Opus 5.5 · High' }))
+
+    expect(onSetModel).toHaveBeenCalledWith('opus', { reasoning: 'high', fast_mode: 'off' })
+  })
+
+  it('a star never snapshots permission mode', async () => {
+    const favoritesStore = createFavoritesStore(memoryFavoritesAdapter())
+    renderSelector({
+      v2PanelProps: { favoritesStore },
+      genericOptions: [
+        option('permission', 'Permission', 'mode', 'bypass', [
+          { value: 'default', name: 'Default' },
+          { value: 'bypass', name: 'Bypass' }
+        ])
+      ]
+    })
+    open()
+
+    fireEvent.click(
+      within(sheet()).getAllByRole('button', { name: 'Add to favorites' }).at(0) as HTMLElement
+    )
+
+    await waitFor(() =>
+      expect(favoritesStore.list().map((f) => f.options)).toEqual([
+        { reasoning: 'high', fast_mode: 'off' }
+      ])
+    )
   })
 
   /** A ready registry agent with no stored config: the chat cannot arm it. */

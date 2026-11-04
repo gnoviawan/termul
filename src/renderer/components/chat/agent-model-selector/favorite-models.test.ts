@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createFavoritesStore,
   FAVORITES_STORAGE_KEY,
+  type FavoriteKey,
   type FavoriteModel,
   type FavoritesAdapter,
   favoritePath,
@@ -274,5 +275,112 @@ describe('createFavoritesStore across windows', () => {
     write.resolve()
     await pending
     unsubscribe()
+  })
+})
+
+describe('favorites with option snapshots', () => {
+  const HIGH = { ...OPUS, options: { effort: 'high', fast: 'false' } }
+  const LOW = { ...OPUS, options: { effort: 'low' } }
+
+  it('two snapshots of one model are two favorites; unstarring one keeps the other', async () => {
+    const store = createFavoritesStore(memoryFavoritesAdapter(), clock())
+    await store.set(HIGH, true)
+    await store.set(LOW, true)
+    await store.set(OPUS, true)
+    expect(store.list()).toEqual([
+      { ...HIGH, addedAt: '2026-01-01T00:00:00.000Z' },
+      { ...LOW, addedAt: '2026-01-01T00:01:00.000Z' },
+      { ...OPUS, addedAt: '2026-01-01T00:02:00.000Z' }
+    ])
+
+    await store.set({ ...OPUS, options: { fast: 'false', effort: 'high' } }, false)
+    expect(store.list().map((f) => f.options)).toEqual([{ effort: 'low' }, undefined])
+  })
+
+  it('an empty snapshot is stored as none', async () => {
+    const store = createFavoritesStore(memoryFavoritesAdapter(), clock())
+    await store.set({ ...OPUS, options: {} }, true)
+    expect(store.list()).toEqual([{ ...OPUS, addedAt: '2026-01-01T00:00:00.000Z' }])
+  })
+
+  it('reads legacy entries unchanged and drops a malformed snapshot', () => {
+    const legacy = { ...OPUS, addedAt: '2026-01-01T00:00:00.000Z' }
+    const bad = { ...SONNET, options: { effort: 3 }, addedAt: '2026-01-02T00:00:00.000Z' }
+    expect(parseFavorites(JSON.stringify([legacy, bad]))).toEqual([legacy])
+  })
+
+  it('the backend path names the snapshot', () => {
+    expect(favoritePath(LOW)).toBe(
+      `/me/favorite-models/claude/opus?options=${encodeURIComponent('[["effort","low"]]')}`
+    )
+  })
+
+  describe('Favorites row labels', () => {
+    const catalog = {
+      id: 'model',
+      source: 'config' as const,
+      currentValue: null,
+      options: [{ value: 'opus', name: 'Opus' }]
+    }
+    const effort = {
+      id: 'effort',
+      name: 'Effort',
+      category: 'thought_level',
+      type: 'select' as const,
+      currentValue: 'low',
+      options: [
+        { value: 'low', name: 'Gentle' },
+        { value: 'high', name: 'Hard' }
+      ]
+    }
+    const fast = {
+      id: 'fast_mode',
+      name: 'Fast mode',
+      type: 'select' as const,
+      currentValue: 'off',
+      options: [
+        { value: 'off', name: 'Off' },
+        { value: 'on', name: 'On' }
+      ]
+    }
+    const labels = (
+      favorites: Array<FavoriteKey & { addedAt: string }>,
+      options: Parameters<typeof resolveFavorites>[3]
+    ) => resolveFavorites(favorites, () => catalog, undefined, options).map((f) => f.label)
+
+    it('shows the effort a snapshot holds, by the option name when known', () => {
+      const favorites = [
+        { ...HIGH, addedAt: 'a' },
+        { ...LOW, addedAt: 'b' },
+        { ...OPUS, addedAt: 'c' }
+      ]
+      expect(labels(favorites, () => [effort])).toEqual(['Hard', 'Gentle', null])
+      expect(labels(favorites, undefined)).toEqual(['High', 'Low', null])
+    })
+
+    it('never reads an on/off value as the effort', () => {
+      const thinking = { ...OPUS, options: { thinking: 'true', reasoning_effort: 'max' } }
+      expect(labels([{ ...thinking, addedAt: 'a' }], undefined)).toEqual(['Max'])
+      const onlyToggle = { ...OPUS, options: { thinking: 'true' } }
+      expect(labels([{ ...onlyToggle, addedAt: 'a' }], undefined)).toEqual([null])
+    })
+
+    it('adds Fast when two favorites of a model share an effort', () => {
+      const favorites = [
+        { ...OPUS, options: { effort: 'high', fast_mode: 'on' }, addedAt: 'a' },
+        { ...OPUS, options: { effort: 'high', fast_mode: 'off' }, addedAt: 'b' },
+        { ...OPUS, options: { effort: 'low', fast_mode: 'on' }, addedAt: 'c' }
+      ]
+      expect(labels(favorites, () => [effort, fast])).toEqual(['Hard · Fast', 'Hard', 'Gentle'])
+      expect(labels(favorites, undefined)).toEqual(['High · Fast', 'High', 'Low'])
+    })
+
+    it('names the differing value of any other option', () => {
+      const favorites = [
+        { ...OPUS, options: { effort: 'high', context: '1m' }, addedAt: 'a' },
+        { ...OPUS, options: { effort: 'high', context: '200k' }, addedAt: 'b' }
+      ]
+      expect(labels(favorites, () => [effort])).toEqual(['Hard · 1m', 'Hard · 200k'])
+    })
   })
 })

@@ -4,6 +4,7 @@ import { MoreHorizontal, Search } from '@/components/icons'
 import { INNER_FIELD_FOCUS_CLASS } from '@/components/ui/panel-styles'
 import type { AgentCapabilities, SessionConfigOption, SessionUsage } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
+import type { OptionValues } from '@/stores/acp-store/composer-options'
 import { SegmentedTrack, type TrackItem } from './SegmentedTrack'
 import { SelectorFooter } from './SelectorFooter'
 import {
@@ -35,7 +36,8 @@ export interface SelectorPanelProps {
   /** The composer's model option: the live agent, or the armed target. */
   modelOption: SessionConfigOption | null
   modelValue: string | undefined
-  onPickModel: (value: string) => void
+  /** `values`: a favorite's option values, applied after the model. */
+  onPickModel: (value: string, values?: OptionValues) => void
   thoughtLevel: SessionConfigOption | null
   effortValue: string | undefined
   onEffort: (value: string) => void

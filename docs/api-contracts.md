@@ -552,6 +552,7 @@ The class column is the request's command class, defined in `src-tauri/src/web/c
 | `promote_session` | command | Turns an ephemeral session into a durable one, so its first real prompt persists. |
 | `send_prompt` | command | Starts a prompt turn. `turnId` is the `command_id`. The reply is the stop reason or a receipt. |
 | `cancel_prompt` | idempotent | Cancels the running turn of a session. |
+| `stop_subagent` | idempotent | Stops one subagent of a chat: `session/cancel` for its child session when the agent offers a stop. Replies `{ outcome: "sent" \| "already_ended" }`; `not_found` or `unsupported` otherwise. |
 | `set_config_option` | idempotent | Sets one session config option. |
 | `set_mode` | idempotent | Sets the session mode. |
 | `set_model` | idempotent | Sets the session model. |
