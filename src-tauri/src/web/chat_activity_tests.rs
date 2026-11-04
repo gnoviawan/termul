@@ -307,3 +307,57 @@ fn an_event_older_than_the_last_applied_one_is_ignored() {
     );
     assert!(table.get(SID).busy, "the newer turn is still open");
 }
+
+fn working(agent: &str, working: bool) -> ActivityEvent {
+    ActivityEvent::Working {
+        agent_id: Some(agent.to_string()),
+        working,
+    }
+}
+
+/// A chat resumed on another live agent: the previous agent can still report
+/// its own work on the chat ended. That must not end the new agent's work.
+#[test]
+fn the_previous_agent_ending_its_work_leaves_the_new_agents_work_on() {
+    let table = ChatActivities::default();
+    table.observe(SID, 1, working("a1", true), no_inputs);
+    table.observe(SID, 2, working("a2", true), no_inputs);
+
+    assert_eq!(table.observe(SID, 3, working("a1", false), no_inputs), None);
+    assert!(table.get(SID).busy, "a2 still works");
+    assert!(table.agent_ended("a1").is_empty(), "a2 owns the chat");
+
+    let idle = table.observe(SID, 4, working("a2", false), no_inputs);
+    assert_eq!(idle, Some(ChatActivity::default()));
+}
+
+/// The agent a chat moves to owns it: the previous agent's work outside a
+/// turn ended with the move, and its late prompts do not take the chat back.
+#[test]
+fn a_new_agent_opening_a_turn_takes_the_chat_over() {
+    let table = ChatActivities::default();
+    table.observe(SID, 1, working("a1", true), no_inputs);
+    table.observe(
+        SID,
+        2,
+        ActivityEvent::TurnOpened {
+            agent_id: Some("a2".to_string()),
+        },
+        no_inputs,
+    );
+    table.observe(
+        SID,
+        3,
+        ActivityEvent::Prompt {
+            agent_id: Some("a1".to_string()),
+        },
+        no_inputs,
+    );
+
+    let ended = table
+        .observe(SID, 4, ActivityEvent::TurnEnded, no_inputs)
+        .expect("changed");
+    assert!(!ended.busy, "a1's work did not outlive the move");
+    assert_eq!(table.agent_ended("a1"), Vec::<String>::new());
+    assert_eq!(table.agent_ended("a2"), vec![SID.to_string()]);
+}

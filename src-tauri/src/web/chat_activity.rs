@@ -158,35 +158,53 @@ impl Entry {
     fn apply(&mut self, event: ActivityEvent, seq: u64) {
         match event {
             ActivityEvent::TurnOpened { agent_id } => {
-                self.agent_id = agent_id.or(self.agent_id.take());
+                self.take_over(agent_id);
                 self.turn_open = true;
             }
             ActivityEvent::TurnEnded => {
                 self.turn_open = false;
                 self.turn_end = Some(seq);
             }
+            // A chat resumed on another live agent: the previous agent can
+            // still report its work on the chat ended, which is not the new
+            // agent's work.
             ActivityEvent::Working { agent_id, working } => {
-                // A resumed session can keep the previous agent's quiet-sweep
-                // emitting `agent_working` false after a new owner started.
-                // Do not let that stale clear replace ownership or drop Working.
-                if !working {
-                    if let (Some(current), Some(incoming)) = (&self.agent_id, &agent_id) {
-                        if current != incoming {
-                            return;
-                        }
-                    }
+                if working || self.owned_by(agent_id.as_deref()) {
+                    self.take_over(agent_id);
+                    self.agent_working = working;
                 }
-                self.agent_id = agent_id.or(self.agent_id.take());
-                self.agent_working = working;
             }
             ActivityEvent::Closed => {
                 self.turn_open = false;
                 self.agent_working = false;
             }
+            // A prompt does not show which agent the chat moved to: a
+            // previous agent can still withdraw one.
             ActivityEvent::Prompt { agent_id } => {
-                self.agent_id = agent_id.or(self.agent_id.take());
+                if self.agent_id.is_none() {
+                    self.agent_id = agent_id;
+                }
             }
         }
+    }
+
+    fn owned_by(&self, agent_id: Option<&str>) -> bool {
+        match (self.agent_id.as_deref(), agent_id) {
+            (Some(owner), Some(agent_id)) => owner == agent_id,
+            _ => true,
+        }
+    }
+
+    /// `agent_id` works on the chat now. When it is not the owner, the chat
+    /// moved to it, and the previous agent's work outside a turn ended.
+    fn take_over(&mut self, agent_id: Option<String>) {
+        let Some(agent_id) = agent_id else {
+            return;
+        };
+        if !self.owned_by(Some(&agent_id)) {
+            self.agent_working = false;
+        }
+        self.agent_id = Some(agent_id);
     }
 
     fn derive(&self, inputs: ActivityInputs) -> ChatActivity {
