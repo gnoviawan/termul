@@ -180,6 +180,17 @@ mod engine_support {
         http: HttpConfig,
     ) -> TestEngine {
         let store = Arc::new(AutomationStore::open_in_memory().unwrap());
+        test_engine_on(store, root, vault, http)
+    }
+
+    /// [`test_engine`] over `store`, so a second engine can stand in for a
+    /// restarted host on the same database file.
+    pub fn test_engine_on(
+        store: Arc<AutomationStore>,
+        root: PathBuf,
+        vault: Arc<dyn SecretVault>,
+        http: HttpConfig,
+    ) -> TestEngine {
         let clock = FakeClock::at(1_000);
         let agents = Arc::new(AgentRegistry::in_memory());
         let secrets = Arc::new(Secrets::new(vault, store.clone()));

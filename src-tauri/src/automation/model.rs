@@ -132,7 +132,7 @@ impl fmt::Display for NodeId {
 /// A string with `{{ path }}` holes; see `template.rs` for the grammar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
-#[schemars(description = r#"A string with `{{ path }}` holes, filled when the step runs. A path starts at `trigger.scheduled_for`, `trigger.kind`, `nodes.<id>.output[.field...]` or `secrets.<NAME>`."#)]
+#[schemars(description = r#"A string with `{{ path }}` holes, filled when the step runs. A path starts at `trigger.scheduled_for`, `trigger.kind`, `nodes.<id>.output[.field...]`, `secrets.<NAME>`, or inside a for_each body `nodes.<loop>.item[.field...]` and `nodes.<loop>.index`."#)]
 pub struct Template(pub String);
 
 impl Template {
@@ -288,6 +288,21 @@ pub enum NodeSpec {
     Fail {
         message: Template,
     },
+    /// Runs the nodes behind its `item` edges once per element of `items`,
+    /// then fires `out` with one object per iteration.
+    ForEach {
+        items: Template,
+        max_iterations: u32,
+    },
+    /// Joins branches: `any` runs when one incoming edge fired, `all` only
+    /// when every one did.
+    Merge {
+        mode: MergeMode,
+    },
+    /// Parks the run durably for `duration_ms`, then continues.
+    Wait {
+        duration_ms: u64,
+    },
 }
 
 /// A class of tool an agent node may use. When the agent asks to use a
@@ -334,6 +349,15 @@ impl AgentTool {
 
 pub const AGENT_MAX_TIMEOUT_MS: u64 = 900_000;
 pub const AGENT_MAX_ATTEMPTS: u8 = 3;
+pub const FOR_EACH_MAX_ITERATIONS: u32 = 100;
+pub const WAIT_MAX_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeMode {
+    Any,
+    All,
+}
 
 impl NodeSpec {
     pub fn kind(&self) -> NodeKind {
@@ -343,6 +367,9 @@ impl NodeSpec {
             NodeSpec::Transform { .. } => NodeKind::Transform,
             NodeSpec::Condition { .. } => NodeKind::Condition,
             NodeSpec::Fail { .. } => NodeKind::Fail,
+            NodeSpec::ForEach { .. } => NodeKind::ForEach,
+            NodeSpec::Merge { .. } => NodeKind::Merge,
+            NodeSpec::Wait { .. } => NodeKind::Wait,
         }
     }
 
@@ -373,6 +400,8 @@ impl NodeSpec {
                 out
             }
             NodeSpec::Fail { message } => vec![("message".to_string(), message)],
+            NodeSpec::ForEach { items, .. } => vec![("items".to_string(), items)],
+            NodeSpec::Merge { .. } | NodeSpec::Wait { .. } => Vec::new(),
         }
     }
 }
@@ -384,6 +413,9 @@ pub enum NodeKind {
     Transform,
     Condition,
     Fail,
+    ForEach,
+    Merge,
+    Wait,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -457,6 +489,8 @@ pub enum Port {
     Error,
     True,
     False,
+    /// A `for_each` node's loop body entry.
+    Item,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -522,6 +556,12 @@ pub enum IssueCode {
     InvalidSchedule,
     UntrustedAgentOutboundTool,
     OutboundAgentFileTool,
+    ForEachMaxIterationsOutOfRange,
+    WaitDurationOutOfRange,
+    LoopBodyNotClosed,
+    NestedForEach,
+    LoopItemOutsideBody,
+    MergeNeedsTwoInputs,
     /// Added by the service, which owns the agent registry.
     UnknownAgent,
 }
@@ -596,17 +636,31 @@ pub enum StepStatus {
     Succeeded,
     Failed,
     Skipped,
+    /// A `wait` step whose run is parked until `wait_until`.
+    Waiting,
+}
+
+impl StepStatus {
+    pub fn is_finished(self) -> bool {
+        matches!(self, StepStatus::Succeeded | StepStatus::Failed)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Step {
     pub run_id: RunId,
     pub node_id: NodeId,
+    /// 0-based iteration for a node inside a `for_each` body, else `None`.
+    #[serde(default)]
+    pub iteration: Option<u32>,
     pub status: StepStatus,
     pub output: Option<Value>,
     pub error: Option<String>,
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
+    /// When a `waiting` step's run resumes.
+    #[serde(default)]
+    pub wait_until: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

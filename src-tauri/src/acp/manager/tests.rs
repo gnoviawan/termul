@@ -458,6 +458,7 @@ async fn session_resume_reopen_preserves_omitted_fields() {
             modes: None,
             models: None,
             config_options: None,
+            answered_by_host: false,
         }
     );
     assert_eq!(
@@ -3073,6 +3074,72 @@ async fn a_successful_resume_replaces_the_old_token_with_the_new_one() {
     let bound = manager.host_plan_server.tokens_bound_to("sess-ok");
     assert_eq!(bound.len(), 1, "exactly the new token remains: {bound:?}");
     assert_ne!(bound[0], old_token, "the old token is dropped");
+}
+
+/// The driver answered the reopen without the agent (it already holds the
+/// session live). The agent never got the new token, so the settle evicts
+/// only that token and the session's state stays.
+#[tokio::test]
+async fn a_reopen_the_host_answered_keeps_the_live_token_and_plan_cache() {
+    let (manager, old_token) = manager_with_live_plan_token("sess-answered");
+    let agent = AgentId("agent-answers".to_string());
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Some(command) = command_rx.recv().await {
+            match command {
+                AcpCommand::OwnsSession { reply, .. } => {
+                    let _ = reply.send(Ok(false));
+                }
+                AcpCommand::SessionIds { reply } => {
+                    let _ = reply.send(Ok(Vec::<String>::new()));
+                }
+                AcpCommand::ResumeSession { reply, .. } => {
+                    let _ = reply.send(Ok(SessionReopenOutcome {
+                        modes: None,
+                        models: None,
+                        config_options: None,
+                        answered_by_host: true,
+                    }));
+                }
+                _ => {}
+            }
+        }
+    });
+    let mut capabilities = AgentCapabilities::default();
+    capabilities.session_capabilities.resume =
+        Some(agent_client_protocol::schema::v1::SessionResumeCapabilities::default());
+    manager.agents.lock().insert(
+        agent.clone(),
+        AgentEntry {
+            command_tx,
+            capabilities,
+            stable_namespace: None,
+            name: "test-agent".to_string(),
+            config_id: None,
+            join_handle: None,
+            exit: Default::default(),
+            stamp: SpawnStamp::default(),
+        },
+    );
+
+    manager
+        .resume_session(
+            &agent,
+            SessionId("sess-answered".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+            Some(Vec::new()),
+        )
+        .await
+        .expect("the host answer is a success");
+
+    assert_eq!(
+        manager.host_plan_server.tokens_bound_to("sess-answered"),
+        vec![old_token]
+    );
+    assert!(manager
+        .host_plan_server
+        .plan_cached_for_test("sess-answered"));
 }
 
 #[tokio::test]

@@ -862,11 +862,12 @@ fn subagent_dispatches_restore_as_cards_with_their_latest_record() {
             json!({"toolCallId": "d1", "kind": "think", "status": "in_progress",
                 "_meta": {"termul/subagent": running}}),
         ),
-        // A child call: grouped under d1 live, not restored (not a dispatch).
+        // A child call: restored under d1 for the subagent panel.
         tool_record(
             3,
             "tool_call",
-            json!({"toolCallId": "c1", "kind": "read",
+            json!({"toolCallId": "c1", "kind": "read", "title": "Read src/a.ts",
+                "locations": [{"path": "src/a.ts"}],
                 "_meta": {"claudeCode": {"parentToolUseId": "d1"}}}),
         ),
         tool_record(
@@ -898,12 +899,109 @@ fn subagent_dispatches_restore_as_cards_with_their_latest_record() {
             {"toolCallId": "d1", "kind": "think", "status": "completed",
                 "seq": 2, "timestamp": 102,
                 "_meta": {"termul/subagent": idle}, "restoredSummary": false},
+            {"toolCallId": "c1", "kind": "read", "locations": [{"path": "src/a.ts"}],
+                "title": "Read src/a.ts", "seq": 3, "timestamp": 103,
+                "_meta": {"claudeCode": {"parentToolUseId": "d1"}}, "restoredSummary": false},
             {"toolCallId": "d2", "kind": "think", "seq": 5, "timestamp": 105,
                 "_meta": {"termul/subagent": running,
                     "claudeCode": {"parentToolUseId": "d1"}},
                 "restoredSummary": false},
         ])
     );
+}
+
+fn subagent_chunk(seq: u64, parent: &str, role: &str, text: &str) -> PersistedEventRecord {
+    let mut chunk = chunk(seq, role, text);
+    chunk.payload["parentToolCallId"] = json!(parent);
+    chunk
+}
+
+#[test]
+fn a_restored_dispatch_carries_its_result_and_its_subagents_text() {
+    let record = json!({"id": "child-1", "activity": "idle", "end": {"reason": "completed"}});
+    let result = json!([{"type": "content", "content": {"type": "text", "text": "All clear."}}]);
+    let records = vec![
+        user_prompt(1, Some("turn-1"), "review"),
+        tool_record(
+            2,
+            "tool_call",
+            json!({"toolCallId": "d1", "kind": "think", "_meta": {"termul/subagent": record}}),
+        ),
+        subagent_chunk(3, "d1", "agent", "Checked a. "),
+        subagent_chunk(4, "d1", "thought", "hmm"),
+        subagent_chunk(5, "unknown", "agent", "lost"),
+        subagent_chunk(6, "d1", "agent", "Checked b."),
+        tool_record(
+            7,
+            "tool_call_update",
+            json!({"toolCallId": "d1", "status": "completed", "content": result,
+                "_meta": {"termul/subagent": record}}),
+        ),
+        prompt_complete(8, "turn-1"),
+    ];
+    let payload = materialize_session_payload(&metadata(), &records);
+    let value = serde_json::to_value(&payload).unwrap();
+    assert_eq!(
+        value["toolCalls"][0]["subagentText"],
+        json!("Checked a. Checked b.")
+    );
+    assert_eq!(value["toolCalls"][0]["content"], result);
+    assert_eq!(
+        payload.messages.len(),
+        1,
+        "subagent text never joins the main reply"
+    );
+}
+
+#[test]
+fn a_restored_subagent_keeps_only_its_newest_text_and_calls() {
+    let record = json!({"id": "child-1", "activity": "running"});
+    let mut records = vec![tool_record(
+        1,
+        "tool_call",
+        json!({"toolCallId": "d1", "_meta": {"termul/subagent": record}}),
+    )];
+    let mut seq = 1;
+    for step in 0..(MAX_RESTORED_CHILD_CALLS + 5) {
+        seq += 1;
+        records.push(tool_record(
+            seq,
+            "tool_call",
+            json!({"toolCallId": format!("c{step}"),
+                "kind": if step == 0 { "edit" } else { "read" },
+                "locations": [{"path": format!("src/{step}.ts")}],
+                "_meta": {"claudeCode": {"parentToolUseId": "d1"}}}),
+        ));
+    }
+    let long = "é".repeat(MAX_DURABLE_SUBAGENT_TEXT_CHARS);
+    for text in [long.as_str(), "end"] {
+        seq += 1;
+        records.push(subagent_chunk(seq, "d1", "agent", text));
+    }
+    // A call whose parent is not a restored dispatch stays out.
+    seq += 1;
+    records.push(tool_record(
+        seq,
+        "tool_call",
+        json!({"toolCallId": "stray", "kind": "read",
+            "_meta": {"claudeCode": {"parentToolUseId": "nobody"}}}),
+    ));
+    let calls = fold_tool_call_summaries(&records);
+    let ids: Vec<&str> = calls
+        .iter()
+        .map(|call| call.tool_call_id.as_str())
+        .collect();
+    assert_eq!(ids.len(), 2 + MAX_RESTORED_CHILD_CALLS);
+    assert_eq!(
+        ids[1], "c0",
+        "an edit past the cap stays a file-change summary"
+    );
+    assert!(calls[1].restored_summary);
+    assert_eq!(ids[2], "c5", "the oldest calls go first");
+    assert!(!ids.contains(&"stray"));
+    let text = calls[0].subagent_text.as_deref().unwrap();
+    assert_eq!(text.chars().count(), MAX_DURABLE_SUBAGENT_TEXT_CHARS);
+    assert!(text.ends_with("éend"));
 }
 
 #[test]

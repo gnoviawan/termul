@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde_json::{json, Value};
 
 use super::model::{NodeId, RunTrigger};
-use super::template::{parse, Reference, RenderContext, RenderError, TemplateError};
+use super::template::{parse, LoopFrame, Reference, RenderContext, RenderError, TemplateError};
 
 fn node(id: &str) -> NodeId {
     NodeId::parse(id).unwrap()
@@ -23,6 +23,7 @@ fn render(src: &str, secrets: Option<&HashMap<String, String>>) -> Result<Value,
         trigger: RunTrigger::CatchUp,
         outputs: &outputs,
         secrets,
+        frame: None,
     };
     parse(src).unwrap().render(&ctx)
 }
@@ -99,8 +100,7 @@ fn missing_outputs_and_fields_are_errors() {
     assert_eq!(
         render("x {{nodes.fetch.output.items.9}}", None),
         Err(RenderError::MissingField {
-            node: node("fetch"),
-            path: vec!["items".into(), "9".into()],
+            reference: "nodes.fetch.output.items.9".into(),
         })
     );
 }
@@ -123,5 +123,66 @@ fn secrets_render_only_when_allowed() {
     assert_eq!(
         RenderError::SecretMissing("OTHER".into()).to_string(),
         "secret_missing:OTHER"
+    );
+}
+
+#[test]
+fn parses_loop_item_and_index_references() {
+    let t = parse("{{nodes.each.item}} {{nodes.each.item.user.name}} {{ nodes.each.index }}").unwrap();
+    assert_eq!(
+        t.references().cloned().collect::<Vec<_>>(),
+        vec![
+            Reference::LoopItem {
+                node: node("each"),
+                path: vec![],
+            },
+            Reference::LoopItem {
+                node: node("each"),
+                path: vec!["user".into(), "name".into()],
+            },
+            Reference::LoopIndex { node: node("each") },
+        ]
+    );
+    assert!(matches!(
+        parse("{{nodes.each.index.x}}"),
+        Err(TemplateError::InvalidPath { .. })
+    ));
+}
+
+#[test]
+fn loop_references_render_from_the_current_frame_only() {
+    let outputs = outputs();
+    let frame = LoopFrame {
+        node: node("each"),
+        item: json!({ "url": "https://a.test/1" }),
+        index: 3,
+    };
+    let ctx = |frame| RenderContext {
+        scheduled_for: 0,
+        trigger: RunTrigger::Manual,
+        outputs: &outputs,
+        secrets: None,
+        frame,
+    };
+    let render = |src: &str, frame| parse(src).unwrap().render(&ctx(frame));
+
+    assert_eq!(
+        render("{{nodes.each.index}}: {{nodes.each.item.url}}", Some(&frame)),
+        Ok(json!("3: https://a.test/1"))
+    );
+    assert_eq!(render("{{nodes.each.index}}", Some(&frame)), Ok(json!(3)));
+    assert_eq!(
+        render("{{nodes.each.item.title}}", Some(&frame)),
+        Err(RenderError::MissingField {
+            reference: "nodes.each.item.title".into()
+        })
+    );
+    assert_eq!(
+        render("{{nodes.other.item}}", Some(&frame)),
+        Err(RenderError::NotInLoop(node("other")))
+    );
+    assert_eq!(
+        render("{{nodes.each.item}}", None),
+        Err(RenderError::NotInLoop(node("each")))
     );
 }

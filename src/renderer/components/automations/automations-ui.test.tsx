@@ -1,7 +1,9 @@
 import wire from '@shared/types/__fixtures__/automation.json'
 import type {
   AutomationId,
+  AutomationStep,
   AutomationSuggestion,
+  Graph,
   Issue,
   NodeId,
   RunId
@@ -296,6 +298,78 @@ describe('AutomationRunDetail', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('AutomationRunDetail with a loop and a wait', () => {
+  const graph: Graph = {
+    nodes: [
+      {
+        id: 'each' as NodeId,
+        label: 'Each item',
+        spec: { kind: 'for_each', items: '{{trigger.kind}}', max_iterations: 5 }
+      },
+      { id: 'send' as NodeId, label: 'Send', spec: { kind: 'transform', fields: [] } },
+      { id: 'pause' as NodeId, label: 'Pause', spec: { kind: 'wait', duration_ms: 60_000 } },
+      { id: 'done' as NodeId, label: 'Done', spec: { kind: 'transform', fields: [] } }
+    ],
+    edges: [
+      { from: 'trigger', port: 'out', to: 'each' as NodeId },
+      { from: 'each' as NodeId, port: 'out', to: 'done' as NodeId },
+      { from: 'each' as NodeId, port: 'item', to: 'send' as NodeId },
+      { from: 'send' as NodeId, port: 'out', to: 'pause' as NodeId }
+    ]
+  }
+  const run = runWith({ status: 'running', graph })
+  const WAIT_UNTIL = 1_773_050_461_000
+  const step = (
+    node: string,
+    iteration: number | null,
+    status: AutomationStep['status'],
+    extra: Partial<AutomationStep> = {}
+  ): AutomationStep => ({
+    run_id: run.id,
+    node_id: node as NodeId,
+    iteration,
+    status,
+    output: null,
+    error: null,
+    started_at: 1_000,
+    finished_at: status === 'running' || status === 'waiting' ? null : 1_500,
+    wait_until: null,
+    ...extra
+  })
+
+  it('groups a body node by iteration and says when a parked wait resumes', async () => {
+    api.getAutomationRunSteps.mockResolvedValue(
+      ok([
+        step('each', null, 'running'),
+        step('send', 0, 'succeeded', { output: { n: 0 } }),
+        step('pause', 0, 'succeeded'),
+        step('send', 1, 'succeeded', { output: { n: 1 } }),
+        step('pause', 1, 'waiting', { wait_until: WAIT_UNTIL })
+      ])
+    )
+    render(<AutomationRunDetail run={run} />)
+
+    const steps = within(screen.getByRole('list', { name: 'Steps' }))
+    await waitFor(() => expect(steps.getByText('Running')).toBeInTheDocument())
+    const waiting = `Waiting until ${formatDateTime(WAIT_UNTIL)}`
+    expect(steps.getAllByRole('listitem').map((row) => row.textContent)).toEqual([
+      'Each itemRunning',
+      'Send2 iterationsSucceededIterations',
+      'DoneNot reached',
+      'Pause2 iterationsWaitingIterations'
+    ])
+
+    fireEvent.click(
+      within(steps.getAllByRole('listitem')[3]).getByRole('button', { name: 'Iterations' })
+    )
+    const pauses = within(screen.getByRole('list', { name: 'Pause iterations' }))
+    expect(pauses.getAllByRole('listitem').map((row) => row.textContent)).toEqual([
+      'Item 1500 msSucceeded',
+      `Item 2Waiting${waiting}`
+    ])
   })
 })
 

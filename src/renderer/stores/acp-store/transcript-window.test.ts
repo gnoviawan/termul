@@ -153,6 +153,7 @@ import {
 } from '@/lib/acp-history-persistence'
 import { logFrontendError } from '@/lib/log-api'
 import { commandToken, fileToken, SKILL_PAD_CHAR, skillToken } from '@/lib/skill-tokens'
+import { subagentToolCall } from '@/lib/test-utils/subagent'
 import {
   _clampedToolCallIdsSizeForTesting,
   _flushCoalescedForTesting,
@@ -1460,6 +1461,36 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     const calls = useAcpStore.getState().toolCalls[sid]
     expect(calls).toHaveLength(MAX_LIVE_TOOL_CALLS)
     expect(calls.some((c) => c.toolCallId === 'fin-0')).toBe(false)
+  })
+
+  it('(f3) a finished subagent dispatch outlives the tool-call cap; its calls trim first', () => {
+    const sid = 's-subagent-cap'
+    seedSession(sid, 'agent-1', true)
+    const dispatch = subagentToolCall(
+      { state: { activity: 'idle', end: { reason: 'completed' } } },
+      { toolCallId: 'dispatch-1', status: 'completed', seq: 0 }
+    )
+    const children = Array.from(
+      { length: 500 },
+      (_, i): ToolCall => ({
+        toolCallId: `child-${i}`,
+        status: 'completed',
+        parentToolCallId: 'dispatch-1',
+        seq: i + 1
+      })
+    )
+    useAcpStore.setState({ toolCalls: { [sid]: [dispatch, ...children] } })
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: { toolCallId: 'next', status: 'completed', seq: 501 }
+    })
+    _flushCoalescedForTesting()
+    const calls = useAcpStore.getState().toolCalls[sid]
+    expect(calls).toHaveLength(MAX_LIVE_TOOL_CALLS)
+    expect(calls[0]?.toolCallId).toBe('dispatch-1')
+    expect(calls.some((c) => c.toolCallId === 'child-1')).toBe(false)
+    expect(calls.some((c) => c.toolCallId === 'child-2')).toBe(true)
   })
 
   it('(g) oversized string rawOutput clamps to 32 KiB + marker, logged without content', () => {

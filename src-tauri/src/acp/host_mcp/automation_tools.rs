@@ -153,14 +153,17 @@ Node = {id, label, spec}. id matches ^[a-z][a-z0-9_]{0,31}$ and is not "trigger"
 - transform: {kind:"transform", fields:[{name, value}]}. Output: an object of the fields.
 - condition: {kind:"condition", left, op:"eq"|"ne"|"contains"|"gt"|"lt"|"exists", right?}. right is required unless op is exists. Output {result}.
 - fail: {kind:"fail", message}. Fails the run with the message.
+- for_each: {kind:"for_each", items, max_iterations (1 to 100)}. items must render to an array. Its body is the nodes behind its item edges and everything after them; the body runs once per element, one element after another, and reads it as {{nodes.<loop>.item[.field...]}} and its 0-based position as {{nodes.<loop>.index}}. Every edge into a body node comes from the loop's item port or another body node; loops do not nest. More elements than max_iterations fails the node (never cut). A body failure with no error edge inside the body fails the loop with "iteration <i>: <node>: <message>". Output on out, after the last element: an array with one object per element, keyed by the body node ids that produced an output. Body outputs are not visible after the loop except through it.
+- merge: {kind:"merge", mode:"any"|"all"}. Joins two or more incoming edges: any runs when at least one fired, all only when every one fired (otherwise it is skipped). Output {from, value, inputs}: from is the first source that fired, value its output, inputs every fired source's output by id. After a condition, {{nodes.<merge>.output.value}} is whichever branch ran.
+- wait: {kind:"wait", duration_ms (1 to 604800000, 7 days)}. Pauses the run durably, across restarts, then continues. Output {resumed_at}.
 
-Edge = {from:"trigger" or a node id, port, to}. Ports: trigger has out; condition has true, false, error; fail has none; the others have out and error. Exactly one edge leaves trigger. out fires on success and error on failure; a failure with no error edge fails the run. The graph is acyclic and every node is reachable from trigger.
+Edge = {from:"trigger" or a node id, port, to}. Ports: trigger has out; condition has true, false, error; for_each has item, out, error; merge and wait have out; fail has none; the others have out and error. Exactly one edge leaves trigger. out fires on success and error on failure; a failure with no error edge fails the run. The graph is acyclic and every node is reachable from trigger.
 
 Trigger = {kind:"manual"} | {kind:"schedule", schedule}. Schedule = {kind:"cron", expr (5 fields), timezone (IANA, e.g. "Europe/Berlin")} | {kind:"every", every_ms, anchor_ms} | {kind:"at", at (unix ms)}.
 
 Isolation = "shared_in_root" (default, the project folder) | "worktree_per_run".
 
-Templates are strings with {{ path }} holes. Roots: trigger.scheduled_for, trigger.kind, nodes.<id>.output[.field...] (a number segment indexes an array; only nodes upstream of this one), secrets.<NAME>. A hole that is the whole string keeps its JSON value; otherwise it is stringified.
+Templates are strings with {{ path }} holes. Roots: trigger.scheduled_for, trigger.kind, nodes.<id>.output[.field...] (a number segment indexes an array; only nodes upstream of this one), secrets.<NAME>, and inside a for_each body nodes.<loop>.item[.field...] and nodes.<loop>.index. Inside the body, nodes.<loop>.output does not exist yet; use nodes.<loop>.item. A hole that is the whole string keeps its JSON value; otherwise it is stringified.
 
 output_schema is a JSON Schema subset: type (object, array, string, number, integer, boolean), properties, required, items, enum, description. Nothing else.
 
@@ -173,7 +176,7 @@ Ops, applied atomically in order:
 - {op:"rename", name}
 - {op:"set_isolation", isolation}
 
-Issue codes: duplicate_node_id, unknown_edge_endpoint, illegal_port, trigger_edge_count, cycle, unreachable, invalid_template, unknown_node_reference, non_ancestor_reference, secret_not_allowed, invalid_url, host_not_allowed, templated_host_without_allowlist, invalid_output_schema, agent_timeout_out_of_range, agent_max_attempts_out_of_range, missing_condition_operand, invalid_schedule, untrusted_agent_outbound_tool, outbound_agent_file_tool, unknown_agent (start that agent once in a chat, or pick one from automation_capabilities).
+Issue codes: duplicate_node_id, unknown_edge_endpoint, illegal_port, trigger_edge_count, cycle, unreachable, invalid_template, unknown_node_reference, non_ancestor_reference, secret_not_allowed, invalid_url, host_not_allowed, templated_host_without_allowlist, invalid_output_schema, agent_timeout_out_of_range, agent_max_attempts_out_of_range, missing_condition_operand, invalid_schedule, for_each_max_iterations_out_of_range, wait_duration_out_of_range, loop_body_not_closed, nested_for_each, loop_item_outside_body, merge_needs_two_inputs, untrusted_agent_outbound_tool, outbound_agent_file_tool, unknown_agent (start that agent once in a chat, or pick one from automation_capabilities).
 
 ## Example
 
@@ -185,4 +188,6 @@ Every weekday at 05:00 Berlin time, fetch items, have an agent pick the urgent o
  {op:"connect", edge:{from:"trigger", port:"out", to:"fetch"}},
  {op:"connect", edge:{from:"fetch", port:"out", to:"pick"}},
  {op:"connect", edge:{from:"pick", port:"out", to:"post"}}]
+
+A loop that posts each fetched item, waiting a minute between posts: fetch -> each {kind:"for_each", items:"{{nodes.fetch.output.body.items}}", max_iterations:50} -item-> send {kind:"http", method:"POST", url:"https://hooks.example.com/in", body:"{{nodes.each.item}}", allowed_hosts:["hooks.example.com"]} -out-> pause {kind:"wait", duration_ms:60000}; each -out-> report {kind:"transform", fields:[{name:"sent", value:"{{nodes.each.output}}"}]}.
 "#;

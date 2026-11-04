@@ -81,9 +81,9 @@ function oneOf<T extends string>(value: unknown, path: string, allowed: readonly
 }
 
 const RUN_STATUSES = ['running', 'succeeded', 'failed', 'cancelled', 'skipped'] as const
-const STEP_STATUSES = ['running', 'succeeded', 'failed', 'skipped'] as const
+const STEP_STATUSES = ['running', 'succeeded', 'failed', 'skipped', 'waiting'] as const
 const RUN_TRIGGERS = ['scheduled', 'catch_up', 'manual'] as const
-const PORTS = ['out', 'error', 'true', 'false'] as const
+const PORTS = ['out', 'error', 'true', 'false', 'item'] as const
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
 const CONDITION_OPS = ['eq', 'ne', 'contains', 'gt', 'lt', 'exists'] as const
 const AGENT_TOOLS: readonly AgentTool[] = ['read', 'search', 'edit', 'execute', 'fetch', 'other']
@@ -91,6 +91,8 @@ const AGENT_TOOLS: readonly AgentTool[] = ['read', 'search', 'edit', 'execute', 
 function agentTools(v: unknown, p: string): AgentTool[] {
   return arr(v, p, (tool, tp) => oneOf(tool, tp, AGENT_TOOLS))
 }
+
+const MERGE_MODES = ['any', 'all'] as const
 
 const automationId = (v: unknown, p: string): AutomationId => str(v, p) as AutomationId
 const runId = (v: unknown, p: string): RunId => str(v, p) as RunId
@@ -166,8 +168,18 @@ function nodeSpec(v: unknown, p: string): NodeSpec {
       }
     case 'fail':
       return { kind: 'fail', message: str(o.message, `${p}.message`) }
+    case 'for_each':
+      return {
+        kind: 'for_each',
+        items: str(o.items, `${p}.items`),
+        max_iterations: num(o.max_iterations, `${p}.max_iterations`)
+      }
+    case 'merge':
+      return { kind: 'merge', mode: oneOf(o.mode, `${p}.mode`, MERGE_MODES) }
+    case 'wait':
+      return { kind: 'wait', duration_ms: num(o.duration_ms, `${p}.duration_ms`) }
     default:
-      return fail(`${p}.kind`, 'http|agent|transform|condition|fail')
+      return fail(`${p}.kind`, 'http|agent|transform|condition|fail|for_each|merge|wait')
   }
 }
 
@@ -324,11 +336,13 @@ function step(v: unknown, p: string): AutomationStep {
   return {
     run_id: runId(o.run_id, `${p}.run_id`),
     node_id: nodeId(o.node_id, `${p}.node_id`),
+    iteration: nullable(o.iteration, `${p}.iteration`, num),
     status: oneOf<StepStatus>(o.status, `${p}.status`, STEP_STATUSES),
     output: o.output ?? null,
     error: nullable(o.error, `${p}.error`, str),
     started_at: nullable(o.started_at, `${p}.started_at`, num),
-    finished_at: nullable(o.finished_at, `${p}.finished_at`, num)
+    finished_at: nullable(o.finished_at, `${p}.finished_at`, num),
+    wait_until: nullable(o.wait_until, `${p}.wait_until`, num)
   }
 }
 

@@ -6,6 +6,7 @@ use std::fmt;
 use super::model::{
     wire_name, AgentTool, Automation, ConditionOp, EdgeSource, Graph, Issue, IssueCode, NodeId,
     NodeKind, NodeSpec, Op, Port, Trigger, AGENT_MAX_ATTEMPTS, AGENT_MAX_TIMEOUT_MS,
+    FOR_EACH_MAX_ITERATIONS, WAIT_MAX_MS,
 };
 use super::template::{self, ParsedTemplate, Reference};
 use super::{schedule, schema};
@@ -23,8 +24,10 @@ pub fn validate(automation: &Automation) -> Vec<Issue> {
     check_unique_ids(graph, &mut issues);
     check_edges(graph, &mut issues);
     check_cycles_and_reachability(graph, &mut issues);
+    let bodies = loop_bodies(graph);
+    check_loops(graph, &bodies, &mut issues);
     for node in &graph.nodes {
-        check_node(graph, &node.id, &node.spec, &mut issues);
+        check_node(graph, &bodies, &node.id, &node.spec, &mut issues);
     }
     check_agent_tools(graph, &mut issues);
     issues
@@ -57,6 +60,8 @@ fn legal_ports(source: Option<NodeKind>) -> &'static [Port] {
         Some(NodeKind::Condition) => &[Port::True, Port::False, Port::Error],
         Some(NodeKind::Fail) => &[],
         Some(NodeKind::Http | NodeKind::Agent | NodeKind::Transform) => &[Port::Out, Port::Error],
+        Some(NodeKind::ForEach) => &[Port::Item, Port::Out, Port::Error],
+        Some(NodeKind::Merge | NodeKind::Wait) => &[Port::Out],
     }
 }
 
@@ -189,8 +194,92 @@ fn check_cycles_and_reachability(graph: &Graph, issues: &mut Vec<Issue>) {
     }
 }
 
-fn check_node(graph: &Graph, id: &NodeId, spec: &NodeSpec, issues: &mut Vec<Issue>) {
+/// Each `for_each` node's body: the targets of its `item` edges and every
+/// node reachable from them.
+pub fn loop_bodies(graph: &Graph) -> HashMap<NodeId, HashSet<NodeId>> {
+    let adjacency = children(graph);
+    graph
+        .nodes
+        .iter()
+        .filter(|n| n.spec.kind() == NodeKind::ForEach)
+        .map(|l| {
+            let entries: Vec<&NodeId> = graph
+                .edges
+                .iter()
+                .filter(|e| e.port == Port::Item && e.from == EdgeSource::Node(l.id.clone()))
+                .map(|e| &e.to)
+                .filter(|to| graph.node(to).is_some())
+                .collect();
+            let mut body = reach(entries.iter().copied(), &adjacency);
+            body.extend(entries);
+            (l.id.clone(), body.into_iter().cloned().collect())
+        })
+        .collect()
+}
+
+/// The loop whose body holds `id`, if any. Validation keeps bodies apart,
+/// so the first match is the only one in a valid graph.
+fn enclosing_loop<'a>(
+    bodies: &'a HashMap<NodeId, HashSet<NodeId>>,
+    id: &NodeId,
+) -> Option<&'a NodeId> {
+    bodies
+        .iter()
+        .filter(|(l, body)| *l != id && body.contains(id))
+        .map(|(l, _)| l)
+        .min()
+}
+
+fn check_loops(
+    graph: &Graph,
+    bodies: &HashMap<NodeId, HashSet<NodeId>>,
+    issues: &mut Vec<Issue>,
+) {
+    for l in graph.nodes.iter().filter(|n| bodies.contains_key(&n.id)) {
+        let body = &bodies[&l.id];
+        for node in graph.nodes.iter().filter(|n| n.id != l.id && body.contains(&n.id)) {
+            if node.spec.kind() == NodeKind::ForEach {
+                issues.push(issue(
+                    Some(&node.id),
+                    IssueCode::NestedForEach,
+                    format!("for_each {} is inside {}'s loop body; loops cannot nest", node.id, l.id),
+                ));
+            }
+            let outside = graph.edges.iter().find(|e| {
+                e.to == node.id
+                    && match &e.from {
+                        EdgeSource::Node(from) if from == &l.id => e.port != Port::Item,
+                        EdgeSource::Node(from) => !body.contains(from),
+                        EdgeSource::Trigger => true,
+                    }
+            });
+            if let Some(edge) = outside {
+                let from: String = edge.from.clone().into();
+                issues.push(issue(
+                    Some(&node.id),
+                    IssueCode::LoopBodyNotClosed,
+                    format!(
+                        "{} is in {}'s loop body but has an edge from {from} ({}); body nodes take edges only from {}'s item port or other body nodes",
+                        node.id,
+                        l.id,
+                        wire_name(&edge.port),
+                        l.id
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn check_node(
+    graph: &Graph,
+    bodies: &HashMap<NodeId, HashSet<NodeId>>,
+    id: &NodeId,
+    spec: &NodeSpec,
+    issues: &mut Vec<Issue>,
+) {
     let node_ancestors = ancestors(graph, id);
+    let in_body_of = |l: &NodeId| bodies.get(l).is_some_and(|body| body.contains(id));
     for (field, source) in spec.templates() {
         let parsed = match template::parse(source.as_str()) {
             Ok(parsed) => parsed,
@@ -212,11 +301,36 @@ fn check_node(graph: &Graph, id: &NodeId, spec: &NodeSpec, issues: &mut Vec<Issu
                         format!("{field} references unknown node {node}"),
                     ));
                 }
+                Reference::NodeOutput { node, .. } if in_body_of(node) => {
+                    issues.push(issue(
+                        Some(id),
+                        IssueCode::NonAncestorReference,
+                        format!("{field} references nodes.{node}.output, which exists only after the loop; inside {node}'s body use nodes.{node}.item"),
+                    ));
+                }
                 Reference::NodeOutput { node, .. } if !node_ancestors.contains(node) => {
                     issues.push(issue(
                         Some(id),
                         IssueCode::NonAncestorReference,
                         format!("{field} references {node}, which does not run before {id}"),
+                    ));
+                }
+                Reference::LoopItem { node, .. } | Reference::LoopIndex { node }
+                    if graph.node(node).is_none() =>
+                {
+                    issues.push(issue(
+                        Some(id),
+                        IssueCode::UnknownNodeReference,
+                        format!("{field} references unknown node {node}"),
+                    ));
+                }
+                Reference::LoopItem { node, .. } | Reference::LoopIndex { node }
+                    if !in_body_of(node) =>
+                {
+                    issues.push(issue(
+                        Some(id),
+                        IssueCode::LoopItemOutsideBody,
+                        format!("{field} uses nodes.{node}.item or .index, which exist only inside the body of for_each {node}"),
                     ));
                 }
                 Reference::Secret(name) if spec.kind() != NodeKind::Http => {
@@ -273,6 +387,32 @@ fn check_node(graph: &Graph, id: &NodeId, spec: &NodeSpec, issues: &mut Vec<Issu
                 format!("condition {} needs a right operand", wire_name(op)),
             ));
         }
+        NodeSpec::ForEach { max_iterations, .. }
+            if !(1..=FOR_EACH_MAX_ITERATIONS).contains(max_iterations) =>
+        {
+            issues.push(issue(
+                Some(id),
+                IssueCode::ForEachMaxIterationsOutOfRange,
+                format!("max_iterations must be 1..={FOR_EACH_MAX_ITERATIONS}, got {max_iterations}"),
+            ));
+        }
+        NodeSpec::Wait { duration_ms } if !(1..=WAIT_MAX_MS).contains(duration_ms) => {
+            issues.push(issue(
+                Some(id),
+                IssueCode::WaitDurationOutOfRange,
+                format!("duration_ms must be 1..={WAIT_MAX_MS} (7 days), got {duration_ms}"),
+            ));
+        }
+        NodeSpec::Merge { .. } => {
+            let inputs = graph.edges.iter().filter(|e| &e.to == id).count();
+            if inputs < 2 {
+                issues.push(issue(
+                    Some(id),
+                    IssueCode::MergeNeedsTwoInputs,
+                    format!("merge {id} joins branches, so it needs at least two incoming edges, found {inputs}"),
+                ));
+            }
+        }
         _ => {}
     }
 }
@@ -321,17 +461,18 @@ fn check_http_host(id: &NodeId, url: &ParsedTemplate, allowed: &[String], issues
 /// True when untrusted content can steer an outbound request: an agent that
 /// reads untrusted data has an http node downstream of it.
 pub fn untrusted_flow(graph: &Graph) -> bool {
-    let tainted = untrusted_outputs(graph);
+    let bodies = loop_bodies(graph);
+    let tainted = untrusted_outputs(graph, &bodies);
     graph.nodes.iter().any(|agent| {
         let NodeSpec::Agent { tools, .. } = &agent.spec else {
             return false;
         };
         let reads_untrusted = tools.iter().any(|t| t.reaches_out())
-            || referenced_nodes(&agent.spec)
+            || data_sources(graph, &bodies, &agent.id, &agent.spec)
                 .iter()
                 .any(|r| tainted.contains(r));
         reads_untrusted
-            && descendants(graph, &agent.id).iter().any(|d| {
+            && downstream(graph, &bodies, &agent.id).iter().any(|d| {
                 graph
                     .node(d)
                     .is_some_and(|n| n.spec.kind() == NodeKind::Http)
@@ -340,13 +481,16 @@ pub fn untrusted_flow(graph: &Graph) -> bool {
 }
 
 /// Nodes whose output carries untrusted content: every http response, every
-/// agent that can reach past the host, and every node whose templates read
+/// agent that can reach past the host, and every node whose data comes from
 /// one of those, directly or through other nodes.
-fn untrusted_outputs(graph: &Graph) -> HashSet<&NodeId> {
-    let refs: HashMap<&NodeId, Vec<NodeId>> = graph
+fn untrusted_outputs<'g>(
+    graph: &'g Graph,
+    bodies: &HashMap<NodeId, HashSet<NodeId>>,
+) -> HashSet<&'g NodeId> {
+    let sources: HashMap<&NodeId, Vec<NodeId>> = graph
         .nodes
         .iter()
-        .map(|n| (&n.id, referenced_nodes(&n.spec)))
+        .map(|n| (&n.id, data_sources(graph, bodies, &n.id, &n.spec)))
         .collect();
     let mut tainted: HashSet<&NodeId> = graph
         .nodes
@@ -361,7 +505,7 @@ fn untrusted_outputs(graph: &Graph) -> HashSet<&NodeId> {
     loop {
         let before = tainted.len();
         for node in &graph.nodes {
-            if refs[&node.id].iter().any(|r| tainted.contains(r)) {
+            if sources[&node.id].iter().any(|r| tainted.contains(r)) {
                 tainted.insert(&node.id);
             }
         }
@@ -376,7 +520,8 @@ fn untrusted_outputs(graph: &Graph) -> HashSet<&NodeId> {
 /// later). An agent that reaches past the host takes in untrusted content
 /// itself, so it may not also read or change files.
 fn check_agent_tools(graph: &Graph, issues: &mut Vec<Issue>) {
-    let tainted = untrusted_outputs(graph);
+    let bodies = loop_bodies(graph);
+    let tainted = untrusted_outputs(graph, &bodies);
     for node in &graph.nodes {
         let NodeSpec::Agent { tools, .. } = &node.spec else {
             continue;
@@ -389,7 +534,7 @@ fn check_agent_tools(graph: &Graph, issues: &mut Vec<Issue>) {
                 .map(|t| wire_name(&t))
                 .collect()
         };
-        let reads_untrusted = referenced_nodes(&node.spec)
+        let reads_untrusted = data_sources(graph, &bodies, &node.id, &node.spec)
             .iter()
             .any(|r| tainted.contains(r));
         let risky = names(|t| t.reaches_out() || t == AgentTool::Edit);
@@ -417,6 +562,54 @@ fn check_agent_tools(graph: &Graph, issues: &mut Vec<Issue>) {
             ));
         }
     }
+}
+
+/// The nodes whose outputs flow into `id`'s output: the outputs its
+/// templates read, a loop's items (for `nodes.<loop>.item`), a merge's
+/// incoming sources, and a for_each's body, which its output carries.
+fn data_sources(
+    graph: &Graph,
+    bodies: &HashMap<NodeId, HashSet<NodeId>>,
+    id: &NodeId,
+    spec: &NodeSpec,
+) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    for reference in references(spec) {
+        match reference {
+            Reference::NodeOutput { node, .. } => out.push(node),
+            Reference::LoopItem { node, .. } => {
+                if let Some(l) = graph.node(&node) {
+                    out.extend(referenced_nodes(&l.spec));
+                }
+            }
+            _ => {}
+        }
+    }
+    match spec {
+        NodeSpec::Merge { .. } => out.extend(graph.edges.iter().filter(|e| &e.to == id).filter_map(
+            |e| match &e.from {
+                EdgeSource::Node(from) => Some(from.clone()),
+                EdgeSource::Trigger => None,
+            },
+        )),
+        NodeSpec::ForEach { .. } => out.extend(bodies.get(id).into_iter().flatten().cloned()),
+        _ => {}
+    }
+    out
+}
+
+/// Nodes that run after `id`: its descendants, plus everything after its
+/// loop when it sits in a for_each body.
+fn downstream<'a>(
+    graph: &'a Graph,
+    bodies: &HashMap<NodeId, HashSet<NodeId>>,
+    id: &NodeId,
+) -> HashSet<&'a NodeId> {
+    let mut out = descendants(graph, id);
+    if let Some(l) = enclosing_loop(bodies, id) {
+        out.extend(descendants(graph, l));
+    }
+    out
 }
 
 fn references(spec: &NodeSpec) -> Vec<Reference> {
