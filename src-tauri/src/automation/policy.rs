@@ -6,18 +6,24 @@ use chrono::{TimeZone, Utc};
 
 use super::graph;
 use super::model::{
-    AgentPolicy, Automation, NodeHosts, NodeSecrets, NodeSpec, RunPolicy, Schedule,
-    Trigger,
+    AgentPolicy, Automation, McpToolPolicy, NodeHosts, NodeSecrets, NodeSpec,
+    RunPolicy, Schedule, Trigger,
 };
 use super::schedule::{next_runs, BACKOFF_LADDER_MS};
 
 const PREVIEW_RUNS: usize = 3;
 
-pub fn run_policy(automation: &Automation, now_ms: i64) -> RunPolicy {
+/// `server_name` names the project's enabled MCP server of an id.
+pub fn run_policy(
+    automation: &Automation,
+    now_ms: i64,
+    server_name: &dyn Fn(&str) -> Option<String>,
+) -> RunPolicy {
     let graph = &automation.graph;
     let mut agents = Vec::new();
     let mut secrets = Vec::new();
     let mut outbound_hosts = Vec::new();
+    let mut mcp_tools = Vec::new();
     for node in &graph.nodes {
         match &node.spec {
             NodeSpec::Agent {
@@ -51,6 +57,14 @@ pub fn run_policy(automation: &Automation, now_ms: i64) -> RunPolicy {
                     hosts: allowed_hosts.clone(),
                 });
             }
+            NodeSpec::McpTool {
+                server_id, tool, ..
+            } => mcp_tools.push(McpToolPolicy {
+                node_id: node.id.clone(),
+                server_id: server_id.clone(),
+                server_name: server_name(server_id),
+                tool: tool.clone(),
+            }),
             NodeSpec::Transform { .. }
             | NodeSpec::Condition { .. }
             | NodeSpec::Fail { .. }
@@ -68,6 +82,7 @@ pub fn run_policy(automation: &Automation, now_ms: i64) -> RunPolicy {
         agents,
         secrets,
         outbound_hosts,
+        mcp_tools,
         untrusted_flow: graph::untrusted_flow(graph),
         failure_policy: failure_policy(),
     }

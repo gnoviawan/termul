@@ -24,6 +24,7 @@ import type {
   JsonSchemaSubset,
   KnownAgent,
   LastRun,
+  McpToolPolicy,
   NodeId,
   NodeSpec,
   RunId,
@@ -168,6 +169,14 @@ function nodeSpec(v: unknown, p: string): NodeSpec {
       }
     case 'fail':
       return { kind: 'fail', message: str(o.message, `${p}.message`) }
+    case 'mcp_tool':
+      return {
+        kind: 'mcp_tool',
+        server_id: str(o.server_id, `${p}.server_id`),
+        tool: str(o.tool, `${p}.tool`),
+        arguments: arr(o.arguments, `${p}.arguments`, namedTemplate),
+        timeout_ms: num(o.timeout_ms, `${p}.timeout_ms`)
+      }
     case 'for_each':
       return {
         kind: 'for_each',
@@ -179,7 +188,7 @@ function nodeSpec(v: unknown, p: string): NodeSpec {
     case 'wait':
       return { kind: 'wait', duration_ms: num(o.duration_ms, `${p}.duration_ms`) }
     default:
-      return fail(`${p}.kind`, 'http|agent|transform|condition|fail|for_each|merge|wait')
+      return fail(`${p}.kind`, 'http|agent|transform|condition|fail|for_each|merge|wait|mcp_tool')
   }
 }
 
@@ -268,6 +277,16 @@ function agentPolicy(v: unknown, p: string): AgentPolicy {
   }
 }
 
+function mcpToolPolicy(v: unknown, p: string): McpToolPolicy {
+  const o = obj(v, p)
+  return {
+    node_id: nodeId(o.node_id, `${p}.node_id`),
+    server_id: str(o.server_id, `${p}.server_id`),
+    server_name: nullable(o.server_name, `${p}.server_name`, str),
+    tool: str(o.tool, `${p}.tool`)
+  }
+}
+
 function perNode<K extends string>(key: K) {
   return (v: unknown, p: string): { node_id: NodeId } & Record<K, string[]> => {
     const o = obj(v, p)
@@ -286,6 +305,7 @@ function runPolicy(v: unknown, p: string): RunPolicy {
     agents: arr(o.agents, `${p}.agents`, agentPolicy),
     secrets: arr(o.secrets, `${p}.secrets`, perNode('names')),
     outbound_hosts: arr(o.outbound_hosts, `${p}.outbound_hosts`, perNode('hosts')),
+    mcp_tools: arr(o.mcp_tools, `${p}.mcp_tools`, mcpToolPolicy),
     untrusted_flow: bool(o.untrusted_flow, `${p}.untrusted_flow`),
     failure_policy: str(o.failure_policy, `${p}.failure_policy`)
   }

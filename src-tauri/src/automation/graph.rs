@@ -7,6 +7,7 @@ use super::model::{
     wire_name, AgentTool, Automation, ConditionOp, EdgeSource, Graph, Issue, IssueCode, NodeId,
     NodeKind, NodeSpec, Op, Port, Trigger, AGENT_MAX_ATTEMPTS, AGENT_MAX_TIMEOUT_MS,
     FOR_EACH_MAX_ITERATIONS, WAIT_MAX_MS,
+    MCP_MAX_TIMEOUT_MS,
 };
 use super::template::{self, ParsedTemplate, Reference};
 use super::{schedule, schema};
@@ -59,7 +60,9 @@ fn legal_ports(source: Option<NodeKind>) -> &'static [Port] {
         None => &[Port::Out],
         Some(NodeKind::Condition) => &[Port::True, Port::False, Port::Error],
         Some(NodeKind::Fail) => &[],
-        Some(NodeKind::Http | NodeKind::Agent | NodeKind::Transform) => &[Port::Out, Port::Error],
+        Some(NodeKind::Http | NodeKind::Agent | NodeKind::Transform | NodeKind::McpTool) => {
+            &[Port::Out, Port::Error]
+        }
         Some(NodeKind::ForEach) => &[Port::Item, Port::Out, Port::Error],
         Some(NodeKind::Merge | NodeKind::Wait) => &[Port::Out],
     }
@@ -378,6 +381,30 @@ fn check_node(
                 ));
             }
         }
+        NodeSpec::McpTool {
+            arguments,
+            timeout_ms,
+            ..
+        } => {
+            if *timeout_ms == 0 || *timeout_ms > MCP_MAX_TIMEOUT_MS {
+                issues.push(issue(
+                    Some(id),
+                    IssueCode::McpTimeoutOutOfRange,
+                    format!("timeout_ms must be 1..={MCP_MAX_TIMEOUT_MS}, got {timeout_ms}"),
+                ));
+            }
+            let mut seen = HashSet::new();
+            for argument in arguments {
+                let problem = if argument.name.trim().is_empty() {
+                    "an argument has an empty name".to_string()
+                } else if !seen.insert(argument.name.as_str()) {
+                    format!("argument {} is given more than once", argument.name)
+                } else {
+                    continue;
+                };
+                issues.push(issue(Some(id), IssueCode::InvalidMcpArguments, problem));
+            }
+        }
         NodeSpec::Condition {
             op, right: None, ..
         } if *op != ConditionOp::Exists => {
@@ -458,8 +485,8 @@ fn check_http_host(id: &NodeId, url: &ParsedTemplate, allowed: &[String], issues
     }
 }
 
-/// True when untrusted content can steer an outbound request: an agent that
-/// reads untrusted data has an http node downstream of it.
+/// True when untrusted content can steer an outbound action: an agent that
+/// reads untrusted data has an http or mcp_tool node downstream of it.
 pub fn untrusted_flow(graph: &Graph) -> bool {
     let bodies = loop_bodies(graph);
     let tainted = untrusted_outputs(graph, &bodies);
@@ -475,13 +502,13 @@ pub fn untrusted_flow(graph: &Graph) -> bool {
             && downstream(graph, &bodies, &agent.id).iter().any(|d| {
                 graph
                     .node(d)
-                    .is_some_and(|n| n.spec.kind() == NodeKind::Http)
+                    .is_some_and(|n| matches!(n.spec.kind(), NodeKind::Http | NodeKind::McpTool))
             })
     })
 }
 
 /// Nodes whose output carries untrusted content: every http response, every
-/// agent that can reach past the host, and every node whose data comes from
+/// MCP tool result, every agent that can reach past the host, and every node whose data comes from
 /// one of those, directly or through other nodes.
 fn untrusted_outputs<'g>(
     graph: &'g Graph,
@@ -496,7 +523,7 @@ fn untrusted_outputs<'g>(
         .nodes
         .iter()
         .filter(|n| match &n.spec {
-            NodeSpec::Http { .. } => true,
+            NodeSpec::Http { .. } | NodeSpec::McpTool { .. } => true,
             NodeSpec::Agent { tools, .. } => tools.iter().any(|t| t.reaches_out()),
             _ => false,
         })
@@ -543,7 +570,7 @@ fn check_agent_tools(graph: &Graph, issues: &mut Vec<Issue>) {
                 Some(&node.id),
                 IssueCode::UntrustedAgentOutboundTool,
                 format!(
-                    "this agent's prompt reads untrusted data (an http response, or the output of an agent that can fetch, run commands or use other tools), so it may not use: {}",
+                    "this agent's prompt reads untrusted data (an http response, an MCP tool result, or the output of an agent that can fetch, run commands or use other tools), so it may not use: {}",
                     risky.join(", ")
                 ),
             ));

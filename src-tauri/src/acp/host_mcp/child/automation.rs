@@ -17,6 +17,15 @@ use crate::acp::host_mcp::{FrameKind, FrameReply, FrameRequest};
 /// Service calls are local SQLite reads and writes.
 const ROUND_TRIP: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// `automation_capabilities` also lists the project's MCP servers, so it
+/// waits past their listing deadline and still answers `unavailable`.
+fn round_trip(tool: AutomationTool) -> std::time::Duration {
+    match tool {
+        AutomationTool::Capabilities => crate::automation::mcp::LISTING_DEADLINE + ROUND_TRIP,
+        _ => ROUND_TRIP,
+    }
+}
+
 impl TermulPlanServer {
     async fn automation(&self, tool: AutomationTool, input: Option<Value>) -> CallToolResult {
         let request = FrameRequest {
@@ -24,7 +33,7 @@ impl TermulPlanServer {
             automation_input: input,
             ..self.frame(FrameKind::Automation)
         };
-        let reply = tokio::time::timeout(ROUND_TRIP, exchange_frame(&self.config, request)).await;
+        let reply = tokio::time::timeout(round_trip(tool), exchange_frame(&self.config, request)).await;
         match reply {
             Ok(Ok(reply)) => tool_result(reply),
             Ok(Err(error)) => {

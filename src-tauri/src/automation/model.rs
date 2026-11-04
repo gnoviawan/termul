@@ -303,6 +303,19 @@ pub enum NodeSpec {
     Wait {
         duration_ms: u64,
     },
+    /// Calls `tool` on the project's MCP server `server_id` (the registry
+    /// entry id) with no LLM. The server's credentials come from its stored
+    /// config, never from templates.
+    McpTool {
+        server_id: String,
+        tool: String,
+        /// Rendered into the `tools/call` arguments object; a hole that is
+        /// the whole value keeps its JSON type.
+        #[serde(default)]
+        arguments: Vec<NamedTemplate>,
+        #[serde(default = "default_mcp_timeout_ms")]
+        timeout_ms: u64,
+    },
 }
 
 /// A class of tool an agent node may use. When the agent asks to use a
@@ -359,6 +372,13 @@ pub enum MergeMode {
     All,
 }
 
+pub const MCP_DEFAULT_TIMEOUT_MS: u64 = 60_000;
+pub const MCP_MAX_TIMEOUT_MS: u64 = 300_000;
+
+fn default_mcp_timeout_ms() -> u64 {
+    MCP_DEFAULT_TIMEOUT_MS
+}
+
 impl NodeSpec {
     pub fn kind(&self) -> NodeKind {
         match self {
@@ -370,6 +390,7 @@ impl NodeSpec {
             NodeSpec::ForEach { .. } => NodeKind::ForEach,
             NodeSpec::Merge { .. } => NodeKind::Merge,
             NodeSpec::Wait { .. } => NodeKind::Wait,
+            NodeSpec::McpTool { .. } => NodeKind::McpTool,
         }
     }
 
@@ -402,6 +423,10 @@ impl NodeSpec {
             NodeSpec::Fail { message } => vec![("message".to_string(), message)],
             NodeSpec::ForEach { items, .. } => vec![("items".to_string(), items)],
             NodeSpec::Merge { .. } | NodeSpec::Wait { .. } => Vec::new(),
+            NodeSpec::McpTool { arguments, .. } => arguments
+                .iter()
+                .map(|a| (format!("arguments.{}", a.name), &a.value))
+                .collect(),
         }
     }
 }
@@ -416,6 +441,7 @@ pub enum NodeKind {
     ForEach,
     Merge,
     Wait,
+    McpTool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -564,6 +590,13 @@ pub enum IssueCode {
     MergeNeedsTwoInputs,
     /// Added by the service, which owns the agent registry.
     UnknownAgent,
+    McpTimeoutOutOfRange,
+    InvalidMcpArguments,
+    /// The rest are added by the service from the live `tools/list`.
+    UnknownMcpServer,
+    McpToolsPending,
+    McpServerUnavailable,
+    UnknownMcpTool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -670,6 +703,7 @@ pub struct RunPolicy {
     pub agents: Vec<AgentPolicy>,
     pub secrets: Vec<NodeSecrets>,
     pub outbound_hosts: Vec<NodeHosts>,
+    pub mcp_tools: Vec<McpToolPolicy>,
     pub untrusted_flow: bool,
     pub failure_policy: String,
 }
@@ -688,6 +722,16 @@ pub struct AgentPolicy {
 pub struct NodeSecrets {
     pub node_id: NodeId,
     pub names: Vec<String>,
+}
+
+/// An `mcp_tool` node: which tool it calls on which server. `server_name` is
+/// `None` when the project has no enabled server of that id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct McpToolPolicy {
+    pub node_id: NodeId,
+    pub server_id: String,
+    pub server_name: Option<String>,
+    pub tool: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

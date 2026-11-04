@@ -183,10 +183,12 @@ pub async fn serve(
         let roots_registry = registry.clone();
         let project_roots: crate::automation::engine::ProjectRoots =
             Arc::new(move |project_id| roots_registry.canonical_root(project_id));
+        let mcp_servers = crate::automation::mcp::project_file_servers(project_roots.clone());
         match crate::automation::service::AutomationService::open(
             &cfg.service_account_state_dir(),
             acp.clone(),
             project_roots,
+            mcp_servers,
         ) {
             Ok(service) => {
                 let service = Arc::new(service);

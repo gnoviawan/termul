@@ -107,6 +107,7 @@ mod engine_support {
     use crate::acp::AcpManager;
     use crate::automation::agents::AgentRegistry;
     use crate::automation::engine::{Clock, Engine, EngineDeps, HttpConfig};
+    use crate::automation::mcp::{McpClient, ProjectMcpServers};
     use crate::automation::secrets::{SecretError, SecretVault, Secrets};
     use crate::automation::store::AutomationStore;
 
@@ -173,14 +174,22 @@ mod engine_support {
     }
 
     /// An engine on an in-memory store whose every project resolves to
-    /// `root`.
-    pub fn test_engine(
+    /// `root`, with no MCP servers.
+    pub fn test_engine(root: PathBuf, vault: Arc<dyn SecretVault>, http: HttpConfig) -> TestEngine {
+        let none: ProjectMcpServers = Arc::new(|_| Vec::new());
+        let client = crate::automation::mcp::test_support::FakeMcp::new();
+        test_engine_with_mcp(root, vault, http, none, client)
+    }
+
+    pub fn test_engine_with_mcp(
         root: PathBuf,
         vault: Arc<dyn SecretVault>,
         http: HttpConfig,
+        mcp_servers: ProjectMcpServers,
+        mcp_client: Arc<dyn McpClient>,
     ) -> TestEngine {
         let store = Arc::new(AutomationStore::open_in_memory().unwrap());
-        test_engine_on(store, root, vault, http)
+        build(store, root, vault, http, mcp_servers, mcp_client)
     }
 
     /// [`test_engine`] over `store`, so a second engine can stand in for a
@@ -190,6 +199,19 @@ mod engine_support {
         root: PathBuf,
         vault: Arc<dyn SecretVault>,
         http: HttpConfig,
+    ) -> TestEngine {
+        let none: ProjectMcpServers = Arc::new(|_| Vec::new());
+        let client = crate::automation::mcp::test_support::FakeMcp::new();
+        build(store, root, vault, http, none, client)
+    }
+
+    fn build(
+        store: Arc<AutomationStore>,
+        root: PathBuf,
+        vault: Arc<dyn SecretVault>,
+        http: HttpConfig,
+        mcp_servers: ProjectMcpServers,
+        mcp_client: Arc<dyn McpClient>,
     ) -> TestEngine {
         let clock = FakeClock::at(1_000);
         let agents = Arc::new(AgentRegistry::in_memory());
@@ -202,6 +224,8 @@ mod engine_support {
             project_roots: Arc::new(move |_| Some(root.clone())),
             clock: clock.clone(),
             http,
+            mcp_servers,
+            mcp_client,
         })
         .unwrap();
         TestEngine {

@@ -15,9 +15,12 @@ use crate::acp::config::AgentConfig;
 use crate::acp::host_mcp::gateway_harness::Harness;
 use crate::acp::session_persistence::UNASSIGNED_PROJECT_ID;
 use crate::automation::engine::HttpConfig;
+use crate::automation::mcp::test_support::{
+    registry, search_tool, server, FakeMcp, SENTINEL_SECRET,
+};
 use crate::automation::model::{AutomationChanged, AutomationId};
 use crate::automation::service::AutomationService;
-use crate::automation::test_support::{no_history, test_engine, MemoryVault};
+use crate::automation::test_support::{no_history, test_engine, test_engine_with_mcp, MemoryVault};
 
 fn service() -> Arc<AutomationService> {
     let engine = test_engine(
@@ -327,10 +330,26 @@ fn a_stale_revision_returns_the_current_one_and_a_bad_op_saves_nothing() {
     );
 }
 
+/// A service whose project has the MCP server `srv-1` ("files"), listing
+/// `search`, with [`SENTINEL_SECRET`] in its args, env and headers.
+fn service_with_mcp() -> Arc<AutomationService> {
+    let fake = FakeMcp::new();
+    fake.lists("files", Ok(vec![search_tool()]));
+    let engine = test_engine_with_mcp(
+        std::env::temp_dir(),
+        Arc::new(MemoryVault::default()),
+        HttpConfig::default(),
+        registry(vec![server("srv-1", "files")]),
+        fake,
+    )
+    .engine;
+    Arc::new(AutomationService::new(engine, no_history()))
+}
+
 #[test]
-fn capabilities_name_agents_and_secrets_without_launch_details() {
+fn capabilities_name_agents_secrets_and_mcp_tools_without_launch_details() {
     let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
-    let service = service();
+    let service = service_with_mcp();
     harness.server().use_automation_service(service.clone());
     service.engine().agents().record(&AgentConfig {
         config_id: Some("test".to_string()),
@@ -357,6 +376,8 @@ fn capabilities_name_agents_and_secrets_without_launch_details() {
                 "env-secret",
                 "vault-secret",
                 "OTHER_KEY",
+                SENTINEL_SECRET,
+                "/opt/files",
             ] {
                 assert!(!text.contains(leaked), "{leaked} in {text}");
             }
@@ -366,6 +387,15 @@ fn capabilities_name_agents_and_secrets_without_launch_details() {
                     "agents": [{ "agent_id": "test", "name": "Test agent" }],
                     "secret_names": ["HOOK_KEY"],
                     "calling_agent_id": "test",
+                    "mcp_servers": [{
+                        "server_id": "srv-1", "name": "files", "transport": "stdio",
+                        "status": "connected", "error": null,
+                        "tools": [{
+                            "name": "search", "description": "search tool",
+                            "input_schema": search_tool().input_schema,
+                            "output_schema": null,
+                        }],
+                    }],
                 })
             );
         }));
@@ -388,6 +418,10 @@ fn the_guide_carries_the_secrets_and_question_rules() {
                 "\"you decide\"",
                 "Agent nodes get no secrets and only the tools their tools list allows",
                 "call automation_propose(id)",
+                "mcp_tool: {kind:\"mcp_tool\", server_id, tool",
+                "A tool that asks for user input (input_required) fails the step",
+                "unknown_mcp_server",
+                "mcp_tools_pending",
             ] {
                 assert!(guide.contains(rule), "missing {rule:?}");
             }
