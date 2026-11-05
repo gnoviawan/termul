@@ -511,10 +511,26 @@ fn write_stamp(dir: &Path, cache: &RegistryCache) -> io::Result<()> {
     crate::acp::atomic_file::replace(&dir.join(STAMP_FILE), &bytes)
 }
 
-/// The on-disk cursor, preferring the stamp over the registry cache.
+/// Gzip header of a cache this process can extend. Does not parse server rows.
+fn cache_header_ok(dir: &Path) -> bool {
+    let Ok(file) = fs::File::open(dir.join(CACHE_FILE)) else {
+        return false;
+    };
+    let mut prefix = [0u8; 256];
+    let Ok(n) = GzDecoder::new(file).read(&mut prefix) else {
+        return false;
+    };
+    std::str::from_utf8(&prefix[..n]).is_ok_and(|text| text.contains("\"formatVersion\":2"))
+}
+
+/// The on-disk cursor. A stamp is ignored unless its cache file is readable,
+/// so a missing cache cannot plan `Since` and then persist only the new rows.
 fn stored_source(dir: &Path, snapshot: &McpCatalogSource) -> McpCatalogSource {
     if let Some(source) = read_stamp(dir, snapshot) {
-        return source;
+        if cache_header_ok(dir) {
+            return source;
+        }
+        log::warn!("[mcp-catalog] sync cursor stamp ignored, registry cache is missing or invalid");
     }
     read_cache(dir, snapshot)
         .map(|cache| published_source(snapshot, &cache))
@@ -531,9 +547,16 @@ fn update_cache(
 ) -> io::Result<RegistryCache> {
     let mut cache = match plan {
         SyncPlan::Full => RegistryCache::new(started_at, true),
-        SyncPlan::Since(_) => {
-            read_cache(dir, source).unwrap_or_else(|| RegistryCache::new(started_at, false))
-        }
+        SyncPlan::Since(_) => match read_cache(dir, source) {
+            Some(cache) => cache,
+            None if !dir.join(STAMP_FILE).exists() => RegistryCache::new(started_at, false),
+            None => {
+                log::warn!(
+                    "[mcp-catalog] incremental sync refused, registry cache is missing or invalid"
+                );
+                return Err(io::Error::other("registry cache missing or invalid"));
+            }
+        },
     };
     cache.cursor = started_at;
     if plan.is_full() {
@@ -737,29 +760,25 @@ impl McpCatalogService {
     }
 
     async fn apply_cached_catalog(&self, dir: &Path) {
-        if self.loaded().is_none() {
-            return;
-        }
-        let _gate = self.load_gate.lock().await;
-        let Some(base) = self.loaded() else {
-            return;
-        };
+        let gate = Arc::clone(&self.load_gate);
+        let catalog_slot = Arc::clone(&self.catalog);
+        let cursor = Arc::clone(&self.sync_cursor);
         let dir = dir.to_path_buf();
-        let merged = tokio::task::spawn_blocking(move || {
-            read_cache(&dir, &base.source).map(|cache| merge(&base, &cache))
-        })
-        .await
-        .ok()
-        .flatten();
-        if let Some(catalog) = merged {
+        let _merged = tokio::task::spawn_blocking(move || {
+            let _gate = gate.lock();
+            let base = catalog_slot.read().as_ref().map(Arc::clone)?;
+            let catalog = read_cache(&dir, &base.source).map(|cache| merge(&base, &cache))?;
             log::info!(
                 "[mcp-catalog] sync cache loaded items={} cursor={} sample={}",
                 catalog.items.len(),
                 catalog.source.updated_at.as_deref().unwrap_or(""),
                 catalog.source.sample
             );
-            self.swap(catalog);
-        }
+            super::publish(&catalog_slot, &cursor, catalog);
+            Some(())
+        })
+        .await
+        .ok();
     }
 
     async fn sync_once(&self, host: &SyncHost) -> Result<(), SyncError> {
@@ -782,15 +801,24 @@ impl McpCatalogService {
             }) => delta?,
         };
         let (received, refetched, changed) = (delta.received, delta.refetched, delta.rows.len());
-        let _gate = self.load_gate.lock().await;
-        let current = self.loaded();
+        let gate = Arc::clone(&self.load_gate);
+        let catalog_slot = Arc::clone(&self.catalog);
+        let cursor_slot = Arc::clone(&self.sync_cursor);
         let dir = host.dir.clone();
         let source_for_cache = source.clone();
-        let updated = tokio::task::spawn_blocking(move || -> io::Result<Option<LoadedCatalog>> {
+        let updated = tokio::task::spawn_blocking(move || -> io::Result<Option<usize>> {
+            let _gate = gate.lock();
+            // Drop the read guard before `publish` takes the write lock.
+            let current = catalog_slot.read().as_ref().map(Arc::clone);
             if let Some(current) = current {
-                commit(&dir, &current, plan, delta, started_at).map(Some)
+                let catalog = commit(&dir, &current, plan, delta, started_at)?;
+                let count = catalog.items.len();
+                super::publish(&catalog_slot, &cursor_slot, catalog);
+                Ok(Some(count))
             } else {
-                update_cache(&dir, &source_for_cache, plan, delta, started_at).map(|_| None)
+                update_cache(&dir, &source_for_cache, plan, delta, started_at)?;
+                *cursor_slot.lock() = Some(source_after_sync(&source_for_cache, plan, started_at));
+                Ok(None)
             }
         })
         .await
@@ -798,18 +826,15 @@ impl McpCatalogService {
         .map_err(|error| SyncError::Cache(error.to_string()))?;
         let cursor = rfc3339(started_at);
         match updated {
-            Some(catalog) => {
+            Some(items) => {
                 log::info!(
-                    "[mcp-catalog] sync done: full={full} received={received} refetched={refetched} changed={changed} items={} cursor={cursor}",
-                    catalog.items.len(),
+                    "[mcp-catalog] sync done: full={full} received={received} refetched={refetched} changed={changed} items={items} cursor={cursor}",
                 );
-                self.swap(catalog);
             }
             None => {
                 log::info!(
                     "[mcp-catalog] sync done: full={full} received={received} refetched={refetched} changed={changed} loaded=false cursor={cursor}",
                 );
-                *self.sync_cursor.lock() = Some(source_after_sync(&source, plan, started_at));
             }
         }
         Ok(())

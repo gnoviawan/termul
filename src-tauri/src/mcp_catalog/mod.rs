@@ -74,8 +74,6 @@ type RunnerProbe = Arc<dyn Fn() -> RunnerAvailability + Send + Sync>;
 type CatalogLoader = Arc<dyn Fn(Option<PathBuf>) -> LoadedCatalog + Send + Sync>;
 
 pub struct McpCatalogService {
-    /// `None` until a catalog request parses the snapshot. Sync does not fill it.
-    catalog: RwLock<Option<Arc<LoadedCatalog>>>,
     phase: Mutex<SyncPhase>,
     sync: OnceLock<Arc<SyncHost>>,
     icons: OnceLock<Arc<IconCache>>,
@@ -84,13 +82,14 @@ pub struct McpCatalogService {
     runner_probe: Mutex<Option<(Instant, RunnerAvailability)>>,
     /// Held across a probe so concurrent cache misses share one.
     probe_gate: tokio::sync::Mutex<()>,
-    /// Serializes snapshot parsing with a sync commit so one cannot overwrite
-    /// the other with a stale catalog.
-    load_gate: tokio::sync::Mutex<()>,
-    /// `mcp-catalog/` directory. Set before sync starts; absent until `run`.
+    /// Held on the blocking thread for the whole parse or cache commit, so
+    /// cancelling a request does not release it early.
+    load_gate: Arc<Mutex<()>>,
+    /// `mcp-catalog/` directory of the accepted sync host.
     state_dir: Mutex<Option<PathBuf>>,
     /// Last sync cursor. Lets the next sync plan a delta without parsing rows.
-    sync_cursor: Mutex<Option<McpCatalogSource>>,
+    sync_cursor: Arc<Mutex<Option<McpCatalogSource>>>,
+    catalog: Arc<RwLock<Option<Arc<LoadedCatalog>>>>,
     plans: PlanStore,
 }
 
@@ -121,10 +120,28 @@ impl From<SearchError> for McpCatalogError {
 
 fn load_for_use(dir: Option<PathBuf>) -> LoadedCatalog {
     let base = snapshot::load_embedded();
-    let Some(dir) = dir.as_deref() else {
-        return base;
-    };
-    match sync::read_cache(dir, &base.source) {
+    let cache = dir
+        .as_deref()
+        .and_then(|dir| sync::read_cache(dir, &base.source));
+    fold_cache(base, cache)
+}
+
+/// A failed snapshot has no rows and no fetch time. An incremental cache is
+/// only a delta, so folding it onto that empty base would hide every server
+/// the delta did not mention and leave the next sync incremental.
+pub(crate) fn fold_cache(base: LoadedCatalog, cache: Option<sync::RegistryCache>) -> LoadedCatalog {
+    let failed = base.items.is_empty() && base.source.updated_at.is_none();
+    if failed && cache.as_ref().is_none_or(|cache| !cache.full) {
+        log::warn!("[mcp-catalog] snapshot load failed, waiting for a full crawl");
+        return LoadedCatalog {
+            items: Vec::new(),
+            source: McpCatalogSource {
+                updated_at: None,
+                sample: true,
+            },
+        };
+    }
+    match cache {
         Some(cache) => {
             let catalog = sync::merge(&base, &cache);
             log::info!(
@@ -137,6 +154,17 @@ fn load_for_use(dir: Option<PathBuf>) -> LoadedCatalog {
         }
         None => base,
     }
+}
+
+fn publish(
+    catalog: &RwLock<Option<Arc<LoadedCatalog>>>,
+    cursor: &Mutex<Option<McpCatalogSource>>,
+    loaded: LoadedCatalog,
+) -> Arc<LoadedCatalog> {
+    let loaded = Arc::new(loaded);
+    *cursor.lock() = Some(loaded.source.clone());
+    *catalog.write() = Some(Arc::clone(&loaded));
+    loaded
 }
 
 fn default_loader() -> CatalogLoader {
@@ -172,7 +200,6 @@ impl McpCatalogService {
         loader: CatalogLoader,
     ) -> Self {
         Self {
-            catalog: RwLock::new(catalog.map(Arc::new)),
             phase: Mutex::new(SyncPhase::Idle),
             sync: OnceLock::new(),
             icons: OnceLock::new(),
@@ -180,9 +207,10 @@ impl McpCatalogService {
             loader,
             runner_probe: Mutex::new(None),
             probe_gate: tokio::sync::Mutex::new(()),
-            load_gate: tokio::sync::Mutex::new(()),
+            load_gate: Arc::new(Mutex::new(())),
             state_dir: Mutex::new(None),
-            sync_cursor: Mutex::new(None),
+            sync_cursor: Arc::new(Mutex::new(None)),
+            catalog: Arc::new(RwLock::new(catalog.map(Arc::new))),
             plans: PlanStore::new(ttl),
         }
     }
@@ -223,7 +251,6 @@ impl McpCatalogService {
 
     pub async fn run(dir: PathBuf) {
         let service = Self::shared().await;
-        service.set_state_dir(dir.clone());
         log::info!("[mcp-catalog] catalog deferred until the first catalog request");
         match IconCache::new(dir.join("icons")) {
             Ok(icons) => service.attach_icons(Arc::new(icons)),
@@ -231,7 +258,10 @@ impl McpCatalogService {
         }
         match Registry::new(sync::REGISTRY_BASE) {
             Ok(registry) => service.attach(dir, registry).await,
-            Err(error) => log::error!("[mcp-catalog] sync disabled, no HTTP client: {error}"),
+            Err(error) => {
+                log::error!("[mcp-catalog] sync disabled, no HTTP client: {error}");
+                service.adopt_state_dir(dir);
+            }
         }
     }
 
@@ -256,7 +286,7 @@ impl McpCatalogService {
     }
 
     pub(crate) async fn attach(self: Arc<Self>, dir: PathBuf, registry: Registry) {
-        self.set_state_dir(dir.clone());
+        let host_dir = dir.clone();
         let host = match tokio::task::spawn_blocking(move || SyncHost::new(dir, registry)).await {
             Ok(host) => Arc::new(host),
             Err(error) => {
@@ -268,43 +298,48 @@ impl McpCatalogService {
             log::warn!("[mcp-catalog] sync already started");
             return;
         }
+        self.adopt_state_dir(host_dir);
         log::info!("[mcp-catalog] sync attached enabled={}", host.enabled());
         self.run_sync(host).await;
     }
 
-    fn set_state_dir(&self, dir: PathBuf) {
-        *self.state_dir.lock() = Some(dir);
+    /// The first accepted host owns the directory. A later `attach` that loses
+    /// the `OnceLock` returns before this, so it cannot redirect reads.
+    fn adopt_state_dir(&self, dir: PathBuf) {
+        let mut slot = self.state_dir.lock();
+        if slot.is_none() {
+            *slot = Some(dir);
+        }
     }
 
     fn loaded(&self) -> Option<Arc<LoadedCatalog>> {
         self.catalog.read().clone()
     }
 
-    fn swap(&self, catalog: LoadedCatalog) -> Arc<LoadedCatalog> {
-        let catalog = Arc::new(catalog);
-        *self.sync_cursor.lock() = Some(catalog.source.clone());
-        *self.catalog.write() = Some(Arc::clone(&catalog));
-        catalog
-    }
-
     async fn ensure_loaded(&self) -> Arc<LoadedCatalog> {
         if let Some(catalog) = self.loaded() {
             return catalog;
         }
-        let _gate = self.load_gate.lock().await;
-        if let Some(catalog) = self.loaded() {
-            return catalog;
-        }
+        let gate = Arc::clone(&self.load_gate);
         let loader = Arc::clone(&self.loader);
+        let catalog = Arc::clone(&self.catalog);
+        let cursor = Arc::clone(&self.sync_cursor);
         let dir = self.state_dir.lock().clone();
-        let catalog = match tokio::task::spawn_blocking(move || loader(dir)).await {
+        match tokio::task::spawn_blocking(move || {
+            let _gate = gate.lock();
+            if let Some(existing) = catalog.read().clone() {
+                return existing;
+            }
+            publish(&catalog, &cursor, loader(dir))
+        })
+        .await
+        {
             Ok(catalog) => catalog,
             Err(error) => {
                 log::error!("[mcp-catalog] snapshot load task failed: {error}");
-                LoadedCatalog::default()
+                Arc::new(LoadedCatalog::default())
             }
-        };
-        self.swap(catalog)
+        }
     }
 
     fn sync_status(&self) -> McpCatalogSync {
