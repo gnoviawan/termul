@@ -1143,10 +1143,18 @@ pub(super) async fn run_command_loop(
                 let result = cx.send_notification(CancelNotification::new(&session_id));
                 // Stop with no prompt turn open ends the agent's own work at
                 // once instead of after the quiet period. An agent that keeps
-                // going reports working again with its next update.
+                // going reports working again with its next update. Clients
+                // hear the end even when no work is recorded here: each
+                // `agent_working` is emitted after the state lock is released,
+                // so a `true` can land after the `false` that ended its work,
+                // and Stop is how the user clears that.
                 let stopped_working = {
                     let mut state = driver_state.lock();
-                    !state.is_turn_active(&session_id.0) && state.unprompted().end(&session_id.0)
+                    let no_turn = !state.is_turn_active(&session_id.0);
+                    if no_turn {
+                        state.unprompted().end(&session_id.0);
+                    }
+                    no_turn
                 };
                 if stopped_working {
                     crate::acp::events::emit_agent_working(&sinks, &agent_id, &session_id.0, false);

@@ -41,6 +41,12 @@
 //!   read and the log epoch its seq belongs to; a delta is `{sessionId, seq,
 //!   logEpoch}`, the marker of one session as it stands after a
 //!   `mark_chat_read`.
+//! - `chat_activity`: state = `{sessions: {sessionId: {busy, needsYou,
+//!   unread, turnEnd}}}`, every chat with something to show or a turn end to
+//!   remember ([`crate::web::chat_activity`]); a delta is `{sessionId, busy,
+//!   needsYou, unread, turnEnd}`, one session's record as it stands. A record
+//!   with every flag false and no `turnEnd` means the chat has nothing to
+//!   show (it left the state).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -145,6 +151,26 @@ pub fn publish_chat_read(relay: &WsRelaySink, session_id: &str) {
             .chat_reads()
             .get(session_id)
             .map_or(Value::Null, |mark| mark.to_wire(session_id))
+    });
+}
+
+/// Full state of the `chat_activity` watch.
+#[must_use]
+pub fn chat_activity_state(relay: &WsRelaySink) -> Value {
+    let sessions: serde_json::Map<String, Value> = relay
+        .chat_activity()
+        .snapshot()
+        .into_iter()
+        .map(|(session_id, activity)| (session_id, activity.to_record()))
+        .collect();
+    json!({ "sessions": sessions })
+}
+
+/// The activity of `session_id` changed: send every `chat_activity`
+/// subscriber its record as it stands.
+pub fn publish_chat_activity(relay: &WsRelaySink, session_id: &str) {
+    relay.watches().publish(WatchKind::ChatActivity, "", || {
+        relay.chat_activity().get(session_id).to_wire(session_id)
     });
 }
 

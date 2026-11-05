@@ -14,7 +14,6 @@ import { logFrontendError } from '@/lib/log-api'
 import { formatChatCreatedTime } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { MobileRecentsActionsSheet } from './MobileRecentsActionsSheet'
 
 /** How long a touch must hold still before it opens the row actions (iOS fires no `contextmenu`). */
@@ -196,10 +195,9 @@ interface OpenRecentsRowProps {
 }
 
 /**
- * An open chat in Recents: live title and status glyphs (the signals the
- * desktop `agent-chat-tab` uses; "New activity" from the same unread store the
- * tab reads). Status
- * is glyphs with sr-only text, never a text chip beside the title.
+ * An open chat in Recents: live title and status glyphs (the host-owned
+ * signals the desktop `agent-chat-tab` uses). Status is glyphs with sr-only
+ * text, never a text chip beside the title.
  */
 function OpenRecentsRow({
   entry,
@@ -210,8 +208,7 @@ function OpenRecentsRow({
   onOpenActions
 }: OpenRecentsRowProps): React.JSX.Element {
   const signals = useAgentChatStatusSignals(sessionId)
-  const unread = useAgentChatUnreadStore((state) => Boolean(state.unread[sessionId]))
-  const { showWorking, showUnread, statusText } = agentChatStatusSlots({ ...signals, unread })
+  const { showWorking, showUnread, statusText } = agentChatStatusSlots(signals)
   const { title, indexAgentId, agentConfigId, agents } = useAcpStore(
     useShallow((s) => {
       const indexEntry = (s.sessionIndex ?? []).find((e) => e.id === sessionId)
@@ -249,6 +246,67 @@ function OpenRecentsRow({
       time={time}
       onSelect={onSelect}
       onOpenActions={() => onOpenActions(title)}
+    />
+  )
+}
+
+interface HistoryRecentsRowProps {
+  entry: ChatHistorySidebarEntry
+  time: string
+  onSelect: () => void
+  onOpenActions: () => void
+}
+
+/**
+ * A chat in Recents with no open tab here. The host's chat activity still
+ * reaches it, so a chat another surface is driving shows Working, Needs you
+ * or New activity before this surface opens it; a failed chat shows Failed.
+ */
+function HistoryRecentsRow({
+  entry,
+  time,
+  onSelect,
+  onOpenActions
+}: HistoryRecentsRowProps): React.JSX.Element {
+  const signals = useAgentChatStatusSignals(entry.id)
+  const { showWorking, showUnread, statuses } = agentChatStatusSlots(signals)
+  const failed = entry.status === 'error'
+  const statusText = [...(failed ? ['Failed'] : []), ...statuses].join(', ')
+  const hasStatus = signals.needsAttention || showWorking || showUnread
+  return (
+    <RecentsRowShell
+      entryId={entry.id}
+      title={entry.title}
+      isActive={false}
+      ariaLabel={rowAriaLabel(entry.title, statusText, time)}
+      disabled={entry.discovered && !entry.canOpen}
+      icon={
+        <ChatEntryIcon
+          agentId={entry.agentId}
+          agentConfigId={entry.agentConfigId}
+          agents={entry.agents}
+        />
+      }
+      status={
+        failed || hasStatus ? (
+          <>
+            {failed ? (
+              <span className="inline-flex size-3.5 items-center justify-center" title="Failed">
+                <span className="size-2 rounded-full bg-destructive" aria-hidden />
+                <span className="sr-only">Failed</span>
+              </span>
+            ) : null}
+            <AgentChatStatusGlyphs
+              needsAttention={signals.needsAttention}
+              showWorking={showWorking}
+              showUnread={showUnread}
+            />
+          </>
+        ) : null
+      }
+      time={time}
+      onSelect={onSelect}
+      onOpenActions={onOpenActions}
     />
   )
 }
@@ -495,35 +553,9 @@ export function MobileRecentsList({
                     )
                   }
                   return (
-                    <RecentsRowShell
+                    <HistoryRecentsRow
                       key={entry.id}
-                      entryId={entry.id}
-                      title={entry.title}
-                      isActive={false}
-                      ariaLabel={rowAriaLabel(
-                        entry.title,
-                        entry.status === 'error' ? 'Failed' : null,
-                        time
-                      )}
-                      disabled={entry.discovered && !entry.canOpen}
-                      icon={
-                        <ChatEntryIcon
-                          agentId={entry.agentId}
-                          agentConfigId={entry.agentConfigId}
-                          agents={entry.agents}
-                        />
-                      }
-                      status={
-                        entry.status === 'error' ? (
-                          <span
-                            className="inline-flex size-3.5 items-center justify-center"
-                            title="Failed"
-                          >
-                            <span className="size-2 rounded-full bg-destructive" aria-hidden />
-                            <span className="sr-only">Failed</span>
-                          </span>
-                        ) : null
-                      }
+                      entry={entry}
                       time={time}
                       onSelect={() => void openEntry(entry)}
                       onOpenActions={() =>

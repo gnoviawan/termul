@@ -69,7 +69,7 @@ import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import type { BrowserConsentOptionId, BrowserConsentTicket } from '@/lib/browser-consent-api'
 import type { CommandState } from '@/lib/command-engine'
-import type { LogPoint } from '@/stores/agent-chat-unread-store'
+import type { LogPoint } from '@/lib/log-point'
 import type { QueuedPrompt } from '../prompt-queue-orchestration'
 
 /** A prompt command's state while the chat waits to confirm it (AD-6). */

@@ -39,6 +39,8 @@ mod agent_api_key_tests;
 #[cfg(test)]
 mod canvas_gateway_tests;
 #[cfg(test)]
+mod chat_activity_tests;
+#[cfg(test)]
 mod chat_reads_tests;
 #[cfg(test)]
 mod relay_approval_tests;

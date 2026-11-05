@@ -1,84 +1,75 @@
 import { CircleDot } from '@/components/icons'
 import { Spinner } from '@/components/ui/spinner'
-import { agentChatNeedsAttention } from '@/lib/agent-chat-attention'
+import { sessionNeedsAttention } from '@/lib/agent-chat-attention'
 import { type AcpSession, isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
+import { useChatActivityStore } from '@/stores/chat-activity-store'
 import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
 
 /**
- * Per-session status signals shared by the desktop `AgentChatTabInline` and
- * the mobile drawer's Open chat rows, so both derive "needs you" and "working"
- * from one source. The desktop tab collapses them into a single trailing slot
- * (Needs you, then Working, then New activity);
- * the drawer rows have room for every active status, so they use
+ * Per-session status signals shared by the desktop `AgentChatTabInline`, the
+ * desktop Chats panel `ChatCard` and the mobile drawer rows. Working, the
+ * pending prompts behind Needs you, and New activity come from the host's
+ * `chat_activity` record, so a chat this renderer never opened shows the
+ * same status as one it is driving. The desktop tab collapses them into a
+ * single trailing slot (Needs you, then Working, then New activity); the
+ * drawer rows have room for every active status, so they use
  * `agentChatStatusSlots` and `AgentChatStatusGlyphs` below instead.
  */
 export interface AgentChatStatusSignals {
+  /** This renderer's Session record, when it opened the chat. */
   session: AcpSession | undefined
   /**
-   * Permission, question, elicitation, a disconnected chat, or a closed chat
-   * that cannot resume by itself (`agentChatNeedsAttention`).
+   * A pending permission, question or elicitation (host), or, for a chat this
+   * renderer opened, a disconnected Agent or a closed Session that cannot
+   * resume by itself (`sessionNeedsAttention`).
    */
   needsAttention: boolean
   /**
-   * Only a live, non-ephemeral session counts: closed/error sessions can carry
-   * stale openTurnId/activeTurn flags (e.g. a crashed-session retry) and
-   * warm-pool sessions are not chats.
+   * The host has a prompt turn open or the agent working outside one, or this
+   * renderer's live Session does (the composer's own state).
    */
-  liveSession: boolean
-  /**
-   * A real chat: the session exists and is not a warm-pool (ephemeral)
-   * session, whatever its status. Gates the unread dot, which stays on a
-   * stopped (`closed`) or crashed chat until the chat is viewed.
-   */
-  realChat: boolean
   turnBusy: boolean
+  /**
+   * A turn end nobody has read (host), on a chat this renderer is not showing.
+   * Survives a stopped (`closed`) or crashed chat until the chat is read.
+   */
+  unread: boolean
 }
 
 export function useAgentChatStatusSignals(sessionId: string): AgentChatStatusSignals {
-  // `?.` / `?? {}` guards: some suites mock the acp-store as a partial shape
-  // (see `use-agent-chat-attention`). They are no-ops against the real store.
+  // `?.` guards: some suites mock the acp-store as a partial shape (see
+  // `use-agent-chat-attention`). They are no-ops against the real store.
   const session = useAcpStore((s) => s.sessions?.[sessionId])
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus?.[session.agentId] : undefined))
-  const pendingPermission = useAcpStore((s) =>
-    Object.values(s.pendingPermissions ?? {}).some(
-      (permission) => permission.sessionId === sessionId
-    )
-  )
-  const pendingQuestion = useAcpStore((s) =>
-    Object.values(s.pendingQuestions ?? {}).some((question) => question.sessionId === sessionId)
-  )
-  const pendingElicitation = useAcpStore((s) =>
-    Object.values(s.pendingElicitations ?? {}).some(
-      (elicitation) => elicitation.sessionId === sessionId
-    )
-  )
-  const ephemeral = session ? isEphemeralAcpSession(session.id) : false
-  const needsAttention = session
-    ? agentChatNeedsAttention({
-        projectId: session.projectId,
+  const activity = useChatActivityStore((s) => s.sessions[sessionId])
+  const viewing = useChatActivityStore((s) => s.viewing.includes(sessionId))
+  // Warm-pool sessions are not chats.
+  if (isEphemeralAcpSession(sessionId)) {
+    return { session, needsAttention: false, turnBusy: false, unread: false }
+  }
+  const sessionAttention = session
+    ? session.projectId.length > 0 &&
+      sessionNeedsAttention({
         sessionStatus: session.status,
         agentStatus,
-        pendingPermission,
-        pendingQuestion,
-        pendingElicitation,
-        lastError: session.lastError ?? null,
-        ephemeral
+        lastError: session.lastError ?? null
       })
     : false
-  // The old lamp slot is now a turn-lifecycle cue: a live turn spins, and a
-  // turn that finishes while this chat is not any pane's active tab leaves an
-  // unread dot (owned by `useAgentChatUnreadStore`) until the chat becomes an
-  // active tab, live or stopped.
-  const realChat = session != null && !ephemeral
-  const liveSession = realChat && session.status !== 'closed' && session.status !== 'error'
-  const turnBusy = liveSession && sessionTurnBusy(session)
-  return { session, needsAttention, liveSession, realChat, turnBusy }
+  // A live chat this renderer drives knows its turn before the host echoes it
+  // back, so the row starts Working with the composer. A record that is not
+  // live keeps whatever turn flags it last had, so only the host counts then.
+  const localBusy = session?.status === 'active' && sessionTurnBusy(session)
+  return {
+    session,
+    needsAttention: Boolean(activity?.needsYou) || sessionAttention,
+    turnBusy: Boolean(activity?.busy) || localBusy,
+    unread: Boolean(activity?.unread) && !viewing
+  }
 }
 
 export interface AgentChatStatusSlotsInput {
   needsAttention: boolean
   turnBusy: boolean
-  realChat: boolean
   unread: boolean
 }
 
@@ -99,12 +90,10 @@ export interface AgentChatStatusSlots {
 export function agentChatStatusSlots({
   needsAttention,
   turnBusy,
-  realChat,
   unread
 }: AgentChatStatusSlotsInput): AgentChatStatusSlots {
   const showWorking = turnBusy
-  // Any real chat keeps its unread dot, closed (idle-stopped) included.
-  const showUnread = realChat && !turnBusy && unread
+  const showUnread = !turnBusy && unread
   const statuses: string[] = []
   if (needsAttention) statuses.push('Needs you')
   if (showWorking) statuses.push('Working')
