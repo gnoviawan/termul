@@ -351,6 +351,8 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
       await railTabs.getByRole('button', { name: 'Explorer', exact: true }).click()
       const explorer = page.getByRole('tabpanel', { name: 'Explorer' })
       await expect(explorer).toBeVisible()
+      // The Rail icon unmounts, so focus moves to the panel's Explorer tab.
+      await expect(columnTab(page, /^Explorer/)).toBeFocused()
       await expect(explorer).toContainText('notes.txt')
       await expect(railTabs).toHaveCount(0)
     } finally {

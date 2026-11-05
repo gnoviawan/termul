@@ -483,8 +483,24 @@ describe('ShellRail', () => {
       // The SSH workspace replaces the Side panel, so the Rail keeps the tabs.
       useShellLayoutStore.setState({ sidePanelVisible: true })
       useSSHStore.setState({ workspaceOpen: true })
-      renderRail()
+      const ssh = renderRail()
       expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
+      ssh.unmount()
+      useSSHStore.setState({ workspaceOpen: false })
+
+      // No project (or one without a local folder): no Side panel, so the
+      // Rail keeps the tabs.
+      for (const activeProject of [undefined, { ...projects[0], path: '' }]) {
+        const view = renderRail({ activeProject })
+        expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
+        view.unmount()
+      }
+      renderRail({ activeProject: undefined, activeProjectId: '' })
+      for (const name of ['Chats', 'Explorer', 'Changes', 'GitHub']) {
+        expect(
+          within(track() as HTMLElement).getByRole('button', { name, exact: true })
+        ).toBeDisabled()
+      }
     })
 
     it('puts the mark / toggle swap below the empty top band under the macOS traffic lights', () => {
