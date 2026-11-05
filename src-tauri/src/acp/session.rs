@@ -28,6 +28,7 @@ use tokio::sync::{oneshot, watch};
 use crate::acp::session_persistence::SessionRegistration;
 
 mod activity;
+mod background_commands;
 mod commands;
 mod sign_in;
 mod subagents;
@@ -35,6 +36,8 @@ mod tool_policy;
 mod unprompted;
 pub(crate) use activity::ActivityClock;
 pub use activity::AgentActivity;
+pub use background_commands::BackgroundCommand;
+pub(crate) use background_commands::BackgroundCommands;
 pub(crate) use sign_in::{RequestElicitationRoute, SignInPrompt, SignInSlot};
 pub(crate) use subagents::ChildRoute;
 pub use tool_policy::ToolAllowlist;
