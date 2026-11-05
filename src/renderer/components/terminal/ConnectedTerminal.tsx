@@ -497,46 +497,33 @@ function ConnectedTerminalComponent({
 
   // #259: insertion only — the suggested command lands at the prompt for
   // review and is never executed automatically (no trailing newline).
-  // Defense in depth: anything carrying a newline/control character is
-  // refused outright — `terminalApi.write` feeds the PTY directly.
+  // Defense in depth: `routeForeignInsert` applies the shared sanitizer in
+  // every input mode, refusing C0/C1 controls, DEL, and Unicode format
+  // characters (bidi, zero-width) — `terminalApi.write` feeds the PTY directly.
   const insertAssistCommand = useCallback(
     async (command: string) => {
       const ptyId = ptyIdRef.current
       if (!ptyId || !serverAdmitsRemoteWrites()) return
-      if (inputModeRef.current === 'Editor') {
-        return routeForeignInsert(
-          editorInputTarget,
-          'assist',
-          command,
-          async (text) => {
-            if (!canTerminalWriteToPty(targetIdRef.current ?? ptyId, text, inputModeRef.current))
-              return
-            await terminalApi.write(ptyId, text)
-          },
-          (message) => onErrorRef.current?.(message)
-        )
-      }
-      if (!canTerminalWriteToPty(targetIdRef.current ?? ptyId, command, inputModeRef.current))
-        return
-      for (const ch of command) {
-        const code = ch.charCodeAt(0)
-        if (code < 0x20 || code === 0x7f) {
-          if (onErrorRef.current) {
-            onErrorRef.current('Refused to insert a command containing control characters')
+      return routeForeignInsert(
+        editorInputTarget,
+        'assist',
+        command,
+        async (text) => {
+          if (!canTerminalWriteToPty(targetIdRef.current ?? ptyId, text, inputModeRef.current))
+            return
+          try {
+            const result = await terminalApi.write(ptyId, text)
+            if (!result.success && onErrorRef.current) {
+              onErrorRef.current(result.error)
+            }
+          } catch (err) {
+            if (onErrorRef.current) {
+              onErrorRef.current(err instanceof Error ? err.message : 'Insert failed')
+            }
           }
-          return
-        }
-      }
-      try {
-        const result = await terminalApi.write(ptyId, command)
-        if (!result.success && onErrorRef.current) {
-          onErrorRef.current(result.error)
-        }
-      } catch (err) {
-        if (onErrorRef.current) {
-          onErrorRef.current(err instanceof Error ? err.message : 'Insert failed')
-        }
-      }
+        },
+        (message) => onErrorRef.current?.(message)
+      )
     },
     [editorInputTarget]
   )

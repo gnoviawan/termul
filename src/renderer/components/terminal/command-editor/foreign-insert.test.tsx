@@ -304,6 +304,33 @@ it('PTY assist still refuses control characters', () => {
   expect(errors).toHaveLength(33)
 })
 
+it('PTY assist refuses format and C1 characters and still writes ordinary commands', () => {
+  const write = vi.fn()
+  const errors: string[] = []
+  const destination: EditorInputTarget = {
+    ...target(null),
+    mode: () => 'PTY'
+  }
+
+  // Same sanitizer as the Editor path: bidi overrides/marks, zero-width
+  // format characters, and C1 controls must never reach terminalApi.write.
+  for (const control of ['\u202e', '\u202a', '\u200b', '\u200f', '\u009b', '\u0085']) {
+    routeForeignInsert(destination, 'assist', `echo safe${control}`, write, (message) => {
+      errors.push(message)
+    })
+  }
+
+  expect(write).not.toHaveBeenCalled()
+  expect(errors).toHaveLength(6)
+  for (const message of errors) {
+    expect(message).toBe('Refused to insert a command containing control characters')
+  }
+
+  // Ordinary commands still reach the PTY, insertion-only (no newline).
+  routeForeignInsert(destination, 'assist', 'git status --short', write)
+  expect(write).toHaveBeenCalledExactlyOnceWith('git status --short')
+})
+
 it('view-only PTY sends nothing', () => {
   const write = vi.fn()
   const requestCompletion = vi.fn()

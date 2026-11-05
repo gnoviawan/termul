@@ -313,9 +313,31 @@ const { mockRecordTerminalContinuityEvent, mockGetOrCreateProjectContinuityCorre
     mockGetOrCreateProjectContinuityCorrelation: vi.fn(() => 'corr-project-a')
   }))
 
+// Assist insert seam: the panel component is stubbed below so tests can drive
+// the real onInsertCommand callback with a controlled command string.
+const { mockAssistCommand } = vi.hoisted(() => ({ mockAssistCommand: { current: '' } }))
+
 vi.mock('@/hooks/use-terminal-restore', () => ({
   isTerminalPendingPtyAssignment: vi.fn(() => false)
 }))
+
+vi.mock('@/components/ui/context-menu', () => import('@/lib/test-utils/context-menu'))
+
+vi.mock('./TerminalAssistPanel', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./TerminalAssistPanel')>()
+  return {
+    ...actual,
+    TerminalAssistPanel: (props: { onInsertCommand: (command: string) => void }) => (
+      <button
+        type="button"
+        data-testid="mock-assist-insert"
+        onClick={() => props.onInsertCommand(mockAssistCommand.current)}
+      >
+        Insert assist command
+      </button>
+    )
+  }
+})
 
 vi.mock('@/lib/terminal-continuity-instrumentation', () => ({
   recordTerminalContinuityEvent: mockRecordTerminalContinuityEvent,
@@ -934,6 +956,67 @@ describe('ConnectedTerminal', () => {
         if (original) Object.defineProperty(Range.prototype, name, original)
         else delete Range.prototype[name]
       })
+    }
+  })
+
+  it('refuses tainted assist inserts on the PTY path and writes ordinary commands', async () => {
+    sessionStore.reset()
+    mockServerAdmitsRemoteWrites.mockReturnValue(true)
+    // The clipboard hook samples terminal.hasSelection() on mount; restore the
+    // default afterwards because this mock instance is shared across tests.
+    mockTerminalInstance.hasSelection.mockReturnValue(true)
+    const onError = vi.fn()
+    let unmount = () => {}
+    try {
+      const mounted = render(
+        <ConnectedTerminal terminalId="pty-assist" autoSpawn={false} onError={onError} />
+      )
+      unmount = mounted.unmount
+
+      // No session entry: the lifecycle snapshot defaults to PTY mode, so the
+      // assist insert takes the PTY fallback (no editor surface mounted).
+      expect(mounted.container.querySelector('[data-slot="command-editor-block"]')).toBeNull()
+
+      // Open the assist panel via the context menu. With no selection the
+      // panel settles into its error state synchronously — enough to mount
+      // the stubbed panel and reach the real onInsertCommand callback.
+      fireEvent.contextMenu(mounted.container.firstElementChild as Element)
+      fireEvent.click(screen.getByText('Explain with AI'))
+      const insertButton = screen.getByTestId('mock-assist-insert')
+
+      // Tainted commands must never reach terminalApi.write; the refusal is
+      // reported through the same onError channel as the Editor mode.
+      const tainted = [
+        'echo \u202ehi', // bidi override
+        'echo \u200bhi', // zero-width space
+        'echo \u009b6n', // C1 CSI
+        'echo hi\necho rm -rf /tmp' // newline would execute the second line
+      ]
+      for (const command of tainted) {
+        mockAssistCommand.current = command
+        await act(async () => {
+          fireEvent.click(insertButton)
+        })
+        expect(vi.mocked(terminalApi).write).not.toHaveBeenCalled()
+        expect(onError).toHaveBeenCalledWith(
+          'Refused to insert a command containing control characters'
+        )
+      }
+
+      // Ordinary commands are written exactly once, insertion-only (no
+      // trailing newline is ever appended).
+      mockAssistCommand.current = 'git status --short'
+      await act(async () => {
+        fireEvent.click(insertButton)
+      })
+      expect(vi.mocked(terminalApi).write).toHaveBeenCalledExactlyOnceWith(
+        'pty-assist',
+        'git status --short'
+      )
+    } finally {
+      unmount()
+      mockServerAdmitsRemoteWrites.mockReturnValue(false)
+      mockTerminalInstance.hasSelection.mockReturnValue(false)
     }
   })
 
