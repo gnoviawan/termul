@@ -61,7 +61,7 @@ pub struct McpCatalogSource {
     pub sample: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct LoadedCatalog {
     /// Sorted by name, one per name.
     pub items: Vec<CatalogItem>,

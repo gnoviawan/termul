@@ -944,6 +944,6 @@ async fn an_aborted_load_publishes_the_catalog_once() {
     let _ = task.await;
     let status = service.status().await;
     assert_eq!(loads.load(Ordering::SeqCst), 1);
-    assert_eq!(status.servers, 24);
+    assert_eq!(status.servers, super::load_for_use(None).items.len());
     assert!(service.is_loaded());
 }

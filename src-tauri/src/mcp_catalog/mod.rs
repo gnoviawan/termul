@@ -86,7 +86,7 @@ pub struct McpCatalogService {
     /// cancelling a request does not release it early.
     load_gate: Arc<Mutex<()>>,
     /// `mcp-catalog/` directory of the accepted sync host.
-    state_dir: Mutex<Option<PathBuf>>,
+    state_dir: Arc<Mutex<Option<PathBuf>>>,
     /// Last sync cursor. Lets the next sync plan a delta without parsing rows.
     sync_cursor: Arc<Mutex<Option<McpCatalogSource>>>,
     catalog: Arc<RwLock<Option<Arc<LoadedCatalog>>>>,
@@ -208,7 +208,7 @@ impl McpCatalogService {
             runner_probe: Mutex::new(None),
             probe_gate: tokio::sync::Mutex::new(()),
             load_gate: Arc::new(Mutex::new(())),
-            state_dir: Mutex::new(None),
+            state_dir: Arc::new(Mutex::new(None)),
             sync_cursor: Arc::new(Mutex::new(None)),
             catalog: Arc::new(RwLock::new(catalog.map(Arc::new))),
             plans: PlanStore::new(ttl),
@@ -324,12 +324,15 @@ impl McpCatalogService {
         let loader = Arc::clone(&self.loader);
         let catalog = Arc::clone(&self.catalog);
         let cursor = Arc::clone(&self.sync_cursor);
-        let dir = self.state_dir.lock().clone();
+        let state_dir = Arc::clone(&self.state_dir);
         match tokio::task::spawn_blocking(move || {
             let _gate = gate.lock();
             if let Some(existing) = catalog.read().clone() {
                 return existing;
             }
+            // Read the accepted dir under the same gate as apply_cached_catalog
+            // so a cache is not skipped when attach races the first load.
+            let dir = state_dir.lock().clone();
             publish(&catalog, &cursor, loader(dir))
         })
         .await

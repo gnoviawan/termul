@@ -775,13 +775,11 @@ impl McpCatalogService {
         let _merged = tokio::task::spawn_blocking(move || {
             let _gate = gate.lock();
             let base = catalog_slot.read().as_ref().map(Arc::clone)?;
-            let catalog = read_cache(&dir, &base.source).map(|cache| merge(&base, &cache))?;
-            log::info!(
-                "[mcp-catalog] sync cache loaded items={} cursor={} sample={}",
-                catalog.items.len(),
-                catalog.source.updated_at.as_deref().unwrap_or(""),
-                catalog.source.sample
-            );
+            let Some(cache) = read_cache(&dir, &base.source) else {
+                return None;
+            };
+            // fold_cache refuses an incomplete overlay on a failed snapshot.
+            let catalog = super::fold_cache((*base).clone(), Some(cache));
             super::publish(&catalog_slot, &cursor, catalog);
             Some(())
         })
