@@ -254,6 +254,7 @@ describe('listImportableSessions', () => {
 describe('importAgentSessions', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    vi.mocked(withAuthRetry).mockClear()
     seedAgent()
   })
 
@@ -294,5 +295,13 @@ describe('importAgentSessions', () => {
       projectId: 'p1'
     })
     expect(loadSessionIndex).toHaveBeenCalledTimes(1)
+    expect(withAuthRetry).toHaveBeenCalledTimes(3)
+    expect(withAuthRetry).toHaveBeenCalledWith(
+      expect.any(Function),
+      'agent-1',
+      'session/load',
+      'text',
+      expect.any(Function)
+    )
   })
 })

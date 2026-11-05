@@ -89,14 +89,19 @@ export const createImportSlice: StateCreator<AcpState, [], [], ImportSliceState>
     for (const info of sessions) {
       try {
         const updatedAt = info.updatedAt ? Date.parse(info.updatedAt) : Number.NaN
-        await acpApi.importAgentSession({
-          agentId,
-          sessionId: info.sessionId,
-          cwd: info.cwd || cwd,
-          title: info.title,
-          updatedAt: Number.isFinite(updatedAt) ? updatedAt : undefined,
-          projectId: projectId || undefined
-        })
+        // The host loads the session on the agent, so an expired login is
+        // recovered the way a chat's own `session/load` recovers it. A failed
+        // import leaves nothing behind, which makes the retry safe.
+        await withAuthRetry(get, agentId, 'session/load', 'text', () =>
+          acpApi.importAgentSession({
+            agentId,
+            sessionId: info.sessionId,
+            cwd: info.cwd || cwd,
+            title: info.title,
+            updatedAt: Number.isFinite(updatedAt) ? updatedAt : undefined,
+            projectId: projectId || undefined
+          })
+        )
         outcomes.push({ sessionId: info.sessionId, status: 'imported' })
       } catch (error) {
         if (error instanceof AcpTransportError && error.code === 'duplicate') {

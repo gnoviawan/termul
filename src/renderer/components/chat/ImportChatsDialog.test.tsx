@@ -107,10 +107,7 @@ describe('ImportChatsDialog', () => {
 
   it('keeps the dialog open and names the failure when an import fails', async () => {
     const { importAll } = seed({ status: 'ready', agentId: 'agent-1', sessions: SESSIONS })
-    importAll.mockResolvedValue([
-      { sessionId: 's1', status: 'imported' },
-      { sessionId: 's2', status: 'failed', message: 'agent exploded' }
-    ])
+    importAll.mockResolvedValue([{ sessionId: 's1', status: 'failed', message: 'agent exploded' }])
     const onOpenChange = renderDialog()
 
     fireEvent.click((await screen.findAllByRole('option'))[0] as HTMLElement)

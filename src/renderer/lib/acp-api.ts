@@ -1271,12 +1271,7 @@ export async function acpRegisterDiscoveredSession(input: {
 }): Promise<import('@shared/types/web-protocol.types').PersistedSessionSummary> {
   const run = await ledgered(
     'register_discovered_session',
-    JSON.stringify([
-      input.agentId.trim(),
-      input.sessionId.trim(),
-      input.cwd.trim(),
-      input.projectId?.trim() ?? ''
-    ]),
+    `${input.agentId}|${input.sessionId}|${input.cwd}|${input.projectId ?? ''}`,
     (call) => getAcpTransport().registerDiscoveredSession(input, call)
   )
   return run.result
@@ -1299,7 +1294,12 @@ export async function acpImportAgentSession(input: {
 }): Promise<import('@shared/types/web-protocol.types').PersistedSessionSummary> {
   const run = await ledgered(
     'import_agent_session',
-    `${input.agentId}|${input.sessionId}|${input.cwd}|${input.projectId ?? ''}`,
+    JSON.stringify([
+      input.agentId.trim(),
+      input.sessionId.trim(),
+      input.cwd.trim(),
+      input.projectId?.trim() ?? ''
+    ]),
     (call) => getAcpTransport().importAgentSession(input, call)
   )
   return run.result

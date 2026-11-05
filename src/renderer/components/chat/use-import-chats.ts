@@ -138,6 +138,7 @@ export function useImportChats({
     setImporting(true)
     setProgress(0)
     setFailure(null)
+    const listing = listingRef.current
     try {
       const outcomes = await importAgentSessions({
         agentId: phase.agentId,
@@ -150,6 +151,9 @@ export function useImportChats({
       const failed = outcomes.filter((o) => o.status === 'failed')
       if (imported > 0)
         toast.success(imported === 1 ? 'Imported 1 chat' : `Imported ${imported} chats`)
+      // The user moved on (another working copy or agent) while this ran: a
+      // refresh now would replace the newer listing with the old one's.
+      if (listing !== listingRef.current) return
       if (failed.length === 0) {
         onDone()
         return
