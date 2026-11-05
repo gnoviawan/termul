@@ -355,6 +355,10 @@ function logSkippedEntries(operation: string, skipped: string[]): void {
  * Cleans up old backups (keeps only MAX_BACKUPS most recent)
  */
 export async function createBackup(): Promise<IpcResult<BackupInfo>> {
+  // Tracks the folder this attempt created so a mid-way failure can remove it
+  // instead of leaving a partial copy that listBackups/cleanupOldBackups ignore.
+  let createdBackupPath: string | null = null
+
   try {
     const backupId = generateBackupId()
     const backupPath = await getBackupPath(backupId)
@@ -362,6 +366,7 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
 
     // Create backup directory
     await mkdir(backupPath, { recursive: true })
+    createdBackupPath = backupPath
 
     const entries = await readDir(userDataPath)
     const skipped: string[] = []
@@ -397,6 +402,9 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
     // Write backup-info.json
     const infoPath = await getBackupInfoPath(backupId)
     await writeTextFile(infoPath, JSON.stringify(metadata, null, 2))
+    // The backup is complete from here on: a later failure (store, retention)
+    // must not delete it.
+    createdBackupPath = null
 
     // Store metadata in store for quick access
     const store = await getMetadataStore()
@@ -424,6 +432,22 @@ export async function createBackup(): Promise<IpcResult<BackupInfo>> {
       source: LOG_SOURCE,
       message: `[backup] create failed: ${errorMessage}`
     })
+
+    // Remove the partial folder this attempt created. Without backup-info.json
+    // listBackups skips it, so cleanupOldBackups would never reclaim it and
+    // partial copies would pile up with every failed attempt. Best effort: if
+    // the removal also fails, log it and still report the original failure.
+    if (createdBackupPath) {
+      try {
+        await remove(createdBackupPath, { recursive: true })
+      } catch (cleanupErr) {
+        void logFrontendError({
+          level: 'warn',
+          source: LOG_SOURCE,
+          message: `[backup] failed to remove partial backup folder: ${extractErrorMessage(cleanupErr, 'Unknown error')}`
+        })
+      }
+    }
 
     if (
       errorMessage.includes('ENOSPC') ||
