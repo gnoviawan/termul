@@ -1,10 +1,11 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { memo, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
+import { useToolCallReveal } from '@/stores/tool-call-reveal-store'
 import { CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
 import type { TimelineItem } from './chat-timeline'
@@ -66,6 +67,12 @@ function WorkRunGroupComponent({
 }: WorkRunGroupProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const [open, setOpen] = useState(false)
+  const revealNonce = useToolCallReveal((id) =>
+    items.some((item) => item.kind === 'tool' && item.tool.toolCallId === id)
+  )
+  useEffect(() => {
+    if (revealNonce !== null) setOpen(true)
+  }, [revealNonce])
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="min-w-0">

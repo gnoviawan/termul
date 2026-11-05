@@ -1737,6 +1737,41 @@ describe('read-only GitHub chats (CAP-6)', () => {
     expect(useAcpStore.getState().sessions['s1']?.agentWorking).toBeFalsy()
   })
 
+  it('keeps sends going while a command runs in the background', async () => {
+    seedSession('s1', 'agent-1', false)
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) =>
+      cmd === 'acp_send_prompt' ? 'end_turn' : undefined
+    )
+    const command = {
+      toolCallId: 'exec-1',
+      title: 'npm run watch',
+      command: 'npm run watch',
+      startedAtMs: 1_000,
+      state: 'running' as const
+    }
+    useAcpStore.getState()._onBackgroundCommands({
+      agentId: 'agent-old',
+      sessionId: 's1',
+      commands: [command]
+    })
+    expect(useAcpStore.getState().sessions['s1']?.backgroundCommands).toBeUndefined()
+    useAcpStore.getState()._onBackgroundCommands({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      commands: [command]
+    })
+    expect(useAcpStore.getState().sessions['s1']?.backgroundCommands).toEqual({
+      agentId: 'agent-1',
+      commands: [command]
+    })
+
+    await useAcpStore.getState().sendPrompt('s1', 'meanwhile')
+    expect(invoke).toHaveBeenCalledWith(
+      'acp_send_prompt',
+      expect.objectContaining({ agentId: 'agent-1', sessionId: 's1' })
+    )
+  })
+
   it('Stop cancels agent work while no prompt turn is open', async () => {
     seedSession('s1', 'agent-1', false)
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)

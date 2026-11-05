@@ -68,6 +68,7 @@ import {
   waitForReadvertisedOptions,
   writeAgentOptionsCache
 } from '../helpers'
+import { recordHostReport } from '../host-session-reports'
 import { useAcpStore } from '../index'
 import { forgetAnswering, noteAnswering } from '../pending-permission-sync'
 import { withoutRejectedRateLimit } from '../rate-limit'
@@ -98,38 +99,6 @@ import {
   recheckPendingPrompt
 } from './prompt-reconcile'
 import { clampLiveToolCallFields, flushCoalescedSync } from './transcript'
-
-/**
- * The newest `agent_working` report per session and agent. A reopen reads the
- * agent listing over a round trip; a report from the adopted owner that
- * arrives meanwhile is newer and wins. Keyed by agent too, so a late report of
- * a former owner never hides the current owner's.
- */
-const latestAgentWorking = new Map<string, { working: boolean; seq: number }>()
-let agentWorkingSeq = 0
-
-const agentWorkingKey = (sessionId: SessionId, agentId: AgentId): string =>
-  `${sessionId}\u0000${agentId}`
-
-/** The sequence number of the newest `agent_working` report seen so far. */
-export function agentWorkingReportSeq(): number {
-  return agentWorkingSeq
-}
-
-export function latestAgentWorkingReport(
-  sessionId: SessionId,
-  agentId: AgentId
-): { working: boolean; seq: number } | undefined {
-  return latestAgentWorking.get(agentWorkingKey(sessionId, agentId))
-}
-
-/** Forget a deleted chat's reports. */
-export function forgetAgentWorkingReports(sessionId: SessionId): void {
-  const prefix = `${sessionId}\u0000`
-  for (const key of latestAgentWorking.keys()) {
-    if (key.startsWith(prefix)) latestAgentWorking.delete(key)
-  }
-}
 
 /** Send the next queued prompt after the current turn closes. */
 export function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
@@ -846,6 +815,7 @@ type PromptSliceState = Pick<
   | '_onElicitationRequest'
   | '_onPromptComplete'
   | '_onAgentWorking'
+  | '_onBackgroundCommands'
 >
 
 /** The host's stable `already_resolved` reply: the approval/question ticket was
@@ -1427,11 +1397,7 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
   },
 
   _onAgentWorking: (e) => {
-    agentWorkingSeq += 1
-    latestAgentWorking.set(agentWorkingKey(e.sessionId, e.agentId), {
-      working: e.working,
-      seq: agentWorkingSeq
-    })
+    recordHostReport(e.sessionId, e.agentId, 'working', e.working)
     // Only the agent the chat runs on speaks for it: a stopped process can
     // still report after the chat moved to a new one.
     const session = get().sessions[e.sessionId]
@@ -1449,6 +1415,18 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     })
     // A message sent meanwhile waited in the queue; it goes out now.
     if (!e.working) flushNextQueuedPrompt(set, e.sessionId)
+  },
+
+  _onBackgroundCommands: (e) => {
+    recordHostReport(e.sessionId, e.agentId, 'backgroundCommands', e.commands)
+    // Only the agent the chat runs on speaks for it, like `_onAgentWorking`.
+    if (get().sessions[e.sessionId]?.agentId !== e.agentId) return
+    set((s) => {
+      const current = s.sessions[e.sessionId]
+      if (!current) return {}
+      const backgroundCommands = { agentId: e.agentId, commands: e.commands }
+      return { sessions: { ...s.sessions, [e.sessionId]: { ...current, backgroundCommands } } }
+    })
   },
 
   _onPromptComplete: (e, eventSeq) => {

@@ -14,7 +14,7 @@ import { decideResume } from '@/lib/acp-resume-policy'
 import { logFrontendError } from '@/lib/log-api'
 import {
   type AcpState,
-  BACKGROUND_SUBAGENTS_BLOCK_REASON,
+  isBackgroundWorkBlock,
   switchBlockedReason,
   useAcpStore
 } from '@/stores/acp-store'
@@ -57,7 +57,7 @@ export function reloadChatBlockedReason(state: AcpState, sessionId: SessionId): 
     sessionId
   )
   // Background agents alone do not block: the reload asks to stop them first.
-  if (blocked && blocked !== BACKGROUND_SUBAGENTS_BLOCK_REASON) {
+  if (blocked && !isBackgroundWorkBlock(blocked)) {
     return runningBackgroundSubagents(state.toolCalls?.[sessionId], state.messages?.[sessionId])
       .length > 0
       ? BACKGROUND_AGENTS_RUNNING
