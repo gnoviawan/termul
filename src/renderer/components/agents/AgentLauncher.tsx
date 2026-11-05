@@ -163,6 +163,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     emptyPendingLauncherOptions
   )
   const launchInFlightRef = useRef(false)
+  // Which launch owns the in-flight flag: a launch releases it only while it
+  // is still the latest, so an earlier launch finishing late cannot clear a
+  // newer one's guard.
+  const launchGenerationRef = useRef(0)
   const menuRef = useRef<SlashMenuHandle>(null)
   const editorRef = useRef<Editor | null>(null)
   // Set when an agent pick happens INSIDE the open selector popover (the only
@@ -227,7 +231,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // the re-shown launcher ignore Enter. Re-presence is a fresh launcher.
   const wasPresentRef = useRef(isPresent)
   useEffect(() => {
-    if (isPresent && !wasPresentRef.current) launchInFlightRef.current = false
+    if (isPresent && !wasPresentRef.current) {
+      launchGenerationRef.current += 1
+      launchInFlightRef.current = false
+    }
     wasPresentRef.current = isPresent
   }, [isPresent])
 
@@ -1314,6 +1321,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     if (!selectedConfig || selectedEntry?.status !== 'ready' || launchInFlightRef.current) return
 
     launchInFlightRef.current = true
+    const generation = ++launchGenerationRef.current
+    const releaseLaunch = (): void => {
+      if (launchGenerationRef.current === generation) launchInFlightRef.current = false
+    }
     const attachmentsSnapshot = [...attachments]
     const appOwnedPaths = appOwnedTempPaths(attachmentsSnapshot)
     const modelsSnapshot = effectiveModels
@@ -1361,7 +1372,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       parts = buildPromptParts(contexts ? await holdComposer(() => contexts) : undefined)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
-      launchInFlightRef.current = false
+      releaseLaunch()
       return
     }
     const { wireWithCommand, displayWithCommand, fileBlocks, contextBlocks } = parts
@@ -1387,7 +1398,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         )
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'That worktree is no longer available.')
-        launchInFlightRef.current = false
+        releaseLaunch()
         return
       }
     }
@@ -1492,7 +1503,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           toast.error(err instanceof Error ? err.message : fallback)
         })
         .finally(() => {
-          launchInFlightRef.current = false
+          releaseLaunch()
         })
       return
     }
@@ -1524,7 +1535,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
       } finally {
-        launchInFlightRef.current = false
+        releaseLaunch()
       }
     })()
   }, [
