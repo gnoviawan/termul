@@ -79,17 +79,22 @@ bun run build:tauri:linux
 Tauri's build script compiles with `cfg(dev)` whenever the `tauri/custom-protocol` feature is off, and a `cfg(dev)` binary loads `devUrl` ("Could not connect to localhost") instead of the embedded `frontendDist`. Only `tauri build` enables the feature for you. When building the desktop binary with plain cargo (for example a distro packager), enable it through the app feature:
 
 ```bash
-# From the repo root: build the frontends first (embedded as frontendDist / dist-web)
+# From the repo root: build the frontends and fetch the canvas bundle first
+# (embedded as frontendDist / dist-web / canvas/bundle)
 bun run build:web && bun run build:frontend:tauri
+bun scripts/canvas/fetch-figcraft-bundle.mjs
 cd src-tauri
 cargo build --release --features custom-protocol
 ```
 
-Or let the Tauri CLI do both steps without bundling (run from the repo root; with npm or pnpm add `--` before `--no-bundle`):
+Or let the Tauri CLI build the frontends without bundling, after fetching the canvas bundle (run from the repo root; with npm or pnpm add `--` before `--no-bundle`):
 
 ```bash
+bun scripts/canvas/fetch-figcraft-bundle.mjs
 bun run build:tauri --no-bundle
 ```
+
+Every release-profile build, desktop or `termul-server`, needs `canvas/bundle/` from the fetch script. Without it the build fails with a message that names the script. To build without the design canvas on purpose, set `TERMUL_ALLOW_MISSING_CANVAS_BUNDLE=1` (or `true`). The canvas in that binary answers `BUNDLE_MISSING`.
 
 To install the desktop binary with cargo, enable the feature the same way: `cargo install --path src-tauri --features custom-protocol`.
 
@@ -120,10 +125,11 @@ bun run test:watch
 
 ### Web end-to-end suite
 
-`tests/e2e` holds Playwright specs that drive a release `termul-server` and the built web client against a fake ACP agent (`tests/e2e/fake-longrun-agent.ts`). The suite starts its own server on `127.0.0.1:8188`, so it needs two builds first:
+`tests/e2e` holds Playwright specs that drive a release `termul-server` and the built web client against a fake ACP agent (`tests/e2e/fake-longrun-agent.ts`). The suite starts its own server on `127.0.0.1:8188`, so it needs the web build, the canvas bundle and a release server build first:
 
 ```bash
 bun run build:web
+bun scripts/canvas/fetch-figcraft-bundle.mjs
 cargo build --release --bin termul-server --features standalone-server   # run in src-tauri
 bun run playwright install chromium
 bun run test:e2e
