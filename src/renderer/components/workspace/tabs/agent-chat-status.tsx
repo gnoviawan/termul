@@ -1,6 +1,6 @@
 import { CircleDot } from '@/components/icons'
 import { Spinner } from '@/components/ui/spinner'
-import { sessionNeedsAttention } from '@/lib/agent-chat-attention'
+import { chatNeedsYou } from '@/lib/agent-chat-attention'
 import { type AcpSession, isEphemeralAcpSession, useAcpStore } from '@/stores/acp-store'
 import { useChatActivityStore } from '@/stores/chat-activity-store'
 import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
@@ -21,7 +21,7 @@ export interface AgentChatStatusSignals {
   /**
    * A pending permission, question or elicitation (host), or, for a chat this
    * renderer opened, a disconnected Agent or a closed Session that cannot
-   * resume by itself (`sessionNeedsAttention`).
+   * resume by itself (`chatNeedsYou`).
    */
   needsAttention: boolean
   /**
@@ -47,21 +47,13 @@ export function useAgentChatStatusSignals(sessionId: string): AgentChatStatusSig
   if (isEphemeralAcpSession(sessionId)) {
     return { session, needsAttention: false, turnBusy: false, unread: false }
   }
-  const sessionAttention = session
-    ? session.projectId.length > 0 &&
-      sessionNeedsAttention({
-        sessionStatus: session.status,
-        agentStatus,
-        lastError: session.lastError ?? null
-      })
-    : false
   // A live chat this renderer drives knows its turn before the host echoes it
   // back, so the row starts Working with the composer. A record that is not
   // live keeps whatever turn flags it last had, so only the host counts then.
   const localBusy = session?.status === 'active' && sessionTurnBusy(session)
   return {
     session,
-    needsAttention: Boolean(activity?.needsYou) || sessionAttention,
+    needsAttention: chatNeedsYou(activity, session, agentStatus),
     turnBusy: Boolean(activity?.busy) || localBusy,
     unread: Boolean(activity?.unread) && !viewing
   }

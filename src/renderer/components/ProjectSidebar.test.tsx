@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { resetChatActivity, seedChatActivity } from '@/lib/test-utils/chat-activity'
 import { useGitStatusStore } from '@/stores/git-status-store'
 import { useProjectStore } from '@/stores/project-store'
 import type { Project } from '@/types/project'
@@ -12,15 +13,13 @@ const {
   toastMock,
   mockGetAvailableShells,
   mockUseProjectsWithActivity,
-  mockUseProjectsWithErrors,
-  mockUseProjectsWithActiveAgentChat
+  mockUseProjectsWithErrors
 } = vi.hoisted(() => ({
   mockSelectDirectory: vi.fn(),
   toastMock: Object.assign(vi.fn(), { error: vi.fn() }),
   mockGetAvailableShells: vi.fn(),
   mockUseProjectsWithActivity: vi.fn(),
-  mockUseProjectsWithErrors: vi.fn(),
-  mockUseProjectsWithActiveAgentChat: vi.fn()
+  mockUseProjectsWithErrors: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -55,14 +54,6 @@ vi.mock('@/stores/terminal-store', async () => {
   }
 })
 
-vi.mock('@/stores/acp-store', async () => {
-  const actual = await vi.importActual('@/stores/acp-store')
-  return {
-    ...actual,
-    useProjectsWithActiveAgentChat: () => mockUseProjectsWithActiveAgentChat()
-  }
-})
-
 vi.mock('@/lib/utils', async () => {
   const actual = await vi.importActual('@/lib/utils')
   return { ...actual }
@@ -86,8 +77,7 @@ beforeEach(() => {
   })
   mockUseProjectsWithActivity.mockReset()
   mockUseProjectsWithActivity.mockReturnValue([])
-  mockUseProjectsWithActiveAgentChat.mockReset()
-  mockUseProjectsWithActiveAgentChat.mockReturnValue([])
+  resetChatActivity()
   mockUseProjectsWithErrors.mockReset()
   mockUseProjectsWithErrors.mockReturnValue(new Set())
 })
@@ -666,10 +656,6 @@ describe('ProjectSidebar Activity Indicator', () => {
     return item.querySelector('[title="Activity"]')
   }
 
-  beforeEach(() => {
-    mockUseProjectsWithActiveAgentChat.mockReturnValue([])
-  })
-
   it('should not show activity indicator when hasActivity is false', () => {
     mockUseProjectsWithActivity.mockReturnValue([])
     renderWithRouter()
@@ -688,9 +674,9 @@ describe('ProjectSidebar Activity Indicator', () => {
     expect(screen.getByRole('status', { name: 'Project activity' })).toBeInTheDocument()
   })
 
-  it('should show activity indicator when agent chat is active', () => {
+  it('should show activity indicator while the host has an agent chat of the project working', () => {
     mockUseProjectsWithActivity.mockReturnValue([])
-    mockUseProjectsWithActiveAgentChat.mockReturnValue(['2'])
+    seedChatActivity({ 'never-opened': { busy: true, projectId: '2' } })
     renderWithRouter()
 
     const item = screen.getByTestId('project-item-2')

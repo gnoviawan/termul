@@ -2317,19 +2317,6 @@ export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): A
   }
 }
 
-/** Project IDs with at least one open agent-chat session in an active turn. */
-export function collectProjectsWithActiveAgentChat(
-  sessions: Record<SessionId, AcpSession>
-): string[] {
-  const ids = new Set<string>()
-  for (const session of Object.values(sessions)) {
-    if (session.status !== 'closed' && session.activeTurn && session.projectId) {
-      ids.add(session.projectId)
-    }
-  }
-  return Array.from(ids).sort()
-}
-
 /**
  * Reduce the per-cwd reuse + warming maps to a single warm state for a config.
  * The reuse map is keyed by `agentReuseKey(configId, cwd)`, so a config can own

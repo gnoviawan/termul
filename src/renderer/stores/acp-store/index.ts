@@ -85,7 +85,6 @@ import { getAgentChatSessionIdsInAllTrees, useWorkspaceStore } from '@/stores/wo
 import type { QueuedPrompt } from '../prompt-queue-orchestration'
 import { attachAgentRosterWatch } from './agent-roster-watch'
 import {
-  collectProjectsWithActiveAgentChat,
   dropHiddenToolCalls,
   dropRecordKey,
   normalizeUserMessages,
@@ -760,10 +759,6 @@ export function useAgentIcon(agentId: AgentId | null, agentConfigId?: string): s
       return selectAgentIdentity(s, agentId).icon
     })
   )
-}
-
-export function useProjectsWithActiveAgentChat(): string[] {
-  return useAcpStore(useShallow((state) => collectProjectsWithActiveAgentChat(state.sessions)))
 }
 
 export const useConfigWarmState = (configId: string): ConfigWarmState =>

@@ -1215,13 +1215,16 @@ export type ChatReadsWatchDelta = ChatReadMark
  * `busy`: a prompt turn is open or the agent works outside one. `needsYou`: a
  * permission, question or elicitation waits for an answer. `unread`: the
  * newest turn end the host saw (`turnEnd`) is past the shared last-read
- * marker.
+ * marker. `projectId`: the project the session was created in, so a surface
+ * counts a chat it never opened under its project; null for a session the
+ * host has no persisted record of (absent from a host that predates it).
  */
 export interface ChatActivityRecord {
   busy: boolean
   needsYou: boolean
   unread: boolean
   turnEnd: { seq: number; logEpoch: string } | null
+  projectId?: string | null
 }
 
 /** `chat_activity` watch state: every chat with something to show or a turn end to remember. */
