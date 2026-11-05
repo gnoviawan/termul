@@ -4675,6 +4675,36 @@ describe('AgentLauncher exit handoff', () => {
     }
   })
 
+  it('launches again when re-shown while the previous launch is still exiting', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-ready-1' }
+    mockClaimPreparedChat
+      .mockReturnValueOnce('prepared-ready-1')
+      .mockReturnValueOnce('prepared-ready-2')
+    // session/prompt resolves at turn end: the first chat's turn keeps running.
+    mockSendPrompt.mockReturnValue(new Promise(() => {}))
+    try {
+      const { rerender } = render(<Harness show />)
+      await screen.findByText(/what should we do/i)
+      setComposerValue('first')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+      await waitFor(() => expect(mockSendPrompt).toHaveBeenCalledTimes(1))
+
+      // New chat inside the exit window: the boundary restores this instance.
+      simulateChatTabTakeover()
+      rerender(<Harness show={false} />)
+      rerender(<Harness show />)
+      setComposerValue('second')
+      fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+      expect(mockClaimPreparedChat).toHaveBeenCalledTimes(2)
+      expect(mockAddAgentChatTab).toHaveBeenLastCalledWith('prepared-ready-2', 'pane1')
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
   it('fades in place without diving when dismissed with no chat handoff', async () => {
     const { rerender } = render(<Harness show />)
     await screen.findByText(/what should we do/i)

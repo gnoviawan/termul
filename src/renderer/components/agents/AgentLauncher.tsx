@@ -221,6 +221,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
   }, [isPresent, paneLeaf, isOverlayLauncher])
   const showOverlayChrome = isOverlayLauncher || (isExiting && overlayVariantRef.current)
+  // New chat inside the exit window restores this exiting instance. Its last
+  // launch already handed off to a chat tab, but a claimed warm session holds
+  // the in-flight flag until that chat's first turn ends, which would make
+  // the re-shown launcher ignore Enter. Re-presence is a fresh launcher.
+  const wasPresentRef = useRef(isPresent)
+  useEffect(() => {
+    if (isPresent && !wasPresentRef.current) launchInFlightRef.current = false
+    wasPresentRef.current = isPresent
+  }, [isPresent])
 
   const exitAnim = useLauncherExitAnim({
     isPresent,
