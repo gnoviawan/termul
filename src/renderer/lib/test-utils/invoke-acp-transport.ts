@@ -343,6 +343,8 @@ export function createInvokeAcpTransport(): AcpTransport {
       invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor }),
     registerDiscoveredSession: (input, options) =>
       invokeCommand<PersistedSessionSummary>('acp_register_discovered_session', input, options),
+    importAgentSession: (input, options) =>
+      invokeCommand<PersistedSessionSummary>('acp_import_agent_session', input, options),
     sendPrompt: (agentId, sessionId, text, turnId, displayContent) =>
       invoke<PromptDispatchResult>('acp_send_prompt', {
         agentId,

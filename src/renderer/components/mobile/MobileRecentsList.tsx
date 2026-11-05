@@ -2,8 +2,10 @@ import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useStat
 import { useShallow } from 'zustand/shallow'
 import { ChatEntryIcon, type ChatHistorySidebarEntry } from '@/components/chat/ChatHistoryEntryRow'
 import { ChatDeleteConfirmDialog } from '@/components/chat/ChatHistoryTab'
+import { ImportChatsButton } from '@/components/chat/ImportChatsButton'
 import { useChatHistoryEntries } from '@/components/chat/use-chat-history-entries'
 import { MoreHorizontal } from '@/components/icons'
+import { useColumnWorkingCopy } from '@/components/shell/use-column-working-copy'
 import {
   AgentChatStatusGlyphs,
   agentChatStatusSlots,
@@ -15,6 +17,7 @@ import { formatChatCreatedTime } from '@/lib/relative-time'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
+import { useActiveProject } from '@/stores/project-store'
 import { MobileRecentsActionsSheet } from './MobileRecentsActionsSheet'
 
 /** How long a touch must hold still before it opens the row actions (iOS fires no `contextmenu`). */
@@ -294,6 +297,8 @@ export function MobileRecentsList({
   const baseId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   const { paneTabs, selectTab, closePaneTab } = useMobileTabActions()
+  const activeProject = useActiveProject()
+  const { cwd: importCwd } = useColumnWorkingCopy(activeProject)
 
   // Open chat tabs of the active project's tree.
   const openChats = useMemo(
@@ -551,6 +556,12 @@ export function MobileRecentsList({
           >
             Load more ({filtered.length - visible.length} more)
           </button>
+        </div>
+      )}
+
+      {activeProject && (
+        <div className="px-2 pt-2">
+          <ImportChatsButton cwd={importCwd} projectId={activeProject.id} variant="row" />
         </div>
       )}
 

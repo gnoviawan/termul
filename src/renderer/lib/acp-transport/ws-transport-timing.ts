@@ -66,6 +66,7 @@ const FIXED_REQUEST_TIMEOUTS_MS: Partial<Record<WsRequestType, number>> = {
   create_session: SESSION_OPEN_TIMEOUT_MS,
   load_session: SESSION_OPEN_TIMEOUT_MS,
   resume_session: SESSION_OPEN_TIMEOUT_MS,
+  import_agent_session: SESSION_OPEN_TIMEOUT_MS,
   authenticate: HANDSHAKE_TIMEOUT_MS
 }
 

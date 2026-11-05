@@ -1,6 +1,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useMemo, useRef, useState } from 'react'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { ImportChatsButton } from '@/components/chat/ImportChatsButton'
 import type { ProjectChatEntry } from '@/components/sidebar/project-chat-row'
 import { SidebarSearchField } from '@/components/sidebar/sidebar-search-field'
 import { useAcpStore } from '@/stores/acp-store'
@@ -10,6 +11,7 @@ import type { Project } from '@/types/project'
 import { ChatCard } from './ChatCard'
 import { buildChatCards, filterChatCards } from './chat-cards'
 import { useChatCardActions } from './use-chat-card-actions'
+import { useColumnWorkingCopy } from './use-column-working-copy'
 
 /** First-paint card height; real heights are measured after mount. */
 const ESTIMATED_CARD_HEIGHT = 44
@@ -40,6 +42,7 @@ export function ChatsList({ project }: ChatsListProps): React.JSX.Element {
   const agentConfigs = useAcpStore((s) => s.agentConfigs)
   const pick = useShellLayoutStore((s) => s.worktreePickByProject[project.id])
   const activeChatSessionId = useActiveChatSessionId()
+  const { cwd } = useColumnWorkingCopy(project)
   const { onDelete, ...cardActions } = useChatCardActions(project.id)
 
   const agentNames = useMemo(
@@ -88,15 +91,18 @@ export function ChatsList({ project }: ChatsListProps): React.JSX.Element {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-2 pb-1">
-        <SidebarSearchField
-          size="sm"
-          value={query}
-          onChange={setQuery}
-          placeholder="Search chats…"
-          ariaLabel="Search chats"
-          clearLabel="Clear chat search"
-        />
+      <div className="flex items-center gap-1 px-2 pb-1">
+        <div className="min-w-0 flex-1">
+          <SidebarSearchField
+            size="sm"
+            value={query}
+            onChange={setQuery}
+            placeholder="Search chats…"
+            ariaLabel="Search chats"
+            clearLabel="Clear chat search"
+          />
+        </div>
+        <ImportChatsButton cwd={cwd} projectId={project.id} variant="icon" />
       </div>
 
       {cards.length === 0 ? (
