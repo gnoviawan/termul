@@ -6,6 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import type { ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
+import { useToolCallReveal } from '@/stores/tool-call-reveal-store'
 import { ChatMessage } from './ChatMessage'
 import { CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
@@ -150,6 +151,16 @@ function TurnActivityComponent({
   const [stepLimit, setStepLimit] = useState(
     () => expandedStepLimits.get(turnKey) ?? TURN_STEP_WINDOW
   )
+  // A Background row in the status pill shows a card of this turn.
+  const revealNonce = useToolCallReveal((id) =>
+    items.some((item) => item.kind === 'tool' && item.tool.toolCallId === id)
+  )
+  const stepCount = items.length
+  useEffect(() => {
+    if (revealNonce === null) return
+    setOpen(true)
+    setStepLimit((limit) => Math.max(limit, stepCount))
+  }, [revealNonce, stepCount])
   const showEarlierSteps = (): void => {
     const next = stepLimit + TURN_STEP_PAGE
     expandedStepLimits.set(turnKey, next)
