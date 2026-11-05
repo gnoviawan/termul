@@ -55,8 +55,10 @@ enum Why {
     /// It clears the unsaved mark without writing anything, so Termul's
     /// autosave, which waits for that mark, would skip the changes.
     SkipsSave,
-    /// It hands the document to a server or a live session.
-    LeavesTermul,
+    /// It reaches past the canvas: it hands the document to a server or a
+    /// live session, opens a link, or contacts or writes outside Termul. The
+    /// text says what it does.
+    Outside(&'static str),
     /// It installs, updates or publishes plugin code. An installed plugin's
     /// code runs on this machine, so an agent may not bring new code in.
     PluginCode,
@@ -75,8 +77,13 @@ const DIR: &[When] = &[When::Path("dir")];
 const FILES: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::Files { instead: None });
 const FILE_AT_PATH: CommandPolicy = CommandPolicy::Refuse(PATH, Why::Files { instead: None });
 const OTHER_DOCUMENT: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::OtherDocument);
-const LEAVES_TERMUL: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::LeavesTermul);
+const LEAVES_TERMUL: CommandPolicy =
+    outside("shares the document outside Termul, with a server or a live session");
 const PLUGIN_CODE: CommandPolicy = CommandPolicy::Refuse(ALWAYS, Why::PluginCode);
+
+const fn outside(does: &'static str) -> CommandPolicy {
+    CommandPolicy::Refuse(ALWAYS, Why::Outside(does))
+}
 
 const fn files_unless(when: &'static [When], instead: &'static str) -> CommandPolicy {
     CommandPolicy::Refuse(
@@ -112,6 +119,10 @@ const COMMANDS: &[(&str, CommandPolicy)] = &[
     ),
     ("file.placeImage", FILE_AT_PATH),
     ("image.place", FILE_AT_PATH),
+    (
+        "image.replace",
+        files_unless(PATH, "pass the image's bytes as base64 `data`"),
+    ),
     ("variable.export", FILE_AT_PATH),
     (
         "variable.import",
@@ -160,6 +171,18 @@ const COMMANDS: &[(&str, CommandPolicy)] = &[
     ("collab.host", LEAVES_TERMUL),
     ("collab.publish", LEAVES_TERMUL),
     ("collab.share", LEAVES_TERMUL),
+    ("text.openLink", outside("opens a link in a web browser")),
+    (
+        "library.check",
+        outside(
+            "contacts the servers of the document's team libraries, and lets the editor contact \
+             them by itself from then on",
+        ),
+    ),
+    (
+        "font.download",
+        outside("downloads a font family and installs it into this machine's shared font folder"),
+    ),
     // Listing plugins and running, using or closing an installed one stay
     // allowed: they bring in no code.
     ("plugin.directory.install", PLUGIN_CODE),
@@ -319,10 +342,9 @@ fn refusal(name: &str, why: Why) -> CanvasError {
              not allow: Termul saves the canvas while it has unsaved changes, so they would \
              never be written. Save with save_file"
         ),
-        Why::LeavesTermul => format!(
-            "`{name}` shares the document outside Termul, with a server or a live session, \
-             which the Termul canvas does not allow"
-        ),
+        Why::Outside(does) => {
+            format!("`{name}` {does}, which the Termul canvas does not allow")
+        }
         Why::PluginCode => format!(
             "`{name}` installs, updates or publishes plugin code, which isn't available from \
              the agent canvas tools. A plugin that is already installed can still run with \

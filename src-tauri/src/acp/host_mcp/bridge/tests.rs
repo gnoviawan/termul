@@ -550,3 +550,126 @@ fn a_timed_out_export_without_a_path_advises_a_smaller_size_not_a_retry() {
     assert!(message.contains("smaller `scale` or `size`"), "{message}");
     assert!(!message.contains("retry once"), "{message}");
 }
+
+const NO_EVENTS: &str = r#"{"events":[],"cursor":7,"reset":false,"dropped":0}"#;
+
+fn polls(seen: &std::sync::mpsc::Receiver<CanvasCallFrame>) -> Vec<(String, Value)> {
+    seen.try_iter()
+        .map(|frame| (frame.method, serde_json::from_str(&frame.params).unwrap()))
+        .collect()
+}
+
+#[test]
+fn wait_for_changes_polls_the_editor_until_an_event_arrives() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let commented = r#"{"events":[{"seq":8,"time":1762300000000,"kind":"comment.created","document":null,"path":null,"data":{"thread":3}}],"cursor":8,"reset":false,"dropped":0}"#;
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let answered = AtomicUsize::new(0);
+    let seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, move |_| {
+        let reply = if answered.fetch_add(1, Ordering::SeqCst) < 2 {
+            NO_EVENTS
+        } else {
+            commented
+        };
+        Some(Ok(reply.to_string()))
+    });
+    let mut bridge = Bridge::new(configs[0].clone()).with_tool("wait_for_changes");
+    let asked = json!({"after": 7, "timeoutMs": 10_000});
+    let started = Instant::now();
+    let result = figcraft_mcp::call_tool(&mut bridge, "wait_for_changes", &asked);
+    let waited = started.elapsed();
+    assert_eq!(
+        tool_json(&result),
+        serde_json::from_str::<Value>(commented).unwrap()
+    );
+    assert_eq!(
+        polls(&seen),
+        vec![
+            ("events.poll".to_string(), asked.clone()),
+            ("events.poll".to_string(), asked.clone()),
+            ("events.poll".to_string(), asked),
+        ]
+    );
+    assert!(
+        waited >= Duration::from_millis(500) && waited < Duration::from_secs(5),
+        "{waited:?}"
+    );
+}
+
+#[test]
+fn wait_for_changes_returns_the_last_empty_reply_once_its_wait_passes() {
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, |_| {
+        Some(Ok(NO_EVENTS.to_string()))
+    });
+    let mut bridge = Bridge::new(configs[0].clone()).with_tool("wait_for_changes");
+    let started = Instant::now();
+    let result = figcraft_mcp::call_tool(
+        &mut bridge,
+        "wait_for_changes",
+        &json!({"after": 7, "timeoutMs": 700}),
+    );
+    let waited = started.elapsed();
+    assert_eq!(
+        tool_json(&result),
+        json!({"events": [], "cursor": 7, "reset": false, "dropped": 0})
+    );
+    assert!(
+        waited >= Duration::from_millis(700) && waited < Duration::from_secs(5),
+        "{waited:?}"
+    );
+    assert!(polls(&seen).len() >= 3);
+}
+
+#[test]
+fn a_reset_event_log_ends_the_wait_at_once() {
+    let reset = r#"{"events":[],"cursor":0,"reset":true,"dropped":0}"#;
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, move |_| {
+        Some(Ok(reset.to_string()))
+    });
+    let mut bridge = Bridge::new(configs[0].clone());
+    let reply = bridge
+        .call("events.poll", json!({"after": 7, "timeoutMs": 10_000}))
+        .unwrap();
+    assert_eq!(reply, serde_json::from_str::<Value>(reset).unwrap());
+    assert_eq!(polls(&seen).len(), 1);
+}
+
+#[test]
+fn a_canvas_error_while_waiting_ends_the_wait_with_that_error() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    let answered = AtomicUsize::new(0);
+    let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, move |_| {
+        if answered.fetch_add(1, Ordering::SeqCst) == 0 {
+            Some(Ok(NO_EVENTS.to_string()))
+        } else {
+            Some(Err(CanvasError::new(
+                CanvasErrorCode::CanvasClosed,
+                "the canvas was closed",
+            )))
+        }
+    });
+    let mut bridge = Bridge::new(configs[0].clone());
+    let started = Instant::now();
+    let error = error_of(bridge.call("events.poll", json!({"timeoutMs": 10_000})));
+    assert_eq!(error["code"], "CANVAS_CLOSED");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+/// The wait `wait_for_changes` documents: 20 s unless the agent names one,
+/// and never past 25 s.
+#[test]
+fn the_wait_is_20_s_by_default_and_at_most_25_s() {
+    assert_eq!(poll_wait(&json!({})), Duration::from_secs(20));
+    assert_eq!(
+        poll_wait(&json!({"timeoutMs": 1500})),
+        Duration::from_millis(1500)
+    );
+    assert_eq!(poll_wait(&json!({"timeoutMs": 0})), Duration::ZERO);
+    assert_eq!(
+        poll_wait(&json!({"timeoutMs": 600_000})),
+        Duration::from_secs(25)
+    );
+}

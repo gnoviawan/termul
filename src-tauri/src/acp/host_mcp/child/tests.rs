@@ -701,7 +701,7 @@ async fn tools_list_carries_figcraft_tools_by_name_with_the_canvas_tag() {
         let mut upstream = figcraft_mcp::TOOL_NAMES.to_vec();
         upstream.sort_unstable();
         assert_eq!(canvas, upstream);
-        assert_eq!(upstream.len(), 19);
+        assert_eq!(upstream.len(), 20);
         for definition in figcraft_mcp::tool_definitions() {
             let tool = tools
                 .iter()
@@ -828,7 +828,11 @@ async fn resources_and_prompts_are_figcrafts_own() {
         let resources = ask(2, r#"{"jsonrpc":"2.0","id":2,"method":"resources/list"}"#).await;
         assert_eq!(
             listed(&resources, "resources", "uri"),
-            [figcraft_mcp::DOC_URI, figcraft_mcp::COMMANDS_URI]
+            [
+                figcraft_mcp::DOC_URI,
+                figcraft_mcp::COMMANDS_URI,
+                "figcraft://comments"
+            ]
         );
         let templates = ask(
             3,

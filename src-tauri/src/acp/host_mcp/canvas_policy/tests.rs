@@ -10,6 +10,20 @@ fn refused(route: &CanvasRoute) -> bool {
     matches!(route, CanvasRoute::Refuse(error) if error.code == CanvasErrorCode::UnsupportedInKiosk)
 }
 
+/// The id of every command the pinned engine runs.
+fn engine_commands() -> std::collections::BTreeSet<String> {
+    use figcraft_mcp::Backend as _;
+    let listed = figcraft_mcp::Headless::new()
+        .call("engine.commands", json!({}))
+        .unwrap();
+    listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|command| command["id"].as_str().map(str::to_owned))
+        .collect()
+}
+
 #[test]
 fn editing_and_reading_methods_go_to_the_editor() {
     for (method, params) in [
@@ -45,6 +59,37 @@ fn editing_and_reading_methods_go_to_the_editor() {
             route(method, &params),
             CanvasRoute::Forward,
             "{method} {params}"
+        );
+    }
+}
+
+/// Commands that change or read only the document, the view or the
+/// editor's own preferences.
+#[test]
+fn document_view_and_preference_commands_go_to_the_editor() {
+    for command in [
+        "node.find",
+        "image.crop",
+        "layout.removeAll",
+        "variable.extendCollection",
+        "text.wrapStyle",
+        "comment.prompt",
+        "file.fontReport",
+        "font.downloads",
+        "board.addConnected",
+        "board.reshape",
+        "board.grid",
+        "widget.hover",
+        "view.minimize",
+        "pref.uiScaleUp",
+        "pref.uiScaleDown",
+        "pref.uiScaleReset",
+        "pref.scrollWheelZoom",
+    ] {
+        assert_eq!(
+            route("engine.execute", &execute(command, json!({}))),
+            CanvasRoute::Forward,
+            "{command}"
         );
     }
 }
@@ -244,6 +289,12 @@ fn a_command_that_names_a_file_is_refused_and_its_inline_form_goes_to_the_editor
             json!({"json": {"version": 1, "links": []}}),
             "`json`",
         ),
+        (
+            "image.replace",
+            json!({"ids": [4], "path": "brand/logo.png"}),
+            json!({"ids": [4], "data": "AAAA"}),
+            "`data`",
+        ),
     ] {
         let error = refusal("engine.execute", &execute(command, with_file));
         assert!(
@@ -314,6 +365,36 @@ fn sending_the_document_outside_termul_is_refused() {
     }
 }
 
+#[test]
+fn opening_links_and_reaching_servers_or_the_machine_outside_termul_is_refused() {
+    assert_eq!(
+        refusal("engine.execute", &execute("text.openLink", json!({}))).message,
+        "`text.openLink` opens a link in a web browser, which the Termul canvas does not allow"
+    );
+    for (command, params, does) in [
+        (
+            "library.check",
+            json!({"library": "Brand"}),
+            "contacts the servers of the document's team libraries",
+        ),
+        (
+            "font.download",
+            json!({"family": "Inter"}),
+            "downloads a font family and installs it into this machine's shared font folder",
+        ),
+    ] {
+        let error = refusal("engine.execute", &execute(command, params));
+        assert!(
+            error.message.starts_with(&format!("`{command}` {does}"))
+                && error
+                    .message
+                    .ends_with("which the Termul canvas does not allow"),
+            "{command}: {}",
+            error.message
+        );
+    }
+}
+
 /// Commands that install, update or publish plugin code. A plugin's code
 /// runs on this machine, so an agent may not bring new code in, whether from
 /// a plugin directory or as bytes it passes itself.
@@ -373,19 +454,12 @@ fn installing_or_publishing_plugin_code_is_refused_and_installed_plugins_still_r
 /// above before it reaches the editor unchecked.
 #[test]
 fn every_plugin_command_the_pinned_engine_runs_is_refused_or_known_to_bring_in_no_code() {
-    use figcraft_mcp::Backend as _;
-    let listed = figcraft_mcp::Headless::new()
-        .call("engine.commands", json!({}))
-        .unwrap();
-    let mut engine: Vec<&str> = listed
-        .as_array()
-        .unwrap()
+    let commands = engine_commands();
+    let engine: Vec<&str> = commands
         .iter()
-        .filter_map(|command| command["id"].as_str())
+        .map(String::as_str)
         .filter(|id| id.starts_with("plugin.") || id.starts_with("plugins."))
         .collect();
-    engine.sort_unstable();
-    engine.dedup();
     let mut sorted: Vec<&str> = PLUGIN_CODE
         .iter()
         .chain(PLUGIN_KEPT)
@@ -430,22 +504,33 @@ fn layers_exported_as_one_zip_come_back_inline_and_a_folder_is_refused() {
 /// A command the policy names but the engine renamed would pass unchecked.
 #[test]
 fn every_command_the_policy_names_is_one_the_pinned_engine_runs() {
-    use figcraft_mcp::Backend as _;
-    let listed = figcraft_mcp::Headless::new()
-        .call("engine.commands", json!({}))
-        .unwrap();
-    let engine: std::collections::HashSet<&str> = listed
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|command| command["id"].as_str())
-        .collect();
+    let engine = engine_commands();
     let unknown: Vec<&str> = COMMANDS
         .iter()
         .map(|(name, _)| *name)
-        .filter(|name| !engine.contains(name))
+        .filter(|name| !engine.contains(*name))
         .collect();
     assert_eq!(unknown, Vec::<&str>::new());
+}
+
+/// Every command id the pinned engine ran when the policy was last reviewed.
+/// A command the engine adds reaches the editor unchecked until someone
+/// decides it, so a new pin fails here until each new id is refused in
+/// `COMMANDS` or judged safe for the editor, then listed.
+#[test]
+fn every_command_the_pinned_engine_runs_has_a_policy_decision() {
+    let engine = engine_commands();
+    let reviewed: std::collections::BTreeSet<String> = include_str!("reviewed_commands.txt")
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let undecided: Vec<&String> = engine.difference(&reviewed).collect();
+    let removed: Vec<&String> = reviewed.difference(&engine).collect();
+    assert!(
+        undecided.is_empty() && removed.is_empty(),
+        "decide each new command (refuse it in COMMANDS or leave it to the editor), then update \
+         canvas_policy/reviewed_commands.txt. New: {undecided:?}. Gone: {removed:?}"
+    );
 }
 
 /// An export path the policy gives a format to must be one the engine can
