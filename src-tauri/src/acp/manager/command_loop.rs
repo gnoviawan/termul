@@ -345,7 +345,7 @@ pub(super) async fn run_command_loop(
                     ReopenReservation::try_new(driver_state.clone(), session_id.0.to_string())
                 else {
                     log::warn!(
-                        "[acp] session {} load rejected: prompt turn active or history import open (ACP_REOPEN_TURN_ACTIVE)",
+                        "[acp] session {} load rejected: prompt turn active (ACP_REOPEN_TURN_ACTIVE)",
                         crate::logging::redact_session_id(&session_id.0)
                     );
                     send_reply(
@@ -402,7 +402,7 @@ pub(super) async fn run_command_loop(
                     };
                     let Some(_replay_guard) = replay_guard else {
                         log::warn!(
-                            "[acp] session {} load rejected: prompt turn active (ACP_REOPEN_TURN_ACTIVE)",
+                            "[acp] session {} load rejected: prompt turn active or history import open (ACP_REOPEN_TURN_ACTIVE)",
                             crate::logging::redact_session_id(&session_id.0)
                         );
                         send_reply(
