@@ -1,11 +1,10 @@
 //! `mark_chat_read` handler: a surface has read a chat up to a seq. The host
-//! keeps the marker ([`crate::web::chat_reads`]) and tells every `chat_reads`
-//! watcher when it moves, so a dot banked on another surface clears.
+//! keeps the marker ([`crate::web::chat_reads`]) and re-derives the chat's
+//! `chat_activity` record when it moves, so the dot clears on every surface.
 
 use super::*;
 use crate::logging::redact_session_id;
 use crate::web::chat_reads::MarkOutcome;
-use crate::web::watch::publish_chat_read;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -57,7 +56,6 @@ pub(super) fn handle_mark_chat_read(id: String, payload: &Value, relay: &WsRelay
                 seq = mark.seq,
                 "chat read marker moved"
             );
-            publish_chat_read(relay, &parsed.session_id);
             relay.refresh_chat_activity(&parsed.session_id);
             mark
         }

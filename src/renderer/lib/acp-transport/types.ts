@@ -531,8 +531,8 @@ export interface AcpTransport {
   /**
    * Tell the host this surface read `sessionId` up to `seq` (the newest turn
    * end it showed) of the log incarnation `logEpoch`. Resolves to the shared
-   * marker as it stands; every `chat_reads` watcher hears when it moves. WS:
-   * `mark_chat_read`.
+   * marker as it stands; the chat's `chat_activity` record turns read on every
+   * surface when it moves. WS: `mark_chat_read`.
    */
   markChatRead?(sessionId: SessionId, seq: number, logEpoch: string | null): Promise<ChatReadMark>
   historyMode?(): HistoryMode | 'tauri_store'

@@ -2090,21 +2090,19 @@ describe('Shared chat read marker parity (cross-surface unread)', () => {
     'utf-8'
   )
 
-  it('one host service owns the marker and the relay serves it to every carrier', () => {
+  it('one host service owns the marker and every carrier moves it', () => {
     const service = readFileSync(join(SRC_TAURI, 'web', 'chat_reads.rs'), 'utf-8')
     expect(service).toMatch(
       /pub fn mark\(\s*&self,\s*session_id: &str,\s*head: &LogHead,\s*log_epoch: Option<&str>,\s*seq: u64,?\s*\)/
     )
     const dispatch = readFileSync(join(SRC_TAURI, 'web', 'ws', 'dispatch.rs'), 'utf-8')
     expect(dispatch).toMatch(/"mark_chat_read" => handle_mark_chat_read/)
-    const sources = readFileSync(join(SRC_TAURI, 'web', 'watch', 'sources.rs'), 'utf-8')
-    expect(sources).toMatch(/WatchKind::ChatReads/)
   })
 
-  it('the protocol declares the request, its class and the watch payloads', () => {
+  it('the protocol declares the request and its class, and no chat_reads watch', () => {
     expect(protocol).toMatch(/'mark_chat_read',/)
     expect(protocol).toMatch(/mark_chat_read: \['idempotent', null\]/)
-    expect(protocol).toMatch(/interface ChatReadsWatchState/)
+    expect(protocol).not.toMatch(/'chat_reads'/)
   })
 
   it('the transport facade and the shell tracker carry it on both renderer roots', () => {

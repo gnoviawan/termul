@@ -249,7 +249,7 @@ export const WS_REQUEST_TYPES = [
   // seq of the newest turn end it showed, and the log epoch it belongs to) →
   // `{ sessionId, seq, logEpoch }`, the host's shared last-read marker as it
   // stands. Idempotent and monotonic: an older seq, or one from another log
-  // epoch, is a no-op. Every `chat_reads` watcher hears when the marker moves.
+  // epoch, is a no-op. The chat's `chat_activity` record follows the marker.
   // Unknown session → `not_found`.
   'mark_chat_read',
   // Watches `{ watch, scope? }` (`projects`, `chat_history`, `agents`; `fs`
@@ -1080,8 +1080,8 @@ export type WsCanvasReplyPayload =
 export const WS_WATCH_FRAME_TYPE = 'watch'
 
 /**
- * The watches a connection can hold. `projects`, `chat_history`, `agents`,
- * `chat_reads` and `chat_activity` have the empty scope; `fs` and `terminals` are scoped to a
+ * The watches a connection can hold. `projects`, `chat_history`, `agents`
+ * and `chat_activity` have the empty scope; `fs` and `terminals` are scoped to a
  * project id, `store` to a store key.
  */
 export const WS_WATCH_NAMES = [
@@ -1091,7 +1091,6 @@ export const WS_WATCH_NAMES = [
   'fs',
   'store',
   'terminals',
-  'chat_reads',
   'chat_activity'
 ] as const
 
@@ -1196,18 +1195,6 @@ export interface ChatReadMark {
   seq: number
   logEpoch?: string
 }
-
-/**
- * `chat_reads` watch state: the last-read marker of every chat a surface has
- * read, and the log epoch of each (absent from a host that predates it).
- */
-export interface ChatReadsWatchState {
-  marks: Record<string, number>
-  logEpochs?: Record<string, string>
-}
-
-/** A `chat_reads` delta: one session's marker as it stands after it moved. */
-export type ChatReadsWatchDelta = ChatReadMark
 
 /**
  * What every chat list shows for one agent chat, owned by the host and the
