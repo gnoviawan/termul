@@ -185,14 +185,22 @@ async fn load_and_close(
     cwd: &str,
     updated_at: Option<u64>,
 ) -> Result<SessionMetadata, ImportAgentSessionError> {
-    acp.import_session_history(
-        agent_id,
-        SessionId(session_id.to_string()),
-        cwd.to_string(),
-        Vec::new(),
-    )
-    .await
-    .map_err(ImportAgentSessionError::Agent)?;
+    if let Err(message) = acp
+        .import_session_history(
+            agent_id,
+            SessionId(session_id.to_string()),
+            cwd.to_string(),
+            Vec::new(),
+        )
+        .await
+    {
+        // The agent loaded the session but the log lost steps: hand it back. A
+        // live session of another flow (`ACP_IMPORT_SESSION_LIVE`) is not ours to close.
+        if message.starts_with("ACP_IMPORT_INCOMPLETE") {
+            close_agent_session(acp, agent_id, session_id).await;
+        }
+        return Err(ImportAgentSessionError::Agent(message));
+    }
 
     // The agent now holds the session: every way out from here hands it back,
     // or a retry would find it live.
