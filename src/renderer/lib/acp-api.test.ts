@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Exercises the real desktop transport, not the invoke-backed double from vitest.setup.ts.
 vi.unmock('@/lib/acp-transport/desktop-transport')
@@ -17,6 +17,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import {
   acpAnswerQuestion,
+  acpApi,
   acpCancelPrompt,
   acpRespondPermission,
   acpSendPrompt,
@@ -134,6 +135,35 @@ describe('acp-api web path (injected WS transport)', () => {
     expect(sendPrompt).toHaveBeenCalledWith('a1', 's1', 'hi', undefined, undefined)
     expect(invoke).not.toHaveBeenCalled()
     _resetAcpTransportForTests(null)
+  })
+})
+
+describe('importAgentSession facade', () => {
+  afterEach(() => {
+    _resetAcpTransportForTests(null)
+  })
+
+  it('delegates to the injected transport with the session identity', async () => {
+    const importAgentSession = vi.fn().mockResolvedValue({ sessionId: 's1' })
+    _setAcpTransportForTests({ importAgentSession, dispose: vi.fn() } as never)
+
+    const input = { sessionId: 's1', agentId: 'a1', cwd: '/work', projectId: 'p1' }
+    const summary = await acpApi.importAgentSession(input)
+
+    expect(summary).toEqual({ sessionId: 's1' })
+    expect(importAgentSession).toHaveBeenCalledWith(input, expect.anything())
+  })
+
+  it('surfaces the host rejection to the caller', async () => {
+    const rejection = new Error('this session is already in the chat history')
+    _setAcpTransportForTests({
+      importAgentSession: vi.fn().mockRejectedValue(rejection),
+      dispose: vi.fn()
+    } as never)
+
+    await expect(
+      acpApi.importAgentSession({ sessionId: 's1', agentId: 'a1', cwd: '/work' })
+    ).rejects.toBe(rejection)
   })
 })
 
