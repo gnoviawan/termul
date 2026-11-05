@@ -11,6 +11,7 @@ import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { resetShellLayoutStoreForTests, useShellLayoutStore } from '@/stores/shell-layout-store'
+import { useSSHStore } from '@/stores/ssh-store'
 import type { Project } from '@/types/project'
 import { ShellRail, type ShellRailProps } from './ShellRail'
 
@@ -126,6 +127,7 @@ describe('ShellRail', () => {
     // `unavailable` keeps the store usable in memory without writing.
     useShellLayoutStore.setState({ status: 'unavailable' })
     useSettingsModalStore.setState({ view: null })
+    useSSHStore.setState({ workspaceOpen: false })
     useProjectStore.setState({ projects, groups: [] })
     useGitStatusStore.setState({
       diffStats: {},
@@ -417,7 +419,7 @@ describe('ShellRail', () => {
       useShellLayoutStore.setState({ railExpanded: false })
     })
 
-    it('shows only the icons: project stack, Column tabs, Search, Canvas, Automations, SSH, Theme, Shortcuts, Settings, Report a bug', () => {
+    it('shows only the icons: project stack, Search, Canvas, Automations, SSH, Theme, Shortcuts, Settings, Report a bug', () => {
       renderRail()
 
       const nav = screen.getByRole('navigation', { name: 'Projects' })
@@ -430,10 +432,7 @@ describe('ShellRail', () => {
         'Switch project (Alpha)',
         // Other open projects (not archived) follow the active one.
         'Open Beta',
-        'Chats',
-        'Explorer',
-        'Changes',
-        'GitHub',
+        // The Side panel is shown, so it carries the Column tabs.
         'Search',
         'Open canvas',
         'Open automations',
@@ -462,6 +461,30 @@ describe('ShellRail', () => {
           .getAllByRole('button')
           .map((b) => b.getAttribute('aria-label'))
       ).toEqual(['Color themes', 'Open keyboard shortcuts menu', 'Settings', 'Report a bug'])
+    })
+
+    it('shows the Column tabs only while the Side panel is not on screen', () => {
+      const track = () => screen.queryByTestId('rail-column-tab-track')
+      const tabs = () =>
+        within(track() as HTMLElement)
+          .getAllByRole('button')
+          .map((b) => b.getAttribute('aria-label'))
+
+      const shown = renderRail()
+      expect(track()).not.toBeInTheDocument()
+      shown.unmount()
+
+      // Everything collapsed: the Rail carries the tabs.
+      useShellLayoutStore.setState({ sidePanelVisible: false })
+      const hidden = renderRail()
+      expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
+      hidden.unmount()
+
+      // The SSH workspace replaces the Side panel, so the Rail keeps the tabs.
+      useShellLayoutStore.setState({ sidePanelVisible: true })
+      useSSHStore.setState({ workspaceOpen: true })
+      renderRail()
+      expect(tabs()).toEqual(['Chats', 'Explorer', 'Changes', 'GitHub'])
     })
 
     it('puts the mark / toggle swap below the empty top band under the macOS traffic lights', () => {

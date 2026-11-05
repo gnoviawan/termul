@@ -339,11 +339,20 @@ test('Journey 1: three chats on one project, side by side, next to the diff', as
       }
       await expect(paneContents(page)).toHaveCount(3)
 
-      // Explorer, picked from the collapsed Rail's column icons.
-      await railNav(page).getByRole('button', { name: 'Explorer', exact: true }).click()
+      // With the Side panel shown, it keeps its own tab bar and the
+      // collapsed Rail shows no column icons.
+      const railTabs = page.getByTestId('rail-column-tab-track')
+      await expect(page.getByRole('tablist', { name: 'Side panel' })).toBeVisible()
+      await expect(railTabs).toHaveCount(0)
+
+      // Everything collapsed: Explorer, picked from the Rail's column icons,
+      // shows the Side panel on that tab, and the tabs move back into it.
+      await page.getByRole('button', { name: 'Hide side panel' }).click()
+      await railTabs.getByRole('button', { name: 'Explorer', exact: true }).click()
       const explorer = page.getByRole('tabpanel', { name: 'Explorer' })
       await expect(explorer).toBeVisible()
       await expect(explorer).toContainText('notes.txt')
+      await expect(railTabs).toHaveCount(0)
     } finally {
       // The Rail state is a persisted setting shared with later specs.
       if ((await railNav(page).getAttribute('data-expanded')) === 'false') {
