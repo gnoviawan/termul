@@ -1,7 +1,6 @@
 import { useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAgentChatProjectSignals } from '@/hooks/use-agent-chat-attention'
-import { useProjectsWithActiveAgentChat } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectsWithActivity, useProjectsWithErrors } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -33,20 +32,19 @@ export function useProjectRail({
 }: UseProjectRailOptions): ProjectRail {
   const navigate = useNavigate()
   const [projectActivityIds, projectErrorIds] = [useProjectsWithActivity(), useProjectsWithErrors()]
-  const agentChatActivityIds = useProjectsWithActiveAgentChat()
-  const { attentionCounts, firstNeedsYouSessionId, runningProjectIds } =
+  const { attentionCounts, firstNeedsYouSessionId, workingProjectIds, runningProjectIds } =
     useAgentChatProjectSignals()
 
   const status = useCallback(
     (projectId: string): ProjectRowStatus => ({
       live: resolveProjectLiveState(
-        projectActivityIds.includes(projectId) || agentChatActivityIds.includes(projectId),
+        projectActivityIds.includes(projectId) || workingProjectIds.has(projectId),
         runningProjectIds.has(projectId)
       ),
       attentionCount: attentionCounts[projectId] ?? 0,
       crashed: projectErrorIds.has(projectId)
     }),
-    [projectActivityIds, agentChatActivityIds, runningProjectIds, attentionCounts, projectErrorIds]
+    [projectActivityIds, workingProjectIds, runningProjectIds, attentionCounts, projectErrorIds]
   )
 
   const openProject = useCallback(

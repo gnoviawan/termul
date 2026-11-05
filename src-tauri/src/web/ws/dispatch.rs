@@ -110,13 +110,21 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         {
             handle_respond_host_ticket(id, &req.payload, env)
         }
-        "respond_permission" => handle_respond_permission(id, &req.payload, relay, env.connection_id).await,
+        "respond_permission" => {
+            let reply = handle_respond_permission(id, &req.payload, relay, env.connection_id).await;
+            relay.refresh_pending_chat_activity();
+            reply
+        }
         "browser_stop" => handle_browser_stop(id, &req.payload, env),
         // Issue #411: `answer_question` — route the browser's structured-question
         // answer through the server-side question rendezvous (first-response-wins,
         // TOCTOU re-validation) to `AcpManager::answer_question`, which resolves
         // the agent's `Responder` on the driver thread.
-        "answer_question" => handle_answer_question(id, &req.payload, relay, env.connection_id).await,
+        "answer_question" => {
+            let reply = handle_answer_question(id, &req.payload, relay, env.connection_id).await;
+            relay.refresh_pending_chat_activity();
+            reply
+        }
         // Story 1.8: ACP command forwarding → `AcpManager`. The streaming events
         // (`message_chunk`, `tool_call`, `prompt_complete`, `session_created`,
         // `config_options_update`, …) flow back automatically through the
@@ -244,7 +252,9 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "logout_agent" => handle_logout_agent(id, &req.payload, acp).await,
         "delete_agent_session" => handle_delete_agent_session(id, &req.payload, acp).await,
         "respond_elicitation" => {
-            handle_respond_elicitation(id, &req.payload, acp, relay).await
+            let reply = handle_respond_elicitation(id, &req.payload, acp, relay).await;
+            relay.refresh_pending_chat_activity();
+            reply
         }
         // Paste-back half of the headless browser-auth flow
         // (spec-acp-terminal-auth): the client delivers the failed loopback

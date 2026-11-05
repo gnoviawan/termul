@@ -53,6 +53,7 @@ import { serializeSelectionContexts } from '@/lib/composer/selection-context'
 import { restoreConversationLabels, stripConversationEnvelopes } from '@/lib/conversation-envelope'
 import { splitReadOnlyGuard } from '@/lib/github-handoff/read-only-guard'
 import { logFrontendError } from '@/lib/log-api'
+import { isAfter, type LogPoint } from '@/lib/log-point'
 import {
   isFolderTokenPath,
   parseFileSegments,
@@ -62,7 +63,6 @@ import {
 } from '@/lib/skill-tokens'
 import { wireBlocksToDisplay, wireTextToDisplay } from '@/lib/skills-wire-reverse'
 import { randomUUID } from '@/lib/uuid'
-import { isAfter, type LogPoint } from '@/stores/agent-chat-unread-store'
 import {
   configIdFromReuseKey,
   detachedReuseKey,
@@ -2315,19 +2315,6 @@ export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): A
     templateId: config?.templateId ?? null,
     icon: config?.icon ?? null
   }
-}
-
-/** Project IDs with at least one open agent-chat session in an active turn. */
-export function collectProjectsWithActiveAgentChat(
-  sessions: Record<SessionId, AcpSession>
-): string[] {
-  const ids = new Set<string>()
-  for (const session of Object.values(sessions)) {
-    if (session.status !== 'closed' && session.activeTurn && session.projectId) {
-      ids.add(session.projectId)
-    }
-  }
-  return Array.from(ids).sort()
 }
 
 /**

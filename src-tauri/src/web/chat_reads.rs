@@ -1,11 +1,10 @@
 //! Shared last-read markers for agent chats.
 //!
-//! Each renderer banks a chat's "New activity" dot itself, but reading the chat
-//! on any surface (a desktop pane, a shared-live phone, a `termul-server`
-//! browser) must clear the dot on every surface. The host keeps, per session,
-//! the newest session-log seq a surface has read, and serves it to every
-//! `chat_reads` watcher. A renderer clears its dot once the marker reaches the
-//! newest turn end it has seen.
+//! Reading a chat on any surface (a desktop pane, a shared-live phone, a
+//! `termul-server` browser) must clear its "New activity" dot on every
+//! surface. The host keeps, per session, the newest session-log seq a surface
+//! has read; the chat's `chat_activity` record ([`crate::web::chat_activity`])
+//! is unread while its newest turn end is past this marker.
 //!
 //! A marker is a point in one log incarnation: `(log_epoch, seq)`. It only
 //! moves forward within that incarnation, so a lagging client that sends an
@@ -16,7 +15,7 @@
 //! exists, so it is ignored rather than clamped. Markers live in memory, like
 //! the dots they clear.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use parking_lot::Mutex;
 use serde_json::{json, Value};
@@ -26,7 +25,7 @@ use crate::web::sink::LogHead;
 /// What [`ChatReads::mark`] did. Each carries the marker as it now stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarkOutcome {
-    /// The marker moved: watchers must hear about it.
+    /// The marker moved: the chat's activity must be re-derived.
     Moved(ReadMark),
     /// The marker already covered the seq.
     Unchanged(ReadMark),
@@ -43,8 +42,7 @@ pub struct ReadMark {
 }
 
 impl ReadMark {
-    /// The `mark_chat_read` reply and `chat_reads` delta:
-    /// `{sessionId, seq, logEpoch}`.
+    /// The `mark_chat_read` reply: `{sessionId, seq, logEpoch}`.
     #[must_use]
     pub fn to_wire(&self, session_id: &str) -> Value {
         json!({ "sessionId": session_id, "seq": self.seq, "logEpoch": self.log_epoch })
@@ -101,16 +99,6 @@ impl ChatReads {
     #[must_use]
     pub fn get(&self, session_id: &str) -> Option<ReadMark> {
         self.marks.lock().get(session_id).cloned()
-    }
-
-    /// Every marker, by session id.
-    #[must_use]
-    pub fn snapshot(&self) -> BTreeMap<String, ReadMark> {
-        self.marks
-            .lock()
-            .iter()
-            .map(|(session_id, mark)| (session_id.clone(), mark.clone()))
-            .collect()
     }
 }
 

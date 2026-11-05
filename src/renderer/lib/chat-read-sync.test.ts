@@ -1,162 +1,144 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
 import type { AcpTransport } from '@/lib/acp-transport'
-import type { WatchHandlers } from '@/lib/acp-transport/watch-client'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
-import { markChatRead, noteTurnEndSeq, startChatReadSync } from './chat-read-sync'
+import { logFrontendError } from '@/lib/log-api'
+import { useChatActivityStore } from '@/stores/chat-activity-store'
+import { markChatRead } from './chat-read-sync'
 
-function fakeSurface(
+function surface(
   markChatReadImpl = vi.fn(async (sessionId: string, seq: number, logEpoch: string | null) => ({
     sessionId,
     seq,
     logEpoch: logEpoch ?? undefined
   }))
 ) {
-  let watch: WatchHandlers | null = null
-  const transport = {
-    watches: {
-      subscribe: (name: string, handlers: WatchHandlers) => {
-        expect(name).toBe('chat_reads')
-        watch = handlers
-        return () => {
-          watch = null
-        }
-      }
-    },
-    markChatRead: markChatReadImpl
-  } as unknown as AcpTransport
-  return {
-    transport,
-    readState: (marks: Record<string, number>, logEpochs?: Record<string, string>) =>
-      watch?.onState({ marks, logEpochs }),
-    readDelta: (sessionId: string, seq: number, logEpoch?: string) =>
-      watch?.onDelta?.({ sessionId, seq, logEpoch }),
-    watching: () => watch !== null
-  }
+  return { markChatRead: markChatReadImpl } as unknown as AcpTransport
 }
 
-function unreadIds(): string[] {
-  return Object.keys(useAgentChatUnreadStore.getState().unread).sort()
+function failingThen(...outcomes: Array<'fail' | 'ok'>) {
+  const impl = vi.fn(async (sessionId: string, seq: number, logEpoch: string | null) => {
+    if (outcomes.shift() === 'ok') return { sessionId, seq, logEpoch: logEpoch ?? undefined }
+    throw new Error('host gone')
+  })
+  return impl
 }
 
-beforeEach(() => {
-  useAgentChatUnreadStore.setState({
-    unread: {},
-    unreadSince: {},
-    seenTurnEnd: {},
-    sharedRead: {}
+function showUnread(sessionId: string, seq: number): void {
+  useChatActivityStore.getState().apply({
+    sessionId,
+    busy: false,
+    needsYou: false,
+    unread: true,
+    turnEnd: { seq, logEpoch: 'e1' }
   })
-})
-
-describe('startChatReadSync', () => {
-  it('clears the dot banked here when another surface reads the same turn end', () => {
-    const desktop = fakeSurface()
-    const stop = startChatReadSync(desktop.transport)
-    desktop.readState({})
-    useAgentChatUnreadStore.getState().markUnread('s1', null)
-    useAgentChatUnreadStore.getState().markUnread('s2', null)
-    noteTurnEndSeq('s1', 7, 'e1')
-    noteTurnEndSeq('s2', 9, 'e1')
-
-    desktop.readDelta('s1', 7, 'e1')
-
-    expect(unreadIds()).toEqual(['s2'])
-    stop()
-    expect(desktop.watching()).toBe(false)
-  })
-
-  it('keeps the dot when the other surface is behind the newest turn end', () => {
-    const desktop = fakeSurface()
-    startChatReadSync(desktop.transport)
-    useAgentChatUnreadStore.getState().markUnread('s1', null)
-    noteTurnEndSeq('s1', 7, 'e1')
-    noteTurnEndSeq('s1', 15, 'e1')
-
-    desktop.readState({ s1: 7 }, { s1: 'e1' })
-
-    expect(unreadIds()).toEqual(['s1'])
-  })
-
-  it('clears a dot once its turn end in the restarted host log is read elsewhere', () => {
-    const phone = fakeSurface()
-    startChatReadSync(phone.transport)
-    phone.readState({})
-    noteTurnEndSeq('s1', 50, 'e1')
-    useAgentChatUnreadStore.getState().markUnread('s1')
-    noteTurnEndSeq('s1', 3, 'e2')
-
-    phone.readDelta('s1', 3, 'e2')
-
-    expect(unreadIds()).toEqual([])
-  })
-
-  it('keeps a dot from the restarted host log that only a marker from the old log covers', () => {
-    const phone = fakeSurface()
-    startChatReadSync(phone.transport)
-    noteTurnEndSeq('s1', 4, 'e2')
-    useAgentChatUnreadStore.getState().markUnread('s1')
-    noteTurnEndSeq('s1', 12, 'e2')
-
-    phone.readState({ s1: 50 }, { s1: 'e1' })
-
-    expect(unreadIds()).toEqual(['s1'])
-  })
-})
-
-describe('noteTurnEndSeq', () => {
-  it('ignores a turn end that carries no seq', () => {
-    noteTurnEndSeq('s1', undefined, 'e1')
-    noteTurnEndSeq('s1', 0, 'e1')
-
-    expect(useAgentChatUnreadStore.getState().seenTurnEnd).toEqual({})
-  })
-})
+}
 
 describe('markChatRead', () => {
-  it('applies the host marker from the reply', async () => {
-    const reply = vi.fn(async (sessionId: string) => ({ sessionId, seq: 11, logEpoch: 'e1' }))
-    const phone = fakeSurface(reply)
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.mocked(logFrontendError).mockClear()
+  })
 
-    markChatRead('s1', { logEpoch: 'e1', seq: 7 }, phone.transport)
-    await new Promise((resolve) => setTimeout(resolve, 0))
+  afterEach(() => {
+    vi.useRealTimers()
+    useChatActivityStore.getState().replace({})
+  })
+
+  it('sends the read point to the host', async () => {
+    const reply = vi.fn(async (sessionId: string) => ({ sessionId, seq: 11, logEpoch: 'e1' }))
+
+    markChatRead('s1', { logEpoch: 'e1', seq: 7 }, surface(reply))
+    await vi.runAllTimersAsync()
 
     expect(reply).toHaveBeenCalledWith('s1', 7, 'e1')
-    expect(useAgentChatUnreadStore.getState().sharedRead).toEqual({
-      s1: { logEpoch: 'e1', seq: 11 }
-    })
   })
 
-  it('never lowers the marker with a reply that lost the race to a newer delta', async () => {
-    const reply = vi.fn(async (sessionId: string) => ({ sessionId, seq: 15, logEpoch: 'e1' }))
-    const phone = fakeSurface(reply)
-    startChatReadSync(phone.transport)
-    phone.readState({})
+  it('sends a seq once while it is in flight and again once its retries ran out', async () => {
+    showUnread('s2', 7)
+    const failing = failingThen()
+    const phone = surface(failing)
 
-    markChatRead('s3', { logEpoch: 'e1', seq: 15 }, phone.transport)
-    phone.readDelta('s3', 20, 'e1')
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    expect(useAgentChatUnreadStore.getState().sharedRead).toEqual({
-      s3: { logEpoch: 'e1', seq: 20 }
-    })
-  })
-
-  it('sends a seq once while it is in flight and again after a failure', async () => {
-    const failing = vi.fn(async () => {
-      throw new Error('host gone')
-    })
-    const phone = fakeSurface(failing)
-
-    markChatRead('s2', { logEpoch: 'e1', seq: 7 }, phone.transport)
-    markChatRead('s2', { logEpoch: 'e1', seq: 7 }, phone.transport)
-    markChatRead('s2', { logEpoch: 'e1', seq: 5 }, phone.transport)
+    markChatRead('s2', { logEpoch: 'e1', seq: 7 }, phone)
+    markChatRead('s2', { logEpoch: 'e1', seq: 7 }, phone)
+    markChatRead('s2', { logEpoch: 'e1', seq: 5 }, phone)
     expect(failing).toHaveBeenCalledTimes(1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await vi.runAllTimersAsync()
+    expect(failing).toHaveBeenCalledTimes(4)
+    expect(logFrontendError).toHaveBeenCalledTimes(4)
 
-    markChatRead('s2', { logEpoch: 'e1', seq: 7 }, phone.transport)
-    expect(failing).toHaveBeenCalledTimes(2)
+    markChatRead('s2', { logEpoch: 'e1', seq: 7 }, phone)
+    expect(failing).toHaveBeenCalledTimes(5)
     expect(failing).toHaveBeenLastCalledWith('s2', 7, 'e1')
+  })
+
+  it('sends a failed point again after a delay, with no new call', async () => {
+    showUnread('s4', 7)
+    const flaky = failingThen('fail', 'ok')
+
+    markChatRead('s4', { logEpoch: 'e1', seq: 7 }, surface(flaky))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flaky).toHaveBeenCalledTimes(1)
+    expect(logFrontendError).toHaveBeenCalledWith({
+      level: 'warn',
+      source: 'chat-read-sync',
+      message: 'mark_chat_read failed for a chat at seq 7: host gone'
+    })
+
+    await vi.runAllTimersAsync()
+    expect(flaky.mock.calls).toEqual([
+      ['s4', 7, 'e1'],
+      ['s4', 7, 'e1']
+    ])
+  })
+
+  it('drops the retry once a newer point was sent', async () => {
+    showUnread('s5', 9)
+    const flaky = failingThen('fail', 'ok')
+    const phone = surface(flaky)
+
+    markChatRead('s5', { logEpoch: 'e1', seq: 7 }, phone)
+    await vi.advanceTimersByTimeAsync(0)
+    markChatRead('s5', { logEpoch: 'e1', seq: 9 }, phone)
+    await vi.runAllTimersAsync()
+
+    expect(flaky.mock.calls).toEqual([
+      ['s5', 7, 'e1'],
+      ['s5', 9, 'e1']
+    ])
+  })
+
+  it('drops the retry once the host no longer shows the chat unread', async () => {
+    showUnread('s6', 7)
+    const flaky = failingThen('fail', 'ok')
+
+    markChatRead('s6', { logEpoch: 'e1', seq: 7 }, surface(flaky))
+    await vi.advanceTimersByTimeAsync(0)
+    useChatActivityStore.getState().apply({
+      sessionId: 's6',
+      busy: false,
+      needsYou: false,
+      unread: false,
+      turnEnd: null
+    })
+    await vi.runAllTimersAsync()
+
+    expect(flaky).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not send an answered point again, so a refused read is not resent on every update', async () => {
+    const reply = vi.fn(async (sessionId: string) => ({ sessionId, seq: 0, logEpoch: 'e0' }))
+    const phone = surface(reply)
+
+    markChatRead('s3', { logEpoch: 'e1', seq: 7 }, phone)
+    await vi.runAllTimersAsync()
+    markChatRead('s3', { logEpoch: 'e1', seq: 7 }, phone)
+    markChatRead('s3', { logEpoch: 'e2', seq: 7 }, phone)
+
+    expect(reply.mock.calls).toEqual([
+      ['s3', 7, 'e1'],
+      ['s3', 7, 'e2']
+    ])
   })
 })

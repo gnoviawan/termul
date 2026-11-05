@@ -5,13 +5,13 @@ import { AskUserQuestion } from '@/components/chat/AskUserQuestion'
 import { logFrontendError } from '@/lib/log-api'
 import { _resetSheetFocusReturnForTests, recordSheetOpener } from '@/lib/sheet-focus-return'
 import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
+import { resetChatActivity, seedChatActivity } from '@/lib/test-utils/chat-activity'
 import {
   _resetEphemeralSessionIdsForTesting,
   type PendingQuestion,
   useAcpStore
 } from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
-import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -358,7 +358,7 @@ beforeEach(async () => {
   browserTabsRef.current = new Map()
   useAcpStore.setState(FRESH)
   _resetEphemeralSessionIdsForTesting()
-  useAgentChatUnreadStore.setState({ unread: {} })
+  resetChatActivity()
   useShellLayoutStore.setState({ worktreePickByProject: {} })
   useConnectionStatusStore.setState({ controlChannel: 'connected', terminalChannel: 'connected' })
   useSettingsModalStore.setState({ view: null })
@@ -1174,13 +1174,11 @@ describe('MobileShellDrawer project row', () => {
 })
 
 describe('MobileShellDrawer unread rows', () => {
-  it('renders a chat with a banked unread entry as New activity (the shell tracker owns the flag)', async () => {
+  it('renders a chat the host calls unread as New activity', async () => {
     seedTabs([CHAT_TAB, { type: 'agent-chat', id: 'tab-2', sessionId: 's2' }], 'tab-1')
     seedOptionsSession('s1', 'agent-1', { title: 'Chat one' })
     seedOptionsSession('s2', 'agent-1', { title: 'Chat two' })
-    // The drawer no longer mounts a tracker: Done is banked by the shell-level
-    // tracker in WorkspaceLayout, so the drawer only reads the store.
-    act(() => useAgentChatUnreadStore.getState().markUnread('s2'))
+    seedChatActivity({ s2: { unread: true, turnEnd: { seq: 3, logEpoch: 'e1' } } })
     render(<Harness activeTabId="tab-1" activeSessionId="s1" />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
@@ -1191,7 +1189,7 @@ describe('MobileShellDrawer unread rows', () => {
     expect(within(dialog).getByRole('button', { name: /^Chat one(,|$)/ })).toBeInTheDocument()
   })
 
-  it('does not bank New activity itself when a turn finishes (no drawer-mounted tracker)', () => {
+  it('shows no dot for a turn this renderer saw end until the host says it is unread', async () => {
     seedTabs([CHAT_TAB, { type: 'agent-chat', id: 'tab-2', sessionId: 's2' }], 'tab-1')
     seedOptionsSession('s1', 'agent-1', { title: 'Chat one' })
     seedOptionsSession('s2', 'agent-1', { title: 'Chat two', activeTurn: true, openTurnId: 't1' })
@@ -1206,7 +1204,9 @@ describe('MobileShellDrawer unread rows', () => {
         }
       })
     })
-    expect(useAgentChatUnreadStore.getState().unread).toEqual({})
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Termul' })
+    expect(within(dialog).getByRole('button', { name: /^Chat two(,|$)/ })).toBeInTheDocument()
   })
 })
 

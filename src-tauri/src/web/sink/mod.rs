@@ -33,6 +33,7 @@ use crate::acp::session_persistence::{
     PersistedEventRecord, SessionPersistence, SessionPersistenceError,
 };
 
+mod activity;
 mod fanout;
 mod session_log;
 mod tickets;
@@ -188,6 +189,9 @@ pub struct WsRelaySink {
     /// `/terminal/ws` (both reach the relay through `AppState.relay`).
     presence: Arc<crate::web::presence::PresenceRegistry>,
     chat_reads: crate::web::chat_reads::ChatReads,
+    /// What every chat list shows for each chat, derived from the events
+    /// this relay numbers and served to every `chat_activity` watcher.
+    chat_activity: crate::web::chat_activity::ChatActivities,
 }
 
 /// Where a session's log stands at a point under the seq lock: the identity
@@ -261,6 +265,7 @@ impl WsRelaySink {
             )),
             presence: Arc::new(crate::web::presence::PresenceRegistry::new()),
             chat_reads: crate::web::chat_reads::ChatReads::default(),
+            chat_activity: crate::web::chat_activity::ChatActivities::default(),
         }
     }
 

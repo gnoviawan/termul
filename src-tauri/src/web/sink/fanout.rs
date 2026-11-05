@@ -352,6 +352,7 @@ impl WsRelaySink {
             rendezvous.forget_session(sid);
         }
         self.turn_watermark.forget_session(sid);
+        self.forget_activity(sid);
         self.restore_gates.lock().remove(sid);
         self.replay_gates.lock().await.remove(sid);
     }
@@ -471,6 +472,7 @@ impl EventSink for WsRelaySink {
                 if matches!(type_, "agent_disconnected" | "agent_crashed") {
                     if let Some(agent_id) = event.payload.get("agentId").and_then(Value::as_str) {
                         self.release_agent_tickets(&crate::acp::AgentId(agent_id.to_string()));
+                        self.end_agent_activity(agent_id);
                     }
                 }
                 // Agent-level events (no session) go to a watch; nothing leaves

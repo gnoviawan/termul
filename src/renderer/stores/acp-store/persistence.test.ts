@@ -1200,31 +1200,6 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessionIndex).toHaveLength(0)
   })
 
-  it('deleteHistorySession clears the chat Done flag, leaving other chats flagged', async () => {
-    const { useAgentChatUnreadStore } = await import('@/stores/agent-chat-unread-store')
-    useAgentChatUnreadStore.setState({ unread: { 's-done': true, 's-other': true } })
-    useAcpStore.setState({
-      sessionIndex: [
-        {
-          id: 's-done',
-          agentId: 'a',
-          title: 'T',
-          cwd: '',
-          projectId: 'p1',
-          createdAt: 0,
-          lastActivityAt: 0,
-          messageCount: 0,
-          status: 'closed'
-        }
-      ]
-    })
-
-    await useAcpStore.getState().deleteHistorySession('s-done')
-
-    expect(useAgentChatUnreadStore.getState().unread).toEqual({ 's-other': true })
-    useAgentChatUnreadStore.setState({ unread: {} })
-  })
-
   it('preserves a concurrent index update while durable history deletion is pending', async () => {
     const deleteGate = deferred<void>()
     const { queueSessionPayloadDelete } = await import('@/lib/acp-history-persistence')

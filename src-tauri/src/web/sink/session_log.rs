@@ -321,6 +321,7 @@ impl WsRelaySink {
             Err(never) => match never {},
         };
         self.mark_head_ahead(sid, head_ahead);
+        self.observe_activity(sid, type_, &event.payload, event.seq);
         event
     }
 
@@ -944,6 +945,9 @@ impl WsRelaySink {
         let _ = persistence.with_ordered_sender(sid, (), |()| {
             self.flush_pre_registration_locked(&persistence, sid);
         });
+        // A turn end observed before registration stands under the persisted
+        // epoch now: surfaces must read it there.
+        self.refresh_chat_activity(sid);
     }
 
     /// Drain `sid`'s pre-registration buffer into the durable writer. MUST be
