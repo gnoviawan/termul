@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -154,13 +154,13 @@ async fn until(
     done: impl Fn(&McpCatalogStatus) -> bool,
 ) -> McpCatalogStatus {
     for _ in 0..500 {
-        let status = service.status();
+        let status = service.status().await;
         if done(&status) {
             return status;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("status never settled: {:?}", service.status());
+    panic!("status never settled: {:?}", service.status().await);
 }
 
 async fn until_requested(mock: &MockRegistry, count: usize) {
@@ -383,7 +383,7 @@ async fn sync_off_sends_no_request_until_it_is_turned_on() {
     let service = start(base(&["io.sample/only"], true), dir.path(), &registry);
 
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(service.status().sync, McpCatalogSync::Disabled);
+    assert_eq!(service.status().await.sync, McpCatalogSync::Disabled);
     assert!(mock.requests().is_empty(), "{:?}", mock.requests());
 
     service.set_sync(true).await.unwrap();
@@ -420,7 +420,7 @@ async fn turning_sync_off_during_a_retry_backoff_sends_no_retry() {
         mock.requests(),
         vec!["/v0.1/servers?limit=100&version=latest"]
     );
-    assert_eq!(service.status().sync, McpCatalogSync::Disabled);
+    assert_eq!(service.status().await.sync, McpCatalogSync::Disabled);
     assert!(!dir.path().join("registry-cache.json.gz").exists());
 
     *mock.mode.lock() = Mode::Serve;
@@ -454,7 +454,7 @@ async fn turning_sync_off_abandons_the_request_in_flight() {
         "the request is still open"
     );
     assert_eq!(mock.requests().len(), 1);
-    assert_eq!(service.status().sync, McpCatalogSync::Disabled);
+    assert_eq!(service.status().await.sync, McpCatalogSync::Disabled);
     assert!(!dir.path().join("registry-cache.json.gz").exists());
 
     *mock.mode.lock() = Mode::Serve;
@@ -513,7 +513,7 @@ async fn a_failed_sync_waits_an_hour_even_across_a_toggle() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(mock.requests().len(), 1);
     assert!(matches!(
-        service.status().sync,
+        service.status().await.sync,
         McpCatalogSync::Enabled(SyncPhase::Failed { .. })
     ));
 }
@@ -595,4 +595,183 @@ async fn synced_rows_keep_only_the_icon_fields_the_host_picks_from() {
         item.icon.map(|icon| icon.url().to_string()),
         Some("https://a.example/logo.png".to_string())
     );
+}
+
+fn counting_service(loads: &Arc<AtomicUsize>) -> Arc<McpCatalogService> {
+    let loads = Arc::clone(loads);
+    Arc::new(McpCatalogService::deferred(
+        RunnerAvailability::default(),
+        Arc::new(move |dir| {
+            loads.fetch_add(1, Ordering::SeqCst);
+            super::load_for_use(dir)
+        }),
+    ))
+}
+
+async fn until_unloaded_sync(service: &McpCatalogService, dir: &Path, mock: &MockRegistry) {
+    for _ in 0..500 {
+        let idle = matches!(
+            service.sync_view(),
+            McpCatalogSync::Enabled(SyncPhase::Idle)
+        );
+        if idle
+            && service.sync_attached()
+            && dir.join("registry-cache.json.gz").exists()
+            && !mock.requests().is_empty()
+            && !service.is_loaded()
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!(
+        "sync did not finish with the catalog unloaded: loaded={} sync={:?} requests={:?}",
+        service.is_loaded(),
+        service.sync_view(),
+        mock.requests()
+    );
+}
+
+#[tokio::test]
+async fn the_snapshot_is_parsed_on_the_first_catalog_read() {
+    let loads = Arc::new(AtomicUsize::new(0));
+    let service = counting_service(&loads);
+    assert!(!service.is_loaded());
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+
+    let page = service
+        .search(&McpCatalogSearchRequest {
+            query: Some("hooka".to_string()),
+            ..McpCatalogSearchRequest::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(loads.load(Ordering::SeqCst), 1);
+    assert!(service.is_loaded());
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].name, "to.hooka/mcp");
+    let _ = service.status().await;
+    assert_eq!(
+        loads.load(Ordering::SeqCst),
+        1,
+        "a later read reuses the parse"
+    );
+}
+
+#[tokio::test]
+async fn background_sync_writes_the_cache_without_parsing_the_snapshot() {
+    let loads = Arc::new(AtomicUsize::new(0));
+    let mock = MockRegistry::new(
+        vec![row("io.example/alpha", "9.0.0", "active", true)],
+        vec![],
+    );
+    let registry = serve(&mock).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let service = counting_service(&loads);
+    tokio::spawn({
+        let service = Arc::clone(&service);
+        let registry = Registry::new(&registry).unwrap();
+        let path = path.clone();
+        async move {
+            service.attach(path, registry).await;
+        }
+    });
+
+    until_unloaded_sync(&service, &path, &mock).await;
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+    let stamp: Value = serde_json::from_slice(
+        &std::fs::read(path.join("registry-cursor.json")).expect("cursor stamp"),
+    )
+    .unwrap();
+    assert_eq!(stamp["full"], true);
+    assert!(stamp["cursor"].as_str().unwrap().len() < 40);
+
+    let status = service.status().await;
+    assert_eq!(loads.load(Ordering::SeqCst), 1);
+    assert_eq!((status.servers, status.source.sample), (1, false));
+    assert_eq!(
+        rows(&service).await,
+        vec![(
+            "io.example/alpha".to_string(),
+            "9.0.0".to_string(),
+            json!("active")
+        )]
+    );
+    assert_eq!(loads.load(Ordering::SeqCst), 1);
+
+    *mock.mode.lock() = Mode::Status(400);
+    let restarted_loads = Arc::new(AtomicUsize::new(0));
+    let restarted = counting_service(&restarted_loads);
+    tokio::spawn({
+        let restarted = Arc::clone(&restarted);
+        let registry = Registry::new(&registry).unwrap();
+        let path = path.clone();
+        async move {
+            restarted.attach(path, registry).await;
+        }
+    });
+    until_requested(&mock, mock.requests().len() + 1).await;
+    for _ in 0..500 {
+        if matches!(
+            restarted.sync_view(),
+            McpCatalogSync::Enabled(SyncPhase::Failed { .. })
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        matches!(
+            restarted.sync_view(),
+            McpCatalogSync::Enabled(SyncPhase::Failed { .. })
+        ),
+        "{:?}",
+        restarted.sync_view()
+    );
+    assert!(!restarted.is_loaded());
+    assert_eq!(restarted_loads.load(Ordering::SeqCst), 0);
+    let requests = mock.requests();
+    let again = requests.last().unwrap();
+    assert!(
+        again.contains("updated_since="),
+        "a restart plans from the stamp, not a full crawl: {again}"
+    );
+    let status = restarted.status().await;
+    assert_eq!(restarted_loads.load(Ordering::SeqCst), 1);
+    assert_eq!((status.servers, status.source.sample), (1, false));
+}
+
+#[tokio::test]
+async fn sync_off_never_parses_the_snapshot() {
+    let loads = Arc::new(AtomicUsize::new(0));
+    let mock = MockRegistry::new(
+        vec![row("io.example/alpha", "1.0.0", "active", true)],
+        vec![],
+    );
+    let registry = serve(&mock).await;
+    let dir = tempfile::tempdir().unwrap();
+    write_setting(dir.path(), false);
+    let service = counting_service(&loads);
+    tokio::spawn({
+        let service = Arc::clone(&service);
+        let registry = Registry::new(&registry).unwrap();
+        let path = dir.path().to_path_buf();
+        async move {
+            service.attach(path, registry).await;
+        }
+    });
+    for _ in 0..100 {
+        if service.sync_attached() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(service.sync_attached());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(service.sync_view(), McpCatalogSync::Disabled);
+    assert!(!service.is_loaded());
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+    assert!(mock.requests().is_empty(), "{:?}", mock.requests());
 }

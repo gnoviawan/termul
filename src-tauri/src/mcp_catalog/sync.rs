@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::Value;
 
-use super::snapshot::{item_from_row, CatalogItem, LoadedCatalog, McpCatalogSource, OFFICIAL_META};
+use super::snapshot::{
+    embedded_source, item_from_row, CatalogItem, LoadedCatalog, McpCatalogSource, OFFICIAL_META,
+};
 use super::McpCatalogService;
 
 pub(crate) const REGISTRY_BASE: &str = "https://registry.modelcontextprotocol.io";
@@ -29,6 +31,8 @@ const REQUEST_ATTEMPTS: u32 = 3;
 const CACHE_FORMAT_VERSION: u32 = 2;
 const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CACHE_FILE: &str = "registry-cache.json.gz";
+/// Cursor and `full` flag, so the next sync can plan without parsing `CACHE_FILE`.
+const STAMP_FILE: &str = "registry-cursor.json";
 const CONFIG_FILE: &str = "config.json";
 const DROPPED_SERVER_FIELDS: [&str; 2] = ["$schema", "_meta"];
 const ICON_FIELDS: [&str; 4] = ["src", "mimeType", "sizes", "theme"];
@@ -424,11 +428,31 @@ fn write_cache(dir: &Path, cache: &RegistryCache) -> io::Result<()> {
     crate::acp::atomic_file::replace(&dir.join(CACHE_FILE), &encoder.finish()?)
 }
 
-pub(crate) fn merge(base: &LoadedCatalog, cache: &RegistryCache) -> LoadedCatalog {
-    let source = McpCatalogSource {
+fn published_source(base: &McpCatalogSource, cache: &RegistryCache) -> McpCatalogSource {
+    McpCatalogSource {
         updated_at: Some(rfc3339(cache.cursor)),
-        sample: base.source.sample && !cache.full,
-    };
+        sample: base.sample && !cache.full,
+    }
+}
+
+/// Source a sync publishes after `plan` commits at `started_at`, without parsing rows.
+fn source_after_sync(
+    previous: &McpCatalogSource,
+    plan: SyncPlan,
+    started_at: DateTime<Utc>,
+) -> McpCatalogSource {
+    McpCatalogSource {
+        updated_at: Some(rfc3339(started_at)),
+        sample: if plan.is_full() {
+            false
+        } else {
+            previous.sample
+        },
+    }
+}
+
+pub(crate) fn merge(base: &LoadedCatalog, cache: &RegistryCache) -> LoadedCatalog {
+    let source = published_source(&base.source, cache);
     if cache.full {
         LoadedCatalog::from_items(
             cache.changes().filter_map(|(_, item)| item).collect(),
@@ -439,6 +463,91 @@ pub(crate) fn merge(base: &LoadedCatalog, cache: &RegistryCache) -> LoadedCatalo
     }
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheStamp {
+    cursor: DateTime<Utc>,
+    full: bool,
+}
+
+fn read_stamp(dir: &Path, snapshot: &McpCatalogSource) -> Option<McpCatalogSource> {
+    let bytes = fs::read(dir.join(STAMP_FILE)).ok()?;
+    let stamp: CacheStamp = match serde_json::from_slice(&bytes) {
+        Ok(stamp) => stamp,
+        Err(error) => {
+            log::warn!(
+                "[mcp-catalog] sync cursor stamp is invalid ({:?} at {}:{}), ignoring it",
+                error.classify(),
+                error.line(),
+                error.column()
+            );
+            return None;
+        }
+    };
+    let snapshot_at = snapshot
+        .updated_at
+        .as_deref()
+        .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| at.with_timezone(&Utc));
+    if snapshot_at.is_some_and(|at| stamp.cursor < at) {
+        log::info!(
+            "[mcp-catalog] sync cursor stamp {} is older than the snapshot, ignoring it",
+            rfc3339(stamp.cursor)
+        );
+        return None;
+    }
+    Some(McpCatalogSource {
+        updated_at: Some(rfc3339(stamp.cursor)),
+        sample: snapshot.sample && !stamp.full,
+    })
+}
+
+fn write_stamp(dir: &Path, cache: &RegistryCache) -> io::Result<()> {
+    let bytes = serde_json::to_vec(&CacheStamp {
+        cursor: cache.cursor,
+        full: cache.full,
+    })
+    .map_err(io::Error::other)?;
+    crate::acp::atomic_file::replace(&dir.join(STAMP_FILE), &bytes)
+}
+
+/// The on-disk cursor, preferring the stamp over the registry cache.
+fn stored_source(dir: &Path, snapshot: &McpCatalogSource) -> McpCatalogSource {
+    if let Some(source) = read_stamp(dir, snapshot) {
+        return source;
+    }
+    read_cache(dir, snapshot)
+        .map(|cache| published_source(snapshot, &cache))
+        .unwrap_or_else(|| snapshot.clone())
+}
+
+/// Writes the registry delta. Does not parse rows into catalog items.
+fn update_cache(
+    dir: &Path,
+    source: &McpCatalogSource,
+    plan: SyncPlan,
+    delta: Delta,
+    started_at: DateTime<Utc>,
+) -> io::Result<RegistryCache> {
+    let mut cache = match plan {
+        SyncPlan::Full => RegistryCache::new(started_at, true),
+        SyncPlan::Since(_) => {
+            read_cache(dir, source).unwrap_or_else(|| RegistryCache::new(started_at, false))
+        }
+    };
+    cache.cursor = started_at;
+    if plan.is_full() {
+        cache.servers = delta.rows;
+    } else {
+        cache.servers.extend(delta.rows);
+    }
+    write_cache(dir, &cache)?;
+    if let Err(error) = write_stamp(dir, &cache) {
+        log::warn!("[mcp-catalog] sync cursor stamp failed: {error}");
+    }
+    Ok(cache)
+}
+
 pub(crate) fn commit(
     dir: &Path,
     current: &LoadedCatalog,
@@ -446,29 +555,23 @@ pub(crate) fn commit(
     delta: Delta,
     started_at: DateTime<Utc>,
 ) -> io::Result<LoadedCatalog> {
-    let mut cache = match plan {
-        SyncPlan::Full => RegistryCache::new(started_at, true),
-        SyncPlan::Since(_) => read_cache(dir, &current.source)
-            .unwrap_or_else(|| RegistryCache::new(started_at, false)),
+    let changes: Vec<_> = if plan.is_full() {
+        Vec::new()
+    } else {
+        delta
+            .rows
+            .iter()
+            .map(|(name, row)| (name.clone(), row.as_deref().and_then(item_from_raw)))
+            .collect()
     };
-    cache.cursor = started_at;
+    let cache = update_cache(dir, &current.source, plan, delta, started_at)?;
     if plan.is_full() {
-        cache.servers = delta.rows;
-        write_cache(dir, &cache)?;
         return Ok(merge(&LoadedCatalog::default(), &cache));
     }
-    let changes: Vec<_> = delta
-        .rows
-        .iter()
-        .map(|(name, row)| (name.clone(), row.as_deref().and_then(item_from_raw)))
-        .collect();
-    cache.servers.extend(delta.rows);
-    write_cache(dir, &cache)?;
-    let source = McpCatalogSource {
-        updated_at: Some(rfc3339(started_at)),
-        sample: current.source.sample,
-    };
-    Ok(current.with_changes(changes, source))
+    Ok(current.with_changes(
+        changes,
+        source_after_sync(&current.source, plan, started_at),
+    ))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -564,23 +667,9 @@ impl SyncHost {
 
 impl McpCatalogService {
     pub(crate) async fn run_sync(self: Arc<Self>, host: Arc<SyncHost>) {
-        let dir = host.dir.clone();
-        let base = self.catalog();
-        let cached = tokio::task::spawn_blocking(move || {
-            read_cache(&dir, &base.source).map(|cache| merge(&base, &cache))
-        })
-        .await
-        .ok()
-        .flatten();
-        if let Some(catalog) = cached {
-            log::info!(
-                "[mcp-catalog] sync cache loaded items={} cursor={} sample={}",
-                catalog.items.len(),
-                catalog.source.updated_at.as_deref().unwrap_or(""),
-                catalog.source.sample
-            );
-            self.swap(catalog);
-        }
+        // A request may have parsed the snapshot before sync attached. Fold
+        // the cache in then. Do not parse the snapshot just to apply it.
+        self.apply_cached_catalog(&host.dir).await;
         let mut next_run = tokio::time::Instant::now();
         loop {
             if !host.enabled() {
@@ -620,9 +709,63 @@ impl McpCatalogService {
         }
     }
 
+    /// Cursor for the next crawl. Uses the embedded metadata, or the on-disk
+    /// cache when one exists. Does not parse the snapshot's rows.
+    async fn sync_source(&self) -> McpCatalogSource {
+        if let Some(catalog) = self.loaded() {
+            return catalog.source.clone();
+        }
+        if let Some(source) = self.sync_cursor.lock().clone() {
+            return source;
+        }
+        let snapshot = embedded_source();
+        let dir = self.state_dir.lock().clone();
+        let source = match dir {
+            Some(dir) => {
+                let snapshot_for_read = snapshot.clone();
+                tokio::task::spawn_blocking(move || stored_source(&dir, &snapshot_for_read))
+                    .await
+                    .unwrap_or(snapshot)
+            }
+            None => snapshot,
+        };
+        let mut cursor = self.sync_cursor.lock();
+        if cursor.is_none() {
+            *cursor = Some(source.clone());
+        }
+        source
+    }
+
+    async fn apply_cached_catalog(&self, dir: &Path) {
+        if self.loaded().is_none() {
+            return;
+        }
+        let _gate = self.load_gate.lock().await;
+        let Some(base) = self.loaded() else {
+            return;
+        };
+        let dir = dir.to_path_buf();
+        let merged = tokio::task::spawn_blocking(move || {
+            read_cache(&dir, &base.source).map(|cache| merge(&base, &cache))
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some(catalog) = merged {
+            log::info!(
+                "[mcp-catalog] sync cache loaded items={} cursor={} sample={}",
+                catalog.items.len(),
+                catalog.source.updated_at.as_deref().unwrap_or(""),
+                catalog.source.sample
+            );
+            self.swap(catalog);
+        }
+    }
+
     async fn sync_once(&self, host: &SyncHost) -> Result<(), SyncError> {
         let started_at = Utc::now();
-        let plan = SyncPlan::for_catalog(&self.catalog().source);
+        let source = self.sync_source().await;
+        let plan = SyncPlan::for_catalog(&source);
         let full = plan.is_full();
         match plan {
             SyncPlan::Full => log::info!("[mcp-catalog] sync start: full crawl"),
@@ -639,19 +782,36 @@ impl McpCatalogService {
             }) => delta?,
         };
         let (received, refetched, changed) = (delta.received, delta.refetched, delta.rows.len());
+        let _gate = self.load_gate.lock().await;
+        let current = self.loaded();
         let dir = host.dir.clone();
-        let current = self.catalog();
-        let catalog =
-            tokio::task::spawn_blocking(move || commit(&dir, &current, plan, delta, started_at))
-                .await
-                .map_err(|error| SyncError::Cache(error.to_string()))?
-                .map_err(|error| SyncError::Cache(error.to_string()))?;
-        log::info!(
-            "[mcp-catalog] sync done: full={full} received={received} refetched={refetched} changed={changed} items={} cursor={}",
-            catalog.items.len(),
-            rfc3339(started_at)
-        );
-        self.swap(catalog);
+        let source_for_cache = source.clone();
+        let updated = tokio::task::spawn_blocking(move || -> io::Result<Option<LoadedCatalog>> {
+            if let Some(current) = current {
+                commit(&dir, &current, plan, delta, started_at).map(Some)
+            } else {
+                update_cache(&dir, &source_for_cache, plan, delta, started_at).map(|_| None)
+            }
+        })
+        .await
+        .map_err(|error| SyncError::Cache(error.to_string()))?
+        .map_err(|error| SyncError::Cache(error.to_string()))?;
+        let cursor = rfc3339(started_at);
+        match updated {
+            Some(catalog) => {
+                log::info!(
+                    "[mcp-catalog] sync done: full={full} received={received} refetched={refetched} changed={changed} items={} cursor={cursor}",
+                    catalog.items.len(),
+                );
+                self.swap(catalog);
+            }
+            None => {
+                log::info!(
+                    "[mcp-catalog] sync done: full={full} received={received} refetched={refetched} changed={changed} loaded=false cursor={cursor}",
+                );
+                *self.sync_cursor.lock() = Some(source_after_sync(&source, plan, started_at));
+            }
+        }
         Ok(())
     }
 }

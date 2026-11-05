@@ -1,6 +1,11 @@
 //! The snapshot is embedded in the binary, so the service is one per process
 //! rather than per `AppState`: the desktop and `termul-server` each own their
 //! own copy, and every carrier in a process answers from the same one.
+//!
+//! A release snapshot is tens of thousands of rows. Parsing it at startup
+//! keeps that whole catalog resident even when nobody opens it, so the
+//! service stays unloaded until the first status, search, icon, or install
+//! request. Sync still runs immediately and writes its cache to disk.
 
 mod consent;
 mod convert;
@@ -65,16 +70,27 @@ const MIN_DOTNET_SDK_MAJOR: u64 = 10;
 static SHARED: OnceCell<Arc<McpCatalogService>> = OnceCell::const_new();
 
 type RunnerProbe = Arc<dyn Fn() -> RunnerAvailability + Send + Sync>;
+/// `Some(dir)` merges the on-disk sync cache into the embedded snapshot.
+type CatalogLoader = Arc<dyn Fn(Option<PathBuf>) -> LoadedCatalog + Send + Sync>;
 
 pub struct McpCatalogService {
-    catalog: RwLock<Arc<LoadedCatalog>>,
+    /// `None` until a catalog request parses the snapshot. Sync does not fill it.
+    catalog: RwLock<Option<Arc<LoadedCatalog>>>,
     phase: Mutex<SyncPhase>,
     sync: OnceLock<Arc<SyncHost>>,
     icons: OnceLock<Arc<IconCache>>,
     probe: RunnerProbe,
+    loader: CatalogLoader,
     runner_probe: Mutex<Option<(Instant, RunnerAvailability)>>,
     /// Held across a probe so concurrent cache misses share one.
     probe_gate: tokio::sync::Mutex<()>,
+    /// Serializes snapshot parsing with a sync commit so one cannot overwrite
+    /// the other with a stale catalog.
+    load_gate: tokio::sync::Mutex<()>,
+    /// `mcp-catalog/` directory. Set before sync starts; absent until `run`.
+    state_dir: Mutex<Option<PathBuf>>,
+    /// Last sync cursor. Lets the next sync plan a delta without parsing rows.
+    sync_cursor: Mutex<Option<McpCatalogSource>>,
     plans: PlanStore,
 }
 
@@ -103,37 +119,70 @@ impl From<SearchError> for McpCatalogError {
     }
 }
 
+fn load_for_use(dir: Option<PathBuf>) -> LoadedCatalog {
+    let base = snapshot::load_embedded();
+    let Some(dir) = dir.as_deref() else {
+        return base;
+    };
+    match sync::read_cache(dir, &base.source) {
+        Some(cache) => {
+            let catalog = sync::merge(&base, &cache);
+            log::info!(
+                "[mcp-catalog] sync cache loaded items={} cursor={} sample={}",
+                catalog.items.len(),
+                catalog.source.updated_at.as_deref().unwrap_or(""),
+                catalog.source.sample
+            );
+            catalog
+        }
+        None => base,
+    }
+}
+
+fn default_loader() -> CatalogLoader {
+    Arc::new(load_for_use)
+}
+
 impl McpCatalogService {
-    /// The process's catalog. The first call decompresses and converts the
-    /// embedded snapshot on the blocking pool; later calls share it.
+    /// The process's catalog service. The embedded snapshot stays unparsed
+    /// until a request needs rows.
     pub async fn shared() -> Arc<Self> {
         SHARED
             .get_or_init(|| async {
-                let catalog = tokio::task::spawn_blocking(snapshot::load_embedded)
-                    .await
-                    .unwrap_or_else(|error| {
-                        log::error!("[mcp-catalog] snapshot load task failed: {error}");
-                        LoadedCatalog::default()
-                    });
-                Arc::new(Self::new(catalog, Arc::new(probe_runners)))
+                Arc::new(Self::with_plan_ttl(
+                    None,
+                    Arc::new(probe_runners),
+                    PLAN_TTL,
+                    default_loader(),
+                ))
             })
             .await
             .clone()
     }
 
+    #[cfg(test)]
     fn new(catalog: LoadedCatalog, probe: RunnerProbe) -> Self {
-        Self::with_plan_ttl(catalog, probe, PLAN_TTL)
+        Self::with_plan_ttl(Some(catalog), probe, PLAN_TTL, default_loader())
     }
 
-    fn with_plan_ttl(catalog: LoadedCatalog, probe: RunnerProbe, ttl: Duration) -> Self {
+    fn with_plan_ttl(
+        catalog: Option<LoadedCatalog>,
+        probe: RunnerProbe,
+        ttl: Duration,
+        loader: CatalogLoader,
+    ) -> Self {
         Self {
-            catalog: RwLock::new(Arc::new(catalog)),
+            catalog: RwLock::new(catalog.map(Arc::new)),
             phase: Mutex::new(SyncPhase::Idle),
             sync: OnceLock::new(),
             icons: OnceLock::new(),
             probe,
+            loader,
             runner_probe: Mutex::new(None),
             probe_gate: tokio::sync::Mutex::new(()),
+            load_gate: tokio::sync::Mutex::new(()),
+            state_dir: Mutex::new(None),
+            sync_cursor: Mutex::new(None),
             plans: PlanStore::new(ttl),
         }
     }
@@ -157,11 +206,25 @@ impl McpCatalogService {
         runners: RunnerAvailability,
         ttl: Duration,
     ) -> Self {
-        Self::with_plan_ttl(catalog, Arc::new(move || runners), ttl)
+        Self::with_plan_ttl(
+            Some(catalog),
+            Arc::new(move || runners),
+            ttl,
+            default_loader(),
+        )
+    }
+
+    /// An unloaded service. `loader` is the only path that parses the snapshot,
+    /// so tests can count parses.
+    #[cfg(test)]
+    pub(crate) fn deferred(runners: RunnerAvailability, loader: CatalogLoader) -> Self {
+        Self::with_plan_ttl(None, Arc::new(move || runners), PLAN_TTL, loader)
     }
 
     pub async fn run(dir: PathBuf) {
         let service = Self::shared().await;
+        service.set_state_dir(dir.clone());
+        log::info!("[mcp-catalog] catalog deferred until the first catalog request");
         match IconCache::new(dir.join("icons")) {
             Ok(icons) => service.attach_icons(Arc::new(icons)),
             Err(error) => log::error!("[mcp-catalog] icons disabled, no HTTP client: {error}"),
@@ -193,6 +256,7 @@ impl McpCatalogService {
     }
 
     pub(crate) async fn attach(self: Arc<Self>, dir: PathBuf, registry: Registry) {
+        self.set_state_dir(dir.clone());
         let host = match tokio::task::spawn_blocking(move || SyncHost::new(dir, registry)).await {
             Ok(host) => Arc::new(host),
             Err(error) => {
@@ -208,24 +272,69 @@ impl McpCatalogService {
         self.run_sync(host).await;
     }
 
-    fn catalog(&self) -> Arc<LoadedCatalog> {
-        Arc::clone(&self.catalog.read())
+    fn set_state_dir(&self, dir: PathBuf) {
+        *self.state_dir.lock() = Some(dir);
     }
 
-    fn swap(&self, catalog: LoadedCatalog) {
-        *self.catalog.write() = Arc::new(catalog);
+    fn loaded(&self) -> Option<Arc<LoadedCatalog>> {
+        self.catalog.read().clone()
     }
 
-    pub fn status(&self) -> McpCatalogStatus {
-        let catalog = self.catalog();
-        let sync = match self.sync.get() {
+    fn swap(&self, catalog: LoadedCatalog) -> Arc<LoadedCatalog> {
+        let catalog = Arc::new(catalog);
+        *self.sync_cursor.lock() = Some(catalog.source.clone());
+        *self.catalog.write() = Some(Arc::clone(&catalog));
+        catalog
+    }
+
+    async fn ensure_loaded(&self) -> Arc<LoadedCatalog> {
+        if let Some(catalog) = self.loaded() {
+            return catalog;
+        }
+        let _gate = self.load_gate.lock().await;
+        if let Some(catalog) = self.loaded() {
+            return catalog;
+        }
+        let loader = Arc::clone(&self.loader);
+        let dir = self.state_dir.lock().clone();
+        let catalog = match tokio::task::spawn_blocking(move || loader(dir)).await {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                log::error!("[mcp-catalog] snapshot load task failed: {error}");
+                LoadedCatalog::default()
+            }
+        };
+        self.swap(catalog)
+    }
+
+    fn sync_status(&self) -> McpCatalogSync {
+        match self.sync.get() {
             Some(host) if host.enabled() => McpCatalogSync::Enabled(self.phase.lock().clone()),
             _ => McpCatalogSync::Disabled,
-        };
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_loaded(&self) -> bool {
+        self.catalog.read().is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sync_attached(&self) -> bool {
+        self.sync.get().is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sync_view(&self) -> McpCatalogSync {
+        self.sync_status()
+    }
+
+    pub async fn status(&self) -> McpCatalogStatus {
+        let catalog = self.ensure_loaded().await;
         McpCatalogStatus {
             source: catalog.source.clone(),
             servers: catalog.items.len(),
-            sync,
+            sync: self.sync_status(),
         }
     }
 
@@ -244,7 +353,7 @@ impl McpCatalogService {
             }
         })?;
         log::info!("[mcp-catalog] sync setting enabled={enabled}");
-        Ok(self.status())
+        Ok(self.status().await)
     }
 
     pub async fn search(
@@ -253,7 +362,7 @@ impl McpCatalogService {
     ) -> Result<McpCatalogPage, McpCatalogError> {
         let query = search::validate(request)?;
         let runners = self.runners().await;
-        let catalog = self.catalog();
+        let catalog = self.ensure_loaded().await;
         tokio::task::spawn_blocking(move || search::search(&catalog, runners, &query))
             .await
             .map_err(|error| {
@@ -267,7 +376,7 @@ impl McpCatalogService {
     }
 
     pub async fn icon(&self, name: &str) -> Result<Icon, McpCatalogError> {
-        let catalog = self.catalog();
+        let catalog = self.ensure_loaded().await;
         let source = catalog
             .items
             .binary_search_by(|item| item.name.as_str().cmp(name))
@@ -296,7 +405,8 @@ impl McpCatalogService {
         request: &FormRequest,
     ) -> Result<FormReply, McpCatalogError> {
         let runners = self.runners().await;
-        plan::describe_install(&self.catalog(), runners, request)
+        let catalog = self.ensure_loaded().await;
+        plan::describe_install(&catalog, runners, request)
     }
 
     pub async fn plan_install(
@@ -305,7 +415,8 @@ impl McpCatalogService {
         caller: PlanCaller,
     ) -> Result<PlanReply, McpCatalogError> {
         let runners = self.fresh_runners().await;
-        plan::plan_install(&self.catalog(), runners, &self.plans, request, caller)
+        let catalog = self.ensure_loaded().await;
+        plan::plan_install(&catalog, runners, &self.plans, request, caller)
     }
 
     pub fn commit_install(

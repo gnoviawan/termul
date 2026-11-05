@@ -147,6 +147,21 @@ pub(crate) fn load_embedded() -> LoadedCatalog {
     load_or_empty(EMBEDDED_SNAPSHOT, EMBEDDED_META)
 }
 
+/// Snapshot metadata only. Sync uses this to choose a full or incremental
+/// crawl without decompressing the registry rows.
+pub(crate) fn embedded_source() -> McpCatalogSource {
+    match serde_json::from_str::<SnapshotMeta>(EMBEDDED_META) {
+        Ok(meta) => McpCatalogSource {
+            updated_at: Some(meta.fetched_at),
+            sample: meta.sample,
+        },
+        Err(error) => {
+            log::error!("[mcp-catalog] snapshot metadata is invalid: {error}");
+            McpCatalogSource::default()
+        }
+    }
+}
+
 pub(crate) fn load_or_empty(gz: &[u8], meta: &str) -> LoadedCatalog {
     match load(gz, meta) {
         Ok(catalog) => {
