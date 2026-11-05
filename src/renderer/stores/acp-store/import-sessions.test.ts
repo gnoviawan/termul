@@ -173,6 +173,7 @@ function seedAgent(capabilities: Record<string, unknown> = CAPABLE.capabilities)
 describe('listImportableSessions', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    vi.mocked(withAuthRetry).mockClear()
     seedAgent()
   })
 
