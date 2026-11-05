@@ -775,9 +775,7 @@ impl McpCatalogService {
         let _merged = tokio::task::spawn_blocking(move || {
             let _gate = gate.lock();
             let base = catalog_slot.read().as_ref().map(Arc::clone)?;
-            let Some(cache) = read_cache(&dir, &base.source) else {
-                return None;
-            };
+            let cache = read_cache(&dir, &base.source)?;
             // fold_cache refuses an incomplete overlay on a failed snapshot.
             let catalog = super::fold_cache((*base).clone(), Some(cache));
             super::publish(&catalog_slot, &cursor, catalog);
