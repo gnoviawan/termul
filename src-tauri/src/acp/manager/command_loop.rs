@@ -2,6 +2,8 @@ use super::*;
 
 use std::collections::BTreeMap;
 
+use super::import_steps::finish_history_import;
+
 use crate::acp::legacy_models::{
     advertises_model_config_option, resolve_models, send_with_legacy_models,
     LEGACY_MODEL_SWITCH_UNSUPPORTED,
@@ -316,6 +318,7 @@ pub(super) async fn run_command_loop(
                 cwd,
                 additional_directories,
                 mcp_servers,
+                import_history,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -323,6 +326,8 @@ pub(super) async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
+                let req_sinks = sinks.clone();
+                let req_agent_id = agent_id.clone();
                 // Story 3 replay contract: admit the reopen by reserving the
                 // session HERE — synchronously in the command loop, before the
                 // request task is spawned — so admission follows
@@ -387,9 +392,15 @@ pub(super) async fn run_command_loop(
                     // outcome (success, agent error, timeout). The reservation
                     // above guarantees no turn is active, so this admission
                     // cannot fail; keep the check total anyway.
-                    let Some(_replay_guard) =
+                    let replay_guard = if import_history {
+                        ReplayWindowGuard::try_new_importing(
+                            req_state.clone(),
+                            session_id.0.to_string(),
+                        )
+                    } else {
                         ReplayWindowGuard::try_new(req_state.clone(), session_id.0.to_string())
-                    else {
+                    };
+                    let Some(_replay_guard) = replay_guard else {
                         log::warn!(
                             "[acp] session {} load rejected: prompt turn active (ACP_REOPEN_TURN_ACTIVE)",
                             crate::logging::redact_session_id(&session_id.0)
@@ -411,7 +422,7 @@ pub(super) async fn run_command_loop(
                     if profile.summarize_thinking {
                         request = request.meta(summarized_thinking_meta());
                     }
-                    let result = run_session_reopen(
+                    let mut result = run_session_reopen(
                         "session/load",
                         &session_id.0,
                         &cwd,
@@ -419,6 +430,16 @@ pub(super) async fn run_command_loop(
                         send_with_legacy_models(&req_cx, request),
                     )
                     .await;
+                    if import_history && result.is_ok() {
+                        if let Err(error) = finish_history_import(
+                            &req_state,
+                            &req_sinks,
+                            &req_agent_id,
+                            &session_id.0,
+                        ) {
+                            result = Err(error);
+                        }
+                    }
                     if let (Ok(outcome), Some(persistence)) = (&result, &req_persistence) {
                         persistence
                             .record_session_model(&session_id.0, outcome.models.as_ref())

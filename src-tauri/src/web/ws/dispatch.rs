@@ -137,6 +137,7 @@ pub(super) async fn route_request(req: WsRequest, env: &HandlerEnv) -> WsReply {
         "register_discovered_session" => {
             handle_register_discovered_session(id, &req.payload, acp, relay).await
         }
+        "import_agent_session" => handle_import_agent_session(id, &req.payload, acp, relay).await,
         // Watches (projects, chat-history index, agent roster, project file
         // changes, store keys, project terminal set): the full state now,
         // deltas under a contiguous revision after. A project's file watcher

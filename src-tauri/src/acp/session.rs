@@ -29,6 +29,7 @@ use crate::acp::session_persistence::SessionRegistration;
 
 mod activity;
 mod commands;
+pub(crate) mod replay_import;
 mod sign_in;
 mod subagents;
 mod tool_policy;
@@ -174,6 +175,8 @@ pub(crate) struct DriverState {
 struct ReplayWindow {
     open_count: usize,
     suppressed: u64,
+    /// Set while the reopen imports the replayed history as durable records.
+    import: Option<replay_import::ImportWindow>,
 }
 
 /// RAII guard keeping a session's replay window open.
@@ -205,6 +208,18 @@ impl ReplayWindowGuard {
     /// history into a live turn.
     pub(crate) fn try_new(state: Arc<Mutex<DriverState>>, session_id: String) -> Option<Self> {
         if !state.lock().try_begin_replay_window(&session_id) {
+            return None;
+        }
+        Some(Self { state, session_id })
+    }
+
+    /// Like [`Self::try_new`], but the window imports the replayed history as
+    /// durable records instead of dropping it.
+    pub(crate) fn try_new_importing(
+        state: Arc<Mutex<DriverState>>,
+        session_id: String,
+    ) -> Option<Self> {
+        if !state.lock().try_begin_import_replay_window(&session_id) {
             return None;
         }
         Some(Self { state, session_id })
@@ -907,6 +922,9 @@ impl DriverState {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod replay_import_tests;
 
 #[cfg(test)]
 mod subagents_tests;
