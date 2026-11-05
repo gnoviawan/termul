@@ -655,12 +655,14 @@ fn service_account_state_dir_falls_through_empty_env_var() {
     for key in STATE_HOME_ENV_KEYS {
         std::env::set_var(key, "");
     }
-    // An inherited relative `TMPDIR` would make the fallback relative too.
-    #[cfg(unix)]
-    std::env::set_var(TEMP_DIR_ENV_KEY, "/tmp");
     let resolved = cfg.service_account_state_dir();
     assert_eq!(resolved, std::env::temp_dir().join("termul"));
-    assert!(resolved.is_absolute(), "got: {}", resolved.display());
+    // `TMPDIR` is not pinned here: tests in other modules read it without
+    // `ENV_LOCK`. Unix `temp_dir()` returns an inherited relative `TMPDIR`
+    // as is, so only an absolute temp dir must yield an absolute path.
+    if std::env::temp_dir().is_absolute() {
+        assert!(resolved.is_absolute(), "got: {}", resolved.display());
+    }
     // An empty higher-priority var falls through to the next branch.
     let base = std::env::temp_dir().join("termul-state-env-base");
     #[cfg(unix)]
@@ -713,11 +715,6 @@ const TERMUL_ENV_KEYS: &[&str] = &[
 /// test may change them freely.
 const STATE_HOME_ENV_KEYS: &[&str] = &["HOME", "XDG_STATE_HOME", "LOCALAPPDATA"];
 
-/// The var behind `std::env::temp_dir()` on Unix. [`lock_env`] restores it
-/// like [`STATE_HOME_ENV_KEYS`]; it is separate because it must never be
-/// set to "" (Unix `temp_dir()` returns `TMPDIR` as is, even when relative).
-const TEMP_DIR_ENV_KEY: &str = "TMPDIR";
-
 /// Holds `ENV_LOCK` and restores every var in [`TERMUL_ENV_KEYS`] and
 /// [`STATE_HOME_ENV_KEYS`] on drop, also when the test panics.
 struct EnvGuard {
@@ -742,7 +739,6 @@ fn lock_env() -> EnvGuard {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut saved = save_env(TERMUL_ENV_KEYS);
     saved.extend(save_env(STATE_HOME_ENV_KEYS));
-    saved.extend(save_env(&[TEMP_DIR_ENV_KEY]));
     for key in TERMUL_ENV_KEYS {
         std::env::remove_var(key);
     }
