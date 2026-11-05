@@ -18,8 +18,9 @@ use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     CallToolResult, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
-    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
-    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Tool,
+    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, MetaObject,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
+    Tool,
 };
 use rmcp::service::{serve_server, RequestContext};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer, ServerHandler};
@@ -257,6 +258,17 @@ async fn describe_browser_tool(config: &ChildConfig) -> Option<DescribedTool> {
     described
 }
 
+/// `_meta` that makes Claude Code load a tool's full definition at session
+/// start instead of deferring it behind tool search, where the agent sees
+/// only its name and rarely calls it. Only for the tools every session
+/// needs: `ask_user` stays deferred because Claude Code has its own
+/// question tool, which Termul also shows.
+fn always_load() -> MetaObject {
+    let mut meta = MetaObject::new();
+    meta.0.insert("anthropic/alwaysLoad".to_string(), Value::Bool(true));
+    meta
+}
+
 /// The static host tools. `get_info` lives in its own `ServerHandler`
 /// block below so it can attach `session_instructions()` to the
 /// `initialize` result — the channel that advertises the chat renderer's
@@ -265,6 +277,7 @@ async fn describe_browser_tool(config: &ChildConfig) -> Option<DescribedTool> {
 impl TermulPlanServer {
     #[tool(
         name = "plan",
+        meta = always_load(),
         description = "Update the execution plan / todo list shown in the Termul plan panel. You MUST call this instead of any built-in todo/task tool — do not maintain your own todo list. Every time you would create or update a task, call this tool so the user sees a unified plan UI across all agents."
     )]
     async fn plan(&self, Parameters(input): Parameters<TermulPlanInput>) -> String {
@@ -280,6 +293,7 @@ impl TermulPlanServer {
 
     #[tool(
         name = "set_session_title",
+        meta = always_load(),
         description = "Set a concise title for the current Termul chat session. Call this EXACTLY ONCE per session, during the first turn, as soon as the user's intent is clear. Do not call it again for the same session — subsequent calls are ignored. Also pass `branch`: a short kebab-case slug for this chat's git branch (lowercase letters, digits and single hyphens, at most 48 characters, for example `fix-login-redirect`); Termul uses it to name the chat's worktree branch."
     )]
     async fn set_session_title(
@@ -364,9 +378,10 @@ impl TermulPlanServer {
 /// per-instance router (static tools, canvas tools and the described
 /// `browser` tool) and skips `get_info` because it is provided here: the
 /// returned `instructions` land in the MCP `initialize` result so agents
-/// learn they can embed images, link files for open-in-editor, and design
-/// on the canvas. Resources and prompts are figcraft's, answered by
-/// `canvas_tools`.
+/// learn to use the host tools, embed images, link files for
+/// open-in-editor, and design on the canvas (see `session_instructions`
+/// for the order and Claude Code's length cut). Resources and prompts are
+/// figcraft's, answered by `canvas_tools`.
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for TermulPlanServer {
     fn get_info(&self) -> rmcp::model::ServerConfig {
