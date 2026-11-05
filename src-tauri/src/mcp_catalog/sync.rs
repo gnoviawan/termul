@@ -530,7 +530,15 @@ fn stored_source(dir: &Path, snapshot: &McpCatalogSource) -> McpCatalogSource {
         if cache_header_ok(dir) {
             return source;
         }
-        log::warn!("[mcp-catalog] sync cursor stamp ignored, registry cache is missing or invalid");
+        log::warn!(
+            "[mcp-catalog] sync cursor stamp ignored, registry cache is missing or invalid; forcing a full crawl"
+        );
+        // Do not fall back to Since(snapshot): a release snapshot cursor would
+        // still plan incremental, and update_cache would then refuse the stamp.
+        return McpCatalogSource {
+            updated_at: None,
+            sample: true,
+        };
     }
     read_cache(dir, snapshot)
         .map(|cache| published_source(snapshot, &cache))
