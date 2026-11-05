@@ -631,6 +631,7 @@ A session log event has one of three delivery tiers (`tier_of` in `src-tauri/src
 | `acp:mode_update` | session | Session log event (reliable). |
 | `acp:config_options_update` | session | Session log event (reliable). |
 | `acp:usage_update` | session | Session log event (reliable). Context-window use and optional cost. |
+| `acp:agent_working` | session | Session log event (reliable). Live only. The agent started or stopped working in the session outside a prompt turn, `{agentId, sessionId, working}`. The `list_agents` summary carries the current set as `workingSessions`. |
 | `acp:permission_request` | session | Session log event (reliable). Live only: never written to the durable log. A `host:` request id with `_meta.termul.origin_kind = "browser"` is a host-originated browser consent ticket with the fixed options `allow_session`, `allow_project` and `deny`. |
 | `acp:question_request` | session | Session log event (reliable). A structured question from the agent, including one from the host `ask_user` tool. |
 | `acp:question_cancelled` | session | Session log event (reliable). A pending question can no longer be answered. |
@@ -743,9 +744,14 @@ from the plan store (logged `source: 'planRehydrate'`); the agent can still emit
 >   engages only after a durability probe (`loadSessionPayload`) confirms the host holds the
 >   full payload; a session whose probe resolves `null` (`live_only` / degraded host) is
 >   untrimmable and keeps every message.
-> - **Live tool calls** — `toolCalls[sessionId]` plateaus at 500 (`MAX_LIVE_TOOL_CALLS`):
->   the oldest *finished* calls drop, in-flight ones are always retained, and every install
->   path (reopen/resume/recovery) applies the same cap.
+> - **Live tool calls** — the live calls in `toolCalls[sessionId]` plateau at 500
+>   (`MAX_LIVE_TOOL_CALLS`): the oldest *finished* calls drop, in-flight ones are always
+>   retained, and every install path (reopen/resume/recovery) applies the same cap. A dropped
+>   edit, delete or move call leaves a path-only file-change summary (`restoredSummary`), and
+>   summaries do not count toward the cap, so the Changed files list never loses a file
+>   that an edit, delete or move call touched. In a git repository the list still shows
+>   only those files that git reports uncommitted, and a file changed only by a shell
+>   command never enters it.
 > - **Tool raw output clamp** — a string `rawOutput` ≥ 32 KiB clamps to 32 KiB +
 >   a `[termul: tool output truncated]` marker on live update (logged once per toolCallId
 >   without content; non-string values pass through).

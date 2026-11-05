@@ -134,7 +134,13 @@ import {
   type TurnEndSetter
 } from '../types'
 import { authenticatedAgents, evictAgentForTransport, withAuthRetry } from './agent'
-import { flushNextQueuedPrompt, runPromptTurn } from './prompt'
+import {
+  agentWorkingReportSeq,
+  flushNextQueuedPrompt,
+  forgetAgentWorkingReports,
+  latestAgentWorkingReport,
+  runPromptTurn
+} from './prompt'
 import { loadFreshSourcePayload } from './switch-seam'
 import {
   dropSessionBookkeeping,
@@ -981,6 +987,9 @@ async function openHistorySessionInner(
   // this gate exists to close. Desktop stays exempt: its host listing does
   // not model the same-process owner, so an empty result proves nothing.
   let ownerListingTrusted = false
+  // `agent_working` reports newer than this belong to the reopen's live agent
+  // and win over the listing (see `latestAgentWorkingReport`).
+  const reportSeqBeforeListing = agentWorkingReportSeq()
   // Guard both fields: `ensureLiveAgent` trims `cwd` (throws on undefined),
   // and a missing/empty cwd can't map to a live agent anyway — fall through
   // to read-only 'local' instead of throwing (spec: do not throw).
@@ -990,7 +999,7 @@ async function openHistorySessionInner(
     // spawning — otherwise every reload spawns a duplicate agent and resumes
     // on it while the original keeps running. A live turn also adopts on
     // desktop (#882): spawning would race the owner the guard is protecting.
-    const { adopted, listingTrusted } = await adoptHostOwnedAgent(
+    const { adopted, listingTrusted, working } = await adoptHostOwnedAgent(
       set,
       id,
       meta.agentConfigId,
@@ -1007,6 +1016,17 @@ async function openHistorySessionInner(
       liveAgentId = adopted
       turnOwnerConnected = true
     }
+    // The owner's listing says whether it works in this chat outside a prompt
+    // turn now; later changes arrive as `agent_working` events. A report from
+    // the owner during the listing round trip is newer than the listing.
+    const report = adopted ? latestAgentWorkingReport(id, adopted) : undefined
+    const reportIsNewer = report !== undefined && report.seq > reportSeqBeforeListing
+    const agentWorking = reportIsNewer ? report.working : Boolean(working)
+    set((s) => {
+      const session = s.sessions[id]
+      if (!session || Boolean(session.agentWorking) === agentWorking) return {}
+      return { sessions: { ...s.sessions, [id]: { ...session, agentWorking } } }
+    })
   }
   if (
     !options?.forceNewAgent &&
@@ -1174,6 +1194,9 @@ async function openHistorySessionInner(
   // `session/load` route to this session, and (for 'load') open the replay
   // window BEFORE the IPC is sent — replayed chunks stream in while the load
   // request is still in flight and must be accepted, not dropped.
+  const lateWorkingReport = latestAgentWorkingReport(id, liveAgentId)
+  const newerWorkingReport =
+    lateWorkingReport && lateWorkingReport.seq > reportSeqBeforeListing ? lateWorkingReport : null
   set((s) => {
     const session = s.sessions[id]
     if (!session) return {}
@@ -1183,6 +1206,9 @@ async function openHistorySessionInner(
         [id]: {
           ...session,
           agentId: liveAgentId,
+          // A report from the live agent that `_onAgentWorking` dropped while
+          // the chat still pointed at its persisted agent applies now.
+          agentWorking: newerWorkingReport ? newerWorkingReport.working : session.agentWorking,
           replaying:
             strategy === 'load'
               ? ('pending' as const)
@@ -1670,6 +1696,9 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
               status: existing?.status === 'closed' ? 'closed' : 'active',
               title: existing?.title ?? null,
               activeTurn: existing?.activeTurn ?? false,
+              // An `agent_working` report can land between `session_created`
+              // and this reply; the rebuilt record keeps it.
+              agentWorking: latestAgentWorkingReport(sessionId, agentId)?.working ?? false,
               mcpServerCount: sessionMcpServers.length,
               openTurnId: existing?.openTurnId ?? null,
               ...addAdvertisedOptionsKeepingCurrent(
@@ -2107,6 +2136,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
 
   deleteHistorySession: async (id) => {
     invalidateSessionReopen(id)
+    forgetAgentWorkingReports(id)
     inFlightHistoryOpens.delete(id)
     inFlightDiscoveredOpens.delete(id)
     invalidateRestorePreload(set, id)

@@ -32,8 +32,8 @@ import {
 import { WEB_TERMINAL_ERROR_CODES } from './web-terminal-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 22 event types including durable user prompts, host records, switch markers + delivery frames', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(22)
+  it('exports exactly 23 event types including durable user prompts, host records, switch markers, the live agent_working state + delivery frames', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(23)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -73,6 +73,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     }
     // CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker.
     expect(WS_EVENT_TYPES).toContain('agent_switch')
+    // Live-only work outside a prompt turn (never persisted).
+    expect(WS_EVENT_TYPES).toContain('agent_working')
+    expect(WS_EVENT_TIERS.agent_working).toBe('reliable')
     // Host-authored durable title record (occupies a session-log seq).
     expect(WS_EVENT_TYPES).toContain('local_title_generated')
     // Delivery frames (no seq): gap after a LOSSY drop, host heartbeat.

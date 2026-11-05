@@ -149,23 +149,41 @@ function extractChangedFiles(toolCalls: ToolCall[], cwd: string): ChangedFile[] 
   return files
 }
 
+/**
+ * The resolved paths this session's file-changing calls touched, both ends of
+ * a move included: the git rows the session may claim. A failed call changed
+ * nothing, so it claims no row.
+ */
+function sessionTouchedPaths(toolCalls: ToolCall[], cwd: string): Set<string> {
+  const paths = new Set<string>()
+  for (const tc of toolCalls) {
+    if (!isChangedFileKind(tc.kind) || tc.status === 'failed') continue
+    for (const raw of [toolCallPath(tc), ...(tc.locations ?? []).map((loc) => loc.path)]) {
+      const trimmed = raw?.trim()
+      const path = trimmed && resolveFilePath(trimmed, cwd)
+      if (path) paths.add(path)
+    }
+  }
+  return paths
+}
+
 export interface ChatChangedFiles {
   files: ChangedFile[]
   /** The base the paths were resolved against; row subtitles are relative to it. */
   rowBase: string
-  /** `git`: uncommitted files of the checkout. `session`: files this session's tool calls touched (no git repository). */
+  /** `git`: files this session touched that are still uncommitted. `session`: every file this session touched (no git repository). */
   source: 'git' | 'session'
   totalAdded: number
   totalRemoved: number
 }
 
 /**
- * The files a chat changed. In a git repository: the uncommitted files of the
- * checkout at `cwd` (staged, unstaged and untracked, against HEAD) with their
- * git line counts, so a committed, discarded or deleted file drops out and a
- * clean tree lists nothing. Outside a git repository: the files touched by
- * ACP tool calls (edit/delete/move) in the session, one row per file with
- * summed +N −N counts.
+ * The files a chat changed: the files its ACP tool calls touched
+ * (edit/delete/move). In a git repository only those still uncommitted in the
+ * checkout at `cwd` list, with git's status and line counts, so a committed,
+ * discarded or deleted file drops out and files changed outside the session
+ * never show. Outside a git repository every touched file lists, one row per
+ * file with summed +N −N counts.
  */
 export function useChatChangedFiles(
   cwd: string,
@@ -174,12 +192,15 @@ export function useChatChangedFiles(
 ): ChatChangedFiles {
   const git = useGitChangedFiles(cwd, toolCalls, turnActive)
   return useMemo(() => {
-    const files =
-      git.state === 'unavailable'
-        ? extractChangedFiles(toolCalls, cwd)
-        : git.state === 'loading'
-          ? []
-          : git.files.map((file) => ({ ...file, path: resolveFilePath(file.path, git.root) }))
+    let files: ChangedFile[]
+    if (git.state === 'unavailable') files = extractChangedFiles(toolCalls, cwd)
+    else if (git.state === 'loading') files = []
+    else {
+      const sessionPaths = sessionTouchedPaths(toolCalls, cwd)
+      files = git.files
+        .map((file) => ({ ...file, path: resolveFilePath(file.path, git.root) }))
+        .filter((file) => sessionPaths.has(file.path))
+    }
     return {
       files,
       rowBase: git.state === 'ready' ? git.root : cwd,
