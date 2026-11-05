@@ -3590,6 +3590,39 @@ describe('AgentLauncher worktree isolation', () => {
     fireEvent.change(base, { target: { value: branch } })
   }
 
+  it('re-enables launch when New chat re-shows the launcher while a worktree is still being created', async () => {
+    function PresenceHarness({ show }: { show: boolean }) {
+      return (
+        <TooltipProvider>
+          <MemoryRouter>
+            <AnimatePresence initial={false}>
+              {show ? (
+                <motion.div exit={{ opacity: 0 }} transition={{ duration: 5 }}>
+                  <AgentLauncher paneId="pane1" />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+    }
+    mockWorktreeCreate.mockReturnValueOnce(new Promise(() => {}))
+    const { rerender } = render(<PresenceHarness show />)
+    await chooseWorktreeBaseBranch('feat/x')
+    setComposerValue('first')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+
+    // The chat opened and the worktree is still being created when New chat
+    // brings back this exiting launcher.
+    rerender(<PresenceHarness show={false} />)
+    rerender(<PresenceHarness show />)
+    setComposerValue('second')
+    expect(screen.getByLabelText('Start agent chat')).toBeEnabled()
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(2))
+  })
+
   // CAP-3: launch in worktree mode calls worktreeApi.create once with chat/{id}
   // then copyIncludeFiles, then threads cwd=worktreePath
   it('creates a worktree, copies includes, and threads cwd=worktreePath on launch (CAP-3)', async () => {
