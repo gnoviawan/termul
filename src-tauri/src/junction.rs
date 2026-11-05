@@ -1,4 +1,5 @@
-//! NTFS directory junctions for the worktree symlink fallback.
+//! NTFS directory junctions, used by the worktree symlink fallback and by the
+//! Claude account linker (a junction needs no privilege, unlike `symlink_dir`).
 //!
 //! Created through `FSCTL_SET_REPARSE_POINT` instead of `cmd /C mklink /J`, so a
 //! path containing `&`, `;`, `=` or other cmd metacharacters is never parsed by
@@ -26,7 +27,7 @@ const REPARSE_HEADER_LEN: usize = 8;
 /// Create a junction at `target` that points to the directory `source`.
 ///
 /// `target` must not exist. On failure no directory is left at `target`.
-pub(super) fn create_junction(source: &Path, target: &Path) -> Result<(), String> {
+pub(crate) fn create_junction(source: &Path, target: &Path) -> Result<(), String> {
     let resolved = std::fs::canonicalize(source)
         .map_err(|e| format!("Failed to resolve {}: {}", source.display(), e))?;
     if !resolved.is_dir() {
@@ -50,7 +51,7 @@ pub(super) fn create_junction(source: &Path, target: &Path) -> Result<(), String
 /// The NT object-manager form of a canonical local path: `\\?\C:\dir` becomes
 /// `\??\C:\dir`. A junction cannot point at a network path, so a UNC path,
 /// which is also what a mapped network drive canonicalizes to, is refused.
-pub(super) fn nt_path(canonical: &Path) -> Result<Vec<u16>, String> {
+pub(crate) fn nt_path(canonical: &Path) -> Result<Vec<u16>, String> {
     let wide: Vec<u16> = canonical.as_os_str().encode_wide().collect();
     let unc: Vec<u16> = r"\\?\UNC\".encode_utf16().collect();
     if wide.starts_with(&unc) {
@@ -120,3 +121,7 @@ fn set_reparse_point(dir: &Path, buffer: &[u8]) -> std::io::Result<()> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "junction_tests.rs"]
+mod tests;
