@@ -334,22 +334,35 @@ pub(super) async fn handle_session_notification(
     // (`session::unprompted`). `sweep_unprompted_work` reports its end. Only a
     // session the driver holds counts, and a subagent dispatch never does:
     // the host stamps only changed dispatch records, so the registry decides.
-    let started_working = {
+    // The same rule picks the commands it leaves running
+    // (`session::background_commands`), in or out of a turn.
+    let (started_working, background_commands) = {
         let mut state = state.lock();
         let is_dispatch = tool_call
             .as_ref()
             .is_some_and(|(call, _, _)| state.subagent_records().get(&session_id, call).is_some());
-        !is_dispatch
+        let tracked = !is_dispatch && state.session_root(&session_id).is_some();
+        let started_working = tracked
             && !state.is_turn_active(&session_id)
-            && state.session_root(&session_id).is_some()
             && state.unprompted().note(
                 &session_id,
                 &notification.update,
                 tokio::time::Instant::now(),
-            )
+            );
+        let commands = state.background_commands();
+        let changed = tracked
+            && commands.note(
+                &session_id,
+                &notification.update,
+                crate::web::store::unix_ms(),
+            );
+        (started_working, changed.then(|| commands.list(&session_id)))
     };
     if started_working {
         crate::acp::events::emit_agent_working(sinks, agent_id, &session_id, true);
+    }
+    if let Some(commands) = background_commands {
+        crate::acp::events::emit_background_commands(sinks, agent_id, &session_id, commands);
     }
     if let Some((tool_call_id, kind, paths)) = tool_call {
         let mut state = state.lock();

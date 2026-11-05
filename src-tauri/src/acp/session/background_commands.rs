@@ -259,14 +259,22 @@ impl BackgroundCommands {
     }
 
     /// A prompt turn of `session_id` ended (any stop reason): every tool call
-    /// still open keeps running in the background. Returns true when the
-    /// session's list changed.
-    pub(crate) fn end_turn(&mut self, session_id: &str) -> bool {
+    /// still open keeps running in the background, except a subagent
+    /// dispatch (`is_dispatch`) the registry learned of after its first
+    /// update. Returns true when the session's list changed.
+    pub(crate) fn end_turn(
+        &mut self,
+        session_id: &str,
+        is_dispatch: impl Fn(&str) -> bool,
+    ) -> bool {
         let Some(session) = self.sessions.get_mut(session_id) else {
             return false;
         };
-        let mut open: Vec<(String, Seen)> =
-            session.seen.drain().filter(|(_, seen)| seen.open).collect();
+        let mut open: Vec<(String, Seen)> = session
+            .seen
+            .drain()
+            .filter(|(id, seen)| seen.open && !is_dispatch(id))
+            .collect();
         open.sort_by_key(|(id, seen)| (seen.first_seen_ms, id.clone()));
         let changed = !open.is_empty();
         for (id, seen) in open {

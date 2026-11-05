@@ -169,6 +169,8 @@ pub(crate) struct DriverState {
     sign_in: SignInSlot,
     /// Sessions the agent works in outside a prompt turn.
     unprompted: UnpromptedWork,
+    /// Commands the agent left running, per session.
+    background_commands: BackgroundCommands,
 }
 
 /// State of one session's replay window: how many reopens are in flight and
@@ -292,6 +294,22 @@ impl DriverState {
 
     pub(crate) fn unprompted(&mut self) -> &mut UnpromptedWork {
         &mut self.unprompted
+    }
+
+    pub(crate) fn background_commands(&mut self) -> &mut BackgroundCommands {
+        &mut self.background_commands
+    }
+
+    /// A prompt turn of `session_id` ended: list the tool calls it left open.
+    /// Returns the session's new list when it changed.
+    pub(crate) fn end_turn_background_commands(
+        &mut self,
+        session_id: &str,
+    ) -> Option<Vec<BackgroundCommand>> {
+        let records = &self.subagent_records;
+        self.background_commands
+            .end_turn(session_id, |call| records.get(session_id, call).is_some())
+            .then(|| self.background_commands.list(session_id))
     }
 
     /// Register a pending permission request and return its globally-unique
@@ -549,8 +567,10 @@ impl DriverState {
         self.subagents.forget_root(session_id);
         self.subagent_records.forget_root(session_id);
         // A closed or deleted session no longer works. A close tells clients
-        // with `session_closed`; a delete reports `agent_working` itself.
+        // with `session_closed`; a delete reports `agent_working` and
+        // `background_commands` itself.
         self.unprompted.end(session_id);
+        self.background_commands.forget(session_id);
     }
 
     /// Whether an `available_commands_update` repeats the set last fanned
@@ -903,6 +923,7 @@ impl DriverState {
                     .map(|w| w.open_count)
                     .sum::<usize>(),
             unprompted_sessions: self.unprompted.count(),
+            running_background_commands: self.background_commands.running_count(),
             last_active_at: self.last_active.last(),
         }
     }

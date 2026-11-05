@@ -61,7 +61,7 @@ async fn is_quiet(
             if activity.has_evidence() {
                 log::debug!(
                     target: LOG_TARGET,
-                    "idle reaper: keeping agent {} (active turns {}, pending permissions {}, questions {}, elicitations {}, running terminals {}, running subagents {}, reopens {})",
+                    "idle reaper: keeping agent {} (active turns {}, pending permissions {}, questions {}, elicitations {}, running terminals {}, running subagents {}, reopens {}, unprompted sessions {}, background commands {})",
                     agent_id.0,
                     activity.active_turns,
                     activity.pending_permissions,
@@ -69,7 +69,9 @@ async fn is_quiet(
                     activity.pending_elicitations,
                     activity.running_terminals,
                     activity.running_subagents,
-                    activity.reopens_in_flight
+                    activity.reopens_in_flight,
+                    activity.unprompted_sessions,
+                    activity.running_background_commands
                 );
             }
             activity.is_reapable(now, window)

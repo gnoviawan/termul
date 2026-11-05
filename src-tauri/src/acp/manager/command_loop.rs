@@ -690,6 +690,22 @@ pub(super) async fn run_command_loop(
                 if driver_state.lock().unprompted().end(&session_id.0) {
                     crate::acp::events::emit_agent_working(&sinks, &agent_id, &session_id.0, false);
                 }
+                // A new prompt clears the commands that ended since the last.
+                let background_commands = {
+                    let mut state = driver_state.lock();
+                    let commands = state.background_commands();
+                    commands
+                        .begin_turn(&session_id.0)
+                        .then(|| commands.list(&session_id.0))
+                };
+                if let Some(commands) = background_commands {
+                    crate::acp::events::emit_background_commands(
+                        &sinks,
+                        &agent_id,
+                        &session_id.0,
+                        commands,
+                    );
+                }
                 // Sequence + fan out the carrier's `user_prompt` NOW — the
                 // driver has accepted the prompt and nothing of its turn has
                 // been emitted yet, so the record can never trail one of its
@@ -790,6 +806,18 @@ pub(super) async fn run_command_loop(
                         let _ = permission.responder.respond(RequestPermissionResponse::new(
                             RequestPermissionOutcome::Cancelled,
                         ));
+                    }
+                    // Listed before the turn's terminator so no client sees the
+                    // chat finished with its command still running.
+                    let background_commands =
+                        turn_state.lock().end_turn_background_commands(&session_id.0);
+                    if let Some(commands) = background_commands {
+                        crate::acp::events::emit_background_commands(
+                            &turn_sinks,
+                            &turn_agent_id,
+                            &session_id.0,
+                            commands,
+                        );
                     }
                     // Issue #411: model-abandoned questions are first-class
                     // outcomes — a turn that ends without the user answering
@@ -902,6 +930,10 @@ pub(super) async fn run_command_loop(
 
             AcpCommand::WorkingSessionIds { reply } => {
                 let _ = reply.send(Ok(driver_state.lock().unprompted().session_ids()));
+            }
+
+            AcpCommand::BackgroundCommands { reply } => {
+                let _ = reply.send(Ok(driver_state.lock().background_commands().by_session()));
             }
 
             AcpCommand::SessionRoots { reply } => {
@@ -1528,13 +1560,14 @@ pub(super) async fn run_command_loop(
                         .block_task()
                         .await;
                     if result.is_ok() {
-                        let (pending, stopped_working) = {
+                        let (pending, stopped_working, had_commands) = {
                             let mut state = req_state.lock();
                             // No `session_closed` follows a delete, so clients
                             // hear the end of the agent's own work here.
                             let stopped_working = state.unprompted().end(&session_id.0);
+                            let had_commands = state.background_commands().forget(&session_id.0);
                             let (_ephemeral, pending) = state.begin_close_session(&session_id.0);
-                            (pending, stopped_working)
+                            (pending, stopped_working, had_commands)
                         };
                         if stopped_working {
                             crate::acp::events::emit_agent_working(
@@ -1542,6 +1575,14 @@ pub(super) async fn run_command_loop(
                                 &req_agent_id,
                                 &session_id.0,
                                 false,
+                            );
+                        }
+                        if had_commands {
+                            crate::acp::events::emit_background_commands(
+                                &req_sinks,
+                                &req_agent_id,
+                                &session_id.0,
+                                Vec::new(),
                             );
                         }
                         for permission in pending {

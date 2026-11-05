@@ -71,6 +71,21 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
             time.sleep(0.3)
             chunk("on my own")
+        elif text == "background":
+            # Claude Code's run_in_background: the call completes without
+            # terminal_exit, which arrives after the turn ended.
+            def tool(update):
+                send({"jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": "mock-1", "update": dict(update, toolCallId="bg-1")}})
+            tool({"sessionUpdate": "tool_call", "status": "pending", "title": "Terminal",
+                  "kind": "execute", "_meta": {"terminal_info": {"terminal_id": "bg-1"}}})
+            tool({"sessionUpdate": "tool_call_update",
+                  "rawInput": {"command": "sleep 1", "description": "Wait a second"}})
+            tool({"sessionUpdate": "tool_call_update", "status": "completed"})
+            send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
+            time.sleep(0.3)
+            tool({"sessionUpdate": "tool_call_update", "_meta": {"terminal_exit": {
+                "terminal_id": "bg-1", "exit_code": None, "signal": None}}})
         elif text == "rpcfail":
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32000, "message": "mock failure"}})
@@ -1267,6 +1282,73 @@ async fn stop_without_a_turn_ends_the_agents_own_work() {
         wait_for_working_events(log, &[true, false]).await;
     }
     wait_for_activity(&h, |activity| activity.unprompted_sessions == 0).await;
+    h.finish().await;
+}
+
+/// The `state` of each command in every `background_commands` event in `log`.
+fn background_command_events(log: &EventLog) -> Vec<Vec<String>> {
+    log.0
+        .lock()
+        .iter()
+        .filter(|(type_, _)| type_ == crate::acp::events::EVENT_BACKGROUND_COMMANDS)
+        .map(|(_, payload)| {
+            payload["commands"]
+                .as_array()
+                .expect("command list")
+                .iter()
+                .map(|command| command["state"].as_str().expect("state").to_string())
+                .collect()
+        })
+        .collect()
+}
+
+async fn wait_for_background_command_events(log: &EventLog, expected: &[&[&str]]) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while background_command_events(log) != expected {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "background_commands events {:?}, want {expected:?}",
+            background_command_events(log)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// A command the agent sends to the background runs past its turn: every
+/// sink hears it start and end, the agent listing keeps the ended row for a
+/// client that opens the chat later, and the next prompt clears it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_backgrounded_command_is_listed_until_the_prompt_after_it_ended() {
+    let Some(h) = Harness::start().await else {
+        return;
+    };
+    let first = spawn_turn(&h, "background", "t1").await;
+    tokio::time::timeout(RUN_TIMEOUT, first)
+        .await
+        .expect("the turn ends")
+        .expect("turn task")
+        .expect("turn ok");
+    for log in &h.logs {
+        wait_for_background_command_events(log, &[&["running"], &["ended"]]).await;
+    }
+    let summaries = h.acp.list_agent_summaries_with_ownership().await;
+    let summary = summaries
+        .iter()
+        .find(|summary| summary.id == h.agent_id)
+        .expect("the agent is listed");
+    let listed =
+        serde_json::to_value(&summary.background_commands[&h.session_id.0]).expect("serializable");
+    assert_eq!(listed[0]["toolCallId"], "bg-1");
+    assert_eq!(listed[0]["title"], "Wait a second");
+    assert_eq!(listed[0]["command"], "sleep 1");
+    assert_eq!(listed[0]["state"], "ended");
+    wait_for_activity(&h, |activity| activity.running_background_commands == 0).await;
+
+    let second = spawn_turn(&h, "ok", "t2").await;
+    let _ = tokio::time::timeout(RUN_TIMEOUT, second).await;
+    for log in &h.logs {
+        wait_for_background_command_events(log, &[&["running"], &["ended"], &[]]).await;
+    }
     h.finish().await;
 }
 
